@@ -1,0 +1,22 @@
+# Rust build artifacts
+/target/
+
+# Cargo lockfile is kept for applications (this is a binary workspace)
+# Cargo.lock
+
+# Output directory - generated reports and JSON artifacts
+/output/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Environment / secrets
+.env
+*.env
+
+# Claude memory (internal session files)
+.claude/
