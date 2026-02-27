@@ -1,0 +1,70 @@
+[package]
+name    = "networker-tester"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "networker_tester"
+path = "src/lib.rs"
+
+[[bin]]
+name = "networker-tester"
+path = "src/main.rs"
+
+[dependencies]
+# --- async runtime ---
+tokio.workspace = true
+
+# --- HTTP (hyper 1.x with direct connection management for timing) ---
+hyper        = { version = "1",    features = ["client", "http1", "http2"] }
+hyper-util   = { version = "0.1",  features = ["client", "client-legacy", "http1", "http2", "tokio"] }
+http-body-util = "0.1"
+http         = "1"
+
+# --- TLS ---
+rustls               = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+tokio-rustls         = "0.26"
+rustls-native-certs  = "0.8"
+webpki-roots         = "0.26"
+rustls-pki-types     = "1"
+
+# --- DNS ---
+hickory-resolver = { version = "0.24", features = ["tokio-runtime"] }
+
+# --- HTTP/3 (optional feature) ---
+quinn    = { version = "0.11",   optional = true }
+h3       = { version = "0.0.6",  optional = true }
+h3-quinn = { version = "0.0.6",  optional = true }
+
+# --- SQL Server ---
+tiberius     = { version = "0.12", default-features = false, features = ["rustls", "chrono", "sql-browser-tokio"] }
+tokio-util   = { version = "0.7",  features = ["compat"] }
+
+# --- shared workspace ---
+serde.workspace       = true
+serde_json.workspace  = true
+clap.workspace        = true
+anyhow.workspace      = true
+thiserror.workspace   = true
+tracing.workspace     = true
+tracing-subscriber.workspace = true
+chrono.workspace      = true
+uuid.workspace        = true
+bytes.workspace       = true
+url.workspace         = true
+
+# --- cert parsing ---
+x509-parser = "0.16"
+
+# --- utilities ---
+futures  = "0.3"
+libc     = "0.2"
+
+[features]
+default = []
+http3   = ["quinn", "h3", "h3-quinn"]
+
+[dev-dependencies]
+tokio-test  = "0.4"
+tempfile    = "3"
+networker-endpoint = { path = "../networker-endpoint" }
