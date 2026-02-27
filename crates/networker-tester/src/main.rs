@@ -256,6 +256,7 @@ async fn main() -> anyhow::Result<()> {
 // Single probe dispatch (used for both the initial attempt and retries)
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 async fn dispatch_once(
     proto: &Protocol,
     payload_sz: Option<usize>,
