@@ -20,6 +20,7 @@ telemetry from user-mode code.
 
 ## Contents
 
+- [Installation](#installation)
 - [Prerequisites](#prerequisites)
 - [Quick Start (30 minutes)](#quick-start)
 - [CLI Reference](#cli-reference)
@@ -30,6 +31,63 @@ telemetry from user-mode code.
 - [Metrics Captured](#metrics-captured)
 - [Known Limitations](#known-limitations)
 - [Design Decisions](#design-decisions)
+
+---
+
+## Installation
+
+> **Requirement:** your machine must have an SSH key configured for GitHub
+> (`ssh -T git@github.com` should respond *"Hi \<user\>! You've successfully authenticated…"*).
+> The source repository is private; the installer pulls and compiles it using your existing key —
+> no personal access token needed.
+
+### macOS and Linux
+
+Install the **tester** (diagnostic CLI client):
+```bash
+curl -fsSL https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh | bash -s -- tester
+```
+
+Install the **endpoint** (target test server — run on the machine you want to probe):
+```bash
+curl -fsSL https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh | bash -s -- endpoint
+```
+
+Or download and run locally:
+```bash
+bash install.sh tester
+bash install.sh endpoint
+```
+
+### Windows (PowerShell)
+
+Install the **tester**:
+```powershell
+Invoke-RestMethod https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.ps1 | Invoke-Expression
+```
+
+Install the **endpoint**:
+```powershell
+.\install.ps1 -Component endpoint
+```
+
+> **Note:** Git for Windows must be installed (bundles `ssh.exe`).
+> Download from <https://git-scm.com/>.
+
+### What the installer does
+
+1. Verifies SSH access to GitHub (`ssh -T git@github.com`).
+2. Installs Rust via [rustup](https://rustup.rs/) if `cargo` is not already present.
+3. Runs `cargo install --git ssh://git@github.com/irlm/networker-tester --bin <binary> --locked`
+   to compile and install the binary from the private repository.
+4. Prints the installed path and a quick-start command.
+
+Compilation takes 2–5 minutes on first run (all dependencies are downloaded and compiled).
+Subsequent installs or upgrades are faster because cargo caches compiled artifacts.
+
+### Upgrading
+
+Re-run the same install command. `cargo install` replaces the binary in-place.
 
 ---
 
@@ -63,8 +121,8 @@ xcode-select --install
 ### 1. Clone and build
 
 ```bash
-git clone <repo-url>
-cd Network
+git clone git@github.com:irlm/networker-tester.git
+cd networker-tester
 cargo build --release
 ```
 
