@@ -15,7 +15,6 @@
 /// HTTP/3 support is gated behind `--features http3`.  The endpoint also needs
 /// HTTP/3 support (see `networker-endpoint` docs).  In CI, HTTP/3 tests are
 /// skipped unless the `H3_TEST` environment variable is set.
-
 #[cfg(not(feature = "http3"))]
 pub use stub::run_http3_probe;
 
@@ -63,16 +62,11 @@ pub use real::run_http3_probe;
 
 #[cfg(feature = "http3")]
 mod real {
-    use crate::metrics::{
-        ErrorCategory, ErrorRecord, HttpResult, Protocol, RequestAttempt, TlsResult,
-    };
-    use bytes::Bytes;
+    use crate::metrics::{ErrorCategory, HttpResult, Protocol, RequestAttempt, TlsResult};
+    use bytes::Buf;
     use chrono::Utc;
-    use h3::client::SendRequest;
     use h3_quinn::Connection as QuinnH3Connection;
-    use http_body_util::BodyExt;
     use quinn::{ClientConfig as QuinnClientConfig, Endpoint};
-    use rustls::pki_types::ServerName;
     use std::sync::Arc;
     use std::time::Instant;
     use uuid::Uuid;
@@ -90,7 +84,13 @@ mod real {
         let host = match target.host_str() {
             Some(h) => h.to_string(),
             None => {
-                return h3_failed(run_id, attempt_id, sequence_num, started_at, "No host in URL");
+                return h3_failed(
+                    run_id,
+                    attempt_id,
+                    sequence_num,
+                    started_at,
+                    "No host in URL",
+                );
             }
         };
         let port = target.port().unwrap_or(443);
@@ -112,7 +112,10 @@ mod real {
             Ok(e) => e,
             Err(e) => {
                 return h3_failed(
-                    run_id, attempt_id, sequence_num, started_at,
+                    run_id,
+                    attempt_id,
+                    sequence_num,
+                    started_at,
                     &format!("QUIC endpoint creation failed: {e}"),
                 );
             }
@@ -127,36 +130,68 @@ mod real {
                 match tokio::net::lookup_host(&addr).await {
                     Ok(mut a) => match a.next() {
                         Some(sa) => sa,
-                        None => return h3_failed(run_id, attempt_id, sequence_num, started_at,
-                            "No address resolved"),
+                        None => {
+                            return h3_failed(
+                                run_id,
+                                attempt_id,
+                                sequence_num,
+                                started_at,
+                                "No address resolved",
+                            )
+                        }
                     },
-                    Err(e) => return h3_failed(run_id, attempt_id, sequence_num, started_at,
-                        &format!("DNS error: {e}")),
+                    Err(e) => {
+                        return h3_failed(
+                            run_id,
+                            attempt_id,
+                            sequence_num,
+                            started_at,
+                            &format!("DNS error: {e}"),
+                        )
+                    }
                 }
             }
         };
 
-        // QUIC handshake
+        // QUIC handshake — pass the Connecting future to timeout directly;
+        // do NOT .await it inline or it resolves before timeout can race it.
         let t_handshake = Instant::now();
-        let conn = match tokio::time::timeout(
-            std::time::Duration::from_millis(timeout_ms),
-            endpoint.connect(server_addr, &host).unwrap().await,
-        )
-        .await
-        {
-            Ok(Ok(c)) => c,
-            Ok(Err(e)) => {
+        let connecting = match endpoint.connect(server_addr, &host) {
+            Ok(c) => c,
+            Err(e) => {
                 return h3_failed(
-                    run_id, attempt_id, sequence_num, started_at,
-                    &format!("QUIC connect: {e}"),
-                );
-            }
-            Err(_) => {
-                return h3_failed(
-                    run_id, attempt_id, sequence_num, started_at, "QUIC handshake timeout",
+                    run_id,
+                    attempt_id,
+                    sequence_num,
+                    started_at,
+                    &format!("QUIC connect error: {e}"),
                 );
             }
         };
+        let conn =
+            match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), connecting)
+                .await
+            {
+                Ok(Ok(c)) => c,
+                Ok(Err(e)) => {
+                    return h3_failed(
+                        run_id,
+                        attempt_id,
+                        sequence_num,
+                        started_at,
+                        &format!("QUIC connect: {e}"),
+                    );
+                }
+                Err(_) => {
+                    return h3_failed(
+                        run_id,
+                        attempt_id,
+                        sequence_num,
+                        started_at,
+                        "QUIC handshake timeout",
+                    );
+                }
+            };
         let handshake_ms = t_handshake.elapsed().as_secs_f64() * 1000.0;
 
         // Build h3 connection
@@ -164,7 +199,10 @@ mod real {
             Ok((driver, send_req)) => (driver, send_req),
             Err(e) => {
                 return h3_failed(
-                    run_id, attempt_id, sequence_num, started_at,
+                    run_id,
+                    attempt_id,
+                    sequence_num,
+                    started_at,
                     &format!("h3 handshake: {e}"),
                 );
             }
@@ -176,7 +214,11 @@ mod real {
         });
 
         // Send request
-        let path = if target.path().is_empty() { "/" } else { target.path() };
+        let path = if target.path().is_empty() {
+            "/"
+        } else {
+            target.path()
+        };
         let req = http::Request::builder()
             .method("GET")
             .uri(format!("https://{host}:{port}{path}"))
@@ -189,7 +231,10 @@ mod real {
             Ok(s) => s,
             Err(e) => {
                 return h3_failed(
-                    run_id, attempt_id, sequence_num, started_at,
+                    run_id,
+                    attempt_id,
+                    sequence_num,
+                    started_at,
                     &format!("h3 send_request: {e}"),
                 );
             }
@@ -200,7 +245,10 @@ mod real {
             Ok(r) => r,
             Err(e) => {
                 return h3_failed(
-                    run_id, attempt_id, sequence_num, started_at,
+                    run_id,
+                    attempt_id,
+                    sequence_num,
+                    started_at,
                     &format!("h3 recv_response: {e}"),
                 );
             }

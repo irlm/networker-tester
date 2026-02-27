@@ -19,12 +19,15 @@ pub async fn resolve(
 
     let resolver = TokioAsyncResolver::tokio(ResolverConfig::default(), ResolverOpts::default());
 
-    let lookup = resolver.lookup_ip(hostname).await.map_err(|e| ErrorRecord {
-        category: ErrorCategory::Dns,
-        message: e.to_string(),
-        detail: Some(format!("lookup_ip({hostname}) failed")),
-        occurred_at: Utc::now(),
-    })?;
+    let lookup = resolver
+        .lookup_ip(hostname)
+        .await
+        .map_err(|e| ErrorRecord {
+            category: ErrorCategory::Dns,
+            message: e.to_string(),
+            detail: Some(format!("lookup_ip({hostname}) failed")),
+            occurred_at: Utc::now(),
+        })?;
 
     let mut ips: Vec<IpAddr> = lookup.iter().collect();
 

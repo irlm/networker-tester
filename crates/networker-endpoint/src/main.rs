@@ -3,7 +3,11 @@ use networker_endpoint::{run, ServerConfig};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
-#[command(name = "networker-endpoint", about = "Diagnostics endpoint for networker-tester", version)]
+#[command(
+    name = "networker-endpoint",
+    about = "Diagnostics endpoint for networker-tester",
+    version
+)]
 struct Cli {
     /// HTTP (plain) listening port
     #[arg(long, default_value_t = 8080)]
@@ -22,8 +26,7 @@ struct Cli {
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info")),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
 

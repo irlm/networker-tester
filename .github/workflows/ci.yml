@@ -49,8 +49,11 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
       # ── Unit + integration tests (no SQL) ─────────────────────────────────
+      # Do NOT pass --include-ignored: tests marked #[ignore] require live
+      # services (endpoint on :8080/:8443, SQL Server) that are not available
+      # in the standard CI environment.
       - name: cargo test (unit tests)
-        run: cargo test --workspace --lib -- --include-ignored
+        run: cargo test --workspace --lib
 
       - name: cargo test (endpoint unit tests)
         run: cargo test -p networker-endpoint --lib
@@ -75,11 +78,17 @@ jobs:
         run: cargo build -p networker-tester --features http3
 
   # ──────────────────────────────────────────────────────────────────────────
-  # Optional: SQL Server integration (runs only when secret is present)
+  # Optional: SQL Server integration.
+  # To enable, go to Settings → Secrets and variables → Actions and add:
+  #   Variable : NETWORKER_SQL_TESTS = true
+  #   Secret   : NETWORKER_SQL_CONN  = <your ADO.NET connection string>
+  #
+  # Note: the `secrets` context is not allowed in job-level `if` conditions
+  # (GitHub Actions limitation), so we use a repository variable to opt in.
   sql-integration:
     name: SQL Server integration
     runs-on: ubuntu-latest
-    if: ${{ secrets.NETWORKER_SQL_CONN != '' }}
+    if: ${{ vars.NETWORKER_SQL_TESTS == 'true' }}
 
     services:
       mssql:

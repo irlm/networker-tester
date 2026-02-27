@@ -74,8 +74,16 @@ pub async fn run_probe(
 
     match protocol {
         Protocol::Http1 | Protocol::Http2 | Protocol::Tcp => {
-            run_http_or_tcp(run_id, attempt_id, sequence_num, protocol, target, cfg, started_at)
-                .await
+            run_http_or_tcp(
+                run_id,
+                attempt_id,
+                sequence_num,
+                protocol,
+                target,
+                cfg,
+                started_at,
+            )
+            .await
         }
         other => RequestAttempt {
             attempt_id,
@@ -117,8 +125,16 @@ async fn run_http_or_tcp(
         Some(h) => h.to_string(),
         None => {
             return failed_attempt(
-                run_id, attempt_id, sequence_num, protocol, started_at,
-                ErrorCategory::Config, "Target URL has no host".into(), None, None, None,
+                run_id,
+                attempt_id,
+                sequence_num,
+                protocol,
+                started_at,
+                ErrorCategory::Config,
+                "Target URL has no host".into(),
+                None,
+                None,
+                None,
             );
         }
     };
@@ -137,8 +153,16 @@ async fn run_http_or_tcp(
             }
             Err(e) => {
                 return failed_attempt(
-                    run_id, attempt_id, sequence_num, protocol, started_at,
-                    e.category, e.message, e.detail, None, None,
+                    run_id,
+                    attempt_id,
+                    sequence_num,
+                    protocol,
+                    started_at,
+                    e.category,
+                    e.message,
+                    e.detail,
+                    None,
+                    None,
                 );
             }
         }
@@ -148,10 +172,16 @@ async fn run_http_or_tcp(
             Ok(ip) => (SocketAddr::new(ip, port), None),
             Err(_) => {
                 return failed_attempt(
-                    run_id, attempt_id, sequence_num, protocol, started_at,
+                    run_id,
+                    attempt_id,
+                    sequence_num,
+                    protocol,
+                    started_at,
                     ErrorCategory::Config,
                     format!("dns_enabled=false but '{host}' is not a valid IP"),
-                    None, None, None,
+                    None,
+                    None,
+                    None,
                 );
             }
         }
@@ -169,17 +199,30 @@ async fn run_http_or_tcp(
         Ok(Ok(s)) => s,
         Ok(Err(e)) => {
             return failed_attempt(
-                run_id, attempt_id, sequence_num, protocol, started_at,
-                ErrorCategory::Tcp, e.to_string(), Some(format!("connect to {addr}")),
-                dns_result, None,
+                run_id,
+                attempt_id,
+                sequence_num,
+                protocol,
+                started_at,
+                ErrorCategory::Tcp,
+                e.to_string(),
+                Some(format!("connect to {addr}")),
+                dns_result,
+                None,
             );
         }
         Err(_) => {
             return failed_attempt(
-                run_id, attempt_id, sequence_num, protocol, started_at,
+                run_id,
+                attempt_id,
+                sequence_num,
+                protocol,
+                started_at,
                 ErrorCategory::Timeout,
                 format!("TCP connect to {addr} timed out after {}ms", cfg.timeout_ms),
-                None, dns_result, None,
+                None,
+                dns_result,
+                None,
             );
         }
     };
@@ -231,9 +274,16 @@ async fn run_http_or_tcp(
             Ok(n) => n,
             Err(e) => {
                 return failed_attempt(
-                    run_id, attempt_id, sequence_num, protocol, started_at,
-                    ErrorCategory::Tls, format!("Invalid SNI: {e}"), None,
-                    dns_result, Some(tcp_result),
+                    run_id,
+                    attempt_id,
+                    sequence_num,
+                    protocol,
+                    started_at,
+                    ErrorCategory::Tls,
+                    format!("Invalid SNI: {e}"),
+                    None,
+                    dns_result,
+                    Some(tcp_result),
                 );
             }
         };
@@ -247,17 +297,30 @@ async fn run_http_or_tcp(
             Ok(Ok(s)) => s,
             Ok(Err(e)) => {
                 return failed_attempt(
-                    run_id, attempt_id, sequence_num, protocol, started_at,
-                    ErrorCategory::Tls, e.to_string(), Some("TLS handshake".into()),
-                    dns_result, Some(tcp_result),
+                    run_id,
+                    attempt_id,
+                    sequence_num,
+                    protocol,
+                    started_at,
+                    ErrorCategory::Tls,
+                    e.to_string(),
+                    Some("TLS handshake".into()),
+                    dns_result,
+                    Some(tcp_result),
                 );
             }
             Err(_) => {
                 return failed_attempt(
-                    run_id, attempt_id, sequence_num, protocol, started_at,
+                    run_id,
+                    attempt_id,
+                    sequence_num,
+                    protocol,
+                    started_at,
                     ErrorCategory::Timeout,
                     format!("TLS handshake timed out after {}ms", cfg.timeout_ms),
-                    None, dns_result, Some(tcp_result),
+                    None,
+                    dns_result,
+                    Some(tcp_result),
                 );
             }
         };
@@ -278,7 +341,11 @@ async fn run_http_or_tcp(
     let http_started_at = Utc::now();
     let t_http = Instant::now();
 
-    let path = if target.path().is_empty() { "/" } else { target.path() };
+    let path = if target.path().is_empty() {
+        "/"
+    } else {
+        target.path()
+    };
     let query = target.query().map(|q| format!("?{q}")).unwrap_or_default();
     let full_path = format!("{path}{query}");
 
@@ -311,9 +378,16 @@ async fn run_http_or_tcp(
         Err(e) => {
             warn!("HTTP request failed: {e}");
             failed_attempt(
-                run_id, attempt_id, sequence_num, protocol, started_at,
-                ErrorCategory::Http, e.to_string(), None,
-                dns_result, Some(tcp_result),
+                run_id,
+                attempt_id,
+                sequence_num,
+                protocol,
+                started_at,
+                ErrorCategory::Http,
+                e.to_string(),
+                None,
+                dns_result,
+                Some(tcp_result),
             )
         }
     }
@@ -332,8 +406,7 @@ async fn send_http1(
     t0: Instant,
 ) -> anyhow::Result<HttpResult> {
     let io = TokioIo::new(io_box);
-    let (mut sender, conn) =
-        hyper::client::conn::http1::handshake::<_, Full<Bytes>>(io).await?;
+    let (mut sender, conn) = hyper::client::conn::http1::handshake::<_, Full<Bytes>>(io).await?;
 
     tokio::spawn(async move {
         if let Err(e) = conn.await {
@@ -529,9 +602,13 @@ fn extract_tls_info(
     }
 }
 
-fn parse_cert_fields(
-    der: &[u8],
-) -> Option<(Option<String>, Option<String>, Option<chrono::DateTime<Utc>>)> {
+type CertFields = (
+    Option<String>,
+    Option<String>,
+    Option<chrono::DateTime<Utc>>,
+);
+
+fn parse_cert_fields(der: &[u8]) -> Option<CertFields> {
     use x509_parser::prelude::*;
     let (_, cert) = X509Certificate::from_der(der).ok()?;
     let subject = Some(cert.subject().to_string());
@@ -545,12 +622,16 @@ fn parse_cert_fields(
 
 fn pick_ip(ips: &[std::net::IpAddr], prefer_v4: bool) -> std::net::IpAddr {
     if prefer_v4 {
-        ips.iter().find(|ip| ip.is_ipv4()).copied().unwrap_or(ips[0])
+        ips.iter()
+            .find(|ip| ip.is_ipv4())
+            .copied()
+            .unwrap_or(ips[0])
     } else {
         ips[0]
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn failed_attempt(
     run_id: Uuid,
     attempt_id: Uuid,
@@ -666,10 +747,7 @@ mod tests {
 
     #[test]
     fn pick_ip_prefers_v4() {
-        let ips = vec![
-            "::1".parse().unwrap(),
-            "127.0.0.1".parse().unwrap(),
-        ];
+        let ips = vec!["::1".parse().unwrap(), "127.0.0.1".parse().unwrap()];
         let ip = pick_ip(&ips, true);
         assert!(ip.is_ipv4());
     }
