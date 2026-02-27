@@ -1,14 +1,15 @@
 /// All HTTP route handlers for the diagnostics endpoint.
 use axum::{
     body::Body,
-    extract::{Path, Query},
-    http::{HeaderMap, Request, StatusCode, Version},
+    extract::{DefaultBodyLimit, Path, Query, Request},
+    http::{HeaderMap, StatusCode, Version},
     response::{IntoResponse, Json, Response},
     routing::{get, post},
     Router,
 };
 use bytes::Bytes;
 use chrono::Utc;
+use http_body_util::BodyExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tokio::time::{sleep, Duration};
@@ -28,6 +29,9 @@ pub fn build_router() -> Router {
         .route("/status/:code", get(status_code))
         .route("/http-version", get(http_version))
         .route("/info", get(server_info))
+        // Remove axum's default 2 MiB body limit so upload probes of arbitrary
+        // size are not rejected with 413 before the body is transmitted.
+        .layer(DefaultBodyLimit::disable())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -89,9 +93,9 @@ struct DownloadParams {
     bytes: Option<usize>,
 }
 
-/// GET /download?bytes=N – returns N zero bytes  (max 100 MiB)
+/// GET /download?bytes=N – returns N zero bytes  (max 2 GiB)
 async fn download(Query(p): Query<DownloadParams>) -> impl IntoResponse {
-    let n = p.bytes.unwrap_or(1024).min(104_857_600); // cap 100 MiB
+    let n = p.bytes.unwrap_or(1024).min(2 * 1024 * 1024 * 1024); // cap 2 GiB
     let body = vec![0u8; n];
     Response::builder()
         .status(200)
@@ -108,10 +112,21 @@ struct UploadStats {
     timestamp: String,
 }
 
-/// POST /upload – accepts body, returns stats JSON
-async fn upload(body: Bytes) -> impl IntoResponse {
+/// POST /upload – drains the request body without buffering it in memory,
+/// then returns a JSON stats object with the byte count.
+///
+/// Using a streaming drain (rather than `Bytes` extractor) avoids axum's
+/// default 2 MiB body limit and prevents OOM for large upload probes.
+async fn upload(req: Request) -> impl IntoResponse {
+    let mut received_bytes: usize = 0;
+    let mut body = req.into_body();
+    while let Some(Ok(frame)) = body.frame().await {
+        if let Ok(data) = frame.into_data() {
+            received_bytes += data.len();
+        }
+    }
     Json(UploadStats {
-        received_bytes: body.len(),
+        received_bytes,
         timestamp: Utc::now().to_rfc3339(),
     })
 }
@@ -153,7 +168,7 @@ async fn status_code(Path(code): Path<u16>) -> impl IntoResponse {
 }
 
 /// GET /http-version – returns the HTTP version used by the client
-async fn http_version(req: Request<Body>) -> impl IntoResponse {
+async fn http_version(req: Request) -> impl IntoResponse {
     let version = match req.version() {
         Version::HTTP_09 => "HTTP/0.9",
         Version::HTTP_10 => "HTTP/1.0",
