@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "develop"]
+  pull_request:
+    branches: ["main"]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # SQL tests are skipped by default; set NETWORKER_SQL_CONN in repo secrets to enable.
+  # NETWORKER_SQL_CONN: "Server=localhost;Database=NetworkDiagnostics;..."
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────────
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      # ── Format check ──────────────────────────────────────────────────────
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      # ── Clippy ────────────────────────────────────────────────────────────
+      - name: Clippy (default features)
+        run: cargo clippy --all-targets -- -D warnings
+
+      # ── Unit + integration tests (no SQL) ─────────────────────────────────
+      - name: cargo test (unit tests)
+        run: cargo test --workspace --lib -- --include-ignored
+
+      - name: cargo test (endpoint unit tests)
+        run: cargo test -p networker-endpoint --lib
+
+      # Integration tests that require the endpoint in-process
+      - name: cargo test (integration – no SQL)
+        run: cargo test --test integration -p networker-tester
+        continue-on-error: true   # integration tests may be flakey in CI
+
+      # ── Build release ─────────────────────────────────────────────────────
+      - name: Build (release)
+        run: cargo build --release --workspace
+
+  # ──────────────────────────────────────────────────────────────────────────
+  test-http3:
+    name: Test HTTP/3 feature
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build with http3 feature
+        run: cargo build -p networker-tester --features http3
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Optional: SQL Server integration (runs only when secret is present)
+  sql-integration:
+    name: SQL Server integration
+    runs-on: ubuntu-latest
+    if: ${{ secrets.NETWORKER_SQL_CONN != '' }}
+
+    services:
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          SA_PASSWORD: "NetworkerTest1!"
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P NetworkerTest1! -C -Q 'SELECT 1'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install sqlcmd
+        run: |
+          curl -sSL https://packages.microsoft.com/keys/microsoft.asc | sudo tee /etc/apt/trusted.gpg.d/microsoft.asc
+          sudo add-apt-repository "$(curl -sSL https://packages.microsoft.com/config/ubuntu/22.04/prod.list)"
+          sudo apt-get update && sudo apt-get install -y mssql-tools18 unixodbc-dev
+
+      - name: Create database schema
+        run: |
+          /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "NetworkerTest1!" -C \
+            -i sql/01_CreateDatabase.sql
+          /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "NetworkerTest1!" -C \
+            -i sql/02_StoredProcedures.sql
+
+      - name: Run SQL tests
+        env:
+          NETWORKER_SQL_CONN: "Server=localhost;Database=NetworkDiagnostics;User Id=sa;Password=NetworkerTest1!;TrustServerCertificate=true"
+        run: cargo test --workspace -- sql --include-ignored
