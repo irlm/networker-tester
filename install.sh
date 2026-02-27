@@ -77,10 +77,20 @@ else
 fi
 
 # ── Build and install ─────────────────────────────────────────────────────────
+# CARGO_NET_GIT_FETCH_WITH_CLI=true makes cargo delegate git cloning to the
+# system `git` binary instead of its built-in libgit2 implementation.
+# libgit2 does not reliably pick up the ssh-agent, causing
+# "no authentication methods succeeded" even when `ssh -T git@github.com` works.
+#
+# The package name (${BINARY}) is passed as a positional argument because this
+# repo is a Cargo workspace with multiple packages; without it cargo errors:
+# "multiple packages with binaries found".
+#
 # </dev/null prevents cargo from reading the curl pipe for interactive prompts
 # (same reason as the ssh call above).
 info "Installing ${BINARY} (this compiles from source – may take a few minutes)..."
-cargo install --git "${REPO_SSH}" --bin "${BINARY}" --locked </dev/null
+CARGO_NET_GIT_FETCH_WITH_CLI=true \
+    cargo install --git "${REPO_SSH}" "${BINARY}" --locked </dev/null
 
 echo ""
 INSTALLED_PATH=$(command -v "${BINARY}" 2>/dev/null || echo "(not in PATH)")
