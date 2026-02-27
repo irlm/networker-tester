@@ -96,6 +96,38 @@ impl Endpoint {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
 
+        // Wait for the UDP echo server.
+        //
+        // Unlike TCP, there is no "connect" handshake to probe.  We send a
+        // tiny echo-format packet (4-byte seq) and wait up to 100 ms for the
+        // server to bounce it back.  On macOS / Linux, sending to a port with
+        // nothing bound returns ICMP Port Unreachable (ECONNREFUSED), so
+        // retrying until we actually get the echo is the correct readiness
+        // check.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            let probe = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            probe
+                .connect(format!("127.0.0.1:{udp_port}"))
+                .await
+                .unwrap();
+            // seq=0, timestamp=0 — valid echo-format header
+            let _ = probe.send(&[0u8; 12]).await;
+            let mut buf = [0u8; 16];
+            let echoed =
+                tokio::time::timeout(std::time::Duration::from_millis(100), probe.recv(&mut buf))
+                    .await
+                    .map(|r| r.is_ok())
+                    .unwrap_or(false);
+            if echoed {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                panic!("UDP echo server did not start within 3 seconds");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
         Endpoint {
             http_port,
             https_port,

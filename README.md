@@ -383,8 +383,12 @@ End-to-end probe pipeline tests.  `networker-endpoint` is spawned **in-process**
 ports — no manual server setup required.
 
 ```bash
-cargo test --test integration -p networker-tester
+cargo test --test integration -p networker-tester -- --test-threads=1
 ```
+
+> `--test-threads=1` is required because each test spawns its own endpoint on
+> random ports — concurrent tests can grab the same port before the endpoint
+> binds it (TOCTOU race).
 
 What's covered:
 
@@ -438,7 +442,7 @@ cargo build -p networker-tester --features http3
 cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings
 cargo test --workspace --lib
-cargo test --test integration -p networker-tester
+cargo test --test integration -p networker-tester -- --test-threads=1
 ```
 
 ---

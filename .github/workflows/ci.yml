@@ -58,10 +58,11 @@ jobs:
       - name: cargo test (endpoint unit tests)
         run: cargo test -p networker-endpoint --lib
 
-      # Integration tests that require the endpoint in-process
+      # Integration tests that require the endpoint in-process.
+      # Each test spawns its own endpoint on random ports (TOCTOU race if
+      # tests run concurrently), so we serialise them with --test-threads=1.
       - name: cargo test (integration – no SQL)
-        run: cargo test --test integration -p networker-tester
-        continue-on-error: true   # integration tests may be flakey in CI
+        run: cargo test --test integration -p networker-tester -- --test-threads=1
 
       # ── Build release ─────────────────────────────────────────────────────
       - name: Build (release)
