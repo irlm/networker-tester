@@ -13,16 +13,22 @@
 ///   transfer_ms = total_duration_ms − ttfb_ms
 ///
 /// **Upload** — data flows client → server *before* the server responds.
-/// The intuitive choice of `ttfb_ms` (time until response headers arrive)
-/// turns out to be near-zero for large payloads: hyper writes the body into
-/// the kernel TCP send buffer almost instantly, so `send_request` returns
-/// before the bytes actually traverse the network.  The actual transmission
-/// and server drain happen concurrently with the rest of `run_probe`, making
-/// `total_duration_ms` the only reliable end-to-end window:
-///   transfer_ms = total_duration_ms
 ///
-/// This slightly overestimates (includes TCP connect + response receipt), but
-/// both of those are negligible compared to a large body transfer.
+/// The preferred measurement source is the server's own drain timer, returned
+/// in the `Server-Timing: recv;dur=X` response header when talking to
+/// `networker-endpoint`.  This directly measures how long the server spent
+/// reading the request body and is immune to client-side timing ambiguities.
+///
+/// When that header is absent (generic HTTP target), we fall back to the
+/// client-side `total_duration_ms` (time from HTTP start to full response
+/// receipt).  This is accurate only when the server drains the body **before**
+/// sending its response — which our endpoint guarantees.  For servers that
+/// respond before the body is fully received, `total_duration_ms` can be
+/// near-zero (the kernel TCP send buffer absorbs the body and hyper returns
+/// as soon as response headers arrive), leading to absurdly high throughput.
+///
+///   preferred: transfer_ms = server_timing.recv_body_ms   (server drain time)
+///   fallback:  transfer_ms = total_duration_ms            (end-to-end client time)
 use crate::metrics::{HttpResult, Protocol, RequestAttempt};
 use crate::runner::http::{run_probe, RunConfig};
 use uuid::Uuid;
@@ -67,7 +73,7 @@ pub async fn run_download_probe(
     .await;
 
     if let Some(h) = attempt.http.clone() {
-        attempt.http = Some(patch_throughput(h, payload_bytes, false));
+        attempt.http = Some(patch_throughput(h, payload_bytes));
     }
     attempt
 }
@@ -95,7 +101,14 @@ pub async fn run_upload_probe(
     let mut attempt = run_probe(run_id, sequence_num, Protocol::Upload, &target, &probe_cfg).await;
 
     if let Some(h) = attempt.http.clone() {
-        attempt.http = Some(patch_throughput(h, payload_bytes, true));
+        // Prefer the server's own drain timer (Server-Timing: recv;dur=X) — it
+        // is accurate even when the server responds before the body is fully
+        // received on the wire.  Fall back to client-side total_duration_ms.
+        let server_recv_ms = attempt
+            .server_timing
+            .as_ref()
+            .and_then(|st| st.recv_body_ms);
+        attempt.http = Some(patch_upload_throughput(h, payload_bytes, server_recv_ms));
     }
     attempt
 }
@@ -104,30 +117,44 @@ pub async fn run_upload_probe(
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Compute and attach throughput to an `HttpResult`.
+/// Compute and attach download throughput to an `HttpResult`.
 ///
-/// `is_upload` selects the correct time window:
-/// - `false` (download): `total_duration_ms − ttfb_ms` — body receive time
-/// - `true`  (upload):   `total_duration_ms`           — full end-to-end time
-///
-/// For uploads, `ttfb_ms` is near-zero on large payloads because hyper
-/// flushes the body to the kernel send buffer before `send_request` returns.
-/// `total_duration_ms` correctly captures the actual transfer duration.
-fn patch_throughput(h: HttpResult, payload_bytes: usize, is_upload: bool) -> HttpResult {
-    let transfer_ms = if is_upload {
-        h.total_duration_ms
-    } else {
-        h.total_duration_ms - h.ttfb_ms
-    };
-    let throughput_mbps = if transfer_ms > 0.0 {
-        Some(payload_bytes as f64 / transfer_ms * 1000.0 / (1024.0 * 1024.0))
-    } else {
-        None
-    };
+/// Transfer window: `total_duration_ms − ttfb_ms` (body-receive phase only).
+fn patch_throughput(h: HttpResult, payload_bytes: usize) -> HttpResult {
+    let transfer_ms = h.total_duration_ms - h.ttfb_ms;
+    let throughput_mbps = mbps(payload_bytes, transfer_ms);
     HttpResult {
         payload_bytes,
         throughput_mbps,
         ..h
+    }
+}
+
+/// Compute and attach upload throughput to an `HttpResult`.
+///
+/// Uses `server_recv_ms` (from `Server-Timing: recv;dur=X`) when provided —
+/// the server's own timer for how long it spent draining the request body.
+/// Falls back to `h.total_duration_ms` (reliable only when the server drains
+/// before responding, which `networker-endpoint` guarantees).
+fn patch_upload_throughput(
+    h: HttpResult,
+    payload_bytes: usize,
+    server_recv_ms: Option<f64>,
+) -> HttpResult {
+    let transfer_ms = server_recv_ms.unwrap_or(h.total_duration_ms);
+    let throughput_mbps = mbps(payload_bytes, transfer_ms);
+    HttpResult {
+        payload_bytes,
+        throughput_mbps,
+        ..h
+    }
+}
+
+fn mbps(payload_bytes: usize, transfer_ms: f64) -> Option<f64> {
+    if transfer_ms > 0.0 {
+        Some(payload_bytes as f64 / transfer_ms * 1000.0 / (1024.0 * 1024.0))
+    } else {
+        None
     }
 }
 
@@ -157,55 +184,88 @@ mod tests {
         }
     }
 
+    // ── Download ─────────────────────────────────────────────────────────────
+
     #[test]
     fn download_uses_body_receive_time() {
         // 1 MiB received in 1000ms body time (ttfb=10ms, total=1010ms) → 1.0 MB/s
         let h = make_http_result(10.0, 1010.0);
-        let patched = patch_throughput(h, 1024 * 1024, false);
+        let patched = patch_throughput(h, 1024 * 1024);
         let mbps = patched.throughput_mbps.expect("should have throughput");
         assert!((mbps - 1.0).abs() < 1e-9, "expected ~1.0 MB/s, got {mbps}");
     }
 
     #[test]
-    fn upload_uses_total_duration() {
-        // 1 MiB upload: ttfb≈0 (hyper buffers to kernel instantly), total=1000ms
-        // correct formula uses total_duration_ms → 1.0 MB/s
+    fn download_throughput_none_when_transfer_ms_is_zero() {
+        // download where ttfb == total → body_ms == 0 → no throughput
+        let h = make_http_result(100.0, 100.0);
+        let patched = patch_throughput(h, 65536);
+        assert!(patched.throughput_mbps.is_none());
+    }
+
+    #[test]
+    fn download_payload_bytes_set() {
+        let h = make_http_result(5.0, 100.0);
+        let patched = patch_throughput(h, 65536);
+        assert_eq!(patched.payload_bytes, 65536);
+    }
+
+    // ── Upload: server recv_body_ms available ─────────────────────────────────
+
+    #[test]
+    fn upload_prefers_server_recv_ms_when_available() {
+        // Server says it drained the body in 1000ms; client total is also 1000ms.
+        // Result should use server's 1000ms.
         let h = make_http_result(0.5, 1000.0);
-        let patched = patch_throughput(h, 1024 * 1024, true);
+        let patched = patch_upload_throughput(h, 1024 * 1024, Some(1000.0));
         let mbps = patched.throughput_mbps.expect("should have throughput");
         assert!((mbps - 1.0).abs() < 1e-9, "expected ~1.0 MB/s, got {mbps}");
     }
 
     #[test]
-    fn upload_near_zero_ttfb_does_not_produce_absurd_throughput() {
-        // Regression: hyper buffers large body to kernel → ttfb_ms ≈ 0.5ms.
-        // Old formula (ttfb):   1 GiB / 0.5ms  → ~2 billion MB/s  (WRONG)
-        // New formula (total):  1 GiB / 9000ms → ~113 MB/s         (correct)
-        let h = make_http_result(0.5, 9000.0);
-        let patched = patch_throughput(h, 1024 * 1024 * 1024, true); // 1 GiB
+    fn upload_server_recv_ms_prevents_absurd_throughput_on_fast_respond() {
+        // Server responded before draining → client total_duration_ms ≈ 0.2ms
+        // but server recv_body_ms = 9000ms (actual drain).
+        // Without server timing, throughput would be ~5M MB/s; with it → ~113 MB/s.
+        let h = make_http_result(0.2, 0.2); // fast client-side times
+        let patched = patch_upload_throughput(h, 1024 * 1024 * 1024, Some(9000.0));
         let mbps = patched.throughput_mbps.expect("should have throughput");
         assert!(
             mbps < 10_000.0,
             "throughput must not be astronomically wrong: {mbps}"
         );
+        assert!(mbps > 50.0, "throughput must be in a plausible range: {mbps}");
+    }
+
+    // ── Upload: no server timing, falls back to total_duration_ms ─────────────
+
+    #[test]
+    fn upload_falls_back_to_total_duration_without_server_timing() {
+        // No server recv_body_ms; endpoint drains before respond → total ≈ 1000ms.
+        let h = make_http_result(0.5, 1000.0);
+        let patched = patch_upload_throughput(h, 1024 * 1024, None);
+        let mbps = patched.throughput_mbps.expect("should have throughput");
+        assert!((mbps - 1.0).abs() < 1e-9, "expected ~1.0 MB/s, got {mbps}");
+    }
+
+    #[test]
+    fn upload_near_zero_ttfb_does_not_produce_absurd_throughput_with_server_timing() {
+        // Regression guard: with server recv_body_ms, even if client ttfb ≈ 0,
+        // the result uses the server's 9000ms drain time.
+        let h = make_http_result(0.5, 9000.0);
+        let patched = patch_upload_throughput(h, 1024 * 1024 * 1024, Some(9000.0));
+        let mbps = patched.throughput_mbps.expect("should have throughput");
         assert!(
-            mbps > 50.0,
-            "throughput must be in a plausible range: {mbps}"
+            mbps < 10_000.0,
+            "throughput must not be astronomically wrong: {mbps}"
         );
+        assert!(mbps > 50.0, "throughput must be in a plausible range: {mbps}");
     }
 
     #[test]
-    fn throughput_none_when_transfer_ms_is_zero() {
-        // download where ttfb == total → body_ms == 0 → no throughput
-        let h = make_http_result(100.0, 100.0);
-        let patched = patch_throughput(h, 65536, false);
-        assert!(patched.throughput_mbps.is_none());
-    }
-
-    #[test]
-    fn throughput_payload_bytes_set() {
+    fn upload_payload_bytes_set() {
         let h = make_http_result(5.0, 100.0);
-        let patched = patch_throughput(h, 65536, false);
+        let patched = patch_upload_throughput(h, 65536, Some(100.0));
         assert_eq!(patched.payload_bytes, 65536);
     }
 
