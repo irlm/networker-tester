@@ -73,7 +73,11 @@ pub async fn run_probe(
     let started_at = Utc::now();
 
     match protocol {
-        Protocol::Http1 | Protocol::Http2 | Protocol::Tcp => {
+        Protocol::Http1
+        | Protocol::Http2
+        | Protocol::Tcp
+        | Protocol::Download
+        | Protocol::Upload => {
             run_http_or_tcp(
                 run_id,
                 attempt_id,
@@ -350,7 +354,7 @@ async fn run_http_or_tcp(
     let full_path = format!("{path}{query}");
 
     let http_result = match protocol {
-        Protocol::Http1 => {
+        Protocol::Http1 | Protocol::Download | Protocol::Upload => {
             send_http1(io_box, &host, &full_path, cfg, http_started_at, t_http).await
         }
         Protocol::Http2 => {
@@ -526,6 +530,8 @@ async fn collect_response(
         redirect_count: 0,
         started_at,
         response_headers,
+        payload_bytes: 0,
+        throughput_mbps: None,
     })
 }
 

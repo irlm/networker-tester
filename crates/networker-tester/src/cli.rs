@@ -37,6 +37,11 @@ pub struct Cli {
     #[arg(long, default_value_t = 0)]
     pub payload_size: usize,
 
+    /// Payload sizes for download/upload probes. Comma-separated, accepts k/m/g suffixes.
+    /// Required when --modes includes download or upload (e.g. --payload-sizes 4k,64k,1m).
+    #[arg(long, value_delimiter = ',')]
+    pub payload_sizes: Vec<String>,
+
     // ── UDP ───────────────────────────────────────────────────────────────────
     /// UDP echo server port on the target host
     #[arg(long, default_value_t = 9999)]
@@ -121,6 +126,28 @@ impl Cli {
             .filter_map(|m| crate::metrics::Protocol::from_str(m).ok())
             .collect()
     }
+
+    pub fn parsed_payload_sizes(&self) -> anyhow::Result<Vec<usize>> {
+        self.payload_sizes.iter().map(|s| parse_size(s)).collect()
+    }
+}
+
+fn parse_size(s: &str) -> anyhow::Result<usize> {
+    let s = s.trim().to_lowercase();
+    let (num, mul) = if s.ends_with('g') {
+        (&s[..s.len() - 1], 1usize << 30)
+    } else if s.ends_with('m') {
+        (&s[..s.len() - 1], 1usize << 20)
+    } else if s.ends_with('k') {
+        (&s[..s.len() - 1], 1usize << 10)
+    } else {
+        (s.as_str(), 1usize)
+    };
+    let n: usize = num
+        .parse()
+        .map_err(|_| anyhow::anyhow!("invalid size: {s}"))?;
+    n.checked_mul(mul)
+        .ok_or_else(|| anyhow::anyhow!("size overflow: {s}"))
 }
 
 #[cfg(test)]
@@ -147,5 +174,21 @@ mod tests {
     fn validate_save_to_sql_without_conn_string_fails() {
         let cli = Cli::parse_from(["networker-tester", "--save-to-sql"]);
         assert!(cli.validate().is_err());
+    }
+
+    #[test]
+    fn parse_size_suffixes() {
+        assert_eq!(super::parse_size("4k").unwrap(), 4096);
+        assert_eq!(super::parse_size("64k").unwrap(), 65536);
+        assert_eq!(super::parse_size("1m").unwrap(), 1048576);
+        assert_eq!(super::parse_size("1024").unwrap(), 1024);
+        assert!(super::parse_size("abc").is_err());
+    }
+
+    #[test]
+    fn payload_sizes_parsed_via_cli() {
+        let cli = Cli::parse_from(["networker-tester", "--payload-sizes", "4k,64k,1m"]);
+        let sizes = cli.parsed_payload_sizes().unwrap();
+        assert_eq!(sizes, vec![4096, 65536, 1048576]);
     }
 }

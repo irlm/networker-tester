@@ -169,3 +169,19 @@ SELECT
     (SELECT COUNT(*) FROM dbo.UdpResult)      AS UdpResults,
     (SELECT COUNT(*) FROM dbo.ErrorRecord)    AS Errors;
 GO
+
+-- ── 11. Throughput summary by mode and payload size ───────────────────────────
+SELECT
+    a.Protocol,
+    h.PayloadBytes,
+    COUNT(*)                AS Attempts,
+    AVG(h.ThroughputMbps)  AS AvgMbps,
+    MIN(h.ThroughputMbps)  AS MinMbps,
+    MAX(h.ThroughputMbps)  AS MaxMbps
+FROM dbo.RequestAttempt a
+JOIN dbo.HttpResult h ON h.AttemptId = a.AttemptId
+WHERE a.Protocol IN ('download', 'upload')
+  AND h.ThroughputMbps IS NOT NULL
+GROUP BY a.Protocol, h.PayloadBytes
+ORDER BY a.Protocol, h.PayloadBytes;
+GO
