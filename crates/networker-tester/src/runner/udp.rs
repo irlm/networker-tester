@@ -55,11 +55,25 @@ pub async fn run_udp_probe(
             match tokio::net::lookup_host(&target).await {
                 Ok(mut addrs) => match addrs.next() {
                     Some(a) => a,
-                    None => return udp_failed(run_id, attempt_id, sequence_num, started_at,
-                        format!("No address resolved for {target}")),
+                    None => {
+                        return udp_failed(
+                            run_id,
+                            attempt_id,
+                            sequence_num,
+                            started_at,
+                            format!("No address resolved for {target}"),
+                        )
+                    }
                 },
-                Err(e) => return udp_failed(run_id, attempt_id, sequence_num, started_at,
-                    format!("DNS error for {target}: {e}")),
+                Err(e) => {
+                    return udp_failed(
+                        run_id,
+                        attempt_id,
+                        sequence_num,
+                        started_at,
+                        format!("DNS error for {target}: {e}"),
+                    )
+                }
             }
         }
     };
@@ -74,7 +88,10 @@ pub async fn run_udp_probe(
         Ok(s) => s,
         Err(e) => {
             return udp_failed(
-                run_id, attempt_id, sequence_num, started_at,
+                run_id,
+                attempt_id,
+                sequence_num,
+                started_at,
                 format!("UDP bind failed: {e}"),
             )
         }
@@ -82,7 +99,10 @@ pub async fn run_udp_probe(
 
     if let Err(e) = socket.connect(target_addr).await {
         return udp_failed(
-            run_id, attempt_id, sequence_num, started_at,
+            run_id,
+            attempt_id,
+            sequence_num,
+            started_at,
             format!("UDP connect failed: {e}"),
         );
     }
@@ -94,7 +114,9 @@ pub async fn run_udp_probe(
         debug!(
             "UDP probe {seq}/{}: {:?}",
             cfg.probe_count,
-            rtt.map(|r| format!("{r:.2}ms")).as_deref().unwrap_or("LOST")
+            rtt.map(|r| format!("{r:.2}ms"))
+                .as_deref()
+                .unwrap_or("LOST")
         );
         probe_rtts.push(rtt);
     }

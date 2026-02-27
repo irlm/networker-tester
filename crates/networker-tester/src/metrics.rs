@@ -96,11 +96,11 @@ pub enum Protocol {
 impl std::fmt::Display for Protocol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Protocol::Tcp   => write!(f, "tcp"),
+            Protocol::Tcp => write!(f, "tcp"),
             Protocol::Http1 => write!(f, "http1"),
             Protocol::Http2 => write!(f, "http2"),
             Protocol::Http3 => write!(f, "http3"),
-            Protocol::Udp   => write!(f, "udp"),
+            Protocol::Udp => write!(f, "udp"),
         }
     }
 }
@@ -110,12 +110,12 @@ impl std::str::FromStr for Protocol {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "tcp"   => Ok(Protocol::Tcp),
+            "tcp" => Ok(Protocol::Tcp),
             "http1" => Ok(Protocol::Http1),
             "http2" => Ok(Protocol::Http2),
             "http3" => Ok(Protocol::Http3),
-            "udp"   => Ok(Protocol::Udp),
-            other   => Err(format!("Unknown protocol: {other}")),
+            "udp" => Ok(Protocol::Udp),
+            other => Err(format!("Unknown protocol: {other}")),
         }
     }
 }
@@ -212,14 +212,14 @@ pub enum ErrorCategory {
 impl std::fmt::Display for ErrorCategory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
-            ErrorCategory::Dns     => "dns",
-            ErrorCategory::Tcp     => "tcp",
-            ErrorCategory::Tls     => "tls",
-            ErrorCategory::Http    => "http",
-            ErrorCategory::Udp     => "udp",
+            ErrorCategory::Dns => "dns",
+            ErrorCategory::Tcp => "tcp",
+            ErrorCategory::Tls => "tls",
+            ErrorCategory::Http => "http",
+            ErrorCategory::Udp => "udp",
             ErrorCategory::Timeout => "timeout",
-            ErrorCategory::Config  => "config",
-            ErrorCategory::Other   => "other",
+            ErrorCategory::Config => "config",
+            ErrorCategory::Other => "other",
         };
         write!(f, "{s}")
     }
@@ -243,10 +243,20 @@ pub fn aggregate_udp_rtts(samples: &[Option<f64>]) -> RttStats {
     let total = samples.len() as f64;
     let mut rtts: Vec<f64> = samples.iter().filter_map(|v| *v).collect();
     let received = rtts.len() as f64;
-    let loss = if total > 0.0 { (total - received) / total * 100.0 } else { 100.0 };
+    let loss = if total > 0.0 {
+        (total - received) / total * 100.0
+    } else {
+        100.0
+    };
 
     if rtts.is_empty() {
-        return RttStats { min: 0.0, avg: 0.0, p95: 0.0, jitter: 0.0, loss_percent: loss };
+        return RttStats {
+            min: 0.0,
+            avg: 0.0,
+            p95: 0.0,
+            jitter: 0.0,
+            loss_percent: loss,
+        };
     }
 
     rtts.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -263,7 +273,13 @@ pub fn aggregate_udp_rtts(samples: &[Option<f64>]) -> RttStats {
         0.0
     };
 
-    RttStats { min, avg, p95, jitter, loss_percent: loss }
+    RttStats {
+        min,
+        avg,
+        p95,
+        jitter,
+        loss_percent: loss,
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -277,8 +293,16 @@ mod tests {
     #[test]
     fn test_rtt_stats_no_loss() {
         let samples: Vec<Option<f64>> = vec![
-            Some(1.0), Some(2.0), Some(3.0), Some(4.0), Some(5.0),
-            Some(6.0), Some(7.0), Some(8.0), Some(9.0), Some(10.0),
+            Some(1.0),
+            Some(2.0),
+            Some(3.0),
+            Some(4.0),
+            Some(5.0),
+            Some(6.0),
+            Some(7.0),
+            Some(8.0),
+            Some(9.0),
+            Some(10.0),
         ];
         let s = aggregate_udp_rtts(&samples);
         assert_eq!(s.loss_percent, 0.0);
@@ -290,8 +314,7 @@ mod tests {
 
     #[test]
     fn test_rtt_stats_with_loss() {
-        let samples: Vec<Option<f64>> =
-            vec![Some(5.0), None, Some(10.0), None, Some(15.0)];
+        let samples: Vec<Option<f64>> = vec![Some(5.0), None, Some(10.0), None, Some(15.0)];
         let s = aggregate_udp_rtts(&samples);
         assert!((s.loss_percent - 40.0).abs() < 1e-9);
         assert!((s.min - 5.0).abs() < 1e-9);

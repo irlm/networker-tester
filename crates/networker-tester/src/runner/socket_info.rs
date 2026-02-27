@@ -47,7 +47,10 @@ fn linux_socket_info(stream: &TcpStream) -> SocketInfo {
     let fd = stream.as_raw_fd();
     let mss = get_tcp_maxseg(fd);
     let rtt = get_tcp_rtt_linux(fd);
-    SocketInfo { mss_bytes: mss, rtt_estimate_ms: rtt }
+    SocketInfo {
+        mss_bytes: mss,
+        rtt_estimate_ms: rtt,
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -62,7 +65,11 @@ fn get_tcp_maxseg(fd: std::os::unix::io::RawFd) -> Option<u32> {
             &mut val as *mut _ as *mut libc::c_void,
             &mut len,
         );
-        if ret == 0 && val > 0 { Some(val as u32) } else { None }
+        if ret == 0 && val > 0 {
+            Some(val as u32)
+        } else {
+            None
+        }
     }
 }
 
@@ -106,9 +113,16 @@ fn macos_socket_info(stream: &TcpStream) -> SocketInfo {
             &mut val as *mut _ as *mut libc::c_void,
             &mut len,
         );
-        if ret == 0 && val > 0 { Some(val as u32) } else { None }
+        if ret == 0 && val > 0 {
+            Some(val as u32)
+        } else {
+            None
+        }
     };
-    SocketInfo { mss_bytes: mss, rtt_estimate_ms: None }
+    SocketInfo {
+        mss_bytes: mss,
+        rtt_estimate_ms: None,
+    }
 }
 
 #[cfg(test)]

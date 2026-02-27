@@ -2,7 +2,11 @@ use clap::Parser;
 
 /// Networker Tester – cross-platform network diagnostics client.
 #[derive(Parser, Debug, Clone)]
-#[command(name = "networker-tester", about = "Collect detailed network telemetry across TCP/HTTP/UDP", version)]
+#[command(
+    name = "networker-tester",
+    about = "Collect detailed network telemetry across TCP/HTTP/UDP",
+    version
+)]
 pub struct Cli {
     // ── Target ────────────────────────────────────────────────────────────────
     /// Target URL (e.g. https://host:8443/health)
