@@ -16,10 +16,11 @@ path = "src/main.rs"
 tokio.workspace = true
 
 # --- HTTP server ---
-axum        = { version = "0.7", features = ["macros"] }
-axum-server = { version = "0.7", features = ["tls-rustls"] }
-tower       = { version = "0.5" }
-tower-http  = { version = "0.6", features = ["trace", "timeout", "cors"] }
+axum            = { version = "0.7", features = ["macros"] }
+axum-server     = { version = "0.7", features = ["tls-rustls"] }
+http-body-util  = "0.1"
+tower           = { version = "0.5" }
+tower-http      = { version = "0.6", features = ["trace", "timeout", "cors"] }
 
 # --- TLS ---
 rustls         = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
