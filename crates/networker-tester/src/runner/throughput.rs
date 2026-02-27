@@ -14,21 +14,29 @@
 ///
 /// **Upload** — data flows client → server *before* the server responds.
 ///
-/// The preferred measurement source is the server's own drain timer, returned
-/// in the `Server-Timing: recv;dur=X` response header when talking to
-/// `networker-endpoint`.  This directly measures how long the server spent
-/// reading the request body and is immune to client-side timing ambiguities.
+/// The transfer window is `max(server_recv_ms, total_duration_ms)`.
 ///
-/// When that header is absent (generic HTTP target), we fall back to the
-/// client-side `total_duration_ms` (time from HTTP start to full response
-/// receipt).  This is accurate only when the server drains the body **before**
-/// sending its response — which our endpoint guarantees.  For servers that
-/// respond before the body is fully received, `total_duration_ms` can be
-/// near-zero (the kernel TCP send buffer absorbs the body and hyper returns
-/// as soon as response headers arrive), leading to absurdly high throughput.
+/// `server_recv_ms` comes from `Server-Timing: recv;dur=X` and measures how
+/// long the server's axum handler spent draining the request body **from the
+/// kernel receive buffer**.  On same-machine connections, all data may already
+/// be in the kernel buffer by the time the handler is invoked, so the drain
+/// completes at memory-copy speed (e.g. 0.124 ms for 1 GiB) — far faster than
+/// the actual wire transfer.  In that scenario `total_duration_ms` (the
+/// client's wall-clock time from HTTP start to full response) is the correct
+/// measurement, because `networker-endpoint` always drains before responding.
 ///
-///   preferred: transfer_ms = server_timing.recv_body_ms   (server drain time)
-///   fallback:  transfer_ms = total_duration_ms            (end-to-end client time)
+/// Conversely, for endpoints that respond **before** finishing the body drain,
+/// `total_duration_ms` can be near-zero while `server_recv_ms` is the
+/// accurate value.
+///
+/// Taking `max` of both picks the larger (more conservative) value, which is
+/// always the one that reflects real network transfer time:
+///
+///   same-machine / kernel-buffer case:  total ≫ server  → total wins  ✓
+///   old-style endpoint (respond early):  server ≫ total  → server wins  ✓
+///   typical remote endpoint:             both similar    → max ≈ total  ✓
+///
+///   transfer_ms = max(server_timing.recv_body_ms, total_duration_ms)
 use crate::metrics::{HttpResult, Protocol, RequestAttempt};
 use crate::runner::http::{run_probe, RunConfig};
 use uuid::Uuid;
@@ -132,16 +140,18 @@ fn patch_throughput(h: HttpResult, payload_bytes: usize) -> HttpResult {
 
 /// Compute and attach upload throughput to an `HttpResult`.
 ///
-/// Uses `server_recv_ms` (from `Server-Timing: recv;dur=X`) when provided —
-/// the server's own timer for how long it spent draining the request body.
-/// Falls back to `h.total_duration_ms` (reliable only when the server drains
-/// before responding, which `networker-endpoint` guarantees).
+/// Uses `max(server_recv_ms, h.total_duration_ms)` as the transfer window —
+/// see module-level documentation for why taking the maximum is correct.
+/// When `server_recv_ms` is absent, falls back to `h.total_duration_ms` alone.
 fn patch_upload_throughput(
     h: HttpResult,
     payload_bytes: usize,
     server_recv_ms: Option<f64>,
 ) -> HttpResult {
-    let transfer_ms = server_recv_ms.unwrap_or(h.total_duration_ms);
+    let transfer_ms = match server_recv_ms {
+        Some(srv) => srv.max(h.total_duration_ms),
+        None => h.total_duration_ms,
+    };
     let throughput_mbps = mbps(payload_bytes, transfer_ms);
     HttpResult {
         payload_bytes,
@@ -210,7 +220,10 @@ mod tests {
         // 1 GiB = 1024 MiB; in 1024ms → 1024 MiB/s = 1000 MB/s (exact)
         // 1073741824 / 1024 * 1000 / 1048576 = 1000.0
         let result = mbps(1024 * 1024 * 1024, 1024.0).expect("should produce a value");
-        assert!((result - 1000.0).abs() < 1e-6, "expected 1000.0, got {result}");
+        assert!(
+            (result - 1000.0).abs() < 1e-6,
+            "expected 1000.0, got {result}"
+        );
     }
 
     #[test]
@@ -237,7 +250,10 @@ mod tests {
         // 1 byte in 1000ms → 1000 / 1048576 B/ms = ~9.54e-4 MB/s
         let expected = 1.0_f64 / 1000.0 * 1000.0 / (1024.0 * 1024.0);
         let result = mbps(1, 1000.0).expect("should produce a value");
-        assert!((result - expected).abs() < 1e-15, "expected {expected}, got {result}");
+        assert!(
+            (result - expected).abs() < 1e-15,
+            "expected {expected}, got {result}"
+        );
     }
 
     #[test]
@@ -258,7 +274,10 @@ mod tests {
         let h = make_http_result(10.0, 1010.0);
         let patched = patch_throughput(h, 1024 * 1024);
         let result = patched.throughput_mbps.expect("should have throughput");
-        assert!((result - 1.0).abs() < 1e-9, "expected 1.0 MB/s, got {result}");
+        assert!(
+            (result - 1.0).abs() < 1e-9,
+            "expected 1.0 MB/s, got {result}"
+        );
     }
 
     #[test]
@@ -267,7 +286,10 @@ mod tests {
         let h = make_http_result(1000.0, 5000.0);
         let patched = patch_throughput(h, 4 * 1024 * 1024);
         let result = patched.throughput_mbps.expect("should have throughput");
-        assert!((result - 1.0).abs() < 1e-9, "expected 1.0 MB/s, got {result}");
+        assert!(
+            (result - 1.0).abs() < 1e-9,
+            "expected 1.0 MB/s, got {result}"
+        );
     }
 
     #[test]
@@ -305,7 +327,9 @@ mod tests {
     fn download_zero_payload_gives_zero_throughput() {
         // 0-byte body is valid; rate = 0.
         let h = make_http_result(10.0, 1010.0);
-        let result = patch_throughput(h, 0).throughput_mbps.expect("should be Some(0)");
+        let result = patch_throughput(h, 0)
+            .throughput_mbps
+            .expect("should be Some(0)");
         assert_eq!(result, 0.0);
     }
 
@@ -319,46 +343,87 @@ mod tests {
         let h = make_http_result(0.5, 1000.0);
         let patched = patch_upload_throughput(h, 1024 * 1024, Some(1000.0));
         let result = patched.throughput_mbps.expect("should have throughput");
-        assert!((result - 1.0).abs() < 1e-9, "expected 1.0 MB/s, got {result}");
+        assert!(
+            (result - 1.0).abs() < 1e-9,
+            "expected 1.0 MB/s, got {result}"
+        );
     }
 
     #[test]
-    fn upload_server_recv_ms_overrides_total_duration() {
-        // server_recv_ms differs from total_duration_ms; server value wins.
-        // 1 MiB / 500ms (server) = 2.0 MB/s, not 1.0 MB/s (client total 1000ms).
+    fn upload_total_duration_wins_when_larger_than_server_recv() {
+        // server_recv_ms (500ms) < total_duration_ms (1000ms) → max picks total.
+        // 1 MiB / 1000ms = 1.0 MB/s.
         let h = make_http_result(0.5, 1000.0);
         let patched = patch_upload_throughput(h, 1024 * 1024, Some(500.0));
         let result = patched.throughput_mbps.expect("should have throughput");
-        assert!((result - 2.0).abs() < 1e-9, "expected 2.0 MB/s, got {result}");
+        assert!(
+            (result - 1.0).abs() < 1e-9,
+            "expected 1.0 MB/s, got {result}"
+        );
     }
 
     #[test]
-    fn upload_server_recv_ms_prevents_absurd_throughput_on_fast_respond() {
-        // Server responded before draining (same-machine / loopback scenario):
-        //   client total_duration_ms ≈ 0.2ms  → old formula → ~5M MB/s (WRONG)
-        //   server recv_body_ms      = 9000ms  → correct     → ~113 MB/s
+    fn upload_server_recv_ms_wins_when_larger_than_total_duration() {
+        // Old-style endpoint responds before draining:
+        //   client total_duration_ms ≈ 0.2ms  (near-zero; old formula → ~5M MB/s WRONG)
+        //   server recv_body_ms      = 9000ms  → max picks server → ~113 MB/s  ✓
         let h = make_http_result(0.2, 0.2);
         let patched = patch_upload_throughput(h, 1024 * 1024 * 1024, Some(9000.0));
         let result = patched.throughput_mbps.expect("should have throughput");
-        assert!(result < 10_000.0, "must not be astronomically wrong: {result}");
+        assert!(
+            result < 10_000.0,
+            "must not be astronomically wrong: {result}"
+        );
         assert!(result > 50.0, "must be in plausible range: {result}");
     }
 
     #[test]
-    fn upload_server_recv_ms_zero_returns_none() {
-        // A server drain time of 0ms is not a valid window.
-        let h = make_http_result(0.5, 1000.0);
-        assert!(patch_upload_throughput(h, 65536, Some(0.0))
-            .throughput_mbps
-            .is_none());
+    fn upload_same_machine_kernel_buffer_case() {
+        // Same-machine Gigabit: kernel receive buffer is already full when handler
+        // runs, so server_recv_ms ≈ 0.124ms (memory-copy speed).
+        // Client total_duration_ms = 9134.7ms (actual Gigabit transfer time).
+        // max(0.124, 9134.7) = 9134.7ms → ~112 MB/s  ✓
+        let h = make_http_result(0.12, 9134.7);
+        let patched = patch_upload_throughput(h, 1024 * 1024 * 1024, Some(0.124));
+        let result = patched.throughput_mbps.expect("should have throughput");
+        // Should be ~112 MB/s, not 8 million MB/s.
+        assert!(
+            result < 10_000.0,
+            "must not be astronomically wrong: {result}"
+        );
+        assert!(result > 50.0, "must be in plausible range: {result}");
+        // More precisely: 1 GiB / 9134.7ms → ~112 MB/s
+        let expected = 1024.0_f64 * 1024.0 * 1024.0 / 9134.7 * 1000.0 / (1024.0 * 1024.0);
+        assert!(
+            (result - expected).abs() < 1.0,
+            "expected ~{expected:.1} MB/s, got {result:.1} MB/s"
+        );
     }
 
     #[test]
-    fn upload_server_recv_ms_negative_returns_none() {
+    fn upload_server_recv_ms_zero_falls_back_to_total() {
+        // server_recv_ms = 0 is invalid; max(0, 1000) = 1000ms → valid throughput.
         let h = make_http_result(0.5, 1000.0);
-        assert!(patch_upload_throughput(h, 65536, Some(-10.0))
+        let result = patch_upload_throughput(h, 1024 * 1024, Some(0.0))
             .throughput_mbps
-            .is_none());
+            .expect("should fall back to total_duration_ms");
+        assert!(
+            (result - 1.0).abs() < 1e-9,
+            "expected 1.0 MB/s, got {result}"
+        );
+    }
+
+    #[test]
+    fn upload_server_recv_ms_negative_falls_back_to_total() {
+        // server_recv_ms < 0 is invalid; max(-10, 1000) = 1000ms → valid throughput.
+        let h = make_http_result(0.5, 1000.0);
+        let result = patch_upload_throughput(h, 1024 * 1024, Some(-10.0))
+            .throughput_mbps
+            .expect("should fall back to total_duration_ms");
+        assert!(
+            (result - 1.0).abs() < 1e-9,
+            "expected 1.0 MB/s, got {result}"
+        );
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -371,7 +436,10 @@ mod tests {
         let h = make_http_result(0.5, 1000.0);
         let patched = patch_upload_throughput(h, 1024 * 1024, None);
         let result = patched.throughput_mbps.expect("should have throughput");
-        assert!((result - 1.0).abs() < 1e-9, "expected 1.0 MB/s, got {result}");
+        assert!(
+            (result - 1.0).abs() < 1e-9,
+            "expected 1.0 MB/s, got {result}"
+        );
     }
 
     #[test]
