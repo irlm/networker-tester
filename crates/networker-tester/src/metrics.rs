@@ -343,7 +343,9 @@ mod tests {
     #[test]
     fn test_protocol_roundtrip() {
         use std::str::FromStr;
-        for p in &["tcp", "http1", "http2", "http3", "udp", "download", "upload"] {
+        for p in &[
+            "tcp", "http1", "http2", "http3", "udp", "download", "upload",
+        ] {
             let parsed = Protocol::from_str(p).unwrap();
             assert_eq!(parsed.to_string(), *p);
         }

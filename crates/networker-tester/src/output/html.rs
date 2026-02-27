@@ -198,9 +198,7 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
     let throughput_rows: Vec<&RequestAttempt> = run
         .attempts
         .iter()
-        .filter(|a| {
-            matches!(a.protocol, Protocol::Download | Protocol::Upload) && a.http.is_some()
-        })
+        .filter(|a| matches!(a.protocol, Protocol::Download | Protocol::Upload) && a.http.is_some())
         .collect();
     if !throughput_rows.is_empty() {
         let _ = write!(
@@ -241,7 +239,11 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
                 seq = a.sequence_num,
                 proto = a.protocol,
                 payload = format_bytes(h.payload_bytes),
-                thr_cls = if h.throughput_mbps.is_some() { "ok" } else { "warn" },
+                thr_cls = if h.throughput_mbps.is_some() {
+                    "ok"
+                } else {
+                    "warn"
+                },
                 thr = throughput,
                 ttfb = h.ttfb_ms,
                 total = h.total_duration_ms,

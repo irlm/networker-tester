@@ -43,7 +43,14 @@ pub async fn run_download_probe(
         ..cfg.run_cfg.clone()
     };
 
-    let mut attempt = run_probe(run_id, sequence_num, Protocol::Download, &target, &probe_cfg).await;
+    let mut attempt = run_probe(
+        run_id,
+        sequence_num,
+        Protocol::Download,
+        &target,
+        &probe_cfg,
+    )
+    .await;
 
     if let Some(h) = attempt.http.clone() {
         attempt.http = Some(patch_throughput(h, payload_bytes));

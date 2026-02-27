@@ -73,8 +73,11 @@ pub async fn run_probe(
     let started_at = Utc::now();
 
     match protocol {
-        Protocol::Http1 | Protocol::Http2 | Protocol::Tcp
-        | Protocol::Download | Protocol::Upload => {
+        Protocol::Http1
+        | Protocol::Http2
+        | Protocol::Tcp
+        | Protocol::Download
+        | Protocol::Upload => {
             run_http_or_tcp(
                 run_id,
                 attempt_id,

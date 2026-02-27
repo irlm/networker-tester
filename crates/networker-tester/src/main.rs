@@ -44,9 +44,7 @@ async fn main() -> anyhow::Result<()> {
         anyhow::bail!("No valid modes specified. Use: tcp,http1,http2,http3,udp,download,upload");
     }
 
-    let payload_sizes = cli
-        .parsed_payload_sizes()
-        .context("--payload-sizes")?;
+    let payload_sizes = cli.parsed_payload_sizes().context("--payload-sizes")?;
     let has_throughput = modes
         .iter()
         .any(|m| matches!(m, Protocol::Download | Protocol::Upload));
@@ -125,8 +123,7 @@ async fn main() -> anyhow::Result<()> {
                 async move {
                     let a = match (&proto, payload_sz) {
                         (Protocol::Download, Some(sz)) => {
-                            run_download_probe(run_id, current_seq, sz, &throughput_cfg_clone)
-                                .await
+                            run_download_probe(run_id, current_seq, sz, &throughput_cfg_clone).await
                         }
                         (Protocol::Upload, Some(sz)) => {
                             run_upload_probe(run_id, current_seq, sz, &throughput_cfg_clone).await
