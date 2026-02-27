@@ -45,9 +45,12 @@ success() { echo -e "${GREEN}[ok]${RESET}    $*"; }
 warn()    { echo -e "${YELLOW}[warn]${RESET}  $*"; }
 
 # ── Check SSH access to GitHub ────────────────────────────────────────────────
+# `ssh -T git@github.com` always exits with code 1 (GitHub provides no shell
+# access), so capture the output with || true and grep the message separately.
 info "Checking SSH access to GitHub..."
-if ! ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-         -o ConnectTimeout=10 -T git@github.com 2>&1 | grep -q "successfully authenticated"; then
+SSH_OUT=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+              -o ConnectTimeout=10 -T git@github.com 2>&1 || true)
+if ! printf '%s' "${SSH_OUT}" | grep -q "successfully authenticated"; then
     echo ""
     echo "  SSH authentication to GitHub failed."
     echo "  Make sure your SSH key is loaded and has access to the private repo."
