@@ -47,9 +47,13 @@ warn()    { echo -e "${YELLOW}[warn]${RESET}  $*"; }
 # ── Check SSH access to GitHub ────────────────────────────────────────────────
 # `ssh -T git@github.com` always exits with code 1 (GitHub provides no shell
 # access), so capture the output with || true and grep the message separately.
+#
+# </dev/null is required when this script is piped from curl: without it, ssh
+# inherits bash's stdin (the curl pipe) and consumes the remaining script,
+# causing bash to hit EOF and exit silently after this block.
 info "Checking SSH access to GitHub..."
 SSH_OUT=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-              -o ConnectTimeout=10 -T git@github.com 2>&1 || true)
+              -o ConnectTimeout=10 -T git@github.com </dev/null 2>&1 || true)
 if ! printf '%s' "${SSH_OUT}" | grep -q "successfully authenticated"; then
     echo ""
     echo "  SSH authentication to GitHub failed."
@@ -73,8 +77,10 @@ else
 fi
 
 # ── Build and install ─────────────────────────────────────────────────────────
+# </dev/null prevents cargo from reading the curl pipe for interactive prompts
+# (same reason as the ssh call above).
 info "Installing ${BINARY} (this compiles from source – may take a few minutes)..."
-cargo install --git "${REPO_SSH}" --bin "${BINARY}" --locked
+cargo install --git "${REPO_SSH}" --bin "${BINARY}" --locked </dev/null
 
 echo ""
 INSTALLED_PATH=$(command -v "${BINARY}" 2>/dev/null || echo "(not in PATH)")
