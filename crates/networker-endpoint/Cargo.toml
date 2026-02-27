@@ -1,0 +1,45 @@
+[package]
+name    = "networker-endpoint"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "networker_endpoint"
+path = "src/lib.rs"
+
+[[bin]]
+name = "networker-endpoint"
+path = "src/main.rs"
+
+[dependencies]
+# --- async runtime ---
+tokio.workspace = true
+
+# --- HTTP server ---
+axum        = { version = "0.7", features = ["macros"] }
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+tower       = { version = "0.5" }
+tower-http  = { version = "0.6", features = ["trace", "timeout", "cors"] }
+
+# --- TLS ---
+rustls         = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+rustls-pemfile = "2"
+tokio-rustls   = "0.26"
+
+# --- cert generation (self-signed for dev) ---
+rcgen = "0.13"
+
+# --- shared workspace ---
+serde.workspace       = true
+serde_json.workspace  = true
+clap.workspace        = true
+anyhow.workspace      = true
+tracing.workspace     = true
+tracing-subscriber.workspace = true
+chrono.workspace      = true
+uuid.workspace        = true
+bytes.workspace       = true
+
+[dev-dependencies]
+tokio-test = "0.4"
+reqwest    = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
