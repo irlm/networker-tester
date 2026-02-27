@@ -1,19 +1,20 @@
 # Networker Tester
 
 A cross-platform network diagnostics suite that exercises an endpoint using TCP,
-HTTP/1.1, HTTP/2, HTTP/3 (optional), and UDP, collecting detailed per-phase
-telemetry from user-mode code.
+HTTP/1.1, HTTP/2, HTTP/3 (optional), UDP, and bulk download/upload throughput
+probes, collecting detailed per-phase telemetry from user-mode code.
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  networker-tester  ──────────────────────►  networker-endpoint │
-│  (Rust CLI)          TCP / HTTP1 / HTTP2    (Rust server)       │
-│                      HTTP3 (QUIC, optional)                     │
+┌──────────────────────────────────────────────────────────────────┐
+│  networker-tester  ──────────────────────►  networker-endpoint   │
+│  (Rust CLI)          TCP / HTTP1 / HTTP2    (Rust server)        │
+│                      HTTP3 (QUIC, optional)                      │
 │                      UDP echo                                    │
-│         │                                                       │
-│         ▼                                                       │
-│  JSON artifact + HTML report + SQL Server inserts               │
-└─────────────────────────────────────────────────────────────┘
+│                      Download / Upload (throughput)              │
+│         │                                                        │
+│         ▼                                                        │
+│  JSON artifact + HTML report + SQL Server inserts                │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -24,6 +25,7 @@ telemetry from user-mode code.
 - [Prerequisites](#prerequisites)
 - [Quick Start (30 minutes)](#quick-start)
 - [CLI Reference](#cli-reference)
+- [Throughput Testing](#throughput-testing)
 - [Endpoint Reference](#endpoint-reference)
 - [SQL Server Setup](#sql-server-setup)
 - [HTML Report](#html-report)
@@ -185,6 +187,16 @@ pre-generated certs needed). Pass `--insecure` to the tester to accept it.
   --output-dir ./output
 ```
 
+**Throughput measurement (download + upload):**
+```bash
+./target/release/networker-tester \
+  --target http://127.0.0.1:8080/health \
+  --modes download,upload \
+  --payload-sizes 4k,64k,1m \
+  --runs 3 \
+  --output-dir ./output
+```
+
 **HTTP/3 (requires `--features http3`):**
 ```bash
 cargo build --release --features http3
@@ -214,11 +226,12 @@ Open `output/report.html` in any browser for the formatted dashboard.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--target` | `http://localhost:8080/health` | URL to probe |
-| `--modes` | `http1,http2,udp` | Comma-separated: `tcp,http1,http2,http3,udp` |
+| `--modes` | `http1,http2,udp` | Comma-separated: `tcp,http1,http2,http3,udp,download,upload` |
 | `--runs` | `3` | Repetitions per mode |
 | `--concurrency` | `1` | Concurrent requests per run |
 | `--timeout` | `30` | Per-request timeout (seconds) |
-| `--payload-size` | `256` | POST body size (bytes) for `/echo` tests |
+| `--payload-size` | `0` | POST body size (bytes) for `/echo` tests |
+| `--payload-sizes` | — | Sizes for download/upload probes, comma-separated with k/m/g suffix (e.g. `4k,64k,1m`). Required when using `download` or `upload` modes. |
 | `--udp-port` | `9999` | UDP echo port on target host |
 | `--udp-probes` | `10` | UDP probe packets per run |
 | `--dns-enabled` | `true` | Perform DNS resolution |
@@ -231,6 +244,78 @@ Open `output/report.html` in any browser for the formatted dashboard.
 | `--save-to-sql` | — | Insert into SQL Server |
 | `--connection-string` | `$NETWORKER_SQL_CONN` | ADO.NET connection string |
 | `--verbose` / `-v` | — | Enable debug logging |
+
+---
+
+## Throughput Testing
+
+The `download` and `upload` modes measure raw transfer speed rather than
+latency. They complement the standard HTTP probes by quantifying how fast
+the link can move data.
+
+### How it works
+
+| Mode | HTTP verb | Endpoint | Measures |
+|------|-----------|----------|---------|
+| `download` | GET | `/download?bytes=N` | Server → client transfer speed |
+| `upload` | POST | `/upload` | Client → server transfer speed |
+
+Throughput is computed from body-transfer time only (total response time minus
+TTFB), so connection setup and time-to-first-byte do not inflate the result:
+
+```
+throughput (MB/s) = payload_bytes / (total_ms − ttfb_ms) × 1000 / 1,048,576
+```
+
+### Usage
+
+`--payload-sizes` is **required** when either mode is active. It accepts
+comma-separated values with optional `k` / `m` / `g` suffixes:
+
+```bash
+./target/release/networker-tester \
+  --target http://127.0.0.1:8080/health \
+  --modes download,upload \
+  --payload-sizes 4k,64k,1m \
+  --runs 5 \
+  --output-dir ./output
+```
+
+This produces `3 payload sizes × 2 modes × 5 runs = 30` probe attempts.
+
+### Combining with latency modes
+
+```bash
+./target/release/networker-tester \
+  --target https://127.0.0.1:8443/health \
+  --modes http1,http2,download,upload \
+  --payload-sizes 64k,1m \
+  --runs 3 \
+  --insecure \
+  --output-dir ./output
+```
+
+### SQL Server — existing database migration
+
+If you already have the `NetworkDiagnostics` schema from a previous release,
+apply the migration to add the two new columns:
+
+```bash
+sqlcmd -S localhost -U sa -P "YourPass1!" -i sql/04_AddThroughput.sql
+```
+
+The migration is **idempotent** — safe to run on a fresh database or one that
+already has the columns. Existing rows are unaffected (columns default to NULL).
+
+### Output
+
+Throughput results appear in:
+- **HTML report** — dedicated "Throughput Results" table (Run #, Mode, Payload,
+  Throughput MB/s, TTFB, Total) and in the "All Attempts" table
+- **JSON artifact** — `http.payload_bytes` and `http.throughput_mbps` fields
+  on each download/upload attempt (absent/null on normal probes for backward
+  compatibility)
+- **SQL Server** — `PayloadBytes` and `ThroughputMbps` columns in `dbo.HttpResult`
 
 ---
 
@@ -271,7 +356,7 @@ docker run --name networker-sql \
 
 Ensure you have a login with `db_owner` on the target database.
 
-### Create schema
+### Create schema (fresh install)
 
 ```bash
 # Linux/macOS (sqlcmd from mssql-tools)
@@ -282,6 +367,17 @@ sqlcmd -S localhost -U sa -P "YourPass1!" -i sql/02_StoredProcedures.sql
 sqlcmd -S localhost -U sa -P "YourPass1!" -i sql\01_CreateDatabase.sql
 sqlcmd -S localhost -U sa -P "YourPass1!" -i sql\02_StoredProcedures.sql
 ```
+
+### Migrate an existing database
+
+If you installed an earlier version, apply the throughput migration to add the
+`PayloadBytes` and `ThroughputMbps` columns to `dbo.HttpResult`:
+
+```bash
+sqlcmd -S localhost -U sa -P "YourPass1!" -i sql/04_AddThroughput.sql
+```
+
+This is idempotent — existing rows gain NULL in the new columns and no data is lost.
 
 ### Connection string format
 
@@ -313,11 +409,12 @@ sqlcmd -S localhost -U sa -P "YourPass1!" -d NetworkDiagnostics \
 The report is a single HTML file with embedded CSS. It contains:
 
 1. **Run Summary** – target, modes, success/failure counts, duration
-2. **Timing Breakdown** – per-protocol average DNS/TCP/TLS/TTFB/total table
+2. **Timing Breakdown** – per-protocol average DNS/TCP/TLS/TTFB/total table (includes download/upload rows)
 3. **UDP Statistics** – RTT min/avg/p95, jitter, loss% per probe run
-4. **All Attempts** – individual rows with all timing phases
-5. **TLS Details** – version, cipher, ALPN, cert subject/expiry
-6. **Errors** – structured error table with category and detail
+4. **Throughput Results** – per-attempt table showing Mode, Payload size, Throughput (MB/s), TTFB, and Total time (only present when download/upload modes were used)
+5. **All Attempts** – individual rows with all timing phases; download/upload rows show throughput in the version column
+6. **TLS Details** – version, cipher, ALPN, cert subject/expiry
+7. **Errors** – structured error table with category and detail
 
 The `assets/report.css` file can be customised to change colours and fonts.
 The inline CSS in the HTML is a minimal fallback for offline use.
@@ -405,6 +502,8 @@ cargo fmt --all -- --check
 | `total_duration_ms` | From request start to last byte of body received |
 | `headers_size_bytes` | Sum of header name+value lengths |
 | `body_size_bytes` | Body bytes consumed |
+| `payload_bytes` | Bytes requested (download) or sent (upload); `0` for normal probes |
+| `throughput_mbps` | `payload_bytes / (total_ms − ttfb_ms) × 1000 / 1MiB` in MB/s; `null` for normal probes |
 
 ### UDP
 | Field | Source |
@@ -427,6 +526,8 @@ cargo fmt --all -- --check
 | Self-signed cert on endpoint | Required for dev; always use `--insecure` flag | Replace with `--cert-file` / `--key-file` options (roadmap) |
 | UDP "loss" counts out-of-order packets as lost | Simple seq-number check | For high-latency links, increase `--timeout` and `--udp-probes` |
 | QUIC/HTTP3 ALPN detection | QUIC embeds TLS 1.3; there is no separate "TLS phase" – handshake_ms covers both | Documented in TlsResult for HTTP/3 |
+| Throughput is single-stream only | Each probe opens one TCP connection; multi-stream parallelism is not tested | Run multiple concurrent probes with `--concurrency` for a rough aggregate |
+| Throughput metric is MB/s not Mbps | The formula uses bytes/MiB division, giving megabytes per second | Multiply by 8 to convert to megabits per second |
 
 ---
 
