@@ -19,15 +19,15 @@ use tokio::time::{sleep, Duration};
 
 pub fn build_router() -> Router {
     Router::new()
-        .route("/health",            get(health))
-        .route("/echo",              post(echo).get(echo_get))
-        .route("/download",          get(download))
-        .route("/upload",            post(upload))
-        .route("/delay",             get(delay))
-        .route("/headers",           get(headers_echo))
-        .route("/status/:code",      get(status_code))
-        .route("/http-version",      get(http_version))
-        .route("/info",              get(server_info))
+        .route("/health", get(health))
+        .route("/echo", post(echo).get(echo_get))
+        .route("/download", get(download))
+        .route("/upload", post(upload))
+        .route("/delay", get(delay))
+        .route("/headers", get(headers_echo))
+        .route("/status/:code", get(status_code))
+        .route("/http-version", get(http_version))
+        .route("/info", get(server_info))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -66,7 +66,7 @@ async fn echo(headers: HeaderMap, body: Bytes) -> impl IntoResponse {
         .collect();
 
     // Return the body + a JSON envelope in the headers
-    let mut resp = Response::builder()
+    let resp = Response::builder()
         .status(200)
         .header("content-type", "application/octet-stream")
         .header("x-echo-body-bytes", body_len.to_string())
@@ -158,9 +158,9 @@ async fn http_version(req: Request<Body>) -> impl IntoResponse {
         Version::HTTP_09 => "HTTP/0.9",
         Version::HTTP_10 => "HTTP/1.0",
         Version::HTTP_11 => "HTTP/1.1",
-        Version::HTTP_2  => "HTTP/2",
-        Version::HTTP_3  => "HTTP/3",
-        _                => "Unknown",
+        Version::HTTP_2 => "HTTP/2",
+        Version::HTTP_3 => "HTTP/3",
+        _ => "Unknown",
     };
     Json(serde_json::json!({
         "version": version,
@@ -200,7 +200,12 @@ mod tests {
     #[tokio::test]
     async fn health_returns_200() {
         let resp = app()
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(resp.status(), 200);

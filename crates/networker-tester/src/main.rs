@@ -1,3 +1,6 @@
+use anyhow::Context;
+use chrono::Utc;
+use clap::Parser;
 use networker_tester::cli;
 use networker_tester::metrics::{Protocol, TestRun};
 use networker_tester::output::{html, json, sql};
@@ -6,9 +9,6 @@ use networker_tester::runner::{
     http3::run_http3_probe,
     udp::{run_udp_probe, UdpProbeConfig},
 };
-use anyhow::Context;
-use chrono::Utc;
-use clap::Parser;
 use std::path::{Path, PathBuf};
 use tracing::{error, info, warn};
 use uuid::Uuid;
@@ -35,12 +35,8 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let target = url::Url::parse(&cli.target)
-        .context("Invalid --target URL")?;
-    let target_host = target
-        .host_str()
-        .unwrap_or("unknown")
-        .to_string();
+    let target = url::Url::parse(&cli.target).context("Invalid --target URL")?;
+    let target_host = target.host_str().unwrap_or("unknown").to_string();
 
     let modes = cli.parsed_modes();
     if modes.is_empty() {
@@ -99,12 +95,15 @@ async fn main() -> anyhow::Result<()> {
                             run_probe(run_id, current_seq, proto, &target_clone, &cfg_clone).await
                         }
                         Protocol::Http3 => {
-                            run_http3_probe(run_id, current_seq, &target_clone, cfg_clone.timeout_ms)
-                                .await
+                            run_http3_probe(
+                                run_id,
+                                current_seq,
+                                &target_clone,
+                                cfg_clone.timeout_ms,
+                            )
+                            .await
                         }
-                        Protocol::Udp => {
-                            run_udp_probe(run_id, current_seq, &udp_cfg_clone).await
-                        }
+                        Protocol::Udp => run_udp_probe(run_id, current_seq, &udp_cfg_clone).await,
                     };
 
                     // Progress logging
@@ -152,10 +151,7 @@ async fn main() -> anyhow::Result<()> {
     std::fs::create_dir_all(&out_dir).context("Cannot create output directory")?;
 
     // ── JSON artifact ─────────────────────────────────────────────────────────
-    let json_path = out_dir.join(format!(
-        "run-{}.json",
-        started_at.format("%Y%m%d-%H%M%S")
-    ));
+    let json_path = out_dir.join(format!("run-{}.json", started_at.format("%Y%m%d-%H%M%S")));
     json::save(&run, &json_path).context("Failed to write JSON artifact")?;
     info!(path = %json_path.display(), "JSON artifact saved");
 
@@ -194,33 +190,45 @@ fn log_attempt(a: &networker_tester::metrics::RequestAttempt) {
 
     match &a.protocol {
         Http1 | Http2 | Http3 | Tcp => {
-            let dns_ms   = a.dns.as_ref().map(|d| d.duration_ms).unwrap_or(0.0);
-            let tcp_ms   = a.tcp.as_ref().map(|t| t.connect_duration_ms).unwrap_or(0.0);
-            let tls_ms   = a.tls.as_ref().map(|t| t.handshake_duration_ms).unwrap_or(0.0);
-            let ttfb_ms  = a.http.as_ref().map(|h| h.ttfb_ms).unwrap_or(0.0);
+            let dns_ms = a.dns.as_ref().map(|d| d.duration_ms).unwrap_or(0.0);
+            let tcp_ms = a.tcp.as_ref().map(|t| t.connect_duration_ms).unwrap_or(0.0);
+            let tls_ms = a
+                .tls
+                .as_ref()
+                .map(|t| t.handshake_duration_ms)
+                .unwrap_or(0.0);
+            let ttfb_ms = a.http.as_ref().map(|h| h.ttfb_ms).unwrap_or(0.0);
             let total_ms = a.http.as_ref().map(|h| h.total_duration_ms).unwrap_or(0.0);
-            let ver      = a.http.as_ref().map(|h| h.negotiated_version.clone()).unwrap_or_default();
-            let status_code = a.http.as_ref().map(|h| h.status_code.to_string()).unwrap_or_default();
+            let ver = a
+                .http
+                .as_ref()
+                .map(|h| h.negotiated_version.clone())
+                .unwrap_or_default();
+            let status_code = a
+                .http
+                .as_ref()
+                .map(|h| h.status_code.to_string())
+                .unwrap_or_default();
 
             info!(
                 "{status} #{seq} [{proto}] {status_code} {ver} \
                  DNS:{dns:.1}ms TCP:{tcp:.1}ms TLS:{tls:.1}ms TTFB:{ttfb:.1}ms Total:{total:.1}ms",
-                seq    = a.sequence_num,
-                proto  = a.protocol,
-                dns    = dns_ms,
-                tcp    = tcp_ms,
-                tls    = tls_ms,
-                ttfb   = ttfb_ms,
-                total  = total_ms,
+                seq = a.sequence_num,
+                proto = a.protocol,
+                dns = dns_ms,
+                tcp = tcp_ms,
+                tls = tls_ms,
+                ttfb = ttfb_ms,
+                total = total_ms,
             );
         }
         Udp => {
             if let Some(u) = &a.udp {
                 info!(
                     "{status} #{seq} [udp] RTT avg={avg:.1}ms p95={p95:.1}ms loss={loss:.1}%",
-                    seq  = a.sequence_num,
-                    avg  = u.rtt_avg_ms,
-                    p95  = u.rtt_p95_ms,
+                    seq = a.sequence_num,
+                    avg = u.rtt_avg_ms,
+                    p95 = u.rtt_p95_ms,
                     loss = u.loss_percent,
                 );
             }
@@ -253,24 +261,43 @@ fn print_summary(run: &TestRun) {
     println!("\n Protocol  │ #   │ Avg DNS │ Avg TCP │ Avg TLS │ Avg TTFB │ Avg Total");
     println!("───────────┼─────┼─────────┼─────────┼─────────┼──────────┼───────────");
 
-    for proto in &[Protocol::Http1, Protocol::Http2, Protocol::Http3, Protocol::Tcp, Protocol::Udp] {
-        let rows: Vec<_> = run.attempts.iter().filter(|a| &a.protocol == proto).collect();
-        if rows.is_empty() { continue; }
+    for proto in &[
+        Protocol::Http1,
+        Protocol::Http2,
+        Protocol::Http3,
+        Protocol::Tcp,
+        Protocol::Udp,
+    ] {
+        let rows: Vec<_> = run
+            .attempts
+            .iter()
+            .filter(|a| &a.protocol == proto)
+            .collect();
+        if rows.is_empty() {
+            continue;
+        }
 
         let avg_f = |f: fn(&networker_tester::metrics::RequestAttempt) -> Option<f64>| -> String {
             let vals: Vec<f64> = rows.iter().filter_map(|a| f(a)).collect();
-            if vals.is_empty() { "—".into() }
-            else { format!("{:.1}ms", vals.iter().sum::<f64>() / vals.len() as f64) }
+            if vals.is_empty() {
+                "—".into()
+            } else {
+                format!("{:.1}ms", vals.iter().sum::<f64>() / vals.len() as f64)
+            }
         };
 
-        println!(" {proto:<9} │ {n:<3} │ {dns:<7} │ {tcp:<7} │ {tls:<7} │ {ttfb:<8} │ {total}",
-            n     = rows.len(),
-            dns   = avg_f(|a| a.dns.as_ref().map(|d| d.duration_ms)),
-            tcp   = avg_f(|a| a.tcp.as_ref().map(|t| t.connect_duration_ms)),
-            tls   = avg_f(|a| a.tls.as_ref().map(|t| t.handshake_duration_ms)),
-            ttfb  = avg_f(|a| a.http.as_ref().map(|h| h.ttfb_ms)),
-            total = avg_f(|a| a.http.as_ref().map(|h| h.total_duration_ms)
-                            .or_else(|| a.udp.as_ref().map(|u| u.rtt_avg_ms))),
+        println!(
+            " {proto:<9} │ {n:<3} │ {dns:<7} │ {tcp:<7} │ {tls:<7} │ {ttfb:<8} │ {total}",
+            n = rows.len(),
+            dns = avg_f(|a| a.dns.as_ref().map(|d| d.duration_ms)),
+            tcp = avg_f(|a| a.tcp.as_ref().map(|t| t.connect_duration_ms)),
+            tls = avg_f(|a| a.tls.as_ref().map(|t| t.handshake_duration_ms)),
+            ttfb = avg_f(|a| a.http.as_ref().map(|h| h.ttfb_ms)),
+            total = avg_f(|a| a
+                .http
+                .as_ref()
+                .map(|h| h.total_duration_ms)
+                .or_else(|| a.udp.as_ref().map(|u| u.rtt_avg_ms))),
         );
     }
 
@@ -281,7 +308,9 @@ fn print_summary(run: &TestRun) {
 /// output directory so the HTML report can link to it.
 fn copy_default_css(out_dir: &Path) {
     let dest = out_dir.join("report.css");
-    if dest.exists() { return; }
+    if dest.exists() {
+        return;
+    }
     if let Ok(src) = std::fs::read("assets/report.css") {
         let _ = std::fs::write(&dest, src);
     } else {

@@ -58,8 +58,7 @@ pub async fn save(run: &TestRun, connection_string: &str) -> anyhow::Result<()> 
 // ─────────────────────────────────────────────────────────────────────────────
 
 async fn connect(conn_str: &str) -> anyhow::Result<SqlClient> {
-    let config = Config::from_ado_string(conn_str)
-        .context("Failed to parse connection string")?;
+    let config = Config::from_ado_string(conn_str).context("Failed to parse connection string")?;
     let tcp = TcpStream::connect(config.get_addr())
         .await
         .context("TCP connect to SQL Server")?;
@@ -76,9 +75,9 @@ async fn connect(conn_str: &str) -> anyhow::Result<SqlClient> {
 
 async fn insert_test_run(run: &TestRun, c: &mut SqlClient) -> anyhow::Result<()> {
     // Bind temporary Strings to local vars so they live long enough.
-    let run_id   = run.run_id.to_string();
-    let modes    = run.modes.join(",");
-    let started  = run.started_at.naive_utc();
+    let run_id = run.run_id.to_string();
+    let modes = run.modes.join(",");
+    let started = run.started_at.naive_utc();
     let finished = run.finished_at.map(|t| t.naive_utc());
 
     let mut q = Query::new(
@@ -109,11 +108,11 @@ async fn insert_test_run(run: &TestRun, c: &mut SqlClient) -> anyhow::Result<()>
 
 async fn insert_request_attempt(a: &RequestAttempt, c: &mut SqlClient) -> anyhow::Result<()> {
     let attempt_id = a.attempt_id.to_string();
-    let run_id     = a.run_id.to_string();
-    let protocol   = a.protocol.to_string();
-    let started    = a.started_at.naive_utc();
-    let finished   = a.finished_at.map(|t| t.naive_utc());
-    let err_msg    = a.error.as_ref().map(|e| e.message.as_str());
+    let run_id = a.run_id.to_string();
+    let protocol = a.protocol.to_string();
+    let started = a.started_at.naive_utc();
+    let finished = a.finished_at.map(|t| t.naive_utc());
+    let err_msg = a.error.as_ref().map(|e| e.message.as_str());
 
     let mut q = Query::new(
         "INSERT INTO dbo.RequestAttempt (
@@ -138,10 +137,10 @@ async fn insert_dns_result(
     dns: &crate::metrics::DnsResult,
     c: &mut SqlClient,
 ) -> anyhow::Result<()> {
-    let id         = uuid::Uuid::new_v4().to_string();
+    let id = uuid::Uuid::new_v4().to_string();
     let attempt_id = a.attempt_id.to_string();
-    let ips        = dns.resolved_ips.join(",");
-    let started    = dns.started_at.naive_utc();
+    let ips = dns.resolved_ips.join(",");
+    let started = dns.started_at.naive_utc();
 
     let mut q = Query::new(
         "INSERT INTO dbo.DnsResult (
@@ -165,9 +164,9 @@ async fn insert_tcp_result(
     tcp: &crate::metrics::TcpResult,
     c: &mut SqlClient,
 ) -> anyhow::Result<()> {
-    let id         = uuid::Uuid::new_v4().to_string();
+    let id = uuid::Uuid::new_v4().to_string();
     let attempt_id = a.attempt_id.to_string();
-    let started    = tcp.started_at.naive_utc();
+    let started = tcp.started_at.naive_utc();
 
     let mut q = Query::new(
         "INSERT INTO dbo.TcpResult (
@@ -195,10 +194,10 @@ async fn insert_tls_result(
     tls: &crate::metrics::TlsResult,
     c: &mut SqlClient,
 ) -> anyhow::Result<()> {
-    let id         = uuid::Uuid::new_v4().to_string();
+    let id = uuid::Uuid::new_v4().to_string();
     let attempt_id = a.attempt_id.to_string();
-    let started    = tls.started_at.naive_utc();
-    let expiry     = tls.cert_expiry.map(|t| t.naive_utc());
+    let started = tls.started_at.naive_utc();
+    let expiry = tls.cert_expiry.map(|t| t.naive_utc());
 
     let mut q = Query::new(
         "INSERT INTO dbo.TlsResult (
@@ -227,9 +226,9 @@ async fn insert_http_result(
     http: &crate::metrics::HttpResult,
     c: &mut SqlClient,
 ) -> anyhow::Result<()> {
-    let id         = uuid::Uuid::new_v4().to_string();
+    let id = uuid::Uuid::new_v4().to_string();
     let attempt_id = a.attempt_id.to_string();
-    let started    = http.started_at.naive_utc();
+    let started = http.started_at.naive_utc();
 
     let mut q = Query::new(
         "INSERT INTO dbo.HttpResult (
@@ -257,9 +256,9 @@ async fn insert_udp_result(
     udp: &crate::metrics::UdpResult,
     c: &mut SqlClient,
 ) -> anyhow::Result<()> {
-    let id         = uuid::Uuid::new_v4().to_string();
+    let id = uuid::Uuid::new_v4().to_string();
     let attempt_id = a.attempt_id.to_string();
-    let started    = udp.started_at.naive_utc();
+    let started = udp.started_at.naive_utc();
 
     let mut q = Query::new(
         "INSERT INTO dbo.UdpResult (
@@ -288,11 +287,11 @@ async fn insert_error(
     err: &crate::metrics::ErrorRecord,
     c: &mut SqlClient,
 ) -> anyhow::Result<()> {
-    let id         = uuid::Uuid::new_v4().to_string();
+    let id = uuid::Uuid::new_v4().to_string();
     let attempt_id = a.attempt_id.to_string();
-    let run_id     = a.run_id.to_string();
-    let category   = err.category.to_string();
-    let occurred   = err.occurred_at.naive_utc();
+    let run_id = a.run_id.to_string();
+    let category = err.category.to_string();
+    let occurred = err.occurred_at.naive_utc();
 
     let mut q = Query::new(
         "INSERT INTO dbo.ErrorRecord (
@@ -330,7 +329,12 @@ mod tests {
             started_at: Utc::now(),
             finished_at: Some(Utc::now()),
             success,
-            dns: None, tcp: None, tls: None, http: None, udp: None, error: None,
+            dns: None,
+            tcp: None,
+            tls: None,
+            http: None,
+            udp: None,
+            error: None,
         }
     }
 
@@ -338,8 +342,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires SQL Server – set NETWORKER_SQL_CONN to enable"]
     async fn sql_insert_round_trip() {
-        let conn = std::env::var("NETWORKER_SQL_CONN")
-            .expect("NETWORKER_SQL_CONN not set");
+        let conn = std::env::var("NETWORKER_SQL_CONN").expect("NETWORKER_SQL_CONN not set");
         let run_id = Uuid::new_v4();
         let run = TestRun {
             run_id,

@@ -23,7 +23,9 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
     let mut out = String::with_capacity(64 * 1024);
 
     // ── Head ─────────────────────────────────────────────────────────────────
-    let _ = write!(out, r#"<!DOCTYPE html>
+    let _ = write!(
+        out,
+        r#"<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -36,13 +38,19 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
     );
 
     if let Some(href) = css_href {
-        let _ = writeln!(out, r#"  <link rel="stylesheet" href="{}">"#, escape_html(href));
+        let _ = writeln!(
+            out,
+            r#"  <link rel="stylesheet" href="{}">"#,
+            escape_html(href)
+        );
     }
 
     let _ = writeln!(out, "</head>\n<body>");
 
     // ── Header ────────────────────────────────────────────────────────────────
-    let _ = write!(out, r#"
+    let _ = write!(
+        out,
+        r#"
 <header class="page-header">
   <h1>Networker Tester</h1>
   <p class="subtitle">Run <code>{run_id}</code> &bull; {started}</p>
@@ -55,10 +63,17 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
     // ── Summary card ──────────────────────────────────────────────────────────
     let duration_s = run
         .finished_at
-        .map(|f| format!("{:.2}s", (f - run.started_at).num_milliseconds() as f64 / 1000.0))
+        .map(|f| {
+            format!(
+                "{:.2}s",
+                (f - run.started_at).num_milliseconds() as f64 / 1000.0
+            )
+        })
         .unwrap_or_else(|| "—".into());
 
-    let _ = write!(out, r#"
+    let _ = write!(
+        out,
+        r#"
 <section class="card">
   <h2>Run Summary</h2>
   <dl class="summary-grid">
@@ -73,19 +88,21 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
   </dl>
 </section>
 "#,
-        url     = escape_html(&run.target_url),
-        modes   = run.modes.join(", "),
-        total   = run.attempts.len(),
-        ok      = run.success_count(),
-        fail    = run.failure_count(),
+        url = escape_html(&run.target_url),
+        modes = run.modes.join(", "),
+        total = run.attempts.len(),
+        ok = run.success_count(),
+        fail = run.failure_count(),
         fail_cls = if run.failure_count() > 0 { "err" } else { "ok" },
-        dur     = duration_s,
-        os      = escape_html(&run.client_os),
-        ver     = escape_html(&run.client_version),
+        dur = duration_s,
+        os = escape_html(&run.client_os),
+        ver = escape_html(&run.client_version),
     );
 
     // ── Per-protocol timing table ─────────────────────────────────────────────
-    let _ = write!(out, r#"
+    let _ = write!(
+        out,
+        r#"
 <section class="card">
   <h2>Timing Breakdown by Protocol</h2>
   <table>
@@ -102,11 +119,21 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
       </tr>
     </thead>
     <tbody>
-"#);
+"#
+    );
 
-    for proto in &[Protocol::Http1, Protocol::Http2, Protocol::Http3, Protocol::Tcp, Protocol::Udp] {
-        let rows: Vec<&RequestAttempt> =
-            run.attempts.iter().filter(|a| &a.protocol == proto).collect();
+    for proto in &[
+        Protocol::Http1,
+        Protocol::Http2,
+        Protocol::Http3,
+        Protocol::Tcp,
+        Protocol::Udp,
+    ] {
+        let rows: Vec<&RequestAttempt> = run
+            .attempts
+            .iter()
+            .filter(|a| &a.protocol == proto)
+            .collect();
         if rows.is_empty() {
             continue;
         }
@@ -115,10 +142,15 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
     let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
 
     // ── UDP statistics ────────────────────────────────────────────────────────
-    let udp_rows: Vec<&RequestAttempt> =
-        run.attempts.iter().filter(|a| a.protocol == Protocol::Udp && a.udp.is_some()).collect();
+    let udp_rows: Vec<&RequestAttempt> = run
+        .attempts
+        .iter()
+        .filter(|a| a.protocol == Protocol::Udp && a.udp.is_some())
+        .collect();
     if !udp_rows.is_empty() {
-        let _ = write!(out, r#"
+        let _ = write!(
+            out,
+            r#"
 <section class="card">
   <h2>UDP Probe Statistics</h2>
   <table>
@@ -127,10 +159,13 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
           <th>Min RTT</th><th>Avg RTT</th><th>P95 RTT</th><th>Jitter</th></tr>
     </thead>
     <tbody>
-"#);
+"#
+        );
         for a in &udp_rows {
             let u = a.udp.as_ref().unwrap();
-            let _ = write!(out, r#"      <tr>
+            let _ = write!(
+                out,
+                r#"      <tr>
         <td>{seq}</td>
         <td>{addr}</td>
         <td>{sent}</td>
@@ -142,23 +177,25 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
         <td>{jitter:.2}ms</td>
       </tr>
 "#,
-                seq      = a.sequence_num,
-                addr     = escape_html(&u.remote_addr),
-                sent     = u.probe_count,
-                recv     = u.success_count,
-                loss     = u.loss_percent,
+                seq = a.sequence_num,
+                addr = escape_html(&u.remote_addr),
+                sent = u.probe_count,
+                recv = u.success_count,
+                loss = u.loss_percent,
                 loss_cls = if u.loss_percent > 0.0 { "warn" } else { "ok" },
-                min      = u.rtt_min_ms,
-                avg      = u.rtt_avg_ms,
-                p95      = u.rtt_p95_ms,
-                jitter   = u.jitter_ms,
+                min = u.rtt_min_ms,
+                avg = u.rtt_avg_ms,
+                p95 = u.rtt_p95_ms,
+                jitter = u.jitter_ms,
             );
         }
         let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
     }
 
     // ── Individual attempts ───────────────────────────────────────────────────
-    let _ = write!(out, r#"
+    let _ = write!(
+        out,
+        r#"
 <section class="card">
   <h2>All Attempts</h2>
   <table>
@@ -171,7 +208,8 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
       </tr>
     </thead>
     <tbody>
-"#);
+"#
+    );
 
     for a in &run.attempts {
         append_attempt_row(&mut out, a);
@@ -179,10 +217,11 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
     let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
 
     // ── TLS info ─────────────────────────────────────────────────────────────
-    let tls_rows: Vec<&RequestAttempt> =
-        run.attempts.iter().filter(|a| a.tls.is_some()).collect();
+    let tls_rows: Vec<&RequestAttempt> = run.attempts.iter().filter(|a| a.tls.is_some()).collect();
     if !tls_rows.is_empty() {
-        let _ = write!(out, r#"
+        let _ = write!(
+            out,
+            r#"
 <section class="card">
   <h2>TLS Details</h2>
   <table>
@@ -191,10 +230,13 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
           <th>Cert Subject</th><th>Cert Expiry</th><th>Handshake (ms)</th></tr>
     </thead>
     <tbody>
-"#);
+"#
+        );
         for a in &tls_rows {
             let t = a.tls.as_ref().unwrap();
-            let _ = write!(out, r#"      <tr>
+            let _ = write!(
+                out,
+                r#"      <tr>
         <td>{seq}</td>
         <td>{ver}</td>
         <td><code>{cipher}</code></td>
@@ -204,15 +246,20 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
         <td>{hs:.2}</td>
       </tr>
 "#,
-                seq    = a.sequence_num,
-                ver    = escape_html(&t.protocol_version),
+                seq = a.sequence_num,
+                ver = escape_html(&t.protocol_version),
                 cipher = escape_html(&t.cipher_suite),
-                alpn   = t.alpn_negotiated.as_deref().unwrap_or("—"),
-                subj   = t.cert_subject.as_deref().map(escape_html).unwrap_or_else(|| "—".into()),
-                expiry = t.cert_expiry
+                alpn = t.alpn_negotiated.as_deref().unwrap_or("—"),
+                subj = t
+                    .cert_subject
+                    .as_deref()
+                    .map(escape_html)
+                    .unwrap_or_else(|| "—".into()),
+                expiry = t
+                    .cert_expiry
                     .map(|e| e.format("%Y-%m-%d").to_string())
                     .unwrap_or_else(|| "—".into()),
-                hs     = t.handshake_duration_ms,
+                hs = t.handshake_duration_ms,
             );
         }
         let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
@@ -222,12 +269,17 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
     let error_rows: Vec<&RequestAttempt> =
         run.attempts.iter().filter(|a| a.error.is_some()).collect();
     if !error_rows.is_empty() {
-        let _ = writeln!(out, r#"<section class="card error-section"><h2>Errors</h2><table>
+        let _ = writeln!(
+            out,
+            r#"<section class="card error-section"><h2>Errors</h2><table>
     <thead><tr><th>#</th><th>Protocol</th><th>Category</th><th>Message</th><th>Detail</th></tr></thead>
-    <tbody>"#);
+    <tbody>"#
+        );
         for a in &error_rows {
             let e = a.error.as_ref().unwrap();
-            let _ = write!(out, r#"      <tr>
+            let _ = write!(
+                out,
+                r#"      <tr>
         <td>{seq}</td>
         <td>{proto}</td>
         <td class="err">{cat}</td>
@@ -235,18 +287,24 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
         <td>{detail}</td>
       </tr>
 "#,
-                seq    = a.sequence_num,
-                proto  = a.protocol,
-                cat    = e.category,
-                msg    = escape_html(&e.message),
-                detail = e.detail.as_deref().map(escape_html).unwrap_or_else(|| "—".into()),
+                seq = a.sequence_num,
+                proto = a.protocol,
+                cat = e.category,
+                msg = escape_html(&e.message),
+                detail = e
+                    .detail
+                    .as_deref()
+                    .map(escape_html)
+                    .unwrap_or_else(|| "—".into()),
             );
         }
         let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
     }
 
     // ── Footer ────────────────────────────────────────────────────────────────
-    let _ = write!(out, r#"
+    let _ = write!(
+        out,
+        r#"
 <footer>
   Generated by <strong>networker-tester v{}</strong> &bull; {}
 </footer>
@@ -267,7 +325,6 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn append_proto_row(out: &mut String, proto: &Protocol, rows: &[&RequestAttempt]) {
-    let n = rows.len() as f64;
     let successes = rows.iter().filter(|a| a.success).count();
 
     let avg = |f: fn(&RequestAttempt) -> Option<f64>| -> String {
@@ -283,12 +340,22 @@ fn append_proto_row(out: &mut String, proto: &Protocol, rows: &[&RequestAttempt]
     let tcp_avg = avg(|a| a.tcp.as_ref().map(|t| t.connect_duration_ms));
     let tls_avg = avg(|a| a.tls.as_ref().map(|t| t.handshake_duration_ms));
     let ttfb_avg = avg(|a| a.http.as_ref().map(|h| h.ttfb_ms));
-    let total_avg = avg(|a| a.http.as_ref().map(|h| h.total_duration_ms)
-        .or_else(|| a.udp.as_ref().map(|u| u.rtt_avg_ms)));
+    let total_avg = avg(|a| {
+        a.http
+            .as_ref()
+            .map(|h| h.total_duration_ms)
+            .or_else(|| a.udp.as_ref().map(|u| u.rtt_avg_ms))
+    });
 
-    let ok_cls = if successes == rows.len() { "ok" } else { "warn" };
+    let ok_cls = if successes == rows.len() {
+        "ok"
+    } else {
+        "warn"
+    };
 
-    let _ = write!(out, r#"      <tr>
+    let _ = write!(
+        out,
+        r#"      <tr>
         <td><strong>{proto}</strong></td>
         <td>{n}</td>
         <td>{dns}</td>
@@ -301,24 +368,44 @@ fn append_proto_row(out: &mut String, proto: &Protocol, rows: &[&RequestAttempt]
 "#,
         proto = proto,
         n = rows.len(),
-        dns   = dns_avg,
-        tcp   = tcp_avg,
-        tls   = tls_avg,
-        ttfb  = ttfb_avg,
+        dns = dns_avg,
+        tcp = tcp_avg,
+        tls = tls_avg,
+        ttfb = ttfb_avg,
         total = total_avg,
-        suc   = successes,
+        suc = successes,
         ok_cls = ok_cls,
     );
 }
 
 fn append_attempt_row(out: &mut String, a: &RequestAttempt) {
-    let dns_ms = a.dns.as_ref().map(|d| format!("{:.2}", d.duration_ms)).unwrap_or_else(|| "—".into());
-    let tcp_ms = a.tcp.as_ref().map(|t| format!("{:.2}", t.connect_duration_ms)).unwrap_or_else(|| "—".into());
-    let tls_ms = a.tls.as_ref().map(|t| format!("{:.2}", t.handshake_duration_ms)).unwrap_or_else(|| "—".into());
+    let dns_ms = a
+        .dns
+        .as_ref()
+        .map(|d| format!("{:.2}", d.duration_ms))
+        .unwrap_or_else(|| "—".into());
+    let tcp_ms = a
+        .tcp
+        .as_ref()
+        .map(|t| format!("{:.2}", t.connect_duration_ms))
+        .unwrap_or_else(|| "—".into());
+    let tls_ms = a
+        .tls
+        .as_ref()
+        .map(|t| format!("{:.2}", t.handshake_duration_ms))
+        .unwrap_or_else(|| "—".into());
     let (ttfb_ms, total_ms, version) = if let Some(h) = &a.http {
-        (format!("{:.2}", h.ttfb_ms), format!("{:.2}", h.total_duration_ms), h.negotiated_version.clone())
+        (
+            format!("{:.2}", h.ttfb_ms),
+            format!("{:.2}", h.total_duration_ms),
+            h.negotiated_version.clone(),
+        )
     } else if let Some(u) = &a.udp {
-        ("—".into(), format!("{:.2}", u.rtt_avg_ms), format!("loss={:.1}%", u.loss_percent))
+        (
+            "—".into(),
+            format!("{:.2}", u.rtt_avg_ms),
+            format!("loss={:.1}%", u.loss_percent),
+        )
     } else {
         ("—".into(), "—".into(), "—".into())
     };
@@ -332,13 +419,21 @@ fn append_attempt_row(out: &mut String, a: &RequestAttempt) {
         r#"<span class="err">FAIL</span>"#.into()
     };
 
-    let err_cell = a.error.as_ref()
-        .map(|e| format!(r#"<span class="err" title="{}">{}</span>"#,
-            escape_html(e.detail.as_deref().unwrap_or("")),
-            escape_html(&e.message)))
+    let err_cell = a
+        .error
+        .as_ref()
+        .map(|e| {
+            format!(
+                r#"<span class="err" title="{}">{}</span>"#,
+                escape_html(e.detail.as_deref().unwrap_or("")),
+                escape_html(&e.message)
+            )
+        })
         .unwrap_or_else(|| "—".into());
 
-    let _ = write!(out, r#"      <tr class="{row_cls}">
+    let _ = write!(
+        out,
+        r#"      <tr class="{row_cls}">
         <td>{seq}</td><td>{proto}</td><td>{status}</td>
         <td>{dns}</td><td>{tcp}</td><td>{tls}</td>
         <td>{ttfb}</td><td>{total}</td>
@@ -346,16 +441,16 @@ fn append_attempt_row(out: &mut String, a: &RequestAttempt) {
       </tr>
 "#,
         row_cls = if a.success { "" } else { "row-err" },
-        seq    = a.sequence_num,
-        proto  = a.protocol,
+        seq = a.sequence_num,
+        proto = a.protocol,
         status = status_cell,
-        dns    = dns_ms,
-        tcp    = tcp_ms,
-        tls    = tls_ms,
-        ttfb   = ttfb_ms,
-        total  = total_ms,
-        ver    = escape_html(&version),
-        err    = err_cell,
+        dns = dns_ms,
+        tcp = tcp_ms,
+        tls = tls_ms,
+        ttfb = ttfb_ms,
+        total = total_ms,
+        ver = escape_html(&version),
+        err = err_cell,
     );
 }
 
@@ -482,7 +577,10 @@ mod tests {
 
     #[test]
     fn html_escapes_special_chars() {
-        assert_eq!(escape_html("<script>alert(1)</script>"), "&lt;script&gt;alert(1)&lt;/script&gt;");
+        assert_eq!(
+            escape_html("<script>alert(1)</script>"),
+            "&lt;script&gt;alert(1)&lt;/script&gt;"
+        );
     }
 
     #[test]

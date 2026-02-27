@@ -60,13 +60,10 @@ mod tests {
         client.send(msg).await.unwrap();
 
         let mut recv = vec![0u8; 1024];
-        let n = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            client.recv(&mut recv),
-        )
-        .await
-        .expect("timeout")
-        .unwrap();
+        let n = tokio::time::timeout(std::time::Duration::from_secs(2), client.recv(&mut recv))
+            .await
+            .expect("timeout")
+            .unwrap();
 
         assert_eq!(&recv[..n], msg);
     }

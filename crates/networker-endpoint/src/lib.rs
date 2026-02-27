@@ -1,9 +1,9 @@
 mod routes;
 mod udp_echo;
 
-pub use routes::build_router;
 use anyhow::Context;
 use axum_server::tls_rustls::RustlsConfig;
+pub use routes::build_router;
 use std::net::SocketAddr;
 use tokio::sync::oneshot;
 use tracing::info;
@@ -21,7 +21,11 @@ pub struct ServerConfig {
 
 impl Default for ServerConfig {
     fn default() -> Self {
-        Self { http_port: 8080, https_port: 8443, udp_port: 9999 }
+        Self {
+            http_port: 8080,
+            https_port: 8443,
+            udp_port: 9999,
+        }
     }
 }
 
@@ -38,18 +42,20 @@ pub async fn run_with_shutdown(
     // rustls 0.23 requires a global CryptoProvider; install ring if none set.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let (cert_pem, key_pem) = generate_self_signed_cert()
-        .context("generate self-signed cert")?;
+    let (cert_pem, key_pem) = generate_self_signed_cert().context("generate self-signed cert")?;
 
     let tls_config = RustlsConfig::from_pem(cert_pem, key_pem)
         .await
         .context("Build RustlsConfig")?;
 
-    let http_addr  = SocketAddr::from(([0, 0, 0, 0], cfg.http_port));
+    let http_addr = SocketAddr::from(([0, 0, 0, 0], cfg.http_port));
     let https_addr = SocketAddr::from(([0, 0, 0, 0], cfg.https_port));
 
     info!("HTTP  → http://0.0.0.0:{}", cfg.http_port);
-    info!("HTTPS → https://0.0.0.0:{}  (self-signed, use --insecure)", cfg.https_port);
+    info!(
+        "HTTPS → https://0.0.0.0:{}  (self-signed, use --insecure)",
+        cfg.https_port
+    );
     info!("UDP   → 0.0.0.0:{}", cfg.udp_port);
 
     let router = build_router();
@@ -101,7 +107,7 @@ pub async fn run(cfg: ServerConfig) -> anyhow::Result<()> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn generate_self_signed_cert() -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
-    use rcgen::{generate_simple_self_signed, SanType};
+    use rcgen::generate_simple_self_signed;
 
     // SANs: localhost (DNS), 127.0.0.1, ::1
     let subject_alt_names = vec![
@@ -114,7 +120,7 @@ fn generate_self_signed_cert() -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
         .context("rcgen generate_simple_self_signed")?;
 
     let cert_pem = certified_key.cert.pem().into_bytes();
-    let key_pem  = certified_key.key_pair.serialize_pem().into_bytes();
+    let key_pem = certified_key.key_pair.serialize_pem().into_bytes();
 
     Ok((cert_pem, key_pem))
 }

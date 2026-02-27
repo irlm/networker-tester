@@ -1,3 +1,4 @@
+use networker_tester::metrics::Protocol;
 /// Integration tests for networker-tester.
 ///
 /// These tests start the `networker-endpoint` in-process and exercise the
@@ -7,7 +8,6 @@
 ///   cargo test --test integration -p networker-tester
 use networker_tester::runner::http::{run_probe, RunConfig};
 use networker_tester::runner::udp::{run_udp_probe, UdpProbeConfig};
-use networker_tester::metrics::Protocol;
 use uuid::Uuid;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -29,9 +29,9 @@ fn init_crypto() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct Endpoint {
-    pub http_port:  u16,
+    pub http_port: u16,
     pub https_port: u16,
-    pub udp_port:   u16,
+    pub udp_port: u16,
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
@@ -39,9 +39,9 @@ impl Endpoint {
     async fn start() -> Self {
         init_crypto();
 
-        let http_port  = free_port();
+        let http_port = free_port();
         let https_port = free_port();
-        let udp_port   = free_port();
+        let udp_port = free_port();
 
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
 
@@ -85,7 +85,12 @@ impl Endpoint {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
 
-        Endpoint { http_port, https_port, udp_port, shutdown: Some(tx) }
+        Endpoint {
+            http_port,
+            https_port,
+            udp_port,
+            shutdown: Some(tx),
+        }
     }
 
     fn http_url(&self, path: &str) -> url::Url {
@@ -122,7 +127,11 @@ async fn http1_health_returns_200() {
     let url = ep.http_url("/health");
     let attempt = run_probe(Uuid::new_v4(), 0, Protocol::Http1, &url, &cfg).await;
 
-    assert!(attempt.success, "HTTP/1.1 probe failed: {:?}", attempt.error);
+    assert!(
+        attempt.success,
+        "HTTP/1.1 probe failed: {:?}",
+        attempt.error
+    );
     let http = attempt.http.expect("http result missing");
     assert_eq!(http.status_code, 200);
     assert_eq!(http.negotiated_version, "HTTP/1.1");
@@ -199,7 +208,11 @@ async fn http1_over_tls_negotiates_http11() {
     let url = ep.https_url("/health");
     let attempt = run_probe(Uuid::new_v4(), 0, Protocol::Http1, &url, &cfg).await;
 
-    assert!(attempt.success, "HTTP/1.1+TLS probe failed: {:?}", attempt.error);
+    assert!(
+        attempt.success,
+        "HTTP/1.1+TLS probe failed: {:?}",
+        attempt.error
+    );
     let tls = attempt.tls.unwrap();
     assert_eq!(tls.alpn_negotiated.as_deref(), Some("http/1.1"));
 }
@@ -219,7 +232,10 @@ async fn tcp_only_mode_records_connect_time() {
 
     assert!(attempt.success);
     assert!(attempt.tcp.is_some());
-    assert!(attempt.http.is_none(), "TCP mode should not send HTTP request");
+    assert!(
+        attempt.http.is_none(),
+        "TCP mode should not send HTTP request"
+    );
 }
 
 #[tokio::test]
