@@ -350,43 +350,99 @@ The inline CSS in the HTML is a minimal fallback for offline use.
 
 ## Running Tests
 
-### Unit tests (fast, no server needed)
+The suite has three independent layers:
+
+| Layer | Command | Requires | Tests |
+|-------|---------|----------|-------|
+| **Unit** | `cargo test --workspace --lib` | Nothing — fully offline | ~35 |
+| **Integration** | `cargo test --test integration -p networker-tester` | Nothing — endpoint is in-process | ~10 |
+| **SQL integration** | see below | SQL Server + `NETWORKER_SQL_CONN` | 1 |
+
+### Layer 1 — Unit tests
+
+Test individual functions and formulas in isolation.  No server, no network, no database.
 
 ```bash
+# All crates (tester + endpoint)
 cargo test --workspace --lib
-```
 
-### Endpoint unit tests
+# Tester only
+cargo test -p networker-tester --lib
 
-```bash
+# Endpoint only
 cargo test -p networker-endpoint --lib
 ```
 
-### Integration tests (start endpoint in-process)
+What's covered: CLI parsing, payload-size suffixes, throughput formula (download vs upload
+time windows), RTT aggregation, HTML rendering, JSON round-trip, TLS ALPN config, UDP probe
+calculations.
+
+### Layer 2 — Integration tests
+
+End-to-end probe pipeline tests.  `networker-endpoint` is spawned **in-process** on random
+ports — no manual server setup required.
 
 ```bash
-cargo test --test integration -p networker-tester
+cargo test --test integration -p networker-tester -- --test-threads=1
 ```
 
-### SQL integration tests (requires SQL Server)
+> `--test-threads=1` is required because each test spawns its own endpoint on
+> random ports — concurrent tests can grab the same port before the endpoint
+> binds it (TOCTOU race).
+
+What's covered:
+
+| Test | What it exercises |
+|------|------------------|
+| `http1_health_returns_200` | Full HTTP/1.1 pipeline: TCP connect → send GET → parse response |
+| `http1_echo_round_trips_payload` | POST body send + response body receive |
+| `http2_over_tls_negotiates_h2` | TLS handshake, ALPN `h2`, HTTP/2 framing |
+| `http1_over_tls_negotiates_http11` | TLS with ALPN `http/1.1` |
+| `tcp_only_mode_records_connect_time` | TCP probe stops after connect — no HTTP sent |
+| `udp_probe_measures_rtt` | UDP echo: RTT min/avg/p95, loss percent |
+| `http1_delay_endpoint_respected` | `/delay?ms=100` — TTFB ≥ 90 ms |
+| `http1_status_endpoint_returns_correct_code` | `/status/404` → status 404 |
+| `download_probe_reports_throughput` | `run_download_probe` → `/download?bytes=65536`, verifies `payload_bytes` + `throughput_mbps` |
+| `upload_probe_reports_throughput` | `run_upload_probe` → `POST /upload` with 64 KiB body, verifies `payload_bytes` + `throughput_mbps` |
+
+### Layer 3 — SQL integration tests
+
+Verifies the tiberius write path against a real SQL Server instance.  Skipped by default
+(`#[ignore]`); opt in by setting `NETWORKER_SQL_CONN`.
 
 ```bash
-export NETWORKER_SQL_CONN="Server=localhost;Database=NetworkDiagnostics;User Id=sa;Password=Pass!;TrustServerCertificate=true"
-cargo test --workspace -- --include-ignored
+# Start SQL Server (Docker)
+docker run --name networker-sql \
+  -e ACCEPT_EULA=Y -e SA_PASSWORD="YourPass1!" \
+  -p 1433:1433 -d mcr.microsoft.com/mssql/server:2022-latest
+
+# Apply schema
+sqlcmd -S localhost -U sa -P "YourPass1!" -i sql/01_CreateDatabase.sql
+sqlcmd -S localhost -U sa -P "YourPass1!" -i sql/02_StoredProcedures.sql
+
+# Run SQL tests
+export NETWORKER_SQL_CONN="Server=localhost;Database=NetworkDiagnostics;User Id=sa;Password=YourPass1!;TrustServerCertificate=true"
+cargo test --workspace -- sql --include-ignored
 ```
 
-### HTTP/3 build
+In CI, enable the SQL job by setting the `NETWORKER_SQL_TESTS = true` repository variable
+under *Settings → Secrets and variables → Actions*.
+
+### HTTP/3 feature build
+
+HTTP/3 support is behind a Cargo feature flag (adds `quinn` + `h3`):
 
 ```bash
 cargo build -p networker-tester --features http3
 ```
 
-### Full test matrix
+### Full check (mirrors CI)
 
 ```bash
-cargo test --workspace
-cargo clippy --all-targets -- -D warnings
 cargo fmt --all -- --check
+cargo clippy --all-targets -- -D warnings
+cargo test --workspace --lib
+cargo test --test integration -p networker-tester -- --test-threads=1
 ```
 
 ---
