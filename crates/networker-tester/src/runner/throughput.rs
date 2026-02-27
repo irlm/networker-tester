@@ -4,11 +4,22 @@
 ///  1. Rewrite the URL to point at the appropriate endpoint route.
 ///  2. Set `payload_size` appropriately (0 for download, N for upload).
 ///  3. After the probe returns, patch the `HttpResult` with `payload_bytes`
-///     and `throughput_mbps` derived from body transfer time.
+///     and `throughput_mbps` using a direction-appropriate time window.
 ///
-/// Throughput formula (MB/s):
-///   body_ms  = total_duration_ms − ttfb_ms   (time spent transferring the body)
-///   mbps     = payload_bytes / body_ms * 1000 / (1024 * 1024)
+/// ## Why the time basis differs by direction
+///
+/// **Download** — data flows server → client *after* the server sends its first
+/// response byte.  The correct window is the body-receive phase:
+///   transfer_ms = total_duration_ms − ttfb_ms
+///
+/// **Upload** — data flows client → server *before* the server responds.
+/// `total − ttfb` measures the response body receive time, which is
+/// near-zero for `/upload` (returns a small JSON ack) and produces absurd
+/// throughput figures.  The correct window is TTFB itself, which covers the
+/// full round-trip of: send request headers + send body + server reads body
+/// + server sends response headers:
+///   transfer_ms = ttfb_ms   (slight overestimate due to server processing,
+///                             but orders-of-magnitude more accurate than ~0 ms)
 use crate::metrics::{HttpResult, Protocol, RequestAttempt};
 use crate::runner::http::{run_probe, RunConfig};
 use uuid::Uuid;
@@ -53,7 +64,7 @@ pub async fn run_download_probe(
     .await;
 
     if let Some(h) = attempt.http.clone() {
-        attempt.http = Some(patch_throughput(h, payload_bytes));
+        attempt.http = Some(patch_throughput(h, payload_bytes, false));
     }
     attempt
 }
@@ -81,7 +92,7 @@ pub async fn run_upload_probe(
     let mut attempt = run_probe(run_id, sequence_num, Protocol::Upload, &target, &probe_cfg).await;
 
     if let Some(h) = attempt.http.clone() {
-        attempt.http = Some(patch_throughput(h, payload_bytes));
+        attempt.http = Some(patch_throughput(h, payload_bytes, true));
     }
     attempt
 }
@@ -90,10 +101,19 @@ pub async fn run_upload_probe(
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn patch_throughput(h: HttpResult, payload_bytes: usize) -> HttpResult {
-    let body_ms = h.total_duration_ms - h.ttfb_ms;
-    let throughput_mbps = if body_ms > 0.0 {
-        Some(payload_bytes as f64 / body_ms * 1000.0 / (1024.0 * 1024.0))
+/// Compute and attach throughput to an `HttpResult`.
+///
+/// `is_upload` selects the correct time window:
+/// - `false` (download): `total_duration_ms − ttfb_ms` — body receive time
+/// - `true`  (upload):   `ttfb_ms`                    — request send + server ack time
+fn patch_throughput(h: HttpResult, payload_bytes: usize, is_upload: bool) -> HttpResult {
+    let transfer_ms = if is_upload {
+        h.ttfb_ms
+    } else {
+        h.total_duration_ms - h.ttfb_ms
+    };
+    let throughput_mbps = if transfer_ms > 0.0 {
+        Some(payload_bytes as f64 / transfer_ms * 1000.0 / (1024.0 * 1024.0))
     } else {
         None
     };
@@ -131,26 +151,53 @@ mod tests {
     }
 
     #[test]
-    fn throughput_formula_is_correct() {
-        // 1 MiB transferred in 1000ms body time → 1.0 MB/s
-        let h = make_http_result(10.0, 1010.0); // ttfb=10ms, total=1010ms → body=1000ms
-        let patched = patch_throughput(h, 1024 * 1024);
+    fn download_uses_body_receive_time() {
+        // 1 MiB received in 1000ms body time (ttfb=10ms, total=1010ms) → 1.0 MB/s
+        let h = make_http_result(10.0, 1010.0);
+        let patched = patch_throughput(h, 1024 * 1024, false);
         let mbps = patched.throughput_mbps.expect("should have throughput");
         assert!((mbps - 1.0).abs() < 1e-9, "expected ~1.0 MB/s, got {mbps}");
     }
 
     #[test]
-    fn throughput_none_when_body_ms_is_zero() {
-        // ttfb == total → body_ms == 0 → no throughput
+    fn upload_uses_ttfb_not_body_receive_time() {
+        // 1 MiB upload: ttfb=1000ms, response body tiny so total≈ttfb
+        // download formula would give ~0ms → broken; upload formula uses ttfb → 1.0 MB/s
+        let h = make_http_result(1000.0, 1001.0); // total−ttfb = 1ms (tiny response)
+        let patched = patch_throughput(h, 1024 * 1024, true);
+        let mbps = patched.throughput_mbps.expect("should have throughput");
+        assert!((mbps - 1.0).abs() < 1e-9, "expected ~1.0 MB/s, got {mbps}");
+    }
+
+    #[test]
+    fn upload_with_near_zero_body_ms_does_not_explode() {
+        // Regression: upload where total ≈ ttfb previously divided by ~0
+        let h = make_http_result(18.7, 18.7);
+        let patched = patch_throughput(h, 1024 * 1024 * 1024, true); // 1 GiB
+        let mbps = patched.throughput_mbps.expect("should have throughput");
+        // 1 GiB / 18.7ms ≈ 54757 MB/s — large but physically plausible on loopback
+        assert!(
+            mbps < 1_000_000.0,
+            "throughput should not be astronomically wrong: {mbps}"
+        );
+        assert!(
+            mbps > 1_000.0,
+            "throughput should be in a plausible range: {mbps}"
+        );
+    }
+
+    #[test]
+    fn throughput_none_when_transfer_ms_is_zero() {
+        // download where ttfb == total → body_ms == 0 → no throughput
         let h = make_http_result(100.0, 100.0);
-        let patched = patch_throughput(h, 65536);
+        let patched = patch_throughput(h, 65536, false);
         assert!(patched.throughput_mbps.is_none());
     }
 
     #[test]
     fn throughput_payload_bytes_set() {
         let h = make_http_result(5.0, 100.0);
-        let patched = patch_throughput(h, 65536);
+        let patched = patch_throughput(h, 65536, false);
         assert_eq!(patched.payload_bytes, 65536);
     }
 
