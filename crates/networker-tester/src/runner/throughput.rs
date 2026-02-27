@@ -18,8 +18,10 @@
 /// throughput figures.  The correct window is TTFB itself, which covers the
 /// full round-trip of: send request headers + send body + server reads body
 /// + server sends response headers:
-///   transfer_ms = ttfb_ms   (slight overestimate due to server processing,
-///                             but orders-of-magnitude more accurate than ~0 ms)
+///   transfer_ms = ttfb_ms
+///
+/// This slightly overestimates (includes server processing), but is
+/// orders-of-magnitude more accurate than dividing by ~0 ms.
 use crate::metrics::{HttpResult, Protocol, RequestAttempt};
 use crate::runner::http::{run_probe, RunConfig};
 use uuid::Uuid;
