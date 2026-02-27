@@ -64,12 +64,14 @@ fi
 success "SSH access confirmed"
 
 # ── Ensure Rust / cargo ───────────────────────────────────────────────────────
+RUST_FRESHLY_INSTALLED=false
 if ! command -v cargo &>/dev/null; then
     warn "cargo not found – installing Rust via rustup..."
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
         | sh -s -- -y --no-modify-path
     # shellcheck source=/dev/null
     source "${HOME}/.cargo/env"
+    RUST_FRESHLY_INSTALLED=true
     success "Rust installed"
 else
     RUST_VER=$(rustc --version)
@@ -93,8 +95,24 @@ CARGO_NET_GIT_FETCH_WITH_CLI=true \
     cargo install --git "${REPO_SSH}" "${BINARY}" --locked </dev/null
 
 echo ""
-INSTALLED_PATH=$(command -v "${BINARY}" 2>/dev/null || echo "(not in PATH)")
+INSTALLED_PATH=$(command -v "${BINARY}" 2>/dev/null || echo "${HOME}/.cargo/bin/${BINARY}")
 success "${BINARY} installed → ${INSTALLED_PATH}"
+
+# ── PATH notice ───────────────────────────────────────────────────────────────
+# source inside the script only affects this subprocess; the user's interactive
+# shell still has the old PATH.  Print a prominent notice when Rust was just
+# installed so the binary is usable immediately without opening a new terminal.
+if [ "${RUST_FRESHLY_INSTALLED}" = "true" ]; then
+    echo ""
+    warn "~/.cargo/bin is not yet in your shell's PATH."
+    echo "  Run the following to use ${BINARY} in this terminal session:"
+    echo ""
+    echo "    . \"\$HOME/.cargo/env\""
+    echo ""
+    echo "  To make this permanent, add it to your shell profile:"
+    echo "    echo '. \"\$HOME/.cargo/env\"' >> ~/.bashrc   # bash"
+    echo "    echo '. \"\$HOME/.cargo/env\"' >> ~/.zshrc    # zsh"
+fi
 
 if [ "${COMPONENT}" = "tester" ]; then
     echo ""
