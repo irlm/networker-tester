@@ -185,6 +185,30 @@ pre-generated certs needed). Pass `--insecure` to the tester to accept it.
   --output-dir ./output
 ```
 
+**Throughput measurement (download + upload across multiple payload sizes):**
+```bash
+./target/release/networker-tester \
+  --target http://127.0.0.1:8080/health \
+  --modes download,upload \
+  --payload-sizes 4k,64k,1m \
+  --runs 3 \
+  --output-dir ./output
+```
+
+Each payload size is probed independently — `4k`, `64k`, and `1m` produce
+3 sizes × 2 modes × 3 runs = **18 attempts**, each reporting throughput in MB/s.
+
+**Mix latency and throughput in one run:**
+```bash
+./target/release/networker-tester \
+  --target https://127.0.0.1:8443/health \
+  --modes http1,http2,download,upload \
+  --payload-sizes 64k,1m \
+  --runs 3 \
+  --insecure \
+  --output-dir ./output
+```
+
 **HTTP/3 (requires `--features http3`):**
 ```bash
 cargo build --release --features http3
