@@ -13,15 +13,16 @@
 ///   transfer_ms = total_duration_ms − ttfb_ms
 ///
 /// **Upload** — data flows client → server *before* the server responds.
-/// `total − ttfb` measures the response body receive time, which is
-/// near-zero for `/upload` (returns a small JSON ack) and produces absurd
-/// throughput figures.  The correct window is TTFB itself, which covers the
-/// full round-trip of: send request headers + send body + server reads body
-/// + server sends response headers:
-///   transfer_ms = ttfb_ms
+/// The intuitive choice of `ttfb_ms` (time until response headers arrive)
+/// turns out to be near-zero for large payloads: hyper writes the body into
+/// the kernel TCP send buffer almost instantly, so `send_request` returns
+/// before the bytes actually traverse the network.  The actual transmission
+/// and server drain happen concurrently with the rest of `run_probe`, making
+/// `total_duration_ms` the only reliable end-to-end window:
+///   transfer_ms = total_duration_ms
 ///
-/// This slightly overestimates (includes server processing), but is
-/// orders-of-magnitude more accurate than dividing by ~0 ms.
+/// This slightly overestimates (includes TCP connect + response receipt), but
+/// both of those are negligible compared to a large body transfer.
 use crate::metrics::{HttpResult, Protocol, RequestAttempt};
 use crate::runner::http::{run_probe, RunConfig};
 use uuid::Uuid;
@@ -107,10 +108,14 @@ pub async fn run_upload_probe(
 ///
 /// `is_upload` selects the correct time window:
 /// - `false` (download): `total_duration_ms − ttfb_ms` — body receive time
-/// - `true`  (upload):   `ttfb_ms`                    — request send + server ack time
+/// - `true`  (upload):   `total_duration_ms`           — full end-to-end time
+///
+/// For uploads, `ttfb_ms` is near-zero on large payloads because hyper
+/// flushes the body to the kernel send buffer before `send_request` returns.
+/// `total_duration_ms` correctly captures the actual transfer duration.
 fn patch_throughput(h: HttpResult, payload_bytes: usize, is_upload: bool) -> HttpResult {
     let transfer_ms = if is_upload {
-        h.ttfb_ms
+        h.total_duration_ms
     } else {
         h.total_duration_ms - h.ttfb_ms
     };
@@ -162,29 +167,30 @@ mod tests {
     }
 
     #[test]
-    fn upload_uses_ttfb_not_body_receive_time() {
-        // 1 MiB upload: ttfb=1000ms, response body tiny so total≈ttfb
-        // download formula would give ~0ms → broken; upload formula uses ttfb → 1.0 MB/s
-        let h = make_http_result(1000.0, 1001.0); // total−ttfb = 1ms (tiny response)
+    fn upload_uses_total_duration() {
+        // 1 MiB upload: ttfb≈0 (hyper buffers to kernel instantly), total=1000ms
+        // correct formula uses total_duration_ms → 1.0 MB/s
+        let h = make_http_result(0.5, 1000.0);
         let patched = patch_throughput(h, 1024 * 1024, true);
         let mbps = patched.throughput_mbps.expect("should have throughput");
         assert!((mbps - 1.0).abs() < 1e-9, "expected ~1.0 MB/s, got {mbps}");
     }
 
     #[test]
-    fn upload_with_near_zero_body_ms_does_not_explode() {
-        // Regression: upload where total ≈ ttfb previously divided by ~0
-        let h = make_http_result(18.7, 18.7);
+    fn upload_near_zero_ttfb_does_not_produce_absurd_throughput() {
+        // Regression: hyper buffers large body to kernel → ttfb_ms ≈ 0.5ms.
+        // Old formula (ttfb):   1 GiB / 0.5ms  → ~2 billion MB/s  (WRONG)
+        // New formula (total):  1 GiB / 9000ms → ~113 MB/s         (correct)
+        let h = make_http_result(0.5, 9000.0);
         let patched = patch_throughput(h, 1024 * 1024 * 1024, true); // 1 GiB
         let mbps = patched.throughput_mbps.expect("should have throughput");
-        // 1 GiB / 18.7ms ≈ 54757 MB/s — large but physically plausible on loopback
         assert!(
-            mbps < 1_000_000.0,
-            "throughput should not be astronomically wrong: {mbps}"
+            mbps < 10_000.0,
+            "throughput must not be astronomically wrong: {mbps}"
         );
         assert!(
-            mbps > 1_000.0,
-            "throughput should be in a plausible range: {mbps}"
+            mbps > 50.0,
+            "throughput must be in a plausible range: {mbps}"
         );
     }
 

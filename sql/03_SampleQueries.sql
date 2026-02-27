@@ -185,3 +185,52 @@ WHERE a.Protocol IN ('download', 'upload')
 GROUP BY a.Protocol, h.PayloadBytes
 ORDER BY a.Protocol, h.PayloadBytes;
 GO
+
+-- ── 12. TCP retransmission hot-spots ─────────────────────────────────────────
+-- Attempts with the highest cumulative retransmit counts; indicates path quality.
+SELECT TOP 20
+    a.Protocol,
+    r.TargetHost,
+    t.RemoteAddr,
+    t.TotalRetrans,
+    t.Retransmits,
+    t.SndCwnd,
+    t.RttEstimateMs,
+    t.RttVarianceMs,
+    a.StartedAt
+FROM dbo.TcpResult t
+JOIN dbo.RequestAttempt a ON a.AttemptId = t.AttemptId
+JOIN dbo.TestRun        r ON r.RunId     = a.RunId
+WHERE t.TotalRetrans IS NOT NULL
+ORDER BY t.TotalRetrans DESC;
+GO
+
+-- ── 13. Server-side timing vs client TTFB ────────────────────────────────────
+-- Compare server processing time to client-measured TTFB to isolate network RTT.
+SELECT
+    a.Protocol,
+    AVG(h.TtfbMs)           AS AvgClientTtfbMs,
+    AVG(st.TotalServerMs)   AS AvgServerTotalMs,
+    AVG(h.TtfbMs - ISNULL(st.TotalServerMs, 0)) AS AvgNetworkOverheadMs,
+    AVG(st.ClockSkewMs)     AS AvgClockSkewMs,
+    COUNT(*)                AS Attempts
+FROM dbo.RequestAttempt a
+JOIN dbo.HttpResult         h   ON h.AttemptId  = a.AttemptId
+JOIN dbo.ServerTimingResult st  ON st.AttemptId = a.AttemptId
+WHERE a.StartedAt >= DATEADD(HOUR, -24, GETUTCDATE())
+GROUP BY a.Protocol
+ORDER BY a.Protocol;
+GO
+
+-- ── 14. Retry analysis – how often do retries succeed ────────────────────────
+SELECT
+    a.Protocol,
+    a.RetryCount,
+    COUNT(*)                                                 AS Attempts,
+    SUM(CASE WHEN a.Success = 1 THEN 1 ELSE 0 END)          AS Successes,
+    CAST(100.0 * SUM(CASE WHEN a.Success = 1 THEN 1 ELSE 0 END)
+         / COUNT(*) AS DECIMAL(5,1))                        AS SuccessRate
+FROM dbo.RequestAttempt a
+GROUP BY a.Protocol, a.RetryCount
+ORDER BY a.Protocol, a.RetryCount;
+GO

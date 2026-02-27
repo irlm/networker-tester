@@ -2,6 +2,7 @@
 ///
 /// TestRun  → 1:N  RequestAttempt
 /// RequestAttempt → 0:1 DnsResult, TcpResult, TlsResult, HttpResult, UdpResult, ErrorRecord
+///              → 0:1 ServerTimingResult (when X-Networker-* headers present)
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -69,6 +70,12 @@ pub struct RequestAttempt {
     pub http: Option<HttpResult>,
     pub udp: Option<UdpResult>,
     pub error: Option<ErrorRecord>,
+    /// Number of retries performed before this attempt succeeded (0 = first try succeeded).
+    #[serde(default)]
+    pub retry_count: u32,
+    /// Server-side timing metadata parsed from response headers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_timing: Option<ServerTimingResult>,
 }
 
 impl RequestAttempt {
@@ -149,8 +156,60 @@ pub struct TcpResult {
     pub success: bool,
     /// MSS as reported by TCP_MAXSEG setsockopt (best-effort, Unix only).
     pub mss_bytes: Option<u32>,
-    /// Smoothed RTT in ms from TCP_INFO (Linux only).
+    /// Smoothed RTT in ms from TCP_INFO (Linux) or TCP_CONNECTION_INFO (macOS).
     pub rtt_estimate_ms: Option<f64>,
+    // ── Extended kernel stats (TCP_INFO / TCP_CONNECTION_INFO) ─────────────────
+    /// Segments currently queued for retransmit (tcpi_retransmits).
+    #[serde(default)]
+    pub retransmits: Option<u32>,
+    /// Lifetime retransmission count (tcpi_total_retrans).
+    #[serde(default)]
+    pub total_retrans: Option<u32>,
+    /// Congestion window in segments (tcpi_snd_cwnd).
+    #[serde(default)]
+    pub snd_cwnd: Option<u32>,
+    /// Slow-start threshold; None when set to the kernel sentinel (infinite).
+    #[serde(default)]
+    pub snd_ssthresh: Option<u32>,
+    /// RTT variance in ms (tcpi_rttvar).
+    #[serde(default)]
+    pub rtt_variance_ms: Option<f64>,
+    /// Receiver advertised window in bytes (tcpi_rcv_space).
+    #[serde(default)]
+    pub rcv_space: Option<u32>,
+    /// Segments sent since connection start (Linux ≥ 4.6).
+    #[serde(default)]
+    pub segs_out: Option<u32>,
+    /// Segments received since connection start (Linux ≥ 4.6).
+    #[serde(default)]
+    pub segs_in: Option<u32>,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Server-side timing
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Metadata extracted from X-Networker-* and Server-Timing response headers.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ServerTimingResult {
+    /// Echoed X-Networker-Request-Id from the response.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    /// Server wall-clock time from X-Networker-Server-Timestamp header.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_timestamp: Option<DateTime<Utc>>,
+    /// Rough one-way clock skew estimate: (server_ts − client_send_at) − ttfb_ms/2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_skew_ms: Option<f64>,
+    /// Body drain time on server side (Server-Timing: recv;dur=X, upload only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recv_body_ms: Option<f64>,
+    /// Server processing time (Server-Timing: proc;dur=X, download only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub processing_ms: Option<f64>,
+    /// Total server time (Server-Timing: total;dur=X).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_server_ms: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -368,6 +427,8 @@ mod tests {
             http: None,
             udp: None,
             error: None,
+            retry_count: 0,
+            server_timing: None,
         };
         let run = TestRun {
             run_id,

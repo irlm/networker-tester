@@ -2,8 +2,8 @@ use anyhow::Context;
 use chrono::Utc;
 use clap::Parser;
 use networker_tester::cli;
-use networker_tester::metrics::{Protocol, TestRun};
-use networker_tester::output::{html, json, sql};
+use networker_tester::metrics::{Protocol, RequestAttempt, TestRun};
+use networker_tester::output::{excel, html, json, sql};
 use networker_tester::runner::{
     http::{run_probe, RunConfig},
     http3::run_http3_probe,
@@ -36,6 +36,16 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
+    // ── Privilege notice (Linux only) ─────────────────────────────────────────
+    #[cfg(target_os = "linux")]
+    if !cli::running_as_root() {
+        eprintln!(
+            "[info] Not running as root. TCP kernel stats (retransmits, cwnd) are \
+             captured via TCP_INFO without root. Run with sudo to enable raw-socket \
+             and BPF metrics."
+        );
+    }
+
     let target = url::Url::parse(&cli.target).context("Invalid --target URL")?;
     let target_host = target.host_str().unwrap_or("unknown").to_string();
 
@@ -62,6 +72,7 @@ async fn main() -> anyhow::Result<()> {
         target = %cli.target,
         modes  = ?modes.iter().map(|m| m.to_string()).collect::<Vec<_>>(),
         runs   = cli.runs,
+        retries = cli.retries,
         "Starting networker-tester"
     );
 
@@ -102,6 +113,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // ── Collect all attempts ──────────────────────────────────────────────────
+    let retries = cli.retries;
     let mut all_attempts = Vec::new();
     let mut seq = 0u32;
 
@@ -121,30 +133,38 @@ async fn main() -> anyhow::Result<()> {
                 seq += 1;
 
                 async move {
-                    let a = match (&proto, payload_sz) {
-                        (Protocol::Download, Some(sz)) => {
-                            run_download_probe(run_id, current_seq, sz, &throughput_cfg_clone).await
+                    // First attempt
+                    let mut a = dispatch_once(
+                        &proto,
+                        payload_sz,
+                        run_id,
+                        current_seq,
+                        &target_clone,
+                        &cfg_clone,
+                        &udp_cfg_clone,
+                        &throughput_cfg_clone,
+                    )
+                    .await;
+
+                    // Retry loop
+                    for retry_num in 1..=retries {
+                        if a.success {
+                            break;
                         }
-                        (Protocol::Upload, Some(sz)) => {
-                            run_upload_probe(run_id, current_seq, sz, &throughput_cfg_clone).await
-                        }
-                        (Protocol::Http1, _) | (Protocol::Http2, _) | (Protocol::Tcp, _) => {
-                            run_probe(run_id, current_seq, proto, &target_clone, &cfg_clone).await
-                        }
-                        (Protocol::Http3, _) => {
-                            run_http3_probe(
-                                run_id,
-                                current_seq,
-                                &target_clone,
-                                cfg_clone.timeout_ms,
-                            )
-                            .await
-                        }
-                        (Protocol::Udp, _) => {
-                            run_udp_probe(run_id, current_seq, &udp_cfg_clone).await
-                        }
-                        _ => unreachable!("Download/Upload without payload_size"),
-                    };
+                        let mut retry_a = dispatch_once(
+                            &proto,
+                            payload_sz,
+                            run_id,
+                            current_seq,
+                            &target_clone,
+                            &cfg_clone,
+                            &udp_cfg_clone,
+                            &throughput_cfg_clone,
+                        )
+                        .await;
+                        retry_a.retry_count = retry_num;
+                        a = retry_a;
+                    }
 
                     // Progress logging
                     log_attempt(&a);
@@ -190,8 +210,10 @@ async fn main() -> anyhow::Result<()> {
     let out_dir = PathBuf::from(&cli.output_dir);
     std::fs::create_dir_all(&out_dir).context("Cannot create output directory")?;
 
+    let ts = started_at.format("%Y%m%d-%H%M%S");
+
     // ── JSON artifact ─────────────────────────────────────────────────────────
-    let json_path = out_dir.join(format!("run-{}.json", started_at.format("%Y%m%d-%H%M%S")));
+    let json_path = out_dir.join(format!("run-{ts}.json"));
     json::save(&run, &json_path).context("Failed to write JSON artifact")?;
     info!(path = %json_path.display(), "JSON artifact saved");
 
@@ -203,6 +225,16 @@ async fn main() -> anyhow::Result<()> {
 
     // Copy default CSS to output dir if it doesn't exist yet
     copy_default_css(&out_dir);
+
+    // ── Excel report ──────────────────────────────────────────────────────────
+    if cli.excel {
+        let name = format!("run-{ts}-{}.xlsx", run.run_id);
+        let xlsx_path = out_dir.join(&name);
+        match excel::save(&run, &xlsx_path) {
+            Ok(()) => info!(path = %xlsx_path.display(), "Excel report saved"),
+            Err(e) => warn!("Excel report failed: {e:#}"),
+        }
+    }
 
     // ── SQL insert ────────────────────────────────────────────────────────────
     if cli.save_to_sql {
@@ -221,12 +253,43 @@ async fn main() -> anyhow::Result<()> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Single probe dispatch (used for both the initial attempt and retries)
+// ─────────────────────────────────────────────────────────────────────────────
+
+async fn dispatch_once(
+    proto: &Protocol,
+    payload_sz: Option<usize>,
+    run_id: Uuid,
+    seq: u32,
+    target: &url::Url,
+    cfg: &RunConfig,
+    udp_cfg: &UdpProbeConfig,
+    throughput_cfg: &ThroughputConfig,
+) -> RequestAttempt {
+    match (proto, payload_sz) {
+        (Protocol::Download, Some(sz)) => run_download_probe(run_id, seq, sz, throughput_cfg).await,
+        (Protocol::Upload, Some(sz)) => run_upload_probe(run_id, seq, sz, throughput_cfg).await,
+        (Protocol::Http1, _) | (Protocol::Http2, _) | (Protocol::Tcp, _) => {
+            run_probe(run_id, seq, proto.clone(), target, cfg).await
+        }
+        (Protocol::Http3, _) => run_http3_probe(run_id, seq, target, cfg.timeout_ms).await,
+        (Protocol::Udp, _) => run_udp_probe(run_id, seq, udp_cfg).await,
+        _ => unreachable!("Download/Upload without payload_size"),
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn log_attempt(a: &networker_tester::metrics::RequestAttempt) {
     use networker_tester::metrics::Protocol::*;
     let status = if a.success { "✓" } else { "✗" };
+    let retry_suffix = if a.retry_count > 0 {
+        format!(" (retry #{})", a.retry_count)
+    } else {
+        String::new()
+    };
 
     match &a.protocol {
         Http1 | Http2 | Http3 | Tcp => {
@@ -252,7 +315,7 @@ fn log_attempt(a: &networker_tester::metrics::RequestAttempt) {
 
             info!(
                 "{status} #{seq} [{proto}] {status_code} {ver} \
-                 DNS:{dns:.1}ms TCP:{tcp:.1}ms TLS:{tls:.1}ms TTFB:{ttfb:.1}ms Total:{total:.1}ms",
+                 DNS:{dns:.1}ms TCP:{tcp:.1}ms TLS:{tls:.1}ms TTFB:{ttfb:.1}ms Total:{total:.1}ms{retry}",
                 seq = a.sequence_num,
                 proto = a.protocol,
                 dns = dns_ms,
@@ -260,6 +323,7 @@ fn log_attempt(a: &networker_tester::metrics::RequestAttempt) {
                 tls = tls_ms,
                 ttfb = ttfb_ms,
                 total = total_ms,
+                retry = retry_suffix,
             );
         }
         Download | Upload => {
@@ -277,22 +341,24 @@ fn log_attempt(a: &networker_tester::metrics::RequestAttempt) {
                     .map(|m| format!("{m:.2} MB/s"))
                     .unwrap_or_else(|| "—".into());
                 info!(
-                    "{status} #{seq} [{proto}] {payload} Total:{total:.1}ms Throughput:{throughput}",
+                    "{status} #{seq} [{proto}] {payload} Total:{total:.1}ms Throughput:{throughput}{retry}",
                     seq = a.sequence_num,
                     proto = a.protocol,
                     payload = payload_str,
                     total = h.total_duration_ms,
+                    retry = retry_suffix,
                 );
             }
         }
         Udp => {
             if let Some(u) = &a.udp {
                 info!(
-                    "{status} #{seq} [udp] RTT avg={avg:.1}ms p95={p95:.1}ms loss={loss:.1}%",
+                    "{status} #{seq} [udp] RTT avg={avg:.1}ms p95={p95:.1}ms loss={loss:.1}%{retry}",
                     seq = a.sequence_num,
                     avg = u.rtt_avg_ms,
                     p95 = u.rtt_p95_ms,
                     loss = u.loss_percent,
+                    retry = retry_suffix,
                 );
             }
         }

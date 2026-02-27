@@ -48,6 +48,9 @@ pub async fn save(run: &TestRun, connection_string: &str) -> anyhow::Result<()> 
         if let Some(err) = &attempt.error {
             insert_error(attempt, err, &mut client).await?;
         }
+        if let Some(st) = &attempt.server_timing {
+            insert_server_timing_result(attempt, st, &mut client).await?;
+        }
     }
 
     Ok(())
@@ -117,8 +120,8 @@ async fn insert_request_attempt(a: &RequestAttempt, c: &mut SqlClient) -> anyhow
     let mut q = Query::new(
         "INSERT INTO dbo.RequestAttempt (
             AttemptId, RunId, Protocol, SequenceNum,
-            StartedAt, FinishedAt, Success, ErrorMessage
-         ) VALUES (@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8)",
+            StartedAt, FinishedAt, Success, ErrorMessage, RetryCount
+         ) VALUES (@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9)",
     );
     q.bind(attempt_id.as_str());
     q.bind(run_id.as_str());
@@ -128,6 +131,7 @@ async fn insert_request_attempt(a: &RequestAttempt, c: &mut SqlClient) -> anyhow
     q.bind(finished);
     q.bind(a.success);
     q.bind(err_msg);
+    q.bind(a.retry_count as i32);
     q.execute(c).await.context("INSERT RequestAttempt")?;
     Ok(())
 }
@@ -172,8 +176,11 @@ async fn insert_tcp_result(
         "INSERT INTO dbo.TcpResult (
             TcpId, AttemptId, LocalAddr, RemoteAddr,
             ConnectDurationMs, AttemptCount, StartedAt, Success,
-            MssBytesEstimate, RttEstimateMs
-         ) VALUES (@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9,@P10)",
+            MssBytesEstimate, RttEstimateMs,
+            Retransmits, TotalRetrans, SndCwnd, SndSsthresh,
+            RttVarianceMs, RcvSpace, SegsOut, SegsIn
+         ) VALUES (@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9,@P10,
+                   @P11,@P12,@P13,@P14,@P15,@P16,@P17,@P18)",
     );
     q.bind(id.as_str());
     q.bind(attempt_id.as_str());
@@ -185,7 +192,43 @@ async fn insert_tcp_result(
     q.bind(tcp.success);
     q.bind(tcp.mss_bytes.map(|v| v as i32));
     q.bind(tcp.rtt_estimate_ms);
+    // Extended kernel stats (nullable)
+    q.bind(tcp.retransmits.map(|v| v as i64));
+    q.bind(tcp.total_retrans.map(|v| v as i64));
+    q.bind(tcp.snd_cwnd.map(|v| v as i64));
+    q.bind(tcp.snd_ssthresh.map(|v| v as i64));
+    q.bind(tcp.rtt_variance_ms);
+    q.bind(tcp.rcv_space.map(|v| v as i64));
+    q.bind(tcp.segs_out.map(|v| v as i64));
+    q.bind(tcp.segs_in.map(|v| v as i64));
     q.execute(c).await.context("INSERT TcpResult")?;
+    Ok(())
+}
+
+async fn insert_server_timing_result(
+    a: &RequestAttempt,
+    st: &crate::metrics::ServerTimingResult,
+    c: &mut SqlClient,
+) -> anyhow::Result<()> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let attempt_id = a.attempt_id.to_string();
+    let server_ts = st.server_timestamp.map(|t| t.naive_utc());
+
+    let mut q = Query::new(
+        "INSERT INTO dbo.ServerTimingResult (
+            ServerId, AttemptId, RequestId, ServerTimestamp,
+            ClockSkewMs, RecvBodyMs, ProcessingMs, TotalServerMs
+         ) VALUES (@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8)",
+    );
+    q.bind(id.as_str());
+    q.bind(attempt_id.as_str());
+    q.bind(st.request_id.as_deref());
+    q.bind(server_ts);
+    q.bind(st.clock_skew_ms);
+    q.bind(st.recv_body_ms);
+    q.bind(st.processing_ms);
+    q.bind(st.total_server_ms);
+    q.execute(c).await.context("INSERT ServerTimingResult")?;
     Ok(())
 }
 
@@ -338,6 +381,8 @@ mod tests {
             http: None,
             udp: None,
             error: None,
+            retry_count: 0,
+            server_timing: None,
         }
     }
 

@@ -56,6 +56,9 @@ url.workspace         = true
 # --- cert parsing ---
 x509-parser = "0.16"
 
+# --- Excel output ---
+rust_xlsxwriter.workspace = true
+
 # --- utilities ---
 futures  = "0.3"
 libc     = "0.2"

@@ -49,6 +49,8 @@ mod stub {
                 detail: Some("cargo build --features http3".into()),
                 occurred_at: Utc::now(),
             }),
+            retry_count: 0,
+            server_timing: None,
         }
     }
 }
@@ -312,6 +314,8 @@ mod real {
             }),
             udp: None,
             error: None,
+            retry_count: 0,
+            server_timing: None,
         }
     }
 
@@ -341,6 +345,8 @@ mod real {
                 detail: None,
                 occurred_at: Utc::now(),
             }),
+            retry_count: 0,
+            server_timing: None,
         }
     }
 }
