@@ -1,12 +1,23 @@
-use networker_tester::metrics::Protocol;
 /// Integration tests for networker-tester.
 ///
-/// These tests start the `networker-endpoint` in-process and exercise the
-/// full probe pipeline (DNS → TCP → TLS → HTTP → collect).
+/// These tests start the `networker-endpoint` in-process on random ports and
+/// exercise the full probe pipeline end-to-end (DNS → TCP → TLS → HTTP → collect).
 ///
-/// Run with:
+/// # Test layers
+///
+/// | Layer | Command | Requires |
+/// |-------|---------|----------|
+/// | Unit  | `cargo test --workspace --lib` | Nothing |
+/// | **Integration** | `cargo test --test integration -p networker-tester` | Nothing (endpoint is in-process) |
+/// | SQL   | `NETWORKER_SQL_CONN=… cargo test --workspace -- sql --include-ignored` | SQL Server |
+///
+/// Run just this layer:
 ///   cargo test --test integration -p networker-tester
+use networker_tester::metrics::Protocol;
 use networker_tester::runner::http::{run_probe, RunConfig};
+use networker_tester::runner::throughput::{
+    run_download_probe, run_upload_probe, ThroughputConfig,
+};
 use networker_tester::runner::udp::{run_udp_probe, UdpProbeConfig};
 use uuid::Uuid;
 
@@ -297,4 +308,80 @@ async fn http1_status_endpoint_returns_correct_code() {
 
     let http = attempt.http.expect("http result missing");
     assert_eq!(http.status_code, 404);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Throughput probes
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// GET /download?bytes=65536 → endpoint streams 64 KiB of zeros.
+/// Verifies the full download probe pipeline: URL rewriting, payload delivery,
+/// throughput field population.
+#[tokio::test]
+async fn download_probe_reports_throughput() {
+    let ep = Endpoint::start().await;
+    let cfg = ThroughputConfig {
+        run_cfg: RunConfig {
+            dns_enabled: false,
+            timeout_ms: 10_000,
+            insecure: false,
+            ..Default::default()
+        },
+        base_url: ep.http_url("/health"),
+    };
+
+    let attempt = run_download_probe(Uuid::new_v4(), 0, 65_536, &cfg).await;
+
+    assert!(
+        attempt.success,
+        "download probe failed: {:?}",
+        attempt.error
+    );
+    assert_eq!(attempt.protocol, Protocol::Download);
+
+    let http = attempt.http.expect("http result missing");
+    assert_eq!(
+        http.payload_bytes, 65_536,
+        "payload_bytes should equal requested download size"
+    );
+    assert_eq!(http.status_code, 200);
+
+    let mbps = http
+        .throughput_mbps
+        .expect("throughput_mbps should be Some for a successful download");
+    assert!(mbps > 0.0, "throughput should be positive, got {mbps}");
+}
+
+/// POST /upload with a 64 KiB body → endpoint reads and acknowledges it.
+/// Verifies the full upload probe pipeline: URL rewriting, body send,
+/// throughput field population using TTFB as the time window.
+#[tokio::test]
+async fn upload_probe_reports_throughput() {
+    let ep = Endpoint::start().await;
+    let cfg = ThroughputConfig {
+        run_cfg: RunConfig {
+            dns_enabled: false,
+            timeout_ms: 10_000,
+            insecure: false,
+            ..Default::default()
+        },
+        base_url: ep.http_url("/health"),
+    };
+
+    let attempt = run_upload_probe(Uuid::new_v4(), 0, 65_536, &cfg).await;
+
+    assert!(attempt.success, "upload probe failed: {:?}", attempt.error);
+    assert_eq!(attempt.protocol, Protocol::Upload);
+
+    let http = attempt.http.expect("http result missing");
+    assert_eq!(
+        http.payload_bytes, 65_536,
+        "payload_bytes should equal the uploaded body size"
+    );
+    assert_eq!(http.status_code, 200);
+
+    let mbps = http
+        .throughput_mbps
+        .expect("throughput_mbps should be Some for a successful upload");
+    assert!(mbps > 0.0, "throughput should be positive, got {mbps}");
 }
