@@ -91,6 +91,8 @@ pub enum Protocol {
     Http2,
     Http3,
     Udp,
+    Download,
+    Upload,
 }
 
 impl std::fmt::Display for Protocol {
@@ -101,6 +103,8 @@ impl std::fmt::Display for Protocol {
             Protocol::Http2 => write!(f, "http2"),
             Protocol::Http3 => write!(f, "http3"),
             Protocol::Udp => write!(f, "udp"),
+            Protocol::Download => write!(f, "download"),
+            Protocol::Upload => write!(f, "upload"),
         }
     }
 }
@@ -115,6 +119,8 @@ impl std::str::FromStr for Protocol {
             "http2" => Ok(Protocol::Http2),
             "http3" => Ok(Protocol::Http3),
             "udp" => Ok(Protocol::Udp),
+            "download" => Ok(Protocol::Download),
+            "upload" => Ok(Protocol::Upload),
             other => Err(format!("Unknown protocol: {other}")),
         }
     }
@@ -171,6 +177,12 @@ pub struct HttpResult {
     pub redirect_count: u32,
     pub started_at: DateTime<Utc>,
     pub response_headers: Vec<(String, String)>,
+    /// Bytes requested (download) or sent (upload); 0 for normal probes.
+    #[serde(default)]
+    pub payload_bytes: usize,
+    /// Measured throughput in MB/s; None for normal latency probes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub throughput_mbps: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -331,7 +343,7 @@ mod tests {
     #[test]
     fn test_protocol_roundtrip() {
         use std::str::FromStr;
-        for p in &["tcp", "http1", "http2", "http3", "udp"] {
+        for p in &["tcp", "http1", "http2", "http3", "udp", "download", "upload"] {
             let parsed = Protocol::from_str(p).unwrap();
             assert_eq!(parsed.to_string(), *p);
         }

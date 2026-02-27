@@ -128,6 +128,8 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
         Protocol::Http3,
         Protocol::Tcp,
         Protocol::Udp,
+        Protocol::Download,
+        Protocol::Upload,
     ] {
         let rows: Vec<&RequestAttempt> = run
             .attempts
@@ -187,6 +189,63 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
                 avg = u.rtt_avg_ms,
                 p95 = u.rtt_p95_ms,
                 jitter = u.jitter_ms,
+            );
+        }
+        let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
+    }
+
+    // ── Throughput results ────────────────────────────────────────────────────
+    let throughput_rows: Vec<&RequestAttempt> = run
+        .attempts
+        .iter()
+        .filter(|a| {
+            matches!(a.protocol, Protocol::Download | Protocol::Upload) && a.http.is_some()
+        })
+        .collect();
+    if !throughput_rows.is_empty() {
+        let _ = write!(
+            out,
+            r#"
+<section class="card">
+  <h2>Throughput Results</h2>
+  <table>
+    <thead>
+      <tr><th>Run #</th><th>Mode</th><th>Payload</th><th>Throughput (MB/s)</th>
+          <th>TTFB (ms)</th><th>Total (ms)</th><th>Status</th></tr>
+    </thead>
+    <tbody>
+"#
+        );
+        for a in &throughput_rows {
+            let h = a.http.as_ref().unwrap();
+            let throughput = h
+                .throughput_mbps
+                .map(|m| format!("{m:.2}"))
+                .unwrap_or_else(|| "—".into());
+            let status_cell = {
+                let cls = if h.status_code < 400 { "ok" } else { "err" };
+                format!(r#"<span class="{cls}">{}</span>"#, h.status_code)
+            };
+            let _ = write!(
+                out,
+                r#"      <tr>
+        <td>{seq}</td>
+        <td>{proto}</td>
+        <td>{payload}</td>
+        <td class="{thr_cls}">{thr}</td>
+        <td>{ttfb:.2}</td>
+        <td>{total:.2}</td>
+        <td>{status}</td>
+      </tr>
+"#,
+                seq = a.sequence_num,
+                proto = a.protocol,
+                payload = format_bytes(h.payload_bytes),
+                thr_cls = if h.throughput_mbps.is_some() { "ok" } else { "warn" },
+                thr = throughput,
+                ttfb = h.ttfb_ms,
+                total = h.total_duration_ms,
+                status = status_cell,
             );
         }
         let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
@@ -395,10 +454,20 @@ fn append_attempt_row(out: &mut String, a: &RequestAttempt) {
         .map(|t| format!("{:.2}", t.handshake_duration_ms))
         .unwrap_or_else(|| "—".into());
     let (ttfb_ms, total_ms, version) = if let Some(h) = &a.http {
+        let ver = match &a.protocol {
+            Protocol::Download | Protocol::Upload => {
+                if let Some(mbps) = h.throughput_mbps {
+                    format!("{:.2} MB/s ({})", mbps, format_bytes(h.payload_bytes))
+                } else {
+                    h.negotiated_version.clone()
+                }
+            }
+            _ => h.negotiated_version.clone(),
+        };
         (
             format!("{:.2}", h.ttfb_ms),
             format!("{:.2}", h.total_duration_ms),
-            h.negotiated_version.clone(),
+            ver,
         )
     } else if let Some(u) = &a.udp {
         (
@@ -452,6 +521,22 @@ fn append_attempt_row(out: &mut String, a: &RequestAttempt) {
         ver = escape_html(&version),
         err = err_cell,
     );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Formatting helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn format_bytes(n: usize) -> String {
+    if n >= 1 << 30 {
+        format!("{:.1} GiB", n as f64 / (1u64 << 30) as f64)
+    } else if n >= 1 << 20 {
+        format!("{:.1} MiB", n as f64 / (1u64 << 20) as f64)
+    } else if n >= 1 << 10 {
+        format!("{:.1} KiB", n as f64 / (1u64 << 10) as f64)
+    } else {
+        format!("{n} B")
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -554,6 +639,8 @@ mod tests {
                     redirect_count: 0,
                     started_at: Utc::now(),
                     response_headers: vec![],
+                    payload_bytes: 0,
+                    throughput_mbps: None,
                 }),
                 udp: None,
                 error: None,

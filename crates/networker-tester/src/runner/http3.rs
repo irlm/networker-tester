@@ -307,6 +307,8 @@ mod real {
                 redirect_count: 0,
                 started_at: http_started_at,
                 response_headers,
+                payload_bytes: 0,
+                throughput_mbps: None,
             }),
             udp: None,
             error: None,

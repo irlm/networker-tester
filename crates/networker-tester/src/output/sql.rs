@@ -234,8 +234,9 @@ async fn insert_http_result(
         "INSERT INTO dbo.HttpResult (
             HttpId, AttemptId, NegotiatedVersion, StatusCode,
             HeadersSizeBytes, BodySizeBytes, TtfbMs,
-            TotalDurationMs, RedirectCount, StartedAt
-         ) VALUES (@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9,@P10)",
+            TotalDurationMs, RedirectCount, StartedAt,
+            PayloadBytes, ThroughputMbps
+         ) VALUES (@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9,@P10,@P11,@P12)",
     );
     q.bind(id.as_str());
     q.bind(attempt_id.as_str());
@@ -247,6 +248,8 @@ async fn insert_http_result(
     q.bind(http.total_duration_ms);
     q.bind(http.redirect_count as i32);
     q.bind(started);
+    q.bind(http.payload_bytes as i64);
+    q.bind(http.throughput_mbps);
     q.execute(c).await.context("INSERT HttpResult")?;
     Ok(())
 }
