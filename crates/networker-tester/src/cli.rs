@@ -76,6 +76,11 @@ pub struct Cli {
     #[arg(long)]
     pub insecure: bool,
 
+    // ── Retry ─────────────────────────────────────────────────────────────────
+    /// Retry failed probes up to N times. Each retry increments retry_count on the attempt.
+    #[arg(long, default_value_t = 0)]
+    pub retries: u32,
+
     // ── Output ────────────────────────────────────────────────────────────────
     /// Directory for JSON artifact and HTML report
     #[arg(long, default_value = "./output")]
@@ -88,6 +93,10 @@ pub struct Cli {
     /// Path to CSS file embedded as <link> in the HTML report
     #[arg(long)]
     pub css: Option<String>,
+
+    /// Write an Excel (.xlsx) report alongside JSON + HTML.
+    #[arg(long, default_value_t = false)]
+    pub excel: bool,
 
     // ── SQL Server ────────────────────────────────────────────────────────────
     /// Insert results into SQL Server
@@ -132,6 +141,20 @@ impl Cli {
     }
 }
 
+/// Returns true if the current process is running as root / Administrator.
+/// On Unix this checks `getuid() == 0`; on Windows it always returns true
+/// (elevated privilege detection requires Windows-specific APIs).
+#[cfg(unix)]
+pub fn running_as_root() -> bool {
+    // SAFETY: getuid() is always safe to call.
+    unsafe { libc::getuid() == 0 }
+}
+
+#[cfg(not(unix))]
+pub fn running_as_root() -> bool {
+    true
+}
+
 fn parse_size(s: &str) -> anyhow::Result<usize> {
     let s = s.trim().to_lowercase();
     let (num, mul) = if s.ends_with('g') {
@@ -162,6 +185,8 @@ mod tests {
         assert_eq!(cli.udp_port, 9999);
         assert_eq!(cli.payload_size, 0);
         assert!(!cli.insecure);
+        assert_eq!(cli.retries, 0);
+        assert!(!cli.excel);
     }
 
     #[test]

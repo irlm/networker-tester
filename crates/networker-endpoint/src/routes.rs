@@ -2,7 +2,8 @@
 use axum::{
     body::Body,
     extract::{DefaultBodyLimit, Path, Query, Request},
-    http::{HeaderMap, StatusCode, Version},
+    http::{HeaderMap, HeaderValue, StatusCode, Version},
+    middleware::{self, Next},
     response::{IntoResponse, Json, Response},
     routing::{get, post},
     Router,
@@ -12,6 +13,7 @@ use chrono::Utc;
 use http_body_util::BodyExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::time::Instant;
 use tokio::time::{sleep, Duration};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -32,6 +34,24 @@ pub fn build_router() -> Router {
         // Remove axum's default 2 MiB body limit so upload probes of arbitrary
         // size are not rejected with 413 before the body is transmitted.
         .layer(DefaultBodyLimit::disable())
+        // Add X-Networker-Server-Timestamp to every response.
+        .layer(middleware::from_fn(add_server_timestamp))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Middleware
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Middleware that stamps every response with the server wall-clock time.
+async fn add_server_timestamp(req: Request, next: Next) -> Response {
+    let mut response = next.run(req).await;
+    let ts = Utc::now().to_rfc3339();
+    if let Ok(val) = HeaderValue::from_str(&ts) {
+        response
+            .headers_mut()
+            .insert("x-networker-server-timestamp", val);
+    }
+    response
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -93,15 +113,21 @@ struct DownloadParams {
     bytes: Option<usize>,
 }
 
-/// GET /download?bytes=N – returns N zero bytes  (max 2 GiB)
+/// GET /download?bytes=N – returns N zero bytes (max 2 GiB).
+/// Adds `Server-Timing: proc;dur=X` indicating body generation time.
 async fn download(Query(p): Query<DownloadParams>) -> impl IntoResponse {
     let n = p.bytes.unwrap_or(1024).min(2 * 1024 * 1024 * 1024); // cap 2 GiB
+    let t0 = Instant::now();
     let body = vec![0u8; n];
+    let proc_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+    let timing = format!("proc;dur={proc_ms:.3}");
     Response::builder()
         .status(200)
         .header("content-type", "application/octet-stream")
         .header("content-length", n.to_string())
         .header("x-download-bytes", n.to_string())
+        .header("server-timing", timing.as_str())
         .body(Body::from(body))
         .unwrap()
 }
@@ -115,9 +141,17 @@ struct UploadStats {
 /// POST /upload – drains the request body without buffering it in memory,
 /// then returns a JSON stats object with the byte count.
 ///
-/// Using a streaming drain (rather than `Bytes` extractor) avoids axum's
-/// default 2 MiB body limit and prevents OOM for large upload probes.
+/// Adds `Server-Timing: recv;dur=X` (body drain time) and echoes
+/// `X-Networker-Request-Id` from the request if present.
 async fn upload(req: Request) -> impl IntoResponse {
+    // Extract request-id and drain the body.
+    let request_id = req
+        .headers()
+        .get("x-networker-request-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_owned());
+
+    let t0 = Instant::now();
     let mut received_bytes: usize = 0;
     let mut body = req.into_body();
     while let Some(Ok(frame)) = body.frame().await {
@@ -125,10 +159,25 @@ async fn upload(req: Request) -> impl IntoResponse {
             received_bytes += data.len();
         }
     }
-    Json(UploadStats {
+    let recv_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+    let mut resp = Json(UploadStats {
         received_bytes,
         timestamp: Utc::now().to_rfc3339(),
     })
+    .into_response();
+
+    let timing = format!("recv;dur={recv_ms:.3}");
+    if let Ok(v) = HeaderValue::from_str(&timing) {
+        resp.headers_mut().insert("server-timing", v);
+    }
+    if let Some(rid) = request_id {
+        if let Ok(v) = HeaderValue::from_str(&rid) {
+            resp.headers_mut().insert("x-networker-request-id", v);
+        }
+    }
+
+    resp
 }
 
 #[derive(Deserialize)]
@@ -227,6 +276,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn health_has_server_timestamp() {
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            resp.headers().contains_key("x-networker-server-timestamp"),
+            "server timestamp header missing"
+        );
+    }
+
+    #[tokio::test]
     async fn echo_returns_body() {
         let payload = b"hello world".as_ref();
         let resp = app()
@@ -259,6 +325,50 @@ mod tests {
         assert_eq!(resp.status(), 200);
         let body = to_bytes(resp.into_body(), 1024).await.unwrap();
         assert_eq!(body.len(), 256);
+    }
+
+    #[tokio::test]
+    async fn download_has_server_timing() {
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/download?bytes=64")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            resp.headers().contains_key("server-timing"),
+            "server-timing header missing from download"
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_echoes_request_id() {
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/upload")
+                    .header("x-networker-request-id", "test-id-123")
+                    .body(Body::from(b"data".as_ref()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        assert_eq!(
+            resp.headers()
+                .get("x-networker-request-id")
+                .and_then(|v| v.to_str().ok()),
+            Some("test-id-123"),
+            "x-networker-request-id not echoed"
+        );
+        assert!(
+            resp.headers().contains_key("server-timing"),
+            "server-timing header missing from upload"
+        );
     }
 
     #[tokio::test]

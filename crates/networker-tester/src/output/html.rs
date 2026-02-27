@@ -629,6 +629,14 @@ mod tests {
                     success: true,
                     mss_bytes: None,
                     rtt_estimate_ms: None,
+                    retransmits: None,
+                    total_retrans: None,
+                    snd_cwnd: None,
+                    snd_ssthresh: None,
+                    rtt_variance_ms: None,
+                    rcv_space: None,
+                    segs_out: None,
+                    segs_in: None,
                 }),
                 tls: None,
                 http: Some(HttpResult {
@@ -646,6 +654,8 @@ mod tests {
                 }),
                 udp: None,
                 error: None,
+                retry_count: 0,
+                server_timing: None,
             }],
         }
     }

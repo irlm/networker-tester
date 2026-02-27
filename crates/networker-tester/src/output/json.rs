@@ -51,6 +51,8 @@ mod tests {
                 http: None,
                 udp: None,
                 error: None,
+                retry_count: 0,
+                server_timing: None,
             }],
         }
     }

@@ -7,8 +7,8 @@
 ///   ttfb_ms      – Time from request sent to first response byte (HTTP status + headers)
 ///   total_ms     – dns + tcp + tls + body download
 use crate::metrics::{
-    DnsResult, ErrorCategory, ErrorRecord, HttpResult, Protocol, RequestAttempt, TcpResult,
-    TlsResult,
+    DnsResult, ErrorCategory, ErrorRecord, HttpResult, Protocol, RequestAttempt,
+    ServerTimingResult, TcpResult, TlsResult,
 };
 use crate::runner::{dns as dns_runner, socket_info::SocketInfo};
 use bytes::Bytes;
@@ -108,6 +108,8 @@ pub async fn run_probe(
                 detail: None,
                 occurred_at: Utc::now(),
             }),
+            retry_count: 0,
+            server_timing: None,
         },
     }
 }
@@ -243,6 +245,14 @@ async fn run_http_or_tcp(
         success: true,
         mss_bytes: sock_info.mss_bytes,
         rtt_estimate_ms: sock_info.rtt_estimate_ms,
+        retransmits: sock_info.retransmits,
+        total_retrans: sock_info.total_retrans,
+        snd_cwnd: sock_info.snd_cwnd,
+        snd_ssthresh: sock_info.snd_ssthresh,
+        rtt_variance_ms: sock_info.rtt_variance_ms,
+        rcv_space: sock_info.rcv_space,
+        segs_out: sock_info.segs_out,
+        segs_in: sock_info.segs_in,
     };
     debug!("TCP connected to {addr} in {tcp_duration_ms:.1}ms (local={local_addr:?})");
 
@@ -263,6 +273,8 @@ async fn run_http_or_tcp(
             http: None,
             udp: None,
             error: None,
+            retry_count: 0,
+            server_timing: None,
         };
     }
 
@@ -355,16 +367,34 @@ async fn run_http_or_tcp(
 
     let http_result = match protocol {
         Protocol::Http1 | Protocol::Download | Protocol::Upload => {
-            send_http1(io_box, &host, &full_path, cfg, http_started_at, t_http).await
+            send_http1(
+                io_box,
+                &host,
+                &full_path,
+                cfg,
+                http_started_at,
+                t_http,
+                attempt_id,
+            )
+            .await
         }
         Protocol::Http2 => {
-            send_http2(io_box, &host, &full_path, cfg, http_started_at, t_http).await
+            send_http2(
+                io_box,
+                &host,
+                &full_path,
+                cfg,
+                http_started_at,
+                t_http,
+                attempt_id,
+            )
+            .await
         }
         _ => unreachable!(),
     };
 
     match http_result {
-        Ok(h) => RequestAttempt {
+        Ok((h, server_timing)) => RequestAttempt {
             attempt_id,
             run_id,
             protocol,
@@ -378,6 +408,8 @@ async fn run_http_or_tcp(
             http: Some(h),
             udp: None,
             error: None,
+            retry_count: 0,
+            server_timing,
         },
         Err(e) => {
             warn!("HTTP request failed: {e}");
@@ -408,7 +440,8 @@ async fn send_http1(
     cfg: &RunConfig,
     started_at: chrono::DateTime<Utc>,
     t0: Instant,
-) -> anyhow::Result<HttpResult> {
+    attempt_id: Uuid,
+) -> anyhow::Result<(HttpResult, Option<ServerTimingResult>)> {
     let io = TokioIo::new(io_box);
     let (mut sender, conn) = hyper::client::conn::http1::handshake::<_, Full<Bytes>>(io).await?;
 
@@ -418,7 +451,8 @@ async fn send_http1(
         }
     });
 
-    let req = build_request(host, path, cfg, "HTTP/1.1")?;
+    let req = build_request(host, path, cfg, "HTTP/1.1", attempt_id)?;
+    let client_send_at = Utc::now();
     let t_sent = Instant::now();
 
     let resp = tokio::time::timeout(
@@ -429,7 +463,7 @@ async fn send_http1(
     .map_err(|_| anyhow::anyhow!("HTTP/1.1 request timed out"))??;
 
     let ttfb_ms = t_sent.elapsed().as_secs_f64() * 1000.0;
-    collect_response(resp, "HTTP/1.1", started_at, ttfb_ms, t0).await
+    collect_response(resp, "HTTP/1.1", started_at, ttfb_ms, t0, client_send_at).await
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -443,7 +477,8 @@ async fn send_http2(
     cfg: &RunConfig,
     started_at: chrono::DateTime<Utc>,
     t0: Instant,
-) -> anyhow::Result<HttpResult> {
+    attempt_id: Uuid,
+) -> anyhow::Result<(HttpResult, Option<ServerTimingResult>)> {
     let io = TokioIo::new(io_box);
     let (mut sender, conn) =
         hyper::client::conn::http2::handshake::<_, _, Full<Bytes>>(TokioExecutor::new(), io)
@@ -455,7 +490,8 @@ async fn send_http2(
         }
     });
 
-    let req = build_request(host, path, cfg, "HTTP/2")?;
+    let req = build_request(host, path, cfg, "HTTP/2", attempt_id)?;
+    let client_send_at = Utc::now();
     let t_sent = Instant::now();
 
     let resp = tokio::time::timeout(
@@ -466,7 +502,7 @@ async fn send_http2(
     .map_err(|_| anyhow::anyhow!("HTTP/2 request timed out"))??;
 
     let ttfb_ms = t_sent.elapsed().as_secs_f64() * 1000.0;
-    collect_response(resp, "HTTP/2", started_at, ttfb_ms, t0).await
+    collect_response(resp, "HTTP/2", started_at, ttfb_ms, t0, client_send_at).await
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -478,6 +514,7 @@ fn build_request(
     path: &str,
     cfg: &RunConfig,
     _version_hint: &str,
+    attempt_id: Uuid,
 ) -> anyhow::Result<Request<Full<Bytes>>> {
     let body = if cfg.payload_size > 0 {
         Bytes::from(vec![0u8; cfg.payload_size])
@@ -493,6 +530,7 @@ fn build_request(
         .header("host", host)
         .header("user-agent", "networker-tester/0.1")
         .header("accept", "*/*")
+        .header("x-networker-request-id", attempt_id.to_string())
         .body(Full::new(body))?)
 }
 
@@ -502,7 +540,8 @@ async fn collect_response(
     started_at: chrono::DateTime<Utc>,
     ttfb_ms: f64,
     t0: Instant,
-) -> anyhow::Result<HttpResult> {
+    client_send_at: chrono::DateTime<Utc>,
+) -> anyhow::Result<(HttpResult, Option<ServerTimingResult>)> {
     let status_code = resp.status().as_u16();
     let headers = resp.headers().clone();
 
@@ -516,11 +555,14 @@ async fn collect_response(
         .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
         .collect();
 
+    // Parse server timing before consuming the body.
+    let server_timing = parse_server_timing(&headers, client_send_at, ttfb_ms);
+
     let body = resp.collect().await?.to_bytes();
     let body_size_bytes = body.len();
     let total_duration_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
-    Ok(HttpResult {
+    let http = HttpResult {
         negotiated_version: version.to_string(),
         status_code,
         headers_size_bytes,
@@ -532,7 +574,92 @@ async fn collect_response(
         response_headers,
         payload_bytes: 0,
         throughput_mbps: None,
+    };
+
+    Ok((http, server_timing))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Server-Timing header parsing
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Parse X-Networker-* and Server-Timing response headers into a
+/// `ServerTimingResult`. Returns None if none of the relevant headers are present.
+fn parse_server_timing(
+    headers: &hyper::HeaderMap,
+    client_send_at: chrono::DateTime<Utc>,
+    ttfb_ms: f64,
+) -> Option<ServerTimingResult> {
+    let has_networker = headers.contains_key("x-networker-server-timestamp")
+        || headers.contains_key("x-networker-request-id");
+
+    if !has_networker && !headers.contains_key("server-timing") {
+        return None;
+    }
+
+    let request_id = headers
+        .get("x-networker-request-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_owned());
+
+    let server_timestamp = headers
+        .get("x-networker-server-timestamp")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&Utc));
+
+    let clock_skew_ms = server_timestamp.map(|ts| {
+        let diff_ms = (ts - client_send_at)
+            .num_microseconds()
+            .map(|us| us as f64 / 1000.0)
+            .unwrap_or_else(|| (ts - client_send_at).num_milliseconds() as f64);
+        diff_ms - ttfb_ms / 2.0
+    });
+
+    let (recv_body_ms, processing_ms, total_server_ms) = headers
+        .get("server-timing")
+        .and_then(|v| v.to_str().ok())
+        .map(parse_server_timing_header)
+        .unwrap_or((None, None, None));
+
+    Some(ServerTimingResult {
+        request_id,
+        server_timestamp,
+        clock_skew_ms,
+        recv_body_ms,
+        processing_ms,
+        total_server_ms,
     })
+}
+
+/// Parse `Server-Timing: recv;dur=X, proc;dur=Y, total;dur=Z` into a tuple.
+fn parse_server_timing_header(value: &str) -> (Option<f64>, Option<f64>, Option<f64>) {
+    let mut recv = None;
+    let mut proc_ms = None;
+    let mut total = None;
+
+    for entry in value.split(',') {
+        let entry = entry.trim();
+        let mut parts = entry.splitn(2, ';');
+        let name = parts.next().map(str::trim).unwrap_or("").to_lowercase();
+        let rest = parts.next().unwrap_or("");
+
+        // Find dur= attribute among semicolon-separated attributes
+        let dur = rest.split(';').find_map(|attr| {
+            let attr = attr.trim().to_lowercase();
+            attr.strip_prefix("dur=")
+                .and_then(|s| s.parse::<f64>().ok())
+        });
+
+        match name.as_str() {
+            "recv" => recv = dur,
+            "proc" => proc_ms = dur,
+            "total" => total = dur,
+            _ => {}
+        }
+    }
+
+    (recv, proc_ms, total)
 }
 
 fn build_tls_config(protocol: &Protocol, insecure: bool) -> rustls::ClientConfig {
@@ -669,6 +796,8 @@ fn failed_attempt(
             detail,
             occurred_at: Utc::now(),
         }),
+        retry_count: 0,
+        server_timing: None,
     }
 }
 
@@ -756,6 +885,31 @@ mod tests {
         let ips = vec!["::1".parse().unwrap(), "127.0.0.1".parse().unwrap()];
         let ip = pick_ip(&ips, true);
         assert!(ip.is_ipv4());
+    }
+
+    #[test]
+    fn parse_server_timing_header_all_fields() {
+        let (recv, proc_ms, total) =
+            parse_server_timing_header("recv;dur=3.2, proc;dur=1.5, total;dur=10.0");
+        assert!((recv.unwrap() - 3.2).abs() < 1e-9);
+        assert!((proc_ms.unwrap() - 1.5).abs() < 1e-9);
+        assert!((total.unwrap() - 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn parse_server_timing_header_partial() {
+        let (recv, proc_ms, total) = parse_server_timing_header("proc;dur=5.0");
+        assert!(recv.is_none());
+        assert!((proc_ms.unwrap() - 5.0).abs() < 1e-9);
+        assert!(total.is_none());
+    }
+
+    #[test]
+    fn parse_server_timing_header_empty() {
+        let (recv, proc_ms, total) = parse_server_timing_header("");
+        assert!(recv.is_none());
+        assert!(proc_ms.is_none());
+        assert!(total.is_none());
     }
 
     #[tokio::test]
