@@ -168,6 +168,10 @@ mod tests {
     use crate::metrics::HttpResult;
     use chrono::Utc;
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Helpers
+    // ─────────────────────────────────────────────────────────────────────────
+
     fn make_http_result(ttfb_ms: f64, total_ms: f64) -> HttpResult {
         HttpResult {
             negotiated_version: "HTTP/1.1".into(),
@@ -184,90 +188,244 @@ mod tests {
         }
     }
 
-    // ── Download ─────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────
+    // mbps — unit conversion
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn mbps_one_mib_in_one_second() {
+        // 1 MiB / 1000ms * 1000 / 1MiB = 1.0 MB/s
+        let result = mbps(1024 * 1024, 1000.0).expect("should produce a value");
+        assert!((result - 1.0).abs() < 1e-9, "expected 1.0, got {result}");
+    }
+
+    #[test]
+    fn mbps_ten_mib_in_one_second() {
+        let result = mbps(10 * 1024 * 1024, 1000.0).expect("should produce a value");
+        assert!((result - 10.0).abs() < 1e-9, "expected 10.0, got {result}");
+    }
+
+    #[test]
+    fn mbps_one_gib_in_1024ms_is_1000_mbs() {
+        // 1 GiB = 1024 MiB; in 1024ms → 1024 MiB/s = 1000 MB/s (exact)
+        // 1073741824 / 1024 * 1000 / 1048576 = 1000.0
+        let result = mbps(1024 * 1024 * 1024, 1024.0).expect("should produce a value");
+        assert!((result - 1000.0).abs() < 1e-6, "expected 1000.0, got {result}");
+    }
+
+    #[test]
+    fn mbps_zero_payload_is_zero() {
+        // Zero bytes transferred is valid (e.g. empty body); rate = 0.
+        let result = mbps(0, 1000.0).expect("should produce Some(0)");
+        assert_eq!(result, 0.0);
+    }
+
+    #[test]
+    fn mbps_zero_transfer_ms_returns_none() {
+        // Division by zero must be guarded.
+        assert!(mbps(1024 * 1024, 0.0).is_none());
+    }
+
+    #[test]
+    fn mbps_negative_transfer_ms_returns_none() {
+        // Negative window (e.g. ttfb > total) must not produce a result.
+        assert!(mbps(1024 * 1024, -5.0).is_none());
+    }
+
+    #[test]
+    fn mbps_single_byte_in_one_second() {
+        // 1 byte in 1000ms → 1000 / 1048576 B/ms = ~9.54e-4 MB/s
+        let expected = 1.0_f64 / 1000.0 * 1000.0 / (1024.0 * 1024.0);
+        let result = mbps(1, 1000.0).expect("should produce a value");
+        assert!((result - expected).abs() < 1e-15, "expected {expected}, got {result}");
+    }
+
+    #[test]
+    fn mbps_very_slow_transfer() {
+        // 1 KiB in 1 hour (~3600000ms) → tiny but non-zero
+        let result = mbps(1024, 3_600_000.0).expect("should produce a value");
+        assert!(result > 0.0);
+        assert!(result < 0.001, "should be very slow: {result}");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // patch_throughput — download
+    // ─────────────────────────────────────────────────────────────────────────
 
     #[test]
     fn download_uses_body_receive_time() {
-        // 1 MiB received in 1000ms body time (ttfb=10ms, total=1010ms) → 1.0 MB/s
+        // 1 MiB in 1000ms body window (ttfb=10ms, total=1010ms) → 1.0 MB/s
         let h = make_http_result(10.0, 1010.0);
         let patched = patch_throughput(h, 1024 * 1024);
-        let mbps = patched.throughput_mbps.expect("should have throughput");
-        assert!((mbps - 1.0).abs() < 1e-9, "expected ~1.0 MB/s, got {mbps}");
+        let result = patched.throughput_mbps.expect("should have throughput");
+        assert!((result - 1.0).abs() < 1e-9, "expected 1.0 MB/s, got {result}");
     }
 
     #[test]
-    fn download_throughput_none_when_transfer_ms_is_zero() {
-        // download where ttfb == total → body_ms == 0 → no throughput
+    fn download_excludes_ttfb_from_window() {
+        // 4 MiB in 4000ms body window (ttfb=1000ms, total=5000ms) → 1.0 MB/s
+        let h = make_http_result(1000.0, 5000.0);
+        let patched = patch_throughput(h, 4 * 1024 * 1024);
+        let result = patched.throughput_mbps.expect("should have throughput");
+        assert!((result - 1.0).abs() < 1e-9, "expected 1.0 MB/s, got {result}");
+    }
+
+    #[test]
+    fn download_throughput_none_when_ttfb_equals_total() {
+        // ttfb == total → body window = 0ms → no meaningful rate
         let h = make_http_result(100.0, 100.0);
-        let patched = patch_throughput(h, 65536);
-        assert!(patched.throughput_mbps.is_none());
+        assert!(patch_throughput(h, 65536).throughput_mbps.is_none());
     }
 
     #[test]
-    fn download_payload_bytes_set() {
+    fn download_throughput_none_when_ttfb_exceeds_total() {
+        // Malformed timing; must not produce a result.
+        let h = make_http_result(200.0, 100.0);
+        assert!(patch_throughput(h, 65536).throughput_mbps.is_none());
+    }
+
+    #[test]
+    fn download_sets_payload_bytes() {
         let h = make_http_result(5.0, 100.0);
-        let patched = patch_throughput(h, 65536);
-        assert_eq!(patched.payload_bytes, 65536);
+        assert_eq!(patch_throughput(h, 65536).payload_bytes, 65536);
     }
 
-    // ── Upload: server recv_body_ms available ─────────────────────────────────
+    #[test]
+    fn download_preserves_other_http_fields() {
+        // Patching must not alter unrelated timing fields.
+        let h = make_http_result(12.5, 512.5);
+        let patched = patch_throughput(h, 1024);
+        assert!((patched.ttfb_ms - 12.5).abs() < 1e-9);
+        assert!((patched.total_duration_ms - 512.5).abs() < 1e-9);
+        assert_eq!(patched.status_code, 200);
+        assert_eq!(patched.negotiated_version, "HTTP/1.1");
+    }
 
     #[test]
-    fn upload_prefers_server_recv_ms_when_available() {
-        // Server says it drained the body in 1000ms; client total is also 1000ms.
-        // Result should use server's 1000ms.
+    fn download_zero_payload_gives_zero_throughput() {
+        // 0-byte body is valid; rate = 0.
+        let h = make_http_result(10.0, 1010.0);
+        let result = patch_throughput(h, 0).throughput_mbps.expect("should be Some(0)");
+        assert_eq!(result, 0.0);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // patch_upload_throughput — upload, server timing present
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn upload_uses_server_recv_ms_when_available() {
+        // 1 MiB drained by server in 1000ms → 1.0 MB/s
         let h = make_http_result(0.5, 1000.0);
         let patched = patch_upload_throughput(h, 1024 * 1024, Some(1000.0));
-        let mbps = patched.throughput_mbps.expect("should have throughput");
-        assert!((mbps - 1.0).abs() < 1e-9, "expected ~1.0 MB/s, got {mbps}");
+        let result = patched.throughput_mbps.expect("should have throughput");
+        assert!((result - 1.0).abs() < 1e-9, "expected 1.0 MB/s, got {result}");
+    }
+
+    #[test]
+    fn upload_server_recv_ms_overrides_total_duration() {
+        // server_recv_ms differs from total_duration_ms; server value wins.
+        // 1 MiB / 500ms (server) = 2.0 MB/s, not 1.0 MB/s (client total 1000ms).
+        let h = make_http_result(0.5, 1000.0);
+        let patched = patch_upload_throughput(h, 1024 * 1024, Some(500.0));
+        let result = patched.throughput_mbps.expect("should have throughput");
+        assert!((result - 2.0).abs() < 1e-9, "expected 2.0 MB/s, got {result}");
     }
 
     #[test]
     fn upload_server_recv_ms_prevents_absurd_throughput_on_fast_respond() {
-        // Server responded before draining → client total_duration_ms ≈ 0.2ms
-        // but server recv_body_ms = 9000ms (actual drain).
-        // Without server timing, throughput would be ~5M MB/s; with it → ~113 MB/s.
-        let h = make_http_result(0.2, 0.2); // fast client-side times
+        // Server responded before draining (same-machine / loopback scenario):
+        //   client total_duration_ms ≈ 0.2ms  → old formula → ~5M MB/s (WRONG)
+        //   server recv_body_ms      = 9000ms  → correct     → ~113 MB/s
+        let h = make_http_result(0.2, 0.2);
         let patched = patch_upload_throughput(h, 1024 * 1024 * 1024, Some(9000.0));
-        let mbps = patched.throughput_mbps.expect("should have throughput");
-        assert!(
-            mbps < 10_000.0,
-            "throughput must not be astronomically wrong: {mbps}"
-        );
-        assert!(mbps > 50.0, "throughput must be in a plausible range: {mbps}");
+        let result = patched.throughput_mbps.expect("should have throughput");
+        assert!(result < 10_000.0, "must not be astronomically wrong: {result}");
+        assert!(result > 50.0, "must be in plausible range: {result}");
     }
 
-    // ── Upload: no server timing, falls back to total_duration_ms ─────────────
+    #[test]
+    fn upload_server_recv_ms_zero_returns_none() {
+        // A server drain time of 0ms is not a valid window.
+        let h = make_http_result(0.5, 1000.0);
+        assert!(patch_upload_throughput(h, 65536, Some(0.0))
+            .throughput_mbps
+            .is_none());
+    }
+
+    #[test]
+    fn upload_server_recv_ms_negative_returns_none() {
+        let h = make_http_result(0.5, 1000.0);
+        assert!(patch_upload_throughput(h, 65536, Some(-10.0))
+            .throughput_mbps
+            .is_none());
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // patch_upload_throughput — upload, no server timing (fallback)
+    // ─────────────────────────────────────────────────────────────────────────
 
     #[test]
     fn upload_falls_back_to_total_duration_without_server_timing() {
-        // No server recv_body_ms; endpoint drains before respond → total ≈ 1000ms.
+        // Endpoint drains before responding → total_duration_ms is accurate.
         let h = make_http_result(0.5, 1000.0);
         let patched = patch_upload_throughput(h, 1024 * 1024, None);
-        let mbps = patched.throughput_mbps.expect("should have throughput");
-        assert!((mbps - 1.0).abs() < 1e-9, "expected ~1.0 MB/s, got {mbps}");
+        let result = patched.throughput_mbps.expect("should have throughput");
+        assert!((result - 1.0).abs() < 1e-9, "expected 1.0 MB/s, got {result}");
     }
 
     #[test]
-    fn upload_near_zero_ttfb_does_not_produce_absurd_throughput_with_server_timing() {
-        // Regression guard: with server recv_body_ms, even if client ttfb ≈ 0,
-        // the result uses the server's 9000ms drain time.
-        let h = make_http_result(0.5, 9000.0);
-        let patched = patch_upload_throughput(h, 1024 * 1024 * 1024, Some(9000.0));
-        let mbps = patched.throughput_mbps.expect("should have throughput");
-        assert!(
-            mbps < 10_000.0,
-            "throughput must not be astronomically wrong: {mbps}"
-        );
-        assert!(mbps > 50.0, "throughput must be in a plausible range: {mbps}");
+    fn upload_fallback_none_when_total_duration_is_zero() {
+        // No server timing and total = 0ms → undefined rate.
+        let h = make_http_result(0.0, 0.0);
+        assert!(patch_upload_throughput(h, 65536, None)
+            .throughput_mbps
+            .is_none());
     }
 
     #[test]
-    fn upload_payload_bytes_set() {
+    fn upload_fallback_none_when_total_duration_is_negative() {
+        let h = make_http_result(5.0, -1.0);
+        assert!(patch_upload_throughput(h, 65536, None)
+            .throughput_mbps
+            .is_none());
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // patch_upload_throughput — field preservation
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn upload_sets_payload_bytes() {
         let h = make_http_result(5.0, 100.0);
-        let patched = patch_upload_throughput(h, 65536, Some(100.0));
-        assert_eq!(patched.payload_bytes, 65536);
+        assert_eq!(
+            patch_upload_throughput(h, 65536, Some(100.0)).payload_bytes,
+            65536
+        );
     }
+
+    #[test]
+    fn upload_preserves_other_http_fields() {
+        let h = make_http_result(12.5, 512.5);
+        let patched = patch_upload_throughput(h, 1024, Some(100.0));
+        assert!((patched.ttfb_ms - 12.5).abs() < 1e-9);
+        assert!((patched.total_duration_ms - 512.5).abs() < 1e-9);
+        assert_eq!(patched.status_code, 200);
+        assert_eq!(patched.negotiated_version, "HTTP/1.1");
+    }
+
+    #[test]
+    fn upload_zero_payload_gives_zero_throughput() {
+        let h = make_http_result(0.5, 1000.0);
+        let result = patch_upload_throughput(h, 0, Some(1000.0))
+            .throughput_mbps
+            .expect("should be Some(0)");
+        assert_eq!(result, 0.0);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Integration tests (require live endpoint)
+    // ─────────────────────────────────────────────────────────────────────────
 
     #[tokio::test]
     #[ignore = "requires local networker-endpoint on :8080"]
