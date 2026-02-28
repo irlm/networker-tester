@@ -1,0 +1,7 @@
+{
+  "http_port": 8080,
+  "https_port": 8443,
+  "udp_port": 9999,
+  "udp_throughput_port": 9998,
+  "log_level": "info"
+}

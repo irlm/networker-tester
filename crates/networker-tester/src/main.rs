@@ -32,15 +32,21 @@ async fn main() -> anyhow::Result<()> {
         .expect("Failed to install ring CryptoProvider");
 
     let cli = cli::Cli::parse();
-    cli.validate()?;
+    let config_file = if let Some(ref path) = cli.config {
+        Some(cli::load_config(path)?)
+    } else {
+        None
+    };
+    let cfg = cli.resolve(config_file);
+    cfg.validate()?;
 
-    let level = if cli.verbose { "debug" } else { "info" };
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(level)),
-        )
-        .init();
+    let log_filter = if let Some(ref level) = cfg.log_level {
+        tracing_subscriber::EnvFilter::new(level)
+    } else {
+        tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
+    };
+    tracing_subscriber::fmt().with_env_filter(log_filter).init();
 
     // ── Privilege notice (Linux only) ─────────────────────────────────────────
     #[cfg(target_os = "linux")]
@@ -52,10 +58,10 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
-    let target = url::Url::parse(&cli.target).context("Invalid --target URL")?;
+    let target = url::Url::parse(&cfg.target).context("Invalid --target URL")?;
     let target_host = target.host_str().unwrap_or("unknown").to_string();
 
-    let modes = cli.parsed_modes();
+    let modes = cfg.parsed_modes();
     if modes.is_empty() {
         anyhow::bail!(
             "No valid modes specified. Use: tcp,http1,http2,http3,udp,\
@@ -63,7 +69,7 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
-    let payload_sizes = cli.parsed_payload_sizes().context("--payload-sizes")?;
+    let payload_sizes = cfg.parsed_payload_sizes().context("--payload-sizes")?;
     let has_throughput = modes.iter().any(|m| {
         matches!(
             m,
@@ -87,26 +93,26 @@ async fn main() -> anyhow::Result<()> {
 
     info!(
         run_id  = %run_id,
-        target  = %cli.target,
+        target  = %cfg.target,
         modes   = ?modes.iter().map(|m| m.to_string()).collect::<Vec<_>>(),
-        runs    = cli.runs,
-        retries = cli.retries,
+        runs    = cfg.runs,
+        retries = cfg.retries,
         version = env!("CARGO_PKG_VERSION"),
         "Starting networker-tester"
     );
 
-    let cfg = RunConfig {
-        timeout_ms: cli.timeout * 1000,
-        dns_enabled: cli.dns_enabled,
-        ipv4_only: cli.ipv4_only,
-        ipv6_only: cli.ipv6_only,
-        insecure: cli.insecure,
-        payload_size: cli.payload_size,
+    let probe_cfg = RunConfig {
+        timeout_ms: cfg.timeout * 1000,
+        dns_enabled: cfg.dns_enabled,
+        ipv4_only: cfg.ipv4_only,
+        ipv6_only: cfg.ipv6_only,
+        insecure: cfg.insecure,
+        payload_size: cfg.payload_size,
         path: target.path().to_string(),
     };
 
     let throughput_cfg = ThroughputConfig {
-        run_cfg: cfg.clone(),
+        run_cfg: probe_cfg.clone(),
         base_url: target.clone(),
     };
 
@@ -130,25 +136,25 @@ async fn main() -> anyhow::Result<()> {
 
     let udp_cfg = UdpProbeConfig {
         target_host: target_host.clone(),
-        target_port: cli.udp_port,
-        probe_count: cli.udp_probes,
-        timeout_ms: cli.timeout * 1000,
+        target_port: cfg.udp_port,
+        probe_count: cfg.udp_probes,
+        timeout_ms: cfg.timeout * 1000,
         payload_size: 64,
     };
 
     let udp_throughput_cfg = UdpThroughputConfig {
         target_host: target_host.clone(),
-        target_port: cli.udp_throughput_port,
-        timeout_ms: cli.timeout * 1000,
+        target_port: cfg.udp_throughput_port,
+        timeout_ms: cfg.timeout * 1000,
     };
 
     // ── Collect all attempts ──────────────────────────────────────────────────
-    let retries = cli.retries;
+    let retries = cfg.retries;
     let mut all_attempts = Vec::new();
     let mut seq = 0u32;
 
-    for run_num in 0..cli.runs {
-        info!("Run {}/{}", run_num + 1, cli.runs);
+    for run_num in 0..cfg.runs {
+        info!("Run {}/{}", run_num + 1, cfg.runs);
 
         let futures: Vec<_> = mode_tasks
             .iter()
@@ -156,7 +162,7 @@ async fn main() -> anyhow::Result<()> {
                 let proto = proto.clone();
                 let payload_sz = *payload_sz;
                 let target_clone = target.clone();
-                let cfg_clone = cfg.clone();
+                let probe_cfg_clone = probe_cfg.clone();
                 let udp_cfg_clone = udp_cfg.clone();
                 let udp_throughput_cfg_clone = udp_throughput_cfg.clone();
                 let throughput_cfg_clone = throughput_cfg.clone();
@@ -171,7 +177,7 @@ async fn main() -> anyhow::Result<()> {
                         run_id,
                         current_seq,
                         &target_clone,
-                        &cfg_clone,
+                        &probe_cfg_clone,
                         &udp_cfg_clone,
                         &udp_throughput_cfg_clone,
                         &throughput_cfg_clone,
@@ -189,7 +195,7 @@ async fn main() -> anyhow::Result<()> {
                             run_id,
                             current_seq,
                             &target_clone,
-                            &cfg_clone,
+                            &probe_cfg_clone,
                             &udp_cfg_clone,
                             &udp_throughput_cfg_clone,
                             &throughput_cfg_clone,
@@ -209,7 +215,7 @@ async fn main() -> anyhow::Result<()> {
         // Run futures with bounded concurrency
         use futures::stream::{self, StreamExt};
         let results: Vec<_> = stream::iter(futures)
-            .buffer_unordered(cli.concurrency)
+            .buffer_unordered(cfg.concurrency)
             .collect()
             .await;
         all_attempts.extend(results);
@@ -221,12 +227,12 @@ async fn main() -> anyhow::Result<()> {
         run_id,
         started_at,
         finished_at: Some(finished_at),
-        target_url: cli.target.clone(),
+        target_url: cfg.target.clone(),
         target_host: target_host.clone(),
         modes: modes.iter().map(|m| m.to_string()).collect(),
-        total_runs: cli.runs,
-        concurrency: cli.concurrency as u32,
-        timeout_ms: cli.timeout * 1000,
+        total_runs: cfg.runs,
+        concurrency: cfg.concurrency as u32,
+        timeout_ms: cfg.timeout * 1000,
         client_os: std::env::consts::OS.to_string(),
         client_version: env!("CARGO_PKG_VERSION").to_string(),
         attempts: all_attempts,
@@ -240,7 +246,7 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // ── Ensure output dir exists ──────────────────────────────────────────────
-    let out_dir = PathBuf::from(&cli.output_dir);
+    let out_dir = PathBuf::from(&cfg.output_dir);
     std::fs::create_dir_all(&out_dir).context("Cannot create output directory")?;
 
     let ts = started_at.format("%Y%m%d-%H%M%S");
@@ -251,8 +257,8 @@ async fn main() -> anyhow::Result<()> {
     info!(path = %json_path.display(), "JSON artifact saved");
 
     // ── HTML report ───────────────────────────────────────────────────────────
-    let html_path = out_dir.join(&cli.html_report);
-    let css_href = cli.css.as_deref().or(Some("report.css"));
+    let html_path = out_dir.join(&cfg.html_report);
+    let css_href = cfg.css.as_deref().or(Some("report.css"));
     html::save(&run, &html_path, css_href).context("Failed to write HTML report")?;
     info!(path = %html_path.display(), "HTML report saved");
 
@@ -260,7 +266,7 @@ async fn main() -> anyhow::Result<()> {
     copy_default_css(&out_dir);
 
     // ── Excel report ──────────────────────────────────────────────────────────
-    if cli.excel {
+    if cfg.excel {
         let name = format!("run-{ts}-{}.xlsx", run.run_id);
         let xlsx_path = out_dir.join(&name);
         match excel::save(&run, &xlsx_path) {
@@ -270,8 +276,8 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // ── SQL insert ────────────────────────────────────────────────────────────
-    if cli.save_to_sql {
-        if let Some(conn_str) = &cli.connection_string {
+    if cfg.save_to_sql {
+        if let Some(conn_str) = &cfg.connection_string {
             info!("Inserting into SQL Server…");
             match sql::save(&run, conn_str).await {
                 Ok(()) => info!("SQL insert complete"),
