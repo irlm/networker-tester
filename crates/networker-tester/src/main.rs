@@ -69,6 +69,7 @@ async fn main() -> anyhow::Result<()> {
             m,
             Protocol::Download
                 | Protocol::Upload
+                | Protocol::WebDownload
                 | Protocol::WebUpload
                 | Protocol::UdpDownload
                 | Protocol::UdpUpload
@@ -76,7 +77,7 @@ async fn main() -> anyhow::Result<()> {
     });
     if has_throughput && payload_sizes.is_empty() {
         anyhow::bail!(
-            "--payload-sizes required for download/upload/webupload/udpdownload/udpupload modes \
+            "--payload-sizes required for download/upload/webdownload/webupload/udpdownload/udpupload modes \
              (e.g. --payload-sizes 4k,64k,1m)"
         );
     }
@@ -110,13 +111,13 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Expand modes × payload sizes into a flat task list.
-    // Download/Upload/WebUpload modes generate one task per payload size.
-    // WebDownload runs once per cycle (payload determined by the server response).
+    // All throughput modes generate one task per payload size.
     let mode_tasks: Vec<(Protocol, Option<usize>)> = modes
         .iter()
         .flat_map(|p| match p {
             Protocol::Download
             | Protocol::Upload
+            | Protocol::WebDownload
             | Protocol::WebUpload
             | Protocol::UdpDownload
             | Protocol::UdpUpload => payload_sizes
@@ -303,7 +304,9 @@ async fn dispatch_once(
     match (proto, payload_sz) {
         (Protocol::Download, Some(sz)) => run_download_probe(run_id, seq, sz, throughput_cfg).await,
         (Protocol::Upload, Some(sz)) => run_upload_probe(run_id, seq, sz, throughput_cfg).await,
-        (Protocol::WebDownload, _) => run_webdownload_probe(run_id, seq, throughput_cfg).await,
+        (Protocol::WebDownload, Some(sz)) => {
+            run_webdownload_probe(run_id, seq, sz, throughput_cfg).await
+        }
         (Protocol::WebUpload, Some(sz)) => {
             run_webupload_probe(run_id, seq, sz, throughput_cfg).await
         }

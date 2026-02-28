@@ -55,18 +55,35 @@ use uuid::Uuid;
 // WebDownload probe
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// GET the target URL as-is and measure the throughput of the response body.
+/// GET the target URL (optionally with `?bytes=N` appended) and measure the
+/// throughput of the response body.
 ///
-/// Unlike `run_download_probe`, the URL is **not rewritten** — this mode works
-/// with any HTTP server.  The download size is whatever the server responds
-/// with, reported as `payload_bytes = body_size_bytes`.
+/// Unlike `run_download_probe`, the **path is not rewritten** — this mode
+/// works with any HTTP server.  When `payload_bytes > 0` the parameter
+/// `bytes=<N>` is appended to the URL's query string so that servers which
+/// support it (e.g. networker-endpoint's `/download` route) will stream back
+/// exactly that many bytes.  The actual response body size is always used as
+/// the payload for the throughput calculation, so the result is honest even
+/// when the server ignores the hint.
 pub async fn run_webdownload_probe(
     run_id: Uuid,
     sequence_num: u32,
+    payload_bytes: usize,
     cfg: &ThroughputConfig,
 ) -> RequestAttempt {
+    let mut target = cfg.base_url.clone();
+    if payload_bytes > 0 {
+        let existing = target.query().unwrap_or("").to_string();
+        let param = format!("bytes={payload_bytes}");
+        target.set_query(Some(&if existing.is_empty() {
+            param
+        } else {
+            format!("{existing}&{param}")
+        }));
+    }
+
     let probe_cfg = RunConfig {
-        payload_size: 0, // GET request
+        payload_size: 0, // GET request — body comes from the server
         ..cfg.run_cfg.clone()
     };
 
@@ -74,13 +91,14 @@ pub async fn run_webdownload_probe(
         run_id,
         sequence_num,
         Protocol::WebDownload,
-        &cfg.base_url,
+        &target,
         &probe_cfg,
     )
     .await;
 
     if let Some(h) = attempt.http.clone() {
-        // Use the actual response body size as the download payload.
+        // Always use actual body bytes for throughput — honest even if the
+        // server ignores the bytes= hint and returns something different.
         let body_size = h.body_size_bytes;
         attempt.http = Some(patch_throughput(h, body_size));
     }
