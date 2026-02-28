@@ -120,7 +120,7 @@ pub async fn run_webupload_probe(
             .server_timing
             .as_ref()
             .and_then(|st| st.recv_body_ms);
-        attempt.http = Some(patch_upload_throughput(h, payload_bytes, server_recv_ms));
+        attempt.http = Some(patch_webupload_throughput(h, payload_bytes, server_recv_ms));
     }
     attempt
 }
@@ -238,6 +238,41 @@ fn patch_upload_throughput(
         None => h.ttfb_ms,
     };
     let throughput_mbps = mbps(payload_bytes, transfer_ms);
+    HttpResult {
+        payload_bytes,
+        throughput_mbps,
+        ..h
+    }
+}
+
+/// Compute and attach upload throughput to a `webupload` `HttpResult`.
+///
+/// Unlike `patch_upload_throughput`, the fallback when `server_recv_ms` is
+/// absent uses `total_duration_ms` rather than `ttfb_ms`.  For generic targets
+/// that respond *before* draining the request body, `ttfb_ms` can be
+/// near-zero (the server ignored the body), which would produce absurdly high
+/// throughput figures.  `total_duration_ms` has the same flaw in that edge
+/// case, but using it is more consistent with "how long the whole request
+/// took" semantics.
+///
+/// A physical cap of **100,000 MB/s** (≈ 800 Gbps) is applied regardless of
+/// denominator: anything above that is physically impossible on today's
+/// hardware and indicates that the server responded without draining the body.
+/// In that case `throughput_mbps` is set to `None` rather than a nonsensical
+/// value.
+fn patch_webupload_throughput(
+    h: HttpResult,
+    payload_bytes: usize,
+    server_recv_ms: Option<f64>,
+) -> HttpResult {
+    let transfer_ms = match server_recv_ms {
+        Some(srv) => srv.max(h.ttfb_ms),
+        None => h.total_duration_ms,
+    };
+    // Cap: 100,000 MB/s ≈ 800 Gbps — exceeds any real network link.
+    // Values above this mean the server replied before reading the body.
+    const MAX_PLAUSIBLE_MBPS: f64 = 100_000.0;
+    let throughput_mbps = mbps(payload_bytes, transfer_ms).filter(|&v| v <= MAX_PLAUSIBLE_MBPS);
     HttpResult {
         payload_bytes,
         throughput_mbps,
@@ -571,6 +606,54 @@ mod tests {
             .throughput_mbps
             .expect("should be Some(0)");
         assert_eq!(result, 0.0);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // patch_webupload_throughput
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn webupload_server_recv_ms_wins_when_present() {
+        // Same semantics as upload when server timing is available.
+        let h = make_http_result(0.5, 1000.0);
+        let patched = patch_webupload_throughput(h, 1024 * 1024, Some(2000.0));
+        // max(2000.0, 0.5) = 2000 ms → 1 MiB / 2 s = 0.5 MB/s
+        let thr = patched.throughput_mbps.expect("should compute throughput");
+        assert!((thr - 0.5).abs() < 1e-6, "expected 0.5, got {thr}");
+    }
+
+    #[test]
+    fn webupload_falls_back_to_total_duration_without_server_timing() {
+        // No server_recv_ms: use total_duration_ms (4000 ms) not ttfb_ms (0.5 ms).
+        let h = make_http_result(0.5, 4000.0);
+        let patched = patch_webupload_throughput(h, 1024 * 1024, None);
+        // 1 MiB / 4000 ms * 1000 / 1 MiB = 0.25 MB/s
+        let thr = patched.throughput_mbps.expect("should compute throughput");
+        assert!((thr - 0.25).abs() < 1e-6, "expected 0.25, got {thr}");
+    }
+
+    #[test]
+    fn webupload_absurd_throughput_suppressed() {
+        // Server responded in 0.4 ms without draining 512 MiB body.
+        let payload = 512 * 1024 * 1024; // 512 MiB
+        let h = make_http_result(0.4, 0.4);
+        let patched = patch_webupload_throughput(h, payload, None);
+        // Would be ~1.3M MB/s — must be capped to None.
+        assert!(
+            patched.throughput_mbps.is_none(),
+            "expected None for implausible throughput, got {:?}",
+            patched.throughput_mbps
+        );
+    }
+
+    #[test]
+    fn webupload_plausible_throughput_shown() {
+        // 512 MiB upload in 4832 ms ≈ 106 MB/s — well within the cap.
+        let payload = 512 * 1024 * 1024;
+        let h = make_http_result(4832.0, 4833.0);
+        let patched = patch_webupload_throughput(h, payload, None);
+        let thr = patched.throughput_mbps.expect("should compute throughput");
+        assert!(thr > 100.0 && thr < 200.0, "expected ~106 MB/s, got {thr}");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
