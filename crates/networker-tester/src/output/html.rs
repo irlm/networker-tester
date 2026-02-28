@@ -3,7 +3,9 @@
 /// The report embeds a minimal inline CSS for offline viewing and optionally
 /// adds a `<link rel="stylesheet">` for the external `report.css` file so
 /// operators can customise the look without editing generated HTML.
-use crate::metrics::{Protocol, RequestAttempt, TestRun};
+use crate::metrics::{
+    compute_stats, primary_metric_label, primary_metric_value, Protocol, RequestAttempt, TestRun,
+};
 use std::fmt::Write as FmtWrite;
 use std::path::Path;
 
@@ -142,6 +144,10 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
         Protocol::Udp,
         Protocol::Download,
         Protocol::Upload,
+        Protocol::WebDownload,
+        Protocol::WebUpload,
+        Protocol::UdpDownload,
+        Protocol::UdpUpload,
     ] {
         let rows: Vec<&RequestAttempt> = run
             .attempts
@@ -154,6 +160,99 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
         append_proto_row(&mut out, proto, &rows);
     }
     let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
+
+    // ── Statistics summary ────────────────────────────────────────────────────
+    let all_protos = [
+        Protocol::Http1,
+        Protocol::Http2,
+        Protocol::Http3,
+        Protocol::Tcp,
+        Protocol::Udp,
+        Protocol::Download,
+        Protocol::Upload,
+        Protocol::WebDownload,
+        Protocol::WebUpload,
+        Protocol::UdpDownload,
+        Protocol::UdpUpload,
+    ];
+    // Collect per-protocol stats rows (only protocols that have data)
+    let stat_rows: Vec<_> = all_protos
+        .iter()
+        .filter_map(|proto| {
+            let attempts: Vec<&RequestAttempt> = run
+                .attempts
+                .iter()
+                .filter(|a| &a.protocol == proto)
+                .collect();
+            if attempts.is_empty() {
+                return None;
+            }
+            let total = attempts.len();
+            let success = attempts.iter().filter(|a| a.success).count();
+            let success_pct = success as f64 / total as f64 * 100.0;
+            let vals: Vec<f64> = attempts
+                .iter()
+                .filter_map(|a| primary_metric_value(a))
+                .collect();
+            let stats = compute_stats(&vals)?;
+            Some((proto, primary_metric_label(proto), stats, success_pct))
+        })
+        .collect();
+
+    if !stat_rows.is_empty() {
+        let _ = write!(
+            out,
+            r#"
+<section class="card">
+  <h2>Statistics Summary</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Protocol</th><th>Metric</th><th>N</th>
+        <th>Min</th><th>Mean</th><th>p50</th><th>p95</th><th>p99</th>
+        <th>Max</th><th>StdDev</th><th>Success %</th>
+      </tr>
+    </thead>
+    <tbody>
+"#
+        );
+        for (proto, label, s, success_pct) in &stat_rows {
+            let ok_cls = if *success_pct >= 100.0 {
+                "ok"
+            } else if *success_pct >= 80.0 {
+                "warn"
+            } else {
+                "err"
+            };
+            let _ = write!(
+                out,
+                r#"      <tr>
+        <td>{proto}</td>
+        <td>{label}</td>
+        <td>{count}</td>
+        <td>{min:.2}</td>
+        <td>{mean:.2}</td>
+        <td>{p50:.2}</td>
+        <td>{p95:.2}</td>
+        <td>{p99:.2}</td>
+        <td>{max:.2}</td>
+        <td>{stddev:.2}</td>
+        <td class="{ok_cls}">{pct:.0}%</td>
+      </tr>
+"#,
+                count = s.count,
+                min = s.min,
+                mean = s.mean,
+                p50 = s.p50,
+                p95 = s.p95,
+                p99 = s.p99,
+                max = s.max,
+                stddev = s.stddev,
+                pct = success_pct,
+            );
+        }
+        let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
+    }
 
     // ── UDP statistics ────────────────────────────────────────────────────────
     let udp_rows: Vec<&RequestAttempt> = run
@@ -210,7 +309,12 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
     let throughput_rows: Vec<&RequestAttempt> = run
         .attempts
         .iter()
-        .filter(|a| matches!(a.protocol, Protocol::Download | Protocol::Upload) && a.http.is_some())
+        .filter(|a| {
+            matches!(
+                a.protocol,
+                Protocol::Download | Protocol::Upload | Protocol::WebDownload | Protocol::WebUpload
+            ) && a.http.is_some()
+        })
         .collect();
     if !throughput_rows.is_empty() {
         let _ = write!(
@@ -260,6 +364,79 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
                 ttfb = h.ttfb_ms,
                 total = h.total_duration_ms,
                 status = status_cell,
+            );
+        }
+        let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
+    }
+
+    // ── UDP Throughput results ────────────────────────────────────────────────
+    let udp_tp_rows: Vec<&RequestAttempt> = run
+        .attempts
+        .iter()
+        .filter(|a| {
+            matches!(a.protocol, Protocol::UdpDownload | Protocol::UdpUpload)
+                && a.udp_throughput.is_some()
+        })
+        .collect();
+    if !udp_tp_rows.is_empty() {
+        let _ = write!(
+            out,
+            r#"
+<section class="card">
+  <h2>UDP Throughput Results</h2>
+  <table>
+    <thead>
+      <tr><th>Run #</th><th>Mode</th><th>Payload</th><th>Sent</th><th>Recv</th>
+          <th>Loss %</th><th>Throughput (MB/s)</th><th>Transfer (ms)</th><th>Bytes Acked</th></tr>
+    </thead>
+    <tbody>
+"#
+        );
+        for a in &udp_tp_rows {
+            let u = a.udp_throughput.as_ref().unwrap();
+            let throughput = u
+                .throughput_mbps
+                .map(|m| format!("{m:.2}"))
+                .unwrap_or_else(|| "—".into());
+            let bytes_acked = u
+                .bytes_acked
+                .map(|b| format_bytes(b))
+                .unwrap_or_else(|| "—".into());
+            let _ = write!(
+                out,
+                r#"      <tr>
+        <td>{seq}</td>
+        <td>{proto}</td>
+        <td>{payload}</td>
+        <td>{sent}</td>
+        <td>{recv}</td>
+        <td class="{loss_cls}">{loss:.1}%</td>
+        <td class="{thr_cls}">{thr}</td>
+        <td>{xfer:.2}</td>
+        <td>{acked}</td>
+      </tr>
+"#,
+                seq = a.sequence_num,
+                proto = a.protocol,
+                payload = format_bytes(u.payload_bytes),
+                sent = u.datagrams_sent,
+                recv = u.datagrams_received,
+                loss = u.loss_percent,
+                loss_cls = if u.loss_percent > 5.0 {
+                    "warn"
+                } else if u.loss_percent == 0.0 {
+                    "ok"
+                } else {
+                    ""
+                },
+                thr_cls = if u.throughput_mbps.is_some() {
+                    "ok"
+                } else {
+                    "warn"
+                },
+                thr = throughput,
+                xfer = u.transfer_ms,
+                acked = bytes_acked,
             );
         }
         let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
@@ -580,7 +757,7 @@ fn append_attempt_row(out: &mut String, a: &RequestAttempt) {
         .unwrap_or_else(|| "—".into());
     let (ttfb_ms, total_ms, version) = if let Some(h) = &a.http {
         let ver = match &a.protocol {
-            Protocol::Download | Protocol::Upload => {
+            Protocol::Download | Protocol::Upload | Protocol::WebDownload | Protocol::WebUpload => {
                 if let Some(mbps) = h.throughput_mbps {
                     format!("{:.2} MB/s ({})", mbps, format_bytes(h.payload_bytes))
                 } else {
@@ -594,6 +771,12 @@ fn append_attempt_row(out: &mut String, a: &RequestAttempt) {
             format!("{:.2}", h.total_duration_ms),
             ver,
         )
+    } else if let Some(ut) = &a.udp_throughput {
+        let thr = ut
+            .throughput_mbps
+            .map(|m| format!("{m:.2} MB/s ({})", format_bytes(ut.payload_bytes)))
+            .unwrap_or_else(|| format!("loss={:.1}%", ut.loss_percent));
+        ("—".into(), format!("{:.2}", ut.transfer_ms), thr)
     } else if let Some(u) = &a.udp {
         (
             "—".into(),
@@ -782,6 +965,7 @@ mod tests {
                 error: None,
                 retry_count: 0,
                 server_timing: None,
+                udp_throughput: None,
             }],
         }
     }

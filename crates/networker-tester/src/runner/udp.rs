@@ -153,6 +153,7 @@ pub async fn run_udp_probe(
         error: None,
         retry_count: 0,
         server_timing: None,
+        udp_throughput: None,
     }
 }
 
@@ -224,6 +225,7 @@ fn udp_failed(
         }),
         retry_count: 0,
         server_timing: None,
+        udp_throughput: None,
     }
 }
 

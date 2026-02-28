@@ -52,6 +52,80 @@ use crate::runner::http::{run_probe, RunConfig};
 use uuid::Uuid;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// WebDownload probe
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// GET the target URL as-is and measure the throughput of the response body.
+///
+/// Unlike `run_download_probe`, the URL is **not rewritten** — this mode works
+/// with any HTTP server.  The download size is whatever the server responds
+/// with, reported as `payload_bytes = body_size_bytes`.
+pub async fn run_webdownload_probe(
+    run_id: Uuid,
+    sequence_num: u32,
+    cfg: &ThroughputConfig,
+) -> RequestAttempt {
+    let probe_cfg = RunConfig {
+        payload_size: 0, // GET request
+        ..cfg.run_cfg.clone()
+    };
+
+    let mut attempt = run_probe(
+        run_id,
+        sequence_num,
+        Protocol::WebDownload,
+        &cfg.base_url,
+        &probe_cfg,
+    )
+    .await;
+
+    if let Some(h) = attempt.http.clone() {
+        // Use the actual response body size as the download payload.
+        let body_size = h.body_size_bytes;
+        attempt.http = Some(patch_throughput(h, body_size));
+    }
+    attempt
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WebUpload probe
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// POST a {payload_bytes}-byte body to the target URL as-is and measure upload speed.
+///
+/// Unlike `run_upload_probe`, the URL is **not rewritten** — this mode works
+/// with any HTTP server.
+pub async fn run_webupload_probe(
+    run_id: Uuid,
+    sequence_num: u32,
+    payload_bytes: usize,
+    cfg: &ThroughputConfig,
+) -> RequestAttempt {
+    let probe_cfg = RunConfig {
+        payload_size: payload_bytes,
+        ..cfg.run_cfg.clone()
+    };
+
+    let mut attempt = run_probe(
+        run_id,
+        sequence_num,
+        Protocol::WebUpload,
+        &cfg.base_url,
+        &probe_cfg,
+    )
+    .await;
+
+    if let Some(h) = attempt.http.clone() {
+        let server_recv_ms = attempt
+            .server_timing
+            .as_ref()
+            .and_then(|st| st.recv_body_ms);
+        attempt.http = Some(patch_upload_throughput(h, payload_bytes, server_recv_ms));
+    }
+    attempt
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Configuration
 // ─────────────────────────────────────────────────────────────────────────────
 

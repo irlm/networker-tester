@@ -51,6 +51,7 @@ mod stub {
             }),
             retry_count: 0,
             server_timing: None,
+            udp_throughput: None,
         }
     }
 }
@@ -316,6 +317,7 @@ mod real {
             error: None,
             retry_count: 0,
             server_timing: None,
+            udp_throughput: None,
         }
     }
 
@@ -347,6 +349,7 @@ mod real {
             }),
             retry_count: 0,
             server_timing: None,
+            udp_throughput: None,
         }
     }
 }

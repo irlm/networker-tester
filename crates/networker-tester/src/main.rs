@@ -2,13 +2,19 @@ use anyhow::Context;
 use chrono::Utc;
 use clap::Parser;
 use networker_tester::cli;
-use networker_tester::metrics::{Protocol, RequestAttempt, TestRun};
+use networker_tester::metrics::{
+    compute_stats, primary_metric_label, primary_metric_value, Protocol, RequestAttempt, TestRun,
+};
 use networker_tester::output::{excel, html, json, sql};
 use networker_tester::runner::{
     http::{run_probe, RunConfig},
     http3::run_http3_probe,
-    throughput::{run_download_probe, run_upload_probe, ThroughputConfig},
+    throughput::{
+        run_download_probe, run_upload_probe, run_webdownload_probe, run_webupload_probe,
+        ThroughputConfig,
+    },
     udp::{run_udp_probe, UdpProbeConfig},
+    udp_throughput::{run_udpdownload_probe, run_udpupload_probe, UdpThroughputConfig},
 };
 use std::path::{Path, PathBuf};
 use tracing::{error, info, warn};
@@ -51,16 +57,27 @@ async fn main() -> anyhow::Result<()> {
 
     let modes = cli.parsed_modes();
     if modes.is_empty() {
-        anyhow::bail!("No valid modes specified. Use: tcp,http1,http2,http3,udp,download,upload");
+        anyhow::bail!(
+            "No valid modes specified. Use: tcp,http1,http2,http3,udp,\
+             download,upload,webdownload,webupload,udpdownload,udpupload"
+        );
     }
 
     let payload_sizes = cli.parsed_payload_sizes().context("--payload-sizes")?;
-    let has_throughput = modes
-        .iter()
-        .any(|m| matches!(m, Protocol::Download | Protocol::Upload));
+    let has_throughput = modes.iter().any(|m| {
+        matches!(
+            m,
+            Protocol::Download
+                | Protocol::Upload
+                | Protocol::WebUpload
+                | Protocol::UdpDownload
+                | Protocol::UdpUpload
+        )
+    });
     if has_throughput && payload_sizes.is_empty() {
         anyhow::bail!(
-            "--payload-sizes required for download/upload modes (e.g. --payload-sizes 4k,64k,1m)"
+            "--payload-sizes required for download/upload/webupload/udpdownload/udpupload modes \
+             (e.g. --payload-sizes 4k,64k,1m)"
         );
     }
 
@@ -93,11 +110,16 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Expand modes × payload sizes into a flat task list.
-    // Download/Upload modes generate one task per payload size.
+    // Download/Upload/WebUpload modes generate one task per payload size.
+    // WebDownload runs once per cycle (payload determined by the server response).
     let mode_tasks: Vec<(Protocol, Option<usize>)> = modes
         .iter()
         .flat_map(|p| match p {
-            Protocol::Download | Protocol::Upload => payload_sizes
+            Protocol::Download
+            | Protocol::Upload
+            | Protocol::WebUpload
+            | Protocol::UdpDownload
+            | Protocol::UdpUpload => payload_sizes
                 .iter()
                 .map(|&sz| (p.clone(), Some(sz)))
                 .collect::<Vec<_>>(),
@@ -111,6 +133,12 @@ async fn main() -> anyhow::Result<()> {
         probe_count: cli.udp_probes,
         timeout_ms: cli.timeout * 1000,
         payload_size: 64,
+    };
+
+    let udp_throughput_cfg = UdpThroughputConfig {
+        target_host: target_host.clone(),
+        target_port: cli.udp_throughput_port,
+        timeout_ms: cli.timeout * 1000,
     };
 
     // ── Collect all attempts ──────────────────────────────────────────────────
@@ -129,6 +157,7 @@ async fn main() -> anyhow::Result<()> {
                 let target_clone = target.clone();
                 let cfg_clone = cfg.clone();
                 let udp_cfg_clone = udp_cfg.clone();
+                let udp_throughput_cfg_clone = udp_throughput_cfg.clone();
                 let throughput_cfg_clone = throughput_cfg.clone();
                 let current_seq = seq;
                 seq += 1;
@@ -143,6 +172,7 @@ async fn main() -> anyhow::Result<()> {
                         &target_clone,
                         &cfg_clone,
                         &udp_cfg_clone,
+                        &udp_throughput_cfg_clone,
                         &throughput_cfg_clone,
                     )
                     .await;
@@ -160,6 +190,7 @@ async fn main() -> anyhow::Result<()> {
                             &target_clone,
                             &cfg_clone,
                             &udp_cfg_clone,
+                            &udp_throughput_cfg_clone,
                             &throughput_cfg_clone,
                         )
                         .await;
@@ -266,17 +297,28 @@ async fn dispatch_once(
     target: &url::Url,
     cfg: &RunConfig,
     udp_cfg: &UdpProbeConfig,
+    udp_throughput_cfg: &UdpThroughputConfig,
     throughput_cfg: &ThroughputConfig,
 ) -> RequestAttempt {
     match (proto, payload_sz) {
         (Protocol::Download, Some(sz)) => run_download_probe(run_id, seq, sz, throughput_cfg).await,
         (Protocol::Upload, Some(sz)) => run_upload_probe(run_id, seq, sz, throughput_cfg).await,
+        (Protocol::WebDownload, _) => run_webdownload_probe(run_id, seq, throughput_cfg).await,
+        (Protocol::WebUpload, Some(sz)) => {
+            run_webupload_probe(run_id, seq, sz, throughput_cfg).await
+        }
+        (Protocol::UdpDownload, Some(sz)) => {
+            run_udpdownload_probe(run_id, seq, sz, udp_throughput_cfg).await
+        }
+        (Protocol::UdpUpload, Some(sz)) => {
+            run_udpupload_probe(run_id, seq, sz, udp_throughput_cfg).await
+        }
         (Protocol::Http1, _) | (Protocol::Http2, _) | (Protocol::Tcp, _) => {
             run_probe(run_id, seq, proto.clone(), target, cfg).await
         }
         (Protocol::Http3, _) => run_http3_probe(run_id, seq, target, cfg.timeout_ms).await,
         (Protocol::Udp, _) => run_udp_probe(run_id, seq, udp_cfg).await,
-        _ => unreachable!("Download/Upload without payload_size"),
+        _ => unreachable!("Upload/WebUpload/UdpDownload/UdpUpload without payload_size"),
     }
 }
 
@@ -328,7 +370,7 @@ fn log_attempt(a: &networker_tester::metrics::RequestAttempt) {
                 retry = retry_suffix,
             );
         }
-        Download | Upload => {
+        Download | Upload | WebDownload | WebUpload => {
             if let Some(h) = &a.http {
                 let n = h.payload_bytes;
                 let payload_str = if n >= 1 << 20 {
@@ -360,6 +402,35 @@ fn log_attempt(a: &networker_tester::metrics::RequestAttempt) {
                     avg = u.rtt_avg_ms,
                     p95 = u.rtt_p95_ms,
                     loss = u.loss_percent,
+                    retry = retry_suffix,
+                );
+            }
+        }
+        UdpDownload | UdpUpload => {
+            if let Some(ut) = &a.udp_throughput {
+                let n = ut.payload_bytes;
+                let payload_str = if n >= 1 << 20 {
+                    format!("{:.1} MiB", n as f64 / (1u64 << 20) as f64)
+                } else if n >= 1 << 10 {
+                    format!("{:.1} KiB", n as f64 / (1u64 << 10) as f64)
+                } else {
+                    format!("{n} B")
+                };
+                let throughput = ut
+                    .throughput_mbps
+                    .map(|m| format!("{m:.2} MB/s"))
+                    .unwrap_or_else(|| "—".into());
+                info!(
+                    "{status} #{seq} [{proto}] {payload} \
+                     sent={sent} recv={recv} loss={loss:.1}% \
+                     xfer={xfer:.1}ms Throughput:{throughput}{retry}",
+                    seq = a.sequence_num,
+                    proto = a.protocol,
+                    payload = payload_str,
+                    sent = ut.datagrams_sent,
+                    recv = ut.datagrams_received,
+                    loss = ut.loss_percent,
+                    xfer = ut.transfer_ms,
                     retry = retry_suffix,
                 );
             }
@@ -414,6 +485,10 @@ fn print_summary(run: &TestRun) {
         Protocol::Udp,
         Protocol::Download,
         Protocol::Upload,
+        Protocol::WebDownload,
+        Protocol::WebUpload,
+        Protocol::UdpDownload,
+        Protocol::UdpUpload,
     ] {
         let rows: Vec<_> = run
             .attempts
@@ -440,12 +515,66 @@ fn print_summary(run: &TestRun) {
             tcp = avg_f(|a| a.tcp.as_ref().map(|t| t.connect_duration_ms)),
             tls = avg_f(|a| a.tls.as_ref().map(|t| t.handshake_duration_ms)),
             ttfb = avg_f(|a| a.http.as_ref().map(|h| h.ttfb_ms)),
-            total = avg_f(|a| a
-                .http
-                .as_ref()
-                .map(|h| h.total_duration_ms)
-                .or_else(|| a.udp.as_ref().map(|u| u.rtt_avg_ms))),
+            total = avg_f(|a| {
+                a.http
+                    .as_ref()
+                    .map(|h| h.total_duration_ms)
+                    .or_else(|| a.udp.as_ref().map(|u| u.rtt_avg_ms))
+                    .or_else(|| a.udp_throughput.as_ref().map(|ut| ut.transfer_ms))
+            }),
         );
+    }
+
+    // Per-protocol statistics (primary metric: ms for latency, MB/s for throughput)
+    let stat_protos = [
+        Protocol::Http1,
+        Protocol::Http2,
+        Protocol::Http3,
+        Protocol::Tcp,
+        Protocol::Udp,
+        Protocol::Download,
+        Protocol::Upload,
+        Protocol::WebDownload,
+        Protocol::WebUpload,
+        Protocol::UdpDownload,
+        Protocol::UdpUpload,
+    ];
+    let has_stats = stat_protos.iter().any(|p| {
+        run.attempts
+            .iter()
+            .filter(|a| &a.protocol == p)
+            .any(|a| primary_metric_value(a).is_some())
+    });
+    if has_stats {
+        println!();
+        println!(
+            " Protocol  │ Metric           │  N  │    Min   │   Mean   │   p50    │   p95    │   p99    │    Max   │  StdDev"
+        );
+        println!(
+            "───────────┼──────────────────┼─────┼──────────┼──────────┼──────────┼──────────┼──────────┼──────────┼─────────"
+        );
+        for proto in &stat_protos {
+            let vals: Vec<f64> = run
+                .attempts
+                .iter()
+                .filter(|a| &a.protocol == proto)
+                .filter_map(|a| primary_metric_value(a))
+                .collect();
+            if let Some(s) = compute_stats(&vals) {
+                let label = primary_metric_label(proto);
+                println!(
+                    " {proto:<9} │ {label:<16} │ {n:<3} │ {min:>8.2} │ {mean:>8.2} │ {p50:>8.2} │ {p95:>8.2} │ {p99:>8.2} │ {max:>8.2} │ {stddev:>7.2}",
+                    n = s.count,
+                    min = s.min,
+                    mean = s.mean,
+                    p50 = s.p50,
+                    p95 = s.p95,
+                    p99 = s.p99,
+                    max = s.max,
+                    stddev = s.stddev,
+                );
+            }
+        }
     }
 
     println!("══════════════════════════════════════════════\n");

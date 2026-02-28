@@ -76,6 +76,9 @@ pub struct RequestAttempt {
     /// Server-side timing metadata parsed from response headers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server_timing: Option<ServerTimingResult>,
+    /// UDP bulk transfer result (udpdownload / udpupload modes only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub udp_throughput: Option<UdpThroughputResult>,
 }
 
 impl RequestAttempt {
@@ -100,6 +103,14 @@ pub enum Protocol {
     Udp,
     Download,
     Upload,
+    /// GET the target URL as-is; measures HTTP timing + response body throughput.
+    WebDownload,
+    /// POST to the target URL with a payload; measures HTTP timing + upload throughput.
+    WebUpload,
+    /// UDP bulk download from the networker-endpoint UDP throughput server (port 9998).
+    UdpDownload,
+    /// UDP bulk upload to the networker-endpoint UDP throughput server (port 9998).
+    UdpUpload,
 }
 
 impl std::fmt::Display for Protocol {
@@ -112,6 +123,10 @@ impl std::fmt::Display for Protocol {
             Protocol::Udp => write!(f, "udp"),
             Protocol::Download => write!(f, "download"),
             Protocol::Upload => write!(f, "upload"),
+            Protocol::WebDownload => write!(f, "webdownload"),
+            Protocol::WebUpload => write!(f, "webupload"),
+            Protocol::UdpDownload => write!(f, "udpdownload"),
+            Protocol::UdpUpload => write!(f, "udpupload"),
         }
     }
 }
@@ -128,6 +143,10 @@ impl std::str::FromStr for Protocol {
             "udp" => Ok(Protocol::Udp),
             "download" => Ok(Protocol::Download),
             "upload" => Ok(Protocol::Upload),
+            "webdownload" => Ok(Protocol::WebDownload),
+            "webupload" => Ok(Protocol::WebUpload),
+            "udpdownload" => Ok(Protocol::UdpDownload),
+            "udpupload" => Ok(Protocol::UdpUpload),
             other => Err(format!("Unknown protocol: {other}")),
         }
     }
@@ -271,6 +290,28 @@ pub struct UdpResult {
     pub probe_rtts_ms: Vec<Option<f64>>,
 }
 
+/// UDP bulk throughput transfer result (udpdownload / udpupload modes).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UdpThroughputResult {
+    pub remote_addr: String,
+    /// Requested transfer size in bytes.
+    pub payload_bytes: usize,
+    /// Number of datagrams sent by the sender (server for download, client for upload).
+    pub datagrams_sent: u32,
+    /// Number of datagrams received by the receiver.
+    pub datagrams_received: u32,
+    /// Bytes acknowledged by the server (from CMD_REPORT); upload mode only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes_acked: Option<usize>,
+    /// Datagram loss percentage (based on unique seq_num gaps).
+    pub loss_percent: f64,
+    /// Total transfer window in ms (from first data packet to CMD_DONE/CMD_REPORT).
+    pub transfer_ms: f64,
+    /// Measured throughput in MB/s; None if transfer_ms = 0.
+    pub throughput_mbps: Option<f64>,
+    pub started_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorRecord {
     pub category: ErrorCategory,
@@ -366,6 +407,98 @@ pub fn aggregate_udp_rtts(samples: &[Option<f64>]) -> RttStats {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Statistics aggregation
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Descriptive statistics for a series of floating-point measurements.
+#[derive(Debug, Clone)]
+pub struct Stats {
+    pub count: usize,
+    pub min: f64,
+    pub mean: f64,
+    pub p50: f64,
+    pub p95: f64,
+    pub p99: f64,
+    pub max: f64,
+    pub stddev: f64,
+}
+
+/// Compute summary statistics from a slice of `f64`.
+/// Returns `None` if `values` is empty.
+pub fn compute_stats(values: &[f64]) -> Option<Stats> {
+    if values.is_empty() {
+        return None;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let count = sorted.len();
+    let min = sorted[0];
+    let max = sorted[count - 1];
+    let mean = sorted.iter().sum::<f64>() / count as f64;
+    let p50 = percentile_from_sorted(&sorted, 50.0);
+    let p95 = percentile_from_sorted(&sorted, 95.0);
+    let p99 = percentile_from_sorted(&sorted, 99.0);
+    let variance = sorted.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / count as f64;
+    let stddev = variance.sqrt();
+    Some(Stats {
+        count,
+        min,
+        mean,
+        p50,
+        p95,
+        p99,
+        max,
+        stddev,
+    })
+}
+
+fn percentile_from_sorted(sorted: &[f64], p: f64) -> f64 {
+    let n = sorted.len();
+    if n == 1 {
+        return sorted[0];
+    }
+    let rank = p / 100.0 * (n - 1) as f64;
+    let lo = rank.floor() as usize;
+    let hi = rank.ceil() as usize;
+    let frac = rank - lo as f64;
+    sorted[lo] + frac * (sorted[hi] - sorted[lo])
+}
+
+/// Human-readable label for the primary metric used when computing statistics
+/// for a given protocol.
+pub fn primary_metric_label(proto: &Protocol) -> &'static str {
+    match proto {
+        Protocol::Http1 | Protocol::Http2 | Protocol::Http3 => "Total ms",
+        Protocol::Tcp => "Connect ms",
+        Protocol::Udp => "RTT avg ms",
+        Protocol::Download
+        | Protocol::Upload
+        | Protocol::WebDownload
+        | Protocol::WebUpload
+        | Protocol::UdpDownload
+        | Protocol::UdpUpload => "Throughput MB/s",
+    }
+}
+
+/// Extract the primary metric value from an attempt for statistics purposes.
+/// Returns `None` if the relevant sub-result is absent.
+pub fn primary_metric_value(a: &RequestAttempt) -> Option<f64> {
+    match a.protocol {
+        Protocol::Http1 | Protocol::Http2 | Protocol::Http3 => {
+            a.http.as_ref().map(|h| h.total_duration_ms)
+        }
+        Protocol::Tcp => a.tcp.as_ref().map(|t| t.connect_duration_ms),
+        Protocol::Udp => a.udp.as_ref().map(|u| u.rtt_avg_ms),
+        Protocol::Download | Protocol::Upload | Protocol::WebDownload | Protocol::WebUpload => {
+            a.http.as_ref().and_then(|h| h.throughput_mbps)
+        }
+        Protocol::UdpDownload | Protocol::UdpUpload => {
+            a.udp_throughput.as_ref().and_then(|ut| ut.throughput_mbps)
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -415,7 +548,17 @@ mod tests {
     fn test_protocol_roundtrip() {
         use std::str::FromStr;
         for p in &[
-            "tcp", "http1", "http2", "http3", "udp", "download", "upload",
+            "tcp",
+            "http1",
+            "http2",
+            "http3",
+            "udp",
+            "download",
+            "upload",
+            "webdownload",
+            "webupload",
+            "udpdownload",
+            "udpupload",
         ] {
             let parsed = Protocol::from_str(p).unwrap();
             assert_eq!(parsed.to_string(), *p);
@@ -441,6 +584,7 @@ mod tests {
             error: None,
             retry_count: 0,
             server_timing: None,
+            udp_throughput: None,
         };
         let run = TestRun {
             run_id,
@@ -473,5 +617,40 @@ mod tests {
         let de: DnsResult = serde_json::from_str(&json).unwrap();
         assert_eq!(de.query_name, r.query_name);
         assert!((de.duration_ms - r.duration_ms).abs() < 1e-9);
+    }
+
+    #[test]
+    fn compute_stats_empty_returns_none() {
+        assert!(compute_stats(&[]).is_none());
+    }
+
+    #[test]
+    fn compute_stats_single_value() {
+        let s = compute_stats(&[7.0]).unwrap();
+        assert_eq!(s.count, 1);
+        assert!((s.min - 7.0).abs() < 1e-9);
+        assert!((s.max - 7.0).abs() < 1e-9);
+        assert!((s.mean - 7.0).abs() < 1e-9);
+        assert!((s.p50 - 7.0).abs() < 1e-9);
+        assert!((s.p95 - 7.0).abs() < 1e-9);
+        assert!((s.p99 - 7.0).abs() < 1e-9);
+        assert!((s.stddev - 0.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn compute_stats_known_values() {
+        // 1..=10: mean=5.5, stddev=sqrt(8.25)≈2.872, p50=5.5, p95=9.55, p99=9.91
+        let vals: Vec<f64> = (1..=10).map(|v| v as f64).collect();
+        let s = compute_stats(&vals).unwrap();
+        assert_eq!(s.count, 10);
+        assert!((s.min - 1.0).abs() < 1e-9);
+        assert!((s.max - 10.0).abs() < 1e-9);
+        assert!((s.mean - 5.5).abs() < 1e-9);
+        // p50: rank=4.5 → 5+0.5*(6-5)=5.5
+        assert!((s.p50 - 5.5).abs() < 1e-9);
+        // p95: rank=8.55 → 9+0.55*(10-9)=9.55
+        assert!((s.p95 - 9.55).abs() < 1e-9);
+        // stddev of 1..10: variance = (sum of (i-5.5)^2 for i in 1..10)/10 = 8.25
+        assert!((s.stddev - 8.25f64.sqrt()).abs() < 1e-9);
     }
 }
