@@ -71,6 +71,16 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
         })
         .unwrap_or_else(|| "—".into());
 
+    let server_ver = run
+        .attempts
+        .iter()
+        .find_map(|a| {
+            a.server_timing
+                .as_ref()
+                .and_then(|st| st.server_version.as_deref())
+        })
+        .unwrap_or("—");
+
     let _ = write!(
         out,
         r#"
@@ -84,7 +94,8 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
     <dt>Failed</dt>          <dd class="{fail_cls}">{fail}</dd>
     <dt>Total Duration</dt>  <dd>{dur}</dd>
     <dt>OS</dt>              <dd>{os}</dd>
-    <dt>Client version</dt>  <dd>{ver}</dd>
+    <dt>Client version</dt>  <dd>{client_ver}</dd>
+    <dt>Server version</dt>  <dd>{server_ver}</dd>
   </dl>
 </section>
 "#,
@@ -96,7 +107,8 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
         fail_cls = if run.failure_count() > 0 { "err" } else { "ok" },
         dur = duration_s,
         os = escape_html(&run.client_os),
-        ver = escape_html(&run.client_version),
+        client_ver = escape_html(&run.client_version),
+        server_ver = escape_html(server_ver),
     );
 
     // ── Per-protocol timing table ─────────────────────────────────────────────

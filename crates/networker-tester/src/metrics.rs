@@ -210,6 +210,9 @@ pub struct ServerTimingResult {
     /// Total server time (Server-Timing: total;dur=X).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_server_ms: Option<f64>,
+    /// Server binary version from X-Networker-Server-Version header.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
