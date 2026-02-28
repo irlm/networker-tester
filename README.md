@@ -45,12 +45,12 @@ telemetry from user-mode code.
 
 Install the **tester** (diagnostic CLI client):
 ```bash
-curl -fsSL https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh | bash -s -- tester
+curl -fsSL https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh | bash -s -- tester
 ```
 
 Install the **endpoint** (target test server — run on the machine you want to probe):
 ```bash
-curl -fsSL https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh | bash -s -- endpoint
+curl -fsSL https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh | bash -s -- endpoint
 ```
 
 Or download and run locally:
@@ -63,7 +63,7 @@ bash install.sh endpoint
 
 Install the **tester**:
 ```powershell
-Invoke-RestMethod https://raw.githubusercontent.com/irlm/networker-tester/main/install.ps1 | Invoke-Expression
+Invoke-RestMethod https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.ps1 | Invoke-Expression
 ```
 
 Install the **endpoint**:
