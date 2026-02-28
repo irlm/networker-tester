@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.3] – 2026-02-28 — Fix RUST_LOG documentation
+
+### Fixed
+- **README `RUST_LOG` example** — `RUST_LOG=tower_http=debug` was documented as the way
+  to get verbose HTTP logs, but a target-specific directive alone silently suppresses all
+  other log targets (including the endpoint's own startup lines). Corrected to
+  `RUST_LOG=info,tower_http=debug` with an explanatory note.
+
+---
+
 ## [0.3.2] – 2026-02-28 — Endpoint version banner + request logging
 
 ### Added
@@ -19,7 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **HTTP request/response logging** — `TraceLayer` (from `tower-http`) added to the axum
   router; every request is logged at `INFO` with method + URI, and every response with
   status code + latency. Verbosity is controlled by `RUST_LOG`
-  (e.g. `RUST_LOG=debug` for full tower trace spans).
+  (e.g. `RUST_LOG=info,tower_http=debug` for verbose HTTP spans).
 
 ---
 
@@ -240,7 +250,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/irlm/networker-tester/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/irlm/networker-tester/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/irlm/networker-tester/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/irlm/networker-tester/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/irlm/networker-tester/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/irlm/networker-tester/compare/v0.2.5...v0.3.0

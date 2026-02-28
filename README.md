@@ -395,8 +395,12 @@ Log verbosity is controlled by the `RUST_LOG` environment variable:
 # Quiet — only warnings and errors
 RUST_LOG=warn ./networker-endpoint
 
-# Verbose HTTP — full tower-http span details (request headers, response size, …)
-RUST_LOG=tower_http=debug ./networker-endpoint
+# Verbose HTTP — keep endpoint logs at INFO, raise tower-http to DEBUG
+# (shows request headers, response body size, full span details)
+# IMPORTANT: a target-specific directive alone (e.g. "tower_http=debug") hides
+# all other log targets including the endpoint's own startup lines. Always
+# include a default level before the comma when using target overrides.
+RUST_LOG=info,tower_http=debug ./networker-endpoint
 
 # Debug everything
 RUST_LOG=debug ./networker-endpoint
