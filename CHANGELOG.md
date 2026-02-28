@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.1] – 2026-02-28 — webdownload/webupload path rewrite
+
+### Fixed
+- **`webdownload` and `webupload` path rewrite** — both probes previously left the URL path
+  unchanged (e.g. `/health`), so `webdownload` returned whatever the target endpoint happened
+  to respond with (e.g. 114 B health JSON) and `webupload` POSTed to a path that ignored the
+  request body. Both probes now rewrite the URL path identically to their non-web counterparts:
+  `webdownload` → `GET /download?bytes=N`, `webupload` → `POST /upload`. The `--target` flag
+  may point at any path; the host and port are preserved and the path is replaced.
+- **`--payload-sizes` now required for `webdownload`** — updated CLI help text to document that
+  `webdownload` requires `--payload-sizes` (same as `download`), since it now issues a
+  `?bytes=N` request and must have a size to request.
+
+---
+
 ## [0.3.0] – 2026-02-28 — Web probes, UDP throughput, statistics
 
 > Starting from this release every PR includes a version bump.
@@ -213,7 +228,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/irlm/networker-tester/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/irlm/networker-tester/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/irlm/networker-tester/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/irlm/networker-tester/compare/v0.2.5...v0.3.0
 [0.2.5]: https://github.com/irlm/networker-tester/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/irlm/networker-tester/compare/v0.2.3...v0.2.4
