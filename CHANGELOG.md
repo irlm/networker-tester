@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`webdownload`/`webupload` probes always failed** — `run_probe` in the HTTP runner only
+  listed `Http1 | Http2 | Tcp | Download | Upload`; both web-probe variants fell through to the
+  `other =>` error arm, returning "Protocol not handled by http runner" on every attempt.
+  Added `WebDownload | WebUpload` to both match arms (`run_probe` entry point and the
+  `send_http1` dispatch inside `run_http_or_tcp`).
+- Clippy `redundant_closure` in `html.rs` (`.map(|b| format_bytes(b))`) and `main.rs`
+  (`.filter_map(|a| primary_metric_value(a))`); both replaced with the bare function reference.
+- Integration test `ServerConfig` initializer missing `udp_throughput_port` field (added in
+  the `udpdownload`/`udpupload` PR but not reflected in the test harness).
+
 ### Added
 - **`udpdownload` probe mode** — bulk UDP download from `networker-endpoint`'s UDP throughput
   server (default port 9998); measures datagrams sent/received, packet loss %, transfer window
