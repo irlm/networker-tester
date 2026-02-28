@@ -68,11 +68,12 @@ async fn main() -> anyhow::Result<()> {
     let started_at = Utc::now();
 
     info!(
-        run_id = %run_id,
-        target = %cli.target,
-        modes  = ?modes.iter().map(|m| m.to_string()).collect::<Vec<_>>(),
-        runs   = cli.runs,
+        run_id  = %run_id,
+        target  = %cli.target,
+        modes   = ?modes.iter().map(|m| m.to_string()).collect::<Vec<_>>(),
+        runs    = cli.runs,
         retries = cli.retries,
+        version = env!("CARGO_PKG_VERSION"),
         "Starting networker-tester"
     );
 
@@ -375,16 +376,30 @@ fn print_summary(run: &TestRun) {
     let fail = run.failure_count();
     let total = run.attempts.len();
 
+    // Extract server version from the first attempt that reported it.
+    let server_version: String = run
+        .attempts
+        .iter()
+        .find_map(|a| {
+            a.server_timing
+                .as_ref()
+                .and_then(|st| st.server_version.as_deref())
+        })
+        .unwrap_or("—")
+        .to_string();
+
     println!("\n══════════════════════════════════════════════");
     println!(" Networker Tester – Run {}", run.run_id);
     println!("══════════════════════════════════════════════");
-    println!(" Target  : {}", run.target_url);
-    println!(" Modes   : {}", run.modes.join(", "));
-    println!(" Results : {ok}/{total} succeeded  ({fail} failed)");
+    println!(" Target         : {}", run.target_url);
+    println!(" Modes          : {}", run.modes.join(", "));
+    println!(" Results        : {ok}/{total} succeeded  ({fail} failed)");
+    println!(" Client version : {}", run.client_version);
+    println!(" Server version : {server_version}");
 
     if let Some(fin) = run.finished_at {
         let dur = (fin - run.started_at).num_milliseconds();
-        println!(" Duration: {dur}ms total");
+        println!(" Duration       : {dur}ms total");
     }
 
     // Per-protocol table

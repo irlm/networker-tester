@@ -591,7 +591,8 @@ fn parse_server_timing(
     ttfb_ms: f64,
 ) -> Option<ServerTimingResult> {
     let has_networker = headers.contains_key("x-networker-server-timestamp")
-        || headers.contains_key("x-networker-request-id");
+        || headers.contains_key("x-networker-request-id")
+        || headers.contains_key("x-networker-server-version");
 
     if !has_networker && !headers.contains_key("server-timing") {
         return None;
@@ -599,6 +600,11 @@ fn parse_server_timing(
 
     let request_id = headers
         .get("x-networker-request-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_owned());
+
+    let server_version = headers
+        .get("x-networker-server-version")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_owned());
 
@@ -629,6 +635,7 @@ fn parse_server_timing(
         recv_body_ms,
         processing_ms,
         total_server_ms,
+        server_version,
     })
 }
 

@@ -42,7 +42,7 @@ pub fn build_router() -> Router {
 // Middleware
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Middleware that stamps every response with the server wall-clock time.
+/// Middleware that stamps every response with the server wall-clock time and version.
 async fn add_server_timestamp(req: Request, next: Next) -> Response {
     let mut response = next.run(req).await;
     let ts = Utc::now().to_rfc3339();
@@ -51,6 +51,10 @@ async fn add_server_timestamp(req: Request, next: Next) -> Response {
             .headers_mut()
             .insert("x-networker-server-timestamp", val);
     }
+    response.headers_mut().insert(
+        "x-networker-server-version",
+        HeaderValue::from_static(env!("CARGO_PKG_VERSION")),
+    );
     response
 }
 
