@@ -52,6 +52,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `sql/07_MoreTcpStats.sql` — idempotent `ALTER TABLE` adding `CongestionAlgorithm`,
   `DeliveryRateBps`, `MinRttMs` columns to `dbo.TcpResult`.
 - Excel TCP Stats sheet gains **Min RTT ms**, **Delivery MB/s**, **Congestion** columns.
+- **Statistics Summary** — per-protocol descriptive statistics (N, Min, Mean, p50, p95, p99,
+  Max, StdDev) computed from each run's primary metric (total duration ms for HTTP/TCP, RTT avg
+  ms for UDP echo, throughput MB/s for all bulk-transfer modes). Shown in three places: (#35)
+  - Terminal: second table printed below the existing averages table.
+  - HTML report: new "Statistics Summary" card (between Timing Breakdown and UDP Probe
+    Statistics); success % column colour-coded green/amber/red.
+  - Excel: new "Statistics" sheet (sheet 2, directly after Summary).
+- `metrics.rs`: new public `Stats` struct, `compute_stats()`, `primary_metric_label()`, and
+  `primary_metric_value()` functions; 3 new unit tests for the percentile calculations. (#35)
 
 ---
 
