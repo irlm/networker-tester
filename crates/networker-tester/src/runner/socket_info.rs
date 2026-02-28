@@ -2,18 +2,38 @@
 ///
 /// # What we can obtain without root / CAP_NET_ADMIN
 ///
-/// | Platform | TCP_MAXSEG (MSS) | TCP_INFO (RTT, cwnd, retrans) | TCP_CONNECTION_INFO |
-/// |----------|-----------------|-------------------------------|---------------------|
-/// | Linux    | ✓ getsockopt    | ✓ all fields without root      | n/a                 |
-/// | macOS    | ✓ getsockopt    | n/a                            | ✓ RTT + cwnd       |
-/// | Windows  | ✗               | ✗                              | ✗                   |
+/// | Platform | TCP_MAXSEG | TCP_INFO / TCP_CONNECTION_INFO | TCP_CONGESTION |
+/// |----------|------------|-------------------------------|----------------|
+/// | Linux    | ✓          | ✓ (all fields, no root)        | ✓              |
+/// | macOS    | ✓          | ✓ (RTT, cwnd, retrans)         | ✓              |
+/// | Windows  | ✗          | ✗                              | ✗              |
+///
+/// # Linux tcp_info byte offsets used for version-guarded fields
+///
+/// The kernel struct has grown over releases.  We read into a raw `[u8; 232]`
+/// buffer and gate each field on the `optlen` returned by `getsockopt`, so the
+/// binary runs on any kernel ≥ 3.x but silently omits fields the running kernel
+/// does not report.
+///
+/// | Offset | Size | Field              | Added    |
+/// |--------|------|--------------------|----------|
+/// |    68  |  u32 | tcpi_rtt (µs)      | baseline |
+/// |    72  |  u32 | tcpi_rttvar (µs)   | baseline |
+/// |    76  |  u32 | tcpi_snd_ssthresh  | baseline |
+/// |    80  |  u32 | tcpi_snd_cwnd      | baseline |
+/// |    96  |  u32 | tcpi_rcv_space     | baseline |
+/// |   100  |  u32 | tcpi_total_retrans | baseline |
+/// |   136  |  u32 | tcpi_segs_out      | 4.2      |
+/// |   140  |  u32 | tcpi_segs_in       | 4.2      |
+/// |   148  |  u32 | tcpi_min_rtt (µs)  | 4.9      |
+/// |   160  |  u64 | tcpi_delivery_rate | 4.9      |
 use tokio::net::TcpStream;
 
 #[derive(Debug, Clone, Default)]
 pub struct SocketInfo {
-    /// Maximum Segment Size in bytes (from TCP_MAXSEG). Best-effort.
+    /// Maximum Segment Size in bytes (TCP_MAXSEG). Best-effort.
     pub mss_bytes: Option<u32>,
-    /// Smoothed RTT in milliseconds (from TCP_INFO on Linux, TCP_CONNECTION_INFO on macOS).
+    /// Smoothed RTT in ms (TCP_INFO on Linux, TCP_CONNECTION_INFO on macOS).
     pub rtt_estimate_ms: Option<f64>,
     /// Segments currently queued for retransmit (tcpi_retransmits / txretransmitpackets).
     pub retransmits: Option<u32>,
@@ -21,16 +41,22 @@ pub struct SocketInfo {
     pub total_retrans: Option<u32>,
     /// Congestion window in segments (tcpi_snd_cwnd).
     pub snd_cwnd: Option<u32>,
-    /// Slow-start threshold; None when set to the kernel sentinel (infinite).
+    /// Slow-start threshold; None when the kernel sentinel (infinite) is set.
     pub snd_ssthresh: Option<u32>,
-    /// RTT variance in milliseconds (tcpi_rttvar).
+    /// RTT variance in ms (tcpi_rttvar).
     pub rtt_variance_ms: Option<f64>,
     /// Receiver advertised window in bytes (tcpi_rcv_space). Linux only.
     pub rcv_space: Option<u32>,
-    /// Segments sent (Linux ≥ 4.6: tcpi_segs_out). Not yet read.
+    /// Segments sent since connection start (Linux ≥ 4.2: tcpi_segs_out).
     pub segs_out: Option<u32>,
-    /// Segments received (Linux ≥ 4.6: tcpi_segs_in). Not yet read.
+    /// Segments received since connection start (Linux ≥ 4.2: tcpi_segs_in).
     pub segs_in: Option<u32>,
+    /// Congestion control algorithm name, e.g. "cubic", "bbr" (TCP_CONGESTION).
+    pub congestion_algorithm: Option<String>,
+    /// Estimated TCP delivery rate in bytes/sec (Linux ≥ 4.9: tcpi_delivery_rate).
+    pub delivery_rate_bps: Option<u64>,
+    /// Minimum RTT ever observed by the kernel in ms (Linux ≥ 4.9: tcpi_min_rtt).
+    pub min_rtt_ms: Option<f64>,
 }
 
 impl SocketInfo {
@@ -57,61 +83,76 @@ impl SocketInfo {
 fn linux_socket_info(stream: &TcpStream) -> SocketInfo {
     use std::os::unix::io::AsRawFd;
     let fd = stream.as_raw_fd();
-    let mss = get_tcp_maxseg(fd);
+    let mss = get_tcp_maxseg_linux(fd);
+    let congestion_algorithm = get_congestion_algorithm_linux(fd);
 
-    // Read the full tcp_info struct for all extended stats.
-    let (rtt_ms, retransmits, total_retrans, snd_cwnd, snd_ssthresh, rtt_var_ms, rcv_space) = unsafe {
-        let mut info: libc::tcp_info = std::mem::zeroed();
-        let mut len = std::mem::size_of::<libc::tcp_info>() as libc::socklen_t;
-        let ret = libc::getsockopt(
+    // Read tcp_info into a raw buffer.  We use byte-offset reads rather than
+    // casting to libc::tcp_info so that fields added in later kernels (4.2, 4.9,
+    // 4.13 …) are safely gated on the `optlen` the kernel actually filled.
+    const BUF: usize = 232; // larger than any known tcp_info
+    let mut buf = [0u8; BUF];
+    let mut optlen = BUF as libc::socklen_t;
+
+    let ret = unsafe {
+        libc::getsockopt(
             fd,
             libc::IPPROTO_TCP,
             libc::TCP_INFO,
-            &mut info as *mut _ as *mut libc::c_void,
-            &mut len,
-        );
-        if ret == 0 {
-            let rtt = if info.tcpi_rtt > 0 {
-                Some(info.tcpi_rtt as f64 / 1000.0)
-            } else {
-                None
-            };
-            // tcpi_retransmits is u8 – segments in-flight and retransmitted
-            let retrans = if info.tcpi_retransmits > 0 {
-                Some(info.tcpi_retransmits as u32)
-            } else {
-                None
-            };
-            let total_retrans = Some(info.tcpi_total_retrans);
-            let cwnd = if info.tcpi_snd_cwnd > 0 {
-                Some(info.tcpi_snd_cwnd)
-            } else {
-                None
-            };
-            // 0x7fffffff is TCP_INFINITE_SSTHRESH sentinel
-            let ssthresh = {
-                let s = info.tcpi_snd_ssthresh;
-                if s < 0x7fff_ffff {
-                    Some(s)
-                } else {
-                    None
-                }
-            };
-            let rttvar = if info.tcpi_rttvar > 0 {
-                Some(info.tcpi_rttvar as f64 / 1000.0)
-            } else {
-                None
-            };
-            let rcv = if info.tcpi_rcv_space > 0 {
-                Some(info.tcpi_rcv_space)
-            } else {
-                None
-            };
-            (rtt, retrans, total_retrans, cwnd, ssthresh, rttvar, rcv)
-        } else {
-            (None, None, None, None, None, None, None)
-        }
+            buf.as_mut_ptr() as *mut libc::c_void,
+            &mut optlen,
+        )
     };
+
+    if ret != 0 || (optlen as usize) < 104 {
+        return SocketInfo {
+            mss_bytes: mss,
+            congestion_algorithm,
+            ..Default::default()
+        };
+    }
+    let n = optlen as usize;
+
+    // Helper macros for safe offset reads.
+    macro_rules! u32_at {
+        ($off:expr) => {
+            if n >= $off + 4 {
+                Some(u32::from_ne_bytes(buf[$off..$off + 4].try_into().unwrap()))
+            } else {
+                None
+            }
+        };
+    }
+    macro_rules! u64_at {
+        ($off:expr) => {
+            if n >= $off + 8 {
+                Some(u64::from_ne_bytes(buf[$off..$off + 8].try_into().unwrap()))
+            } else {
+                None
+            }
+        };
+    }
+
+    // tcpi_retransmits is a u8 at offset 2.
+    let retransmits = if n > 2 && buf[2] > 0 {
+        Some(buf[2] as u32)
+    } else {
+        None
+    };
+
+    let rtt_ms = u32_at!(68).and_then(|v| if v > 0 { Some(v as f64 / 1000.0) } else { None });
+    let rtt_var_ms = u32_at!(72).and_then(|v| if v > 0 { Some(v as f64 / 1000.0) } else { None });
+    let snd_ssthresh = u32_at!(76).and_then(|v| if v < 0x7fff_ffff { Some(v) } else { None });
+    let snd_cwnd = u32_at!(80).and_then(|v| if v > 0 { Some(v) } else { None });
+    let rcv_space = u32_at!(96).and_then(|v| if v > 0 { Some(v) } else { None });
+    let total_retrans = u32_at!(100);
+
+    // Linux ≥ 4.2
+    let segs_out = u32_at!(136).and_then(|v| if v > 0 { Some(v) } else { None });
+    let segs_in = u32_at!(140).and_then(|v| if v > 0 { Some(v) } else { None });
+
+    // Linux ≥ 4.9
+    let min_rtt_ms = u32_at!(148).and_then(|v| if v > 0 { Some(v as f64 / 1000.0) } else { None });
+    let delivery_rate_bps = u64_at!(160).and_then(|v| if v > 0 { Some(v) } else { None });
 
     SocketInfo {
         mss_bytes: mss,
@@ -122,14 +163,16 @@ fn linux_socket_info(stream: &TcpStream) -> SocketInfo {
         snd_ssthresh,
         rtt_variance_ms: rtt_var_ms,
         rcv_space,
-        // segs_out / segs_in require Linux ≥ 4.6; left as None pending kernel/libc guard
-        segs_out: None,
-        segs_in: None,
+        segs_out,
+        segs_in,
+        congestion_algorithm,
+        delivery_rate_bps,
+        min_rtt_ms,
     }
 }
 
 #[cfg(target_os = "linux")]
-fn get_tcp_maxseg(fd: std::os::unix::io::RawFd) -> Option<u32> {
+fn get_tcp_maxseg_linux(fd: libc::c_int) -> Option<u32> {
     unsafe {
         let mut val: libc::c_int = 0;
         let mut len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
@@ -148,13 +191,39 @@ fn get_tcp_maxseg(fd: std::os::unix::io::RawFd) -> Option<u32> {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn get_congestion_algorithm_linux(fd: libc::c_int) -> Option<String> {
+    unsafe {
+        let mut buf = [0u8; 32];
+        let mut len = 32u32;
+        let ret = libc::getsockopt(
+            fd,
+            libc::IPPROTO_TCP,
+            libc::TCP_CONGESTION,
+            buf.as_mut_ptr() as *mut libc::c_void,
+            &mut len,
+        );
+        if ret == 0 && len > 0 {
+            let s = std::str::from_utf8(&buf[..len as usize])
+                .unwrap_or("")
+                .trim_end_matches('\0');
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
+        } else {
+            None
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // macOS
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Manual layout for the macOS `tcp_connection_info` struct.
-/// We only need the first 17 × 4-byte words (68 bytes); getsockopt fills up to
-/// `size_of::<TcpConnectionInfoPartial>()` bytes so the layout must be exact.
+/// We only need the first 17 × 4-byte words (68 bytes).
 #[cfg(target_os = "macos")]
 #[repr(C)]
 struct TcpConnectionInfoPartial {
@@ -178,7 +247,11 @@ struct TcpConnectionInfoPartial {
 }
 
 #[cfg(target_os = "macos")]
-const TCP_CONNECTION_INFO_OPT: libc::c_int = 0x24; // IPPROTO_TCP, TCP_CONNECTION_INFO
+const TCP_CONNECTION_INFO_OPT: libc::c_int = 0x24;
+
+/// TCP_CONGESTION on macOS (IPPROTO_TCP option 0x20).
+#[cfg(target_os = "macos")]
+const TCP_CONGESTION_MACOS: libc::c_int = 0x20;
 
 #[cfg(target_os = "macos")]
 fn macos_socket_info(stream: &TcpStream) -> SocketInfo {
@@ -202,7 +275,30 @@ fn macos_socket_info(stream: &TcpStream) -> SocketInfo {
         }
     };
 
-    // TCP_CONNECTION_INFO gives RTT, cwnd, and retransmit count without root.
+    let congestion_algorithm = unsafe {
+        let mut buf = [0u8; 32];
+        let mut len = 32u32;
+        let ret = libc::getsockopt(
+            fd,
+            libc::IPPROTO_TCP,
+            TCP_CONGESTION_MACOS,
+            buf.as_mut_ptr() as *mut libc::c_void,
+            &mut len,
+        );
+        if ret == 0 && len > 0 {
+            let s = std::str::from_utf8(&buf[..len as usize])
+                .unwrap_or("")
+                .trim_end_matches('\0');
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
+        } else {
+            None
+        }
+    };
+
     let (rtt_ms, rtt_var_ms, snd_cwnd, snd_ssthresh, retransmits) = unsafe {
         let mut info: TcpConnectionInfoPartial = std::mem::zeroed();
         let mut len = std::mem::size_of::<TcpConnectionInfoPartial>() as libc::socklen_t;
@@ -215,7 +311,7 @@ fn macos_socket_info(stream: &TcpStream) -> SocketInfo {
         );
         if ret == 0 {
             let rtt = if info.tcpi_srtt > 0 {
-                Some(info.tcpi_srtt as f64 / 1000.0) // µs → ms
+                Some(info.tcpi_srtt as f64 / 1000.0)
             } else {
                 None
             };
@@ -252,13 +348,16 @@ fn macos_socket_info(stream: &TcpStream) -> SocketInfo {
         mss_bytes: mss,
         rtt_estimate_ms: rtt_ms,
         retransmits,
-        total_retrans: None, // not available via TCP_CONNECTION_INFO
+        total_retrans: None,
         snd_cwnd,
         snd_ssthresh,
         rtt_variance_ms: rtt_var_ms,
         rcv_space: None,
         segs_out: None,
         segs_in: None,
+        congestion_algorithm,
+        delivery_rate_bps: None, // not available via TCP_CONNECTION_INFO
+        min_rtt_ms: None,        // not available via TCP_CONNECTION_INFO
     }
 }
 
@@ -274,5 +373,8 @@ mod tests {
         assert!(info.retransmits.is_none());
         assert!(info.snd_cwnd.is_none());
         assert!(info.rtt_variance_ms.is_none());
+        assert!(info.congestion_algorithm.is_none());
+        assert!(info.delivery_rate_bps.is_none());
+        assert!(info.min_rtt_ms.is_none());
     }
 }

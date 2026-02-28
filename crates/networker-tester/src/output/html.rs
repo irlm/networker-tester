@@ -289,6 +289,117 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
     }
     let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
 
+    // ── TCP kernel stats ─────────────────────────────────────────────────────
+    let tcp_rows: Vec<&RequestAttempt> = run.attempts.iter().filter(|a| a.tcp.is_some()).collect();
+    if !tcp_rows.is_empty() {
+        let _ = write!(
+            out,
+            r#"
+<section class="card">
+  <h2>TCP Stats</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>#</th><th>Protocol</th><th>Local → Remote</th>
+        <th>Connect (ms)</th><th>MSS (B)</th>
+        <th>RTT (ms)</th><th>RTT Var (ms)</th><th>Min RTT (ms)</th>
+        <th>Cwnd (seg)</th><th>Ssthresh</th>
+        <th>Retrans</th><th>Total Retrans</th>
+        <th>Rcv Win (B)</th><th>Segs Out</th><th>Segs In</th>
+        <th>Delivery (MB/s)</th><th>Congestion</th>
+      </tr>
+    </thead>
+    <tbody>
+"#
+        );
+        for a in &tcp_rows {
+            let t = a.tcp.as_ref().unwrap();
+            let local_remote = format!(
+                "{} → {}",
+                t.local_addr.as_deref().unwrap_or("?"),
+                t.remote_addr
+            );
+            let delivery_mbps = t
+                .delivery_rate_bps
+                .map(|b| format!("{:.1}", b as f64 / 1_000_000.0))
+                .unwrap_or_else(|| "—".into());
+            let _ = write!(
+                out,
+                r#"      <tr>
+        <td>{seq}</td>
+        <td>{proto}</td>
+        <td><code>{addrs}</code></td>
+        <td>{conn:.3}</td>
+        <td>{mss}</td>
+        <td>{rtt}</td>
+        <td>{rttvar}</td>
+        <td>{minrtt}</td>
+        <td>{cwnd}</td>
+        <td>{ssthresh}</td>
+        <td>{retrans}</td>
+        <td>{total_retrans}</td>
+        <td>{rcvwin}</td>
+        <td>{segsout}</td>
+        <td>{segsin}</td>
+        <td>{delivery}</td>
+        <td>{cong}</td>
+      </tr>
+"#,
+                seq = a.sequence_num,
+                proto = a.protocol,
+                addrs = local_remote,
+                conn = t.connect_duration_ms,
+                mss = t
+                    .mss_bytes
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "—".into()),
+                rtt = t
+                    .rtt_estimate_ms
+                    .map(|v| format!("{v:.3}"))
+                    .unwrap_or_else(|| "—".into()),
+                rttvar = t
+                    .rtt_variance_ms
+                    .map(|v| format!("{v:.3}"))
+                    .unwrap_or_else(|| "—".into()),
+                minrtt = t
+                    .min_rtt_ms
+                    .map(|v| format!("{v:.3}"))
+                    .unwrap_or_else(|| "—".into()),
+                cwnd = t
+                    .snd_cwnd
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "—".into()),
+                ssthresh = t
+                    .snd_ssthresh
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "∞".into()),
+                retrans = t
+                    .retransmits
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "0".into()),
+                total_retrans = t
+                    .total_retrans
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "0".into()),
+                rcvwin = t
+                    .rcv_space
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "—".into()),
+                segsout = t
+                    .segs_out
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "—".into()),
+                segsin = t
+                    .segs_in
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "—".into()),
+                delivery = delivery_mbps,
+                cong = t.congestion_algorithm.as_deref().unwrap_or("—"),
+            );
+        }
+        let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
+    }
+
     // ── TLS info ─────────────────────────────────────────────────────────────
     let tls_rows: Vec<&RequestAttempt> = run.attempts.iter().filter(|a| a.tls.is_some()).collect();
     if !tls_rows.is_empty() {
@@ -649,6 +760,9 @@ mod tests {
                     rcv_space: None,
                     segs_out: None,
                     segs_in: None,
+                    congestion_algorithm: None,
+                    delivery_rate_bps: None,
+                    min_rtt_ms: None,
                 }),
                 tls: None,
                 http: Some(HttpResult {

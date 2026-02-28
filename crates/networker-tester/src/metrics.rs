@@ -177,12 +177,21 @@ pub struct TcpResult {
     /// Receiver advertised window in bytes (tcpi_rcv_space).
     #[serde(default)]
     pub rcv_space: Option<u32>,
-    /// Segments sent since connection start (Linux ≥ 4.6).
+    /// Segments sent since connection start (Linux ≥ 4.2).
     #[serde(default)]
     pub segs_out: Option<u32>,
-    /// Segments received since connection start (Linux ≥ 4.6).
+    /// Segments received since connection start (Linux ≥ 4.2).
     #[serde(default)]
     pub segs_in: Option<u32>,
+    /// Congestion control algorithm name, e.g. "cubic", "bbr" (TCP_CONGESTION).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub congestion_algorithm: Option<String>,
+    /// Estimated TCP delivery rate in bytes/sec (Linux ≥ 4.9: tcpi_delivery_rate).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_rate_bps: Option<u64>,
+    /// Minimum RTT ever observed by the kernel in ms (Linux ≥ 4.9: tcpi_min_rtt).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_rtt_ms: Option<f64>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

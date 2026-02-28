@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **TCP Stats card in HTML report** — new section showing all per-connection kernel
+  stats: local→remote addresses, MSS, RTT, RTT variance, min RTT, cwnd, ssthresh,
+  retransmits, total retransmits, receive window, segments out/in, delivery rate (MB/s),
+  and congestion algorithm.
+- **Congestion algorithm** — `TCP_CONGESTION` getsockopt added to Linux and macOS;
+  stored as `TcpResult.congestion_algorithm` (e.g. "cubic", "bbr").
+- **Delivery rate** — `tcpi_delivery_rate` (Linux ≥ 4.9); bytes/sec stored as
+  `TcpResult.delivery_rate_bps`; displayed as MB/s in HTML + Excel.
+- **Minimum RTT** — `tcpi_min_rtt` (Linux ≥ 4.9); ms stored as `TcpResult.min_rtt_ms`.
+- **segs_out / segs_in** — now populated on Linux ≥ 4.2 (were always `None` previously);
+  switched from `libc::tcp_info` struct to raw byte-offset reads so all kernel-version-
+  gated fields work without a matching libc struct definition.
+- `sql/07_MoreTcpStats.sql` — idempotent `ALTER TABLE` adding `CongestionAlgorithm`,
+  `DeliveryRateBps`, `MinRttMs` columns to `dbo.TcpResult`.
+- Excel TCP Stats sheet gains **Min RTT ms**, **Delivery MB/s**, **Congestion** columns.
+
 ---
 
 ## [0.2.5] – 2026-02-28 — Install script fixes

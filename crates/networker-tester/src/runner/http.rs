@@ -253,6 +253,9 @@ async fn run_http_or_tcp(
         rcv_space: sock_info.rcv_space,
         segs_out: sock_info.segs_out,
         segs_in: sock_info.segs_in,
+        congestion_algorithm: sock_info.congestion_algorithm,
+        delivery_rate_bps: sock_info.delivery_rate_bps,
+        min_rtt_ms: sock_info.min_rtt_ms,
     };
     debug!("TCP connected to {addr} in {tcp_duration_ms:.1}ms (local={local_addr:?})");
 

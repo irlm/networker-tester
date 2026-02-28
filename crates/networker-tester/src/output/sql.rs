@@ -178,9 +178,11 @@ async fn insert_tcp_result(
             ConnectDurationMs, AttemptCount, StartedAt, Success,
             MssBytesEstimate, RttEstimateMs,
             Retransmits, TotalRetrans, SndCwnd, SndSsthresh,
-            RttVarianceMs, RcvSpace, SegsOut, SegsIn
+            RttVarianceMs, RcvSpace, SegsOut, SegsIn,
+            CongestionAlgorithm, DeliveryRateBps, MinRttMs
          ) VALUES (@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9,@P10,
-                   @P11,@P12,@P13,@P14,@P15,@P16,@P17,@P18)",
+                   @P11,@P12,@P13,@P14,@P15,@P16,@P17,@P18,
+                   @P19,@P20,@P21)",
     );
     q.bind(id.as_str());
     q.bind(attempt_id.as_str());
@@ -201,6 +203,10 @@ async fn insert_tcp_result(
     q.bind(tcp.rcv_space.map(|v| v as i64));
     q.bind(tcp.segs_out.map(|v| v as i64));
     q.bind(tcp.segs_in.map(|v| v as i64));
+    // New fields (07_MoreTcpStats.sql)
+    q.bind(tcp.congestion_algorithm.as_deref());
+    q.bind(tcp.delivery_rate_bps.map(|v| v as i64));
+    q.bind(tcp.min_rtt_ms);
     q.execute(c).await.context("INSERT TcpResult")?;
     Ok(())
 }
