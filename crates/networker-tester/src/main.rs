@@ -558,7 +558,7 @@ fn print_summary(run: &TestRun) {
                 .attempts
                 .iter()
                 .filter(|a| &a.protocol == proto)
-                .filter_map(|a| primary_metric_value(a))
+                .filter_map(primary_metric_value)
                 .collect();
             if let Some(s) = compute_stats(&vals) {
                 let label = primary_metric_label(proto);

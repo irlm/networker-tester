@@ -400,7 +400,7 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
                 .unwrap_or_else(|| "—".into());
             let bytes_acked = u
                 .bytes_acked
-                .map(|b| format_bytes(b))
+                .map(format_bytes)
                 .unwrap_or_else(|| "—".into());
             let _ = write!(
                 out,

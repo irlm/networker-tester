@@ -60,6 +60,7 @@ impl Endpoint {
             http_port,
             https_port,
             udp_port,
+            udp_throughput_port: free_port(),
         };
 
         tokio::spawn(async move {
