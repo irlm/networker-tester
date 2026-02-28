@@ -7,7 +7,10 @@ use networker_tester::output::{excel, html, json, sql};
 use networker_tester::runner::{
     http::{run_probe, RunConfig},
     http3::run_http3_probe,
-    throughput::{run_download_probe, run_upload_probe, ThroughputConfig},
+    throughput::{
+        run_download_probe, run_upload_probe, run_webdownload_probe, run_webupload_probe,
+        ThroughputConfig,
+    },
     udp::{run_udp_probe, UdpProbeConfig},
 };
 use std::path::{Path, PathBuf};
@@ -51,16 +54,18 @@ async fn main() -> anyhow::Result<()> {
 
     let modes = cli.parsed_modes();
     if modes.is_empty() {
-        anyhow::bail!("No valid modes specified. Use: tcp,http1,http2,http3,udp,download,upload");
+        anyhow::bail!(
+            "No valid modes specified. Use: tcp,http1,http2,http3,udp,download,upload,webdownload,webupload"
+        );
     }
 
     let payload_sizes = cli.parsed_payload_sizes().context("--payload-sizes")?;
     let has_throughput = modes
         .iter()
-        .any(|m| matches!(m, Protocol::Download | Protocol::Upload));
+        .any(|m| matches!(m, Protocol::Download | Protocol::Upload | Protocol::WebUpload));
     if has_throughput && payload_sizes.is_empty() {
         anyhow::bail!(
-            "--payload-sizes required for download/upload modes (e.g. --payload-sizes 4k,64k,1m)"
+            "--payload-sizes required for download/upload/webupload modes (e.g. --payload-sizes 4k,64k,1m)"
         );
     }
 
@@ -93,11 +98,12 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Expand modes × payload sizes into a flat task list.
-    // Download/Upload modes generate one task per payload size.
+    // Download/Upload/WebUpload modes generate one task per payload size.
+    // WebDownload runs once per cycle (payload determined by the server response).
     let mode_tasks: Vec<(Protocol, Option<usize>)> = modes
         .iter()
         .flat_map(|p| match p {
-            Protocol::Download | Protocol::Upload => payload_sizes
+            Protocol::Download | Protocol::Upload | Protocol::WebUpload => payload_sizes
                 .iter()
                 .map(|&sz| (p.clone(), Some(sz)))
                 .collect::<Vec<_>>(),
@@ -271,12 +277,16 @@ async fn dispatch_once(
     match (proto, payload_sz) {
         (Protocol::Download, Some(sz)) => run_download_probe(run_id, seq, sz, throughput_cfg).await,
         (Protocol::Upload, Some(sz)) => run_upload_probe(run_id, seq, sz, throughput_cfg).await,
+        (Protocol::WebDownload, _) => run_webdownload_probe(run_id, seq, throughput_cfg).await,
+        (Protocol::WebUpload, Some(sz)) => {
+            run_webupload_probe(run_id, seq, sz, throughput_cfg).await
+        }
         (Protocol::Http1, _) | (Protocol::Http2, _) | (Protocol::Tcp, _) => {
             run_probe(run_id, seq, proto.clone(), target, cfg).await
         }
         (Protocol::Http3, _) => run_http3_probe(run_id, seq, target, cfg.timeout_ms).await,
         (Protocol::Udp, _) => run_udp_probe(run_id, seq, udp_cfg).await,
-        _ => unreachable!("Download/Upload without payload_size"),
+        _ => unreachable!("Upload/WebUpload without payload_size"),
     }
 }
 
@@ -328,7 +338,7 @@ fn log_attempt(a: &networker_tester::metrics::RequestAttempt) {
                 retry = retry_suffix,
             );
         }
-        Download | Upload => {
+        Download | Upload | WebDownload | WebUpload => {
             if let Some(h) = &a.http {
                 let n = h.payload_bytes;
                 let payload_str = if n >= 1 << 20 {
@@ -414,6 +424,8 @@ fn print_summary(run: &TestRun) {
         Protocol::Udp,
         Protocol::Download,
         Protocol::Upload,
+        Protocol::WebDownload,
+        Protocol::WebUpload,
     ] {
         let rows: Vec<_> = run
             .attempts

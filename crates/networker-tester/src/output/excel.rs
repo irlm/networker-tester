@@ -370,7 +370,10 @@ fn write_throughput(
 
     let mut row = 1u32;
     for a in &run.attempts {
-        if !matches!(a.protocol, Protocol::Download | Protocol::Upload) {
+        if !matches!(
+            a.protocol,
+            Protocol::Download | Protocol::Upload | Protocol::WebDownload | Protocol::WebUpload
+        ) {
             continue;
         }
         let h = match &a.http {

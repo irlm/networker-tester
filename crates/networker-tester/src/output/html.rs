@@ -142,6 +142,8 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
         Protocol::Udp,
         Protocol::Download,
         Protocol::Upload,
+        Protocol::WebDownload,
+        Protocol::WebUpload,
     ] {
         let rows: Vec<&RequestAttempt> = run
             .attempts
@@ -210,7 +212,12 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
     let throughput_rows: Vec<&RequestAttempt> = run
         .attempts
         .iter()
-        .filter(|a| matches!(a.protocol, Protocol::Download | Protocol::Upload) && a.http.is_some())
+        .filter(|a| {
+            matches!(
+                a.protocol,
+                Protocol::Download | Protocol::Upload | Protocol::WebDownload | Protocol::WebUpload
+            ) && a.http.is_some()
+        })
         .collect();
     if !throughput_rows.is_empty() {
         let _ = write!(
@@ -580,7 +587,7 @@ fn append_attempt_row(out: &mut String, a: &RequestAttempt) {
         .unwrap_or_else(|| "—".into());
     let (ttfb_ms, total_ms, version) = if let Some(h) = &a.http {
         let ver = match &a.protocol {
-            Protocol::Download | Protocol::Upload => {
+            Protocol::Download | Protocol::Upload | Protocol::WebDownload | Protocol::WebUpload => {
                 if let Some(mbps) = h.throughput_mbps {
                     format!("{:.2} MB/s ({})", mbps, format_bytes(h.payload_bytes))
                 } else {

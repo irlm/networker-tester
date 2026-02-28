@@ -14,7 +14,9 @@ pub struct Cli {
     pub target: String,
 
     // ── Modes ─────────────────────────────────────────────────────────────────
-    /// Comma-separated probe modes: tcp,http1,http2,http3,udp
+    /// Comma-separated probe modes: tcp,http1,http2,http3,udp,download,upload,webdownload,webupload.
+    /// webdownload: GET target URL, measures HTTP timing + response body throughput.
+    /// webupload: POST to target URL, measures HTTP timing + upload throughput (requires --payload-sizes).
     #[arg(long, value_delimiter = ',', default_value = "http1,http2,udp")]
     pub modes: Vec<String>,
 

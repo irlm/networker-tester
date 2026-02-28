@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`webdownload` probe mode** — GET the target URL as-is (no endpoint path rewriting),
+  measures full HTTP phase timing (DNS, TCP, TLS, TTFB, Total) + response body throughput
+  + TCP kernel stats. Works with any HTTP server, not just `networker-endpoint`.
+- **`webupload` probe mode** — POST to the target URL with a payload body (requires
+  `--payload-sizes`), measures full HTTP phase timing + upload throughput + TCP kernel
+  stats. Works with any HTTP server.
+- Both new modes appear in the HTML Throughput table, TCP Stats card, All Attempts table,
+  and Excel Throughput sheet alongside the existing `download`/`upload` modes.
 - **TCP Stats card in HTML report** — new section showing all per-connection kernel
   stats: local→remote addresses, MSS, RTT, RTT variance, min RTT, cwnd, ssthresh,
   retransmits, total retransmits, receive window, segments out/in, delivery rate (MB/s),

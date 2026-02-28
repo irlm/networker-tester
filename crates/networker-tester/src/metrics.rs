@@ -100,6 +100,10 @@ pub enum Protocol {
     Udp,
     Download,
     Upload,
+    /// GET the target URL as-is; measures HTTP timing + response body throughput.
+    WebDownload,
+    /// POST to the target URL with a payload; measures HTTP timing + upload throughput.
+    WebUpload,
 }
 
 impl std::fmt::Display for Protocol {
@@ -112,6 +116,8 @@ impl std::fmt::Display for Protocol {
             Protocol::Udp => write!(f, "udp"),
             Protocol::Download => write!(f, "download"),
             Protocol::Upload => write!(f, "upload"),
+            Protocol::WebDownload => write!(f, "webdownload"),
+            Protocol::WebUpload => write!(f, "webupload"),
         }
     }
 }
@@ -128,6 +134,8 @@ impl std::str::FromStr for Protocol {
             "udp" => Ok(Protocol::Udp),
             "download" => Ok(Protocol::Download),
             "upload" => Ok(Protocol::Upload),
+            "webdownload" => Ok(Protocol::WebDownload),
+            "webupload" => Ok(Protocol::WebUpload),
             other => Err(format!("Unknown protocol: {other}")),
         }
     }
@@ -416,6 +424,7 @@ mod tests {
         use std::str::FromStr;
         for p in &[
             "tcp", "http1", "http2", "http3", "udp", "download", "upload",
+            "webdownload", "webupload",
         ] {
             let parsed = Protocol::from_str(p).unwrap();
             assert_eq!(parsed.to_string(), *p);
