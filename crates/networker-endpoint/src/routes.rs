@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Instant;
 use tokio::time::{sleep, Duration};
+use tower_http::trace::TraceLayer;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Router
@@ -36,6 +37,9 @@ pub fn build_router() -> Router {
         .layer(DefaultBodyLimit::disable())
         // Add X-Networker-Server-Timestamp to every response.
         .layer(middleware::from_fn(add_server_timestamp))
+        // Log every request (method + URI) and response (status + latency).
+        // Verbosity is controlled by RUST_LOG; defaults to INFO.
+        .layer(TraceLayer::new_for_http())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
