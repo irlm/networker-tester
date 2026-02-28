@@ -128,16 +128,14 @@ Open `output/report.html` in any browser.
 | `udp` | UDP | RTT min/avg/p95 · jitter · loss% | `--udp-port` |
 | `download` | TCP → `/download?bytes=N` | Throughput MB/s (server→client) | `--payload-sizes` |
 | `upload` | TCP → `/upload` | Throughput MB/s (client→server) | `--payload-sizes` |
-| `webdownload` | TCP → _target URL_ | HTTP timing + response body throughput | — |
-| `webupload` | TCP → _target URL_ | HTTP timing + upload throughput | `--payload-sizes` |
+| `webdownload` | TCP → `/download?bytes=N` | HTTP timing + response body throughput | `--payload-sizes` |
+| `webupload` | TCP → `/upload` | HTTP timing + upload throughput | `--payload-sizes` |
 
-**`download` vs `webdownload`:**
-`download` rewrites the URL to `/download?bytes=N` (requires `networker-endpoint`).
-`webdownload` uses the target URL exactly as given — works with any HTTP server, and the
-download size is whatever the server responds with.
-
-**`webupload` vs `upload`:**
-Same distinction — `upload` always targets `/upload`; `webupload` POSTs to the exact URL.
+**`download` vs `webdownload` (and `upload` vs `webupload`):**
+Both pairs rewrite the URL path to `/download` or `/upload` on the target host — the
+difference is only the protocol label recorded in the report, which lets you run them
+side-by-side and compare results. Use `webdownload`/`webupload` when you want a named
+"web" category separate from your primary `download`/`upload` baseline.
 
 ---
 
@@ -255,24 +253,26 @@ networker-tester \
   --output-dir ./output
 ```
 
-### Test any web server (not just the endpoint)
+### Side-by-side download and upload labelled separately
 
-`webdownload` / `webupload` work against any HTTP server — no special routes needed:
+`webdownload` / `webupload` rewrite the URL path to `/download` and `/upload` exactly
+like their counterparts, but emit a different protocol label (`webdownload` / `webupload`)
+in the report. This lets you run two named groups in a single invocation and compare them:
 
 ```bash
-# Download: GET the URL; measure response throughput + full HTTP timing + TCP stats
+# Run download and webdownload back-to-back, compare results in one report
 networker-tester \
-  --target https://example.com/ \
-  --modes http1,webdownload \
-  --runs 3
+  --target http://host:8080/health \
+  --modes download,webdownload \
+  --payload-sizes 4k,64k,1m \
+  --runs 5
 
-# Upload: POST to the URL; measure upload throughput + HTTP timing + TCP stats
+# Full comparison: all four throughput modes
 networker-tester \
-  --target https://api.example.com/upload \
-  --modes webupload \
+  --target http://host:8080/health \
+  --modes download,upload,webdownload,webupload \
   --payload-sizes 64k,1m \
-  --runs 3 \
-  --insecure
+  --runs 3
 ```
 
 ### Everything in one run (all modes, all metrics)
@@ -382,6 +382,40 @@ drained.
 | Port | Protocol | Description |
 |------|----------|-------------|
 | `:9999` | UDP datagram | Reflects every packet back unchanged. Used by `--modes udp`. |
+
+### Logging
+
+The endpoint uses [`tracing`](https://docs.rs/tracing) and logs to stdout.
+Log verbosity is controlled by the `RUST_LOG` environment variable:
+
+```bash
+# Default — INFO: version banner, listening addresses, one line per request/response
+./networker-endpoint
+
+# Quiet — only warnings and errors
+RUST_LOG=warn ./networker-endpoint
+
+# Verbose HTTP — full tower-http span details (request headers, response size, …)
+RUST_LOG=tower_http=debug ./networker-endpoint
+
+# Debug everything
+RUST_LOG=debug ./networker-endpoint
+```
+
+Example startup output (default `INFO`):
+```
+INFO networker_endpoint: networker-endpoint v0.3.2
+INFO networker_endpoint: HTTP  → http://0.0.0.0:8080
+INFO networker_endpoint: HTTPS → https://0.0.0.0:8443  (self-signed, use --insecure)
+INFO networker_endpoint: UDP echo       → 0.0.0.0:9999
+INFO networker_endpoint: UDP throughput → 0.0.0.0:9998
+```
+
+Example per-request output:
+```
+INFO request{method=GET uri=/download?bytes=65536 version=HTTP/1.1}: started processing request
+INFO request{method=GET uri=/download?bytes=65536 version=HTTP/1.1}: finished processing request status=200 latency=8 ms
+```
 
 ---
 
