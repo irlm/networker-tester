@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.2] – 2026-02-28 — Endpoint version banner + request logging
+
+### Added
+- **Version banner at startup** — `networker-endpoint` now prints its version (e.g.
+  `networker-endpoint v0.3.2`) as the first log line before the listening-address lines.
+- **HTTP request/response logging** — `TraceLayer` (from `tower-http`) added to the axum
+  router; every request is logged at `INFO` with method + URI, and every response with
+  status code + latency. Verbosity is controlled by `RUST_LOG`
+  (e.g. `RUST_LOG=debug` for full tower trace spans).
+
+---
+
 ## [0.3.1] – 2026-02-28 — webdownload/webupload path rewrite
 
 ### Fixed
@@ -228,7 +240,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/irlm/networker-tester/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/irlm/networker-tester/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/irlm/networker-tester/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/irlm/networker-tester/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/irlm/networker-tester/compare/v0.2.5...v0.3.0
 [0.2.5]: https://github.com/irlm/networker-tester/compare/v0.2.4...v0.2.5

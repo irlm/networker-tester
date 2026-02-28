@@ -55,6 +55,7 @@ pub async fn run_with_shutdown(
     let http_addr = SocketAddr::from(([0, 0, 0, 0], cfg.http_port));
     let https_addr = SocketAddr::from(([0, 0, 0, 0], cfg.https_port));
 
+    info!("networker-endpoint v{}", env!("CARGO_PKG_VERSION"));
     info!("HTTP  → http://0.0.0.0:{}", cfg.http_port);
     info!(
         "HTTPS → https://0.0.0.0:{}  (self-signed, use --insecure)",
