@@ -76,6 +76,9 @@ pub struct RequestAttempt {
     /// Server-side timing metadata parsed from response headers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server_timing: Option<ServerTimingResult>,
+    /// UDP bulk transfer result (udpdownload / udpupload modes only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub udp_throughput: Option<UdpThroughputResult>,
 }
 
 impl RequestAttempt {
@@ -104,6 +107,10 @@ pub enum Protocol {
     WebDownload,
     /// POST to the target URL with a payload; measures HTTP timing + upload throughput.
     WebUpload,
+    /// UDP bulk download from the networker-endpoint UDP throughput server (port 9998).
+    UdpDownload,
+    /// UDP bulk upload to the networker-endpoint UDP throughput server (port 9998).
+    UdpUpload,
 }
 
 impl std::fmt::Display for Protocol {
@@ -118,6 +125,8 @@ impl std::fmt::Display for Protocol {
             Protocol::Upload => write!(f, "upload"),
             Protocol::WebDownload => write!(f, "webdownload"),
             Protocol::WebUpload => write!(f, "webupload"),
+            Protocol::UdpDownload => write!(f, "udpdownload"),
+            Protocol::UdpUpload => write!(f, "udpupload"),
         }
     }
 }
@@ -136,6 +145,8 @@ impl std::str::FromStr for Protocol {
             "upload" => Ok(Protocol::Upload),
             "webdownload" => Ok(Protocol::WebDownload),
             "webupload" => Ok(Protocol::WebUpload),
+            "udpdownload" => Ok(Protocol::UdpDownload),
+            "udpupload" => Ok(Protocol::UdpUpload),
             other => Err(format!("Unknown protocol: {other}")),
         }
     }
@@ -277,6 +288,28 @@ pub struct UdpResult {
     pub started_at: DateTime<Utc>,
     /// Per-probe RTT values (ms), None if probe was lost.
     pub probe_rtts_ms: Vec<Option<f64>>,
+}
+
+/// UDP bulk throughput transfer result (udpdownload / udpupload modes).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UdpThroughputResult {
+    pub remote_addr: String,
+    /// Requested transfer size in bytes.
+    pub payload_bytes: usize,
+    /// Number of datagrams sent by the sender (server for download, client for upload).
+    pub datagrams_sent: u32,
+    /// Number of datagrams received by the receiver.
+    pub datagrams_received: u32,
+    /// Bytes acknowledged by the server (from CMD_REPORT); upload mode only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes_acked: Option<usize>,
+    /// Datagram loss percentage (based on unique seq_num gaps).
+    pub loss_percent: f64,
+    /// Total transfer window in ms (from first data packet to CMD_DONE/CMD_REPORT).
+    pub transfer_ms: f64,
+    /// Measured throughput in MB/s; None if transfer_ms = 0.
+    pub throughput_mbps: Option<f64>,
+    pub started_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -432,6 +465,8 @@ mod tests {
             "upload",
             "webdownload",
             "webupload",
+            "udpdownload",
+            "udpupload",
         ] {
             let parsed = Protocol::from_str(p).unwrap();
             assert_eq!(parsed.to_string(), *p);
@@ -457,6 +492,7 @@ mod tests {
             error: None,
             retry_count: 0,
             server_timing: None,
+            udp_throughput: None,
         };
         let run = TestRun {
             run_id,

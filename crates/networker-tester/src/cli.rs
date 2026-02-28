@@ -14,9 +14,12 @@ pub struct Cli {
     pub target: String,
 
     // ── Modes ─────────────────────────────────────────────────────────────────
-    /// Comma-separated probe modes: tcp,http1,http2,http3,udp,download,upload,webdownload,webupload.
+    /// Comma-separated probe modes:
+    /// tcp,http1,http2,http3,udp,download,upload,webdownload,webupload,udpdownload,udpupload.
     /// webdownload: GET target URL, measures HTTP timing + response body throughput.
     /// webupload: POST to target URL, measures HTTP timing + upload throughput (requires --payload-sizes).
+    /// udpdownload: UDP bulk download from networker-endpoint (requires --payload-sizes).
+    /// udpupload: UDP bulk upload to networker-endpoint (requires --payload-sizes).
     #[arg(long, value_delimiter = ',', default_value = "http1,http2,udp")]
     pub modes: Vec<String>,
 
@@ -48,6 +51,10 @@ pub struct Cli {
     /// UDP echo server port on the target host
     #[arg(long, default_value_t = 9999)]
     pub udp_port: u16,
+
+    /// UDP bulk throughput server port (for udpdownload / udpupload probes)
+    #[arg(long, default_value_t = 9998)]
+    pub udp_throughput_port: u16,
 
     /// Number of UDP probe packets per run
     #[arg(long, default_value_t = 10)]
@@ -189,6 +196,7 @@ mod tests {
         assert!(!cli.insecure);
         assert_eq!(cli.retries, 0);
         assert!(!cli.excel);
+        assert_eq!(cli.udp_throughput_port, 9998);
     }
 
     #[test]

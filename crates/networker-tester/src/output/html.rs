@@ -144,6 +144,8 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
         Protocol::Upload,
         Protocol::WebDownload,
         Protocol::WebUpload,
+        Protocol::UdpDownload,
+        Protocol::UdpUpload,
     ] {
         let rows: Vec<&RequestAttempt> = run
             .attempts
@@ -267,6 +269,79 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
                 ttfb = h.ttfb_ms,
                 total = h.total_duration_ms,
                 status = status_cell,
+            );
+        }
+        let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
+    }
+
+    // ── UDP Throughput results ────────────────────────────────────────────────
+    let udp_tp_rows: Vec<&RequestAttempt> = run
+        .attempts
+        .iter()
+        .filter(|a| {
+            matches!(a.protocol, Protocol::UdpDownload | Protocol::UdpUpload)
+                && a.udp_throughput.is_some()
+        })
+        .collect();
+    if !udp_tp_rows.is_empty() {
+        let _ = write!(
+            out,
+            r#"
+<section class="card">
+  <h2>UDP Throughput Results</h2>
+  <table>
+    <thead>
+      <tr><th>Run #</th><th>Mode</th><th>Payload</th><th>Sent</th><th>Recv</th>
+          <th>Loss %</th><th>Throughput (MB/s)</th><th>Transfer (ms)</th><th>Bytes Acked</th></tr>
+    </thead>
+    <tbody>
+"#
+        );
+        for a in &udp_tp_rows {
+            let u = a.udp_throughput.as_ref().unwrap();
+            let throughput = u
+                .throughput_mbps
+                .map(|m| format!("{m:.2}"))
+                .unwrap_or_else(|| "—".into());
+            let bytes_acked = u
+                .bytes_acked
+                .map(|b| format_bytes(b))
+                .unwrap_or_else(|| "—".into());
+            let _ = write!(
+                out,
+                r#"      <tr>
+        <td>{seq}</td>
+        <td>{proto}</td>
+        <td>{payload}</td>
+        <td>{sent}</td>
+        <td>{recv}</td>
+        <td class="{loss_cls}">{loss:.1}%</td>
+        <td class="{thr_cls}">{thr}</td>
+        <td>{xfer:.2}</td>
+        <td>{acked}</td>
+      </tr>
+"#,
+                seq = a.sequence_num,
+                proto = a.protocol,
+                payload = format_bytes(u.payload_bytes),
+                sent = u.datagrams_sent,
+                recv = u.datagrams_received,
+                loss = u.loss_percent,
+                loss_cls = if u.loss_percent > 5.0 {
+                    "warn"
+                } else if u.loss_percent == 0.0 {
+                    "ok"
+                } else {
+                    ""
+                },
+                thr_cls = if u.throughput_mbps.is_some() {
+                    "ok"
+                } else {
+                    "warn"
+                },
+                thr = throughput,
+                xfer = u.transfer_ms,
+                acked = bytes_acked,
             );
         }
         let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
@@ -601,6 +676,12 @@ fn append_attempt_row(out: &mut String, a: &RequestAttempt) {
             format!("{:.2}", h.total_duration_ms),
             ver,
         )
+    } else if let Some(ut) = &a.udp_throughput {
+        let thr = ut
+            .throughput_mbps
+            .map(|m| format!("{m:.2} MB/s ({})", format_bytes(ut.payload_bytes)))
+            .unwrap_or_else(|| format!("loss={:.1}%", ut.loss_percent));
+        ("—".into(), format!("{:.2}", ut.transfer_ms), thr)
     } else if let Some(u) = &a.udp {
         (
             "—".into(),
@@ -789,6 +870,7 @@ mod tests {
                 error: None,
                 retry_count: 0,
                 server_timing: None,
+                udp_throughput: None,
             }],
         }
     }

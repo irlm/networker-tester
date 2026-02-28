@@ -1,5 +1,6 @@
 mod routes;
 mod udp_echo;
+mod udp_throughput;
 
 use anyhow::Context;
 use axum_server::tls_rustls::RustlsConfig;
@@ -17,6 +18,8 @@ pub struct ServerConfig {
     pub http_port: u16,
     pub https_port: u16,
     pub udp_port: u16,
+    /// UDP bulk throughput server port (udpdownload / udpupload probes).
+    pub udp_throughput_port: u16,
 }
 
 impl Default for ServerConfig {
@@ -25,6 +28,7 @@ impl Default for ServerConfig {
             http_port: 8080,
             https_port: 8443,
             udp_port: 9999,
+            udp_throughput_port: 9998,
         }
     }
 }
@@ -56,12 +60,15 @@ pub async fn run_with_shutdown(
         "HTTPS → https://0.0.0.0:{}  (self-signed, use --insecure)",
         cfg.https_port
     );
-    info!("UDP   → 0.0.0.0:{}", cfg.udp_port);
+    info!("UDP echo       → 0.0.0.0:{}", cfg.udp_port);
+    info!("UDP throughput → 0.0.0.0:{}", cfg.udp_throughput_port);
 
     let router = build_router();
 
     // Spawn UDP echo
     let udp_handle = tokio::spawn(udp_echo::run_udp_echo(cfg.udp_port));
+    // Spawn UDP throughput server
+    let udp_tp_handle = tokio::spawn(udp_throughput::run_udp_throughput(cfg.udp_throughput_port));
 
     // HTTP server
     let http_router = router.clone();
@@ -85,6 +92,7 @@ pub async fn run_with_shutdown(
     http_handle.abort();
     https_handle.abort();
     udp_handle.abort();
+    udp_tp_handle.abort();
 
     Ok(())
 }

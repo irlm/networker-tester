@@ -110,6 +110,7 @@ pub async fn run_probe(
             }),
             retry_count: 0,
             server_timing: None,
+            udp_throughput: None,
         },
     }
 }
@@ -278,6 +279,7 @@ async fn run_http_or_tcp(
             error: None,
             retry_count: 0,
             server_timing: None,
+            udp_throughput: None,
         };
     }
 
@@ -413,6 +415,7 @@ async fn run_http_or_tcp(
             error: None,
             retry_count: 0,
             server_timing,
+            udp_throughput: None,
         },
         Err(e) => {
             warn!("HTTP request failed: {e}");
@@ -808,6 +811,7 @@ fn failed_attempt(
         }),
         retry_count: 0,
         server_timing: None,
+        udp_throughput: None,
     }
 }
 

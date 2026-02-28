@@ -20,6 +20,10 @@ struct Cli {
     /// UDP echo port
     #[arg(long, default_value_t = 9999)]
     udp_port: u16,
+
+    /// UDP bulk throughput server port (for udpdownload / udpupload probes)
+    #[arg(long, default_value_t = 9998)]
+    udp_throughput_port: u16,
 }
 
 #[tokio::main]
@@ -35,6 +39,7 @@ async fn main() -> anyhow::Result<()> {
         http_port: cli.http_port,
         https_port: cli.https_port,
         udp_port: cli.udp_port,
+        udp_throughput_port: cli.udp_throughput_port,
     };
 
     run(cfg).await

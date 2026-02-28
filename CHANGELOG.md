@@ -10,6 +10,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`udpdownload` probe mode** — bulk UDP download from `networker-endpoint`'s UDP throughput
+  server (default port 9998); measures datagrams sent/received, packet loss %, transfer window
+  ms, and throughput MB/s. Requires `--payload-sizes`.
+- **`udpupload` probe mode** — bulk UDP upload to `networker-endpoint`'s UDP throughput server;
+  server reports bytes actually received (CMD_REPORT) so client-side and server-side counts are
+  compared. Requires `--payload-sizes`.
+- **UDP throughput protocol** — new custom datagram protocol (`b"NWKT"` magic) over a separate
+  port. Control packets: CMD_DOWNLOAD, CMD_UPLOAD, CMD_DONE, CMD_ACK, CMD_REPORT. Data packets
+  have 8-byte header (seq_num + total_seqs) + up to 1400-byte payload.
+- **`UdpThroughputResult`** — new JSON field on `RequestAttempt`; stores remote_addr,
+  payload_bytes, datagrams_sent, datagrams_received, bytes_acked, loss_percent, transfer_ms,
+  throughput_mbps.
+- **HTML UDP Throughput section** — new card in the report showing all UDP throughput attempts
+  with loss %, throughput, and bytes-acked.
+- **Excel UDP Throughput sheet** — new sheet in the `.xlsx` report.
+- **`networker-endpoint --udp-throughput-port`** — new CLI flag (default 9998) for the bulk
+  throughput listener.
+- **`networker-tester --udp-throughput-port`** — new CLI flag (default 9998) matching the
+  endpoint default.
 - **`webdownload` probe mode** — GET the target URL as-is (no endpoint path rewriting),
   measures full HTTP phase timing (DNS, TCP, TLS, TTFB, Total) + response body throughput
   + TCP kernel stats. Works with any HTTP server, not just `networker-endpoint`.
