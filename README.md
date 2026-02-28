@@ -45,12 +45,12 @@ telemetry from user-mode code.
 
 Install the **tester** (diagnostic CLI client):
 ```bash
-curl -fsSL https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh | bash -s -- tester
+curl -fsSL https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh | bash -s -- tester
 ```
 
 Install the **endpoint** (target test server — run on the machine you want to probe):
 ```bash
-curl -fsSL https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh | bash -s -- endpoint
+curl -fsSL https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh | bash -s -- endpoint
 ```
 
 Or download and run locally:
@@ -63,7 +63,7 @@ bash install.sh endpoint
 
 Install the **tester**:
 ```powershell
-Invoke-RestMethod https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.ps1 | Invoke-Expression
+Invoke-RestMethod https://raw.githubusercontent.com/irlm/networker-tester/main/install.ps1 | Invoke-Expression
 ```
 
 Install the **endpoint**:
@@ -78,16 +78,18 @@ Install the **endpoint**:
 
 1. Verifies SSH access to GitHub (`ssh -T git@github.com`).
 2. Installs Rust via [rustup](https://rustup.rs/) if `cargo` is not already present.
-3. Runs `cargo install --git ssh://git@github.com/irlm/networker-tester --bin <binary> --locked`
+3. Runs `cargo install --git ssh://git@github.com/irlm/networker-tester <binary> --locked --force`
    to compile and install the binary from the private repository.
-4. Prints the installed path and a quick-start command.
+4. Prints the installed path and the installed version (e.g. `networker-tester 0.2.4`).
 
 Compilation takes 2–5 minutes on first run (all dependencies are downloaded and compiled).
-Subsequent installs or upgrades are faster because cargo caches compiled artifacts.
+Subsequent installs are faster because cargo caches compiled artifacts.
 
 ### Upgrading
 
-Re-run the same install command. `cargo install` replaces the binary in-place.
+Re-run the same install command — **on every machine** where the binary is used.
+The `--force` flag ensures the binary is always rebuilt from the latest commit, even
+when cargo's internal cache thinks the version is current.
 
 ---
 

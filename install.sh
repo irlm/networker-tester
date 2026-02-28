@@ -89,12 +89,17 @@ fi
 # </dev/null prevents cargo from reading the curl pipe for interactive prompts
 # (same reason as the ssh call above).
 info "Installing ${BINARY} (this compiles from source – may take a few minutes)..."
+# --force ensures the binary is always rebuilt and replaced, even when cargo's
+# git-SHA cache thinks the installed version is current.  Without --force, a
+# re-run of this script can silently keep a stale binary if the revision hash
+# matches the last cached build.
 CARGO_NET_GIT_FETCH_WITH_CLI=true \
-    cargo install --git "${REPO_SSH}" "${BINARY}" --locked </dev/null
+    cargo install --git "${REPO_SSH}" "${BINARY}" --locked --force </dev/null
 
 echo ""
 INSTALLED_PATH="${HOME}/.cargo/bin/${BINARY}"
-success "${BINARY} installed → ${INSTALLED_PATH}"
+INSTALLED_VER=$("${INSTALLED_PATH}" --version 2>/dev/null || echo "unknown")
+success "${BINARY} installed → ${INSTALLED_PATH}  (${INSTALLED_VER})"
 
 # ── PATH notice ───────────────────────────────────────────────────────────────
 # source inside the script only affects this subprocess — the user's interactive
