@@ -3,7 +3,9 @@
 /// The report embeds a minimal inline CSS for offline viewing and optionally
 /// adds a `<link rel="stylesheet">` for the external `report.css` file so
 /// operators can customise the look without editing generated HTML.
-use crate::metrics::{Protocol, RequestAttempt, TestRun};
+use crate::metrics::{
+    compute_stats, primary_metric_label, primary_metric_value, Protocol, RequestAttempt, TestRun,
+};
 use std::fmt::Write as FmtWrite;
 use std::path::Path;
 
@@ -158,6 +160,99 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
         append_proto_row(&mut out, proto, &rows);
     }
     let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
+
+    // ── Statistics summary ────────────────────────────────────────────────────
+    let all_protos = [
+        Protocol::Http1,
+        Protocol::Http2,
+        Protocol::Http3,
+        Protocol::Tcp,
+        Protocol::Udp,
+        Protocol::Download,
+        Protocol::Upload,
+        Protocol::WebDownload,
+        Protocol::WebUpload,
+        Protocol::UdpDownload,
+        Protocol::UdpUpload,
+    ];
+    // Collect per-protocol stats rows (only protocols that have data)
+    let stat_rows: Vec<_> = all_protos
+        .iter()
+        .filter_map(|proto| {
+            let attempts: Vec<&RequestAttempt> = run
+                .attempts
+                .iter()
+                .filter(|a| &a.protocol == proto)
+                .collect();
+            if attempts.is_empty() {
+                return None;
+            }
+            let total = attempts.len();
+            let success = attempts.iter().filter(|a| a.success).count();
+            let success_pct = success as f64 / total as f64 * 100.0;
+            let vals: Vec<f64> = attempts
+                .iter()
+                .filter_map(|a| primary_metric_value(a))
+                .collect();
+            let stats = compute_stats(&vals)?;
+            Some((proto, primary_metric_label(proto), stats, success_pct))
+        })
+        .collect();
+
+    if !stat_rows.is_empty() {
+        let _ = write!(
+            out,
+            r#"
+<section class="card">
+  <h2>Statistics Summary</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Protocol</th><th>Metric</th><th>N</th>
+        <th>Min</th><th>Mean</th><th>p50</th><th>p95</th><th>p99</th>
+        <th>Max</th><th>StdDev</th><th>Success %</th>
+      </tr>
+    </thead>
+    <tbody>
+"#
+        );
+        for (proto, label, s, success_pct) in &stat_rows {
+            let ok_cls = if *success_pct >= 100.0 {
+                "ok"
+            } else if *success_pct >= 80.0 {
+                "warn"
+            } else {
+                "err"
+            };
+            let _ = write!(
+                out,
+                r#"      <tr>
+        <td>{proto}</td>
+        <td>{label}</td>
+        <td>{count}</td>
+        <td>{min:.2}</td>
+        <td>{mean:.2}</td>
+        <td>{p50:.2}</td>
+        <td>{p95:.2}</td>
+        <td>{p99:.2}</td>
+        <td>{max:.2}</td>
+        <td>{stddev:.2}</td>
+        <td class="{ok_cls}">{pct:.0}%</td>
+      </tr>
+"#,
+                count = s.count,
+                min = s.min,
+                mean = s.mean,
+                p50 = s.p50,
+                p95 = s.p95,
+                p99 = s.p99,
+                max = s.max,
+                stddev = s.stddev,
+                pct = success_pct,
+            );
+        }
+        let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
+    }
 
     // ── UDP statistics ────────────────────────────────────────────────────────
     let udp_rows: Vec<&RequestAttempt> = run

@@ -2,7 +2,9 @@ use anyhow::Context;
 use chrono::Utc;
 use clap::Parser;
 use networker_tester::cli;
-use networker_tester::metrics::{Protocol, RequestAttempt, TestRun};
+use networker_tester::metrics::{
+    compute_stats, primary_metric_label, primary_metric_value, Protocol, RequestAttempt, TestRun,
+};
 use networker_tester::output::{excel, html, json, sql};
 use networker_tester::runner::{
     http::{run_probe, RunConfig},
@@ -521,6 +523,58 @@ fn print_summary(run: &TestRun) {
                     .or_else(|| a.udp_throughput.as_ref().map(|ut| ut.transfer_ms))
             }),
         );
+    }
+
+    // Per-protocol statistics (primary metric: ms for latency, MB/s for throughput)
+    let stat_protos = [
+        Protocol::Http1,
+        Protocol::Http2,
+        Protocol::Http3,
+        Protocol::Tcp,
+        Protocol::Udp,
+        Protocol::Download,
+        Protocol::Upload,
+        Protocol::WebDownload,
+        Protocol::WebUpload,
+        Protocol::UdpDownload,
+        Protocol::UdpUpload,
+    ];
+    let has_stats = stat_protos.iter().any(|p| {
+        run.attempts
+            .iter()
+            .filter(|a| &a.protocol == p)
+            .any(|a| primary_metric_value(a).is_some())
+    });
+    if has_stats {
+        println!();
+        println!(
+            " Protocol  │ Metric           │  N  │    Min   │   Mean   │   p50    │   p95    │   p99    │    Max   │  StdDev"
+        );
+        println!(
+            "───────────┼──────────────────┼─────┼──────────┼──────────┼──────────┼──────────┼──────────┼──────────┼─────────"
+        );
+        for proto in &stat_protos {
+            let vals: Vec<f64> = run
+                .attempts
+                .iter()
+                .filter(|a| &a.protocol == proto)
+                .filter_map(|a| primary_metric_value(a))
+                .collect();
+            if let Some(s) = compute_stats(&vals) {
+                let label = primary_metric_label(proto);
+                println!(
+                    " {proto:<9} │ {label:<16} │ {n:<3} │ {min:>8.2} │ {mean:>8.2} │ {p50:>8.2} │ {p95:>8.2} │ {p99:>8.2} │ {max:>8.2} │ {stddev:>7.2}",
+                    n = s.count,
+                    min = s.min,
+                    mean = s.mean,
+                    p50 = s.p50,
+                    p95 = s.p95,
+                    p99 = s.p99,
+                    max = s.max,
+                    stddev = s.stddev,
+                );
+            }
+        }
     }
 
     println!("══════════════════════════════════════════════\n");

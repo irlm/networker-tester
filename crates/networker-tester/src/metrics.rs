@@ -407,6 +407,98 @@ pub fn aggregate_udp_rtts(samples: &[Option<f64>]) -> RttStats {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Statistics aggregation
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Descriptive statistics for a series of floating-point measurements.
+#[derive(Debug, Clone)]
+pub struct Stats {
+    pub count: usize,
+    pub min: f64,
+    pub mean: f64,
+    pub p50: f64,
+    pub p95: f64,
+    pub p99: f64,
+    pub max: f64,
+    pub stddev: f64,
+}
+
+/// Compute summary statistics from a slice of `f64`.
+/// Returns `None` if `values` is empty.
+pub fn compute_stats(values: &[f64]) -> Option<Stats> {
+    if values.is_empty() {
+        return None;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let count = sorted.len();
+    let min = sorted[0];
+    let max = sorted[count - 1];
+    let mean = sorted.iter().sum::<f64>() / count as f64;
+    let p50 = percentile_from_sorted(&sorted, 50.0);
+    let p95 = percentile_from_sorted(&sorted, 95.0);
+    let p99 = percentile_from_sorted(&sorted, 99.0);
+    let variance = sorted.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / count as f64;
+    let stddev = variance.sqrt();
+    Some(Stats {
+        count,
+        min,
+        mean,
+        p50,
+        p95,
+        p99,
+        max,
+        stddev,
+    })
+}
+
+fn percentile_from_sorted(sorted: &[f64], p: f64) -> f64 {
+    let n = sorted.len();
+    if n == 1 {
+        return sorted[0];
+    }
+    let rank = p / 100.0 * (n - 1) as f64;
+    let lo = rank.floor() as usize;
+    let hi = rank.ceil() as usize;
+    let frac = rank - lo as f64;
+    sorted[lo] + frac * (sorted[hi] - sorted[lo])
+}
+
+/// Human-readable label for the primary metric used when computing statistics
+/// for a given protocol.
+pub fn primary_metric_label(proto: &Protocol) -> &'static str {
+    match proto {
+        Protocol::Http1 | Protocol::Http2 | Protocol::Http3 => "Total ms",
+        Protocol::Tcp => "Connect ms",
+        Protocol::Udp => "RTT avg ms",
+        Protocol::Download
+        | Protocol::Upload
+        | Protocol::WebDownload
+        | Protocol::WebUpload
+        | Protocol::UdpDownload
+        | Protocol::UdpUpload => "Throughput MB/s",
+    }
+}
+
+/// Extract the primary metric value from an attempt for statistics purposes.
+/// Returns `None` if the relevant sub-result is absent.
+pub fn primary_metric_value(a: &RequestAttempt) -> Option<f64> {
+    match a.protocol {
+        Protocol::Http1 | Protocol::Http2 | Protocol::Http3 => {
+            a.http.as_ref().map(|h| h.total_duration_ms)
+        }
+        Protocol::Tcp => a.tcp.as_ref().map(|t| t.connect_duration_ms),
+        Protocol::Udp => a.udp.as_ref().map(|u| u.rtt_avg_ms),
+        Protocol::Download | Protocol::Upload | Protocol::WebDownload | Protocol::WebUpload => {
+            a.http.as_ref().and_then(|h| h.throughput_mbps)
+        }
+        Protocol::UdpDownload | Protocol::UdpUpload => {
+            a.udp_throughput.as_ref().and_then(|ut| ut.throughput_mbps)
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -525,5 +617,40 @@ mod tests {
         let de: DnsResult = serde_json::from_str(&json).unwrap();
         assert_eq!(de.query_name, r.query_name);
         assert!((de.duration_ms - r.duration_ms).abs() < 1e-9);
+    }
+
+    #[test]
+    fn compute_stats_empty_returns_none() {
+        assert!(compute_stats(&[]).is_none());
+    }
+
+    #[test]
+    fn compute_stats_single_value() {
+        let s = compute_stats(&[7.0]).unwrap();
+        assert_eq!(s.count, 1);
+        assert!((s.min - 7.0).abs() < 1e-9);
+        assert!((s.max - 7.0).abs() < 1e-9);
+        assert!((s.mean - 7.0).abs() < 1e-9);
+        assert!((s.p50 - 7.0).abs() < 1e-9);
+        assert!((s.p95 - 7.0).abs() < 1e-9);
+        assert!((s.p99 - 7.0).abs() < 1e-9);
+        assert!((s.stddev - 0.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn compute_stats_known_values() {
+        // 1..=10: mean=5.5, stddev=sqrt(8.25)≈2.872, p50=5.5, p95=9.55, p99=9.91
+        let vals: Vec<f64> = (1..=10).map(|v| v as f64).collect();
+        let s = compute_stats(&vals).unwrap();
+        assert_eq!(s.count, 10);
+        assert!((s.min - 1.0).abs() < 1e-9);
+        assert!((s.max - 10.0).abs() < 1e-9);
+        assert!((s.mean - 5.5).abs() < 1e-9);
+        // p50: rank=4.5 → 5+0.5*(6-5)=5.5
+        assert!((s.p50 - 5.5).abs() < 1e-9);
+        // p95: rank=8.55 → 9+0.55*(10-9)=9.55
+        assert!((s.p95 - 9.55).abs() < 1e-9);
+        // stddev of 1..10: variance = (sum of (i-5.5)^2 for i in 1..10)/10 = 8.25
+        assert!((s.stddev - 8.25f64.sqrt()).abs() < 1e-9);
     }
 }
