@@ -9,7 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [0.3.0] – 2026-02-28 — Web probes, UDP throughput, statistics
+
+> Starting from this release every PR includes a version bump.
+> Standard [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`) is used:
+> new features → MINOR bump, bug fixes → PATCH bump.
+
 ### Fixed
+- **`webdownload` ignored `--payload-sizes`** — the mode previously ran once per cycle
+  and GETed the target URL as-is, returning whatever the server happened to send (e.g. 114 B
+  for a `/health` endpoint). `webdownload` now expands per payload size exactly like `download`,
+  and appends `?bytes=N` to the target URL so that any server that supports the parameter (such
+  as `networker-endpoint`'s `/download` route) will stream back the requested number of bytes.
+  The actual body bytes received are always used for the throughput calculation.
+  `--payload-sizes` is now required for `webdownload` (same as `download`).
 - **`webupload` absurd throughput when server ignores the request body** — generic targets
   (e.g. a `/health` endpoint) may respond immediately without draining the POST body, making
   `ttfb_ms` near-zero and the computed throughput physically impossible (e.g. 1.3M MB/s).
@@ -198,7 +213,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/irlm/networker-tester/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/irlm/networker-tester/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/irlm/networker-tester/compare/v0.2.5...v0.3.0
 [0.2.5]: https://github.com/irlm/networker-tester/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/irlm/networker-tester/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/irlm/networker-tester/compare/v0.2.2...v0.2.3
