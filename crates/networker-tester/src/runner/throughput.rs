@@ -14,29 +14,39 @@
 ///
 /// **Upload** — data flows client → server *before* the server responds.
 ///
-/// The transfer window is `max(server_recv_ms, total_duration_ms)`.
+/// The transfer window is `max(server_recv_ms, ttfb_ms)`.
 ///
-/// `server_recv_ms` comes from `Server-Timing: recv;dur=X` and measures how
-/// long the server's axum handler spent draining the request body **from the
-/// kernel receive buffer**.  On same-machine connections, all data may already
-/// be in the kernel buffer by the time the handler is invoked, so the drain
-/// completes at memory-copy speed (e.g. 0.124 ms for 1 GiB) — far faster than
-/// the actual wire transfer.  In that scenario `total_duration_ms` (the
-/// client's wall-clock time from HTTP start to full response) is the correct
-/// measurement, because `networker-endpoint` always drains before responding.
+/// ## Why `ttfb_ms` is the right client-side stopwatch
 ///
-/// Conversely, for endpoints that respond **before** finishing the body drain,
-/// `total_duration_ms` can be near-zero while `server_recv_ms` is the
-/// accurate value.
+/// `ttfb_ms` is measured in `http.rs` as follows:
+/// ```text
+/// t_sent = Instant::now()       // just before send_request()
+/// send_request(req).await       // writes headers + full body; blocks whenever
+///                               // the kernel TCP send buffer fills up
+/// ttfb_ms = t_sent.elapsed()    // fires when server sends response headers
+/// ```
+/// Because `networker-endpoint` only sends its response **after** draining the
+/// entire request body, the stopwatch spans: write headers → write body
+/// (blocking on the wire) → server drain → response RTT.  At Gigabit speed
+/// with a same-machine connection this is ~9 s for 1 GiB — the actual
+/// wire transfer time.
 ///
-/// Taking `max` of both picks the larger (more conservative) value, which is
-/// always the one that reflects real network transfer time:
+/// `total_duration_ms` additionally includes the time to read the server's JSON
+/// response body (~0.7 ms for 74 bytes).  That is download time, not upload
+/// time, so it is a noisier denominator even though the difference is tiny.
 ///
-///   same-machine / kernel-buffer case:  total ≫ server  → total wins  ✓
-///   old-style endpoint (respond early):  server ≫ total  → server wins  ✓
-///   typical remote endpoint:             both similar    → max ≈ total  ✓
+/// ## Why `max` is still needed
 ///
-///   transfer_ms = max(server_timing.recv_body_ms, total_duration_ms)
+/// Old-style endpoints respond **before** draining the request body.  In that
+/// case `ttfb_ms ≈ 0 ms` (response headers arrive instantly) while
+/// `server_recv_ms` (from `Server-Timing: recv;dur=X`) is the accurate value.
+/// Taking `max` of both covers every scenario:
+///
+///   our endpoint (drain-before-respond):  ttfb ≈ 9134ms, recv ≈ 0.124ms → ttfb wins   ✓
+///   old-style (respond-before-drain):     ttfb ≈ 0.2ms,  recv ≈ 9000ms  → recv wins   ✓
+///   generic (no Server-Timing header):    ttfb ≈ correct, recv = None   → ttfb used   ✓
+///
+///   transfer_ms = max(server_timing.recv_body_ms, ttfb_ms)
 use crate::metrics::{HttpResult, Protocol, RequestAttempt};
 use crate::runner::http::{run_probe, RunConfig};
 use uuid::Uuid;
@@ -140,17 +150,18 @@ fn patch_throughput(h: HttpResult, payload_bytes: usize) -> HttpResult {
 
 /// Compute and attach upload throughput to an `HttpResult`.
 ///
-/// Uses `max(server_recv_ms, h.total_duration_ms)` as the transfer window —
-/// see module-level documentation for why taking the maximum is correct.
-/// When `server_recv_ms` is absent, falls back to `h.total_duration_ms` alone.
+/// Uses `max(server_recv_ms, h.ttfb_ms)` as the transfer window —
+/// see module-level documentation for why `ttfb_ms` is the right stopwatch
+/// and why `max` is needed.  When `server_recv_ms` is absent, falls back to
+/// `h.ttfb_ms` alone.
 fn patch_upload_throughput(
     h: HttpResult,
     payload_bytes: usize,
     server_recv_ms: Option<f64>,
 ) -> HttpResult {
     let transfer_ms = match server_recv_ms {
-        Some(srv) => srv.max(h.total_duration_ms),
-        None => h.total_duration_ms,
+        Some(srv) => srv.max(h.ttfb_ms),
+        None => h.ttfb_ms,
     };
     let throughput_mbps = mbps(payload_bytes, transfer_ms);
     HttpResult {
@@ -350,10 +361,11 @@ mod tests {
     }
 
     #[test]
-    fn upload_total_duration_wins_when_larger_than_server_recv() {
-        // server_recv_ms (500ms) < total_duration_ms (1000ms) → max picks total.
+    fn upload_ttfb_wins_when_larger_than_server_recv() {
+        // Our endpoint (drain-before-respond): ttfb captures full upload time.
+        // server_recv_ms (500ms) < ttfb_ms (1000ms) → max picks ttfb.
         // 1 MiB / 1000ms = 1.0 MB/s.
-        let h = make_http_result(0.5, 1000.0);
+        let h = make_http_result(1000.0, 1000.7);
         let patched = patch_upload_throughput(h, 1024 * 1024, Some(500.0));
         let result = patched.throughput_mbps.expect("should have throughput");
         assert!(
@@ -363,10 +375,10 @@ mod tests {
     }
 
     #[test]
-    fn upload_server_recv_ms_wins_when_larger_than_total_duration() {
+    fn upload_server_recv_ms_wins_when_larger_than_ttfb() {
         // Old-style endpoint responds before draining:
-        //   client total_duration_ms ≈ 0.2ms  (near-zero; old formula → ~5M MB/s WRONG)
-        //   server recv_body_ms      = 9000ms  → max picks server → ~113 MB/s  ✓
+        //   ttfb_ms ≈ 0.2ms (server responded instantly; upload still in flight)
+        //   server recv_body_ms = 9000ms → max picks server → ~113 MB/s  ✓
         let h = make_http_result(0.2, 0.2);
         let patched = patch_upload_throughput(h, 1024 * 1024 * 1024, Some(9000.0));
         let result = patched.throughput_mbps.expect("should have throughput");
@@ -379,11 +391,13 @@ mod tests {
 
     #[test]
     fn upload_same_machine_kernel_buffer_case() {
-        // Same-machine Gigabit: kernel receive buffer is already full when handler
-        // runs, so server_recv_ms ≈ 0.124ms (memory-copy speed).
-        // Client total_duration_ms = 9134.7ms (actual Gigabit transfer time).
-        // max(0.124, 9134.7) = 9134.7ms → ~112 MB/s  ✓
-        let h = make_http_result(0.12, 9134.7);
+        // Same-machine Gigabit (e.g. 172.16.32.106 → 172.16.32.106):
+        //   - Data travels through the NIC driver at Gigabit speed (~9134ms for 1 GiB)
+        //   - hyper's send_request blocks until server responds → ttfb_ms ≈ 9134ms
+        //   - By the time the axum handler runs the kernel buffer is already full
+        //     → server_recv_ms ≈ 0.124ms (memory-copy speed — NOT wire speed)
+        //   - max(0.124, 9134.7) = 9134.7ms → ~112 MB/s  ✓
+        let h = make_http_result(9134.7, 9134.7); // ttfb ≈ total for uploads
         let patched = patch_upload_throughput(h, 1024 * 1024 * 1024, Some(0.124));
         let result = patched.throughput_mbps.expect("should have throughput");
         // Should be ~112 MB/s, not 8 million MB/s.
@@ -401,12 +415,13 @@ mod tests {
     }
 
     #[test]
-    fn upload_server_recv_ms_zero_falls_back_to_total() {
-        // server_recv_ms = 0 is invalid; max(0, 1000) = 1000ms → valid throughput.
-        let h = make_http_result(0.5, 1000.0);
+    fn upload_server_recv_ms_zero_falls_back_to_ttfb() {
+        // server_recv_ms = 0 is invalid; max(0, ttfb=1000ms) = 1000ms → 1.0 MB/s.
+        // In practice ttfb ≈ total for uploads (response body is tiny).
+        let h = make_http_result(1000.0, 1000.7);
         let result = patch_upload_throughput(h, 1024 * 1024, Some(0.0))
             .throughput_mbps
-            .expect("should fall back to total_duration_ms");
+            .expect("should fall back to ttfb_ms");
         assert!(
             (result - 1.0).abs() < 1e-9,
             "expected 1.0 MB/s, got {result}"
@@ -414,12 +429,12 @@ mod tests {
     }
 
     #[test]
-    fn upload_server_recv_ms_negative_falls_back_to_total() {
-        // server_recv_ms < 0 is invalid; max(-10, 1000) = 1000ms → valid throughput.
-        let h = make_http_result(0.5, 1000.0);
+    fn upload_server_recv_ms_negative_falls_back_to_ttfb() {
+        // server_recv_ms < 0 is invalid; max(-10, ttfb=1000ms) = 1000ms → 1.0 MB/s.
+        let h = make_http_result(1000.0, 1000.7);
         let result = patch_upload_throughput(h, 1024 * 1024, Some(-10.0))
             .throughput_mbps
-            .expect("should fall back to total_duration_ms");
+            .expect("should fall back to ttfb_ms");
         assert!(
             (result - 1.0).abs() < 1e-9,
             "expected 1.0 MB/s, got {result}"
@@ -431,9 +446,10 @@ mod tests {
     // ─────────────────────────────────────────────────────────────────────────
 
     #[test]
-    fn upload_falls_back_to_total_duration_without_server_timing() {
-        // Endpoint drains before responding → total_duration_ms is accurate.
-        let h = make_http_result(0.5, 1000.0);
+    fn upload_falls_back_to_ttfb_without_server_timing() {
+        // No Server-Timing header (generic endpoint); ttfb_ms is the stopwatch.
+        // ttfb ≈ total for uploads (response body is tiny).
+        let h = make_http_result(1000.0, 1000.7);
         let patched = patch_upload_throughput(h, 1024 * 1024, None);
         let result = patched.throughput_mbps.expect("should have throughput");
         assert!(
@@ -443,17 +459,9 @@ mod tests {
     }
 
     #[test]
-    fn upload_fallback_none_when_total_duration_is_zero() {
-        // No server timing and total = 0ms → undefined rate.
-        let h = make_http_result(0.0, 0.0);
-        assert!(patch_upload_throughput(h, 65536, None)
-            .throughput_mbps
-            .is_none());
-    }
-
-    #[test]
-    fn upload_fallback_none_when_total_duration_is_negative() {
-        let h = make_http_result(5.0, -1.0);
+    fn upload_fallback_none_when_ttfb_is_zero() {
+        // ttfb = 0ms with no server timing → undefined rate.
+        let h = make_http_result(0.0, 100.0);
         assert!(patch_upload_throughput(h, 65536, None)
             .throughput_mbps
             .is_none());
