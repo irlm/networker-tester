@@ -167,6 +167,7 @@ fn write_tcp_stats(
         "MSS bytes",
         "RTT ms",
         "RTT Var ms",
+        "Min RTT ms",
         "cwnd",
         "ssthresh",
         "Retransmits",
@@ -174,6 +175,8 @@ fn write_tcp_stats(
         "rcv_space",
         "segs_out",
         "segs_in",
+        "Delivery MB/s",
+        "Congestion",
     ];
     for (col, h) in headers.iter().enumerate() {
         ws.write_with_format(0, col as u16, *h, bold)?;
@@ -199,26 +202,35 @@ fn write_tcp_stats(
         if let Some(v) = t.rtt_variance_ms {
             ws.write_with_format(row, 7, v, num2)?;
         }
-        if let Some(v) = t.snd_cwnd {
-            ws.write_with_format(row, 8, v as f64, num0)?;
+        if let Some(v) = t.min_rtt_ms {
+            ws.write_with_format(row, 8, v, num2)?;
         }
-        if let Some(v) = t.snd_ssthresh {
+        if let Some(v) = t.snd_cwnd {
             ws.write_with_format(row, 9, v as f64, num0)?;
         }
-        if let Some(v) = t.retransmits {
+        if let Some(v) = t.snd_ssthresh {
             ws.write_with_format(row, 10, v as f64, num0)?;
         }
-        if let Some(v) = t.total_retrans {
+        if let Some(v) = t.retransmits {
             ws.write_with_format(row, 11, v as f64, num0)?;
         }
-        if let Some(v) = t.rcv_space {
+        if let Some(v) = t.total_retrans {
             ws.write_with_format(row, 12, v as f64, num0)?;
         }
-        if let Some(v) = t.segs_out {
+        if let Some(v) = t.rcv_space {
             ws.write_with_format(row, 13, v as f64, num0)?;
         }
-        if let Some(v) = t.segs_in {
+        if let Some(v) = t.segs_out {
             ws.write_with_format(row, 14, v as f64, num0)?;
+        }
+        if let Some(v) = t.segs_in {
+            ws.write_with_format(row, 15, v as f64, num0)?;
+        }
+        if let Some(v) = t.delivery_rate_bps {
+            ws.write_with_format(row, 16, v as f64 / 1_000_000.0, num2)?;
+        }
+        if let Some(v) = t.congestion_algorithm.as_deref() {
+            ws.write(row, 17, v)?;
         }
         row += 1;
     }
