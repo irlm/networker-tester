@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **`webupload` absurd throughput when server ignores the request body** — generic targets
+  (e.g. a `/health` endpoint) may respond immediately without draining the POST body, making
+  `ttfb_ms` near-zero and the computed throughput physically impossible (e.g. 1.3M MB/s).
+  `webupload` now uses a dedicated `patch_webupload_throughput` helper that (a) falls back to
+  `total_duration_ms` instead of `ttfb_ms` when no `Server-Timing: recv` header is present,
+  and (b) caps results at 100,000 MB/s (≈ 800 Gbps — physically impossible on any real link);
+  values above the cap are reported as `null`/`—` instead. Four new unit tests cover the
+  server-recv, fallback, implausible, and plausible cases.
 - **`webdownload`/`webupload` probes always failed** — `run_probe` in the HTTP runner only
   listed `Http1 | Http2 | Tcp | Download | Upload`; both web-probe variants fell through to the
   `other =>` error arm, returning "Protocol not handled by http runner" on every attempt.
