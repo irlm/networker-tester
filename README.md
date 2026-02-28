@@ -24,6 +24,7 @@ in the kernel or scattered across multiple tools.
 - [Quick Start](#quick-start)
 - [Probe Modes](#probe-modes)
 - [CLI Reference](#cli-reference)
+- [Configuration File](#configuration-file)
 - [Getting All Low-Level Metrics](#getting-all-low-level-metrics)
 - [Endpoint Reference](#endpoint-reference)
 - [Output Formats](#output-formats)
@@ -141,6 +142,13 @@ side-by-side and compare results. Use `webdownload`/`webupload` when you want a 
 
 ## CLI Reference
 
+### Config file
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--config` / `-c` | — | Path to a JSON config file (see [Configuration File](#configuration-file)) |
+| `--log-level` | — | `tracing` filter string (e.g. `"debug"`, `"info,tower_http=debug"`). Overrides `--verbose` and `RUST_LOG` |
+
 ### Targeting
 
 | Flag | Default | Description |
@@ -187,7 +195,7 @@ Size suffixes: `k` = KiB (×1024), `m` = MiB (×1024²), `g` = GiB (×1024³).
 | `--html-report` | `report.html` | HTML filename (relative to `--output-dir`) |
 | `--css` | `report.css` | CSS `<link>` href embedded in the HTML |
 | `--excel` | — | Write a `.xlsx` workbook with 8 sheets alongside JSON + HTML |
-| `--verbose` / `-v` | — | Enable debug logging |
+| `--verbose` / `-v` | — | Enable debug logging (equivalent to `--log-level debug`) |
 
 ### SQL Server
 
@@ -195,6 +203,67 @@ Size suffixes: `k` = KiB (×1024), `m` = MiB (×1024²), `g` = GiB (×1024³).
 |------|---------|-------------|
 | `--save-to-sql` | — | Insert results into SQL Server |
 | `--connection-string` | `$NETWORKER_SQL_CONN` | ADO.NET connection string |
+
+---
+
+## Configuration File
+
+Both binaries accept a JSON config file via `--config` / `-c`. Any key in the file can be
+overridden by the corresponding CLI flag.
+
+**Priority (highest → lowest):** CLI flag > JSON config key > `RUST_LOG` env / built-in default
+
+### tester.example.json
+
+```json
+{
+  "target": "http://localhost:8080/health",
+  "modes": ["http1", "http2", "udp"],
+  "runs": 3,
+  "concurrency": 1,
+  "timeout": 30,
+  "payload_sizes": [],
+  "udp_port": 9999,
+  "udp_throughput_port": 9998,
+  "udp_probes": 10,
+  "insecure": false,
+  "retries": 0,
+  "output_dir": "./output",
+  "html_report": "report.html",
+  "excel": false,
+  "save_to_sql": false
+}
+```
+
+### endpoint.example.json
+
+```json
+{
+  "http_port": 8080,
+  "https_port": 8443,
+  "udp_port": 9999,
+  "udp_throughput_port": 9998,
+  "log_level": "info"
+}
+```
+
+### Usage
+
+```bash
+# Run the tester with a saved config; override --runs from the command line
+networker-tester --config tester.example.json --runs 1
+
+# Start the endpoint on a non-default port with verbose HTTP logs
+echo '{"http_port":9090,"log_level":"info,tower_http=debug"}' > ep.json
+networker-endpoint --config ep.json
+
+# CLI flag still wins
+networker-endpoint --config ep.json --http-port 8080
+```
+
+Unknown JSON keys are silently ignored (forward-compatible for future releases).
+The `connection_string` key (tester) and `log_level` key (both) may be omitted — they
+default to `null` / the `RUST_LOG` env var.
 
 ---
 
@@ -383,14 +452,28 @@ drained.
 |------|----------|-------------|
 | `:9999` | UDP datagram | Reflects every packet back unchanged. Used by `--modes udp`. |
 
+### Endpoint CLI flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--config` / `-c` | — | Path to a JSON config file (see [Configuration File](#configuration-file)) |
+| `--http-port` | `8080` | HTTP (plain) listening port |
+| `--https-port` | `8443` | HTTPS (TLS) listening port |
+| `--udp-port` | `9999` | UDP echo listening port |
+| `--udp-throughput-port` | `9998` | UDP bulk throughput listening port |
+| `--log-level` | — | `tracing` filter string. Overrides `RUST_LOG` |
+
 ### Logging
 
 The endpoint uses [`tracing`](https://docs.rs/tracing) and logs to stdout.
-Log verbosity is controlled by the `RUST_LOG` environment variable:
+Log verbosity is controlled by `--log-level` or the `RUST_LOG` environment variable:
 
 ```bash
 # Default — INFO: version banner, listening addresses, one line per request/response
 ./networker-endpoint
+
+# Via --log-level flag (persists in config file; see below)
+./networker-endpoint --log-level info,tower_http=debug
 
 # Quiet — only warnings and errors
 RUST_LOG=warn ./networker-endpoint

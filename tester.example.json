@@ -1,0 +1,23 @@
+{
+  "target": "http://localhost:8080/health",
+  "modes": ["http1", "http2", "udp"],
+  "runs": 3,
+  "concurrency": 1,
+  "timeout": 30,
+  "payload_size": 0,
+  "payload_sizes": [],
+  "udp_port": 9999,
+  "udp_throughput_port": 9998,
+  "udp_probes": 10,
+  "connection_reuse": false,
+  "dns_enabled": true,
+  "ipv4_only": false,
+  "ipv6_only": false,
+  "no_proxy": false,
+  "insecure": false,
+  "retries": 0,
+  "output_dir": "./output",
+  "html_report": "report.html",
+  "excel": false,
+  "save_to_sql": false
+}

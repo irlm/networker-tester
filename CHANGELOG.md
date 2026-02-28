@@ -11,6 +11,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.4.0] – 2026-02-28 — JSON config file support
+
+### Added
+- **`--config` / `-c` flag (both binaries)** — accepts a path to a JSON config file. Any key
+  from the file can be overridden by a CLI flag (priority: CLI arg > JSON key > built-in default).
+- **`--log-level` flag (both binaries)** — set the `tracing` filter directly (e.g.
+  `"debug"`, `"info,tower_http=debug"`). Overrides `--verbose` (tester only) and `RUST_LOG`.
+- **`ConfigFile` / `ResolvedConfig` structs in `cli.rs`** — all previously hard-defaulted
+  tester fields are now `Option<T>` in the raw `Cli` struct; `Cli::resolve(Option<ConfigFile>)`
+  merges CLI + file + built-in defaults into a concrete `ResolvedConfig`.
+- **`validate()`, `parsed_modes()`, `parsed_payload_sizes()`** moved to `ResolvedConfig`;
+  `validate()` gains an explicit `ipv4_only && ipv6_only` conflict check (catches config-file
+  sourced conflicts not covered by clap's `conflicts_with`).
+- **`tester.example.json`** — repo-root example file showing every tester key with its default
+  value.
+- **`endpoint.example.json`** — repo-root example file showing every endpoint key with its
+  default value.
+- New unit tests: `resolved_defaults`, `config_file_overrides_defaults`,
+  `cli_overrides_config_file`.
+
+### Changed
+- `Cli` struct field types changed from concrete types with `default_value` annotations to
+  `Option<T>` (no observable behaviour change — defaults still apply via `resolve()`).
+- Existing tests `defaults_parse`, `validate_save_to_sql_without_conn_string_fails`, and
+  `payload_sizes_parsed_via_cli` updated to reflect the new raw/resolved split.
+- Workspace version bumped to `0.4.0` (MINOR — new feature).
+
+---
+
 ## [0.3.3] – 2026-02-28 — Fix RUST_LOG documentation
 
 ### Fixed
@@ -250,7 +279,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/irlm/networker-tester/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/irlm/networker-tester/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/irlm/networker-tester/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/irlm/networker-tester/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/irlm/networker-tester/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/irlm/networker-tester/compare/v0.3.0...v0.3.1
