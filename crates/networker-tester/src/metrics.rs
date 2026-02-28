@@ -480,6 +480,21 @@ pub fn primary_metric_label(proto: &Protocol) -> &'static str {
     }
 }
 
+/// Extracts payload bytes from an attempt (throughput protocols only).
+/// Returns None for non-throughput protocols and for payload == 0.
+pub fn attempt_payload_bytes(a: &RequestAttempt) -> Option<usize> {
+    a.http
+        .as_ref()
+        .map(|h| h.payload_bytes)
+        .filter(|&b| b > 0)
+        .or_else(|| {
+            a.udp_throughput
+                .as_ref()
+                .map(|ut| ut.payload_bytes)
+                .filter(|&b| b > 0)
+        })
+}
+
 /// Extract the primary metric value from an attempt for statistics purposes.
 /// Returns `None` if the relevant sub-result is absent.
 pub fn primary_metric_value(a: &RequestAttempt) -> Option<f64> {

@@ -11,6 +11,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.0] – 2026-02-28 — Payload-grouped stats + collapsible HTML sections
+
+### Added
+- **Payload-grouped statistics** — the terminal Statistics Summary and Averages tables now group
+  results by `(protocol, payload_size)` rather than by protocol alone. Running
+  `--modes download,upload --payload-sizes 64k,1m,4m` produces separate rows for
+  "download 64KiB", "download 1MiB", etc., each with their own N/Min/Mean/p50/p95/p99/Max/StdDev.
+- **`attempt_payload_bytes()`** — new public helper in `metrics.rs` that returns the payload
+  size for throughput attempts (`http.payload_bytes` or `udp_throughput.payload_bytes`),
+  `None` for latency-only probes.
+- **`fmt_bytes()` helper in `main.rs`** — formats byte counts as KiB/MiB/GiB for terminal output.
+- **Collapsible `<details>` sections in HTML report** (no JS — pure HTML5):
+  - **Throughput Results** — one `<details>` per `(proto, payload)` group; summary line shows
+    `N runs · avg X MB/s · ±stddev · min Y · max Z`. Expanded by default only when there is
+    exactly one group with ≤ 20 rows.
+  - **UDP Throughput Results** — same treatment; summary line includes average loss %.
+  - **All Attempts** — single collapsible block; summary shows succeeded/failed counts;
+    open by default when total attempts ≤ 20.
+  - **TCP Stats** — single collapsible block showing connection count; open by default when ≤ 20 rows.
+- **Inline CSS** and **`assets/report.css`** updated with `<details>`/`<summary>` styles
+  (`▶`/`▼` indicator, `.grp-lbl`, `.grp-meta` classes).
+
+### Changed
+- HTML Statistics Summary now emits one row per `(protocol, payload_size)` group, matching
+  the terminal output. The "Protocol" column value becomes e.g. "download 64 KiB".
+- Terminal averages table header widened from 9 → 16 chars to accommodate grouped labels.
+- Workspace version bumped to `0.5.0` (MINOR — new feature).
+
+---
+
 ## [0.4.0] – 2026-02-28 — JSON config file support
 
 ### Added
@@ -279,7 +309,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/irlm/networker-tester/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/irlm/networker-tester/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/irlm/networker-tester/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/irlm/networker-tester/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/irlm/networker-tester/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/irlm/networker-tester/compare/v0.3.1...v0.3.2

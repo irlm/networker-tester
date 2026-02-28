@@ -199,3 +199,21 @@ footer {
   margin-left: .5em;
   max-width: 80px;
 }
+
+/* ── Collapsible groups ───────────────────────────── */
+details { margin-bottom: .6rem; }
+details summary {
+  cursor: pointer; list-style: none; user-select: none;
+  padding: .45rem .75rem;
+  background: var(--color-th-bg);
+  color: var(--color-th-fg);
+  border-radius: var(--radius);
+  display: flex; align-items: center; gap: .8rem;
+  font-size: .88rem;
+}
+details summary::-webkit-details-marker { display: none; }
+details summary::before { content: "▶"; font-size: .7rem; flex-shrink: 0; }
+details[open] > summary::before { content: "▼"; }
+.grp-lbl { font-weight: 600; flex: 1; }
+.grp-meta { opacity: .7; font-family: var(--font-mono); font-size: .82rem; }
+details table { margin-top: .5rem; }
