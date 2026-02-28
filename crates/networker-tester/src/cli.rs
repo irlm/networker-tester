@@ -16,8 +16,10 @@ pub struct Cli {
     // ── Modes ─────────────────────────────────────────────────────────────────
     /// Comma-separated probe modes:
     /// tcp,http1,http2,http3,udp,download,upload,webdownload,webupload,udpdownload,udpupload.
-    /// webdownload: GET target URL, measures HTTP timing + response body throughput.
-    /// webupload: POST to target URL, measures HTTP timing + upload throughput (requires --payload-sizes).
+    /// webdownload: GET /download?bytes=N on the target host (path rewritten to /download),
+    ///   measures HTTP phase timing + response body throughput. Requires --payload-sizes.
+    /// webupload: POST /upload with N-byte body on the target host (path rewritten to /upload),
+    ///   measures HTTP phase timing + upload throughput. Requires --payload-sizes.
     /// udpdownload: UDP bulk download from networker-endpoint (requires --payload-sizes).
     /// udpupload: UDP bulk upload to networker-endpoint (requires --payload-sizes).
     #[arg(long, value_delimiter = ',', default_value = "http1,http2,udp")]

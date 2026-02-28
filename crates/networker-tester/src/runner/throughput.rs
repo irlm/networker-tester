@@ -1,4 +1,10 @@
-/// Throughput probes: download (GET /download?bytes=N) and upload (POST /upload with N-byte body).
+/// Throughput probes: download/webdownload (GET /download?bytes=N) and
+/// upload/webupload (POST /upload with N-byte body).
+///
+/// All four probes rewrite the target URL to `/download` or `/upload` so they
+/// work correctly regardless of what path the `--target` flag points at.
+/// The `web` variants differ only in their protocol label, enabling
+/// side-by-side comparison in reports.
 ///
 /// These are thin wrappers around `run_probe` that:
 ///  1. Rewrite the URL to point at the appropriate endpoint route.
@@ -55,16 +61,11 @@ use uuid::Uuid;
 // WebDownload probe
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// GET the target URL (optionally with `?bytes=N` appended) and measure the
-/// throughput of the response body.
+/// GET `/download?bytes=N` on the target host and measure response body throughput.
 ///
-/// Unlike `run_download_probe`, the **path is not rewritten** — this mode
-/// works with any HTTP server.  When `payload_bytes > 0` the parameter
-/// `bytes=<N>` is appended to the URL's query string so that servers which
-/// support it (e.g. networker-endpoint's `/download` route) will stream back
-/// exactly that many bytes.  The actual response body size is always used as
-/// the payload for the throughput calculation, so the result is honest even
-/// when the server ignores the hint.
+/// Rewrites the URL path to `/download` and sets `bytes=<N>` — identical
+/// URL construction to `run_download_probe`.  The protocol label in the result
+/// is `webdownload` so the two modes can be compared side-by-side in reports.
 pub async fn run_webdownload_probe(
     run_id: Uuid,
     sequence_num: u32,
@@ -72,18 +73,11 @@ pub async fn run_webdownload_probe(
     cfg: &ThroughputConfig,
 ) -> RequestAttempt {
     let mut target = cfg.base_url.clone();
-    if payload_bytes > 0 {
-        let existing = target.query().unwrap_or("").to_string();
-        let param = format!("bytes={payload_bytes}");
-        target.set_query(Some(&if existing.is_empty() {
-            param
-        } else {
-            format!("{existing}&{param}")
-        }));
-    }
+    target.set_path("/download");
+    target.set_query(Some(&format!("bytes={payload_bytes}")));
 
     let probe_cfg = RunConfig {
-        payload_size: 0, // GET request — body comes from the server
+        payload_size: 0, // GET — body comes from server
         ..cfg.run_cfg.clone()
     };
 
@@ -97,8 +91,6 @@ pub async fn run_webdownload_probe(
     .await;
 
     if let Some(h) = attempt.http.clone() {
-        // Always use actual body bytes for throughput — honest even if the
-        // server ignores the bytes= hint and returns something different.
         let body_size = h.body_size_bytes;
         attempt.http = Some(patch_throughput(h, body_size));
     }
@@ -109,16 +101,22 @@ pub async fn run_webdownload_probe(
 // WebUpload probe
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// POST a {payload_bytes}-byte body to the target URL as-is and measure upload speed.
+/// POST a `payload_bytes`-byte body to `/upload` on the target host and
+/// measure upload throughput.
 ///
-/// Unlike `run_upload_probe`, the URL is **not rewritten** — this mode works
-/// with any HTTP server.
+/// Rewrites the URL path to `/upload` — identical URL construction to
+/// `run_upload_probe`.  The protocol label in the result is `webupload` so
+/// the two modes can be compared side-by-side in reports.
 pub async fn run_webupload_probe(
     run_id: Uuid,
     sequence_num: u32,
     payload_bytes: usize,
     cfg: &ThroughputConfig,
 ) -> RequestAttempt {
+    let mut target = cfg.base_url.clone();
+    target.set_path("/upload");
+    target.set_query(None);
+
     let probe_cfg = RunConfig {
         payload_size: payload_bytes,
         ..cfg.run_cfg.clone()
@@ -128,7 +126,7 @@ pub async fn run_webupload_probe(
         run_id,
         sequence_num,
         Protocol::WebUpload,
-        &cfg.base_url,
+        &target,
         &probe_cfg,
     )
     .await;
