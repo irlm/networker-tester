@@ -4,7 +4,8 @@
 /// adds a `<link rel="stylesheet">` for the external `report.css` file so
 /// operators can customise the look without editing generated HTML.
 use crate::metrics::{
-    compute_stats, primary_metric_label, primary_metric_value, Protocol, RequestAttempt, TestRun,
+    attempt_payload_bytes, compute_stats, primary_metric_label, primary_metric_value, Protocol,
+    RequestAttempt, TestRun,
 };
 use std::fmt::Write as FmtWrite;
 use std::path::Path;
@@ -161,48 +162,68 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
     }
     let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
 
-    // ── Statistics summary ────────────────────────────────────────────────────
-    let all_protos = [
-        Protocol::Http1,
-        Protocol::Http2,
-        Protocol::Http3,
-        Protocol::Tcp,
-        Protocol::Udp,
-        Protocol::Download,
-        Protocol::Upload,
-        Protocol::WebDownload,
-        Protocol::WebUpload,
-        Protocol::UdpDownload,
-        Protocol::UdpUpload,
-    ];
-    // Collect per-protocol stats rows (only protocols that have data)
-    let stat_rows: Vec<_> = all_protos
-        .iter()
-        .filter_map(|proto| {
-            let attempts: Vec<&RequestAttempt> = run
-                .attempts
-                .iter()
-                .filter(|a| &a.protocol == proto)
-                .collect();
-            if attempts.is_empty() {
-                return None;
-            }
-            let total = attempts.len();
-            let success = attempts.iter().filter(|a| a.success).count();
-            let success_pct = success as f64 / total as f64 * 100.0;
-            let vals: Vec<f64> = attempts
-                .iter()
-                .filter_map(|a| primary_metric_value(a))
-                .collect();
-            let stats = compute_stats(&vals)?;
-            Some((proto, primary_metric_label(proto), stats, success_pct))
-        })
-        .collect();
+    // ── Statistics summary (grouped by proto + payload) ───────────────────────
+    {
+        use std::collections::BTreeSet;
+        let all_protos = [
+            Protocol::Http1,
+            Protocol::Http2,
+            Protocol::Http3,
+            Protocol::Tcp,
+            Protocol::Udp,
+            Protocol::Download,
+            Protocol::Upload,
+            Protocol::WebDownload,
+            Protocol::WebUpload,
+            Protocol::UdpDownload,
+            Protocol::UdpUpload,
+        ];
+        // Collect (proto, Option<payload>) groups in canonical order.
+        let stat_groups: Vec<(Protocol, Option<usize>)> = all_protos
+            .iter()
+            .flat_map(|proto| {
+                let payloads: BTreeSet<Option<usize>> = run
+                    .attempts
+                    .iter()
+                    .filter(|a| a.protocol == *proto)
+                    .map(attempt_payload_bytes)
+                    .collect();
+                payloads.into_iter().map(move |p| ((*proto).clone(), p))
+            })
+            .collect();
 
-    if !stat_rows.is_empty() {
-        let _ = write!(
-            out,
-            r#"
+        // Build rows: one per (proto, payload) pair that has stats data.
+        let stat_rows: Vec<_> = stat_groups
+            .iter()
+            .filter_map(|(proto, payload)| {
+                let attempts: Vec<&RequestAttempt> = run
+                    .attempts
+                    .iter()
+                    .filter(|a| &a.protocol == proto && attempt_payload_bytes(a) == *payload)
+                    .collect();
+                if attempts.is_empty() {
+                    return None;
+                }
+                let total = attempts.len();
+                let success = attempts.iter().filter(|a| a.success).count();
+                let success_pct = success as f64 / total as f64 * 100.0;
+                let vals: Vec<f64> = attempts
+                    .iter()
+                    .filter_map(|a| primary_metric_value(a))
+                    .collect();
+                let stats = compute_stats(&vals)?;
+                let label = match payload {
+                    None => proto.to_string(),
+                    Some(b) => format!("{proto} {}", format_bytes(*b)),
+                };
+                Some((label, primary_metric_label(proto), stats, success_pct))
+            })
+            .collect();
+
+        if !stat_rows.is_empty() {
+            let _ = write!(
+                out,
+                r#"
 <section class="card">
   <h2>Statistics Summary</h2>
   <table>
@@ -215,20 +236,20 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
     </thead>
     <tbody>
 "#
-        );
-        for (proto, label, s, success_pct) in &stat_rows {
-            let ok_cls = if *success_pct >= 100.0 {
-                "ok"
-            } else if *success_pct >= 80.0 {
-                "warn"
-            } else {
-                "err"
-            };
-            let _ = write!(
-                out,
-                r#"      <tr>
-        <td>{proto}</td>
+            );
+            for (label, metric, s, success_pct) in &stat_rows {
+                let ok_cls = if *success_pct >= 100.0 {
+                    "ok"
+                } else if *success_pct >= 80.0 {
+                    "warn"
+                } else {
+                    "err"
+                };
+                let _ = write!(
+                    out,
+                    r#"      <tr>
         <td>{label}</td>
+        <td>{metric}</td>
         <td>{count}</td>
         <td>{min:.2}</td>
         <td>{mean:.2}</td>
@@ -240,18 +261,19 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
         <td class="{ok_cls}">{pct:.0}%</td>
       </tr>
 "#,
-                count = s.count,
-                min = s.min,
-                mean = s.mean,
-                p50 = s.p50,
-                p95 = s.p95,
-                p99 = s.p99,
-                max = s.max,
-                stddev = s.stddev,
-                pct = success_pct,
-            );
+                    count = s.count,
+                    min = s.min,
+                    mean = s.mean,
+                    p50 = s.p50,
+                    p95 = s.p95,
+                    p99 = s.p99,
+                    max = s.max,
+                    stddev = s.stddev,
+                    pct = success_pct,
+                );
+            }
+            let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
         }
-        let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
     }
 
     // ── UDP statistics ────────────────────────────────────────────────────────
@@ -305,189 +327,380 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
         let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
     }
 
-    // ── Throughput results ────────────────────────────────────────────────────
-    let throughput_rows: Vec<&RequestAttempt> = run
-        .attempts
-        .iter()
-        .filter(|a| {
-            matches!(
-                a.protocol,
-                Protocol::Download | Protocol::Upload | Protocol::WebDownload | Protocol::WebUpload
-            ) && a.http.is_some()
-        })
-        .collect();
-    if !throughput_rows.is_empty() {
-        let _ = write!(
-            out,
-            r#"
-<section class="card">
-  <h2>Throughput Results</h2>
-  <table>
-    <thead>
-      <tr><th>Run #</th><th>Mode</th><th>Payload</th><th>Throughput (MB/s)</th>
-          <th>TTFB (ms)</th><th>Total (ms)</th><th>Status</th></tr>
-    </thead>
-    <tbody>
-"#
-        );
-        for a in &throughput_rows {
-            let h = a.http.as_ref().unwrap();
-            let throughput = h
-                .throughput_mbps
-                .map(|m| format!("{m:.2}"))
-                .unwrap_or_else(|| "—".into());
-            let status_cell = {
-                let cls = if h.status_code < 400 { "ok" } else { "err" };
-                format!(r#"<span class="{cls}">{}</span>"#, h.status_code)
-            };
-            let _ = write!(
+    // ── Throughput results (collapsible, grouped by proto+payload) ───────────
+    {
+        use std::collections::BTreeSet;
+        let throughput_rows: Vec<&RequestAttempt> = run
+            .attempts
+            .iter()
+            .filter(|a| {
+                matches!(
+                    a.protocol,
+                    Protocol::Download
+                        | Protocol::Upload
+                        | Protocol::WebDownload
+                        | Protocol::WebUpload
+                ) && a.http.is_some()
+            })
+            .collect();
+        if !throughput_rows.is_empty() {
+            let _ = writeln!(
                 out,
-                r#"      <tr>
-        <td>{seq}</td>
-        <td>{proto}</td>
-        <td>{payload}</td>
-        <td class="{thr_cls}">{thr}</td>
-        <td>{ttfb:.2}</td>
-        <td>{total:.2}</td>
-        <td>{status}</td>
-      </tr>
-"#,
-                seq = a.sequence_num,
-                proto = a.protocol,
-                payload = format_bytes(h.payload_bytes),
-                thr_cls = if h.throughput_mbps.is_some() {
-                    "ok"
-                } else {
-                    "warn"
-                },
-                thr = throughput,
-                ttfb = h.ttfb_ms,
-                total = h.total_duration_ms,
-                status = status_cell,
+                "\n<section class=\"card\">\n  <h2>Throughput Results</h2>"
             );
+
+            // Collect distinct (proto, payload_bytes) pairs in order.
+            let groups: Vec<(Protocol, usize)> = {
+                let mut seen = BTreeSet::new();
+                let protos_order = [
+                    Protocol::Download,
+                    Protocol::Upload,
+                    Protocol::WebDownload,
+                    Protocol::WebUpload,
+                ];
+                protos_order
+                    .iter()
+                    .flat_map(|proto| {
+                        let mut payloads: Vec<usize> = throughput_rows
+                            .iter()
+                            .filter(|a| &a.protocol == proto)
+                            .filter_map(|a| a.http.as_ref().map(|h| h.payload_bytes))
+                            .filter(|&b| b > 0)
+                            .collect::<BTreeSet<_>>()
+                            .into_iter()
+                            .collect();
+                        payloads.retain(|p| seen.insert((proto.to_string(), *p)));
+                        payloads
+                            .into_iter()
+                            .map(move |p| (proto.clone(), p))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect()
+            };
+
+            let single_small = groups.len() == 1
+                && throughput_rows
+                    .iter()
+                    .filter(|a| {
+                        groups
+                            .first()
+                            .map(|(p, b)| {
+                                &a.protocol == p
+                                    && a.http.as_ref().map(|h| h.payload_bytes) == Some(*b)
+                            })
+                            .unwrap_or(false)
+                    })
+                    .count()
+                    <= 20;
+
+            for (proto, payload_bytes) in &groups {
+                let group_rows: Vec<&&RequestAttempt> = throughput_rows
+                    .iter()
+                    .filter(|a| {
+                        &a.protocol == proto
+                            && a.http.as_ref().map(|h| h.payload_bytes) == Some(*payload_bytes)
+                    })
+                    .collect();
+                let n = group_rows.len();
+                let mbps_vals: Vec<f64> = group_rows
+                    .iter()
+                    .filter_map(|a| a.http.as_ref().and_then(|h| h.throughput_mbps))
+                    .collect();
+                let stats = compute_stats(&mbps_vals);
+                let summary_meta = if let Some(ref s) = stats {
+                    format!(
+                        "{n} runs · avg {avg:.1} MB/s · ±{sd:.1} · min {min:.1} · max {max:.1}",
+                        avg = s.mean,
+                        sd = s.stddev,
+                        min = s.min,
+                        max = s.max,
+                    )
+                } else {
+                    format!("{n} runs")
+                };
+                let grp_label = format!("{proto} {}", format_bytes(*payload_bytes));
+                let open_attr = if single_small { " open" } else { "" };
+                let _ = write!(
+                    out,
+                    r#"  <details{open}>
+    <summary><span class="grp-lbl">{lbl}</span><span class="grp-meta">{meta}</span></summary>
+    <table>
+      <thead>
+        <tr><th>Run #</th><th>Mode</th><th>Payload</th><th>Throughput (MB/s)</th>
+            <th>TTFB (ms)</th><th>Total (ms)</th><th>Status</th></tr>
+      </thead>
+      <tbody>
+"#,
+                    open = open_attr,
+                    lbl = escape_html(&grp_label),
+                    meta = escape_html(&summary_meta),
+                );
+                for a in &group_rows {
+                    let h = a.http.as_ref().unwrap();
+                    let throughput = h
+                        .throughput_mbps
+                        .map(|m| format!("{m:.2}"))
+                        .unwrap_or_else(|| "—".into());
+                    let status_cell = {
+                        let cls = if h.status_code < 400 { "ok" } else { "err" };
+                        format!(r#"<span class="{cls}">{}</span>"#, h.status_code)
+                    };
+                    let _ = write!(
+                        out,
+                        r#"        <tr>
+          <td>{seq}</td>
+          <td>{proto}</td>
+          <td>{payload}</td>
+          <td class="{thr_cls}">{thr}</td>
+          <td>{ttfb:.2}</td>
+          <td>{total:.2}</td>
+          <td>{status}</td>
+        </tr>
+"#,
+                        seq = a.sequence_num,
+                        proto = a.protocol,
+                        payload = format_bytes(h.payload_bytes),
+                        thr_cls = if h.throughput_mbps.is_some() {
+                            "ok"
+                        } else {
+                            "warn"
+                        },
+                        thr = throughput,
+                        ttfb = h.ttfb_ms,
+                        total = h.total_duration_ms,
+                        status = status_cell,
+                    );
+                }
+                let _ = writeln!(out, "      </tbody>\n    </table>\n  </details>");
+            }
+            let _ = writeln!(out, "</section>");
         }
-        let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
     }
 
-    // ── UDP Throughput results ────────────────────────────────────────────────
-    let udp_tp_rows: Vec<&RequestAttempt> = run
-        .attempts
-        .iter()
-        .filter(|a| {
-            matches!(a.protocol, Protocol::UdpDownload | Protocol::UdpUpload)
-                && a.udp_throughput.is_some()
-        })
-        .collect();
-    if !udp_tp_rows.is_empty() {
-        let _ = write!(
-            out,
-            r#"
-<section class="card">
-  <h2>UDP Throughput Results</h2>
-  <table>
-    <thead>
-      <tr><th>Run #</th><th>Mode</th><th>Payload</th><th>Sent</th><th>Recv</th>
-          <th>Loss %</th><th>Throughput (MB/s)</th><th>Transfer (ms)</th><th>Bytes Acked</th></tr>
-    </thead>
-    <tbody>
-"#
-        );
-        for a in &udp_tp_rows {
-            let u = a.udp_throughput.as_ref().unwrap();
-            let throughput = u
-                .throughput_mbps
-                .map(|m| format!("{m:.2}"))
-                .unwrap_or_else(|| "—".into());
-            let bytes_acked = u
-                .bytes_acked
-                .map(format_bytes)
-                .unwrap_or_else(|| "—".into());
-            let _ = write!(
+    // ── UDP Throughput results (collapsible, grouped by proto+payload) ───────
+    {
+        use std::collections::BTreeSet;
+        let udp_tp_rows: Vec<&RequestAttempt> = run
+            .attempts
+            .iter()
+            .filter(|a| {
+                matches!(a.protocol, Protocol::UdpDownload | Protocol::UdpUpload)
+                    && a.udp_throughput.is_some()
+            })
+            .collect();
+        if !udp_tp_rows.is_empty() {
+            let _ = writeln!(
                 out,
-                r#"      <tr>
-        <td>{seq}</td>
-        <td>{proto}</td>
-        <td>{payload}</td>
-        <td>{sent}</td>
-        <td>{recv}</td>
-        <td class="{loss_cls}">{loss:.1}%</td>
-        <td class="{thr_cls}">{thr}</td>
-        <td>{xfer:.2}</td>
-        <td>{acked}</td>
-      </tr>
-"#,
-                seq = a.sequence_num,
-                proto = a.protocol,
-                payload = format_bytes(u.payload_bytes),
-                sent = u.datagrams_sent,
-                recv = u.datagrams_received,
-                loss = u.loss_percent,
-                loss_cls = if u.loss_percent > 5.0 {
-                    "warn"
-                } else if u.loss_percent == 0.0 {
-                    "ok"
-                } else {
-                    ""
-                },
-                thr_cls = if u.throughput_mbps.is_some() {
-                    "ok"
-                } else {
-                    "warn"
-                },
-                thr = throughput,
-                xfer = u.transfer_ms,
-                acked = bytes_acked,
+                "\n<section class=\"card\">\n  <h2>UDP Throughput Results</h2>"
             );
+
+            let groups: Vec<(Protocol, usize)> = {
+                let mut seen = BTreeSet::new();
+                [Protocol::UdpDownload, Protocol::UdpUpload]
+                    .iter()
+                    .flat_map(|proto| {
+                        let mut payloads: Vec<usize> = udp_tp_rows
+                            .iter()
+                            .filter(|a| &a.protocol == proto)
+                            .filter_map(|a| a.udp_throughput.as_ref().map(|u| u.payload_bytes))
+                            .filter(|&b| b > 0)
+                            .collect::<BTreeSet<_>>()
+                            .into_iter()
+                            .collect();
+                        payloads.retain(|p| seen.insert((proto.to_string(), *p)));
+                        payloads
+                            .into_iter()
+                            .map(move |p| (proto.clone(), p))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect()
+            };
+
+            let single_small = groups.len() == 1
+                && udp_tp_rows
+                    .iter()
+                    .filter(|a| {
+                        groups
+                            .first()
+                            .map(|(p, b)| {
+                                &a.protocol == p
+                                    && a.udp_throughput.as_ref().map(|u| u.payload_bytes)
+                                        == Some(*b)
+                            })
+                            .unwrap_or(false)
+                    })
+                    .count()
+                    <= 20;
+
+            for (proto, payload_bytes) in &groups {
+                let group_rows: Vec<&&RequestAttempt> = udp_tp_rows
+                    .iter()
+                    .filter(|a| {
+                        &a.protocol == proto
+                            && a.udp_throughput.as_ref().map(|u| u.payload_bytes)
+                                == Some(*payload_bytes)
+                    })
+                    .collect();
+                let n = group_rows.len();
+                let mbps_vals: Vec<f64> = group_rows
+                    .iter()
+                    .filter_map(|a| a.udp_throughput.as_ref().and_then(|u| u.throughput_mbps))
+                    .collect();
+                let avg_loss: f64 = group_rows
+                    .iter()
+                    .filter_map(|a| a.udp_throughput.as_ref().map(|u| u.loss_percent))
+                    .sum::<f64>()
+                    / n.max(1) as f64;
+                let stats = compute_stats(&mbps_vals);
+                let summary_meta = if let Some(ref s) = stats {
+                    format!(
+                        "{n} runs · avg {avg:.1} MB/s · ±{sd:.1} · loss {loss:.1}%",
+                        avg = s.mean,
+                        sd = s.stddev,
+                        loss = avg_loss,
+                    )
+                } else {
+                    format!("{n} runs · loss {avg_loss:.1}%")
+                };
+                let grp_label = format!("{proto} {}", format_bytes(*payload_bytes));
+                let open_attr = if single_small { " open" } else { "" };
+                let _ = write!(
+                    out,
+                    r#"  <details{open}>
+    <summary><span class="grp-lbl">{lbl}</span><span class="grp-meta">{meta}</span></summary>
+    <table>
+      <thead>
+        <tr><th>Run #</th><th>Mode</th><th>Payload</th><th>Sent</th><th>Recv</th>
+            <th>Loss %</th><th>Throughput (MB/s)</th><th>Transfer (ms)</th><th>Bytes Acked</th></tr>
+      </thead>
+      <tbody>
+"#,
+                    open = open_attr,
+                    lbl = escape_html(&grp_label),
+                    meta = escape_html(&summary_meta),
+                );
+                for a in &group_rows {
+                    let u = a.udp_throughput.as_ref().unwrap();
+                    let throughput = u
+                        .throughput_mbps
+                        .map(|m| format!("{m:.2}"))
+                        .unwrap_or_else(|| "—".into());
+                    let bytes_acked = u
+                        .bytes_acked
+                        .map(format_bytes)
+                        .unwrap_or_else(|| "—".into());
+                    let _ = write!(
+                        out,
+                        r#"        <tr>
+          <td>{seq}</td>
+          <td>{proto}</td>
+          <td>{payload}</td>
+          <td>{sent}</td>
+          <td>{recv}</td>
+          <td class="{loss_cls}">{loss:.1}%</td>
+          <td class="{thr_cls}">{thr}</td>
+          <td>{xfer:.2}</td>
+          <td>{acked}</td>
+        </tr>
+"#,
+                        seq = a.sequence_num,
+                        proto = a.protocol,
+                        payload = format_bytes(u.payload_bytes),
+                        sent = u.datagrams_sent,
+                        recv = u.datagrams_received,
+                        loss = u.loss_percent,
+                        loss_cls = if u.loss_percent > 5.0 {
+                            "warn"
+                        } else if u.loss_percent == 0.0 {
+                            "ok"
+                        } else {
+                            ""
+                        },
+                        thr_cls = if u.throughput_mbps.is_some() {
+                            "ok"
+                        } else {
+                            "warn"
+                        },
+                        thr = throughput,
+                        xfer = u.transfer_ms,
+                        acked = bytes_acked,
+                    );
+                }
+                let _ = writeln!(out, "      </tbody>\n    </table>\n  </details>");
+            }
+            let _ = writeln!(out, "</section>");
         }
-        let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
     }
 
     // ── Individual attempts ───────────────────────────────────────────────────
-    let _ = write!(
-        out,
-        r#"
+    {
+        let total_attempts = run.attempts.len();
+        let succeeded = run.success_count();
+        let failed = run.failure_count();
+        let open_attr = if total_attempts <= 20 { " open" } else { "" };
+        let summary_meta = format!("{succeeded} succeeded · {failed} failed");
+        let _ = write!(
+            out,
+            r#"
 <section class="card">
   <h2>All Attempts</h2>
-  <table>
-    <thead>
-      <tr>
-        <th>#</th><th>Protocol</th><th>Status</th>
-        <th>DNS (ms)</th><th>TCP (ms)</th><th>TLS (ms)</th>
-        <th>TTFB (ms)</th><th>Total (ms)</th>
-        <th>HTTP ver / UDP stats</th><th>Error</th>
-      </tr>
-    </thead>
-    <tbody>
-"#
-    );
+  <details{open}>
+    <summary>
+      <span class="grp-lbl">{n} attempts</span>
+      <span class="grp-meta">{meta}</span>
+    </summary>
+    <table>
+      <thead>
+        <tr>
+          <th>#</th><th>Protocol</th><th>Status</th>
+          <th>DNS (ms)</th><th>TCP (ms)</th><th>TLS (ms)</th>
+          <th>TTFB (ms)</th><th>Total (ms)</th>
+          <th>HTTP ver / UDP stats</th><th>Error</th>
+        </tr>
+      </thead>
+      <tbody>
+"#,
+            open = open_attr,
+            n = total_attempts,
+            meta = escape_html(&summary_meta),
+        );
 
-    for a in &run.attempts {
-        append_attempt_row(&mut out, a);
+        for a in &run.attempts {
+            append_attempt_row(&mut out, a);
+        }
+        let _ = writeln!(
+            out,
+            "      </tbody>\n    </table>\n  </details>\n</section>"
+        );
     }
-    let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
 
     // ── TCP kernel stats ─────────────────────────────────────────────────────
     let tcp_rows: Vec<&RequestAttempt> = run.attempts.iter().filter(|a| a.tcp.is_some()).collect();
     if !tcp_rows.is_empty() {
+        let open_attr = if tcp_rows.len() <= 20 { " open" } else { "" };
         let _ = write!(
             out,
             r#"
 <section class="card">
   <h2>TCP Stats</h2>
-  <table>
-    <thead>
-      <tr>
-        <th>#</th><th>Protocol</th><th>Local → Remote</th>
-        <th>Connect (ms)</th><th>MSS (B)</th>
-        <th>RTT (ms)</th><th>RTT Var (ms)</th><th>Min RTT (ms)</th>
-        <th>Cwnd (seg)</th><th>Ssthresh</th>
-        <th>Retrans</th><th>Total Retrans</th>
-        <th>Rcv Win (B)</th><th>Segs Out</th><th>Segs In</th>
-        <th>Delivery (MB/s)</th><th>Congestion</th>
-      </tr>
-    </thead>
-    <tbody>
-"#
+  <details{open}>
+    <summary><span class="grp-lbl">{n} connections</span></summary>
+    <table>
+      <thead>
+        <tr>
+          <th>#</th><th>Protocol</th><th>Local → Remote</th>
+          <th>Connect (ms)</th><th>MSS (B)</th>
+          <th>RTT (ms)</th><th>RTT Var (ms)</th><th>Min RTT (ms)</th>
+          <th>Cwnd (seg)</th><th>Ssthresh</th>
+          <th>Retrans</th><th>Total Retrans</th>
+          <th>Rcv Win (B)</th><th>Segs Out</th><th>Segs In</th>
+          <th>Delivery (MB/s)</th><th>Congestion</th>
+        </tr>
+      </thead>
+      <tbody>
+"#,
+            open = open_attr,
+            n = tcp_rows.len(),
         );
         for a in &tcp_rows {
             let t = a.tcp.as_ref().unwrap();
@@ -502,25 +715,25 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
                 .unwrap_or_else(|| "—".into());
             let _ = write!(
                 out,
-                r#"      <tr>
-        <td>{seq}</td>
-        <td>{proto}</td>
-        <td><code>{addrs}</code></td>
-        <td>{conn:.3}</td>
-        <td>{mss}</td>
-        <td>{rtt}</td>
-        <td>{rttvar}</td>
-        <td>{minrtt}</td>
-        <td>{cwnd}</td>
-        <td>{ssthresh}</td>
-        <td>{retrans}</td>
-        <td>{total_retrans}</td>
-        <td>{rcvwin}</td>
-        <td>{segsout}</td>
-        <td>{segsin}</td>
-        <td>{delivery}</td>
-        <td>{cong}</td>
-      </tr>
+                r#"        <tr>
+          <td>{seq}</td>
+          <td>{proto}</td>
+          <td><code>{addrs}</code></td>
+          <td>{conn:.3}</td>
+          <td>{mss}</td>
+          <td>{rtt}</td>
+          <td>{rttvar}</td>
+          <td>{minrtt}</td>
+          <td>{cwnd}</td>
+          <td>{ssthresh}</td>
+          <td>{retrans}</td>
+          <td>{total_retrans}</td>
+          <td>{rcvwin}</td>
+          <td>{segsout}</td>
+          <td>{segsin}</td>
+          <td>{delivery}</td>
+          <td>{cong}</td>
+        </tr>
 "#,
                 seq = a.sequence_num,
                 proto = a.protocol,
@@ -574,7 +787,10 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
                 cong = t.congestion_algorithm.as_deref().unwrap_or("—"),
             );
         }
-        let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
+        let _ = writeln!(
+            out,
+            "      </tbody>\n    </table>\n  </details>\n</section>"
+        );
     }
 
     // ── TLS info ─────────────────────────────────────────────────────────────
@@ -890,6 +1106,16 @@ const INLINE_CSS: &str = r#"
   a     { color: #1565c0; }
   footer { text-align: center; padding: 2rem; font-size: .8rem; color: #888; }
   .error-section h2 { color: #c62828; }
+  details{margin-bottom:.6rem}
+  details summary{cursor:pointer;padding:.45rem .75rem;background:#f0f0f0;
+    border-radius:4px;display:flex;align-items:center;gap:.8rem;
+    list-style:none;user-select:none;font-size:.88rem}
+  details summary::-webkit-details-marker{display:none}
+  details summary::before{content:"▶";font-size:.7rem;flex-shrink:0}
+  details[open]>summary::before{content:"▼"}
+  .grp-lbl{font-weight:600;flex:1}
+  .grp-meta{opacity:.7;font-family:monospace;font-size:.82rem}
+  details table{margin-top:.5rem}
 "#;
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -3,7 +3,8 @@ use chrono::Utc;
 use clap::Parser;
 use networker_tester::cli;
 use networker_tester::metrics::{
-    compute_stats, primary_metric_label, primary_metric_value, Protocol, RequestAttempt, TestRun,
+    attempt_payload_bytes, compute_stats, primary_metric_label, primary_metric_value, Protocol,
+    RequestAttempt, TestRun,
 };
 use networker_tester::output::{excel, html, json, sql};
 use networker_tester::runner::{
@@ -451,6 +452,18 @@ fn log_attempt(a: &networker_tester::metrics::RequestAttempt) {
     }
 }
 
+fn fmt_bytes(n: usize) -> String {
+    if n >= 1 << 30 {
+        format!("{:.1}GiB", n as f64 / (1u64 << 30) as f64)
+    } else if n >= 1 << 20 {
+        format!("{:.0}MiB", n as f64 / (1u64 << 20) as f64)
+    } else if n >= 1 << 10 {
+        format!("{:.0}KiB", n as f64 / (1u64 << 10) as f64)
+    } else {
+        format!("{n}B")
+    }
+}
+
 fn print_summary(run: &TestRun) {
     let ok = run.success_count();
     let fail = run.failure_count();
@@ -482,11 +495,9 @@ fn print_summary(run: &TestRun) {
         println!(" Duration       : {dur}ms total");
     }
 
-    // Per-protocol table
-    println!("\n Protocol  │ #   │ Avg DNS │ Avg TCP │ Avg TLS │ Avg TTFB │ Avg Total");
-    println!("───────────┼─────┼─────────┼─────────┼─────────┼──────────┼───────────");
-
-    for proto in &[
+    // Build (proto, Option<payload_bytes>) groups in canonical protocol order.
+    use std::collections::BTreeSet;
+    let ordered_protos = [
         Protocol::Http1,
         Protocol::Http2,
         Protocol::Http3,
@@ -498,17 +509,43 @@ fn print_summary(run: &TestRun) {
         Protocol::WebUpload,
         Protocol::UdpDownload,
         Protocol::UdpUpload,
-    ] {
+    ];
+    let stat_groups: Vec<(Protocol, Option<usize>)> = ordered_protos
+        .iter()
+        .flat_map(|proto| {
+            let payloads: BTreeSet<Option<usize>> = run
+                .attempts
+                .iter()
+                .filter(|a| &a.protocol == proto)
+                .map(attempt_payload_bytes)
+                .collect();
+            payloads.into_iter().map(move |p| (proto.clone(), p))
+        })
+        .collect();
+
+    let group_label = |proto: &Protocol, payload: Option<usize>| match payload {
+        None => proto.to_string(),
+        Some(b) => format!("{proto} {}", fmt_bytes(b)),
+    };
+
+    // Per-protocol/payload averages table
+    println!(
+        "\n {:<16} │ #   │ Avg DNS │ Avg TCP │ Avg TLS │ Avg TTFB │ Avg Total",
+        "Protocol"
+    );
+    println!("──────────────────┼─────┼─────────┼─────────┼─────────┼──────────┼───────────");
+
+    for (proto, payload) in &stat_groups {
         let rows: Vec<_> = run
             .attempts
             .iter()
-            .filter(|a| &a.protocol == proto)
+            .filter(|a| &a.protocol == proto && attempt_payload_bytes(a) == *payload)
             .collect();
         if rows.is_empty() {
             continue;
         }
 
-        let avg_f = |f: fn(&networker_tester::metrics::RequestAttempt) -> Option<f64>| -> String {
+        let avg_f = |f: fn(&RequestAttempt) -> Option<f64>| -> String {
             let vals: Vec<f64> = rows.iter().filter_map(|a| f(a)).collect();
             if vals.is_empty() {
                 "—".into()
@@ -518,7 +555,8 @@ fn print_summary(run: &TestRun) {
         };
 
         println!(
-            " {proto:<9} │ {n:<3} │ {dns:<7} │ {tcp:<7} │ {tls:<7} │ {ttfb:<8} │ {total}",
+            " {label:<16} │ {n:<3} │ {dns:<7} │ {tcp:<7} │ {tls:<7} │ {ttfb:<8} │ {total}",
+            label = group_label(proto, *payload),
             n = rows.len(),
             dns = avg_f(|a| a.dns.as_ref().map(|d| d.duration_ms)),
             tcp = avg_f(|a| a.tcp.as_ref().map(|t| t.connect_duration_ms)),
@@ -534,45 +572,34 @@ fn print_summary(run: &TestRun) {
         );
     }
 
-    // Per-protocol statistics (primary metric: ms for latency, MB/s for throughput)
-    let stat_protos = [
-        Protocol::Http1,
-        Protocol::Http2,
-        Protocol::Http3,
-        Protocol::Tcp,
-        Protocol::Udp,
-        Protocol::Download,
-        Protocol::Upload,
-        Protocol::WebDownload,
-        Protocol::WebUpload,
-        Protocol::UdpDownload,
-        Protocol::UdpUpload,
-    ];
-    let has_stats = stat_protos.iter().any(|p| {
+    // Per-group statistics (primary metric: ms for latency, MB/s for throughput)
+    let has_stats = stat_groups.iter().any(|(proto, payload)| {
         run.attempts
             .iter()
-            .filter(|a| &a.protocol == p)
+            .filter(|a| &a.protocol == proto && attempt_payload_bytes(a) == *payload)
             .any(|a| primary_metric_value(a).is_some())
     });
     if has_stats {
         println!();
         println!(
-            " Protocol  │ Metric           │  N  │    Min   │   Mean   │   p50    │   p95    │   p99    │    Max   │  StdDev"
+            " {:<16} │ Metric           │  N  │    Min   │   Mean   │   p50    │   p95    │   p99    │    Max   │  StdDev",
+            "Protocol"
         );
         println!(
-            "───────────┼──────────────────┼─────┼──────────┼──────────┼──────────┼──────────┼──────────┼──────────┼─────────"
+            "──────────────────┼──────────────────┼─────┼──────────┼──────────┼──────────┼──────────┼──────────┼──────────┼─────────"
         );
-        for proto in &stat_protos {
+        for (proto, payload) in &stat_groups {
             let vals: Vec<f64> = run
                 .attempts
                 .iter()
-                .filter(|a| &a.protocol == proto)
+                .filter(|a| &a.protocol == proto && attempt_payload_bytes(a) == *payload)
                 .filter_map(primary_metric_value)
                 .collect();
             if let Some(s) = compute_stats(&vals) {
                 let label = primary_metric_label(proto);
                 println!(
-                    " {proto:<9} │ {label:<16} │ {n:<3} │ {min:>8.2} │ {mean:>8.2} │ {p50:>8.2} │ {p95:>8.2} │ {p99:>8.2} │ {max:>8.2} │ {stddev:>7.2}",
+                    " {grp:<16} │ {label:<16} │ {n:<3} │ {min:>8.2} │ {mean:>8.2} │ {p50:>8.2} │ {p95:>8.2} │ {p99:>8.2} │ {max:>8.2} │ {stddev:>7.2}",
+                    grp = group_label(proto, *payload),
                     n = s.count,
                     min = s.min,
                     mean = s.mean,
