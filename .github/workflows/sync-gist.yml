@@ -1,0 +1,39 @@
+name: Sync install.sh to Gist
+
+# Keeps the public Gist (used as the curl install URL) in sync with the
+# install.sh in this private repo.  The Gist must be public so that users on
+# any machine can curl it without authentication.
+#
+# Required secret: GIST_TOKEN
+#   A GitHub Personal Access Token (classic) with the `gist` scope.
+#   Add it at: Settings → Secrets and variables → Actions → New repository secret
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - install.sh
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update Gist
+        env:
+          GIST_ID: 37a1af64b70ef6e58ea117839407f4f9
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+        run: |
+          content=$(cat install.sh)
+          payload=$(jq -n --arg content "$content" \
+            '{"files": {"install.sh": {"content": $content}}}')
+          curl -fsSL \
+            -X PATCH \
+            -H "Authorization: token ${GIST_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/json" \
+            -d "$payload" \
+            "https://api.github.com/gists/${GIST_ID}" \
+            | jq -r '.updated_at // "no updated_at in response"'
+          echo "Gist updated."
