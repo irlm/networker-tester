@@ -77,7 +77,9 @@ pub async fn run_probe(
         | Protocol::Http2
         | Protocol::Tcp
         | Protocol::Download
-        | Protocol::Upload => {
+        | Protocol::Upload
+        | Protocol::WebDownload
+        | Protocol::WebUpload => {
             run_http_or_tcp(
                 run_id,
                 attempt_id,
@@ -371,7 +373,11 @@ async fn run_http_or_tcp(
     let full_path = format!("{path}{query}");
 
     let http_result = match protocol {
-        Protocol::Http1 | Protocol::Download | Protocol::Upload => {
+        Protocol::Http1
+        | Protocol::Download
+        | Protocol::Upload
+        | Protocol::WebDownload
+        | Protocol::WebUpload => {
             send_http1(
                 io_box,
                 &host,
