@@ -60,9 +60,12 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let payload_sizes = cli.parsed_payload_sizes().context("--payload-sizes")?;
-    let has_throughput = modes
-        .iter()
-        .any(|m| matches!(m, Protocol::Download | Protocol::Upload | Protocol::WebUpload));
+    let has_throughput = modes.iter().any(|m| {
+        matches!(
+            m,
+            Protocol::Download | Protocol::Upload | Protocol::WebUpload
+        )
+    });
     if has_throughput && payload_sizes.is_empty() {
         anyhow::bail!(
             "--payload-sizes required for download/upload/webupload modes (e.g. --payload-sizes 4k,64k,1m)"
