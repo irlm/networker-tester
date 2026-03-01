@@ -21,7 +21,12 @@ pub struct Cli {
 
     // ── Modes ─────────────────────────────────────────────────────────────────
     /// Comma-separated probe modes:
-    /// tcp,http1,http2,http3,udp,download,upload,webdownload,webupload,udpdownload,udpupload,dns,tls.
+    /// tcp,http1,http2,http3,udp,download,upload,webdownload,webupload,udpdownload,udpupload,
+    /// dns,tls,native,curl.
+    /// native: DNS + TCP + platform TLS (SChannel/SecureTransport/OpenSSL) + HTTP/1.1.
+    ///   Requires --features native at compile time.
+    /// curl: DNS + TCP + TLS + HTTP via the system curl binary.
+    ///   Captures per-phase timing from curl --write-out.
     /// webdownload: GET /download?bytes=N on the target host (path rewritten to /download),
     ///   measures HTTP phase timing + response body throughput. Requires --payload-sizes.
     /// webupload: POST /upload with N-byte body on the target host (path rewritten to /upload),

@@ -116,6 +116,12 @@ pub enum Protocol {
     /// Standalone TLS probe — DNS + TCP + TLS handshake only, no HTTP request.
     /// Collects the full certificate chain, cipher suite, and negotiated ALPN.
     Tls,
+    /// Native-TLS probe — DNS + TCP + platform TLS (SChannel / SecureTransport / OpenSSL)
+    /// + HTTP/1.1. Reports which backend was used in `TlsResult.tls_backend`.
+    Native,
+    /// Curl probe — spawns the `curl` binary and captures per-phase timing from
+    /// `--write-out`. Maps to the same result structs as an http1 probe.
+    Curl,
 }
 
 impl std::fmt::Display for Protocol {
@@ -134,6 +140,8 @@ impl std::fmt::Display for Protocol {
             Protocol::UdpUpload => write!(f, "udpupload"),
             Protocol::Dns => write!(f, "dns"),
             Protocol::Tls => write!(f, "tls"),
+            Protocol::Native => write!(f, "native"),
+            Protocol::Curl => write!(f, "curl"),
         }
     }
 }
@@ -156,6 +164,8 @@ impl std::str::FromStr for Protocol {
             "udpupload" => Ok(Protocol::UdpUpload),
             "dns" => Ok(Protocol::Dns),
             "tls" => Ok(Protocol::Tls),
+            "native" => Ok(Protocol::Native),
+            "curl" => Ok(Protocol::Curl),
             other => Err(format!("Unknown protocol: {other}")),
         }
     }
@@ -278,6 +288,11 @@ pub struct TlsResult {
     /// Full certificate chain returned by the server (leaf cert first).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cert_chain: Vec<CertEntry>,
+    /// TLS backend that performed the handshake.
+    /// "rustls" for the default backend; "native/schannel", "native/secure-transport",
+    /// or "native/openssl" for the `native` probe mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls_backend: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -492,7 +507,9 @@ fn percentile_from_sorted(sorted: &[f64], p: f64) -> f64 {
 /// for a given protocol.
 pub fn primary_metric_label(proto: &Protocol) -> &'static str {
     match proto {
-        Protocol::Http1 | Protocol::Http2 | Protocol::Http3 => "Total ms",
+        Protocol::Http1 | Protocol::Http2 | Protocol::Http3 | Protocol::Native | Protocol::Curl => {
+            "Total ms"
+        }
         Protocol::Tcp => "Connect ms",
         Protocol::Udp => "RTT avg ms",
         Protocol::Download
@@ -525,7 +542,7 @@ pub fn attempt_payload_bytes(a: &RequestAttempt) -> Option<usize> {
 /// Returns `None` if the relevant sub-result is absent.
 pub fn primary_metric_value(a: &RequestAttempt) -> Option<f64> {
     match a.protocol {
-        Protocol::Http1 | Protocol::Http2 | Protocol::Http3 => {
+        Protocol::Http1 | Protocol::Http2 | Protocol::Http3 | Protocol::Native | Protocol::Curl => {
             a.http.as_ref().map(|h| h.total_duration_ms)
         }
         Protocol::Tcp => a.tcp.as_ref().map(|t| t.connect_duration_ms),
@@ -602,6 +619,8 @@ mod tests {
             "webupload",
             "udpdownload",
             "udpupload",
+            "native",
+            "curl",
         ] {
             let parsed = Protocol::from_str(p).unwrap();
             assert_eq!(parsed.to_string(), *p);

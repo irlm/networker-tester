@@ -1,6 +1,8 @@
+pub mod curl;
 pub mod dns;
 pub mod http;
 pub mod http3;
+pub mod native;
 pub mod socket_info;
 pub mod throughput;
 pub mod tls;

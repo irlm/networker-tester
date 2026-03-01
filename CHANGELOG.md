@@ -11,6 +11,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.7.0] – 2026-02-28 — native-TLS probe, curl probe, tls_backend field
+
+### Added
+- **`native` probe mode** — DNS + TCP + platform TLS + HTTP/1.1 using the OS TLS
+  stack: SChannel (Windows), SecureTransport (macOS), OpenSSL (Linux). Requires
+  recompiling with `--features native` (gates the `native-tls` / `tokio-native-tls`
+  deps to avoid mandatory OpenSSL headers on Linux CI). Records leaf certificate
+  info via `x509-parser`. TLS version and cipher suite are not exposed by
+  `native-tls` and are reported as `"unknown"`.
+- **`curl` probe mode** — spawns the system `curl` binary with `--write-out` timing
+  fields and maps the output to the same `DnsResult` / `TcpResult` / `TlsResult` /
+  `HttpResult` structs as an `http1` probe. Requires `curl` on `$PATH`; returns a
+  graceful error at runtime if not found. Supports `--insecure`, `--proxy`,
+  `--ca-bundle`, `--ipv4-only`, `--ipv6-only`, and `--timeout`.
+- **`TlsResult.tls_backend: Option<String>`** — new serde-default field that records
+  which TLS implementation performed the handshake: `"rustls"` for all existing
+  rustls-based probes (`http1`, `http2`, `http3`, `tls`), `"native/schannel"` /
+  `"native/secure-transport"` / `"native/openssl"` for the `native` probe, and
+  `"curl"` for the `curl` probe.
+- `native` and `curl` appear in the terminal summary tables, HTML Statistics
+  Summary, and HTML Timing Breakdown.
+
+### Changed
+- CLI `--modes` help text extended to document `native` and `curl`.
+- Workspace version bumped to `0.7.0` (MINOR — new features).
+
+### Fixed
+- `runner/tls.rs`: default port for non-HTTPS targets was incorrectly `443`; now `80`.
+
+---
+
 ## [0.6.0] – 2026-02-28 — DNS probe, TLS probe, proxy support, CA bundle
 
 ### Added
