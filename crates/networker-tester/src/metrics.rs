@@ -111,6 +111,11 @@ pub enum Protocol {
     UdpDownload,
     /// UDP bulk upload to the networker-endpoint UDP throughput server (port 9998).
     UdpUpload,
+    /// Standalone DNS resolution probe — resolves the target host and records timing without TCP.
+    Dns,
+    /// Standalone TLS probe — DNS + TCP + TLS handshake only, no HTTP request.
+    /// Collects the full certificate chain, cipher suite, and negotiated ALPN.
+    Tls,
 }
 
 impl std::fmt::Display for Protocol {
@@ -127,6 +132,8 @@ impl std::fmt::Display for Protocol {
             Protocol::WebUpload => write!(f, "webupload"),
             Protocol::UdpDownload => write!(f, "udpdownload"),
             Protocol::UdpUpload => write!(f, "udpupload"),
+            Protocol::Dns => write!(f, "dns"),
+            Protocol::Tls => write!(f, "tls"),
         }
     }
 }
@@ -147,6 +154,8 @@ impl std::str::FromStr for Protocol {
             "webupload" => Ok(Protocol::WebUpload),
             "udpdownload" => Ok(Protocol::UdpDownload),
             "udpupload" => Ok(Protocol::UdpUpload),
+            "dns" => Ok(Protocol::Dns),
+            "tls" => Ok(Protocol::Tls),
             other => Err(format!("Unknown protocol: {other}")),
         }
     }
@@ -243,6 +252,18 @@ pub struct ServerTimingResult {
     pub server_version: Option<String>,
 }
 
+/// A single certificate in the peer's certificate chain.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CertEntry {
+    pub subject: String,
+    pub issuer: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expiry: Option<DateTime<Utc>>,
+    /// Subject Alternative Names (DNS names and IP addresses).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sans: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TlsResult {
     pub protocol_version: String,
@@ -254,6 +275,9 @@ pub struct TlsResult {
     pub handshake_duration_ms: f64,
     pub started_at: DateTime<Utc>,
     pub success: bool,
+    /// Full certificate chain returned by the server (leaf cert first).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cert_chain: Vec<CertEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -477,6 +501,8 @@ pub fn primary_metric_label(proto: &Protocol) -> &'static str {
         | Protocol::WebUpload
         | Protocol::UdpDownload
         | Protocol::UdpUpload => "Throughput MB/s",
+        Protocol::Dns => "Resolve ms",
+        Protocol::Tls => "Handshake ms",
     }
 }
 
@@ -510,6 +536,8 @@ pub fn primary_metric_value(a: &RequestAttempt) -> Option<f64> {
         Protocol::UdpDownload | Protocol::UdpUpload => {
             a.udp_throughput.as_ref().and_then(|ut| ut.throughput_mbps)
         }
+        Protocol::Dns => a.dns.as_ref().map(|d| d.duration_ms),
+        Protocol::Tls => a.tls.as_ref().map(|t| t.handshake_duration_ms),
     }
 }
 

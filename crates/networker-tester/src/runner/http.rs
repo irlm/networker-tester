@@ -40,6 +40,13 @@ pub struct RunConfig {
     pub payload_size: usize,
     /// Path to probe (defaults to "/")
     pub path: String,
+    /// Path to a PEM CA bundle file to add to the trust store.
+    pub ca_bundle: Option<String>,
+    /// Explicit HTTP proxy URL (from --proxy flag).
+    /// None means use env vars (HTTP_PROXY / HTTPS_PROXY) unless no_proxy is true.
+    pub proxy: Option<String>,
+    /// When true, bypass all proxy settings (--no-proxy flag).
+    pub no_proxy: bool,
 }
 
 impl Default for RunConfig {
@@ -52,6 +59,9 @@ impl Default for RunConfig {
             insecure: false,
             payload_size: 0,
             path: "/".to_string(),
+            ca_bundle: None,
+            proxy: None,
+            no_proxy: false,
         }
     }
 }
@@ -152,13 +162,28 @@ async fn run_http_or_tcp(
     let default_port = if scheme == "https" { 443 } else { 80 };
     let port = target.port().unwrap_or(default_port);
 
+    // Determine effective proxy (None = direct connection).
+    let proxy_url = effective_proxy(scheme, &host, cfg);
+
     // ── 1. DNS ────────────────────────────────────────────────────────────────
+    // When routing through a proxy, resolve the proxy host; otherwise resolve
+    // the target host directly.
+    let (connect_host, connect_port) = if let Some(ref p) = proxy_url {
+        let ph = p.host_str().unwrap_or("").to_string();
+        let pp = p
+            .port()
+            .unwrap_or(if p.scheme() == "https" { 443 } else { 3128 });
+        (ph, pp)
+    } else {
+        (host.clone(), port)
+    };
+
     let (addr, dns_result): (SocketAddr, Option<DnsResult>) = if cfg.dns_enabled {
-        match dns_runner::resolve(&host, cfg.ipv4_only, cfg.ipv6_only).await {
+        match dns_runner::resolve(&connect_host, cfg.ipv4_only, cfg.ipv6_only).await {
             Ok((ips, r)) => {
                 let ip = pick_ip(&ips, cfg.ipv4_only);
-                debug!("DNS {} → {} ({:.1}ms)", host, ip, r.duration_ms);
-                (SocketAddr::new(ip, port), Some(r))
+                debug!("DNS {} → {} ({:.1}ms)", connect_host, ip, r.duration_ms);
+                (SocketAddr::new(ip, connect_port), Some(r))
             }
             Err(e) => {
                 return failed_attempt(
@@ -176,9 +201,8 @@ async fn run_http_or_tcp(
             }
         }
     } else {
-        // Treat host as a literal IP
-        match host.parse::<IpAddr>() {
-            Ok(ip) => (SocketAddr::new(ip, port), None),
+        match connect_host.parse::<IpAddr>() {
+            Ok(ip) => (SocketAddr::new(ip, connect_port), None),
             Err(_) => {
                 return failed_attempt(
                     run_id,
@@ -187,7 +211,7 @@ async fn run_http_or_tcp(
                     protocol,
                     started_at,
                     ErrorCategory::Config,
-                    format!("dns_enabled=false but '{host}' is not a valid IP"),
+                    format!("dns_enabled=false but '{connect_host}' is not a valid IP"),
                     None,
                     None,
                     None,
@@ -262,6 +286,50 @@ async fn run_http_or_tcp(
     };
     debug!("TCP connected to {addr} in {tcp_duration_ms:.1}ms (local={local_addr:?})");
 
+    // ── 2b. Proxy CONNECT tunnel (HTTPS through proxy only) ───────────────────
+    // For HTTPS targets: establish a transparent tunnel via CONNECT before TLS.
+    // For HTTP targets: no tunnel needed; we use an absolute-form URI instead.
+    let tcp_stream = if proxy_url.is_some() && scheme == "https" {
+        match tokio::time::timeout(
+            std::time::Duration::from_millis(cfg.timeout_ms),
+            connect_via_proxy_tunnel(tcp_stream, &host, port),
+        )
+        .await
+        {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => {
+                return failed_attempt(
+                    run_id,
+                    attempt_id,
+                    sequence_num,
+                    protocol,
+                    started_at,
+                    ErrorCategory::Tcp,
+                    format!("Proxy CONNECT failed: {e}"),
+                    None,
+                    dns_result,
+                    Some(tcp_result),
+                );
+            }
+            Err(_) => {
+                return failed_attempt(
+                    run_id,
+                    attempt_id,
+                    sequence_num,
+                    protocol,
+                    started_at,
+                    ErrorCategory::Timeout,
+                    format!("Proxy CONNECT timed out after {}ms", cfg.timeout_ms),
+                    None,
+                    dns_result,
+                    Some(tcp_result),
+                );
+            }
+        }
+    } else {
+        tcp_stream
+    };
+
     // TCP-only mode: record connect, return.
     if protocol == Protocol::Tcp {
         drop(tcp_stream);
@@ -290,7 +358,23 @@ async fn run_http_or_tcp(
         let tls_started_at = Utc::now();
         let t_tls = Instant::now();
 
-        let tls_config = build_tls_config(&protocol, cfg.insecure);
+        let tls_config = match build_tls_config(&protocol, cfg.insecure, cfg.ca_bundle.as_deref()) {
+            Ok(c) => c,
+            Err(e) => {
+                return failed_attempt(
+                    run_id,
+                    attempt_id,
+                    sequence_num,
+                    protocol,
+                    started_at,
+                    ErrorCategory::Tls,
+                    e.to_string(),
+                    None,
+                    dns_result,
+                    Some(tcp_result),
+                );
+            }
+        };
         let connector = TlsConnector::from(Arc::new(tls_config));
 
         let server_name = match ServerName::try_from(host.clone()) {
@@ -372,6 +456,15 @@ async fn run_http_or_tcp(
     let query = target.query().map(|q| format!("?{q}")).unwrap_or_default();
     let full_path = format!("{path}{query}");
 
+    // HTTP through proxy requires an absolute-form URI:
+    //   GET http://example.com:80/path HTTP/1.1
+    // HTTPS through proxy uses a tunnel so we keep the origin-form URI.
+    let request_uri = if proxy_url.is_some() && scheme != "https" {
+        format!("http://{}:{}{}", host, port, full_path)
+    } else {
+        full_path
+    };
+
     let http_result = match protocol {
         Protocol::Http1
         | Protocol::Download
@@ -381,7 +474,7 @@ async fn run_http_or_tcp(
             send_http1(
                 io_box,
                 &host,
-                &full_path,
+                &request_uri,
                 cfg,
                 http_started_at,
                 t_http,
@@ -393,7 +486,7 @@ async fn run_http_or_tcp(
             send_http2(
                 io_box,
                 &host,
-                &full_path,
+                &request_uri,
                 cfg,
                 http_started_at,
                 t_http,
@@ -681,8 +774,120 @@ fn parse_server_timing_header(value: &str) -> (Option<f64>, Option<f64>, Option<
     (recv, proc_ms, total)
 }
 
-fn build_tls_config(protocol: &Protocol, insecure: bool) -> rustls::ClientConfig {
-    // Both branches must produce a `rustls::ClientConfig`.
+// ─────────────────────────────────────────────────────────────────────────────
+// Proxy helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Returns the effective proxy URL for this request, or `None` for a direct
+/// connection.  Priority: `cfg.proxy` > `HTTPS_PROXY`/`HTTP_PROXY` > `ALL_PROXY`.
+/// `NO_PROXY` is respected when reading from environment variables (not when
+/// `cfg.proxy` is set explicitly by the user via `--proxy`).
+fn effective_proxy(scheme: &str, host: &str, cfg: &RunConfig) -> Option<url::Url> {
+    if cfg.no_proxy {
+        return None;
+    }
+
+    let raw = if let Some(p) = &cfg.proxy {
+        p.clone()
+    } else {
+        // Check NO_PROXY before reading proxy env vars.
+        let no_proxy = std::env::var("NO_PROXY")
+            .or_else(|_| std::env::var("no_proxy"))
+            .unwrap_or_default();
+        if is_no_proxy(host, &no_proxy) {
+            return None;
+        }
+
+        let env_val = if scheme == "https" {
+            std::env::var("HTTPS_PROXY")
+                .or_else(|_| std::env::var("https_proxy"))
+                .ok()
+        } else {
+            std::env::var("HTTP_PROXY")
+                .or_else(|_| std::env::var("http_proxy"))
+                .ok()
+        }
+        .or_else(|| {
+            std::env::var("ALL_PROXY")
+                .or_else(|_| std::env::var("all_proxy"))
+                .ok()
+        });
+
+        env_val?
+    };
+
+    url::Url::parse(&raw).ok()
+}
+
+/// Returns `true` when `host` matches an entry in a comma-separated `NO_PROXY`
+/// list (exact match or suffix match with a leading `.`).
+fn is_no_proxy(host: &str, no_proxy: &str) -> bool {
+    if no_proxy.is_empty() {
+        return false;
+    }
+    let host_lower = host.to_lowercase();
+    for entry in no_proxy.split(',') {
+        let entry = entry.trim().to_lowercase();
+        if entry.is_empty() {
+            continue;
+        }
+        if entry == "*" || host_lower == entry || host_lower.ends_with(&format!(".{entry}")) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Send an HTTP `CONNECT` request through an already-open TCP stream to
+/// establish a tunnel to `target_host:target_port`.  Returns the same stream
+/// once the proxy replies with `200`.
+async fn connect_via_proxy_tunnel(
+    mut stream: TcpStream,
+    target_host: &str,
+    target_port: u16,
+) -> anyhow::Result<TcpStream> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let req = format!(
+        "CONNECT {target_host}:{target_port} HTTP/1.1\r\n\
+         Host: {target_host}:{target_port}\r\n\r\n"
+    );
+    stream
+        .write_all(req.as_bytes())
+        .await
+        .map_err(|e| anyhow::anyhow!("Proxy CONNECT write error: {e}"))?;
+
+    // Read the response byte-by-byte until we see the end of headers.
+    let mut response = Vec::with_capacity(256);
+    loop {
+        let mut buf = [0u8; 1];
+        stream
+            .read_exact(&mut buf)
+            .await
+            .map_err(|e| anyhow::anyhow!("Proxy CONNECT response read error: {e}"))?;
+        response.push(buf[0]);
+        if response.ends_with(b"\r\n\r\n") {
+            break;
+        }
+        if response.len() > 8192 {
+            anyhow::bail!("Proxy CONNECT response too long (>8 KiB)");
+        }
+    }
+
+    let response_str = String::from_utf8_lossy(&response);
+    let status_line = response_str.lines().next().unwrap_or("");
+    if !status_line.contains("200") {
+        anyhow::bail!("Proxy CONNECT rejected: {status_line}");
+    }
+
+    Ok(stream)
+}
+
+fn build_tls_config(
+    protocol: &Protocol,
+    insecure: bool,
+    ca_bundle: Option<&str>,
+) -> anyhow::Result<rustls::ClientConfig> {
     let mut config: rustls::ClientConfig = if insecure {
         rustls::ClientConfig::builder()
             .dangerous()
@@ -698,6 +903,10 @@ fn build_tls_config(protocol: &Protocol, insecure: bool) -> rustls::ClientConfig
             let _ = root_store.add(cert);
         }
 
+        if let Some(bundle_path) = ca_bundle {
+            crate::runner::tls::load_ca_bundle(&mut root_store, bundle_path)?;
+        }
+
         rustls::ClientConfig::builder()
             .with_root_certificates(root_store)
             .with_no_client_auth()
@@ -709,7 +918,7 @@ fn build_tls_config(protocol: &Protocol, insecure: bool) -> rustls::ClientConfig
         _ => vec![b"http/1.1".to_vec()],
     };
 
-    config
+    Ok(config)
 }
 
 fn extract_tls_info(
@@ -751,6 +960,7 @@ fn extract_tls_info(
         handshake_duration_ms: duration_ms,
         started_at,
         success: true,
+        cert_chain: vec![],
     }
 }
 
@@ -889,15 +1099,45 @@ mod tests {
     #[test]
     fn tls_config_http2_uses_h2_alpn() {
         init_crypto();
-        let cfg = build_tls_config(&Protocol::Http2, false);
+        let cfg = build_tls_config(&Protocol::Http2, false, None).unwrap();
         assert_eq!(cfg.alpn_protocols, vec![b"h2".to_vec()]);
     }
 
     #[test]
     fn tls_config_http1_uses_http11_alpn() {
         init_crypto();
-        let cfg = build_tls_config(&Protocol::Http1, false);
+        let cfg = build_tls_config(&Protocol::Http1, false, None).unwrap();
         assert_eq!(cfg.alpn_protocols, vec![b"http/1.1".to_vec()]);
+    }
+
+    #[test]
+    fn no_proxy_bypasses_env_vars() {
+        let cfg = RunConfig {
+            no_proxy: true,
+            ..Default::default()
+        };
+        // Even if env var were set, no_proxy=true should return None.
+        assert!(effective_proxy("http", "example.com", &cfg).is_none());
+    }
+
+    #[test]
+    fn is_no_proxy_exact_match() {
+        assert!(is_no_proxy("example.com", "example.com,foo.com"));
+    }
+
+    #[test]
+    fn is_no_proxy_suffix_match() {
+        assert!(is_no_proxy("sub.example.com", "example.com"));
+    }
+
+    #[test]
+    fn is_no_proxy_no_match() {
+        assert!(!is_no_proxy("other.com", "example.com"));
+    }
+
+    #[test]
+    fn is_no_proxy_wildcard() {
+        assert!(is_no_proxy("anything.com", "*"));
     }
 
     #[test]
