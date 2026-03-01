@@ -45,8 +45,8 @@ mod stub {
             udp: None,
             error: Some(ErrorRecord {
                 category: ErrorCategory::Config,
-                message: "HTTP/3 support not compiled in. Rebuild with --features http3".into(),
-                detail: Some("cargo build --features http3".into()),
+                message: "HTTP/3 support was excluded at compile time (built with --no-default-features)".into(),
+                detail: Some("cargo build (without --no-default-features) to enable HTTP/3".into()),
                 occurred_at: Utc::now(),
             }),
             retry_count: 0,

@@ -69,14 +69,14 @@ jobs:
         run: cargo build --release --workspace
 
   # ──────────────────────────────────────────────────────────────────────────
-  test-http3:
-    name: Test HTTP/3 feature
+  test-no-default-features:
+    name: Build without default features (stub paths)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Build with http3 feature
-        run: cargo build -p networker-tester --features http3
+      - name: Build with no default features (verifies http3/pageload3 stubs compile)
+        run: cargo build -p networker-tester --no-default-features
 
   # ──────────────────────────────────────────────────────────────────────────
   # Optional: SQL Server integration.
