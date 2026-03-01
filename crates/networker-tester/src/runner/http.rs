@@ -27,6 +27,19 @@ use tracing::{debug, warn};
 use uuid::Uuid;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// CPU / context-switch helpers (Unix only)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Returns `(voluntary_csw, involuntary_csw)` for the current process.
+/// Uses `getrusage(RUSAGE_SELF)` to read `ru_nvcsw` and `ru_nivcsw`.
+#[cfg(unix)]
+pub(crate) fn get_rusage_csw() -> (i64, i64) {
+    let mut u: libc::rusage = unsafe { std::mem::zeroed() };
+    unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut u) };
+    (u.ru_nvcsw, u.ru_nivcsw)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Public configuration
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -141,6 +154,11 @@ async fn run_http_or_tcp(
     cfg: &RunConfig,
     started_at: chrono::DateTime<Utc>,
 ) -> RequestAttempt {
+    // CPU and context-switch measurement starts here (before DNS).
+    let cpu_start = cpu_time::ProcessTime::now();
+    #[cfg(unix)]
+    let (csw_v0, csw_i0) = get_rusage_csw();
+
     let host = match target.host_str() {
         Some(h) => h.to_string(),
         None => {
@@ -500,25 +518,35 @@ async fn run_http_or_tcp(
     };
 
     match http_result {
-        Ok((h, server_timing)) => RequestAttempt {
-            attempt_id,
-            run_id,
-            protocol,
-            sequence_num,
-            started_at,
-            finished_at: Some(Utc::now()),
-            success: h.status_code < 500,
-            dns: dns_result,
-            tcp: Some(tcp_result),
-            tls: tls_result,
-            http: Some(h),
-            udp: None,
-            error: None,
-            retry_count: 0,
-            server_timing,
-            udp_throughput: None,
-            page_load: None,
-        },
+        Ok((mut h, server_timing)) => {
+            // Measure CPU and context switches consumed over the full probe.
+            h.cpu_time_ms = Some(cpu_start.elapsed().as_secs_f64() * 1000.0);
+            #[cfg(unix)]
+            {
+                let (csw_v1, csw_i1) = get_rusage_csw();
+                h.csw_voluntary = Some((csw_v1 - csw_v0) as u64);
+                h.csw_involuntary = Some((csw_i1 - csw_i0) as u64);
+            }
+            RequestAttempt {
+                attempt_id,
+                run_id,
+                protocol,
+                sequence_num,
+                started_at,
+                finished_at: Some(Utc::now()),
+                success: h.status_code < 500,
+                dns: dns_result,
+                tcp: Some(tcp_result),
+                tls: tls_result,
+                http: Some(h),
+                udp: None,
+                error: None,
+                retry_count: 0,
+                server_timing,
+                udp_throughput: None,
+                page_load: None,
+            }
+        }
         Err(e) => {
             warn!("HTTP request failed: {e}");
             failed_attempt(
@@ -682,6 +710,10 @@ async fn collect_response(
         response_headers,
         payload_bytes: 0,
         throughput_mbps: None,
+        goodput_mbps: None,
+        cpu_time_ms: None,
+        csw_voluntary: None,
+        csw_involuntary: None,
     };
 
     Ok((http, server_timing))
@@ -730,28 +762,40 @@ fn parse_server_timing(
         diff_ms - ttfb_ms / 2.0
     });
 
-    let (recv_body_ms, processing_ms, total_server_ms) = headers
+    let parsed_st = headers
         .get("server-timing")
         .and_then(|v| v.to_str().ok())
         .map(parse_server_timing_header)
-        .unwrap_or((None, None, None));
+        .unwrap_or_default();
 
     Some(ServerTimingResult {
         request_id,
         server_timestamp,
         clock_skew_ms,
-        recv_body_ms,
-        processing_ms,
-        total_server_ms,
+        recv_body_ms: parsed_st.recv_ms,
+        processing_ms: parsed_st.proc_ms,
+        total_server_ms: parsed_st.total_ms,
         server_version,
+        srv_csw_voluntary: parsed_st.csw_v,
+        srv_csw_involuntary: parsed_st.csw_i,
     })
 }
 
-/// Parse `Server-Timing: recv;dur=X, proc;dur=Y, total;dur=Z` into a tuple.
-fn parse_server_timing_header(value: &str) -> (Option<f64>, Option<f64>, Option<f64>) {
-    let mut recv = None;
-    let mut proc_ms = None;
-    let mut total = None;
+/// Parsed fields from a `Server-Timing` header value.
+#[derive(Default)]
+struct ParsedServerTiming {
+    recv_ms: Option<f64>,
+    proc_ms: Option<f64>,
+    total_ms: Option<f64>,
+    /// Server-side voluntary context switches (csw-v;dur=N).
+    csw_v: Option<u64>,
+    /// Server-side involuntary context switches (csw-i;dur=N).
+    csw_i: Option<u64>,
+}
+
+/// Parse `Server-Timing: recv;dur=X, proc;dur=Y, total;dur=Z, csw-v;dur=A, csw-i;dur=B`.
+fn parse_server_timing_header(value: &str) -> ParsedServerTiming {
+    let mut parsed = ParsedServerTiming::default();
 
     for entry in value.split(',') {
         let entry = entry.trim();
@@ -767,14 +811,16 @@ fn parse_server_timing_header(value: &str) -> (Option<f64>, Option<f64>, Option<
         });
 
         match name.as_str() {
-            "recv" => recv = dur,
-            "proc" => proc_ms = dur,
-            "total" => total = dur,
+            "recv" => parsed.recv_ms = dur,
+            "proc" => parsed.proc_ms = dur,
+            "total" => parsed.total_ms = dur,
+            "csw-v" => parsed.csw_v = dur.map(|d| d as u64),
+            "csw-i" => parsed.csw_i = dur.map(|d| d as u64),
             _ => {}
         }
     }
 
-    (recv, proc_ms, total)
+    parsed
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1154,27 +1200,36 @@ mod tests {
 
     #[test]
     fn parse_server_timing_header_all_fields() {
-        let (recv, proc_ms, total) =
-            parse_server_timing_header("recv;dur=3.2, proc;dur=1.5, total;dur=10.0");
-        assert!((recv.unwrap() - 3.2).abs() < 1e-9);
-        assert!((proc_ms.unwrap() - 1.5).abs() < 1e-9);
-        assert!((total.unwrap() - 10.0).abs() < 1e-9);
+        let p = parse_server_timing_header("recv;dur=3.2, proc;dur=1.5, total;dur=10.0");
+        assert!((p.recv_ms.unwrap() - 3.2).abs() < 1e-9);
+        assert!((p.proc_ms.unwrap() - 1.5).abs() < 1e-9);
+        assert!((p.total_ms.unwrap() - 10.0).abs() < 1e-9);
+        assert!(p.csw_v.is_none());
+        assert!(p.csw_i.is_none());
     }
 
     #[test]
     fn parse_server_timing_header_partial() {
-        let (recv, proc_ms, total) = parse_server_timing_header("proc;dur=5.0");
-        assert!(recv.is_none());
-        assert!((proc_ms.unwrap() - 5.0).abs() < 1e-9);
-        assert!(total.is_none());
+        let p = parse_server_timing_header("proc;dur=5.0");
+        assert!(p.recv_ms.is_none());
+        assert!((p.proc_ms.unwrap() - 5.0).abs() < 1e-9);
+        assert!(p.total_ms.is_none());
     }
 
     #[test]
     fn parse_server_timing_header_empty() {
-        let (recv, proc_ms, total) = parse_server_timing_header("");
-        assert!(recv.is_none());
-        assert!(proc_ms.is_none());
-        assert!(total.is_none());
+        let p = parse_server_timing_header("");
+        assert!(p.recv_ms.is_none());
+        assert!(p.proc_ms.is_none());
+        assert!(p.total_ms.is_none());
+    }
+
+    #[test]
+    fn parse_server_timing_header_csw_fields() {
+        let p = parse_server_timing_header("recv;dur=5.0, csw-v;dur=12, csw-i;dur=3");
+        assert!((p.recv_ms.unwrap() - 5.0).abs() < 1e-9);
+        assert_eq!(p.csw_v, Some(12));
+        assert_eq!(p.csw_i, Some(3));
     }
 
     #[tokio::test]

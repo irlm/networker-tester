@@ -11,6 +11,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.11.0] – 2026-02-28 — CPU cost, goodput, context switches & TTFB visibility
+
+### Added
+- **CPU time on all HTTP probes** (`http1`, `http2`, `http3`) — `HttpResult.cpu_time_ms`
+  captures process CPU (user + system) consumed per probe using `cpu-time::ProcessTime`.
+  Enables a fair H1 vs H2 vs H3 comparison; QUIC/HTTP3 is expected to show the highest
+  CPU cost due to in-process TLS encryption.
+- **Goodput metric** — `HttpResult.goodput_mbps` = payload_bytes / full end-to-end delivery
+  time (DNS + TCP + TLS + total HTTP ms). Penalises connection-setup overhead, giving a
+  more complete picture than throughput alone (which only measures the body-transfer phase).
+  Set for all four throughput probe types: `download`, `upload`, `webdownload`, `webupload`.
+- **Client-side context switches** — `HttpResult.csw_voluntary` and `csw_involuntary`
+  capture the `getrusage(RUSAGE_SELF)` delta (`ru_nvcsw`, `ru_nivcsw`) over the full probe
+  duration (Unix only; `None` on Windows).
+- **Server-side context switches** — `networker-endpoint` now appends
+  `csw-v;dur=N, csw-i;dur=N` to the existing `Server-Timing` header on `/download` and
+  `/upload` responses. `ServerTimingResult.srv_csw_voluntary` /
+  `srv_csw_involuntary` expose these values in the tester's metrics.
+- **TTFB + TLS visibility in throughput terminal output** — `log_attempt()` for
+  `download`, `upload`, `webdownload`, `webupload` probes now shows:
+  `TLS:Xms` (when applicable), `TTFB:Xms`, `Goodput:X MB/s`, `CPU:Xms`,
+  `CSW:Xv/Xi` (client), `sCSW:Xv/Xi` (server).
+- **New HTML Throughput Results columns**: Goodput (MB/s), CPU (ms),
+  Client CSW (v/i), Server CSW (v/i) alongside the existing TTFB and Total columns.
+
+### Internal
+- `parse_server_timing_header()` refactored to return a named `ParsedServerTiming` struct
+  (replacing the previous 3-tuple) to accommodate the two new `csw-v`/`csw-i` fields.
+
+---
+
 ## [0.10.0] – 2026-02-28 — H1.1 keep-alive fix, TLS cost visibility, named presets, CPU measurement
 
 ### Added

@@ -243,6 +243,10 @@ pub async fn run_curl_probe(
         response_headers: vec![],
         payload_bytes: 0,
         throughput_mbps: None,
+        goodput_mbps: None,
+        cpu_time_ms: None,
+        csw_voluntary: None,
+        csw_involuntary: None,
     };
     let success = parsed.code > 0 && parsed.code < 400;
 

@@ -58,6 +58,27 @@ use crate::runner::http::{run_probe, RunConfig};
 use uuid::Uuid;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Goodput helper
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Sum of the connection-setup phases (DNS + TCP + TLS) for an attempt.
+/// Used as the overhead component of goodput: goodput = payload / (overhead + http_total).
+fn compute_overhead_ms(attempt: &RequestAttempt) -> f64 {
+    let dns = attempt.dns.as_ref().map(|d| d.duration_ms).unwrap_or(0.0);
+    let tcp = attempt
+        .tcp
+        .as_ref()
+        .map(|t| t.connect_duration_ms)
+        .unwrap_or(0.0);
+    let tls = attempt
+        .tls
+        .as_ref()
+        .map(|t| t.handshake_duration_ms)
+        .unwrap_or(0.0);
+    dns + tcp + tls
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // WebDownload probe
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -92,7 +113,13 @@ pub async fn run_webdownload_probe(
 
     if let Some(h) = attempt.http.clone() {
         let body_size = h.body_size_bytes;
-        attempt.http = Some(patch_throughput(h, body_size));
+        let mut patched = patch_throughput(h, body_size);
+        let overhead_ms = compute_overhead_ms(&attempt);
+        patched.goodput_mbps = mbps(
+            patched.payload_bytes,
+            overhead_ms + patched.total_duration_ms,
+        );
+        attempt.http = Some(patched);
     }
     attempt
 }
@@ -136,7 +163,13 @@ pub async fn run_webupload_probe(
             .server_timing
             .as_ref()
             .and_then(|st| st.recv_body_ms);
-        attempt.http = Some(patch_webupload_throughput(h, payload_bytes, server_recv_ms));
+        let mut patched = patch_webupload_throughput(h, payload_bytes, server_recv_ms);
+        let overhead_ms = compute_overhead_ms(&attempt);
+        patched.goodput_mbps = mbps(
+            patched.payload_bytes,
+            overhead_ms + patched.total_duration_ms,
+        );
+        attempt.http = Some(patched);
     }
     attempt
 }
@@ -181,7 +214,13 @@ pub async fn run_download_probe(
     .await;
 
     if let Some(h) = attempt.http.clone() {
-        attempt.http = Some(patch_throughput(h, payload_bytes));
+        let mut patched = patch_throughput(h, payload_bytes);
+        let overhead_ms = compute_overhead_ms(&attempt);
+        patched.goodput_mbps = mbps(
+            patched.payload_bytes,
+            overhead_ms + patched.total_duration_ms,
+        );
+        attempt.http = Some(patched);
     }
     attempt
 }
@@ -216,7 +255,13 @@ pub async fn run_upload_probe(
             .server_timing
             .as_ref()
             .and_then(|st| st.recv_body_ms);
-        attempt.http = Some(patch_upload_throughput(h, payload_bytes, server_recv_ms));
+        let mut patched = patch_upload_throughput(h, payload_bytes, server_recv_ms);
+        let overhead_ms = compute_overhead_ms(&attempt);
+        patched.goodput_mbps = mbps(
+            patched.payload_bytes,
+            overhead_ms + patched.total_duration_ms,
+        );
+        attempt.http = Some(patched);
     }
     attempt
 }
@@ -331,6 +376,10 @@ mod tests {
             response_headers: vec![],
             payload_bytes: 0,
             throughput_mbps: None,
+            goodput_mbps: None,
+            cpu_time_ms: None,
+            csw_voluntary: None,
+            csw_involuntary: None,
         }
     }
 
