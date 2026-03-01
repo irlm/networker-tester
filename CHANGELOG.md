@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.11.3] – 2026-03-01 — Coverage report as GitHub Actions artifact
+
+### Changed
+- CI coverage job now uploads an HTML report + `lcov.info` as a downloadable
+  GitHub Actions artifact (`coverage-report`, 30-day retention) instead of
+  pushing to Codecov. The coverage summary is also printed directly in the
+  CI log (`cargo llvm-cov report --summary-only`).
+
+---
+
 ## [0.11.2] – 2026-03-01 — Fix --all-features compile error in native probe
 
 ### Fixed
