@@ -403,8 +403,19 @@ fn log_attempt(a: &networker_tester::metrics::RequestAttempt) {
 
     match &a.protocol {
         Http1 | Http2 | Http3 | Tcp | Native | Curl => {
-            let dns_ms = a.dns.as_ref().map(|d| d.duration_ms).unwrap_or(0.0);
-            let tcp_ms = a.tcp.as_ref().map(|t| t.connect_duration_ms).unwrap_or(0.0);
+            // Only show DNS/TCP segments when the probe actually measured them.
+            // HTTP/3 sets both to None (QUIC has no separate DNS/TCP phase —
+            // the QUIC handshake is captured in TLS:Xms instead).
+            let dns = a
+                .dns
+                .as_ref()
+                .map(|d| format!(" DNS:{:.1}ms", d.duration_ms))
+                .unwrap_or_default();
+            let tcp = a
+                .tcp
+                .as_ref()
+                .map(|t| format!(" TCP:{:.1}ms", t.connect_duration_ms))
+                .unwrap_or_default();
             let tls_ms = a
                 .tls
                 .as_ref()
@@ -435,14 +446,18 @@ fn log_attempt(a: &networker_tester::metrics::RequestAttempt) {
                 (Some(v), Some(i)) => format!(" CSW:{v}v/{i}i"),
                 _ => String::new(),
             };
+            // For HTTP/3, TLS: is the QUIC handshake; label it accordingly.
+            let tls_label = if matches!(a.protocol, Http3) {
+                "QUIC"
+            } else {
+                "TLS"
+            };
 
             info!(
-                "{status} #{seq} [{proto}] {status_code} {ver} \
-                 DNS:{dns:.1}ms TCP:{tcp:.1}ms TLS:{tls:.1}ms TTFB:{ttfb:.1}ms Total:{total:.1}ms{cpu}{csw}{retry}",
+                "{status} #{seq} [{proto}] {status_code} {ver}{dns}{tcp} \
+                 {tls_label}:{tls:.1}ms TTFB:{ttfb:.1}ms Total:{total:.1}ms{cpu}{csw}{retry}",
                 seq = a.sequence_num,
                 proto = a.protocol,
-                dns = dns_ms,
-                tcp = tcp_ms,
                 tls = tls_ms,
                 ttfb = ttfb_ms,
                 total = total_ms,

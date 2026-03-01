@@ -82,9 +82,11 @@ request/response. Included in the default build.
 networker-tester --target https://example.com/health --modes http3 --runs 10 --insecure
 ```
 
-**Populated:** `dns`, `tcp` (QUIC), `tls` (QUIC handshake), `http`
-**Terminal:** same format; expect higher `CPU` than h1/h2 (QUIC encryption in userspace)
-**Note:** QUIC bypasses kernel TCP stack — CPU cost reflects full userspace TLS per-packet.
+**Populated:** `tls` (QUIC handshake, labeled `QUIC:` in terminal), `http` — `dns` and `tcp` are `None`
+because QUIC combines transport + crypto into a single UDP-based handshake.
+**Terminal:** `QUIC:Xms TTFB:Xms Total:Xms CPU:Xms CSW:Xv/Xi` — no `DNS:` or `TCP:` shown.
+**Note:** `QUIC:Xms` = full 1-RTT handshake including TLS 1.3. CPU is higher than H/1.1 or H/2
+because encryption runs in userspace per UDP datagram rather than in the kernel TCP stack.
 
 ---
 
