@@ -412,10 +412,23 @@ fn log_attempt(a: &networker_tester::metrics::RequestAttempt) {
                 .as_ref()
                 .map(|h| h.status_code.to_string())
                 .unwrap_or_default();
+            let cpu = a
+                .http
+                .as_ref()
+                .and_then(|h| h.cpu_time_ms)
+                .map(|c| format!(" CPU:{c:.1}ms"))
+                .unwrap_or_default();
+            let csw = match (
+                a.http.as_ref().and_then(|h| h.csw_voluntary),
+                a.http.as_ref().and_then(|h| h.csw_involuntary),
+            ) {
+                (Some(v), Some(i)) => format!(" CSW:{v}v/{i}i"),
+                _ => String::new(),
+            };
 
             info!(
                 "{status} #{seq} [{proto}] {status_code} {ver} \
-                 DNS:{dns:.1}ms TCP:{tcp:.1}ms TLS:{tls:.1}ms TTFB:{ttfb:.1}ms Total:{total:.1}ms{retry}",
+                 DNS:{dns:.1}ms TCP:{tcp:.1}ms TLS:{tls:.1}ms TTFB:{ttfb:.1}ms Total:{total:.1}ms{cpu}{csw}{retry}",
                 seq = a.sequence_num,
                 proto = a.protocol,
                 dns = dns_ms,
