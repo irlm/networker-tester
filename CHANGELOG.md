@@ -11,6 +11,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.6.0] – 2026-02-28 — DNS probe, TLS probe, proxy support, CA bundle
+
+### Added
+- **`dns` probe mode** — standalone DNS resolution probe (`--modes dns`); records
+  resolved IPs, query duration, and success state. No TCP or HTTP activity.
+- **`tls` probe mode** — standalone TLS handshake probe (`--modes tls`); performs
+  DNS + TCP connect + TLS handshake and records the full certificate chain (all
+  certs with Subject, Issuer, SANs, and expiry), negotiated cipher suite, TLS
+  version, and ALPN protocol. Advertises both `h2` and `http/1.1` in ALPN to
+  discover server preference without sending an HTTP request.
+- **`--proxy <url>`** — explicit HTTP proxy URL (e.g. `http://proxy.corp:3128`);
+  overrides `HTTP_PROXY`/`HTTPS_PROXY` env vars. For HTTPS targets, a CONNECT
+  tunnel is established through the proxy before TLS; for HTTP targets an
+  absolute-form URI is used.
+- **`--no-proxy`** — disable all proxy detection (both `--proxy` flag and
+  `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` env vars). Respects `NO_PROXY` /
+  `no_proxy` env var when reading proxy settings from the environment.
+- **`--ca-bundle <path>`** — path to a PEM-format CA certificate bundle to add
+  to the trust store; useful for corporate CAs not present in the OS store.
+  Supported by both HTTP/HTTPS probes and the standalone TLS probe.
+- **`CertEntry`** struct in `metrics.rs` — captures `subject`, `issuer`, `expiry`,
+  and `sans` (Subject Alternative Names) for each certificate in the chain.
+- **`cert_chain: Vec<CertEntry>`** field on `TlsResult` — populated by the
+  standalone TLS probe.
+- **`proxy` / `ca_bundle`** fields in `ConfigFile` / `ResolvedConfig` / `tester.example.json`.
+- Terminal progress logging for `dns` and `tls` protocols.
+- HTML and terminal summary tables now include `dns` and `tls` rows.
+
+### Changed
+- `RunConfig` gains `ca_bundle: Option<String>`, `proxy: Option<String>`, and
+  `no_proxy: bool` fields (all defaulting to `None`/`false`).
+- `build_tls_config()` in `runner/http.rs` now returns `anyhow::Result` and
+  accepts an optional CA bundle path.
+- Workspace version bumped to `0.6.0` (MINOR — new features).
+
+---
+
 ## [0.5.0] – 2026-02-28 — Payload-grouped stats + collapsible HTML sections
 
 ### Added

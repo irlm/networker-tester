@@ -21,7 +21,7 @@ pub struct Cli {
 
     // ── Modes ─────────────────────────────────────────────────────────────────
     /// Comma-separated probe modes:
-    /// tcp,http1,http2,http3,udp,download,upload,webdownload,webupload,udpdownload,udpupload.
+    /// tcp,http1,http2,http3,udp,download,upload,webdownload,webupload,udpdownload,udpupload,dns,tls.
     /// webdownload: GET /download?bytes=N on the target host (path rewritten to /download),
     ///   measures HTTP phase timing + response body throughput. Requires --payload-sizes.
     /// webupload: POST /upload with N-byte body on the target host (path rewritten to /upload),
@@ -85,9 +85,19 @@ pub struct Cli {
     #[arg(long, conflicts_with = "ipv4_only")]
     pub ipv6_only: bool,
 
-    /// Bypass any system proxy
+    /// Bypass any system proxy (disables HTTP_PROXY / HTTPS_PROXY env var detection)
     #[arg(long)]
     pub no_proxy: bool,
+
+    /// Explicit HTTP proxy URL (e.g. http://proxy.corp:3128).
+    /// Overrides HTTP_PROXY / HTTPS_PROXY env vars.
+    #[arg(long)]
+    pub proxy: Option<String>,
+
+    /// Path to a PEM-format CA certificate bundle to add to the trust store.
+    /// Useful for corporate CAs not in the OS trust store.
+    #[arg(long)]
+    pub ca_bundle: Option<String>,
 
     /// Skip TLS certificate verification (useful with self-signed endpoint certs)
     #[arg(long)]
@@ -154,6 +164,8 @@ pub struct ConfigFile {
     pub ipv4_only: Option<bool>,
     pub ipv6_only: Option<bool>,
     pub no_proxy: Option<bool>,
+    pub proxy: Option<String>,
+    pub ca_bundle: Option<String>,
     pub insecure: Option<bool>,
     pub retries: Option<u32>,
     pub output_dir: Option<String>,
@@ -184,6 +196,8 @@ pub struct ResolvedConfig {
     pub ipv4_only: bool,
     pub ipv6_only: bool,
     pub no_proxy: bool,
+    pub proxy: Option<String>,
+    pub ca_bundle: Option<String>,
     pub insecure: bool,
     pub retries: u32,
     pub output_dir: String,
@@ -229,6 +243,8 @@ impl Cli {
             ipv4_only: flag!(ipv4_only),
             ipv6_only: flag!(ipv6_only),
             no_proxy: flag!(no_proxy),
+            proxy: self.proxy.or(f.proxy),
+            ca_bundle: self.ca_bundle.or(f.ca_bundle),
             insecure: flag!(insecure),
             retries: pick!(retries, 0),
             output_dir: pick!(output_dir, "./output".into()),

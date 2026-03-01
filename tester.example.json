@@ -14,6 +14,8 @@
   "ipv4_only": false,
   "ipv6_only": false,
   "no_proxy": false,
+  "proxy": null,
+  "ca_bundle": null,
   "insecure": false,
   "retries": 0,
   "output_dir": "./output",

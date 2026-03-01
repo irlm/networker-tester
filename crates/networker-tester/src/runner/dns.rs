@@ -1,4 +1,4 @@
-use crate::metrics::{DnsResult, ErrorCategory, ErrorRecord};
+use crate::metrics::{DnsResult, ErrorCategory, ErrorRecord, Protocol, RequestAttempt};
 use chrono::Utc;
 use hickory_resolver::{
     config::{ResolverConfig, ResolverOpts},
@@ -6,6 +6,7 @@ use hickory_resolver::{
 };
 use std::net::IpAddr;
 use std::time::Instant;
+use uuid::Uuid;
 
 /// Resolve `hostname` and return the list of IPs plus a timing record.
 /// Respects `ipv4_only` / `ipv6_only` filtering.
@@ -57,6 +58,58 @@ pub async fn resolve(
     }
 
     Ok((ips, result))
+}
+
+/// Standalone DNS probe: resolves the target hostname and returns a complete
+/// `RequestAttempt` with only a `DnsResult` populated (no TCP/TLS/HTTP).
+pub async fn run_dns_probe(
+    run_id: Uuid,
+    sequence_num: u32,
+    hostname: &str,
+    ipv4_only: bool,
+    ipv6_only: bool,
+) -> RequestAttempt {
+    let attempt_id = Uuid::new_v4();
+    let started_at = Utc::now();
+
+    match resolve(hostname, ipv4_only, ipv6_only).await {
+        Ok((_, dns_result)) => RequestAttempt {
+            attempt_id,
+            run_id,
+            protocol: Protocol::Dns,
+            sequence_num,
+            started_at,
+            finished_at: Some(Utc::now()),
+            success: dns_result.success,
+            dns: Some(dns_result),
+            tcp: None,
+            tls: None,
+            http: None,
+            udp: None,
+            error: None,
+            retry_count: 0,
+            server_timing: None,
+            udp_throughput: None,
+        },
+        Err(err) => RequestAttempt {
+            attempt_id,
+            run_id,
+            protocol: Protocol::Dns,
+            sequence_num,
+            started_at,
+            finished_at: Some(Utc::now()),
+            success: false,
+            dns: None,
+            tcp: None,
+            tls: None,
+            http: None,
+            udp: None,
+            error: Some(err),
+            retry_count: 0,
+            server_timing: None,
+            udp_throughput: None,
+        },
+    }
 }
 
 #[cfg(test)]

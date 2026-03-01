@@ -8,12 +8,14 @@ use networker_tester::metrics::{
 };
 use networker_tester::output::{excel, html, json, sql};
 use networker_tester::runner::{
+    dns::run_dns_probe,
     http::{run_probe, RunConfig},
     http3::run_http3_probe,
     throughput::{
         run_download_probe, run_upload_probe, run_webdownload_probe, run_webupload_probe,
         ThroughputConfig,
     },
+    tls::run_tls_probe,
     udp::{run_udp_probe, UdpProbeConfig},
     udp_throughput::{run_udpdownload_probe, run_udpupload_probe, UdpThroughputConfig},
 };
@@ -65,7 +67,7 @@ async fn main() -> anyhow::Result<()> {
     let modes = cfg.parsed_modes();
     if modes.is_empty() {
         anyhow::bail!(
-            "No valid modes specified. Use: tcp,http1,http2,http3,udp,\
+            "No valid modes specified. Use: tcp,http1,http2,http3,udp,dns,tls,\
              download,upload,webdownload,webupload,udpdownload,udpupload"
         );
     }
@@ -84,8 +86,8 @@ async fn main() -> anyhow::Result<()> {
     });
     if has_throughput && payload_sizes.is_empty() {
         anyhow::bail!(
-            "--payload-sizes required for download/upload/webdownload/webupload/udpdownload/udpupload modes \
-             (e.g. --payload-sizes 4k,64k,1m)"
+            "--payload-sizes required for download/upload/webdownload/webupload/\
+             udpdownload/udpupload modes (e.g. --payload-sizes 4k,64k,1m)"
         );
     }
 
@@ -110,6 +112,9 @@ async fn main() -> anyhow::Result<()> {
         insecure: cfg.insecure,
         payload_size: cfg.payload_size,
         path: target.path().to_string(),
+        ca_bundle: cfg.ca_bundle.clone(),
+        proxy: cfg.proxy.clone(),
+        no_proxy: cfg.no_proxy,
     };
 
     let throughput_cfg = ThroughputConfig {
@@ -328,6 +333,11 @@ async fn dispatch_once(
         }
         (Protocol::Http3, _) => run_http3_probe(run_id, seq, target, cfg.timeout_ms).await,
         (Protocol::Udp, _) => run_udp_probe(run_id, seq, udp_cfg).await,
+        (Protocol::Dns, _) => {
+            let host = target.host_str().unwrap_or("");
+            run_dns_probe(run_id, seq, host, cfg.ipv4_only, cfg.ipv6_only).await
+        }
+        (Protocol::Tls, _) => run_tls_probe(run_id, seq, target, cfg).await,
         _ => unreachable!("Upload/WebUpload/UdpDownload/UdpUpload without payload_size"),
     }
 }
@@ -445,6 +455,32 @@ fn log_attempt(a: &networker_tester::metrics::RequestAttempt) {
                 );
             }
         }
+        Dns => {
+            if let Some(d) = &a.dns {
+                info!(
+                    "{status} #{seq} [dns] {name} → {ips} in {dur:.1}ms{retry}",
+                    seq = a.sequence_num,
+                    name = d.query_name,
+                    ips = d.resolved_ips.join(", "),
+                    dur = d.duration_ms,
+                    retry = retry_suffix,
+                );
+            }
+        }
+        Tls => {
+            if let Some(t) = &a.tls {
+                let ver = &t.protocol_version;
+                let alpn = t.alpn_negotiated.as_deref().unwrap_or("—");
+                info!(
+                    "{status} #{seq} [tls] {ver} ALPN={alpn} \
+                     TCP:{tcp:.1}ms Handshake:{hs:.1}ms{retry}",
+                    seq = a.sequence_num,
+                    tcp = a.tcp.as_ref().map(|t| t.connect_duration_ms).unwrap_or(0.0),
+                    hs = t.handshake_duration_ms,
+                    retry = retry_suffix,
+                );
+            }
+        }
     }
 
     if let Some(e) = &a.error {
@@ -503,6 +539,8 @@ fn print_summary(run: &TestRun) {
         Protocol::Http3,
         Protocol::Tcp,
         Protocol::Udp,
+        Protocol::Dns,
+        Protocol::Tls,
         Protocol::Download,
         Protocol::Upload,
         Protocol::WebDownload,
