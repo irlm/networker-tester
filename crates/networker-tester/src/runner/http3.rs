@@ -29,6 +29,8 @@ mod stub {
         sequence_num: u32,
         _target: &url::Url,
         _timeout_ms: u64,
+        _insecure: bool,
+        _ca_bundle: Option<&str>,
     ) -> RequestAttempt {
         RequestAttempt {
             attempt_id: Uuid::new_v4(),
@@ -45,7 +47,9 @@ mod stub {
             udp: None,
             error: Some(ErrorRecord {
                 category: ErrorCategory::Config,
-                message: "HTTP/3 support was excluded at compile time (built with --no-default-features)".into(),
+                message:
+                    "HTTP/3 support was excluded at compile time (built with --no-default-features)"
+                        .into(),
                 detail: Some("cargo build (without --no-default-features) to enable HTTP/3".into()),
                 occurred_at: Utc::now(),
             }),
@@ -87,6 +91,8 @@ mod real {
         sequence_num: u32,
         target: &url::Url,
         timeout_ms: u64,
+        insecure: bool,
+        ca_bundle: Option<&str>,
     ) -> RequestAttempt {
         let attempt_id = Uuid::new_v4();
         let started_at = Utc::now();
@@ -109,18 +115,38 @@ mod real {
         };
         let port = target.port().unwrap_or(443);
 
-        // Build QUIC/TLS config
-        let mut root_store = rustls::RootCertStore::empty();
-        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        let mut tls_config = rustls::ClientConfig::builder()
-            .with_root_certificates(root_store)
-            .with_no_client_auth();
+        // Build QUIC/TLS config — reuse the same build_tls_config() as HTTP/1.1 and HTTP/2
+        // so --insecure and --ca-bundle work identically across all protocols.
+        let mut tls_config = match crate::runner::http::build_tls_config(
+            &crate::metrics::Protocol::Http1,
+            insecure,
+            ca_bundle,
+        ) {
+            Ok(c) => c,
+            Err(e) => {
+                return h3_failed(
+                    run_id,
+                    attempt_id,
+                    sequence_num,
+                    started_at,
+                    &format!("TLS config error: {e}"),
+                );
+            }
+        };
         tls_config.alpn_protocols = vec![b"h3".to_vec()];
 
-        let quinn_tls = QuinnClientConfig::new(Arc::new(
-            quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
-                .expect("valid QUIC TLS config"),
-        ));
+        let quinn_tls = match quinn::crypto::rustls::QuicClientConfig::try_from(tls_config) {
+            Ok(c) => QuinnClientConfig::new(Arc::new(c)),
+            Err(e) => {
+                return h3_failed(
+                    run_id,
+                    attempt_id,
+                    sequence_num,
+                    started_at,
+                    &format!("QUIC TLS config error: {e}"),
+                );
+            }
+        };
 
         let mut endpoint = match Endpoint::client("0.0.0.0:0".parse().unwrap()) {
             Ok(e) => e,

@@ -362,7 +362,17 @@ async fn dispatch_once(
         (Protocol::Http1, _) | (Protocol::Http2, _) | (Protocol::Tcp, _) => {
             run_probe(run_id, seq, proto.clone(), target, cfg).await
         }
-        (Protocol::Http3, _) => run_http3_probe(run_id, seq, target, cfg.timeout_ms).await,
+        (Protocol::Http3, _) => {
+            run_http3_probe(
+                run_id,
+                seq,
+                target,
+                cfg.timeout_ms,
+                cfg.insecure,
+                cfg.ca_bundle.as_deref(),
+            )
+            .await
+        }
         (Protocol::Udp, _) => run_udp_probe(run_id, seq, udp_cfg).await,
         (Protocol::Dns, _) => {
             let host = target.host_str().unwrap_or("");
