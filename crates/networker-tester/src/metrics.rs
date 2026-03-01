@@ -387,6 +387,23 @@ pub struct PageLoadResult {
     /// Per-asset total durations in ms.
     pub asset_timings_ms: Vec<f64>,
     pub started_at: DateTime<Utc>,
+    /// Sum of all TLS handshake durations during this page load (ms).
+    /// H1.1: sum across all connections_opened (one per connection).
+    /// H2/H3: single handshake duration. Zero when target is plain http://.
+    #[serde(default)]
+    pub tls_setup_ms: f64,
+    /// Fraction of total_ms spent in TLS handshakes (0.0–1.0).
+    /// Zero when target is plain http://.
+    #[serde(default)]
+    pub tls_overhead_ratio: f64,
+    /// Individual TLS handshake duration for each connection opened (ms).
+    /// Length == connections_opened. Plain HTTP = all zeros.
+    #[serde(default)]
+    pub per_connection_tls_ms: Vec<f64>,
+    /// Total process CPU time (user + system) consumed during this probe (ms).
+    /// Highest for HTTP/3 due to QUIC userspace encryption. None if unavailable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_time_ms: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

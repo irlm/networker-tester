@@ -148,12 +148,20 @@ pub struct Cli {
     // ── Misc ──────────────────────────────────────────────────────────────────
     // ── Page-load ─────────────────────────────────────────────────────────────
     /// Number of assets per page-load probe cycle (default: 20, max: 500).
+    /// Overridden by --page-preset.
     #[arg(long)]
     pub page_assets: Option<usize>,
 
     /// Asset size for page-load probes, accepts k/m suffixes (default: 10k).
+    /// Overridden by --page-preset.
     #[arg(long)]
     pub page_asset_size: Option<String>,
+
+    /// Named page-load preset (overrides --page-assets and --page-asset-size).
+    /// Valid: tiny (100×1KB), small (50×5KB), default (20×10KB),
+    ///        medium (10×100KB), large (5×1MB), mixed (30 assets, ~820KB).
+    #[arg(long)]
+    pub page_preset: Option<String>,
 
     // ── Misc ──────────────────────────────────────────────────────────────────
     /// Enable verbose output (equivalent to --log-level debug)
@@ -197,6 +205,7 @@ pub struct ConfigFile {
     pub log_level: Option<String>,
     pub page_assets: Option<usize>,
     pub page_asset_size: Option<String>,
+    pub page_preset: Option<String>,
 }
 
 /// Fully resolved configuration with all defaults applied.
@@ -229,8 +238,10 @@ pub struct ResolvedConfig {
     pub save_to_sql: bool,
     pub connection_string: Option<String>,
     pub log_level: Option<String>,
-    pub page_assets: usize,
-    pub page_asset_size: usize,
+    /// One entry per asset; value = byte count for that asset.
+    pub page_asset_sizes: Vec<usize>,
+    /// Display name of the active preset, if any (e.g. "mixed").
+    pub page_preset_name: Option<String>,
 }
 
 impl Cli {
@@ -250,6 +261,24 @@ impl Cli {
                 self.$field || f.$field.unwrap_or(false)
             };
         }
+
+        // Pre-compute page-load fields before the struct literal partially moves self/f.
+        let page_preset_raw = self.page_preset.or(f.page_preset);
+        let page_assets_count = self.page_assets.or(f.page_assets).unwrap_or(20);
+        let page_asset_size_bytes = {
+            let s = self
+                .page_asset_size
+                .or(f.page_asset_size)
+                .unwrap_or_else(|| "10k".into());
+            parse_size(&s).unwrap_or(10_240)
+        };
+        let (page_asset_sizes, page_preset_name) = match page_preset_raw.as_deref() {
+            Some(p) => match crate::runner::pageload::resolve_preset(p) {
+                Ok(sizes) => (sizes, Some(p.to_string())),
+                Err(_) => (vec![page_asset_size_bytes; page_assets_count], None),
+            },
+            None => (vec![page_asset_size_bytes; page_assets_count], None),
+        };
 
         ResolvedConfig {
             target: pick!(target, "http://localhost:8080/health".into()),
@@ -281,14 +310,8 @@ impl Cli {
                 .log_level
                 .or(f.log_level)
                 .or_else(|| verbose.then(|| "debug".into())),
-            page_assets: pick!(page_assets, 20),
-            page_asset_size: {
-                let s = self
-                    .page_asset_size
-                    .or(f.page_asset_size)
-                    .unwrap_or_else(|| "10k".into());
-                parse_size(&s).unwrap_or(10_240)
-            },
+            page_asset_sizes,
+            page_preset_name,
         }
     }
 }
