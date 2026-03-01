@@ -21,12 +21,10 @@ for a research-quality protocol evaluation:
 ### 1. Build
 
 ```bash
-# HTTP/1.1 and HTTP/2 — always available
 cargo build --release
-
-# HTTP/3 — compile in QUIC support
-cargo build --release --features http3
 ```
+
+HTTP/3 is included by default. No extra flags needed.
 
 ### 2. Start the endpoint
 
@@ -55,7 +53,7 @@ Measures the per-request overhead of each protocol on a tiny payload.
   --runs 20 \
   --insecure
 
-# HTTP/3 (requires --features http3 build)
+# HTTP/3
 ./target/release/networker-tester \
   --target https://127.0.0.1:8443/health \
   --modes http3 \
@@ -157,7 +155,7 @@ assets over one connection.
   --runs 10 \
   --insecure
 
-# HTTP/3: single QUIC connection, all assets multiplexed (--features http3 build)
+# HTTP/3: single QUIC connection, all assets multiplexed
 ./target/release/networker-tester \
   --target https://127.0.0.1:8443/health \
   --modes pageload3 \
@@ -167,7 +165,7 @@ assets over one connection.
   --insecure
 ```
 
-Or run all three in a single invocation (requires `--features http3`):
+Or run all three in a single invocation:
 
 ```bash
 ./target/release/networker-tester \
@@ -332,6 +330,6 @@ Server CSW (`sCSW`) is reported by the endpoint via `Server-Timing: csw-v;dur=N,
 | `--excel` | false | Write Excel report to `output/report.xlsx` |
 | `--json` | false | Write JSON results to stdout |
 | `--retries N` | `0` | Retry failed probes |
-| `--features http3` | off | Enable HTTP/3 (compile-time flag) |
+| `--no-default-features` | off | Exclude HTTP/3 for a minimal build |
 
 See `networker-tester --help` for the full list.

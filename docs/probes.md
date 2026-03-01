@@ -76,7 +76,7 @@ networker-tester --target https://example.com/health --modes http2 --runs 10
 ## `http3` — HTTP/3 over QUIC
 
 Measures: UDP-based QUIC handshake (combines TCP+TLS equivalent) → HTTP/3
-request/response. Requires `--features http3` at compile time.
+request/response. Included in the default build.
 
 ```bash
 networker-tester --target https://example.com/health --modes http3 --runs 10 --insecure
@@ -241,7 +241,7 @@ networker-tester --target https://127.0.0.1:8443/health \
 
 ## `pageload3` — HTTP/3 Multiplexed Page Load
 
-Like `pageload2` but over QUIC. Requires `--features http3`.
+Like `pageload2` but over QUIC. Included in the default build.
 
 ```bash
 networker-tester --target https://127.0.0.1:8443/health \

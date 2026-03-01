@@ -1144,7 +1144,7 @@ pub async fn run_pageload3_probe(run_id: Uuid, seq: u32, _cfg: &PageLoadConfig) 
         chrono::Utc::now(),
         Protocol::PageLoad3,
         ErrorCategory::Config,
-        "HTTP/3 support not compiled in. Rebuild with --features http3".into(),
+        "HTTP/3 support was excluded at compile time (built with --no-default-features)".into(),
     )
 }
 
