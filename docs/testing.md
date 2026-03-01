@@ -64,9 +64,13 @@ Measures the per-request overhead of each protocol on a tiny payload.
 **What to look for in terminal output:**
 ```
 ✓ #1 [http1] 200 HTTP/1.1 DNS:0.3ms TCP:0.2ms TLS:4.1ms TTFB:0.5ms Total:4.8ms CPU:0.8ms CSW:2v/0i
-✓ #1 [http2] 200 HTTP/2 DNS:0.3ms TCP:0.2ms TLS:3.9ms TTFB:0.4ms Total:4.6ms CPU:0.9ms CSW:3v/0i
-✓ #1 [http3] 200 HTTP/3 DNS:0.3ms TCP:0.3ms TLS:3.7ms TTFB:0.4ms Total:4.5ms CPU:2.4ms CSW:4v/1i
+✓ #1 [http2] 200 HTTP/2    DNS:0.3ms TCP:0.2ms TLS:3.9ms TTFB:0.4ms Total:4.6ms CPU:0.9ms CSW:3v/0i
+✓ #1 [http3] 200 HTTP/3    QUIC:1.5ms TTFB:0.4ms Total:2.1ms CPU:2.4ms CSW:4v/1i
 ```
+
+HTTP/3 has no separate DNS or TCP phase — QUIC is UDP-based and combines transport +
+crypto into one handshake, shown as `QUIC:Xms`. HTTP/1.1 and HTTP/2 show `DNS:` and
+`TCP:` separately because those are distinct phases before the `TLS:` handshake.
 
 **Expected patterns:**
 - `CPU` for HTTP/3 is notably higher — QUIC encryption runs in userspace (no kernel offload)
