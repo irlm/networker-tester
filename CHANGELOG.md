@@ -11,6 +11,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.10.0] – 2026-02-28 — H1.1 keep-alive fix, TLS cost visibility, named presets, CPU measurement
+
+### Added
+- **`pageload` H1.1 keep-alive pool** — corrected a fundamental accuracy bug where each
+  asset opened a brand-new TCP+TLS connection. The rewritten probe opens `k = min(6, n)`
+  persistent TCP connections (one TLS handshake each for HTTPS) and distributes assets
+  across them round-robin, so each connection reuses its TCP/TLS handshake for all its
+  assigned assets — exactly how a real browser behaves. This eliminates the previous
+  inflation of TLS setup cost and makes the H1.1 vs H2 vs H3 comparison accurate.
+- **TLS cost fields on `PageLoadResult`** — four new fields report the cost of TLS
+  establishment per page-load variant:
+  - `tls_setup_ms`: sum of all TLS handshake durations (H1.1: k handshakes; H2/H3: 1).
+  - `tls_overhead_ratio`: fraction of `total_ms` spent in TLS (0.0–1.0).
+  - `per_connection_tls_ms`: per-connection handshake durations (length = `connections_opened`).
+  - `cpu_time_ms`: process CPU time consumed during the probe (highest for HTTP/3 due to
+    QUIC userspace encryption).
+- **Named `--page-preset` flag** — selects a predefined asset mix, overriding
+  `--page-assets` and `--page-asset-size`:
+
+  | Preset    | Assets | Size per asset | Total    |
+  |-----------|--------|---------------|----------|
+  | `tiny`    | 100    | 1 KB          | ~100 KB  |
+  | `small`   | 50     | 5 KB          | ~250 KB  |
+  | `default` | 20     | 10 KB         | ~200 KB  |
+  | `medium`  | 10     | 100 KB        | ~1 MB    |
+  | `large`   | 5      | 1 MB          | ~5 MB    |
+  | `mixed`   | 30     | varied        | ~820 KB  |
+
+  The `mixed` preset (1×200KB + 4×50KB + 10×20KB + 15×5KB) approximates a real-world
+  web page with a large hero image, medium assets, and many small scripts/styles.
+- **Per-asset sizes in `PageLoadConfig`** — `asset_sizes: Vec<usize>` replaces the old
+  uniform `asset_count`/`asset_size` pair. Each element specifies the byte count for
+  one asset, enabling varied payloads (used by presets and future per-asset control).
+- **Extended Protocol Comparison table** — both the terminal output and the HTML report
+  now include `TLS Setup (ms)`, `TLS Overhead %`, and `CPU (ms)` columns, making the
+  cost structure of each protocol variant immediately visible.
+
+### Changed
+- `PageLoadConfig.asset_count` / `asset_size` → `asset_sizes: Vec<usize>` and
+  `preset_name: Option<String>`. Consumers must pass `asset_sizes` (a `Vec`).
+- `ResolvedConfig.page_assets` / `page_asset_size` → `page_asset_sizes: Vec<usize>` and
+  `page_preset_name: Option<String>`.
+- Workspace version bumped to `0.10.0` (MINOR — new fields, new flag, keep-alive fix).
+
+---
+
+## [0.9.0] – 2026-02-28 — HTTP/3 page-load probe
+
+### Added
+- **`pageload3` probe mode** — fetches the same N assets as `pageload`/`pageload2` but
+  multiplexed over a single QUIC/HTTP/3 connection (`connections_opened = 1`).
+  All N asset streams are opened sequentially (fast HEADERS frames) then all responses
+  are received concurrently. Requires `--features http3` and an HTTPS target.
+  Completes the three-protocol page-load comparison: HTTP/1.1 (≤6 conns) vs
+  HTTP/2 (1 TLS conn) vs HTTP/3 (1 QUIC conn), motivated by
+  "Does QUIC Make the Web Faster?" (Biswal & Gnawali, IEEE GLOBECOM 2016).
+- **`--insecure` support for `pageload3`** — reuses `build_tls_config` from `http.rs`
+  (same `NoCertVerifier` + custom CA bundle path), overriding ALPN to `h3`.
+- **ALPN warning extended** — startup `[WARN]` now also fires for `pageload3` mode
+  against a plain `http://` target.
+- **Protocol Comparison table extended** — terminal and HTML report now include a
+  `pageload3` row alongside `pageload` and `pageload2`.
+
+### Background
+Reference [5] cited in "Does QUIC Make the Web Faster?" for the finding that
+bandwidth improvements beyond ~5 Mbps yield diminishing returns on page load time is:
+Ilya Grigorik, *"Latency: The New Web Performance Bottleneck"*,
+https://www.igvita.com/2012/07/19/latency-the-new-web-performance-bottleneck/, 2012.
+This motivates testing all three protocols: the wall-clock difference between `pageload`,
+`pageload2`, and `pageload3` reveals which bottleneck (connection setup vs multiplexing
+vs QUIC handshake latency) dominates under real network conditions.
+
+---
+
 ## [0.8.0] – 2026-02-28 — Page-load simulation, ALPN warning
 
 ### Added

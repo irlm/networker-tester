@@ -79,7 +79,7 @@ pub struct RequestAttempt {
     /// UDP bulk transfer result (udpdownload / udpupload modes only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub udp_throughput: Option<UdpThroughputResult>,
-    /// Page-load simulation result (pageload / pageload2 modes only).
+    /// Page-load simulation result (pageload / pageload2 / pageload3 modes only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page_load: Option<PageLoadResult>,
 }
@@ -131,6 +131,9 @@ pub enum Protocol {
     /// HTTP/2 page-load: same assets but multiplexed over one TLS connection.
     /// Requires an HTTPS target.
     PageLoad2,
+    /// HTTP/3 page-load: same assets multiplexed over one QUIC connection.
+    /// Requires `--features http3` and an HTTPS target.
+    PageLoad3,
 }
 
 impl std::fmt::Display for Protocol {
@@ -153,6 +156,7 @@ impl std::fmt::Display for Protocol {
             Protocol::Curl => write!(f, "curl"),
             Protocol::PageLoad => write!(f, "pageload"),
             Protocol::PageLoad2 => write!(f, "pageload2"),
+            Protocol::PageLoad3 => write!(f, "pageload3"),
         }
     }
 }
@@ -179,6 +183,7 @@ impl std::str::FromStr for Protocol {
             "curl" => Ok(Protocol::Curl),
             "pageload" => Ok(Protocol::PageLoad),
             "pageload2" => Ok(Protocol::PageLoad2),
+            "pageload3" => Ok(Protocol::PageLoad3),
             other => Err(format!("Unknown protocol: {other}")),
         }
     }
@@ -364,7 +369,7 @@ pub struct UdpThroughputResult {
     pub started_at: DateTime<Utc>,
 }
 
-/// Page-load simulation result (pageload / pageload2 modes).
+/// Page-load simulation result (pageload / pageload2 / pageload3 modes).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PageLoadResult {
     /// Number of assets listed in the manifest.
@@ -382,6 +387,23 @@ pub struct PageLoadResult {
     /// Per-asset total durations in ms.
     pub asset_timings_ms: Vec<f64>,
     pub started_at: DateTime<Utc>,
+    /// Sum of all TLS handshake durations during this page load (ms).
+    /// H1.1: sum across all connections_opened (one per connection).
+    /// H2/H3: single handshake duration. Zero when target is plain http://.
+    #[serde(default)]
+    pub tls_setup_ms: f64,
+    /// Fraction of total_ms spent in TLS handshakes (0.0–1.0).
+    /// Zero when target is plain http://.
+    #[serde(default)]
+    pub tls_overhead_ratio: f64,
+    /// Individual TLS handshake duration for each connection opened (ms).
+    /// Length == connections_opened. Plain HTTP = all zeros.
+    #[serde(default)]
+    pub per_connection_tls_ms: Vec<f64>,
+    /// Total process CPU time (user + system) consumed during this probe (ms).
+    /// Highest for HTTP/3 due to QUIC userspace encryption. None if unavailable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_time_ms: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -553,7 +575,7 @@ pub fn primary_metric_label(proto: &Protocol) -> &'static str {
         | Protocol::UdpUpload => "Throughput MB/s",
         Protocol::Dns => "Resolve ms",
         Protocol::Tls => "Handshake ms",
-        Protocol::PageLoad | Protocol::PageLoad2 => "Total ms",
+        Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3 => "Total ms",
     }
 }
 
@@ -589,7 +611,9 @@ pub fn primary_metric_value(a: &RequestAttempt) -> Option<f64> {
         }
         Protocol::Dns => a.dns.as_ref().map(|d| d.duration_ms),
         Protocol::Tls => a.tls.as_ref().map(|t| t.handshake_duration_ms),
-        Protocol::PageLoad | Protocol::PageLoad2 => a.page_load.as_ref().map(|p| p.total_ms),
+        Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3 => {
+            a.page_load.as_ref().map(|p| p.total_ms)
+        }
     }
 }
 
@@ -658,6 +682,7 @@ mod tests {
             "curl",
             "pageload",
             "pageload2",
+            "pageload3",
         ] {
             let parsed = Protocol::from_str(p).unwrap();
             assert_eq!(parsed.to_string(), *p);

@@ -155,6 +155,7 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
         Protocol::UdpUpload,
         Protocol::PageLoad,
         Protocol::PageLoad2,
+        Protocol::PageLoad3,
     ] {
         let rows: Vec<&RequestAttempt> = run
             .attempts
@@ -189,6 +190,7 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
             Protocol::UdpUpload,
             Protocol::PageLoad,
             Protocol::PageLoad2,
+            Protocol::PageLoad3,
         ];
         // Collect (proto, Option<payload>) groups in canonical order.
         let stat_groups: Vec<(Protocol, Option<usize>)> = all_protos
@@ -295,8 +297,10 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
             .attempts
             .iter()
             .filter(|a| {
-                matches!(a.protocol, Protocol::PageLoad | Protocol::PageLoad2)
-                    && a.page_load.is_some()
+                matches!(
+                    a.protocol,
+                    Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3
+                ) && a.page_load.is_some()
             })
             .collect();
         if !pl_attempts.is_empty() {
@@ -309,13 +313,14 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
     <thead>
       <tr>
         <th>Protocol</th><th>N</th><th>Assets</th>
-        <th>Avg Conns</th><th>p50 Total (ms)</th><th>Min (ms)</th><th>Max (ms)</th>
+        <th>Avg Conns</th><th>TLS Setup (ms)</th><th>TLS Overhead</th>
+        <th>CPU (ms)</th><th>p50 Total (ms)</th><th>Min (ms)</th><th>Max (ms)</th>
       </tr>
     </thead>
     <tbody>
 "#
             );
-            for proto in &[Protocol::PageLoad, Protocol::PageLoad2] {
+            for proto in &[Protocol::PageLoad, Protocol::PageLoad2, Protocol::PageLoad3] {
                 let rows: Vec<&RequestAttempt> = pl_attempts
                     .iter()
                     .filter(|a| &a.protocol == proto)
@@ -335,6 +340,22 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
                 let avg_fetched =
                     pl_rows.iter().map(|p| p.assets_fetched as f64).sum::<f64>() / n as f64;
                 let total_assets = pl_rows.first().map(|p| p.asset_count).unwrap_or(0);
+                let avg_tls_ms: f64 =
+                    pl_rows.iter().map(|p| p.tls_setup_ms).sum::<f64>() / n as f64;
+                let avg_tls_pct: f64 = pl_rows
+                    .iter()
+                    .map(|p| p.tls_overhead_ratio * 100.0)
+                    .sum::<f64>()
+                    / n as f64;
+                let cpu_vals: Vec<f64> = pl_rows.iter().filter_map(|p| p.cpu_time_ms).collect();
+                let cpu_display = if cpu_vals.is_empty() {
+                    "—".to_string()
+                } else {
+                    format!(
+                        "{:.2}",
+                        cpu_vals.iter().sum::<f64>() / cpu_vals.len() as f64
+                    )
+                };
                 let total_ms_vals: Vec<f64> = pl_rows.iter().map(|p| p.total_ms).collect();
                 if let Some(s) = compute_stats(&total_ms_vals) {
                     let _ = write!(
@@ -344,6 +365,9 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
         <td>{n}</td>
         <td>{fetched:.0}/{total}</td>
         <td>{conns:.1}</td>
+        <td>{tls_ms:.2}</td>
+        <td>{tls_pct:.1}%</td>
+        <td>{cpu}</td>
         <td>{p50:.2}</td>
         <td>{min:.2}</td>
         <td>{max:.2}</td>
@@ -354,6 +378,9 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
                         fetched = avg_fetched,
                         total = total_assets,
                         conns = avg_conns,
+                        tls_ms = avg_tls_ms,
+                        tls_pct = avg_tls_pct,
+                        cpu = cpu_display,
                         p50 = s.p50,
                         min = s.min,
                         max = s.max,

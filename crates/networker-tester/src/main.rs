@@ -14,7 +14,7 @@ use networker_tester::runner::{
     http::{run_probe, RunConfig},
     http3::run_http3_probe,
     native::run_native_probe,
-    pageload::{run_pageload2_probe, run_pageload_probe, PageLoadConfig},
+    pageload::{run_pageload2_probe, run_pageload3_probe, run_pageload_probe, PageLoadConfig},
     throughput::{
         run_download_probe, run_upload_probe, run_webdownload_probe, run_webupload_probe,
         ThroughputConfig,
@@ -72,7 +72,7 @@ async fn main() -> anyhow::Result<()> {
     if modes.is_empty() {
         anyhow::bail!(
             "No valid modes specified. Use: tcp,http1,http2,http3,udp,dns,tls,native,curl,\
-             download,upload,webdownload,webupload,udpdownload,udpupload,pageload,pageload2"
+             download,upload,webdownload,webupload,udpdownload,udpupload,pageload,pageload2,pageload3"
         );
     }
 
@@ -80,7 +80,7 @@ async fn main() -> anyhow::Result<()> {
     for mode in &modes {
         if matches!(
             mode,
-            Protocol::Http2 | Protocol::Http3 | Protocol::PageLoad2
+            Protocol::Http2 | Protocol::Http3 | Protocol::PageLoad2 | Protocol::PageLoad3
         ) && target.scheme() == "http"
         {
             warn!(
@@ -145,8 +145,8 @@ async fn main() -> anyhow::Result<()> {
     let pageload_cfg = PageLoadConfig {
         run_cfg: probe_cfg.clone(),
         base_url: target.clone(),
-        asset_count: cfg.page_assets,
-        asset_size: cfg.page_asset_size,
+        asset_sizes: cfg.page_asset_sizes.clone(),
+        preset_name: cfg.page_preset_name.clone(),
     };
 
     // Expand modes × payload sizes into a flat task list.
@@ -373,6 +373,7 @@ async fn dispatch_once(
         (Protocol::Curl, _) => run_curl_probe(run_id, seq, target, cfg).await,
         (Protocol::PageLoad, _) => run_pageload_probe(run_id, seq, pageload_cfg).await,
         (Protocol::PageLoad2, _) => run_pageload2_probe(run_id, seq, pageload_cfg).await,
+        (Protocol::PageLoad3, _) => run_pageload3_probe(run_id, seq, pageload_cfg).await,
         _ => unreachable!("Upload/WebUpload/UdpDownload/UdpUpload without payload_size"),
     }
 }
@@ -516,17 +517,31 @@ fn log_attempt(a: &networker_tester::metrics::RequestAttempt) {
                 );
             }
         }
-        PageLoad | PageLoad2 => {
+        PageLoad | PageLoad2 | PageLoad3 => {
             if let Some(p) = &a.page_load {
+                let tls_info = if p.tls_setup_ms > 0.0 {
+                    format!(
+                        " tls={:.1}ms({:.1}%)",
+                        p.tls_setup_ms,
+                        p.tls_overhead_ratio * 100.0
+                    )
+                } else {
+                    String::new()
+                };
+                let cpu_info = p
+                    .cpu_time_ms
+                    .map(|ms| format!(" cpu={ms:.1}ms"))
+                    .unwrap_or_default();
                 info!(
                     "{status} #{seq} [{proto}] {fetched}/{total} assets \
-                     conns={conns} {bytes}B {ms:.1}ms{retry}",
+                     conns={conns}{tls}{cpu} {ms:.1}ms{retry}",
                     seq = a.sequence_num,
                     proto = a.protocol,
                     fetched = p.assets_fetched,
                     total = p.asset_count,
                     conns = p.connections_opened,
-                    bytes = p.total_bytes,
+                    tls = tls_info,
+                    cpu = cpu_info,
                     ms = p.total_ms,
                     retry = retry_suffix,
                 );
@@ -602,6 +617,7 @@ fn print_summary(run: &TestRun) {
         Protocol::UdpUpload,
         Protocol::PageLoad,
         Protocol::PageLoad2,
+        Protocol::PageLoad3,
     ];
     let stat_groups: Vec<(Protocol, Option<usize>)> = ordered_protos
         .iter()
@@ -706,16 +722,14 @@ fn print_summary(run: &TestRun) {
         }
     }
 
-    // Protocol comparison table when both pageload variants are present
-    let has_pl1 = run
-        .attempts
-        .iter()
-        .any(|a| a.protocol == Protocol::PageLoad);
-    let has_pl2 = run
-        .attempts
-        .iter()
-        .any(|a| a.protocol == Protocol::PageLoad2);
-    if has_pl1 || has_pl2 {
+    // Protocol comparison table when any pageload variant is present
+    let has_pageload = run.attempts.iter().any(|a| {
+        matches!(
+            a.protocol,
+            Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3
+        )
+    });
+    if has_pageload {
         print_comparison(run);
     }
 
@@ -752,14 +766,32 @@ fn print_comparison(run: &TestRun) {
             .sum::<f64>()
             / n as f64;
         let total_assets = pl_results.first().map(|p| p.asset_count).unwrap_or(0);
+        let avg_tls_ms: f64 = pl_results.iter().map(|p| p.tls_setup_ms).sum::<f64>() / n as f64;
+        let avg_tls_pct: f64 = pl_results
+            .iter()
+            .map(|p| p.tls_overhead_ratio * 100.0)
+            .sum::<f64>()
+            / n as f64;
+        let cpu_vals: Vec<f64> = pl_results.iter().filter_map(|p| p.cpu_time_ms).collect();
+        let avg_cpu_str = if cpu_vals.is_empty() {
+            "  —".into()
+        } else {
+            format!(
+                "{:>5.1}",
+                cpu_vals.iter().sum::<f64>() / cpu_vals.len() as f64
+            )
+        };
         let stats = networker_tester::metrics::compute_stats(&total_ms_vals)?;
         Some(format!(
-            " {proto:<10} │ {n:<3} │ {assets:>3.0}/{total:<3} │ {conns:>5.1} │ {p50:>8.1}ms │ {min:>8.1}ms │ {max:>8.1}ms",
+            " {proto:<10} │ {n:<3} │ {assets:>3.0}/{total:<3} │ {conns:>5.1} │ {tls_ms:>8.1} │ {tls_pct:>6.1}% │ {cpu:>8} │ {p50:>8.1}ms │ {min:>8.1}ms │ {max:>8.1}ms",
             proto = proto,
             n = n,
             assets = avg_assets,
             total = total_assets,
             conns = avg_conns,
+            tls_ms = avg_tls_ms,
+            tls_pct = avg_tls_pct,
+            cpu = avg_cpu_str,
             p50 = stats.p50,
             min = stats.min,
             max = stats.max,
@@ -767,10 +799,10 @@ fn print_comparison(run: &TestRun) {
     };
 
     println!();
-    println!(" ── Protocol Comparison (Page Load) ──────────────────────────────────");
-    println!(" Protocol  │ N   │ Assets  │ Conns │   p50    │   Min    │   Max");
-    println!("───────────┼─────┼─────────┼───────┼──────────┼──────────┼──────────");
-    for proto in &[Protocol::PageLoad, Protocol::PageLoad2] {
+    println!(" ── Protocol Comparison (Page Load) ─────────────────────────────────────────────────────────────────────────");
+    println!(" Protocol  │ N   │ Assets  │ Conns │  TLS ms  │  TLS %  │  CPU ms  │   p50    │   Min    │   Max");
+    println!("───────────┼─────┼─────────┼───────┼──────────┼─────────┼──────────┼──────────┼──────────┼──────────");
+    for proto in &[Protocol::PageLoad, Protocol::PageLoad2, Protocol::PageLoad3] {
         if let Some(r) = row(proto) {
             println!("{r}");
         }
