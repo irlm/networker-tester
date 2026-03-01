@@ -43,7 +43,11 @@ pub async fn run_tls_probe(
         }
     };
 
-    let default_port = if target.scheme() == "https" { 443 } else { 443 };
+    let default_port = if target.scheme() == "https" {
+        443u16
+    } else {
+        80
+    };
     let port = target.port().unwrap_or(default_port);
 
     // ── 1. DNS ────────────────────────────────────────────────────────────────
@@ -354,6 +358,7 @@ fn extract_tls_probe_info(
         started_at,
         success: true,
         cert_chain,
+        tls_backend: Some("rustls".into()),
     }
 }
 

@@ -8,9 +8,11 @@ use networker_tester::metrics::{
 };
 use networker_tester::output::{excel, html, json, sql};
 use networker_tester::runner::{
+    curl::run_curl_probe,
     dns::run_dns_probe,
     http::{run_probe, RunConfig},
     http3::run_http3_probe,
+    native::run_native_probe,
     throughput::{
         run_download_probe, run_upload_probe, run_webdownload_probe, run_webupload_probe,
         ThroughputConfig,
@@ -67,7 +69,7 @@ async fn main() -> anyhow::Result<()> {
     let modes = cfg.parsed_modes();
     if modes.is_empty() {
         anyhow::bail!(
-            "No valid modes specified. Use: tcp,http1,http2,http3,udp,dns,tls,\
+            "No valid modes specified. Use: tcp,http1,http2,http3,udp,dns,tls,native,curl,\
              download,upload,webdownload,webupload,udpdownload,udpupload"
         );
     }
@@ -338,6 +340,8 @@ async fn dispatch_once(
             run_dns_probe(run_id, seq, host, cfg.ipv4_only, cfg.ipv6_only).await
         }
         (Protocol::Tls, _) => run_tls_probe(run_id, seq, target, cfg).await,
+        (Protocol::Native, _) => run_native_probe(run_id, seq, target, cfg).await,
+        (Protocol::Curl, _) => run_curl_probe(run_id, seq, target, cfg).await,
         _ => unreachable!("Upload/WebUpload/UdpDownload/UdpUpload without payload_size"),
     }
 }
@@ -356,7 +360,7 @@ fn log_attempt(a: &networker_tester::metrics::RequestAttempt) {
     };
 
     match &a.protocol {
-        Http1 | Http2 | Http3 | Tcp => {
+        Http1 | Http2 | Http3 | Tcp | Native | Curl => {
             let dns_ms = a.dns.as_ref().map(|d| d.duration_ms).unwrap_or(0.0);
             let tcp_ms = a.tcp.as_ref().map(|t| t.connect_duration_ms).unwrap_or(0.0);
             let tls_ms = a
@@ -537,6 +541,8 @@ fn print_summary(run: &TestRun) {
         Protocol::Http1,
         Protocol::Http2,
         Protocol::Http3,
+        Protocol::Native,
+        Protocol::Curl,
         Protocol::Tcp,
         Protocol::Udp,
         Protocol::Dns,

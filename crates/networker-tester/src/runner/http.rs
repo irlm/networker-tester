@@ -961,6 +961,7 @@ fn extract_tls_info(
         started_at,
         success: true,
         cert_chain: vec![],
+        tls_backend: Some("rustls".into()),
     }
 }
 
