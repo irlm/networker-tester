@@ -436,15 +436,47 @@ fn log_attempt(a: &networker_tester::metrics::RequestAttempt) {
                 } else {
                     format!("{n} B")
                 };
+                let tls_ms = a
+                    .tls
+                    .as_ref()
+                    .map(|t| t.handshake_duration_ms)
+                    .unwrap_or(0.0);
+                let ttfb_ms = h.ttfb_ms;
+                let tls_part = if tls_ms > 0.0 {
+                    format!(" TLS:{tls_ms:.1}ms")
+                } else {
+                    String::new()
+                };
                 let throughput = h
                     .throughput_mbps
                     .map(|m| format!("{m:.2} MB/s"))
                     .unwrap_or_else(|| "—".into());
+                let goodput = h
+                    .goodput_mbps
+                    .map(|g| format!(" Goodput:{g:.2} MB/s"))
+                    .unwrap_or_default();
+                let cpu = h
+                    .cpu_time_ms
+                    .map(|c| format!(" CPU:{c:.1}ms"))
+                    .unwrap_or_default();
+                let csw = match (h.csw_voluntary, h.csw_involuntary) {
+                    (Some(v), Some(i)) => format!(" CSW:{v}v/{i}i"),
+                    _ => String::new(),
+                };
+                let srv_csw = match a.server_timing.as_ref() {
+                    Some(st) => match (st.srv_csw_voluntary, st.srv_csw_involuntary) {
+                        (Some(v), Some(i)) => format!(" sCSW:{v}v/{i}i"),
+                        _ => String::new(),
+                    },
+                    None => String::new(),
+                };
                 info!(
-                    "{status} #{seq} [{proto}] {payload} Total:{total:.1}ms Throughput:{throughput}{retry}",
+                    "{status} #{seq} [{proto}] {payload}{tls} TTFB:{ttfb:.1}ms Total:{total:.1}ms Throughput:{throughput}{goodput}{cpu}{csw}{srv_csw}{retry}",
                     seq = a.sequence_num,
                     proto = a.protocol,
                     payload = payload_str,
+                    tls = tls_part,
+                    ttfb = ttfb_ms,
                     total = h.total_duration_ms,
                     retry = retry_suffix,
                 );

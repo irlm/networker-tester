@@ -564,6 +564,10 @@ async fn run_h1_keepalive_connection(
                         .collect(),
                     payload_bytes: 0,
                     throughput_mbps: None,
+                    goodput_mbps: None,
+                    cpu_time_ms: None,
+                    csw_voluntary: None,
+                    csw_involuntary: None,
                 };
                 (Some(http), st, ttfb_ms)
             }
@@ -937,6 +941,10 @@ pub async fn run_pageload2_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
             .collect(),
         payload_bytes: 0,
         throughput_mbps: None,
+        goodput_mbps: None,
+        cpu_time_ms: None,
+        csw_voluntary: None,
+        csw_involuntary: None,
     };
 
     // ── Asset requests (all in-flight simultaneously over the H2 connection) ──
@@ -1422,6 +1430,10 @@ pub async fn run_pageload3_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
             .collect(),
         payload_bytes: 0,
         throughput_mbps: None,
+        goodput_mbps: None,
+        cpu_time_ms: None,
+        csw_voluntary: None,
+        csw_involuntary: None,
     };
 
     // ── Asset requests: open all N streams sequentially, then receive concurrently ──
@@ -1558,6 +1570,8 @@ fn parse_server_timing_simple(
         processing_ms: None,
         total_server_ms: None,
         server_version,
+        srv_csw_voluntary: None,
+        srv_csw_involuntary: None,
     })
 }
 

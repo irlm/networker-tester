@@ -65,6 +65,18 @@ async fn add_server_timestamp(req: Request, next: Next) -> Response {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Context-switch helpers (Unix only)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Returns `(voluntary_csw, involuntary_csw)` for the server process.
+#[cfg(unix)]
+fn csw_snapshot() -> (i64, i64) {
+    let mut u: libc::rusage = unsafe { std::mem::zeroed() };
+    unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut u) };
+    (u.ru_nvcsw, u.ru_nivcsw)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Handlers
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -124,14 +136,28 @@ struct DownloadParams {
 }
 
 /// GET /download?bytes=N – returns N zero bytes (max 2 GiB).
-/// Adds `Server-Timing: proc;dur=X` indicating body generation time.
+/// Adds `Server-Timing: proc;dur=X, csw-v;dur=N, csw-i;dur=N` indicating
+/// body generation time and context switches.
 async fn download(Query(p): Query<DownloadParams>) -> impl IntoResponse {
     let n = p.bytes.unwrap_or(1024).min(2 * 1024 * 1024 * 1024); // cap 2 GiB
     let t0 = Instant::now();
+    #[cfg(unix)]
+    let (csw_v0, csw_i0) = csw_snapshot();
     let body = vec![0u8; n];
     let proc_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    #[cfg(unix)]
+    let csw_part = {
+        let (csw_v1, csw_i1) = csw_snapshot();
+        format!(
+            ", csw-v;dur={}, csw-i;dur={}",
+            csw_v1 - csw_v0,
+            csw_i1 - csw_i0
+        )
+    };
+    #[cfg(not(unix))]
+    let csw_part = "";
 
-    let timing = format!("proc;dur={proc_ms:.3}");
+    let timing = format!("proc;dur={proc_ms:.3}{csw_part}");
     Response::builder()
         .status(200)
         .header("content-type", "application/octet-stream")
@@ -162,6 +188,8 @@ async fn upload(req: Request) -> impl IntoResponse {
         .map(|s| s.to_owned());
 
     let t0 = Instant::now();
+    #[cfg(unix)]
+    let (csw_v0, csw_i0) = csw_snapshot();
     let mut received_bytes: usize = 0;
     let mut body = req.into_body();
     while let Some(Ok(frame)) = body.frame().await {
@@ -170,6 +198,17 @@ async fn upload(req: Request) -> impl IntoResponse {
         }
     }
     let recv_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    #[cfg(unix)]
+    let csw_part = {
+        let (csw_v1, csw_i1) = csw_snapshot();
+        format!(
+            ", csw-v;dur={}, csw-i;dur={}",
+            csw_v1 - csw_v0,
+            csw_i1 - csw_i0
+        )
+    };
+    #[cfg(not(unix))]
+    let csw_part = "";
 
     let mut resp = Json(UploadStats {
         received_bytes,
@@ -177,7 +216,7 @@ async fn upload(req: Request) -> impl IntoResponse {
     })
     .into_response();
 
-    let timing = format!("recv;dur={recv_ms:.3}");
+    let timing = format!("recv;dur={recv_ms:.3}{csw_part}");
     if let Ok(v) = HeaderValue::from_str(&timing) {
         resp.headers_mut().insert("server-timing", v);
     }

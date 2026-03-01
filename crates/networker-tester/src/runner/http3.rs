@@ -75,6 +75,13 @@ mod real {
     use std::time::Instant;
     use uuid::Uuid;
 
+    #[cfg(unix)]
+    fn get_rusage_csw() -> (i64, i64) {
+        let mut u: libc::rusage = unsafe { std::mem::zeroed() };
+        unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut u) };
+        (u.ru_nvcsw, u.ru_nivcsw)
+    }
+
     pub async fn run_http3_probe(
         run_id: Uuid,
         sequence_num: u32,
@@ -84,6 +91,9 @@ mod real {
         let attempt_id = Uuid::new_v4();
         let started_at = Utc::now();
         let t0 = Instant::now();
+        let cpu_start = cpu_time::ProcessTime::now();
+        #[cfg(unix)]
+        let (csw_v0, csw_i0) = get_rusage_csw();
 
         let host = match target.host_str() {
             Some(h) => h.to_string(),
@@ -276,6 +286,14 @@ mod real {
         }
 
         let total_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        let cpu_time_ms = Some(cpu_start.elapsed().as_secs_f64() * 1000.0);
+        #[cfg(unix)]
+        let (csw_voluntary, csw_involuntary) = {
+            let (v1, i1) = get_rusage_csw();
+            (Some((v1 - csw_v0) as u64), Some((i1 - csw_i0) as u64))
+        };
+        #[cfg(not(unix))]
+        let (csw_voluntary, csw_involuntary) = (None::<u64>, None::<u64>);
         let http_started_at = Utc::now();
 
         let tls_result = TlsResult {
@@ -315,6 +333,10 @@ mod real {
                 response_headers,
                 payload_bytes: 0,
                 throughput_mbps: None,
+                goodput_mbps: None,
+                cpu_time_ms,
+                csw_voluntary,
+                csw_involuntary,
             }),
             udp: None,
             error: None,

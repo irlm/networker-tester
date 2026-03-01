@@ -278,6 +278,14 @@ pub struct ServerTimingResult {
     /// Server binary version from X-Networker-Server-Version header.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server_version: Option<String>,
+    /// Server-side voluntary context switches for this request
+    /// (from Server-Timing: csw-v;dur=N, where N is the count).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srv_csw_voluntary: Option<u64>,
+    /// Server-side involuntary context switches for this request
+    /// (from Server-Timing: csw-i;dur=N, where N is the count).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srv_csw_involuntary: Option<u64>,
 }
 
 /// A single certificate in the peer's certificate chain.
@@ -330,6 +338,23 @@ pub struct HttpResult {
     /// Measured throughput in MB/s; None for normal latency probes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub throughput_mbps: Option<f64>,
+    /// True end-to-end goodput = payload_bytes / (dns_ms + tcp_ms + tls_ms + total_http_ms).
+    /// Only set for throughput probes (download/upload/webdownload/webupload). None otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goodput_mbps: Option<f64>,
+    /// Process CPU time (user + system) consumed during this probe (ms).
+    /// Enables H1 vs H2 vs H3 CPU overhead comparison; highest for HTTP/3 (QUIC userspace).
+    /// None on Windows or if measurement fails.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_time_ms: Option<f64>,
+    /// Client-side voluntary context switches during this probe (getrusage ru_nvcsw delta).
+    /// Unix only; None on Windows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub csw_voluntary: Option<u64>,
+    /// Client-side involuntary context switches during this probe (getrusage ru_nivcsw delta).
+    /// Unix only; None on Windows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub csw_involuntary: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

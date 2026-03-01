@@ -542,7 +542,9 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
     <table>
       <thead>
         <tr><th>Run #</th><th>Mode</th><th>Payload</th><th>Throughput (MB/s)</th>
-            <th>TTFB (ms)</th><th>Total (ms)</th><th>Status</th></tr>
+            <th>Goodput (MB/s)</th><th>TTFB (ms)</th><th>Total (ms)</th>
+            <th>CPU (ms)</th><th>Client CSW (v/i)</th><th>Server CSW (v/i)</th>
+            <th>Status</th></tr>
       </thead>
       <tbody>
 "#,
@@ -556,6 +558,25 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
                         .throughput_mbps
                         .map(|m| format!("{m:.2}"))
                         .unwrap_or_else(|| "—".into());
+                    let goodput = h
+                        .goodput_mbps
+                        .map(|g| format!("{g:.2}"))
+                        .unwrap_or_else(|| "—".into());
+                    let cpu = h
+                        .cpu_time_ms
+                        .map(|c| format!("{c:.1}"))
+                        .unwrap_or_else(|| "—".into());
+                    let client_csw = match (h.csw_voluntary, h.csw_involuntary) {
+                        (Some(v), Some(i)) => format!("{v}/{i}"),
+                        _ => "—".into(),
+                    };
+                    let server_csw = match a.server_timing.as_ref() {
+                        Some(st) => match (st.srv_csw_voluntary, st.srv_csw_involuntary) {
+                            (Some(v), Some(i)) => format!("{v}/{i}"),
+                            _ => "—".into(),
+                        },
+                        None => "—".into(),
+                    };
                     let status_cell = {
                         let cls = if h.status_code < 400 { "ok" } else { "err" };
                         format!(r#"<span class="{cls}">{}</span>"#, h.status_code)
@@ -567,8 +588,12 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
           <td>{proto}</td>
           <td>{payload}</td>
           <td class="{thr_cls}">{thr}</td>
+          <td>{goodput}</td>
           <td>{ttfb:.2}</td>
           <td>{total:.2}</td>
+          <td>{cpu}</td>
+          <td>{client_csw}</td>
+          <td>{server_csw}</td>
           <td>{status}</td>
         </tr>
 "#,
@@ -581,8 +606,12 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
                             "warn"
                         },
                         thr = throughput,
+                        goodput = goodput,
                         ttfb = h.ttfb_ms,
                         total = h.total_duration_ms,
+                        cpu = cpu,
+                        client_csw = client_csw,
+                        server_csw = server_csw,
                         status = status_cell,
                     );
                 }
@@ -1301,6 +1330,10 @@ mod tests {
                     response_headers: vec![],
                     payload_bytes: 0,
                     throughput_mbps: None,
+                    goodput_mbps: None,
+                    cpu_time_ms: None,
+                    csw_voluntary: None,
+                    csw_involuntary: None,
                 }),
                 udp: None,
                 error: None,
