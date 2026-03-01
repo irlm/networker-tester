@@ -68,6 +68,7 @@ pub async fn run_native_probe(
             retry_count: 0,
             server_timing: None,
             udp_throughput: None,
+            page_load: None,
         }
     }
 
@@ -400,6 +401,7 @@ async fn run_native_probe_impl(
             retry_count: 0,
             server_timing: None,
             udp_throughput: None,
+            page_load: None,
         }
     }
 }
@@ -666,6 +668,7 @@ async fn run_native_https(
         retry_count: 0,
         server_timing: None,
         udp_throughput: None,
+        page_load: None,
     }
 }
 
@@ -817,5 +820,6 @@ fn make_failed(
         retry_count: 0,
         server_timing: None,
         udp_throughput: None,
+        page_load: None,
     }
 }

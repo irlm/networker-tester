@@ -390,6 +390,7 @@ mod tests {
             retry_count: 0,
             server_timing: None,
             udp_throughput: None,
+            page_load: None,
         }
     }
 

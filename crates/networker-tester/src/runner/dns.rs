@@ -90,6 +90,7 @@ pub async fn run_dns_probe(
             retry_count: 0,
             server_timing: None,
             udp_throughput: None,
+            page_load: None,
         },
         Err(err) => RequestAttempt {
             attempt_id,
@@ -108,6 +109,7 @@ pub async fn run_dns_probe(
             retry_count: 0,
             server_timing: None,
             udp_throughput: None,
+            page_load: None,
         },
     }
 }

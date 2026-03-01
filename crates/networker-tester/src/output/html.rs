@@ -153,6 +153,8 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
         Protocol::WebUpload,
         Protocol::UdpDownload,
         Protocol::UdpUpload,
+        Protocol::PageLoad,
+        Protocol::PageLoad2,
     ] {
         let rows: Vec<&RequestAttempt> = run
             .attempts
@@ -185,6 +187,8 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
             Protocol::WebUpload,
             Protocol::UdpDownload,
             Protocol::UdpUpload,
+            Protocol::PageLoad,
+            Protocol::PageLoad2,
         ];
         // Collect (proto, Option<payload>) groups in canonical order.
         let stat_groups: Vec<(Protocol, Option<usize>)> = all_protos
@@ -279,6 +283,82 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
                     stddev = s.stddev,
                     pct = success_pct,
                 );
+            }
+            let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
+        }
+    }
+
+    // ── Protocol Comparison (Page Load) ──────────────────────────────────────
+    {
+        use crate::metrics::compute_stats;
+        let pl_attempts: Vec<&RequestAttempt> = run
+            .attempts
+            .iter()
+            .filter(|a| {
+                matches!(a.protocol, Protocol::PageLoad | Protocol::PageLoad2)
+                    && a.page_load.is_some()
+            })
+            .collect();
+        if !pl_attempts.is_empty() {
+            let _ = write!(
+                out,
+                r#"
+<section class="card">
+  <h2>Protocol Comparison – Page Load</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Protocol</th><th>N</th><th>Assets</th>
+        <th>Avg Conns</th><th>p50 Total (ms)</th><th>Min (ms)</th><th>Max (ms)</th>
+      </tr>
+    </thead>
+    <tbody>
+"#
+            );
+            for proto in &[Protocol::PageLoad, Protocol::PageLoad2] {
+                let rows: Vec<&RequestAttempt> = pl_attempts
+                    .iter()
+                    .filter(|a| &a.protocol == proto)
+                    .copied()
+                    .collect();
+                if rows.is_empty() {
+                    continue;
+                }
+                let n = rows.len();
+                let pl_rows: Vec<&crate::metrics::PageLoadResult> =
+                    rows.iter().filter_map(|a| a.page_load.as_ref()).collect();
+                let avg_conns = pl_rows
+                    .iter()
+                    .map(|p| p.connections_opened as f64)
+                    .sum::<f64>()
+                    / n as f64;
+                let avg_fetched =
+                    pl_rows.iter().map(|p| p.assets_fetched as f64).sum::<f64>() / n as f64;
+                let total_assets = pl_rows.first().map(|p| p.asset_count).unwrap_or(0);
+                let total_ms_vals: Vec<f64> = pl_rows.iter().map(|p| p.total_ms).collect();
+                if let Some(s) = compute_stats(&total_ms_vals) {
+                    let _ = write!(
+                        out,
+                        r#"      <tr>
+        <td>{proto}</td>
+        <td>{n}</td>
+        <td>{fetched:.0}/{total}</td>
+        <td>{conns:.1}</td>
+        <td>{p50:.2}</td>
+        <td>{min:.2}</td>
+        <td>{max:.2}</td>
+      </tr>
+"#,
+                        proto = proto,
+                        n = n,
+                        fetched = avg_fetched,
+                        total = total_assets,
+                        conns = avg_conns,
+                        p50 = s.p50,
+                        min = s.min,
+                        max = s.max,
+                    );
+                }
             }
             let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
         }
@@ -1200,6 +1280,7 @@ mod tests {
                 retry_count: 0,
                 server_timing: None,
                 udp_throughput: None,
+                page_load: None,
             }],
         }
     }
