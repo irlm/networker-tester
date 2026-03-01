@@ -1,0 +1,7 @@
+{
+  "target": "http://172.16.32.106:8080/health",
+  "modes": ["download", "webdownload", "upload", "webupload", "http1", "http2", "udp"],
+  "payload_sizes": ["1m", "4m", "8m", "16m"],
+  "runs": 100,
+  "output_dir": "./output"
+}
