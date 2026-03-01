@@ -69,6 +69,56 @@ jobs:
         run: cargo build --release --workspace
 
   # ──────────────────────────────────────────────────────────────────────────
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-coverage-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ubuntu-coverage-cargo-
+
+      # Run lib tests + in-process integration tests under coverage.
+      # --all-features ensures http3 and native feature-gated paths are included.
+      # --no-report accumulates raw profiles; the final `report` step merges them.
+      # Integration tests are serialised (--test-threads=1) because each spawns
+      # its own endpoint on random ports.
+      - name: Collect coverage (lib tests)
+        run: |
+          cargo llvm-cov --no-report --workspace --all-features --lib
+
+      - name: Collect coverage (integration tests)
+        run: |
+          cargo llvm-cov --no-report --workspace --all-features \
+            --test integration -- --test-threads=1
+
+      - name: Generate lcov report
+        run: cargo llvm-cov report --lcov --output-path lcov.info
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: lcov.info
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  # ──────────────────────────────────────────────────────────────────────────
   test-no-default-features:
     name: Build without default features (stub paths)
     runs-on: ubuntu-latest

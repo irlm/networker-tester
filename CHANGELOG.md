@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- CI: `coverage` job runs `cargo-llvm-cov` over lib + integration tests with
+  `--all-features`, uploads merged lcov to Codecov (`CODECOV_TOKEN` secret).
+  `fail_ci_if_error: false` so a missing token never breaks the build.
+- Local: `cargo llvm-cov --workspace --all-features --open` for an instant HTML report.
+
 ---
 
 ## [0.11.1] – 2026-03-01 — HTTP/3 QUIC endpoint; --insecure for http3 probe
