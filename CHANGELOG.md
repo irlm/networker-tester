@@ -11,6 +11,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.0] – 2026-02-28 — HTTP/3 page-load probe
+
+### Added
+- **`pageload3` probe mode** — fetches the same N assets as `pageload`/`pageload2` but
+  multiplexed over a single QUIC/HTTP/3 connection (`connections_opened = 1`).
+  All N asset streams are opened sequentially (fast HEADERS frames) then all responses
+  are received concurrently. Requires `--features http3` and an HTTPS target.
+  Completes the three-protocol page-load comparison: HTTP/1.1 (≤6 conns) vs
+  HTTP/2 (1 TLS conn) vs HTTP/3 (1 QUIC conn), motivated by
+  "Does QUIC Make the Web Faster?" (Biswal & Gnawali, IEEE GLOBECOM 2016).
+- **`--insecure` support for `pageload3`** — reuses `build_tls_config` from `http.rs`
+  (same `NoCertVerifier` + custom CA bundle path), overriding ALPN to `h3`.
+- **ALPN warning extended** — startup `[WARN]` now also fires for `pageload3` mode
+  against a plain `http://` target.
+- **Protocol Comparison table extended** — terminal and HTML report now include a
+  `pageload3` row alongside `pageload` and `pageload2`.
+
+### Background
+Reference [5] cited in "Does QUIC Make the Web Faster?" for the finding that
+bandwidth improvements beyond ~5 Mbps yield diminishing returns on page load time is:
+Ilya Grigorik, *"Latency: The New Web Performance Bottleneck"*,
+https://www.igvita.com/2012/07/19/latency-the-new-web-performance-bottleneck/, 2012.
+This motivates testing all three protocols: the wall-clock difference between `pageload`,
+`pageload2`, and `pageload3` reveals which bottleneck (connection setup vs multiplexing
+vs QUIC handshake latency) dominates under real network conditions.
+
+---
+
 ## [0.8.0] – 2026-02-28 — Page-load simulation, ALPN warning
 
 ### Added

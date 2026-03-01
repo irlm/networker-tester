@@ -616,10 +616,30 @@ fn error_attempt(
     category: ErrorCategory,
     message: String,
 ) -> RequestAttempt {
+    error_attempt_proto(
+        attempt_id,
+        run_id,
+        seq,
+        started_at,
+        Protocol::PageLoad2,
+        category,
+        message,
+    )
+}
+
+fn error_attempt_proto(
+    attempt_id: Uuid,
+    run_id: Uuid,
+    seq: u32,
+    started_at: chrono::DateTime<Utc>,
+    protocol: Protocol,
+    category: ErrorCategory,
+    message: String,
+) -> RequestAttempt {
     RequestAttempt {
         attempt_id,
         run_id,
-        protocol: Protocol::PageLoad2,
+        protocol,
         sequence_num: seq,
         started_at,
         finished_at: Some(Utc::now()),
@@ -639,6 +659,394 @@ fn error_attempt(
         server_timing: None,
         udp_throughput: None,
         page_load: None,
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HTTP/3 page-load probe (feature-gated — requires `--features http3`)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Stub returned when the `http3` feature is disabled.
+#[cfg(not(feature = "http3"))]
+pub async fn run_pageload3_probe(run_id: Uuid, seq: u32, _cfg: &PageLoadConfig) -> RequestAttempt {
+    error_attempt_proto(
+        Uuid::new_v4(),
+        run_id,
+        seq,
+        chrono::Utc::now(),
+        Protocol::PageLoad3,
+        ErrorCategory::Config,
+        "HTTP/3 support not compiled in. Rebuild with --features http3".into(),
+    )
+}
+
+/// Establish one QUIC+HTTP/3 connection and fetch all assets concurrently
+/// via H3 stream multiplexing.
+#[cfg(feature = "http3")]
+pub async fn run_pageload3_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -> RequestAttempt {
+    use bytes::Buf;
+    use h3_quinn::Connection as QuinnH3Connection;
+    use quinn::{ClientConfig as QuinnClientConfig, Endpoint};
+    use std::sync::Arc;
+
+    let attempt_id = Uuid::new_v4();
+    let started_at = Utc::now();
+    let t_wall = Instant::now();
+
+    let target = &cfg.base_url;
+    let host = match target.host_str() {
+        Some(h) => h.to_string(),
+        None => {
+            return error_attempt_proto(
+                attempt_id,
+                run_id,
+                seq,
+                started_at,
+                Protocol::PageLoad3,
+                ErrorCategory::Config,
+                "Target URL has no host".into(),
+            );
+        }
+    };
+    if target.scheme() != "https" {
+        return error_attempt_proto(
+            attempt_id,
+            run_id,
+            seq,
+            started_at,
+            Protocol::PageLoad3,
+            ErrorCategory::Config,
+            "pageload3 requires an HTTPS target (HTTP/3 needs QUIC/TLS)".into(),
+        );
+    }
+    let port = target.port().unwrap_or(443);
+    let run_cfg = &cfg.run_cfg;
+
+    // ── QUIC / TLS config ─────────────────────────────────────────────────────
+    // Reuse build_tls_config (handles insecure + ca_bundle) then override ALPN.
+    let mut tls_cfg = match build_tls_config(
+        &Protocol::Http1,
+        run_cfg.insecure,
+        run_cfg.ca_bundle.as_deref(),
+    ) {
+        Ok(c) => c,
+        Err(e) => {
+            return error_attempt_proto(
+                attempt_id,
+                run_id,
+                seq,
+                started_at,
+                Protocol::PageLoad3,
+                ErrorCategory::Tls,
+                format!("TLS config error: {e}"),
+            );
+        }
+    };
+    tls_cfg.alpn_protocols = vec![b"h3".to_vec()];
+
+    let quinn_tls = QuinnClientConfig::new(Arc::new(
+        match quinn::crypto::rustls::QuicClientConfig::try_from(tls_cfg) {
+            Ok(c) => c,
+            Err(e) => {
+                return error_attempt_proto(
+                    attempt_id,
+                    run_id,
+                    seq,
+                    started_at,
+                    Protocol::PageLoad3,
+                    ErrorCategory::Tls,
+                    format!("QUIC TLS config error: {e}"),
+                );
+            }
+        },
+    ));
+
+    let mut endpoint = match Endpoint::client("0.0.0.0:0".parse().unwrap()) {
+        Ok(e) => e,
+        Err(e) => {
+            return error_attempt_proto(
+                attempt_id,
+                run_id,
+                seq,
+                started_at,
+                Protocol::PageLoad3,
+                ErrorCategory::Config,
+                format!("QUIC endpoint creation failed: {e}"),
+            );
+        }
+    };
+    endpoint.set_default_client_config(quinn_tls);
+
+    // ── DNS / address resolution ──────────────────────────────────────────────
+    let addr_str = format!("{host}:{port}");
+    let server_addr: std::net::SocketAddr = match addr_str.parse() {
+        Ok(a) => a,
+        Err(_) => match tokio::net::lookup_host(&addr_str).await {
+            Ok(mut a) => match a.next() {
+                Some(sa) => sa,
+                None => {
+                    return error_attempt_proto(
+                        attempt_id,
+                        run_id,
+                        seq,
+                        started_at,
+                        Protocol::PageLoad3,
+                        ErrorCategory::Dns,
+                        format!("No addresses resolved for {host}"),
+                    );
+                }
+            },
+            Err(e) => {
+                return error_attempt_proto(
+                    attempt_id,
+                    run_id,
+                    seq,
+                    started_at,
+                    Protocol::PageLoad3,
+                    ErrorCategory::Dns,
+                    format!("DNS error: {e}"),
+                );
+            }
+        },
+    };
+
+    // ── QUIC handshake (includes TLS 1.3) ────────────────────────────────────
+    let t_handshake = Instant::now();
+    let connecting = match endpoint.connect(server_addr, &host) {
+        Ok(c) => c,
+        Err(e) => {
+            return error_attempt_proto(
+                attempt_id,
+                run_id,
+                seq,
+                started_at,
+                Protocol::PageLoad3,
+                ErrorCategory::Tcp,
+                format!("QUIC connect error: {e}"),
+            );
+        }
+    };
+    let conn = match tokio::time::timeout(
+        std::time::Duration::from_millis(run_cfg.timeout_ms),
+        connecting,
+    )
+    .await
+    {
+        Ok(Ok(c)) => c,
+        Ok(Err(e)) => {
+            return error_attempt_proto(
+                attempt_id,
+                run_id,
+                seq,
+                started_at,
+                Protocol::PageLoad3,
+                ErrorCategory::Tcp,
+                format!("QUIC connect: {e}"),
+            );
+        }
+        Err(_) => {
+            return error_attempt_proto(
+                attempt_id,
+                run_id,
+                seq,
+                started_at,
+                Protocol::PageLoad3,
+                ErrorCategory::Timeout,
+                format!("QUIC handshake timed out after {}ms", run_cfg.timeout_ms),
+            );
+        }
+    };
+    let handshake_ms = t_handshake.elapsed().as_secs_f64() * 1000.0;
+
+    // ── H3 client ─────────────────────────────────────────────────────────────
+    let (mut driver, mut send_req) = match h3::client::new(QuinnH3Connection::new(conn)).await {
+        Ok(pair) => pair,
+        Err(e) => {
+            return error_attempt_proto(
+                attempt_id,
+                run_id,
+                seq,
+                started_at,
+                Protocol::PageLoad3,
+                ErrorCategory::Http,
+                format!("H3 handshake: {e}"),
+            );
+        }
+    };
+
+    tokio::spawn(async move {
+        let _ = futures::future::poll_fn(|cx| driver.poll_close(cx)).await;
+    });
+
+    // ── Manifest request (measures ttfb on first request) ────────────────────
+    let manifest_path = format!("/page?assets={}&bytes={}", cfg.asset_count, cfg.asset_size);
+    let manifest_req = http::Request::builder()
+        .method("GET")
+        .uri(format!("https://{host}:{port}{manifest_path}"))
+        .header("user-agent", "networker-tester/0.1 (h3-pageload)")
+        .body(())
+        .expect("valid request");
+
+    let http_started_at = Utc::now();
+    let t_sent = Instant::now();
+    let mut manifest_stream = match send_req.send_request(manifest_req).await {
+        Ok(s) => s,
+        Err(e) => {
+            return error_attempt_proto(
+                attempt_id,
+                run_id,
+                seq,
+                started_at,
+                Protocol::PageLoad3,
+                ErrorCategory::Http,
+                format!("Manifest send_request: {e}"),
+            );
+        }
+    };
+    manifest_stream.finish().await.ok();
+
+    let manifest_resp = match manifest_stream.recv_response().await {
+        Ok(r) => r,
+        Err(e) => {
+            return error_attempt_proto(
+                attempt_id,
+                run_id,
+                seq,
+                started_at,
+                Protocol::PageLoad3,
+                ErrorCategory::Http,
+                format!("Manifest recv_response: {e}"),
+            );
+        }
+    };
+    let ttfb_ms = t_sent.elapsed().as_secs_f64() * 1000.0;
+    let manifest_status = manifest_resp.status().as_u16();
+    let manifest_headers = manifest_resp.headers().clone();
+
+    let mut manifest_body_bytes = 0usize;
+    while let Some(chunk) = manifest_stream.recv_data().await.ok().flatten() {
+        manifest_body_bytes += chunk.remaining();
+    }
+    let manifest_total_ms = t_sent.elapsed().as_secs_f64() * 1000.0;
+
+    let tls_result = crate::metrics::TlsResult {
+        protocol_version: "TLSv1.3 (QUIC)".into(),
+        cipher_suite: "QUIC-embedded".into(),
+        alpn_negotiated: Some("h3".into()),
+        cert_subject: None,
+        cert_issuer: None,
+        cert_expiry: None,
+        handshake_duration_ms: handshake_ms,
+        started_at: http_started_at,
+        success: true,
+        cert_chain: vec![],
+        tls_backend: Some("rustls+quinn".into()),
+    };
+    let manifest_http = crate::metrics::HttpResult {
+        negotiated_version: "HTTP/3".into(),
+        status_code: manifest_status,
+        headers_size_bytes: manifest_headers
+            .iter()
+            .map(|(k, v)| k.as_str().len() + v.len() + 4)
+            .sum(),
+        body_size_bytes: manifest_body_bytes,
+        ttfb_ms,
+        total_duration_ms: manifest_total_ms,
+        redirect_count: 0,
+        started_at: http_started_at,
+        response_headers: manifest_headers
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+            .collect(),
+        payload_bytes: 0,
+        throughput_mbps: None,
+    };
+
+    // ── Asset requests: open all N streams sequentially, then receive concurrently ──
+    let asset_urls = build_asset_urls(&cfg.base_url, cfg.asset_count, cfg.asset_size);
+    let n = asset_urls.len();
+    let dur = std::time::Duration::from_millis(run_cfg.timeout_ms);
+
+    // Phase 1: open N streams (fast — just sends HEADERS frame per stream)
+    let mut streams = Vec::with_capacity(n);
+    for (i, _) in asset_urls.iter().enumerate() {
+        let path = format!("/asset?id={i}&bytes={}", cfg.asset_size);
+        let req = http::Request::builder()
+            .method("GET")
+            .uri(format!("https://{host}:{port}{path}"))
+            .header("user-agent", "networker-tester/0.1 (h3-pageload)")
+            .body(())
+            .expect("valid asset request");
+        match tokio::time::timeout(dur, send_req.send_request(req)).await {
+            Ok(Ok(mut s)) => {
+                s.finish().await.ok();
+                streams.push(Some(s));
+            }
+            _ => streams.push(None),
+        }
+    }
+
+    // Phase 2: receive all responses concurrently
+    let asset_futures: Vec<_> = streams
+        .into_iter()
+        .map(|maybe_stream| async move {
+            let mut stream = maybe_stream?;
+            let t0 = Instant::now();
+            let resp = stream.recv_response().await.ok()?;
+            let status = resp.status().as_u16();
+            let mut body_bytes = 0usize;
+            while let Some(chunk) = stream.recv_data().await.ok().flatten() {
+                body_bytes += chunk.remaining();
+            }
+            let elapsed = t0.elapsed().as_secs_f64() * 1000.0;
+            Some((status, body_bytes, elapsed))
+        })
+        .collect();
+
+    let asset_results = futures::future::join_all(asset_futures).await;
+
+    let mut assets_fetched = 0usize;
+    let mut total_bytes = 0usize;
+    let mut asset_timings: Vec<f64> = Vec::with_capacity(n);
+
+    for (status, body_bytes, elapsed) in asset_results.into_iter().flatten() {
+        if status < 500 {
+            assets_fetched += 1;
+            total_bytes += body_bytes;
+            asset_timings.push(elapsed);
+        }
+    }
+
+    let total_ms = t_wall.elapsed().as_secs_f64() * 1000.0;
+    let page_load = PageLoadResult {
+        asset_count: n,
+        assets_fetched,
+        total_bytes,
+        total_ms,
+        ttfb_ms,
+        connections_opened: 1,
+        asset_timings_ms: asset_timings,
+        started_at,
+    };
+
+    RequestAttempt {
+        attempt_id,
+        run_id,
+        protocol: Protocol::PageLoad3,
+        sequence_num: seq,
+        started_at,
+        finished_at: Some(Utc::now()),
+        success: assets_fetched == n,
+        dns: None,
+        tcp: None,
+        tls: Some(tls_result),
+        http: Some(manifest_http),
+        udp: None,
+        error: None,
+        retry_count: 0,
+        server_timing: None,
+        udp_throughput: None,
+        page_load: Some(page_load),
     }
 }
 

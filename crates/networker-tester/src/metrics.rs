@@ -79,7 +79,7 @@ pub struct RequestAttempt {
     /// UDP bulk transfer result (udpdownload / udpupload modes only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub udp_throughput: Option<UdpThroughputResult>,
-    /// Page-load simulation result (pageload / pageload2 modes only).
+    /// Page-load simulation result (pageload / pageload2 / pageload3 modes only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page_load: Option<PageLoadResult>,
 }
@@ -131,6 +131,9 @@ pub enum Protocol {
     /// HTTP/2 page-load: same assets but multiplexed over one TLS connection.
     /// Requires an HTTPS target.
     PageLoad2,
+    /// HTTP/3 page-load: same assets multiplexed over one QUIC connection.
+    /// Requires `--features http3` and an HTTPS target.
+    PageLoad3,
 }
 
 impl std::fmt::Display for Protocol {
@@ -153,6 +156,7 @@ impl std::fmt::Display for Protocol {
             Protocol::Curl => write!(f, "curl"),
             Protocol::PageLoad => write!(f, "pageload"),
             Protocol::PageLoad2 => write!(f, "pageload2"),
+            Protocol::PageLoad3 => write!(f, "pageload3"),
         }
     }
 }
@@ -179,6 +183,7 @@ impl std::str::FromStr for Protocol {
             "curl" => Ok(Protocol::Curl),
             "pageload" => Ok(Protocol::PageLoad),
             "pageload2" => Ok(Protocol::PageLoad2),
+            "pageload3" => Ok(Protocol::PageLoad3),
             other => Err(format!("Unknown protocol: {other}")),
         }
     }
@@ -364,7 +369,7 @@ pub struct UdpThroughputResult {
     pub started_at: DateTime<Utc>,
 }
 
-/// Page-load simulation result (pageload / pageload2 modes).
+/// Page-load simulation result (pageload / pageload2 / pageload3 modes).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PageLoadResult {
     /// Number of assets listed in the manifest.
@@ -553,7 +558,7 @@ pub fn primary_metric_label(proto: &Protocol) -> &'static str {
         | Protocol::UdpUpload => "Throughput MB/s",
         Protocol::Dns => "Resolve ms",
         Protocol::Tls => "Handshake ms",
-        Protocol::PageLoad | Protocol::PageLoad2 => "Total ms",
+        Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3 => "Total ms",
     }
 }
 
@@ -589,7 +594,9 @@ pub fn primary_metric_value(a: &RequestAttempt) -> Option<f64> {
         }
         Protocol::Dns => a.dns.as_ref().map(|d| d.duration_ms),
         Protocol::Tls => a.tls.as_ref().map(|t| t.handshake_duration_ms),
-        Protocol::PageLoad | Protocol::PageLoad2 => a.page_load.as_ref().map(|p| p.total_ms),
+        Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3 => {
+            a.page_load.as_ref().map(|p| p.total_ms)
+        }
     }
 }
 
@@ -658,6 +665,7 @@ mod tests {
             "curl",
             "pageload",
             "pageload2",
+            "pageload3",
         ] {
             let parsed = Protocol::from_str(p).unwrap();
             assert_eq!(parsed.to_string(), *p);

@@ -22,7 +22,7 @@ pub struct Cli {
     // ── Modes ─────────────────────────────────────────────────────────────────
     /// Comma-separated probe modes:
     /// tcp,http1,http2,http3,udp,download,upload,webdownload,webupload,udpdownload,udpupload,
-    /// dns,tls,native,curl,pageload,pageload2.
+    /// dns,tls,native,curl,pageload,pageload2,pageload3.
     /// native: DNS + TCP + platform TLS (SChannel/SecureTransport/OpenSSL) + HTTP/1.1.
     ///   Requires --features native at compile time.
     /// curl: DNS + TCP + TLS + HTTP via the system curl binary.
@@ -36,6 +36,8 @@ pub struct Cli {
     /// pageload: fetch /page manifest then download all assets over up to 6 parallel HTTP/1.1
     ///   connections (browser-like). Use --page-assets and --page-asset-size to configure.
     /// pageload2: same assets multiplexed over a single HTTP/2 TLS connection. Requires HTTPS.
+    /// pageload3: same assets multiplexed over a single QUIC/HTTP/3 connection. Requires HTTPS
+    ///   and --features http3.
     #[arg(long, value_delimiter = ',')]
     pub modes: Option<Vec<String>>,
 

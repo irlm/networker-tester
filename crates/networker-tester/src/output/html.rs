@@ -155,6 +155,7 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
         Protocol::UdpUpload,
         Protocol::PageLoad,
         Protocol::PageLoad2,
+        Protocol::PageLoad3,
     ] {
         let rows: Vec<&RequestAttempt> = run
             .attempts
@@ -189,6 +190,7 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
             Protocol::UdpUpload,
             Protocol::PageLoad,
             Protocol::PageLoad2,
+            Protocol::PageLoad3,
         ];
         // Collect (proto, Option<payload>) groups in canonical order.
         let stat_groups: Vec<(Protocol, Option<usize>)> = all_protos
@@ -295,8 +297,10 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
             .attempts
             .iter()
             .filter(|a| {
-                matches!(a.protocol, Protocol::PageLoad | Protocol::PageLoad2)
-                    && a.page_load.is_some()
+                matches!(
+                    a.protocol,
+                    Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3
+                ) && a.page_load.is_some()
             })
             .collect();
         if !pl_attempts.is_empty() {
@@ -315,7 +319,7 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
     <tbody>
 "#
             );
-            for proto in &[Protocol::PageLoad, Protocol::PageLoad2] {
+            for proto in &[Protocol::PageLoad, Protocol::PageLoad2, Protocol::PageLoad3] {
                 let rows: Vec<&RequestAttempt> = pl_attempts
                     .iter()
                     .filter(|a| &a.protocol == proto)

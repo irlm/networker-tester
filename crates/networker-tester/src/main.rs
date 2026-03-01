@@ -14,7 +14,7 @@ use networker_tester::runner::{
     http::{run_probe, RunConfig},
     http3::run_http3_probe,
     native::run_native_probe,
-    pageload::{run_pageload2_probe, run_pageload_probe, PageLoadConfig},
+    pageload::{run_pageload2_probe, run_pageload3_probe, run_pageload_probe, PageLoadConfig},
     throughput::{
         run_download_probe, run_upload_probe, run_webdownload_probe, run_webupload_probe,
         ThroughputConfig,
@@ -72,7 +72,7 @@ async fn main() -> anyhow::Result<()> {
     if modes.is_empty() {
         anyhow::bail!(
             "No valid modes specified. Use: tcp,http1,http2,http3,udp,dns,tls,native,curl,\
-             download,upload,webdownload,webupload,udpdownload,udpupload,pageload,pageload2"
+             download,upload,webdownload,webupload,udpdownload,udpupload,pageload,pageload2,pageload3"
         );
     }
 
@@ -80,7 +80,7 @@ async fn main() -> anyhow::Result<()> {
     for mode in &modes {
         if matches!(
             mode,
-            Protocol::Http2 | Protocol::Http3 | Protocol::PageLoad2
+            Protocol::Http2 | Protocol::Http3 | Protocol::PageLoad2 | Protocol::PageLoad3
         ) && target.scheme() == "http"
         {
             warn!(
@@ -373,6 +373,7 @@ async fn dispatch_once(
         (Protocol::Curl, _) => run_curl_probe(run_id, seq, target, cfg).await,
         (Protocol::PageLoad, _) => run_pageload_probe(run_id, seq, pageload_cfg).await,
         (Protocol::PageLoad2, _) => run_pageload2_probe(run_id, seq, pageload_cfg).await,
+        (Protocol::PageLoad3, _) => run_pageload3_probe(run_id, seq, pageload_cfg).await,
         _ => unreachable!("Upload/WebUpload/UdpDownload/UdpUpload without payload_size"),
     }
 }
@@ -516,7 +517,7 @@ fn log_attempt(a: &networker_tester::metrics::RequestAttempt) {
                 );
             }
         }
-        PageLoad | PageLoad2 => {
+        PageLoad | PageLoad2 | PageLoad3 => {
             if let Some(p) = &a.page_load {
                 info!(
                     "{status} #{seq} [{proto}] {fetched}/{total} assets \
@@ -602,6 +603,7 @@ fn print_summary(run: &TestRun) {
         Protocol::UdpUpload,
         Protocol::PageLoad,
         Protocol::PageLoad2,
+        Protocol::PageLoad3,
     ];
     let stat_groups: Vec<(Protocol, Option<usize>)> = ordered_protos
         .iter()
@@ -706,16 +708,14 @@ fn print_summary(run: &TestRun) {
         }
     }
 
-    // Protocol comparison table when both pageload variants are present
-    let has_pl1 = run
-        .attempts
-        .iter()
-        .any(|a| a.protocol == Protocol::PageLoad);
-    let has_pl2 = run
-        .attempts
-        .iter()
-        .any(|a| a.protocol == Protocol::PageLoad2);
-    if has_pl1 || has_pl2 {
+    // Protocol comparison table when any pageload variant is present
+    let has_pageload = run.attempts.iter().any(|a| {
+        matches!(
+            a.protocol,
+            Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3
+        )
+    });
+    if has_pageload {
         print_comparison(run);
     }
 
@@ -770,7 +770,7 @@ fn print_comparison(run: &TestRun) {
     println!(" ── Protocol Comparison (Page Load) ──────────────────────────────────");
     println!(" Protocol  │ N   │ Assets  │ Conns │   p50    │   Min    │   Max");
     println!("───────────┼─────┼─────────┼───────┼──────────┼──────────┼──────────");
-    for proto in &[Protocol::PageLoad, Protocol::PageLoad2] {
+    for proto in &[Protocol::PageLoad, Protocol::PageLoad2, Protocol::PageLoad3] {
         if let Some(r) = row(proto) {
             println!("{r}");
         }
