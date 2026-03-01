@@ -11,6 +11,10 @@ path = "src/lib.rs"
 name = "networker-endpoint"
 path = "src/main.rs"
 
+[features]
+default = ["http3"]
+http3   = ["quinn", "h3", "h3-quinn"]
+
 [dependencies]
 # --- async runtime ---
 tokio.workspace = true
@@ -29,6 +33,13 @@ tokio-rustls   = "0.26"
 
 # --- cert generation (self-signed for dev) ---
 rcgen = "0.13"
+
+http     = "1"
+
+# --- HTTP/3 / QUIC (optional feature, on by default) ---
+quinn    = { version = "0.11",    optional = true }
+h3       = { version = "0.0.8",  optional = true }
+h3-quinn = { version = "0.0.10", optional = true }
 
 # --- shared workspace ---
 serde.workspace       = true

@@ -286,8 +286,12 @@ async fn server_info() -> impl IntoResponse {
     Json(serde_json::json!({
         "service": "networker-endpoint",
         "version": env!("CARGO_PKG_VERSION"),
-        "protocols": ["HTTP/1.1", "HTTP/2"],
-        "http3": false,
+        "protocols": if cfg!(feature = "http3") {
+            serde_json::json!(["HTTP/1.1", "HTTP/2", "HTTP/3"])
+        } else {
+            serde_json::json!(["HTTP/1.1", "HTTP/2"])
+        },
+        "http3": cfg!(feature = "http3"),
         "endpoints": [
             "/health", "/echo", "/download", "/upload",
             "/delay", "/headers", "/status/:code", "/http-version", "/info"

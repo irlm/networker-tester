@@ -1,3 +1,4 @@
+mod http3_server;
 mod routes;
 mod udp_echo;
 mod udp_throughput;
@@ -48,7 +49,7 @@ pub async fn run_with_shutdown(
 
     let (cert_pem, key_pem) = generate_self_signed_cert().context("generate self-signed cert")?;
 
-    let tls_config = RustlsConfig::from_pem(cert_pem, key_pem)
+    let tls_config = RustlsConfig::from_pem(cert_pem.clone(), key_pem.clone())
         .await
         .context("Build RustlsConfig")?;
 
@@ -88,12 +89,22 @@ pub async fn run_with_shutdown(
             .expect("HTTPS server error");
     });
 
+    // HTTP/3 QUIC server – same UDP port as HTTPS, sharing the self-signed cert
+    #[cfg(feature = "http3")]
+    let h3_handle = tokio::spawn(async move {
+        if let Err(e) = http3_server::server::run_h3_server(cert_pem, key_pem, https_addr).await {
+            tracing::error!("HTTP/3 server error: {e:#}");
+        }
+    });
+
     // Wait for shutdown signal
     let _ = shutdown_rx.await;
     http_handle.abort();
     https_handle.abort();
     udp_handle.abort();
     udp_tp_handle.abort();
+    #[cfg(feature = "http3")]
+    h3_handle.abort();
 
     Ok(())
 }

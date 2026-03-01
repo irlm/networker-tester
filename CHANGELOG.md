@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.11.1] – 2026-03-01 — HTTP/3 QUIC endpoint; --insecure for http3 probe
+
+### Added
+- **HTTP/3 QUIC server in `networker-endpoint`** — Quinn-based QUIC listener on UDP
+  8443 (same port as HTTPS), serving `/health`, `/download`, `/upload`, `/page`, `/asset`
+  with full `Server-Timing` (proc/recv/csw-v/csw-i) and `X-Networker-*` headers.
+  `http3` is now a default feature of both crates; no extra flags needed.
+- **`--insecure` and `--ca-bundle` for `http3` probe** — previously the h3 client always
+  used webpki roots and ignored these flags. Now uses the same `build_tls_config()` path
+  as HTTP/1.1 and HTTP/2, so `--insecure` works with the self-signed endpoint cert.
+
+### Changed
+- `networker-endpoint/Cargo.toml`: `[features] default = ["http3"]`
+- `/info` endpoint: `"http3": true` and `"protocols": ["HTTP/1.1","HTTP/2","HTTP/3"]`
+  when compiled with the http3 feature (now the default).
+
+---
+
 ## [0.11.0] – 2026-02-28 — CPU cost, goodput, context switches & TTFB visibility
 
 ### Added
