@@ -145,6 +145,7 @@ pub async fn run_udpdownload_probe(
         retry_count: 0,
         server_timing: None,
         udp_throughput: Some(result),
+        page_load: None,
     }
 }
 
@@ -234,6 +235,7 @@ pub async fn run_udpupload_probe(
         retry_count: 0,
         server_timing: None,
         udp_throughput: Some(result),
+        page_load: None,
     }
 }
 
@@ -464,6 +466,7 @@ fn udp_tp_failed(
         retry_count: 0,
         server_timing: None,
         udp_throughput: None,
+        page_load: None,
     }
 }
 

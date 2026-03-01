@@ -11,6 +11,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.8.0] – 2026-02-28 — Page-load simulation, ALPN warning
+
+### Added
+- **`pageload` probe mode** — fetches `/page?assets=N&bytes=B` manifest from the endpoint
+  then downloads all assets over up to 6 parallel HTTP/1.1 connections (browser-like).
+  Measures wall-clock `total_ms`, `ttfb_ms`, `connections_opened`, per-asset timings,
+  and total bytes. Configure with `--page-assets N` (default 20) and
+  `--page-asset-size <size>` (default 10k, accepts k/m suffixes).
+- **`pageload2` probe mode** — same N assets multiplexed over a single HTTP/2 TLS
+  connection. Records `connections_opened = 1`. Requires an HTTPS target.
+- **`/page` and `/asset` endpoints on `networker-endpoint`** — `GET /page?assets=N&bytes=B`
+  returns a JSON manifest listing N asset URLs; `GET /asset?id=X&bytes=B` returns B
+  zero bytes (cap 100 MiB).
+- **ALPN warning** — startup warns with `[WARN]` when `http2`, `http3`, or `pageload2`
+  mode is requested against a plain `http://` target (HTTP/2 requires TLS+ALPN; over
+  plain HTTP every connection silently falls back to HTTP/1.1).
+- **`PageLoadResult` struct** — `asset_count`, `assets_fetched`, `total_bytes`,
+  `total_ms`, `ttfb_ms`, `connections_opened`, `asset_timings_ms`, `started_at`.
+  Attached to `RequestAttempt.page_load` (serde-default, skip_serializing_if none).
+- **Terminal comparison table** — when both `pageload` and `pageload2` are run in the
+  same session, a `Protocol Comparison (Page Load)` table is printed showing N,
+  assets, avg connections, p50/min/max total_ms per variant.
+- **HTML Protocol Comparison card** — same data rendered as an HTML `<table>` after
+  the Statistics Summary section whenever any `pageload`/`pageload2` attempts are present.
+- `pageload` and `pageload2` appear in terminal averages + statistics tables, HTML
+  Timing Breakdown, and HTML Statistics Summary.
+
+### Changed
+- CLI `--modes` help text extended to document `pageload` and `pageload2`.
+- `runner/http.rs::build_tls_config` promoted to `pub(crate)` for reuse by `pageload.rs`.
+- `cli::parse_size` promoted to `pub(crate)` for reuse in `resolve()`.
+- Workspace version bumped to `0.8.0` (MINOR — new features).
+
+---
+
 ## [0.7.0] – 2026-02-28 — native-TLS probe, curl probe, tls_backend field
 
 ### Added

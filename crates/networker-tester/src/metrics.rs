@@ -79,6 +79,9 @@ pub struct RequestAttempt {
     /// UDP bulk transfer result (udpdownload / udpupload modes only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub udp_throughput: Option<UdpThroughputResult>,
+    /// Page-load simulation result (pageload / pageload2 modes only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_load: Option<PageLoadResult>,
 }
 
 impl RequestAttempt {
@@ -122,6 +125,12 @@ pub enum Protocol {
     /// Curl probe — spawns the `curl` binary and captures per-phase timing from
     /// `--write-out`. Maps to the same result structs as an http1 probe.
     Curl,
+    /// HTTP/1.1 page-load: fetches /page manifest then downloads all assets
+    /// using up to 6 parallel connections (browser-like).
+    PageLoad,
+    /// HTTP/2 page-load: same assets but multiplexed over one TLS connection.
+    /// Requires an HTTPS target.
+    PageLoad2,
 }
 
 impl std::fmt::Display for Protocol {
@@ -142,6 +151,8 @@ impl std::fmt::Display for Protocol {
             Protocol::Tls => write!(f, "tls"),
             Protocol::Native => write!(f, "native"),
             Protocol::Curl => write!(f, "curl"),
+            Protocol::PageLoad => write!(f, "pageload"),
+            Protocol::PageLoad2 => write!(f, "pageload2"),
         }
     }
 }
@@ -166,6 +177,8 @@ impl std::str::FromStr for Protocol {
             "tls" => Ok(Protocol::Tls),
             "native" => Ok(Protocol::Native),
             "curl" => Ok(Protocol::Curl),
+            "pageload" => Ok(Protocol::PageLoad),
+            "pageload2" => Ok(Protocol::PageLoad2),
             other => Err(format!("Unknown protocol: {other}")),
         }
     }
@@ -351,6 +364,26 @@ pub struct UdpThroughputResult {
     pub started_at: DateTime<Utc>,
 }
 
+/// Page-load simulation result (pageload / pageload2 modes).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageLoadResult {
+    /// Number of assets listed in the manifest.
+    pub asset_count: usize,
+    /// Number of assets successfully retrieved.
+    pub assets_fetched: usize,
+    /// Sum of all asset response body bytes.
+    pub total_bytes: usize,
+    /// Wall-clock time from probe start to last asset byte received (ms).
+    pub total_ms: f64,
+    /// Time to first asset's first byte (ms).
+    pub ttfb_ms: f64,
+    /// Number of distinct TCP connections opened (6 for H1.1, 1 for H2).
+    pub connections_opened: u32,
+    /// Per-asset total durations in ms.
+    pub asset_timings_ms: Vec<f64>,
+    pub started_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorRecord {
     pub category: ErrorCategory,
@@ -520,6 +553,7 @@ pub fn primary_metric_label(proto: &Protocol) -> &'static str {
         | Protocol::UdpUpload => "Throughput MB/s",
         Protocol::Dns => "Resolve ms",
         Protocol::Tls => "Handshake ms",
+        Protocol::PageLoad | Protocol::PageLoad2 => "Total ms",
     }
 }
 
@@ -555,6 +589,7 @@ pub fn primary_metric_value(a: &RequestAttempt) -> Option<f64> {
         }
         Protocol::Dns => a.dns.as_ref().map(|d| d.duration_ms),
         Protocol::Tls => a.tls.as_ref().map(|t| t.handshake_duration_ms),
+        Protocol::PageLoad | Protocol::PageLoad2 => a.page_load.as_ref().map(|p| p.total_ms),
     }
 }
 
@@ -621,6 +656,8 @@ mod tests {
             "udpupload",
             "native",
             "curl",
+            "pageload",
+            "pageload2",
         ] {
             let parsed = Protocol::from_str(p).unwrap();
             assert_eq!(parsed.to_string(), *p);
@@ -647,6 +684,7 @@ mod tests {
             retry_count: 0,
             server_timing: None,
             udp_throughput: None,
+            page_load: None,
         };
         let run = TestRun {
             run_id,

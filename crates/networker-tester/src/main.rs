@@ -2,6 +2,7 @@ use anyhow::Context;
 use chrono::Utc;
 use clap::Parser;
 use networker_tester::cli;
+use networker_tester::metrics::PageLoadResult;
 use networker_tester::metrics::{
     attempt_payload_bytes, compute_stats, primary_metric_label, primary_metric_value, Protocol,
     RequestAttempt, TestRun,
@@ -13,6 +14,7 @@ use networker_tester::runner::{
     http::{run_probe, RunConfig},
     http3::run_http3_probe,
     native::run_native_probe,
+    pageload::{run_pageload2_probe, run_pageload_probe, PageLoadConfig},
     throughput::{
         run_download_probe, run_upload_probe, run_webdownload_probe, run_webupload_probe,
         ThroughputConfig,
@@ -70,8 +72,24 @@ async fn main() -> anyhow::Result<()> {
     if modes.is_empty() {
         anyhow::bail!(
             "No valid modes specified. Use: tcp,http1,http2,http3,udp,dns,tls,native,curl,\
-             download,upload,webdownload,webupload,udpdownload,udpupload"
+             download,upload,webdownload,webupload,udpdownload,udpupload,pageload,pageload2"
         );
+    }
+
+    // ── ALPN warning for H2/H3/pageload2 over plain HTTP ─────────────────────
+    for mode in &modes {
+        if matches!(
+            mode,
+            Protocol::Http2 | Protocol::Http3 | Protocol::PageLoad2
+        ) && target.scheme() == "http"
+        {
+            warn!(
+                "{mode} requires HTTPS for ALPN negotiation; \
+                 over plain http:// the connection falls back to HTTP/1.1. \
+                 Use https:// (e.g. https://host:8443) with --insecure for the \
+                 self-signed endpoint cert."
+            );
+        }
     }
 
     let payload_sizes = cfg.parsed_payload_sizes().context("--payload-sizes")?;
@@ -124,6 +142,13 @@ async fn main() -> anyhow::Result<()> {
         base_url: target.clone(),
     };
 
+    let pageload_cfg = PageLoadConfig {
+        run_cfg: probe_cfg.clone(),
+        base_url: target.clone(),
+        asset_count: cfg.page_assets,
+        asset_size: cfg.page_asset_size,
+    };
+
     // Expand modes × payload sizes into a flat task list.
     // All throughput modes generate one task per payload size.
     let mode_tasks: Vec<(Protocol, Option<usize>)> = modes
@@ -174,6 +199,7 @@ async fn main() -> anyhow::Result<()> {
                 let udp_cfg_clone = udp_cfg.clone();
                 let udp_throughput_cfg_clone = udp_throughput_cfg.clone();
                 let throughput_cfg_clone = throughput_cfg.clone();
+                let pageload_cfg_clone = pageload_cfg.clone();
                 let current_seq = seq;
                 seq += 1;
 
@@ -189,6 +215,7 @@ async fn main() -> anyhow::Result<()> {
                         &udp_cfg_clone,
                         &udp_throughput_cfg_clone,
                         &throughput_cfg_clone,
+                        &pageload_cfg_clone,
                     )
                     .await;
 
@@ -207,6 +234,7 @@ async fn main() -> anyhow::Result<()> {
                             &udp_cfg_clone,
                             &udp_throughput_cfg_clone,
                             &throughput_cfg_clone,
+                            &pageload_cfg_clone,
                         )
                         .await;
                         retry_a.retry_count = retry_num;
@@ -314,6 +342,7 @@ async fn dispatch_once(
     udp_cfg: &UdpProbeConfig,
     udp_throughput_cfg: &UdpThroughputConfig,
     throughput_cfg: &ThroughputConfig,
+    pageload_cfg: &PageLoadConfig,
 ) -> RequestAttempt {
     match (proto, payload_sz) {
         (Protocol::Download, Some(sz)) => run_download_probe(run_id, seq, sz, throughput_cfg).await,
@@ -342,6 +371,8 @@ async fn dispatch_once(
         (Protocol::Tls, _) => run_tls_probe(run_id, seq, target, cfg).await,
         (Protocol::Native, _) => run_native_probe(run_id, seq, target, cfg).await,
         (Protocol::Curl, _) => run_curl_probe(run_id, seq, target, cfg).await,
+        (Protocol::PageLoad, _) => run_pageload_probe(run_id, seq, pageload_cfg).await,
+        (Protocol::PageLoad2, _) => run_pageload2_probe(run_id, seq, pageload_cfg).await,
         _ => unreachable!("Upload/WebUpload/UdpDownload/UdpUpload without payload_size"),
     }
 }
@@ -485,6 +516,22 @@ fn log_attempt(a: &networker_tester::metrics::RequestAttempt) {
                 );
             }
         }
+        PageLoad | PageLoad2 => {
+            if let Some(p) = &a.page_load {
+                info!(
+                    "{status} #{seq} [{proto}] {fetched}/{total} assets \
+                     conns={conns} {bytes}B {ms:.1}ms{retry}",
+                    seq = a.sequence_num,
+                    proto = a.protocol,
+                    fetched = p.assets_fetched,
+                    total = p.asset_count,
+                    conns = p.connections_opened,
+                    bytes = p.total_bytes,
+                    ms = p.total_ms,
+                    retry = retry_suffix,
+                );
+            }
+        }
     }
 
     if let Some(e) = &a.error {
@@ -553,6 +600,8 @@ fn print_summary(run: &TestRun) {
         Protocol::WebUpload,
         Protocol::UdpDownload,
         Protocol::UdpUpload,
+        Protocol::PageLoad,
+        Protocol::PageLoad2,
     ];
     let stat_groups: Vec<(Protocol, Option<usize>)> = ordered_protos
         .iter()
@@ -657,7 +706,75 @@ fn print_summary(run: &TestRun) {
         }
     }
 
+    // Protocol comparison table when both pageload variants are present
+    let has_pl1 = run
+        .attempts
+        .iter()
+        .any(|a| a.protocol == Protocol::PageLoad);
+    let has_pl2 = run
+        .attempts
+        .iter()
+        .any(|a| a.protocol == Protocol::PageLoad2);
+    if has_pl1 || has_pl2 {
+        print_comparison(run);
+    }
+
     println!("══════════════════════════════════════════════\n");
+}
+
+fn print_comparison(run: &TestRun) {
+    let row = |proto: &Protocol| -> Option<String> {
+        let attempts: Vec<&RequestAttempt> = run
+            .attempts
+            .iter()
+            .filter(|a| &a.protocol == proto)
+            .collect();
+        if attempts.is_empty() {
+            return None;
+        }
+        let n = attempts.len();
+        let pl_results: Vec<&PageLoadResult> = attempts
+            .iter()
+            .filter_map(|a| a.page_load.as_ref())
+            .collect();
+        if pl_results.is_empty() {
+            return None;
+        }
+        let total_ms_vals: Vec<f64> = pl_results.iter().map(|p| p.total_ms).collect();
+        let avg_conns: f64 = pl_results
+            .iter()
+            .map(|p| p.connections_opened as f64)
+            .sum::<f64>()
+            / n as f64;
+        let avg_assets: f64 = pl_results
+            .iter()
+            .map(|p| p.assets_fetched as f64)
+            .sum::<f64>()
+            / n as f64;
+        let total_assets = pl_results.first().map(|p| p.asset_count).unwrap_or(0);
+        let stats = networker_tester::metrics::compute_stats(&total_ms_vals)?;
+        Some(format!(
+            " {proto:<10} │ {n:<3} │ {assets:>3.0}/{total:<3} │ {conns:>5.1} │ {p50:>8.1}ms │ {min:>8.1}ms │ {max:>8.1}ms",
+            proto = proto,
+            n = n,
+            assets = avg_assets,
+            total = total_assets,
+            conns = avg_conns,
+            p50 = stats.p50,
+            min = stats.min,
+            max = stats.max,
+        ))
+    };
+
+    println!();
+    println!(" ── Protocol Comparison (Page Load) ──────────────────────────────────");
+    println!(" Protocol  │ N   │ Assets  │ Conns │   p50    │   Min    │   Max");
+    println!("───────────┼─────┼─────────┼───────┼──────────┼──────────┼──────────");
+    for proto in &[Protocol::PageLoad, Protocol::PageLoad2] {
+        if let Some(r) = row(proto) {
+            println!("{r}");
+        }
+    }
 }
 
 /// Copy the bundled `report.css` from the binary's embedded bytes to the

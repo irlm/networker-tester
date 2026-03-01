@@ -32,6 +32,8 @@ pub fn build_router() -> Router {
         .route("/status/:code", get(status_code))
         .route("/http-version", get(http_version))
         .route("/info", get(server_info))
+        .route("/page", get(page_manifest))
+        .route("/asset", get(asset_handler))
         // Remove axum's default 2 MiB body limit so upload probes of arbitrary
         // size are not rejected with 413 before the body is transmitted.
         .layer(DefaultBodyLimit::disable())
@@ -253,6 +255,46 @@ async fn server_info() -> impl IntoResponse {
         ],
         "timestamp": Utc::now().to_rfc3339(),
     }))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Page-load simulation routes
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct PageParams {
+    assets: Option<usize>,
+    bytes: Option<usize>,
+}
+
+#[derive(Deserialize)]
+struct AssetParams {
+    #[allow(dead_code)]
+    id: Option<u32>,
+    bytes: Option<usize>,
+}
+
+/// GET /page?assets=N&bytes=B → JSON manifest listing N asset URLs.
+async fn page_manifest(Query(p): Query<PageParams>) -> impl IntoResponse {
+    let n = p.assets.unwrap_or(20).min(500);
+    let b = p.bytes.unwrap_or(10_240);
+    let assets: Vec<String> = (0..n).map(|i| format!("/asset?id={i}&bytes={b}")).collect();
+    Json(serde_json::json!({
+        "asset_count": n,
+        "asset_bytes": b,
+        "assets": assets,
+    }))
+}
+
+/// GET /asset?id=X&bytes=B → B zero bytes, content-type: application/octet-stream.
+async fn asset_handler(Query(p): Query<AssetParams>) -> impl IntoResponse {
+    let n = p.bytes.unwrap_or(10_240).min(100 * 1024 * 1024); // cap 100 MiB
+    Response::builder()
+        .status(200)
+        .header("content-type", "application/octet-stream")
+        .header("content-length", n.to_string())
+        .body(Body::from(vec![0u8; n]))
+        .unwrap()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
