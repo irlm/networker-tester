@@ -1,0 +1,54 @@
+name: Release
+
+# Triggered by pushing a version tag, e.g.:
+#
+#   git tag v0.11.0 <merge-commit>
+#   git push origin v0.11.0
+#
+# The workflow extracts the matching section from CHANGELOG.md and creates
+# a GitHub release with it as the release body.
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*.[0-9]*.[0-9]*'
+
+permissions:
+  contents: write   # required to create releases
+
+jobs:
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Extract the release notes for this version from CHANGELOG.md.
+      # Matches the section header "## [X.Y.Z]" and captures everything
+      # until the next "## [" heading.
+      - name: Extract release notes
+        id: notes
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          NOTES=$(awk "
+            /^## \[${VERSION}\]/ { found=1; next }
+            found && /^## \[/    { exit }
+            found                { print }
+          " CHANGELOG.md | sed '/^[[:space:]]*$/d' | sed '1s/^[[:space:]]*//')
+          if [ -z "$NOTES" ]; then
+            NOTES="See [CHANGELOG.md](CHANGELOG.md) for details."
+          fi
+          {
+            echo 'notes<<RELEASE_NOTES_EOF'
+            echo "$NOTES"
+            echo 'RELEASE_NOTES_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" \
+            --notes "${{ steps.notes.outputs.notes }}"
+        env:
+          GH_TOKEN: ${{ github.token }}

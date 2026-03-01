@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--all-features`, uploads merged lcov to Codecov (`CODECOV_TOKEN` secret).
   `fail_ci_if_error: false` so a missing token never breaks the build.
 - Local: `cargo llvm-cov --workspace --all-features --open` for an instant HTML report.
+- CI: `.github/workflows/release.yml` — pushing a `vX.Y.Z` tag automatically creates
+  a GitHub release with the matching `CHANGELOG.md` section as the release body.
 
 ---
 
