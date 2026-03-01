@@ -287,6 +287,8 @@ mod real {
             handshake_duration_ms: handshake_ms,
             started_at: http_started_at,
             success: true,
+            cert_chain: vec![],
+            tls_backend: Some("rustls".into()),
         };
 
         RequestAttempt {
