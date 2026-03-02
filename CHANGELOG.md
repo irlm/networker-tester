@@ -11,6 +11,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.34] – 2026-03-02 — browser3: SPKI hash pinning for QUIC cert trust; browser1: plain-HTTP URL
+
+### Fixed
+- **`browser3` (HTTP/3 QUIC)** probe was always showing `proto=h2` because Chrome's QUIC
+  TLS stack does not honour `--ignore-certificate-errors` for self-signed certs, causing
+  fallback to H2.  Fix: before launching Chrome, the probe now performs a plain TLS
+  connection to the target, extracts the leaf certificate's SubjectPublicKeyInfo (SPKI)
+  DER bytes, SHA-256-hashes them, and passes the base64 hash to Chrome via
+  `--ignore-certificate-errors-spki-list=<hash>`.  Chrome trusts the cert over QUIC and
+  successfully negotiates H3.  If the SPKI fetch fails a warning is logged and Chrome
+  may still fall back to H2.
+- **`browser1` (HTTP/1.1)** probe was always showing `proto=h2` because the
+  `--disable-http2` Chrome flag is silently ignored in Chrome ≥ 136's network service
+  subprocess.  Fix: the probe now rewrites the target URL to `http://` (plain HTTP) and
+  auto-derives the HTTP port (8443 → 8080, 443/default → 80, other ports unchanged).
+  Plain HTTP has no TLS ALPN negotiation, so Chrome physically cannot negotiate H2 or H3.
+
+### Added
+- `fetch_spki_hash()` helper inside `mod real` — extracts and hashes the server's SPKI
+  for Chrome cert-pinning (uses `sha2 0.10` + `base64 0.22`, both already optional deps
+  under the `browser` feature)
+- `build_browser1_url()` public helper — rewrites a URL to `http://` with port mapping
+- Unit tests for `build_browser1_url` (4 new tests: port mapping, param encoding,
+  non-standard port preserved, standard port omitted)
+
+---
+
 ## [0.12.33] – 2026-03-02 — pageload/browser as all-3 shortcuts; pageload1 alias; script version sync
 
 ### Changed
