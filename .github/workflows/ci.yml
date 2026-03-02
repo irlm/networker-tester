@@ -116,10 +116,14 @@ jobs:
 
       - name: Create database schema
         run: |
-          /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "NetworkerTest1!" -C \
-            -i sql/01_CreateDatabase.sql
-          /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "NetworkerTest1!" -C \
-            -i sql/02_StoredProcedures.sql
+          SQLCMD=/opt/mssql-tools18/bin/sqlcmd
+          ARGS="-S localhost -U sa -P NetworkerTest1! -C"
+          $SQLCMD $ARGS -i sql/01_CreateDatabase.sql
+          $SQLCMD $ARGS -i sql/02_StoredProcedures.sql
+          $SQLCMD $ARGS -i sql/04_AddThroughput.sql
+          $SQLCMD $ARGS -i sql/05_ExtendedTcpStats.sql
+          $SQLCMD $ARGS -i sql/06_ServerTiming.sql
+          $SQLCMD $ARGS -i sql/07_MoreTcpStats.sql
 
       # Run lib tests + in-process integration tests under coverage.
       # --all-features ensures http3 and native feature-gated paths are included.
@@ -213,10 +217,14 @@ jobs:
 
       - name: Create database schema
         run: |
-          /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "NetworkerTest1!" -C \
-            -i sql/01_CreateDatabase.sql
-          /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "NetworkerTest1!" -C \
-            -i sql/02_StoredProcedures.sql
+          SQLCMD=/opt/mssql-tools18/bin/sqlcmd
+          ARGS="-S localhost -U sa -P NetworkerTest1! -C"
+          $SQLCMD $ARGS -i sql/01_CreateDatabase.sql
+          $SQLCMD $ARGS -i sql/02_StoredProcedures.sql
+          $SQLCMD $ARGS -i sql/04_AddThroughput.sql
+          $SQLCMD $ARGS -i sql/05_ExtendedTcpStats.sql
+          $SQLCMD $ARGS -i sql/06_ServerTiming.sql
+          $SQLCMD $ARGS -i sql/07_MoreTcpStats.sql
 
       - name: Run SQL tests
         env:

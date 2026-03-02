@@ -453,6 +453,11 @@ mod tests {
 
     #[test]
     fn validate_save_to_sql_without_conn_string_fails() {
+        // Skip when NETWORKER_SQL_CONN is set: clap picks it up automatically,
+        // so validation would correctly pass — but the test expects an error.
+        if std::env::var("NETWORKER_SQL_CONN").is_ok() {
+            return;
+        }
         let cli = Cli::parse_from(["networker-tester", "--save-to-sql"]);
         assert!(cli.resolve(None).validate().is_err());
     }

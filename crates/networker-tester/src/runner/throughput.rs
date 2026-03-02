@@ -725,9 +725,17 @@ mod tests {
     // Integration tests (require live endpoint)
     // ─────────────────────────────────────────────────────────────────────────
 
+    async fn endpoint_available(addr: &str) -> bool {
+        tokio::net::TcpStream::connect(addr).await.is_ok()
+    }
+
     #[tokio::test]
     #[ignore = "requires local networker-endpoint on :8080"]
     async fn download_probe_returns_throughput() {
+        if !endpoint_available("127.0.0.1:8080").await {
+            eprintln!("Skipping download_probe_returns_throughput: no endpoint on :8080");
+            return;
+        }
         let _ = rustls::crypto::ring::default_provider().install_default();
         let base = url::Url::parse("http://127.0.0.1:8080/health").unwrap();
         let cfg = ThroughputConfig {
@@ -748,6 +756,10 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires local networker-endpoint on :8080"]
     async fn upload_probe_returns_throughput() {
+        if !endpoint_available("127.0.0.1:8080").await {
+            eprintln!("Skipping upload_probe_returns_throughput: no endpoint on :8080");
+            return;
+        }
         let _ = rustls::crypto::ring::default_provider().install_default();
         let base = url::Url::parse("http://127.0.0.1:8080/health").unwrap();
         let cfg = ThroughputConfig {
