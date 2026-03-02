@@ -11,6 +11,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.11] – 2026-03-02 — Rustup-style interactive installer
+
+### Changed
+- **`install.sh`** rewritten with a rustup-style interactive UX:
+  - Banner with version, system info table (OS, arch, shell, Rust version, install path)
+  - Numbered installation plan displayed before any action is taken
+  - Three-option prompt: `1) Proceed` / `2) Customize` / `3) Cancel`
+  - Customize flow lets the user toggle each step individually (SSH check, Rust install,
+    component selection: tester / endpoint / both) then shows a revised plan before executing
+  - Step headers (`Step N: …`) printed during execution so progress is always visible
+  - Completion summary with PATH notice and quick-start commands
+  - New CLI flags: `-y`/`--yes` (non-interactive), `--skip-ssh-check`, `--skip-rust`,
+    `-h`/`--help`; positional `tester|endpoint|both` (default: `both`)
+- **`install.ps1`** rewritten with the equivalent rustup-style UX for Windows:
+  - Same banner → system info → plan → 1/2/3 prompt → customize → step execution → summary
+  - PS 5.1 compatible throughout (no `??` operator, no `?.`); `$script:` prefix for
+    cross-function state mutation
+  - ARM64 vs x64 rustup-init URL auto-detected via `$env:PROCESSOR_ARCHITECTURE`
+  - `$ErrorActionPreference` guarded around SSH call (GitHub always exits 1 by design)
+  - Validates `-Component` value even when script is piped through `iex`
+  - Equivalent flags: `-Yes`, `-SkipSshCheck`, `-SkipRust`, `-Help`
+
+---
+
 ## [0.12.10] – 2026-03-02 — Coverage phase 5: tls/curl/pageload/html unit tests
 
 ### Added
