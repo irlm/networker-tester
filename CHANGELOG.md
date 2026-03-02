@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.29] – 2026-03-02 — Fix browser probe root/snap: pre-create /run/user/0
+
+### Fixed
+- **`runner/browser.rs`**: `XDG_RUNTIME_DIR=/tmp` (v0.12.28) did not prevent
+  the `mkdir: cannot create directory '/run/user/0': Permission denied` error
+  because snap-confine hardcodes `/run/user/<uid>` and ignores `XDG_RUNTIME_DIR`
+- Fix: pre-create `/run/user/<uid>` with mode `0700` before launching Chrome
+  (only when the directory does not already exist); as root we have permission
+  to create it, so snap-confine's subsequent `mkdir` succeeds (directory already
+  exists) and Chrome proceeds to accept `--no-sandbox`
+
+---
+
 ## [0.12.28] – 2026-03-02 — Fix browser probe when running as root (sudo)
 
 ### Fixed

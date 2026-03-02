@@ -163,14 +163,33 @@ mod real {
 
         // 3. Launch browser
         //
-        // When running as root (e.g. via sudo), XDG_RUNTIME_DIR may not exist
-        // (/run/user/0 is not created automatically).  The snap Chromium wrapper
-        // tries to mkdir that path and fails, then Chrome itself exits before
-        // the WebSocket URL is resolved.  Setting XDG_RUNTIME_DIR=/tmp lets the
-        // snap setup proceed and Chrome accept --no-sandbox.
+        // When running as root (e.g. via sudo), snap-confine always tries to
+        // create /run/user/<uid> as part of its confinement setup, regardless
+        // of XDG_RUNTIME_DIR.  If that directory doesn't exist the mkdir fails
+        // with "Permission denied" (snap-confine drops some privileges before
+        // the mkdir), then Chrome exits before the WebSocket URL is resolved.
+        //
+        // Fix: pre-create /run/user/<uid> with mode 0700 ourselves (we are
+        // running as root so this succeeds), then set XDG_RUNTIME_DIR to
+        // point at it so Chrome picks it up correctly.
         #[cfg(unix)]
-        if std::env::var("XDG_RUNTIME_DIR").is_err() {
-            std::env::set_var("XDG_RUNTIME_DIR", "/tmp");
+        {
+            let uid = unsafe { libc::getuid() };
+            let runtime_dir = format!("/run/user/{uid}");
+            let runtime_path = std::path::Path::new(&runtime_dir);
+            if !runtime_path.exists() {
+                if let Ok(()) = std::fs::create_dir_all(runtime_path) {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(
+                        runtime_path,
+                        std::fs::Permissions::from_mode(0o700),
+                    );
+                    tracing::debug!("Created {runtime_dir} for Chrome/snap runtime");
+                }
+            }
+            if std::env::var("XDG_RUNTIME_DIR").is_err() {
+                std::env::set_var("XDG_RUNTIME_DIR", &runtime_dir);
+            }
         }
 
         let browser_config = match BrowserConfig::builder()
