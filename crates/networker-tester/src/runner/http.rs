@@ -700,9 +700,14 @@ fn build_request(
         .header("accept", "*/*")
         .header("x-networker-request-id", attempt_id.to_string());
 
-    // Set content-length so the server and HTTP/1.1 don't need chunked encoding.
+    // Upload metadata — lets the server verify it received the full body.
     if cfg.payload_size > 0 {
-        builder = builder.header("content-length", cfg.payload_size.to_string());
+        builder = builder
+            // Fixed-length framing: no chunked transfer encoding on HTTP/1.1.
+            .header("content-length", cfg.payload_size.to_string())
+            // Declared payload size so the server can echo back what it received
+            // and the client can detect truncation or size mismatches.
+            .header("x-networker-upload-bytes", cfg.payload_size.to_string());
     }
 
     Ok(builder.body(body)?)

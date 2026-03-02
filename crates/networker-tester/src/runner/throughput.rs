@@ -53,8 +53,9 @@
 ///   generic (no Server-Timing header):    ttfb ≈ correct, recv = None   → ttfb used   ✓
 ///
 ///   transfer_ms = max(server_timing.recv_body_ms, ttfb_ms)
-use crate::metrics::{HttpResult, Protocol, RequestAttempt};
+use crate::metrics::{ErrorCategory, ErrorRecord, HttpResult, Protocol, RequestAttempt};
 use crate::runner::http::{run_probe, RunConfig};
+use chrono::Utc;
 use uuid::Uuid;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -76,6 +77,52 @@ const MIN_UPLOAD_BYTES_PER_MS: u64 = 100 * 1024 * 1024 / 1000; // ≈ 104_857 B/
 fn upload_timeout_ms(payload_bytes: usize, base_ms: u64) -> u64 {
     let min_ms = payload_bytes as u64 / MIN_UPLOAD_BYTES_PER_MS + 10_000;
     base_ms.max(min_ms)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Upload verification
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Check that the server received exactly `expected_bytes`.
+///
+/// The endpoint echoes `X-Networker-Received-Bytes: N` in every upload response.
+/// If the header is present and doesn't match, or if it is absent on an otherwise
+/// successful attempt (indicating an older endpoint), we mark the attempt failed.
+///
+/// Silent truncation causes (e.g. old body-size limit, network drop mid-transfer)
+/// are surfaced as a clear `ErrorCategory::Http` error rather than a silently
+/// wrong throughput figure.
+fn verify_upload(attempt: &mut RequestAttempt, expected_bytes: usize) {
+    // Only validate successful HTTP-level attempts — connection errors already set
+    // success=false with their own message.
+    if !attempt.success {
+        return;
+    }
+    let received: Option<usize> = attempt.http.as_ref().and_then(|h| {
+        h.response_headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("x-networker-received-bytes"))
+            .and_then(|(_, v)| v.parse().ok())
+    });
+
+    match received {
+        Some(n) if n == expected_bytes => {}
+        Some(n) => {
+            attempt.success = false;
+            attempt.error = Some(ErrorRecord {
+                category: ErrorCategory::Http,
+                message: format!(
+                    "Upload size mismatch: sent {expected_bytes} bytes but server received {n} bytes"
+                ),
+                detail: None,
+                occurred_at: Utc::now(),
+            });
+        }
+        None => {
+            // Header absent — endpoint predates this feature; skip verification
+            // so we don't break probes against third-party or older servers.
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -193,6 +240,7 @@ pub async fn run_webupload_probe(
         );
         attempt.http = Some(patched);
     }
+    verify_upload(&mut attempt, payload_bytes);
     attempt
 }
 
@@ -286,6 +334,7 @@ pub async fn run_upload_probe(
         );
         attempt.http = Some(patched);
     }
+    verify_upload(&mut attempt, payload_bytes);
     attempt
 }
 
@@ -841,5 +890,189 @@ mod tests {
     fn timeout_zero_payload_returns_overhead_only() {
         // 0 bytes / anything = 0ms upload time + 10s overhead.
         assert_eq!(upload_timeout_ms(0, 0), 10_000);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // verify_upload — upload size verification
+    // ─────────────────────────────────────────────────────────────────────────
+
+    fn make_attempt_with_received_header(received: usize) -> RequestAttempt {
+        use crate::metrics::{HttpResult, Protocol};
+        use chrono::Utc;
+        RequestAttempt {
+            attempt_id: uuid::Uuid::new_v4(),
+            run_id: uuid::Uuid::new_v4(),
+            protocol: Protocol::Upload,
+            sequence_num: 0,
+            started_at: Utc::now(),
+            finished_at: Some(Utc::now()),
+            success: true,
+            dns: None,
+            tcp: None,
+            tls: None,
+            http: Some(HttpResult {
+                negotiated_version: "HTTP/1.1".into(),
+                status_code: 200,
+                headers_size_bytes: 0,
+                body_size_bytes: 0,
+                ttfb_ms: 1.0,
+                total_duration_ms: 100.0,
+                redirect_count: 0,
+                started_at: Utc::now(),
+                response_headers: vec![("x-networker-received-bytes".into(), received.to_string())],
+                payload_bytes: 0,
+                throughput_mbps: None,
+                goodput_mbps: None,
+                cpu_time_ms: None,
+                csw_voluntary: None,
+                csw_involuntary: None,
+            }),
+            udp: None,
+            error: None,
+            retry_count: 0,
+            server_timing: None,
+            udp_throughput: None,
+            page_load: None,
+            browser: None,
+        }
+    }
+
+    fn make_attempt_without_header() -> RequestAttempt {
+        use crate::metrics::{HttpResult, Protocol};
+        use chrono::Utc;
+        RequestAttempt {
+            attempt_id: uuid::Uuid::new_v4(),
+            run_id: uuid::Uuid::new_v4(),
+            protocol: Protocol::Upload,
+            sequence_num: 0,
+            started_at: Utc::now(),
+            finished_at: Some(Utc::now()),
+            success: true,
+            dns: None,
+            tcp: None,
+            tls: None,
+            http: Some(HttpResult {
+                negotiated_version: "HTTP/1.1".into(),
+                status_code: 200,
+                headers_size_bytes: 0,
+                body_size_bytes: 0,
+                ttfb_ms: 1.0,
+                total_duration_ms: 100.0,
+                redirect_count: 0,
+                started_at: Utc::now(),
+                response_headers: vec![],
+                payload_bytes: 0,
+                throughput_mbps: None,
+                goodput_mbps: None,
+                cpu_time_ms: None,
+                csw_voluntary: None,
+                csw_involuntary: None,
+            }),
+            udp: None,
+            error: None,
+            retry_count: 0,
+            server_timing: None,
+            udp_throughput: None,
+            page_load: None,
+            browser: None,
+        }
+    }
+
+    #[test]
+    fn verify_upload_passes_when_bytes_match() {
+        let mut attempt = make_attempt_with_received_header(65536);
+        verify_upload(&mut attempt, 65536);
+        assert!(attempt.success, "should remain successful");
+        assert!(attempt.error.is_none());
+    }
+
+    #[test]
+    fn verify_upload_fails_when_bytes_mismatch() {
+        let mut attempt = make_attempt_with_received_header(1234);
+        verify_upload(&mut attempt, 65536);
+        assert!(!attempt.success, "should be marked failed");
+        let err = attempt.error.expect("error should be set");
+        assert!(
+            err.message.contains("65536"),
+            "message should mention expected bytes"
+        );
+        assert!(
+            err.message.contains("1234"),
+            "message should mention received bytes"
+        );
+    }
+
+    #[test]
+    fn verify_upload_skips_when_header_absent() {
+        // Header absent = older/third-party endpoint; skip verification silently.
+        let mut attempt = make_attempt_without_header();
+        verify_upload(&mut attempt, 65536);
+        assert!(
+            attempt.success,
+            "should remain successful when header absent"
+        );
+        assert!(attempt.error.is_none());
+    }
+
+    #[test]
+    fn verify_upload_skips_already_failed_attempt() {
+        // If the HTTP layer already failed, don't overwrite the error.
+        let mut attempt = make_attempt_with_received_header(1234);
+        attempt.success = false;
+        attempt.error = Some(ErrorRecord {
+            category: ErrorCategory::Timeout,
+            message: "timed out".into(),
+            detail: None,
+            occurred_at: Utc::now(),
+        });
+        verify_upload(&mut attempt, 65536);
+        // Error message must still be the original timeout, not the mismatch.
+        let err = attempt.error.unwrap();
+        assert_eq!(err.message, "timed out");
+    }
+
+    #[test]
+    fn verify_upload_header_case_insensitive() {
+        // Header name matching must be case-insensitive.
+        use crate::metrics::{HttpResult, Protocol};
+        let mut attempt = RequestAttempt {
+            attempt_id: uuid::Uuid::new_v4(),
+            run_id: uuid::Uuid::new_v4(),
+            protocol: Protocol::Upload,
+            sequence_num: 0,
+            started_at: Utc::now(),
+            finished_at: Some(Utc::now()),
+            success: true,
+            dns: None,
+            tcp: None,
+            tls: None,
+            http: Some(HttpResult {
+                negotiated_version: "HTTP/1.1".into(),
+                status_code: 200,
+                headers_size_bytes: 0,
+                body_size_bytes: 0,
+                ttfb_ms: 1.0,
+                total_duration_ms: 100.0,
+                redirect_count: 0,
+                started_at: Utc::now(),
+                // Mixed-case header name (as sometimes returned by HTTP/1.1 proxies)
+                response_headers: vec![("X-Networker-Received-Bytes".into(), "100".into())],
+                payload_bytes: 0,
+                throughput_mbps: None,
+                goodput_mbps: None,
+                cpu_time_ms: None,
+                csw_voluntary: None,
+                csw_involuntary: None,
+            }),
+            udp: None,
+            error: None,
+            retry_count: 0,
+            server_timing: None,
+            udp_throughput: None,
+            page_load: None,
+            browser: None,
+        };
+        verify_upload(&mut attempt, 100);
+        assert!(attempt.success);
     }
 }

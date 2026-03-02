@@ -179,8 +179,10 @@ struct UploadStats {
 ///
 /// Adds `Server-Timing: recv;dur=X` (body drain time) and echoes
 /// `X-Networker-Request-Id` from the request if present.
+/// Adds `X-Networker-Received-Bytes` with the actual drained byte count so the
+/// client can verify the upload was not silently truncated.
 async fn upload(req: Request) -> impl IntoResponse {
-    // Extract request-id and drain the body.
+    // Extract request metadata before consuming the body.
     let request_id = req
         .headers()
         .get("x-networker-request-id")
@@ -220,6 +222,12 @@ async fn upload(req: Request) -> impl IntoResponse {
     if let Ok(v) = HeaderValue::from_str(&timing) {
         resp.headers_mut().insert("server-timing", v);
     }
+    // Always echo the actual received byte count as a response header so the
+    // client can detect upload truncation without parsing the JSON body.
+    resp.headers_mut().insert(
+        "x-networker-received-bytes",
+        HeaderValue::from(received_bytes as u64),
+    );
     if let Some(rid) = request_id {
         if let Ok(v) = HeaderValue::from_str(&rid) {
             resp.headers_mut().insert("x-networker-request-id", v);
@@ -461,6 +469,35 @@ mod tests {
         assert!(
             resp.headers().contains_key("server-timing"),
             "server-timing header missing from upload"
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_returns_received_bytes_header() {
+        let payload = b"hello world 12345";
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/upload")
+                    .body(Body::from(payload.as_ref()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let received: usize = resp
+            .headers()
+            .get("x-networker-received-bytes")
+            .expect("x-networker-received-bytes header missing")
+            .to_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(
+            received,
+            payload.len(),
+            "received-bytes header must match body size"
         );
     }
 

@@ -1543,7 +1543,7 @@ dependencies = [
 
 [[package]]
 name = "networker-endpoint"
-version = "0.12.7"
+version = "0.12.8"
 dependencies = [
  "anyhow",
  "axum",
@@ -1575,7 +1575,7 @@ dependencies = [
 
 [[package]]
 name = "networker-tester"
-version = "0.12.7"
+version = "0.12.8"
 dependencies = [
  "anyhow",
  "bytes",
