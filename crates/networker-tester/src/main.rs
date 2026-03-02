@@ -392,10 +392,7 @@ async fn dispatch_once(
         (Protocol::PageLoad, _) => run_pageload_probe(run_id, seq, pageload_cfg).await,
         (Protocol::PageLoad2, _) => run_pageload2_probe(run_id, seq, pageload_cfg).await,
         (Protocol::PageLoad3, _) => run_pageload3_probe(run_id, seq, pageload_cfg).await,
-        (
-            Protocol::Browser | Protocol::Browser1 | Protocol::Browser2 | Protocol::Browser3,
-            _,
-        ) => {
+        (Protocol::Browser | Protocol::Browser1 | Protocol::Browser2 | Protocol::Browser3, _) => {
             run_browser_probe(
                 run_id,
                 seq,

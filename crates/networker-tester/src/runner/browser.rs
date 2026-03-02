@@ -115,13 +115,39 @@ pub fn build_page_url(base: &url::Url, asset_sizes: &[usize]) -> String {
     target.to_string()
 }
 
+/// Rewrite the base URL for the `browser1` (forced HTTP/1.1) probe.
+///
+/// Uses `http://` so there is no TLS ALPN negotiation — Chrome physically
+/// cannot use HTTP/2 or HTTP/3 over plain HTTP.
+///
+/// Port derivation: 8443 → 8080 (endpoint convention); 443 / no port → 80
+/// (HTTP default, omitted from the URL).  Any other explicit port is kept as-is.
+pub fn build_browser1_url(base: &url::Url, asset_sizes: &[usize]) -> String {
+    let mut target = base.clone();
+    let _ = target.set_scheme("http");
+    // Derive plain HTTP port from the HTTPS port.
+    let http_port: Option<u16> = match base.port_or_known_default() {
+        Some(8443) => Some(8080),
+        Some(443) | None => None, // use HTTP default (80, omit from URL)
+        Some(p) => Some(p),       // non-standard port: keep as-is
+    };
+    let _ = target.set_port(http_port);
+    target.set_path("/browser-page");
+    if !asset_sizes.is_empty() {
+        let n = asset_sizes.len();
+        let bytes = asset_sizes[0];
+        target.set_query(Some(&format!("assets={n}&bytes={bytes}")));
+    }
+    target.to_string()
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Real implementation (feature = "browser")
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(feature = "browser")]
 mod real {
-    use super::{build_page_url, find_chrome};
+    use super::{build_browser1_url, build_page_url, find_chrome};
     use crate::metrics::{BrowserResult, ErrorCategory, ErrorRecord, Protocol, RequestAttempt};
     use chromiumoxide::browser::{Browser, BrowserConfig};
     use chromiumoxide::cdp::browser_protocol::network::EventResponseReceived;
@@ -159,8 +185,13 @@ mod real {
             }
         };
 
-        // 2. Build page URL
-        let page_url = build_page_url(base_url, asset_sizes);
+        // 2. Build page URL.
+        // browser1 uses plain HTTP so Chrome has no ALPN to negotiate H2/H3.
+        let page_url = if matches!(protocol, Protocol::Browser1) {
+            build_browser1_url(base_url, asset_sizes)
+        } else {
+            build_page_url(base_url, asset_sizes)
+        };
         tracing::debug!(url = %page_url, "Browser probe target URL");
 
         // 3. Launch browser
@@ -186,8 +217,8 @@ mod real {
         // chromiumoxide defaults to /tmp/chromiumoxide-runner; if that dir was
         // created by root it is not writable by the non-root SUDO_USER that our
         // runuser wrapper launches Chrome as.
-        let profile_dir = std::env::temp_dir()
-            .join(format!("networker-chrome-profile-{}", std::process::id()));
+        let profile_dir =
+            std::env::temp_dir().join(format!("networker-chrome-profile-{}", std::process::id()));
         // RAII guard: remove the profile dir on every return path.
         struct ProfileDirGuard(std::path::PathBuf);
         impl Drop for ProfileDirGuard {
@@ -198,15 +229,18 @@ mod real {
         let _profile_guard = ProfileDirGuard(profile_dir.clone());
 
         // Per-protocol Chrome flags:
-        //   browser1 → --disable-http2          (force HTTP/1.1)
+        //   browser1 → plain HTTP URL (no ALPN = definitively H1.1; no extra flags needed)
         //   browser2 → --disable-quic           (force HTTP/2, prevent H3 upgrade)
         //   browser3 → --enable-quic            (force HTTP/3 QUIC)
         //              --origin-to-force-quic-on=<host>:<port>
+        //              --ignore-certificate-errors-spki-list=<hash>
+        //                  (QUIC TLS needs explicit cert trust for self-signed certs;
+        //                   we fetch the SPKI hash before launching Chrome)
         //   browser  → no extra flags (auto-negotiate, typically H2)
         let mut extra_args: Vec<String> = Vec::new();
         match &protocol {
             Protocol::Browser1 => {
-                extra_args.push("--disable-http2".into());
+                // URL already rewritten to http:// above — no extra Chrome flags needed.
             }
             Protocol::Browser2 => {
                 extra_args.push("--disable-quic".into());
@@ -216,6 +250,21 @@ mod real {
                 let port = base_url.port_or_known_default().unwrap_or(443);
                 extra_args.push("--enable-quic".into());
                 extra_args.push(format!("--origin-to-force-quic-on={host}:{port}"));
+                // Chrome's QUIC TLS verifier doesn't honour --ignore-certificate-errors
+                // for self-signed certs.  Fetch the SPKI hash and pin it explicitly so
+                // Chrome trusts the cert over QUIC.
+                match fetch_spki_hash(base_url).await {
+                    Some(hash) => {
+                        tracing::debug!(spki = %hash, "browser3: pinning cert SPKI for QUIC");
+                        extra_args.push(format!("--ignore-certificate-errors-spki-list={hash}"));
+                    }
+                    None => {
+                        tracing::warn!(
+                            "browser3: could not fetch SPKI hash; \
+                             Chrome may fall back to H2 if cert is self-signed"
+                        );
+                    }
+                }
             }
             _ => {}
         }
@@ -526,25 +575,17 @@ mod real {
             .copied()
             .unwrap_or("/usr/sbin/runuser");
 
-        let wrapper = std::env::temp_dir()
-            .join(format!("networker-chrome-{}.sh", std::process::id()));
+        let wrapper =
+            std::env::temp_dir().join(format!("networker-chrome-{}.sh", std::process::id()));
 
         // Single-quote the chrome path to handle spaces (e.g. macOS bundles).
         let escaped = chrome_path.display().to_string().replace('\'', "'\\''");
-        let script = format!(
-            "#!/bin/sh\nexec {runuser} -u {sudo_user} -- '{escaped}' \"$@\"\n"
-        );
+        let script = format!("#!/bin/sh\nexec {runuser} -u {sudo_user} -- '{escaped}' \"$@\"\n");
 
         if std::fs::write(&wrapper, &script).is_ok()
-            && std::fs::set_permissions(
-                &wrapper,
-                std::fs::Permissions::from_mode(0o755),
-            )
-            .is_ok()
+            && std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).is_ok()
         {
-            tracing::debug!(
-                "Wrapping Chrome with runuser -u {sudo_user} (running as root)"
-            );
+            tracing::debug!("Wrapping Chrome with runuser -u {sudo_user} (running as root)");
             wrapper
         } else {
             chrome_path
@@ -587,6 +628,92 @@ mod real {
         }
     }
 
+    /// Fetch the SHA-256 hash of the server's leaf certificate SubjectPublicKeyInfo (SPKI),
+    /// base64-encoded (standard alphabet with padding).
+    ///
+    /// Chrome's `--ignore-certificate-errors-spki-list` accepts exactly this format and
+    /// allows QUIC/TLS to succeed against a self-signed certificate even when
+    /// `--ignore-certificate-errors` alone is not honoured by the QUIC stack.
+    ///
+    /// Returns `None` on any TCP/TLS error — callers should log a warning and continue
+    /// without the pin (Chrome may fall back to H2 in that case).
+    async fn fetch_spki_hash(base_url: &url::Url) -> Option<String> {
+        use base64::Engine as _;
+        use sha2::{Digest, Sha256};
+        use std::sync::{Arc, Mutex};
+
+        let host = base_url.host_str()?.to_string();
+        let port = base_url.port_or_known_default()?;
+
+        // Custom verifier: accept all certs but capture the leaf cert DER bytes.
+        #[derive(Debug)]
+        struct CertCapture(Mutex<Option<Vec<u8>>>);
+
+        impl rustls::client::danger::ServerCertVerifier for CertCapture {
+            fn verify_server_cert(
+                &self,
+                end_entity: &rustls::pki_types::CertificateDer,
+                _intermediates: &[rustls::pki_types::CertificateDer],
+                _server_name: &rustls::pki_types::ServerName,
+                _ocsp_response: &[u8],
+                _now: rustls::pki_types::UnixTime,
+            ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+                *self.0.lock().unwrap() = Some(end_entity.as_ref().to_vec());
+                Ok(rustls::client::danger::ServerCertVerified::assertion())
+            }
+
+            fn verify_tls12_signature(
+                &self,
+                _message: &[u8],
+                _cert: &rustls::pki_types::CertificateDer,
+                _dss: &rustls::DigitallySignedStruct,
+            ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error>
+            {
+                Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+            }
+
+            fn verify_tls13_signature(
+                &self,
+                _message: &[u8],
+                _cert: &rustls::pki_types::CertificateDer,
+                _dss: &rustls::DigitallySignedStruct,
+            ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error>
+            {
+                Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+            }
+
+            fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+                rustls::crypto::ring::default_provider()
+                    .signature_verification_algorithms
+                    .supported_schemes()
+            }
+        }
+
+        let capturer = Arc::new(CertCapture(Mutex::new(None)));
+        let tls_config = rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(capturer.clone())
+            .with_no_client_auth();
+        let connector = tokio_rustls::TlsConnector::from(Arc::new(tls_config));
+
+        let tcp = tokio::net::TcpStream::connect((host.as_str(), port))
+            .await
+            .ok()?;
+        // TryFrom<String> → ServerName<'static>; TryFrom<&str> is only ServerName<'a>.
+        let server_name = rustls::pki_types::ServerName::try_from(host).ok()?;
+        let _tls = connector.connect(server_name, tcp).await.ok()?;
+
+        let cert_der = capturer.0.lock().unwrap().take()?;
+        use x509_parser::prelude::FromDer as _;
+        let (_, cert) = x509_parser::certificate::X509Certificate::from_der(&cert_der).ok()?;
+        let spki_raw = cert.tbs_certificate.subject_pki.raw;
+
+        let mut hasher = Sha256::new();
+        hasher.update(spki_raw);
+        let hash = hasher.finalize();
+        Some(base64::engine::general_purpose::STANDARD.encode(hash))
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -617,7 +744,16 @@ mod real {
             }
 
             let base = url::Url::parse("https://127.0.0.1:8443/health").unwrap();
-            let result = run_browser_probe(uuid::Uuid::new_v4(), 0, &base, &[], 30_000, true).await;
+            let result = run_browser_probe(
+                uuid::Uuid::new_v4(),
+                0,
+                Protocol::Browser,
+                &base,
+                &[],
+                30_000,
+                true,
+            )
+            .await;
 
             if !result.success {
                 eprintln!("Browser probe failed: {:?}", result.error);
@@ -707,16 +843,25 @@ mod tests {
     fn build_page_url_with_assets() {
         let base = url::Url::parse("https://host:8443/health").unwrap();
         let url = build_page_url(&base, &[10240, 10240, 10240]);
-        assert!(url.contains("/browser-page"), "should rewrite to /browser-page");
+        assert!(
+            url.contains("/browser-page"),
+            "should rewrite to /browser-page"
+        );
         assert!(url.contains("assets=3"), "should include assets count");
-        assert!(url.contains("bytes=10240"), "should include asset size as bytes=");
+        assert!(
+            url.contains("bytes=10240"),
+            "should include asset size as bytes="
+        );
     }
 
     #[test]
     fn build_page_url_no_assets() {
         let base = url::Url::parse("http://localhost:8080/health").unwrap();
         let url = build_page_url(&base, &[]);
-        assert!(url.contains("/browser-page"), "should rewrite to /browser-page");
+        assert!(
+            url.contains("/browser-page"),
+            "should rewrite to /browser-page"
+        );
         assert!(!url.contains("assets="), "should not add empty query");
     }
 
@@ -795,7 +940,61 @@ mod tests {
     #[tokio::test]
     async fn stub_or_real_returns_browser_protocol() {
         let base = url::Url::parse("https://127.0.0.1:8443/health").unwrap();
-        let attempt = run_browser_probe(uuid::Uuid::new_v4(), 0, &base, &[], 5_000, true).await;
+        let attempt = run_browser_probe(
+            uuid::Uuid::new_v4(),
+            0,
+            crate::metrics::Protocol::Browser,
+            &base,
+            &[],
+            5_000,
+            true,
+        )
+        .await;
         assert_eq!(attempt.protocol, crate::metrics::Protocol::Browser);
+    }
+
+    // ── build_browser1_url tests ──────────────────────────────────────────────
+
+    #[test]
+    fn build_browser1_url_switches_to_http_and_maps_8443() {
+        let base = url::Url::parse("https://host:8443/health").unwrap();
+        let url = build_browser1_url(&base, &[]);
+        assert!(
+            url.starts_with("http://host:8080/browser-page"),
+            "url={url}"
+        );
+    }
+
+    #[test]
+    fn build_browser1_url_standard_https_port_omits_port() {
+        let base = url::Url::parse("https://example.com/health").unwrap();
+        let url = build_browser1_url(&base, &[]);
+        // Port 80 is default for http — url::Url omits it.
+        assert!(
+            url.starts_with("http://example.com/browser-page"),
+            "url={url}"
+        );
+        assert!(
+            !url.contains(":80"),
+            "default port should not appear: {url}"
+        );
+    }
+
+    #[test]
+    fn build_browser1_url_non_standard_port_preserved() {
+        let base = url::Url::parse("https://host:9443/health").unwrap();
+        let url = build_browser1_url(&base, &[]);
+        assert!(
+            url.starts_with("http://host:9443/browser-page"),
+            "url={url}"
+        );
+    }
+
+    #[test]
+    fn build_browser1_url_includes_asset_params() {
+        let base = url::Url::parse("https://host:8443/health").unwrap();
+        let url = build_browser1_url(&base, &[4096, 4096, 4096]);
+        assert!(url.contains("assets=3"), "url={url}");
+        assert!(url.contains("bytes=4096"), "url={url}");
     }
 }
