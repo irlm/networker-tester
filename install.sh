@@ -2,6 +2,12 @@
 # ──────────────────────────────────────────────────────────────────────────────
 # Networker Tester – Unix/macOS interactive installer (rustup-style)
 #
+# Two install modes (auto-detected, or choose in customize flow):
+#   release  – download pre-built binary from the latest GitHub release via
+#              gh CLI (fast, ~10 s); requires: gh installed + gh auth login
+#   source   – compile from source via cargo install (slower, ~5-10 min);
+#              requires: SSH key for the private repo + Rust/cargo
+#
 # Usage (piped from curl):
 #   curl -fsSL <raw-gist-url>/install.sh | bash -s -- [OPTIONS] [tester|endpoint|both]
 #
@@ -10,14 +16,17 @@
 #
 # Options:
 #   -y, --yes           Non-interactive: accept all defaults
-#   --skip-ssh-check    Skip the GitHub SSH connectivity test
-#   --skip-rust         Skip Rust installation (assume cargo is available)
+#   --from-source       Force source-compile mode (skip release download)
+#   --skip-ssh-check    Skip the GitHub SSH connectivity test (source mode)
+#   --skip-rust         Skip Rust installation (source mode)
 #   -h, --help          Show this help message
 # ──────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
 REPO_SSH="ssh://git@github.com/irlm/networker-tester"
-SCRIPT_VERSION="0.12.11"
+REPO_GH="irlm/networker-tester"
+SCRIPT_VERSION="0.12.12"
+INSTALL_DIR="${HOME}/.cargo/bin"
 
 # ── Colours (ANSI C quoting; safe even when stdin is a curl pipe) ─────────────
 if [ -t 1 ]; then
@@ -66,27 +75,39 @@ Usage: install.sh [OPTIONS] [tester|endpoint|both]
   endpoint  Install networker-endpoint (the target test server)
   both      Install both binaries  [default]
 
+Install modes (auto-detected; override in customize flow or via flag):
+  release   Download pre-built binary via gh CLI — fast (~10 s)
+            Requires: gh installed and authenticated (gh auth login)
+  source    Compile from private Git repo via cargo install — slower (~5-10 min)
+            Requires: SSH key for github.com + Rust/cargo
+
 Options:
   -y, --yes           Non-interactive: accept all defaults
-  --skip-ssh-check    Skip the GitHub SSH connectivity test
-  --skip-rust         Skip Rust installation (assume cargo is available)
+  --from-source       Force source-compile mode (skip release detection)
+  --skip-ssh-check    Skip the GitHub SSH connectivity test (source mode only)
+  --skip-rust         Skip Rust installation (source mode only)
   -h, --help          Show this help message
 
 Examples:
   curl -fsSL <url>/install.sh | bash -s -- tester
   bash install.sh -y endpoint
-  bash install.sh --skip-rust both
+  bash install.sh --from-source --skip-rust both
 EOF
 }
 
-# ── Script-level state ─────────────────────────────────────────────────────────
-# (all globals are set by parse_args / discover_system / customize_flow)
+# ── Script-level state ────────────────────────────────────────────────────────
 COMPONENT="both"
 AUTO_YES=0
+FROM_SOURCE=0
 SKIP_SSH=0
 SKIP_RUST=0
+
+INSTALL_METHOD="source"   # "release" | "source"
+RELEASE_AVAILABLE=0
+RELEASE_TARGET=""
+
 DO_SSH_CHECK=1
-DO_RUST_INSTALL=0   # determined after checking whether cargo already exists
+DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
 DO_INSTALL_ENDPOINT=1
 RUST_VER=""
@@ -94,7 +115,6 @@ RUST_EXISTS=0
 SYS_OS=""
 SYS_ARCH=""
 SYS_SHELL=""
-SYS_HOME=""
 STEP_NUM=0
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
@@ -105,6 +125,8 @@ parse_args() {
                 COMPONENT="$1" ;;
             -y|--yes)
                 AUTO_YES=1 ;;
+            --from-source)
+                FROM_SOURCE=1 ;;
             --skip-ssh-check)
                 SKIP_SSH=1 ;;
             --skip-rust)
@@ -132,12 +154,33 @@ parse_args() {
     fi
 }
 
+# ── Target triple detection ───────────────────────────────────────────────────
+detect_release_target() {
+    local os arch
+    os="$(uname -s 2>/dev/null || echo "")"
+    arch="$(uname -m 2>/dev/null || echo "")"
+
+    case "$os" in
+        Linux)
+            case "$arch" in
+                x86_64) echo "x86_64-unknown-linux-gnu" ;;
+                *)      echo "" ;;   # ARM64 Linux not yet in release matrix
+            esac ;;
+        Darwin)
+            case "$arch" in
+                x86_64) echo "x86_64-apple-darwin" ;;
+                arm64)  echo "aarch64-apple-darwin" ;;
+                *)      echo "" ;;
+            esac ;;
+        *)  echo "" ;;
+    esac
+}
+
 # ── System discovery ──────────────────────────────────────────────────────────
 discover_system() {
     SYS_OS="$(uname -s 2>/dev/null || echo "unknown")"
     SYS_ARCH="$(uname -m 2>/dev/null || echo "unknown")"
     SYS_SHELL="${SHELL:-unknown}"
-    SYS_HOME="$HOME"
 
     if command -v cargo &>/dev/null; then
         RUST_VER="$(rustc --version 2>/dev/null || echo "unknown version")"
@@ -147,9 +190,20 @@ discover_system() {
         RUST_EXISTS=0
     fi
 
-    # Propose installing Rust only if absent and not explicitly skipped
     if [[ $RUST_EXISTS -eq 0 && $SKIP_RUST -eq 0 ]]; then
         DO_RUST_INSTALL=1
+    fi
+
+    # Release mode: available when gh is authenticated AND this platform has a
+    # pre-built binary in the release matrix.
+    if [[ $FROM_SOURCE -eq 0 ]]; then
+        RELEASE_TARGET="$(detect_release_target)"
+        if [[ -n "$RELEASE_TARGET" ]] \
+           && command -v gh &>/dev/null \
+           && gh auth status &>/dev/null 2>&1; then
+            RELEASE_AVAILABLE=1
+            INSTALL_METHOD="release"
+        fi
     fi
 }
 
@@ -159,46 +213,66 @@ display_system_info() {
     printf "    %-22s %s\n" "OS:"           "$SYS_OS"
     printf "    %-22s %s\n" "Architecture:" "$SYS_ARCH"
     printf "    %-22s %s\n" "Shell:"        "$SYS_SHELL"
-    printf "    %-22s %s\n" "Home:"         "$SYS_HOME"
+    printf "    %-22s %s\n" "Home:"         "$HOME"
     printf "    %-22s %s\n" "Rust / cargo:" "$RUST_VER"
-    printf "    %-22s %s\n" "Install to:"   "${HOME}/.cargo/bin/"
+    printf "    %-22s %s\n" "Install to:"   "${INSTALL_DIR}/"
+
+    if [[ $RELEASE_AVAILABLE -eq 1 ]]; then
+        printf "    %-22s %s\n" "gh CLI:" "authenticated ✓"
+    fi
 }
 
 display_plan() {
     print_section "Installation Plan"
     echo ""
 
-    local step=1
+    if [[ "$INSTALL_METHOD" == "release" ]]; then
+        printf "    ${BOLD}Method:${RESET}  Download binary from GitHub release  ${DIM}(fast)${RESET}\n"
+        printf "    ${DIM}Target:  %s${RESET}\n" "$RELEASE_TARGET"
+        echo ""
 
-    if [[ $DO_SSH_CHECK -eq 1 ]]; then
-        printf "    %s. ${BOLD}SSH check${RESET}              Verify GitHub SSH access\n" "$step"
-        step=$((step + 1))
+        local step=1
+        if [[ $DO_INSTALL_TESTER -eq 1 ]]; then
+            printf "    %s. ${BOLD}Download networker-tester${RESET}    gh release download (latest)\n" "$step"
+            step=$((step + 1))
+        fi
+        if [[ $DO_INSTALL_ENDPOINT -eq 1 ]]; then
+            printf "    %s. ${BOLD}Download networker-endpoint${RESET}  gh release download (latest)\n" "$step"
+        fi
+        echo ""
+        print_dim "Repository:  $REPO_GH  (latest release)"
     else
-        printf "    ${DIM}-. SSH check              (skipped)${RESET}\n"
-    fi
+        printf "    ${BOLD}Method:${RESET}  Compile from source  ${DIM}(~5-10 min)${RESET}\n"
+        echo ""
 
-    if [[ $DO_RUST_INSTALL -eq 1 ]]; then
-        printf "    %s. ${BOLD}Install Rust${RESET}           Download rustup from sh.rustup.rs and run installer\n" "$step"
-        step=$((step + 1))
-    elif [[ $RUST_EXISTS -eq 0 ]]; then
-        printf "    ${DIM}-. Install Rust            (skipped – --skip-rust)${RESET}\n"
-    else
-        printf "    ${DIM}-. Install Rust            (skip – already installed: %s)${RESET}\n" "$RUST_VER"
-    fi
+        local step=1
+        if [[ $DO_SSH_CHECK -eq 1 ]]; then
+            printf "    %s. ${BOLD}SSH check${RESET}              Verify GitHub SSH access\n" "$step"
+            step=$((step + 1))
+        else
+            printf "    ${DIM}-. SSH check              (skipped)${RESET}\n"
+        fi
 
-    if [[ $DO_INSTALL_TESTER -eq 1 ]]; then
-        printf "    %s. ${BOLD}Install networker-tester${RESET}   cargo install from private Git repo\n" "$step"
-        step=$((step + 1))
-    fi
+        if [[ $DO_RUST_INSTALL -eq 1 ]]; then
+            printf "    %s. ${BOLD}Install Rust${RESET}           Download rustup from sh.rustup.rs and run installer\n" "$step"
+            step=$((step + 1))
+        elif [[ $RUST_EXISTS -eq 0 ]]; then
+            printf "    ${DIM}-. Install Rust            (skipped – --skip-rust)${RESET}\n"
+        else
+            printf "    ${DIM}-. Install Rust            (skip – already installed: %s)${RESET}\n" "$RUST_VER"
+        fi
 
-    if [[ $DO_INSTALL_ENDPOINT -eq 1 ]]; then
-        printf "    %s. ${BOLD}Install networker-endpoint${RESET} cargo install from private Git repo\n" "$step"
-        step=$((step + 1))
+        if [[ $DO_INSTALL_TESTER -eq 1 ]]; then
+            printf "    %s. ${BOLD}Install networker-tester${RESET}   cargo install from private Git repo\n" "$step"
+            step=$((step + 1))
+        fi
+        if [[ $DO_INSTALL_ENDPOINT -eq 1 ]]; then
+            printf "    %s. ${BOLD}Install networker-endpoint${RESET} cargo install from private Git repo\n" "$step"
+        fi
+        echo ""
+        print_dim "Repository:  $REPO_SSH"
+        print_dim "Source code is compiled locally — no pre-built binaries are downloaded."
     fi
-
-    echo ""
-    print_dim "Repository:  $REPO_SSH"
-    print_dim "Source code is compiled locally — no pre-built binaries are downloaded."
 }
 
 # ── Main interactive prompt ───────────────────────────────────────────────────
@@ -235,7 +309,7 @@ prompt_main() {
     done
 }
 
-# ── Yes/No helper (reads from /dev/tty even when stdin is a curl pipe) ────────
+# ── Yes/No helper ─────────────────────────────────────────────────────────────
 ask_yn() {
     local prompt="$1"
     local default="${2:-y}"
@@ -257,53 +331,68 @@ ask_yn() {
     done
 }
 
-# ── Customise flow ────────────────────────────────────────────────────────────
+# ── Customize flow ────────────────────────────────────────────────────────────
 customize_flow() {
     print_section "Customize Installation"
     echo ""
 
-    # SSH check
-    if ask_yn "Run SSH connectivity check for GitHub?" "y"; then
-        DO_SSH_CHECK=1
-    else
-        DO_SSH_CHECK=0
-    fi
-
-    # Rust install – only relevant when Rust is not already present
-    if [[ $RUST_EXISTS -eq 0 ]]; then
+    # Install method (only offered when release mode is available)
+    if [[ $RELEASE_AVAILABLE -eq 1 ]]; then
+        echo "  Install method:"
+        echo "    1) Download binary from latest release  (fast, recommended)"
+        echo "    2) Compile from source  (requires SSH key + Rust)"
         echo ""
-        if ask_yn "Install Rust via rustup (sh.rustup.rs)?" "y"; then
-            DO_RUST_INSTALL=1
-        else
-            DO_RUST_INSTALL=0
-            echo ""
-            print_warn "Rust is not installed — cargo must be on PATH before proceeding."
-            echo "  Install manually: https://rustup.rs"
-            echo "  Then re-run this script with --skip-rust"
-        fi
+        local method_ans
+        printf "  Choice [1]: "
+        read -r method_ans </dev/tty || true
+        method_ans="${method_ans:-1}"
+        case "$method_ans" in
+            2) INSTALL_METHOD="source" ;;
+            *) INSTALL_METHOD="release" ;;
+        esac
+        echo ""
     fi
 
-    # Component selection
-    echo ""
+    # SSH check + Rust install – only relevant in source mode
+    if [[ "$INSTALL_METHOD" == "source" ]]; then
+        if ask_yn "Run SSH connectivity check for GitHub?" "y"; then
+            DO_SSH_CHECK=1
+        else
+            DO_SSH_CHECK=0
+        fi
+
+        if [[ $RUST_EXISTS -eq 0 ]]; then
+            echo ""
+            if ask_yn "Install Rust via rustup (sh.rustup.rs)?" "y"; then
+                DO_RUST_INSTALL=1
+            else
+                DO_RUST_INSTALL=0
+                echo ""
+                print_warn "Rust is not installed — cargo must be on PATH before proceeding."
+                echo "  Install manually: https://rustup.rs"
+                echo "  Then re-run with --skip-rust"
+            fi
+        fi
+        echo ""
+    fi
+
+    # Component selection (always shown)
     echo "  Which components do you want to install?"
     echo ""
     echo "    1) Both  (networker-tester + networker-endpoint)  [default]"
     echo "    2) tester only   – the diagnostic CLI client"
     echo "    3) endpoint only – the target test server"
     echo ""
-
     local comp_ans
     printf "  Choice [1]: "
     read -r comp_ans </dev/tty || true
     comp_ans="${comp_ans:-1}"
-
     case "$comp_ans" in
         2) DO_INSTALL_TESTER=1; DO_INSTALL_ENDPOINT=0 ;;
         3) DO_INSTALL_TESTER=0; DO_INSTALL_ENDPOINT=1 ;;
         *) DO_INSTALL_TESTER=1; DO_INSTALL_ENDPOINT=1 ;;
     esac
 
-    # Show revised plan and ask for confirmation
     echo ""
     print_section "Revised Plan"
     display_plan
@@ -315,18 +404,54 @@ customize_flow() {
     fi
 }
 
-# ── Step execution helpers ────────────────────────────────────────────────────
+# ── Step helpers ──────────────────────────────────────────────────────────────
 next_step() {
     STEP_NUM=$((STEP_NUM + 1))
     print_step_header "$STEP_NUM" "$@"
 }
 
+# ── Release-mode steps ────────────────────────────────────────────────────────
+step_download_release() {
+    local binary="$1"
+    local archive="${binary}-${RELEASE_TARGET}.tar.gz"
+    local tmp_dir
+    tmp_dir="$(mktemp -d)"
+
+    next_step "Download $binary"
+    print_info "Fetching ${archive} from latest GitHub release…"
+
+    if ! gh release download \
+            --repo "$REPO_GH" \
+            --latest \
+            --pattern "${archive}" \
+            --dir "${tmp_dir}" \
+            --clobber; then
+        echo ""
+        print_err "gh release download failed."
+        echo ""
+        echo "  Expected asset: ${archive}"
+        echo "  Check available releases: gh release list --repo $REPO_GH"
+        rm -rf "$tmp_dir"
+        exit 1
+    fi
+
+    mkdir -p "$INSTALL_DIR"
+    tar xzf "${tmp_dir}/${archive}" -C "$INSTALL_DIR"
+    chmod +x "${INSTALL_DIR}/${binary}"
+    rm -rf "$tmp_dir"
+
+    local installed_ver
+    installed_ver="$("${INSTALL_DIR}/${binary}" --version 2>/dev/null || echo "unknown")"
+    print_ok "$binary installed → ${INSTALL_DIR}/${binary}  ($installed_ver)"
+}
+
+# ── Source-mode steps ─────────────────────────────────────────────────────────
 step_ssh_check() {
     next_step "Verify GitHub SSH access"
-    print_info "Connecting to git@github.com..."
+    print_info "Connecting to git@github.com…"
 
-    # ssh -T always exits 1 on GitHub (by design — no shell access).
-    # </dev/null prevents ssh from consuming the curl pipe when stdin is piped.
+    # ssh -T always exits 1 on GitHub (no shell access by design).
+    # </dev/null prevents ssh from consuming the curl pipe.
     local ssh_out
     ssh_out=$(ssh -o BatchMode=yes \
                   -o StrictHostKeyChecking=accept-new \
@@ -349,7 +474,7 @@ step_ssh_check() {
 
 step_install_rust() {
     next_step "Install Rust via rustup"
-    print_info "Downloading rustup from https://sh.rustup.rs ..."
+    print_info "Downloading rustup from https://sh.rustup.rs …"
     echo ""
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
         | sh -s -- -y --no-modify-path
@@ -361,7 +486,6 @@ step_install_rust() {
 }
 
 step_ensure_cargo_env() {
-    # Ensure ~/.cargo/bin is on PATH (may need sourcing after a fresh install)
     if [[ ! ":${PATH}:" == *":${HOME}/.cargo/bin:"* ]]; then
         if [[ -f "${HOME}/.cargo/env" ]]; then
             # shellcheck source=/dev/null
@@ -386,18 +510,17 @@ step_cargo_install() {
     print_dim "This compiles from the private Git repo and may take a few minutes."
     echo ""
 
-    # CARGO_NET_GIT_FETCH_WITH_CLI=true makes cargo use the system git binary
-    # instead of libgit2, which reliably picks up the SSH agent.
+    # CARGO_NET_GIT_FETCH_WITH_CLI=true delegates git operations to the system
+    # git binary (rather than libgit2), reliably picking up the SSH agent.
     # --force rebuilds unconditionally even when cargo's SHA cache is current.
-    # </dev/null prevents cargo from reading the curl pipe for interactive prompts.
+    # </dev/null prevents cargo reading the curl pipe for interactive prompts.
     CARGO_NET_GIT_FETCH_WITH_CLI=true \
         cargo install --git "$REPO_SSH" "$binary" --locked --force </dev/null
 
-    local installed_path="${HOME}/.cargo/bin/${binary}"
     local installed_ver
-    installed_ver="$("$installed_path" --version 2>/dev/null || echo "unknown")"
+    installed_ver="$("${INSTALL_DIR}/${binary}" --version 2>/dev/null || echo "unknown")"
     echo ""
-    print_ok "$binary installed → $installed_path  ($installed_ver)"
+    print_ok "$binary installed → ${INSTALL_DIR}/${binary}  ($installed_ver)"
 }
 
 # ── Completion summary ────────────────────────────────────────────────────────
@@ -408,16 +531,15 @@ display_completion() {
     echo "${BOLD}══════════════════════════════════════════════════════════${RESET}"
     echo ""
 
-    # PATH notice – check the parent shell's PATH (not the env we may have sourced)
-    if ! echo ":${PATH}:" | grep -q ":${HOME}/.cargo/bin:"; then
-        print_warn "~/.cargo/bin is not in your shell PATH."
+    if ! echo ":${PATH}:" | grep -q ":${INSTALL_DIR}:"; then
+        print_warn "${INSTALL_DIR} is not in your shell PATH."
         echo ""
         echo "  Run now (activates for this terminal session):"
-        echo "    . \"\$HOME/.cargo/env\""
+        echo "    export PATH=\"${INSTALL_DIR}:\$PATH\""
         echo ""
-        echo "  Make permanent (add to your shell profile):"
-        echo "    echo '. \"\$HOME/.cargo/env\"' >> ~/.bashrc   # bash"
-        echo "    echo '. \"\$HOME/.cargo/env\"' >> ~/.zshrc    # zsh"
+        echo "  Make permanent:"
+        echo "    echo 'export PATH=\"${INSTALL_DIR}:\$PATH\"' >> ~/.bashrc   # bash"
+        echo "    echo 'export PATH=\"${INSTALL_DIR}:\$PATH\"' >> ~/.zshrc    # zsh"
         echo ""
     fi
 
@@ -446,22 +568,28 @@ main() {
     display_plan
     prompt_main
 
-    if [[ $DO_SSH_CHECK -eq 1 ]]; then
-        step_ssh_check
-    fi
-
-    if [[ $DO_RUST_INSTALL -eq 1 ]]; then
-        step_install_rust
-    fi
-
-    step_ensure_cargo_env
-
-    if [[ $DO_INSTALL_TESTER -eq 1 ]]; then
-        step_cargo_install "networker-tester"
-    fi
-
-    if [[ $DO_INSTALL_ENDPOINT -eq 1 ]]; then
-        step_cargo_install "networker-endpoint"
+    if [[ "$INSTALL_METHOD" == "release" ]]; then
+        mkdir -p "$INSTALL_DIR"
+        if [[ $DO_INSTALL_TESTER -eq 1 ]]; then
+            step_download_release "networker-tester"
+        fi
+        if [[ $DO_INSTALL_ENDPOINT -eq 1 ]]; then
+            step_download_release "networker-endpoint"
+        fi
+    else
+        if [[ $DO_SSH_CHECK -eq 1 ]]; then
+            step_ssh_check
+        fi
+        if [[ $DO_RUST_INSTALL -eq 1 ]]; then
+            step_install_rust
+        fi
+        step_ensure_cargo_env
+        if [[ $DO_INSTALL_TESTER -eq 1 ]]; then
+            step_cargo_install "networker-tester"
+        fi
+        if [[ $DO_INSTALL_ENDPOINT -eq 1 ]]; then
+            step_cargo_install "networker-endpoint"
+        fi
     fi
 
     display_completion

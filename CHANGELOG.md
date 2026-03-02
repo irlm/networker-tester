@@ -11,6 +11,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.12] – 2026-03-02 — Binary release downloads + cross-compile CI
+
+### Added
+- **Release workflow now builds and uploads native binaries** for 4 platforms:
+  `x86_64-unknown-linux-gnu`, `x86_64-apple-darwin`, `aarch64-apple-darwin`,
+  `x86_64-pc-windows-msvc`. Each release asset is a `.tar.gz` (Unix) or `.zip`
+  (Windows) containing the single binary. Archives are attached to every GitHub
+  release going forward.
+- **Both installers now auto-detect install mode**:
+  - **release mode** (default when available): if `gh` CLI is installed and
+    `gh auth login` has been run, and the current platform has a release binary,
+    the installer downloads and extracts the pre-built binary via
+    `gh release download --latest` (~10 s total)
+  - **source mode** (fallback): compiles from source via `cargo install` as before
+    (~5-10 min); chosen automatically when `gh` is not available or
+    `--from-source` / `-FromSource` flag is passed
+- **`install.sh`**: new `--from-source` flag; system info shows `gh CLI: authenticated ✓`
+  when release mode is available; plan section shows install method + target triple;
+  customize flow offers install method choice
+- **`install.ps1`**: new `-FromSource` switch; same UX improvements as bash
+- Release mode installs to `~/.cargo/bin/` (Unix) / `%USERPROFILE%\.cargo\bin\`
+  (Windows) — same path as source mode, identical PATH instructions
+
+---
+
 ## [0.12.11] – 2026-03-02 — Rustup-style interactive installer
 
 ### Changed
