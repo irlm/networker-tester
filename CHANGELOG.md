@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.21] – 2026-03-02 — Fix browser probe Chrome detection on Windows
+
+### Fixed
+- **`runner/browser.rs` `find_chrome()`**: added Windows path detection; previously only
+  Linux and macOS paths were searched, so Chrome installed via the installer was never
+  found at runtime on Windows
+- Now checks `%PROGRAMFILES%\Google\Chrome\Application\chrome.exe`,
+  `%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe`, and
+  `%PROGRAMFILES(X86)%\...` before falling through to Linux/macOS paths
+
+---
+
 ## [0.12.20] – 2026-03-02 — Fix: `--features browser` applied only to networker-tester
 
 ### Fixed

@@ -18,8 +18,9 @@ use std::path::PathBuf;
 ///
 /// Search order:
 /// 1. `NETWORKER_CHROME_PATH` environment variable.
-/// 2. Linux system paths.
-/// 3. macOS application bundle paths.
+/// 2. Windows standard install locations (`%ProgramFiles%`, `%LocalAppData%`).
+/// 3. Linux system paths.
+/// 4. macOS application bundle paths.
 pub fn find_chrome() -> Option<PathBuf> {
     // 1. Env var override
     if let Ok(path) = std::env::var("NETWORKER_CHROME_PATH") {
@@ -29,7 +30,35 @@ pub fn find_chrome() -> Option<PathBuf> {
         }
     }
 
-    // 2. Linux paths
+    // 2. Windows paths (resolved from environment variables so they work on
+    //    any locale / drive letter)
+    #[cfg(target_os = "windows")]
+    {
+        let win_roots: Vec<String> = [
+            std::env::var("PROGRAMFILES").ok(),
+            std::env::var("LOCALAPPDATA").ok(),
+            std::env::var("PROGRAMFILES(X86)").ok(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+
+        let win_rel = [
+            r"Google\Chrome\Application\chrome.exe",
+            r"Chromium\Application\chrome.exe",
+        ];
+
+        for root in &win_roots {
+            for rel in &win_rel {
+                let p = PathBuf::from(root).join(rel);
+                if std::fs::metadata(&p).is_ok() {
+                    return Some(p);
+                }
+            }
+        }
+    }
+
+    // 3. Linux paths
     let linux_paths = [
         "/usr/bin/google-chrome",
         "/usr/bin/chromium-browser",
@@ -44,7 +73,7 @@ pub fn find_chrome() -> Option<PathBuf> {
         }
     }
 
-    // 3. macOS application bundle paths
+    // 4. macOS application bundle paths
     let macos_paths = [
         "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
         "/Applications/Chromium.app/Contents/MacOS/Chromium",
