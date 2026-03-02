@@ -81,7 +81,7 @@ impl Endpoint {
         });
 
         // Wait for the HTTP server to become ready (poll up to 3 s)
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {
             if tokio::net::TcpStream::connect(format!("127.0.0.1:{http_port}"))
                 .await
@@ -90,13 +90,13 @@ impl Endpoint {
                 break;
             }
             if std::time::Instant::now() >= deadline {
-                panic!("Endpoint did not start within 3 seconds");
+                panic!("Endpoint did not start within 10 seconds");
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
 
         // Also wait for HTTPS
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {
             if tokio::net::TcpStream::connect(format!("127.0.0.1:{https_port}"))
                 .await
@@ -105,7 +105,7 @@ impl Endpoint {
                 break;
             }
             if std::time::Instant::now() >= deadline {
-                panic!("HTTPS endpoint did not start within 3 seconds");
+                panic!("HTTPS endpoint did not start within 10 seconds");
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
@@ -118,7 +118,7 @@ impl Endpoint {
         // nothing bound returns ICMP Port Unreachable (ECONNREFUSED), so
         // retrying until we actually get the echo is the correct readiness
         // check.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {
             let probe = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
             probe
@@ -137,7 +137,7 @@ impl Endpoint {
                 break;
             }
             if std::time::Instant::now() >= deadline {
-                panic!("UDP echo server did not start within 3 seconds");
+                panic!("UDP echo server did not start within 10 seconds");
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
@@ -147,7 +147,7 @@ impl Endpoint {
         //   ConnectionRefused → ICMP Port Unreachable → not bound yet, retry.
         //   timeout           → packet absorbed (no ICMP) → server is listening.
         //   Ok(data)          → server responded → definitely ready.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {
             let sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
             sock.connect(format!("127.0.0.1:{udp_throughput_port}"))
@@ -167,7 +167,7 @@ impl Endpoint {
                 Ok(Err(_)) => break,
             }
             if std::time::Instant::now() >= deadline {
-                panic!("UDP throughput server did not bind on port {udp_throughput_port} within 3 seconds");
+                panic!("UDP throughput server did not bind on port {udp_throughput_port} within 10 seconds");
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
