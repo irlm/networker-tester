@@ -156,6 +156,7 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
         Protocol::PageLoad,
         Protocol::PageLoad2,
         Protocol::PageLoad3,
+        Protocol::Browser,
     ] {
         let rows: Vec<&RequestAttempt> = run
             .attempts
@@ -191,6 +192,7 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
             Protocol::PageLoad,
             Protocol::PageLoad2,
             Protocol::PageLoad3,
+            Protocol::Browser,
         ];
         // Collect (proto, Option<payload>) groups in canonical order.
         let stat_groups: Vec<(Protocol, Option<usize>)> = all_protos
@@ -388,6 +390,86 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
                 }
             }
             let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
+        }
+    }
+
+    // ── Browser Results ───────────────────────────────────────────────────────
+    {
+        let browser_rows: Vec<&RequestAttempt> = run
+            .attempts
+            .iter()
+            .filter(|a| a.protocol == Protocol::Browser && a.browser.is_some())
+            .collect();
+        if !browser_rows.is_empty() {
+            let open_attr = if browser_rows.len() <= 20 {
+                " open"
+            } else {
+                ""
+            };
+            let _ = write!(
+                out,
+                r#"
+<section class="card">
+  <h2>Browser Results</h2>
+  <details{open}>
+    <summary><span class="grp-lbl">{n} attempts</span></summary>
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Protocol (main)</th>
+          <th>TTFB (ms)</th>
+          <th>DCL (ms)</th>
+          <th>Load (ms)</th>
+          <th>Resources</th>
+          <th>Bytes</th>
+          <th>Protocols</th>
+        </tr>
+      </thead>
+      <tbody>
+"#,
+                open = open_attr,
+                n = browser_rows.len(),
+            );
+            for a in &browser_rows {
+                let b = a.browser.as_ref().unwrap();
+                let proto_summary = b
+                    .resource_protocols
+                    .iter()
+                    .map(|(p, n)| format!("{p}×{n}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let _ = write!(
+                    out,
+                    r#"        <tr>
+          <td>{seq}</td>
+          <td><code>{proto}</code></td>
+          <td>{ttfb:.2}</td>
+          <td>{dcl:.2}</td>
+          <td>{load:.2}</td>
+          <td>{res}</td>
+          <td>{bytes}</td>
+          <td>{protos}</td>
+        </tr>
+"#,
+                    seq = a.sequence_num,
+                    proto = escape_html(&b.protocol),
+                    ttfb = b.ttfb_ms,
+                    dcl = b.dom_content_loaded_ms,
+                    load = b.load_ms,
+                    res = b.resource_count,
+                    bytes = b.transferred_bytes,
+                    protos = if proto_summary.is_empty() {
+                        "—".to_string()
+                    } else {
+                        escape_html(&proto_summary)
+                    },
+                );
+            }
+            let _ = writeln!(
+                out,
+                "      </tbody>\n    </table>\n  </details>\n</section>"
+            );
         }
     }
 
@@ -1341,6 +1423,7 @@ mod tests {
                 server_timing: None,
                 udp_throughput: None,
                 page_load: None,
+                browser: None,
             }],
         }
     }

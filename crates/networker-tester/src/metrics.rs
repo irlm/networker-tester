@@ -82,6 +82,9 @@ pub struct RequestAttempt {
     /// Page-load simulation result (pageload / pageload2 / pageload3 modes only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page_load: Option<PageLoadResult>,
+    /// Real-browser page-load result (browser mode only, requires `--features browser`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<BrowserResult>,
 }
 
 impl RequestAttempt {
@@ -134,6 +137,9 @@ pub enum Protocol {
     /// HTTP/3 page-load: same assets multiplexed over one QUIC connection.
     /// Requires `--features http3` and an HTTPS target.
     PageLoad3,
+    /// Real headless-browser probe via CDP (chromiumoxide).
+    /// Requires `--features browser`. Self-skips with an error attempt if Chrome is not found.
+    Browser,
 }
 
 impl std::fmt::Display for Protocol {
@@ -157,6 +163,7 @@ impl std::fmt::Display for Protocol {
             Protocol::PageLoad => write!(f, "pageload"),
             Protocol::PageLoad2 => write!(f, "pageload2"),
             Protocol::PageLoad3 => write!(f, "pageload3"),
+            Protocol::Browser => write!(f, "browser"),
         }
     }
 }
@@ -184,6 +191,7 @@ impl std::str::FromStr for Protocol {
             "pageload" => Ok(Protocol::PageLoad),
             "pageload2" => Ok(Protocol::PageLoad2),
             "pageload3" => Ok(Protocol::PageLoad3),
+            "browser" => Ok(Protocol::Browser),
             other => Err(format!("Unknown protocol: {other}")),
         }
     }
@@ -431,6 +439,26 @@ pub struct PageLoadResult {
     pub cpu_time_ms: Option<f64>,
 }
 
+/// Real-browser page-load result (browser mode, requires `--features browser`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrowserResult {
+    /// Total page load time: navigation start → load event (ms).
+    pub load_ms: f64,
+    /// DOMContentLoaded event timing (ms from navigation start).
+    pub dom_content_loaded_ms: f64,
+    /// Time to first byte of the main document (ms).
+    pub ttfb_ms: f64,
+    /// Total resources loaded (main doc + all sub-resources).
+    pub resource_count: u32,
+    /// Total bytes transferred across all resources.
+    pub transferred_bytes: usize,
+    /// HTTP protocol negotiated for the main document ("h2", "h3", "http/1.1" …).
+    pub protocol: String,
+    /// Per-protocol resource counts sorted by count desc: [("h2", 18), ("h3", 2)].
+    pub resource_protocols: Vec<(String, u32)>,
+    pub started_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorRecord {
     pub category: ErrorCategory,
@@ -601,6 +629,7 @@ pub fn primary_metric_label(proto: &Protocol) -> &'static str {
         Protocol::Dns => "Resolve ms",
         Protocol::Tls => "Handshake ms",
         Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3 => "Total ms",
+        Protocol::Browser => "Load ms",
     }
 }
 
@@ -639,6 +668,7 @@ pub fn primary_metric_value(a: &RequestAttempt) -> Option<f64> {
         Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3 => {
             a.page_load.as_ref().map(|p| p.total_ms)
         }
+        Protocol::Browser => a.browser.as_ref().map(|b| b.load_ms),
     }
 }
 
@@ -708,6 +738,7 @@ mod tests {
             "pageload",
             "pageload2",
             "pageload3",
+            "browser",
         ] {
             let parsed = Protocol::from_str(p).unwrap();
             assert_eq!(parsed.to_string(), *p);
@@ -735,6 +766,7 @@ mod tests {
             server_timing: None,
             udp_throughput: None,
             page_load: None,
+            browser: None,
         };
         let run = TestRun {
             run_id,

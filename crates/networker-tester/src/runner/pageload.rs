@@ -340,6 +340,7 @@ pub async fn run_pageload_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) ->
         server_timing: conn0.server_timing.clone(),
         udp_throughput: None,
         page_load: Some(page_load),
+        browser: None,
     }
 }
 
@@ -1045,6 +1046,7 @@ pub async fn run_pageload2_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
         server_timing,
         udp_throughput: None,
         page_load: Some(page_load),
+        browser: None,
     }
 }
 
@@ -1127,6 +1129,7 @@ fn error_attempt_proto(
         server_timing: None,
         udp_throughput: None,
         page_load: None,
+        browser: None,
     }
 }
 
@@ -1533,6 +1536,7 @@ pub async fn run_pageload3_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
         server_timing: None,
         udp_throughput: None,
         page_load: Some(page_load),
+        browser: None,
     }
 }
 

@@ -1,3 +1,4 @@
+pub mod browser;
 pub mod curl;
 pub mod dns;
 pub mod http;
