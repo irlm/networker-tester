@@ -30,7 +30,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$ScriptVersion = "0.12.20"
+$ScriptVersion = "0.12.23"
 $RepoSsh       = "ssh://git@github.com/irlm/networker-tester"
 $RepoGh        = "irlm/networker-tester"
 $CargoBin      = Join-Path $env:USERPROFILE ".cargo\bin"
@@ -203,10 +203,7 @@ function Invoke-DiscoverSystem {
     # Chrome detection (affects --features browser in source mode)
     $script:ChromePath      = Get-ChromePath
     $script:ChromeAvailable = -not [string]::IsNullOrWhiteSpace($script:ChromePath)
-    # Auto-offer Chrome install only in source mode when winget is available
-    if ($script:InstallMethod -eq "source" -and -not $script:ChromeAvailable -and $script:WingetAvailable) {
-        $script:DoChromiumInstall = $true
-    }
+    # DoChromiumInstall stays $false here — user is asked in Invoke-MainPrompt / Invoke-CustomizeFlow
 }
 
 # ── Display helpers ────────────────────────────────────────────────────────────
@@ -278,7 +275,7 @@ function Show-Plan {
                 Write-Host ("    {0}. Install Chrome         winget install Google.Chrome (browser probe)" -f $step)
                 $step++
             } elseif ($script:WingetAvailable) {
-                Write-Host "    -. Install Chrome         (skip -- toggle in Customize; browser probe disabled)" -ForegroundColor DarkGray
+                Write-Host "    -. Install Chrome         (will ask -- browser probe disabled if skipped)" -ForegroundColor DarkGray
             } else {
                 Write-Host "    -. Install Chrome         (not installed -- https://www.google.com/chrome/)" -ForegroundColor DarkGray
             }
@@ -339,7 +336,18 @@ function Invoke-MainPrompt {
         $ans = Read-Host "Enter choice [1]"
         if ([string]::IsNullOrWhiteSpace($ans)) { $ans = "1" }
         switch ($ans.Trim()) {
-            "1" { return }
+            "1" {
+                # Ask about Chrome if not already available (source mode, winget present)
+                if (-not $script:ChromeAvailable -and $script:InstallMethod -eq "source" -and $script:WingetAvailable) {
+                    Write-Host ""
+                    $script:DoChromiumInstall = Invoke-AskYN "Chrome/Chromium not found -- install it to enable the browser probe?" "y"
+                    if (-not $script:DoChromiumInstall) {
+                        Write-Info "Skipping Chrome -- browser probe will be disabled."
+                        Write-Info "To enable later: install Chrome then re-run this installer."
+                    }
+                }
+                return
+            }
             "2" { Invoke-CustomizeFlow; return }
             "3" { Write-Host ""; Write-Host "Installation cancelled."; exit 0 }
             default { Write-Warn "Please enter 1, 2, or 3." }

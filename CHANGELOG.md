@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.23] – 2026-03-02 — Installer always asks before installing Chrome
+
+### Fixed
+- **`install.sh`** / **`install.ps1`**: Chrome/Chromium was installed silently whenever
+  a package manager was available and the user chose "1 — Proceed with default installation";
+  the user was only asked in the "2 — Customize" path
+- Now the installer always prompts `[Y/n]` for Chrome when it is not found, regardless
+  of whether the user chose Proceed or Customize
+
+---
+
 ## [0.12.22] – 2026-03-02 — Fix browser probe: add `/browser-page` HTML endpoint
 
 ### Fixed

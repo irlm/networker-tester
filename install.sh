@@ -25,7 +25,7 @@ set -euo pipefail
 
 REPO_SSH="ssh://git@github.com/irlm/networker-tester"
 REPO_GH="irlm/networker-tester"
-SCRIPT_VERSION="0.12.20"
+SCRIPT_VERSION="0.12.23"
 INSTALL_DIR="${HOME}/.cargo/bin"
 
 # ── Colours (ANSI C quoting; safe even when stdin is a curl pipe) ─────────────
@@ -272,10 +272,7 @@ discover_system() {
         CHROME_AVAILABLE=1
     else
         CHROME_AVAILABLE=0
-        # Auto-offer Chrome install only in source mode when a pkg manager is available
-        if [[ "$INSTALL_METHOD" == "source" && -n "$PKG_MGR" ]]; then
-            DO_CHROME_INSTALL=1
-        fi
+        # DO_CHROME_INSTALL stays 0 here — user is asked in prompt_main / customize_flow
     fi
 }
 
@@ -345,9 +342,9 @@ display_plan() {
                 printf "    %s. ${BOLD}Install Chrome${RESET}         Install via %s (browser probe)\n" "$step" "$PKG_MGR"
                 step=$((step + 1))
             elif [[ -n "$PKG_MGR" ]]; then
-                printf "    ${DIM}-. Install Chrome         (skip – toggle in Customize; browser probe disabled)${RESET}\n"
+                printf "    ${DIM}-. Install Chrome         (will ask — browser probe disabled if skipped)${RESET}\n"
             else
-                printf "    ${DIM}-. Install Chrome         (not installed – https://www.google.com/chrome/)${RESET}\n"
+                printf "    ${DIM}-. Install Chrome         (not installed — https://www.google.com/chrome/)${RESET}\n"
             fi
         fi
 
@@ -404,7 +401,19 @@ prompt_main() {
         read -r ans </dev/tty || true
         ans="${ans:-1}"
         case "$ans" in
-            1) return 0 ;;
+            1)
+                # Ask about Chrome if not already available (source mode, pkg manager present)
+                if [[ $CHROME_AVAILABLE -eq 0 && "$INSTALL_METHOD" == "source" && -n "$PKG_MGR" ]]; then
+                    echo ""
+                    if ask_yn "Chrome/Chromium not found — install it to enable the browser probe?" "y"; then
+                        DO_CHROME_INSTALL=1
+                    else
+                        DO_CHROME_INSTALL=0
+                        print_info "Skipping Chrome — browser probe will be disabled."
+                        print_info "To enable later: install Chrome then re-run this installer."
+                    fi
+                fi
+                return 0 ;;
             2) customize_flow; return 0 ;;
             3)
                 echo ""
