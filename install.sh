@@ -25,7 +25,7 @@ set -euo pipefail
 
 REPO_SSH="ssh://git@github.com/irlm/networker-tester"
 REPO_GH="irlm/networker-tester"
-SCRIPT_VERSION="0.12.12"
+SCRIPT_VERSION="0.12.14"
 INSTALL_DIR="${HOME}/.cargo/bin"
 
 # ── Colours (ANSI C quoting; safe even when stdin is a curl pipe) ─────────────
@@ -112,6 +112,9 @@ DO_INSTALL_TESTER=1
 DO_INSTALL_ENDPOINT=1
 RUST_VER=""
 RUST_EXISTS=0
+GIT_AVAILABLE=0
+PKG_MGR=""
+DO_GIT_INSTALL=0
 SYS_OS=""
 SYS_ARCH=""
 SYS_SHELL=""
@@ -154,6 +157,25 @@ parse_args() {
     fi
 }
 
+# ── Package manager detection ─────────────────────────────────────────────────
+detect_pkg_manager() {
+    local os
+    os="$(uname -s 2>/dev/null || echo "")"
+    case "$os" in
+        Darwin)
+            if command -v brew &>/dev/null; then echo "brew"; fi
+            ;;
+        Linux)
+            if   command -v apt-get &>/dev/null; then echo "apt-get"
+            elif command -v dnf     &>/dev/null; then echo "dnf"
+            elif command -v pacman  &>/dev/null; then echo "pacman"
+            elif command -v zypper  &>/dev/null; then echo "zypper"
+            elif command -v apk     &>/dev/null; then echo "apk"
+            fi
+            ;;
+    esac
+}
+
 # ── Target triple detection ───────────────────────────────────────────────────
 detect_release_target() {
     local os arch
@@ -194,6 +216,14 @@ discover_system() {
         DO_RUST_INSTALL=1
     fi
 
+    # Git detection
+    if command -v git &>/dev/null; then
+        GIT_AVAILABLE=1
+    else
+        GIT_AVAILABLE=0
+        PKG_MGR="$(detect_pkg_manager)"
+    fi
+
     # Release mode: available when gh is authenticated AND this platform has a
     # pre-built binary in the release matrix.
     if [[ $FROM_SOURCE -eq 0 ]]; then
@@ -205,6 +235,11 @@ discover_system() {
             INSTALL_METHOD="release"
         fi
     fi
+
+    # Auto-offer git install only in source mode (release mode uses gh, not git)
+    if [[ "$INSTALL_METHOD" == "source" && $GIT_AVAILABLE -eq 0 && -n "$PKG_MGR" ]]; then
+        DO_GIT_INSTALL=1
+    fi
 }
 
 display_system_info() {
@@ -215,6 +250,11 @@ display_system_info() {
     printf "    %-22s %s\n" "Shell:"        "$SYS_SHELL"
     printf "    %-22s %s\n" "Home:"         "$HOME"
     printf "    %-22s %s\n" "Rust / cargo:" "$RUST_VER"
+    if [[ $GIT_AVAILABLE -eq 1 ]]; then
+        printf "    %-22s %s\n" "git:" "$(git --version 2>/dev/null)"
+    else
+        printf "    %-22s %s\n" "git:" "not installed"
+    fi
     printf "    %-22s %s\n" "Install to:"   "${INSTALL_DIR}/"
 
     if [[ $RELEASE_AVAILABLE -eq 1 ]]; then
@@ -246,6 +286,18 @@ display_plan() {
         echo ""
 
         local step=1
+
+        if [[ $GIT_AVAILABLE -eq 0 ]]; then
+            if [[ $DO_GIT_INSTALL -eq 1 ]]; then
+                printf "    %s. ${BOLD}Install git${RESET}            Install via %s\n" "$step" "$PKG_MGR"
+                step=$((step + 1))
+            elif [[ -n "$PKG_MGR" ]]; then
+                printf "    ${DIM}-. Install git              (skip – toggle in Customize)${RESET}\n"
+            else
+                printf "    ${DIM}-. Install git              (not installed – visit https://git-scm.com/)${RESET}\n"
+            fi
+        fi
+
         if [[ $DO_SSH_CHECK -eq 1 ]]; then
             printf "    %s. ${BOLD}SSH check${RESET}              Verify GitHub SSH access\n" "$step"
             step=$((step + 1))
@@ -353,8 +405,34 @@ customize_flow() {
         echo ""
     fi
 
-    # SSH check + Rust install – only relevant in source mode
+    # SSH check + Rust install + git install – only relevant in source mode
     if [[ "$INSTALL_METHOD" == "source" ]]; then
+        # git install (only offered when git is absent and pkg manager is available)
+        if [[ $GIT_AVAILABLE -eq 0 ]]; then
+            if [[ -n "$PKG_MGR" ]]; then
+                if ask_yn "git is not installed — install it via ${PKG_MGR}?" "y"; then
+                    DO_GIT_INSTALL=1
+                else
+                    DO_GIT_INSTALL=0
+                    echo ""
+                    print_warn "Skipping git install — cargo will use its built-in libgit2 for SSH."
+                    print_warn "If SSH authentication fails, install git manually:"
+                    case "$PKG_MGR" in
+                        brew)    echo "    brew install git" ;;
+                        apt-get) echo "    sudo apt-get install git" ;;
+                        dnf)     echo "    sudo dnf install git" ;;
+                        pacman)  echo "    sudo pacman -S git" ;;
+                        zypper)  echo "    sudo zypper install git" ;;
+                        apk)     echo "    sudo apk add git" ;;
+                    esac
+                fi
+            else
+                print_warn "git is not installed."
+                echo "  Install git from https://git-scm.com/ then re-run this script."
+            fi
+            echo ""
+        fi
+
         if ask_yn "Run SSH connectivity check for GitHub?" "y"; then
             DO_SSH_CHECK=1
         else
@@ -472,6 +550,45 @@ step_ssh_check() {
     fi
 }
 
+step_install_git() {
+    next_step "Install git"
+    print_info "Installing git via ${PKG_MGR}…"
+    echo ""
+
+    case "$PKG_MGR" in
+        brew)
+            brew install git
+            ;;
+        apt-get)
+            sudo apt-get update -qq && sudo apt-get install -y git
+            ;;
+        dnf)
+            sudo dnf install -y git
+            ;;
+        pacman)
+            sudo pacman -S --noconfirm git
+            ;;
+        zypper)
+            sudo zypper install -y git
+            ;;
+        apk)
+            sudo apk add git
+            ;;
+        *)
+            print_err "Unknown package manager: $PKG_MGR"
+            exit 1
+            ;;
+    esac
+
+    if command -v git &>/dev/null; then
+        GIT_AVAILABLE=1
+        print_ok "git installed: $(git --version)"
+    else
+        print_warn "git installed, but not yet in PATH — you may need to open a new terminal."
+        print_warn "Continuing; cargo will fall back to its built-in libgit2 for SSH."
+    fi
+}
+
 step_install_rust() {
     next_step "Install Rust via rustup"
     print_info "Downloading rustup from https://sh.rustup.rs …"
@@ -512,10 +629,15 @@ step_cargo_install() {
 
     # CARGO_NET_GIT_FETCH_WITH_CLI=true delegates git operations to the system
     # git binary (rather than libgit2), reliably picking up the SSH agent.
+    # Only set when git is on PATH; otherwise cargo uses its built-in libgit2.
     # --force rebuilds unconditionally even when cargo's SHA cache is current.
     # </dev/null prevents cargo reading the curl pipe for interactive prompts.
-    CARGO_NET_GIT_FETCH_WITH_CLI=true \
+    if command -v git &>/dev/null; then
+        CARGO_NET_GIT_FETCH_WITH_CLI=true \
+            cargo install --git "$REPO_SSH" "$binary" --locked --force </dev/null
+    else
         cargo install --git "$REPO_SSH" "$binary" --locked --force </dev/null
+    fi
 
     local installed_ver
     installed_ver="$("${INSTALL_DIR}/${binary}" --version 2>/dev/null || echo "unknown")"
@@ -577,6 +699,9 @@ main() {
             step_download_release "networker-endpoint"
         fi
     else
+        if [[ $DO_GIT_INSTALL -eq 1 ]]; then
+            step_install_git
+        fi
         if [[ $DO_SSH_CHECK -eq 1 ]]; then
             step_ssh_check
         fi

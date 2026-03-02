@@ -30,7 +30,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$ScriptVersion = "0.12.12"
+$ScriptVersion = "0.12.14"
 $RepoSsh       = "ssh://git@github.com/irlm/networker-tester"
 $RepoGh        = "irlm/networker-tester"
 $CargoBin      = Join-Path $env:USERPROFILE ".cargo\bin"
@@ -95,6 +95,9 @@ $script:DoInstallTester   = $true
 $script:DoInstallEndpoint = $true
 $script:RustExists        = $false
 $script:RustVer           = "not installed"
+$script:GitAvailable      = $false
+$script:WingetAvailable   = $false
+$script:DoGitInstall      = $false
 $script:SysOs             = ""
 $script:SysArch           = ""
 $script:StepNum           = 0
@@ -124,6 +127,12 @@ function Invoke-DiscoverSystem {
     if (-not $script:RustExists -and -not $SkipRust) { $script:DoRustInstall = $true }
     if ($SkipSshCheck) { $script:DoSshCheck = $false }
 
+    # Git detection
+    $script:GitAvailable = $null -ne (Get-Command git -ErrorAction SilentlyContinue)
+    if (-not $script:GitAvailable) {
+        $script:WingetAvailable = $null -ne (Get-Command winget -ErrorAction SilentlyContinue)
+    }
+
     switch ($Component) {
         "tester"   { $script:DoInstallEndpoint = $false }
         "endpoint" { $script:DoInstallTester   = $false }
@@ -146,6 +155,11 @@ function Invoke-DiscoverSystem {
             }
         }
     }
+
+    # Auto-offer git install only in source mode (release mode uses gh, not git)
+    if ($script:InstallMethod -eq "source" -and -not $script:GitAvailable -and $script:WingetAvailable) {
+        $script:DoGitInstall = $true
+    }
 }
 
 # ── Display helpers ────────────────────────────────────────────────────────────
@@ -156,6 +170,12 @@ function Show-SystemInfo {
     Write-Host ("    {0,-22} {1}" -f "Architecture:", $script:SysArch)
     Write-Host ("    {0,-22} {1}" -f "User home:",    $env:USERPROFILE)
     Write-Host ("    {0,-22} {1}" -f "Rust / cargo:", $script:RustVer)
+    if ($script:GitAvailable) {
+        $gitVer = (& git --version 2>&1)
+        Write-Host ("    {0,-22} {1}" -f "git:", $gitVer)
+    } else {
+        Write-Host ("    {0,-22} {1}" -f "git:", "not installed")
+    }
     Write-Host ("    {0,-22} {1}" -f "Install to:",   $CargoBin)
     if ($script:ReleaseAvailable) {
         Write-Host ("    {0,-22} {1}" -f "gh CLI:", "authenticated v")
@@ -184,6 +204,18 @@ function Show-Plan {
     } else {
         Write-Host "    Method:  Compile from source  (~5-10 min)" -ForegroundColor White
         Write-Host ""
+
+        if (-not $script:GitAvailable) {
+            if ($script:DoGitInstall) {
+                Write-Host ("    {0}. Install git            Install via winget" -f $step)
+                $step++
+            } elseif ($script:WingetAvailable) {
+                Write-Host "    -. Install git            (skip -- toggle in Customize)" -ForegroundColor DarkGray
+            } else {
+                Write-Host "    -. Install git            (not installed -- visit https://git-scm.com/)" -ForegroundColor DarkGray
+            }
+        }
+
         if ($script:DoSshCheck) {
             Write-Host ("    {0}. SSH check              Verify GitHub SSH access" -f $step)
             $step++
@@ -275,6 +307,25 @@ function Invoke-CustomizeFlow {
     }
 
     if ($script:InstallMethod -eq "source") {
+        # git install (only offered when git is absent)
+        if (-not $script:GitAvailable) {
+            if ($script:WingetAvailable) {
+                Write-Host ""
+                $script:DoGitInstall = Invoke-AskYN "git is not installed -- install it via winget?" "y"
+                if (-not $script:DoGitInstall) {
+                    Write-Host ""
+                    Write-Warn "Skipping git -- cargo will use its built-in libgit2 for SSH."
+                    Write-Warn "If authentication fails, install git from: https://git-scm.com/"
+                }
+            } else {
+                Write-Host ""
+                Write-Warn "git is not installed and winget was not found."
+                Write-Host "  Install Git from: https://git-scm.com/"
+                Write-Host "  Then re-run this installer."
+            }
+            Write-Host ""
+        }
+
         $script:DoSshCheck = Invoke-AskYN "Run SSH connectivity check for GitHub?" "y"
         if (-not $script:RustExists) {
             Write-Host ""
@@ -358,6 +409,42 @@ function Invoke-DownloadReleaseStep ($binary) {
 }
 
 # ── Source-mode steps ──────────────────────────────────────────────────────────
+function Invoke-GitInstallStep {
+    Invoke-NextStep "Install git"
+    Write-Info "Installing git via winget..."
+    Write-Host ""
+
+    $prevErr = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    & winget install --id Git.Git -e --source winget `
+        --accept-package-agreements --accept-source-agreements
+    $exitCode = $LASTEXITCODE
+    $ErrorActionPreference = $prevErr
+
+    if ($exitCode -ne 0) {
+        Write-Host ""
+        Write-Err "winget install failed (exit code $exitCode)."
+        Write-Host "  Install Git manually from: https://git-scm.com/"
+        Write-Host "  Then re-run this installer."
+        exit 1
+    }
+
+    # Refresh PATH so git.exe is visible without reopening the terminal
+    $machinePath = [System.Environment]::GetEnvironmentVariable("PATH", "Machine")
+    $userPath    = [System.Environment]::GetEnvironmentVariable("PATH", "User")
+    $env:PATH    = "$machinePath;$userPath"
+
+    $gitCmd = Get-Command git -ErrorAction SilentlyContinue
+    if ($gitCmd) {
+        $script:GitAvailable = $true
+        Write-Ok ("git installed: " + (& git --version 2>&1))
+    } else {
+        Write-Warn "git was installed but is not yet in PATH."
+        Write-Warn "You may need to reopen your terminal. Continuing with built-in libgit2..."
+        $script:GitAvailable = $false
+    }
+}
+
 function Invoke-SshStep {
     Invoke-NextStep "Verify GitHub SSH access"
 
@@ -423,9 +510,31 @@ function Invoke-CargoInstallStep ($binary) {
     Write-Dim "This compiles from the private Git repo and may take a few minutes."
     Write-Host ""
 
-    $env:CARGO_NET_GIT_FETCH_WITH_CLI = "true"
+    # CARGO_NET_GIT_FETCH_WITH_CLI=true delegates git operations to the system
+    # git binary rather than libgit2, which reliably picks up the SSH agent.
+    # Only set it when git.exe is actually on PATH; if git is absent, cargo falls
+    # back to its built-in libgit2 (which reads keys from %USERPROFILE%\.ssh\).
+    $gitAvailable = $null -ne (Get-Command git -ErrorAction SilentlyContinue)
+    if ($gitAvailable) { $env:CARGO_NET_GIT_FETCH_WITH_CLI = "true" }
+
+    $prevErr = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
     & cargo install --git $RepoSsh $binary --locked --force
-    $env:CARGO_NET_GIT_FETCH_WITH_CLI = $null
+    $exitCode = $LASTEXITCODE
+    $ErrorActionPreference = $prevErr
+
+    if ($gitAvailable) { $env:CARGO_NET_GIT_FETCH_WITH_CLI = $null }
+
+    if ($exitCode -ne 0) {
+        Write-Host ""
+        Write-Err "cargo install failed (exit code $exitCode)."
+        if (-not $gitAvailable) {
+            Write-Host "  git.exe was not found -- cargo used built-in libgit2 for SSH."
+            Write-Host "  If the error is SSH-related, install Git for Windows and retry:"
+            Write-Host "    https://git-scm.com/"
+        }
+        exit 1
+    }
 
     $installedCmd  = Get-Command $binary -ErrorAction SilentlyContinue
     $installedPath = if ($installedCmd) { $installedCmd.Source } else { "$CargoBin\$binary.exe" }
@@ -487,6 +596,7 @@ if ($script:InstallMethod -eq "release") {
     if ($script:DoInstallTester)   { Invoke-DownloadReleaseStep "networker-tester" }
     if ($script:DoInstallEndpoint) { Invoke-DownloadReleaseStep "networker-endpoint" }
 } else {
+    if ($script:DoGitInstall)      { Invoke-GitInstallStep }
     if ($script:DoSshCheck)        { Invoke-SshStep }
     if ($script:DoRustInstall)     { Invoke-RustInstallStep }
     Invoke-EnsureCargoEnv
