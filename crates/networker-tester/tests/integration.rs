@@ -14,8 +14,10 @@
 /// Run just this layer:
 ///   cargo test --test integration -p networker-tester
 use networker_tester::metrics::Protocol;
+use networker_tester::runner::curl::run_curl_probe;
 use networker_tester::runner::dns::run_dns_probe;
 use networker_tester::runner::http::{run_probe, RunConfig};
+use networker_tester::runner::native::run_native_probe;
 use networker_tester::runner::tls::run_tls_probe;
 #[cfg(feature = "http3")]
 use networker_tester::runner::pageload::run_pageload3_probe;
@@ -821,4 +823,102 @@ async fn tls_probe_captures_cert_chain() {
 
     // Standalone TLS probe — no HTTP request
     assert!(attempt.http.is_none(), "TLS probe should not send an HTTP request");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Native-TLS and curl probes
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Native-TLS probe against the local HTTPS endpoint.
+///
+/// Without `--features native` the probe returns a graceful stub error — this
+/// test verifies that behavior.  With the feature enabled it verifies the full
+/// pipeline: DNS + TCP + TLS (platform backend) + HTTP/1.1.
+#[tokio::test]
+async fn native_probe_uses_platform_tls() {
+    let ep = Endpoint::start().await;
+    let cfg = RunConfig {
+        dns_enabled: false,
+        timeout_ms: 5_000,
+        insecure: true, // self-signed cert
+        ..Default::default()
+    };
+
+    let url = ep.https_url("/health");
+    let attempt = run_native_probe(Uuid::new_v4(), 0, &url, &cfg).await;
+
+    if cfg!(not(feature = "native")) {
+        // Without the feature the probe returns a compile-time stub error.
+        assert!(!attempt.success, "stub should report failure");
+        let msg = attempt
+            .error
+            .expect("stub should set error")
+            .message;
+        assert!(
+            msg.contains("--features native"),
+            "stub error should mention the feature flag, got: {msg}"
+        );
+        return;
+    }
+
+    // Feature is enabled — expect a real successful probe.
+    assert!(attempt.success, "native probe failed: {:?}", attempt.error);
+    assert_eq!(attempt.protocol, Protocol::Native);
+
+    let http = attempt.http.expect("http result missing");
+    assert_eq!(http.status_code, 200);
+    assert!(http.ttfb_ms >= 0.0);
+
+    let tls = attempt.tls.expect("tls result missing");
+    assert!(tls.success);
+    assert!(tls.handshake_duration_ms >= 0.0);
+    assert!(
+        tls.tls_backend
+            .as_deref()
+            .map(|b| b.starts_with("native/"))
+            .unwrap_or(false),
+        "tls_backend should start with 'native/', got: {:?}",
+        tls.tls_backend
+    );
+}
+
+/// Curl probe against the local HTTP endpoint.
+///
+/// Self-skips gracefully when `curl` is not found on `$PATH`; verifies the
+/// "not found" error in that case.  When curl is present it checks HTTP timing
+/// and status code.
+#[tokio::test]
+async fn curl_probe_measures_timing() {
+    let ep = Endpoint::start().await;
+    let cfg = RunConfig {
+        dns_enabled: false,
+        timeout_ms: 5_000,
+        insecure: false,
+        ..Default::default()
+    };
+
+    let url = ep.http_url("/health");
+    let attempt = run_curl_probe(Uuid::new_v4(), 0, &url, &cfg).await;
+
+    // If curl is not installed, the probe returns a graceful error — not a test failure.
+    if !attempt.success {
+        if let Some(ref e) = attempt.error {
+            if e.message.contains("curl binary not found") {
+                return; // curl not on PATH — skip gracefully
+            }
+        }
+        panic!("curl probe failed unexpectedly: {:?}", attempt.error);
+    }
+
+    assert_eq!(attempt.protocol, Protocol::Curl);
+
+    let http = attempt.http.expect("http result missing");
+    assert_eq!(http.status_code, 200);
+    assert!(http.total_duration_ms > 0.0);
+    assert!(http.ttfb_ms >= 0.0);
+
+    // curl connects to 127.0.0.1 (IP) — dns_ms may be zero; TCP must be present
+    assert!(attempt.tcp.is_some(), "TCP result should be present for HTTP probe");
+    // Plain HTTP — no TLS result
+    assert!(attempt.tls.is_none(), "no TLS expected for plain HTTP");
 }
