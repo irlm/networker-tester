@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.19] – 2026-03-02 — Installer detects Chrome; browser feature follows Chrome availability
+
+### Changed
+- **`browser` feature removed from `default`** in `Cargo.toml`; it was briefly added in
+  v0.12.18 but is now driven by the installer instead (same pattern as git/MSVC detection)
+- **`release.yml`**: pre-built release binaries are always built with `--features browser`
+  (Chrome is a runtime dep only; CI build machines need no Chrome installed)
+- **`install.sh`** (SCRIPT_VERSION 0.12.19): detects Chrome/Chromium at startup via
+  `NETWORKER_CHROME_PATH` env var or standard macOS/Linux paths; shows in System
+  Information table; offers to install via the system package manager if absent;
+  user can toggle in the Customize flow; adds `--features browser` to `cargo install`
+  only when Chrome is present after the install step
+- **`install.ps1`** (SCRIPT_VERSION 0.12.19): same Chrome detection and offer via
+  `winget install Google.Chrome`; Chrome status shown in System Information table;
+  `--features browser` added to `cargo install` only when Chrome is available
+
+---
+
 ## [0.12.18] – 2026-03-02 — Make `browser` probe a default feature
 
 ### Changed

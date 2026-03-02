@@ -30,7 +30,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$ScriptVersion = "0.12.16"
+$ScriptVersion = "0.12.19"
 $RepoSsh       = "ssh://git@github.com/irlm/networker-tester"
 $RepoGh        = "irlm/networker-tester"
 $CargoBin      = Join-Path $env:USERPROFILE ".cargo\bin"
@@ -100,6 +100,9 @@ $script:WingetAvailable   = $false
 $script:DoGitInstall      = $false
 $script:MsvcAvailable     = $true
 $script:DoMsvcInstall     = $false
+$script:ChromeAvailable   = $false
+$script:ChromePath        = ""
+$script:DoChromiumInstall = $false
 $script:SysOs             = ""
 $script:SysArch           = ""
 $script:StepNum           = 0
@@ -110,6 +113,23 @@ function Get-ReleaseTarget {
         "AMD64"  { return "x86_64-pc-windows-msvc" }
         default  { return "" }   # ARM64/x86 not yet in release matrix
     }
+}
+
+# ── Chrome/Chromium detection ──────────────────────────────────────────────────
+function Get-ChromePath {
+    if ($env:NETWORKER_CHROME_PATH -and (Test-Path $env:NETWORKER_CHROME_PATH)) {
+        return $env:NETWORKER_CHROME_PATH
+    }
+    $paths = @(
+        "${env:ProgramFiles}\Google\Chrome\Application\chrome.exe",
+        "${env:LocalAppData}\Google\Chrome\Application\chrome.exe",
+        "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe",
+        "${env:ProgramFiles}\Chromium\Application\chrome.exe"
+    )
+    foreach ($p in $paths) {
+        if (Test-Path $p) { return $p }
+    }
+    return $null
 }
 
 # ── System discovery ───────────────────────────────────────────────────────────
@@ -179,6 +199,14 @@ function Invoke-DiscoverSystem {
     if ($script:InstallMethod -eq "source" -and -not $script:MsvcAvailable -and $script:WingetAvailable) {
         $script:DoMsvcInstall = $true
     }
+
+    # Chrome detection (affects --features browser in source mode)
+    $script:ChromePath      = Get-ChromePath
+    $script:ChromeAvailable = -not [string]::IsNullOrWhiteSpace($script:ChromePath)
+    # Auto-offer Chrome install only in source mode when winget is available
+    if ($script:InstallMethod -eq "source" -and -not $script:ChromeAvailable -and $script:WingetAvailable) {
+        $script:DoChromiumInstall = $true
+    }
 }
 
 # ── Display helpers ────────────────────────────────────────────────────────────
@@ -199,6 +227,11 @@ function Show-SystemInfo {
         Write-Host ("    {0,-22} {1}" -f "VC++ build tools:", "installed v")
     } else {
         Write-Host ("    {0,-22} {1}" -f "VC++ build tools:", "not installed")
+    }
+    if ($script:ChromeAvailable) {
+        Write-Host ("    {0,-22} {1}" -f "Chrome/Chromium:", "installed v")
+    } else {
+        Write-Host ("    {0,-22} {1}" -f "Chrome/Chromium:", "not installed  (browser probe disabled)")
     }
     Write-Host ("    {0,-22} {1}" -f "Install to:",   $CargoBin)
     if ($script:ReleaseAvailable) {
@@ -240,6 +273,17 @@ function Show-Plan {
             }
         }
 
+        if (-not $script:ChromeAvailable) {
+            if ($script:DoChromiumInstall) {
+                Write-Host ("    {0}. Install Chrome         winget install Google.Chrome (browser probe)" -f $step)
+                $step++
+            } elseif ($script:WingetAvailable) {
+                Write-Host "    -. Install Chrome         (skip -- toggle in Customize; browser probe disabled)" -ForegroundColor DarkGray
+            } else {
+                Write-Host "    -. Install Chrome         (not installed -- https://www.google.com/chrome/)" -ForegroundColor DarkGray
+            }
+        }
+
         if ($script:DoSshCheck) {
             Write-Host ("    {0}. SSH check              Verify GitHub SSH access" -f $step)
             $step++
@@ -264,8 +308,9 @@ function Show-Plan {
                 Write-Host "    -. Install VC++ Build Tools  (not installed -- https://aka.ms/vs/buildtools)" -ForegroundColor DarkGray
             }
         }
+        $browserNote = if ($script:ChromeAvailable -or $script:DoChromiumInstall) { "  [+browser feature]" } else { "" }
         if ($script:DoInstallTester) {
-            Write-Host ("    {0}. Install networker-tester    cargo install from private Git repo" -f $step)
+            Write-Host ("    {0}. Install networker-tester    cargo install from private Git repo{1}" -f $step, $browserNote)
             $step++
         }
         if ($script:DoInstallEndpoint) {
@@ -376,6 +421,24 @@ function Invoke-CustomizeFlow {
                 Write-Warn "VC++ Build Tools are not installed (winget not found to auto-install)."
                 Write-Host "  Install from: https://aka.ms/vs/buildtools"
                 Write-Host "  Select 'Desktop development with C++' workload, then re-run."
+            }
+            Write-Host ""
+        }
+
+        # Chrome install (only offered when Chrome is absent)
+        if (-not $script:ChromeAvailable) {
+            if ($script:WingetAvailable) {
+                Write-Host ""
+                $script:DoChromiumInstall = Invoke-AskYN "Chrome/Chromium not found -- install it to enable the browser probe?" "y"
+                if (-not $script:DoChromiumInstall) {
+                    Write-Host ""
+                    Write-Warn "Skipping Chrome -- networker-tester will be compiled without the browser probe."
+                    Write-Warn "To enable later: install Chrome then re-run this installer."
+                }
+            } else {
+                Write-Host ""
+                Write-Warn "Chrome/Chromium is not installed (winget not found to auto-install)."
+                Write-Host "  Install from: https://www.google.com/chrome/"
             }
             Write-Host ""
         }
@@ -545,6 +608,40 @@ function Invoke-MsvcInstallStep {
     }
 }
 
+function Invoke-ChromeInstallStep {
+    Invoke-NextStep "Install Chrome (browser probe)"
+    Write-Info "Installing Google Chrome via winget..."
+    Write-Dim "Required at runtime for the 'browser' probe (headless Chromium via CDP)."
+    Write-Host ""
+
+    $prevErr = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    & winget install --id Google.Chrome -e --source winget `
+        --accept-package-agreements --accept-source-agreements
+    $exitCode = $LASTEXITCODE
+    $ErrorActionPreference = $prevErr
+
+    if ($exitCode -ne 0) {
+        Write-Host ""
+        Write-Warn "Chrome install failed (exit code $exitCode) -- browser probe will not be compiled."
+        Write-Warn "Install Chrome manually from: https://www.google.com/chrome/"
+        $script:ChromeAvailable = $false
+        return   # Don't exit; continue installing without browser feature
+    }
+
+    # Re-detect after install (Chrome may need a PATH refresh)
+    $script:ChromePath = Get-ChromePath
+    if ($script:ChromePath) {
+        $script:ChromeAvailable = $true
+        Write-Ok "Chrome installed: $($script:ChromePath)"
+    } else {
+        # Installed but not in standard paths yet — compile with feature anyway
+        $script:ChromeAvailable = $true
+        Write-Warn "Chrome installed but not yet detectable in standard paths."
+        Write-Warn "browser probe compiled in; set NETWORKER_CHROME_PATH env var if needed."
+    }
+}
+
 function Invoke-GitInstallStep {
     Invoke-NextStep "Install git"
     Write-Info "Installing git via winget..."
@@ -661,12 +758,21 @@ function Invoke-CargoInstallStep ($binary) {
     # git binary rather than libgit2, which reliably picks up the SSH agent.
     # Only set it when git.exe is actually on PATH; if git is absent, cargo falls
     # back to its built-in libgit2 (which reads keys from %USERPROFILE%\.ssh\).
+    # --features browser is added only when Chrome/Chromium is available.
     $gitAvailable = $null -ne (Get-Command git -ErrorAction SilentlyContinue)
     if ($gitAvailable) { $env:CARGO_NET_GIT_FETCH_WITH_CLI = "true" }
 
+    if ($script:ChromeAvailable) {
+        Write-Info "Chrome detected -- compiling with browser probe support."
+    }
+
     $prevErr = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
-    & cargo install --git $RepoSsh $binary --locked --force
+    if ($script:ChromeAvailable) {
+        & cargo install --git $RepoSsh $binary --locked --force --features browser
+    } else {
+        & cargo install --git $RepoSsh $binary --locked --force
+    }
     $exitCode = $LASTEXITCODE
     $ErrorActionPreference = $prevErr
 
@@ -743,6 +849,7 @@ if ($script:InstallMethod -eq "release") {
     if ($script:DoInstallTester)   { Invoke-DownloadReleaseStep "networker-tester" }
     if ($script:DoInstallEndpoint) { Invoke-DownloadReleaseStep "networker-endpoint" }
 } else {
+    if ($script:DoChromiumInstall) { Invoke-ChromeInstallStep }
     if ($script:DoMsvcInstall)     { Invoke-MsvcInstallStep }
     if ($script:DoGitInstall)      { Invoke-GitInstallStep }
     if ($script:DoSshCheck)        { Invoke-SshStep }
