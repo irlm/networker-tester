@@ -72,8 +72,9 @@ async fn main() -> anyhow::Result<()> {
     if modes.is_empty() {
         anyhow::bail!(
             "No valid modes specified. Use: tcp,http1,http2,http3,udp,dns,tls,native,curl,\
-             download,upload,webdownload,webupload,udpdownload,udpupload,pageload,pageload2,\
-             pageload3,browser,browser1,browser2,browser3"
+             download,upload,webdownload,webupload,udpdownload,udpupload,\
+             pageload(H1+H2+H3),pageload1,pageload2,pageload3,\
+             browser(H1+H2+H3),browser1,browser2,browser3"
         );
     }
 
