@@ -11,6 +11,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.9] – 2026-03-02 — Coverage phase 4: http.rs + udp.rs unit tests + integration flakiness fix
+
+### Added
+- **30 new unit tests in `runner/http.rs`**: `is_no_proxy` edge cases (empty string,
+  case-insensitive, whitespace trimming, empty entries, non-suffix match); `parse_server_timing_header`
+  edge cases (unknown name ignored, invalid `dur=` ignored, `dur=` among multiple attrs);
+  `parse_cert_fields` (invalid DER returns None, empty bytes, valid cert subject/issuer/expiry via
+  rcgen, expiry is in future); `pick_ip` fallback cases (no IPv4 available → first, `prefer_v4=false`
+  → first regardless); `failed_attempt` constructor (all fields verified); `parse_server_timing`
+  with HeaderMap (no headers → None, server-timing only, `x-networker-server-version`, request-id);
+  `build_request` method/header selection (GET for empty payload, POST with content-length and
+  upload-bytes headers, host + request-id headers set correctly).
+- **3 new unit tests in `runner/udp.rs`**: `udp_failed` constructor correctness; loopback echo
+  server with `probe_rtts_ms` all-Some verification; existing test reuse without duplication.
+
+### Fixed
+- **Integration test flakiness** (`free_udp_port()`): UDP server binds `0.0.0.0:{port}` but the
+  previous `free_port()` used a TCP listener (different port namespace). New `free_udp_port()` now
+  binds `0.0.0.0:0` — the same address family as the server — so the port is guaranteed free for a
+  subsequent `0.0.0.0:{port}` bind, eliminating "UDP throughput server did not bind within 10s" panics.
+
+### Coverage
+- `runner/http.rs`: 68% → 78.22% lines, 75% → 86.67% functions
+- `runner/udp.rs`: 60% → 84.68% lines, 78% → 88.89% functions
+- Total: 67.46% → 70.28% lines, 74.92% → 74.48% functions (line improvement of +2.8 pp)
+
+---
+
 ## [0.12.8] – 2026-03-02 — Upload size verification via response header
 
 ### Added

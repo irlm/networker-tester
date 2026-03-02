@@ -1384,4 +1384,256 @@ mod tests {
         }
         assert_eq!(frames, 0, "zero-byte body should yield no frames");
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // is_no_proxy — additional edge cases
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn is_no_proxy_empty_string_always_false() {
+        assert!(!is_no_proxy("example.com", ""));
+    }
+
+    #[test]
+    fn is_no_proxy_case_insensitive() {
+        assert!(is_no_proxy("EXAMPLE.COM", "example.com"));
+        assert!(is_no_proxy("example.com", "EXAMPLE.COM"));
+    }
+
+    #[test]
+    fn is_no_proxy_whitespace_trimmed() {
+        assert!(is_no_proxy("example.com", " example.com , other.com "));
+    }
+
+    #[test]
+    fn is_no_proxy_empty_entry_skipped() {
+        // Double-comma creates an empty entry that should be skipped.
+        assert!(!is_no_proxy("example.com", ",,foo.com,,"));
+        assert!(is_no_proxy("foo.com", ",,foo.com,,"));
+    }
+
+    #[test]
+    fn is_no_proxy_suffix_does_not_match_unrelated_domain() {
+        // "notexample.com" should not match ".example.com"
+        assert!(!is_no_proxy("notexample.com", "example.com"));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // parse_server_timing_header — additional edge cases
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_server_timing_header_unknown_name_ignored() {
+        let p = parse_server_timing_header("unknown;dur=99.0");
+        assert!(p.recv_ms.is_none());
+        assert!(p.proc_ms.is_none());
+        assert!(p.total_ms.is_none());
+    }
+
+    #[test]
+    fn parse_server_timing_header_invalid_dur_ignored() {
+        // Non-numeric dur value — should produce None for that field.
+        let p = parse_server_timing_header("recv;dur=abc");
+        assert!(p.recv_ms.is_none());
+    }
+
+    #[test]
+    fn parse_server_timing_header_dur_among_multiple_attrs() {
+        // Metrics with desc before dur should still parse correctly.
+        let p = parse_server_timing_header("recv;desc=body;dur=7.5");
+        assert!((p.recv_ms.unwrap() - 7.5).abs() < 1e-9);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // parse_cert_fields — pure-logic tests using rcgen
+    // ─────────────────────────────────────────────────────────────────────────
+
+    fn make_test_cert_der() -> Vec<u8> {
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        cert.cert.der().to_vec()
+    }
+
+    #[test]
+    fn parse_cert_fields_invalid_der_returns_none() {
+        assert!(parse_cert_fields(b"not a cert").is_none());
+    }
+
+    #[test]
+    fn parse_cert_fields_empty_bytes_returns_none() {
+        assert!(parse_cert_fields(b"").is_none());
+    }
+
+    #[test]
+    fn parse_cert_fields_valid_cert_returns_subject_and_issuer() {
+        let der = make_test_cert_der();
+        let (subject, issuer, expiry) = parse_cert_fields(&der).expect("should parse valid cert");
+        assert!(subject.is_some(), "subject should be present");
+        assert!(issuer.is_some(), "issuer should be present");
+        assert!(expiry.is_some(), "expiry should be present");
+        // For a self-signed cert, subject == issuer.
+        assert_eq!(subject, issuer, "self-signed cert: subject == issuer");
+    }
+
+    #[test]
+    fn parse_cert_fields_expiry_is_in_future() {
+        let der = make_test_cert_der();
+        let (_, _, expiry) = parse_cert_fields(&der).unwrap();
+        let now = chrono::Utc::now();
+        assert!(
+            expiry.unwrap() > now,
+            "freshly generated cert should not yet be expired"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // pick_ip — additional cases
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn pick_ip_returns_first_when_no_v4_available() {
+        let ips: Vec<std::net::IpAddr> = vec!["::1".parse().unwrap(), "::2".parse().unwrap()];
+        // prefer_v4 = true but no IPv4 present — should fall back to first.
+        let ip = pick_ip(&ips, true);
+        assert_eq!(ip, ips[0]);
+    }
+
+    #[test]
+    fn pick_ip_returns_first_when_not_prefer_v4() {
+        let ips: Vec<std::net::IpAddr> = vec!["::1".parse().unwrap(), "127.0.0.1".parse().unwrap()];
+        // prefer_v4 = false — always return first regardless of type.
+        let ip = pick_ip(&ips, false);
+        assert_eq!(ip, ips[0]);
+        assert!(ip.is_ipv6());
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // failed_attempt — constructor correctness
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn failed_attempt_sets_expected_fields() {
+        let run_id = Uuid::new_v4();
+        let attempt_id = Uuid::new_v4();
+        let started_at = chrono::Utc::now();
+        let a = failed_attempt(
+            run_id,
+            attempt_id,
+            7,
+            Protocol::Http1,
+            started_at,
+            ErrorCategory::Tcp,
+            "connect refused".to_string(),
+            Some("detail".to_string()),
+            None,
+            None,
+        );
+        assert!(!a.success);
+        assert_eq!(a.run_id, run_id);
+        assert_eq!(a.attempt_id, attempt_id);
+        assert_eq!(a.sequence_num, 7);
+        assert_eq!(a.protocol, Protocol::Http1);
+        let err = a.error.expect("error should be set");
+        assert_eq!(err.message, "connect refused");
+        assert_eq!(err.detail.as_deref(), Some("detail"));
+        assert_eq!(err.category, ErrorCategory::Tcp);
+        assert!(a.http.is_none());
+        assert!(a.dns.is_none());
+        assert!(a.tls.is_none());
+        assert!(a.finished_at.is_some());
+        assert_eq!(a.retry_count, 0);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // parse_server_timing (HeaderMap version)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_server_timing_no_relevant_headers_returns_none() {
+        let headers = hyper::HeaderMap::new();
+        let result = parse_server_timing(&headers, chrono::Utc::now(), 10.0);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn parse_server_timing_only_server_timing_header() {
+        let mut headers = hyper::HeaderMap::new();
+        headers.insert(
+            "server-timing",
+            "recv;dur=5.0, proc;dur=2.0".parse().unwrap(),
+        );
+        let result = parse_server_timing(&headers, chrono::Utc::now(), 10.0);
+        let st = result.expect("should be Some when server-timing header is present");
+        assert!((st.recv_body_ms.unwrap() - 5.0).abs() < 1e-9);
+        assert!((st.processing_ms.unwrap() - 2.0).abs() < 1e-9);
+        assert!(st.request_id.is_none());
+    }
+
+    #[test]
+    fn parse_server_timing_networker_version_header() {
+        let mut headers = hyper::HeaderMap::new();
+        headers.insert("x-networker-server-version", "0.12.0".parse().unwrap());
+        let result = parse_server_timing(&headers, chrono::Utc::now(), 10.0);
+        let st = result.expect("should be Some with x-networker-server-version");
+        assert_eq!(st.server_version.as_deref(), Some("0.12.0"));
+        assert!(st.clock_skew_ms.is_none()); // no timestamp header
+    }
+
+    #[test]
+    fn parse_server_timing_request_id_extracted() {
+        let mut headers = hyper::HeaderMap::new();
+        let id = Uuid::new_v4().to_string();
+        headers.insert("x-networker-request-id", id.parse().unwrap());
+        let result = parse_server_timing(&headers, chrono::Utc::now(), 5.0);
+        let st = result.expect("should be Some with x-networker-request-id");
+        assert_eq!(st.request_id.as_deref(), Some(id.as_str()));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // build_request — method and header selection
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn build_request_empty_payload_uses_get() {
+        let cfg = RunConfig {
+            payload_size: 0,
+            ..Default::default()
+        };
+        let req = build_request("example.com", "/health", &cfg, "HTTP/1.1", Uuid::new_v4())
+            .expect("build_request should succeed");
+        assert_eq!(req.method(), hyper::Method::GET);
+    }
+
+    #[test]
+    fn build_request_nonzero_payload_uses_post() {
+        let cfg = RunConfig {
+            payload_size: 1024,
+            ..Default::default()
+        };
+        let req = build_request("example.com", "/upload", &cfg, "HTTP/1.1", Uuid::new_v4())
+            .expect("build_request should succeed");
+        assert_eq!(req.method(), hyper::Method::POST);
+        // Content-Length header must be present.
+        let cl = req.headers().get("content-length").expect("content-length");
+        assert_eq!(cl, "1024");
+        // x-networker-upload-bytes must be present.
+        let ub = req
+            .headers()
+            .get("x-networker-upload-bytes")
+            .expect("x-networker-upload-bytes");
+        assert_eq!(ub, "1024");
+    }
+
+    #[test]
+    fn build_request_sets_host_and_request_id() {
+        let attempt_id = Uuid::new_v4();
+        let cfg = RunConfig::default();
+        let req = build_request("myhost.test", "/path", &cfg, "HTTP/1.1", attempt_id)
+            .expect("build_request should succeed");
+        assert_eq!(req.headers().get("host").unwrap(), "myhost.test");
+        let rid = req
+            .headers()
+            .get("x-networker-request-id")
+            .expect("x-networker-request-id");
+        assert_eq!(rid, attempt_id.to_string().as_str());
+    }
 }

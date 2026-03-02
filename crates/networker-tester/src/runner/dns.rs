@@ -167,7 +167,14 @@ mod tests {
     #[tokio::test]
     async fn run_dns_probe_failure_sets_error() {
         let run_id = uuid::Uuid::new_v4();
-        let attempt = run_dns_probe(run_id, 0, "this-hostname-does-not-exist.invalid", false, false).await;
+        let attempt = run_dns_probe(
+            run_id,
+            0,
+            "this-hostname-does-not-exist.invalid",
+            false,
+            false,
+        )
+        .await;
         assert!(!attempt.success);
         assert!(attempt.error.is_some());
         assert!(attempt.dns.is_none());

@@ -293,4 +293,56 @@ mod tests {
         assert_eq!(udp.success_count, 0);
         assert_eq!(udp.loss_percent, 100.0);
     }
+
+    #[test]
+    fn udp_failed_sets_correct_fields() {
+        let run_id = Uuid::new_v4();
+        let attempt_id = Uuid::new_v4();
+        let started_at = chrono::Utc::now();
+        let a = udp_failed(run_id, attempt_id, 3, started_at, "bind failed".to_string());
+        assert!(!a.success);
+        assert_eq!(a.run_id, run_id);
+        assert_eq!(a.attempt_id, attempt_id);
+        assert_eq!(a.sequence_num, 3);
+        assert_eq!(a.protocol, Protocol::Udp);
+        assert!(a.udp.is_none());
+        assert!(a.tcp.is_none());
+        assert!(a.dns.is_none());
+        let err = a.error.expect("error should be set");
+        assert_eq!(err.message, "bind failed");
+        assert_eq!(err.category, ErrorCategory::Udp);
+        assert_eq!(a.retry_count, 0);
+    }
+
+    #[tokio::test]
+    async fn udp_probe_all_responses_sets_zero_loss() {
+        // A perfect echo server: 5 probes, 0 loss.
+        let server = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let server_port = server.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 4096];
+            for _ in 0..10 {
+                match server.recv_from(&mut buf).await {
+                    Ok((n, addr)) => {
+                        let _ = server.send_to(&buf[..n], addr).await;
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        let cfg = UdpProbeConfig {
+            target_host: "127.0.0.1".to_string(),
+            target_port: server_port,
+            probe_count: 5,
+            timeout_ms: 2000,
+            payload_size: 32,
+        };
+        let attempt = run_udp_probe(Uuid::new_v4(), 0, &cfg).await;
+        assert!(attempt.success);
+        let udp = attempt.udp.unwrap();
+        assert_eq!(udp.loss_percent, 0.0);
+        // All 5 RTT entries should be Some.
+        assert_eq!(udp.probe_rtts_ms.len(), 5);
+        assert!(udp.probe_rtts_ms.iter().all(|r| r.is_some()));
+    }
 }

@@ -18,7 +18,6 @@ use networker_tester::runner::curl::run_curl_probe;
 use networker_tester::runner::dns::run_dns_probe;
 use networker_tester::runner::http::{run_probe, RunConfig};
 use networker_tester::runner::native::run_native_probe;
-use networker_tester::runner::tls::run_tls_probe;
 #[cfg(feature = "http3")]
 use networker_tester::runner::pageload::run_pageload3_probe;
 use networker_tester::runner::pageload::{run_pageload2_probe, run_pageload_probe, PageLoadConfig};
@@ -26,10 +25,11 @@ use networker_tester::runner::throughput::{
     run_download_probe, run_upload_probe, run_webdownload_probe, run_webupload_probe,
     ThroughputConfig,
 };
+use networker_tester::runner::tls::run_tls_probe;
+use networker_tester::runner::udp::{run_udp_probe, UdpProbeConfig};
 use networker_tester::runner::udp_throughput::{
     run_udpdownload_probe, run_udpupload_probe, UdpThroughputConfig,
 };
-use networker_tester::runner::udp::{run_udp_probe, UdpProbeConfig};
 use uuid::Uuid;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -40,6 +40,16 @@ fn free_port() -> u16 {
     use std::net::TcpListener;
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
     l.local_addr().unwrap().port()
+}
+
+/// Like `free_port` but finds a free *UDP* port by actually binding a UDP socket.
+///
+/// Binds `0.0.0.0:0` (same as the server) so the OS guarantees the port is
+/// free for a subsequent `0.0.0.0:{port}` bind by the server.
+fn free_udp_port() -> u16 {
+    use std::net::UdpSocket;
+    let s = UdpSocket::bind("0.0.0.0:0").unwrap();
+    s.local_addr().unwrap().port()
 }
 
 fn init_crypto() {
@@ -64,8 +74,8 @@ impl Endpoint {
 
         let http_port = free_port();
         let https_port = free_port();
-        let udp_port = free_port();
-        let udp_throughput_port = free_port();
+        let udp_port = free_udp_port();
+        let udp_throughput_port = free_udp_port();
 
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
 
@@ -155,11 +165,8 @@ impl Endpoint {
                 .unwrap();
             let _ = sock.send(&[0u8]).await;
             let mut buf = [0u8; 64];
-            match tokio::time::timeout(
-                std::time::Duration::from_millis(100),
-                sock.recv(&mut buf),
-            )
-            .await
+            match tokio::time::timeout(std::time::Duration::from_millis(100), sock.recv(&mut buf))
+                .await
             {
                 Err(_timeout) => break,
                 Ok(Ok(_)) => break,
@@ -208,11 +215,8 @@ impl Endpoint {
                 .unwrap();
             let _ = sock.send(&[0u8]).await;
             let mut buf = [0u8; 64];
-            match tokio::time::timeout(
-                std::time::Duration::from_millis(100),
-                sock.recv(&mut buf),
-            )
-            .await
+            match tokio::time::timeout(std::time::Duration::from_millis(100), sock.recv(&mut buf))
+                .await
             {
                 Err(_timeout) => break, // no ICMP unreachable → Quinn is listening
                 Ok(Ok(_)) => break,     // Quinn sent data back → definitely ready
@@ -689,7 +693,9 @@ async fn udpdownload_probe_reports_throughput() {
     );
     assert_eq!(attempt.protocol, Protocol::UdpDownload);
 
-    let ut = attempt.udp_throughput.expect("udp_throughput result missing");
+    let ut = attempt
+        .udp_throughput
+        .expect("udp_throughput result missing");
     assert_eq!(ut.payload_bytes, 65_536);
     assert!(ut.datagrams_received > 0, "should have received datagrams");
     assert!(
@@ -718,7 +724,9 @@ async fn udpupload_probe_reports_throughput() {
     );
     assert_eq!(attempt.protocol, Protocol::UdpUpload);
 
-    let ut = attempt.udp_throughput.expect("udp_throughput result missing");
+    let ut = attempt
+        .udp_throughput
+        .expect("udp_throughput result missing");
     assert_eq!(ut.payload_bytes, 65_536);
     assert!(ut.datagrams_sent > 0, "should have sent datagrams");
     // Server reports bytes_acked via CMD_REPORT
@@ -745,11 +753,7 @@ async fn dns_probe_resolves_localhost() {
 
     let attempt = run_dns_probe(Uuid::new_v4(), 0, "localhost", false, false).await;
 
-    assert!(
-        attempt.success,
-        "DNS probe failed: {:?}",
-        attempt.error
-    );
+    assert!(attempt.success, "DNS probe failed: {:?}", attempt.error);
     assert_eq!(attempt.protocol, Protocol::Dns);
 
     let dns = attempt.dns.expect("dns result missing");
@@ -761,7 +765,10 @@ async fn dns_probe_resolves_localhost() {
     assert!(dns.duration_ms >= 0.0);
 
     // Standalone DNS probe — no TCP/TLS/HTTP phases
-    assert!(attempt.tcp.is_none(), "DNS probe should not open a TCP connection");
+    assert!(
+        attempt.tcp.is_none(),
+        "DNS probe should not open a TCP connection"
+    );
     assert!(attempt.tls.is_none());
     assert!(attempt.http.is_none());
 }
@@ -782,11 +789,7 @@ async fn tls_probe_captures_cert_chain() {
     let url = ep.https_url("/health");
     let attempt = run_tls_probe(Uuid::new_v4(), 0, &url, &cfg).await;
 
-    assert!(
-        attempt.success,
-        "TLS probe failed: {:?}",
-        attempt.error
-    );
+    assert!(attempt.success, "TLS probe failed: {:?}", attempt.error);
     assert_eq!(attempt.protocol, Protocol::Tls);
 
     let tls = attempt.tls.expect("tls result missing");
@@ -822,7 +825,10 @@ async fn tls_probe_captures_cert_chain() {
     );
 
     // Standalone TLS probe — no HTTP request
-    assert!(attempt.http.is_none(), "TLS probe should not send an HTTP request");
+    assert!(
+        attempt.http.is_none(),
+        "TLS probe should not send an HTTP request"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -850,10 +856,7 @@ async fn native_probe_uses_platform_tls() {
     if cfg!(not(feature = "native")) {
         // Without the feature the probe returns a compile-time stub error.
         assert!(!attempt.success, "stub should report failure");
-        let msg = attempt
-            .error
-            .expect("stub should set error")
-            .message;
+        let msg = attempt.error.expect("stub should set error").message;
         assert!(
             msg.contains("--features native"),
             "stub error should mention the feature flag, got: {msg}"
@@ -918,7 +921,10 @@ async fn curl_probe_measures_timing() {
     assert!(http.ttfb_ms >= 0.0);
 
     // curl connects to 127.0.0.1 (IP) — dns_ms may be zero; TCP must be present
-    assert!(attempt.tcp.is_some(), "TCP result should be present for HTTP probe");
+    assert!(
+        attempt.tcp.is_some(),
+        "TCP result should be present for HTTP probe"
+    );
     // Plain HTTP — no TLS result
     assert!(attempt.tls.is_none(), "no TLS expected for plain HTTP");
 }
