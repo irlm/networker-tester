@@ -11,6 +11,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.35] – 2026-03-02 — browser3: Alt-Svc + warmup navigation to reliably force H3
+
+### Fixed
+- **`browser3` always showed `proto=h2`** despite `--origin-to-force-quic-on` and SPKI hash
+  pinning.  Root cause: on a LAN, Chrome's TCP connection is established in <1 ms and wins
+  the TCP-vs-QUIC race before the QUIC handshake completes.
+  Two changes together fix this:
+  1. **Endpoint now serves `Alt-Svc: h3=":PORT"; ma=86400`** on every HTTPS response
+     (Chrome ignores Alt-Svc from plain-HTTP origins).  Chrome caches the hint and opens a
+     QUIC connection in the background after the first response.
+  2. **browser3 probe does a warmup navigation** to `/health` before the measured page
+     load: the warmup receives the Alt-Svc header, Chrome establishes the QUIC session
+     (200 ms sleep), and the main navigation uses the already-open QUIC connection → H3.
+     Network events are subscribed **after** the warmup so only the main navigation's
+     resources are counted.
+- **Self-signed cert now includes the server's primary LAN IP** (e.g. `172.16.32.106`) as
+  an IP SAN (rcgen auto-detects IP strings).  Detected via the UDP-socket routing trick —
+  no packets sent.  Eliminates the hostname-mismatch cert error for clients connecting via
+  LAN IP, reducing reliance on SPKI-pin bypass.
+
+### Changed
+- `build_router()` → `build_router(h3_port: Option<u16>)` in `networker-endpoint`.
+  Callers pass `Some(https_port)` when the `http3` feature is compiled in, `None` otherwise.
+
+---
+
 ## [0.12.34] – 2026-03-02 — browser3: SPKI hash pinning for QUIC cert trust; browser1: plain-HTTP URL
 
 ### Fixed

@@ -65,7 +65,14 @@ pub async fn run_with_shutdown(
     info!("UDP echo       → 0.0.0.0:{}", cfg.udp_port);
     info!("UDP throughput → 0.0.0.0:{}", cfg.udp_throughput_port);
 
-    let router = build_router();
+    // Pass the QUIC port so the router can advertise H3 via Alt-Svc headers.
+    // Chrome only acts on Alt-Svc from HTTPS origins, so HTTP clients ignore it.
+    #[cfg(feature = "http3")]
+    let h3_port = Some(cfg.https_port);
+    #[cfg(not(feature = "http3"))]
+    let h3_port: Option<u16> = None;
+
+    let router = build_router(h3_port);
 
     // Spawn UDP echo
     let udp_handle = tokio::spawn(udp_echo::run_udp_echo(cfg.udp_port));
@@ -126,15 +133,37 @@ pub async fn run(cfg: ServerConfig) -> anyhow::Result<()> {
 // Self-signed TLS certificate (rcgen 0.13)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Detect the primary non-loopback LAN IP by routing to an external address.
+/// Uses the UDP socket trick (no packets are sent — just reads the routing table).
+fn get_primary_local_ip() -> Option<String> {
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("8.8.8.8:80").ok()?;
+    let addr = socket.local_addr().ok()?;
+    let ip = addr.ip();
+    if ip.is_loopback() {
+        None
+    } else {
+        Some(ip.to_string())
+    }
+}
+
 fn generate_self_signed_cert() -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
     use rcgen::generate_simple_self_signed;
 
-    // SANs: localhost (DNS), 127.0.0.1, ::1
-    let subject_alt_names = vec![
+    // SANs: localhost (DNS), 127.0.0.1, ::1, and the primary LAN IP (if any).
+    // rcgen 0.13 auto-detects IP strings and creates IP SANs; DNS strings get DNS SANs.
+    // Including the LAN IP means the cert is valid for remote clients (e.g. 172.16.x.x)
+    // without needing SPKI-pin to bypass a hostname-mismatch error.
+    let mut subject_alt_names = vec![
         "localhost".to_string(),
         "127.0.0.1".to_string(),
         "::1".to_string(),
     ];
+    if let Some(lan_ip) = get_primary_local_ip() {
+        if !subject_alt_names.contains(&lan_ip) {
+            subject_alt_names.push(lan_ip);
+        }
+    }
 
     let certified_key = generate_simple_self_signed(subject_alt_names)
         .context("rcgen generate_simple_self_signed")?;
