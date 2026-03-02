@@ -179,8 +179,25 @@ mod real {
         #[cfg(unix)]
         let chrome_path = wrap_chrome_for_root(chrome_path);
 
+        // Use a unique per-run user-data dir so Chrome is never blocked by a
+        // root-owned /tmp/chromiumoxide-runner left from a previous sudo run.
+        // chromiumoxide defaults to /tmp/chromiumoxide-runner; if that dir was
+        // created by root it is not writable by the non-root SUDO_USER that our
+        // runuser wrapper launches Chrome as.
+        let profile_dir = std::env::temp_dir()
+            .join(format!("networker-chrome-profile-{}", std::process::id()));
+        // RAII guard: remove the profile dir on every return path.
+        struct ProfileDirGuard(std::path::PathBuf);
+        impl Drop for ProfileDirGuard {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _profile_guard = ProfileDirGuard(profile_dir.clone());
+
         let browser_config = match BrowserConfig::builder()
             .chrome_executable(chrome_path)
+            .user_data_dir(&profile_dir)
             .arg("--headless=new")
             .arg("--no-sandbox")
             .arg("--disable-setuid-sandbox")

@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.31] – 2026-03-02 — Fix browser probe root: unique per-run user-data-dir
+
+### Fixed
+- **`runner/browser.rs`**: after the `runuser` fix (v0.12.30), Chrome now
+  runs as `SUDO_USER` but was still failing with
+  `readlink(/tmp/chromiumoxide-runner/SingletonLock): Permission denied` —
+  the `/tmp/chromiumoxide-runner` directory was left over from a previous
+  root run and is owned by root, so the non-root user Chrome now runs as
+  cannot write to it
+- Fix: compute a unique per-run profile directory
+  (`/tmp/networker-chrome-profile-<pid>`) and pass it to chromiumoxide via
+  `BrowserConfig::builder().user_data_dir()`, bypassing the default
+  `/tmp/chromiumoxide-runner` path; Chrome (running as `SUDO_USER`) creates
+  this fresh directory itself in world-writable `/tmp`
+- RAII guard (`ProfileDirGuard`) cleans up the profile directory on all
+  return paths so `/tmp` is not littered with leftover profiles
+
+---
+
 ## [0.12.30] – 2026-03-02 — Fix browser probe as root: launch Chrome via runuser as SUDO_USER
 
 ### Fixed
