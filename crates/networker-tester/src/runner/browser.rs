@@ -365,7 +365,36 @@ mod real {
             }
         };
 
-        // 5. Subscribe to network response events
+        // 5a. browser3 warmup navigation.
+        //
+        // Alt-Svc discovery flow:
+        //   1. Warmup GET /health → server returns Alt-Svc: h3=":PORT" over H2.
+        //   2. Chrome caches the hint and starts establishing a QUIC connection.
+        //   3. 200 ms sleep → Chrome completes the QUIC TLS handshake.
+        //   4. Main navigation → Chrome uses the already-open QUIC session → H3.
+        //
+        // Without this warmup Chrome always wins the TCP-vs-QUIC race on LAN (<1 ms)
+        // and uses H2 even when --origin-to-force-quic-on is set.
+        if matches!(protocol, Protocol::Browser3) {
+            let warmup = if let Ok(mut u) = url::Url::parse(&page_url) {
+                u.set_path("/health");
+                u.set_query(None);
+                u.to_string()
+            } else {
+                page_url.clone()
+            };
+            tracing::info!(url = %warmup, "browser3: warmup navigation to seed QUIC/Alt-Svc cache");
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                page.goto(&warmup).await?;
+                page.wait_for_navigation().await
+            })
+            .await;
+            // Give Chrome 200 ms to complete the QUIC handshake from the Alt-Svc hint.
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+
+        // 5b. Subscribe to network response events.
+        // Subscribed AFTER the warmup so only the main navigation's resources are counted.
         let mut response_events = match page.event_listener::<EventResponseReceived>().await {
             Ok(e) => e,
             Err(e) => {

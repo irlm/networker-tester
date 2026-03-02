@@ -1,7 +1,7 @@
 /// All HTTP route handlers for the diagnostics endpoint.
 use axum::{
     body::Body,
-    extract::{DefaultBodyLimit, Path, Query, Request},
+    extract::{DefaultBodyLimit, Path, Query, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, Version},
     middleware::{self, Next},
     response::{IntoResponse, Json, Response},
@@ -21,7 +21,13 @@ use tower_http::trace::TraceLayer;
 // Router
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub fn build_router() -> Router {
+/// Build the router.
+///
+/// `h3_port` — when `Some(port)`, every response includes
+/// `Alt-Svc: h3=":port"; ma=86400` so that Chrome can discover H3 support
+/// and upgrade to QUIC on subsequent navigations.  Pass `None` when H3 is not
+/// compiled in (the `http3` feature is disabled).
+pub fn build_router(h3_port: Option<u16>) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/echo", post(echo).get(echo_get))
@@ -38,8 +44,11 @@ pub fn build_router() -> Router {
         // Remove axum's default 2 MiB body limit so upload probes of arbitrary
         // size are not rejected with 413 before the body is transmitted.
         .layer(DefaultBodyLimit::disable())
-        // Add X-Networker-Server-Timestamp to every response.
-        .layer(middleware::from_fn(add_server_timestamp))
+        // Add X-Networker-Server-Timestamp (and optionally Alt-Svc) to every response.
+        .layer(middleware::from_fn_with_state(
+            h3_port,
+            add_server_timestamp,
+        ))
         // Log every request (method + URI) and response (status + latency).
         // Verbosity is controlled by RUST_LOG; defaults to INFO.
         .layer(TraceLayer::new_for_http())
@@ -49,8 +58,17 @@ pub fn build_router() -> Router {
 // Middleware
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Middleware that stamps every response with the server wall-clock time and version.
-async fn add_server_timestamp(req: Request, next: Next) -> Response {
+/// Middleware that stamps every response with the server wall-clock time, version,
+/// and (when `h3_port` is set) an `Alt-Svc` header advertising HTTP/3 support.
+///
+/// The `Alt-Svc` header is served on all responses regardless of scheme.
+/// Chrome ignores it for plain-HTTP origins; it only upgrades to QUIC when
+/// the header arrives over HTTPS — exactly the behaviour we want.
+async fn add_server_timestamp(
+    State(h3_port): State<Option<u16>>,
+    req: Request,
+    next: Next,
+) -> Response {
     let mut response = next.run(req).await;
     let ts = Utc::now().to_rfc3339();
     if let Ok(val) = HeaderValue::from_str(&ts) {
@@ -62,6 +80,13 @@ async fn add_server_timestamp(req: Request, next: Next) -> Response {
         "x-networker-server-version",
         HeaderValue::from_static(env!("CARGO_PKG_VERSION")),
     );
+    // Advertise H3 so Chrome can upgrade to QUIC on the next request to this origin.
+    if let Some(port) = h3_port {
+        let alt_svc = format!("h3=\":{port}\"; ma=86400");
+        if let Ok(val) = HeaderValue::from_str(&alt_svc) {
+            response.headers_mut().insert("alt-svc", val);
+        }
+    }
     response
 }
 
@@ -388,7 +413,7 @@ mod tests {
     use tower::ServiceExt; // for `oneshot`
 
     fn app() -> Router {
-        build_router()
+        build_router(None)
     }
 
     #[tokio::test]
