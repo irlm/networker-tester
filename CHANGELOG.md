@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.32] – 2026-03-02 — Add browser1/browser2/browser3 forced-protocol probe modes
+
+### Added
+- **`browser1`** probe mode — real headless Chromium forced to HTTP/1.1
+  via `--disable-http2`
+- **`browser2`** probe mode — real headless Chromium forced to HTTP/2
+  via `--disable-quic` (prevents H3 upgrade); requires HTTPS
+- **`browser3`** probe mode — real headless Chromium forced to HTTP/3 QUIC
+  via `--enable-quic --origin-to-force-quic-on=<host>:<port>`; requires HTTPS
+- All three appear in the Protocol Comparison table alongside
+  `pageload`/`pageload2`/`pageload3`
+- HTML "Browser Results" table gains a **Mode** column so all four browser
+  variants are shown together with their mode labels
+- Terminal log line now shows `[browser1]`/`[browser2]`/`[browser3]` instead of
+  hardcoded `[browser]`
+
+---
+
 ## [0.12.31] – 2026-03-02 — Fix browser probe root: unique per-run user-data-dir
 
 ### Fixed

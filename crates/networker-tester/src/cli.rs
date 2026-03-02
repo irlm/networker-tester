@@ -22,7 +22,7 @@ pub struct Cli {
     // ── Modes ─────────────────────────────────────────────────────────────────
     /// Comma-separated probe modes:
     /// tcp,http1,http2,http3,udp,download,upload,webdownload,webupload,udpdownload,udpupload,
-    /// dns,tls,native,curl,pageload,pageload2,pageload3,browser.
+    /// dns,tls,native,curl,pageload,pageload2,pageload3,browser,browser1,browser2,browser3.
     /// native: DNS + TCP + platform TLS (SChannel/SecureTransport/OpenSSL) + HTTP/1.1.
     ///   Requires --features native at compile time.
     /// curl: DNS + TCP + TLS + HTTP via the system curl binary.
@@ -41,6 +41,9 @@ pub struct Cli {
     /// browser: drive a real headless Chromium via CDP; measures load time, DCL, TTFB, resource
     ///   counts, transferred bytes, and per-protocol resource counts. Requires --features browser
     ///   and Chrome/Chromium installed (or NETWORKER_CHROME_PATH env var).
+    /// browser1: same as browser but forced to HTTP/1.1 (--disable-http2).
+    /// browser2: same as browser but forced to HTTP/2 (--disable-quic). Requires HTTPS.
+    /// browser3: same as browser but forced to HTTP/3 QUIC (--enable-quic). Requires HTTPS.
     #[arg(long, value_delimiter = ',')]
     pub modes: Option<Vec<String>>,
 

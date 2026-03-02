@@ -134,6 +134,7 @@ mod real {
     pub async fn run_browser_probe(
         run_id: Uuid,
         sequence_num: u32,
+        protocol: Protocol,
         base_url: &url::Url,
         asset_sizes: &[usize],
         timeout_ms: u64,
@@ -150,6 +151,7 @@ mod real {
                     run_id,
                     attempt_id,
                     sequence_num,
+                    protocol,
                     started_at,
                     "Chrome not found. Install Chrome/Chromium or set NETWORKER_CHROME_PATH.",
                     ErrorCategory::Config,
@@ -195,7 +197,30 @@ mod real {
         }
         let _profile_guard = ProfileDirGuard(profile_dir.clone());
 
-        let browser_config = match BrowserConfig::builder()
+        // Per-protocol Chrome flags:
+        //   browser1 → --disable-http2          (force HTTP/1.1)
+        //   browser2 → --disable-quic           (force HTTP/2, prevent H3 upgrade)
+        //   browser3 → --enable-quic            (force HTTP/3 QUIC)
+        //              --origin-to-force-quic-on=<host>:<port>
+        //   browser  → no extra flags (auto-negotiate, typically H2)
+        let mut extra_args: Vec<String> = Vec::new();
+        match &protocol {
+            Protocol::Browser1 => {
+                extra_args.push("--disable-http2".into());
+            }
+            Protocol::Browser2 => {
+                extra_args.push("--disable-quic".into());
+            }
+            Protocol::Browser3 => {
+                let host = base_url.host_str().unwrap_or("localhost");
+                let port = base_url.port_or_known_default().unwrap_or(443);
+                extra_args.push("--enable-quic".into());
+                extra_args.push(format!("--origin-to-force-quic-on={host}:{port}"));
+            }
+            _ => {}
+        }
+
+        let mut config_builder = BrowserConfig::builder()
             .chrome_executable(chrome_path)
             .user_data_dir(&profile_dir)
             .arg("--headless=new")
@@ -203,15 +228,19 @@ mod real {
             .arg("--disable-setuid-sandbox")
             .arg("--disable-gpu")
             .arg("--ignore-certificate-errors")
-            .arg("--disable-dev-shm-usage")
-            .build()
-        {
+            .arg("--disable-dev-shm-usage");
+        for arg in &extra_args {
+            config_builder = config_builder.arg(arg.as_str());
+        }
+
+        let browser_config = match config_builder.build() {
             Ok(c) => c,
             Err(e) => {
                 return browser_error(
                     run_id,
                     attempt_id,
                     sequence_num,
+                    protocol,
                     started_at,
                     &format!("Failed to build browser config: {e}"),
                     ErrorCategory::Config,
@@ -231,6 +260,7 @@ mod real {
                     run_id,
                     attempt_id,
                     sequence_num,
+                    protocol,
                     started_at,
                     &format!("Failed to launch browser: {e}"),
                     ErrorCategory::Other,
@@ -241,6 +271,7 @@ mod real {
                     run_id,
                     attempt_id,
                     sequence_num,
+                    protocol,
                     started_at,
                     "Browser launch timed out",
                     ErrorCategory::Timeout,
@@ -265,6 +296,7 @@ mod real {
                     run_id,
                     attempt_id,
                     sequence_num,
+                    protocol,
                     started_at,
                     &format!("Failed to open page: {e}"),
                     ErrorCategory::Other,
@@ -276,6 +308,7 @@ mod real {
                     run_id,
                     attempt_id,
                     sequence_num,
+                    protocol,
                     started_at,
                     "Page open timed out",
                     ErrorCategory::Timeout,
@@ -292,6 +325,7 @@ mod real {
                     run_id,
                     attempt_id,
                     sequence_num,
+                    protocol,
                     started_at,
                     &format!("Failed to subscribe to network events: {e}"),
                     ErrorCategory::Other,
@@ -317,6 +351,7 @@ mod real {
                     run_id,
                     attempt_id,
                     sequence_num,
+                    protocol,
                     started_at,
                     &format!("Navigation failed: {e}"),
                     ErrorCategory::Http,
@@ -328,6 +363,7 @@ mod real {
                     run_id,
                     attempt_id,
                     sequence_num,
+                    protocol,
                     started_at,
                     &format!("Navigation timed out after {}ms", timeout_ms),
                     ErrorCategory::Timeout,
@@ -409,7 +445,7 @@ mod real {
         RequestAttempt {
             attempt_id,
             run_id,
-            protocol: Protocol::Browser,
+            protocol,
             sequence_num,
             started_at,
             finished_at: Some(finished_at),
@@ -519,6 +555,7 @@ mod real {
         run_id: Uuid,
         attempt_id: Uuid,
         sequence_num: u32,
+        protocol: Protocol,
         started_at: chrono::DateTime<Utc>,
         message: &str,
         category: ErrorCategory,
@@ -526,7 +563,7 @@ mod real {
         RequestAttempt {
             attempt_id,
             run_id,
-            protocol: Protocol::Browser,
+            protocol,
             sequence_num,
             started_at,
             finished_at: Some(Utc::now()),
@@ -606,6 +643,7 @@ mod stub {
     pub async fn run_browser_probe(
         run_id: Uuid,
         sequence_num: u32,
+        protocol: Protocol,
         _base_url: &url::Url,
         _asset_sizes: &[usize],
         _timeout_ms: u64,
@@ -616,7 +654,7 @@ mod stub {
         RequestAttempt {
             attempt_id,
             run_id,
-            protocol: Protocol::Browser,
+            protocol,
             sequence_num,
             started_at,
             finished_at: Some(Utc::now()),

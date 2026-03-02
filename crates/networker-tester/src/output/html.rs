@@ -398,7 +398,15 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
         let browser_rows: Vec<&RequestAttempt> = run
             .attempts
             .iter()
-            .filter(|a| a.protocol == Protocol::Browser && a.browser.is_some())
+            .filter(|a| {
+                matches!(
+                    a.protocol,
+                    Protocol::Browser
+                        | Protocol::Browser1
+                        | Protocol::Browser2
+                        | Protocol::Browser3
+                ) && a.browser.is_some()
+            })
             .collect();
         if !browser_rows.is_empty() {
             let open_attr = if browser_rows.len() <= 20 {
@@ -417,6 +425,7 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
       <thead>
         <tr>
           <th>#</th>
+          <th>Mode</th>
           <th>Protocol (main)</th>
           <th>TTFB (ms)</th>
           <th>DCL (ms)</th>
@@ -443,6 +452,7 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
                     out,
                     r#"        <tr>
           <td>{seq}</td>
+          <td><code>{mode}</code></td>
           <td><code>{proto}</code></td>
           <td>{ttfb:.2}</td>
           <td>{dcl:.2}</td>
@@ -453,6 +463,7 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
         </tr>
 "#,
                     seq = a.sequence_num,
+                    mode = escape_html(&a.protocol.to_string()),
                     proto = escape_html(&b.protocol),
                     ttfb = b.ttfb_ms,
                     dcl = b.dom_content_loaded_ms,

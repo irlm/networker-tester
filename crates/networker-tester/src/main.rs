@@ -73,7 +73,7 @@ async fn main() -> anyhow::Result<()> {
         anyhow::bail!(
             "No valid modes specified. Use: tcp,http1,http2,http3,udp,dns,tls,native,curl,\
              download,upload,webdownload,webupload,udpdownload,udpupload,pageload,pageload2,\
-             pageload3,browser"
+             pageload3,browser,browser1,browser2,browser3"
         );
     }
 
@@ -86,6 +86,8 @@ async fn main() -> anyhow::Result<()> {
                 | Protocol::PageLoad2
                 | Protocol::PageLoad3
                 | Protocol::Browser
+                | Protocol::Browser2
+                | Protocol::Browser3
         ) && target.scheme() == "http"
         {
             warn!(
@@ -389,10 +391,14 @@ async fn dispatch_once(
         (Protocol::PageLoad, _) => run_pageload_probe(run_id, seq, pageload_cfg).await,
         (Protocol::PageLoad2, _) => run_pageload2_probe(run_id, seq, pageload_cfg).await,
         (Protocol::PageLoad3, _) => run_pageload3_probe(run_id, seq, pageload_cfg).await,
-        (Protocol::Browser, _) => {
+        (
+            Protocol::Browser | Protocol::Browser1 | Protocol::Browser2 | Protocol::Browser3,
+            _,
+        ) => {
             run_browser_probe(
                 run_id,
                 seq,
+                proto.clone(),
                 target,
                 &pageload_cfg.asset_sizes,
                 cfg.timeout_ms,
@@ -603,7 +609,7 @@ fn log_attempt(a: &networker_tester::metrics::RequestAttempt) {
                 );
             }
         }
-        Browser => {
+        Browser | Browser1 | Browser2 | Browser3 => {
             if let Some(b) = &a.browser {
                 let protos = b
                     .resource_protocols
@@ -612,8 +618,9 @@ fn log_attempt(a: &networker_tester::metrics::RequestAttempt) {
                     .collect::<Vec<_>>()
                     .join(" ");
                 info!(
-                    "{status} #{seq} [browser] proto={proto} TTFB:{ttfb:.1}ms \
+                    "{status} #{seq} [{mode}] proto={proto} TTFB:{ttfb:.1}ms \
                      DCL:{dcl:.1}ms Load:{load:.1}ms res={res} bytes={bytes} [{protos}]{retry}",
+                    mode = a.protocol,
                     seq = a.sequence_num,
                     proto = b.protocol,
                     ttfb = b.ttfb_ms,
@@ -727,6 +734,9 @@ fn print_summary(run: &TestRun) {
         Protocol::PageLoad2,
         Protocol::PageLoad3,
         Protocol::Browser,
+        Protocol::Browser1,
+        Protocol::Browser2,
+        Protocol::Browser3,
     ];
     let stat_groups: Vec<(Protocol, Option<usize>)> = ordered_protos
         .iter()
@@ -835,7 +845,13 @@ fn print_summary(run: &TestRun) {
     let has_pageload = run.attempts.iter().any(|a| {
         matches!(
             a.protocol,
-            Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3 | Protocol::Browser
+            Protocol::PageLoad
+                | Protocol::PageLoad2
+                | Protocol::PageLoad3
+                | Protocol::Browser
+                | Protocol::Browser1
+                | Protocol::Browser2
+                | Protocol::Browser3
         )
     });
     if has_pageload {
@@ -950,8 +966,15 @@ fn print_comparison(run: &TestRun) {
             println!("{r}");
         }
     }
-    if let Some(r) = browser_row(&Protocol::Browser) {
-        println!("{r}");
+    for proto in &[
+        Protocol::Browser,
+        Protocol::Browser1,
+        Protocol::Browser2,
+        Protocol::Browser3,
+    ] {
+        if let Some(r) = browser_row(proto) {
+            println!("{r}");
+        }
     }
 }
 
