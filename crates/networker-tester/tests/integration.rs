@@ -150,11 +150,44 @@ impl Endpoint {
 
     /// Wait for the QUIC/HTTP3 server (UDP) to be ready.
     ///
-    /// The HTTP/3 server is spawned concurrently with the TCP servers and binds
-    /// immediately.  A brief sleep after TCP readiness is sufficient on loopback.
+    /// The QUIC server binds the same UDP port as the HTTPS TCP server, but is
+    /// spawned concurrently and may lag behind.  We probe it the same way as the
+    /// UDP echo server: send a single byte to the port and check the result.
+    ///
+    /// - `ConnectionRefused` → ICMP Port Unreachable → nothing bound yet, retry.
+    /// - timeout            → Quinn absorbed the packet (no ICMP) → port is bound.
+    /// - `Ok(data)`         → Quinn sent a response (e.g. version negotiation) → ready.
     #[cfg(feature = "http3")]
     async fn wait_for_quic(&self) {
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            sock.connect(format!("127.0.0.1:{}", self.https_port))
+                .await
+                .unwrap();
+            let _ = sock.send(&[0u8]).await;
+            let mut buf = [0u8; 64];
+            match tokio::time::timeout(
+                std::time::Duration::from_millis(100),
+                sock.recv(&mut buf),
+            )
+            .await
+            {
+                Err(_timeout) => break, // no ICMP unreachable → Quinn is listening
+                Ok(Ok(_)) => break,     // Quinn sent data back → definitely ready
+                Ok(Err(e)) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
+                    // UDP port not bound yet — retry
+                }
+                Ok(Err(_)) => break, // unexpected error; let the probe handle it
+            }
+            if std::time::Instant::now() >= deadline {
+                panic!(
+                    "QUIC server did not bind on UDP port {} within 5 seconds",
+                    self.https_port
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
     }
 }
 
