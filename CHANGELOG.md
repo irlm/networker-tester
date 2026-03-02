@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.1] – 2026-03-01 — Fix install.ps1 compatibility with Windows PowerShell 5.1
+
+### Fixed
+- **`install.ps1`** — replaced `?.Source` (null-conditional member access, requires PS 7.1+)
+  with a PS 5.1-compatible `if ($cmd) { $cmd.Source }` pattern. The script declared
+  `#Requires -Version 5.1` but used syntax only available in PowerShell 7.1+, causing a
+  `ParseException: UnexpectedToken` when run via `irm … | iex` on Windows with the default
+  Windows PowerShell 5.1.
+
+---
+
 ## [0.12.0] – 2026-03-01 — Real-browser probe (`browser` mode via chromiumoxide)
 
 ### Added

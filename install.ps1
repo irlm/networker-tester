@@ -34,7 +34,8 @@ function Write-Warn    ($msg) { Write-Host "[warn]  $msg" -ForegroundColor Yello
 # ── Check SSH access to GitHub ────────────────────────────────────────────────
 Write-Info "Checking SSH access to GitHub..."
 
-$sshExe = (Get-Command ssh -ErrorAction SilentlyContinue)?.Source
+$sshCmd = Get-Command ssh -ErrorAction SilentlyContinue
+$sshExe = if ($sshCmd) { $sshCmd.Source } else { $null }
 if (-not $sshExe) {
     Write-Host ""
     Write-Host "  ssh.exe not found." -ForegroundColor Red
@@ -81,7 +82,8 @@ Write-Info "Installing $Binary (compiling from source – may take a few minutes
 & cargo install --git $RepoSsh --bin $Binary --locked
 
 Write-Host ""
-$installedPath = (Get-Command $Binary -ErrorAction SilentlyContinue)?.Source
+$installedCmd = Get-Command $Binary -ErrorAction SilentlyContinue
+$installedPath = if ($installedCmd) { $installedCmd.Source } else { $null }
 if (-not $installedPath) { $installedPath = "$cargoBin\$Binary.exe (may need to restart shell)" }
 Write-Success "$Binary installed -> $installedPath"
 
