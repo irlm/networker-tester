@@ -835,4 +835,253 @@ mod tests {
         // stddev of 1..10: variance = (sum of (i-5.5)^2 for i in 1..10)/10 = 8.25
         assert!((s.stddev - 8.25f64.sqrt()).abs() < 1e-9);
     }
+
+    // Helper to build a minimal RequestAttempt with no sub-results.
+    fn bare_attempt(proto: Protocol) -> RequestAttempt {
+        RequestAttempt {
+            attempt_id: Uuid::new_v4(),
+            run_id: Uuid::new_v4(),
+            protocol: proto,
+            sequence_num: 0,
+            started_at: Utc::now(),
+            finished_at: Some(Utc::now()),
+            success: true,
+            dns: None,
+            tcp: None,
+            tls: None,
+            http: None,
+            udp: None,
+            error: None,
+            retry_count: 0,
+            server_timing: None,
+            udp_throughput: None,
+            page_load: None,
+            browser: None,
+        }
+    }
+
+    // ── primary_metric_label ──────────────────────────────────────────────────
+
+    #[test]
+    fn primary_metric_label_dns() {
+        assert_eq!(primary_metric_label(&Protocol::Dns), "Resolve ms");
+    }
+
+    #[test]
+    fn primary_metric_label_tls() {
+        assert_eq!(primary_metric_label(&Protocol::Tls), "Handshake ms");
+    }
+
+    #[test]
+    fn primary_metric_label_browser() {
+        assert_eq!(primary_metric_label(&Protocol::Browser), "Load ms");
+    }
+
+    #[test]
+    fn primary_metric_label_throughput_protocols() {
+        for proto in [
+            Protocol::Download,
+            Protocol::Upload,
+            Protocol::WebDownload,
+            Protocol::WebUpload,
+            Protocol::UdpDownload,
+            Protocol::UdpUpload,
+        ] {
+            assert_eq!(primary_metric_label(&proto), "Throughput MB/s");
+        }
+    }
+
+    // ── primary_metric_value ──────────────────────────────────────────────────
+
+    #[test]
+    fn primary_metric_value_dns_present() {
+        let mut a = bare_attempt(Protocol::Dns);
+        a.dns = Some(DnsResult {
+            query_name: "example.com".into(),
+            resolved_ips: vec![],
+            duration_ms: 42.0,
+            started_at: Utc::now(),
+            success: true,
+        });
+        assert!((primary_metric_value(&a).unwrap() - 42.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn primary_metric_value_dns_absent() {
+        let a = bare_attempt(Protocol::Dns);
+        assert!(primary_metric_value(&a).is_none());
+    }
+
+    #[test]
+    fn primary_metric_value_tls_present() {
+        let mut a = bare_attempt(Protocol::Tls);
+        a.tls = Some(TlsResult {
+            protocol_version: "TLSv1.3".into(),
+            cipher_suite: "AES_256_GCM".into(),
+            alpn_negotiated: None,
+            cert_subject: None,
+            cert_issuer: None,
+            cert_expiry: None,
+            handshake_duration_ms: 7.5,
+            started_at: Utc::now(),
+            success: true,
+            cert_chain: vec![],
+            tls_backend: None,
+        });
+        assert!((primary_metric_value(&a).unwrap() - 7.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn primary_metric_value_tls_absent() {
+        let a = bare_attempt(Protocol::Tls);
+        assert!(primary_metric_value(&a).is_none());
+    }
+
+    #[test]
+    fn primary_metric_value_browser_present() {
+        let mut a = bare_attempt(Protocol::Browser);
+        a.browser = Some(BrowserResult {
+            load_ms: 350.0,
+            dom_content_loaded_ms: 200.0,
+            ttfb_ms: 50.0,
+            resource_count: 10,
+            transferred_bytes: 102400,
+            protocol: "h2".into(),
+            resource_protocols: vec![("h2".into(), 10)],
+            started_at: Utc::now(),
+        });
+        assert!((primary_metric_value(&a).unwrap() - 350.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn primary_metric_value_browser_absent() {
+        let a = bare_attempt(Protocol::Browser);
+        assert!(primary_metric_value(&a).is_none());
+    }
+
+    // ── attempt_payload_bytes ─────────────────────────────────────────────────
+
+    #[test]
+    fn attempt_payload_bytes_from_http() {
+        let mut a = bare_attempt(Protocol::Download);
+        a.http = Some(HttpResult {
+            negotiated_version: "HTTP/1.1".into(),
+            status_code: 200,
+            headers_size_bytes: 0,
+            body_size_bytes: 0,
+            ttfb_ms: 0.0,
+            total_duration_ms: 10.0,
+            redirect_count: 0,
+            started_at: Utc::now(),
+            response_headers: vec![],
+            payload_bytes: 65536,
+            throughput_mbps: None,
+            goodput_mbps: None,
+            cpu_time_ms: None,
+            csw_voluntary: None,
+            csw_involuntary: None,
+        });
+        assert_eq!(attempt_payload_bytes(&a), Some(65536));
+    }
+
+    #[test]
+    fn attempt_payload_bytes_zero_is_filtered() {
+        let mut a = bare_attempt(Protocol::Download);
+        a.http = Some(HttpResult {
+            negotiated_version: "HTTP/1.1".into(),
+            status_code: 200,
+            headers_size_bytes: 0,
+            body_size_bytes: 0,
+            ttfb_ms: 0.0,
+            total_duration_ms: 10.0,
+            redirect_count: 0,
+            started_at: Utc::now(),
+            response_headers: vec![],
+            payload_bytes: 0,
+            throughput_mbps: None,
+            goodput_mbps: None,
+            cpu_time_ms: None,
+            csw_voluntary: None,
+            csw_involuntary: None,
+        });
+        assert!(attempt_payload_bytes(&a).is_none());
+    }
+
+    #[test]
+    fn attempt_payload_bytes_from_udp_throughput() {
+        let mut a = bare_attempt(Protocol::UdpDownload);
+        a.udp_throughput = Some(UdpThroughputResult {
+            remote_addr: "127.0.0.1:9998".into(),
+            payload_bytes: 1_048_576,
+            datagrams_sent: 100,
+            datagrams_received: 100,
+            bytes_acked: None,
+            loss_percent: 0.0,
+            transfer_ms: 50.0,
+            throughput_mbps: Some(20.0),
+            started_at: Utc::now(),
+        });
+        assert_eq!(attempt_payload_bytes(&a), Some(1_048_576));
+    }
+
+    #[test]
+    fn attempt_payload_bytes_none_when_absent() {
+        let a = bare_attempt(Protocol::Http1);
+        assert!(attempt_payload_bytes(&a).is_none());
+    }
+
+    // ── TestRun::protocols_tested ─────────────────────────────────────────────
+
+    #[test]
+    fn protocols_tested_deduplicates() {
+        let run_id = Uuid::new_v4();
+        let mk = |proto: Protocol| {
+            let mut a = bare_attempt(proto);
+            a.run_id = run_id;
+            a
+        };
+        let run = TestRun {
+            run_id,
+            started_at: Utc::now(),
+            finished_at: None,
+            target_url: "http://x".into(),
+            target_host: "x".into(),
+            modes: vec![],
+            total_runs: 4,
+            concurrency: 1,
+            timeout_ms: 5000,
+            client_os: "test".into(),
+            client_version: "0.1.0".into(),
+            attempts: vec![
+                mk(Protocol::Http1),
+                mk(Protocol::Http2),
+                mk(Protocol::Http1), // duplicate
+                mk(Protocol::Http2), // duplicate
+            ],
+        };
+        let protos = run.protocols_tested();
+        assert_eq!(protos.len(), 2);
+        assert!(protos.contains(&"http1".to_string()));
+        assert!(protos.contains(&"http2".to_string()));
+    }
+
+    // ── RequestAttempt::total_duration_ms ────────────────────────────────────
+
+    #[test]
+    fn total_duration_ms_some_when_finished() {
+        let start = Utc::now();
+        let end = start + chrono::Duration::milliseconds(150);
+        let mut a = bare_attempt(Protocol::Http1);
+        a.started_at = start;
+        a.finished_at = Some(end);
+        let dur = a.total_duration_ms().unwrap();
+        assert!((dur - 150.0).abs() < 1.0, "expected ~150ms, got {dur}");
+    }
+
+    #[test]
+    fn total_duration_ms_none_when_not_finished() {
+        let mut a = bare_attempt(Protocol::Http1);
+        a.finished_at = None;
+        assert!(a.total_duration_ms().is_none());
+    }
 }

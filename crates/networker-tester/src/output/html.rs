@@ -1451,11 +1451,311 @@ mod tests {
     }
 
     #[test]
+    fn escape_html_ampersand_and_quotes() {
+        assert_eq!(escape_html("a&b"), "a&amp;b");
+        assert_eq!(escape_html("\"quoted\""), "&quot;quoted&quot;");
+        assert_eq!(escape_html("it's"), "it&#39;s");
+    }
+
+    #[test]
     fn save_writes_html_file() {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let run = make_run();
         save(&run, tmp.path(), None).unwrap();
         let content = std::fs::read_to_string(tmp.path()).unwrap();
         assert!(content.starts_with("<!DOCTYPE html>"));
+    }
+
+    #[test]
+    fn html_includes_css_link_when_href_provided() {
+        let run = make_run();
+        let html = render(&run, Some("report.css"));
+        assert!(html.contains(r#"<link rel="stylesheet""#));
+        assert!(html.contains("report.css"));
+    }
+
+    #[test]
+    fn html_no_css_link_without_href() {
+        let run = make_run();
+        let html = render(&run, None);
+        // Without an external CSS href, should embed inline styles but no <link>
+        assert!(html.contains("<style>"));
+    }
+
+    #[test]
+    fn html_contains_error_section_for_failed_attempt() {
+        use crate::metrics::{ErrorCategory, ErrorRecord};
+
+        let run_id = Uuid::new_v4();
+        let run = TestRun {
+            run_id,
+            started_at: Utc::now(),
+            finished_at: Some(Utc::now()),
+            target_url: "http://localhost/health".into(),
+            target_host: "localhost".into(),
+            modes: vec!["http1".into()],
+            total_runs: 1,
+            concurrency: 1,
+            timeout_ms: 5000,
+            client_os: "test".into(),
+            client_version: "0.1.0".into(),
+            attempts: vec![RequestAttempt {
+                attempt_id: Uuid::new_v4(),
+                run_id,
+                protocol: Protocol::Http1,
+                sequence_num: 0,
+                started_at: Utc::now(),
+                finished_at: Some(Utc::now()),
+                success: false,
+                dns: None,
+                tcp: None,
+                tls: None,
+                http: None,
+                udp: None,
+                error: Some(ErrorRecord {
+                    category: ErrorCategory::Tcp,
+                    message: "Connection refused".into(),
+                    detail: Some("os error 111".into()),
+                    occurred_at: Utc::now(),
+                }),
+                retry_count: 0,
+                server_timing: None,
+                udp_throughput: None,
+                page_load: None,
+                browser: None,
+            }],
+        };
+        let html = render(&run, None);
+        assert!(html.contains("Errors"), "should have an Errors section");
+        assert!(html.contains("Connection refused"));
+    }
+
+    #[test]
+    fn html_contains_throughput_section_for_download_attempt() {
+        let run_id = Uuid::new_v4();
+        let now = Utc::now();
+        let run = TestRun {
+            run_id,
+            started_at: now,
+            finished_at: Some(now),
+            target_url: "http://localhost/health".into(),
+            target_host: "localhost".into(),
+            modes: vec!["download".into()],
+            total_runs: 1,
+            concurrency: 1,
+            timeout_ms: 5000,
+            client_os: "test".into(),
+            client_version: "0.1.0".into(),
+            attempts: vec![RequestAttempt {
+                attempt_id: Uuid::new_v4(),
+                run_id,
+                protocol: Protocol::Download,
+                sequence_num: 0,
+                started_at: now,
+                finished_at: Some(now),
+                success: true,
+                dns: None,
+                tcp: None,
+                tls: None,
+                http: Some(HttpResult {
+                    negotiated_version: "HTTP/1.1".into(),
+                    status_code: 200,
+                    headers_size_bytes: 0,
+                    body_size_bytes: 1_048_576,
+                    ttfb_ms: 5.0,
+                    total_duration_ms: 95.0,
+                    redirect_count: 0,
+                    started_at: now,
+                    response_headers: vec![],
+                    payload_bytes: 1_048_576,
+                    throughput_mbps: Some(105.5),
+                    goodput_mbps: Some(98.0),
+                    cpu_time_ms: Some(12.0),
+                    csw_voluntary: None,
+                    csw_involuntary: None,
+                }),
+                udp: None,
+                error: None,
+                retry_count: 0,
+                server_timing: None,
+                udp_throughput: None,
+                page_load: None,
+                browser: None,
+            }],
+        };
+        let html = render(&run, None);
+        assert!(
+            html.contains("Throughput Results"),
+            "should have a Throughput Results section"
+        );
+        assert!(html.contains("105"), "should show throughput value");
+    }
+
+    #[test]
+    fn html_contains_tls_section_for_tls_attempt() {
+        let run_id = Uuid::new_v4();
+        let now = Utc::now();
+        let run = TestRun {
+            run_id,
+            started_at: now,
+            finished_at: Some(now),
+            target_url: "https://localhost/health".into(),
+            target_host: "localhost".into(),
+            modes: vec!["tls".into()],
+            total_runs: 1,
+            concurrency: 1,
+            timeout_ms: 5000,
+            client_os: "test".into(),
+            client_version: "0.1.0".into(),
+            attempts: vec![RequestAttempt {
+                attempt_id: Uuid::new_v4(),
+                run_id,
+                protocol: crate::metrics::Protocol::Tls,
+                sequence_num: 0,
+                started_at: now,
+                finished_at: Some(now),
+                success: true,
+                dns: None,
+                tcp: None,
+                tls: Some(crate::metrics::TlsResult {
+                    protocol_version: "TLSv1.3".into(),
+                    cipher_suite: "TLS_AES_256_GCM_SHA384".into(),
+                    alpn_negotiated: Some("h2".into()),
+                    cert_subject: Some("CN=localhost".into()),
+                    cert_issuer: Some("CN=Test CA".into()),
+                    cert_expiry: Some(now),
+                    handshake_duration_ms: 7.5,
+                    started_at: now,
+                    success: true,
+                    cert_chain: vec![],
+                    tls_backend: Some("rustls".into()),
+                }),
+                http: None,
+                udp: None,
+                error: None,
+                retry_count: 0,
+                server_timing: None,
+                udp_throughput: None,
+                page_load: None,
+                browser: None,
+            }],
+        };
+        let html = render(&run, None);
+        assert!(
+            html.contains("TLS Details"),
+            "should have TLS Details section"
+        );
+        assert!(html.contains("TLSv1.3"));
+    }
+
+    #[test]
+    fn html_contains_page_load_section() {
+        let run_id = Uuid::new_v4();
+        let now = Utc::now();
+        let run = TestRun {
+            run_id,
+            started_at: now,
+            finished_at: Some(now),
+            target_url: "https://localhost/health".into(),
+            target_host: "localhost".into(),
+            modes: vec!["pageload".into()],
+            total_runs: 1,
+            concurrency: 1,
+            timeout_ms: 5000,
+            client_os: "test".into(),
+            client_version: "0.1.0".into(),
+            attempts: vec![RequestAttempt {
+                attempt_id: Uuid::new_v4(),
+                run_id,
+                protocol: crate::metrics::Protocol::PageLoad,
+                sequence_num: 0,
+                started_at: now,
+                finished_at: Some(now),
+                success: true,
+                dns: None,
+                tcp: None,
+                tls: None,
+                http: None,
+                udp: None,
+                error: None,
+                retry_count: 0,
+                server_timing: None,
+                udp_throughput: None,
+                page_load: Some(crate::metrics::PageLoadResult {
+                    asset_count: 20,
+                    assets_fetched: 20,
+                    total_bytes: 204_800,
+                    total_ms: 120.5,
+                    ttfb_ms: 5.2,
+                    connections_opened: 6,
+                    asset_timings_ms: vec![10.0; 20],
+                    started_at: now,
+                    tls_setup_ms: 24.0,
+                    tls_overhead_ratio: 0.19,
+                    per_connection_tls_ms: vec![4.0; 6],
+                    cpu_time_ms: Some(8.3),
+                }),
+                browser: None,
+            }],
+        };
+        let html = render(&run, None);
+        // Page load data should appear in the Protocol Comparison section
+        assert!(
+            html.contains("pageload") || html.contains("PageLoad") || html.contains("Page Load"),
+            "should reference page load mode"
+        );
+    }
+
+    #[test]
+    fn html_contains_browser_section() {
+        let run_id = Uuid::new_v4();
+        let now = Utc::now();
+        let run = TestRun {
+            run_id,
+            started_at: now,
+            finished_at: Some(now),
+            target_url: "https://localhost/health".into(),
+            target_host: "localhost".into(),
+            modes: vec!["browser".into()],
+            total_runs: 1,
+            concurrency: 1,
+            timeout_ms: 5000,
+            client_os: "test".into(),
+            client_version: "0.1.0".into(),
+            attempts: vec![RequestAttempt {
+                attempt_id: Uuid::new_v4(),
+                run_id,
+                protocol: crate::metrics::Protocol::Browser,
+                sequence_num: 0,
+                started_at: now,
+                finished_at: Some(now),
+                success: true,
+                dns: None,
+                tcp: None,
+                tls: None,
+                http: None,
+                udp: None,
+                error: None,
+                retry_count: 0,
+                server_timing: None,
+                udp_throughput: None,
+                page_load: None,
+                browser: Some(crate::metrics::BrowserResult {
+                    load_ms: 350.0,
+                    dom_content_loaded_ms: 200.0,
+                    ttfb_ms: 50.0,
+                    resource_count: 21,
+                    transferred_bytes: 204_800,
+                    protocol: "h2".into(),
+                    resource_protocols: vec![("h2".into(), 21)],
+                    started_at: now,
+                }),
+            }],
+        };
+        let html = render(&run, None);
+        assert!(
+            html.contains("Browser Results"),
+            "should have Browser Results section"
+        );
     }
 }

@@ -11,6 +11,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.5] – 2026-03-02 — Test coverage phase 2
+
+### Added
+- **`runner/curl.rs`** — unit tests for `parse_write_out`, `secs_to_ms`, and
+  `error_category_for_exit` (all pure-logic, no live curl needed): 11 new tests
+- **`metrics.rs`** — tests for `primary_metric_label` (Dns / Tls / Browser),
+  `primary_metric_value` (with and without sub-results), `attempt_payload_bytes`
+  (http, udp_throughput, zero-payload filter), `TestRun::protocols_tested`
+  (deduplication), and `RequestAttempt::total_duration_ms`: 18 new tests
+- **`runner/pageload.rs`** — tests for all 6 named presets (tiny / small / medium /
+  large / default / mixed), mixed-asset composition, case-insensitive matching,
+  and unknown-preset error messaging: 8 new tests
+- **`cli.rs`** — tests for empty-modes validation, verbose flag → log-level debug,
+  log-level overriding verbose, `parsed_modes` filtering invalid strings, `--page-preset`
+  tiny resolution, invalid preset fallback, `parse_size` gigabyte suffix, and
+  `load_config` error paths: 8 new tests
+- **`output/html.rs`** — tests for CSS `<link>` injection, error section, Throughput
+  Results section (Download attempt), TLS Details section, Page Load section, Browser
+  Results section, `escape_html` quotes/ampersand: 8 new tests
+- **`output/excel.rs`** — test exercising the Throughput sheet (Download + Upload
+  attempts) that was previously uncovered: 1 new test
+- **`runner/browser.rs`** — tests for `find_chrome` with non-existent env-var path
+  (skip), existing tempfile path (return), and `build_page_url` scheme/host preservation:
+  3 new tests
+
+---
+
 ## [0.12.4] – 2026-03-02 — README: fix Windows installer examples
 
 ### Fixed

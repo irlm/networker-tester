@@ -560,6 +560,75 @@ mod tests {
         assert!(!url.contains("assets="), "should not add empty query");
     }
 
+    #[test]
+    fn build_page_url_preserves_scheme_and_host() {
+        let base = url::Url::parse("https://myhost.example.com:9443/some/path").unwrap();
+        let url = build_page_url(&base, &[1024]);
+        assert!(
+            url.starts_with("https://myhost.example.com:9443/page"),
+            "url={url}"
+        );
+    }
+
+    #[test]
+    fn build_page_url_http_scheme_preserved() {
+        let base = url::Url::parse("http://127.0.0.1:8080/health").unwrap();
+        let url = build_page_url(&base, &[512, 512]);
+        assert!(url.starts_with("http://127.0.0.1:8080/page"), "url={url}");
+        assert!(url.contains("assets=2"));
+        assert!(url.contains("size=512"));
+    }
+
+    #[test]
+    fn find_chrome_env_var_nonexistent_path_is_skipped() {
+        // Temporarily set the env var to a path that doesn't exist.
+        // find_chrome should fall through to system paths (or return None).
+        // We can't guarantee the outcome on all machines, but we can verify
+        // that a non-existent path doesn't cause a panic.
+        let key = "NETWORKER_CHROME_PATH";
+        let saved = std::env::var(key).ok();
+        std::env::set_var(key, "/this/path/does/not/exist/chrome");
+        let result = find_chrome();
+        // Restore environment
+        match saved {
+            Some(v) => std::env::set_var(key, v),
+            None => std::env::remove_var(key),
+        }
+        // The non-existent env path should not be returned.
+        if let Some(p) = result {
+            assert_ne!(
+                p.to_str().unwrap(),
+                "/this/path/does/not/exist/chrome",
+                "non-existent env var path should not be returned"
+            );
+        }
+    }
+
+    #[test]
+    fn find_chrome_env_var_existing_file_is_returned() {
+        use std::io::Write;
+        let key = "NETWORKER_CHROME_PATH";
+        let saved = std::env::var(key).ok();
+
+        // Create a temporary file to simulate a Chrome binary.
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        writeln!(tmp, "#!/bin/sh").unwrap();
+        let tmp_path = tmp.path().to_path_buf();
+
+        std::env::set_var(key, tmp_path.to_str().unwrap());
+        let result = find_chrome();
+        // Restore environment
+        match saved {
+            Some(v) => std::env::set_var(key, v),
+            None => std::env::remove_var(key),
+        }
+        assert_eq!(
+            result.unwrap(),
+            tmp_path,
+            "should return the env-var path when the file exists"
+        );
+    }
+
     #[tokio::test]
     async fn stub_or_real_returns_browser_protocol() {
         let base = url::Url::parse("https://127.0.0.1:8443/health").unwrap();
