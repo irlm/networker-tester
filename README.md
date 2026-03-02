@@ -8,10 +8,10 @@ in the kernel or scattered across multiple tools.
 ┌────────────────────────────────────────────────────────────────────┐
 │  networker-tester  ──────────────────────►  networker-endpoint     │
 │  (Rust CLI)           TCP / HTTP1 / HTTP2   (Rust server)          │
-│                        HTTP3 (QUIC, opt.)                           │
-│                        UDP echo                                     │
-│         │                                                           │
-│         ▼                                                           │
+│                        HTTP3 (QUIC, opt.)                          │
+│                        UDP echo                                    │
+│         │                                                          │
+│         ▼                                                          │
 │  JSON artifact  ·  HTML report  ·  Excel workbook  ·  SQL Server   │
 └────────────────────────────────────────────────────────────────────┘
 ```
