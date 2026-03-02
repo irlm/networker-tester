@@ -15,6 +15,9 @@
 ///   cargo test --test integration -p networker-tester
 use networker_tester::metrics::Protocol;
 use networker_tester::runner::http::{run_probe, RunConfig};
+#[cfg(feature = "http3")]
+use networker_tester::runner::pageload::run_pageload3_probe;
+use networker_tester::runner::pageload::{run_pageload2_probe, run_pageload_probe, PageLoadConfig};
 use networker_tester::runner::throughput::{
     run_download_probe, run_upload_probe, ThroughputConfig,
 };
@@ -143,6 +146,15 @@ impl Endpoint {
 
     fn https_url(&self, path: &str) -> url::Url {
         url::Url::parse(&format!("https://127.0.0.1:{}{}", self.https_port, path)).unwrap()
+    }
+
+    /// Wait for the QUIC/HTTP3 server (UDP) to be ready.
+    ///
+    /// The HTTP/3 server is spawned concurrently with the TCP servers and binds
+    /// immediately.  A brief sleep after TCP readiness is sufficient on loopback.
+    #[cfg(feature = "http3")]
+    async fn wait_for_quic(&self) {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     }
 }
 
@@ -383,6 +395,99 @@ async fn download_probe_reports_throughput() {
         .throughput_mbps
         .expect("throughput_mbps should be Some for a successful download");
     assert!(mbps > 0.0, "throughput should be positive, got {mbps}");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Page-load probes
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// HTTP/1.1 page-load: fetches `/page` manifest then downloads N assets
+/// over up to 6 parallel keep-alive connections.
+#[tokio::test]
+async fn pageload_h1_fetches_assets() {
+    let ep = Endpoint::start().await;
+    let cfg = PageLoadConfig {
+        run_cfg: RunConfig {
+            dns_enabled: false,
+            timeout_ms: 10_000,
+            insecure: false,
+            ..Default::default()
+        },
+        base_url: ep.http_url("/health"),
+        asset_sizes: vec![1024; 5], // 5 × 1 KB assets
+        preset_name: None,
+    };
+
+    let attempt = run_pageload_probe(Uuid::new_v4(), 0, &cfg).await;
+
+    assert!(attempt.success, "pageload H1 failed: {:?}", attempt.error);
+    assert_eq!(attempt.protocol, Protocol::PageLoad);
+
+    let pl = attempt.page_load.expect("page_load result missing");
+    assert_eq!(pl.asset_count, 5, "should have 5 assets");
+    assert!(pl.assets_fetched > 0, "should have fetched some assets");
+    assert!(pl.total_ms > 0.0);
+    assert!(pl.total_bytes > 0);
+    assert!(pl.connections_opened >= 1);
+}
+
+/// HTTP/2 page-load: all assets multiplexed over a single TLS connection.
+#[tokio::test]
+async fn pageload_h2_multiplexes_assets() {
+    let ep = Endpoint::start().await;
+    let cfg = PageLoadConfig {
+        run_cfg: RunConfig {
+            dns_enabled: false,
+            timeout_ms: 10_000,
+            insecure: true, // self-signed cert
+            ..Default::default()
+        },
+        base_url: ep.https_url("/health"),
+        asset_sizes: vec![1024; 5],
+        preset_name: None,
+    };
+
+    let attempt = run_pageload2_probe(Uuid::new_v4(), 0, &cfg).await;
+
+    assert!(attempt.success, "pageload H2 failed: {:?}", attempt.error);
+    assert_eq!(attempt.protocol, Protocol::PageLoad2);
+
+    let pl = attempt.page_load.expect("page_load result missing");
+    assert_eq!(pl.asset_count, 5);
+    assert!(pl.assets_fetched > 0);
+    assert_eq!(pl.connections_opened, 1, "H2 uses a single connection");
+    assert!(pl.tls_setup_ms >= 0.0);
+}
+
+/// HTTP/3 page-load: all assets multiplexed over a single QUIC connection.
+#[cfg(feature = "http3")]
+#[tokio::test]
+async fn pageload_h3_multiplexes_assets() {
+    let ep = Endpoint::start().await;
+    // Wait for the QUIC server to bind its UDP port before probing.
+    ep.wait_for_quic().await;
+
+    let cfg = PageLoadConfig {
+        run_cfg: RunConfig {
+            dns_enabled: false,
+            timeout_ms: 10_000,
+            insecure: true,
+            ..Default::default()
+        },
+        base_url: ep.https_url("/health"),
+        asset_sizes: vec![1024; 5],
+        preset_name: None,
+    };
+
+    let attempt = run_pageload3_probe(Uuid::new_v4(), 0, &cfg).await;
+
+    assert!(attempt.success, "pageload H3 failed: {:?}", attempt.error);
+    assert_eq!(attempt.protocol, Protocol::PageLoad3);
+
+    let pl = attempt.page_load.expect("page_load result missing");
+    assert_eq!(pl.asset_count, 5);
+    assert!(pl.assets_fetched > 0);
+    assert_eq!(pl.connections_opened, 1, "H3 uses a single QUIC connection");
 }
 
 /// POST /upload with a 64 KiB body → endpoint reads and acknowledges it.
