@@ -118,10 +118,8 @@ pub async fn run_dns_probe(
 mod tests {
     use super::*;
 
-    /// This test needs actual network access; it is gated behind an env var so
-    /// CI can skip it if needed.
+    /// Resolves "localhost" — loopback always resolves in any environment.
     #[tokio::test]
-    #[ignore = "requires network"]
     async fn resolves_localhost() {
         let (ips, r) = resolve("localhost", false, false).await.unwrap();
         assert!(!ips.is_empty());
@@ -130,7 +128,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires network"]
     async fn ipv4_only_filter() {
         let (ips, _) = resolve("localhost", true, false).await.unwrap();
         assert!(ips.iter().all(|ip| ip.is_ipv4()));

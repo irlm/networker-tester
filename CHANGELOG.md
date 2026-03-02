@@ -11,6 +11,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.11.4] – 2026-03-01 — Coverage phase 1: SQL Docker, DNS tests, Excel tests
+
+### Added
+- **SQL Server in coverage CI** — MSSQL 2022 Docker service added to the coverage
+  job; schema migrations run automatically; `NETWORKER_SQL_CONN` env var set so the
+  existing `#[ignore]` SQL round-trip test executes under `cargo-llvm-cov`.
+- **Excel unit tests** — `save_writes_xlsx_file` exercises all 10 worksheet writers
+  with a fully-populated `TestRun` (HTTP, TCP, TLS, UDP, throughput, UDP throughput,
+  server timing, page-load, errors); `save_empty_run_does_not_panic` covers the
+  zero-attempt edge case.
+- **`main.rs` excluded from coverage** — `--ignore-filename-regex 'main\.rs'` added
+  to all `cargo llvm-cov report` invocations so the binary entry point does not
+  drag down the overall percentage.
+
+### Changed
+- DNS tests `resolves_localhost` and `ipv4_only_filter` are no longer `#[ignore]` —
+  loopback resolution works in all environments including CI.
+- Coverage lib-test step now passes `--include-ignored` to pick up `#[ignore]` tests
+  that self-skip when their service is unavailable (SQL, curl).
+
+---
+
 ## [0.11.3] – 2026-03-01 — Coverage report as GitHub Actions artifact
 
 ### Changed
