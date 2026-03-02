@@ -487,21 +487,30 @@ mod tests {
     fn tls_config_insecure_builds_without_error() {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let cfg = build_tls_config_for_probe(true, None).unwrap();
-        assert_eq!(cfg.alpn_protocols, vec![b"h2".to_vec(), b"http/1.1".to_vec()]);
+        assert_eq!(
+            cfg.alpn_protocols,
+            vec![b"h2".to_vec(), b"http/1.1".to_vec()]
+        );
     }
 
     #[test]
     fn tls_config_secure_builds_without_error() {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let cfg = build_tls_config_for_probe(false, None).unwrap();
-        assert_eq!(cfg.alpn_protocols, vec![b"h2".to_vec(), b"http/1.1".to_vec()]);
+        assert_eq!(
+            cfg.alpn_protocols,
+            vec![b"h2".to_vec(), b"http/1.1".to_vec()]
+        );
     }
 
     #[test]
     fn tls_config_ca_bundle_not_found_returns_error() {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let err = build_tls_config_for_probe(false, Some("/nonexistent/ca.pem")).unwrap_err();
-        assert!(err.to_string().contains("Cannot read CA bundle") || err.to_string().contains("nonexistent"));
+        assert!(
+            err.to_string().contains("Cannot read CA bundle")
+                || err.to_string().contains("nonexistent")
+        );
     }
 
     // ── load_ca_bundle ────────────────────────────────────────────────────────
