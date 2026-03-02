@@ -83,4 +83,5 @@ browser = ["dep:chromiumoxide"]
 [dev-dependencies]
 tokio-test  = "0.4"
 tempfile    = "3"
+rcgen       = "0.13"
 networker-endpoint = { path = "../networker-endpoint" }

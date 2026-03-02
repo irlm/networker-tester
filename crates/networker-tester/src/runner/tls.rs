@@ -467,6 +467,116 @@ impl rustls::client::danger::ServerCertVerifier for NoVerifier {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    fn self_signed_der() -> Vec<u8> {
+        let cert = rcgen::generate_simple_self_signed(vec![
+            "localhost".to_string(),
+            "127.0.0.1".to_string(),
+        ])
+        .unwrap();
+        cert.cert.der().to_vec()
+    }
+
+    // ── build_tls_config_for_probe ────────────────────────────────────────────
+
+    #[test]
+    fn tls_config_insecure_builds_without_error() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let cfg = build_tls_config_for_probe(true, None).unwrap();
+        assert_eq!(cfg.alpn_protocols, vec![b"h2".to_vec(), b"http/1.1".to_vec()]);
+    }
+
+    #[test]
+    fn tls_config_secure_builds_without_error() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let cfg = build_tls_config_for_probe(false, None).unwrap();
+        assert_eq!(cfg.alpn_protocols, vec![b"h2".to_vec(), b"http/1.1".to_vec()]);
+    }
+
+    #[test]
+    fn tls_config_ca_bundle_not_found_returns_error() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let err = build_tls_config_for_probe(false, Some("/nonexistent/ca.pem")).unwrap_err();
+        assert!(err.to_string().contains("Cannot read CA bundle") || err.to_string().contains("nonexistent"));
+    }
+
+    // ── load_ca_bundle ────────────────────────────────────────────────────────
+
+    #[test]
+    fn load_ca_bundle_file_not_found_returns_error() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let mut store = rustls::RootCertStore::empty();
+        let err = load_ca_bundle(&mut store, "/nonexistent/ca.pem").unwrap_err();
+        assert!(err.to_string().contains("Cannot read CA bundle"));
+    }
+
+    #[test]
+    fn load_ca_bundle_empty_file_returns_error() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let mut store = rustls::RootCertStore::empty();
+        let tmp = NamedTempFile::new().unwrap();
+        let err = load_ca_bundle(&mut store, tmp.path().to_str().unwrap()).unwrap_err();
+        assert!(err.to_string().contains("No PEM certificates found"));
+    }
+
+    #[test]
+    fn load_ca_bundle_invalid_pem_returns_error() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let mut store = rustls::RootCertStore::empty();
+        let tmp = NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), b"this is not valid PEM").unwrap();
+        // Either "No PEM certificates found" or a parse error — both are errors
+        assert!(load_ca_bundle(&mut store, tmp.path().to_str().unwrap()).is_err());
+    }
+
+    // ── parse_cert_entry ─────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_cert_entry_invalid_der_returns_none() {
+        assert!(parse_cert_entry(&[0u8; 32]).is_none());
+    }
+
+    #[test]
+    fn parse_cert_entry_empty_returns_none() {
+        assert!(parse_cert_entry(&[]).is_none());
+    }
+
+    #[test]
+    fn parse_cert_entry_valid_cert_has_sans() {
+        let der = self_signed_der();
+        let entry = parse_cert_entry(&der).expect("should parse valid DER");
+        assert!(
+            entry.sans.iter().any(|s| s == "localhost"),
+            "SANs should include 'localhost', got: {:?}",
+            entry.sans
+        );
+        assert!(
+            entry.sans.iter().any(|s| s == "127.0.0.1"),
+            "SANs should include '127.0.0.1', got: {:?}",
+            entry.sans
+        );
+    }
+
+    #[test]
+    fn parse_cert_entry_has_subject_and_issuer() {
+        let der = self_signed_der();
+        let entry = parse_cert_entry(&der).unwrap();
+        assert!(!entry.subject.is_empty(), "subject should be non-empty");
+        assert!(!entry.issuer.is_empty(), "issuer should be non-empty");
+    }
+
+    #[test]
+    fn parse_cert_entry_self_signed_expiry_is_some() {
+        let der = self_signed_der();
+        let entry = parse_cert_entry(&der).unwrap();
+        assert!(entry.expiry.is_some(), "expiry should be present");
+    }
+}
+
 fn make_failed(
     run_id: Uuid,
     attempt_id: Uuid,
