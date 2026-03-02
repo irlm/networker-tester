@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.18] – 2026-03-02 — Make `browser` probe a default feature
+
+### Changed
+- **`browser` feature is now included in `default`** alongside `http3`; previously it
+  had to be explicitly opt-in at compile time (`--features browser`), which meant the
+  install script and pre-built binaries did not include it
+- The probe still fails gracefully with a clear message if Chrome/Chromium is not
+  installed at runtime; no behavioural change for users without Chrome
+
+---
+
 ## [0.12.17] – 2026-03-02 — Expand README: all probe modes + page-load comparison guide
 
 ### Changed
