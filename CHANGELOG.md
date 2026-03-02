@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.3] – 2026-03-02 — Fix install.ps1 NativeCommandError on SSH probe
+
+### Fixed
+- **`install.ps1`** — `ssh -T git@github.com` always exits with code 1 (GitHub design).
+  With `$ErrorActionPreference = "Stop"` set globally, PowerShell 5.1 throws
+  `NativeCommandError` before the authentication string can be checked.
+  Fixed by temporarily lowering preference to `"Continue"` around the SSH call and
+  restoring it immediately after.
+
+---
+
 ## [0.12.2] – 2026-03-02 — Fix Gist sync to include install.ps1
 
 ### Fixed
