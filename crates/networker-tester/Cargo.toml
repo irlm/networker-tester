@@ -75,7 +75,7 @@ futures  = "0.3"
 libc     = "0.2"
 
 [features]
-default = ["http3"]
+default = ["http3", "browser"]
 http3   = ["quinn", "h3", "h3-quinn"]
 native  = ["dep:native-tls", "dep:tokio-native-tls"]
 browser = ["dep:chromiumoxide"]
