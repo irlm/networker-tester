@@ -1232,9 +1232,17 @@ mod tests {
         assert_eq!(p.csw_i, Some(3));
     }
 
+    async fn endpoint_available(addr: &str) -> bool {
+        tokio::net::TcpStream::connect(addr).await.is_ok()
+    }
+
     #[tokio::test]
     #[ignore = "requires local endpoint"]
     async fn http1_probe_succeeds() {
+        if !endpoint_available("127.0.0.1:8080").await {
+            eprintln!("Skipping http1_probe_succeeds: no endpoint on :8080");
+            return;
+        }
         let cfg = RunConfig {
             timeout_ms: 5000,
             dns_enabled: false,
@@ -1251,6 +1259,10 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires local endpoint with TLS"]
     async fn http2_probe_negotiates_h2() {
+        if !endpoint_available("127.0.0.1:8443").await {
+            eprintln!("Skipping http2_probe_negotiates_h2: no endpoint on :8443");
+            return;
+        }
         let cfg = RunConfig {
             timeout_ms: 5000,
             dns_enabled: false,
