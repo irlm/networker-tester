@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.11.6] – 2026-03-01 — Improve sql.rs coverage
+
+### Added
+- **`sql_full_round_trip` test** — exercises all 7 sub-result insert helpers
+  (`insert_dns_result`, `insert_tcp_result`, `insert_tls_result`,
+  `insert_http_result`, `insert_udp_result`, `insert_error`,
+  `insert_server_timing_result`) by inserting a fully-populated `RequestAttempt`
+  with every sub-result field set; expected to push `sql.rs` line coverage from
+  ~39% to ~85%+.
+
+### Changed
+- `sql_insert_round_trip` refactored to use shared `make_run` / `bare_attempt` /
+  `sql_conn` helpers so the new comprehensive test reuses the same scaffolding.
+
+---
+
 ## [0.11.5] – 2026-03-01 — Fix 6 test failures with --include-ignored in coverage CI
 
 ### Fixed
