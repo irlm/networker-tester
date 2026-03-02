@@ -25,7 +25,7 @@ set -euo pipefail
 
 REPO_SSH="ssh://git@github.com/irlm/networker-tester"
 REPO_GH="irlm/networker-tester"
-SCRIPT_VERSION="0.12.24"
+SCRIPT_VERSION="0.12.25"
 INSTALL_DIR="${HOME}/.cargo/bin"
 
 # ── Colours (ANSI C quoting; safe even when stdin is a curl pipe) ─────────────
@@ -241,12 +241,14 @@ discover_system() {
         DO_RUST_INSTALL=1
     fi
 
+    # Package manager detection (always needed — Chrome install, git install, etc.)
+    PKG_MGR="$(detect_pkg_manager)"
+
     # Git detection
     if command -v git &>/dev/null; then
         GIT_AVAILABLE=1
     else
         GIT_AVAILABLE=0
-        PKG_MGR="$(detect_pkg_manager)"
     fi
 
     # Release mode: available when gh is authenticated AND this platform has a
