@@ -11,6 +11,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.7] – 2026-03-02 — Streaming upload body; large-payload timeout scaling
+
+### Fixed
+- **Upload probes** (`upload`, `webupload`) no longer allocate the entire upload payload in
+  RAM at once. The body is now streamed in 256 KiB chunks from a static zero buffer, so a
+  5 GiB upload uses ~256 KiB of memory instead of ~5 GB.
+- **Timeout auto-scaling**: both upload probes extend the request timeout if the payload
+  cannot complete at an assumed minimum speed of ~100 MB/s within the user-specified timeout.
+  A 5 GiB upload now gets ~60 s instead of the default 30 s, preventing spurious timeouts
+  on large but healthy uploads. Users on slower links can still set `--timeout` explicitly.
+- `content-length` header is now set on streaming upload requests so HTTP/1.1 uses
+  fixed-length framing rather than chunked transfer encoding.
+
+### Added
+- 9 new unit tests: `upload_body_exact_byte_count`, `upload_body_all_zeros`,
+  `upload_body_small_payload`, `upload_body_zero_bytes_yields_nothing` (streaming body
+  correctness); `timeout_unchanged_for_small_payloads`, `timeout_unchanged_for_one_gib`,
+  `timeout_extended_for_five_gib`, `timeout_never_below_base`,
+  `timeout_zero_payload_returns_overhead_only` (timeout scaling logic).
+
+---
+
 ## [0.12.6] – 2026-03-02 — Integration tests for pageload H1/H2/H3
 
 ### Added
