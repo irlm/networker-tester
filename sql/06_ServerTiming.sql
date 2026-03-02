@@ -13,10 +13,9 @@ IF NOT EXISTS (
 )
 BEGIN
     CREATE TABLE dbo.ServerTimingResult (
-        ServerId        UNIQUEIDENTIFIER NOT NULL
-                            CONSTRAINT PK_ServerTimingResult PRIMARY KEY
-                            DEFAULT NEWSEQUENTIALID(),
-        AttemptId       UNIQUEIDENTIFIER NOT NULL
+        ServerId        NVARCHAR(36)     NOT NULL
+                            CONSTRAINT PK_ServerTimingResult PRIMARY KEY,
+        AttemptId       NVARCHAR(36)     NOT NULL
                             CONSTRAINT FK_ServerTimingResult_Attempt
                             REFERENCES dbo.RequestAttempt(AttemptId),
         -- X-Networker-Request-Id echoed from the response
