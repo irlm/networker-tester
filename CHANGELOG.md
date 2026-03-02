@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.11.7] – 2026-03-01 — Fix ServerTimingResult schema (type mismatch in FK)
+
+### Fixed
+- **`sql/06_ServerTiming.sql`** — `ServerId` and `AttemptId` columns were declared
+  as `UNIQUEIDENTIFIER`, but `RequestAttempt.AttemptId` (the FK target) is
+  `NVARCHAR(36)`. SQL Server rejected the `CREATE TABLE` silently (sqlcmd
+  doesn't abort on DDL errors), leaving `dbo.ServerTimingResult` absent from the
+  database. Both columns are now `NVARCHAR(36)` to match the schema convention
+  used by all other tables and the Rust insert code (`uuid.to_string()`).
+  The `DEFAULT NEWSEQUENTIALID()` on `ServerId` is also removed — the insert
+  always provides an explicit UUID value.
+
+---
+
 ## [0.11.6] – 2026-03-01 — Improve sql.rs coverage
 
 ### Added
