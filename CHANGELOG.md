@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.27] – 2026-03-02 — Sync Cargo workspace version to match CHANGELOG/tag version
+
+### Changed
+- Cargo workspace `version` bumped from `0.12.13` to `0.12.27` to re-align
+  `networker-tester --version` / `networker-endpoint --version` with the
+  CHANGELOG and git tag versioning (they had drifted apart over several
+  installer-only releases that did not bump the Cargo version)
+
+---
+
 ## [0.12.26] – 2026-03-02 — Upgrade chromiumoxide 0.7 → 0.9 to fix CDP crash on Chrome 145+
 
 ### Fixed
