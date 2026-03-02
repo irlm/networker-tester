@@ -163,34 +163,21 @@ mod real {
 
         // 3. Launch browser
         //
-        // When running as root (e.g. via sudo), snap-confine always tries to
-        // create /run/user/<uid> as part of its confinement setup, regardless
-        // of XDG_RUNTIME_DIR.  If that directory doesn't exist the mkdir fails
-        // with "Permission denied" (snap-confine drops some privileges before
-        // the mkdir), then Chrome exits before the WebSocket URL is resolved.
+        // When running as root (e.g. via sudo), the snap chromium launcher
+        // script filters out --no-sandbox for security reasons, so Chrome
+        // always exits with "Running as root without --no-sandbox is not
+        // supported" regardless of what flags we pass.
         //
-        // Fix: pre-create /run/user/<uid> with mode 0700 ourselves (we are
-        // running as root so this succeeds), then set XDG_RUNTIME_DIR to
-        // point at it so Chrome picks it up correctly.
+        // Fix: if we are root and SUDO_USER is set, wrap the Chrome binary
+        // with `runuser -u <original-user> --` so Chrome runs as the
+        // non-root user and never sees the root restriction.  runuser is
+        // part of util-linux (available on all mainstream Linux distros)
+        // and allows root to switch users without a password.
+        //
+        // The wrapper is a small temp shell script so chromiumoxide can
+        // still manage the child process normally via its path interface.
         #[cfg(unix)]
-        {
-            let uid = unsafe { libc::getuid() };
-            let runtime_dir = format!("/run/user/{uid}");
-            let runtime_path = std::path::Path::new(&runtime_dir);
-            if !runtime_path.exists() {
-                if let Ok(()) = std::fs::create_dir_all(runtime_path) {
-                    use std::os::unix::fs::PermissionsExt;
-                    let _ = std::fs::set_permissions(
-                        runtime_path,
-                        std::fs::Permissions::from_mode(0o700),
-                    );
-                    tracing::debug!("Created {runtime_dir} for Chrome/snap runtime");
-                }
-            }
-            if std::env::var("XDG_RUNTIME_DIR").is_err() {
-                std::env::set_var("XDG_RUNTIME_DIR", &runtime_dir);
-            }
-        }
+        let chrome_path = wrap_chrome_for_root(chrome_path);
 
         let browser_config = match BrowserConfig::builder()
             .chrome_executable(chrome_path)
@@ -456,6 +443,59 @@ mod real {
         let dcl_ms = (dcl_end - nav_start).max(0.0);
         let ttfb_ms = (response_start - nav_start).max(0.0);
         (load_ms, dcl_ms, ttfb_ms)
+    }
+
+    /// If we are running as root (e.g. via sudo) and SUDO_USER is set, return
+    /// a path to a temporary shell script that re-executes the Chrome binary
+    /// as the original non-root user via `runuser`.  This bypasses the snap
+    /// chromium launcher's root-safety check, which strips --no-sandbox and
+    /// causes Chrome to exit immediately.
+    ///
+    /// If not root, or SUDO_USER is unset/root, returns `chrome_path` unchanged.
+    #[cfg(unix)]
+    fn wrap_chrome_for_root(chrome_path: std::path::PathBuf) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Only needed when running as root.
+        if unsafe { libc::getuid() } != 0 {
+            return chrome_path;
+        }
+
+        let sudo_user = match std::env::var("SUDO_USER") {
+            Ok(u) if !u.is_empty() && u != "root" => u,
+            _ => return chrome_path,
+        };
+
+        // Find runuser (util-linux; present on Debian/Ubuntu/RHEL/Fedora/etc.)
+        let runuser = ["/usr/sbin/runuser", "/sbin/runuser"]
+            .iter()
+            .find(|p| std::path::Path::new(p).exists())
+            .copied()
+            .unwrap_or("/usr/sbin/runuser");
+
+        let wrapper = std::env::temp_dir()
+            .join(format!("networker-chrome-{}.sh", std::process::id()));
+
+        // Single-quote the chrome path to handle spaces (e.g. macOS bundles).
+        let escaped = chrome_path.display().to_string().replace('\'', "'\\''");
+        let script = format!(
+            "#!/bin/sh\nexec {runuser} -u {sudo_user} -- '{escaped}' \"$@\"\n"
+        );
+
+        if std::fs::write(&wrapper, &script).is_ok()
+            && std::fs::set_permissions(
+                &wrapper,
+                std::fs::Permissions::from_mode(0o755),
+            )
+            .is_ok()
+        {
+            tracing::debug!(
+                "Wrapping Chrome with runuser -u {sudo_user} (running as root)"
+            );
+            wrapper
+        } else {
+            chrome_path
+        }
     }
 
     fn browser_error(
