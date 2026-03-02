@@ -25,7 +25,7 @@ set -euo pipefail
 
 REPO_SSH="ssh://git@github.com/irlm/networker-tester"
 REPO_GH="irlm/networker-tester"
-SCRIPT_VERSION="0.12.19"
+SCRIPT_VERSION="0.12.20"
 INSTALL_DIR="${HOME}/.cargo/bin"
 
 # ── Colours (ANSI C quoting; safe even when stdin is a curl pipe) ─────────────
@@ -770,7 +770,7 @@ step_cargo_install() {
     # --features browser is added only when Chrome/Chromium is available.
     # </dev/null prevents cargo reading the curl pipe for interactive prompts.
     local features_arg=""
-    if [[ $CHROME_AVAILABLE -eq 1 ]]; then
+    if [[ $CHROME_AVAILABLE -eq 1 && "$binary" == "networker-tester" ]]; then
         features_arg="--features browser"
         print_info "Chrome detected — compiling with browser probe support."
     fi
