@@ -30,7 +30,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$ScriptVersion = "0.12.23"
+$ScriptVersion = "0.12.24"
 $RepoSsh       = "ssh://git@github.com/irlm/networker-tester"
 $RepoGh        = "irlm/networker-tester"
 $CargoBin      = Join-Path $env:USERPROFILE ".cargo\bin"
@@ -270,7 +270,7 @@ function Show-Plan {
             }
         }
 
-        if (-not $script:ChromeAvailable) {
+        if (-not $script:ChromeAvailable -and $script:DoInstallTester) {
             if ($script:DoChromiumInstall) {
                 Write-Host ("    {0}. Install Chrome         winget install Google.Chrome (browser probe)" -f $step)
                 $step++
@@ -338,7 +338,7 @@ function Invoke-MainPrompt {
         switch ($ans.Trim()) {
             "1" {
                 # Ask about Chrome if not already available (source mode, winget present)
-                if (-not $script:ChromeAvailable -and $script:InstallMethod -eq "source" -and $script:WingetAvailable) {
+                if (-not $script:ChromeAvailable -and $script:InstallMethod -eq "source" -and $script:WingetAvailable -and $script:DoInstallTester) {
                     Write-Host ""
                     $script:DoChromiumInstall = Invoke-AskYN "Chrome/Chromium not found -- install it to enable the browser probe?" "y"
                     if (-not $script:DoChromiumInstall) {
@@ -433,8 +433,8 @@ function Invoke-CustomizeFlow {
             Write-Host ""
         }
 
-        # Chrome install (only offered when Chrome is absent)
-        if (-not $script:ChromeAvailable) {
+        # Chrome install (only offered when Chrome is absent and tester is being installed)
+        if (-not $script:ChromeAvailable -and $script:DoInstallTester) {
             if ($script:WingetAvailable) {
                 Write-Host ""
                 $script:DoChromiumInstall = Invoke-AskYN "Chrome/Chromium not found -- install it to enable the browser probe?" "y"

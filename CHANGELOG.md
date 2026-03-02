@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.24] – 2026-03-02 — Installer skips Chrome prompt when only installing endpoint
+
+### Fixed
+- **`install.sh`** / **`install.ps1`**: Chrome detection, plan display, and install prompt
+  are now skipped entirely when only `networker-endpoint` is being installed
+  (`install.sh endpoint`); Chrome/browser probe is only relevant to `networker-tester`
+
+---
+
 ## [0.12.23] – 2026-03-02 — Installer always asks before installing Chrome
 
 ### Fixed

@@ -25,7 +25,7 @@ set -euo pipefail
 
 REPO_SSH="ssh://git@github.com/irlm/networker-tester"
 REPO_GH="irlm/networker-tester"
-SCRIPT_VERSION="0.12.23"
+SCRIPT_VERSION="0.12.24"
 INSTALL_DIR="${HOME}/.cargo/bin"
 
 # ── Colours (ANSI C quoting; safe even when stdin is a curl pipe) ─────────────
@@ -337,7 +337,7 @@ display_plan() {
             fi
         fi
 
-        if [[ $CHROME_AVAILABLE -eq 0 ]]; then
+        if [[ $CHROME_AVAILABLE -eq 0 && $DO_INSTALL_TESTER -eq 1 ]]; then
             if [[ $DO_CHROME_INSTALL -eq 1 ]]; then
                 printf "    %s. ${BOLD}Install Chrome${RESET}         Install via %s (browser probe)\n" "$step" "$PKG_MGR"
                 step=$((step + 1))
@@ -403,7 +403,7 @@ prompt_main() {
         case "$ans" in
             1)
                 # Ask about Chrome if not already available (source mode, pkg manager present)
-                if [[ $CHROME_AVAILABLE -eq 0 && "$INSTALL_METHOD" == "source" && -n "$PKG_MGR" ]]; then
+                if [[ $CHROME_AVAILABLE -eq 0 && "$INSTALL_METHOD" == "source" && -n "$PKG_MGR" && $DO_INSTALL_TESTER -eq 1 ]]; then
                     echo ""
                     if ask_yn "Chrome/Chromium not found — install it to enable the browser probe?" "y"; then
                         DO_CHROME_INSTALL=1
@@ -499,8 +499,8 @@ customize_flow() {
             echo ""
         fi
 
-        # Chrome install (only offered when Chrome is absent)
-        if [[ $CHROME_AVAILABLE -eq 0 ]]; then
+        # Chrome install (only offered when Chrome is absent and tester is being installed)
+        if [[ $CHROME_AVAILABLE -eq 0 && $DO_INSTALL_TESTER -eq 1 ]]; then
             if [[ -n "$PKG_MGR" ]]; then
                 if ask_yn "Chrome/Chromium not found — install it to enable the browser probe?" "y"; then
                     DO_CHROME_INSTALL=1
