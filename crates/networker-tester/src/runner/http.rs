@@ -137,6 +137,7 @@ pub async fn run_probe(
             server_timing: None,
             udp_throughput: None,
             page_load: None,
+            browser: None,
         },
     }
 }
@@ -370,6 +371,7 @@ async fn run_http_or_tcp(
             server_timing: None,
             udp_throughput: None,
             page_load: None,
+            browser: None,
         };
     }
 
@@ -545,6 +547,7 @@ async fn run_http_or_tcp(
                 server_timing,
                 udp_throughput: None,
                 page_load: None,
+                browser: None,
             }
         }
         Err(e) => {
@@ -1079,6 +1082,7 @@ fn failed_attempt(
         server_timing: None,
         udp_throughput: None,
         page_load: None,
+        browser: None,
     }
 }
 

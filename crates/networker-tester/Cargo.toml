@@ -41,6 +41,9 @@ h3-quinn = { version = "0.0.10", optional = true }
 native-tls       = { version = "0.2", optional = true }
 tokio-native-tls = { version = "0.3", optional = true }
 
+# --- Headless browser (optional feature) ---
+chromiumoxide = { version = "0.7", optional = true, default-features = false, features = ["tokio-runtime"] }
+
 # --- SQL Server ---
 tiberius     = { version = "0.12", default-features = false, features = ["rustls", "chrono", "sql-browser-tokio"] }
 tokio-util   = { version = "0.7",  features = ["compat"] }
@@ -75,6 +78,7 @@ libc     = "0.2"
 default = ["http3"]
 http3   = ["quinn", "h3", "h3-quinn"]
 native  = ["dep:native-tls", "dep:tokio-native-tls"]
+browser = ["dep:chromiumoxide"]
 
 [dev-dependencies]
 tokio-test  = "0.4"

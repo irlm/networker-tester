@@ -277,6 +277,7 @@ pub async fn run_curl_probe(
         server_timing: None,
         udp_throughput: None,
         page_load: None,
+        browser: None,
     }
 }
 
@@ -366,5 +367,6 @@ fn make_failed(
         server_timing: None,
         udp_throughput: None,
         page_load: None,
+        browser: None,
     }
 }

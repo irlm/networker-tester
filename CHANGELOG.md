@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.11.8] – 2026-03-01 — Fix install.ps1 compatibility with Windows PowerShell 5.1
+## [0.12.1] – 2026-03-01 — Fix install.ps1 compatibility with Windows PowerShell 5.1
 
 ### Fixed
 - **`install.ps1`** — replaced `?.Source` (null-conditional member access, requires PS 7.1+)
@@ -19,6 +19,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `#Requires -Version 5.1` but used syntax only available in PowerShell 7.1+, causing a
   `ParseException: UnexpectedToken` when run via `irm … | iex` on Windows with the default
   Windows PowerShell 5.1.
+
+---
+
+## [0.12.0] – 2026-03-01 — Real-browser probe (`browser` mode via chromiumoxide)
+
+### Added
+- **`browser` probe mode** (`--features browser`) — drives a real headless Chromium instance
+  via the Chrome DevTools Protocol (chromiumoxide 0.7) to measure actual page-load performance
+  that no synthetic probe can replicate.
+- **Metrics captured**: load time (navigation start → load event), DOMContentLoaded (ms),
+  TTFB (ms), total resource count, total transferred bytes, negotiated protocol for the main
+  document, and per-protocol resource counts (e.g. `h2×18 h3×2`).
+- URL is rewritten to `/page` endpoint for a fair comparison with `pageload`/`pageload2`/
+  `pageload3` probes.
+- Self-skips with a `success: false` `RequestAttempt` if no Chrome/Chromium binary is found;
+  binary search order: `NETWORKER_CHROME_PATH` env var → common Linux paths → macOS app bundles.
+- `--features browser` is opt-in (not part of `default`); the stub build always compiles and
+  returns a clear error message.
+- HTML report **"Browser Results"** section with a per-attempt table (Protocol, TTFB, DCL,
+  Load, Resources, Bytes, per-protocol counts).
+- Terminal summary: `Protocol Comparison` table now includes a `browser` row.
+- New `BrowserResult` struct in `metrics.rs`; `Protocol::Browser` variant in the `Protocol`
+  enum; `RequestAttempt.browser: Option<BrowserResult>` field (backwards-compatible via
+  `#[serde(default, skip_serializing_if = "Option::is_none")]`).
 
 ---
 
