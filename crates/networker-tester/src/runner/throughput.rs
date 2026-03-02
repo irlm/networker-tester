@@ -58,6 +58,27 @@ use crate::runner::http::{run_probe, RunConfig};
 use uuid::Uuid;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Timeout auto-scaling
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Minimum assumed upload speed for timeout auto-scaling: ≈ 100 MB/s (800 Mbps).
+///
+/// Payloads that would take longer than `base_timeout` at this assumed speed
+/// get an extended timeout so the probe does not spuriously timeout on large
+/// but perfectly healthy uploads.  Add 10 s of overhead for TCP/TLS setup.
+///
+/// Users on slower links should set `--timeout <seconds>` explicitly.
+const MIN_UPLOAD_BYTES_PER_MS: u64 = 100 * 1024 * 1024 / 1000; // ≈ 104_857 B/ms
+
+/// Return the effective request timeout for an upload of `payload_bytes`.
+/// Always at least `base_ms`; extended if the payload cannot realistically
+/// transfer in `base_ms` at [`MIN_UPLOAD_BYTES_PER_MS`].
+fn upload_timeout_ms(payload_bytes: usize, base_ms: u64) -> u64 {
+    let min_ms = payload_bytes as u64 / MIN_UPLOAD_BYTES_PER_MS + 10_000;
+    base_ms.max(min_ms)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Goodput helper
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -146,6 +167,7 @@ pub async fn run_webupload_probe(
 
     let probe_cfg = RunConfig {
         payload_size: payload_bytes,
+        timeout_ms: upload_timeout_ms(payload_bytes, cfg.run_cfg.timeout_ms),
         ..cfg.run_cfg.clone()
     };
 
@@ -241,7 +263,8 @@ pub async fn run_upload_probe(
     target.set_query(None);
 
     let probe_cfg = RunConfig {
-        payload_size: payload_bytes, // POST body
+        payload_size: payload_bytes,
+        timeout_ms: upload_timeout_ms(payload_bytes, cfg.run_cfg.timeout_ms),
         ..cfg.run_cfg.clone()
     };
 
@@ -775,5 +798,48 @@ mod tests {
         let h = attempt.http.expect("http result missing");
         assert_eq!(h.payload_bytes, 65536);
         assert!(h.throughput_mbps.is_some(), "throughput should be measured");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // upload_timeout_ms — auto-scaling
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn timeout_unchanged_for_small_payloads() {
+        // 64 KiB at 100 MB/s = 0.6ms + 10s overhead = 10,001ms < default 30s.
+        let base = 30_000u64;
+        assert_eq!(upload_timeout_ms(64 * 1024, base), base);
+    }
+
+    #[test]
+    fn timeout_unchanged_for_one_gib() {
+        // 1 GiB at 100 MB/s = ~10,240ms + 10s = ~20,240ms < 30,000ms base.
+        let base = 30_000u64;
+        assert_eq!(upload_timeout_ms(1024 * 1024 * 1024, base), base);
+    }
+
+    #[test]
+    fn timeout_extended_for_five_gib() {
+        // 5 GiB at 100 MB/s ≈ 51,200ms + 10s = ~61,200ms > 30,000ms base.
+        let base = 30_000u64;
+        let result = upload_timeout_ms(5 * 1024 * 1024 * 1024, base);
+        assert!(result > base, "expected extended timeout, got {result}ms");
+        assert!(
+            result >= 50_000,
+            "5 GiB timeout should be at least 50s, got {result}ms"
+        );
+    }
+
+    #[test]
+    fn timeout_never_below_base() {
+        // Even with a very large base timeout, the result is never less.
+        let big_base = 600_000u64; // 10 minutes
+        assert_eq!(upload_timeout_ms(1024 * 1024, big_base), big_base);
+    }
+
+    #[test]
+    fn timeout_zero_payload_returns_overhead_only() {
+        // 0 bytes / anything = 0ms upload time + 10s overhead.
+        assert_eq!(upload_timeout_ms(0, 0), 10_000);
     }
 }

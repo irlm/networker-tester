@@ -13,11 +13,14 @@ use crate::metrics::{
 use crate::runner::{dns as dns_runner, socket_info::SocketInfo};
 use bytes::Bytes;
 use chrono::Utc;
-use http_body_util::{BodyExt, Full};
-use hyper::body::Incoming;
+use futures::stream;
+use http_body_util::combinators::BoxBody;
+use http_body_util::{BodyExt, Empty, StreamBody};
+use hyper::body::{Frame, Incoming};
 use hyper::{Request, Response};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use rustls::pki_types::ServerName;
+use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Instant;
@@ -582,7 +585,10 @@ async fn send_http1(
     attempt_id: Uuid,
 ) -> anyhow::Result<(HttpResult, Option<ServerTimingResult>)> {
     let io = TokioIo::new(io_box);
-    let (mut sender, conn) = hyper::client::conn::http1::handshake::<_, Full<Bytes>>(io).await?;
+    let (mut sender, conn): (
+        hyper::client::conn::http1::SendRequest<BoxBody<Bytes, Infallible>>,
+        _,
+    ) = hyper::client::conn::http1::handshake(io).await?;
 
     tokio::spawn(async move {
         if let Err(e) = conn.await {
@@ -619,9 +625,10 @@ async fn send_http2(
     attempt_id: Uuid,
 ) -> anyhow::Result<(HttpResult, Option<ServerTimingResult>)> {
     let io = TokioIo::new(io_box);
-    let (mut sender, conn) =
-        hyper::client::conn::http2::handshake::<_, _, Full<Bytes>>(TokioExecutor::new(), io)
-            .await?;
+    let (mut sender, conn): (
+        hyper::client::conn::http2::SendRequest<BoxBody<Bytes, Infallible>>,
+        _,
+    ) = hyper::client::conn::http2::handshake(TokioExecutor::new(), io).await?;
 
     tokio::spawn(async move {
         if let Err(e) = conn.await {
@@ -648,29 +655,57 @@ async fn send_http2(
 // Shared helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Chunk size for streaming upload bodies — avoids allocating the full payload in memory.
+const UPLOAD_CHUNK: usize = 256 * 1024; // 256 KiB
+/// Static zero buffer reused across all upload chunks (zero-copy via `Bytes::from_static`).
+static ZERO_BYTES: [u8; UPLOAD_CHUNK] = [0u8; UPLOAD_CHUNK];
+
+/// Build a streaming body that yields exactly `total_bytes` zero bytes in 256 KiB chunks.
+///
+/// Uses a single static 256 KiB zero array — no heap allocation per chunk.
+fn make_upload_body(total_bytes: usize) -> BoxBody<Bytes, Infallible> {
+    let s = stream::unfold(total_bytes, |remaining| async move {
+        if remaining == 0 {
+            return None;
+        }
+        let n = remaining.min(UPLOAD_CHUNK);
+        // SAFETY: n <= UPLOAD_CHUNK so the slice is always in-bounds.
+        // `from_static` is zero-copy — the Bytes points directly into the static array.
+        let chunk = Bytes::from_static(&ZERO_BYTES[..n]);
+        Some((Ok::<_, Infallible>(Frame::data(chunk)), remaining - n))
+    });
+    BoxBody::new(StreamBody::new(s))
+}
+
 fn build_request(
     host: &str,
     path: &str,
     cfg: &RunConfig,
     _version_hint: &str,
     attempt_id: Uuid,
-) -> anyhow::Result<Request<Full<Bytes>>> {
-    let body = if cfg.payload_size > 0 {
-        Bytes::from(vec![0u8; cfg.payload_size])
+) -> anyhow::Result<Request<BoxBody<Bytes, Infallible>>> {
+    let body: BoxBody<Bytes, Infallible> = if cfg.payload_size > 0 {
+        make_upload_body(cfg.payload_size)
     } else {
-        Bytes::new()
+        BoxBody::new(Empty::<Bytes>::new())
     };
 
     let method = if cfg.payload_size > 0 { "POST" } else { "GET" };
 
-    Ok(Request::builder()
+    let mut builder = Request::builder()
         .method(method)
         .uri(path)
         .header("host", host)
         .header("user-agent", "networker-tester/0.1")
         .header("accept", "*/*")
-        .header("x-networker-request-id", attempt_id.to_string())
-        .body(Full::new(body))?)
+        .header("x-networker-request-id", attempt_id.to_string());
+
+    // Set content-length so the server and HTTP/1.1 don't need chunked encoding.
+    if cfg.payload_size > 0 {
+        builder = builder.header("content-length", cfg.payload_size.to_string());
+    }
+
+    Ok(builder.body(body)?)
 }
 
 async fn collect_response(
@@ -1279,5 +1314,69 @@ mod tests {
         assert!(attempt.tls.is_some());
         let tls = attempt.tls.unwrap();
         assert_eq!(tls.alpn_negotiated.as_deref(), Some("h2"));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // make_upload_body — streaming zero body
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn upload_body_exact_byte_count() {
+        // Drain the streaming body and verify total bytes match.
+        use http_body_util::BodyExt;
+        let total: usize = 3 * UPLOAD_CHUNK + 12345;
+        let mut body = make_upload_body(total);
+        let mut received: usize = 0;
+        while let Some(frame) = body.frame().await {
+            if let Ok(data) = frame.unwrap().into_data() {
+                received += data.len();
+            }
+        }
+        assert_eq!(
+            received, total,
+            "body yielded {received} bytes, expected {total}"
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_body_all_zeros() {
+        // Every byte in the streamed body must be zero.
+        use http_body_util::BodyExt;
+        let total = UPLOAD_CHUNK + 100;
+        let mut body = make_upload_body(total);
+        while let Some(frame) = body.frame().await {
+            if let Ok(data) = frame.unwrap().into_data() {
+                assert!(
+                    data.iter().all(|&b| b == 0),
+                    "non-zero byte found in upload body"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn upload_body_small_payload() {
+        // Payload smaller than one chunk must still work correctly.
+        use http_body_util::BodyExt;
+        let total = 42;
+        let mut body = make_upload_body(total);
+        let mut received = 0usize;
+        while let Some(frame) = body.frame().await {
+            if let Ok(data) = frame.unwrap().into_data() {
+                received += data.len();
+            }
+        }
+        assert_eq!(received, total);
+    }
+
+    #[tokio::test]
+    async fn upload_body_zero_bytes_yields_nothing() {
+        use http_body_util::BodyExt;
+        let mut body = make_upload_body(0);
+        let mut frames = 0;
+        while let Some(_frame) = body.frame().await {
+            frames += 1;
+        }
+        assert_eq!(frames, 0, "zero-byte body should yield no frames");
     }
 }
