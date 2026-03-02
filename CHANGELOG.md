@@ -11,6 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.8] – 2026-03-02 — Upload size verification via response header
+
+### Added
+- **`X-Networker-Upload-Bytes: N`** request header: the client now declares the
+  intended upload size on every POST so the server knows what to expect.
+- **`X-Networker-Received-Bytes: N`** response header: the endpoint echoes the
+  actual number of bytes drained from the request body, enabling end-to-end
+  verification without parsing the JSON body.
+- `verify_upload()` in `throughput.rs`: after every `upload` / `webupload` probe,
+  the received byte count is compared against the declared payload size. A mismatch
+  marks the attempt `success = false` with a clear `ErrorCategory::Http` message
+  ("sent N bytes but server received M bytes"). Absent header (third-party or older
+  endpoint) is silently skipped — no false failures.
+- 6 new unit tests covering the verification logic: match passes, mismatch fails with
+  descriptive message, absent header is skipped, already-failed attempt is not
+  overwritten, header name matching is case-insensitive.
+- 1 new endpoint unit test: `upload_returns_received_bytes_header`.
+
+---
+
 ## [0.12.7] – 2026-03-02 — Streaming upload body; large-payload timeout scaling
 
 ### Fixed
