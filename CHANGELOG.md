@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.25] – 2026-03-02 — Fix Chrome prompt skipped when git is installed
+
+### Fixed
+- **`install.sh`**: `PKG_MGR` was only populated inside the `git not installed` else-branch,
+  so on machines where git is already present the package manager was never detected;
+  this caused the Chrome Y/N prompt to be silently skipped and the plan to show
+  `(not installed — https://www.google.com/chrome/)` instead of asking
+- Package manager detection now always runs, independent of git availability
+
+---
+
 ## [0.12.24] – 2026-03-02 — Installer skips Chrome prompt when only installing endpoint
 
 ### Fixed
