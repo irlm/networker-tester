@@ -278,3 +278,26 @@ networker-tester --target https://example.com/health --modes curl --runs 5
 ```
 
 **Populated:** `http` fields from curl's timing output; `tls.tls_backend = "curl"`
+
+---
+
+## `browser` — Real Headless Chromium (CDP)
+
+Drives a real headless Chromium instance via the Chrome DevTools Protocol (chromiumoxide)
+to measure actual page-load performance that no synthetic probe can replicate.
+Requires `--features browser` at compile time and a local Chrome/Chromium installation.
+
+```bash
+networker-tester --target https://127.0.0.1:8443/health \
+  --modes browser --runs 3 --insecure
+```
+
+**Populated:** `browser` — `load_ms`, `dom_content_loaded_ms`, `ttfb_ms`, `resource_count`,
+`transferred_bytes`, `protocol` (main-document ALPN), `resource_protocols` (per-protocol
+resource counts, e.g. `[("h2", 18), ("h3", 2)]`)
+**Terminal:** `[browser] proto=h2 TTFB:Xms DCL:Xms Load:Xms res=21 bytes=...`
+**Note:** URL is rewritten to `/page` so results are directly comparable with
+`pageload` / `pageload2` / `pageload3`. Chrome binary search order:
+`NETWORKER_CHROME_PATH` env var → system paths (`/usr/bin/google-chrome`, etc. on Linux;
+`/Applications/Google Chrome.app/…` on macOS). If no Chrome binary is found the probe
+returns a skipped `RequestAttempt` rather than crashing the run.

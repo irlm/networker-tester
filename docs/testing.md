@@ -33,6 +33,11 @@ HTTP/3 is included by default. No extra flags needed.
 ./target/release/networker-endpoint
 ```
 
+> **Windows note:** Replace `./target/release/` with `.\target\release\` and add `.exe`
+> to binary names. Use backtick `` ` `` instead of `\` for line continuation in PowerShell.
+> Examples in this guide use Unix syntax; PowerShell equivalents are shown where the syntax
+> differs meaningfully (loops, `open`).
+
 The endpoint serves:
 - `/health` — tiny JSON response for latency probes
 - `/download?bytes=N` — generates N bytes of body on the fly
@@ -169,17 +174,21 @@ assets over one connection.
   --insecure
 ```
 
-Or run all three in a single invocation:
+Or run all four in a single invocation (including the real-browser probe):
 
 ```bash
 ./target/release/networker-tester \
   --target https://127.0.0.1:8443/health \
-  --modes pageload,pageload2,pageload3 \
+  --modes pageload,pageload2,pageload3,browser \
   --page-assets 30 \
   --page-asset-size 50k \
   --runs 10 \
   --insecure
 ```
+
+> `browser` requires `cargo build --release --features browser` and a local Chrome/Chromium
+> installation. Drop it from `--modes` if Chrome is not available — the run continues with
+> the other three modes.
 
 **What to look for:**
 
@@ -203,6 +212,7 @@ Run a sweep across asset counts to find the crossover point where H/2 multiplexi
 starts to beat H/1.1's parallel connections:
 
 ```bash
+# bash / zsh (macOS, Linux)
 for N in 5 10 20 40 80; do
   echo "=== $N assets ==="
   ./target/release/networker-tester \
@@ -215,6 +225,20 @@ for N in 5 10 20 40 80; do
 done
 ```
 
+```powershell
+# PowerShell (Windows)
+foreach ($N in 5, 10, 20, 40, 80) {
+    Write-Host "=== $N assets ==="
+    .\target\release\networker-tester.exe `
+        --target https://127.0.0.1:8443/health `
+        --modes pageload,pageload2 `
+        --page-assets $N `
+        --page-asset-size 10k `
+        --runs 5 `
+        --insecure
+}
+```
+
 Expect H/2 to break even or win at around 6-10 assets (the browser-connection-limit
 threshold) and pull ahead at higher counts.
 
@@ -225,6 +249,7 @@ threshold) and pull ahead at higher counts.
 Small assets expose connection overhead; large assets expose transfer efficiency:
 
 ```bash
+# bash / zsh (macOS, Linux)
 for SZ in 1k 10k 100k 1m; do
   echo "=== $SZ assets ==="
   ./target/release/networker-tester \
@@ -235,6 +260,20 @@ for SZ in 1k 10k 100k 1m; do
     --runs 5 \
     --insecure
 done
+```
+
+```powershell
+# PowerShell (Windows)
+foreach ($SZ in '1k', '10k', '100k', '1m') {
+    Write-Host "=== $SZ assets ==="
+    .\target\release\networker-tester.exe `
+        --target https://127.0.0.1:8443/health `
+        --modes pageload,pageload2,pageload3 `
+        --page-assets 20 `
+        --page-asset-size $SZ `
+        --runs 5 `
+        --insecure
+}
 ```
 
 ---
@@ -265,8 +304,14 @@ Output is logged to `stdout` as structured JSON by default when `--json` is pass
   --runs 5 \
   --insecure \
   --html
+```
 
-open output/report.html
+```bash
+open output/report.html        # macOS
+xdg-open output/report.html   # Linux
+```
+```powershell
+Invoke-Item output\report.html  # Windows
 ```
 
 The HTML report includes a **Protocol Comparison** table and a **Throughput Results** table
@@ -283,8 +328,14 @@ with Goodput, CPU, Client CSW, and Server CSW columns.
   --runs 5 \
   --insecure \
   --excel
+```
 
-open output/report.xlsx
+```bash
+open output/report.xlsx        # macOS
+xdg-open output/report.xlsx   # Linux
+```
+```powershell
+Invoke-Item output\report.xlsx  # Windows
 ```
 
 ---
