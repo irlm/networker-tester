@@ -349,7 +349,7 @@ impl ResolvedConfig {
     }
 }
 
-/// Load and deserialise a JSON config file.
+/// Load and deserialize a JSON config file.
 pub fn load_config(path: &str) -> anyhow::Result<ConfigFile> {
     let s = std::fs::read_to_string(path)
         .with_context(|| format!("Cannot read config file: {path}"))?;

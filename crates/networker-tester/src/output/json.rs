@@ -1,7 +1,7 @@
 use crate::metrics::TestRun;
 use std::path::Path;
 
-/// Serialise a `TestRun` to pretty-printed JSON and write to `path`.
+/// Serialize a `TestRun` to pretty-printed JSON and write to `path`.
 pub fn save(run: &TestRun, path: &Path) -> anyhow::Result<()> {
     let dir = path.parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(dir)?;

@@ -1,4 +1,4 @@
-/// Core data model – one row per concept, normalised.
+/// Core data model – one row per concept, normalized.
 ///
 /// TestRun  → 1:N  RequestAttempt
 /// RequestAttempt → 0:1 DnsResult, TcpResult, TlsResult, HttpResult, UdpResult, ErrorRecord

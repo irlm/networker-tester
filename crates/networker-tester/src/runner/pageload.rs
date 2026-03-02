@@ -99,7 +99,7 @@ struct ConnResult {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Fetch the `/page` manifest then download all assets with up to 6 persistent
-/// HTTP/1.1 keep-alive connections — accurately mimicking browser behaviour.
+/// HTTP/1.1 keep-alive connections — accurately mimicking browser behavior.
 ///
 /// Connection pool assignment (round-robin):
 ///   conn 0: /page manifest → asset[0] → asset[k] → asset[2k] …

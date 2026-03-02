@@ -2,7 +2,7 @@
 ///
 /// The report embeds a minimal inline CSS for offline viewing and optionally
 /// adds a `<link rel="stylesheet">` for the external `report.css` file so
-/// operators can customise the look without editing generated HTML.
+/// operators can customize the look without editing generated HTML.
 use crate::metrics::{
     attempt_payload_bytes, compute_stats, primary_metric_label, primary_metric_value, Protocol,
     RequestAttempt, TestRun,
