@@ -513,6 +513,64 @@ mod tests {
         assert_eq!(loss_percent(0, 0), 0.0);
     }
 
+    // ── make_ctrl ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn make_ctrl_has_correct_magic() {
+        let pkt = make_ctrl(CMD_DOWNLOAD, 0);
+        assert_eq!(&pkt[..4], MAGIC);
+    }
+
+    #[test]
+    fn make_ctrl_sets_command_byte() {
+        assert_eq!(make_ctrl(CMD_DOWNLOAD, 0)[4], CMD_DOWNLOAD);
+        assert_eq!(make_ctrl(CMD_UPLOAD, 0)[4], CMD_UPLOAD);
+        assert_eq!(make_ctrl(CMD_ACK, 0)[4], CMD_ACK);
+    }
+
+    #[test]
+    fn make_ctrl_encodes_value_little_endian() {
+        let pkt = make_ctrl(CMD_DOWNLOAD, 0x0102_0304);
+        assert_eq!(&pkt[8..12], &[0x04, 0x03, 0x02, 0x01]);
+    }
+
+    #[test]
+    fn make_ctrl_zero_value() {
+        let pkt = make_ctrl(CMD_DONE, 0);
+        assert_eq!(&pkt[8..12], &[0x00, 0x00, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn make_ctrl_length_is_ctrl_len() {
+        assert_eq!(make_ctrl(CMD_DOWNLOAD, 1234).len(), CTRL_LEN);
+    }
+
+    // ── udp_tp_failed ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn udp_tp_failed_sets_correct_fields() {
+        let run_id = Uuid::new_v4();
+        let attempt_id = Uuid::new_v4();
+        let started_at = chrono::Utc::now();
+        let attempt = udp_tp_failed(
+            run_id,
+            attempt_id,
+            7,
+            Protocol::UdpDownload,
+            started_at,
+            "test error".into(),
+        );
+        assert!(!attempt.success);
+        assert_eq!(attempt.protocol, Protocol::UdpDownload);
+        assert_eq!(attempt.sequence_num, 7);
+        assert_eq!(attempt.run_id, run_id);
+        assert_eq!(attempt.attempt_id, attempt_id);
+        let err = attempt.error.expect("error should be set");
+        assert_eq!(err.message, "test error");
+        assert_eq!(err.category, ErrorCategory::Udp);
+        assert!(attempt.udp_throughput.is_none());
+    }
+
     /// End-to-end download test: spin up a loopback stub server and download 4 KiB.
     #[tokio::test]
     async fn udpdownload_loopback() {

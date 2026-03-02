@@ -1458,6 +1458,64 @@ mod tests {
     }
 
     #[test]
+    fn escape_html_empty_string() {
+        assert_eq!(escape_html(""), "");
+    }
+
+    #[test]
+    fn escape_html_ampersand_escaped_first_to_avoid_double_escaping() {
+        // "&lt;" should become "&amp;lt;" not "&lt;" again
+        assert_eq!(escape_html("&lt;"), "&amp;lt;");
+    }
+
+    // ── format_bytes ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn format_bytes_zero() {
+        assert_eq!(format_bytes(0), "0 B");
+    }
+
+    #[test]
+    fn format_bytes_one() {
+        assert_eq!(format_bytes(1), "1 B");
+    }
+
+    #[test]
+    fn format_bytes_just_below_kib() {
+        assert_eq!(format_bytes(1023), "1023 B");
+    }
+
+    #[test]
+    fn format_bytes_exactly_kib() {
+        assert_eq!(format_bytes(1024), "1.0 KiB");
+    }
+
+    #[test]
+    fn format_bytes_just_below_mib() {
+        assert_eq!(format_bytes(1024 * 1024 - 1), "1024.0 KiB");
+    }
+
+    #[test]
+    fn format_bytes_exactly_mib() {
+        assert_eq!(format_bytes(1024 * 1024), "1.0 MiB");
+    }
+
+    #[test]
+    fn format_bytes_just_below_gib() {
+        assert_eq!(format_bytes(1024 * 1024 * 1024 - 1), "1024.0 MiB");
+    }
+
+    #[test]
+    fn format_bytes_exactly_gib() {
+        assert_eq!(format_bytes(1024 * 1024 * 1024), "1.0 GiB");
+    }
+
+    #[test]
+    fn format_bytes_multiple_gibs() {
+        assert_eq!(format_bytes(4 * 1024 * 1024 * 1024), "4.0 GiB");
+    }
+
+    #[test]
     fn save_writes_html_file() {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let run = make_run();

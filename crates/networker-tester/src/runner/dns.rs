@@ -134,4 +134,42 @@ mod tests {
         let (ips, _) = resolve("localhost", true, false).await.unwrap();
         assert!(ips.iter().all(|ip| ip.is_ipv4()));
     }
+
+    #[tokio::test]
+    async fn ipv6_only_filter_on_localhost() {
+        // "localhost" may or may not have AAAA records depending on the OS.
+        // We just verify the filter is applied — if it returns Ok, all IPs are v6;
+        // if it returns Err (no IPv6 for localhost), that's also valid.
+        match resolve("localhost", false, true).await {
+            Ok((ips, _)) => assert!(ips.iter().all(|ip| ip.is_ipv6())),
+            Err(_) => {} // no IPv6 address for localhost — filter worked correctly
+        }
+    }
+
+    #[tokio::test]
+    async fn unresolvable_hostname_returns_error() {
+        let result = resolve("this-hostname-does-not-exist.invalid", false, false).await;
+        assert!(result.is_err(), "should fail for an unresolvable hostname");
+    }
+
+    #[tokio::test]
+    async fn run_dns_probe_success_populates_dns_result() {
+        let run_id = uuid::Uuid::new_v4();
+        let attempt = run_dns_probe(run_id, 0, "localhost", false, false).await;
+        assert!(attempt.success, "probe should succeed: {:?}", attempt.error);
+        assert_eq!(attempt.protocol, Protocol::Dns);
+        let dns = attempt.dns.expect("dns result should be present");
+        assert!(!dns.resolved_ips.is_empty());
+        assert!(attempt.tcp.is_none());
+        assert!(attempt.http.is_none());
+    }
+
+    #[tokio::test]
+    async fn run_dns_probe_failure_sets_error() {
+        let run_id = uuid::Uuid::new_v4();
+        let attempt = run_dns_probe(run_id, 0, "this-hostname-does-not-exist.invalid", false, false).await;
+        assert!(!attempt.success);
+        assert!(attempt.error.is_some());
+        assert!(attempt.dns.is_none());
+    }
 }

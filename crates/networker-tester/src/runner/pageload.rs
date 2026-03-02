@@ -1676,4 +1676,102 @@ mod tests {
         assert!(urls[1].query().unwrap().contains("bytes=2048"));
         assert!(urls[2].query().unwrap().contains("bytes=4096"));
     }
+
+    #[test]
+    fn build_asset_urls_empty_returns_empty() {
+        let base: url::Url = "http://localhost:8080/health".parse().unwrap();
+        let urls = build_asset_urls(&base, &[]);
+        assert!(urls.is_empty());
+    }
+
+    #[test]
+    fn build_asset_urls_single_asset() {
+        let base: url::Url = "http://localhost:8080/".parse().unwrap();
+        let urls = build_asset_urls(&base, &[512]);
+        assert_eq!(urls.len(), 1);
+        assert_eq!(urls[0].path(), "/asset");
+        let q = urls[0].query().unwrap();
+        assert!(q.contains("id=0"));
+        assert!(q.contains("bytes=512"));
+    }
+
+    #[test]
+    fn build_asset_urls_path_is_always_asset() {
+        let base: url::Url = "http://localhost:8080/health".parse().unwrap();
+        let urls = build_asset_urls(&base, &[100, 200]);
+        assert!(urls.iter().all(|u| u.path() == "/asset"));
+    }
+
+    #[test]
+    fn build_asset_urls_ids_are_sequential() {
+        let base: url::Url = "http://localhost:8080/".parse().unwrap();
+        let urls = build_asset_urls(&base, &[1, 2, 3]);
+        for (i, url) in urls.iter().enumerate() {
+            assert!(url.query().unwrap().contains(&format!("id={i}")));
+        }
+    }
+
+    // ── pick_ip ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn pick_ip_first_when_not_ipv4_only() {
+        use std::net::IpAddr;
+        let ips: Vec<IpAddr> = vec!["192.168.1.1".parse().unwrap(), "::1".parse().unwrap()];
+        assert_eq!(pick_ip(&ips, false), ips[0]);
+    }
+
+    #[test]
+    fn pick_ip_prefers_ipv4_when_ipv4_only() {
+        use std::net::IpAddr;
+        let ips: Vec<IpAddr> = vec!["::1".parse().unwrap(), "10.0.0.1".parse().unwrap()];
+        let picked = pick_ip(&ips, true);
+        assert!(picked.is_ipv4());
+        assert_eq!(picked, "10.0.0.1".parse::<IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn pick_ip_falls_back_to_first_when_no_ipv4() {
+        use std::net::IpAddr;
+        let ips: Vec<IpAddr> = vec!["::1".parse().unwrap(), "::2".parse().unwrap()];
+        // ipv4_only=true but no IPv4 present — falls back to ips[0]
+        assert_eq!(pick_ip(&ips, true), ips[0]);
+    }
+
+    // ── error_attempt_proto ───────────────────────────────────────────────────
+
+    #[test]
+    fn error_attempt_proto_sets_correct_fields() {
+        let run_id = uuid::Uuid::new_v4();
+        let attempt_id = uuid::Uuid::new_v4();
+        let a = error_attempt_proto(
+            attempt_id,
+            run_id,
+            3,
+            chrono::Utc::now(),
+            Protocol::PageLoad3,
+            ErrorCategory::Timeout,
+            "timed out".into(),
+        );
+        assert!(!a.success);
+        assert_eq!(a.protocol, Protocol::PageLoad3);
+        assert_eq!(a.sequence_num, 3);
+        let err = a.error.unwrap();
+        assert_eq!(err.message, "timed out");
+        assert_eq!(err.category, ErrorCategory::Timeout);
+    }
+
+    #[test]
+    fn error_attempt_defaults_to_pageload2_protocol() {
+        let run_id = uuid::Uuid::new_v4();
+        let a = error_attempt(
+            uuid::Uuid::new_v4(),
+            run_id,
+            0,
+            chrono::Utc::now(),
+            ErrorCategory::Config,
+            "config error".into(),
+        );
+        assert_eq!(a.protocol, Protocol::PageLoad2);
+        assert!(!a.success);
+    }
 }
