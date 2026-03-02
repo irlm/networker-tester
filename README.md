@@ -26,6 +26,7 @@ in the kernel or scattered across multiple tools.
 - [CLI Reference](#cli-reference)
 - [Configuration File](#configuration-file)
 - [Getting All Low-Level Metrics](#getting-all-low-level-metrics)
+- [Page-Load Protocol Comparison](#page-load-protocol-comparison-h1--h2--h3--browser)
 - [Endpoint Reference](#endpoint-reference)
 - [Output Formats](#output-formats)
 - [SQL Server Setup](#sql-server-setup)
@@ -66,16 +67,26 @@ Invoke-WebRequest $GistUrl -OutFile "$env:TEMP\networker-install.ps1"
 & "$env:TEMP\networker-install.ps1" -Component endpoint
 ```
 
-> **Note:** Git for Windows must be installed (bundles `ssh.exe`). Download from <https://git-scm.com/>.
-> Compatible with **Windows PowerShell 5.1** and PowerShell 7+.
+> Compatible with **Windows PowerShell 5.1** and PowerShell 7+. The installer
+> auto-detects and offers to install Git for Windows and Visual C++ Build Tools
+> via `winget` if they are absent.
 
 ### What the installer does
 
-1. Verifies SSH access to GitHub.
-2. Installs Rust via [rustup](https://rustup.rs/) if not present.
-3. Runs `cargo install --git ssh://... <binary> --locked --force` — `--force` ensures the
-   binary is always rebuilt from the latest commit.
-4. Prints the installed version (e.g. `networker-tester 0.2.5`).
+The installer uses a **rustup-style interactive UX**: it shows a system info table, a
+numbered plan, and a `1) Proceed / 2) Customize / 3) Cancel` prompt before doing anything.
+
+**Auto-detected install mode:**
+- **Release mode** (fast, ~10 s) — if `gh` CLI is installed and authenticated
+  (`gh auth login`), downloads the pre-built binary for your platform from the latest
+  GitHub release.
+- **Source mode** (slower, ~5–10 min) — compiles from the private Git repo via
+  `cargo install`; requires an SSH key for GitHub.
+
+**In source mode, the installer also auto-detects and offers to install missing dependencies:**
+- Git (via `brew` / `apt-get` / `dnf` / `pacman` / `zypper` / `apk` / `winget`)
+- Visual C++ Build Tools on Windows (via `winget`, required by Rust's MSVC target)
+- Rust (via [rustup](https://rustup.rs/))
 
 Compilation takes 2–5 minutes on first run; subsequent runs are faster.
 
@@ -130,18 +141,31 @@ Open `output/report.html` in any browser.
 | `tcp` | TCP | Connect time only (no HTTP) | — |
 | `http1` | TCP + HTTP/1.1 | DNS · TCP · TLS · TTFB · Total | — |
 | `http2` | TCP + HTTP/2 | DNS · TCP · TLS · TTFB · Total | TLS (ALPN) |
-| `http3` | QUIC + HTTP/3 | DNS · QUIC handshake · TTFB · Total | `--features http3` |
-| `udp` | UDP | RTT min/avg/p95 · jitter · loss% | `--udp-port` |
+| `http3` | QUIC + HTTP/3 | DNS · QUIC handshake · TTFB · Total | default feature |
+| `dns` | DNS | Standalone DNS resolution; resolved IPs + duration | — |
+| `tls` | TCP + TLS | DNS · TCP · TLS; full cert chain, cipher, ALPN | — |
+| `native` | TCP + native TLS | Same as `tls` but via OS TLS stack | `--features native` |
+| `curl` | curl binary | HTTP timing via system `curl` (proxy/cert baseline) | `curl` on PATH |
+| `udp` | UDP datagram | RTT min/avg/p95 · jitter · loss% | `--udp-port` |
+| `udpdownload` | UDP bulk | Custom NWKT protocol: datagrams/loss/throughput (server→client) | `--payload-sizes` |
+| `udpupload` | UDP bulk | Custom NWKT protocol: bytes_acked / throughput (client→server) | `--payload-sizes` |
 | `download` | TCP → `/download?bytes=N` | Throughput MB/s (server→client) | `--payload-sizes` |
 | `upload` | TCP → `/upload` | Throughput MB/s (client→server) | `--payload-sizes` |
-| `webdownload` | TCP → `/download?bytes=N` | HTTP timing + response body throughput | `--payload-sizes` |
-| `webupload` | TCP → `/upload` | HTTP timing + upload throughput | `--payload-sizes` |
+| `webdownload` | TCP → target URL | HTTP timing + response body throughput (URL unchanged) | — |
+| `webupload` | TCP → target URL | HTTP timing + upload throughput (URL unchanged) | `--payload-sizes` |
+| `pageload` | HTTP/1.1 | Multi-asset page: ≤6 parallel conns, TLS cost, per-asset timings | HTTPS target |
+| `pageload2` | HTTP/2 | Multi-asset page: single TLS conn, all assets multiplexed | HTTPS target |
+| `pageload3` | HTTP/3 | Multi-asset page: single QUIC conn, all assets multiplexed | HTTPS target |
+| `browser` | real Chromium | Headless Chrome via CDP: Load/DCL/TTFB/bytes/per-protocol counts | `--features browser` |
 
-**`download` vs `webdownload` (and `upload` vs `webupload`):**
-Both pairs rewrite the URL path to `/download` or `/upload` on the target host — the
-difference is only the protocol label recorded in the report, which lets you run them
-side-by-side and compare results. Use `webdownload`/`webupload` when you want a named
-"web" category separate from your primary `download`/`upload` baseline.
+**`pageload` / `pageload2` / `pageload3` / `browser`** all rewrite the URL to the `/page` endpoint,
+which serves one HTML document plus N configurable assets.
+Use `--page-assets N` (default 20) and `--page-asset-size <sz>` (default 10k) to tune the load.
+
+**`download` vs `webdownload`** (and `upload` vs `webupload`):
+`download`/`upload` rewrite the URL path to `/download` or `/upload` on the target host.
+`webdownload`/`webupload` fetch the target URL as-is — useful for testing external URLs or
+labelling a named group separately in the report.
 
 ---
 
@@ -423,6 +447,114 @@ networker-tester \
   --modes http3 \
   --insecure
 ```
+
+---
+
+## Page-Load Protocol Comparison (H1 / H2 / H3 / Browser)
+
+The page-load probes simulate a browser fetching a real HTML page with N embedded assets.
+All four modes target the same `/page` endpoint so the comparison is fair: only the
+transport and connection model change.
+
+| Mode | Connection model | What makes it realistic |
+|------|-----------------|------------------------|
+| `pageload` | Up to 6 parallel TCP connections | Matches H1.1 browser behaviour (connection pool) |
+| `pageload2` | Single TLS connection, all assets multiplexed | H2 stream multiplexing |
+| `pageload3` | Single QUIC connection, all assets multiplexed | H3 / QUIC — no TCP head-of-line blocking |
+| `browser` | Real headless Chromium via CDP | Actual browser events: Load, DOMContentLoaded, sub-resource negotiation |
+
+### Minimum example — H1.1 vs H2 vs H3
+
+```bash
+# 1. Start the endpoint (HTTPS required for H2 and H3)
+./networker-endpoint
+
+# 2. Compare all three protocols — 20 assets × 10 KiB each (defaults), 5 runs
+./networker-tester \
+  --target https://127.0.0.1:8443/health \
+  --modes pageload,pageload2,pageload3 \
+  --runs 5 \
+  --insecure \
+  --output-dir ./output
+```
+
+Terminal output includes a **Protocol Comparison** table once all runs complete:
+
+```
+──── Protocol Comparison ────
+
+  pageload   ·  Total ms  ·  avg 124.3  min  98.2  max 161.7
+  pageload2  ·  Total ms  ·  avg  89.1  min  76.4  max 105.3
+  pageload3  ·  Total ms  ·  avg  82.6  min  69.1  max  99.2
+```
+
+### Customise asset count and size
+
+```bash
+# 50 assets × 50 KiB — heavier page, amplifies H1 head-of-line blocking
+./networker-tester \
+  --target https://host:8443/health \
+  --modes pageload,pageload2,pageload3 \
+  --page-assets 50 \
+  --page-asset-size 50k \
+  --runs 5 \
+  --insecure
+```
+
+### Add real-browser metrics
+
+Requires Chrome or Chromium installed. Build with the `browser` feature:
+
+```bash
+cargo build --release --features browser
+```
+
+Then add `browser` to `--modes`:
+
+```bash
+./networker-tester \
+  --target https://127.0.0.1:8443/health \
+  --modes pageload,pageload2,pageload3,browser \
+  --page-assets 20 \
+  --page-asset-size 10k \
+  --runs 5 \
+  --insecure \
+  --output-dir ./output
+```
+
+The `browser` probe drives real headless Chromium and captures events that synthetic probes
+cannot replicate:
+
+| Metric | Meaning |
+|--------|---------|
+| **Load time** | Navigation start → `load` event — what end users experience |
+| **DOMContentLoaded** | DOM fully parsed, before images/stylesheets finish |
+| **TTFB** | Time to first byte of the main document from the browser's perspective |
+| **Resource count** | Total sub-resources loaded (HTML + all assets) |
+| **Bytes transferred** | Actual bytes over the wire as seen by the browser |
+| **Per-protocol counts** | e.g. `h2×18 h3×2` — which resources negotiated which protocol |
+
+Chrome is auto-detected from common install paths. Override with an environment variable:
+
+```bash
+NETWORKER_CHROME_PATH=/usr/bin/chromium ./networker-tester \
+  --target https://127.0.0.1:8443/health \
+  --modes browser --runs 3 --insecure
+```
+
+### Interpreting the results
+
+| What to compare | What it tells you |
+|-----------------|-------------------|
+| `pageload` vs `pageload2` total time | Benefit of H2 multiplexing over H1.1 connection pools |
+| `pageload2` vs `pageload3` total time | QUIC advantage (especially on lossy or high-latency links) |
+| `pageload` connections_opened | Should be ≤ 6; more parallel TCP = more TLS handshake cost |
+| `pageload` tls_overhead_ratio | TLS as % of total — high ratio → TLS cost dominates, connection reuse helps |
+| `browser` Load event vs `pageload` total | Gap = browser render/parse/JS overhead on top of network |
+| `browser` per-protocol counts | Mixed `h2×N h3×M` → protocol fallback or split CDN |
+
+> **Note:** `pageload3` and `browser` require HTTPS. Pass `--insecure` when pointing at the
+> self-signed certificate generated by `networker-endpoint`.
 
 ---
 
@@ -768,7 +900,6 @@ cargo build -p networker-tester --features http3
 | No redirect following | Redirects complicate timing attribution | Point `--target` at a URL that responds directly (e.g. `/health`) |
 | Self-signed cert on endpoint | Required for dev | Pass `--insecure` to the tester |
 | UDP "loss" counts out-of-order as lost | Simple seq-number check | Increase `--timeout` and `--udp-probes` for high-latency links |
-| No UDP bulk throughput modes | UDP bulk transfer requires a custom datagram protocol — planned as `udpdownload`/`udpupload` | Use `download`/`upload` (TCP) for throughput; use `udp` for UDP latency |
 
 ---
 
