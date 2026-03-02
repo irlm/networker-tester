@@ -2,20 +2,27 @@
 # ──────────────────────────────────────────────────────────────────────────────
 # Networker Tester – Windows interactive installer (rustup-style)
 #
+# Two install modes (auto-detected, or choose in customize flow):
+#   release  – download pre-built binary from the latest GitHub release via
+#              gh CLI (fast, ~10 s); requires: gh installed + gh auth login
+#   source   – compile from source via cargo install (slower, ~5-10 min);
+#              requires: SSH key for the private repo + Rust/cargo
+#
 # Usage (piped):
 #   irm <raw-gist-url>/install.ps1 | iex
 #
 # Usage (downloaded):
-#   .\install.ps1 [-Component tester|endpoint|both] [-Yes] [-SkipSshCheck]
-#                 [-SkipRust] [-Help]
+#   .\install.ps1 [-Component tester|endpoint|both] [-Yes] [-FromSource]
+#                 [-SkipSshCheck] [-SkipRust] [-Help]
 #
-# Prerequisites:
+# Prerequisites (source mode):
 #   - Git for Windows (includes ssh.exe) – https://git-scm.com/
 #   - SSH key configured for github.com in %USERPROFILE%\.ssh\
 # ──────────────────────────────────────────────────────────────────────────────
 param(
-    [string]$Component    = "both",
+    [string]$Component  = "both",
     [switch]$Yes,
+    [switch]$FromSource,
     [switch]$SkipSshCheck,
     [switch]$SkipRust,
     [switch]$Help
@@ -23,8 +30,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$ScriptVersion = "0.12.11"
+$ScriptVersion = "0.12.12"
 $RepoSsh       = "ssh://git@github.com/irlm/networker-tester"
+$RepoGh        = "irlm/networker-tester"
 $CargoBin      = Join-Path $env:USERPROFILE ".cargo\bin"
 
 # ── Print helpers ──────────────────────────────────────────────────────────────
@@ -59,18 +67,28 @@ function Show-Help {
     Write-Host "               endpoint  Install networker-endpoint"
     Write-Host "               both      Install both binaries"
     Write-Host ""
+    Write-Host "Install modes (auto-detected; override in customize flow or via flag):"
+    Write-Host "  release   Download pre-built binary via gh CLI -- fast (~10 s)"
+    Write-Host "            Requires: gh installed and authenticated (gh auth login)"
+    Write-Host "  source    Compile from private Git repo via cargo install -- slower"
+    Write-Host "            Requires: SSH key for github.com + Rust/cargo"
+    Write-Host ""
     Write-Host "  -Yes           Non-interactive: accept all defaults"
-    Write-Host "  -SkipSshCheck  Skip the GitHub SSH connectivity test"
-    Write-Host "  -SkipRust      Skip Rust installation (assume cargo is available)"
+    Write-Host "  -FromSource    Force source-compile mode (skip release detection)"
+    Write-Host "  -SkipSshCheck  Skip the GitHub SSH connectivity test (source mode)"
+    Write-Host "  -SkipRust      Skip Rust installation (source mode)"
     Write-Host "  -Help          Show this help message"
     Write-Host ""
     Write-Host "Examples:"
     Write-Host "  .\install.ps1 -Component tester"
     Write-Host "  .\install.ps1 -Yes -Component endpoint"
-    Write-Host "  .\install.ps1 -SkipRust -Component both"
+    Write-Host "  .\install.ps1 -FromSource -SkipRust -Component both"
 }
 
 # ── Script-level state ($script: prefix required to mutate from inside functions)
+$script:InstallMethod     = "source"   # "release" | "source"
+$script:ReleaseAvailable  = $false
+$script:ReleaseTarget     = ""
 $script:DoSshCheck        = $true
 $script:DoRustInstall     = $false
 $script:DoInstallTester   = $true
@@ -80,6 +98,14 @@ $script:RustVer           = "not installed"
 $script:SysOs             = ""
 $script:SysArch           = ""
 $script:StepNum           = 0
+
+# ── Target triple detection ────────────────────────────────────────────────────
+function Get-ReleaseTarget {
+    switch ($env:PROCESSOR_ARCHITECTURE) {
+        "AMD64"  { return "x86_64-pc-windows-msvc" }
+        default  { return "" }   # ARM64/x86 not yet in release matrix
+    }
+}
 
 # ── System discovery ───────────────────────────────────────────────────────────
 function Invoke-DiscoverSystem {
@@ -95,17 +121,30 @@ function Invoke-DiscoverSystem {
         $script:RustVer    = "not installed"
     }
 
-    if (-not $script:RustExists -and -not $SkipRust) {
-        $script:DoRustInstall = $true
-    }
-
-    if ($SkipSshCheck) {
-        $script:DoSshCheck = $false
-    }
+    if (-not $script:RustExists -and -not $SkipRust) { $script:DoRustInstall = $true }
+    if ($SkipSshCheck) { $script:DoSshCheck = $false }
 
     switch ($Component) {
         "tester"   { $script:DoInstallEndpoint = $false }
         "endpoint" { $script:DoInstallTester   = $false }
+    }
+
+    # Release mode: available when gh is authenticated AND platform is in release matrix
+    if (-not $FromSource) {
+        $target = Get-ReleaseTarget
+        $ghCmd  = Get-Command gh -ErrorAction SilentlyContinue
+        if ($ghCmd -and $target) {
+            $prevErr = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            $null = & gh auth status 2>&1
+            $ghOk = ($LASTEXITCODE -eq 0)
+            $ErrorActionPreference = $prevErr
+            if ($ghOk) {
+                $script:ReleaseTarget    = $target
+                $script:ReleaseAvailable = $true
+                $script:InstallMethod    = "release"
+            }
+        }
     }
 }
 
@@ -118,6 +157,9 @@ function Show-SystemInfo {
     Write-Host ("    {0,-22} {1}" -f "User home:",    $env:USERPROFILE)
     Write-Host ("    {0,-22} {1}" -f "Rust / cargo:", $script:RustVer)
     Write-Host ("    {0,-22} {1}" -f "Install to:",   $CargoBin)
+    if ($script:ReleaseAvailable) {
+        Write-Host ("    {0,-22} {1}" -f "gh CLI:", "authenticated v")
+    }
 }
 
 function Show-Plan {
@@ -125,34 +167,49 @@ function Show-Plan {
     Write-Host ""
     $step = 1
 
-    if ($script:DoSshCheck) {
-        Write-Host ("    {0}. SSH check              Verify GitHub SSH access" -f $step)
-        $step++
+    if ($script:InstallMethod -eq "release") {
+        Write-Host "    Method:  Download binary from GitHub release  (fast)" -ForegroundColor White
+        Write-Host ("    Target:  " + $script:ReleaseTarget) -ForegroundColor DarkGray
+        Write-Host ""
+        if ($script:DoInstallTester) {
+            Write-Host ("    {0}. Download networker-tester    gh release download (latest)" -f $step)
+            $step++
+        }
+        if ($script:DoInstallEndpoint) {
+            Write-Host ("    {0}. Download networker-endpoint  gh release download (latest)" -f $step)
+            $step++
+        }
+        Write-Host ""
+        Write-Dim "Repository:  $RepoGh  (latest release)"
     } else {
-        Write-Host "    -. SSH check              (skipped)" -ForegroundColor DarkGray
+        Write-Host "    Method:  Compile from source  (~5-10 min)" -ForegroundColor White
+        Write-Host ""
+        if ($script:DoSshCheck) {
+            Write-Host ("    {0}. SSH check              Verify GitHub SSH access" -f $step)
+            $step++
+        } else {
+            Write-Host "    -. SSH check              (skipped)" -ForegroundColor DarkGray
+        }
+        if ($script:DoRustInstall) {
+            Write-Host ("    {0}. Install Rust           Download rustup-init.exe from win.rustup.rs" -f $step)
+            $step++
+        } elseif (-not $script:RustExists) {
+            Write-Host "    -. Install Rust            (skipped -- -SkipRust)" -ForegroundColor DarkGray
+        } else {
+            Write-Host ("    -. Install Rust            (skip -- already installed: {0})" -f $script:RustVer) -ForegroundColor DarkGray
+        }
+        if ($script:DoInstallTester) {
+            Write-Host ("    {0}. Install networker-tester    cargo install from private Git repo" -f $step)
+            $step++
+        }
+        if ($script:DoInstallEndpoint) {
+            Write-Host ("    {0}. Install networker-endpoint  cargo install from private Git repo" -f $step)
+            $step++
+        }
+        Write-Host ""
+        Write-Dim "Repository:  $RepoSsh"
+        Write-Dim "Source code is compiled locally -- no pre-built binaries are downloaded."
     }
-
-    if ($script:DoRustInstall) {
-        Write-Host ("    {0}. Install Rust           Download rustup-init.exe from win.rustup.rs" -f $step)
-        $step++
-    } elseif (-not $script:RustExists) {
-        Write-Host "    -. Install Rust            (skipped -- -SkipRust)" -ForegroundColor DarkGray
-    } else {
-        Write-Host ("    -. Install Rust            (skip -- already installed: {0})" -f $script:RustVer) -ForegroundColor DarkGray
-    }
-
-    if ($script:DoInstallTester) {
-        Write-Host ("    {0}. Install networker-tester    cargo install from private Git repo" -f $step)
-        $step++
-    }
-    if ($script:DoInstallEndpoint) {
-        Write-Host ("    {0}. Install networker-endpoint  cargo install from private Git repo" -f $step)
-        $step++
-    }
-
-    Write-Host ""
-    Write-Dim "Repository:  $RepoSsh"
-    Write-Dim "Source code is compiled locally -- no pre-built binaries are downloaded."
 }
 
 # ── Main interactive prompt ────────────────────────────────────────────────────
@@ -203,23 +260,35 @@ function Invoke-CustomizeFlow {
     Write-Section "Customize Installation"
     Write-Host ""
 
-    # SSH check
-    $script:DoSshCheck = Invoke-AskYN "Run SSH connectivity check for GitHub?" "y"
-
-    # Rust install – only relevant when Rust is not already present
-    if (-not $script:RustExists) {
+    if ($script:ReleaseAvailable) {
+        Write-Host "  Install method:"
+        Write-Host "    1) Download binary from latest release  (fast, recommended)"
+        Write-Host "    2) Compile from source  (requires SSH key + Rust)"
         Write-Host ""
-        $script:DoRustInstall = Invoke-AskYN "Install Rust via rustup (win.rustup.rs)?" "y"
-        if (-not $script:DoRustInstall) {
-            Write-Host ""
-            Write-Warn "Rust is not installed -- cargo must be on PATH before proceeding."
-            Write-Host "  Install manually: https://rustup.rs"
-            Write-Host "  Then re-run this script with -SkipRust"
+        $methodAns = Read-Host "  Choice [1]"
+        if ([string]::IsNullOrWhiteSpace($methodAns)) { $methodAns = "1" }
+        switch ($methodAns.Trim()) {
+            "2"     { $script:InstallMethod = "source"  }
+            default { $script:InstallMethod = "release" }
         }
+        Write-Host ""
     }
 
-    # Component selection
-    Write-Host ""
+    if ($script:InstallMethod -eq "source") {
+        $script:DoSshCheck = Invoke-AskYN "Run SSH connectivity check for GitHub?" "y"
+        if (-not $script:RustExists) {
+            Write-Host ""
+            $script:DoRustInstall = Invoke-AskYN "Install Rust via rustup (win.rustup.rs)?" "y"
+            if (-not $script:DoRustInstall) {
+                Write-Host ""
+                Write-Warn "Rust is not installed -- cargo must be on PATH before proceeding."
+                Write-Host "  Install manually: https://rustup.rs"
+                Write-Host "  Then re-run this script with -SkipRust"
+            }
+        }
+        Write-Host ""
+    }
+
     Write-Host "  Which components do you want to install?"
     Write-Host ""
     Write-Host "    1) Both  (networker-tester + networker-endpoint)  [default]"
@@ -235,7 +304,6 @@ function Invoke-CustomizeFlow {
         default { $script:DoInstallTester = $true; $script:DoInstallEndpoint = $true }
     }
 
-    # Show revised plan and confirm
     Write-Host ""
     Show-Plan
     Write-Host ""
@@ -247,12 +315,49 @@ function Invoke-CustomizeFlow {
     }
 }
 
-# ── Step execution helpers ─────────────────────────────────────────────────────
+# ── Step helpers ───────────────────────────────────────────────────────────────
 function Invoke-NextStep ($title) {
     $script:StepNum++
     Write-StepHeader $script:StepNum $title
 }
 
+# ── Release-mode steps ─────────────────────────────────────────────────────────
+function Invoke-DownloadReleaseStep ($binary) {
+    Invoke-NextStep "Download $binary"
+    $archive = "$binary-$($script:ReleaseTarget).zip"
+    Write-Info "Fetching $archive from latest GitHub release..."
+
+    $tmpDir = Join-Path $env:TEMP ("nw-install-" + [System.IO.Path]::GetRandomFileName())
+    New-Item -ItemType Directory -Force $tmpDir | Out-Null
+
+    $prevErr = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    & gh release download --repo $RepoGh --latest `
+        --pattern $archive --dir $tmpDir --clobber
+    $ok = ($LASTEXITCODE -eq 0)
+    $ErrorActionPreference = $prevErr
+
+    if (-not $ok) {
+        Write-Host ""
+        Write-Err "gh release download failed."
+        Write-Host "  Expected asset: $archive"
+        Write-Host "  Check releases: gh release list --repo $RepoGh"
+        Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+        exit 1
+    }
+
+    New-Item -ItemType Directory -Force $CargoBin | Out-Null
+    Expand-Archive -Path "$tmpDir\$archive" -DestinationPath $CargoBin -Force
+    Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+
+    $installedCmd  = Get-Command $binary -ErrorAction SilentlyContinue
+    $installedPath = if ($installedCmd) { $installedCmd.Source } else { "$CargoBin\$binary.exe" }
+    $installedVer  = if ($installedCmd) { (& $binary --version 2>&1) } else { "unknown" }
+    Write-Host ""
+    Write-Ok "$binary installed -> $installedPath  ($installedVer)"
+}
+
+# ── Source-mode steps ──────────────────────────────────────────────────────────
 function Invoke-SshStep {
     Invoke-NextStep "Verify GitHub SSH access"
 
@@ -266,9 +371,6 @@ function Invoke-SshStep {
     }
 
     Write-Info "Connecting to git@github.com..."
-
-    # ssh -T always exits 1 on GitHub (by design). Lower $ErrorActionPreference so
-    # PS 5.1 does not throw NativeCommandError on the non-zero exit code.
     $prevErr = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     $sshOutput = & $sshExe -o BatchMode=yes -o StrictHostKeyChecking=accept-new `
@@ -290,30 +392,23 @@ function Invoke-SshStep {
 function Invoke-RustInstallStep {
     Invoke-NextStep "Install Rust via rustup"
 
-    # Choose the correct rustup-init URL for this architecture
-    $arch       = $env:PROCESSOR_ARCHITECTURE
-    $rustupUrl  = if ($arch -eq "ARM64") { "https://win.rustup.rs/aarch64" } else { "https://win.rustup.rs/x86_64" }
-    $rustupExe  = Join-Path $env:TEMP "rustup-init.exe"
+    $arch      = $env:PROCESSOR_ARCHITECTURE
+    $rustupUrl = if ($arch -eq "ARM64") { "https://win.rustup.rs/aarch64" } else { "https://win.rustup.rs/x86_64" }
+    $rustupExe = Join-Path $env:TEMP "rustup-init.exe"
 
     Write-Info "Downloading rustup from $rustupUrl ..."
     Invoke-WebRequest -Uri $rustupUrl -OutFile $rustupExe -UseBasicParsing
     & $rustupExe -y --no-modify-path
     Remove-Item $rustupExe -Force -ErrorAction SilentlyContinue
 
-    # Add cargo bin to PATH for this session
-    if ($env:PATH -notlike "*$CargoBin*") {
-        $env:PATH = "$CargoBin;$env:PATH"
-    }
-
+    if ($env:PATH -notlike "*$CargoBin*") { $env:PATH = "$CargoBin;$env:PATH" }
     $script:RustVer = (& rustc --version 2>&1)
     Write-Ok ("Rust installed: " + $script:RustVer)
 }
 
 function Invoke-EnsureCargoEnv {
     if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
-        if ($env:PATH -notlike "*$CargoBin*") {
-            $env:PATH = "$CargoBin;$env:PATH"
-        }
+        if ($env:PATH -notlike "*$CargoBin*") { $env:PATH = "$CargoBin;$env:PATH" }
     }
     if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
         Write-Err "cargo not found -- cannot install binaries."
@@ -328,10 +423,6 @@ function Invoke-CargoInstallStep ($binary) {
     Write-Dim "This compiles from the private Git repo and may take a few minutes."
     Write-Host ""
 
-    # CARGO_NET_GIT_FETCH_WITH_CLI=true makes cargo delegate git operations to
-    # the system git binary rather than libgit2, which reliably picks up the
-    # SSH agent on Windows.
-    # --force rebuilds unconditionally even when cargo's SHA cache is current.
     $env:CARGO_NET_GIT_FETCH_WITH_CLI = "true"
     & cargo install --git $RepoSsh $binary --locked --force
     $env:CARGO_NET_GIT_FETCH_WITH_CLI = $null
@@ -351,15 +442,14 @@ function Show-Completion {
     Write-Host ("=" * 58) -ForegroundColor Green
     Write-Host ""
 
-    # PATH notice
     if ($env:PATH -notlike "*$CargoBin*") {
         Write-Warn "$CargoBin is not in PATH for this session."
         Write-Host ""
-        Write-Host "  Run now (activates for this terminal session):"
+        Write-Host "  Run now:"
         Write-Host ('    $env:PATH = "' + $CargoBin + ';$env:PATH"')
         Write-Host ""
         Write-Host "  Make permanent (User scope):"
-        Write-Host ('    [Environment]::SetEnvironmentVariable("PATH", "' + $CargoBin + ';$env:PATH", "User")')
+        Write-Host ('    [Environment]::SetEnvironmentVariable("PATH","' + $CargoBin + ';$env:PATH","User")')
         Write-Host ""
     }
 
@@ -369,7 +459,6 @@ function Show-Completion {
         Write-Host "    networker-tester --target http://localhost:8080/health --modes http1 --runs 3"
         Write-Host ""
     }
-
     if ($script:DoInstallEndpoint) {
         Write-Host "  networker-endpoint quick start:" -ForegroundColor White
         Write-Host "    networker-endpoint"
@@ -381,7 +470,6 @@ function Show-Completion {
 # ── Entry point ────────────────────────────────────────────────────────────────
 if ($Help) { Show-Help; exit 0 }
 
-# Validate -Component (when piped through iex the ValidateSet is not enforced)
 if ($Component -notin @("tester", "endpoint", "both")) {
     Write-Err "Invalid -Component value '$Component'. Use: tester, endpoint, or both."
     exit 1
@@ -394,10 +482,16 @@ Show-SystemInfo
 Show-Plan
 Invoke-MainPrompt
 
-if ($script:DoSshCheck)    { Invoke-SshStep }
-if ($script:DoRustInstall) { Invoke-RustInstallStep }
-Invoke-EnsureCargoEnv
-if ($script:DoInstallTester)   { Invoke-CargoInstallStep "networker-tester" }
-if ($script:DoInstallEndpoint) { Invoke-CargoInstallStep "networker-endpoint" }
+if ($script:InstallMethod -eq "release") {
+    New-Item -ItemType Directory -Force $CargoBin | Out-Null
+    if ($script:DoInstallTester)   { Invoke-DownloadReleaseStep "networker-tester" }
+    if ($script:DoInstallEndpoint) { Invoke-DownloadReleaseStep "networker-endpoint" }
+} else {
+    if ($script:DoSshCheck)        { Invoke-SshStep }
+    if ($script:DoRustInstall)     { Invoke-RustInstallStep }
+    Invoke-EnsureCargoEnv
+    if ($script:DoInstallTester)   { Invoke-CargoInstallStep "networker-tester" }
+    if ($script:DoInstallEndpoint) { Invoke-CargoInstallStep "networker-endpoint" }
+}
 
 Show-Completion

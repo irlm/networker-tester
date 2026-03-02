@@ -2,11 +2,13 @@ name: Release
 
 # Triggered by pushing a version tag, e.g.:
 #
-#   git tag v0.11.0 <merge-commit>
-#   git push origin v0.11.0
+#   git tag v0.12.11 <merge-commit>
+#   git push origin v0.12.11
 #
-# The workflow extracts the matching section from CHANGELOG.md and creates
-# a GitHub release with it as the release body.
+# The workflow:
+#   1. Builds native binaries for Linux x64, macOS x64, macOS ARM64, Windows x64.
+#   2. Extracts the matching CHANGELOG section for the release notes.
+#   3. Creates a GitHub release with the notes and the compiled binary archives.
 
 on:
   push:
@@ -14,15 +16,114 @@ on:
       - 'v[0-9]*.[0-9]*.[0-9]*'
 
 permissions:
-  contents: write   # required to create releases
+  contents: write   # required to create releases and upload assets
 
 jobs:
+  # ── Build binaries for each supported platform ─────────────────────────────
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target:  x86_64-unknown-linux-gnu
+            os:      ubuntu-latest
+            ext:     ""
+            archive: tar.gz
+
+          - target:  x86_64-apple-darwin
+            os:      macos-13          # last Intel macOS runner
+            ext:     ""
+            archive: tar.gz
+
+          - target:  aarch64-apple-darwin
+            os:      macos-latest      # Apple Silicon (arm64)
+            ext:     ""
+            archive: tar.gz
+
+          - target:  x86_64-pc-windows-msvc
+            os:      windows-latest
+            ext:     ".exe"
+            archive: zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: release-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: release-${{ matrix.target }}-
+
+      - name: Build binaries
+        run: >
+          cargo build --release --locked
+          --target ${{ matrix.target }}
+          -p networker-tester -p networker-endpoint
+
+      # ── Package (Unix: .tar.gz) ──────────────────────────────────────────
+      - name: Package (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          TARGET="${{ matrix.target }}"
+          SRC="target/${TARGET}/release"
+          mkdir -p dist
+
+          tar czf "dist/networker-tester-${TARGET}.tar.gz" \
+              -C "${SRC}" "networker-tester"
+          tar czf "dist/networker-endpoint-${TARGET}.tar.gz" \
+              -C "${SRC}" "networker-endpoint"
+
+      # ── Package (Windows: .zip) ──────────────────────────────────────────
+      - name: Package (zip)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $target = "${{ matrix.target }}"
+          $src    = "target\$target\release"
+          New-Item -ItemType Directory -Force dist | Out-Null
+
+          Compress-Archive `
+              -Path "$src\networker-tester.exe" `
+              -DestinationPath "dist\networker-tester-$target.zip" `
+              -Force
+          Compress-Archive `
+              -Path "$src\networker-endpoint.exe" `
+              -DestinationPath "dist\networker-endpoint-$target.zip" `
+              -Force
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.target }}
+          path: dist/
+
+  # ── Create GitHub release and attach all binary archives ─────────────────
   release:
     name: Create GitHub Release
+    needs: build
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist/
 
       # Extract the release notes for this version from CHANGELOG.md.
       # Matches the section header "## [X.Y.Z]" and captures everything
@@ -49,6 +150,7 @@ jobs:
         run: |
           gh release create "${{ github.ref_name }}" \
             --title "${{ github.ref_name }}" \
-            --notes "${{ steps.notes.outputs.notes }}"
+            --notes "${{ steps.notes.outputs.notes }}" \
+            dist/*
         env:
           GH_TOKEN: ${{ github.token }}
