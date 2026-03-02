@@ -43,8 +43,12 @@ if (-not $sshExe) {
     exit 1
 }
 
+# ssh -T git@github.com always exits with code 1 (GitHub design); lower
+# $ErrorActionPreference so PS 5.1 doesn't throw NativeCommandError on it.
+$ErrorActionPreference = "Continue"
 $sshOutput = & $sshExe -o BatchMode=yes -o StrictHostKeyChecking=accept-new `
                         -o ConnectTimeout=10 -T git@github.com 2>&1
+$ErrorActionPreference = "Stop"
 if ($sshOutput -notmatch "successfully authenticated") {
     Write-Host ""
     Write-Host "  SSH authentication to GitHub failed." -ForegroundColor Red
