@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.33] – 2026-03-02 — pageload/browser as all-3 shortcuts; pageload1 alias; script version sync
+
+### Changed
+- **`pageload` mode** now expands to `pageload1 + pageload2 + pageload3` automatically —
+  a single `--modes pageload` runs all three HTTP versions for a full comparison
+- **`browser` mode** now expands to `browser1 + browser2 + browser3` automatically —
+  a single `--modes browser` runs all three forced-protocol variants
+- Deduplication: if a mode appears multiple times after expansion it is only run once
+- `SCRIPT_VERSION` in `install.sh` and `install.ps1` now always matches the binary
+  workspace version (previously drifted; was 0.12.25/0.12.24, now 0.12.33)
+
+### Added
+- **`pageload1`** mode — explicit alias for the HTTP/1.1 pageload probe (equivalent to
+  the old `pageload` single-mode behaviour); consistent with `pageload2` / `pageload3`
+
+---
+
 ## [0.12.32] – 2026-03-02 — Add browser1/browser2/browser3 forced-protocol probe modes
 
 ### Added

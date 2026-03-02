@@ -22,7 +22,10 @@ pub struct Cli {
     // ── Modes ─────────────────────────────────────────────────────────────────
     /// Comma-separated probe modes:
     /// tcp,http1,http2,http3,udp,download,upload,webdownload,webupload,udpdownload,udpupload,
-    /// dns,tls,native,curl,pageload,pageload2,pageload3,browser,browser1,browser2,browser3.
+    /// dns,tls,native,curl,pageload,pageload1,pageload2,pageload3,browser,browser1,browser2,browser3.
+    /// pageload: shorthand that runs pageload1+pageload2+pageload3 (all three HTTP versions).
+    /// pageload1: HTTP/1.1 page-load (same as the original pageload single-version mode).
+    /// browser: shorthand that runs browser1+browser2+browser3 (all three HTTP versions).
     /// native: DNS + TCP + platform TLS (SChannel/SecureTransport/OpenSSL) + HTTP/1.1.
     ///   Requires --features native at compile time.
     /// curl: DNS + TCP + TLS + HTTP via the system curl binary.
@@ -340,10 +343,34 @@ impl ResolvedConfig {
     }
 
     pub fn parsed_modes(&self) -> Vec<crate::metrics::Protocol> {
-        use std::str::FromStr;
+        use crate::metrics::Protocol;
+
+        // Aggregate shorthand modes:
+        //   "pageload"  → [pageload H1.1, pageload2 H2, pageload3 H3]
+        //   "pageload1" → [pageload H1.1]  (explicit H1.1 alias)
+        //   "browser"   → [browser1 H1.1, browser2 H2, browser3 H3]
+        let expand = |s: &str| -> Vec<Protocol> {
+            match s.to_lowercase().as_str() {
+                "pageload" => {
+                    vec![Protocol::PageLoad, Protocol::PageLoad2, Protocol::PageLoad3]
+                }
+                "pageload1" => vec![Protocol::PageLoad],
+                "browser" => {
+                    vec![Protocol::Browser1, Protocol::Browser2, Protocol::Browser3]
+                }
+                other => match other.parse::<Protocol>() {
+                    Ok(p) => vec![p],
+                    Err(_) => vec![],
+                },
+            }
+        };
+
+        // Expand and deduplicate while preserving order.
+        let mut seen = std::collections::HashSet::new();
         self.modes
             .iter()
-            .filter_map(|m| crate::metrics::Protocol::from_str(m).ok())
+            .flat_map(|m| expand(m))
+            .filter(|p| seen.insert(p.clone()))
             .collect()
     }
 
