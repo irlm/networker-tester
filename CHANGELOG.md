@@ -11,6 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.15] – 2026-03-02 — Detect missing build tools before cargo install
+
+### Added
+- **`install.ps1`**: detects Visual C++ Build Tools via `vswhere.exe` before
+  attempting `cargo install`; if absent and `winget` is available, auto-offers
+  `winget install Microsoft.VisualStudio.2022.BuildTools` (~2-3 GB, VC++ workload);
+  after install, sources `vcvars64.bat` so `link.exe` is on PATH for the current
+  session without reopening the terminal
+- **`install.ps1`**: VC++ build tools status shown in System Information table
+  (`installed ✓` or `not installed`)
+- **`install.ps1`**: customize flow lets user toggle the VC++ install step; shows
+  the exact `winget` command to run manually if user opts out
+- **`install.ps1`**: pre-flight warning in cargo install step if MSVC still absent —
+  prints the exact `winget` one-liner to fix it
+- **`install.sh`**: pre-flight check in `step_cargo_install` warns when no C linker
+  (`cc`/`gcc`/`clang`) is found and prints the correct install command
+  (`xcode-select --install` on macOS; `build-essential`/`gcc`/`base-devel` on Linux)
+
+---
+
 ## [0.12.14] – 2026-03-02 — Optional git installation in both installers
 
 ### Added

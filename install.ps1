@@ -30,7 +30,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$ScriptVersion = "0.12.14"
+$ScriptVersion = "0.12.15"
 $RepoSsh       = "ssh://git@github.com/irlm/networker-tester"
 $RepoGh        = "irlm/networker-tester"
 $CargoBin      = Join-Path $env:USERPROFILE ".cargo\bin"
@@ -98,6 +98,8 @@ $script:RustVer           = "not installed"
 $script:GitAvailable      = $false
 $script:WingetAvailable   = $false
 $script:DoGitInstall      = $false
+$script:MsvcAvailable     = $true
+$script:DoMsvcInstall     = $false
 $script:SysOs             = ""
 $script:SysArch           = ""
 $script:StepNum           = 0
@@ -127,10 +129,22 @@ function Invoke-DiscoverSystem {
     if (-not $script:RustExists -and -not $SkipRust) { $script:DoRustInstall = $true }
     if ($SkipSshCheck) { $script:DoSshCheck = $false }
 
-    # Git detection
-    $script:GitAvailable = $null -ne (Get-Command git -ErrorAction SilentlyContinue)
-    if (-not $script:GitAvailable) {
-        $script:WingetAvailable = $null -ne (Get-Command winget -ErrorAction SilentlyContinue)
+    # Git + winget detection (winget checked regardless of git status)
+    $script:GitAvailable    = $null -ne (Get-Command git    -ErrorAction SilentlyContinue)
+    $script:WingetAvailable = $null -ne (Get-Command winget -ErrorAction SilentlyContinue)
+
+    # MSVC C++ Build Tools detection (required by Rust's default msvc target)
+    # vswhere.exe is the authoritative way to query Visual Studio installations.
+    $vswhereExe = Join-Path ([System.Environment]::GetFolderPath('ProgramFilesX86')) `
+                             "Microsoft Visual Studio\Installer\vswhere.exe"
+    if (Test-Path $vswhereExe) {
+        $vsPath = & $vswhereExe -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath 2>&1
+        $script:MsvcAvailable = -not [string]::IsNullOrWhiteSpace($vsPath)
+    } else {
+        # vswhere absent → VS not installed; check for link.exe on PATH as fallback
+        $script:MsvcAvailable = $null -ne (Get-Command link -ErrorAction SilentlyContinue)
     }
 
     switch ($Component) {
@@ -160,6 +174,11 @@ function Invoke-DiscoverSystem {
     if ($script:InstallMethod -eq "source" -and -not $script:GitAvailable -and $script:WingetAvailable) {
         $script:DoGitInstall = $true
     }
+
+    # Auto-offer MSVC install only in source mode
+    if ($script:InstallMethod -eq "source" -and -not $script:MsvcAvailable -and $script:WingetAvailable) {
+        $script:DoMsvcInstall = $true
+    }
 }
 
 # ── Display helpers ────────────────────────────────────────────────────────────
@@ -175,6 +194,11 @@ function Show-SystemInfo {
         Write-Host ("    {0,-22} {1}" -f "git:", $gitVer)
     } else {
         Write-Host ("    {0,-22} {1}" -f "git:", "not installed")
+    }
+    if ($script:MsvcAvailable) {
+        Write-Host ("    {0,-22} {1}" -f "VC++ build tools:", "installed v")
+    } else {
+        Write-Host ("    {0,-22} {1}" -f "VC++ build tools:", "not installed")
     }
     Write-Host ("    {0,-22} {1}" -f "Install to:",   $CargoBin)
     if ($script:ReleaseAvailable) {
@@ -229,6 +253,16 @@ function Show-Plan {
             Write-Host "    -. Install Rust            (skipped -- -SkipRust)" -ForegroundColor DarkGray
         } else {
             Write-Host ("    -. Install Rust            (skip -- already installed: {0})" -f $script:RustVer) -ForegroundColor DarkGray
+        }
+        if (-not $script:MsvcAvailable) {
+            if ($script:DoMsvcInstall) {
+                Write-Host ("    {0}. Install VC++ Build Tools  winget install  (~2-3 GB, 5-15 min)" -f $step)
+                $step++
+            } elseif ($script:WingetAvailable) {
+                Write-Host "    -. Install VC++ Build Tools  (skip -- toggle in Customize)" -ForegroundColor DarkGray
+            } else {
+                Write-Host "    -. Install VC++ Build Tools  (not installed -- https://aka.ms/vs/buildtools)" -ForegroundColor DarkGray
+            }
         }
         if ($script:DoInstallTester) {
             Write-Host ("    {0}. Install networker-tester    cargo install from private Git repo" -f $step)
@@ -326,6 +360,26 @@ function Invoke-CustomizeFlow {
             Write-Host ""
         }
 
+        # MSVC Build Tools offer (only when absent in source mode)
+        if (-not $script:MsvcAvailable) {
+            if ($script:WingetAvailable) {
+                Write-Host ""
+                $script:DoMsvcInstall = Invoke-AskYN "VC++ Build Tools not found -- install via winget? (~2-3 GB)" "y"
+                if (-not $script:DoMsvcInstall) {
+                    Write-Host ""
+                    Write-Warn "Skipping -- cargo will fail with 'linker not found' without MSVC tools."
+                    Write-Host "  Install manually from: https://aka.ms/vs/buildtools"
+                    Write-Host "  Select 'Desktop development with C++' workload, then re-run."
+                }
+            } else {
+                Write-Host ""
+                Write-Warn "VC++ Build Tools are not installed (winget not found to auto-install)."
+                Write-Host "  Install from: https://aka.ms/vs/buildtools"
+                Write-Host "  Select 'Desktop development with C++' workload, then re-run."
+            }
+            Write-Host ""
+        }
+
         $script:DoSshCheck = Invoke-AskYN "Run SSH connectivity check for GitHub?" "y"
         if (-not $script:RustExists) {
             Write-Host ""
@@ -409,6 +463,57 @@ function Invoke-DownloadReleaseStep ($binary) {
 }
 
 # ── Source-mode steps ──────────────────────────────────────────────────────────
+function Invoke-MsvcInstallStep {
+    Invoke-NextStep "Install Visual C++ Build Tools"
+    Write-Info "Installing MSVC build tools via winget..."
+    Write-Dim "Includes the C++ linker (link.exe) required to compile Rust on Windows."
+    Write-Dim "Download: ~2-3 GB  |  Estimated time: 5-15 minutes."
+    Write-Host ""
+
+    $prevErr = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    & winget install --id Microsoft.VisualStudio.2022.BuildTools -e --source winget `
+        --accept-package-agreements --accept-source-agreements `
+        --override "--quiet --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+    $exitCode = $LASTEXITCODE
+    $ErrorActionPreference = $prevErr
+
+    if ($exitCode -ne 0) {
+        Write-Host ""
+        Write-Err "winget install failed (exit code $exitCode)."
+        Write-Host "  Install manually from: https://aka.ms/vs/buildtools"
+        Write-Host "  Select the 'Desktop development with C++' workload, then re-run."
+        exit 1
+    }
+
+    # Source vcvars64.bat so the MSVC toolchain is available in this session
+    $vswhereExe = Join-Path ([System.Environment]::GetFolderPath('ProgramFilesX86')) `
+                             "Microsoft Visual Studio\Installer\vswhere.exe"
+    if (Test-Path $vswhereExe) {
+        $vsPath = (& $vswhereExe -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath 2>&1).Trim()
+        if ($vsPath) {
+            $vcvars = Join-Path $vsPath "VC\Auxiliary\Build\vcvars64.bat"
+            if (Test-Path $vcvars) {
+                Write-Info "Loading MSVC environment (vcvars64.bat)..."
+                # Invoke vcvars inside cmd.exe and capture resulting env vars
+                $envOutput = cmd.exe /c "`"$vcvars`" > NUL 2>&1 && set" 2>&1
+                foreach ($line in $envOutput) {
+                    if ($line -match "^([^=]+)=(.+)$") {
+                        [System.Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], "Process")
+                    }
+                }
+                $script:MsvcAvailable = $true
+                Write-Ok "VC++ Build Tools installed and loaded for this session"
+                return
+            }
+        }
+    }
+    Write-Warn "Build Tools installed -- PATH changes take effect after reopening your terminal."
+    Write-Warn "If cargo still fails, close this window and re-run the installer."
+}
+
 function Invoke-GitInstallStep {
     Invoke-NextStep "Install git"
     Write-Info "Installing git via winget..."
@@ -508,7 +613,18 @@ function Invoke-CargoInstallStep ($binary) {
     Invoke-NextStep "Install $binary"
     Write-Info "Building and installing $binary from source..."
     Write-Dim "This compiles from the private Git repo and may take a few minutes."
-    Write-Host ""
+
+    # Pre-flight: warn if MSVC linker is still absent (user skipped install or no winget)
+    if (-not $script:MsvcAvailable) {
+        Write-Host ""
+        Write-Warn "VC++ Build Tools not detected -- cargo will likely fail with 'linker not found'."
+        Write-Host "  To install now, run:"
+        Write-Host "    winget install --id Microsoft.VisualStudio.2022.BuildTools -e --override `"--quiet --add Microsoft.VisualStudio.Workload.VCTools`""
+        Write-Host "  Then re-run this installer."
+        Write-Host ""
+    } else {
+        Write-Host ""
+    }
 
     # CARGO_NET_GIT_FETCH_WITH_CLI=true delegates git operations to the system
     # git binary rather than libgit2, which reliably picks up the SSH agent.
@@ -596,6 +712,7 @@ if ($script:InstallMethod -eq "release") {
     if ($script:DoInstallTester)   { Invoke-DownloadReleaseStep "networker-tester" }
     if ($script:DoInstallEndpoint) { Invoke-DownloadReleaseStep "networker-endpoint" }
 } else {
+    if ($script:DoMsvcInstall)     { Invoke-MsvcInstallStep }
     if ($script:DoGitInstall)      { Invoke-GitInstallStep }
     if ($script:DoSshCheck)        { Invoke-SshStep }
     if ($script:DoRustInstall)     { Invoke-RustInstallStep }
