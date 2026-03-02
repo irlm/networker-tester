@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.13] – 2026-03-02 — Fix Windows source-mode install when git is absent
+
+### Fixed
+- **`install.ps1`**: `CARGO_NET_GIT_FETCH_WITH_CLI=true` is now only set when
+  `git.exe` is found on PATH. Previously, setting it unconditionally caused
+  `cargo install` to fail with "program not found" on machines that have SSH
+  (and Rust) but not Git for Windows. Without the flag, cargo falls back to its
+  built-in libgit2, which reads SSH keys from `%USERPROFILE%\.ssh\` directly.
+- **`install.ps1`**: `cargo install` exit code is now checked; a non-zero exit
+  immediately prints a clear error (with a Git-for-Windows hint if git was absent)
+  and exits — previously the installer reported success even when cargo failed.
+
+---
+
 ## [0.12.12] – 2026-03-02 — Binary release downloads + cross-compile CI
 
 ### Added

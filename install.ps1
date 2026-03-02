@@ -30,7 +30,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$ScriptVersion = "0.12.12"
+$ScriptVersion = "0.12.13"
 $RepoSsh       = "ssh://git@github.com/irlm/networker-tester"
 $RepoGh        = "irlm/networker-tester"
 $CargoBin      = Join-Path $env:USERPROFILE ".cargo\bin"
@@ -423,9 +423,31 @@ function Invoke-CargoInstallStep ($binary) {
     Write-Dim "This compiles from the private Git repo and may take a few minutes."
     Write-Host ""
 
-    $env:CARGO_NET_GIT_FETCH_WITH_CLI = "true"
+    # CARGO_NET_GIT_FETCH_WITH_CLI=true delegates git operations to the system
+    # git binary rather than libgit2, which reliably picks up the SSH agent.
+    # Only set it when git.exe is actually on PATH; if git is absent, cargo falls
+    # back to its built-in libgit2 (which reads keys from %USERPROFILE%\.ssh\).
+    $gitAvailable = $null -ne (Get-Command git -ErrorAction SilentlyContinue)
+    if ($gitAvailable) { $env:CARGO_NET_GIT_FETCH_WITH_CLI = "true" }
+
+    $prevErr = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
     & cargo install --git $RepoSsh $binary --locked --force
-    $env:CARGO_NET_GIT_FETCH_WITH_CLI = $null
+    $exitCode = $LASTEXITCODE
+    $ErrorActionPreference = $prevErr
+
+    if ($gitAvailable) { $env:CARGO_NET_GIT_FETCH_WITH_CLI = $null }
+
+    if ($exitCode -ne 0) {
+        Write-Host ""
+        Write-Err "cargo install failed (exit code $exitCode)."
+        if (-not $gitAvailable) {
+            Write-Host "  git.exe was not found -- cargo used built-in libgit2 for SSH."
+            Write-Host "  If the error is SSH-related, install Git for Windows and retry:"
+            Write-Host "    https://git-scm.com/"
+        }
+        exit 1
+    }
 
     $installedCmd  = Get-Command $binary -ErrorAction SilentlyContinue
     $installedPath = if ($installedCmd) { $installedCmd.Source } else { "$CargoBin\$binary.exe" }
