@@ -72,6 +72,21 @@ jobs:
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
+
+    services:
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          SA_PASSWORD: "NetworkerTest1!"
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P NetworkerTest1! -C -Q 'SELECT 1'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v4
 
@@ -93,14 +108,32 @@ jobs:
           key: ubuntu-coverage-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ubuntu-coverage-cargo-
 
+      - name: Install sqlcmd
+        run: |
+          curl -sSL https://packages.microsoft.com/keys/microsoft.asc | sudo tee /etc/apt/trusted.gpg.d/microsoft.asc
+          sudo add-apt-repository "$(curl -sSL https://packages.microsoft.com/config/ubuntu/22.04/prod.list)"
+          sudo apt-get update && sudo apt-get install -y mssql-tools18 unixodbc-dev
+
+      - name: Create database schema
+        run: |
+          /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "NetworkerTest1!" -C \
+            -i sql/01_CreateDatabase.sql
+          /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "NetworkerTest1!" -C \
+            -i sql/02_StoredProcedures.sql
+
       # Run lib tests + in-process integration tests under coverage.
       # --all-features ensures http3 and native feature-gated paths are included.
       # --no-report accumulates raw profiles; the final `report` step merges them.
       # Integration tests are serialised (--test-threads=1) because each spawns
       # its own endpoint on random ports.
+      # --include-ignored runs #[ignore] tests that have their own env-var guards
+      # (SQL, DNS, curl) — they self-skip when the service is unavailable.
       - name: Collect coverage (lib tests)
         run: |
-          cargo llvm-cov --no-report --workspace --all-features --lib
+          cargo llvm-cov --no-report --workspace --all-features --lib \
+            -- --include-ignored
+        env:
+          NETWORKER_SQL_CONN: "Server=localhost;Database=NetworkDiagnostics;User Id=sa;Password=NetworkerTest1!;TrustServerCertificate=true"
 
       - name: Collect coverage (integration tests)
         run: |
@@ -108,13 +141,19 @@ jobs:
             --test integration -- --test-threads=1
 
       - name: Generate lcov report
-        run: cargo llvm-cov report --lcov --output-path lcov.info
+        run: |
+          cargo llvm-cov report --lcov --output-path lcov.info \
+            --ignore-filename-regex 'main\.rs'
 
       - name: Print coverage summary
-        run: cargo llvm-cov report --summary-only
+        run: |
+          cargo llvm-cov report --summary-only \
+            --ignore-filename-regex 'main\.rs'
 
       - name: Generate HTML report
-        run: cargo llvm-cov report --html --output-dir coverage-html
+        run: |
+          cargo llvm-cov report --html --output-dir coverage-html \
+            --ignore-filename-regex 'main\.rs'
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v4

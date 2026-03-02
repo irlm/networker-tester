@@ -656,6 +656,9 @@ fn format_bytes(n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::metrics::*;
+    use chrono::Utc;
+    use uuid::Uuid;
 
     #[test]
     fn format_bytes_values() {
@@ -665,5 +668,281 @@ mod tests {
         assert_eq!(format_bytes(65536), "64.0 KiB");
         assert_eq!(format_bytes(1 << 20), "1.0 MiB");
         assert_eq!(format_bytes(1 << 30), "1.0 GiB");
+    }
+
+    /// Build a TestRun that touches every sheet: HTTP, TCP, TLS, UDP, throughput,
+    /// UDP throughput, server timing, page-load, and errors.
+    fn make_full_run() -> TestRun {
+        let run_id = Uuid::new_v4();
+        let now = Utc::now();
+
+        let http_attempt = RequestAttempt {
+            attempt_id: Uuid::new_v4(),
+            run_id,
+            protocol: Protocol::Http1,
+            sequence_num: 0,
+            started_at: now,
+            finished_at: Some(now),
+            success: true,
+            dns: Some(DnsResult {
+                query_name: "localhost".into(),
+                resolved_ips: vec!["127.0.0.1".into()],
+                duration_ms: 0.5,
+                started_at: now,
+                success: true,
+            }),
+            tcp: Some(TcpResult {
+                local_addr: Some("127.0.0.1:54321".into()),
+                remote_addr: "127.0.0.1:8080".into(),
+                connect_duration_ms: 1.2,
+                attempt_count: 1,
+                started_at: now,
+                success: true,
+                mss_bytes: Some(1460),
+                rtt_estimate_ms: Some(0.3),
+                retransmits: Some(0),
+                total_retrans: Some(0),
+                snd_cwnd: Some(10),
+                snd_ssthresh: None,
+                rtt_variance_ms: Some(0.05),
+                rcv_space: Some(65536),
+                segs_out: Some(5),
+                segs_in: Some(4),
+                congestion_algorithm: Some("cubic".into()),
+                delivery_rate_bps: Some(1_000_000),
+                min_rtt_ms: Some(0.2),
+            }),
+            tls: Some(TlsResult {
+                protocol_version: "TLSv1.3".into(),
+                cipher_suite: "TLS_AES_256_GCM_SHA384".into(),
+                alpn_negotiated: Some("http/1.1".into()),
+                cert_subject: Some("CN=localhost".into()),
+                cert_issuer: Some("CN=Test CA".into()),
+                cert_expiry: Some(now),
+                handshake_duration_ms: 4.2,
+                started_at: now,
+                success: true,
+                cert_chain: vec![CertEntry {
+                    subject: "CN=localhost".into(),
+                    issuer: "CN=Test CA".into(),
+                    expiry: Some(now),
+                    sans: vec!["localhost".into()],
+                }],
+                tls_backend: Some("rustls".into()),
+            }),
+            http: Some(HttpResult {
+                negotiated_version: "HTTP/1.1".into(),
+                status_code: 200,
+                headers_size_bytes: 120,
+                body_size_bytes: 42,
+                ttfb_ms: 3.1,
+                total_duration_ms: 8.4,
+                redirect_count: 0,
+                started_at: now,
+                response_headers: vec![("content-type".into(), "application/json".into())],
+                payload_bytes: 65536,
+                throughput_mbps: Some(105.2),
+                goodput_mbps: Some(98.1),
+                cpu_time_ms: Some(1.4),
+                csw_voluntary: Some(3),
+                csw_involuntary: Some(0),
+            }),
+            udp: None,
+            error: None,
+            retry_count: 0,
+            server_timing: Some(ServerTimingResult {
+                request_id: Some("req-1".into()),
+                server_timestamp: Some(now),
+                clock_skew_ms: Some(0.5),
+                recv_body_ms: None,
+                processing_ms: Some(2.1),
+                total_server_ms: Some(2.3),
+                server_version: Some("0.11.3".into()),
+                srv_csw_voluntary: Some(1),
+                srv_csw_involuntary: Some(0),
+            }),
+            udp_throughput: None,
+            page_load: None,
+        };
+
+        let udp_attempt = RequestAttempt {
+            attempt_id: Uuid::new_v4(),
+            run_id,
+            protocol: Protocol::Udp,
+            sequence_num: 1,
+            started_at: now,
+            finished_at: Some(now),
+            success: true,
+            dns: None,
+            tcp: None,
+            tls: None,
+            http: None,
+            udp: Some(UdpResult {
+                remote_addr: "127.0.0.1:9999".into(),
+                probe_count: 10,
+                success_count: 10,
+                loss_percent: 0.0,
+                rtt_min_ms: 0.1,
+                rtt_avg_ms: 0.2,
+                rtt_p95_ms: 0.3,
+                jitter_ms: 0.05,
+                started_at: now,
+                probe_rtts_ms: vec![Some(0.2); 10],
+            }),
+            error: None,
+            retry_count: 0,
+            server_timing: None,
+            udp_throughput: None,
+            page_load: None,
+        };
+
+        let udp_throughput_attempt = RequestAttempt {
+            attempt_id: Uuid::new_v4(),
+            run_id,
+            protocol: Protocol::UdpDownload,
+            sequence_num: 2,
+            started_at: now,
+            finished_at: Some(now),
+            success: true,
+            dns: None,
+            tcp: None,
+            tls: None,
+            http: None,
+            udp: None,
+            error: None,
+            retry_count: 0,
+            server_timing: None,
+            udp_throughput: Some(UdpThroughputResult {
+                remote_addr: "127.0.0.1:9998".into(),
+                payload_bytes: 1_048_576,
+                datagrams_sent: 800,
+                datagrams_received: 798,
+                bytes_acked: Some(1_048_576),
+                loss_percent: 0.25,
+                transfer_ms: 85.0,
+                throughput_mbps: Some(98.6),
+                started_at: now,
+            }),
+            page_load: None,
+        };
+
+        let pageload_attempt = RequestAttempt {
+            attempt_id: Uuid::new_v4(),
+            run_id,
+            protocol: Protocol::PageLoad,
+            sequence_num: 3,
+            started_at: now,
+            finished_at: Some(now),
+            success: true,
+            dns: None,
+            tcp: None,
+            tls: None,
+            http: None,
+            udp: None,
+            error: None,
+            retry_count: 0,
+            server_timing: None,
+            udp_throughput: None,
+            page_load: Some(PageLoadResult {
+                asset_count: 20,
+                assets_fetched: 20,
+                total_bytes: 204_800,
+                total_ms: 120.5,
+                ttfb_ms: 5.2,
+                connections_opened: 6,
+                asset_timings_ms: vec![10.0; 20],
+                started_at: now,
+                tls_setup_ms: 24.0,
+                tls_overhead_ratio: 0.19,
+                per_connection_tls_ms: vec![4.0; 6],
+                cpu_time_ms: Some(8.3),
+            }),
+        };
+
+        let error_attempt = RequestAttempt {
+            attempt_id: Uuid::new_v4(),
+            run_id,
+            protocol: Protocol::Http1,
+            sequence_num: 4,
+            started_at: now,
+            finished_at: Some(now),
+            success: false,
+            dns: None,
+            tcp: None,
+            tls: None,
+            http: None,
+            udp: None,
+            error: Some(ErrorRecord {
+                category: ErrorCategory::Tcp,
+                message: "Connection refused".into(),
+                detail: Some("os error 111".into()),
+                occurred_at: now,
+            }),
+            retry_count: 1,
+            server_timing: None,
+            udp_throughput: None,
+            page_load: None,
+        };
+
+        TestRun {
+            run_id,
+            started_at: now,
+            finished_at: Some(now),
+            target_url: "http://localhost:8080/health".into(),
+            target_host: "localhost".into(),
+            modes: vec![
+                "http1".into(),
+                "udp".into(),
+                "udpdownload".into(),
+                "pageload".into(),
+            ],
+            total_runs: 5,
+            concurrency: 1,
+            timeout_ms: 5000,
+            client_os: "linux".into(),
+            client_version: "0.11.3".into(),
+            attempts: vec![
+                http_attempt,
+                udp_attempt,
+                udp_throughput_attempt,
+                pageload_attempt,
+                error_attempt,
+            ],
+        }
+    }
+
+    #[test]
+    fn save_writes_xlsx_file() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let run = make_full_run();
+        save(&run, tmp.path()).unwrap();
+        // File must be non-empty (valid xlsx is at least a few KB)
+        let metadata = std::fs::metadata(tmp.path()).unwrap();
+        assert!(
+            metadata.len() > 1024,
+            "xlsx file too small: {} bytes",
+            metadata.len()
+        );
+    }
+
+    #[test]
+    fn save_empty_run_does_not_panic() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let run_id = Uuid::new_v4();
+        let run = TestRun {
+            run_id,
+            started_at: Utc::now(),
+            finished_at: None,
+            target_url: "http://localhost/health".into(),
+            target_host: "localhost".into(),
+            modes: vec![],
+            total_runs: 0,
+            concurrency: 1,
+            timeout_ms: 5000,
+            client_os: "test".into(),
+            client_version: "0.0.0".into(),
+            attempts: vec![],
+        };
+        save(&run, tmp.path()).unwrap();
     }
 }
