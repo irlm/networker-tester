@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.16] – 2026-03-02 — Fix MSVC install: wait for background VS installation
+
+### Fixed
+- **`install.ps1`**: the VS bootstrapper winget downloads (~4 MB) launches the real
+  ~2 GB installation as a background process; the previous version called `.Trim()`
+  on `$null` (vswhere output before VS had registered) causing a script crash
+- **`install.ps1`**: added `--wait` to the VS installer override so it blocks until
+  fully complete; added a polling loop (15 s intervals, 15 min timeout) as a
+  belt-and-suspenders fallback in case `--wait` is insufficient
+- **`install.ps1`**: all `vswhere` output is cast via `[string]` before null/whitespace
+  checks so the script never crashes on empty output
+- **`install.ps1`**: wrapped `vcvars64.bat` environment loading in `try/catch`; on
+  failure, shows a clear "reopen terminal and re-run" message instead of crashing
+
+---
+
 ## [0.12.15] – 2026-03-02 — Detect missing build tools before cargo install
 
 ### Added
