@@ -93,18 +93,23 @@ pub fn find_chrome() -> Option<PathBuf> {
 // URL rewriting helper
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Rewrite the base URL to the `/page` endpoint (same as `pageload*` probes).
+/// Rewrite the base URL to the `/browser-page` endpoint.
 ///
-/// Adds `assets=N&size=S` query params derived from the provided asset sizes.
-/// If `asset_sizes` is empty, uses defaults matching the endpoint's defaults.
+/// `/browser-page` returns an actual HTML page with `<img>` tags so that Chrome
+/// fetches each asset via real network requests and the `load` event fires after
+/// all assets have settled.  (`/page` returns a JSON manifest used by the
+/// synthetic pageload probes — a real browser would just display it as text.)
+///
+/// Adds `assets=N&bytes=S` query params derived from the provided asset sizes.
+/// If `asset_sizes` is empty the endpoint uses its own defaults (20 assets, 10 KiB).
 pub fn build_page_url(base: &url::Url, asset_sizes: &[usize]) -> String {
     let mut target = base.clone();
-    target.set_path("/page");
+    target.set_path("/browser-page");
 
     if !asset_sizes.is_empty() {
         let n = asset_sizes.len();
-        let size = asset_sizes[0];
-        target.set_query(Some(&format!("assets={n}&size={size}")));
+        let bytes = asset_sizes[0];
+        target.set_query(Some(&format!("assets={n}&bytes={bytes}")));
     }
 
     target.to_string()
@@ -576,16 +581,16 @@ mod tests {
     fn build_page_url_with_assets() {
         let base = url::Url::parse("https://host:8443/health").unwrap();
         let url = build_page_url(&base, &[10240, 10240, 10240]);
-        assert!(url.contains("/page"), "should rewrite to /page");
+        assert!(url.contains("/browser-page"), "should rewrite to /browser-page");
         assert!(url.contains("assets=3"), "should include assets count");
-        assert!(url.contains("size=10240"), "should include asset size");
+        assert!(url.contains("bytes=10240"), "should include asset size as bytes=");
     }
 
     #[test]
     fn build_page_url_no_assets() {
         let base = url::Url::parse("http://localhost:8080/health").unwrap();
         let url = build_page_url(&base, &[]);
-        assert!(url.contains("/page"), "should rewrite to /page");
+        assert!(url.contains("/browser-page"), "should rewrite to /browser-page");
         assert!(!url.contains("assets="), "should not add empty query");
     }
 
@@ -594,7 +599,7 @@ mod tests {
         let base = url::Url::parse("https://myhost.example.com:9443/some/path").unwrap();
         let url = build_page_url(&base, &[1024]);
         assert!(
-            url.starts_with("https://myhost.example.com:9443/page"),
+            url.starts_with("https://myhost.example.com:9443/browser-page"),
             "url={url}"
         );
     }
@@ -603,9 +608,12 @@ mod tests {
     fn build_page_url_http_scheme_preserved() {
         let base = url::Url::parse("http://127.0.0.1:8080/health").unwrap();
         let url = build_page_url(&base, &[512, 512]);
-        assert!(url.starts_with("http://127.0.0.1:8080/page"), "url={url}");
+        assert!(
+            url.starts_with("http://127.0.0.1:8080/browser-page"),
+            "url={url}"
+        );
         assert!(url.contains("assets=2"));
-        assert!(url.contains("size=512"));
+        assert!(url.contains("bytes=512"));
     }
 
     #[test]

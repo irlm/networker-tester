@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.22] – 2026-03-02 — Fix browser probe: add `/browser-page` HTML endpoint
+
+### Fixed
+- **`networker-endpoint` `/browser-page` route** (HTTP/1.1, HTTP/2, HTTP/3): new endpoint
+  returns a real HTML page with `<img>` tags for each asset; the browser's `load` event
+  fires only after all image requests settle, giving accurate end-to-end page load timing
+- **`runner/browser.rs` `build_page_url()`**: previously pointed to `/page` which returns
+  a JSON manifest — a real browser displays the JSON as text and never fetches the listed
+  assets (`res=2 bytes=178`); now points to `/browser-page`
+- **`build_page_url()`**: fixed query param name `size=` → `bytes=` to match the endpoint's
+  `PageParams` struct (was silently ignored, defaulting to 10 KiB regardless)
+
+---
+
 ## [0.12.21] – 2026-03-02 — Fix browser probe Chrome detection on Windows
 
 ### Fixed

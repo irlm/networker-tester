@@ -6,7 +6,8 @@
 ///   GET  /health            – liveness probe
 ///   GET  /download?bytes=N  – N-byte response + Server-Timing
 ///   POST /upload            – drain body + Server-Timing
-///   GET  /page?assets=N&bytes=B – page-load manifest
+///   GET  /page?assets=N&bytes=B         – page-load JSON manifest (for synthetic probes)
+///   GET  /browser-page?assets=N&bytes=B – HTML page with img tags (for real browser probe)
 ///   GET  /asset?bytes=B     – B-byte asset body
 ///
 /// All responses include the standard `X-Networker-Server-Timestamp` and
@@ -144,6 +145,7 @@ pub mod server {
                 handle_upload(req_id, &mut stream).await;
             }
             ("GET", "/page") => handle_page(&query, &mut stream).await,
+            ("GET", "/browser-page") => handle_browser_page(&query, &mut stream).await,
             ("GET", "/asset") => handle_asset(&query, &mut stream).await,
             _ => handle_not_found(&mut stream).await,
         }
@@ -272,6 +274,42 @@ pub mod server {
         }
         if let Err(e) = stream.send_data(Bytes::from(body)).await {
             debug!("upload send_data: {e}");
+            return;
+        }
+        let _ = stream.finish().await;
+    }
+
+    async fn handle_browser_page<T: h3::quic::BidiStream<Bytes>>(
+        query: &str,
+        stream: &mut h3::server::RequestStream<T, Bytes>,
+    ) {
+        let n = parse_query_usize(query, "assets").unwrap_or(20).min(500);
+        let b = parse_query_usize(query, "bytes").unwrap_or(10_240);
+
+        let mut html = String::from(
+            "<!DOCTYPE html>\n\
+             <html><head><title>Networker Page Load Test</title></head>\n\
+             <body>\n",
+        );
+        for i in 0..n {
+            html.push_str(&format!(
+                "<img src=\"/asset?id={i}&bytes={b}\" width=\"1\" height=\"1\" alt=\"\">\n"
+            ));
+        }
+        html.push_str("</body></html>\n");
+
+        let resp = Response::builder()
+            .status(200)
+            .header("content-type", "text/html; charset=utf-8")
+            .header("content-length", html.len().to_string())
+            .body(())
+            .unwrap();
+        if let Err(e) = stream.send_response(resp).await {
+            debug!("browser-page send_response: {e}");
+            return;
+        }
+        if let Err(e) = stream.send_data(Bytes::from(html)).await {
+            debug!("browser-page send_data: {e}");
             return;
         }
         let _ = stream.finish().await;
