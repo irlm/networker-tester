@@ -25,7 +25,7 @@ set -euo pipefail
 
 REPO_SSH="ssh://git@github.com/irlm/networker-tester"
 REPO_GH="irlm/networker-tester"
-SCRIPT_VERSION="0.12.14"
+SCRIPT_VERSION="0.12.15"
 INSTALL_DIR="${HOME}/.cargo/bin"
 
 # ── Colours (ANSI C quoting; safe even when stdin is a curl pipe) ─────────────
@@ -625,6 +625,29 @@ step_cargo_install() {
     next_step "Install $binary"
     print_info "Building and installing $binary from source…"
     print_dim "This compiles from the private Git repo and may take a few minutes."
+
+    # Pre-flight: warn if no C linker is available (cargo needs cc/gcc/clang to link)
+    if ! command -v cc &>/dev/null && ! command -v gcc &>/dev/null && ! command -v clang &>/dev/null; then
+        echo ""
+        print_warn "No C linker found (cc/gcc/clang) — cargo will likely fail."
+        case "$SYS_OS" in
+            Darwin)
+                echo "  Install Xcode Command Line Tools:"
+                echo "    xcode-select --install"
+                ;;
+            Linux)
+                case "$PKG_MGR" in
+                    apt-get) echo "  sudo apt-get install -y build-essential" ;;
+                    dnf)     echo "  sudo dnf install -y gcc gcc-c++ make" ;;
+                    pacman)  echo "  sudo pacman -S --noconfirm base-devel" ;;
+                    zypper)  echo "  sudo zypper install -y gcc make" ;;
+                    apk)     echo "  sudo apk add build-base" ;;
+                    *)       echo "  Install gcc or clang via your package manager." ;;
+                esac
+                ;;
+        esac
+        echo "  Then re-run this installer."
+    fi
     echo ""
 
     # CARGO_NET_GIT_FETCH_WITH_CLI=true delegates git operations to the system
