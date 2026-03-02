@@ -25,7 +25,7 @@ set -euo pipefail
 
 REPO_SSH="ssh://git@github.com/irlm/networker-tester"
 REPO_GH="irlm/networker-tester"
-SCRIPT_VERSION="0.12.15"
+SCRIPT_VERSION="0.12.19"
 INSTALL_DIR="${HOME}/.cargo/bin"
 
 # ── Colours (ANSI C quoting; safe even when stdin is a curl pipe) ─────────────
@@ -115,6 +115,9 @@ RUST_EXISTS=0
 GIT_AVAILABLE=0
 PKG_MGR=""
 DO_GIT_INSTALL=0
+CHROME_AVAILABLE=0
+CHROME_PATH=""
+DO_CHROME_INSTALL=0
 SYS_OS=""
 SYS_ARCH=""
 SYS_SHELL=""
@@ -174,6 +177,28 @@ detect_pkg_manager() {
             fi
             ;;
     esac
+}
+
+# ── Chrome/Chromium detection ─────────────────────────────────────────────────
+# Returns the path of the Chrome/Chromium binary, or empty string if not found.
+detect_chrome() {
+    # 1. Explicit env override
+    if [[ -n "${NETWORKER_CHROME_PATH:-}" && -x "${NETWORKER_CHROME_PATH}" ]]; then
+        echo "$NETWORKER_CHROME_PATH"; return
+    fi
+    # 2. macOS standard locations
+    local mac_paths=(
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        "/Applications/Chromium.app/Contents/MacOS/Chromium"
+    )
+    for p in "${mac_paths[@]}"; do
+        [[ -x "$p" ]] && echo "$p" && return
+    done
+    # 3. Linux / PATH-visible names
+    local cmd
+    for cmd in google-chrome google-chrome-stable chromium-browser chromium; do
+        if command -v "$cmd" &>/dev/null; then command -v "$cmd"; return; fi
+    done
 }
 
 # ── Target triple detection ───────────────────────────────────────────────────
@@ -240,6 +265,18 @@ discover_system() {
     if [[ "$INSTALL_METHOD" == "source" && $GIT_AVAILABLE -eq 0 && -n "$PKG_MGR" ]]; then
         DO_GIT_INSTALL=1
     fi
+
+    # Chrome detection (affects --features browser in source mode)
+    CHROME_PATH="$(detect_chrome)"
+    if [[ -n "$CHROME_PATH" ]]; then
+        CHROME_AVAILABLE=1
+    else
+        CHROME_AVAILABLE=0
+        # Auto-offer Chrome install only in source mode when a pkg manager is available
+        if [[ "$INSTALL_METHOD" == "source" && -n "$PKG_MGR" ]]; then
+            DO_CHROME_INSTALL=1
+        fi
+    fi
 }
 
 display_system_info() {
@@ -254,6 +291,11 @@ display_system_info() {
         printf "    %-22s %s\n" "git:" "$(git --version 2>/dev/null)"
     else
         printf "    %-22s %s\n" "git:" "not installed"
+    fi
+    if [[ $CHROME_AVAILABLE -eq 1 ]]; then
+        printf "    %-22s %s\n" "Chrome/Chromium:" "installed ✓"
+    else
+        printf "    %-22s %s\n" "Chrome/Chromium:" "not installed  (browser probe disabled)"
     fi
     printf "    %-22s %s\n" "Install to:"   "${INSTALL_DIR}/"
 
@@ -298,6 +340,17 @@ display_plan() {
             fi
         fi
 
+        if [[ $CHROME_AVAILABLE -eq 0 ]]; then
+            if [[ $DO_CHROME_INSTALL -eq 1 ]]; then
+                printf "    %s. ${BOLD}Install Chrome${RESET}         Install via %s (browser probe)\n" "$step" "$PKG_MGR"
+                step=$((step + 1))
+            elif [[ -n "$PKG_MGR" ]]; then
+                printf "    ${DIM}-. Install Chrome         (skip – toggle in Customize; browser probe disabled)${RESET}\n"
+            else
+                printf "    ${DIM}-. Install Chrome         (not installed – https://www.google.com/chrome/)${RESET}\n"
+            fi
+        fi
+
         if [[ $DO_SSH_CHECK -eq 1 ]]; then
             printf "    %s. ${BOLD}SSH check${RESET}              Verify GitHub SSH access\n" "$step"
             step=$((step + 1))
@@ -314,8 +367,12 @@ display_plan() {
             printf "    ${DIM}-. Install Rust            (skip – already installed: %s)${RESET}\n" "$RUST_VER"
         fi
 
+        local browser_note=""
+        if [[ $CHROME_AVAILABLE -eq 1 || $DO_CHROME_INSTALL -eq 1 ]]; then
+            browser_note="  ${DIM}[+browser feature]${RESET}"
+        fi
         if [[ $DO_INSTALL_TESTER -eq 1 ]]; then
-            printf "    %s. ${BOLD}Install networker-tester${RESET}   cargo install from private Git repo\n" "$step"
+            printf "    %s. ${BOLD}Install networker-tester${RESET}   cargo install from private Git repo%s\n" "$step" "$browser_note"
             step=$((step + 1))
         fi
         if [[ $DO_INSTALL_ENDPOINT -eq 1 ]]; then
@@ -429,6 +486,24 @@ customize_flow() {
             else
                 print_warn "git is not installed."
                 echo "  Install git from https://git-scm.com/ then re-run this script."
+            fi
+            echo ""
+        fi
+
+        # Chrome install (only offered when Chrome is absent)
+        if [[ $CHROME_AVAILABLE -eq 0 ]]; then
+            if [[ -n "$PKG_MGR" ]]; then
+                if ask_yn "Chrome/Chromium not found — install it to enable the browser probe?" "y"; then
+                    DO_CHROME_INSTALL=1
+                else
+                    DO_CHROME_INSTALL=0
+                    echo ""
+                    print_warn "Skipping Chrome — networker-tester will be compiled without the browser probe."
+                    print_warn "To enable later: install Chrome then re-run this installer."
+                fi
+            else
+                print_warn "Chrome/Chromium is not installed."
+                echo "  Install from https://www.google.com/chrome/ then re-run."
             fi
             echo ""
         fi
@@ -589,6 +664,44 @@ step_install_git() {
     fi
 }
 
+step_install_chrome() {
+    next_step "Install Chrome/Chromium (browser probe)"
+    print_info "Installing Chromium via ${PKG_MGR}…"
+    echo ""
+
+    case "$PKG_MGR" in
+        brew)
+            brew install --cask google-chrome 2>/dev/null \
+                || brew install chromium
+            ;;
+        apt-get)
+            sudo apt-get update -qq \
+                && (sudo apt-get install -y chromium-browser 2>/dev/null \
+                    || sudo apt-get install -y chromium)
+            ;;
+        dnf)    sudo dnf install -y chromium ;;
+        pacman) sudo pacman -S --noconfirm chromium ;;
+        zypper) sudo zypper install -y chromium ;;
+        apk)    sudo apk add chromium ;;
+        *)
+            print_warn "Unknown package manager: $PKG_MGR"
+            print_warn "Install Chrome manually from: https://www.google.com/chrome/"
+            return
+            ;;
+    esac
+
+    # Re-detect after install
+    CHROME_PATH="$(detect_chrome)"
+    if [[ -n "$CHROME_PATH" ]]; then
+        CHROME_AVAILABLE=1
+        print_ok "Chrome/Chromium ready: $CHROME_PATH"
+    else
+        print_warn "Chrome/Chromium installed but not yet detectable in standard paths."
+        print_warn "browser probe will be compiled in; set NETWORKER_CHROME_PATH if needed."
+        CHROME_AVAILABLE=1  # Compile with feature; user can set path at runtime
+    fi
+}
+
 step_install_rust() {
     next_step "Install Rust via rustup"
     print_info "Downloading rustup from https://sh.rustup.rs …"
@@ -654,12 +767,19 @@ step_cargo_install() {
     # git binary (rather than libgit2), reliably picking up the SSH agent.
     # Only set when git is on PATH; otherwise cargo uses its built-in libgit2.
     # --force rebuilds unconditionally even when cargo's SHA cache is current.
+    # --features browser is added only when Chrome/Chromium is available.
     # </dev/null prevents cargo reading the curl pipe for interactive prompts.
+    local features_arg=""
+    if [[ $CHROME_AVAILABLE -eq 1 ]]; then
+        features_arg="--features browser"
+        print_info "Chrome detected — compiling with browser probe support."
+    fi
+
     if command -v git &>/dev/null; then
         CARGO_NET_GIT_FETCH_WITH_CLI=true \
-            cargo install --git "$REPO_SSH" "$binary" --locked --force </dev/null
+            cargo install --git "$REPO_SSH" "$binary" --locked --force $features_arg </dev/null
     else
-        cargo install --git "$REPO_SSH" "$binary" --locked --force </dev/null
+        cargo install --git "$REPO_SSH" "$binary" --locked --force $features_arg </dev/null
     fi
 
     local installed_ver
@@ -722,6 +842,9 @@ main() {
             step_download_release "networker-endpoint"
         fi
     else
+        if [[ $DO_CHROME_INSTALL -eq 1 ]]; then
+            step_install_chrome
+        fi
         if [[ $DO_GIT_INSTALL -eq 1 ]]; then
             step_install_git
         fi

@@ -69,6 +69,7 @@ jobs:
         run: >
           cargo build --release --locked
           --target ${{ matrix.target }}
+          --features browser
           -p networker-tester -p networker-endpoint
 
       # ── Package (Unix: .tar.gz) ──────────────────────────────────────────
