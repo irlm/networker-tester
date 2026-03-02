@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.28] – 2026-03-02 — Fix browser probe when running as root (sudo)
+
+### Fixed
+- **`runner/browser.rs`**: browser probe failed with
+  `Running as root without --no-sandbox is not supported` when
+  `networker-tester` was invoked via `sudo`
+- Root cause: snap Chromium tries to create `/run/user/0` (XDG runtime dir
+  for root) which doesn't exist; this caused the snap wrapper to fail before
+  Chrome could read the `--no-sandbox` flag
+- Set `XDG_RUNTIME_DIR=/tmp` at launch time when the variable is not already
+  set (Unix only); this allows the snap setup to proceed
+- Added `--disable-setuid-sandbox` alongside `--no-sandbox` for belt-and-braces
+  compatibility with Chrome's setuid sandbox check when running as root
+
+---
+
 ## [0.12.27] – 2026-03-02 — Sync Cargo workspace version to match CHANGELOG/tag version
 
 ### Changed

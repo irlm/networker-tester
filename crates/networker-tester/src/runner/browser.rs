@@ -162,10 +162,22 @@ mod real {
         tracing::debug!(url = %page_url, "Browser probe target URL");
 
         // 3. Launch browser
+        //
+        // When running as root (e.g. via sudo), XDG_RUNTIME_DIR may not exist
+        // (/run/user/0 is not created automatically).  The snap Chromium wrapper
+        // tries to mkdir that path and fails, then Chrome itself exits before
+        // the WebSocket URL is resolved.  Setting XDG_RUNTIME_DIR=/tmp lets the
+        // snap setup proceed and Chrome accept --no-sandbox.
+        #[cfg(unix)]
+        if std::env::var("XDG_RUNTIME_DIR").is_err() {
+            std::env::set_var("XDG_RUNTIME_DIR", "/tmp");
+        }
+
         let browser_config = match BrowserConfig::builder()
             .chrome_executable(chrome_path)
             .arg("--headless=new")
             .arg("--no-sandbox")
+            .arg("--disable-setuid-sandbox")
             .arg("--disable-gpu")
             .arg("--ignore-certificate-errors")
             .arg("--disable-dev-shm-usage")
