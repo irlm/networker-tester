@@ -19,7 +19,11 @@ use networker_tester::runner::http::{run_probe, RunConfig};
 use networker_tester::runner::pageload::run_pageload3_probe;
 use networker_tester::runner::pageload::{run_pageload2_probe, run_pageload_probe, PageLoadConfig};
 use networker_tester::runner::throughput::{
-    run_download_probe, run_upload_probe, ThroughputConfig,
+    run_download_probe, run_upload_probe, run_webdownload_probe, run_webupload_probe,
+    ThroughputConfig,
+};
+use networker_tester::runner::udp_throughput::{
+    run_udpdownload_probe, run_udpupload_probe, UdpThroughputConfig,
 };
 use networker_tester::runner::udp::{run_udp_probe, UdpProbeConfig};
 use uuid::Uuid;
@@ -46,6 +50,7 @@ struct Endpoint {
     pub http_port: u16,
     pub https_port: u16,
     pub udp_port: u16,
+    pub udp_throughput_port: u16,
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
@@ -56,6 +61,7 @@ impl Endpoint {
         let http_port = free_port();
         let https_port = free_port();
         let udp_port = free_port();
+        let udp_throughput_port = free_port();
 
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
 
@@ -63,7 +69,7 @@ impl Endpoint {
             http_port,
             https_port,
             udp_port,
-            udp_throughput_port: free_port(),
+            udp_throughput_port,
         };
 
         tokio::spawn(async move {
@@ -132,10 +138,41 @@ impl Endpoint {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
 
+        // Wait for the UDP throughput (NWKT) server to bind.
+        // Same probe as the QUIC readiness check: send a byte, classify the result.
+        //   ConnectionRefused → ICMP Port Unreachable → not bound yet, retry.
+        //   timeout           → packet absorbed (no ICMP) → server is listening.
+        //   Ok(data)          → server responded → definitely ready.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            let sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            sock.connect(format!("127.0.0.1:{udp_throughput_port}"))
+                .await
+                .unwrap();
+            let _ = sock.send(&[0u8]).await;
+            let mut buf = [0u8; 64];
+            match tokio::time::timeout(
+                std::time::Duration::from_millis(100),
+                sock.recv(&mut buf),
+            )
+            .await
+            {
+                Err(_timeout) => break,
+                Ok(Ok(_)) => break,
+                Ok(Err(e)) if e.kind() == std::io::ErrorKind::ConnectionRefused => {}
+                Ok(Err(_)) => break,
+            }
+            if std::time::Instant::now() >= deadline {
+                panic!("UDP throughput server did not bind on port {udp_throughput_port} within 3 seconds");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
         Endpoint {
             http_port,
             https_port,
             udp_port,
+            udp_throughput_port,
             shutdown: Some(tx),
         }
     }
@@ -555,4 +592,139 @@ async fn upload_probe_reports_throughput() {
         .throughput_mbps
         .expect("throughput_mbps should be Some for a successful upload");
     assert!(mbps > 0.0, "throughput should be positive, got {mbps}");
+}
+
+/// GET `/download?bytes=65536` using the `webdownload` protocol label.
+/// Identical URL construction to `download` — differs only in the protocol
+/// recorded on the attempt (enables side-by-side comparison in reports).
+#[tokio::test]
+async fn webdownload_probe_reports_throughput() {
+    let ep = Endpoint::start().await;
+    let cfg = ThroughputConfig {
+        run_cfg: RunConfig {
+            dns_enabled: false,
+            timeout_ms: 10_000,
+            insecure: false,
+            ..Default::default()
+        },
+        base_url: ep.http_url("/health"),
+    };
+
+    let attempt = run_webdownload_probe(Uuid::new_v4(), 0, 65_536, &cfg).await;
+
+    assert!(
+        attempt.success,
+        "webdownload probe failed: {:?}",
+        attempt.error
+    );
+    assert_eq!(attempt.protocol, Protocol::WebDownload);
+
+    let http = attempt.http.expect("http result missing");
+    assert_eq!(http.payload_bytes, 65_536);
+    assert_eq!(http.status_code, 200);
+    assert!(
+        http.throughput_mbps.unwrap_or(0.0) > 0.0,
+        "throughput should be positive"
+    );
+}
+
+/// POST a 64 KiB body using the `webupload` protocol label.
+/// Same upload mechanics as `upload` — protocol label differs for report comparison.
+#[tokio::test]
+async fn webupload_probe_reports_throughput() {
+    let ep = Endpoint::start().await;
+    let cfg = ThroughputConfig {
+        run_cfg: RunConfig {
+            dns_enabled: false,
+            timeout_ms: 10_000,
+            insecure: false,
+            ..Default::default()
+        },
+        base_url: ep.http_url("/health"),
+    };
+
+    let attempt = run_webupload_probe(Uuid::new_v4(), 0, 65_536, &cfg).await;
+
+    assert!(
+        attempt.success,
+        "webupload probe failed: {:?}",
+        attempt.error
+    );
+    assert_eq!(attempt.protocol, Protocol::WebUpload);
+
+    let http = attempt.http.expect("http result missing");
+    assert_eq!(http.payload_bytes, 65_536);
+    assert_eq!(http.status_code, 200);
+    assert!(
+        http.throughput_mbps.unwrap_or(0.0) > 0.0,
+        "throughput should be positive"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UDP throughput probes
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Send CMD_DOWNLOAD to the NWKT server and receive 64 KiB of datagrams.
+/// Verifies the full UDP download pipeline: handshake, data transfer, throughput.
+#[tokio::test]
+async fn udpdownload_probe_reports_throughput() {
+    let ep = Endpoint::start().await;
+    let cfg = UdpThroughputConfig {
+        target_host: "127.0.0.1".into(),
+        target_port: ep.udp_throughput_port,
+        timeout_ms: 10_000,
+    };
+
+    let attempt = run_udpdownload_probe(Uuid::new_v4(), 0, 65_536, &cfg).await;
+
+    assert!(
+        attempt.success,
+        "udpdownload probe failed: {:?}",
+        attempt.error
+    );
+    assert_eq!(attempt.protocol, Protocol::UdpDownload);
+
+    let ut = attempt.udp_throughput.expect("udp_throughput result missing");
+    assert_eq!(ut.payload_bytes, 65_536);
+    assert!(ut.datagrams_received > 0, "should have received datagrams");
+    assert!(
+        ut.throughput_mbps.unwrap_or(0.0) > 0.0,
+        "throughput should be positive"
+    );
+}
+
+/// Send CMD_UPLOAD to the NWKT server with a 64 KiB payload.
+/// Verifies CMD_REPORT bytes_acked matches the sent size and throughput is measured.
+#[tokio::test]
+async fn udpupload_probe_reports_throughput() {
+    let ep = Endpoint::start().await;
+    let cfg = UdpThroughputConfig {
+        target_host: "127.0.0.1".into(),
+        target_port: ep.udp_throughput_port,
+        timeout_ms: 10_000,
+    };
+
+    let attempt = run_udpupload_probe(Uuid::new_v4(), 0, 65_536, &cfg).await;
+
+    assert!(
+        attempt.success,
+        "udpupload probe failed: {:?}",
+        attempt.error
+    );
+    assert_eq!(attempt.protocol, Protocol::UdpUpload);
+
+    let ut = attempt.udp_throughput.expect("udp_throughput result missing");
+    assert_eq!(ut.payload_bytes, 65_536);
+    assert!(ut.datagrams_sent > 0, "should have sent datagrams");
+    // Server reports bytes_acked via CMD_REPORT
+    assert_eq!(
+        ut.bytes_acked,
+        Some(65_536),
+        "server should have acknowledged all bytes"
+    );
+    assert!(
+        ut.throughput_mbps.unwrap_or(0.0) > 0.0,
+        "throughput should be positive"
+    );
 }
