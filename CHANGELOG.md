@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.26] – 2026-03-02 — Upgrade chromiumoxide 0.7 → 0.9 to fix CDP crash on Chrome 145+
+
+### Fixed
+- **`runner/browser.rs`**: browser probe crashed with
+  `data did not match any variant of untagged enum Message` on Ubuntu 22.04
+  with Chromium 145 (snap); root cause was chromiumoxide 0.7 failing to
+  deserialize new CDP message types introduced in newer Chrome versions,
+  which killed the WebSocket handler and caused all subsequent page operations
+  to fail
+- Upgraded `chromiumoxide` dependency from `0.7` to `0.9` (latest: 0.9.1);
+  the `tokio-runtime` feature flag was removed in 0.9 (tokio is now the
+  default runtime), so the dependency entry is simplified accordingly
+
+---
+
 ## [0.12.25] – 2026-03-02 — Fix Chrome prompt skipped when git is installed
 
 ### Fixed
