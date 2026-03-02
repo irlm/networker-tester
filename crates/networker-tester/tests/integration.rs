@@ -14,7 +14,9 @@
 /// Run just this layer:
 ///   cargo test --test integration -p networker-tester
 use networker_tester::metrics::Protocol;
+use networker_tester::runner::dns::run_dns_probe;
 use networker_tester::runner::http::{run_probe, RunConfig};
+use networker_tester::runner::tls::run_tls_probe;
 #[cfg(feature = "http3")]
 use networker_tester::runner::pageload::run_pageload3_probe;
 use networker_tester::runner::pageload::{run_pageload2_probe, run_pageload_probe, PageLoadConfig};
@@ -727,4 +729,96 @@ async fn udpupload_probe_reports_throughput() {
         ut.throughput_mbps.unwrap_or(0.0) > 0.0,
         "throughput should be positive"
     );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DNS and TLS probes
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Resolve `localhost` → should return at least one IP (127.0.0.1 or ::1).
+/// Verifies the probe returns a populated DnsResult with no TCP/TLS/HTTP.
+#[tokio::test]
+async fn dns_probe_resolves_localhost() {
+    init_crypto();
+
+    let attempt = run_dns_probe(Uuid::new_v4(), 0, "localhost", false, false).await;
+
+    assert!(
+        attempt.success,
+        "DNS probe failed: {:?}",
+        attempt.error
+    );
+    assert_eq!(attempt.protocol, Protocol::Dns);
+
+    let dns = attempt.dns.expect("dns result missing");
+    assert_eq!(dns.query_name, "localhost");
+    assert!(
+        !dns.resolved_ips.is_empty(),
+        "should have resolved at least one IP"
+    );
+    assert!(dns.duration_ms >= 0.0);
+
+    // Standalone DNS probe — no TCP/TLS/HTTP phases
+    assert!(attempt.tcp.is_none(), "DNS probe should not open a TCP connection");
+    assert!(attempt.tls.is_none());
+    assert!(attempt.http.is_none());
+}
+
+/// TLS handshake against the local HTTPS endpoint.
+/// Verifies the cert chain is captured (SANs include 127.0.0.1), cipher suite
+/// and TLS version are populated, and no HTTP request is made.
+#[tokio::test]
+async fn tls_probe_captures_cert_chain() {
+    let ep = Endpoint::start().await;
+    let cfg = RunConfig {
+        dns_enabled: false,
+        timeout_ms: 5_000,
+        insecure: true, // self-signed cert
+        ..Default::default()
+    };
+
+    let url = ep.https_url("/health");
+    let attempt = run_tls_probe(Uuid::new_v4(), 0, &url, &cfg).await;
+
+    assert!(
+        attempt.success,
+        "TLS probe failed: {:?}",
+        attempt.error
+    );
+    assert_eq!(attempt.protocol, Protocol::Tls);
+
+    let tls = attempt.tls.expect("tls result missing");
+    assert!(tls.success);
+    assert!(tls.handshake_duration_ms >= 0.0);
+    assert!(
+        !tls.protocol_version.is_empty(),
+        "protocol_version should be populated"
+    );
+    assert!(
+        !tls.cipher_suite.is_empty(),
+        "cipher_suite should be populated"
+    );
+
+    // The endpoint advertises h2 + http/1.1; one should be negotiated
+    assert!(
+        tls.alpn_negotiated.is_some(),
+        "ALPN should be negotiated on HTTPS"
+    );
+
+    // Full cert chain should be captured (rcgen self-signed = 1 cert)
+    assert!(
+        !tls.cert_chain.is_empty(),
+        "cert_chain should contain at least the leaf cert"
+    );
+    let leaf = &tls.cert_chain[0];
+
+    // The endpoint cert includes 127.0.0.1 as a SAN
+    assert!(
+        leaf.sans.iter().any(|s| s == "127.0.0.1"),
+        "leaf cert SANs should include 127.0.0.1, got: {:?}",
+        leaf.sans
+    );
+
+    // Standalone TLS probe — no HTTP request
+    assert!(attempt.http.is_none(), "TLS probe should not send an HTTP request");
 }
