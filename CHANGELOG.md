@@ -11,6 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.30] – 2026-03-02 — Fix browser probe as root: launch Chrome via runuser as SUDO_USER
+
+### Fixed
+- **`runner/browser.rs`**: snap chromium's internal launcher script
+  (`chromium.launcher`) strips `--no-sandbox` when the process UID is 0,
+  causing Chrome to always exit with
+  `Running as root without --no-sandbox is not supported`
+  regardless of flags passed — previous workarounds (`XDG_RUNTIME_DIR`,
+  `--disable-setuid-sandbox`, pre-creating `/run/user/0`) could not
+  overcome this launcher-level filter
+- Fix: when running as root and `SUDO_USER` is set (i.e. invoked via
+  `sudo`), generate a temporary wrapper script that re-executes the
+  Chrome binary as the original non-root user via
+  `runuser -u <SUDO_USER> -- <chrome> "$@"`; Chrome then runs as a
+  normal user and the snap root check never triggers
+- `runuser` (util-linux) is used without a password when called by root
+  and is available on all mainstream Linux distributions
+
+---
+
 ## [0.12.29] – 2026-03-02 — Fix browser probe root/snap: pre-create /run/user/0
 
 ### Fixed
