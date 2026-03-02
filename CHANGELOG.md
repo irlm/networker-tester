@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.4] – 2026-03-02 — README: fix Windows installer examples
+
+### Fixed
+- **README.md** — Windows PowerShell section now shows self-contained one-liners for both
+  `tester` and `endpoint`: the endpoint example previously assumed the script was already
+  downloaded locally (`.\install.ps1 -Component endpoint`); replaced with an
+  `Invoke-WebRequest` + `&` pattern that downloads from the Gist URL before running.
+  Added PS 5.1 / PS 7+ compatibility note.
+
+---
+
 ## [0.12.3] – 2026-03-02 — Fix install.ps1 NativeCommandError on SSH probe
 
 ### Fixed
