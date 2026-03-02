@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.2] – 2026-03-02 — Fix Gist sync to include install.ps1
+
+### Fixed
+- **`sync-gist.yml`** — workflow only watched `install.sh` changes and only uploaded `install.sh`
+  to the Gist; `install.ps1` was never synced even when it changed. Updated path trigger and
+  payload to include both `install.sh` and `install.ps1`.
+
+---
+
 ## [0.12.1] – 2026-03-01 — Fix install.ps1 compatibility with Windows PowerShell 5.1
 
 ### Fixed
