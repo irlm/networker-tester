@@ -33,6 +33,7 @@ pub fn build_router() -> Router {
         .route("/http-version", get(http_version))
         .route("/info", get(server_info))
         .route("/page", get(page_manifest))
+        .route("/browser-page", get(browser_page))
         .route("/asset", get(asset_handler))
         // Remove axum's default 2 MiB body limit so upload probes of arbitrary
         // size are not rejected with 413 before the body is transmitted.
@@ -335,6 +336,34 @@ async fn page_manifest(Query(p): Query<PageParams>) -> impl IntoResponse {
         "asset_bytes": b,
         "assets": assets,
     }))
+}
+
+/// GET /browser-page?assets=N&bytes=B → HTML page with N `<img>` tags pointing to /asset.
+///
+/// Each img src triggers a real HTTP fetch; the browser's `load` event fires only after
+/// all images have settled (loaded or errored), making this suitable for measuring full
+/// page-load time with a real browser (chromiumoxide / CDP).
+async fn browser_page(Query(p): Query<PageParams>) -> impl IntoResponse {
+    let n = p.assets.unwrap_or(20).min(500);
+    let b = p.bytes.unwrap_or(10_240);
+
+    let mut html = String::from(
+        "<!DOCTYPE html>\n\
+         <html><head><title>Networker Page Load Test</title></head>\n\
+         <body>\n",
+    );
+    for i in 0..n {
+        html.push_str(&format!(
+            "<img src=\"/asset?id={i}&bytes={b}\" width=\"1\" height=\"1\" alt=\"\">\n"
+        ));
+    }
+    html.push_str("</body></html>\n");
+
+    Response::builder()
+        .status(200)
+        .header("content-type", "text/html; charset=utf-8")
+        .body(Body::from(html))
+        .unwrap()
 }
 
 /// GET /asset?id=X&bytes=B → B zero bytes, content-type: application/octet-stream.
