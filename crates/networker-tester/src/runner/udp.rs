@@ -155,6 +155,7 @@ pub async fn run_udp_probe(
         server_timing: None,
         udp_throughput: None,
         page_load: None,
+        browser: None,
     }
 }
 
@@ -228,6 +229,7 @@ fn udp_failed(
         server_timing: None,
         udp_throughput: None,
         page_load: None,
+        browser: None,
     }
 }
 

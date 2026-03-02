@@ -57,6 +57,7 @@ mod stub {
             server_timing: None,
             udp_throughput: None,
             page_load: None,
+            browser: None,
         }
     }
 }
@@ -370,6 +371,7 @@ mod real {
             server_timing: None,
             udp_throughput: None,
             page_load: None,
+            browser: None,
         }
     }
 
@@ -403,6 +405,7 @@ mod real {
             server_timing: None,
             udp_throughput: None,
             page_load: None,
+            browser: None,
         }
     }
 }

@@ -763,6 +763,7 @@ mod tests {
             }),
             udp_throughput: None,
             page_load: None,
+            browser: None,
         };
 
         let udp_attempt = RequestAttempt {
@@ -794,6 +795,7 @@ mod tests {
             server_timing: None,
             udp_throughput: None,
             page_load: None,
+            browser: None,
         };
 
         let udp_throughput_attempt = RequestAttempt {
@@ -824,6 +826,7 @@ mod tests {
                 started_at: now,
             }),
             page_load: None,
+            browser: None,
         };
 
         let pageload_attempt = RequestAttempt {
@@ -857,6 +860,7 @@ mod tests {
                 per_connection_tls_ms: vec![4.0; 6],
                 cpu_time_ms: Some(8.3),
             }),
+            browser: None,
         };
 
         let error_attempt = RequestAttempt {
@@ -882,6 +886,7 @@ mod tests {
             server_timing: None,
             udp_throughput: None,
             page_load: None,
+            browser: None,
         };
 
         TestRun {

@@ -2,13 +2,13 @@ use anyhow::Context;
 use chrono::Utc;
 use clap::Parser;
 use networker_tester::cli;
-use networker_tester::metrics::PageLoadResult;
 use networker_tester::metrics::{
-    attempt_payload_bytes, compute_stats, primary_metric_label, primary_metric_value, Protocol,
-    RequestAttempt, TestRun,
+    attempt_payload_bytes, compute_stats, primary_metric_label, primary_metric_value,
+    PageLoadResult, Protocol, RequestAttempt, TestRun,
 };
 use networker_tester::output::{excel, html, json, sql};
 use networker_tester::runner::{
+    browser::run_browser_probe,
     curl::run_curl_probe,
     dns::run_dns_probe,
     http::{run_probe, RunConfig},
@@ -72,15 +72,20 @@ async fn main() -> anyhow::Result<()> {
     if modes.is_empty() {
         anyhow::bail!(
             "No valid modes specified. Use: tcp,http1,http2,http3,udp,dns,tls,native,curl,\
-             download,upload,webdownload,webupload,udpdownload,udpupload,pageload,pageload2,pageload3"
+             download,upload,webdownload,webupload,udpdownload,udpupload,pageload,pageload2,\
+             pageload3,browser"
         );
     }
 
-    // ── ALPN warning for H2/H3/pageload2 over plain HTTP ─────────────────────
+    // ── ALPN warning for H2/H3/pageload2/browser over plain HTTP ─────────────
     for mode in &modes {
         if matches!(
             mode,
-            Protocol::Http2 | Protocol::Http3 | Protocol::PageLoad2 | Protocol::PageLoad3
+            Protocol::Http2
+                | Protocol::Http3
+                | Protocol::PageLoad2
+                | Protocol::PageLoad3
+                | Protocol::Browser
         ) && target.scheme() == "http"
         {
             warn!(
@@ -384,6 +389,17 @@ async fn dispatch_once(
         (Protocol::PageLoad, _) => run_pageload_probe(run_id, seq, pageload_cfg).await,
         (Protocol::PageLoad2, _) => run_pageload2_probe(run_id, seq, pageload_cfg).await,
         (Protocol::PageLoad3, _) => run_pageload3_probe(run_id, seq, pageload_cfg).await,
+        (Protocol::Browser, _) => {
+            run_browser_probe(
+                run_id,
+                seq,
+                target,
+                &pageload_cfg.asset_sizes,
+                cfg.timeout_ms,
+                cfg.insecure,
+            )
+            .await
+        }
         _ => unreachable!("Upload/WebUpload/UdpDownload/UdpUpload without payload_size"),
     }
 }
@@ -587,6 +603,28 @@ fn log_attempt(a: &networker_tester::metrics::RequestAttempt) {
                 );
             }
         }
+        Browser => {
+            if let Some(b) = &a.browser {
+                let protos = b
+                    .resource_protocols
+                    .iter()
+                    .map(|(p, n)| format!("{p}×{n}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                info!(
+                    "{status} #{seq} [browser] proto={proto} TTFB:{ttfb:.1}ms \
+                     DCL:{dcl:.1}ms Load:{load:.1}ms res={res} bytes={bytes} [{protos}]{retry}",
+                    seq = a.sequence_num,
+                    proto = b.protocol,
+                    ttfb = b.ttfb_ms,
+                    dcl = b.dom_content_loaded_ms,
+                    load = b.load_ms,
+                    res = b.resource_count,
+                    bytes = b.transferred_bytes,
+                    retry = retry_suffix,
+                );
+            }
+        }
         PageLoad | PageLoad2 | PageLoad3 => {
             if let Some(p) = &a.page_load {
                 let tls_info = if p.tls_setup_ms > 0.0 {
@@ -688,6 +726,7 @@ fn print_summary(run: &TestRun) {
         Protocol::PageLoad,
         Protocol::PageLoad2,
         Protocol::PageLoad3,
+        Protocol::Browser,
     ];
     let stat_groups: Vec<(Protocol, Option<usize>)> = ordered_protos
         .iter()
@@ -792,11 +831,11 @@ fn print_summary(run: &TestRun) {
         }
     }
 
-    // Protocol comparison table when any pageload variant is present
+    // Protocol comparison table when any pageload or browser variant is present
     let has_pageload = run.attempts.iter().any(|a| {
         matches!(
             a.protocol,
-            Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3
+            Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3 | Protocol::Browser
         )
     });
     if has_pageload {
@@ -868,6 +907,40 @@ fn print_comparison(run: &TestRun) {
         ))
     };
 
+    // Browser row (uses BrowserResult, not PageLoadResult)
+    let browser_row = |proto: &Protocol| -> Option<String> {
+        let attempts: Vec<&RequestAttempt> = run
+            .attempts
+            .iter()
+            .filter(|a| &a.protocol == proto)
+            .collect();
+        if attempts.is_empty() {
+            return None;
+        }
+        let n = attempts.len();
+        let br_results: Vec<&networker_tester::metrics::BrowserResult> =
+            attempts.iter().filter_map(|a| a.browser.as_ref()).collect();
+        if br_results.is_empty() {
+            return None;
+        }
+        let load_ms_vals: Vec<f64> = br_results.iter().map(|b| b.load_ms).collect();
+        let avg_resources: f64 = br_results
+            .iter()
+            .map(|b| b.resource_count as f64)
+            .sum::<f64>()
+            / n as f64;
+        let stats = networker_tester::metrics::compute_stats(&load_ms_vals)?;
+        Some(format!(
+            " {proto:<10} │ {n:<3} │ {res:>4.0}/—   │   —   │       —  │      —  │       —  │ {p50:>8.1}ms │ {min:>8.1}ms │ {max:>8.1}ms",
+            proto = proto,
+            n = n,
+            res = avg_resources,
+            p50 = stats.p50,
+            min = stats.min,
+            max = stats.max,
+        ))
+    };
+
     println!();
     println!(" ── Protocol Comparison (Page Load) ─────────────────────────────────────────────────────────────────────────");
     println!(" Protocol  │ N   │ Assets  │ Conns │  TLS ms  │  TLS %  │  CPU ms  │   p50    │   Min    │   Max");
@@ -876,6 +949,9 @@ fn print_comparison(run: &TestRun) {
         if let Some(r) = row(proto) {
             println!("{r}");
         }
+    }
+    if let Some(r) = browser_row(&Protocol::Browser) {
+        println!("{r}");
     }
 }
 

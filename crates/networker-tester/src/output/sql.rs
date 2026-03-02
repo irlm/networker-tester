@@ -416,6 +416,7 @@ mod tests {
             server_timing: None,
             udp_throughput: None,
             page_load: None,
+            browser: None,
         }
     }
 
@@ -522,6 +523,7 @@ mod tests {
             }),
             udp_throughput: None,
             page_load: None,
+            browser: None,
         }
     }
 
