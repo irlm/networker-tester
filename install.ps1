@@ -30,7 +30,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$ScriptVersion = "0.12.19"
+$ScriptVersion = "0.12.20"
 $RepoSsh       = "ssh://git@github.com/irlm/networker-tester"
 $RepoGh        = "irlm/networker-tester"
 $CargoBin      = Join-Path $env:USERPROFILE ".cargo\bin"
@@ -762,13 +762,13 @@ function Invoke-CargoInstallStep ($binary) {
     $gitAvailable = $null -ne (Get-Command git -ErrorAction SilentlyContinue)
     if ($gitAvailable) { $env:CARGO_NET_GIT_FETCH_WITH_CLI = "true" }
 
-    if ($script:ChromeAvailable) {
+    if ($script:ChromeAvailable -and $binary -eq "networker-tester") {
         Write-Info "Chrome detected -- compiling with browser probe support."
     }
 
     $prevErr = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
-    if ($script:ChromeAvailable) {
+    if ($script:ChromeAvailable -and $binary -eq "networker-tester") {
         & cargo install --git $RepoSsh $binary --locked --force --features browser
     } else {
         & cargo install --git $RepoSsh $binary --locked --force

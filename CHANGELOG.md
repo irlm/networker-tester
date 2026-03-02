@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.20] – 2026-03-02 — Fix: `--features browser` applied only to networker-tester
+
+### Fixed
+- **`install.sh`** / **`install.ps1`**: `--features browser` was incorrectly passed to
+  `networker-endpoint` as well as `networker-tester`; the `browser` feature does not
+  exist in the endpoint crate, causing `cargo install` to fail with
+  "the package 'networker-endpoint' does not contain this feature: browser"
+- Fixed by guarding the flag: only added when the binary being installed is
+  `networker-tester`
+
+---
+
 ## [0.12.19] – 2026-03-02 — Installer detects Chrome; browser feature follows Chrome availability
 
 ### Changed
