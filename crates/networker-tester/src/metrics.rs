@@ -140,6 +140,12 @@ pub enum Protocol {
     /// Real headless-browser probe via CDP (chromiumoxide).
     /// Requires `--features browser`. Self-skips with an error attempt if Chrome is not found.
     Browser,
+    /// Real headless-browser probe forced to HTTP/1.1 (`--disable-http2`).
+    Browser1,
+    /// Real headless-browser probe forced to HTTP/2 (`--disable-quic`).
+    Browser2,
+    /// Real headless-browser probe forced to HTTP/3 QUIC (`--enable-quic --origin-to-force-quic-on=…`).
+    Browser3,
 }
 
 impl std::fmt::Display for Protocol {
@@ -164,6 +170,9 @@ impl std::fmt::Display for Protocol {
             Protocol::PageLoad2 => write!(f, "pageload2"),
             Protocol::PageLoad3 => write!(f, "pageload3"),
             Protocol::Browser => write!(f, "browser"),
+            Protocol::Browser1 => write!(f, "browser1"),
+            Protocol::Browser2 => write!(f, "browser2"),
+            Protocol::Browser3 => write!(f, "browser3"),
         }
     }
 }
@@ -192,6 +201,9 @@ impl std::str::FromStr for Protocol {
             "pageload2" => Ok(Protocol::PageLoad2),
             "pageload3" => Ok(Protocol::PageLoad3),
             "browser" => Ok(Protocol::Browser),
+            "browser1" => Ok(Protocol::Browser1),
+            "browser2" => Ok(Protocol::Browser2),
+            "browser3" => Ok(Protocol::Browser3),
             other => Err(format!("Unknown protocol: {other}")),
         }
     }
@@ -629,7 +641,9 @@ pub fn primary_metric_label(proto: &Protocol) -> &'static str {
         Protocol::Dns => "Resolve ms",
         Protocol::Tls => "Handshake ms",
         Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3 => "Total ms",
-        Protocol::Browser => "Load ms",
+        Protocol::Browser | Protocol::Browser1 | Protocol::Browser2 | Protocol::Browser3 => {
+            "Load ms"
+        }
     }
 }
 
@@ -668,7 +682,9 @@ pub fn primary_metric_value(a: &RequestAttempt) -> Option<f64> {
         Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3 => {
             a.page_load.as_ref().map(|p| p.total_ms)
         }
-        Protocol::Browser => a.browser.as_ref().map(|b| b.load_ms),
+        Protocol::Browser | Protocol::Browser1 | Protocol::Browser2 | Protocol::Browser3 => {
+            a.browser.as_ref().map(|b| b.load_ms)
+        }
     }
 }
 
