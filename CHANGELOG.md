@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.6] – 2026-03-02 — Integration tests for pageload H1/H2/H3
+
+### Added
+- Integration tests for `run_pageload_probe` (HTTP/1.1), `run_pageload2_probe` (HTTP/2),
+  and `run_pageload3_probe` (HTTP/3 over QUIC) — all using the in-process endpoint on random
+  ports, no external dependencies required
+- `Endpoint::wait_for_quic()` helper in the integration test fixture: waits 300 ms after
+  TCP-HTTPS readiness to let the QUIC server bind its UDP port
+- `pageload.rs` line coverage: 11% → 74%; function coverage: 28% → 84%
+- Overall (lib + integration): lines 47.9% → 57.4%, functions 54% → 65.8%
+
+---
+
 ## [0.12.5] – 2026-03-02 — Test coverage phase 2
 
 ### Added
