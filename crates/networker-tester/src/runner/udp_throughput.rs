@@ -332,7 +332,7 @@ async fn recv_download(
                 t_last = now;
                 debug!("UDP download: seq {seq}/{expected_seqs} ({data_len}B)");
             }
-            Ok(Ok(_)) => {} // ignore short or unrecognised packets
+            Ok(Ok(_)) => {} // ignore short or unrecognized packets
             Ok(Err(e)) => {
                 debug!("UDP download recv error: {e}");
                 break;

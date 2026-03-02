@@ -173,7 +173,7 @@ fn make_ctrl(cmd: u8, value: u32) -> Vec<u8> {
     let mut pkt = vec![0u8; CTRL_LEN];
     pkt[..4].copy_from_slice(MAGIC);
     pkt[4] = cmd;
-    // pkt[5..8] = zeros (padding, already initialised)
+    // pkt[5..8] = zeros (padding, already initialized)
     pkt[8..12].copy_from_slice(&value.to_le_bytes());
     pkt
 }
