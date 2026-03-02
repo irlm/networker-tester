@@ -370,3 +370,111 @@ fn make_failed(
         browser: None,
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── secs_to_ms ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn secs_to_ms_converts_correctly() {
+        assert!((secs_to_ms("1.0") - 1000.0).abs() < 1e-9);
+        assert!((secs_to_ms("0.012345") - 12.345).abs() < 1e-6);
+        assert!((secs_to_ms("0") - 0.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn secs_to_ms_invalid_input_returns_zero() {
+        assert_eq!(secs_to_ms(""), 0.0);
+        assert_eq!(secs_to_ms("abc"), 0.0);
+        assert_eq!(secs_to_ms("--"), 0.0);
+    }
+
+    // ── error_category_for_exit ───────────────────────────────────────────────
+
+    #[test]
+    fn error_category_dns_codes() {
+        assert_eq!(error_category_for_exit(6), ErrorCategory::Dns);
+        assert_eq!(error_category_for_exit(7), ErrorCategory::Dns);
+    }
+
+    #[test]
+    fn error_category_timeout_code() {
+        assert_eq!(error_category_for_exit(28), ErrorCategory::Timeout);
+    }
+
+    #[test]
+    fn error_category_tls_codes() {
+        for code in [35, 51, 53, 54, 58, 59, 60, 64, 66, 77, 80, 82, 83, 90, 91] {
+            assert_eq!(
+                error_category_for_exit(code),
+                ErrorCategory::Tls,
+                "code {code} should be Tls"
+            );
+        }
+    }
+
+    #[test]
+    fn error_category_http_fallback() {
+        assert_eq!(error_category_for_exit(0), ErrorCategory::Http);
+        assert_eq!(error_category_for_exit(1), ErrorCategory::Http);
+        assert_eq!(error_category_for_exit(22), ErrorCategory::Http);
+        assert_eq!(error_category_for_exit(-1), ErrorCategory::Http);
+    }
+
+    // ── parse_write_out ───────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_write_out_full_output() {
+        let input = "dns:0.003\nconnect:0.005\ntls:0.020\nttfb:0.030\ntotal:0.050\ncode:200\nsize:1234\nurl_effective:https://example.com/\n";
+        let t = parse_write_out(input);
+        assert!((t.dns_ms - 3.0).abs() < 1e-6);
+        assert!((t.connect_ms - 5.0).abs() < 1e-6);
+        assert!((t.tls_ms - 20.0).abs() < 1e-6);
+        assert!((t.ttfb_ms - 30.0).abs() < 1e-6);
+        assert!((t.total_ms - 50.0).abs() < 1e-6);
+        assert_eq!(t.code, 200);
+        assert_eq!(t.size_bytes, 1234);
+    }
+
+    #[test]
+    fn parse_write_out_empty_string() {
+        let t = parse_write_out("");
+        assert_eq!(t.dns_ms, 0.0);
+        assert_eq!(t.code, 0);
+        assert_eq!(t.size_bytes, 0);
+    }
+
+    #[test]
+    fn parse_write_out_partial_output() {
+        let input = "dns:0.001\ncode:404\n";
+        let t = parse_write_out(input);
+        assert!((t.dns_ms - 1.0).abs() < 1e-6);
+        assert_eq!(t.code, 404);
+        assert_eq!(t.connect_ms, 0.0);
+        assert_eq!(t.tls_ms, 0.0);
+    }
+
+    #[test]
+    fn parse_write_out_bad_values_default_to_zero() {
+        let input = "dns:notanumber\ncode:abc\nsize:-1\n";
+        let t = parse_write_out(input);
+        assert_eq!(t.dns_ms, 0.0);
+        assert_eq!(t.code, 0);
+        // negative parses as 0 via unwrap_or(0)
+        assert_eq!(t.size_bytes, 0);
+    }
+
+    #[test]
+    fn parse_write_out_url_effective_line_ignored() {
+        // url_effective contains a colon — ensure the extra colon doesn't corrupt parsing
+        let input = "url_effective:https://host:8443/path\ncode:200\n";
+        let t = parse_write_out(input);
+        assert_eq!(t.code, 200);
+    }
+}

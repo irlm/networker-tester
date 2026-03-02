@@ -1595,14 +1595,75 @@ mod tests {
     }
 
     #[test]
+    fn resolve_preset_tiny() {
+        let sizes = resolve_preset("tiny").unwrap();
+        assert_eq!(sizes.len(), 100);
+        assert!(sizes.iter().all(|&s| s == 1_024));
+    }
+
+    #[test]
+    fn resolve_preset_small() {
+        let sizes = resolve_preset("small").unwrap();
+        assert_eq!(sizes.len(), 50);
+        assert!(sizes.iter().all(|&s| s == 5_120));
+    }
+
+    #[test]
+    fn resolve_preset_medium() {
+        let sizes = resolve_preset("medium").unwrap();
+        assert_eq!(sizes.len(), 10);
+        assert!(sizes.iter().all(|&s| s == 102_400));
+    }
+
+    #[test]
+    fn resolve_preset_large() {
+        let sizes = resolve_preset("large").unwrap();
+        assert_eq!(sizes.len(), 5);
+        assert!(sizes.iter().all(|&s| s == 1_048_576));
+    }
+
+    #[test]
     fn resolve_preset_mixed_has_30_assets() {
         let sizes = resolve_preset("mixed").unwrap();
         assert_eq!(sizes.len(), 30);
     }
 
     #[test]
+    fn resolve_preset_mixed_asset_composition() {
+        let sizes = resolve_preset("mixed").unwrap();
+        let large = sizes.iter().filter(|&&s| s == 204_800).count();
+        let medium = sizes.iter().filter(|&&s| s == 51_200).count();
+        let small = sizes.iter().filter(|&&s| s == 20_480).count();
+        let tiny = sizes.iter().filter(|&&s| s == 5_120).count();
+        assert_eq!(large, 1);
+        assert_eq!(medium, 4);
+        assert_eq!(small, 10);
+        assert_eq!(tiny, 15);
+    }
+
+    #[test]
+    fn resolve_preset_case_insensitive() {
+        assert!(resolve_preset("TINY").is_ok());
+        assert!(resolve_preset("Default").is_ok());
+        assert!(resolve_preset("MIXED").is_ok());
+    }
+
+    #[test]
     fn resolve_preset_unknown_returns_err() {
-        assert!(resolve_preset("bogus").is_err());
+        let err = resolve_preset("bogus").unwrap_err();
+        assert!(
+            err.to_string().contains("bogus"),
+            "error should name the bad preset"
+        );
+    }
+
+    #[test]
+    fn resolve_preset_unknown_lists_valid_names() {
+        let err = resolve_preset("oops").unwrap_err();
+        let msg = err.to_string();
+        for name in &["tiny", "small", "default", "medium", "large", "mixed"] {
+            assert!(msg.contains(name), "error should list '{name}' as valid");
+        }
     }
 
     #[test]

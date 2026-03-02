@@ -950,4 +950,107 @@ mod tests {
         };
         save(&run, tmp.path()).unwrap();
     }
+
+    #[test]
+    fn save_with_throughput_attempts_does_not_panic() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let run_id = Uuid::new_v4();
+        let now = Utc::now();
+
+        let download_attempt = RequestAttempt {
+            attempt_id: Uuid::new_v4(),
+            run_id,
+            protocol: Protocol::Download,
+            sequence_num: 0,
+            started_at: now,
+            finished_at: Some(now),
+            success: true,
+            dns: None,
+            tcp: None,
+            tls: None,
+            http: Some(HttpResult {
+                negotiated_version: "HTTP/1.1".into(),
+                status_code: 200,
+                headers_size_bytes: 0,
+                body_size_bytes: 1_048_576,
+                ttfb_ms: 5.0,
+                total_duration_ms: 95.0,
+                redirect_count: 0,
+                started_at: now,
+                response_headers: vec![],
+                payload_bytes: 1_048_576,
+                throughput_mbps: Some(105.5),
+                goodput_mbps: Some(98.0),
+                cpu_time_ms: Some(12.0),
+                csw_voluntary: Some(20),
+                csw_involuntary: Some(1),
+            }),
+            udp: None,
+            error: None,
+            retry_count: 0,
+            server_timing: None,
+            udp_throughput: None,
+            page_load: None,
+            browser: None,
+        };
+
+        let upload_attempt = RequestAttempt {
+            attempt_id: Uuid::new_v4(),
+            run_id,
+            protocol: Protocol::Upload,
+            sequence_num: 1,
+            started_at: now,
+            finished_at: Some(now),
+            success: true,
+            dns: None,
+            tcp: None,
+            tls: None,
+            http: Some(HttpResult {
+                negotiated_version: "HTTP/1.1".into(),
+                status_code: 200,
+                headers_size_bytes: 0,
+                body_size_bytes: 0,
+                ttfb_ms: 90.0,
+                total_duration_ms: 90.0,
+                redirect_count: 0,
+                started_at: now,
+                response_headers: vec![],
+                payload_bytes: 1_048_576,
+                throughput_mbps: Some(110.0),
+                goodput_mbps: Some(102.0),
+                cpu_time_ms: Some(15.0),
+                csw_voluntary: Some(25),
+                csw_involuntary: Some(0),
+            }),
+            udp: None,
+            error: None,
+            retry_count: 0,
+            server_timing: None,
+            udp_throughput: None,
+            page_load: None,
+            browser: None,
+        };
+
+        let run = TestRun {
+            run_id,
+            started_at: now,
+            finished_at: Some(now),
+            target_url: "http://localhost:8080/health".into(),
+            target_host: "localhost".into(),
+            modes: vec!["download".into(), "upload".into()],
+            total_runs: 1,
+            concurrency: 1,
+            timeout_ms: 5000,
+            client_os: "test".into(),
+            client_version: "0.0.0".into(),
+            attempts: vec![download_attempt, upload_attempt],
+        };
+
+        save(&run, tmp.path()).unwrap();
+        let metadata = std::fs::metadata(tmp.path()).unwrap();
+        assert!(
+            metadata.len() > 1000,
+            "xlsx with throughput data must be non-empty"
+        );
+    }
 }

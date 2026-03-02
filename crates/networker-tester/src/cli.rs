@@ -481,4 +481,76 @@ mod tests {
         let sizes = cfg.parsed_payload_sizes().unwrap();
         assert_eq!(sizes, vec![4096, 65536, 1048576]);
     }
+
+    #[test]
+    fn parse_size_gigabyte_suffix() {
+        assert_eq!(super::parse_size("1g").unwrap(), 1_073_741_824);
+        assert_eq!(super::parse_size("2g").unwrap(), 2_147_483_648);
+    }
+
+    #[test]
+    fn validate_empty_modes_fails() {
+        // Supply an empty modes vec via ConfigFile (CLI always has a fallback default).
+        let file = ConfigFile {
+            modes: Some(vec![]),
+            ..Default::default()
+        };
+        let cfg = Cli::parse_from(["networker-tester"]).resolve(Some(file));
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn verbose_flag_sets_log_level_debug() {
+        let cli = Cli::parse_from(["networker-tester", "--verbose"]);
+        let cfg = cli.resolve(None);
+        assert_eq!(cfg.log_level.as_deref(), Some("debug"));
+    }
+
+    #[test]
+    fn log_level_flag_overrides_verbose() {
+        let cli = Cli::parse_from(["networker-tester", "--verbose", "--log-level", "warn"]);
+        let cfg = cli.resolve(None);
+        assert_eq!(cfg.log_level.as_deref(), Some("warn"));
+    }
+
+    #[test]
+    fn parsed_modes_filters_invalid_strings() {
+        let cli = Cli::parse_from(["networker-tester", "--modes", "http1,notamode,http2"]);
+        let cfg = cli.resolve(None);
+        let protos = cfg.parsed_modes();
+        assert_eq!(protos.len(), 2);
+        use crate::metrics::Protocol;
+        assert!(protos.contains(&Protocol::Http1));
+        assert!(protos.contains(&Protocol::Http2));
+    }
+
+    #[test]
+    fn page_preset_tiny_resolves_to_100_assets() {
+        let cli = Cli::parse_from(["networker-tester", "--page-preset", "tiny"]);
+        let cfg = cli.resolve(None);
+        assert_eq!(cfg.page_asset_sizes.len(), 100);
+        assert!(cfg.page_asset_sizes.iter().all(|&s| s == 1024));
+        assert_eq!(cfg.page_preset_name.as_deref(), Some("tiny"));
+    }
+
+    #[test]
+    fn page_preset_invalid_falls_back_to_default() {
+        let cli = Cli::parse_from([
+            "networker-tester",
+            "--page-preset",
+            "nonexistent",
+            "--page-assets",
+            "5",
+        ]);
+        let cfg = cli.resolve(None);
+        // invalid preset → falls back to page_assets × page_asset_size
+        assert_eq!(cfg.page_asset_sizes.len(), 5);
+        assert!(cfg.page_preset_name.is_none());
+    }
+
+    #[test]
+    fn load_config_nonexistent_path_returns_error() {
+        let result = super::load_config("/this/path/does/not/exist.json");
+        assert!(result.is_err());
+    }
 }
