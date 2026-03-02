@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.17] – 2026-03-02 — Expand README: all probe modes + page-load comparison guide
+
+### Changed
+- **`README.md`**: Probe Modes table now lists all 18 probe modes (previously only 9),
+  including `dns`, `tls`, `native`, `curl`, `webdownload`, `webupload`, `udpdownload`,
+  `udpupload`, `pageload2`, `pageload3`, and `browser`
+- **`README.md`**: new "Page-Load Protocol Comparison (H1 / H2 / H3 / Browser)" section
+  shows the exact command for comparing protocol performance across all four page-load
+  probes against a local endpoint
+- **`README.md`**: updated installer description and removed stale Known Limitations row
+
+---
+
 ## [0.12.16] – 2026-03-02 — Fix MSVC install: wait for background VS installation
 
 ### Fixed
