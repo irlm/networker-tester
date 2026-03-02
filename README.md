@@ -55,14 +55,19 @@ curl -fsSL https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f
 ### Windows (PowerShell)
 
 ```powershell
-# Install tester
-Invoke-RestMethod https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.ps1 | Invoke-Expression
+$GistUrl = 'https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.ps1'
 
-# Install endpoint
-.\install.ps1 -Component endpoint
+# Install the diagnostic CLI client (tester — default)
+Invoke-RestMethod $GistUrl | Invoke-Expression
+
+# Install the target test server (endpoint)
+# irm | iex cannot forward parameters, so download first then run:
+Invoke-WebRequest $GistUrl -OutFile "$env:TEMP\networker-install.ps1"
+& "$env:TEMP\networker-install.ps1" -Component endpoint
 ```
 
 > **Note:** Git for Windows must be installed (bundles `ssh.exe`). Download from <https://git-scm.com/>.
+> Compatible with **Windows PowerShell 5.1** and PowerShell 7+.
 
 ### What the installer does
 
