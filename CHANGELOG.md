@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.10] – 2026-03-02 — Coverage phase 5: tls/curl/pageload/html unit tests
+
+### Added
+- **`runner/tls.rs`** +2 tests: `make_failed` constructor — verifies `Protocol::Tls`, error
+  message/detail/category, `retry_count=0`, `finished_at` present, `tls/dns/tcp` all None.
+- **`runner/curl.rs`** +2 tests: `make_failed` constructor — verifies `Protocol::Curl`, error
+  fields, no-detail variant.
+- **`runner/pageload.rs`** +5 tests: `parse_server_timing_simple` — no headers → None;
+  version header → Some with version; clock_skew formula (`diff_ms - ttfb/2`, verified to
+  within 5ms tolerance); invalid RFC3339 timestamp → `server_timestamp`/`clock_skew` both None;
+  server-timing header alone → Some.
+- **`output/html.rs`** +10 tests: `append_proto_row` — all-success → `"ok"` CSS class; partial
+  failure → `"warn"` CSS class; TTFB/total averages computed correctly; no HTTP result → em
+  dash. `append_attempt_row` — HTTP 200 success shows status + `"ok"`; failed attempt shows
+  `row-err` class + error message + detail in title; UDP echo shows `rtt_avg_ms` + `loss%`;
+  UDP throughput shows `transfer_ms` + `throughput_mbps`; no-result attempt shows multiple em
+  dashes + `OK` span; Download attempt shows `throughput_mbps` + formatted payload size.
+
+### Coverage
+- Total: 70.28% → **71.78%** lines (+1.5 pp); 74.48% → **75.40%** functions
+
+---
+
 ## [0.12.9] – 2026-03-02 — Coverage phase 4: http.rs + udp.rs unit tests + integration flakiness fix
 
 ### Added

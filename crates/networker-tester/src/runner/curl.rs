@@ -477,4 +477,53 @@ mod tests {
         let t = parse_write_out(input);
         assert_eq!(t.code, 200);
     }
+
+    // ── make_failed ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn make_failed_sets_curl_protocol_and_error() {
+        let run_id = Uuid::new_v4();
+        let attempt_id = Uuid::new_v4();
+        let started_at = chrono::Utc::now();
+        let a = make_failed(
+            run_id,
+            attempt_id,
+            3,
+            started_at,
+            ErrorCategory::Dns,
+            "could not resolve host".to_string(),
+            None,
+        );
+        assert!(!a.success);
+        assert_eq!(a.run_id, run_id);
+        assert_eq!(a.attempt_id, attempt_id);
+        assert_eq!(a.sequence_num, 3);
+        assert_eq!(a.protocol, Protocol::Curl);
+        assert!(a.dns.is_none());
+        assert!(a.tcp.is_none());
+        assert!(a.tls.is_none());
+        assert!(a.http.is_none());
+        assert!(a.finished_at.is_some());
+        assert_eq!(a.retry_count, 0);
+        let err = a.error.expect("error must be set");
+        assert_eq!(err.message, "could not resolve host");
+        assert!(err.detail.is_none());
+        assert_eq!(err.category, ErrorCategory::Dns);
+    }
+
+    #[test]
+    fn make_failed_with_detail() {
+        let a = make_failed(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            0,
+            chrono::Utc::now(),
+            ErrorCategory::Tls,
+            "SSL error".to_string(),
+            Some("certificate verify failed".to_string()),
+        );
+        let err = a.error.unwrap();
+        assert_eq!(err.detail.as_deref(), Some("certificate verify failed"));
+        assert_eq!(err.category, ErrorCategory::Tls);
+    }
 }

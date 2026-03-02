@@ -1774,4 +1774,77 @@ mod tests {
         assert_eq!(a.protocol, Protocol::PageLoad2);
         assert!(!a.success);
     }
+
+    // ── parse_server_timing_simple ────────────────────────────────────────────
+
+    #[test]
+    fn parse_server_timing_simple_no_headers_returns_none() {
+        let headers = hyper::HeaderMap::new();
+        let result = parse_server_timing_simple(&headers, chrono::Utc::now(), 10.0);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn parse_server_timing_simple_version_header_returns_some() {
+        let mut headers = hyper::HeaderMap::new();
+        headers.insert("x-networker-server-version", "0.12.0".parse().unwrap());
+        let result = parse_server_timing_simple(&headers, chrono::Utc::now(), 10.0);
+        let st = result.expect("should be Some when version header present");
+        assert_eq!(st.server_version.as_deref(), Some("0.12.0"));
+        // No timestamp header → no clock skew
+        assert!(st.clock_skew_ms.is_none());
+        assert!(st.server_timestamp.is_none());
+    }
+
+    #[test]
+    fn parse_server_timing_simple_clock_skew_formula() {
+        // clock_skew_ms = (server_ts - client_send_at) - ttfb_ms / 2
+        let client_send_at = chrono::Utc::now();
+        // Server timestamp is 100ms ahead of client
+        let server_ts = client_send_at + chrono::Duration::milliseconds(100);
+        let ttfb_ms = 40.0;
+
+        let mut headers = hyper::HeaderMap::new();
+        headers.insert(
+            "x-networker-server-timestamp",
+            server_ts.to_rfc3339().parse().unwrap(),
+        );
+
+        let result = parse_server_timing_simple(&headers, client_send_at, ttfb_ms);
+        let st = result.expect("should be Some with timestamp header");
+        let skew = st.clock_skew_ms.expect("clock_skew_ms should be set");
+        // Expected: 100ms - 40/2 = 80ms (with some tolerance for execution time)
+        assert!(
+            (skew - 80.0).abs() < 5.0,
+            "clock skew was {skew:.3}ms, expected ~80ms"
+        );
+    }
+
+    #[test]
+    fn parse_server_timing_simple_invalid_timestamp_gives_none_skew() {
+        let mut headers = hyper::HeaderMap::new();
+        headers.insert(
+            "x-networker-server-timestamp",
+            "not-a-valid-rfc3339-date".parse().unwrap(),
+        );
+        let result = parse_server_timing_simple(&headers, chrono::Utc::now(), 10.0);
+        let st = result.expect("should be Some (has the timestamp header key)");
+        // Invalid format → server_timestamp = None → clock_skew_ms = None
+        assert!(st.server_timestamp.is_none());
+        assert!(st.clock_skew_ms.is_none());
+    }
+
+    #[test]
+    fn parse_server_timing_simple_only_server_timing_header() {
+        // server-timing header alone (no x-networker-*) should also yield Some
+        let mut headers = hyper::HeaderMap::new();
+        headers.insert("server-timing", "recv;dur=5.0".parse().unwrap());
+        let result = parse_server_timing_simple(&headers, chrono::Utc::now(), 10.0);
+        // parse_server_timing_simple doesn't parse server-timing values, but it does
+        // return Some because the header is present
+        assert!(
+            result.is_some(),
+            "should be Some when server-timing header present"
+        );
+    }
 }

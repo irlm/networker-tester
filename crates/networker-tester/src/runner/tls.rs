@@ -578,6 +578,56 @@ mod tests {
         assert!(!entry.issuer.is_empty(), "issuer should be non-empty");
     }
 
+    // ── make_failed ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn make_failed_sets_tls_protocol_and_error() {
+        let run_id = uuid::Uuid::new_v4();
+        let attempt_id = uuid::Uuid::new_v4();
+        let started_at = Utc::now();
+        let a = make_failed(
+            run_id,
+            attempt_id,
+            5,
+            started_at,
+            ErrorCategory::Tls,
+            "handshake failed".to_string(),
+            Some("detail text".to_string()),
+            None,
+            None,
+        );
+        assert!(!a.success);
+        assert_eq!(a.run_id, run_id);
+        assert_eq!(a.attempt_id, attempt_id);
+        assert_eq!(a.sequence_num, 5);
+        assert_eq!(a.protocol, Protocol::Tls);
+        assert!(a.tls.is_none());
+        assert!(a.dns.is_none());
+        assert!(a.tcp.is_none());
+        assert!(a.finished_at.is_some());
+        assert_eq!(a.retry_count, 0);
+        let err = a.error.expect("error must be set");
+        assert_eq!(err.message, "handshake failed");
+        assert_eq!(err.detail.as_deref(), Some("detail text"));
+        assert_eq!(err.category, ErrorCategory::Tls);
+    }
+
+    #[test]
+    fn make_failed_no_detail() {
+        let a = make_failed(
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+            0,
+            Utc::now(),
+            ErrorCategory::Tcp,
+            "connect refused".to_string(),
+            None,
+            None,
+            None,
+        );
+        assert!(a.error.as_ref().unwrap().detail.is_none());
+    }
+
     #[test]
     fn parse_cert_entry_self_signed_expiry_is_some() {
         let der = self_signed_der();

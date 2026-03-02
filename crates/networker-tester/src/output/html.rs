@@ -1351,7 +1351,10 @@ const INLINE_CSS: &str = r#"
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metrics::{HttpResult, Protocol, RequestAttempt, TcpResult, TestRun};
+    use crate::metrics::{
+        ErrorCategory, ErrorRecord, HttpResult, Protocol, RequestAttempt, TcpResult, TestRun,
+        UdpResult, UdpThroughputResult,
+    };
     use chrono::Utc;
     use uuid::Uuid;
 
@@ -1762,6 +1765,287 @@ mod tests {
             html.contains("pageload") || html.contains("PageLoad") || html.contains("Page Load"),
             "should reference page load mode"
         );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // append_proto_row — protocol summary row rendering
+    // ─────────────────────────────────────────────────────────────────────────
+
+    fn make_http_attempt(success: bool, ttfb: f64, total: f64) -> RequestAttempt {
+        RequestAttempt {
+            attempt_id: Uuid::new_v4(),
+            run_id: Uuid::new_v4(),
+            protocol: Protocol::Http1,
+            sequence_num: 0,
+            started_at: Utc::now(),
+            finished_at: Some(Utc::now()),
+            success,
+            dns: None,
+            tcp: None,
+            tls: None,
+            http: Some(HttpResult {
+                negotiated_version: "HTTP/1.1".into(),
+                status_code: if success { 200 } else { 500 },
+                headers_size_bytes: 100,
+                body_size_bytes: 42,
+                ttfb_ms: ttfb,
+                total_duration_ms: total,
+                redirect_count: 0,
+                started_at: Utc::now(),
+                response_headers: vec![],
+                payload_bytes: 0,
+                throughput_mbps: None,
+                goodput_mbps: None,
+                cpu_time_ms: None,
+                csw_voluntary: None,
+                csw_involuntary: None,
+            }),
+            udp: None,
+            error: None,
+            retry_count: 0,
+            server_timing: None,
+            udp_throughput: None,
+            page_load: None,
+            browser: None,
+        }
+    }
+
+    #[test]
+    fn append_proto_row_all_success_uses_ok_class() {
+        let a1 = make_http_attempt(true, 5.0, 10.0);
+        let a2 = make_http_attempt(true, 7.0, 14.0);
+        let rows: Vec<&RequestAttempt> = vec![&a1, &a2];
+        let mut out = String::new();
+        append_proto_row(&mut out, &Protocol::Http1, &rows);
+        assert!(
+            out.contains(r#"class="ok""#),
+            "all-success rows should use 'ok' class"
+        );
+        assert!(out.contains("2/2"), "should show 2/2 successes");
+    }
+
+    #[test]
+    fn append_proto_row_partial_success_uses_warn_class() {
+        let ok = make_http_attempt(true, 5.0, 10.0);
+        let fail = make_http_attempt(false, 0.0, 0.0);
+        let rows: Vec<&RequestAttempt> = vec![&ok, &fail];
+        let mut out = String::new();
+        append_proto_row(&mut out, &Protocol::Http1, &rows);
+        assert!(
+            out.contains(r#"class="warn""#),
+            "partial failures should use 'warn' class"
+        );
+        assert!(out.contains("1/2"), "should show 1/2 successes");
+    }
+
+    #[test]
+    fn append_proto_row_averages_ttfb_correctly() {
+        let a1 = make_http_attempt(true, 10.0, 20.0);
+        let a2 = make_http_attempt(true, 20.0, 40.0);
+        let rows: Vec<&RequestAttempt> = vec![&a1, &a2];
+        let mut out = String::new();
+        append_proto_row(&mut out, &Protocol::Http1, &rows);
+        // avg TTFB = (10 + 20) / 2 = 15.00
+        assert!(out.contains("15.00"), "average TTFB should be 15.00");
+        // avg total = (20 + 40) / 2 = 30.00
+        assert!(out.contains("30.00"), "average total should be 30.00");
+    }
+
+    #[test]
+    fn append_proto_row_no_http_shows_dashes() {
+        let a = RequestAttempt {
+            attempt_id: Uuid::new_v4(),
+            run_id: Uuid::new_v4(),
+            protocol: Protocol::Tcp,
+            sequence_num: 0,
+            started_at: Utc::now(),
+            finished_at: Some(Utc::now()),
+            success: true,
+            dns: None,
+            tcp: None,
+            tls: None,
+            http: None,
+            udp: None,
+            error: None,
+            retry_count: 0,
+            server_timing: None,
+            udp_throughput: None,
+            page_load: None,
+            browser: None,
+        };
+        let rows: Vec<&RequestAttempt> = vec![&a];
+        let mut out = String::new();
+        append_proto_row(&mut out, &Protocol::Tcp, &rows);
+        assert!(out.contains("—"), "no timing data should show em dash");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // append_attempt_row — individual attempt row rendering
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn append_attempt_row_success_http_shows_status_code() {
+        let a = make_http_attempt(true, 5.0, 10.0);
+        let mut out = String::new();
+        append_attempt_row(&mut out, &a);
+        assert!(out.contains("200"), "should show HTTP status 200");
+        assert!(
+            out.contains(r#"class="ok""#),
+            "status cell should use 'ok' class"
+        );
+        // No error → em dash in error column
+        assert!(out.contains("—"), "no error should show em dash");
+    }
+
+    #[test]
+    fn append_attempt_row_failed_shows_err_class() {
+        let mut a = make_http_attempt(false, 0.0, 0.0);
+        a.error = Some(ErrorRecord {
+            category: ErrorCategory::Tcp,
+            message: "connection refused".to_string(),
+            detail: Some("detail info".to_string()),
+            occurred_at: Utc::now(),
+        });
+        let mut out = String::new();
+        append_attempt_row(&mut out, &a);
+        assert!(
+            out.contains("row-err"),
+            "failed attempt should have row-err class"
+        );
+        assert!(
+            out.contains("connection refused"),
+            "error message should appear"
+        );
+        assert!(
+            out.contains("detail info"),
+            "detail should appear in title attr"
+        );
+    }
+
+    #[test]
+    fn append_attempt_row_udp_echo_shows_rtt() {
+        let a = RequestAttempt {
+            attempt_id: Uuid::new_v4(),
+            run_id: Uuid::new_v4(),
+            protocol: Protocol::Udp,
+            sequence_num: 1,
+            started_at: Utc::now(),
+            finished_at: Some(Utc::now()),
+            success: true,
+            dns: None,
+            tcp: None,
+            tls: None,
+            http: None,
+            udp: Some(UdpResult {
+                remote_addr: "127.0.0.1:9000".into(),
+                probe_count: 5,
+                success_count: 5,
+                loss_percent: 0.0,
+                rtt_min_ms: 1.0,
+                rtt_avg_ms: 2.5,
+                rtt_p95_ms: 3.0,
+                jitter_ms: 0.5,
+                started_at: Utc::now(),
+                probe_rtts_ms: vec![Some(2.5); 5],
+            }),
+            error: None,
+            retry_count: 0,
+            server_timing: None,
+            udp_throughput: None,
+            page_load: None,
+            browser: None,
+        };
+        let mut out = String::new();
+        append_attempt_row(&mut out, &a);
+        assert!(out.contains("2.50"), "rtt_avg_ms should appear");
+        assert!(out.contains("loss=0.0%"), "loss percent should appear");
+    }
+
+    #[test]
+    fn append_attempt_row_udp_throughput_shows_transfer_ms() {
+        let a = RequestAttempt {
+            attempt_id: Uuid::new_v4(),
+            run_id: Uuid::new_v4(),
+            protocol: Protocol::UdpDownload,
+            sequence_num: 2,
+            started_at: Utc::now(),
+            finished_at: Some(Utc::now()),
+            success: true,
+            dns: None,
+            tcp: None,
+            tls: None,
+            http: None,
+            udp: None,
+            error: None,
+            retry_count: 0,
+            server_timing: None,
+            udp_throughput: Some(UdpThroughputResult {
+                remote_addr: "127.0.0.1:9998".into(),
+                payload_bytes: 65_536,
+                datagrams_sent: 50,
+                datagrams_received: 50,
+                bytes_acked: None,
+                loss_percent: 0.0,
+                transfer_ms: 125.0,
+                throughput_mbps: Some(4.5),
+                started_at: Utc::now(),
+            }),
+            page_load: None,
+            browser: None,
+        };
+        let mut out = String::new();
+        append_attempt_row(&mut out, &a);
+        assert!(out.contains("125.00"), "transfer_ms should appear");
+        assert!(out.contains("4.50 MB/s"), "throughput should appear");
+    }
+
+    #[test]
+    fn append_attempt_row_no_results_shows_dashes() {
+        let a = RequestAttempt {
+            attempt_id: Uuid::new_v4(),
+            run_id: Uuid::new_v4(),
+            protocol: Protocol::Tcp,
+            sequence_num: 0,
+            started_at: Utc::now(),
+            finished_at: Some(Utc::now()),
+            success: true,
+            dns: None,
+            tcp: None,
+            tls: None,
+            http: None,
+            udp: None,
+            error: None,
+            retry_count: 0,
+            server_timing: None,
+            udp_throughput: None,
+            page_load: None,
+            browser: None,
+        };
+        let mut out = String::new();
+        append_attempt_row(&mut out, &a);
+        let dash_count = out.matches("—").count();
+        assert!(
+            dash_count >= 4,
+            "no-data attempt should have multiple em dashes, got {dash_count}"
+        );
+        assert!(
+            out.contains(r#"class="ok">OK<"#),
+            "success with no HTTP should show OK"
+        );
+    }
+
+    #[test]
+    fn append_attempt_row_http_throughput_shows_mbps() {
+        let mut a = make_http_attempt(true, 5.0, 100.0);
+        a.protocol = Protocol::Download;
+        if let Some(ref mut h) = a.http {
+            h.throughput_mbps = Some(12.34);
+            h.payload_bytes = 1_048_576; // 1 MiB
+        }
+        let mut out = String::new();
+        append_attempt_row(&mut out, &a);
+        assert!(out.contains("12.34 MB/s"), "should show throughput");
+        assert!(out.contains("1.0 MiB"), "should show payload size");
     }
 
     #[test]
