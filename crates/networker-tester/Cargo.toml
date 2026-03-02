@@ -42,7 +42,7 @@ native-tls       = { version = "0.2", optional = true }
 tokio-native-tls = { version = "0.3", optional = true }
 
 # --- Headless browser (optional feature) ---
-chromiumoxide = { version = "0.7", optional = true, default-features = false, features = ["tokio-runtime"] }
+chromiumoxide = { version = "0.9", optional = true }
 
 # --- SQL Server ---
 tiberius     = { version = "0.12", default-features = false, features = ["rustls", "chrono", "sql-browser-tokio"] }
