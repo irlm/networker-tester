@@ -30,7 +30,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$ScriptVersion = "0.12.15"
+$ScriptVersion = "0.12.16"
 $RepoSsh       = "ssh://git@github.com/irlm/networker-tester"
 $RepoGh        = "irlm/networker-tester"
 $CargoBin      = Join-Path $env:USERPROFILE ".cargo\bin"
@@ -467,14 +467,15 @@ function Invoke-MsvcInstallStep {
     Invoke-NextStep "Install Visual C++ Build Tools"
     Write-Info "Installing MSVC build tools via winget..."
     Write-Dim "Includes the C++ linker (link.exe) required to compile Rust on Windows."
-    Write-Dim "Download: ~2-3 GB  |  Estimated time: 5-15 minutes."
+    Write-Dim "The VS bootstrapper (~4 MB) then downloads and installs the full toolchain (~2 GB)."
     Write-Host ""
 
+    # --wait tells the VS installer to block until installation is fully complete.
     $prevErr = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     & winget install --id Microsoft.VisualStudio.2022.BuildTools -e --source winget `
         --accept-package-agreements --accept-source-agreements `
-        --override "--quiet --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+        --override "--wait --quiet --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
     $exitCode = $LASTEXITCODE
     $ErrorActionPreference = $prevErr
 
@@ -486,32 +487,62 @@ function Invoke-MsvcInstallStep {
         exit 1
     }
 
-    # Source vcvars64.bat so the MSVC toolchain is available in this session
+    # VS installs asynchronously even after winget reports success (the bootstrapper
+    # launches a background process for the real 2 GB install).  Poll vswhere until
+    # the VC++ toolchain component is fully registered — timeout after 15 minutes.
     $vswhereExe = Join-Path ([System.Environment]::GetFolderPath('ProgramFilesX86')) `
                              "Microsoft Visual Studio\Installer\vswhere.exe"
-    if (Test-Path $vswhereExe) {
-        $vsPath = (& $vswhereExe -latest -products * `
-            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
-            -property installationPath 2>&1).Trim()
-        if ($vsPath) {
-            $vcvars = Join-Path $vsPath "VC\Auxiliary\Build\vcvars64.bat"
-            if (Test-Path $vcvars) {
-                Write-Info "Loading MSVC environment (vcvars64.bat)..."
-                # Invoke vcvars inside cmd.exe and capture resulting env vars
-                $envOutput = cmd.exe /c "`"$vcvars`" > NUL 2>&1 && set" 2>&1
-                foreach ($line in $envOutput) {
-                    if ($line -match "^([^=]+)=(.+)$") {
-                        [System.Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], "Process")
-                    }
-                }
-                $script:MsvcAvailable = $true
-                Write-Ok "VC++ Build Tools installed and loaded for this session"
-                return
+    $vsPath  = $null
+    $elapsed = 0
+    $timeout = 900  # 15 min
+
+    Write-Info "Waiting for Visual Studio installation to complete..."
+    while ($elapsed -lt $timeout) {
+        if (Test-Path $vswhereExe) {
+            $raw = & $vswhereExe -latest -products * `
+                -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+                -property installationPath 2>&1
+            # $raw may be $null if VS hasn't registered yet — guard with [string] cast
+            if (-not [string]::IsNullOrWhiteSpace([string]$raw)) {
+                $vsPath = ([string]$raw).Trim()
+                break
             }
         }
+        Start-Sleep -Seconds 15
+        $elapsed += 15
+        Write-Host ("    still installing... ({0}s)" -f $elapsed) -ForegroundColor DarkGray
     }
-    Write-Warn "Build Tools installed -- PATH changes take effect after reopening your terminal."
-    Write-Warn "If cargo still fails, close this window and re-run the installer."
+
+    if (-not $vsPath) {
+        Write-Host ""
+        Write-Warn "VS Build Tools did not finish within ${timeout}s."
+        Write-Host "  Once Visual Studio finishes installing, re-run this installer."
+        exit 1
+    }
+
+    # Source vcvars64.bat to make link.exe available in this terminal session
+    try {
+        $vcvars = Join-Path $vsPath "VC\Auxiliary\Build\vcvars64.bat"
+        if (Test-Path $vcvars) {
+            Write-Info "Loading MSVC environment (vcvars64.bat)..."
+            $envOutput = cmd.exe /c "`"$vcvars`" > NUL 2>&1 && set" 2>&1
+            foreach ($line in $envOutput) {
+                if ([string]$line -match "^([^=]+)=(.+)$") {
+                    [System.Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], "Process")
+                }
+            }
+            $script:MsvcAvailable = $true
+            Write-Ok "VC++ Build Tools installed and loaded for this session"
+        } else {
+            Write-Warn "vcvars64.bat not found at expected path."
+            Write-Warn "Reopen your terminal and re-run this installer."
+            exit 1
+        }
+    } catch {
+        Write-Warn ("Could not load MSVC environment: {0}" -f $_.Exception.Message)
+        Write-Warn "Reopen your terminal and re-run this installer."
+        exit 1
+    }
 }
 
 function Invoke-GitInstallStep {
