@@ -11,6 +11,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.41] – 2026-03-03 — browser3: fix Chrome arg double-dash bug (root cause of H3 regression)
+
+### Fixed
+- **`browser3` always reporting `proto=h2` despite all cert-trust fixes** — definitive root cause
+  found: chromiumoxide's `BrowserConfig::arg(&str)` treats the entire string as the arg *key*
+  and prepends `"--"` at launch time.  All our calls used `"--flag=value"` format, producing
+  `"----flag=value"` which Chrome silently ignores.  Affected flags:
+  - `--origin-to-force-quic-on` (the QUIC-forcing flag) — **was always ignored**
+  - `--use-system-cert-store` (Chrome Root Store bypass)
+  - `--ignore-certificate-errors`
+  - `--disable-quic` (browser2)
+  - All manually re-added DEFAULT_ARGS in the `disable_default_args()` block
+  Fix: strip `--` prefix from all raw arg strings; use chromiumoxide's typed
+  `.no_sandbox()` / `.new_headless_mode()` helpers instead of manual arg strings for
+  sandbox/headless so chromiumoxide's Arg machinery produces correct `--` flags.
+- **Chrome 127+ Chrome Root Store** — even with correct arg format, Chrome 127+ ignores
+  `security add-trusted-cert` because it defaults to its own Chrome Root Store (not the
+  macOS trust store).  Added `--use-system-cert-store` (now correctly passed) to force Chrome
+  to use the platform verifier which reads `login.keychain-db`.
+
+### Result
+All three protocols are now consistently correct across 3 runs:
+- `browser1` → `http/1.1×22` ✓
+- `browser2` → `h2×22` ✓
+- `browser3` → `h3×21` ✓ (was always `h2` before this fix)
+
+---
+
+## [0.12.40] – 2026-03-03 — browser3: fix QUIC cert trust (CA:TRUE) and remove --ignore-certificate-errors when cert is trusted
+
+### Fixed
+- **`browser3` QUIC TLS still failing with `CERTIFICATE_VERIFY_FAILED`** even after v0.12.39
+  installed the server cert in the macOS Keychain.
+  Root cause (definitive, from Chrome net-log analysis):
+  1. Chrome's cert verifier (BoringSSL) requires trust anchors to have `basicConstraints: CA:TRUE`
+     per RFC 5280 §4.2.1.9.  The endpoint used `rcgen::generate_simple_self_signed()` which
+     produces a plain leaf cert with **no** `basicConstraints` extension.  Adding a non-CA leaf
+     cert to the macOS Keychain as `trustRoot` is silently ignored by Chrome's QUIC verifier —
+     it accepted the Keychain entry for display but refused to use the cert as a chain anchor,
+     producing `CERTIFICATE_VERIFY_FAILED`.
+  2. `--ignore-certificate-errors` was still added to all browser modes including browser3.
+     Chrome discards `Alt-Svc` hints from connections with overridden cert errors, so QUIC was
+     never scheduled even though cert trust installation logged success.
+  Fix:
+  - **Endpoint** (`networker-endpoint`): switched cert generation from
+    `generate_simple_self_signed()` to `CertificateParams::new()` with
+    `is_ca = IsCa::Ca(BasicConstraints::Unconstrained)`.  The server cert now carries
+    `basicConstraints: CA:TRUE` and can serve as a proper trust anchor.
+  - **Tester** (`networker-tester`, `runner/browser.rs`): `--ignore-certificate-errors` is now
+    **omitted** for browser3 when cert trust installation succeeded (`CertTrustGuard` is `Some`).
+    Chrome sees no cert errors → `Alt-Svc` hint is processed → QUIC session scheduled →
+    main navigation uses H3.  Falls back to adding the flag (H2 only) if cert trust failed.
+  - Removed the `--log-net-log` diagnostic flag that was left in browser3 in v0.12.39.
+
+---
+
+## [0.12.39] – 2026-03-03 — browser3: install server cert as trusted root before Chrome launch to enable QUIC/H3
+
+### Fixed
+- **`browser3` still shows `proto=h2` with zero QUIC packets** in all previous attempts
+  (v0.12.35–v0.12.38).
+  Root cause (definitive): Chrome silently discards `Alt-Svc` hints from connections where
+  certificate errors were *overridden* via `--ignore-certificate-errors`.  This is a deliberate
+  Chrome security policy: upgrading a "broken" (cert-error) connection to QUIC would allow a
+  MITM to force protocol negotiation.  Even with the CDP `Security.setIgnoreCertificateErrors`
+  command and the SPKI-list flag, Chrome never scheduled a background QUIC probe because the
+  initial H2 warmup connection was flagged as having an overridden cert error.
+  Fix: **install the server's leaf certificate as a temporarily-trusted root before Chrome
+  launches**, so Chrome sees a fully-authenticated connection, processes the `Alt-Svc` hint,
+  schedules a background QUIC session, and the main navigation uses H3.
+  - **macOS**: `security add-trusted-cert -d -r trustRoot -k login.keychain-db <cert.pem>`
+    before Chrome launch; `security delete-certificate -Z <SHA-256>` in RAII `Drop` guard.
+  - **Linux**: `certutil -A -d sql:<profile>/Default/ -t CT,, -n <name> -i <cert.pem>` into
+    the Chrome user-data-dir NSS database (populated before `Browser::launch` so Chrome reads
+    it at startup); cert name uses PID for uniqueness; cleanup in RAII `Drop` guard.
+  - Falls back gracefully (logs a warning, browser3 may show H2) if `certutil` is absent
+    (`apt install libnss3-tools`), or if the macOS keychain is locked.
+- Replaced `fetch_spki_hash` + `--ignore-certificate-errors-spki-list` (did not work in
+  `--headless=new` mode) with `fetch_cert_der` used by the cert trust path.
+- Re-enabled `--origin-to-force-quic-on=<host>:<port>` as belt-and-suspenders alongside
+  the Alt-Svc warmup (cert now trusted, so the forced probe succeeds).
+- Increased browser3 post-warmup sleep from 500 ms to 1 s for more reliable QUIC session
+  establishment on higher-latency links.
+- Added two new unit tests: `der_to_pem_has_header_and_footer`,
+  `compute_cert_sha256_hex_is_64_uppercase_hex`.
+
+---
+
 ## [0.12.38] – 2026-03-03 — browser3: remove forced-QUIC flags to fix Alt-Svc H3 negotiation
 
 ### Fixed
