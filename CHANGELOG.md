@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.46] – 2026-03-03 — installer: certutil check runs for release downloads too
+
+### Fixed
+- **Installer (`install.sh`)**: `step_ensure_certutil()` was placed inside the `else`
+  (source-build) branch of `main()`, so it was never reached when using the default
+  release-binary download path.  Moved the call outside the `if/else` so it runs
+  regardless of install method, whenever Chrome is available.
+
+---
+
 ## [0.12.45] – 2026-03-03 — installer: ensure certutil for existing Chrome installs
 
 ### Fixed
