@@ -25,7 +25,7 @@ set -euo pipefail
 
 REPO_SSH="ssh://git@github.com/irlm/networker-tester"
 REPO_GH="irlm/networker-tester"
-SCRIPT_VERSION="0.12.44"
+SCRIPT_VERSION="0.12.45"
 INSTALL_DIR="${HOME}/.cargo/bin"
 
 # ── Colours (ANSI C quoting; safe even when stdin is a curl pipe) ─────────────
@@ -731,6 +731,32 @@ step_install_chrome() {
     fi
 }
 
+# Install the NSS certutil tool required for browser3 QUIC cert trust on Linux.
+# Chrome on Linux uses an NSS database in the profile directory; certutil is the
+# only standard way to import a trusted CA into it.  This step is a no-op on
+# macOS (uses security(1) instead) and when certutil is already present.
+step_ensure_certutil() {
+    [[ "$SYS_OS" == "linux" ]] || return 0
+    [[ -n "$PKG_MGR" ]]       || return 0
+    command -v certutil &>/dev/null && return 0   # already installed
+
+    print_info "Installing certutil (NSS tools) via ${PKG_MGR} — required for browser3 QUIC cert trust…"
+    case "$PKG_MGR" in
+        apt-get) sudo apt-get install -y libnss3-tools 2>/dev/null || true ;;
+        dnf)     sudo dnf install -y nss-tools 2>/dev/null || true ;;
+        pacman)  sudo pacman -S --noconfirm nss 2>/dev/null || true ;;
+        zypper)  sudo zypper install -y mozilla-nss-tools 2>/dev/null || true ;;
+        apk)     sudo apk add nss-tools 2>/dev/null || true ;;
+        *)       print_warn "Unknown PKG_MGR; install certutil manually for browser3 H3 support" ; return ;;
+    esac
+
+    if command -v certutil &>/dev/null; then
+        print_ok "certutil ready"
+    else
+        print_warn "certutil not found after install attempt; browser3 will fall back to H2"
+    fi
+}
+
 step_install_rust() {
     next_step "Install Rust via rustup"
     print_info "Downloading rustup from https://sh.rustup.rs …"
@@ -873,6 +899,11 @@ main() {
     else
         if [[ $DO_CHROME_INSTALL -eq 1 ]]; then
             step_install_chrome
+        fi
+        # Ensure certutil is present whenever Chrome is available (existing or just installed).
+        # This is a no-op on macOS and when certutil is already installed.
+        if [[ $CHROME_AVAILABLE -eq 1 || $DO_CHROME_INSTALL -eq 1 ]]; then
+            step_ensure_certutil
         fi
         if [[ $DO_GIT_INSTALL -eq 1 ]]; then
             step_install_git
