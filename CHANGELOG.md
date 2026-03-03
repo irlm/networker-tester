@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.38] – 2026-03-03 — browser3: remove forced-QUIC flags to fix Alt-Svc H3 negotiation
+
+### Fixed
+- **`browser3` still shows `proto=h2`** after CDP cert override (v0.12.37).
+  Root cause: `--origin-to-force-quic-on=<ip>:<port>` causes Chrome's network stack to probe
+  the origin with a raw QUIC connection during initialization — **before** the CDP
+  `Security.setIgnoreCertificateErrors(true)` command is applied.  This early probe fails the
+  TLS handshake (cert not yet trusted) and Chrome permanently marks the origin as "QUIC broken"
+  for the duration of the session.  Subsequent Alt-Svc hints from the warmup navigation are
+  then silently discarded for that broken origin.  Confirmed via server logs: Chrome sent zero
+  QUIC packets to the server in all v0.12.37 runs.
+  Fix: **remove `--origin-to-force-quic-on` and `--enable-quic`** from browser3's Chrome flags.
+  QUIC is Chrome's default; without the forced-probe flag, no early QUIC attempt is made.
+  H3 is triggered naturally via the server's `Alt-Svc: h3=":PORT"` warmup response: Chrome
+  schedules a background QUIC session, the CDP cert override (already active) makes the TLS
+  handshake succeed, and the main navigation uses the established QUIC session → H3.
+
+---
+
 ## [0.12.37] – 2026-03-03 — browser3: CDP Security.setIgnoreCertificateErrors to fix QUIC cert trust in --headless=new
 
 ### Fixed

@@ -257,12 +257,18 @@ mod real {
         // Per-protocol Chrome flags:
         //   browser1 → plain HTTP URL (no ALPN = definitively H1.1; no extra flags needed)
         //   browser2 → --disable-quic           (force HTTP/2, prevent H3 upgrade)
-        //   browser3 → --enable-quic + --origin-to-force-quic-on=<host>:<port>
-        //              Cert trust is handled via CDP Security.setIgnoreCertificateErrors()
-        //              applied after Chrome starts — this reliably works in --headless=new
-        //              where --ignore-certificate-errors-spki-list is silently ignored by
-        //              Chrome's QUIC network stack.
-        //              SPKI hash is also passed as belt-and-suspenders for older Chrome.
+        //   browser3 → NO forced-QUIC flags (QUIC is Chrome's default; explicit
+        //              --origin-to-force-quic-on causes Chrome to probe the origin
+        //              during network-stack init, before the CDP cert override is active,
+        //              which marks the origin as "QUIC broken" for the rest of the session).
+        //              QUIC is instead triggered via Alt-Svc from the warmup navigation:
+        //                1. Warmup GET /health → server responds with Alt-Svc: h3=":PORT"
+        //                2. Chrome schedules a background QUIC connection to the origin
+        //                3. CDP Security.setIgnoreCertificateErrors(true) was applied before
+        //                   the warmup, so the background QUIC TLS handshake succeeds
+        //                4. 500 ms sleep → QUIC session established
+        //                5. Main navigation uses the already-open QUIC session → H3
+        //              Belt-and-suspenders: SPKI hash also passed for older Chrome.
         //   browser  → no extra flags (auto-negotiate, typically H2)
         let mut extra_args: Vec<String> = Vec::new();
         match &protocol {
@@ -273,12 +279,8 @@ mod real {
                 extra_args.push("--disable-quic".into());
             }
             Protocol::Browser3 => {
-                let host = base_url.host_str().unwrap_or("localhost");
-                let port = base_url.port_or_known_default().unwrap_or(443);
-                extra_args.push("--enable-quic".into());
-                extra_args.push(format!("--origin-to-force-quic-on={host}:{port}"));
                 // Belt-and-suspenders: SPKI hash for older Chrome where the CDP
-                // Security.setIgnoreCertificateErrors() may not reach the network stack.
+                // Security.setIgnoreCertificateErrors() may not reach the QUIC stack.
                 match fetch_spki_hash(base_url).await {
                     Some(hash) => {
                         tracing::info!(spki = %hash, "browser3: SPKI hash fetched for cert pinning");
