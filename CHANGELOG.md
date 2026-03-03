@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.43] – 2026-03-03 — browser3: fix ERR_QUIC_PROTOCOL_ERROR when cert trust fails on Linux
+
+### Fixed
+- **`browser3` fails with `ERR_QUIC_PROTOCOL_ERROR`** when `certutil` is not installed on Linux
+  (or cert trust installation fails for any reason).  Root cause: `--origin-to-force-quic-on`
+  was unconditionally added, causing Chrome to attempt QUIC even in the cert-trust-failed
+  fallback path.  QUIC TLS does **not** honour `--ignore-certificate-errors`, so the handshake
+  fails outright instead of falling back gracefully to H2.
+  Fix: gate `--origin-to-force-quic-on` on cert trust success (`_cert_trust_guard.is_some()`).
+  When cert trust fails, browser3 falls back to H2 (same as pre-v0.12.41 behaviour) rather
+  than erroring.
+
+---
+
+## [0.12.42] – 2026-03-03 — fix dead_code warning on Linux
+
+### Fixed
+- Suppressed `dead_code` compiler warning for `compute_cert_sha256_hex` on Linux CI builds.
+  The function is macOS-only (used by `security delete-certificate -Z`); gated with
+  `#[cfg(target_os = "macos")]`.
+
+---
+
 ## [0.12.41] – 2026-03-03 — browser3: fix Chrome arg double-dash bug (root cause of H3 regression)
 
 ### Fixed
