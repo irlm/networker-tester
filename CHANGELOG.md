@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.45] – 2026-03-03 — installer: ensure certutil for existing Chrome installs
+
+### Fixed
+- **Installer (`install.sh`)**: `libnss3-tools` / `nss-tools` was only installed inside
+  `step_install_chrome()`, which is skipped when Chrome is already present.  Added a new
+  `step_ensure_certutil()` function that runs whenever Chrome is available (pre-existing
+  **or** freshly installed), checks for `certutil` with `command -v`, and installs the
+  appropriate NSS package if missing.  This is a no-op on macOS (uses `security(1)`) and
+  when `certutil` is already installed.
+- **Installer (`install.ps1`, `install.sh`)**: bump `$ScriptVersion` / `SCRIPT_VERSION` to
+  `0.12.45`.
+
+---
+
 ## [0.12.44] – 2026-03-03 — installer: libnss3-tools; Windows browser3 cert trust
 
 ### Added
