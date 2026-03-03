@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.55] – 2026-03-03 — fix browser probe: use JS Performance API for transferred_bytes
+
+### Fixed
+- **`transferred_bytes` browser1 (HTTP/1.1) vastly under-reported**: `Network.loadingFinished.encodedDataLength`
+  in Chrome's CDP is unreliable for HTTP/1.1 connections — values varied from 38 % to 55 % of expected
+  bytes across runs (79–113 KiB for 20 × 10 KiB assets, vs the correct ~200 KiB).  H2/H3 were
+  consistent (the same multiplexed connection makes the accounting deterministic), but H1.1 uses
+  multiple serial connections where Chrome's internal byte counter drifts.
+- **Fix**: Replaced the `EventLoadingFinished` CDP subscription with a single JavaScript evaluation
+  of `performance.getEntriesByType('resource')` + `getEntriesByType('navigation')[0]`, summing
+  `encodedBodySize` for every resource.  This value is computed post-load by the browser, is
+  consistent across HTTP/1.1, H2, and H3, and does not depend on CDP event timing or ordering.
+  `EventResponseReceived` is still used for resource count and per-protocol breakdown (unchanged).
+
+---
+
 ## [0.12.54] – 2026-03-03 — installer: sync SCRIPT_VERSION to 0.12.54
 
 ### Changed

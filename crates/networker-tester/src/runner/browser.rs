@@ -174,9 +174,7 @@ mod real {
     use super::{build_browser1_url, build_page_url, find_chrome};
     use crate::metrics::{BrowserResult, ErrorCategory, ErrorRecord, Protocol, RequestAttempt};
     use chromiumoxide::browser::{Browser, BrowserConfig};
-    use chromiumoxide::cdp::browser_protocol::network::{
-        EventLoadingFinished, EventResponseReceived,
-    };
+    use chromiumoxide::cdp::browser_protocol::network::EventResponseReceived;
     use chromiumoxide::cdp::browser_protocol::security::SetIgnoreCertificateErrorsParams;
     use chrono::Utc;
     use futures::StreamExt;
@@ -565,10 +563,11 @@ mod real {
             tokio::time::sleep(std::time::Duration::from_millis(1_000)).await;
         }
 
-        // 9c. Subscribe to network events.
+        // 9c. Subscribe to ResponseReceived events.
         // Subscribed AFTER the warmup so only the main navigation's resources are counted.
-        // EventResponseReceived: fires on headers received → used for protocol + resource count.
-        // EventLoadingFinished:  fires after full body received → used for accurate byte count.
+        // Used for: protocol detection per resource + total resource count.
+        // Bytes are measured via JS performance.getEntriesByType('resource') after navigation
+        // (more reliable than CDP encodedDataLength which is protocol-dependent for HTTP/1.1).
         let mut response_events = match page.event_listener::<EventResponseReceived>().await {
             Ok(e) => e,
             Err(e) => {
@@ -580,22 +579,6 @@ mod real {
                     protocol,
                     started_at,
                     &format!("Failed to subscribe to network events: {e}"),
-                    ErrorCategory::Other,
-                );
-            }
-        };
-        let mut loading_finished_events = match page.event_listener::<EventLoadingFinished>().await
-        {
-            Ok(e) => e,
-            Err(e) => {
-                handler_task.abort();
-                return browser_error(
-                    run_id,
-                    attempt_id,
-                    sequence_num,
-                    protocol,
-                    started_at,
-                    &format!("Failed to subscribe to loading-finished events: {e}"),
                     ErrorCategory::Other,
                 );
             }
@@ -665,11 +648,40 @@ mod real {
             }
         };
 
-        // 12. Drain network events (500 ms after navigation).
-        // ResponseReceived → resource count + protocol breakdown.
-        // LoadingFinished  → bytes (encodedDataLength after full body; reliable for all protocols).
+        // 11b. Measure transferred bytes via Performance Resource Timing API.
+        //
+        // CDP's Network.loadingFinished.encodedDataLength is unreliable for HTTP/1.1:
+        // the value varies widely across runs (38–55 % of expected) due to Chrome's
+        // internal HTTP/1.1 byte accounting in the DevTools protocol.  For H2/H3 it
+        // is consistent, but differs from H1.1 making cross-protocol comparisons
+        // misleading.
+        //
+        // The JS Performance API is evaluated once, post-load, and reports
+        // encodedBodySize (compressed body bytes, headers excluded) which is
+        // consistent across all three protocols for the same assets.
+        let bytes_js = r#"
+            (function() {
+                var total = 0;
+                var nav = performance.getEntriesByType('navigation')[0];
+                if (nav) { total += nav.encodedBodySize || 0; }
+                var res = performance.getEntriesByType('resource');
+                for (var i = 0; i < res.length; i++) { total += res[i].encodedBodySize || 0; }
+                return total;
+            })()
+        "#;
+        let transferred_bytes: usize = match page.evaluate(bytes_js).await {
+            Ok(v) => v.into_value::<f64>().unwrap_or(0.0) as usize,
+            Err(e) => {
+                tracing::warn!("Failed to evaluate resource bytes: {e}");
+                0
+            }
+        };
+
+        // 12. Drain ResponseReceived events (500 ms after navigation).
+        // Collects resource count and per-protocol breakdown.
+        // All events should already be queued (page load event guarantees all
+        // resources are complete before wait_for_navigation() returns).
         let mut resource_count: u32 = 0;
-        let mut transferred_bytes: usize = 0;
         let mut main_protocol = String::from("unknown");
         let mut first_resource = true;
         let mut protocol_counts: HashMap<String, u32> = HashMap::new();
@@ -694,15 +706,6 @@ mod real {
                             *protocol_counts.entry(proto).or_insert(0) += 1;
                         }
                         None => break,
-                    }
-                }
-                event = loading_finished_events.next() => {
-                    if let Some(evt) = event {
-                        // encoded_data_length = total wire bytes (headers + body, compressed).
-                        // This fires after the full response body is received, giving an
-                        // accurate per-request byte count unlike responseReceived.encoded_data_length
-                        // which is unreliable for multiplexed protocols (H2/H3).
-                        transferred_bytes += evt.encoded_data_length as usize;
                     }
                 }
                 _ = &mut drain_deadline => {
