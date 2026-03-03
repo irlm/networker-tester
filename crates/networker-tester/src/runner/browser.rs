@@ -179,317 +179,33 @@ mod real {
     use chrono::Utc;
     use futures::StreamExt;
     use std::collections::HashMap;
-    use std::path::Path;
+
     use std::time::Instant;
     use uuid::Uuid;
 
-    // ── Cert trust helpers ────────────────────────────────────────────────────
+    // ── Cert helpers ──────────────────────────────────────────────────────────
 
-    /// DER-encoded certificate → PEM string (base64 with header/footer).
-    fn der_to_pem(cert_der: &[u8]) -> String {
+    /// SHA-256 hash of the certificate's SubjectPublicKeyInfo (SPKI) DER bytes,
+    /// Base64-encoded.
+    ///
+    /// This is the format expected by Chrome's `--ignore-certificate-errors-spki-list`
+    /// flag.  Unlike `--ignore-certificate-errors`, the SPKI list is **honoured by
+    /// Chrome's QUIC cert verifier**, making it the only reliable cross-platform way
+    /// to accept self-signed certs over QUIC/H3.
+    ///
+    /// The hash is of the raw DER bytes of the SubjectPublicKeyInfo field
+    /// (the SEQUENCE containing AlgorithmIdentifier + BIT STRING key), not of the
+    /// full certificate — matching Chrome's internal computation.
+    fn compute_spki_sha256_base64(cert_der: &[u8]) -> Option<String> {
         use base64::Engine as _;
-        let b64 = base64::engine::general_purpose::STANDARD.encode(cert_der);
-        let lines = b64
-            .as_bytes()
-            .chunks(64)
-            .map(|c| std::str::from_utf8(c).unwrap_or_default())
-            .collect::<Vec<_>>()
-            .join("\n");
-        format!("-----BEGIN CERTIFICATE-----\n{lines}\n-----END CERTIFICATE-----\n")
-    }
-
-    /// SHA-256 hash of the DER cert bytes, hex-encoded without separators.
-    /// Used by macOS `security delete-certificate -Z` for cleanup.
-    #[cfg(target_os = "macos")]
-    fn compute_cert_sha256_hex(cert_der: &[u8]) -> String {
         use sha2::{Digest, Sha256};
-        let hash = Sha256::digest(cert_der);
-        hash.iter().map(|b| format!("{b:02X}")).collect()
-    }
+        use x509_parser::prelude::*;
 
-    // ── CertTrustGuard ────────────────────────────────────────────────────────
-
-    /// RAII guard that removes the temporarily-installed cert trust on drop.
-    ///
-    /// Ensures cleanup even if the browser probe panics or returns early.
-    struct CertTrustGuard {
-        /// macOS: SHA-256 fingerprint for `security delete-certificate -Z`.
-        #[cfg(target_os = "macos")]
-        sha256_hex: String,
-        /// Linux: NSS db path for `certutil -D`.
-        #[cfg(target_os = "linux")]
-        nss_db_path: String,
-        /// Linux: cert nickname for `certutil -D`.
-        #[cfg(target_os = "linux")]
-        cert_name: String,
-        /// Windows: thumbprint for removal from `CurrentUser\Root` store.
-        #[cfg(target_os = "windows")]
-        thumbprint: String,
-        // Other platforms: guard is a no-op; keep the struct non-empty.
-        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-        _unused: (),
-    }
-
-    impl Drop for CertTrustGuard {
-        fn drop(&mut self) {
-            #[cfg(target_os = "macos")]
-            {
-                tracing::debug!(
-                    sha256 = %self.sha256_hex,
-                    "browser3: removing temp cert from login keychain"
-                );
-                let home = std::env::var("HOME").unwrap_or_default();
-                let keychain = format!("{home}/Library/Keychains/login.keychain-db");
-                // -t: also delete user trust settings for this cert.
-                // keychain path is a positional argument (no flag).
-                let _ = std::process::Command::new("security")
-                    .args([
-                        "delete-certificate",
-                        "-Z",
-                        &self.sha256_hex,
-                        "-t",
-                        &keychain,
-                    ])
-                    .output();
-            }
-            #[cfg(target_os = "linux")]
-            {
-                tracing::debug!(
-                    db = %self.nss_db_path,
-                    name = %self.cert_name,
-                    "browser3: removing temp cert from NSS db"
-                );
-                let _ = std::process::Command::new("certutil")
-                    .args(["-D", "-d", &self.nss_db_path, "-n", &self.cert_name])
-                    .output();
-            }
-            #[cfg(target_os = "windows")]
-            {
-                tracing::debug!(
-                    thumbprint = %self.thumbprint,
-                    "browser3: removing temp cert from Windows CurrentUser\\Root"
-                );
-                let cmd = format!(
-                    "Get-ChildItem Cert:\\CurrentUser\\Root \
-                     | Where-Object {{ $_.Thumbprint -eq '{}' }} \
-                     | Remove-Item",
-                    self.thumbprint
-                );
-                let _ = std::process::Command::new("powershell")
-                    .args(["-NoProfile", "-NonInteractive", "-Command", &cmd])
-                    .output();
-            }
-        }
-    }
-
-    // ── install_cert_trust ────────────────────────────────────────────────────
-
-    /// Install the server's leaf cert as a temporarily-trusted root so Chrome's
-    /// QUIC stack accepts it at the **network-service level** (not just the page target).
-    ///
-    /// # Why this is needed
-    ///
-    /// Chrome silently discards Alt-Svc hints from connections where cert errors
-    /// were overridden (e.g. via `--ignore-certificate-errors`).  This is a
-    /// security policy: upgrading a broken connection to QUIC would allow a MITM
-    /// to force protocol negotiation.
-    ///
-    /// With the cert *actually trusted* (no errors at all), Chrome processes Alt-Svc
-    /// normally, schedules a background QUIC session, and the main navigation uses H3.
-    ///
-    /// # Platform behaviour
-    ///
-    /// **macOS**: adds the cert to the user's login keychain as a trusted root via
-    /// `security add-trusted-cert`.  `CertTrustGuard::drop` removes it afterwards.
-    ///
-    /// **Linux**: imports the cert into `~/.pki/nssdb` via `certutil` (package
-    /// `libnss3-tools`).  With `--use-system-cert-store`, Chrome reads this
-    /// user-level NSS database for certificate verification, including QUIC.
-    ///
-    /// **Windows**: adds the cert to `CurrentUser\Root` via PowerShell (no extra
-    /// package needed — Windows Certificate Store + PowerShell are built-in).
-    /// `CertTrustGuard::drop` removes it by thumbprint afterwards.
-    ///
-    /// **Other platforms**: returns an error; the probe falls back to H2.
-    async fn install_cert_trust(
-        cert_der: &[u8],
-        profile_dir: &Path,
-    ) -> anyhow::Result<CertTrustGuard> {
-        // Write PEM into the profile dir (cleaned up by ProfileDirGuard on exit).
-        let pem = der_to_pem(cert_der);
-        let pem_path = profile_dir.join("browser3-server-cert.pem");
-        tokio::fs::write(&pem_path, pem.as_bytes()).await?;
-        install_cert_trust_inner(cert_der, &pem_path, profile_dir).await
-    }
-
-    #[cfg(target_os = "macos")]
-    async fn install_cert_trust_inner(
-        cert_der: &[u8],
-        pem_path: &Path,
-        _profile_dir: &Path,
-    ) -> anyhow::Result<CertTrustGuard> {
-        let sha256_hex = compute_cert_sha256_hex(cert_der);
-        let home = std::env::var("HOME").unwrap_or_default();
-        let keychain = format!("{home}/Library/Keychains/login.keychain-db");
-        // NOTE: Do NOT pass `-d` (domain-only trust).  On macOS Sequoia (15+),
-        // `-d` triggers a Keychain authentication dialog that blocks indefinitely
-        // in a non-interactive context.  Without `-d`, the cert is added with
-        // all-purpose trust and the command completes immediately.  The cert is
-        // only valid for localhost/127.0.0.1 so the broader trust is harmless.
-        let out = tokio::process::Command::new("security")
-            .args([
-                "add-trusted-cert",
-                "-r",
-                "trustRoot",
-                "-k",
-                &keychain,
-                pem_path.to_str().unwrap_or_default(),
-            ])
-            .output()
-            .await?;
-        if !out.status.success() {
-            anyhow::bail!(
-                "security add-trusted-cert failed: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            );
-        }
-        tracing::info!(%sha256_hex, "browser3: server cert added to login keychain");
-        Ok(CertTrustGuard { sha256_hex })
-    }
-
-    #[cfg(target_os = "linux")]
-    async fn install_cert_trust_inner(
-        _cert_der: &[u8],
-        pem_path: &Path,
-        _profile_dir: &Path,
-    ) -> anyhow::Result<CertTrustGuard> {
-        // Verify certutil is available.
-        let certutil_path = which_command("certutil").ok_or_else(|| {
-            anyhow::anyhow!(
-                "certutil not found; install libnss3-tools: \
-                 apt install libnss3-tools  (or  dnf install nss-tools)"
-            )
-        })?;
-
-        // Chrome on Linux reads NSS certs from ~/.pki/nssdb when
-        // --use-system-cert-store is set.  This is the user-level NSS database
-        // shared across Chrome, Chromium, and other NSS-aware applications — it
-        // is NOT the profile directory.  Importing into the profile's Default/
-        // subdirectory has no effect on Chrome's certificate verifier.
-        let home = std::env::var("HOME").unwrap_or_default();
-        if home.is_empty() {
-            anyhow::bail!("HOME not set; cannot locate ~/.pki/nssdb");
-        }
-        let nss_dir = std::path::PathBuf::from(&home).join(".pki").join("nssdb");
-        tokio::fs::create_dir_all(&nss_dir).await?;
-        let db_path = format!("sql:{}", nss_dir.display());
-
-        // Initialise NSS db (ignore error if already exists).
-        let _ = tokio::process::Command::new(&certutil_path)
-            .args(["-N", "-d", &db_path, "--empty-password"])
-            .output()
-            .await;
-
-        // Import cert as a trusted CA.
-        let cert_name = format!("networker-endpoint-{}", std::process::id());
-        let out = tokio::process::Command::new(&certutil_path)
-            .args([
-                "-A",
-                "-d",
-                &db_path,
-                "-t",
-                "CT,,",
-                "-n",
-                &cert_name,
-                "-i",
-                pem_path.to_str().unwrap_or_default(),
-            ])
-            .output()
-            .await?;
-        if !out.status.success() {
-            anyhow::bail!(
-                "certutil -A failed: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            );
-        }
-        tracing::info!(db = %db_path, name = %cert_name, "browser3: cert imported into ~/.pki/nssdb");
-        Ok(CertTrustGuard {
-            nss_db_path: db_path,
-            cert_name,
-        })
-    }
-
-    /// Windows: add the cert to `CurrentUser\Root` via PowerShell, capture the
-    /// thumbprint so `CertTrustGuard::drop` can remove it afterwards.
-    ///
-    /// Chrome on Windows reads `CurrentUser\Root` natively (no certutil needed).
-    /// PowerShell and the Windows Certificate Store are built-in — no extra package
-    /// installation is required.
-    #[cfg(target_os = "windows")]
-    async fn install_cert_trust_inner(
-        _cert_der: &[u8],
-        pem_path: &Path,
-        _profile_dir: &Path,
-    ) -> anyhow::Result<CertTrustGuard> {
-        let pem_str = pem_path.to_str().unwrap_or_default();
-        // Import the PEM cert into CurrentUser\Root, output the thumbprint.
-        // X509Certificate2::new(path) accepts PEM on .NET 5+; all supported Windows
-        // versions ship PowerShell 5.1+ which uses .NET Framework 4.x — we convert
-        // from PEM manually to avoid that constraint.
-        let script = format!(
-            "$pem = [System.IO.File]::ReadAllText('{pem}'); \
-             $b64 = ($pem -replace '-----[^-]+-----','') -replace '\\s',''; \
-             $bytes = [System.Convert]::FromBase64String($b64); \
-             $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($bytes); \
-             $store = [System.Security.Cryptography.X509Certificates.X509Store]::new('Root','CurrentUser'); \
-             $store.Open('ReadWrite'); \
-             $store.Add($cert); \
-             $store.Close(); \
-             Write-Output $cert.Thumbprint",
-            pem = pem_str.replace('\'', "''"),
-        );
-        let out = tokio::process::Command::new("powershell")
-            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-            .output()
-            .await?;
-        if !out.status.success() {
-            anyhow::bail!(
-                "PowerShell cert install failed: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            );
-        }
-        let thumbprint = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if thumbprint.is_empty() {
-            anyhow::bail!("PowerShell cert install succeeded but returned empty thumbprint");
-        }
-        tracing::info!(%thumbprint, "browser3: server cert added to Windows CurrentUser\\Root");
-        Ok(CertTrustGuard { thumbprint })
-    }
-
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-    async fn install_cert_trust_inner(
-        _cert_der: &[u8],
-        _pem_path: &Path,
-        _profile_dir: &Path,
-    ) -> anyhow::Result<CertTrustGuard> {
-        anyhow::bail!(
-            "cert trust installation not supported on this platform (macOS/Linux/Windows only)"
-        )
-    }
-
-    /// Returns the full path to `cmd` if it exists anywhere in `$PATH`.
-    #[cfg(target_os = "linux")]
-    fn which_command(cmd: &str) -> Option<std::path::PathBuf> {
-        std::env::var_os("PATH").and_then(|path| {
-            std::env::split_paths(&path).find_map(|dir| {
-                let p = dir.join(cmd);
-                if p.exists() {
-                    Some(p)
-                } else {
-                    None
-                }
-            })
-        })
+        let (_, cert) = X509Certificate::from_der(cert_der).ok()?;
+        // `raw` is the DER-encoded SubjectPublicKeyInfo SEQUENCE bytes.
+        let spki_der: &[u8] = cert.public_key().raw;
+        let hash = Sha256::digest(spki_der);
+        Some(base64::engine::general_purpose::STANDARD.encode(hash))
     }
 
     // ── Main probe ────────────────────────────────────────────────────────────
@@ -534,11 +250,10 @@ mod real {
 
         // 3. Per-run user-data dir.
         //
-        // Created EARLY (before Chrome launches) so the Linux NSS cert database
-        // can be pre-populated in profile_dir/Default/ before Chrome reads it
-        // at startup.  On macOS the keychain is queried dynamically, so order
-        // relative to Chrome launch is less critical — but pre-creation is still
-        // required to write the PEM file used by security(1).
+        // Each run gets an isolated profile directory so that there is no state
+        // leakage between runs (cached connections, HSTS, QUIC session tickets, etc.).
+        // The directory is created before Chrome launches and cleaned up by
+        // ProfileDirGuard on drop.
         let profile_dir =
             std::env::temp_dir().join(format!("networker-chrome-profile-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&profile_dir); // pre-create for NSS db
@@ -551,35 +266,34 @@ mod real {
         }
         let _profile_guard = ProfileDirGuard(profile_dir.clone());
 
-        // 4. browser3: fetch the server cert and install it as a trusted root.
+        // 4. browser3: compute the SPKI hash of the server certificate.
         //
-        // This must happen BEFORE Browser::launch so that:
-        //   (a) On Linux: the NSS db in profile_dir/Default/ exists at Chrome startup.
-        //   (b) On macOS: the keychain entry is present when Chrome's TLS stack first
-        //       queries it during the QUIC handshake.
+        // Chrome's `--ignore-certificate-errors-spki-list` flag IS honoured by
+        // Chrome's QUIC TLS cert verifier (unlike `--ignore-certificate-errors`).
+        // When the SPKI hash is provided, Chrome accepts the self-signed cert over
+        // QUIC/H3 without triggering cert errors, which also means:
+        //   (a) Alt-Svc hints are processed normally (not silently discarded).
+        //   (b) Background QUIC sessions are established correctly.
         //
-        // Without actual cert trust, Chrome silently discards Alt-Svc hints from
-        // connections where cert errors were overridden (--ignore-certificate-errors).
-        // With the cert trusted (no errors), Chrome processes Alt-Svc → schedules a
-        // background QUIC session → main navigation uses H3.
-        let _cert_trust_guard: Option<CertTrustGuard> = if matches!(protocol, Protocol::Browser3) {
+        // This is the only reliable cross-platform approach — platform cert stores
+        // (NSS db on Linux, Keychain on macOS, Windows Root) are unreliable for
+        // Chrome's QUIC TLS path because Chrome 127+ uses its own Root Store by
+        // default and the QUIC verifier ignores `--ignore-certificate-errors`.
+        let spki_hash: Option<String> = if matches!(protocol, Protocol::Browser3) {
             match fetch_cert_der(base_url).await {
-                Some(cert_der) => match install_cert_trust(&cert_der, &profile_dir).await {
-                    Ok(guard) => {
+                Some(cert_der) => {
+                    let hash = compute_spki_sha256_base64(&cert_der);
+                    if hash.is_some() {
                         tracing::info!(
-                            "browser3: server cert installed as trusted root; \
-                                 QUIC/H3 should work"
+                            "browser3: SPKI hash computed; QUIC cert pinning active"
                         );
-                        Some(guard)
-                    }
-                    Err(e) => {
+                    } else {
                         tracing::warn!(
-                            "browser3: cert trust installation failed ({e}); \
-                                 Chrome may fall back to H2"
+                            "browser3: could not compute SPKI hash; Chrome may fall back to H2"
                         );
-                        None
                     }
-                },
+                    hash
+                }
                 None => {
                     tracing::warn!(
                         "browser3: could not fetch server cert; Chrome may fall back to H2"
@@ -609,17 +323,21 @@ mod real {
                 extra_args.push("disable-quic".into());
             }
             Protocol::Browser3 => {
-                // Only force QUIC when cert trust was successfully installed.
-                // `--origin-to-force-quic-on` makes Chrome attempt QUIC even when
-                // no Alt-Svc hint is cached, but QUIC TLS does NOT honour
-                // `--ignore-certificate-errors`.  If cert trust failed (e.g. certutil
-                // not installed on Linux) and we still add the flag, Chrome attempts
-                // the QUIC handshake with an untrusted cert and the connection fails
-                // with ERR_QUIC_PROTOCOL_ERROR instead of falling back gracefully.
-                if _cert_trust_guard.is_some() {
+                // Provide the SPKI hash so Chrome's QUIC TLS verifier accepts the
+                // self-signed cert, then force QUIC via --origin-to-force-quic-on
+                // so Chrome uses QUIC even before Alt-Svc is cached.
+                //
+                // `--ignore-certificate-errors-spki-list` IS honoured by Chrome's
+                // QUIC cert verifier (unlike `--ignore-certificate-errors`).
+                //
+                // Only add these flags when the SPKI hash is available.  Without it,
+                // QUIC would fail with ERR_QUIC_PROTOCOL_ERROR instead of gracefully
+                // falling back to H2.
+                if let Some(hash) = &spki_hash {
                     let host = base_url.host_str().unwrap_or("");
                     let port = base_url.port_or_known_default().unwrap_or(443);
                     // Format "key=value" without "--" prefix; chromiumoxide prepends "--".
+                    extra_args.push(format!("ignore-certificate-errors-spki-list={hash}"));
                     extra_args.push(format!("origin-to-force-quic-on={host}:{port}"));
                 }
             }
@@ -632,18 +350,8 @@ mod real {
 
         // 7. Launch browser.
         //
-        // `--ignore-certificate-errors` bypasses cert verification but causes Chrome
-        // to discard Alt-Svc hints from connections that had cert errors, preventing
-        // QUIC from ever being scheduled.  For browser3 we install the server cert
-        // as a trusted root *before* launching Chrome so that:
-        //   (a) Chrome sees no cert errors → Alt-Svc is processed normally.
-        //   (b) QUIC TLS verification succeeds (cert is trusted, has CA:TRUE).
-        // Only omit the flag when cert trust was actually installed successfully.
-        let cert_trusted = _cert_trust_guard.is_some();
-
-        // For browser3 with cert trust: override chromiumoxide's DEFAULT_ARGS to
-        // enable background networking (required for QUIC Alt-Svc probes) and remove
-        // --use-mock-keychain so Chrome reads the real macOS Keychain trust store.
+        // For browser3 with SPKI pinning: override chromiumoxide's DEFAULT_ARGS to
+        // enable background networking (required for QUIC Alt-Svc probes).
         //
         // Chromiumoxide's DEFAULT_ARGS include `--disable-background-networking`
         // which disables ALL background network activity including QUIC speculative
@@ -666,6 +374,7 @@ mod real {
         // For headless/sandbox, use chromiumoxide's typed methods instead of raw
         // arg strings — they call Arg::key() internally with the correct bare name.
 
+        let cert_trusted = spki_hash.is_some();
         let needs_quic_networking = matches!(protocol, Protocol::Browser3) && cert_trusted;
 
         let mut config_builder = BrowserConfig::builder()
@@ -711,13 +420,12 @@ mod real {
         // --disable-gpu is not in DEFAULT_ARGS or chromiumoxide's launch(); add explicitly.
         config_builder = config_builder.arg("disable-gpu");
 
-        if cert_trusted {
-            // Chrome 127+ uses the Chrome Root Store by default, which does NOT
-            // include user-added certificates from the platform trust store
-            // (login.keychain on macOS, NSS db on Linux).  `--use-system-cert-store`
-            // forces Chrome to use the platform verifier, which reads user-added roots.
-            config_builder = config_builder.arg("use-system-cert-store");
-        } else {
+        if !cert_trusted {
+            // When no SPKI hash is available (browser1/2/browser modes, or browser3
+            // where the server cert could not be fetched), fall back to ignoring cert
+            // errors globally so the probe can still navigate.
+            // Note: for browser3 with SPKI hash, --ignore-certificate-errors-spki-list
+            // is already in extra_args and no blanket override is needed.
             config_builder = config_builder.arg("ignore-certificate-errors");
         }
         for arg in &extra_args {
@@ -808,14 +516,14 @@ mod real {
             }
         };
 
-        // 9a. browser3: CDP cert override — only when cert trust installation failed.
+        // 9a. browser3: CDP cert override — only when SPKI pinning is unavailable.
         //
         // `Security.setIgnoreCertificateErrors(true)` is equivalent to
         // `--ignore-certificate-errors` at the page level: it causes Chrome to
         // discard Alt-Svc hints from connections with overridden cert errors,
-        // preventing QUIC from being scheduled.  When the cert is properly
-        // trusted (cert_trusted=true) we must NOT set this override — Chrome
-        // should see clean, error-free connections so it processes Alt-Svc.
+        // preventing QUIC from being scheduled.  When SPKI pinning is active
+        // (cert_trusted=true), Chrome sees clean cert connections → Alt-Svc is
+        // processed normally → QUIC/H3 succeeds.  Do NOT set this override then.
         if matches!(protocol, Protocol::Browser3) && !cert_trusted {
             match page
                 .execute(SetIgnoreCertificateErrorsParams { ignore: true })
@@ -1226,25 +934,10 @@ mod real {
         }
 
         #[test]
-        fn der_to_pem_has_header_and_footer() {
-            let dummy = vec![0u8; 32];
-            let pem = der_to_pem(&dummy);
-            assert!(
-                pem.starts_with("-----BEGIN CERTIFICATE-----\n"),
-                "pem={pem}"
-            );
-            assert!(pem.ends_with("-----END CERTIFICATE-----\n"), "pem={pem}");
-        }
-
-        #[test]
-        fn compute_cert_sha256_hex_is_64_uppercase_hex() {
-            let dummy = vec![0u8; 32];
-            let hex = compute_cert_sha256_hex(&dummy);
-            assert_eq!(hex.len(), 64, "SHA-256 hex should be 64 chars: {hex}");
-            assert!(
-                hex.chars().all(|c| c.is_ascii_hexdigit()),
-                "all hex digits: {hex}"
-            );
+        fn compute_spki_sha256_base64_rejects_invalid_der() {
+            // Non-DER bytes should return None without panicking.
+            let result = compute_spki_sha256_base64(&[0u8; 32]);
+            assert!(result.is_none(), "invalid DER should return None");
         }
 
         #[tokio::test]

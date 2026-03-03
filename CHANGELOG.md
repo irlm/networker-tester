@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.50] – 2026-03-03 — fix browser3: SPKI hash pinning replaces unreliable platform cert stores
+
+### Fixed
+- **`browser3` QUIC cert trust (cross-platform)**: Replaced the entire platform cert-store
+  approach (NSS db on Linux, macOS Keychain, Windows Root store) with
+  `--ignore-certificate-errors-spki-list=<spki_hash>`.  Chrome's QUIC TLS cert verifier
+  **does** honour this flag (unlike `--ignore-certificate-errors`), making it the only
+  reliable way to accept self-signed certs over QUIC/H3 on all platforms.
+- **SPKI hash computation**: Added `compute_spki_sha256_base64()` which fetches the server
+  cert via a custom-verifier TLS handshake, extracts the DER-encoded SubjectPublicKeyInfo
+  bytes via `x509-parser`, and Base64-encodes their SHA-256 hash — exactly the format
+  Chrome's SPKI list expects.
+- Removed dead code: `der_to_pem`, `CertTrustGuard`, `install_cert_trust`,
+  `install_cert_trust_inner` (all platform variants), `which_command`,
+  `compute_cert_sha256_hex`.  The new SPKI approach is ~15 lines vs ~290 lines of
+  platform-specific cert management.
+
+---
+
 ## [0.12.49] – 2026-03-03 — fix browser3 Linux cert trust: import into ~/.pki/nssdb
 
 ### Fixed
