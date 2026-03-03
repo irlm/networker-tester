@@ -11,6 +11,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.39] – 2026-03-03 — browser3: install server cert as trusted root before Chrome launch to enable QUIC/H3
+
+### Fixed
+- **`browser3` still shows `proto=h2` with zero QUIC packets** in all previous attempts
+  (v0.12.35–v0.12.38).
+  Root cause (definitive): Chrome silently discards `Alt-Svc` hints from connections where
+  certificate errors were *overridden* via `--ignore-certificate-errors`.  This is a deliberate
+  Chrome security policy: upgrading a "broken" (cert-error) connection to QUIC would allow a
+  MITM to force protocol negotiation.  Even with the CDP `Security.setIgnoreCertificateErrors`
+  command and the SPKI-list flag, Chrome never scheduled a background QUIC probe because the
+  initial H2 warmup connection was flagged as having an overridden cert error.
+  Fix: **install the server's leaf certificate as a temporarily-trusted root before Chrome
+  launches**, so Chrome sees a fully-authenticated connection, processes the `Alt-Svc` hint,
+  schedules a background QUIC session, and the main navigation uses H3.
+  - **macOS**: `security add-trusted-cert -d -r trustRoot -k login.keychain-db <cert.pem>`
+    before Chrome launch; `security delete-certificate -Z <SHA-256>` in RAII `Drop` guard.
+  - **Linux**: `certutil -A -d sql:<profile>/Default/ -t CT,, -n <name> -i <cert.pem>` into
+    the Chrome user-data-dir NSS database (populated before `Browser::launch` so Chrome reads
+    it at startup); cert name uses PID for uniqueness; cleanup in RAII `Drop` guard.
+  - Falls back gracefully (logs a warning, browser3 may show H2) if `certutil` is absent
+    (`apt install libnss3-tools`), or if the macOS keychain is locked.
+- Replaced `fetch_spki_hash` + `--ignore-certificate-errors-spki-list` (did not work in
+  `--headless=new` mode) with `fetch_cert_der` used by the cert trust path.
+- Re-enabled `--origin-to-force-quic-on=<host>:<port>` as belt-and-suspenders alongside
+  the Alt-Svc warmup (cert now trusted, so the forced probe succeeds).
+- Increased browser3 post-warmup sleep from 500 ms to 1 s for more reliable QUIC session
+  establishment on higher-latency links.
+- Added two new unit tests: `der_to_pem_has_header_and_footer`,
+  `compute_cert_sha256_hex_is_64_uppercase_hex`.
+
+---
+
 ## [0.12.38] – 2026-03-03 — browser3: remove forced-QUIC flags to fix Alt-Svc H3 negotiation
 
 ### Fixed

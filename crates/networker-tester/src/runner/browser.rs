@@ -90,7 +90,7 @@ pub fn find_chrome() -> Option<PathBuf> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// URL rewriting helper
+// URL rewriting helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Rewrite the base URL to the `/browser-page` endpoint.
@@ -179,8 +179,226 @@ mod real {
     use chrono::Utc;
     use futures::StreamExt;
     use std::collections::HashMap;
+    use std::path::Path;
     use std::time::Instant;
     use uuid::Uuid;
+
+    // ── Cert trust helpers ────────────────────────────────────────────────────
+
+    /// DER-encoded certificate → PEM string (base64 with header/footer).
+    fn der_to_pem(cert_der: &[u8]) -> String {
+        use base64::Engine as _;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(cert_der);
+        let lines = b64
+            .as_bytes()
+            .chunks(64)
+            .map(|c| std::str::from_utf8(c).unwrap_or_default())
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("-----BEGIN CERTIFICATE-----\n{lines}\n-----END CERTIFICATE-----\n")
+    }
+
+    /// SHA-256 hash of the DER cert bytes, hex-encoded without separators.
+    /// Used by macOS `security delete-certificate -Z` for cleanup.
+    fn compute_cert_sha256_hex(cert_der: &[u8]) -> String {
+        use sha2::{Digest, Sha256};
+        let hash = Sha256::digest(cert_der);
+        hash.iter().map(|b| format!("{b:02X}")).collect()
+    }
+
+    // ── CertTrustGuard ────────────────────────────────────────────────────────
+
+    /// RAII guard that removes the temporarily-installed cert trust on drop.
+    ///
+    /// Ensures cleanup even if the browser probe panics or returns early.
+    struct CertTrustGuard {
+        /// macOS: SHA-256 fingerprint for `security delete-certificate -Z`.
+        #[cfg(target_os = "macos")]
+        sha256_hex: String,
+        /// Linux: NSS db path for `certutil -D`.
+        #[cfg(target_os = "linux")]
+        nss_db_path: String,
+        /// Linux: cert nickname for `certutil -D`.
+        #[cfg(target_os = "linux")]
+        cert_name: String,
+        // Other platforms: guard is a no-op; keep the struct non-empty.
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        _unused: (),
+    }
+
+    impl Drop for CertTrustGuard {
+        fn drop(&mut self) {
+            #[cfg(target_os = "macos")]
+            {
+                tracing::debug!(
+                    sha256 = %self.sha256_hex,
+                    "browser3: removing temp cert from login keychain"
+                );
+                let _ = std::process::Command::new("security")
+                    .args(["delete-certificate", "-Z", &self.sha256_hex])
+                    .output();
+            }
+            #[cfg(target_os = "linux")]
+            {
+                tracing::debug!(
+                    db = %self.nss_db_path,
+                    name = %self.cert_name,
+                    "browser3: removing temp cert from NSS db"
+                );
+                let _ = std::process::Command::new("certutil")
+                    .args(["-D", "-d", &self.nss_db_path, "-n", &self.cert_name])
+                    .output();
+            }
+        }
+    }
+
+    // ── install_cert_trust ────────────────────────────────────────────────────
+
+    /// Install the server's leaf cert as a temporarily-trusted root so Chrome's
+    /// QUIC stack accepts it at the **network-service level** (not just the page target).
+    ///
+    /// # Why this is needed
+    ///
+    /// Chrome silently discards Alt-Svc hints from connections where cert errors
+    /// were overridden (e.g. via `--ignore-certificate-errors`).  This is a
+    /// security policy: upgrading a broken connection to QUIC would allow a MITM
+    /// to force protocol negotiation.
+    ///
+    /// With the cert *actually trusted* (no errors at all), Chrome processes Alt-Svc
+    /// normally, schedules a background QUIC session, and the main navigation uses H3.
+    ///
+    /// # Platform behaviour
+    ///
+    /// **macOS**: adds the cert to the user's login keychain as a trusted root via
+    /// `security add-trusted-cert`.  `CertTrustGuard::drop` removes it afterwards.
+    ///
+    /// **Linux**: creates an NSS certificate database in `profile_dir/Default/` and
+    /// imports the cert as trusted via `certutil` (package `libnss3-tools`).
+    /// Chrome on Linux reads this NSS db at startup, so the profile dir must be
+    /// pre-created before `Browser::launch`.
+    ///
+    /// **Other platforms**: returns an error; the probe falls back to H2.
+    async fn install_cert_trust(
+        cert_der: &[u8],
+        profile_dir: &Path,
+    ) -> anyhow::Result<CertTrustGuard> {
+        // Write PEM into the profile dir (cleaned up by ProfileDirGuard on exit).
+        let pem = der_to_pem(cert_der);
+        let pem_path = profile_dir.join("browser3-server-cert.pem");
+        tokio::fs::write(&pem_path, pem.as_bytes()).await?;
+        install_cert_trust_inner(cert_der, &pem_path, profile_dir).await
+    }
+
+    #[cfg(target_os = "macos")]
+    async fn install_cert_trust_inner(
+        cert_der: &[u8],
+        pem_path: &Path,
+        _profile_dir: &Path,
+    ) -> anyhow::Result<CertTrustGuard> {
+        let sha256_hex = compute_cert_sha256_hex(cert_der);
+        let home = std::env::var("HOME").unwrap_or_default();
+        let keychain = format!("{home}/Library/Keychains/login.keychain-db");
+        let out = tokio::process::Command::new("security")
+            .args([
+                "add-trusted-cert",
+                "-d",
+                "-r",
+                "trustRoot",
+                "-k",
+                &keychain,
+                pem_path.to_str().unwrap_or_default(),
+            ])
+            .output()
+            .await?;
+        if !out.status.success() {
+            anyhow::bail!(
+                "security add-trusted-cert failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        tracing::info!(%sha256_hex, "browser3: server cert added to login keychain");
+        Ok(CertTrustGuard { sha256_hex })
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn install_cert_trust_inner(
+        _cert_der: &[u8],
+        pem_path: &Path,
+        profile_dir: &Path,
+    ) -> anyhow::Result<CertTrustGuard> {
+        // Verify certutil is available.
+        let certutil_path = which_command("certutil").ok_or_else(|| {
+            anyhow::anyhow!(
+                "certutil not found; install libnss3-tools: \
+                 apt install libnss3-tools  (or  dnf install nss-tools)"
+            )
+        })?;
+
+        // NSS db lives inside the Chrome profile dir (Chrome reads it at startup).
+        let nss_dir = profile_dir.join("Default");
+        tokio::fs::create_dir_all(&nss_dir).await?;
+        let db_path = format!("sql:{}", nss_dir.display());
+
+        // Initialise NSS db (ignore error if already exists).
+        let _ = tokio::process::Command::new(&certutil_path)
+            .args(["-N", "-d", &db_path, "--empty-password"])
+            .output()
+            .await;
+
+        // Import cert as a trusted CA.
+        let cert_name = format!("networker-endpoint-{}", std::process::id());
+        let out = tokio::process::Command::new(&certutil_path)
+            .args([
+                "-A",
+                "-d",
+                &db_path,
+                "-t",
+                "CT,,",
+                "-n",
+                &cert_name,
+                "-i",
+                pem_path.to_str().unwrap_or_default(),
+            ])
+            .output()
+            .await?;
+        if !out.status.success() {
+            anyhow::bail!(
+                "certutil -A failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        tracing::info!(db = %db_path, name = %cert_name, "browser3: cert imported into NSS db");
+        Ok(CertTrustGuard {
+            nss_db_path: db_path,
+            cert_name,
+        })
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    async fn install_cert_trust_inner(
+        _cert_der: &[u8],
+        _pem_path: &Path,
+        _profile_dir: &Path,
+    ) -> anyhow::Result<CertTrustGuard> {
+        anyhow::bail!("cert trust installation not supported on this platform (macOS/Linux only)")
+    }
+
+    /// Returns the full path to `cmd` if it exists anywhere in `$PATH`.
+    #[cfg(target_os = "linux")]
+    fn which_command(cmd: &str) -> Option<std::path::PathBuf> {
+        std::env::var_os("PATH").and_then(|path| {
+            std::env::split_paths(&path).find_map(|dir| {
+                let p = dir.join(cmd);
+                if p.exists() {
+                    Some(p)
+                } else {
+                    None
+                }
+            })
+        })
+    }
+
+    // ── Main probe ────────────────────────────────────────────────────────────
 
     pub async fn run_browser_probe(
         run_id: Uuid,
@@ -194,7 +412,7 @@ mod real {
         let attempt_id = Uuid::new_v4();
         let started_at = Utc::now();
 
-        // 1. Locate Chrome
+        // 1. Locate Chrome.
         let chrome_path = match find_chrome() {
             Some(p) => p,
             None => {
@@ -212,7 +430,7 @@ mod real {
 
         // 2. Build page URL.
         // browser1 uses plain HTTP so Chrome has no ALPN to negotiate H2/H3.
-        // browser3 uses the same HTTPS URL as browser2 but with QUIC forced via Chrome flags.
+        // browser2/3 use the same HTTPS URL; protocol is forced via Chrome flags.
         let page_url = if matches!(protocol, Protocol::Browser1) {
             build_browser1_url(base_url, asset_sizes)
         } else {
@@ -220,32 +438,17 @@ mod real {
         };
         tracing::debug!(url = %page_url, "Browser probe target URL");
 
-        // 3. Launch browser
+        // 3. Per-run user-data dir.
         //
-        // When running as root (e.g. via sudo), the snap chromium launcher
-        // script filters out --no-sandbox for security reasons, so Chrome
-        // always exits with "Running as root without --no-sandbox is not
-        // supported" regardless of what flags we pass.
-        //
-        // Fix: if we are root and SUDO_USER is set, wrap the Chrome binary
-        // with `runuser -u <original-user> --` so Chrome runs as the
-        // non-root user and never sees the root restriction.  runuser is
-        // part of util-linux (available on all mainstream Linux distros)
-        // and allows root to switch users without a password.
-        //
-        // The wrapper is a small temp shell script so chromiumoxide can
-        // still manage the child process normally via its path interface.
-        #[cfg(unix)]
-        let chrome_path = wrap_chrome_for_root(chrome_path);
-
-        // Use a unique per-run user-data dir so Chrome is never blocked by a
-        // root-owned /tmp/chromiumoxide-runner left from a previous sudo run.
-        // chromiumoxide defaults to /tmp/chromiumoxide-runner; if that dir was
-        // created by root it is not writable by the non-root SUDO_USER that our
-        // runuser wrapper launches Chrome as.
+        // Created EARLY (before Chrome launches) so the Linux NSS cert database
+        // can be pre-populated in profile_dir/Default/ before Chrome reads it
+        // at startup.  On macOS the keychain is queried dynamically, so order
+        // relative to Chrome launch is less critical — but pre-creation is still
+        // required to write the PEM file used by security(1).
         let profile_dir =
             std::env::temp_dir().join(format!("networker-chrome-profile-{}", std::process::id()));
-        // RAII guard: remove the profile dir on every return path.
+        let _ = std::fs::create_dir_all(&profile_dir); // pre-create for NSS db
+
         struct ProfileDirGuard(std::path::PathBuf);
         impl Drop for ProfileDirGuard {
             fn drop(&mut self) {
@@ -254,49 +457,75 @@ mod real {
         }
         let _profile_guard = ProfileDirGuard(profile_dir.clone());
 
-        // Per-protocol Chrome flags:
-        //   browser1 → plain HTTP URL (no ALPN = definitively H1.1; no extra flags needed)
+        // 4. browser3: fetch the server cert and install it as a trusted root.
+        //
+        // This must happen BEFORE Browser::launch so that:
+        //   (a) On Linux: the NSS db in profile_dir/Default/ exists at Chrome startup.
+        //   (b) On macOS: the keychain entry is present when Chrome's TLS stack first
+        //       queries it during the QUIC handshake.
+        //
+        // Without actual cert trust, Chrome silently discards Alt-Svc hints from
+        // connections where cert errors were overridden (--ignore-certificate-errors).
+        // With the cert trusted (no errors), Chrome processes Alt-Svc → schedules a
+        // background QUIC session → main navigation uses H3.
+        let _cert_trust_guard: Option<CertTrustGuard> = if matches!(protocol, Protocol::Browser3) {
+            match fetch_cert_der(base_url).await {
+                Some(cert_der) => match install_cert_trust(&cert_der, &profile_dir).await {
+                    Ok(guard) => {
+                        tracing::info!(
+                            "browser3: server cert installed as trusted root; \
+                                 QUIC/H3 should work"
+                        );
+                        Some(guard)
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "browser3: cert trust installation failed ({e}); \
+                                 Chrome may fall back to H2"
+                        );
+                        None
+                    }
+                },
+                None => {
+                    tracing::warn!(
+                        "browser3: could not fetch server cert; Chrome may fall back to H2"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        // 5. Per-protocol Chrome flags.
+        //   browser1 → http:// URL; no ALPN → definitively H1.1 (no flags needed)
         //   browser2 → --disable-quic           (force HTTP/2, prevent H3 upgrade)
-        //   browser3 → NO forced-QUIC flags (QUIC is Chrome's default; explicit
-        //              --origin-to-force-quic-on causes Chrome to probe the origin
-        //              during network-stack init, before the CDP cert override is active,
-        //              which marks the origin as "QUIC broken" for the rest of the session).
-        //              QUIC is instead triggered via Alt-Svc from the warmup navigation:
-        //                1. Warmup GET /health → server responds with Alt-Svc: h3=":PORT"
-        //                2. Chrome schedules a background QUIC connection to the origin
-        //                3. CDP Security.setIgnoreCertificateErrors(true) was applied before
-        //                   the warmup, so the background QUIC TLS handshake succeeds
-        //                4. 500 ms sleep → QUIC session established
-        //                5. Main navigation uses the already-open QUIC session → H3
-        //              Belt-and-suspenders: SPKI hash also passed for older Chrome.
-        //   browser  → no extra flags (auto-negotiate, typically H2)
+        //   browser3 → --origin-to-force-quic-on (force QUIC alongside Alt-Svc)
+        //   browser  → no extra flags (auto-negotiate; typically H2 on LAN)
         let mut extra_args: Vec<String> = Vec::new();
         match &protocol {
             Protocol::Browser1 => {
-                // URL already rewritten to http:// above — no extra Chrome flags needed.
+                // URL already rewritten to http:// — no extra Chrome flags needed.
             }
             Protocol::Browser2 => {
                 extra_args.push("--disable-quic".into());
             }
             Protocol::Browser3 => {
-                // Belt-and-suspenders: SPKI hash for older Chrome where the CDP
-                // Security.setIgnoreCertificateErrors() may not reach the QUIC stack.
-                match fetch_spki_hash(base_url).await {
-                    Some(hash) => {
-                        tracing::info!(spki = %hash, "browser3: SPKI hash fetched for cert pinning");
-                        extra_args.push(format!("--ignore-certificate-errors-spki-list={hash}"));
-                    }
-                    None => {
-                        tracing::warn!(
-                            "browser3: could not fetch SPKI hash; \
-                             relying on CDP cert-override only"
-                        );
-                    }
-                }
+                // Belt-and-suspenders: force QUIC alongside the Alt-Svc warmup.
+                // On Chrome 132+ this flag may be a no-op, but the cert trust +
+                // Alt-Svc path is the primary mechanism.
+                let host = base_url.host_str().unwrap_or("");
+                let port = base_url.port_or_known_default().unwrap_or(443);
+                extra_args.push(format!("--origin-to-force-quic-on={host}:{port}"));
             }
             _ => {}
         }
 
+        // 6. Root-user wrapper (snap Chrome restriction on Linux).
+        #[cfg(unix)]
+        let chrome_path = wrap_chrome_for_root(chrome_path);
+
+        // 7. Launch browser.
         let mut config_builder = BrowserConfig::builder()
             .chrome_executable(chrome_path)
             .user_data_dir(&profile_dir)
@@ -356,10 +585,10 @@ mod real {
             }
         };
 
-        // Spawn the CDP message handler
+        // Spawn the CDP message handler.
         let handler_task = tokio::spawn(async move { while handler.next().await.is_some() {} });
 
-        // 4. Open a new page
+        // 8. Open a new page.
         let page = match tokio::time::timeout(
             std::time::Duration::from_millis(timeout_ms / 2),
             browser.new_page("about:blank"),
@@ -393,38 +622,32 @@ mod real {
             }
         };
 
-        // 5a. browser3: enable CDP-level cert-error override BEFORE any navigation.
-        //
-        // Chrome's --headless=new mode silently ignores --ignore-certificate-errors-spki-list
-        // for QUIC connections (Chrome bug / architecture limitation: the flag is handled by
-        // the browser process but QUIC TLS runs in the network service process which doesn't
-        // always receive the flag).  The CDP Security.setIgnoreCertificateErrors() command
-        // goes through the DevTools session and reliably applies to ALL connections,
-        // including QUIC/H3, when set before the first navigation.
+        // 9a. browser3: belt-and-suspenders CDP cert override (page-level).
+        //     The cert is now trusted at the network-service level (step 4), so
+        //     this is mainly for older Chrome where trust-store propagation is slow.
         if matches!(protocol, Protocol::Browser3) {
             match page
                 .execute(SetIgnoreCertificateErrorsParams { ignore: true })
                 .await
             {
-                Ok(_) => tracing::info!(
+                Ok(_) => tracing::debug!(
                     "browser3: CDP Security.setIgnoreCertificateErrors(true) applied"
                 ),
-                Err(e) => tracing::warn!(
-                    "browser3: CDP cert-error override failed (falling back to SPKI pin): {e}"
-                ),
+                Err(e) => {
+                    tracing::warn!("browser3: CDP cert-error override failed (non-fatal): {e}")
+                }
             }
         }
 
-        // 5b. browser3 warmup navigation.
+        // 9b. browser3 warmup navigation to seed the Alt-Svc / QUIC pre-connect cache.
         //
-        // Alt-Svc discovery flow:
-        //   1. Warmup GET /health → server returns Alt-Svc: h3=":PORT" over H2.
-        //   2. Chrome caches the hint and starts establishing a QUIC connection.
-        //   3. 500 ms sleep → Chrome completes the QUIC TLS handshake.
-        //   4. Main navigation → Chrome uses the already-open QUIC session → H3.
-        //
-        // Without this warmup Chrome always wins the TCP-vs-QUIC race on LAN (<1 ms)
-        // and uses H2 even when --origin-to-force-quic-on is set.
+        // Flow (with cert trusted):
+        //   1. Warmup GET /health → server responds with Alt-Svc: h3=":PORT" over H2.
+        //   2. Chrome stores the hint and starts a background QUIC session.
+        //      Because the cert is *actually* trusted (no overridden errors), Chrome
+        //      processes the Alt-Svc hint and the QUIC TLS succeeds.
+        //   3. 1 s sleep → background QUIC session fully established.
+        //   4. Main navigation uses the open QUIC session → H3.
         if matches!(protocol, Protocol::Browser3) {
             let warmup = if let Ok(mut u) = url::Url::parse(&page_url) {
                 u.set_path("/health");
@@ -439,11 +662,11 @@ mod real {
                 page.wait_for_navigation().await
             })
             .await;
-            // Give Chrome 500 ms to complete the QUIC handshake from the Alt-Svc hint.
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            // Give Chrome time to complete the background QUIC handshake.
+            tokio::time::sleep(std::time::Duration::from_millis(1_000)).await;
         }
 
-        // 5c. Subscribe to network response events.
+        // 9c. Subscribe to network response events.
         // Subscribed AFTER the warmup so only the main navigation's resources are counted.
         let mut response_events = match page.event_listener::<EventResponseReceived>().await {
             Ok(e) => e,
@@ -461,7 +684,7 @@ mod real {
             }
         };
 
-        // 6. Navigate and wait for load event
+        // 10. Navigate and wait for load event.
         let nav_start = Instant::now();
         let nav_result =
             tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), async {
@@ -501,7 +724,7 @@ mod real {
 
         let _nav_elapsed = nav_start.elapsed().as_millis();
 
-        // 7. Extract performance timing via JS
+        // 11. Extract performance timing via JS.
         let timing_js = r#"
             (function() {
                 var t = window.performance.timing;
@@ -525,7 +748,7 @@ mod real {
             }
         };
 
-        // 8. Drain network events (500 ms drain timeout after navigation)
+        // 12. Drain network events (500 ms after navigation).
         let mut resource_count: u32 = 0;
         let mut transferred_bytes: usize = 0;
         let mut main_protocol = String::from("unknown");
@@ -563,7 +786,7 @@ mod real {
             }
         }
 
-        // Sort protocol counts by count descending
+        // Sort protocol counts by count descending.
         let mut resource_protocols: Vec<(String, u32)> = protocol_counts.into_iter().collect();
         resource_protocols.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
 
@@ -601,6 +824,8 @@ mod real {
         }
     }
 
+    // ── Performance timing helpers ────────────────────────────────────────────
+
     /// Parse `window.performance.timing` JSON into (load_ms, dcl_ms, ttfb_ms).
     fn parse_perf_timing(json: &str) -> (f64, f64, f64) {
         if json.is_empty() {
@@ -625,6 +850,8 @@ mod real {
         let ttfb_ms = (response_start - nav_start).max(0.0);
         (load_ms, dcl_ms, ttfb_ms)
     }
+
+    // ── Root-user wrapper ─────────────────────────────────────────────────────
 
     /// If we are running as root (e.g. via sudo) and SUDO_USER is set, return
     /// a path to a temporary shell script that re-executes the Chrome binary
@@ -671,6 +898,8 @@ mod real {
         }
     }
 
+    // ── Error helper ──────────────────────────────────────────────────────────
+
     fn browser_error(
         run_id: Uuid,
         attempt_id: Uuid,
@@ -707,24 +936,21 @@ mod real {
         }
     }
 
-    /// Fetch the SHA-256 hash of the server's leaf certificate SubjectPublicKeyInfo (SPKI),
-    /// base64-encoded (standard alphabet with padding).
+    // ── Cert fetch ────────────────────────────────────────────────────────────
+
+    /// Connect to the server via TLS and return the leaf certificate's DER bytes.
     ///
-    /// Chrome's `--ignore-certificate-errors-spki-list` accepts exactly this format and
-    /// allows QUIC/TLS to succeed against a self-signed certificate even when
-    /// `--ignore-certificate-errors` alone is not honoured by the QUIC stack.
+    /// All certificate errors are ignored (custom verifier that accepts anything),
+    /// so this works even for self-signed certificates.
     ///
-    /// Returns `None` on any TCP/TLS error — callers should log a warning and continue
-    /// without the pin (Chrome may fall back to H2 in that case).
-    async fn fetch_spki_hash(base_url: &url::Url) -> Option<String> {
-        use base64::Engine as _;
-        use sha2::{Digest, Sha256};
+    /// Returns `None` on any TCP/TLS error.
+    async fn fetch_cert_der(base_url: &url::Url) -> Option<Vec<u8>> {
         use std::sync::{Arc, Mutex};
 
         let host = base_url.host_str()?.to_string();
         let port = base_url.port_or_known_default()?;
 
-        // Custom verifier: accept all certs but capture the leaf cert DER bytes.
+        // Custom verifier: accept all certs, capture the leaf cert DER bytes.
         #[derive(Debug)]
         struct CertCapture(Mutex<Option<Vec<u8>>>);
 
@@ -778,20 +1004,14 @@ mod real {
         let tcp = tokio::net::TcpStream::connect((host.as_str(), port))
             .await
             .ok()?;
-        // TryFrom<String> → ServerName<'static>; TryFrom<&str> is only ServerName<'a>.
         let server_name = rustls::pki_types::ServerName::try_from(host).ok()?;
         let _tls = connector.connect(server_name, tcp).await.ok()?;
 
-        let cert_der = capturer.0.lock().unwrap().take()?;
-        use x509_parser::prelude::FromDer as _;
-        let (_, cert) = x509_parser::certificate::X509Certificate::from_der(&cert_der).ok()?;
-        let spki_raw = cert.tbs_certificate.subject_pki.raw;
-
-        let mut hasher = Sha256::new();
-        hasher.update(spki_raw);
-        let hash = hasher.finalize();
-        Some(base64::engine::general_purpose::STANDARD.encode(hash))
+        let cert_der = capturer.0.lock().unwrap().take();
+        cert_der
     }
+
+    // ── Tests ─────────────────────────────────────────────────────────────────
 
     #[cfg(test)]
     mod tests {
@@ -812,6 +1032,28 @@ mod real {
             assert_eq!(load, 0.0);
             assert_eq!(dcl, 0.0);
             assert_eq!(ttfb, 0.0);
+        }
+
+        #[test]
+        fn der_to_pem_has_header_and_footer() {
+            let dummy = vec![0u8; 32];
+            let pem = der_to_pem(&dummy);
+            assert!(
+                pem.starts_with("-----BEGIN CERTIFICATE-----\n"),
+                "pem={pem}"
+            );
+            assert!(pem.ends_with("-----END CERTIFICATE-----\n"), "pem={pem}");
+        }
+
+        #[test]
+        fn compute_cert_sha256_hex_is_64_uppercase_hex() {
+            let dummy = vec![0u8; 32];
+            let hex = compute_cert_sha256_hex(&dummy);
+            assert_eq!(hex.len(), 64, "SHA-256 hex should be 64 chars: {hex}");
+            assert!(
+                hex.chars().all(|c| c.is_ascii_hexdigit()),
+                "all hex digits: {hex}"
+            );
         }
 
         #[tokio::test]
