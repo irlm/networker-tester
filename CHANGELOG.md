@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.49] – 2026-03-03 — fix browser3 Linux cert trust: import into ~/.pki/nssdb
+
+### Fixed
+- **`browser3` Linux cert trust**: `install_cert_trust_inner` was importing the server
+  cert into `profile_dir/Default/` (the Chrome profile's data directory).  Chrome does
+  **not** read TLS certificates from the profile directory — it reads `~/.pki/nssdb` when
+  `--use-system-cert-store` is set.  Changed the NSS db path to `~/.pki/nssdb`; certutil
+  creates the directory if absent.  The cert is still removed by `CertTrustGuard::drop`
+  on probe completion.
+
+---
+
 ## [0.12.48] – 2026-03-03 — installer: certutil shown in plan and confirmed before install
 
 ### Changed
