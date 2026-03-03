@@ -200,6 +200,7 @@ mod real {
 
     /// SHA-256 hash of the DER cert bytes, hex-encoded without separators.
     /// Used by macOS `security delete-certificate -Z` for cleanup.
+    #[cfg(target_os = "macos")]
     fn compute_cert_sha256_hex(cert_der: &[u8]) -> String {
         use sha2::{Digest, Sha256};
         let hash = Sha256::digest(cert_der);
