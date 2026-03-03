@@ -25,7 +25,7 @@ set -euo pipefail
 
 REPO_SSH="ssh://git@github.com/irlm/networker-tester"
 REPO_GH="irlm/networker-tester"
-SCRIPT_VERSION="0.12.46"
+SCRIPT_VERSION="0.12.47"
 INSTALL_DIR="${HOME}/.cargo/bin"
 
 # ── Colours (ANSI C quoting; safe even when stdin is a curl pipe) ─────────────
@@ -736,7 +736,7 @@ step_install_chrome() {
 # only standard way to import a trusted CA into it.  This step is a no-op on
 # macOS (uses security(1) instead) and when certutil is already present.
 step_ensure_certutil() {
-    [[ "$SYS_OS" == "linux" ]] || return 0
+    [[ "$SYS_OS" == "Linux" ]] || return 0
     [[ -n "$PKG_MGR" ]]       || return 0
     command -v certutil &>/dev/null && return 0   # already installed
 
