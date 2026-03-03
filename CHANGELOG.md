@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.53] – 2026-03-03 — fix browser probe: use EventLoadingFinished for accurate transferred_bytes
+
+### Fixed
+- **`transferred_bytes` in browser probes**: Switched from `EventResponseReceived.response.encoded_data_length`
+  to `EventLoadingFinished.encoded_data_length` for byte accounting.
+  `Network.responseReceived` fires when headers arrive — its `encodedDataLength` is unreliable for
+  multiplexed protocols (H2/H3) because it captures connection-level bytes at an arbitrary point
+  mid-transfer, producing bimodal values (e.g. browser2 alternating between ~1 KiB and ~86 KiB
+  across runs). `Network.loadingFinished` fires after the full response body is received and gives
+  an accurate per-request byte count for all protocols.
+  Protocol and resource-count accounting still uses `EventResponseReceived` (unchanged).
+
+---
+
 ## [0.12.52] – 2026-03-03 — HTML report: browser comparison table, SVG charts, analysis, favicon fix
 
 ### Added

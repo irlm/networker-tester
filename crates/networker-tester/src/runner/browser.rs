@@ -174,7 +174,9 @@ mod real {
     use super::{build_browser1_url, build_page_url, find_chrome};
     use crate::metrics::{BrowserResult, ErrorCategory, ErrorRecord, Protocol, RequestAttempt};
     use chromiumoxide::browser::{Browser, BrowserConfig};
-    use chromiumoxide::cdp::browser_protocol::network::EventResponseReceived;
+    use chromiumoxide::cdp::browser_protocol::network::{
+        EventLoadingFinished, EventResponseReceived,
+    };
     use chromiumoxide::cdp::browser_protocol::security::SetIgnoreCertificateErrorsParams;
     use chrono::Utc;
     use futures::StreamExt;
@@ -284,9 +286,7 @@ mod real {
                 Some(cert_der) => {
                     let hash = compute_spki_sha256_base64(&cert_der);
                     if hash.is_some() {
-                        tracing::info!(
-                            "browser3: SPKI hash computed; QUIC cert pinning active"
-                        );
+                        tracing::info!("browser3: SPKI hash computed; QUIC cert pinning active");
                     } else {
                         tracing::warn!(
                             "browser3: could not compute SPKI hash; Chrome may fall back to H2"
@@ -565,8 +565,10 @@ mod real {
             tokio::time::sleep(std::time::Duration::from_millis(1_000)).await;
         }
 
-        // 9c. Subscribe to network response events.
+        // 9c. Subscribe to network events.
         // Subscribed AFTER the warmup so only the main navigation's resources are counted.
+        // EventResponseReceived: fires on headers received → used for protocol + resource count.
+        // EventLoadingFinished:  fires after full body received → used for accurate byte count.
         let mut response_events = match page.event_listener::<EventResponseReceived>().await {
             Ok(e) => e,
             Err(e) => {
@@ -578,6 +580,22 @@ mod real {
                     protocol,
                     started_at,
                     &format!("Failed to subscribe to network events: {e}"),
+                    ErrorCategory::Other,
+                );
+            }
+        };
+        let mut loading_finished_events = match page.event_listener::<EventLoadingFinished>().await
+        {
+            Ok(e) => e,
+            Err(e) => {
+                handler_task.abort();
+                return browser_error(
+                    run_id,
+                    attempt_id,
+                    sequence_num,
+                    protocol,
+                    started_at,
+                    &format!("Failed to subscribe to loading-finished events: {e}"),
                     ErrorCategory::Other,
                 );
             }
@@ -648,6 +666,8 @@ mod real {
         };
 
         // 12. Drain network events (500 ms after navigation).
+        // ResponseReceived → resource count + protocol breakdown.
+        // LoadingFinished  → bytes (encodedDataLength after full body; reliable for all protocols).
         let mut resource_count: u32 = 0;
         let mut transferred_bytes: usize = 0;
         let mut main_protocol = String::from("unknown");
@@ -667,9 +687,6 @@ mod real {
                                 .as_deref()
                                 .unwrap_or("unknown")
                                 .to_lowercase();
-                            let encoded_len = evt.response.encoded_data_length as usize;
-                            transferred_bytes += encoded_len;
-
                             if first_resource {
                                 main_protocol = proto.clone();
                                 first_resource = false;
@@ -677,6 +694,15 @@ mod real {
                             *protocol_counts.entry(proto).or_insert(0) += 1;
                         }
                         None => break,
+                    }
+                }
+                event = loading_finished_events.next() => {
+                    if let Some(evt) = event {
+                        // encoded_data_length = total wire bytes (headers + body, compressed).
+                        // This fires after the full response body is received, giving an
+                        // accurate per-request byte count unlike responseReceived.encoded_data_length
+                        // which is unreliable for multiplexed protocols (H2/H3).
+                        transferred_bytes += evt.encoded_data_length as usize;
                     }
                 }
                 _ = &mut drain_deadline => {
