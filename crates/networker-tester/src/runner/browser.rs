@@ -302,10 +302,9 @@ mod real {
     /// **macOS**: adds the cert to the user's login keychain as a trusted root via
     /// `security add-trusted-cert`.  `CertTrustGuard::drop` removes it afterwards.
     ///
-    /// **Linux**: creates an NSS certificate database in `profile_dir/Default/` and
-    /// imports the cert as trusted via `certutil` (package `libnss3-tools`).
-    /// Chrome on Linux reads this NSS db at startup, so the profile dir must be
-    /// pre-created before `Browser::launch`.
+    /// **Linux**: imports the cert into `~/.pki/nssdb` via `certutil` (package
+    /// `libnss3-tools`).  With `--use-system-cert-store`, Chrome reads this
+    /// user-level NSS database for certificate verification, including QUIC.
     ///
     /// **Windows**: adds the cert to `CurrentUser\Root` via PowerShell (no extra
     /// package needed — Windows Certificate Store + PowerShell are built-in).
@@ -362,7 +361,7 @@ mod real {
     async fn install_cert_trust_inner(
         _cert_der: &[u8],
         pem_path: &Path,
-        profile_dir: &Path,
+        _profile_dir: &Path,
     ) -> anyhow::Result<CertTrustGuard> {
         // Verify certutil is available.
         let certutil_path = which_command("certutil").ok_or_else(|| {
@@ -372,8 +371,16 @@ mod real {
             )
         })?;
 
-        // NSS db lives inside the Chrome profile dir (Chrome reads it at startup).
-        let nss_dir = profile_dir.join("Default");
+        // Chrome on Linux reads NSS certs from ~/.pki/nssdb when
+        // --use-system-cert-store is set.  This is the user-level NSS database
+        // shared across Chrome, Chromium, and other NSS-aware applications — it
+        // is NOT the profile directory.  Importing into the profile's Default/
+        // subdirectory has no effect on Chrome's certificate verifier.
+        let home = std::env::var("HOME").unwrap_or_default();
+        if home.is_empty() {
+            anyhow::bail!("HOME not set; cannot locate ~/.pki/nssdb");
+        }
+        let nss_dir = std::path::PathBuf::from(&home).join(".pki").join("nssdb");
         tokio::fs::create_dir_all(&nss_dir).await?;
         let db_path = format!("sql:{}", nss_dir.display());
 
@@ -405,7 +412,7 @@ mod real {
                 String::from_utf8_lossy(&out.stderr).trim()
             );
         }
-        tracing::info!(db = %db_path, name = %cert_name, "browser3: cert imported into NSS db");
+        tracing::info!(db = %db_path, name = %cert_name, "browser3: cert imported into ~/.pki/nssdb");
         Ok(CertTrustGuard {
             nss_db_path: db_path,
             cert_name,
