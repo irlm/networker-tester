@@ -234,8 +234,18 @@ mod real {
                     sha256 = %self.sha256_hex,
                     "browser3: removing temp cert from login keychain"
                 );
+                let home = std::env::var("HOME").unwrap_or_default();
+                let keychain = format!("{home}/Library/Keychains/login.keychain-db");
+                // -t: also delete user trust settings for this cert.
+                // keychain path is a positional argument (no flag).
                 let _ = std::process::Command::new("security")
-                    .args(["delete-certificate", "-Z", &self.sha256_hex])
+                    .args([
+                        "delete-certificate",
+                        "-Z",
+                        &self.sha256_hex,
+                        "-t",
+                        &keychain,
+                    ])
                     .output();
             }
             #[cfg(target_os = "linux")]
@@ -298,10 +308,14 @@ mod real {
         let sha256_hex = compute_cert_sha256_hex(cert_der);
         let home = std::env::var("HOME").unwrap_or_default();
         let keychain = format!("{home}/Library/Keychains/login.keychain-db");
+        // NOTE: Do NOT pass `-d` (domain-only trust).  On macOS Sequoia (15+),
+        // `-d` triggers a Keychain authentication dialog that blocks indefinitely
+        // in a non-interactive context.  Without `-d`, the cert is added with
+        // all-purpose trust and the command completes immediately.  The cert is
+        // only valid for localhost/127.0.0.1 so the broader trust is harmless.
         let out = tokio::process::Command::new("security")
             .args([
                 "add-trusted-cert",
-                "-d",
                 "-r",
                 "trustRoot",
                 "-k",
@@ -508,15 +522,18 @@ mod real {
                 // URL already rewritten to http:// — no extra Chrome flags needed.
             }
             Protocol::Browser2 => {
-                extra_args.push("--disable-quic".into());
+                // NOTE: chromiumoxide arg() converts &str to Arg by treating the
+                // whole string as the key (WITHOUT "--" prefix).  chromiumoxide then
+                // prepends "--" when building the command line.  Never pass "--flag"
+                // with the dashes — that produces "----flag" which Chrome ignores.
+                extra_args.push("disable-quic".into());
             }
             Protocol::Browser3 => {
                 // Belt-and-suspenders: force QUIC alongside the Alt-Svc warmup.
-                // On Chrome 132+ this flag may be a no-op, but the cert trust +
-                // Alt-Svc path is the primary mechanism.
                 let host = base_url.host_str().unwrap_or("");
                 let port = base_url.port_or_known_default().unwrap_or(443);
-                extra_args.push(format!("--origin-to-force-quic-on={host}:{port}"));
+                // Format "key=value" without "--" prefix; chromiumoxide prepends "--".
+                extra_args.push(format!("origin-to-force-quic-on={host}:{port}"));
             }
             _ => {}
         }
@@ -526,16 +543,97 @@ mod real {
         let chrome_path = wrap_chrome_for_root(chrome_path);
 
         // 7. Launch browser.
+        //
+        // `--ignore-certificate-errors` bypasses cert verification but causes Chrome
+        // to discard Alt-Svc hints from connections that had cert errors, preventing
+        // QUIC from ever being scheduled.  For browser3 we install the server cert
+        // as a trusted root *before* launching Chrome so that:
+        //   (a) Chrome sees no cert errors → Alt-Svc is processed normally.
+        //   (b) QUIC TLS verification succeeds (cert is trusted, has CA:TRUE).
+        // Only omit the flag when cert trust was actually installed successfully.
+        let cert_trusted = _cert_trust_guard.is_some();
+
+        // For browser3 with cert trust: override chromiumoxide's DEFAULT_ARGS to
+        // enable background networking (required for QUIC Alt-Svc probes) and remove
+        // --use-mock-keychain so Chrome reads the real macOS Keychain trust store.
+        //
+        // Chromiumoxide's DEFAULT_ARGS include `--disable-background-networking`
+        // which disables ALL background network activity including QUIC speculative
+        // pre-connections and Alt-Svc background probe sessions.  This was the root
+        // cause of browser3 always showing H2 — the Alt-Svc warmup received
+        // `h3=":PORT"` but Chrome never scheduled the background QUIC session.
+        //
+        // For browser1/browser2/browser the defaults are fine: those modes use
+        // `--ignore-certificate-errors` which already disables QUIC anyway.
+        // IMPORTANT: chromiumoxide's BrowserConfig::arg() converts &str to Arg by
+        // using the ENTIRE string as the HashMap key (without "--" prefix).  The
+        // launcher then prepends "--" to form the final flag.  Passing a string that
+        // already begins with "--" produces "----flag" which Chrome silently ignores.
+        //
+        // Correct usage:
+        //   config_builder.arg("disable-gpu")          → passes --disable-gpu       ✓
+        //   config_builder.arg("headless=new")         → passes --headless=new      ✓
+        //   config_builder.arg("--disable-gpu")        → passes ----disable-gpu     ✗
+        //
+        // For headless/sandbox, use chromiumoxide's typed methods instead of raw
+        // arg strings — they call Arg::key() internally with the correct bare name.
+
+        let needs_quic_networking = matches!(protocol, Protocol::Browser3) && cert_trusted;
+
         let mut config_builder = BrowserConfig::builder()
             .chrome_executable(chrome_path)
             .user_data_dir(&profile_dir)
-            .arg("--headless=new")
-            .arg("--no-sandbox")
-            .arg("--disable-setuid-sandbox")
-            .arg("--disable-gpu")
-            .arg("--ignore-certificate-errors")
-            .arg("--disable-dev-shm-usage");
+            .no_sandbox() // --no-sandbox --disable-setuid-sandbox
+            .new_headless_mode(); // --headless=new --hide-scrollbars --mute-audio
+
+        if needs_quic_networking {
+            // Disable chromiumoxide's DEFAULT_ARGS so we can exclude the two that
+            // break QUIC for browser3:
+            //   --disable-background-networking  → blocks QUIC Alt-Svc probes
+            //   --use-mock-keychain              → prevents macOS Keychain cert trust
+            // All other DEFAULT_ARGS are re-added manually below.
+            config_builder = config_builder
+                .disable_default_args()
+                // Re-add all DEFAULT_ARGS except --disable-background-networking
+                // and --use-mock-keychain.  Note: bare names, no "--" prefix.
+                .arg("enable-features=NetworkService,NetworkServiceInProcess")
+                .arg("disable-background-timer-throttling")
+                .arg("disable-backgrounding-occluded-windows")
+                .arg("disable-breakpad")
+                .arg("disable-client-side-phishing-detection")
+                .arg("disable-component-extensions-with-background-pages")
+                .arg("disable-default-apps")
+                .arg("disable-dev-shm-usage")
+                .arg("disable-features=TranslateUI")
+                .arg("disable-hang-monitor")
+                .arg("disable-ipc-flooding-protection")
+                .arg("disable-popup-blocking")
+                .arg("disable-prompt-on-repost")
+                .arg("disable-renderer-backgrounding")
+                .arg("disable-sync")
+                .arg("force-color-profile=srgb")
+                .arg("metrics-recording-only")
+                .arg("no-first-run")
+                .arg("enable-automation") // required: enables Chrome DevTools Protocol
+                .arg("password-store=basic")
+                .arg("enable-blink-features=IdleDetection")
+                .arg("lang=en_US");
+        }
+
+        // --disable-gpu is not in DEFAULT_ARGS or chromiumoxide's launch(); add explicitly.
+        config_builder = config_builder.arg("disable-gpu");
+
+        if cert_trusted {
+            // Chrome 127+ uses the Chrome Root Store by default, which does NOT
+            // include user-added certificates from the platform trust store
+            // (login.keychain on macOS, NSS db on Linux).  `--use-system-cert-store`
+            // forces Chrome to use the platform verifier, which reads user-added roots.
+            config_builder = config_builder.arg("use-system-cert-store");
+        } else {
+            config_builder = config_builder.arg("ignore-certificate-errors");
+        }
         for arg in &extra_args {
+            // extra_args entries are already formatted without "--" prefix.
             config_builder = config_builder.arg(arg.as_str());
         }
 
@@ -622,16 +720,21 @@ mod real {
             }
         };
 
-        // 9a. browser3: belt-and-suspenders CDP cert override (page-level).
-        //     The cert is now trusted at the network-service level (step 4), so
-        //     this is mainly for older Chrome where trust-store propagation is slow.
-        if matches!(protocol, Protocol::Browser3) {
+        // 9a. browser3: CDP cert override — only when cert trust installation failed.
+        //
+        // `Security.setIgnoreCertificateErrors(true)` is equivalent to
+        // `--ignore-certificate-errors` at the page level: it causes Chrome to
+        // discard Alt-Svc hints from connections with overridden cert errors,
+        // preventing QUIC from being scheduled.  When the cert is properly
+        // trusted (cert_trusted=true) we must NOT set this override — Chrome
+        // should see clean, error-free connections so it processes Alt-Svc.
+        if matches!(protocol, Protocol::Browser3) && !cert_trusted {
             match page
                 .execute(SetIgnoreCertificateErrorsParams { ignore: true })
                 .await
             {
                 Ok(_) => tracing::debug!(
-                    "browser3: CDP Security.setIgnoreCertificateErrors(true) applied"
+                    "browser3: CDP Security.setIgnoreCertificateErrors(true) applied (fallback)"
                 ),
                 Err(e) => {
                     tracing::warn!("browser3: CDP cert-error override failed (non-fatal): {e}")

@@ -148,7 +148,7 @@ fn get_primary_local_ip() -> Option<String> {
 }
 
 fn generate_self_signed_cert() -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
-    use rcgen::generate_simple_self_signed;
+    use rcgen::{BasicConstraints, CertificateParams, IsCa, KeyPair};
 
     // SANs: localhost (DNS), 127.0.0.1, ::1, and the primary LAN IP (if any).
     // rcgen 0.13 auto-detects IP strings and creates IP SANs; DNS strings get DNS SANs.
@@ -165,11 +165,23 @@ fn generate_self_signed_cert() -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
         }
     }
 
-    let certified_key = generate_simple_self_signed(subject_alt_names)
-        .context("rcgen generate_simple_self_signed")?;
+    // Use CertificateParams directly so we can set `is_ca = CA`.
+    // A cert with basicConstraints: CA:TRUE can be used as a trust anchor by
+    // Chrome's cert verifier (both the macOS Security Framework path and
+    // Chrome's built-in BoringSSL QUIC path).  A plain leaf cert (no CA flag)
+    // is silently rejected as a trust root even when added to the macOS Keychain
+    // or Linux NSS db, causing QUIC TLS to fail with CERTIFICATE_VERIFY_FAILED.
+    let mut params =
+        CertificateParams::new(subject_alt_names).context("rcgen CertificateParams::new")?;
+    params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
 
-    let cert_pem = certified_key.cert.pem().into_bytes();
-    let key_pem = certified_key.key_pair.serialize_pem().into_bytes();
+    let key_pair = KeyPair::generate().context("rcgen KeyPair::generate")?;
+    let cert = params
+        .self_signed(&key_pair)
+        .context("rcgen CertificateParams::self_signed")?;
+
+    let cert_pem = cert.pem().into_bytes();
+    let key_pem = key_pair.serialize_pem().into_bytes();
 
     Ok((cert_pem, key_pem))
 }
