@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.47] – 2026-03-03 — installer: fix SYS_OS case check in step_ensure_certutil
+
+### Fixed
+- **Installer (`install.sh`)**: `step_ensure_certutil` compared `"$SYS_OS" == "linux"`
+  (lowercase) but `SYS_OS` is set from `uname -s` which returns `"Linux"` (capital L).
+  The guard returned immediately on every Linux system, so certutil was never installed.
+  Fixed to `"Linux"`.
+
+---
+
 ## [0.12.46] – 2026-03-03 — installer: certutil check runs for release downloads too
 
 ### Fixed
