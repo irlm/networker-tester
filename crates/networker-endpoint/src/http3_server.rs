@@ -288,7 +288,7 @@ pub mod server {
 
         let mut html = String::from(
             "<!DOCTYPE html>\n\
-             <html><head><title>Networker Page Load Test</title></head>\n\
+             <html><head><title>Networker Page Load Test</title><link rel=\"icon\" href=\"data:,\"></head>\n\
              <body>\n",
         );
         for i in 0..n {

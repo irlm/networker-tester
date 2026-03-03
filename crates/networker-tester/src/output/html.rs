@@ -393,6 +393,99 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
         }
     }
 
+    // ── Protocol Comparison (Browser) ─────────────────────────────────────────
+    {
+        let br_cmp_attempts: Vec<&RequestAttempt> = run
+            .attempts
+            .iter()
+            .filter(|a| {
+                matches!(
+                    a.protocol,
+                    Protocol::Browser
+                        | Protocol::Browser1
+                        | Protocol::Browser2
+                        | Protocol::Browser3
+                ) && a.browser.is_some()
+            })
+            .collect();
+        if !br_cmp_attempts.is_empty() {
+            let _ = write!(
+                out,
+                r#"
+<section class="card">
+  <h2>Protocol Comparison – Browser</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Protocol</th><th>N</th>
+        <th>Avg TTFB (ms)</th><th>Avg DCL (ms)</th><th>Avg Load (ms)</th>
+        <th>p50 (ms)</th><th>Min (ms)</th><th>Max (ms)</th>
+        <th>Avg Resources</th><th>Avg Bytes</th>
+      </tr>
+    </thead>
+    <tbody>
+"#
+            );
+            for proto in &[
+                Protocol::Browser1,
+                Protocol::Browser2,
+                Protocol::Browser3,
+                Protocol::Browser,
+            ] {
+                let rows: Vec<&RequestAttempt> = br_cmp_attempts
+                    .iter()
+                    .filter(|a| &a.protocol == proto)
+                    .copied()
+                    .collect();
+                if rows.is_empty() {
+                    continue;
+                }
+                let n = rows.len();
+                let br_data: Vec<_> = rows.iter().filter_map(|a| a.browser.as_ref()).collect();
+                let avg_ttfb = br_data.iter().map(|b| b.ttfb_ms).sum::<f64>() / n as f64;
+                let avg_dcl =
+                    br_data.iter().map(|b| b.dom_content_loaded_ms).sum::<f64>() / n as f64;
+                let load_vals: Vec<f64> = br_data.iter().map(|b| b.load_ms).collect();
+                let avg_res =
+                    br_data.iter().map(|b| b.resource_count as f64).sum::<f64>() / n as f64;
+                let avg_bytes = br_data
+                    .iter()
+                    .map(|b| b.transferred_bytes as f64)
+                    .sum::<f64>()
+                    / n as f64;
+                if let Some(s) = compute_stats(&load_vals) {
+                    let _ = write!(
+                        out,
+                        r#"      <tr>
+        <td>{proto}</td>
+        <td>{n}</td>
+        <td>{ttfb:.2}</td>
+        <td>{dcl:.2}</td>
+        <td>{load:.2}</td>
+        <td>{p50:.2}</td>
+        <td>{min:.2}</td>
+        <td>{max:.2}</td>
+        <td>{res:.1}</td>
+        <td>{bytes}</td>
+      </tr>
+"#,
+                        proto = proto,
+                        n = n,
+                        ttfb = avg_ttfb,
+                        dcl = avg_dcl,
+                        load = s.mean,
+                        p50 = s.p50,
+                        min = s.min,
+                        max = s.max,
+                        res = avg_res,
+                        bytes = format_bytes(avg_bytes as usize),
+                    );
+                }
+            }
+            let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
+        }
+    }
+
     // ── Browser Results ───────────────────────────────────────────────────────
     {
         let browser_rows: Vec<&RequestAttempt> = run
@@ -481,6 +574,344 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
                 out,
                 "      </tbody>\n    </table>\n  </details>\n</section>"
             );
+        }
+    }
+
+    // ── Charts + Analysis ─────────────────────────────────────────────────────
+    {
+        let chart_browser: Vec<&RequestAttempt> = run
+            .attempts
+            .iter()
+            .filter(|a| {
+                matches!(
+                    a.protocol,
+                    Protocol::Browser
+                        | Protocol::Browser1
+                        | Protocol::Browser2
+                        | Protocol::Browser3
+                ) && a.browser.is_some()
+            })
+            .collect();
+        let chart_pl: Vec<&RequestAttempt> = run
+            .attempts
+            .iter()
+            .filter(|a| {
+                matches!(
+                    a.protocol,
+                    Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3
+                ) && a.page_load.is_some()
+            })
+            .collect();
+        let has_throughput = run.attempts.iter().any(|a| {
+            matches!(
+                a.protocol,
+                Protocol::Download | Protocol::Upload | Protocol::WebDownload | Protocol::WebUpload
+            ) && a
+                .http
+                .as_ref()
+                .map(|h| h.throughput_mbps.is_some())
+                .unwrap_or(false)
+        });
+
+        if !chart_browser.is_empty() || !chart_pl.is_empty() {
+            let _ = writeln!(
+                out,
+                "<section class=\"card\">\n  <h2>Charts &amp; Analysis</h2>\n  <div class=\"charts-grid\">"
+            );
+
+            // Chart 1: Page Load Time — All Protocols
+            {
+                let mut bars: Vec<(String, f64, &'static str)> = Vec::new();
+                for (proto, color) in [
+                    (Protocol::Browser1, "#e07b39"),
+                    (Protocol::Browser2, "#4e79a7"),
+                    (Protocol::Browser3, "#59a14f"),
+                    (Protocol::Browser, "#8c6bb1"),
+                ] {
+                    let data: Vec<f64> = chart_browser
+                        .iter()
+                        .filter(|a| a.protocol == proto)
+                        .filter_map(|a| a.browser.as_ref().map(|b| b.load_ms))
+                        .collect();
+                    if !data.is_empty() {
+                        let avg = data.iter().sum::<f64>() / data.len() as f64;
+                        bars.push((proto.to_string(), avg, color));
+                    }
+                }
+                for (proto, color) in [
+                    (Protocol::PageLoad, "#e07b39"),
+                    (Protocol::PageLoad2, "#4e79a7"),
+                    (Protocol::PageLoad3, "#59a14f"),
+                ] {
+                    let data: Vec<f64> = chart_pl
+                        .iter()
+                        .filter(|a| a.protocol == proto)
+                        .filter_map(|a| a.page_load.as_ref().map(|p| p.total_ms))
+                        .collect();
+                    if !data.is_empty() {
+                        let avg = data.iter().sum::<f64>() / data.len() as f64;
+                        bars.push((proto.to_string(), avg, color));
+                    }
+                }
+                if !bars.is_empty() {
+                    bars.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                    let bar_refs: Vec<(&str, f64)> =
+                        bars.iter().map(|(l, v, _)| (l.as_str(), *v)).collect();
+                    let color_refs: Vec<&str> = bars.iter().map(|(_, _, c)| *c).collect();
+                    let svg = svg_hbar(
+                        "Page Load Time (ms) \u{2014} All Protocols",
+                        &bar_refs,
+                        "ms",
+                        &color_refs,
+                    );
+                    let _ = writeln!(out, "<div>{}</div>", svg);
+                }
+            }
+
+            // Chart 2: Browser TTFB / DCL / Load Breakdown
+            if !chart_browser.is_empty() {
+                let mut bar_labels: Vec<String> = Vec::new();
+                let mut bar_values: Vec<f64> = Vec::new();
+                let mut bar_colors: Vec<&'static str> = Vec::new();
+                for (proto, ttfb_c, dcl_c, load_c) in [
+                    (Protocol::Browser1, "#f0b98d", "#e07b39", "#b85c1f"),
+                    (Protocol::Browser2, "#91b8d4", "#4e79a7", "#2c5077"),
+                    (Protocol::Browser3, "#95cf8b", "#59a14f", "#38712f"),
+                    (Protocol::Browser, "#c9b3d5", "#8c6bb1", "#614080"),
+                ] {
+                    let data: Vec<_> = chart_browser
+                        .iter()
+                        .filter(|a| a.protocol == proto)
+                        .filter_map(|a| a.browser.as_ref())
+                        .collect();
+                    if data.is_empty() {
+                        continue;
+                    }
+                    let label = proto.to_string();
+                    let n = data.len() as f64;
+                    let avg_ttfb = data.iter().map(|b| b.ttfb_ms).sum::<f64>() / n;
+                    let avg_dcl = data.iter().map(|b| b.dom_content_loaded_ms).sum::<f64>() / n;
+                    let avg_load = data.iter().map(|b| b.load_ms).sum::<f64>() / n;
+                    bar_labels.push(format!("{label} TTFB"));
+                    bar_values.push(avg_ttfb);
+                    bar_colors.push(ttfb_c);
+                    bar_labels.push(format!("{label} DCL"));
+                    bar_values.push(avg_dcl);
+                    bar_colors.push(dcl_c);
+                    bar_labels.push(format!("{label} Load"));
+                    bar_values.push(avg_load);
+                    bar_colors.push(load_c);
+                }
+                if !bar_values.is_empty() {
+                    let bars: Vec<(&str, f64)> = bar_labels
+                        .iter()
+                        .zip(bar_values.iter())
+                        .map(|(l, v)| (l.as_str(), *v))
+                        .collect();
+                    let svg = svg_hbar(
+                        "Browser TTFB / DCL / Load Breakdown",
+                        &bars,
+                        "ms",
+                        &bar_colors,
+                    );
+                    let _ = writeln!(out, "<div>{}</div>", svg);
+                }
+            }
+
+            // Chart 3: Throughput by Protocol
+            if has_throughput {
+                use std::collections::BTreeSet;
+                let tp_attempts: Vec<&RequestAttempt> = run
+                    .attempts
+                    .iter()
+                    .filter(|a| {
+                        matches!(
+                            a.protocol,
+                            Protocol::Download
+                                | Protocol::Upload
+                                | Protocol::WebDownload
+                                | Protocol::WebUpload
+                        ) && a.http.is_some()
+                    })
+                    .collect();
+                let mut bars: Vec<(String, f64, &'static str)> = Vec::new();
+                for (proto, color) in [
+                    (Protocol::Download, "#4e79a7"),
+                    (Protocol::Upload, "#e07b39"),
+                    (Protocol::WebDownload, "#59a14f"),
+                    (Protocol::WebUpload, "#8c6bb1"),
+                ] {
+                    let payloads: BTreeSet<usize> = tp_attempts
+                        .iter()
+                        .filter(|a| a.protocol == proto)
+                        .filter_map(|a| a.http.as_ref().map(|h| h.payload_bytes))
+                        .filter(|&b| b > 0)
+                        .collect();
+                    for payload_bytes in payloads {
+                        let data: Vec<f64> = tp_attempts
+                            .iter()
+                            .filter(|a| {
+                                a.protocol == proto
+                                    && a.http.as_ref().map(|h| h.payload_bytes)
+                                        == Some(payload_bytes)
+                            })
+                            .filter_map(|a| a.http.as_ref().and_then(|h| h.throughput_mbps))
+                            .collect();
+                        if !data.is_empty() {
+                            let avg = data.iter().sum::<f64>() / data.len() as f64;
+                            bars.push((
+                                format!("{proto} {}", format_bytes(payload_bytes)),
+                                avg,
+                                color,
+                            ));
+                        }
+                    }
+                }
+                if !bars.is_empty() {
+                    let bar_refs: Vec<(&str, f64)> =
+                        bars.iter().map(|(l, v, _)| (l.as_str(), *v)).collect();
+                    let color_refs: Vec<&str> = bars.iter().map(|(_, _, c)| *c).collect();
+                    let svg = svg_hbar(
+                        "Throughput by Protocol (MB/s)",
+                        &bar_refs,
+                        "MB/s",
+                        &color_refs,
+                    );
+                    let _ = writeln!(out, "<div>{}</div>", svg);
+                }
+            }
+
+            let _ = writeln!(out, "  </div>"); // close charts-grid
+
+            // Analysis observations
+            {
+                let mut observations: Vec<String> = Vec::new();
+
+                // Fastest browser mode
+                let mut fastest: Option<(String, f64)> = None;
+                for proto in [
+                    Protocol::Browser1,
+                    Protocol::Browser2,
+                    Protocol::Browser3,
+                    Protocol::Browser,
+                ] {
+                    let data: Vec<f64> = chart_browser
+                        .iter()
+                        .filter(|a| a.protocol == proto)
+                        .filter_map(|a| a.browser.as_ref().map(|b| b.load_ms))
+                        .collect();
+                    if !data.is_empty() {
+                        let avg = data.iter().sum::<f64>() / data.len() as f64;
+                        if fastest.as_ref().map(|(_, v)| avg < *v).unwrap_or(true) {
+                            fastest = Some((proto.to_string(), avg));
+                        }
+                    }
+                }
+                if let Some((proto, ms)) = fastest {
+                    observations.push(format!(
+                        "Fastest browser mode: <strong>{proto}</strong> \u{2014} {ms:.1}ms avg load time"
+                    ));
+                }
+
+                // H3 vs H2 comparison
+                let br2_avg: Option<f64> = {
+                    let data: Vec<f64> = chart_browser
+                        .iter()
+                        .filter(|a| a.protocol == Protocol::Browser2)
+                        .filter_map(|a| a.browser.as_ref().map(|b| b.load_ms))
+                        .collect();
+                    if data.is_empty() {
+                        None
+                    } else {
+                        Some(data.iter().sum::<f64>() / data.len() as f64)
+                    }
+                };
+                let br3_avg: Option<f64> = {
+                    let data: Vec<f64> = chart_browser
+                        .iter()
+                        .filter(|a| a.protocol == Protocol::Browser3)
+                        .filter_map(|a| a.browser.as_ref().map(|b| b.load_ms))
+                        .collect();
+                    if data.is_empty() {
+                        None
+                    } else {
+                        Some(data.iter().sum::<f64>() / data.len() as f64)
+                    }
+                };
+                if let (Some(h2), Some(h3)) = (br2_avg, br3_avg) {
+                    let diff = h2 - h3;
+                    let pct = diff / h2 * 100.0;
+                    if diff > 0.0 {
+                        observations.push(format!(
+                            "H3 is {:.1}ms ({:.1}%) faster than H2 ({:.1}ms vs {:.1}ms avg load)",
+                            diff, pct, h3, h2
+                        ));
+                    } else {
+                        observations.push(format!(
+                            "H2 is {:.1}ms ({:.1}%) faster than H3 ({:.1}ms vs {:.1}ms avg load)",
+                            -diff, -pct, h2, h3
+                        ));
+                    }
+                }
+
+                // Real browser vs synthetic (browser3 vs pageload3)
+                let pl3_avg: Option<f64> = {
+                    let data: Vec<f64> = chart_pl
+                        .iter()
+                        .filter(|a| a.protocol == Protocol::PageLoad3)
+                        .filter_map(|a| a.page_load.as_ref().map(|p| p.total_ms))
+                        .collect();
+                    if data.is_empty() {
+                        None
+                    } else {
+                        Some(data.iter().sum::<f64>() / data.len() as f64)
+                    }
+                };
+                if let (Some(br3), Some(pl3)) = (br3_avg, pl3_avg) {
+                    let overhead = br3 - pl3;
+                    let pct = overhead / pl3 * 100.0;
+                    observations.push(format!(
+                        "Real browser (browser3) overhead vs synthetic (pageload3): {overhead:+.1}ms ({pct:+.1}%)"
+                    ));
+                }
+
+                // Resource protocol breakdown from last browser run
+                if let Some(last_br) = chart_browser.last() {
+                    if let Some(b) = &last_br.browser {
+                        if !b.resource_protocols.is_empty() {
+                            let total_res: u32 = b.resource_protocols.iter().map(|(_, n)| n).sum();
+                            if b.resource_protocols.len() == 1 {
+                                let (p, _) = &b.resource_protocols[0];
+                                observations.push(format!(
+                                    "All {} resources via {} (last run)",
+                                    total_res,
+                                    escape_html(p)
+                                ));
+                            } else {
+                                let proto_summary = b
+                                    .resource_protocols
+                                    .iter()
+                                    .map(|(p, n)| format!("{}×{}", escape_html(p), n))
+                                    .collect::<Vec<_>>()
+                                    .join(", ");
+                                observations.push(format!(
+                                    "Resource protocols (last run): {proto_summary}"
+                                ));
+                            }
+                        }
+                    }
+                }
+
+                if !observations.is_empty() {
+                    let _ = writeln!(out, "  <div class=\"analysis\"><h3>Observations</h3><ul>");
+                    for obs in &observations {
+                        let _ = writeln!(out, "    <li>{obs}</li>");
+                    }
+                    let _ = writeln!(out, "  </ul></div>");
+                }
+            }
+
+            let _ = writeln!(out, "</section>");
         }
     }
 
@@ -1312,6 +1743,70 @@ fn escape_html(s: &str) -> String {
         .replace('\'', "&#39;")
 }
 
+/// Render a self-contained horizontal SVG bar chart.
+/// `bars`: (label, value) pairs sorted as desired.
+/// `unit`: appended after the value in the value label (e.g. "ms", "MB/s").
+/// `colors`: per-bar fill color hex strings; cycles if shorter than `bars`.
+fn svg_hbar(title: &str, bars: &[(&str, f64)], unit: &str, colors: &[&str]) -> String {
+    const LBL_W: usize = 130;
+    const BAR_AREA: usize = 280;
+    const VAL_W: usize = 80;
+    const BAR_H: usize = 26;
+    const GAP: usize = 6;
+    const PAD_TOP: usize = 30;
+    const PAD_BOT: usize = 12;
+
+    if bars.is_empty() {
+        return String::new();
+    }
+    let max_val = bars.iter().map(|(_, v)| *v).fold(0.0_f64, f64::max);
+    let total_h = PAD_TOP + bars.len() * (BAR_H + GAP) + PAD_BOT;
+    let total_w = LBL_W + BAR_AREA + VAL_W;
+    let def_color = "#4e79a7";
+
+    let mut s = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{total_w}" height="{total_h}" style="font-family:system-ui,sans-serif;font-size:12px">"#
+    );
+    s.push_str(&format!(
+        r##"<text x="{}" y="18" font-weight="bold" font-size="13" fill="#1a1a2e">{}</text>"##,
+        LBL_W + 5,
+        escape_html(title)
+    ));
+    for (i, (label, value)) in bars.iter().enumerate() {
+        let y = PAD_TOP + i * (BAR_H + GAP);
+        let bx = LBL_W;
+        let bar_w = if max_val > 0.0 {
+            (*value / max_val * BAR_AREA as f64) as usize
+        } else {
+            0
+        };
+        let color = colors
+            .get(i % colors.len().max(1))
+            .copied()
+            .unwrap_or(def_color);
+        s.push_str(&format!(
+            r##"<text x="{}" y="{}" text-anchor="end" dominant-baseline="middle" fill="#555">{}</text>"##,
+            bx - 5,
+            y + BAR_H / 2,
+            escape_html(label)
+        ));
+        if bar_w > 0 {
+            s.push_str(&format!(
+                r#"<rect x="{bx}" y="{y}" width="{bar_w}" height="{BAR_H}" rx="3" fill="{color}"/>"#
+            ));
+        }
+        s.push_str(&format!(
+            r##"<text x="{}" y="{}" dominant-baseline="middle" fill="#333">{:.1} {}</text>"##,
+            bx + bar_w + 5,
+            y + BAR_H / 2,
+            value,
+            unit
+        ));
+    }
+    s.push_str("</svg>");
+    s
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Inline CSS (minimal, works offline; external CSS can override)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1353,6 +1848,13 @@ const INLINE_CSS: &str = r#"
   .grp-lbl{font-weight:600;flex:1}
   .grp-meta{opacity:.7;font-family:monospace;font-size:.82rem}
   details table{margin-top:.5rem}
+  .charts-grid{display:flex;flex-wrap:wrap;gap:1.5rem;align-items:flex-start;margin-top:.5rem}
+  .analysis{background:#f8f9fa;border-left:3px solid #4e79a7;padding:.8rem 1.2rem;
+            border-radius:0 6px 6px 0;margin-top:1rem}
+  .analysis h3{font-size:.95rem;margin-bottom:.5rem;color:#1a1a2e}
+  .analysis ul{list-style:none;padding:0}
+  .analysis li{padding:.2rem 0;font-size:.86rem;line-height:1.45}
+  .analysis li::before{content:"\2022";margin-right:.5rem;color:#4e79a7;font-weight:bold}
 "#;
 
 // ─────────────────────────────────────────────────────────────────────────────
