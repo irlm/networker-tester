@@ -530,11 +530,19 @@ mod real {
                 extra_args.push("disable-quic".into());
             }
             Protocol::Browser3 => {
-                // Belt-and-suspenders: force QUIC alongside the Alt-Svc warmup.
-                let host = base_url.host_str().unwrap_or("");
-                let port = base_url.port_or_known_default().unwrap_or(443);
-                // Format "key=value" without "--" prefix; chromiumoxide prepends "--".
-                extra_args.push(format!("origin-to-force-quic-on={host}:{port}"));
+                // Only force QUIC when cert trust was successfully installed.
+                // `--origin-to-force-quic-on` makes Chrome attempt QUIC even when
+                // no Alt-Svc hint is cached, but QUIC TLS does NOT honour
+                // `--ignore-certificate-errors`.  If cert trust failed (e.g. certutil
+                // not installed on Linux) and we still add the flag, Chrome attempts
+                // the QUIC handshake with an untrusted cert and the connection fails
+                // with ERR_QUIC_PROTOCOL_ERROR instead of falling back gracefully.
+                if _cert_trust_guard.is_some() {
+                    let host = base_url.host_str().unwrap_or("");
+                    let port = base_url.port_or_known_default().unwrap_or(443);
+                    // Format "key=value" without "--" prefix; chromiumoxide prepends "--".
+                    extra_args.push(format!("origin-to-force-quic-on={host}:{port}"));
+                }
             }
             _ => {}
         }
