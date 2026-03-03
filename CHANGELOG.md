@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.54] – 2026-03-03 — installer: sync SCRIPT_VERSION to 0.12.54
+
+### Changed
+- `install.sh` and `install.ps1`: bump `SCRIPT_VERSION` from 0.12.48 → 0.12.54 so the installer
+  banner matches the binary version being installed.
+
+---
+
 ## [0.12.53] – 2026-03-03 — fix browser probe: use EventLoadingFinished for accurate transferred_bytes
 
 ### Fixed
