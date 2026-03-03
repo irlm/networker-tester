@@ -11,6 +11,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.36] – 2026-03-02 — browser3: localhost URL rewrite + host-resolver-rules to force H3
+
+### Fixed
+- **`browser3` still showed `proto=h2`** even after Alt-Svc + warmup navigation (v0.12.35).
+  Root cause: Chrome's QUIC TLS path is stricter about SAN matching than the TCP/TLS path.
+  When connecting to `172.16.32.106:8443`, Chrome's QUIC stack rejects the handshake if the
+  cert has no SAN matching that exact IP — even with `--ignore-certificate-errors-spki-list`
+  pinning the cert.  (`--ignore-certificate-errors` alone does not bypass QUIC TLS failures.)
+  Fix: browser3 now **rewrites the navigation URL to `https://localhost:<port>`** and adds:
+  - `--host-resolver-rules=MAP localhost <actual_ip>` — Chrome routes `localhost` DNS to the
+    real server IP, so the connection reaches the endpoint.
+  - `--allow-insecure-localhost` — Chrome trusts self-signed certs on localhost without
+    requiring a SPKI pin (the cert always has `localhost` as a SAN).
+  - `--origin-to-force-quic-on=localhost:<port>` — QUIC is forced on the localhost origin.
+  - `--ignore-certificate-errors-spki-list=<hash>` — belt-and-suspenders SPKI pin still
+    computed and passed.
+  - `fetch_spki_hash()` log level promoted from `DEBUG` to `INFO` for visibility.
+  - Warmup sleep increased from 200 ms to 500 ms to give Chrome more time to establish the
+    QUIC session from the Alt-Svc hint.
+
+---
+
 ## [0.12.35] – 2026-03-02 — browser3: Alt-Svc + warmup navigation to reliably force H3
 
 ### Fixed

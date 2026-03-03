@@ -141,13 +141,37 @@ pub fn build_browser1_url(base: &url::Url, asset_sizes: &[usize]) -> String {
     target.to_string()
 }
 
+/// Rewrite the base URL for the `browser3` (forced HTTP/3 QUIC) probe.
+///
+/// Rewrites the host to `localhost` so that Chrome's cert verification passes
+/// against the self-signed cert (which always has `localhost` as a SAN).
+/// The actual server IP is passed via `--host-resolver-rules=MAP localhost <ip>`
+/// so Chrome still connects to the real server while presenting `localhost` as
+/// the SNI hostname — matching the cert SAN exactly.
+///
+/// This avoids the hostname-mismatch that would block QUIC even when the cert
+/// is trusted via SPKI pin: Chrome's QUIC TLS path is stricter about SAN
+/// matching than the regular TCP/TLS path.
+pub fn build_browser3_url(base: &url::Url, asset_sizes: &[usize]) -> String {
+    let mut target = base.clone();
+    // Keep https:// scheme and port; just swap the host to localhost.
+    let _ = target.set_host(Some("localhost"));
+    target.set_path("/browser-page");
+    if !asset_sizes.is_empty() {
+        let n = asset_sizes.len();
+        let bytes = asset_sizes[0];
+        target.set_query(Some(&format!("assets={n}&bytes={bytes}")));
+    }
+    target.to_string()
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Real implementation (feature = "browser")
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(feature = "browser")]
 mod real {
-    use super::{build_browser1_url, build_page_url, find_chrome};
+    use super::{build_browser1_url, build_browser3_url, build_page_url, find_chrome};
     use crate::metrics::{BrowserResult, ErrorCategory, ErrorRecord, Protocol, RequestAttempt};
     use chromiumoxide::browser::{Browser, BrowserConfig};
     use chromiumoxide::cdp::browser_protocol::network::EventResponseReceived;
@@ -187,10 +211,12 @@ mod real {
 
         // 2. Build page URL.
         // browser1 uses plain HTTP so Chrome has no ALPN to negotiate H2/H3.
-        let page_url = if matches!(protocol, Protocol::Browser1) {
-            build_browser1_url(base_url, asset_sizes)
-        } else {
-            build_page_url(base_url, asset_sizes)
+        // browser3 rewrites host to `localhost` so QUIC cert verification passes
+        // (the self-signed cert always has `localhost` as a SAN).
+        let page_url = match &protocol {
+            Protocol::Browser1 => build_browser1_url(base_url, asset_sizes),
+            Protocol::Browser3 => build_browser3_url(base_url, asset_sizes),
+            _ => build_page_url(base_url, asset_sizes),
         };
         tracing::debug!(url = %page_url, "Browser probe target URL");
 
@@ -231,11 +257,13 @@ mod real {
         // Per-protocol Chrome flags:
         //   browser1 → plain HTTP URL (no ALPN = definitively H1.1; no extra flags needed)
         //   browser2 → --disable-quic           (force HTTP/2, prevent H3 upgrade)
-        //   browser3 → --enable-quic            (force HTTP/3 QUIC)
-        //              --origin-to-force-quic-on=<host>:<port>
-        //              --ignore-certificate-errors-spki-list=<hash>
-        //                  (QUIC TLS needs explicit cert trust for self-signed certs;
-        //                   we fetch the SPKI hash before launching Chrome)
+        //   browser3 → URL rewritten to https://localhost:<port> (cert SAN matches);
+        //              --enable-quic
+        //              --origin-to-force-quic-on=localhost:<port>
+        //              --allow-insecure-localhost  (bypass cert errors for localhost)
+        //              --host-resolver-rules=MAP localhost <actual_ip>
+        //                  (redirect localhost DNS to the real server IP)
+        //              --ignore-certificate-errors-spki-list=<hash>  (belt-and-suspenders)
         //   browser  → no extra flags (auto-negotiate, typically H2)
         let mut extra_args: Vec<String> = Vec::new();
         match &protocol {
@@ -246,22 +274,30 @@ mod real {
                 extra_args.push("--disable-quic".into());
             }
             Protocol::Browser3 => {
-                let host = base_url.host_str().unwrap_or("localhost");
+                let actual_host = base_url.host_str().unwrap_or("localhost").to_string();
                 let port = base_url.port_or_known_default().unwrap_or(443);
                 extra_args.push("--enable-quic".into());
-                extra_args.push(format!("--origin-to-force-quic-on={host}:{port}"));
-                // Chrome's QUIC TLS verifier doesn't honour --ignore-certificate-errors
-                // for self-signed certs.  Fetch the SPKI hash and pin it explicitly so
-                // Chrome trusts the cert over QUIC.
+                // Force QUIC on the localhost origin (URL was rewritten to localhost).
+                extra_args.push(format!("--origin-to-force-quic-on=localhost:{port}"));
+                // Allow Chrome to trust self-signed certs on localhost without SPKI pin.
+                extra_args.push("--allow-insecure-localhost".into());
+                // Redirect localhost DNS to the actual server IP so Chrome connects to
+                // the real endpoint while presenting "localhost" as the SNI hostname.
+                if actual_host != "localhost" && actual_host != "127.0.0.1" && actual_host != "::1"
+                {
+                    extra_args.push(format!("--host-resolver-rules=MAP localhost {actual_host}"));
+                }
+                // Belt-and-suspenders: also pin the SPKI hash in case --allow-insecure-localhost
+                // is not sufficient for Chrome's QUIC TLS path.
                 match fetch_spki_hash(base_url).await {
                     Some(hash) => {
-                        tracing::debug!(spki = %hash, "browser3: pinning cert SPKI for QUIC");
+                        tracing::info!(spki = %hash, "browser3: SPKI hash fetched for cert pinning");
                         extra_args.push(format!("--ignore-certificate-errors-spki-list={hash}"));
                     }
                     None => {
                         tracing::warn!(
                             "browser3: could not fetch SPKI hash; \
-                             Chrome may fall back to H2 if cert is self-signed"
+                             relying on --allow-insecure-localhost only"
                         );
                     }
                 }
@@ -389,8 +425,8 @@ mod real {
                 page.wait_for_navigation().await
             })
             .await;
-            // Give Chrome 200 ms to complete the QUIC handshake from the Alt-Svc hint.
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            // Give Chrome 500 ms to complete the QUIC handshake from the Alt-Svc hint.
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
 
         // 5b. Subscribe to network response events.
@@ -980,6 +1016,44 @@ mod tests {
         )
         .await;
         assert_eq!(attempt.protocol, crate::metrics::Protocol::Browser);
+    }
+
+    // ── build_browser3_url tests ──────────────────────────────────────────────
+
+    #[test]
+    fn build_browser3_url_rewrites_host_to_localhost() {
+        let base = url::Url::parse("https://172.16.32.106:8443/health").unwrap();
+        let url = build_browser3_url(&base, &[]);
+        assert!(
+            url.starts_with("https://localhost:8443/browser-page"),
+            "url={url}"
+        );
+    }
+
+    #[test]
+    fn build_browser3_url_keeps_https_and_port() {
+        let base = url::Url::parse("https://192.168.1.1:9443/some/path").unwrap();
+        let url = build_browser3_url(&base, &[]);
+        assert!(
+            url.starts_with("https://localhost:9443/browser-page"),
+            "url={url}"
+        );
+    }
+
+    #[test]
+    fn build_browser3_url_includes_asset_params() {
+        let base = url::Url::parse("https://10.0.0.1:8443/health").unwrap();
+        let url = build_browser3_url(&base, &[8192, 8192]);
+        assert!(url.contains("assets=2"), "url={url}");
+        assert!(url.contains("bytes=8192"), "url={url}");
+    }
+
+    #[test]
+    fn build_browser3_url_no_query_when_no_assets() {
+        let base = url::Url::parse("https://10.0.0.1:8443/health").unwrap();
+        let url = build_browser3_url(&base, &[]);
+        assert!(!url.contains("assets="), "url={url}");
+        assert!(!url.contains("bytes="), "url={url}");
     }
 
     // ── build_browser1_url tests ──────────────────────────────────────────────
