@@ -25,7 +25,7 @@ set -euo pipefail
 
 REPO_SSH="ssh://git@github.com/irlm/networker-tester"
 REPO_GH="irlm/networker-tester"
-SCRIPT_VERSION="0.12.38"
+SCRIPT_VERSION="0.12.44"
 INSTALL_DIR="${HOME}/.cargo/bin"
 
 # ── Colours (ANSI C quoting; safe even when stdin is a curl pipe) ─────────────
@@ -689,11 +689,29 @@ step_install_chrome() {
             sudo apt-get update -qq \
                 && (sudo apt-get install -y chromium-browser 2>/dev/null \
                     || sudo apt-get install -y chromium)
+            # libnss3-tools provides certutil, required for browser3 QUIC cert trust on Linux
+            sudo apt-get install -y libnss3-tools 2>/dev/null || true
             ;;
-        dnf)    sudo dnf install -y chromium ;;
-        pacman) sudo pacman -S --noconfirm chromium ;;
-        zypper) sudo zypper install -y chromium ;;
-        apk)    sudo apk add chromium ;;
+        dnf)
+            sudo dnf install -y chromium
+            # nss-tools provides certutil, required for browser3 QUIC cert trust on Linux
+            sudo dnf install -y nss-tools 2>/dev/null || true
+            ;;
+        pacman)
+            sudo pacman -S --noconfirm chromium
+            # nss provides certutil, required for browser3 QUIC cert trust on Linux
+            sudo pacman -S --noconfirm nss 2>/dev/null || true
+            ;;
+        zypper)
+            sudo zypper install -y chromium
+            # mozilla-nss-tools provides certutil, required for browser3 QUIC cert trust on Linux
+            sudo zypper install -y mozilla-nss-tools 2>/dev/null || true
+            ;;
+        apk)
+            sudo apk add chromium
+            # nss-tools provides certutil, required for browser3 QUIC cert trust on Linux
+            sudo apk add nss-tools 2>/dev/null || true
+            ;;
         *)
             print_warn "Unknown package manager: $PKG_MGR"
             print_warn "Install Chrome manually from: https://www.google.com/chrome/"
