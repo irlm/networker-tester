@@ -30,7 +30,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$ScriptVersion = "0.12.38"
+$ScriptVersion = "0.12.44"
 $RepoSsh       = "ssh://git@github.com/irlm/networker-tester"
 $RepoGh        = "irlm/networker-tester"
 $CargoBin      = Join-Path $env:USERPROFILE ".cargo\bin"

@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.44] – 2026-03-03 — installer: libnss3-tools; Windows browser3 cert trust
+
+### Added
+- **Installer (`install.sh`)**: automatically installs the NSS `certutil` helper tool
+  alongside Chromium for all supported Linux package managers — `libnss3-tools` (apt-get),
+  `nss-tools` (dnf/apk), `nss` (pacman), `mozilla-nss-tools` (zypper).  `certutil` is
+  required for `browser3` QUIC cert trust on Linux; without it the probe silently falls
+  back to H2.
+- **`browser3` cert trust on Windows**: uses PowerShell to add the server's self-signed cert
+  to `CurrentUser\Root` temporarily (no extra package installation required — Windows
+  Certificate Store and PowerShell 5.1+ are built-in).  The cert is removed automatically
+  via `CertTrustGuard::drop` after the probe completes.
+- **Installer (`install.ps1`)**: bump `$ScriptVersion` to match binary version `0.12.43`
+  (was stale at `0.12.38`).
+
+---
+
 ## [0.12.43] – 2026-03-03 — browser3: fix ERR_QUIC_PROTOCOL_ERROR when cert trust fails on Linux
 
 ### Fixed

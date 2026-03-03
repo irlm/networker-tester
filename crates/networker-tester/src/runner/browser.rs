@@ -222,8 +222,11 @@ mod real {
         /// Linux: cert nickname for `certutil -D`.
         #[cfg(target_os = "linux")]
         cert_name: String,
+        /// Windows: thumbprint for removal from `CurrentUser\Root` store.
+        #[cfg(target_os = "windows")]
+        thumbprint: String,
         // Other platforms: guard is a no-op; keep the struct non-empty.
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
         _unused: (),
     }
 
@@ -260,6 +263,22 @@ mod real {
                     .args(["-D", "-d", &self.nss_db_path, "-n", &self.cert_name])
                     .output();
             }
+            #[cfg(target_os = "windows")]
+            {
+                tracing::debug!(
+                    thumbprint = %self.thumbprint,
+                    "browser3: removing temp cert from Windows CurrentUser\\Root"
+                );
+                let cmd = format!(
+                    "Get-ChildItem Cert:\\CurrentUser\\Root \
+                     | Where-Object {{ $_.Thumbprint -eq '{}' }} \
+                     | Remove-Item",
+                    self.thumbprint
+                );
+                let _ = std::process::Command::new("powershell")
+                    .args(["-NoProfile", "-NonInteractive", "-Command", &cmd])
+                    .output();
+            }
         }
     }
 
@@ -287,6 +306,10 @@ mod real {
     /// imports the cert as trusted via `certutil` (package `libnss3-tools`).
     /// Chrome on Linux reads this NSS db at startup, so the profile dir must be
     /// pre-created before `Browser::launch`.
+    ///
+    /// **Windows**: adds the cert to `CurrentUser\Root` via PowerShell (no extra
+    /// package needed — Windows Certificate Store + PowerShell are built-in).
+    /// `CertTrustGuard::drop` removes it by thumbprint afterwards.
     ///
     /// **Other platforms**: returns an error; the probe falls back to H2.
     async fn install_cert_trust(
@@ -389,13 +412,62 @@ mod real {
         })
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    /// Windows: add the cert to `CurrentUser\Root` via PowerShell, capture the
+    /// thumbprint so `CertTrustGuard::drop` can remove it afterwards.
+    ///
+    /// Chrome on Windows reads `CurrentUser\Root` natively (no certutil needed).
+    /// PowerShell and the Windows Certificate Store are built-in — no extra package
+    /// installation is required.
+    #[cfg(target_os = "windows")]
+    async fn install_cert_trust_inner(
+        _cert_der: &[u8],
+        pem_path: &Path,
+        _profile_dir: &Path,
+    ) -> anyhow::Result<CertTrustGuard> {
+        let pem_str = pem_path.to_str().unwrap_or_default();
+        // Import the PEM cert into CurrentUser\Root, output the thumbprint.
+        // X509Certificate2::new(path) accepts PEM on .NET 5+; all supported Windows
+        // versions ship PowerShell 5.1+ which uses .NET Framework 4.x — we convert
+        // from PEM manually to avoid that constraint.
+        let script = format!(
+            "$pem = [System.IO.File]::ReadAllText('{pem}'); \
+             $b64 = ($pem -replace '-----[^-]+-----','') -replace '\\s',''; \
+             $bytes = [System.Convert]::FromBase64String($b64); \
+             $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($bytes); \
+             $store = [System.Security.Cryptography.X509Certificates.X509Store]::new('Root','CurrentUser'); \
+             $store.Open('ReadWrite'); \
+             $store.Add($cert); \
+             $store.Close(); \
+             Write-Output $cert.Thumbprint",
+            pem = pem_str.replace('\'', "''"),
+        );
+        let out = tokio::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .output()
+            .await?;
+        if !out.status.success() {
+            anyhow::bail!(
+                "PowerShell cert install failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        let thumbprint = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if thumbprint.is_empty() {
+            anyhow::bail!("PowerShell cert install succeeded but returned empty thumbprint");
+        }
+        tracing::info!(%thumbprint, "browser3: server cert added to Windows CurrentUser\\Root");
+        Ok(CertTrustGuard { thumbprint })
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     async fn install_cert_trust_inner(
         _cert_der: &[u8],
         _pem_path: &Path,
         _profile_dir: &Path,
     ) -> anyhow::Result<CertTrustGuard> {
-        anyhow::bail!("cert trust installation not supported on this platform (macOS/Linux only)")
+        anyhow::bail!(
+            "cert trust installation not supported on this platform (macOS/Linux/Windows only)"
+        )
     }
 
     /// Returns the full path to `cmd` if it exists anywhere in `$PATH`.
