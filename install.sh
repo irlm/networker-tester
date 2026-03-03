@@ -25,7 +25,7 @@ set -euo pipefail
 
 REPO_SSH="ssh://git@github.com/irlm/networker-tester"
 REPO_GH="irlm/networker-tester"
-SCRIPT_VERSION="0.12.45"
+SCRIPT_VERSION="0.12.46"
 INSTALL_DIR="${HOME}/.cargo/bin"
 
 # ── Colours (ANSI C quoting; safe even when stdin is a curl pipe) ─────────────
@@ -900,11 +900,6 @@ main() {
         if [[ $DO_CHROME_INSTALL -eq 1 ]]; then
             step_install_chrome
         fi
-        # Ensure certutil is present whenever Chrome is available (existing or just installed).
-        # This is a no-op on macOS and when certutil is already installed.
-        if [[ $CHROME_AVAILABLE -eq 1 || $DO_CHROME_INSTALL -eq 1 ]]; then
-            step_ensure_certutil
-        fi
         if [[ $DO_GIT_INSTALL -eq 1 ]]; then
             step_install_git
         fi
@@ -921,6 +916,12 @@ main() {
         if [[ $DO_INSTALL_ENDPOINT -eq 1 ]]; then
             step_cargo_install "networker-endpoint"
         fi
+    fi
+
+    # Ensure certutil is present whenever Chrome is available (release or source path).
+    # No-op on macOS (uses security(1)) and when certutil is already installed.
+    if [[ $CHROME_AVAILABLE -eq 1 || $DO_CHROME_INSTALL -eq 1 ]]; then
+        step_ensure_certutil
     fi
 
     display_completion
