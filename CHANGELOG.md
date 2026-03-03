@@ -11,6 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.37] – 2026-03-03 — browser3: CDP Security.setIgnoreCertificateErrors to fix QUIC cert trust in --headless=new
+
+### Fixed
+- **`browser3` failed with `net::ERR_CONNECTION_REFUSED`** (v0.12.36 regression): the localhost
+  URL approach was broken because Chrome internally hardcodes `localhost` → `127.0.0.1` and
+  silently ignores `--host-resolver-rules` for that hostname.  Reverted to using the actual
+  server IP in the URL; removed `--host-resolver-rules`, `--allow-insecure-localhost`.
+- **`browser3` root cause identified**: Chrome's `--headless=new` mode (Chrome 112+) does NOT
+  apply `--ignore-certificate-errors-spki-list` to QUIC/H3 TLS connections.  The flag is
+  handled in the browser process but QUIC TLS runs in the network service process which does
+  not receive it in headless mode.  Fix: send `Security.setIgnoreCertificateErrors(true)` via
+  CDP immediately after page creation.  The DevTools Protocol command applies to ALL
+  connections made by that page, including QUIC, reliably in `--headless=new`.
+  `--ignore-certificate-errors-spki-list` is kept as belt-and-suspenders for older Chrome.
+
+### Changed
+- browser3: `INFO` log `CDP Security.setIgnoreCertificateErrors(true) applied` for visibility.
+
+---
+
 ## [0.12.36] – 2026-03-02 — browser3: localhost URL rewrite + host-resolver-rules to force H3
 
 ### Fixed

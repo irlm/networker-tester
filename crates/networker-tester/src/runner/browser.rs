@@ -171,10 +171,11 @@ pub fn build_browser3_url(base: &url::Url, asset_sizes: &[usize]) -> String {
 
 #[cfg(feature = "browser")]
 mod real {
-    use super::{build_browser1_url, build_browser3_url, build_page_url, find_chrome};
+    use super::{build_browser1_url, build_page_url, find_chrome};
     use crate::metrics::{BrowserResult, ErrorCategory, ErrorRecord, Protocol, RequestAttempt};
     use chromiumoxide::browser::{Browser, BrowserConfig};
     use chromiumoxide::cdp::browser_protocol::network::EventResponseReceived;
+    use chromiumoxide::cdp::browser_protocol::security::SetIgnoreCertificateErrorsParams;
     use chrono::Utc;
     use futures::StreamExt;
     use std::collections::HashMap;
@@ -211,12 +212,11 @@ mod real {
 
         // 2. Build page URL.
         // browser1 uses plain HTTP so Chrome has no ALPN to negotiate H2/H3.
-        // browser3 rewrites host to `localhost` so QUIC cert verification passes
-        // (the self-signed cert always has `localhost` as a SAN).
-        let page_url = match &protocol {
-            Protocol::Browser1 => build_browser1_url(base_url, asset_sizes),
-            Protocol::Browser3 => build_browser3_url(base_url, asset_sizes),
-            _ => build_page_url(base_url, asset_sizes),
+        // browser3 uses the same HTTPS URL as browser2 but with QUIC forced via Chrome flags.
+        let page_url = if matches!(protocol, Protocol::Browser1) {
+            build_browser1_url(base_url, asset_sizes)
+        } else {
+            build_page_url(base_url, asset_sizes)
         };
         tracing::debug!(url = %page_url, "Browser probe target URL");
 
@@ -257,13 +257,12 @@ mod real {
         // Per-protocol Chrome flags:
         //   browser1 → plain HTTP URL (no ALPN = definitively H1.1; no extra flags needed)
         //   browser2 → --disable-quic           (force HTTP/2, prevent H3 upgrade)
-        //   browser3 → URL rewritten to https://localhost:<port> (cert SAN matches);
-        //              --enable-quic
-        //              --origin-to-force-quic-on=localhost:<port>
-        //              --allow-insecure-localhost  (bypass cert errors for localhost)
-        //              --host-resolver-rules=MAP localhost <actual_ip>
-        //                  (redirect localhost DNS to the real server IP)
-        //              --ignore-certificate-errors-spki-list=<hash>  (belt-and-suspenders)
+        //   browser3 → --enable-quic + --origin-to-force-quic-on=<host>:<port>
+        //              Cert trust is handled via CDP Security.setIgnoreCertificateErrors()
+        //              applied after Chrome starts — this reliably works in --headless=new
+        //              where --ignore-certificate-errors-spki-list is silently ignored by
+        //              Chrome's QUIC network stack.
+        //              SPKI hash is also passed as belt-and-suspenders for older Chrome.
         //   browser  → no extra flags (auto-negotiate, typically H2)
         let mut extra_args: Vec<String> = Vec::new();
         match &protocol {
@@ -274,21 +273,12 @@ mod real {
                 extra_args.push("--disable-quic".into());
             }
             Protocol::Browser3 => {
-                let actual_host = base_url.host_str().unwrap_or("localhost").to_string();
+                let host = base_url.host_str().unwrap_or("localhost");
                 let port = base_url.port_or_known_default().unwrap_or(443);
                 extra_args.push("--enable-quic".into());
-                // Force QUIC on the localhost origin (URL was rewritten to localhost).
-                extra_args.push(format!("--origin-to-force-quic-on=localhost:{port}"));
-                // Allow Chrome to trust self-signed certs on localhost without SPKI pin.
-                extra_args.push("--allow-insecure-localhost".into());
-                // Redirect localhost DNS to the actual server IP so Chrome connects to
-                // the real endpoint while presenting "localhost" as the SNI hostname.
-                if actual_host != "localhost" && actual_host != "127.0.0.1" && actual_host != "::1"
-                {
-                    extra_args.push(format!("--host-resolver-rules=MAP localhost {actual_host}"));
-                }
-                // Belt-and-suspenders: also pin the SPKI hash in case --allow-insecure-localhost
-                // is not sufficient for Chrome's QUIC TLS path.
+                extra_args.push(format!("--origin-to-force-quic-on={host}:{port}"));
+                // Belt-and-suspenders: SPKI hash for older Chrome where the CDP
+                // Security.setIgnoreCertificateErrors() may not reach the network stack.
                 match fetch_spki_hash(base_url).await {
                     Some(hash) => {
                         tracing::info!(spki = %hash, "browser3: SPKI hash fetched for cert pinning");
@@ -297,7 +287,7 @@ mod real {
                     None => {
                         tracing::warn!(
                             "browser3: could not fetch SPKI hash; \
-                             relying on --allow-insecure-localhost only"
+                             relying on CDP cert-override only"
                         );
                     }
                 }
@@ -401,12 +391,34 @@ mod real {
             }
         };
 
-        // 5a. browser3 warmup navigation.
+        // 5a. browser3: enable CDP-level cert-error override BEFORE any navigation.
+        //
+        // Chrome's --headless=new mode silently ignores --ignore-certificate-errors-spki-list
+        // for QUIC connections (Chrome bug / architecture limitation: the flag is handled by
+        // the browser process but QUIC TLS runs in the network service process which doesn't
+        // always receive the flag).  The CDP Security.setIgnoreCertificateErrors() command
+        // goes through the DevTools session and reliably applies to ALL connections,
+        // including QUIC/H3, when set before the first navigation.
+        if matches!(protocol, Protocol::Browser3) {
+            match page
+                .execute(SetIgnoreCertificateErrorsParams { ignore: true })
+                .await
+            {
+                Ok(_) => tracing::info!(
+                    "browser3: CDP Security.setIgnoreCertificateErrors(true) applied"
+                ),
+                Err(e) => tracing::warn!(
+                    "browser3: CDP cert-error override failed (falling back to SPKI pin): {e}"
+                ),
+            }
+        }
+
+        // 5b. browser3 warmup navigation.
         //
         // Alt-Svc discovery flow:
         //   1. Warmup GET /health → server returns Alt-Svc: h3=":PORT" over H2.
         //   2. Chrome caches the hint and starts establishing a QUIC connection.
-        //   3. 200 ms sleep → Chrome completes the QUIC TLS handshake.
+        //   3. 500 ms sleep → Chrome completes the QUIC TLS handshake.
         //   4. Main navigation → Chrome uses the already-open QUIC session → H3.
         //
         // Without this warmup Chrome always wins the TCP-vs-QUIC race on LAN (<1 ms)
@@ -429,7 +441,7 @@ mod real {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
 
-        // 5b. Subscribe to network response events.
+        // 5c. Subscribe to network response events.
         // Subscribed AFTER the warmup so only the main navigation's resources are counted.
         let mut response_events = match page.event_listener::<EventResponseReceived>().await {
             Ok(e) => e,
