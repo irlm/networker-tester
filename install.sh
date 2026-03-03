@@ -25,7 +25,7 @@ set -euo pipefail
 
 REPO_SSH="ssh://git@github.com/irlm/networker-tester"
 REPO_GH="irlm/networker-tester"
-SCRIPT_VERSION="0.12.47"
+SCRIPT_VERSION="0.12.48"
 INSTALL_DIR="${HOME}/.cargo/bin"
 
 # ── Colours (ANSI C quoting; safe even when stdin is a curl pipe) ─────────────
@@ -118,6 +118,7 @@ DO_GIT_INSTALL=0
 CHROME_AVAILABLE=0
 CHROME_PATH=""
 DO_CHROME_INSTALL=0
+CERTUTIL_AVAILABLE=0
 SYS_OS=""
 SYS_ARCH=""
 SYS_SHELL=""
@@ -276,6 +277,11 @@ discover_system() {
         CHROME_AVAILABLE=0
         # DO_CHROME_INSTALL stays 0 here — user is asked in prompt_main / customize_flow
     fi
+
+    # certutil detection (NSS tools, required for browser3 QUIC cert trust on Linux)
+    if command -v certutil &>/dev/null; then
+        CERTUTIL_AVAILABLE=1
+    fi
 }
 
 display_system_info() {
@@ -319,6 +325,20 @@ display_plan() {
         fi
         if [[ $DO_INSTALL_ENDPOINT -eq 1 ]]; then
             printf "    %s. ${BOLD}Download networker-endpoint${RESET}  gh release download (latest)\n" "$step"
+            step=$((step + 1))
+        fi
+        if [[ "$SYS_OS" == "Linux" && $CERTUTIL_AVAILABLE -eq 0 && -n "$PKG_MGR" \
+              && ( $CHROME_AVAILABLE -eq 1 || $DO_CHROME_INSTALL -eq 1 ) ]]; then
+            local nss_pkg
+            case "$PKG_MGR" in
+                apt-get) nss_pkg="libnss3-tools" ;;
+                dnf)     nss_pkg="nss-tools" ;;
+                pacman)  nss_pkg="nss" ;;
+                zypper)  nss_pkg="mozilla-nss-tools" ;;
+                apk)     nss_pkg="nss-tools" ;;
+                *)       nss_pkg="nss-tools" ;;
+            esac
+            printf "    %s. ${BOLD}Install certutil${RESET}        Install %s via %s ${DIM}(browser3 QUIC cert trust)${RESET}\n" "$step" "$nss_pkg" "$PKG_MGR"
         fi
         echo ""
         print_dim "Repository:  $REPO_GH  (latest release)"
@@ -376,6 +396,23 @@ display_plan() {
         fi
         if [[ $DO_INSTALL_ENDPOINT -eq 1 ]]; then
             printf "    %s. ${BOLD}Install networker-endpoint${RESET} cargo install from private Git repo\n" "$step"
+            step=$((step + 1))
+        fi
+
+        # Show certutil step when Chrome is present/planned and certutil is absent (Linux only)
+        if [[ "$SYS_OS" == "Linux" && $CERTUTIL_AVAILABLE -eq 0 && -n "$PKG_MGR" \
+              && ( $CHROME_AVAILABLE -eq 1 || $DO_CHROME_INSTALL -eq 1 ) ]]; then
+            local nss_pkg
+            case "$PKG_MGR" in
+                apt-get) nss_pkg="libnss3-tools" ;;
+                dnf)     nss_pkg="nss-tools" ;;
+                pacman)  nss_pkg="nss" ;;
+                zypper)  nss_pkg="mozilla-nss-tools" ;;
+                apk)     nss_pkg="nss-tools" ;;
+                *)       nss_pkg="nss-tools" ;;
+            esac
+            printf "    %s. ${BOLD}Install certutil${RESET}        Install %s via %s ${DIM}(browser3 QUIC cert trust)${RESET}\n" "$step" "$nss_pkg" "$PKG_MGR"
+            step=$((step + 1))
         fi
         echo ""
         print_dim "Repository:  $REPO_SSH"
@@ -740,7 +777,12 @@ step_ensure_certutil() {
     [[ -n "$PKG_MGR" ]]       || return 0
     command -v certutil &>/dev/null && return 0   # already installed
 
-    print_info "Installing certutil (NSS tools) via ${PKG_MGR} — required for browser3 QUIC cert trust…"
+    next_step "Install certutil (browser3 QUIC cert trust)"
+    if ! ask_yn "Install certutil (NSS tools) via ${PKG_MGR}? Required for browser3 to use H3." "y"; then
+        print_warn "Skipped — browser3 will fall back to H2 without certutil"
+        return 0
+    fi
+    print_info "Installing certutil (NSS tools) via ${PKG_MGR}…"
     case "$PKG_MGR" in
         apt-get) sudo apt-get install -y libnss3-tools 2>/dev/null || true ;;
         dnf)     sudo dnf install -y nss-tools 2>/dev/null || true ;;
