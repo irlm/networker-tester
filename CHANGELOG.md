@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.51] – 2026-03-03 — fix browser probe: close browser gracefully to suppress chromiumoxide warning
+
+### Fixed
+- **`browser` probe**: Call `browser.close().await` before aborting the CDP handler task.
+  Without this, chromiumoxide logs `WARN: Browser was not closed manually, it will be
+  killed automatically in the background` on every probe run.
+
+---
+
 ## [0.12.50] – 2026-03-03 — fix browser3: SPKI hash pinning replaces unreliable platform cert stores
 
 ### Fixed
