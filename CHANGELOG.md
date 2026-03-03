@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.48] – 2026-03-03 — installer: certutil shown in plan and confirmed before install
+
+### Changed
+- **Installer (`install.sh`)**: `certutil` (NSS tools) now appears in the Installation Plan
+  when Chrome is available on Linux and `certutil` is not yet installed.  Shown in both the
+  release-download and source-build plan sections.
+- **Installer (`install.sh`)**: `step_ensure_certutil` now asks `Y/n` before installing
+  (`ask_yn`) instead of silently running `apt-get install`.  Skipping prints a warning that
+  browser3 will fall back to H2.
+- **Installer (`install.sh`)**: `CERTUTIL_AVAILABLE` flag detected in `discover_system`
+  (via `command -v certutil`) so the plan display knows whether to show the step.
+
+---
+
 ## [0.12.47] – 2026-03-03 — installer: fix SYS_OS case check in step_ensure_certutil
 
 ### Fixed
