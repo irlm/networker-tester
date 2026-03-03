@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.42] – 2026-03-03 — fix dead_code warning on Linux
+
+### Fixed
+- Suppressed `dead_code` compiler warning for `compute_cert_sha256_hex` on Linux CI builds.
+  The function is macOS-only (used by `security delete-certificate -Z`); gated with
+  `#[cfg(target_os = "macos")]`.
+
+---
+
 ## [0.12.41] – 2026-03-03 — browser3: fix Chrome arg double-dash bug (root cause of H3 regression)
 
 ### Fixed
