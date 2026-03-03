@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.52] – 2026-03-03 — HTML report: browser comparison table, SVG charts, analysis, favicon fix
+
+### Added
+- **Browser Protocol Comparison table**: New aggregated summary table showing browser1/2/3 side-by-side
+  (Avg TTFB, DCL, Load, p50, Min, Max, Avg Resources, Avg Bytes) — mirrors the existing pageload comparison table.
+- **SVG bar charts** (self-contained, no CDN): Three horizontal bar charts embedded in the HTML report:
+  1. "Page Load Time — All Protocols": merged browser + pageload avg load times, slowest→fastest
+  2. "Browser TTFB / DCL / Load Breakdown": interleaved bars per browser mode with TTFB/DCL/Load breakdown
+  3. "Throughput by Protocol (MB/s)": shown only when download/upload data is present
+- **Analysis observations**: Auto-generated bullet list including fastest browser mode, H3 vs H2
+  improvement percentage, real-browser vs synthetic overhead, and resource protocol breakdown.
+
+### Fixed
+- **Favicon 404**: Added `<link rel="icon" href="data:,">` to `<head>` in both `/browser-page` HTML
+  endpoints (HTTP/2 `routes.rs` and HTTP/3 `http3_server.rs`). Chrome no longer auto-requests
+  `/favicon.ico`, eliminating 404 noise from endpoint server debug logs.
+
+---
+
 ## [0.12.51] – 2026-03-03 — fix browser probe: close browser gracefully to suppress chromiumoxide warning
 
 ### Fixed
