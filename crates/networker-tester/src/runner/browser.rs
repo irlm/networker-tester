@@ -448,7 +448,7 @@ mod real {
             }
         };
 
-        let (browser, mut handler) = match tokio::time::timeout(
+        let (mut browser, mut handler) = match tokio::time::timeout(
             std::time::Duration::from_millis(timeout_ms),
             Browser::launch(browser_config),
         )
@@ -689,6 +689,9 @@ mod real {
         let mut resource_protocols: Vec<(String, u32)> = protocol_counts.into_iter().collect();
         resource_protocols.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
 
+        // Close the browser gracefully before aborting the handler so chromiumoxide
+        // does not warn "Browser was not closed manually".
+        let _ = browser.close().await;
         handler_task.abort();
         let finished_at = Utc::now();
 
