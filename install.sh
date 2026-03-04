@@ -159,7 +159,8 @@ SKIP_RUST=0
 INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
-NETWORKER_VERSION=""      # populated in discover_system when gh is available
+NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
+INSTALLER_VERSION="v0.12.62"  # fallback when gh is unavailable
 
 DO_SSH_CHECK=1
 DO_RUST_INSTALL=0
@@ -415,6 +416,10 @@ discover_system() {
     if [[ -z "$NETWORKER_VERSION" ]] && command -v gh &>/dev/null; then
         NETWORKER_VERSION="$(gh release list --repo "$REPO_GH" \
             --limit 1 --json tagName -q '.[0].tagName' 2>/dev/null || echo "")"
+    fi
+    # Fallback: use the version embedded in this installer script
+    if [[ -z "$NETWORKER_VERSION" ]]; then
+        NETWORKER_VERSION="$INSTALLER_VERSION"
     fi
 
     # Azure CLI detection
@@ -840,6 +845,169 @@ ask_aws_options() {
     echo ""
 }
 
+# ── Ensure Azure CLI is installed and authenticated ───────────────────────────
+ensure_azure_cli() {
+    if [[ $AZURE_CLI_AVAILABLE -eq 0 ]]; then
+        echo ""
+        print_warn "Azure CLI (az) is not installed."
+        echo ""
+        echo "  The Azure CLI is required to provision VMs and manage resources."
+        echo ""
+        if [[ -n "$PKG_MGR" ]]; then
+            local install_cmd
+            case "$PKG_MGR" in
+                brew)    install_cmd="brew install azure-cli" ;;
+                apt-get) install_cmd="curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash" ;;
+                dnf)     install_cmd="sudo rpm --import https://packages.microsoft.com/keys/microsoft.asc && sudo dnf install -y azure-cli" ;;
+                pacman)  install_cmd="sudo pacman -S --noconfirm azure-cli" ;;
+                zypper)  install_cmd="sudo zypper install -y azure-cli" ;;
+                *)       install_cmd="" ;;
+            esac
+            if [[ -n "$install_cmd" ]]; then
+                echo "  Install command:  $install_cmd"
+                echo ""
+                if ask_yn "Install Azure CLI now?" "y"; then
+                    echo ""
+                    case "$PKG_MGR" in
+                        brew)    brew install azure-cli ;;
+                        apt-get) curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash ;;
+                        dnf)
+                            sudo rpm --import https://packages.microsoft.com/keys/microsoft.asc 2>/dev/null || true
+                            sudo dnf install -y azure-cli ;;
+                        pacman)  sudo pacman -S --noconfirm azure-cli ;;
+                        zypper)  sudo zypper install -y azure-cli ;;
+                    esac
+                    if command -v az &>/dev/null; then
+                        AZURE_CLI_AVAILABLE=1
+                        print_ok "Azure CLI installed"
+                    else
+                        print_err "Azure CLI installation failed — install manually from https://docs.microsoft.com/cli/azure/install-azure-cli"
+                        echo "  Then re-run this installer."
+                        exit 1
+                    fi
+                else
+                    print_err "Azure CLI is required for remote Azure deployment."
+                    echo "  Install from: https://docs.microsoft.com/cli/azure/install-azure-cli"
+                    echo "  Then re-run:  bash install.sh --azure"
+                    exit 1
+                fi
+            else
+                echo "  Install from: https://docs.microsoft.com/cli/azure/install-azure-cli"
+                echo "  Then re-run:  bash install.sh --azure"
+                exit 1
+            fi
+        else
+            echo "  Install from: https://docs.microsoft.com/cli/azure/install-azure-cli"
+            echo "  Then re-run:  bash install.sh --azure"
+            exit 1
+        fi
+    fi
+
+    if [[ $AZURE_LOGGED_IN -eq 0 ]]; then
+        echo ""
+        print_warn "Not logged in to Azure."
+        echo ""
+        if ask_yn "Log in to Azure now (opens browser)?" "y"; then
+            az login
+            if az account show &>/dev/null 2>&1; then
+                AZURE_LOGGED_IN=1
+                local sub_name
+                sub_name="$(az account show --query name -o tsv 2>/dev/null || echo "")"
+                print_ok "Logged in: $sub_name"
+            else
+                print_err "Azure login failed — run 'az login' manually then re-run this installer."
+                exit 1
+            fi
+        else
+            print_err "Azure login required for remote deployment."
+            echo "  Run:  az login"
+            exit 1
+        fi
+    fi
+}
+
+# ── Ensure AWS CLI is installed and authenticated ─────────────────────────────
+ensure_aws_cli() {
+    if [[ $AWS_CLI_AVAILABLE -eq 0 ]]; then
+        echo ""
+        print_warn "AWS CLI (aws) is not installed."
+        echo ""
+        echo "  The AWS CLI is required to provision EC2 instances and manage resources."
+        echo ""
+        if [[ -n "$PKG_MGR" ]]; then
+            local install_cmd
+            case "$PKG_MGR" in
+                brew)    install_cmd="brew install awscli" ;;
+                apt-get) install_cmd="sudo apt-get install -y awscli" ;;
+                dnf)     install_cmd="sudo dnf install -y awscli" ;;
+                pacman)  install_cmd="sudo pacman -S --noconfirm aws-cli" ;;
+                zypper)  install_cmd="sudo zypper install -y aws-cli" ;;
+                *)       install_cmd="" ;;
+            esac
+            if [[ -n "$install_cmd" ]]; then
+                echo "  Install command:  $install_cmd"
+                echo ""
+                if ask_yn "Install AWS CLI now?" "y"; then
+                    echo ""
+                    case "$PKG_MGR" in
+                        brew)    brew install awscli ;;
+                        apt-get) sudo apt-get install -y awscli ;;
+                        dnf)     sudo dnf install -y awscli ;;
+                        pacman)  sudo pacman -S --noconfirm aws-cli ;;
+                        zypper)  sudo zypper install -y aws-cli ;;
+                    esac
+                    if command -v aws &>/dev/null; then
+                        AWS_CLI_AVAILABLE=1
+                        print_ok "AWS CLI installed"
+                    else
+                        print_err "AWS CLI installation failed — install manually from https://aws.amazon.com/cli/"
+                        echo "  Then re-run this installer."
+                        exit 1
+                    fi
+                else
+                    print_err "AWS CLI is required for remote AWS deployment."
+                    echo "  Install from: https://aws.amazon.com/cli/"
+                    echo "  Then re-run:  bash install.sh --aws"
+                    exit 1
+                fi
+            else
+                echo "  Install from: https://aws.amazon.com/cli/"
+                echo "  Then re-run:  bash install.sh --aws"
+                exit 1
+            fi
+        else
+            echo "  Install from: https://aws.amazon.com/cli/"
+            echo "  Then re-run:  bash install.sh --aws"
+            exit 1
+        fi
+    fi
+
+    if [[ $AWS_LOGGED_IN -eq 0 ]]; then
+        echo ""
+        print_warn "AWS CLI is not configured or credentials are not valid."
+        echo ""
+        echo "  Run 'aws configure' to set up your access key, secret, and default region."
+        echo "  Or set environment variables: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION"
+        echo ""
+        if ask_yn "Run 'aws configure' now?" "y"; then
+            aws configure
+            if aws sts get-caller-identity &>/dev/null 2>&1; then
+                AWS_LOGGED_IN=1
+                local aws_account
+                aws_account="$(aws sts get-caller-identity --query Account --output text 2>/dev/null || echo "")"
+                print_ok "AWS authenticated  (account: $aws_account)"
+            else
+                print_err "AWS credentials invalid — run 'aws configure' then re-run this installer."
+                exit 1
+            fi
+        else
+            print_err "AWS credentials required for remote deployment."
+            echo "  Run:  aws configure"
+            exit 1
+        fi
+    fi
+}
+
 # Ask where to install each component.  Skipped when AUTO_YES=1.
 ask_deployment_locations() {
     [[ $AUTO_YES -eq 1 ]] && return 0
@@ -864,8 +1032,8 @@ ask_deployment_locations() {
         fi
         if [[ $DO_REMOTE_TESTER -eq 1 ]]; then
             case "$TESTER_LOCATION" in
-                azure) ask_azure_options "tester" ;;
-                aws)   ask_aws_options   "tester" ;;
+                azure) ensure_azure_cli; ask_azure_options "tester" ;;
+                aws)   ensure_aws_cli;   ask_aws_options   "tester" ;;
             esac
         fi
     fi
@@ -890,8 +1058,8 @@ ask_deployment_locations() {
         fi
         if [[ $DO_REMOTE_ENDPOINT -eq 1 ]]; then
             case "$ENDPOINT_LOCATION" in
-                azure) ask_azure_options "endpoint" ;;
-                aws)   ask_aws_options   "endpoint" ;;
+                azure) ensure_azure_cli; ask_azure_options "endpoint" ;;
+                aws)   ensure_aws_cli;   ask_aws_options   "endpoint" ;;
             esac
         fi
     fi

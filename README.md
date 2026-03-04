@@ -26,6 +26,7 @@ in the kernel or scattered across multiple tools.
 - [CLI Reference](#cli-reference)
 - [Configuration File](#configuration-file)
 - [Getting All Low-Level Metrics](#getting-all-low-level-metrics)
+- [Multi-Target Comparison](#multi-target-comparison)
 - [Page-Load Protocol Comparison](#page-load-protocol-comparison-h1--h2--h3--browser)
 - [Endpoint Reference](#endpoint-reference)
 - [Output Formats](#output-formats)
@@ -182,7 +183,7 @@ labelling a named group separately in the report.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--target` | `http://localhost:8080/health` | URL to probe |
+| `--target` | `http://localhost:8080/health` | URL to probe. Repeat the flag to test multiple targets in one run and get a combined comparison report: `--target URL1 --target URL2` |
 | `--modes` | `http1,http2,udp` | Comma-separated probe modes (see table above) |
 | `--runs` | `3` | Repetitions per mode per run cycle |
 | `--concurrency` | `1` | Concurrent requests per run (best-effort) |
@@ -247,6 +248,7 @@ overridden by the corresponding CLI flag.
 ```json
 {
   "target": "http://localhost:8080/health",
+  "targets": ["http://localhost:8080/health", "https://remote:8443/health"],
   "modes": ["http1", "http2", "udp"],
   "runs": 3,
   "concurrency": 1,
@@ -263,6 +265,10 @@ overridden by the corresponding CLI flag.
   "save_to_sql": false
 }
 ```
+
+> **Note:** Use `"targets"` (plural) to list multiple probe targets in a config file.
+> The legacy `"target"` (singular) is still supported for backward compatibility; both
+> keys are merged with any `--target` flags given on the command line.
 
 ### endpoint.example.json
 
@@ -447,6 +453,61 @@ networker-tester \
   --modes http3 \
   --insecure
 ```
+
+---
+
+## Multi-Target Comparison
+
+Pass `--target` more than once to probe multiple endpoints in a single run and get
+one combined HTML report.
+
+### Example — local vs cloud endpoint
+
+```bash
+./networker-tester \
+  --target http://127.0.0.1:8080/health \
+  --target https://my-cloud-vm:8443/health \
+  --modes tcp,http1,http2,http3,udp,download \
+  --payload-sizes 1m \
+  --runs 5 \
+  --insecure \
+  --output-dir ./output
+```
+
+The HTML report (`output/report.html`) opens with:
+
+1. **Multi-Target Summary** — one row per target, totals at a glance
+2. **Cross-Target Protocol Comparison** — the primary metric for each protocol side-by-side,
+   with % delta vs the first target (green = faster, red = slower)
+3. **Per-target details** — each target's full report in a collapsible card
+
+JSON files are named `run-{ts}-1.json` (local) and `run-{ts}-2.json` (cloud).
+Excel workbooks follow the same numbering when `--excel` is passed.
+
+### Via config file
+
+```json
+{
+  "targets": [
+    "http://127.0.0.1:8080/health",
+    "https://my-cloud-vm:8443/health"
+  ],
+  "modes": ["http1", "http2", "download"],
+  "payload_sizes": ["1m"],
+  "runs": 5,
+  "insecure": true
+}
+```
+
+```bash
+networker-tester --config multi.json
+```
+
+### Backward compatibility
+
+Passing a single `--target` (or no `--target`) produces exactly the same single-target
+report as before — the multi-target sections are only added when two or more targets are
+detected.
 
 ---
 
@@ -647,7 +708,11 @@ INFO request{method=GET uri=/download?bytes=65536 version=HTTP/1.1}: finished pr
 
 ### JSON artifact
 
-One file per run: `run-YYYYMMDD-HHMMSS.json`. Normalised structure:
+One file per target per run. Naming:
+- Single target: `run-YYYYMMDD-HHMMSS.json`
+- Multiple targets: `run-YYYYMMDD-HHMMSS-1.json`, `run-YYYYMMDD-HHMMSS-2.json`, …
+
+Normalised structure:
 
 ```
 TestRun
@@ -670,7 +735,7 @@ TestRun
 
 ### HTML report
 
-Single file (with optional external CSS). Sections:
+Single file (with optional external CSS). For a **single target**, sections are:
 
 1. **Run Summary** — target, modes, attempt count, duration, client/server versions
 2. **Timing Breakdown** — per-protocol averages: DNS/TCP/TLS/TTFB/Total
@@ -680,6 +745,14 @@ Single file (with optional external CSS). Sections:
 6. **TCP Stats** — kernel-level socket metrics per connection (see [TCP](#tcp) below)
 7. **TLS Details** — negotiated version, cipher, ALPN, cert subject/expiry
 8. **Errors** — structured error table
+
+For **multiple targets**, the same file additionally includes:
+
+1. **Multi-Target Summary** — one row per target with attempt count, duration, succeeded/failed
+2. **Cross-Target Protocol Comparison** — side-by-side table of primary metrics per protocol,
+   with % delta vs the first target highlighted green (faster) or red (slower)
+3. **Per-target collapsible sections** — each target's full single-target report nested inside
+   a `<details>` element (open by default when ≤ 2 targets)
 
 ### Excel workbook (`--excel`)
 

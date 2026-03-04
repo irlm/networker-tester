@@ -278,6 +278,79 @@ foreach ($SZ in '1k', '10k', '100k', '1m') {
 
 ---
 
+## Test 7: Multi-Target Comparison (Local vs Remote)
+
+The most powerful use-case: run the same probe set against two (or more) endpoints in one
+invocation and get a single HTML report with a side-by-side comparison table.
+
+### Setup
+
+Start a local endpoint:
+
+```bash
+./target/release/networker-endpoint
+```
+
+Deploy a remote endpoint via the installer:
+
+```bash
+bash install.sh --azure endpoint   # or --aws endpoint
+```
+
+The installer writes `networker-cloud.json` pointing at the remote VM's IP.
+
+### Run — local vs cloud
+
+```bash
+./target/release/networker-tester \
+  --target http://127.0.0.1:8080/health \
+  --target https://<cloud-ip>:8443/health \
+  --modes tcp,http1,http2,http3,udp,download,pageload,pageload2,pageload3 \
+  --payload-sizes 1m \
+  --runs 5 \
+  --insecure \
+  --output-dir ./output
+```
+
+### Via config file (equivalent)
+
+```json
+{
+  "targets": [
+    "http://127.0.0.1:8080/health",
+    "https://<cloud-ip>:8443/health"
+  ],
+  "modes": ["tcp", "http1", "http2", "http3", "udp", "download",
+            "pageload", "pageload2", "pageload3"],
+  "payload_sizes": ["1m"],
+  "runs": 5,
+  "insecure": true
+}
+```
+
+### What to look for in the HTML report
+
+The report opens with a **Multi-Target Summary** table (one row per target) and a
+**Cross-Target Protocol Comparison** table. The comparison shows the primary metric for
+each protocol (e.g. `total_duration_ms` for HTTP, `throughput_mbps` for download) with
+the % delta vs the first (local) target:
+
+| What to compare | What it tells you |
+|-----------------|-------------------|
+| `http1`/`http2`/`http3` total_ms delta | Extra RTT added by WAN vs loopback |
+| `download` throughput delta | Available bandwidth to the remote endpoint |
+| `pageload`/`pageload2`/`pageload3` total_ms delta | Real page-load impact of WAN latency |
+| `tcp` connect_ms delta | Raw TCP setup cost over the network link |
+| `udp` rtt_avg_ms delta | UDP path latency (incl. NAT/firewall path difference) |
+
+**Typical patterns:**
+- WAN HTTP total_ms 5–50× higher than loopback due to RTT
+- Download throughput limited to available uplink/downlink of both sides
+- H3 may show larger delta than H2 on high-latency links due to QUIC handshake overhead
+- `%diff` in green = remote is faster (unusual for loopback baseline); red = slower (expected)
+
+---
+
 ## Exporting Results
 
 ### JSON (default — every run)
@@ -374,7 +447,7 @@ Server CSW (`sCSW`) is reported by the endpoint via `Server-Timing: csw-v;dur=N,
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `--target URL` | required | Base URL of the server |
+| `--target URL` | required | Base URL of the server. Repeat for multi-target comparison: `--target URL1 --target URL2` |
 | `--modes MODE,...` | `http1` | Comma-separated probe modes |
 | `--runs N` | `3` | Probes per mode per payload size |
 | `--insecure` | false | Skip TLS certificate verification |
