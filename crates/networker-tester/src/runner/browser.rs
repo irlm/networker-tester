@@ -648,40 +648,23 @@ mod real {
             }
         };
 
-        // 11b. Measure transferred bytes via Performance Resource Timing API.
-        //
-        // CDP's Network.loadingFinished.encodedDataLength is unreliable for HTTP/1.1:
-        // the value varies widely across runs (38–55 % of expected) due to Chrome's
-        // internal HTTP/1.1 byte accounting in the DevTools protocol.  For H2/H3 it
-        // is consistent, but differs from H1.1 making cross-protocol comparisons
-        // misleading.
-        //
-        // The JS Performance API is evaluated once, post-load, and reports
-        // encodedBodySize (compressed body bytes, headers excluded) which is
-        // consistent across all three protocols for the same assets.
-        let bytes_js = r#"
-            (function() {
-                var total = 0;
-                var nav = performance.getEntriesByType('navigation')[0];
-                if (nav) { total += nav.encodedBodySize || 0; }
-                var res = performance.getEntriesByType('resource');
-                for (var i = 0; i < res.length; i++) { total += res[i].encodedBodySize || 0; }
-                return total;
-            })()
-        "#;
-        let transferred_bytes: usize = match page.evaluate(bytes_js).await {
-            Ok(v) => v.into_value::<f64>().unwrap_or(0.0) as usize,
-            Err(e) => {
-                tracing::warn!("Failed to evaluate resource bytes: {e}");
-                0
-            }
-        };
-
         // 12. Drain ResponseReceived events (500 ms after navigation).
-        // Collects resource count and per-protocol breakdown.
-        // All events should already be queued (page load event guarantees all
-        // resources are complete before wait_for_navigation() returns).
+        //
+        // Collects resource count, per-protocol breakdown, and transferred bytes.
+        //
+        // Bytes are measured by summing `content-length` response headers.
+        // This is more reliable than Chrome's Performance Resource Timing API
+        // (encodedBodySize) or CDP encodedDataLength, both of which under-report
+        // for HTTP/1.1 due to how Chrome tracks socket-level bytes vs body bytes
+        // for connection-reuse scenarios.  The server always sets content-length
+        // explicitly for all asset responses, so summing it is accurate for all
+        // protocols (H1.1, H2, H3).
+        //
+        // All events should already be queued when we reach this point because the
+        // page load event guarantees all resources are complete before
+        // wait_for_navigation() returns.
         let mut resource_count: u32 = 0;
+        let mut transferred_bytes: usize = 0;
         let mut main_protocol = String::from("unknown");
         let mut first_resource = true;
         let mut protocol_counts: HashMap<String, u32> = HashMap::new();
@@ -704,6 +687,16 @@ mod real {
                                 first_resource = false;
                             }
                             *protocol_counts.entry(proto).or_insert(0) += 1;
+                            // Sum content-length headers for accurate byte accounting.
+                            // Headers exposes inner() → &serde_json::Value.
+                            // Header names are lower-case for H2/H3 but may be
+                            // title-case for H1.1.
+                            let h = evt.response.headers.inner();
+                            let cl: usize = h["content-length"].as_str()
+                                .or_else(|| h["Content-Length"].as_str())
+                                .and_then(|s| s.parse::<usize>().ok())
+                                .unwrap_or(0);
+                            transferred_bytes += cl;
                         }
                         None => break,
                     }
