@@ -351,6 +351,14 @@ detect_chrome() {
     done
 }
 
+# Check whether Chrome/Chromium is installed on a remote VM via SSH.
+# Returns 0 (found) or 1 (not found).
+_remote_chrome_available() {
+    local ip="$1" user="$2"
+    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "${user}@${ip}" \
+        'command -v google-chrome google-chrome-stable chromium-browser chromium chromium-browser-stable 2>/dev/null | head -1 | grep -q .' 2>/dev/null
+}
+
 # ── Target triple detection ───────────────────────────────────────────────────
 detect_release_target() {
     local os arch
@@ -549,7 +557,7 @@ display_plan() {
                 fi
             fi
 
-            if [[ $CHROME_AVAILABLE -eq 0 && $DO_INSTALL_TESTER -eq 1 ]]; then
+            if [[ $CHROME_AVAILABLE -eq 0 && $do_local_tester -eq 1 ]]; then
                 if [[ $DO_CHROME_INSTALL -eq 1 ]]; then
                     printf "    %s. ${BOLD}Install Chrome${RESET}         Install via %s (browser probe)\n" "$step" "$PKG_MGR"
                     step=$((step + 1))
@@ -1707,9 +1715,15 @@ _remote_install_binary_from_source() {
     mkdir -p "$tmp_root"
 
     local features_arg=""
-    if [[ $CHROME_AVAILABLE -eq 1 && "$binary" == "networker-tester" ]]; then
-        features_arg="--features browser"
-        print_info "Chrome detected — compiling with browser probe support."
+    if [[ "$binary" == "networker-tester" ]]; then
+        # Check Chrome on the *remote* VM (not locally — this binary will run there)
+        if _remote_chrome_available "$ip" "$user"; then
+            features_arg="--features browser"
+            print_info "Chrome detected on remote VM — compiling with browser probe support."
+        else
+            print_info "Chrome not found on remote VM — compiling without browser probe."
+            print_dim  "  To enable later: install Chrome on the VM then re-run:  cargo install --git $REPO_SSH networker-tester --features browser"
+        fi
     fi
 
     print_info "Building ${binary} from source…"
@@ -2223,6 +2237,70 @@ step_aws_set_auto_shutdown() {
     fi
 }
 
+# Check if Chrome is on a remote Linux VM via SSH; if not, offer to install it.
+# For Windows VMs, shows a manual install reminder (no automated install via SSH).
+# $1=ip  $2=ssh-user  $3=pkg_mgr (apt-get|dnf|pacman|…)  $4=os ("linux"|"windows")
+# $5=rg (Azure, Windows path only)  $6=vm (Azure, Windows path only)
+_remote_offer_chrome_install() {
+    local ip="$1" user="$2" pkg_mgr="${3:-apt-get}" os_type="${4:-linux}"
+    local rg="${5:-}" vm="${6:-}"
+
+    if [[ "$os_type" == "windows" ]]; then
+        # Check via az run-command (PowerShell); show install reminder if missing
+        local chrome_found=0
+        if [[ -n "$rg" && -n "$vm" ]]; then
+            local out
+            out="$(az vm run-command invoke \
+                --resource-group "$rg" --name "$vm" \
+                --command-id RunPowerShellScript \
+                --scripts 'if (Test-Path "C:\Program Files\Google\Chrome\Application\chrome.exe") { Write-Output "found" }' \
+                --query 'value[0].message' -o tsv 2>/dev/null || echo "")"
+            [[ "$out" == *"found"* ]] && chrome_found=1
+        fi
+        if [[ $chrome_found -eq 1 ]]; then
+            print_ok "Chrome detected on Windows VM — browser probe enabled."
+        else
+            echo ""
+            print_info "Chrome not found on Windows VM."
+            print_info "To enable the browser probe, RDP into the VM and install Chrome:"
+            print_dim  "  https://www.google.com/chrome/"
+            print_dim  "  Then re-run: networker-tester --modes browser ..."
+        fi
+        return 0
+    fi
+
+    # Linux path: check via SSH
+    if _remote_chrome_available "$ip" "$user"; then
+        print_ok "Chrome/Chromium detected on VM — browser probe enabled."
+        return 0
+    fi
+    echo ""
+    print_info "Chrome/Chromium not found on the remote VM."
+    print_info "Without it the browser probe (--modes browser) will be skipped."
+    if [[ -z "$pkg_mgr" ]]; then
+        print_dim "  Install manually on the VM: https://www.google.com/chrome/"
+        return 0
+    fi
+    if ask_yn "Install Chromium on the remote VM (enables browser probe)?" "y"; then
+        next_step "Install Chromium on remote VM"
+        local install_cmd
+        case "$pkg_mgr" in
+            apt-get) install_cmd="sudo apt-get update -qq && sudo apt-get install -y chromium-browser 2>/dev/null || sudo apt-get install -y chromium" ;;
+            dnf)     install_cmd="sudo dnf install -y chromium" ;;
+            pacman)  install_cmd="sudo pacman -S --noconfirm chromium" ;;
+            zypper)  install_cmd="sudo zypper install -y chromium" ;;
+            *)       install_cmd="sudo apt-get install -y chromium-browser" ;;
+        esac
+        if ssh -o StrictHostKeyChecking=no "${user}@${ip}" "$install_cmd" 2>/dev/null; then
+            print_ok "Chromium installed on VM — browser probe enabled."
+        else
+            print_warn "Could not install Chromium (non-critical — browser probe will be skipped)."
+        fi
+    else
+        print_info "Skipping Chrome — browser probe will not be available on this VM."
+    fi
+}
+
 step_azure_deploy_tester() {
     step_check_azure_prereqs
     step_azure_create_vm "tester" \
@@ -2232,6 +2310,7 @@ step_azure_deploy_tester() {
     next_step "Install networker-tester on Azure VM"
     if [[ "$AZURE_TESTER_OS" == "windows" ]]; then
         _azure_wait_for_windows_vm "$AZURE_TESTER_RG" "$AZURE_TESTER_VM" "tester VM"
+        _remote_offer_chrome_install "" "" "" "windows" "$AZURE_TESTER_RG" "$AZURE_TESTER_VM"
         _azure_win_install_binary "networker-tester" \
             "$AZURE_TESTER_RG" "$AZURE_TESTER_VM" "${NETWORKER_VERSION:-latest}"
         echo ""
@@ -2239,6 +2318,7 @@ step_azure_deploy_tester() {
         print_info "Run tester:  networker-tester --target ... --modes http1,http2 --runs 5"
     else
         _wait_for_ssh "$AZURE_TESTER_IP" "azureuser" "tester VM"
+        _remote_offer_chrome_install "$AZURE_TESTER_IP" "azureuser" "apt-get" "linux"
         _remote_install_binary "networker-tester" "$AZURE_TESTER_IP" "azureuser"
         echo ""
         print_info "To connect:  ssh azureuser@${AZURE_TESTER_IP}"
@@ -2535,6 +2615,7 @@ step_aws_deploy_tester() {
 
     _wait_for_ssh "$AWS_TESTER_IP" "ubuntu" "tester instance"
     step_aws_set_auto_shutdown "$AWS_TESTER_IP" "ubuntu" "tester instance"
+    _remote_offer_chrome_install "$AWS_TESTER_IP" "ubuntu" "apt-get" "$AWS_TESTER_OS"
 
     next_step "Install networker-tester on AWS EC2"
     _remote_install_binary "networker-tester" "$AWS_TESTER_IP" "ubuntu"
