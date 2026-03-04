@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.63] – 2026-03-04 — Installer: source-build fallback + VM auto-shutdown + component prompt
+
+### Added
+- **Local source-build fallback** (`install.sh`): when no GitHub release artifacts exist
+  (e.g. billing limit hit), the installer compiles the binary locally via
+  `cargo install --git <repo>` and uploads it to the remote VM via SCP.  No manual
+  intervention needed — the fallback is transparent.
+- **VM auto-shutdown policy** (`install.sh`): new prompt in Azure / AWS options asks whether
+  to configure a daily auto-shutdown at 11 PM EST (04:00 UTC).  Default is yes.
+  Azure uses the native `az vm auto-shutdown` policy; AWS installs a cron job on the
+  instance.  The completion summary shows a green confirmation or a yellow warning if
+  the user opted out, and always prints the delete/terminate commands.
+- **Component selection prompt** (`install.sh`): when the script is invoked with no
+  positional argument (i.e. not `install.sh tester` / `install.sh endpoint`), a
+  friendly menu now asks "what do you want to install?" before displaying the plan —
+  so users are no longer silently defaulted to installing both components.
+
+---
+
 ## [0.12.62] – 2026-03-04 — Multi-target support
 
 ### Added
