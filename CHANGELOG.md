@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.12.65] – 2026-03-04 — Installer: offer complementary component after single-component install
+## [0.12.65] – 2026-03-04 — Installer: complementary component offer; cargo crate counter; bats tests
 
 ### Added
 - **Offer tester install when only endpoint was deployed** (`install.sh`):
@@ -23,8 +23,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   new `_offer_also_endpoint()` step at the end of `display_completion()`.  When
   only `networker-tester` was installed (no endpoint anywhere), a prompt asks
   whether to: (1) install `networker-endpoint` locally, (2) deploy one on a cloud
-  VM (shows the re-run command), or (3) skip.  This closes the loop for users who
-  install the tester first and then realise they need something to test against.
+  VM (shows the re-run command), or (3) skip.
+- **Cargo spinner crate counter** (`install.sh`): `_cargo_progress()` now shows
+  `[N crates]` counting up as each crate is compiled — e.g.
+  `⠋  Building networker-tester  [47 crates]  Compiling tokio v1.0.0`.
+  On completion the summary line shows the final count and the `Finished` timing.
+- **Installer unit tests** (`tests/installer.bats`): 35 bats tests covering
+  `parse_args`, `_offer_quick_test`, `_offer_also_endpoint`,
+  `_remote_verify_health`, `_remote_install_binary_from_source`, and
+  `step_download_release`.  Includes configurable stub executables for `ssh`,
+  `curl`, `cargo`, `gh`, `scp`, `az`, and the networker binaries.
+- **CI: shellcheck + bats + PSScriptAnalyzer**
+  (`.github/workflows/test-installer.yml`): runs on every change to `install.sh`,
+  `install.ps1`, or `tests/**`.
 
 ---
 
