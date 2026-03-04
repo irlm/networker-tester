@@ -7,6 +7,7 @@ use crate::metrics::{
     attempt_payload_bytes, compute_stats, primary_metric_label, primary_metric_value, Protocol,
     RequestAttempt, TestRun,
 };
+use chrono::DateTime;
 use std::fmt::Write as FmtWrite;
 use std::path::Path;
 
@@ -22,10 +23,250 @@ pub fn save(run: &TestRun, path: &Path, css_href: Option<&str>) -> anyhow::Resul
     Ok(())
 }
 
+/// Save a combined HTML report for one or more `TestRun`s.
+///
+/// When `runs.len() == 1` the output is identical to `save()`.
+/// When `runs.len() > 1` the report includes a cross-target summary and
+/// protocol-comparison table followed by per-target collapsible sections.
+pub fn save_multi(runs: &[TestRun], path: &Path, css_href: Option<&str>) -> anyhow::Result<()> {
+    std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")))?;
+    std::fs::write(path, render_multi(runs, css_href))?;
+    Ok(())
+}
+
 pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
     let mut out = String::with_capacity(64 * 1024);
+    write_html_head(&run.target_url, css_href, &mut out);
+    write_run_sections(run, &mut out);
+    write_html_footer(run.finished_at.unwrap_or(run.started_at), &mut out);
+    out
+}
 
-    // ── Head ─────────────────────────────────────────────────────────────────
+/// Render a combined report for multiple targets.
+///
+/// Single-target runs delegate to `render()` for identical output.
+pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
+    if runs.len() == 1 {
+        return render(&runs[0], css_href);
+    }
+
+    let mut out = String::with_capacity(128 * 1024);
+    let title = format!("{} targets compared", runs.len());
+    write_html_head(&title, css_href, &mut out);
+
+    // ── Multi-target page header ──────────────────────────────────────────────
+    let started = runs[0].started_at.format("%Y-%m-%d %H:%M:%S UTC");
+    let _ = write!(
+        out,
+        r#"
+<header class="page-header">
+  <h1>Networker Tester</h1>
+  <p class="subtitle">{n} targets compared &bull; {started}</p>
+</header>
+"#,
+        n = runs.len(),
+    );
+
+    // ── Multi-Target Summary table ────────────────────────────────────────────
+    let _ = write!(
+        out,
+        r#"
+<section class="card">
+  <h2>Multi-Target Summary</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>#</th><th>Target</th><th>Runs</th><th>Modes</th>
+        <th>Attempts</th><th>Succeeded</th><th>Failed</th><th>Duration</th>
+      </tr>
+    </thead>
+    <tbody>
+"#
+    );
+    for (i, run) in runs.iter().enumerate() {
+        let dur = run
+            .finished_at
+            .map(|f| {
+                format!(
+                    "{:.2}s",
+                    (f - run.started_at).num_milliseconds() as f64 / 1000.0
+                )
+            })
+            .unwrap_or_else(|| "—".into());
+        let fail = run.failure_count();
+        let _ = write!(
+            out,
+            r#"      <tr>
+        <td>{idx}</td>
+        <td><a href="{url}">{url}</a></td>
+        <td>{total_runs}</td>
+        <td>{modes}</td>
+        <td>{attempts}</td>
+        <td class="ok">{ok}</td>
+        <td class="{fail_cls}">{fail}</td>
+        <td>{dur}</td>
+      </tr>
+"#,
+            idx = i + 1,
+            url = escape_html(&run.target_url),
+            total_runs = run.total_runs,
+            modes = run.modes.join(", "),
+            attempts = run.attempts.len(),
+            ok = run.success_count(),
+            fail_cls = if fail > 0 { "err" } else { "ok" },
+        );
+    }
+    let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
+
+    // ── Cross-Target Protocol Comparison table ────────────────────────────────
+    // Collect all protocols present in any run (canonical order).
+    let canonical_protos = [
+        Protocol::Http1,
+        Protocol::Http2,
+        Protocol::Http3,
+        Protocol::Native,
+        Protocol::Curl,
+        Protocol::Tcp,
+        Protocol::Udp,
+        Protocol::Dns,
+        Protocol::Tls,
+        Protocol::Download,
+        Protocol::Upload,
+        Protocol::WebDownload,
+        Protocol::WebUpload,
+        Protocol::UdpDownload,
+        Protocol::UdpUpload,
+        Protocol::PageLoad,
+        Protocol::PageLoad2,
+        Protocol::PageLoad3,
+        Protocol::Browser,
+        Protocol::Browser1,
+        Protocol::Browser2,
+        Protocol::Browser3,
+    ];
+
+    // avg_primary(run, proto) → avg of primary_metric_value across attempts for that proto.
+    let avg_primary = |run: &TestRun, proto: &Protocol| -> Option<f64> {
+        let vals: Vec<f64> = run
+            .attempts
+            .iter()
+            .filter(|a| &a.protocol == proto)
+            .filter_map(primary_metric_value)
+            .collect();
+        if vals.is_empty() {
+            None
+        } else {
+            Some(vals.iter().sum::<f64>() / vals.len() as f64)
+        }
+    };
+
+    // Only include protocols where at least one run has data.
+    let active_protos: Vec<&Protocol> = canonical_protos
+        .iter()
+        .filter(|proto| runs.iter().any(|r| avg_primary(r, proto).is_some()))
+        .collect();
+
+    if !active_protos.is_empty() {
+        // Build column headers: Protocol | Unit | Target 1 | Target 2 | …
+        let _ = write!(
+            out,
+            r#"
+<section class="card">
+  <h2>Cross-Target Protocol Comparison</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Protocol</th>
+        <th>Metric</th>
+"#
+        );
+        for (i, run) in runs.iter().enumerate() {
+            let _ = write!(
+                out,
+                "        <th>Target {} <small>{}</small></th>\n",
+                i + 1,
+                escape_html(&run.target_url)
+            );
+        }
+        let _ = writeln!(out, "      </tr>\n    </thead>\n    <tbody>");
+
+        for proto in &active_protos {
+            let baseline = avg_primary(&runs[0], proto);
+            let _ = write!(
+                out,
+                "      <tr>\n        <td><strong>{proto}</strong></td>\n        <td>{metric}</td>\n",
+                metric = primary_metric_label(proto),
+            );
+            for (i, run) in runs.iter().enumerate() {
+                match avg_primary(run, proto) {
+                    None => {
+                        let _ = writeln!(out, "        <td>—</td>");
+                    }
+                    Some(v) => {
+                        if i == 0 || baseline.is_none() {
+                            let _ = write!(out, "        <td>{v:.2}</td>\n");
+                        } else {
+                            let base = baseline.unwrap();
+                            // For latency metrics (lower = better): negative diff = faster.
+                            // For throughput metrics (higher = better): positive diff = faster.
+                            let is_throughput = matches!(
+                                proto,
+                                Protocol::Download
+                                    | Protocol::Upload
+                                    | Protocol::WebDownload
+                                    | Protocol::WebUpload
+                                    | Protocol::UdpDownload
+                                    | Protocol::UdpUpload
+                            );
+                            let diff_pct = if base > 0.0 {
+                                (v - base) / base * 100.0
+                            } else {
+                                0.0
+                            };
+                            // faster = lower latency OR higher throughput
+                            let is_faster = if is_throughput {
+                                diff_pct > 0.0
+                            } else {
+                                diff_pct < 0.0
+                            };
+                            let diff_class = if is_faster { "diff-fast" } else { "diff-slow" };
+                            let sign = if diff_pct >= 0.0 { "+" } else { "" };
+                            let _ = write!(
+                                out,
+                                "        <td>{v:.2}<span class=\"{diff_class}\">{sign}{diff_pct:.1}%</span></td>\n",
+                            );
+                        }
+                    }
+                }
+            }
+            let _ = writeln!(out, "      </tr>");
+        }
+        let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
+    }
+
+    // ── Per-target collapsible sections ───────────────────────────────────────
+    for (i, run) in runs.iter().enumerate() {
+        let open = if runs.len() <= 2 { " open" } else { "" };
+        let _ = write!(
+            out,
+            "\n<details class=\"card multi-target-details\"{open}>\n  <summary><strong>Target {}:</strong> {}</summary>\n",
+            i + 1,
+            escape_html(&run.target_url)
+        );
+        write_run_sections(run, &mut out);
+        let _ = writeln!(out, "</details>");
+    }
+
+    let last = runs.last().unwrap();
+    write_html_footer(last.finished_at.unwrap_or(last.started_at), &mut out);
+    out
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Structural helpers used by render() and render_multi()
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn write_html_head(title: &str, css_href: Option<&str>, out: &mut String) {
     let _ = write!(
         out,
         r#"<!DOCTYPE html>
@@ -33,13 +274,12 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Networker Tester – {target}</title>
+  <title>Networker Tester – {title}</title>
   <style>{inline_css}</style>
 "#,
-        target = escape_html(&run.target_url),
+        title = escape_html(title),
         inline_css = INLINE_CSS,
     );
-
     if let Some(href) = css_href {
         let _ = writeln!(
             out,
@@ -47,9 +287,29 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
             escape_html(href)
         );
     }
-
     let _ = writeln!(out, "</head>\n<body>");
+}
 
+fn write_html_footer(timestamp: DateTime<chrono::Utc>, out: &mut String) {
+    let _ = write!(
+        out,
+        r#"
+<footer>
+  Generated by <strong>networker-tester v{}</strong> &bull; {}
+</footer>
+</body>
+</html>
+"#,
+        env!("CARGO_PKG_VERSION"),
+        timestamp.format("%Y-%m-%d %H:%M:%S UTC"),
+    );
+}
+
+/// Write all per-run content sections (page header + all data cards).
+///
+/// This is used by both `render()` (directly) and `render_multi()` (wrapped
+/// in a per-target `<details>` block).
+fn write_run_sections(run: &TestRun, mut out: &mut String) {
     // ── Header ────────────────────────────────────────────────────────────────
     let _ = write!(
         out,
@@ -887,11 +1147,7 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
                         .iter()
                         .map(|(l, v, c)| (l.as_str(), v.as_slice(), *c))
                         .collect();
-                    let svg = svg_cdf(
-                        "Load Time CDF \u{2014} All Protocols",
-                        &series_refs,
-                        "ms",
-                    );
+                    let svg = svg_cdf("Load Time CDF \u{2014} All Protocols", &series_refs, "ms");
                     let _ = writeln!(out, "<div>{}</div>", svg);
                 }
             }
@@ -1052,14 +1308,10 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
                         }
                     }
                     if ttfb_vals.len() >= 2 {
-                        if let Some((best, best_v)) = ttfb_vals
-                            .iter()
-                            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-                        {
-                            let worst_v = ttfb_vals
-                                .iter()
-                                .map(|(_, v)| *v)
-                                .fold(0.0_f64, f64::max);
+                        if let Some((best, best_v)) = ttfb_vals.iter().min_by(|a, b| {
+                            a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+                        }) {
+                            let worst_v = ttfb_vals.iter().map(|(_, v)| *v).fold(0.0_f64, f64::max);
                             observations.push(format!(
                                 "Lowest TTFB: <strong>{best}</strong> at {best_v:.1}ms \
                                  ({:.1}ms advantage over slowest protocol)",
@@ -1798,25 +2050,7 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
         }
         let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
     }
-
-    // ── Footer ────────────────────────────────────────────────────────────────
-    let _ = write!(
-        out,
-        r#"
-<footer>
-  Generated by <strong>networker-tester v{}</strong> &bull; {}
-</footer>
-</body>
-</html>
-"#,
-        env!("CARGO_PKG_VERSION"),
-        run.finished_at
-            .unwrap_or(run.started_at)
-            .format("%Y-%m-%d %H:%M:%S UTC"),
-    );
-
-    out
-}
+} // end write_run_sections
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Row renderers
@@ -2183,7 +2417,11 @@ fn svg_cdf(title: &str, series: &[(&str, &[f64], &str)], unit: &str) -> String {
     for &pct in &[0u32, 25, 50, 75, 100] {
         let p = pct as f64 / 100.0;
         let y = sy(p);
-        let stroke = if pct == 0 || pct == 100 { "#ccc" } else { "#e8e8e8" };
+        let stroke = if pct == 0 || pct == 100 {
+            "#ccc"
+        } else {
+            "#e8e8e8"
+        };
         s.push_str(&format!(
             r#"<line x1="{PAD_L}" y1="{y}" x2="{}" y2="{y}" stroke="{stroke}" stroke-width="1"/>"#,
             PAD_L + plot_w
@@ -2364,6 +2602,16 @@ const INLINE_CSS: &str = r#"
   .analysis ul{list-style:none;padding:0}
   .analysis li{padding:.2rem 0;font-size:.86rem;line-height:1.45}
   .analysis li::before{content:"\2022";margin-right:.5rem;color:#4e79a7;font-weight:bold}
+  .multi-target-details{margin:1.5rem 2rem;padding:0}
+  .multi-target-details>summary{cursor:pointer;font-size:1rem;padding:.6rem 1rem;
+    background:#f0f2f5;border-radius:6px 6px 0 0;color:#1a1a2e;list-style:none;
+    font-weight:600;display:flex;align-items:center;gap:.5rem}
+  .multi-target-details>summary::-webkit-details-marker{display:none}
+  .multi-target-details>summary::before{content:"▶ ";font-size:.8em;flex-shrink:0}
+  .multi-target-details[open]>summary::before{content:"▼ "}
+  .multi-target-details>.page-header{border-radius:0;margin:0}
+  .diff-fast{color:#2e7d32;font-size:.8em;margin-left:.3em}
+  .diff-slow{color:#c62828;font-size:.8em;margin-left:.3em}
 "#;
 
 // ─────────────────────────────────────────────────────────────────────────────

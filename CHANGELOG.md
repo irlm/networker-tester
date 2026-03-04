@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.62] – 2026-03-04 — Multi-target support
+
+### Added
+- **`--target` accepts multiple values**: repeat `--target URL` for each target to test.
+  All targets run the same modes and produce one HTML report with a side-by-side comparison.
+- **Multi-Target Summary table**: one row per target showing run count, modes, attempts,
+  succeeded, failed and duration.
+- **Cross-Target Protocol Comparison table**: rows = protocols present in any run;
+  columns = each target with average primary metric (ms or MB/s) and colour-coded
+  delta vs the first (baseline) target — green = faster/higher, red = slower/lower.
+- **Per-target collapsible details**: each target's full per-protocol report is wrapped
+  in a `<details>` card (open by default for ≤ 2 targets).
+- **Multi-target JSON output**: `run-{ts}-1.json`, `run-{ts}-2.json` … when more than one
+  target is specified; single-target runs keep the original `run-{ts}.json` name.
+- **`html::save_multi()` / `html::render_multi()`**: new public API for building a single
+  combined HTML report from a slice of `TestRun`s.
+- **Config file `"targets"` key**: `targets: ["url1","url2"]` in JSON config;
+  backward-compatible with existing `"target": "url"` key.
+
+### Changed
+- Single-target runs produce identical output to pre-0.12.62 (render_multi delegates
+  to render when `runs.len() == 1`).
+
 ## [0.12.61] – 2026-03-04 — HTML report: TTFB + DCL box-plot distribution charts
 
 ### Added

@@ -65,9 +65,6 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
-    let target = url::Url::parse(&cfg.target).context("Invalid --target URL")?;
-    let target_host = target.host_str().unwrap_or("unknown").to_string();
-
     let modes = cfg.parsed_modes();
     if modes.is_empty() {
         anyhow::bail!(
@@ -76,28 +73,6 @@ async fn main() -> anyhow::Result<()> {
              pageload(H1+H2+H3),pageload1,pageload2,pageload3,\
              browser(H1+H2+H3),browser1,browser2,browser3"
         );
-    }
-
-    // ── ALPN warning for H2/H3/pageload2/browser over plain HTTP ─────────────
-    for mode in &modes {
-        if matches!(
-            mode,
-            Protocol::Http2
-                | Protocol::Http3
-                | Protocol::PageLoad2
-                | Protocol::PageLoad3
-                | Protocol::Browser
-                | Protocol::Browser2
-                | Protocol::Browser3
-        ) && target.scheme() == "http"
-        {
-            warn!(
-                "{mode} requires HTTPS for ALPN negotiation; \
-                 over plain http:// the connection falls back to HTTP/1.1. \
-                 Use https:// (e.g. https://host:8443) with --insecure for the \
-                 self-signed endpoint cert."
-            );
-        }
     }
 
     let payload_sizes = cfg.parsed_payload_sizes().context("--payload-sizes")?;
@@ -119,17 +94,133 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
-    let run_id = Uuid::new_v4();
-    let started_at = Utc::now();
-
     info!(
-        run_id  = %run_id,
-        target  = %cfg.target,
+        targets = ?cfg.targets,
         modes   = ?modes.iter().map(|m| m.to_string()).collect::<Vec<_>>(),
         runs    = cfg.runs,
         retries = cfg.retries,
         version = env!("CARGO_PKG_VERSION"),
         "Starting networker-tester"
+    );
+
+    // ── Run probes for every target ───────────────────────────────────────────
+    let mut all_runs: Vec<TestRun> = Vec::new();
+    for target_url_str in &cfg.targets {
+        info!(target = %target_url_str, "Running probes for target");
+        let run = run_for_target(target_url_str, &cfg, &modes, &payload_sizes).await?;
+        all_runs.push(run);
+    }
+
+    // ── Ensure output dir exists ──────────────────────────────────────────────
+    let out_dir = PathBuf::from(&cfg.output_dir);
+    std::fs::create_dir_all(&out_dir).context("Cannot create output directory")?;
+
+    let ts = all_runs[0].started_at.format("%Y%m%d-%H%M%S");
+    let multi = all_runs.len() > 1;
+
+    // ── JSON artifact (one per target) ────────────────────────────────────────
+    for (i, run) in all_runs.iter().enumerate() {
+        let name = if multi {
+            format!("run-{ts}-{}.json", i + 1)
+        } else {
+            format!("run-{ts}.json")
+        };
+        let json_path = out_dir.join(&name);
+        json::save(run, &json_path).context("Failed to write JSON artifact")?;
+        info!(path = %json_path.display(), "JSON artifact saved");
+    }
+
+    // ── HTML report (single combined report) ──────────────────────────────────
+    let html_path = out_dir.join(&cfg.html_report);
+    let css_href = cfg.css.as_deref().or(Some("report.css"));
+    html::save_multi(&all_runs, &html_path, css_href).context("Failed to write HTML report")?;
+    info!(path = %html_path.display(), "HTML report saved");
+
+    // Copy default CSS to output dir if it doesn't exist yet
+    copy_default_css(&out_dir);
+
+    // ── Excel report (one per target) ─────────────────────────────────────────
+    if cfg.excel {
+        for (i, run) in all_runs.iter().enumerate() {
+            let name = if multi {
+                format!("run-{ts}-{}.xlsx", i + 1)
+            } else {
+                format!("run-{ts}-{}.xlsx", run.run_id)
+            };
+            let xlsx_path = out_dir.join(&name);
+            match excel::save(run, &xlsx_path) {
+                Ok(()) => info!(path = %xlsx_path.display(), "Excel report saved"),
+                Err(e) => warn!("Excel report failed: {e:#}"),
+            }
+        }
+    }
+
+    // ── SQL insert (one per target) ───────────────────────────────────────────
+    if cfg.save_to_sql {
+        if let Some(conn_str) = &cfg.connection_string {
+            for run in &all_runs {
+                info!(target = %run.target_url, "Inserting into SQL Server…");
+                match sql::save(run, conn_str).await {
+                    Ok(()) => info!("SQL insert complete"),
+                    Err(e) => error!("SQL insert failed: {e:#}"),
+                }
+            }
+        }
+    }
+
+    // ── Summary ───────────────────────────────────────────────────────────────
+    for run in &all_runs {
+        print_summary(run);
+    }
+
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Per-target probe runner
+// ─────────────────────────────────────────────────────────────────────────────
+
+async fn run_for_target(
+    target_url_str: &str,
+    cfg: &cli::ResolvedConfig,
+    modes: &[Protocol],
+    payload_sizes: &[usize],
+) -> anyhow::Result<TestRun> {
+    let target = url::Url::parse(target_url_str)
+        .with_context(|| format!("Invalid --target URL: {target_url_str}"))?;
+    let target_host = target.host_str().unwrap_or("unknown").to_string();
+
+    // ── ALPN warning for H2/H3/pageload2/browser over plain HTTP ─────────────
+    for mode in modes {
+        if matches!(
+            mode,
+            Protocol::Http2
+                | Protocol::Http3
+                | Protocol::PageLoad2
+                | Protocol::PageLoad3
+                | Protocol::Browser
+                | Protocol::Browser2
+                | Protocol::Browser3
+        ) && target.scheme() == "http"
+        {
+            warn!(
+                "{mode} requires HTTPS for ALPN negotiation; \
+                 over plain http:// the connection falls back to HTTP/1.1. \
+                 Use https:// (e.g. https://host:8443) with --insecure for the \
+                 self-signed endpoint cert."
+            );
+        }
+    }
+
+    let run_id = Uuid::new_v4();
+    let started_at = Utc::now();
+
+    info!(
+        run_id  = %run_id,
+        target  = %target_url_str,
+        modes   = ?modes.iter().map(|m| m.to_string()).collect::<Vec<_>>(),
+        runs    = cfg.runs,
+        "Starting run"
     );
 
     let probe_cfg = RunConfig {
@@ -271,8 +362,8 @@ async fn main() -> anyhow::Result<()> {
         run_id,
         started_at,
         finished_at: Some(finished_at),
-        target_url: cfg.target.clone(),
-        target_host: target_host.clone(),
+        target_url: target_url_str.to_string(),
+        target_host,
         modes: modes.iter().map(|m| m.to_string()).collect(),
         total_runs: cfg.runs,
         concurrency: cfg.concurrency as u32,
@@ -282,57 +373,14 @@ async fn main() -> anyhow::Result<()> {
         attempts: all_attempts,
     };
 
-    // Summary
     info!(
         success = run.success_count(),
         failure = run.failure_count(),
+        target  = %target_url_str,
         "Run complete"
     );
 
-    // ── Ensure output dir exists ──────────────────────────────────────────────
-    let out_dir = PathBuf::from(&cfg.output_dir);
-    std::fs::create_dir_all(&out_dir).context("Cannot create output directory")?;
-
-    let ts = started_at.format("%Y%m%d-%H%M%S");
-
-    // ── JSON artifact ─────────────────────────────────────────────────────────
-    let json_path = out_dir.join(format!("run-{ts}.json"));
-    json::save(&run, &json_path).context("Failed to write JSON artifact")?;
-    info!(path = %json_path.display(), "JSON artifact saved");
-
-    // ── HTML report ───────────────────────────────────────────────────────────
-    let html_path = out_dir.join(&cfg.html_report);
-    let css_href = cfg.css.as_deref().or(Some("report.css"));
-    html::save(&run, &html_path, css_href).context("Failed to write HTML report")?;
-    info!(path = %html_path.display(), "HTML report saved");
-
-    // Copy default CSS to output dir if it doesn't exist yet
-    copy_default_css(&out_dir);
-
-    // ── Excel report ──────────────────────────────────────────────────────────
-    if cfg.excel {
-        let name = format!("run-{ts}-{}.xlsx", run.run_id);
-        let xlsx_path = out_dir.join(&name);
-        match excel::save(&run, &xlsx_path) {
-            Ok(()) => info!(path = %xlsx_path.display(), "Excel report saved"),
-            Err(e) => warn!("Excel report failed: {e:#}"),
-        }
-    }
-
-    // ── SQL insert ────────────────────────────────────────────────────────────
-    if cfg.save_to_sql {
-        if let Some(conn_str) = &cfg.connection_string {
-            info!("Inserting into SQL Server…");
-            match sql::save(&run, conn_str).await {
-                Ok(()) => info!("SQL insert complete"),
-                Err(e) => error!("SQL insert failed: {e:#}"),
-            }
-        }
-    }
-
-    print_summary(&run);
-
-    Ok(())
+    Ok(run)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
