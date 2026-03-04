@@ -11,6 +11,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.60] – 2026-03-04 — installer: AWS EC2 support + banner version display
+
+### Added
+- **AWS EC2 remote deployment**: `install.sh` now supports deploying each component
+  (`tester` / `endpoint`) to AWS EC2 in addition to local and Azure options.
+- **Interactive location selection (3 options)**: after choosing which components to
+  install, the installer asks *where* — `1) Locally`, `2) Remote: Azure VM`, or
+  `3) Remote: AWS EC2`.
+- **AWS provisioning flow**: security group creation (TCP 22, and for endpoint also
+  TCP 8080/8443 + UDP 8443/9998/9999), key pair import from `~/.ssh/id_ed25519.pub`,
+  dynamic Ubuntu 22.04 AMI lookup (Canonical owner), `run-instances`, wait for
+  running state, SSH install, systemd service, health-check verification.
+- **AWS options prompt**: 8-region menu, 4 instance types with pricing guide
+  (`t3.micro` ~$7/mo to `t3.large` ~$60/mo), EC2 instance name tags — all with
+  sensible defaults.
+- **New CLI flags**: `--aws`, `--tester-aws`, `--aws-region`, `--aws-instance-type`,
+  `--aws-endpoint-name`, `--aws-tester-name` for non-interactive scripted use.
+- **Cross-cloud mixing**: tester and endpoint can be on different providers, e.g.
+  `--tester-azure --aws both` deploys tester to Azure and endpoint to AWS.
+- **Cleanup hints**: completion summary shows `aws ec2 terminate-instances` commands
+  with the provisioned instance IDs for easy teardown.
+- **Banner version display**: installer banner now shows the latest Networker release
+  version (`v0.12.60`) even when run in source mode (best-effort `gh release list`
+  query, fails silently if gh is not available).
+
+### Changed
+- Shared remote-install helpers (`_wait_for_ssh`, `_remote_install_binary`,
+  `_remote_create_endpoint_service`, `_remote_verify_health`) now accept a `user`
+  parameter and are shared between Azure (`azureuser`) and AWS (`ubuntu`) paths.
+- Config file renamed from `networker-azure.json` → `networker-cloud.json` to be
+  provider-agnostic.
+- AWS CLI presence and login state detected in `discover_system()` and shown in
+  the System Information section.
+- No Rust binary changes; version bump is for the installer only.
+
+---
+
 ## [0.12.59] – 2026-03-04 — installer: unified local + Azure remote deployment
 
 ### Changed
