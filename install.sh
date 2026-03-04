@@ -1778,12 +1778,27 @@ _remote_install_binary_from_source() {
     local_os="$(uname -s 2>/dev/null || echo "")"
     local_arch="$(uname -m 2>/dev/null || echo "")"
 
+    # Detect remote OS for compatibility check
+    local remote_os
+    remote_os="$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "${user}@${ip}" \
+        "uname -s" 2>/dev/null || echo "Linux")"
+
     if [[ "$local_os" != "Linux" && "$local_os" != "Darwin" ]]; then
         print_err "Source compilation fallback requires a Linux or macOS local machine."
         exit 1
     fi
+    if [[ "$local_os" != "$remote_os" ]]; then
+        print_err "OS mismatch: local=${local_os}, remote=${remote_os}."
+        print_err "A ${local_os} binary will not run on a ${remote_os} VM."
+        echo ""
+        echo "  Options:"
+        echo "    1. Fix GitHub Actions billing so release binaries are available:"
+        echo "       https://github.com/settings/billing"
+        echo "    2. Run the installer from a ${remote_os} machine."
+        exit 1
+    fi
     if [[ "$remote_arch" != "$local_arch" ]]; then
-        print_err "Remote arch ($remote_arch) differs from local ($local_arch) — cross-compilation not supported."
+        print_err "Arch mismatch: local=${local_arch}, remote=${remote_arch} — cross-compilation not supported."
         echo "  Options:"
         echo "    1. Fix GitHub Actions billing so release binaries are available:"
         echo "       https://github.com/settings/billing"
@@ -1840,10 +1855,24 @@ _remote_install_binary_from_source() {
         "sudo mv /tmp/${binary} /usr/local/bin/${binary} && \
          sudo chmod +x /usr/local/bin/${binary}"
 
-    local remote_ver
-    remote_ver="$(ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
-        "/usr/local/bin/${binary} --version 2>/dev/null" || echo "unknown")"
-    print_ok "${binary} compiled locally and installed on VM  ($remote_ver)"
+    # Verify the binary actually runs on the remote VM
+    local remote_ver exec_err
+    exec_err="$(ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
+        "/usr/local/bin/${binary} --version 2>&1" || echo "")"
+    if [[ "$exec_err" =~ ^networker ]]; then
+        remote_ver="$exec_err"
+        print_ok "${binary} compiled locally and installed on VM  ($remote_ver)"
+    else
+        echo ""
+        print_err "${binary} was uploaded but failed to execute on the VM!"
+        echo "  Output: ${exec_err:-<none>}"
+        echo ""
+        echo "  This usually means the binary was compiled for a different OS or architecture."
+        echo "  Check: ssh ${user}@${ip} 'file /usr/local/bin/${binary}'"
+        echo "  Common fix: resolve GitHub Actions billing so release binaries are used instead:"
+        echo "    https://github.com/settings/billing"
+        exit 1
+    fi
 }
 
 # Download binary from GitHub release and install it on a remote host.
@@ -1969,7 +1998,7 @@ REMOTE
 # Poll /health until the endpoint responds.
 # $1 = public IP
 _remote_verify_health() {
-    local ip="$1"
+    local ip="$1" ssh_user="${2:-azureuser}"
 
     print_info "Checking http://${ip}:8080/health …"
     local attempts=0
@@ -1984,7 +2013,16 @@ _remote_verify_health() {
         if [[ $attempts -gt 12 ]]; then
             echo ""
             print_warn "Endpoint did not respond within 60 seconds."
-            print_warn "Check logs on the VM: sudo journalctl -u networker-endpoint -n 50"
+            echo ""
+            print_info "Fetching service status from the VM…"
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "${ssh_user}@${ip}" \
+                "sudo systemctl status networker-endpoint --no-pager -l 2>&1 | head -30" 2>/dev/null || true
+            echo ""
+            print_info "Last 30 log lines:"
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "${ssh_user}@${ip}" \
+                "sudo journalctl -u networker-endpoint -n 30 --no-pager 2>&1" 2>/dev/null || true
+            echo ""
+            print_warn "Manual check:  ssh ${ssh_user}@${ip} 'sudo journalctl -u networker-endpoint -f'"
             return 0
         fi
         printf "."
@@ -2442,7 +2480,7 @@ _azure_deploy_one_endpoint() {
         next_step "Create networker-endpoint service ($label)"
         _remote_create_endpoint_service "$ip" "azureuser"
         next_step "Verify endpoint health ($label)"
-        _remote_verify_health "$ip"
+        _remote_verify_health "$ip" "azureuser"
     fi
 }
 
@@ -2734,7 +2772,7 @@ step_aws_deploy_endpoint() {
     _remote_create_endpoint_service "$AWS_ENDPOINT_IP" "ubuntu"
 
     next_step "Verify endpoint health (AWS)"
-    _remote_verify_health "$AWS_ENDPOINT_IP"
+    _remote_verify_health "$AWS_ENDPOINT_IP" "ubuntu"
 
     step_generate_config "$AWS_ENDPOINT_IP"
 }
@@ -2922,19 +2960,21 @@ _offer_quick_test() {
     print_info "Running quick test — press Ctrl-C to stop early."
     echo ""
 
-    # Use the generated config if available; otherwise use sensible defaults.
-    if [[ -n "$CONFIG_FILE_PATH" && -f "$CONFIG_FILE_PATH" ]]; then
-        "$tester_bin" --config "$CONFIG_FILE_PATH" --runs 5
-    else
-        "$tester_bin" \
-            --target "https://${e_ip}:8443/health" \
-            --modes http1,http2,http3,download,pageload,pageload2,pageload3 \
-            --payload-sizes 1m \
-            --page-assets 10 \
-            --runs 5 \
-            --insecure \
-            --html
-    fi
+    # Build --target args from primary IP + any extra endpoint IPs
+    local target_args=("--target" "https://${e_ip}:8443/health")
+    for extra in "${AZURE_EXTRA_ENDPOINT_IPS[@]}"; do
+        local extra_ip="${extra%%:*}"
+        target_args+=("--target" "https://${extra_ip}:8443/health")
+    done
+
+    "$tester_bin" \
+        "${target_args[@]}" \
+        --modes http1,http2,http3,download,pageload,pageload2,pageload3 \
+        --payload-sizes 1m \
+        --page-assets 10 \
+        --runs 5 \
+        --insecure \
+        --html
 
     echo ""
     if [[ -f "output/report.html" ]]; then
