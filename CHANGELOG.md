@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.71] – 2026-03-04 — Fix silent exit in `_cargo_progress` (set -e + pipefail)
+
+### Fixed
+- **`_cargo_progress` silent exit** (`install.sh`): four `set -e` + `pipefail` traps caused
+  the installer to exit silently with no error message whenever `cargo install` was invoked:
+
+  1. **Spinner loop** (lines ~134, ~138): `phase="$(grep … | tail -1)"` — when the build log
+     is still empty (cargo just started or failed immediately), `grep` returns 1 (no matches),
+     `pipefail` propagates the non-zero exit through the `$(…)`, and `set -e` kills the shell
+     before the spinner prints a single character or the error banner is shown.
+     Fix: added `|| true` inside each `$(…)` so the subshell always exits 0.
+
+  2. **Success path** (line ~168): `timing="$(grep … | tail -1)"` — same trap; if the
+     "Finished" line is absent from the log, silent exit instead of printing the ✓ line.
+     Fix: added `|| true` inside `$(…)`.
+
+  3. **Non-TTY path** (line ~106): `"$@" | tee "$log_file"` — with `pipefail`, a cargo
+     failure causes `set -e` to exit before `PIPESTATUS` is captured, so the "build failed"
+     banner is never printed and `return $rc` is never reached.
+     Fix: wrap with `set +e` / `set -e` to capture `PIPESTATUS` before re-enabling errexit.
+
+---
+
 ## [0.12.70] – 2026-03-04 — Fix source installs: drop --locked, always compile on VM
 
 ### Fixed
