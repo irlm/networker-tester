@@ -11,6 +11,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.57] – 2026-03-04 — HTML report: box-and-whisker chart + CDF chart + new observations
+
+### Added
+- **Box-and-whisker chart** ("Load Time Distribution"): new Chart 3 in the Charts & Analysis
+  section.  Shows p5 whisker, Q1–Q3 IQR box, median line, and p95 whisker per protocol.
+  Inspired by GLOBECOM 2016 paper which demonstrates that variance — not just average — is
+  essential for comparing protocol performance.
+- **CDF chart** ("Load Time CDF — All Protocols"): new Chart 4.  Empirical step-function CDF
+  line per protocol (browser1/2/3 + pageload1/2/3 when both are present) with percentage
+  y-axis and time x-axis.  Inspired by GLOBECOM 2016 Figures 6–7, which use CDFs to show
+  whether one protocol is *consistently* faster or only occasionally faster.
+- **Two new observations** in the analysis section:
+  - *Lowest TTFB*: identifies which browser protocol has the lowest avg TTFB and the
+    advantage over the slowest.  Motivated by CCNC 2023 which highlights TTFB as the key
+    metric where H3 wins even when goodput is similar.
+  - *Consistency (p95−p50)*: compares the tail-latency spread across protocols; identifies
+    the most and least stable modes.  Paper 1 key finding: QUIC shows higher variance on
+    well-connected networks with many small objects.
+
+### Changed
+- Existing throughput chart renumbered from Chart 3 → Chart 5.
+
+---
+
 ## [0.12.56] – 2026-03-03 — fix browser probe: use content-length headers for transferred_bytes
 
 ### Fixed
