@@ -1,0 +1,69 @@
+name: Endpoint Tests
+
+# Run on every push/PR that touches the endpoint crate or its bats tests.
+on:
+  push:
+    branches: ["main", "develop"]
+    paths:
+      - "crates/networker-endpoint/**"
+      - "tests/endpoint.bats"
+      - ".github/workflows/test-endpoint.yml"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "crates/networker-endpoint/**"
+      - "tests/endpoint.bats"
+      - ".github/workflows/test-endpoint.yml"
+
+jobs:
+  # ── Rust unit tests (fast, no binary needed) ────────────────────────────────
+  cargo-test:
+    name: cargo test (networker-endpoint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-endpoint-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-endpoint-
+
+      - name: Run unit tests
+        run: cargo test -p networker-endpoint
+
+  # ── bats integration tests (builds binary, tests via curl) ──────────────────
+  bats:
+    name: bats (endpoint integration)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-endpoint-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-endpoint-
+
+      - name: Build networker-endpoint
+        run: cargo build -p networker-endpoint
+
+      - name: Install bats-core
+        run: sudo apt-get install -y bats
+
+      - name: Run endpoint integration tests
+        run: bats --tap tests/endpoint.bats
