@@ -11,6 +11,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.59] – 2026-03-04 — installer: unified local + Azure remote deployment
+
+### Changed
+- **`install.sh` unified local and cloud deployment**: instead of a separate
+  `deploy-azure.sh`, `install.sh` now supports deploying each component either
+  locally (existing behaviour) or remotely to a cloud VM.
+- **Interactive location selection**: after choosing which components to install
+  (`tester` / `endpoint` / `both`), the installer asks *where* to install each
+  — `1) Locally` or `2) Remote: Azure VM`.
+- **Azure deployment for endpoint**: provisions an Ubuntu 22.04 VM, opens TCP
+  8080/8443 and UDP 8443/9998/9999 on the NSG, installs `networker-endpoint` as
+  a systemd service, verifies `/health`, and writes `networker-azure.json` with
+  the full test config pointing at the new VM.
+- **Azure deployment for tester**: provisions a second VM (or the same VM if
+  desired), installs `networker-tester`, uploads the generated config, and shows
+  the SSH command to run tests from the cloud.
+- **Azure options prompt**: region (8 choices), VM size (4 choices, with pricing
+  guide), resource group name, and VM name — all with sensible defaults so a
+  single Enter key deploys immediately.
+- **New CLI flags**: `--azure`, `--tester-azure`, `--region`, `--rg`, `--vm`,
+  `--tester-rg`, `--tester-vm`, `--vm-size` for non-interactive scripted use.
+- **Cleanup hint**: completion summary shows `az group delete` commands for each
+  provisioned resource group.
+- **Azure CLI detection**: `discover_system()` detects `az` and `az account`
+  login state; shown in the System Information section.
+- No Rust binary changes; version bump is for the installer only.
+
+---
+
 ## [0.12.58] – 2026-03-04 — installer: show installed version instead of stale script version
 
 ### Changed

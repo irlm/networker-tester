@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────────────────────
-# Networker Tester – Unix/macOS interactive installer (rustup-style)
+# Networker Tester – unified installer (rustup-style)
 #
-# Two install modes (auto-detected, or choose in customize flow):
+# Installs networker-tester and/or networker-endpoint either:
+#   locally  – on this machine (release binary download or source compile)
+#   remotely – provisioned on a cloud VM (Azure supported; AWS coming soon)
+#
+# Two local install modes (auto-detected, or choose in customize flow):
 #   release  – download pre-built binary from the latest GitHub release via
 #              gh CLI (fast, ~10 s); requires: gh installed + gh auth login
 #   source   – compile from source via cargo install (slower, ~5-10 min);
@@ -15,11 +19,19 @@
 #   bash install.sh [OPTIONS] [tester|endpoint|both]
 #
 # Options:
-#   -y, --yes           Non-interactive: accept all defaults
-#   --from-source       Force source-compile mode (skip release download)
-#   --skip-ssh-check    Skip the GitHub SSH connectivity test (source mode)
-#   --skip-rust         Skip Rust installation (source mode)
-#   -h, --help          Show this help message
+#   -y, --yes               Non-interactive: accept all defaults (local install)
+#   --from-source           Force source-compile mode (skip release download)
+#   --skip-ssh-check        Skip the GitHub SSH connectivity test (source mode)
+#   --skip-rust             Skip Rust installation (source mode)
+#   --azure                 Deploy endpoint to Azure VM (interactive options)
+#   --tester-azure          Deploy tester to Azure VM (interactive options)
+#   --region REGION         Azure region (default: eastus)
+#   --rg NAME               Azure endpoint resource group (default: networker-rg-endpoint)
+#   --vm NAME               Azure endpoint VM name (default: networker-endpoint-vm)
+#   --tester-rg NAME        Azure tester resource group (default: networker-rg-tester)
+#   --tester-vm NAME        Azure tester VM name (default: networker-tester-vm)
+#   --vm-size SIZE          Azure VM size for all cloud VMs (default: Standard_B2s)
+#   -h, --help              Show this help message
 # ──────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -78,23 +90,38 @@ Usage: install.sh [OPTIONS] [tester|endpoint|both]
   endpoint  Install networker-endpoint (the target test server)
   both      Install both binaries  [default]
 
-Install modes (auto-detected; override in customize flow or via flag):
+Install location (interactive; can also be set via flags):
+  local     Install on this machine  [default]
+  azure     Provision Azure VM and deploy there (requires az CLI + az login)
+
+Local install modes (auto-detected; override in customize flow or via flag):
   release   Download pre-built binary via gh CLI — fast (~10 s)
             Requires: gh installed and authenticated (gh auth login)
   source    Compile from private Git repo via cargo install — slower (~5-10 min)
             Requires: SSH key for github.com + Rust/cargo
 
 Options:
-  -y, --yes           Non-interactive: accept all defaults
-  --from-source       Force source-compile mode (skip release detection)
-  --skip-ssh-check    Skip the GitHub SSH connectivity test (source mode only)
-  --skip-rust         Skip Rust installation (source mode only)
-  -h, --help          Show this help message
+  -y, --yes               Non-interactive: accept all defaults (local install)
+  --from-source           Force source-compile mode (skip release detection)
+  --skip-ssh-check        Skip the GitHub SSH connectivity test (source mode only)
+  --skip-rust             Skip Rust installation (source mode only)
+  --azure                 Deploy endpoint to Azure (interactive: choose region/size)
+  --tester-azure          Deploy tester to Azure (interactive: choose region/size)
+  --region REGION         Azure region for all VMs (default: eastus)
+  --rg NAME               Endpoint resource group name (default: networker-rg-endpoint)
+  --vm NAME               Endpoint VM name (default: networker-endpoint-vm)
+  --tester-rg NAME        Tester resource group name (default: networker-rg-tester)
+  --tester-vm NAME        Tester VM name (default: networker-tester-vm)
+  --vm-size SIZE          VM size for all Azure VMs (default: Standard_B2s)
+  -h, --help              Show this help message
 
 Examples:
   curl -fsSL <url>/install.sh | bash -s -- tester
   bash install.sh -y endpoint
   bash install.sh --from-source --skip-rust both
+  bash install.sh --azure endpoint
+  bash install.sh --azure --region westeurope both
+  bash install.sh --tester-azure --azure both
 EOF
 }
 
@@ -128,6 +155,31 @@ SYS_ARCH=""
 SYS_SHELL=""
 STEP_NUM=0
 
+# ── Remote deployment state ───────────────────────────────────────────────────
+TESTER_LOCATION="local"       # "local" | "azure"
+ENDPOINT_LOCATION="local"     # "local" | "azure"
+DO_REMOTE_TESTER=0
+DO_REMOTE_ENDPOINT=0
+
+AZURE_CLI_AVAILABLE=0
+AZURE_LOGGED_IN=0
+AZURE_REGION="eastus"
+AZURE_REGION_ASKED=0          # track if already asked interactively
+
+# Tester VM config
+AZURE_TESTER_RG="networker-rg-tester"
+AZURE_TESTER_VM="networker-tester-vm"
+AZURE_TESTER_SIZE="Standard_B2s"
+AZURE_TESTER_IP=""
+
+# Endpoint VM config
+AZURE_ENDPOINT_RG="networker-rg-endpoint"
+AZURE_ENDPOINT_VM="networker-endpoint-vm"
+AZURE_ENDPOINT_SIZE="Standard_B2s"
+AZURE_ENDPOINT_IP=""
+
+CONFIG_FILE_PATH=""
+
 # ── Argument parsing ──────────────────────────────────────────────────────────
 parse_args() {
     while [[ $# -gt 0 ]]; do
@@ -142,6 +194,24 @@ parse_args() {
                 SKIP_SSH=1 ;;
             --skip-rust)
                 SKIP_RUST=1 ;;
+            --azure)
+                ENDPOINT_LOCATION="azure"; DO_REMOTE_ENDPOINT=1 ;;
+            --tester-azure)
+                TESTER_LOCATION="azure"; DO_REMOTE_TESTER=1 ;;
+            --region)
+                shift; AZURE_REGION="${1:-eastus}" ;;
+            --rg)
+                shift; AZURE_ENDPOINT_RG="${1:-networker-rg-endpoint}" ;;
+            --vm)
+                shift; AZURE_ENDPOINT_VM="${1:-networker-endpoint-vm}" ;;
+            --tester-rg)
+                shift; AZURE_TESTER_RG="${1:-networker-rg-tester}" ;;
+            --tester-vm)
+                shift; AZURE_TESTER_VM="${1:-networker-tester-vm}" ;;
+            --vm-size)
+                shift
+                AZURE_TESTER_SIZE="${1:-Standard_B2s}"
+                AZURE_ENDPOINT_SIZE="${1:-Standard_B2s}" ;;
             -h|--help)
                 show_help; exit 0 ;;
             *)
@@ -162,6 +232,14 @@ parse_args() {
 
     if [[ $SKIP_SSH -eq 1 ]]; then
         DO_SSH_CHECK=0
+    fi
+
+    # If --azure/--tester-azure was set but matching component not enabled, enable it
+    if [[ $DO_REMOTE_ENDPOINT -eq 1 && $DO_INSTALL_ENDPOINT -eq 0 ]]; then
+        DO_INSTALL_ENDPOINT=1
+    fi
+    if [[ $DO_REMOTE_TESTER -eq 1 && $DO_INSTALL_TESTER -eq 0 ]]; then
+        DO_INSTALL_TESTER=1
     fi
 }
 
@@ -185,13 +263,10 @@ detect_pkg_manager() {
 }
 
 # ── Chrome/Chromium detection ─────────────────────────────────────────────────
-# Returns the path of the Chrome/Chromium binary, or empty string if not found.
 detect_chrome() {
-    # 1. Explicit env override
     if [[ -n "${NETWORKER_CHROME_PATH:-}" && -x "${NETWORKER_CHROME_PATH}" ]]; then
         echo "$NETWORKER_CHROME_PATH"; return
     fi
-    # 2. macOS standard locations
     local mac_paths=(
         "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
         "/Applications/Chromium.app/Contents/MacOS/Chromium"
@@ -199,7 +274,6 @@ detect_chrome() {
     for p in "${mac_paths[@]}"; do
         [[ -x "$p" ]] && echo "$p" && return
     done
-    # 3. Linux / PATH-visible names
     local cmd
     for cmd in google-chrome google-chrome-stable chromium-browser chromium; do
         if command -v "$cmd" &>/dev/null; then command -v "$cmd"; return; fi
@@ -216,7 +290,7 @@ detect_release_target() {
         Linux)
             case "$arch" in
                 x86_64) echo "x86_64-unknown-linux-gnu" ;;
-                *)      echo "" ;;   # ARM64 Linux not yet in release matrix
+                *)      echo "" ;;
             esac ;;
         Darwin)
             case "$arch" in
@@ -246,18 +320,14 @@ discover_system() {
         DO_RUST_INSTALL=1
     fi
 
-    # Package manager detection (always needed — Chrome install, git install, etc.)
     PKG_MGR="$(detect_pkg_manager)"
 
-    # Git detection
     if command -v git &>/dev/null; then
         GIT_AVAILABLE=1
     else
         GIT_AVAILABLE=0
     fi
 
-    # Release mode: available when gh is authenticated AND this platform has a
-    # pre-built binary in the release matrix.
     if [[ $FROM_SOURCE -eq 0 ]]; then
         RELEASE_TARGET="$(detect_release_target)"
         if [[ -n "$RELEASE_TARGET" ]] \
@@ -265,30 +335,32 @@ discover_system() {
            && gh auth status &>/dev/null 2>&1; then
             RELEASE_AVAILABLE=1
             INSTALL_METHOD="release"
-            # Resolve the exact version that will be installed so the banner and
-            # plan can show it instead of the stale script version.
             NETWORKER_VERSION="$(gh release list --repo "$REPO_GH" \
                 --limit 1 --json tagName -q '.[0].tagName' 2>/dev/null || echo "")"
         fi
     fi
 
-    # Auto-offer git install only in source mode (release mode uses gh, not git)
     if [[ "$INSTALL_METHOD" == "source" && $GIT_AVAILABLE -eq 0 && -n "$PKG_MGR" ]]; then
         DO_GIT_INSTALL=1
     fi
 
-    # Chrome detection (affects --features browser in source mode)
     CHROME_PATH="$(detect_chrome)"
     if [[ -n "$CHROME_PATH" ]]; then
         CHROME_AVAILABLE=1
     else
         CHROME_AVAILABLE=0
-        # DO_CHROME_INSTALL stays 0 here — user is asked in prompt_main / customize_flow
     fi
 
-    # certutil detection (NSS tools, required for browser3 QUIC cert trust on Linux)
     if command -v certutil &>/dev/null; then
         CERTUTIL_AVAILABLE=1
+    fi
+
+    # Azure CLI detection
+    if command -v az &>/dev/null; then
+        AZURE_CLI_AVAILABLE=1
+        if az account show &>/dev/null 2>&1; then
+            AZURE_LOGGED_IN=1
+        fi
     fi
 }
 
@@ -315,117 +387,317 @@ display_system_info() {
     if [[ $RELEASE_AVAILABLE -eq 1 ]]; then
         printf "    %-22s %s\n" "gh CLI:" "authenticated ✓"
     fi
+
+    if [[ $AZURE_CLI_AVAILABLE -eq 1 ]]; then
+        if [[ $AZURE_LOGGED_IN -eq 1 ]]; then
+            local az_sub
+            az_sub="$(az account show --query name -o tsv 2>/dev/null || echo "")"
+            printf "    %-22s %s\n" "Azure CLI:" "authenticated ✓  (${az_sub})"
+        else
+            printf "    %-22s %s\n" "Azure CLI:" "installed  (run: az login)"
+        fi
+    fi
 }
 
 display_plan() {
     print_section "Installation Plan"
     echo ""
 
-    if [[ "$INSTALL_METHOD" == "release" ]]; then
-        printf "    ${BOLD}Method:${RESET}  Download binary from GitHub release  ${DIM}(fast)${RESET}\n"
-        printf "    ${DIM}Target:  %s${RESET}\n" "$RELEASE_TARGET"
-        echo ""
+    # ── Local install plan ────────────────────────────────────────────────────
+    local do_local_tester=0
+    local do_local_endpoint=0
+    [[ $DO_INSTALL_TESTER -eq 1 && $DO_REMOTE_TESTER -eq 0 ]]     && do_local_tester=1
+    [[ $DO_INSTALL_ENDPOINT -eq 1 && $DO_REMOTE_ENDPOINT -eq 0 ]]  && do_local_endpoint=1
 
-        local step=1
-        local ver_label="${NETWORKER_VERSION:-latest}"
-        if [[ $DO_INSTALL_TESTER -eq 1 ]]; then
-            printf "    %s. ${BOLD}Download networker-tester${RESET}    %s\n" "$step" "$ver_label"
-            step=$((step + 1))
+    if [[ $do_local_tester -eq 1 || $do_local_endpoint -eq 1 ]]; then
+        if [[ "$INSTALL_METHOD" == "release" ]]; then
+            printf "    ${BOLD}Local method:${RESET}  Download binary from GitHub release  ${DIM}(fast)${RESET}\n"
+            printf "    ${DIM}Target:        %s${RESET}\n" "$RELEASE_TARGET"
+            echo ""
+
+            local step=1
+            local ver_label="${NETWORKER_VERSION:-latest}"
+            if [[ $do_local_tester -eq 1 ]]; then
+                printf "    %s. ${BOLD}Download networker-tester${RESET}    %s\n" "$step" "$ver_label"
+                step=$((step + 1))
+            fi
+            if [[ $do_local_endpoint -eq 1 ]]; then
+                printf "    %s. ${BOLD}Download networker-endpoint${RESET}  %s\n" "$step" "$ver_label"
+                step=$((step + 1))
+            fi
+            if [[ "$SYS_OS" == "Linux" && $CERTUTIL_AVAILABLE -eq 0 && -n "$PKG_MGR" \
+                  && ( $CHROME_AVAILABLE -eq 1 || $DO_CHROME_INSTALL -eq 1 ) ]]; then
+                local nss_pkg; _nss_pkg_name nss_pkg
+                printf "    %s. ${BOLD}Install certutil${RESET}        %s via %s ${DIM}(browser3 QUIC cert trust)${RESET}\n" \
+                    "$step" "$nss_pkg" "$PKG_MGR"
+            fi
+            echo ""
+            print_dim "Repository:  $REPO_GH  (${NETWORKER_VERSION:-latest release})"
+        else
+            printf "    ${BOLD}Local method:${RESET}  Compile from source  ${DIM}(~5-10 min)${RESET}\n"
+            echo ""
+            local step=1
+
+            if [[ $GIT_AVAILABLE -eq 0 ]]; then
+                if [[ $DO_GIT_INSTALL -eq 1 ]]; then
+                    printf "    %s. ${BOLD}Install git${RESET}            Install via %s\n" "$step" "$PKG_MGR"
+                    step=$((step + 1))
+                elif [[ -n "$PKG_MGR" ]]; then
+                    printf "    ${DIM}-. Install git              (skip – toggle in Customize)${RESET}\n"
+                else
+                    printf "    ${DIM}-. Install git              (not installed – visit https://git-scm.com/)${RESET}\n"
+                fi
+            fi
+
+            if [[ $CHROME_AVAILABLE -eq 0 && $DO_INSTALL_TESTER -eq 1 ]]; then
+                if [[ $DO_CHROME_INSTALL -eq 1 ]]; then
+                    printf "    %s. ${BOLD}Install Chrome${RESET}         Install via %s (browser probe)\n" "$step" "$PKG_MGR"
+                    step=$((step + 1))
+                elif [[ -n "$PKG_MGR" ]]; then
+                    printf "    ${DIM}-. Install Chrome         (will ask — browser probe disabled if skipped)${RESET}\n"
+                else
+                    printf "    ${DIM}-. Install Chrome         (not installed — https://www.google.com/chrome/)${RESET}\n"
+                fi
+            fi
+
+            if [[ $DO_SSH_CHECK -eq 1 ]]; then
+                printf "    %s. ${BOLD}SSH check${RESET}              Verify GitHub SSH access\n" "$step"
+                step=$((step + 1))
+            else
+                printf "    ${DIM}-. SSH check              (skipped)${RESET}\n"
+            fi
+
+            if [[ $DO_RUST_INSTALL -eq 1 ]]; then
+                printf "    %s. ${BOLD}Install Rust${RESET}           Download rustup and run installer\n" "$step"
+                step=$((step + 1))
+            elif [[ $RUST_EXISTS -eq 0 ]]; then
+                printf "    ${DIM}-. Install Rust            (skipped – --skip-rust)${RESET}\n"
+            else
+                printf "    ${DIM}-. Install Rust            (skip – already installed: %s)${RESET}\n" "$RUST_VER"
+            fi
+
+            local browser_note=""
+            if [[ $CHROME_AVAILABLE -eq 1 || $DO_CHROME_INSTALL -eq 1 ]]; then
+                browser_note="  ${DIM}[+browser feature]${RESET}"
+            fi
+            if [[ $do_local_tester -eq 1 ]]; then
+                printf "    %s. ${BOLD}Install networker-tester${RESET}   cargo install from private Git repo%s\n" "$step" "$browser_note"
+                step=$((step + 1))
+            fi
+            if [[ $do_local_endpoint -eq 1 ]]; then
+                printf "    %s. ${BOLD}Install networker-endpoint${RESET} cargo install from private Git repo\n" "$step"
+                step=$((step + 1))
+            fi
+
+            if [[ "$SYS_OS" == "Linux" && $CERTUTIL_AVAILABLE -eq 0 && -n "$PKG_MGR" \
+                  && ( $CHROME_AVAILABLE -eq 1 || $DO_CHROME_INSTALL -eq 1 ) ]]; then
+                local nss_pkg; _nss_pkg_name nss_pkg
+                printf "    %s. ${BOLD}Install certutil${RESET}        %s via %s ${DIM}(browser3 QUIC cert trust)${RESET}\n" \
+                    "$step" "$nss_pkg" "$PKG_MGR"
+                step=$((step + 1))
+            fi
+            echo ""
+            print_dim "Repository:  $REPO_SSH"
+            print_dim "Source code is compiled locally — no pre-built binaries are downloaded."
         fi
-        if [[ $DO_INSTALL_ENDPOINT -eq 1 ]]; then
-            printf "    %s. ${BOLD}Download networker-endpoint${RESET}  %s\n" "$step" "$ver_label"
-            step=$((step + 1))
-        fi
-        if [[ "$SYS_OS" == "Linux" && $CERTUTIL_AVAILABLE -eq 0 && -n "$PKG_MGR" \
-              && ( $CHROME_AVAILABLE -eq 1 || $DO_CHROME_INSTALL -eq 1 ) ]]; then
-            local nss_pkg
-            case "$PKG_MGR" in
-                apt-get) nss_pkg="libnss3-tools" ;;
-                dnf)     nss_pkg="nss-tools" ;;
-                pacman)  nss_pkg="nss" ;;
-                zypper)  nss_pkg="mozilla-nss-tools" ;;
-                apk)     nss_pkg="nss-tools" ;;
-                *)       nss_pkg="nss-tools" ;;
-            esac
-            printf "    %s. ${BOLD}Install certutil${RESET}        Install %s via %s ${DIM}(browser3 QUIC cert trust)${RESET}\n" "$step" "$nss_pkg" "$PKG_MGR"
-        fi
+    fi
+
+    # ── Remote Azure — tester ─────────────────────────────────────────────────
+    if [[ $DO_REMOTE_TESTER -eq 1 ]]; then
         echo ""
-        print_dim "Repository:  $REPO_GH  (${NETWORKER_VERSION:-latest release})"
+        printf "    ${BOLD}networker-tester:${RESET}  Remote — Azure VM\n"
+        printf "    %-22s %s\n" "Region:"        "$AZURE_REGION"
+        printf "    %-22s %s\n" "Resource group:" "$AZURE_TESTER_RG"
+        printf "    %-22s %s\n" "VM name:"        "$AZURE_TESTER_VM"
+        printf "    %-22s %s\n" "VM size:"        "$AZURE_TESTER_SIZE"
+        echo ""
+        printf "    ${DIM}a. Create resource group + VM (Ubuntu 22.04)\n"
+        printf "    b. Install networker-tester binary\n"
+        printf "    c. Show SSH access command${RESET}\n"
+    fi
+
+    # ── Remote Azure — endpoint ───────────────────────────────────────────────
+    if [[ $DO_REMOTE_ENDPOINT -eq 1 ]]; then
+        echo ""
+        printf "    ${BOLD}networker-endpoint:${RESET}  Remote — Azure VM\n"
+        printf "    %-22s %s\n" "Region:"         "$AZURE_REGION"
+        printf "    %-22s %s\n" "Resource group:" "$AZURE_ENDPOINT_RG"
+        printf "    %-22s %s\n" "VM name:"        "$AZURE_ENDPOINT_VM"
+        printf "    %-22s %s\n" "VM size:"        "$AZURE_ENDPOINT_SIZE"
+        echo ""
+        printf "    ${DIM}a. Create resource group + VM (Ubuntu 22.04)\n"
+        printf "    b. Open TCP 8080, 8443 and UDP 8443, 9998, 9999\n"
+        printf "    c. Install networker-endpoint + systemd service\n"
+        printf "    d. Verify /health endpoint\n"
+        printf "    e. Write networker-azure.json config file${RESET}\n"
+    fi
+}
+
+# ── Helper: resolve NSS package name for current distro ──────────────────────
+_nss_pkg_name() {
+    local varname="$1"
+    local pkg
+    case "$PKG_MGR" in
+        apt-get) pkg="libnss3-tools" ;;
+        dnf)     pkg="nss-tools" ;;
+        pacman)  pkg="nss" ;;
+        zypper)  pkg="mozilla-nss-tools" ;;
+        apk)     pkg="nss-tools" ;;
+        *)       pkg="nss-tools" ;;
+    esac
+    printf -v "$varname" "%s" "$pkg"
+}
+
+# ── Azure interactive configuration ──────────────────────────────────────────
+# Prompts for Azure options for a given component ("tester" or "endpoint").
+# Sets AZURE_TESTER_* or AZURE_ENDPOINT_* variables accordingly.
+ask_azure_options() {
+    local component="$1"  # "tester" or "endpoint"
+    local title
+    case "$component" in
+        tester)   title="networker-tester" ;;
+        endpoint) title="networker-endpoint" ;;
+    esac
+
+    print_section "Azure options for $title"
+    echo ""
+
+    # Region (shared between both VMs; ask only once)
+    if [[ $AZURE_REGION_ASKED -eq 0 ]]; then
+        AZURE_REGION_ASKED=1
+        local regions=(
+            "eastus:East US (Virginia)"
+            "westus2:West US 2 (Washington)"
+            "westeurope:West Europe (Netherlands)"
+            "northeurope:North Europe (Ireland)"
+            "southeastasia:Southeast Asia (Singapore)"
+            "australiaeast:Australia East (New South Wales)"
+            "uksouth:UK South (London)"
+            "japaneast:Japan East (Tokyo)"
+        )
+        echo "  Azure region:"
+        local i=1
+        for r in "${regions[@]}"; do
+            local code="${r%%:*}"
+            local label="${r#*:}"
+            if [[ "$code" == "$AZURE_REGION" ]]; then
+                printf "    %s) %-20s %s  ${DIM}[current]${RESET}\n" "$i" "$code" "$label"
+            else
+                printf "    %s) %-20s %s\n" "$i" "$code" "$label"
+            fi
+            i=$((i + 1))
+        done
+        echo ""
+        printf "  Choice [1]: "
+        local reg_ans
+        read -r reg_ans </dev/tty || true
+        reg_ans="${reg_ans:-1}"
+        if [[ "$reg_ans" =~ ^[0-9]+$ ]] && \
+           [[ "$reg_ans" -ge 1 ]] && \
+           [[ "$reg_ans" -le "${#regions[@]}" ]]; then
+            local chosen="${regions[$((reg_ans - 1))]}"
+            AZURE_REGION="${chosen%%:*}"
+        fi
+        print_ok "Region: $AZURE_REGION"
+        echo ""
     else
-        printf "    ${BOLD}Method:${RESET}  Compile from source  ${DIM}(~5-10 min)${RESET}\n"
+        print_info "Region: $AZURE_REGION  (shared with other Azure VM)"
         echo ""
+    fi
 
-        local step=1
+    # VM size
+    echo "  VM size:"
+    echo "    1) Standard_B1s     1 vCPU,  1 GB RAM  ~\$7/mo   (minimal)"
+    echo "    2) Standard_B2s     2 vCPU,  4 GB RAM  ~\$30/mo  [default]"
+    echo "    3) Standard_D2s_v3  2 vCPU,  8 GB RAM  ~\$70/mo"
+    echo "    4) Standard_D4s_v3  4 vCPU, 16 GB RAM  ~\$140/mo"
+    echo ""
+    printf "  Choice [2]: "
+    local size_ans
+    read -r size_ans </dev/tty || true
+    size_ans="${size_ans:-2}"
+    local chosen_size
+    case "$size_ans" in
+        1) chosen_size="Standard_B1s" ;;
+        3) chosen_size="Standard_D2s_v3" ;;
+        4) chosen_size="Standard_D4s_v3" ;;
+        *) chosen_size="Standard_B2s" ;;
+    esac
+    echo ""
 
-        if [[ $GIT_AVAILABLE -eq 0 ]]; then
-            if [[ $DO_GIT_INSTALL -eq 1 ]]; then
-                printf "    %s. ${BOLD}Install git${RESET}            Install via %s\n" "$step" "$PKG_MGR"
-                step=$((step + 1))
-            elif [[ -n "$PKG_MGR" ]]; then
-                printf "    ${DIM}-. Install git              (skip – toggle in Customize)${RESET}\n"
-            else
-                printf "    ${DIM}-. Install git              (not installed – visit https://git-scm.com/)${RESET}\n"
+    # Resource group and VM name
+    if [[ "$component" == "tester" ]]; then
+        printf "  Resource group name [%s]: " "$AZURE_TESTER_RG"
+        local rg_ans; read -r rg_ans </dev/tty || true
+        AZURE_TESTER_RG="${rg_ans:-$AZURE_TESTER_RG}"
+
+        printf "  VM name             [%s]: " "$AZURE_TESTER_VM"
+        local vm_ans; read -r vm_ans </dev/tty || true
+        AZURE_TESTER_VM="${vm_ans:-$AZURE_TESTER_VM}"
+
+        AZURE_TESTER_SIZE="$chosen_size"
+        print_ok "Size: $AZURE_TESTER_SIZE  |  RG: $AZURE_TESTER_RG  |  VM: $AZURE_TESTER_VM"
+    else
+        printf "  Resource group name [%s]: " "$AZURE_ENDPOINT_RG"
+        local rg_ans; read -r rg_ans </dev/tty || true
+        AZURE_ENDPOINT_RG="${rg_ans:-$AZURE_ENDPOINT_RG}"
+
+        printf "  VM name             [%s]: " "$AZURE_ENDPOINT_VM"
+        local vm_ans; read -r vm_ans </dev/tty || true
+        AZURE_ENDPOINT_VM="${vm_ans:-$AZURE_ENDPOINT_VM}"
+
+        AZURE_ENDPOINT_SIZE="$chosen_size"
+        print_ok "Size: $AZURE_ENDPOINT_SIZE  |  RG: $AZURE_ENDPOINT_RG  |  VM: $AZURE_ENDPOINT_VM"
+    fi
+    echo ""
+}
+
+# Ask where to install each component.  Skipped when AUTO_YES=1.
+ask_deployment_locations() {
+    [[ $AUTO_YES -eq 1 ]] && return 0
+
+    # Tester location
+    if [[ $DO_INSTALL_TESTER -eq 1 ]]; then
+        if [[ $DO_REMOTE_TESTER -eq 0 ]]; then
+            echo ""
+            echo "  ${BOLD}Where to install networker-tester?${RESET}"
+            echo "    1) Locally on this machine  [default]"
+            echo "    2) Remote: Azure VM"
+            echo ""
+            printf "  Choice [1]: "
+            local ans
+            read -r ans </dev/tty || true
+            ans="${ans:-1}"
+            if [[ "$ans" == "2" ]]; then
+                TESTER_LOCATION="azure"
+                DO_REMOTE_TESTER=1
             fi
         fi
+        if [[ $DO_REMOTE_TESTER -eq 1 ]]; then
+            ask_azure_options "tester"
+        fi
+    fi
 
-        if [[ $CHROME_AVAILABLE -eq 0 && $DO_INSTALL_TESTER -eq 1 ]]; then
-            if [[ $DO_CHROME_INSTALL -eq 1 ]]; then
-                printf "    %s. ${BOLD}Install Chrome${RESET}         Install via %s (browser probe)\n" "$step" "$PKG_MGR"
-                step=$((step + 1))
-            elif [[ -n "$PKG_MGR" ]]; then
-                printf "    ${DIM}-. Install Chrome         (will ask — browser probe disabled if skipped)${RESET}\n"
-            else
-                printf "    ${DIM}-. Install Chrome         (not installed — https://www.google.com/chrome/)${RESET}\n"
+    # Endpoint location
+    if [[ $DO_INSTALL_ENDPOINT -eq 1 ]]; then
+        if [[ $DO_REMOTE_ENDPOINT -eq 0 ]]; then
+            echo ""
+            echo "  ${BOLD}Where to install networker-endpoint?${RESET}"
+            echo "    1) Locally on this machine  [default]"
+            echo "    2) Remote: Azure VM"
+            echo ""
+            printf "  Choice [1]: "
+            local ans
+            read -r ans </dev/tty || true
+            ans="${ans:-1}"
+            if [[ "$ans" == "2" ]]; then
+                ENDPOINT_LOCATION="azure"
+                DO_REMOTE_ENDPOINT=1
             fi
         fi
-
-        if [[ $DO_SSH_CHECK -eq 1 ]]; then
-            printf "    %s. ${BOLD}SSH check${RESET}              Verify GitHub SSH access\n" "$step"
-            step=$((step + 1))
-        else
-            printf "    ${DIM}-. SSH check              (skipped)${RESET}\n"
+        if [[ $DO_REMOTE_ENDPOINT -eq 1 ]]; then
+            ask_azure_options "endpoint"
         fi
-
-        if [[ $DO_RUST_INSTALL -eq 1 ]]; then
-            printf "    %s. ${BOLD}Install Rust${RESET}           Download rustup from sh.rustup.rs and run installer\n" "$step"
-            step=$((step + 1))
-        elif [[ $RUST_EXISTS -eq 0 ]]; then
-            printf "    ${DIM}-. Install Rust            (skipped – --skip-rust)${RESET}\n"
-        else
-            printf "    ${DIM}-. Install Rust            (skip – already installed: %s)${RESET}\n" "$RUST_VER"
-        fi
-
-        local browser_note=""
-        if [[ $CHROME_AVAILABLE -eq 1 || $DO_CHROME_INSTALL -eq 1 ]]; then
-            browser_note="  ${DIM}[+browser feature]${RESET}"
-        fi
-        if [[ $DO_INSTALL_TESTER -eq 1 ]]; then
-            printf "    %s. ${BOLD}Install networker-tester${RESET}   cargo install from private Git repo%s\n" "$step" "$browser_note"
-            step=$((step + 1))
-        fi
-        if [[ $DO_INSTALL_ENDPOINT -eq 1 ]]; then
-            printf "    %s. ${BOLD}Install networker-endpoint${RESET} cargo install from private Git repo\n" "$step"
-            step=$((step + 1))
-        fi
-
-        # Show certutil step when Chrome is present/planned and certutil is absent (Linux only)
-        if [[ "$SYS_OS" == "Linux" && $CERTUTIL_AVAILABLE -eq 0 && -n "$PKG_MGR" \
-              && ( $CHROME_AVAILABLE -eq 1 || $DO_CHROME_INSTALL -eq 1 ) ]]; then
-            local nss_pkg
-            case "$PKG_MGR" in
-                apt-get) nss_pkg="libnss3-tools" ;;
-                dnf)     nss_pkg="nss-tools" ;;
-                pacman)  nss_pkg="nss" ;;
-                zypper)  nss_pkg="mozilla-nss-tools" ;;
-                apk)     nss_pkg="nss-tools" ;;
-                *)       nss_pkg="nss-tools" ;;
-            esac
-            printf "    %s. ${BOLD}Install certutil${RESET}        Install %s via %s ${DIM}(browser3 QUIC cert trust)${RESET}\n" "$step" "$nss_pkg" "$PKG_MGR"
-            step=$((step + 1))
-        fi
-        echo ""
-        print_dim "Repository:  $REPO_SSH"
-        print_dim "Source code is compiled locally — no pre-built binaries are downloaded."
     fi
 }
 
@@ -451,7 +723,9 @@ prompt_main() {
         case "$ans" in
             1)
                 # Ask about Chrome if not already available (source mode, pkg manager present)
-                if [[ $CHROME_AVAILABLE -eq 0 && "$INSTALL_METHOD" == "source" && -n "$PKG_MGR" && $DO_INSTALL_TESTER -eq 1 ]]; then
+                if [[ $CHROME_AVAILABLE -eq 0 && "$INSTALL_METHOD" == "source" \
+                      && -n "$PKG_MGR" && $DO_INSTALL_TESTER -eq 1 \
+                      && $DO_REMOTE_TESTER -eq 0 ]]; then
                     echo ""
                     if ask_yn "Chrome/Chromium not found — install it to enable the browser probe?" "y"; then
                         DO_CHROME_INSTALL=1
@@ -461,6 +735,8 @@ prompt_main() {
                         print_info "To enable later: install Chrome then re-run this installer."
                     fi
                 fi
+                # Ask deployment locations
+                ask_deployment_locations
                 return 0 ;;
             2) customize_flow; return 0 ;;
             3)
@@ -521,7 +797,6 @@ customize_flow() {
 
     # SSH check + Rust install + git install – only relevant in source mode
     if [[ "$INSTALL_METHOD" == "source" ]]; then
-        # git install (only offered when git is absent and pkg manager is available)
         if [[ $GIT_AVAILABLE -eq 0 ]]; then
             if [[ -n "$PKG_MGR" ]]; then
                 if ask_yn "git is not installed — install it via ${PKG_MGR}?" "y"; then
@@ -547,7 +822,6 @@ customize_flow() {
             echo ""
         fi
 
-        # Chrome install (only offered when Chrome is absent and tester is being installed)
         if [[ $CHROME_AVAILABLE -eq 0 && $DO_INSTALL_TESTER -eq 1 ]]; then
             if [[ -n "$PKG_MGR" ]]; then
                 if ask_yn "Chrome/Chromium not found — install it to enable the browser probe?" "y"; then
@@ -586,7 +860,7 @@ customize_flow() {
         echo ""
     fi
 
-    # Component selection (always shown)
+    # Component selection
     echo "  Which components do you want to install?"
     echo ""
     echo "    1) Both  (networker-tester + networker-endpoint)  [default]"
@@ -602,6 +876,9 @@ customize_flow() {
         3) DO_INSTALL_TESTER=0; DO_INSTALL_ENDPOINT=1 ;;
         *) DO_INSTALL_TESTER=1; DO_INSTALL_ENDPOINT=1 ;;
     esac
+
+    # Deployment location selection
+    ask_deployment_locations
 
     echo ""
     print_section "Revised Plan"
@@ -660,8 +937,6 @@ step_ssh_check() {
     next_step "Verify GitHub SSH access"
     print_info "Connecting to git@github.com…"
 
-    # ssh -T always exits 1 on GitHub (no shell access by design).
-    # </dev/null prevents ssh from consuming the curl pipe.
     local ssh_out
     ssh_out=$(ssh -o BatchMode=yes \
                   -o StrictHostKeyChecking=accept-new \
@@ -688,24 +963,12 @@ step_install_git() {
     echo ""
 
     case "$PKG_MGR" in
-        brew)
-            brew install git
-            ;;
-        apt-get)
-            sudo apt-get update -qq && sudo apt-get install -y git
-            ;;
-        dnf)
-            sudo dnf install -y git
-            ;;
-        pacman)
-            sudo pacman -S --noconfirm git
-            ;;
-        zypper)
-            sudo zypper install -y git
-            ;;
-        apk)
-            sudo apk add git
-            ;;
+        brew)    brew install git ;;
+        apt-get) sudo apt-get update -qq && sudo apt-get install -y git ;;
+        dnf)     sudo dnf install -y git ;;
+        pacman)  sudo pacman -S --noconfirm git ;;
+        zypper)  sudo zypper install -y git ;;
+        apk)     sudo apk add git ;;
         *)
             print_err "Unknown package manager: $PKG_MGR"
             exit 1
@@ -735,27 +998,22 @@ step_install_chrome() {
             sudo apt-get update -qq \
                 && (sudo apt-get install -y chromium-browser 2>/dev/null \
                     || sudo apt-get install -y chromium)
-            # libnss3-tools provides certutil, required for browser3 QUIC cert trust on Linux
             sudo apt-get install -y libnss3-tools 2>/dev/null || true
             ;;
         dnf)
             sudo dnf install -y chromium
-            # nss-tools provides certutil, required for browser3 QUIC cert trust on Linux
             sudo dnf install -y nss-tools 2>/dev/null || true
             ;;
         pacman)
             sudo pacman -S --noconfirm chromium
-            # nss provides certutil, required for browser3 QUIC cert trust on Linux
             sudo pacman -S --noconfirm nss 2>/dev/null || true
             ;;
         zypper)
             sudo zypper install -y chromium
-            # mozilla-nss-tools provides certutil, required for browser3 QUIC cert trust on Linux
             sudo zypper install -y mozilla-nss-tools 2>/dev/null || true
             ;;
         apk)
             sudo apk add chromium
-            # nss-tools provides certutil, required for browser3 QUIC cert trust on Linux
             sudo apk add nss-tools 2>/dev/null || true
             ;;
         *)
@@ -765,7 +1023,6 @@ step_install_chrome() {
             ;;
     esac
 
-    # Re-detect after install
     CHROME_PATH="$(detect_chrome)"
     if [[ -n "$CHROME_PATH" ]]; then
         CHROME_AVAILABLE=1
@@ -773,18 +1030,14 @@ step_install_chrome() {
     else
         print_warn "Chrome/Chromium installed but not yet detectable in standard paths."
         print_warn "browser probe will be compiled in; set NETWORKER_CHROME_PATH if needed."
-        CHROME_AVAILABLE=1  # Compile with feature; user can set path at runtime
+        CHROME_AVAILABLE=1
     fi
 }
 
-# Install the NSS certutil tool required for browser3 QUIC cert trust on Linux.
-# Chrome on Linux uses an NSS database in the profile directory; certutil is the
-# only standard way to import a trusted CA into it.  This step is a no-op on
-# macOS (uses security(1) instead) and when certutil is already present.
 step_ensure_certutil() {
     [[ "$SYS_OS" == "Linux" ]] || return 0
     [[ -n "$PKG_MGR" ]]       || return 0
-    command -v certutil &>/dev/null && return 0   # already installed
+    command -v certutil &>/dev/null && return 0
 
     next_step "Install certutil (browser3 QUIC cert trust)"
     if ! ask_yn "Install certutil (NSS tools) via ${PKG_MGR}? Required for browser3 to use H3." "y"; then
@@ -845,7 +1098,6 @@ step_cargo_install() {
     print_info "Building and installing $binary from source…"
     print_dim "This compiles from the private Git repo and may take a few minutes."
 
-    # Pre-flight: warn if no C linker is available (cargo needs cc/gcc/clang to link)
     if ! command -v cc &>/dev/null && ! command -v gcc &>/dev/null && ! command -v clang &>/dev/null; then
         echo ""
         print_warn "No C linker found (cc/gcc/clang) — cargo will likely fail."
@@ -869,12 +1121,6 @@ step_cargo_install() {
     fi
     echo ""
 
-    # CARGO_NET_GIT_FETCH_WITH_CLI=true delegates git operations to the system
-    # git binary (rather than libgit2), reliably picking up the SSH agent.
-    # Only set when git is on PATH; otherwise cargo uses its built-in libgit2.
-    # --force rebuilds unconditionally even when cargo's SHA cache is current.
-    # --features browser is added only when Chrome/Chromium is available.
-    # </dev/null prevents cargo reading the curl pipe for interactive prompts.
     local features_arg=""
     if [[ $CHROME_AVAILABLE -eq 1 && "$binary" == "networker-tester" ]]; then
         features_arg="--features browser"
@@ -894,6 +1140,339 @@ step_cargo_install() {
     print_ok "$binary installed → ${INSTALL_DIR}/${binary}  ($installed_ver)"
 }
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Azure deployment steps
+# ──────────────────────────────────────────────────────────────────────────────
+
+step_check_azure_prereqs() {
+    next_step "Check Azure prerequisites"
+
+    if [[ $AZURE_CLI_AVAILABLE -eq 0 ]]; then
+        print_err "Azure CLI (az) is not installed."
+        echo ""
+        echo "  Install from: https://docs.microsoft.com/cli/azure/install-azure-cli"
+        echo "    macOS:  brew install azure-cli"
+        echo "    Linux:  curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash"
+        exit 1
+    fi
+    print_ok "az CLI found"
+
+    if [[ $AZURE_LOGGED_IN -eq 0 ]]; then
+        print_info "Not logged in to Azure — running az login…"
+        az login
+        if ! az account show &>/dev/null 2>&1; then
+            print_err "Azure login failed."
+            exit 1
+        fi
+        AZURE_LOGGED_IN=1
+    fi
+
+    local sub_name sub_id
+    sub_name="$(az account show --query name -o tsv 2>/dev/null || echo "unknown")"
+    sub_id="$(az account show --query id -o tsv 2>/dev/null || echo "")"
+    print_ok "Subscription: ${sub_name}  (${sub_id})"
+}
+
+# Create an Azure resource group and Ubuntu 22.04 VM.
+# $1 = label ("tester" or "endpoint")
+# $2 = resource group name
+# $3 = VM name
+# $4 = VM size
+# $5 = name of the global variable to receive the public IP
+step_azure_create_vm() {
+    local label="$1" rg="$2" vm="$3" size="$4" ip_var="$5"
+
+    next_step "Create Azure VM for $label ($vm in $AZURE_REGION)"
+
+    print_info "Creating resource group '$rg' in $AZURE_REGION…"
+    az group create --name "$rg" --location "$AZURE_REGION" --output none
+    print_ok "Resource group: $rg"
+
+    # Prefer an existing local SSH public key; fall back to Azure key generation
+    local ssh_key_option="--generate-ssh-keys"
+    local key_file
+    for key_file in "${HOME}/.ssh/id_ed25519.pub" "${HOME}/.ssh/id_rsa.pub"; do
+        if [[ -f "$key_file" ]]; then
+            ssh_key_option="--ssh-key-values @${key_file}"
+            break
+        fi
+    done
+
+    print_info "Creating Ubuntu 22.04 VM '$vm' ($size)…"
+    print_dim "This typically takes 1–2 minutes…"
+    echo ""
+
+    local ip
+    ip="$(az vm create \
+        --resource-group "$rg" \
+        --name "$vm" \
+        --image Ubuntu2204 \
+        --size "$size" \
+        --admin-username azureuser \
+        $ssh_key_option \
+        --output tsv \
+        --query publicIpAddress)"
+
+    if [[ -z "$ip" ]]; then
+        print_err "Failed to retrieve VM public IP address."
+        echo "  Check the Azure portal for resource group: $rg"
+        exit 1
+    fi
+
+    printf -v "$ip_var" "%s" "$ip"
+    print_ok "VM created — Public IP: ${BOLD}${ip}${RESET}"
+}
+
+# Wait for SSH to become available on a remote VM.
+# $1 = public IP
+# $2 = friendly label (optional)
+_wait_for_ssh() {
+    local ip="$1"
+    local label="${2:-VM}"
+
+    print_info "Waiting for SSH on $label ($ip)…"
+    local attempts=0
+    while ! ssh -o ConnectTimeout=5 \
+                -o StrictHostKeyChecking=no \
+                -o BatchMode=yes \
+                "azureuser@${ip}" "echo ready" &>/dev/null; do
+        attempts=$((attempts + 1))
+        if [[ $attempts -gt 36 ]]; then
+            echo ""
+            print_err "SSH not available after 3 minutes."
+            echo "  Check the VM status in Azure portal and try:"
+            echo "    ssh azureuser@${ip}"
+            exit 1
+        fi
+        printf "."
+        sleep 5
+    done
+    echo ""
+    print_ok "SSH ready"
+}
+
+# Open TCP 8080/8443 and UDP 8443/9998/9999 on the NSG for the endpoint VM.
+step_azure_open_endpoint_ports() {
+    local rg="$1" vm="$2"
+
+    next_step "Open firewall ports for networker-endpoint"
+
+    print_info "Opening TCP 8080 (HTTP) and 8443 (HTTPS/H2)…"
+    az vm open-port \
+        --resource-group "$rg" --name "$vm" \
+        --port 8080 --priority 1001 --output none
+    az vm open-port \
+        --resource-group "$rg" --name "$vm" \
+        --port 8443 --priority 1002 --output none
+    print_ok "TCP 8080, 8443 open"
+
+    print_info "Opening UDP 8443 (H3/QUIC), 9998 (UDP throughput), 9999 (UDP echo)…"
+
+    # az vm open-port only handles TCP; UDP requires a direct NSG rule
+    local nsg_name
+    nsg_name="$(az network nsg list \
+        --resource-group "$rg" \
+        --query "[?contains(name, '${vm}')].name | [0]" \
+        -o tsv 2>/dev/null || echo "")"
+
+    if [[ -z "$nsg_name" ]]; then
+        nsg_name="$(az network nsg list \
+            --resource-group "$rg" \
+            --query "[0].name" \
+            -o tsv 2>/dev/null || echo "")"
+    fi
+
+    if [[ -z "$nsg_name" ]]; then
+        print_warn "Could not detect NSG name; UDP ports may not be open."
+        print_warn "Open manually after deployment:"
+        print_warn "  az network nsg rule create --resource-group $rg --nsg-name <nsg-name> \\"
+        print_warn "    --name Networker-UDP --protocol Udp --direction Inbound \\"
+        print_warn "    --priority 1010 --destination-port-ranges 8443 9998 9999 --access Allow"
+    else
+        az network nsg rule create \
+            --resource-group "$rg" \
+            --nsg-name "$nsg_name" \
+            --name "Networker-UDP" \
+            --protocol Udp \
+            --direction Inbound \
+            --priority 1010 \
+            --destination-port-ranges 8443 9998 9999 \
+            --access Allow \
+            --output none
+        print_ok "UDP 8443, 9998, 9999 open"
+    fi
+}
+
+# Download and install a binary on a remote Azure VM.
+# $1 = binary name ("networker-tester" or "networker-endpoint")
+# $2 = public IP of the VM
+step_azure_install_binary() {
+    local binary="$1" ip="$2"
+
+    next_step "Install $binary on remote VM ($ip)"
+
+    _wait_for_ssh "$ip" "$binary VM"
+
+    # Detect remote architecture
+    local remote_arch remote_target
+    remote_arch="$(ssh -o StrictHostKeyChecking=no "azureuser@${ip}" "uname -m" 2>/dev/null || echo "x86_64")"
+    case "$remote_arch" in
+        x86_64)        remote_target="x86_64-unknown-linux-gnu" ;;
+        aarch64|arm64) remote_target="aarch64-unknown-linux-gnu" ;;
+        *)             remote_target="x86_64-unknown-linux-gnu" ;;
+    esac
+
+    local archive="${binary}-${remote_target}.tar.gz"
+    local tmp_dir
+    tmp_dir="$(mktemp -d)"
+
+    print_info "Downloading ${archive} from GitHub release…"
+    if gh release download \
+            --repo "$REPO_GH" \
+            --latest \
+            --pattern "${archive}" \
+            --dir "${tmp_dir}" \
+            --clobber 2>/dev/null; then
+
+        tar xzf "${tmp_dir}/${archive}" -C "${tmp_dir}"
+        chmod +x "${tmp_dir}/${binary}"
+
+        print_info "Uploading binary to VM…"
+        scp -o StrictHostKeyChecking=no -q \
+            "${tmp_dir}/${binary}" \
+            "azureuser@${ip}:/tmp/${binary}"
+        rm -rf "${tmp_dir}"
+
+        ssh -o StrictHostKeyChecking=no "azureuser@${ip}" \
+            "sudo mv /tmp/${binary} /usr/local/bin/${binary} && \
+             sudo chmod +x /usr/local/bin/${binary}"
+    else
+        rm -rf "${tmp_dir}"
+        # Fallback: wget directly on the remote VM
+        local ver="${NETWORKER_VERSION:-}"
+        if [[ -z "$ver" ]]; then
+            ver="$(gh release list --repo "$REPO_GH" --limit 1 --json tagName \
+                   -q '.[0].tagName' 2>/dev/null || echo "")"
+        fi
+        if [[ -z "$ver" ]]; then
+            print_err "Cannot determine release version for remote download."
+            exit 1
+        fi
+        print_info "Downloading directly on VM (${ver})…"
+        ssh -o StrictHostKeyChecking=no "azureuser@${ip}" \
+            "curl -fsSL https://github.com/${REPO_GH}/releases/download/${ver}/${archive} \
+               -o /tmp/${archive} && \
+             tar xzf /tmp/${archive} -C /tmp && \
+             sudo mv /tmp/${binary} /usr/local/bin/${binary} && \
+             sudo chmod +x /usr/local/bin/${binary} && \
+             rm /tmp/${archive}"
+    fi
+
+    local remote_ver
+    remote_ver="$(ssh -o StrictHostKeyChecking=no "azureuser@${ip}" \
+        "/usr/local/bin/${binary} --version 2>/dev/null" || echo "unknown")"
+    print_ok "$binary installed on VM  ($remote_ver)"
+}
+
+# Create a systemd service for networker-endpoint and start it.
+# $1 = public IP of the endpoint VM
+step_azure_create_endpoint_service() {
+    local ip="$1"
+
+    next_step "Create networker-endpoint systemd service"
+
+    ssh -o StrictHostKeyChecking=no "azureuser@${ip}" bash <<'REMOTE'
+# Create dedicated system user
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin networker 2>/dev/null || true
+
+# Write unit file
+sudo tee /etc/systemd/system/networker-endpoint.service > /dev/null <<'UNIT'
+[Unit]
+Description=Networker Endpoint
+After=network.target
+
+[Service]
+User=networker
+ExecStart=/usr/local/bin/networker-endpoint
+Restart=always
+RestartSec=5
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+sudo systemctl daemon-reload
+sudo systemctl enable networker-endpoint
+sudo systemctl start networker-endpoint
+REMOTE
+
+    sleep 2
+    print_ok "networker-endpoint service enabled and started"
+}
+
+# Poll /health until the endpoint responds.
+# $1 = public IP of the endpoint VM
+step_azure_verify_health() {
+    local ip="$1"
+
+    next_step "Verify endpoint health"
+    print_info "Checking http://${ip}:8080/health …"
+
+    local attempts=0
+    while true; do
+        local resp
+        resp="$(curl -sf --max-time 5 "http://${ip}:8080/health" 2>/dev/null || echo "")"
+        if [[ -n "$resp" ]]; then
+            print_ok "Health check passed: $resp"
+            return 0
+        fi
+        attempts=$((attempts + 1))
+        if [[ $attempts -gt 12 ]]; then
+            echo ""
+            print_warn "Endpoint did not respond within 60 seconds."
+            print_warn "Check logs: ssh azureuser@${ip} 'sudo journalctl -u networker-endpoint -n 50'"
+            return 0
+        fi
+        printf "."
+        sleep 5
+    done
+}
+
+# Write a networker-tester JSON config file pointing at the remote endpoint.
+# $1 = endpoint public IP
+step_generate_config() {
+    local endpoint_ip="$1"
+
+    next_step "Generate test config file"
+
+    CONFIG_FILE_PATH="${PWD}/networker-azure.json"
+
+    cat > "$CONFIG_FILE_PATH" <<EOF
+{
+  "target": "https://${endpoint_ip}:8443/health",
+  "modes": ["tcp", "http1", "http2", "http3", "udp", "download", "upload",
+             "pageload", "pageload2", "pageload3"],
+  "runs": 5,
+  "insecure": true,
+  "udp_port": 9999,
+  "udp_throughput_port": 9998,
+  "payload_sizes": ["64k", "1m"],
+  "html_report": "report.html"
+}
+EOF
+    print_ok "Config written to ${CONFIG_FILE_PATH}"
+
+    # If the tester is also remote, upload the config there too
+    if [[ $DO_REMOTE_TESTER -eq 1 && -n "$AZURE_TESTER_IP" ]]; then
+        print_info "Uploading config to tester VM ($AZURE_TESTER_IP)…"
+        scp -o StrictHostKeyChecking=no -q \
+            "$CONFIG_FILE_PATH" \
+            "azureuser@${AZURE_TESTER_IP}:~/networker-azure.json"
+        print_ok "Config uploaded to ~/networker-azure.json on tester VM"
+    fi
+}
+
 # ── Completion summary ────────────────────────────────────────────────────────
 display_completion() {
     echo ""
@@ -902,29 +1481,80 @@ display_completion() {
     echo "${BOLD}══════════════════════════════════════════════════════════${RESET}"
     echo ""
 
-    if ! echo ":${PATH}:" | grep -q ":${INSTALL_DIR}:"; then
-        print_warn "${INSTALL_DIR} is not in your shell PATH."
-        echo ""
-        echo "  Run now (activates for this terminal session):"
-        echo "    export PATH=\"${INSTALL_DIR}:\$PATH\""
-        echo ""
-        echo "  Make permanent:"
-        echo "    echo 'export PATH=\"${INSTALL_DIR}:\$PATH\"' >> ~/.bashrc   # bash"
-        echo "    echo 'export PATH=\"${INSTALL_DIR}:\$PATH\"' >> ~/.zshrc    # zsh"
-        echo ""
+    # ── Local PATH check ──────────────────────────────────────────────────────
+    local do_local_tester=0 do_local_endpoint=0
+    [[ $DO_INSTALL_TESTER -eq 1 && $DO_REMOTE_TESTER -eq 0 ]]     && do_local_tester=1
+    [[ $DO_INSTALL_ENDPOINT -eq 1 && $DO_REMOTE_ENDPOINT -eq 0 ]]  && do_local_endpoint=1
+
+    if [[ $do_local_tester -eq 1 || $do_local_endpoint -eq 1 ]]; then
+        if ! echo ":${PATH}:" | grep -q ":${INSTALL_DIR}:"; then
+            print_warn "${INSTALL_DIR} is not in your shell PATH."
+            echo ""
+            echo "  Run now (activates for this terminal session):"
+            echo "    export PATH=\"${INSTALL_DIR}:\$PATH\""
+            echo ""
+            echo "  Make permanent:"
+            echo "    echo 'export PATH=\"${INSTALL_DIR}:\$PATH\"' >> ~/.bashrc   # bash"
+            echo "    echo 'export PATH=\"${INSTALL_DIR}:\$PATH\"' >> ~/.zshrc    # zsh"
+            echo ""
+        fi
     fi
 
-    if [[ $DO_INSTALL_TESTER -eq 1 ]]; then
+    # ── Local tester quick start ──────────────────────────────────────────────
+    if [[ $do_local_tester -eq 1 ]]; then
         echo "  ${BOLD}networker-tester${RESET} quick start:"
         echo "    networker-tester --help"
         echo "    networker-tester --target http://localhost:8080/health --modes http1 --runs 3"
         echo ""
     fi
 
-    if [[ $DO_INSTALL_ENDPOINT -eq 1 ]]; then
+    # ── Local endpoint quick start ────────────────────────────────────────────
+    if [[ $do_local_endpoint -eq 1 ]]; then
         echo "  ${BOLD}networker-endpoint${RESET} quick start:"
         echo "    networker-endpoint"
         echo "    # Listens on :8080 HTTP, :8443 HTTPS/H2/H3, :9998 UDP throughput, :9999 UDP echo"
+        echo ""
+    fi
+
+    # ── Remote tester summary ─────────────────────────────────────────────────
+    if [[ $DO_REMOTE_TESTER -eq 1 && -n "$AZURE_TESTER_IP" ]]; then
+        echo "  ${BOLD}networker-tester${RESET} (Azure VM ${AZURE_TESTER_IP}):"
+        echo "    SSH:   ssh azureuser@${AZURE_TESTER_IP}"
+        if [[ -n "$CONFIG_FILE_PATH" ]]; then
+            echo "    Tests: ssh azureuser@${AZURE_TESTER_IP} 'networker-tester --config ~/networker-azure.json'"
+        else
+            echo "    Run:   ssh azureuser@${AZURE_TESTER_IP} 'networker-tester --help'"
+        fi
+        echo "    Logs:  ssh azureuser@${AZURE_TESTER_IP} 'tail -f /tmp/networker.log'"
+        echo ""
+    fi
+
+    # ── Remote endpoint summary ───────────────────────────────────────────────
+    if [[ $DO_REMOTE_ENDPOINT -eq 1 && -n "$AZURE_ENDPOINT_IP" ]]; then
+        echo "  ${BOLD}networker-endpoint${RESET} (Azure VM ${AZURE_ENDPOINT_IP}):"
+        echo "    Health: curl http://${AZURE_ENDPOINT_IP}:8080/health"
+        echo "    SSH:    ssh azureuser@${AZURE_ENDPOINT_IP}"
+        echo "    Logs:   ssh azureuser@${AZURE_ENDPOINT_IP} 'sudo journalctl -u networker-endpoint -f'"
+        echo "    Stop:   ssh azureuser@${AZURE_ENDPOINT_IP} 'sudo systemctl stop networker-endpoint'"
+        echo ""
+    fi
+
+    # ── Generated config ──────────────────────────────────────────────────────
+    if [[ -n "$CONFIG_FILE_PATH" ]]; then
+        echo "  ${BOLD}Test config:${RESET}  ${CONFIG_FILE_PATH}"
+        echo "    networker-tester --config ${CONFIG_FILE_PATH}"
+        echo ""
+    fi
+
+    # ── Cleanup reminder (Azure) ──────────────────────────────────────────────
+    if [[ $DO_REMOTE_TESTER -eq 1 || $DO_REMOTE_ENDPOINT -eq 1 ]]; then
+        echo "  ${DIM}Azure cleanup (when done testing):${RESET}"
+        if [[ $DO_REMOTE_ENDPOINT -eq 1 ]]; then
+            printf "  ${DIM}  az group delete --name %s --yes --no-wait${RESET}\n" "$AZURE_ENDPOINT_RG"
+        fi
+        if [[ $DO_REMOTE_TESTER -eq 1 ]]; then
+            printf "  ${DIM}  az group delete --name %s --yes --no-wait${RESET}\n" "$AZURE_TESTER_RG"
+        fi
         echo ""
     fi
 }
@@ -939,12 +1569,17 @@ main() {
     display_plan
     prompt_main
 
+    # ── Local installs ────────────────────────────────────────────────────────
+    local do_local_tester=0 do_local_endpoint=0
+    [[ $DO_INSTALL_TESTER -eq 1 && $DO_REMOTE_TESTER -eq 0 ]]     && do_local_tester=1
+    [[ $DO_INSTALL_ENDPOINT -eq 1 && $DO_REMOTE_ENDPOINT -eq 0 ]]  && do_local_endpoint=1
+
     if [[ "$INSTALL_METHOD" == "release" ]]; then
         mkdir -p "$INSTALL_DIR"
-        if [[ $DO_INSTALL_TESTER -eq 1 ]]; then
+        if [[ $do_local_tester -eq 1 ]]; then
             step_download_release "networker-tester"
         fi
-        if [[ $DO_INSTALL_ENDPOINT -eq 1 ]]; then
+        if [[ $do_local_endpoint -eq 1 ]]; then
             step_download_release "networker-endpoint"
         fi
     else
@@ -960,19 +1595,43 @@ main() {
         if [[ $DO_RUST_INSTALL -eq 1 ]]; then
             step_install_rust
         fi
-        step_ensure_cargo_env
-        if [[ $DO_INSTALL_TESTER -eq 1 ]]; then
+        if [[ $do_local_tester -eq 1 || $do_local_endpoint -eq 1 ]]; then
+            step_ensure_cargo_env
+        fi
+        if [[ $do_local_tester -eq 1 ]]; then
             step_cargo_install "networker-tester"
         fi
-        if [[ $DO_INSTALL_ENDPOINT -eq 1 ]]; then
+        if [[ $do_local_endpoint -eq 1 ]]; then
             step_cargo_install "networker-endpoint"
         fi
     fi
 
-    # Ensure certutil is present whenever Chrome is available (release or source path).
-    # No-op on macOS (uses security(1)) and when certutil is already installed.
-    if [[ $CHROME_AVAILABLE -eq 1 || $DO_CHROME_INSTALL -eq 1 ]]; then
+    # certutil for local Chrome (release or source path)
+    if [[ $do_local_tester -eq 1 && ( $CHROME_AVAILABLE -eq 1 || $DO_CHROME_INSTALL -eq 1 ) ]]; then
         step_ensure_certutil
+    fi
+
+    # ── Azure: tester VM ─────────────────────────────────────────────────────
+    if [[ $DO_REMOTE_TESTER -eq 1 ]]; then
+        step_check_azure_prereqs
+        step_azure_create_vm "tester" \
+            "$AZURE_TESTER_RG" "$AZURE_TESTER_VM" "$AZURE_TESTER_SIZE" "AZURE_TESTER_IP"
+        step_azure_install_binary "networker-tester" "$AZURE_TESTER_IP"
+    fi
+
+    # ── Azure: endpoint VM ────────────────────────────────────────────────────
+    if [[ $DO_REMOTE_ENDPOINT -eq 1 ]]; then
+        # Only check prereqs once (already done if tester was also remote)
+        if [[ $DO_REMOTE_TESTER -eq 0 ]]; then
+            step_check_azure_prereqs
+        fi
+        step_azure_create_vm "endpoint" \
+            "$AZURE_ENDPOINT_RG" "$AZURE_ENDPOINT_VM" "$AZURE_ENDPOINT_SIZE" "AZURE_ENDPOINT_IP"
+        step_azure_open_endpoint_ports "$AZURE_ENDPOINT_RG" "$AZURE_ENDPOINT_VM"
+        step_azure_install_binary "networker-endpoint" "$AZURE_ENDPOINT_IP"
+        step_azure_create_endpoint_service "$AZURE_ENDPOINT_IP"
+        step_azure_verify_health "$AZURE_ENDPOINT_IP"
+        step_generate_config "$AZURE_ENDPOINT_IP"
     fi
 
     display_completion
