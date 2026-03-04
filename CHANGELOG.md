@@ -11,6 +11,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.69] – 2026-03-04 — Azure RG reuse; remote source compilation
+
+### Changed
+- **Azure naming** (`install.sh`): resource group name no longer increments a suffix
+  to avoid collision — the same RG is reused when it already exists (you may want to
+  add a second VM to an existing RG, e.g. Linux then Windows endpoint in `nwk-ep-lnx-b1s`).
+  Only the VM name is made unique within the RG via the new `_azure_suggest_vm_name()`
+  helper (`nwk-ep-lnx-b1s-vm`, `-vm-2`, `-vm-3`, …).  When the RG already exists the
+  installer prints an info message ("exists — adding VM to it") rather than a warning.
+
+### Added
+- **`_find_repo_root()`** (`install.sh`): walks up the directory tree from `install.sh`
+  to locate the Cargo workspace root (presence of `Cargo.toml` + `crates/`).  Returns 1
+  when invoked via `curl | bash` with no local checkout.
+- **`_remote_compile_on_vm()`** (`install.sh`): when no pre-built release binary is
+  available and the local OS or arch does not match the remote VM (e.g. macOS → Linux),
+  tars the workspace source (excluding `target/`, `.git/`, `docs/`, `tests/`, …),
+  uploads it via SCP, installs Rust on the VM if absent, and compiles natively on the
+  remote machine.  Clear error + instructions are shown if `_find_repo_root()` fails.
+
+### Fixed
+- **OS/arch mismatch** (`_remote_install_binary_from_source`): previously exited with an
+  error; now routes to `_remote_compile_on_vm()` so cross-OS deployments (macOS laptop →
+  Linux Azure VM) succeed without requiring GitHub Actions billing to be active.
+
+---
+
 ## [0.12.68] – 2026-03-04 — Smart Azure resource naming
 
 ### Added
