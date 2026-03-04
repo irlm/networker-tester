@@ -25,7 +25,6 @@ set -euo pipefail
 
 REPO_SSH="ssh://git@github.com/irlm/networker-tester"
 REPO_GH="irlm/networker-tester"
-SCRIPT_VERSION="0.12.54"
 INSTALL_DIR="${HOME}/.cargo/bin"
 
 # ── Colours (ANSI C quoting; safe even when stdin is a curl pipe) ─────────────
@@ -51,7 +50,11 @@ print_dim()  { printf "${DIM}    %s${RESET}\n" "$*"; }
 print_banner() {
     echo ""
     echo "${BOLD}══════════════════════════════════════════════════════════${RESET}"
-    printf "${BOLD}      Networker Tester Installer  v%-10s             ${RESET}\n" "$SCRIPT_VERSION"
+    if [[ -n "$NETWORKER_VERSION" ]]; then
+        printf "${BOLD}      Networker Tester  %-34s${RESET}\n" "$NETWORKER_VERSION"
+    else
+        printf "${BOLD}      Networker Tester Installer                          ${RESET}\n"
+    fi
     echo "${BOLD}══════════════════════════════════════════════════════════${RESET}"
     echo ""
 }
@@ -105,6 +108,7 @@ SKIP_RUST=0
 INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
+NETWORKER_VERSION=""      # populated in discover_system when gh is available
 
 DO_SSH_CHECK=1
 DO_RUST_INSTALL=0
@@ -261,6 +265,10 @@ discover_system() {
            && gh auth status &>/dev/null 2>&1; then
             RELEASE_AVAILABLE=1
             INSTALL_METHOD="release"
+            # Resolve the exact version that will be installed so the banner and
+            # plan can show it instead of the stale script version.
+            NETWORKER_VERSION="$(gh release list --repo "$REPO_GH" \
+                --limit 1 --json tagName -q '.[0].tagName' 2>/dev/null || echo "")"
         fi
     fi
 
@@ -319,12 +327,13 @@ display_plan() {
         echo ""
 
         local step=1
+        local ver_label="${NETWORKER_VERSION:-latest}"
         if [[ $DO_INSTALL_TESTER -eq 1 ]]; then
-            printf "    %s. ${BOLD}Download networker-tester${RESET}    gh release download (latest)\n" "$step"
+            printf "    %s. ${BOLD}Download networker-tester${RESET}    %s\n" "$step" "$ver_label"
             step=$((step + 1))
         fi
         if [[ $DO_INSTALL_ENDPOINT -eq 1 ]]; then
-            printf "    %s. ${BOLD}Download networker-endpoint${RESET}  gh release download (latest)\n" "$step"
+            printf "    %s. ${BOLD}Download networker-endpoint${RESET}  %s\n" "$step" "$ver_label"
             step=$((step + 1))
         fi
         if [[ "$SYS_OS" == "Linux" && $CERTUTIL_AVAILABLE -eq 0 && -n "$PKG_MGR" \
@@ -341,7 +350,7 @@ display_plan() {
             printf "    %s. ${BOLD}Install certutil${RESET}        Install %s via %s ${DIM}(browser3 QUIC cert trust)${RESET}\n" "$step" "$nss_pkg" "$PKG_MGR"
         fi
         echo ""
-        print_dim "Repository:  $REPO_GH  (latest release)"
+        print_dim "Repository:  $REPO_GH  (${NETWORKER_VERSION:-latest release})"
     else
         printf "    ${BOLD}Method:${RESET}  Compile from source  ${DIM}(~5-10 min)${RESET}\n"
         echo ""

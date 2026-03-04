@@ -30,7 +30,6 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$ScriptVersion = "0.12.54"
 $RepoSsh       = "ssh://git@github.com/irlm/networker-tester"
 $RepoGh        = "irlm/networker-tester"
 $CargoBin      = Join-Path $env:USERPROFILE ".cargo\bin"
@@ -45,7 +44,11 @@ function Write-Dim  ($msg) { Write-Host "    $msg" -ForegroundColor DarkGray }
 function Write-Banner {
     Write-Host ""
     Write-Host ("=" * 58) -ForegroundColor Cyan
-    Write-Host ("      Networker Tester Installer  v" + $ScriptVersion) -ForegroundColor Cyan
+    if ($script:NetworkerVersion) {
+        Write-Host ("      Networker Tester  " + $script:NetworkerVersion) -ForegroundColor Cyan
+    } else {
+        Write-Host ("      Networker Tester Installer") -ForegroundColor Cyan
+    }
     Write-Host ("=" * 58) -ForegroundColor Cyan
     Write-Host ""
 }
@@ -89,6 +92,7 @@ function Show-Help {
 $script:InstallMethod     = "source"   # "release" | "source"
 $script:ReleaseAvailable  = $false
 $script:ReleaseTarget     = ""
+$script:NetworkerVersion  = ""        # populated in Invoke-DiscoverSystem when gh is available
 $script:DoSshCheck        = $true
 $script:DoRustInstall     = $false
 $script:DoInstallTester   = $true
@@ -186,6 +190,9 @@ function Invoke-DiscoverSystem {
                 $script:ReleaseTarget    = $target
                 $script:ReleaseAvailable = $true
                 $script:InstallMethod    = "release"
+                # Resolve the exact version that will be installed.
+                $script:NetworkerVersion = (& gh release list --repo $RepoGh `
+                    --limit 1 --json tagName --jq ".[0].tagName" 2>$null) -join ""
             }
         }
     }
@@ -245,16 +252,18 @@ function Show-Plan {
         Write-Host "    Method:  Download binary from GitHub release  (fast)" -ForegroundColor White
         Write-Host ("    Target:  " + $script:ReleaseTarget) -ForegroundColor DarkGray
         Write-Host ""
+        $verLabel = if ($script:NetworkerVersion) { $script:NetworkerVersion } else { "latest" }
         if ($script:DoInstallTester) {
-            Write-Host ("    {0}. Download networker-tester    gh release download (latest)" -f $step)
+            Write-Host ("    {0}. Download networker-tester    {1}" -f $step, $verLabel)
             $step++
         }
         if ($script:DoInstallEndpoint) {
-            Write-Host ("    {0}. Download networker-endpoint  gh release download (latest)" -f $step)
+            Write-Host ("    {0}. Download networker-endpoint  {1}" -f $step, $verLabel)
             $step++
         }
         Write-Host ""
-        Write-Dim "Repository:  $RepoGh  (latest release)"
+        $releaseLabel = if ($script:NetworkerVersion) { $script:NetworkerVersion } else { "latest release" }
+        Write-Dim "Repository:  $RepoGh  ($releaseLabel)"
     } else {
         Write-Host "    Method:  Compile from source  (~5-10 min)" -ForegroundColor White
         Write-Host ""
