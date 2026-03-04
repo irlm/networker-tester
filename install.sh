@@ -2776,6 +2776,79 @@ display_completion() {
         fi
         echo ""
     fi
+
+    # ── Offer to open SSH session ─────────────────────────────────────────────
+    _offer_ssh_connect
+}
+
+# Offer an interactive SSH session into the newly provisioned VM(s).
+# Shown only for Linux remote VMs (Windows needs RDP, not SSH).
+_offer_ssh_connect() {
+    local ssh_targets=()   # array of "label|user@ip" pairs
+
+    if [[ $DO_REMOTE_TESTER -eq 1 ]]; then
+        case "$TESTER_LOCATION" in
+            azure)
+                [[ "$AZURE_TESTER_OS" != "windows" && -n "$AZURE_TESTER_IP" ]] && \
+                    ssh_targets+=("networker-tester (Azure)|azureuser@${AZURE_TESTER_IP}")
+                ;;
+            aws)
+                [[ "$AWS_TESTER_OS" != "windows" && -n "$AWS_TESTER_IP" ]] && \
+                    ssh_targets+=("networker-tester (AWS)|ubuntu@${AWS_TESTER_IP}")
+                ;;
+        esac
+    fi
+
+    if [[ $DO_REMOTE_ENDPOINT -eq 1 ]]; then
+        case "$ENDPOINT_LOCATION" in
+            azure)
+                [[ "$AZURE_ENDPOINT_OS" != "windows" && -n "$AZURE_ENDPOINT_IP" ]] && \
+                    ssh_targets+=("networker-endpoint (Azure)|azureuser@${AZURE_ENDPOINT_IP}")
+                ;;
+            aws)
+                [[ "$AWS_ENDPOINT_OS" != "windows" && -n "$AWS_ENDPOINT_IP" ]] && \
+                    ssh_targets+=("networker-endpoint (AWS)|ubuntu@${AWS_ENDPOINT_IP}")
+                ;;
+        esac
+    fi
+
+    [[ ${#ssh_targets[@]} -eq 0 ]] && return 0   # no remote Linux VMs
+
+    echo ""
+    echo "${BOLD}──────────────────────────────────────────────────────────${RESET}"
+
+    if [[ ${#ssh_targets[@]} -eq 1 ]]; then
+        local label="${ssh_targets[0]%%|*}"
+        local dest="${ssh_targets[0]##*|}"
+        if ask_yn "Connect to ${label} via SSH now?  (ssh ${dest})" "y"; then
+            echo ""
+            print_info "Connecting — type 'exit' to return to your shell."
+            echo ""
+            ssh -o StrictHostKeyChecking=no "${dest}"
+        fi
+    else
+        echo "  Connect to a VM via SSH now?"
+        local i=1
+        for t in "${ssh_targets[@]}"; do
+            local label="${t%%|*}"
+            local dest="${t##*|}"
+            printf "    %s) %s  (ssh %s)\n" "$i" "$label" "$dest"
+            i=$((i + 1))
+        done
+        printf "    %s) Skip\n" "$i"
+        echo ""
+        printf "  Choice [%s]: " "$i"
+        local ans; read -r ans </dev/tty || true
+        ans="${ans:-$i}"
+        if [[ "$ans" =~ ^[0-9]+$ ]] && [[ "$ans" -ge 1 ]] && [[ "$ans" -lt "$i" ]]; then
+            local chosen="${ssh_targets[$((ans - 1))]}"
+            local dest="${chosen##*|}"
+            echo ""
+            print_info "Connecting — type 'exit' to return to your shell."
+            echo ""
+            ssh -o StrictHostKeyChecking=no "${dest}"
+        fi
+    fi
 }
 
 # ── Entry point ───────────────────────────────────────────────────────────────
