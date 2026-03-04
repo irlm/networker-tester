@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Stub for curl.
+#
+# STUB_CURL_FAIL   If set to "1", always exit 1 (simulates unreachable host)
+# STUB_CURL_BODY   Response body when successful  (default: {"status":"ok"})
+
+if [[ "${STUB_CURL_FAIL:-}" == "1" ]]; then
+    exit 1
+fi
+echo "${STUB_CURL_BODY:-{\"status\":\"ok\"}}"
+exit 0

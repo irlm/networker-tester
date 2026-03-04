@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Stub for gh (GitHub CLI).
+#
+# STUB_GH_RELEASE_TAG    Tag returned by "gh release list"   (default: v0.12.65)
+# STUB_GH_FAIL           If set to "1", always exit 1
+
+if [[ "${STUB_GH_FAIL:-}" == "1" ]]; then
+    exit 1
+fi
+
+_gh_create_archive() {
+    local dir="$1" pattern="$2"
+    local stub_bin="${pattern%.tar.gz}"
+    local stub_bin_name
+    stub_bin_name="$(basename "$stub_bin")"
+
+    mkdir -p "$dir"
+    printf '#!/usr/bin/env bash\necho "%s 0.12.65"\n' "$stub_bin_name" \
+        > "/tmp/${stub_bin_name}"
+    chmod +x "/tmp/${stub_bin_name}"
+    tar czf "${dir}/${pattern}" -C /tmp "${stub_bin_name}" 2>/dev/null
+    rm -f "/tmp/${stub_bin_name}"
+}
+
+case "$*" in
+    *"release list"*)
+        echo "[{\"tagName\":\"${STUB_GH_RELEASE_TAG:-v0.12.65}\"}]"
+        ;;
+    *"release download"*)
+        # Parse --dir and --pattern from argument list
+        dl_dir=""
+        dl_pattern=""
+        prev=""
+        for arg in "$@"; do
+            case "$prev" in
+                --dir)     dl_dir="$arg" ;;
+                --pattern) dl_pattern="$arg" ;;
+            esac
+            prev="$arg"
+        done
+        if [[ -n "$dl_dir" && -n "$dl_pattern" ]]; then
+            _gh_create_archive "$dl_dir" "$dl_pattern"
+        fi
+        ;;
+    *)
+        ;;
+esac
+exit 0

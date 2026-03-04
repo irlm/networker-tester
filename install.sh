@@ -111,21 +111,28 @@ _cargo_progress() {
     cols="$(tput cols 2>/dev/null || echo 80)"
 
     while kill -0 "$cargo_pid" 2>/dev/null; do
-        # Extract the most recent interesting line from the build log
-        local phase=""
-        phase="$(grep -oE '(Fetching|Updating|Downloading|Compiling|Linking|Finished|Installing)[[:space:]]+[^[:space:]]+' \
+        # Count crates compiled so far and show the most recent one being compiled
+        local compiled_count=0 phase=""
+        compiled_count="$(grep -c ' Compiling ' "$log_file" 2>/dev/null || echo 0)"
+        phase="$(grep -oE 'Compiling[[:space:]]+[^[:space:]]+' \
                     "$log_file" 2>/dev/null | tail -1)"
+        # Fall back to Fetching/Updating/Linking if no Compiling line yet
+        if [[ -z "$phase" ]]; then
+            phase="$(grep -oE '(Fetching|Updating|Downloading|Linking|Finished|Installing)[[:space:]]+[^[:space:]]+' \
+                        "$log_file" 2>/dev/null | tail -1)"
+        fi
         phase="${phase:-…}"
+        local count_tag="[${compiled_count} crates]"
 
-        local line="  ${spin[$si]}  ${label}  ${DIM}${phase}${RESET}"
-        # Truncate to terminal width
-        local visible="${label}    ${phase}"
-        local trunc=$(( cols - 6 ))
-        [[ ${#visible} -gt $trunc ]] && phase="${phase:0:$(( trunc - ${#label} - 4 ))}…"
-        line="  ${spin[$si]}  ${label}  ${DIM}${phase}${RESET}"
+        # Truncate phase so the whole line fits in the terminal
+        local overhead=$(( ${#label} + ${#count_tag} + 8 ))
+        local max_phase=$(( cols - overhead ))
+        [[ ${#phase} -gt $max_phase && $max_phase -gt 4 ]] && phase="${phase:0:$(( max_phase - 1 ))}…"
 
-        printf "\r%-*s" "$cols" ""   # clear line
-        printf "\r%s" "$line"
+        printf "\r%-*s\r  %s  %s  %s%s %s%s" \
+            "$cols" "" \
+            "${spin[$si]}" "$label" \
+            "$DIM" "$count_tag" "$phase" "$RESET"
 
         si=$(( (si + 1) % ${#spin[@]} ))
         sleep 0.12
@@ -138,11 +145,14 @@ _cargo_progress() {
     printf "\r%-*s\r" "$cols" ""     # clear spinner line
 
     if [[ $rc -eq 0 ]]; then
-        # Pull timing from the Finished line
-        local timing=""
+        # Pull crate count and timing from the build log
+        local final_count timing=""
+        final_count="$(grep -c ' Compiling ' "$log_file" 2>/dev/null || echo 0)"
         timing="$(grep -oE 'Finished[^)]+\)' "$log_file" 2>/dev/null | tail -1)"
+        local count_str=""
+        [[ "$final_count" -gt 0 ]] && count_str="  ${DIM}[${final_count} crates]${RESET}"
         [[ -n "$timing" ]] && timing="  ${DIM}(${timing})${RESET}"
-        print_ok "${label}${timing}"
+        print_ok "${label}${count_str}${timing}"
     else
         print_err "${label} — build failed"
         echo ""
@@ -1778,12 +1788,27 @@ _remote_install_binary_from_source() {
     local_os="$(uname -s 2>/dev/null || echo "")"
     local_arch="$(uname -m 2>/dev/null || echo "")"
 
+    # Detect remote OS for compatibility check
+    local remote_os
+    remote_os="$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "${user}@${ip}" \
+        "uname -s" 2>/dev/null || echo "Linux")"
+
     if [[ "$local_os" != "Linux" && "$local_os" != "Darwin" ]]; then
         print_err "Source compilation fallback requires a Linux or macOS local machine."
         exit 1
     fi
+    if [[ "$local_os" != "$remote_os" ]]; then
+        print_err "OS mismatch: local=${local_os}, remote=${remote_os}."
+        print_err "A ${local_os} binary will not run on a ${remote_os} VM."
+        echo ""
+        echo "  Options:"
+        echo "    1. Fix GitHub Actions billing so release binaries are available:"
+        echo "       https://github.com/settings/billing"
+        echo "    2. Run the installer from a ${remote_os} machine."
+        exit 1
+    fi
     if [[ "$remote_arch" != "$local_arch" ]]; then
-        print_err "Remote arch ($remote_arch) differs from local ($local_arch) — cross-compilation not supported."
+        print_err "Arch mismatch: local=${local_arch}, remote=${remote_arch} — cross-compilation not supported."
         echo "  Options:"
         echo "    1. Fix GitHub Actions billing so release binaries are available:"
         echo "       https://github.com/settings/billing"
@@ -1840,10 +1865,24 @@ _remote_install_binary_from_source() {
         "sudo mv /tmp/${binary} /usr/local/bin/${binary} && \
          sudo chmod +x /usr/local/bin/${binary}"
 
-    local remote_ver
-    remote_ver="$(ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
-        "/usr/local/bin/${binary} --version 2>/dev/null" || echo "unknown")"
-    print_ok "${binary} compiled locally and installed on VM  ($remote_ver)"
+    # Verify the binary actually runs on the remote VM
+    local remote_ver exec_err
+    exec_err="$(ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
+        "/usr/local/bin/${binary} --version 2>&1" || echo "")"
+    if [[ "$exec_err" =~ ^networker ]]; then
+        remote_ver="$exec_err"
+        print_ok "${binary} compiled locally and installed on VM  ($remote_ver)"
+    else
+        echo ""
+        print_err "${binary} was uploaded but failed to execute on the VM!"
+        echo "  Output: ${exec_err:-<none>}"
+        echo ""
+        echo "  This usually means the binary was compiled for a different OS or architecture."
+        echo "  Check: ssh ${user}@${ip} 'file /usr/local/bin/${binary}'"
+        echo "  Common fix: resolve GitHub Actions billing so release binaries are used instead:"
+        echo "    https://github.com/settings/billing"
+        exit 1
+    fi
 }
 
 # Download binary from GitHub release and install it on a remote host.
@@ -1969,7 +2008,7 @@ REMOTE
 # Poll /health until the endpoint responds.
 # $1 = public IP
 _remote_verify_health() {
-    local ip="$1"
+    local ip="$1" ssh_user="${2:-azureuser}"
 
     print_info "Checking http://${ip}:8080/health …"
     local attempts=0
@@ -1984,7 +2023,16 @@ _remote_verify_health() {
         if [[ $attempts -gt 12 ]]; then
             echo ""
             print_warn "Endpoint did not respond within 60 seconds."
-            print_warn "Check logs on the VM: sudo journalctl -u networker-endpoint -n 50"
+            echo ""
+            print_info "Fetching service status from the VM…"
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "${ssh_user}@${ip}" \
+                "sudo systemctl status networker-endpoint --no-pager -l 2>&1 | head -30" 2>/dev/null || true
+            echo ""
+            print_info "Last 30 log lines:"
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "${ssh_user}@${ip}" \
+                "sudo journalctl -u networker-endpoint -n 30 --no-pager 2>&1" 2>/dev/null || true
+            echo ""
+            print_warn "Manual check:  ssh ${ssh_user}@${ip} 'sudo journalctl -u networker-endpoint -f'"
             return 0
         fi
         printf "."
@@ -2442,7 +2490,7 @@ _azure_deploy_one_endpoint() {
         next_step "Create networker-endpoint service ($label)"
         _remote_create_endpoint_service "$ip" "azureuser"
         next_step "Verify endpoint health ($label)"
-        _remote_verify_health "$ip"
+        _remote_verify_health "$ip" "azureuser"
     fi
 }
 
@@ -2734,7 +2782,7 @@ step_aws_deploy_endpoint() {
     _remote_create_endpoint_service "$AWS_ENDPOINT_IP" "ubuntu"
 
     next_step "Verify endpoint health (AWS)"
-    _remote_verify_health "$AWS_ENDPOINT_IP"
+    _remote_verify_health "$AWS_ENDPOINT_IP" "ubuntu"
 
     step_generate_config "$AWS_ENDPOINT_IP"
 }
@@ -2865,6 +2913,9 @@ display_completion() {
         echo ""
     fi
 
+    # ── Offer the complementary component if only one was installed ──────────
+    _offer_also_endpoint
+
     # ── Offer quick test against the endpoint ────────────────────────────────
     _offer_quick_test
 
@@ -2897,13 +2948,41 @@ _offer_quick_test() {
     fi
 
     if [[ -z "$tester_bin" ]]; then
-        # Can't run locally — show the command instead
         echo ""
-        print_info "Run a quick test against the endpoint from this machine:"
-        echo "  networker-tester \\"
-        echo "    --target https://${e_ip}:8443/health \\"
-        echo "    --modes http1,http2,http3 --runs 5 --insecure"
-        return 0
+        echo "${BOLD}──────────────────────────────────────────────────────────${RESET}"
+        print_info "Endpoint is live at ${e_ip}."
+        print_info "networker-tester is not installed locally — it is needed to run tests from this machine."
+
+        if ! ask_yn "Install networker-tester locally now so you can run a quick test?" "y"; then
+            echo ""
+            print_info "Install it later:"
+            echo "  bash install.sh tester"
+            echo ""
+            print_info "Then run:"
+            echo "  networker-tester --target https://${e_ip}:8443/health --modes http1,http2,http3 --runs 5 --insecure"
+            return 0
+        fi
+
+        echo ""
+        # Install using the same method already resolved for this session
+        if [[ "$INSTALL_METHOD" == "release" ]]; then
+            step_download_release "networker-tester"
+        else
+            step_ensure_cargo_env
+            step_cargo_install "networker-tester"
+        fi
+
+        # Re-locate the binary after install
+        if command -v networker-tester &>/dev/null; then
+            tester_bin="networker-tester"
+        elif [[ -x "${INSTALL_DIR}/networker-tester" ]]; then
+            tester_bin="${INSTALL_DIR}/networker-tester"
+        fi
+
+        if [[ -z "$tester_bin" ]]; then
+            print_warn "networker-tester install did not succeed — skipping quick test."
+            return 0
+        fi
     fi
 
     echo ""
@@ -2922,19 +3001,21 @@ _offer_quick_test() {
     print_info "Running quick test — press Ctrl-C to stop early."
     echo ""
 
-    # Use the generated config if available; otherwise use sensible defaults.
-    if [[ -n "$CONFIG_FILE_PATH" && -f "$CONFIG_FILE_PATH" ]]; then
-        "$tester_bin" --config "$CONFIG_FILE_PATH" --runs 5
-    else
-        "$tester_bin" \
-            --target "https://${e_ip}:8443/health" \
-            --modes http1,http2,http3,download,pageload,pageload2,pageload3 \
-            --payload-sizes 1m \
-            --page-assets 10 \
-            --runs 5 \
-            --insecure \
-            --html
-    fi
+    # Build --target args from primary IP + any extra endpoint IPs
+    local target_args=("--target" "https://${e_ip}:8443/health")
+    for extra in "${AZURE_EXTRA_ENDPOINT_IPS[@]}"; do
+        local extra_ip="${extra%%:*}"
+        target_args+=("--target" "https://${extra_ip}:8443/health")
+    done
+
+    "$tester_bin" \
+        "${target_args[@]}" \
+        --modes http1,http2,http3,download,pageload,pageload2,pageload3 \
+        --payload-sizes 1m \
+        --page-assets 10 \
+        --runs 5 \
+        --insecure \
+        --html
 
     echo ""
     if [[ -f "output/report.html" ]]; then
@@ -2945,6 +3026,55 @@ _offer_quick_test() {
             Linux)  echo "  xdg-open output/report.html" ;;
         esac
     fi
+}
+
+# If only the tester was installed (no endpoint anywhere), offer to also install/deploy
+# an endpoint so the user has something to test against.
+_offer_also_endpoint() {
+    # Only relevant when no endpoint is installed or deployed
+    [[ $DO_INSTALL_ENDPOINT -eq 1 || $DO_REMOTE_ENDPOINT -eq 1 ]] && return 0
+    # And we must have actually installed a tester
+    [[ $DO_INSTALL_TESTER -eq 0 && $DO_REMOTE_TESTER -eq 0 ]] && return 0
+
+    echo ""
+    echo "${BOLD}──────────────────────────────────────────────────────────${RESET}"
+    print_info "networker-tester is installed but no endpoint was deployed."
+    print_info "You need an endpoint to test against."
+    echo ""
+    echo "  ${BOLD}1)${RESET} Install networker-endpoint locally (test on this machine)"
+    echo "  ${BOLD}2)${RESET} Deploy a networker-endpoint on a cloud VM (Azure or AWS)"
+    echo "  ${BOLD}3)${RESET} Skip — I already have an endpoint elsewhere"
+    echo ""
+    local ans
+    read -rp "$(printf "%b" "${CYAN}?${RESET} What would you like to do? [1/2/3] ")" ans
+    case "${ans:-3}" in
+        1)
+            echo ""
+            if [[ "$INSTALL_METHOD" == "release" ]]; then
+                step_download_release "networker-endpoint"
+            else
+                step_ensure_cargo_env
+                step_cargo_install "networker-endpoint"
+            fi
+            echo ""
+            print_ok "Start the endpoint with:"
+            echo "  networker-endpoint"
+            echo ""
+            print_ok "Then test with:"
+            echo "  networker-tester --target http://127.0.0.1:8080/health --modes http1,http2,http3 --runs 5"
+            ;;
+        2)
+            echo ""
+            print_info "Run the installer again to deploy a cloud endpoint:"
+            echo "  bash install.sh endpoint --azure   # Azure"
+            echo "  bash install.sh endpoint --aws     # AWS"
+            ;;
+        *)
+            echo ""
+            print_info "Test against any running endpoint:"
+            echo "  networker-tester --target http://<host>:8080/health --modes http1,http2,http3 --runs 5"
+            ;;
+    esac
 }
 
 # Offer an interactive SSH session into the newly provisioned VM(s).
@@ -3088,4 +3218,5 @@ main() {
     display_completion
 }
 
-main "$@"
+# Run main only when the script is executed directly (not sourced for testing).
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then main "$@"; fi

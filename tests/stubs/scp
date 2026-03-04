@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Stub for scp.
+#
+# STUB_SCP_FAIL   If set to "1", exit 1
+
+if [[ "${STUB_SCP_FAIL:-}" == "1" ]]; then
+    echo "scp: connection refused" >&2
+    exit 1
+fi
+exit 0

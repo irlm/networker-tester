@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Stub for ssh — configurable via env vars.
+#
+# STUB_SSH_UNAME          Response to "uname -s"              (default: Linux)
+# STUB_SSH_VERSION        Response to "--version"             (default: networker-endpoint 0.12.65)
+# STUB_SSH_ECHO_READY     Response to "echo ready"            (default: ready)
+# STUB_SSH_SYSTEMCTL      Response to "systemctl status"      (default: ● networker-endpoint.service)
+# STUB_SSH_JOURNALCTL     Response to "journalctl"            (default: [log line])
+# STUB_SSH_FAIL           If set to "1", always exit 1
+# STUB_SSH_FAIL_UNAME     If set to "1", exit 1 on uname -s
+# STUB_SSH_FAIL_VERSION   If set to "1", exit 1 on --version
+
+if [[ "${STUB_SSH_FAIL:-}" == "1" ]]; then
+    exit 1
+fi
+
+# The remote command is the last non-option argument block.
+# Strip leading ssh option flags to get the actual remote command string.
+cmd="${*: -1}"
+
+case "$cmd" in
+    *"uname -s"*)
+        [[ "${STUB_SSH_FAIL_UNAME:-}" == "1" ]] && exit 1
+        echo "${STUB_SSH_UNAME:-Linux}"
+        ;;
+    *"--version"*)
+        [[ "${STUB_SSH_FAIL_VERSION:-}" == "1" ]] && { echo "Exec format error"; exit 1; }
+        echo "${STUB_SSH_VERSION:-networker-endpoint 0.12.65}"
+        ;;
+    *"echo ready"*)
+        echo "${STUB_SSH_ECHO_READY:-ready}"
+        ;;
+    *"systemctl status"*)
+        echo "${STUB_SSH_SYSTEMCTL:-● networker-endpoint.service - Active: active (running)}"
+        ;;
+    *"journalctl"*)
+        echo "${STUB_SSH_JOURNALCTL:-Mar  4 18:00:00 vm networker-endpoint[1234]: Listening on :8080}"
+        ;;
+    *"sudo mv"*|*"chmod"*)
+        :  # silent success
+        ;;
+    *)
+        echo "${STUB_SSH_DEFAULT:-}"
+        ;;
+esac
+exit 0

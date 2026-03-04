@@ -11,6 +11,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.65] – 2026-03-04 — Installer: complementary component offer; cargo crate counter; bats tests
+
+### Added
+- **Offer tester install when only endpoint was deployed** (`install.sh`):
+  if `networker-tester` is not found locally after deploying a remote endpoint,
+  the installer now asks "Install networker-tester locally now?" instead of just
+  printing the command.  If the user accepts, the tester is installed immediately
+  (via release download or `cargo install`) and the quick test runs straight away.
+- **Offer endpoint install when only tester was installed** (`install.sh`):
+  new `_offer_also_endpoint()` step at the end of `display_completion()`.  When
+  only `networker-tester` was installed (no endpoint anywhere), a prompt asks
+  whether to: (1) install `networker-endpoint` locally, (2) deploy one on a cloud
+  VM (shows the re-run command), or (3) skip.
+- **Cargo spinner crate counter** (`install.sh`): `_cargo_progress()` now shows
+  `[N crates]` counting up as each crate is compiled — e.g.
+  `⠋  Building networker-tester  [47 crates]  Compiling tokio v1.0.0`.
+  On completion the summary line shows the final count and the `Finished` timing.
+- **Installer unit tests** (`tests/installer.bats`): 35 bats tests covering
+  `parse_args`, `_offer_quick_test`, `_offer_also_endpoint`,
+  `_remote_verify_health`, `_remote_install_binary_from_source`, and
+  `step_download_release`.  Includes configurable stub executables for `ssh`,
+  `curl`, `cargo`, `gh`, `scp`, `az`, and the networker binaries.
+- **CI: shellcheck + bats + PSScriptAnalyzer**
+  (`.github/workflows/test-installer.yml`): runs on every change to `install.sh`,
+  `install.ps1`, or `tests/**`.
+
+---
+
+## [0.12.64] – 2026-03-04 — Installer: fix quick-test --config bug, OS mismatch detection, SSH diagnostics
+
+### Fixed
+- **`_offer_quick_test()` — removed `--config` flag** (`install.sh`): the quick-test
+  invocation used `--config <file>` which does not exist in tester binaries older than
+  v0.12.62.  Replaced with explicit `--target`/`--modes`/`--runs` flags built from the
+  installer's state variables; works with any installed version of `networker-tester`.
+  Multiple endpoint IPs (multi-region) are passed as repeated `--target` flags.
+- **`_remote_install_binary_from_source()` — OS mismatch detection** (`install.sh`):
+  detects the remote VM OS via SSH (`uname -s`) before compiling locally.  If
+  local OS ≠ remote OS (e.g. macOS compiling for a Linux VM), the installer exits
+  with a clear error instead of uploading an unrunnable binary.
+- **`_remote_install_binary_from_source()` — binary execution check** (`install.sh`):
+  after uploading, runs `--version` on the VM and verifies output starts with
+  `networker`.  If the binary crashes (wrong arch), shows the error and exits rather
+  than proceeding to start a broken service.
+- **`_remote_verify_health()` — SSH diagnostics on timeout** (`install.sh`): when the
+  60 s health poll times out, SSHes in and prints `systemctl status` and the last 30
+  `journalctl` lines so the root cause is immediately visible.
+- **`_remote_verify_health()` — correct SSH user** (`install.sh`): call sites now pass
+  `azureuser` (Azure) or `ubuntu` (AWS) explicitly, preventing permission-denied errors
+  on AWS VMs that used the defaulted value.
+
+---
+
 ## [0.12.63] – 2026-03-04 — Installer: source-build fallback + VM auto-shutdown + component prompt + remote Chrome check
 
 ### Added

@@ -1,0 +1,74 @@
+name: Installer Tests
+
+# Run on every push/PR that touches the installer or its tests.
+on:
+  push:
+    branches: ["main", "develop"]
+    paths:
+      - "install.sh"
+      - "install.ps1"
+      - "tests/**"
+      - ".github/workflows/test-installer.yml"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "install.sh"
+      - "install.ps1"
+      - "tests/**"
+      - ".github/workflows/test-installer.yml"
+
+jobs:
+  # ── shellcheck: static analysis for install.sh ─────────────────────────────
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get install -y shellcheck
+
+      - name: Lint install.sh
+        # SC2034 = unused vars (we use many globals as state); SC1091 = sourced
+        # file not found (expected in CI); SC2154 = referenced but not assigned
+        # (common with global state). Elevate to errors everything else.
+        run: |
+          shellcheck \
+            --severity=warning \
+            --exclude=SC2034,SC1091,SC2154 \
+            install.sh
+
+  # ── bats: unit tests for install.sh ────────────────────────────────────────
+  bats:
+    name: bats (installer unit tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install bats-core
+        run: |
+          sudo apt-get install -y bats
+
+      - name: Make stubs executable
+        run: chmod +x tests/stubs/*
+
+      - name: Run installer tests
+        run: bats --tap tests/installer.bats
+
+  # ── shellcheck on Windows installer (PowerShell syntax is checked by PSScriptAnalyzer) ──
+  psscriptanalyzer:
+    name: PSScriptAnalyzer (install.ps1)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint install.ps1
+        shell: pwsh
+        run: |
+          Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser -ErrorAction Stop
+          $results = Invoke-ScriptAnalyzer -Path install.ps1 -Severity Warning,Error
+          if ($results) {
+            $results | Format-Table -AutoSize
+            exit 1
+          }
+          Write-Host "PSScriptAnalyzer: no issues found."
