@@ -195,7 +195,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Multi-Target Summary table**: one row per target showing run count, modes, attempts,
   succeeded, failed and duration.
 - **Cross-Target Protocol Comparison table**: rows = protocols present in any run;
-  columns = each target with average primary metric (ms or MB/s) and colour-coded
+  columns = each target with average primary metric (ms or MB/s) and color-coded
   delta vs the first (baseline) target — green = faster/higher, red = slower/lower.
 - **Per-target collapsible details**: each target's full per-protocol report is wrapped
   in a `<details>` card (open by default for ≤ 2 targets).
@@ -273,7 +273,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **`install.sh` unified local and cloud deployment**: instead of a separate
   `deploy-azure.sh`, `install.sh` now supports deploying each component either
-  locally (existing behaviour) or remotely to a cloud VM.
+  locally (existing behavior) or remotely to a cloud VM.
 - **Interactive location selection**: after choosing which components to install
   (`tester` / `endpoint` / `both`), the installer asks *where* to install each
   — `1) Locally` or `2) Remote: Azure VM`.
@@ -426,7 +426,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`browser3` QUIC cert trust (cross-platform)**: Replaced the entire platform cert-store
   approach (NSS db on Linux, macOS Keychain, Windows Root store) with
   `--ignore-certificate-errors-spki-list=<spki_hash>`.  Chrome's QUIC TLS cert verifier
-  **does** honour this flag (unlike `--ignore-certificate-errors`), making it the only
+  **does** honor this flag (unlike `--ignore-certificate-errors`), making it the only
   reliable way to accept self-signed certs over QUIC/H3 on all platforms.
 - **SPKI hash computation**: Added `compute_spki_sha256_base64()` which fetches the server
   cert via a custom-verifier TLS handshake, extracts the DER-encoded SubjectPublicKeyInfo
@@ -522,10 +522,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`browser3` fails with `ERR_QUIC_PROTOCOL_ERROR`** when `certutil` is not installed on Linux
   (or cert trust installation fails for any reason).  Root cause: `--origin-to-force-quic-on`
   was unconditionally added, causing Chrome to attempt QUIC even in the cert-trust-failed
-  fallback path.  QUIC TLS does **not** honour `--ignore-certificate-errors`, so the handshake
+  fallback path.  QUIC TLS does **not** honor `--ignore-certificate-errors`, so the handshake
   fails outright instead of falling back gracefully to H2.
   Fix: gate `--origin-to-force-quic-on` on cert trust success (`_cert_trust_guard.is_some()`).
-  When cert trust fails, browser3 falls back to H2 (same as pre-v0.12.41 behaviour) rather
+  When cert trust fails, browser3 falls back to H2 (same as pre-v0.12.41 behavior) rather
   than erroring.
 
 ---
@@ -718,7 +718,7 @@ All three protocols are now consistently correct across 3 runs:
 
 ### Fixed
 - **`browser3` (HTTP/3 QUIC)** probe was always showing `proto=h2` because Chrome's QUIC
-  TLS stack does not honour `--ignore-certificate-errors` for self-signed certs, causing
+  TLS stack does not honor `--ignore-certificate-errors` for self-signed certs, causing
   fallback to H2.  Fix: before launching Chrome, the probe now performs a plain TLS
   connection to the target, extracts the leaf certificate's SubjectPublicKeyInfo (SPKI)
   DER bytes, SHA-256-hashes them, and passes the base64 hash to Chrome via
@@ -754,7 +754,7 @@ All three protocols are now consistently correct across 3 runs:
 
 ### Added
 - **`pageload1`** mode — explicit alias for the HTTP/1.1 pageload probe (equivalent to
-  the old `pageload` single-mode behaviour); consistent with `pageload2` / `pageload3`
+  the old `pageload` single-mode behavior); consistent with `pageload2` / `pageload3`
 
 ---
 
@@ -963,7 +963,7 @@ All three protocols are now consistently correct across 3 runs:
   had to be explicitly opt-in at compile time (`--features browser`), which meant the
   install script and pre-built binaries did not include it
 - The probe still fails gracefully with a clear message if Chrome/Chromium is not
-  installed at runtime; no behavioural change for users without Chrome
+  installed at runtime; no behavioral change for users without Chrome
 
 ---
 
@@ -1414,7 +1414,7 @@ All three protocols are now consistently correct across 3 runs:
   Enables a fair H1 vs H2 vs H3 comparison; QUIC/HTTP3 is expected to show the highest
   CPU cost due to in-process TLS encryption.
 - **Goodput metric** — `HttpResult.goodput_mbps` = payload_bytes / full end-to-end delivery
-  time (DNS + TCP + TLS + total HTTP ms). Penalises connection-setup overhead, giving a
+  time (DNS + TCP + TLS + total HTTP ms). Penalizes connection-setup overhead, giving a
   more complete picture than throughput alone (which only measures the body-transfer phase).
   Set for all four throughput probe types: `download`, `upload`, `webdownload`, `webupload`.
 - **Client-side context switches** — `HttpResult.csw_voluntary` and `csw_involuntary`
@@ -1666,7 +1666,7 @@ vs QUIC handshake latency) dominates under real network conditions.
 
 ### Changed
 - `Cli` struct field types changed from concrete types with `default_value` annotations to
-  `Option<T>` (no observable behaviour change — defaults still apply via `resolve()`).
+  `Option<T>` (no observable behavior change — defaults still apply via `resolve()`).
 - Existing tests `defaults_parse`, `validate_save_to_sql_without_conn_string_fails`, and
   `payload_sizes_parsed_via_cli` updated to reflect the new raw/resolved split.
 - Workspace version bumped to `0.4.0` (MINOR — new feature).
@@ -1790,7 +1790,7 @@ vs QUIC handshake latency) dominates under real network conditions.
   ms for UDP echo, throughput MB/s for all bulk-transfer modes). Shown in three places: (#35)
   - Terminal: second table printed below the existing averages table.
   - HTML report: new "Statistics Summary" card (between Timing Breakdown and UDP Probe
-    Statistics); success % column colour-coded green/amber/red.
+    Statistics); success % column color-coded green/amber/red.
   - Excel: new "Statistics" sheet (sheet 2, directly after Summary).
 - `metrics.rs`: new public `Stats` struct, `compute_stats()`, `primary_metric_label()`, and
   `primary_metric_value()` functions; 3 new unit tests for the percentile calculations. (#35)

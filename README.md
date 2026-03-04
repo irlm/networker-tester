@@ -166,7 +166,7 @@ Use `--page-assets N` (default 20) and `--page-asset-size <sz>` (default 10k) to
 **`download` vs `webdownload`** (and `upload` vs `webupload`):
 `download`/`upload` rewrite the URL path to `/download` or `/upload` on the target host.
 `webdownload`/`webupload` fetch the target URL as-is — useful for testing external URLs or
-labelling a named group separately in the report.
+labeling a named group separately in the report.
 
 ---
 
@@ -712,7 +712,7 @@ One file per target per run. Naming:
 - Single target: `run-YYYYMMDD-HHMMSS.json`
 - Multiple targets: `run-YYYYMMDD-HHMMSS-1.json`, `run-YYYYMMDD-HHMMSS-2.json`, …
 
-Normalised structure:
+Normalized structure:
 
 ```
 TestRun

@@ -96,7 +96,7 @@ reset_state() {
     CONFIG_FILE_PATH=""
     INSTALL_DIR="${HOME}/.cargo/bin"
 
-    # Colour codes — always empty in tests (stdout is not a TTY)
+    # Color codes — always empty in tests (stdout is not a TTY)
     BOLD=''; DIM=''; GREEN=''; YELLOW=''; RED=''; CYAN=''; RESET=''
 }
 

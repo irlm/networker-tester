@@ -60,7 +60,7 @@ jobs:
 
       # Integration tests that require the endpoint in-process.
       # Each test spawns its own endpoint on random ports (TOCTOU race if
-      # tests run concurrently), so we serialise them with --test-threads=1.
+      # tests run concurrently), so we serialize them with --test-threads=1.
       - name: cargo test (integration – no SQL)
         run: cargo test --test integration -p networker-tester -- --test-threads=1
 
@@ -128,7 +128,7 @@ jobs:
       # Run lib tests + in-process integration tests under coverage.
       # --all-features ensures http3 and native feature-gated paths are included.
       # --no-report accumulates raw profiles; the final `report` step merges them.
-      # Integration tests are serialised (--test-threads=1) because each spawns
+      # Integration tests are serialized (--test-threads=1) because each spawns
       # its own endpoint on random ports.
       # --include-ignored runs #[ignore] tests that have their own env-var guards
       # (SQL, DNS, curl) — they self-skip when the service is unavailable.
