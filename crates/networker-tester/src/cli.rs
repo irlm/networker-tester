@@ -15,9 +15,10 @@ pub struct Cli {
     pub config: Option<String>,
 
     // ── Target ────────────────────────────────────────────────────────────────
-    /// Target URL (e.g. https://host:8443/health)
-    #[arg(long)]
-    pub target: Option<String>,
+    /// Target URL(s) to test. Repeat the flag for multiple targets:
+    /// --target https://local/health --target https://remote/health
+    #[arg(long, action = clap::ArgAction::Append, num_args = 1)]
+    pub target: Vec<String>,
 
     // ── Modes ─────────────────────────────────────────────────────────────────
     /// Comma-separated probe modes:
@@ -186,7 +187,8 @@ pub struct Cli {
 /// Unknown keys are silently ignored (no `deny_unknown_fields`).
 #[derive(Debug, Default, Deserialize)]
 pub struct ConfigFile {
-    pub target: Option<String>,
+    pub target: Option<String>,       // kept for backward compat
+    pub targets: Option<Vec<String>>, // list of targets; merged with CLI --target flags
     pub modes: Option<Vec<String>>,
     pub runs: Option<u32>,
     pub concurrency: Option<usize>,
@@ -221,7 +223,8 @@ pub struct ConfigFile {
 /// Priority: CLI arg > JSON config key > built-in default.
 #[derive(Debug, Clone)]
 pub struct ResolvedConfig {
-    pub target: String,
+    /// One or more target URLs to probe. Always non-empty (defaults to localhost).
+    pub targets: Vec<String>,
     pub modes: Vec<String>,
     pub runs: u32,
     pub concurrency: usize,
@@ -290,7 +293,27 @@ impl Cli {
         };
 
         ResolvedConfig {
-            target: pick!(target, "http://localhost:8080/health".into()),
+            targets: {
+                // CLI --target flags take priority (already a Vec); then config `targets`
+                // list; then the legacy single `target` key; finally the built-in default.
+                let mut ts: Vec<String> = self.target;
+                if let Some(ref ts2) = f.targets {
+                    for t in ts2 {
+                        if !ts.contains(t) {
+                            ts.push(t.clone());
+                        }
+                    }
+                }
+                if let Some(ref t) = f.target {
+                    if !ts.contains(t) {
+                        ts.push(t.clone());
+                    }
+                }
+                if ts.is_empty() {
+                    ts.push("http://localhost:8080/health".into());
+                }
+                ts
+            },
             modes: pick!(modes, vec!["http1".into(), "http2".into(), "udp".into()]),
             runs: pick!(runs, 3),
             concurrency: pick!(concurrency, 1),
@@ -427,7 +450,7 @@ mod tests {
     fn defaults_parse() {
         let cli = Cli::parse_from(["networker-tester"]);
         assert!(cli.runs.is_none());
-        assert!(cli.target.is_none());
+        assert!(cli.target.is_empty());
         assert!(cli.udp_port.is_none());
         assert!(!cli.insecure);
         assert!(cli.retries.is_none());
@@ -439,7 +462,7 @@ mod tests {
     fn resolved_defaults() {
         let cfg = Cli::parse_from(["networker-tester"]).resolve(None);
         assert_eq!(cfg.runs, 3);
-        assert_eq!(cfg.target, "http://localhost:8080/health");
+        assert_eq!(cfg.targets, vec!["http://localhost:8080/health"]);
         assert_eq!(cfg.udp_port, 9999);
         assert!(!cfg.insecure);
         assert_eq!(cfg.retries, 0);
@@ -458,7 +481,52 @@ mod tests {
         };
         let cfg = Cli::parse_from(["networker-tester"]).resolve(Some(file));
         assert_eq!(cfg.runs, 7);
-        assert_eq!(cfg.target, "http://myhost/health");
+        assert_eq!(cfg.targets, vec!["http://myhost/health"]);
+    }
+
+    #[test]
+    fn multi_target_from_cli() {
+        let cfg = Cli::parse_from([
+            "networker-tester",
+            "--target",
+            "http://host1/health",
+            "--target",
+            "http://host2/health",
+        ])
+        .resolve(None);
+        assert_eq!(
+            cfg.targets,
+            vec!["http://host1/health", "http://host2/health"]
+        );
+    }
+
+    #[test]
+    fn multi_target_from_config_file() {
+        let file = ConfigFile {
+            targets: Some(vec![
+                "http://host1/health".into(),
+                "http://host2/health".into(),
+            ]),
+            ..Default::default()
+        };
+        let cfg = Cli::parse_from(["networker-tester"]).resolve(Some(file));
+        assert_eq!(
+            cfg.targets,
+            vec!["http://host1/health", "http://host2/health"]
+        );
+    }
+
+    #[test]
+    fn cli_targets_override_config_targets() {
+        let file = ConfigFile {
+            targets: Some(vec!["http://config/health".into()]),
+            ..Default::default()
+        };
+        // CLI --target takes priority; config target is appended if not a dupe
+        let cfg = Cli::parse_from(["networker-tester", "--target", "http://cli/health"])
+            .resolve(Some(file));
+        assert_eq!(cfg.targets[0], "http://cli/health");
+        assert_eq!(cfg.targets[1], "http://config/health");
     }
 
     #[test]
