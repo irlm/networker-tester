@@ -4,7 +4,7 @@
 #
 # Installs networker-tester and/or networker-endpoint either:
 #   locally  – on this machine (release binary download or source compile)
-#   remotely – provisioned on a cloud VM (Azure supported; AWS coming soon)
+#   remotely – provisioned on a cloud VM (Azure and AWS supported)
 #
 # Two local install modes (auto-detected, or choose in customize flow):
 #   release  – download pre-built binary from the latest GitHub release via
@@ -19,19 +19,30 @@
 #   bash install.sh [OPTIONS] [tester|endpoint|both]
 #
 # Options:
-#   -y, --yes               Non-interactive: accept all defaults (local install)
-#   --from-source           Force source-compile mode (skip release download)
-#   --skip-ssh-check        Skip the GitHub SSH connectivity test (source mode)
-#   --skip-rust             Skip Rust installation (source mode)
-#   --azure                 Deploy endpoint to Azure VM (interactive options)
-#   --tester-azure          Deploy tester to Azure VM (interactive options)
-#   --region REGION         Azure region (default: eastus)
-#   --rg NAME               Azure endpoint resource group (default: networker-rg-endpoint)
-#   --vm NAME               Azure endpoint VM name (default: networker-endpoint-vm)
-#   --tester-rg NAME        Azure tester resource group (default: networker-rg-tester)
-#   --tester-vm NAME        Azure tester VM name (default: networker-tester-vm)
-#   --vm-size SIZE          Azure VM size for all cloud VMs (default: Standard_B2s)
-#   -h, --help              Show this help message
+#   -y, --yes                Non-interactive: accept all defaults (local install)
+#   --from-source            Force source-compile mode (skip release download)
+#   --skip-ssh-check         Skip the GitHub SSH connectivity test (source mode)
+#   --skip-rust              Skip Rust installation (source mode)
+#
+#   Azure:
+#   --azure                  Deploy endpoint to Azure VM (interactive options)
+#   --tester-azure           Deploy tester to Azure VM (interactive options)
+#   --region REGION          Azure region (default: eastus)
+#   --rg NAME                Azure endpoint resource group (default: networker-rg-endpoint)
+#   --vm NAME                Azure endpoint VM name (default: networker-endpoint-vm)
+#   --tester-rg NAME         Azure tester resource group (default: networker-rg-tester)
+#   --tester-vm NAME         Azure tester VM name (default: networker-tester-vm)
+#   --vm-size SIZE           Azure VM size (default: Standard_B2s)
+#
+#   AWS:
+#   --aws                    Deploy endpoint to AWS EC2 (interactive options)
+#   --tester-aws             Deploy tester to AWS EC2 (interactive options)
+#   --aws-region REGION      AWS region (default: us-east-1)
+#   --aws-instance-type TYPE EC2 instance type (default: t3.small)
+#   --aws-endpoint-name NAME EC2 Name tag for endpoint (default: networker-endpoint)
+#   --aws-tester-name NAME   EC2 Name tag for tester (default: networker-tester)
+#
+#   -h, --help               Show this help message
 # ──────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -93,6 +104,7 @@ Usage: install.sh [OPTIONS] [tester|endpoint|both]
 Install location (interactive; can also be set via flags):
   local     Install on this machine  [default]
   azure     Provision Azure VM and deploy there (requires az CLI + az login)
+  aws       Provision AWS EC2 instance and deploy there (requires aws CLI)
 
 Local install modes (auto-detected; override in customize flow or via flag):
   release   Download pre-built binary via gh CLI — fast (~10 s)
@@ -101,27 +113,39 @@ Local install modes (auto-detected; override in customize flow or via flag):
             Requires: SSH key for github.com + Rust/cargo
 
 Options:
-  -y, --yes               Non-interactive: accept all defaults (local install)
-  --from-source           Force source-compile mode (skip release detection)
-  --skip-ssh-check        Skip the GitHub SSH connectivity test (source mode only)
-  --skip-rust             Skip Rust installation (source mode only)
-  --azure                 Deploy endpoint to Azure (interactive: choose region/size)
-  --tester-azure          Deploy tester to Azure (interactive: choose region/size)
-  --region REGION         Azure region for all VMs (default: eastus)
-  --rg NAME               Endpoint resource group name (default: networker-rg-endpoint)
-  --vm NAME               Endpoint VM name (default: networker-endpoint-vm)
-  --tester-rg NAME        Tester resource group name (default: networker-rg-tester)
-  --tester-vm NAME        Tester VM name (default: networker-tester-vm)
-  --vm-size SIZE          VM size for all Azure VMs (default: Standard_B2s)
-  -h, --help              Show this help message
+  -y, --yes                Non-interactive: accept all defaults (local install)
+  --from-source            Force source-compile mode (skip release detection)
+  --skip-ssh-check         Skip the GitHub SSH connectivity test (source mode only)
+  --skip-rust              Skip Rust installation (source mode only)
+
+Azure options:
+  --azure                  Deploy endpoint to Azure (interactive: choose region/size)
+  --tester-azure           Deploy tester to Azure (interactive: choose region/size)
+  --region REGION          Azure region for all VMs (default: eastus)
+  --rg NAME                Endpoint resource group name (default: networker-rg-endpoint)
+  --vm NAME                Endpoint VM name (default: networker-endpoint-vm)
+  --tester-rg NAME         Tester resource group name (default: networker-rg-tester)
+  --tester-vm NAME         Tester VM name (default: networker-tester-vm)
+  --vm-size SIZE           Azure VM size for all VMs (default: Standard_B2s)
+
+AWS options:
+  --aws                    Deploy endpoint to AWS EC2 (interactive: choose region/type)
+  --tester-aws             Deploy tester to AWS EC2 (interactive: choose region/type)
+  --aws-region REGION      AWS region (default: us-east-1)
+  --aws-instance-type TYPE EC2 instance type (default: t3.small)
+  --aws-endpoint-name NAME EC2 Name tag for endpoint instance (default: networker-endpoint)
+  --aws-tester-name NAME   EC2 Name tag for tester instance (default: networker-tester)
+
+  -h, --help               Show this help message
 
 Examples:
-  curl -fsSL <url>/install.sh | bash -s -- tester
   bash install.sh -y endpoint
-  bash install.sh --from-source --skip-rust both
   bash install.sh --azure endpoint
   bash install.sh --azure --region westeurope both
-  bash install.sh --tester-azure --azure both
+  bash install.sh --aws endpoint
+  bash install.sh --aws --aws-region eu-west-1 both
+  bash install.sh --tester-aws --aws both          # both on separate AWS instances
+  bash install.sh --tester-azure --aws both        # tester on Azure, endpoint on AWS
 EOF
 }
 
@@ -156,27 +180,42 @@ SYS_SHELL=""
 STEP_NUM=0
 
 # ── Remote deployment state ───────────────────────────────────────────────────
-TESTER_LOCATION="local"       # "local" | "azure"
-ENDPOINT_LOCATION="local"     # "local" | "azure"
+TESTER_LOCATION="local"       # "local" | "azure" | "aws"
+ENDPOINT_LOCATION="local"     # "local" | "azure" | "aws"
 DO_REMOTE_TESTER=0
 DO_REMOTE_ENDPOINT=0
 
+# ── Azure state ───────────────────────────────────────────────────────────────
 AZURE_CLI_AVAILABLE=0
 AZURE_LOGGED_IN=0
 AZURE_REGION="eastus"
-AZURE_REGION_ASKED=0          # track if already asked interactively
+AZURE_REGION_ASKED=0
 
-# Tester VM config
 AZURE_TESTER_RG="networker-rg-tester"
 AZURE_TESTER_VM="networker-tester-vm"
 AZURE_TESTER_SIZE="Standard_B2s"
 AZURE_TESTER_IP=""
 
-# Endpoint VM config
 AZURE_ENDPOINT_RG="networker-rg-endpoint"
 AZURE_ENDPOINT_VM="networker-endpoint-vm"
 AZURE_ENDPOINT_SIZE="Standard_B2s"
 AZURE_ENDPOINT_IP=""
+
+# ── AWS state ─────────────────────────────────────────────────────────────────
+AWS_CLI_AVAILABLE=0
+AWS_LOGGED_IN=0
+AWS_REGION="us-east-1"
+AWS_REGION_ASKED=0
+
+AWS_TESTER_NAME="networker-tester"
+AWS_TESTER_INSTANCE_TYPE="t3.small"
+AWS_TESTER_INSTANCE_ID=""
+AWS_TESTER_IP=""
+
+AWS_ENDPOINT_NAME="networker-endpoint"
+AWS_ENDPOINT_INSTANCE_TYPE="t3.small"
+AWS_ENDPOINT_INSTANCE_ID=""
+AWS_ENDPOINT_IP=""
 
 CONFIG_FILE_PATH=""
 
@@ -194,6 +233,7 @@ parse_args() {
                 SKIP_SSH=1 ;;
             --skip-rust)
                 SKIP_RUST=1 ;;
+            # Azure
             --azure)
                 ENDPOINT_LOCATION="azure"; DO_REMOTE_ENDPOINT=1 ;;
             --tester-azure)
@@ -212,6 +252,21 @@ parse_args() {
                 shift
                 AZURE_TESTER_SIZE="${1:-Standard_B2s}"
                 AZURE_ENDPOINT_SIZE="${1:-Standard_B2s}" ;;
+            # AWS
+            --aws)
+                ENDPOINT_LOCATION="aws"; DO_REMOTE_ENDPOINT=1 ;;
+            --tester-aws)
+                TESTER_LOCATION="aws"; DO_REMOTE_TESTER=1 ;;
+            --aws-region)
+                shift; AWS_REGION="${1:-us-east-1}" ;;
+            --aws-instance-type)
+                shift
+                AWS_TESTER_INSTANCE_TYPE="${1:-t3.small}"
+                AWS_ENDPOINT_INSTANCE_TYPE="${1:-t3.small}" ;;
+            --aws-endpoint-name)
+                shift; AWS_ENDPOINT_NAME="${1:-networker-endpoint}" ;;
+            --aws-tester-name)
+                shift; AWS_TESTER_NAME="${1:-networker-tester}" ;;
             -h|--help)
                 show_help; exit 0 ;;
             *)
@@ -234,7 +289,7 @@ parse_args() {
         DO_SSH_CHECK=0
     fi
 
-    # If --azure/--tester-azure was set but matching component not enabled, enable it
+    # If a cloud flag was set but matching component wasn't enabled, enable it
     if [[ $DO_REMOTE_ENDPOINT -eq 1 && $DO_INSTALL_ENDPOINT -eq 0 ]]; then
         DO_INSTALL_ENDPOINT=1
     fi
@@ -355,11 +410,26 @@ discover_system() {
         CERTUTIL_AVAILABLE=1
     fi
 
+    # Always try to resolve the latest release version for the banner, even in
+    # source mode — requires gh installed and authenticated, fails silently if not.
+    if [[ -z "$NETWORKER_VERSION" ]] && command -v gh &>/dev/null; then
+        NETWORKER_VERSION="$(gh release list --repo "$REPO_GH" \
+            --limit 1 --json tagName -q '.[0].tagName' 2>/dev/null || echo "")"
+    fi
+
     # Azure CLI detection
     if command -v az &>/dev/null; then
         AZURE_CLI_AVAILABLE=1
         if az account show &>/dev/null 2>&1; then
             AZURE_LOGGED_IN=1
+        fi
+    fi
+
+    # AWS CLI detection
+    if command -v aws &>/dev/null; then
+        AWS_CLI_AVAILABLE=1
+        if aws sts get-caller-identity &>/dev/null 2>&1; then
+            AWS_LOGGED_IN=1
         fi
     fi
 }
@@ -395,6 +465,16 @@ display_system_info() {
             printf "    %-22s %s\n" "Azure CLI:" "authenticated ✓  (${az_sub})"
         else
             printf "    %-22s %s\n" "Azure CLI:" "installed  (run: az login)"
+        fi
+    fi
+
+    if [[ $AWS_CLI_AVAILABLE -eq 1 ]]; then
+        if [[ $AWS_LOGGED_IN -eq 1 ]]; then
+            local aws_account
+            aws_account="$(aws sts get-caller-identity --query Account --output text 2>/dev/null || echo "")"
+            printf "    %-22s %s\n" "AWS CLI:" "authenticated ✓  (account: ${aws_account})"
+        else
+            printf "    %-22s %s\n" "AWS CLI:" "installed  (run: aws configure)"
         fi
     fi
 }
@@ -502,34 +582,53 @@ display_plan() {
         fi
     fi
 
-    # ── Remote Azure — tester ─────────────────────────────────────────────────
+    # ── Remote — tester ───────────────────────────────────────────────────────
     if [[ $DO_REMOTE_TESTER -eq 1 ]]; then
         echo ""
-        printf "    ${BOLD}networker-tester:${RESET}  Remote — Azure VM\n"
-        printf "    %-22s %s\n" "Region:"        "$AZURE_REGION"
-        printf "    %-22s %s\n" "Resource group:" "$AZURE_TESTER_RG"
-        printf "    %-22s %s\n" "VM name:"        "$AZURE_TESTER_VM"
-        printf "    %-22s %s\n" "VM size:"        "$AZURE_TESTER_SIZE"
+        case "$TESTER_LOCATION" in
+            azure)
+                printf "    ${BOLD}networker-tester:${RESET}  Remote — Azure VM\n"
+                printf "    %-22s %s\n" "Region:"         "$AZURE_REGION"
+                printf "    %-22s %s\n" "Resource group:" "$AZURE_TESTER_RG"
+                printf "    %-22s %s\n" "VM name:"        "$AZURE_TESTER_VM"
+                printf "    %-22s %s\n" "VM size:"        "$AZURE_TESTER_SIZE"
+                ;;
+            aws)
+                printf "    ${BOLD}networker-tester:${RESET}  Remote — AWS EC2\n"
+                printf "    %-22s %s\n" "Region:"         "$AWS_REGION"
+                printf "    %-22s %s\n" "Instance name:"  "$AWS_TESTER_NAME"
+                printf "    %-22s %s\n" "Instance type:"  "$AWS_TESTER_INSTANCE_TYPE"
+                ;;
+        esac
         echo ""
-        printf "    ${DIM}a. Create resource group + VM (Ubuntu 22.04)\n"
+        printf "    ${DIM}a. Provision VM (Ubuntu 22.04)\n"
         printf "    b. Install networker-tester binary\n"
         printf "    c. Show SSH access command${RESET}\n"
     fi
 
-    # ── Remote Azure — endpoint ───────────────────────────────────────────────
+    # ── Remote — endpoint ─────────────────────────────────────────────────────
     if [[ $DO_REMOTE_ENDPOINT -eq 1 ]]; then
         echo ""
-        printf "    ${BOLD}networker-endpoint:${RESET}  Remote — Azure VM\n"
-        printf "    %-22s %s\n" "Region:"         "$AZURE_REGION"
-        printf "    %-22s %s\n" "Resource group:" "$AZURE_ENDPOINT_RG"
-        printf "    %-22s %s\n" "VM name:"        "$AZURE_ENDPOINT_VM"
-        printf "    %-22s %s\n" "VM size:"        "$AZURE_ENDPOINT_SIZE"
+        case "$ENDPOINT_LOCATION" in
+            azure)
+                printf "    ${BOLD}networker-endpoint:${RESET}  Remote — Azure VM\n"
+                printf "    %-22s %s\n" "Region:"         "$AZURE_REGION"
+                printf "    %-22s %s\n" "Resource group:" "$AZURE_ENDPOINT_RG"
+                printf "    %-22s %s\n" "VM name:"        "$AZURE_ENDPOINT_VM"
+                printf "    %-22s %s\n" "VM size:"        "$AZURE_ENDPOINT_SIZE"
+                ;;
+            aws)
+                printf "    ${BOLD}networker-endpoint:${RESET}  Remote — AWS EC2\n"
+                printf "    %-22s %s\n" "Region:"         "$AWS_REGION"
+                printf "    %-22s %s\n" "Instance name:"  "$AWS_ENDPOINT_NAME"
+                printf "    %-22s %s\n" "Instance type:"  "$AWS_ENDPOINT_INSTANCE_TYPE"
+                ;;
+        esac
         echo ""
-        printf "    ${DIM}a. Create resource group + VM (Ubuntu 22.04)\n"
-        printf "    b. Open TCP 8080, 8443 and UDP 8443, 9998, 9999\n"
-        printf "    c. Install networker-endpoint + systemd service\n"
-        printf "    d. Verify /health endpoint\n"
-        printf "    e. Write networker-azure.json config file${RESET}\n"
+        printf "    ${DIM}a. Provision VM + open TCP 8080, 8443 and UDP 8443, 9998, 9999\n"
+        printf "    b. Install networker-endpoint + systemd service\n"
+        printf "    c. Verify /health endpoint\n"
+        printf "    d. Write networker-cloud.json config file${RESET}\n"
     fi
 }
 
@@ -549,8 +648,6 @@ _nss_pkg_name() {
 }
 
 # ── Azure interactive configuration ──────────────────────────────────────────
-# Prompts for Azure options for a given component ("tester" or "endpoint").
-# Sets AZURE_TESTER_* or AZURE_ENDPOINT_* variables accordingly.
 ask_azure_options() {
     local component="$1"  # "tester" or "endpoint"
     local title
@@ -562,7 +659,7 @@ ask_azure_options() {
     print_section "Azure options for $title"
     echo ""
 
-    # Region (shared between both VMs; ask only once)
+    # Region (shared; ask once)
     if [[ $AZURE_REGION_ASKED -eq 0 ]]; then
         AZURE_REGION_ASKED=1
         local regions=(
@@ -625,7 +722,6 @@ ask_azure_options() {
     esac
     echo ""
 
-    # Resource group and VM name
     if [[ "$component" == "tester" ]]; then
         printf "  Resource group name [%s]: " "$AZURE_TESTER_RG"
         local rg_ans; read -r rg_ans </dev/tty || true
@@ -652,6 +748,98 @@ ask_azure_options() {
     echo ""
 }
 
+# ── AWS interactive configuration ─────────────────────────────────────────────
+ask_aws_options() {
+    local component="$1"  # "tester" or "endpoint"
+    local title
+    case "$component" in
+        tester)   title="networker-tester" ;;
+        endpoint) title="networker-endpoint" ;;
+    esac
+
+    print_section "AWS options for $title"
+    echo ""
+
+    # Region (shared; ask once)
+    if [[ $AWS_REGION_ASKED -eq 0 ]]; then
+        AWS_REGION_ASKED=1
+        local regions=(
+            "us-east-1:US East (N. Virginia)"
+            "us-west-2:US West (Oregon)"
+            "eu-west-1:EU West (Ireland)"
+            "eu-central-1:EU Central (Frankfurt)"
+            "ap-southeast-1:Asia Pacific (Singapore)"
+            "ap-northeast-1:Asia Pacific (Tokyo)"
+            "ap-southeast-2:Asia Pacific (Sydney)"
+            "sa-east-1:South America (São Paulo)"
+        )
+        echo "  AWS region:"
+        local i=1
+        for r in "${regions[@]}"; do
+            local code="${r%%:*}"
+            local label="${r#*:}"
+            if [[ "$code" == "$AWS_REGION" ]]; then
+                printf "    %s) %-20s %s  ${DIM}[current]${RESET}\n" "$i" "$code" "$label"
+            else
+                printf "    %s) %-20s %s\n" "$i" "$code" "$label"
+            fi
+            i=$((i + 1))
+        done
+        echo ""
+        printf "  Choice [1]: "
+        local reg_ans
+        read -r reg_ans </dev/tty || true
+        reg_ans="${reg_ans:-1}"
+        if [[ "$reg_ans" =~ ^[0-9]+$ ]] && \
+           [[ "$reg_ans" -ge 1 ]] && \
+           [[ "$reg_ans" -le "${#regions[@]}" ]]; then
+            local chosen="${regions[$((reg_ans - 1))]}"
+            AWS_REGION="${chosen%%:*}"
+        fi
+        print_ok "Region: $AWS_REGION"
+        echo ""
+    else
+        print_info "Region: $AWS_REGION  (shared with other AWS instance)"
+        echo ""
+    fi
+
+    # Instance type
+    echo "  EC2 instance type:"
+    echo "    1) t3.micro   2 vCPU,  1 GB RAM  ~\$7/mo   (free-tier eligible: t2.micro)"
+    echo "    2) t3.small   2 vCPU,  2 GB RAM  ~\$15/mo  [default]"
+    echo "    3) t3.medium  2 vCPU,  4 GB RAM  ~\$30/mo"
+    echo "    4) t3.large   2 vCPU,  8 GB RAM  ~\$60/mo"
+    echo ""
+    printf "  Choice [2]: "
+    local type_ans
+    read -r type_ans </dev/tty || true
+    type_ans="${type_ans:-2}"
+    local chosen_type
+    case "$type_ans" in
+        1) chosen_type="t3.micro" ;;
+        3) chosen_type="t3.medium" ;;
+        4) chosen_type="t3.large" ;;
+        *) chosen_type="t3.small" ;;
+    esac
+    echo ""
+
+    # Instance Name tag
+    if [[ "$component" == "tester" ]]; then
+        printf "  Instance name tag [%s]: " "$AWS_TESTER_NAME"
+        local name_ans; read -r name_ans </dev/tty || true
+        AWS_TESTER_NAME="${name_ans:-$AWS_TESTER_NAME}"
+        AWS_TESTER_INSTANCE_TYPE="$chosen_type"
+        print_ok "Type: $AWS_TESTER_INSTANCE_TYPE  |  Name: $AWS_TESTER_NAME"
+    else
+        printf "  Instance name tag [%s]: " "$AWS_ENDPOINT_NAME"
+        local name_ans; read -r name_ans </dev/tty || true
+        AWS_ENDPOINT_NAME="${name_ans:-$AWS_ENDPOINT_NAME}"
+        AWS_ENDPOINT_INSTANCE_TYPE="$chosen_type"
+        print_ok "Type: $AWS_ENDPOINT_INSTANCE_TYPE  |  Name: $AWS_ENDPOINT_NAME"
+    fi
+    echo ""
+}
+
 # Ask where to install each component.  Skipped when AUTO_YES=1.
 ask_deployment_locations() {
     [[ $AUTO_YES -eq 1 ]] && return 0
@@ -663,18 +851,22 @@ ask_deployment_locations() {
             echo "  ${BOLD}Where to install networker-tester?${RESET}"
             echo "    1) Locally on this machine  [default]"
             echo "    2) Remote: Azure VM"
+            echo "    3) Remote: AWS EC2"
             echo ""
             printf "  Choice [1]: "
             local ans
             read -r ans </dev/tty || true
             ans="${ans:-1}"
-            if [[ "$ans" == "2" ]]; then
-                TESTER_LOCATION="azure"
-                DO_REMOTE_TESTER=1
-            fi
+            case "$ans" in
+                2) TESTER_LOCATION="azure"; DO_REMOTE_TESTER=1 ;;
+                3) TESTER_LOCATION="aws";   DO_REMOTE_TESTER=1 ;;
+            esac
         fi
         if [[ $DO_REMOTE_TESTER -eq 1 ]]; then
-            ask_azure_options "tester"
+            case "$TESTER_LOCATION" in
+                azure) ask_azure_options "tester" ;;
+                aws)   ask_aws_options   "tester" ;;
+            esac
         fi
     fi
 
@@ -685,18 +877,22 @@ ask_deployment_locations() {
             echo "  ${BOLD}Where to install networker-endpoint?${RESET}"
             echo "    1) Locally on this machine  [default]"
             echo "    2) Remote: Azure VM"
+            echo "    3) Remote: AWS EC2"
             echo ""
             printf "  Choice [1]: "
             local ans
             read -r ans </dev/tty || true
             ans="${ans:-1}"
-            if [[ "$ans" == "2" ]]; then
-                ENDPOINT_LOCATION="azure"
-                DO_REMOTE_ENDPOINT=1
-            fi
+            case "$ans" in
+                2) ENDPOINT_LOCATION="azure"; DO_REMOTE_ENDPOINT=1 ;;
+                3) ENDPOINT_LOCATION="aws";   DO_REMOTE_ENDPOINT=1 ;;
+            esac
         fi
         if [[ $DO_REMOTE_ENDPOINT -eq 1 ]]; then
-            ask_azure_options "endpoint"
+            case "$ENDPOINT_LOCATION" in
+                azure) ask_azure_options "endpoint" ;;
+                aws)   ask_aws_options   "endpoint" ;;
+            esac
         fi
     fi
 }
@@ -722,7 +918,6 @@ prompt_main() {
         ans="${ans:-1}"
         case "$ans" in
             1)
-                # Ask about Chrome if not already available (source mode, pkg manager present)
                 if [[ $CHROME_AVAILABLE -eq 0 && "$INSTALL_METHOD" == "source" \
                       && -n "$PKG_MGR" && $DO_INSTALL_TESTER -eq 1 \
                       && $DO_REMOTE_TESTER -eq 0 ]]; then
@@ -735,7 +930,6 @@ prompt_main() {
                         print_info "To enable later: install Chrome then re-run this installer."
                     fi
                 fi
-                # Ask deployment locations
                 ask_deployment_locations
                 return 0 ;;
             2) customize_flow; return 0 ;;
@@ -778,7 +972,6 @@ customize_flow() {
     print_section "Customize Installation"
     echo ""
 
-    # Install method (only offered when release mode is available)
     if [[ $RELEASE_AVAILABLE -eq 1 ]]; then
         echo "  Install method:"
         echo "    1) Download binary from latest release  (fast, recommended)"
@@ -795,7 +988,6 @@ customize_flow() {
         echo ""
     fi
 
-    # SSH check + Rust install + git install – only relevant in source mode
     if [[ "$INSTALL_METHOD" == "source" ]]; then
         if [[ $GIT_AVAILABLE -eq 0 ]]; then
             if [[ -n "$PKG_MGR" ]]; then
@@ -805,7 +997,6 @@ customize_flow() {
                     DO_GIT_INSTALL=0
                     echo ""
                     print_warn "Skipping git install — cargo will use its built-in libgit2 for SSH."
-                    print_warn "If SSH authentication fails, install git manually:"
                     case "$PKG_MGR" in
                         brew)    echo "    brew install git" ;;
                         apt-get) echo "    sudo apt-get install git" ;;
@@ -860,7 +1051,6 @@ customize_flow() {
         echo ""
     fi
 
-    # Component selection
     echo "  Which components do you want to install?"
     echo ""
     echo "    1) Both  (networker-tester + networker-endpoint)  [default]"
@@ -877,7 +1067,6 @@ customize_flow() {
         *) DO_INSTALL_TESTER=1; DO_INSTALL_ENDPOINT=1 ;;
     esac
 
-    # Deployment location selection
     ask_deployment_locations
 
     echo ""
@@ -1141,6 +1330,201 @@ step_cargo_install() {
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Shared remote helpers (used by both Azure and AWS steps)
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Wait for SSH to become reachable on a remote VM.
+# $1 = public IP, $2 = SSH user, $3 = friendly label
+_wait_for_ssh() {
+    local ip="$1" user="$2" label="${3:-VM}"
+
+    print_info "Waiting for SSH on $label ($ip)…"
+    local attempts=0
+    while ! ssh -o ConnectTimeout=5 \
+                -o StrictHostKeyChecking=no \
+                -o BatchMode=yes \
+                "${user}@${ip}" "echo ready" &>/dev/null; do
+        attempts=$((attempts + 1))
+        if [[ $attempts -gt 36 ]]; then
+            echo ""
+            print_err "SSH not available after 3 minutes."
+            echo "  Check the VM status and try:  ssh ${user}@${ip}"
+            exit 1
+        fi
+        printf "."
+        sleep 5
+    done
+    echo ""
+    print_ok "SSH ready"
+}
+
+# Download binary from GitHub release and install it on a remote host.
+# $1 = binary ("networker-tester" or "networker-endpoint")
+# $2 = public IP
+# $3 = SSH user ("azureuser" or "ubuntu")
+_remote_install_binary() {
+    local binary="$1" ip="$2" user="$3"
+
+    # Detect remote architecture
+    local remote_arch remote_target
+    remote_arch="$(ssh -o StrictHostKeyChecking=no "${user}@${ip}" "uname -m" 2>/dev/null || echo "x86_64")"
+    case "$remote_arch" in
+        x86_64)        remote_target="x86_64-unknown-linux-gnu" ;;
+        aarch64|arm64) remote_target="aarch64-unknown-linux-gnu" ;;
+        *)             remote_target="x86_64-unknown-linux-gnu" ;;
+    esac
+
+    local archive="${binary}-${remote_target}.tar.gz"
+    local tmp_dir
+    tmp_dir="$(mktemp -d)"
+
+    print_info "Downloading ${archive} from GitHub release…"
+    if gh release download \
+            --repo "$REPO_GH" \
+            --latest \
+            --pattern "${archive}" \
+            --dir "${tmp_dir}" \
+            --clobber 2>/dev/null; then
+
+        tar xzf "${tmp_dir}/${archive}" -C "${tmp_dir}"
+        chmod +x "${tmp_dir}/${binary}"
+
+        print_info "Uploading binary to VM…"
+        scp -o StrictHostKeyChecking=no -q \
+            "${tmp_dir}/${binary}" \
+            "${user}@${ip}:/tmp/${binary}"
+        rm -rf "${tmp_dir}"
+
+        ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
+            "sudo mv /tmp/${binary} /usr/local/bin/${binary} && \
+             sudo chmod +x /usr/local/bin/${binary}"
+    else
+        rm -rf "${tmp_dir}"
+        # Fallback: download directly on the remote VM
+        local ver="${NETWORKER_VERSION:-}"
+        if [[ -z "$ver" ]]; then
+            ver="$(gh release list --repo "$REPO_GH" --limit 1 --json tagName \
+                   -q '.[0].tagName' 2>/dev/null || echo "")"
+        fi
+        if [[ -z "$ver" ]]; then
+            print_err "Cannot determine release version for remote download."
+            exit 1
+        fi
+        print_info "Downloading directly on VM (${ver})…"
+        ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
+            "curl -fsSL https://github.com/${REPO_GH}/releases/download/${ver}/${archive} \
+               -o /tmp/${archive} && \
+             tar xzf /tmp/${archive} -C /tmp && \
+             sudo mv /tmp/${binary} /usr/local/bin/${binary} && \
+             sudo chmod +x /usr/local/bin/${binary} && \
+             rm /tmp/${archive}"
+    fi
+
+    local remote_ver
+    remote_ver="$(ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
+        "/usr/local/bin/${binary} --version 2>/dev/null" || echo "unknown")"
+    print_ok "$binary installed on VM  ($remote_ver)"
+}
+
+# Create a systemd service for networker-endpoint on a remote host.
+# $1 = public IP, $2 = SSH user
+_remote_create_endpoint_service() {
+    local ip="$1" user="$2"
+
+    ssh -o StrictHostKeyChecking=no "${user}@${ip}" bash <<'REMOTE'
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin networker 2>/dev/null || true
+
+sudo tee /etc/systemd/system/networker-endpoint.service > /dev/null <<'UNIT'
+[Unit]
+Description=Networker Endpoint
+After=network.target
+
+[Service]
+User=networker
+ExecStart=/usr/local/bin/networker-endpoint
+Restart=always
+RestartSec=5
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+sudo systemctl daemon-reload
+sudo systemctl enable networker-endpoint
+sudo systemctl start networker-endpoint
+REMOTE
+
+    sleep 2
+    print_ok "networker-endpoint service enabled and started"
+}
+
+# Poll /health until the endpoint responds.
+# $1 = public IP
+_remote_verify_health() {
+    local ip="$1"
+
+    print_info "Checking http://${ip}:8080/health …"
+    local attempts=0
+    while true; do
+        local resp
+        resp="$(curl -sf --max-time 5 "http://${ip}:8080/health" 2>/dev/null || echo "")"
+        if [[ -n "$resp" ]]; then
+            print_ok "Health check passed: $resp"
+            return 0
+        fi
+        attempts=$((attempts + 1))
+        if [[ $attempts -gt 12 ]]; then
+            echo ""
+            print_warn "Endpoint did not respond within 60 seconds."
+            print_warn "Check logs on the VM: sudo journalctl -u networker-endpoint -n 50"
+            return 0
+        fi
+        printf "."
+        sleep 5
+    done
+}
+
+# Write networker-cloud.json pointing at the remote endpoint.
+# $1 = endpoint public IP
+step_generate_config() {
+    local endpoint_ip="$1"
+
+    next_step "Generate test config file"
+
+    CONFIG_FILE_PATH="${PWD}/networker-cloud.json"
+
+    cat > "$CONFIG_FILE_PATH" <<EOF
+{
+  "target": "https://${endpoint_ip}:8443/health",
+  "modes": ["tcp", "http1", "http2", "http3", "udp", "download", "upload",
+             "pageload", "pageload2", "pageload3"],
+  "runs": 5,
+  "insecure": true,
+  "udp_port": 9999,
+  "udp_throughput_port": 9998,
+  "payload_sizes": ["64k", "1m"],
+  "html_report": "report.html"
+}
+EOF
+    print_ok "Config written to ${CONFIG_FILE_PATH}"
+
+    # If the tester is also remote, upload the config there too
+    local tester_ip="" tester_user=""
+    case "$TESTER_LOCATION" in
+        azure) tester_ip="$AZURE_TESTER_IP"; tester_user="azureuser" ;;
+        aws)   tester_ip="$AWS_TESTER_IP";   tester_user="ubuntu" ;;
+    esac
+    if [[ -n "$tester_ip" ]]; then
+        print_info "Uploading config to tester VM ($tester_ip)…"
+        scp -o StrictHostKeyChecking=no -q \
+            "$CONFIG_FILE_PATH" \
+            "${tester_user}@${tester_ip}:~/networker-cloud.json"
+        print_ok "Config uploaded to ~/networker-cloud.json on tester VM"
+    fi
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Azure deployment steps
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -1174,11 +1558,8 @@ step_check_azure_prereqs() {
 }
 
 # Create an Azure resource group and Ubuntu 22.04 VM.
-# $1 = label ("tester" or "endpoint")
-# $2 = resource group name
-# $3 = VM name
-# $4 = VM size
-# $5 = name of the global variable to receive the public IP
+# $1 = label ("tester" or "endpoint"), $2 = RG, $3 = VM name,
+# $4 = VM size, $5 = name of global variable to receive public IP
 step_azure_create_vm() {
     local label="$1" rg="$2" vm="$3" size="$4" ip_var="$5"
 
@@ -1188,7 +1569,6 @@ step_azure_create_vm() {
     az group create --name "$rg" --location "$AZURE_REGION" --output none
     print_ok "Resource group: $rg"
 
-    # Prefer an existing local SSH public key; fall back to Azure key generation
     local ssh_key_option="--generate-ssh-keys"
     local key_file
     for key_file in "${HOME}/.ssh/id_ed25519.pub" "${HOME}/.ssh/id_rsa.pub"; do
@@ -1223,52 +1603,18 @@ step_azure_create_vm() {
     print_ok "VM created — Public IP: ${BOLD}${ip}${RESET}"
 }
 
-# Wait for SSH to become available on a remote VM.
-# $1 = public IP
-# $2 = friendly label (optional)
-_wait_for_ssh() {
-    local ip="$1"
-    local label="${2:-VM}"
-
-    print_info "Waiting for SSH on $label ($ip)…"
-    local attempts=0
-    while ! ssh -o ConnectTimeout=5 \
-                -o StrictHostKeyChecking=no \
-                -o BatchMode=yes \
-                "azureuser@${ip}" "echo ready" &>/dev/null; do
-        attempts=$((attempts + 1))
-        if [[ $attempts -gt 36 ]]; then
-            echo ""
-            print_err "SSH not available after 3 minutes."
-            echo "  Check the VM status in Azure portal and try:"
-            echo "    ssh azureuser@${ip}"
-            exit 1
-        fi
-        printf "."
-        sleep 5
-    done
-    echo ""
-    print_ok "SSH ready"
-}
-
 # Open TCP 8080/8443 and UDP 8443/9998/9999 on the NSG for the endpoint VM.
 step_azure_open_endpoint_ports() {
     local rg="$1" vm="$2"
 
-    next_step "Open firewall ports for networker-endpoint"
+    next_step "Open firewall ports (Azure)"
 
-    print_info "Opening TCP 8080 (HTTP) and 8443 (HTTPS/H2)…"
-    az vm open-port \
-        --resource-group "$rg" --name "$vm" \
-        --port 8080 --priority 1001 --output none
-    az vm open-port \
-        --resource-group "$rg" --name "$vm" \
-        --port 8443 --priority 1002 --output none
+    print_info "Opening TCP 8080, 8443…"
+    az vm open-port --resource-group "$rg" --name "$vm" --port 8080 --priority 1001 --output none
+    az vm open-port --resource-group "$rg" --name "$vm" --port 8443 --priority 1002 --output none
     print_ok "TCP 8080, 8443 open"
 
-    print_info "Opening UDP 8443 (H3/QUIC), 9998 (UDP throughput), 9999 (UDP echo)…"
-
-    # az vm open-port only handles TCP; UDP requires a direct NSG rule
+    print_info "Opening UDP 8443, 9998, 9999…"
     local nsg_name
     nsg_name="$(az network nsg list \
         --resource-group "$rg" \
@@ -1284,10 +1630,9 @@ step_azure_open_endpoint_ports() {
 
     if [[ -z "$nsg_name" ]]; then
         print_warn "Could not detect NSG name; UDP ports may not be open."
-        print_warn "Open manually after deployment:"
-        print_warn "  az network nsg rule create --resource-group $rg --nsg-name <nsg-name> \\"
-        print_warn "    --name Networker-UDP --protocol Udp --direction Inbound \\"
-        print_warn "    --priority 1010 --destination-port-ranges 8443 9998 9999 --access Allow"
+        print_warn "Open manually: az network nsg rule create --resource-group $rg --nsg-name <nsg> \\"
+        print_warn "  --name Networker-UDP --protocol Udp --direction Inbound \\"
+        print_warn "  --priority 1010 --destination-port-ranges 8443 9998 9999 --access Allow"
     else
         az network nsg rule create \
             --resource-group "$rg" \
@@ -1303,174 +1648,286 @@ step_azure_open_endpoint_ports() {
     fi
 }
 
-# Download and install a binary on a remote Azure VM.
-# $1 = binary name ("networker-tester" or "networker-endpoint")
-# $2 = public IP of the VM
-step_azure_install_binary() {
-    local binary="$1" ip="$2"
+step_azure_deploy_tester() {
+    step_check_azure_prereqs
+    step_azure_create_vm "tester" \
+        "$AZURE_TESTER_RG" "$AZURE_TESTER_VM" "$AZURE_TESTER_SIZE" "AZURE_TESTER_IP"
+    _wait_for_ssh "$AZURE_TESTER_IP" "azureuser" "tester VM"
 
-    next_step "Install $binary on remote VM ($ip)"
+    next_step "Install networker-tester on Azure VM"
+    _remote_install_binary "networker-tester" "$AZURE_TESTER_IP" "azureuser"
+}
 
-    _wait_for_ssh "$ip" "$binary VM"
+step_azure_deploy_endpoint() {
+    # Only check prereqs once (shared with tester path if both are Azure)
+    if [[ "$TESTER_LOCATION" != "azure" || -z "$AZURE_TESTER_IP" ]]; then
+        step_check_azure_prereqs
+    fi
+    step_azure_create_vm "endpoint" \
+        "$AZURE_ENDPOINT_RG" "$AZURE_ENDPOINT_VM" "$AZURE_ENDPOINT_SIZE" "AZURE_ENDPOINT_IP"
+    step_azure_open_endpoint_ports "$AZURE_ENDPOINT_RG" "$AZURE_ENDPOINT_VM"
+    _wait_for_ssh "$AZURE_ENDPOINT_IP" "azureuser" "endpoint VM"
 
-    # Detect remote architecture
-    local remote_arch remote_target
-    remote_arch="$(ssh -o StrictHostKeyChecking=no "azureuser@${ip}" "uname -m" 2>/dev/null || echo "x86_64")"
-    case "$remote_arch" in
-        x86_64)        remote_target="x86_64-unknown-linux-gnu" ;;
-        aarch64|arm64) remote_target="aarch64-unknown-linux-gnu" ;;
-        *)             remote_target="x86_64-unknown-linux-gnu" ;;
-    esac
+    next_step "Install networker-endpoint on Azure VM"
+    _remote_install_binary "networker-endpoint" "$AZURE_ENDPOINT_IP" "azureuser"
 
-    local archive="${binary}-${remote_target}.tar.gz"
-    local tmp_dir
-    tmp_dir="$(mktemp -d)"
+    next_step "Create networker-endpoint service (Azure)"
+    _remote_create_endpoint_service "$AZURE_ENDPOINT_IP" "azureuser"
 
-    print_info "Downloading ${archive} from GitHub release…"
-    if gh release download \
-            --repo "$REPO_GH" \
-            --latest \
-            --pattern "${archive}" \
-            --dir "${tmp_dir}" \
-            --clobber 2>/dev/null; then
+    next_step "Verify endpoint health (Azure)"
+    _remote_verify_health "$AZURE_ENDPOINT_IP"
 
-        tar xzf "${tmp_dir}/${archive}" -C "${tmp_dir}"
-        chmod +x "${tmp_dir}/${binary}"
+    step_generate_config "$AZURE_ENDPOINT_IP"
+}
 
-        print_info "Uploading binary to VM…"
-        scp -o StrictHostKeyChecking=no -q \
-            "${tmp_dir}/${binary}" \
-            "azureuser@${ip}:/tmp/${binary}"
-        rm -rf "${tmp_dir}"
+# ──────────────────────────────────────────────────────────────────────────────
+# AWS deployment steps
+# ──────────────────────────────────────────────────────────────────────────────
 
-        ssh -o StrictHostKeyChecking=no "azureuser@${ip}" \
-            "sudo mv /tmp/${binary} /usr/local/bin/${binary} && \
-             sudo chmod +x /usr/local/bin/${binary}"
-    else
-        rm -rf "${tmp_dir}"
-        # Fallback: wget directly on the remote VM
-        local ver="${NETWORKER_VERSION:-}"
-        if [[ -z "$ver" ]]; then
-            ver="$(gh release list --repo "$REPO_GH" --limit 1 --json tagName \
-                   -q '.[0].tagName' 2>/dev/null || echo "")"
-        fi
-        if [[ -z "$ver" ]]; then
-            print_err "Cannot determine release version for remote download."
+step_check_aws_prereqs() {
+    next_step "Check AWS prerequisites"
+
+    if [[ $AWS_CLI_AVAILABLE -eq 0 ]]; then
+        print_err "AWS CLI (aws) is not installed."
+        echo ""
+        echo "  Install from: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
+        echo "    macOS:  brew install awscli"
+        echo "    Linux:  curl https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tmp/awscliv2.zip"
+        echo "            unzip /tmp/awscliv2.zip -d /tmp && sudo /tmp/aws/install"
+        exit 1
+    fi
+    print_ok "aws CLI found"
+
+    if [[ $AWS_LOGGED_IN -eq 0 ]]; then
+        print_info "No active AWS credentials — running aws configure…"
+        print_info "You need: Access Key ID, Secret Access Key, and default region."
+        aws configure
+        if ! aws sts get-caller-identity &>/dev/null 2>&1; then
+            print_err "AWS credentials are not valid."
+            echo "  Run: aws configure"
             exit 1
         fi
-        print_info "Downloading directly on VM (${ver})…"
-        ssh -o StrictHostKeyChecking=no "azureuser@${ip}" \
-            "curl -fsSL https://github.com/${REPO_GH}/releases/download/${ver}/${archive} \
-               -o /tmp/${archive} && \
-             tar xzf /tmp/${archive} -C /tmp && \
-             sudo mv /tmp/${binary} /usr/local/bin/${binary} && \
-             sudo chmod +x /usr/local/bin/${binary} && \
-             rm /tmp/${archive}"
+        AWS_LOGGED_IN=1
     fi
 
-    local remote_ver
-    remote_ver="$(ssh -o StrictHostKeyChecking=no "azureuser@${ip}" \
-        "/usr/local/bin/${binary} --version 2>/dev/null" || echo "unknown")"
-    print_ok "$binary installed on VM  ($remote_ver)"
+    local aws_acct aws_arn
+    aws_acct="$(aws sts get-caller-identity --query Account --output text 2>/dev/null || echo "unknown")"
+    aws_arn="$(aws sts get-caller-identity --query Arn --output text 2>/dev/null || echo "")"
+    print_ok "Account: ${aws_acct}  (${aws_arn})"
 }
 
-# Create a systemd service for networker-endpoint and start it.
-# $1 = public IP of the endpoint VM
-step_azure_create_endpoint_service() {
-    local ip="$1"
-
-    next_step "Create networker-endpoint systemd service"
-
-    ssh -o StrictHostKeyChecking=no "azureuser@${ip}" bash <<'REMOTE'
-# Create dedicated system user
-sudo useradd --system --no-create-home --shell /usr/sbin/nologin networker 2>/dev/null || true
-
-# Write unit file
-sudo tee /etc/systemd/system/networker-endpoint.service > /dev/null <<'UNIT'
-[Unit]
-Description=Networker Endpoint
-After=network.target
-
-[Service]
-User=networker
-ExecStart=/usr/local/bin/networker-endpoint
-Restart=always
-RestartSec=5
-Environment=RUST_LOG=info
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-
-sudo systemctl daemon-reload
-sudo systemctl enable networker-endpoint
-sudo systemctl start networker-endpoint
-REMOTE
-
-    sleep 2
-    print_ok "networker-endpoint service enabled and started"
-}
-
-# Poll /health until the endpoint responds.
-# $1 = public IP of the endpoint VM
-step_azure_verify_health() {
-    local ip="$1"
-
-    next_step "Verify endpoint health"
-    print_info "Checking http://${ip}:8080/health …"
-
-    local attempts=0
-    while true; do
-        local resp
-        resp="$(curl -sf --max-time 5 "http://${ip}:8080/health" 2>/dev/null || echo "")"
-        if [[ -n "$resp" ]]; then
-            print_ok "Health check passed: $resp"
-            return 0
+# Import SSH public key into AWS if not already present.
+_aws_ensure_keypair() {
+    local ssh_key_file=""
+    for kf in "${HOME}/.ssh/id_ed25519.pub" "${HOME}/.ssh/id_rsa.pub"; do
+        if [[ -f "$kf" ]]; then
+            ssh_key_file="$kf"
+            break
         fi
-        attempts=$((attempts + 1))
-        if [[ $attempts -gt 12 ]]; then
-            echo ""
-            print_warn "Endpoint did not respond within 60 seconds."
-            print_warn "Check logs: ssh azureuser@${ip} 'sudo journalctl -u networker-endpoint -n 50'"
-            return 0
-        fi
-        printf "."
-        sleep 5
     done
-}
 
-# Write a networker-tester JSON config file pointing at the remote endpoint.
-# $1 = endpoint public IP
-step_generate_config() {
-    local endpoint_ip="$1"
-
-    next_step "Generate test config file"
-
-    CONFIG_FILE_PATH="${PWD}/networker-azure.json"
-
-    cat > "$CONFIG_FILE_PATH" <<EOF
-{
-  "target": "https://${endpoint_ip}:8443/health",
-  "modes": ["tcp", "http1", "http2", "http3", "udp", "download", "upload",
-             "pageload", "pageload2", "pageload3"],
-  "runs": 5,
-  "insecure": true,
-  "udp_port": 9999,
-  "udp_throughput_port": 9998,
-  "payload_sizes": ["64k", "1m"],
-  "html_report": "report.html"
-}
-EOF
-    print_ok "Config written to ${CONFIG_FILE_PATH}"
-
-    # If the tester is also remote, upload the config there too
-    if [[ $DO_REMOTE_TESTER -eq 1 && -n "$AZURE_TESTER_IP" ]]; then
-        print_info "Uploading config to tester VM ($AZURE_TESTER_IP)…"
-        scp -o StrictHostKeyChecking=no -q \
-            "$CONFIG_FILE_PATH" \
-            "azureuser@${AZURE_TESTER_IP}:~/networker-azure.json"
-        print_ok "Config uploaded to ~/networker-azure.json on tester VM"
+    if [[ -z "$ssh_key_file" ]]; then
+        print_warn "No local SSH public key found (~/.ssh/id_ed25519.pub or ~/.ssh/id_rsa.pub)."
+        print_warn "The instance will be created without a key pair — SSH access will not be available."
+        echo ""
+        return 0
     fi
+
+    print_info "Importing SSH public key as 'networker-keypair'…"
+    # Import is idempotent when the key already exists (returns existing key)
+    aws ec2 import-key-pair \
+        --region "$AWS_REGION" \
+        --key-name "networker-keypair" \
+        --public-key-material "fileb://${ssh_key_file}" \
+        --output none 2>/dev/null || true
+    print_ok "Key pair: networker-keypair"
+}
+
+# Look up the latest Ubuntu 22.04 LTS AMI for the current region.
+# Sets the global AWS_AMI_ID.
+AWS_AMI_ID=""
+_aws_find_ubuntu_ami() {
+    print_info "Looking up Ubuntu 22.04 LTS AMI in $AWS_REGION…"
+    AWS_AMI_ID="$(aws ec2 describe-images \
+        --region "$AWS_REGION" \
+        --owners 099720109477 \
+        --filters \
+            "Name=name,Values=ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*" \
+            "Name=state,Values=available" \
+            "Name=architecture,Values=x86_64" \
+        --query "sort_by(Images, &CreationDate)[-1].ImageId" \
+        --output text 2>/dev/null || echo "")"
+
+    if [[ -z "$AWS_AMI_ID" || "$AWS_AMI_ID" == "None" ]]; then
+        print_err "Could not find Ubuntu 22.04 AMI in region $AWS_REGION."
+        exit 1
+    fi
+    print_ok "AMI: $AWS_AMI_ID  (Ubuntu 22.04 LTS)"
+}
+
+# Create a security group with the necessary inbound rules.
+# $1 = "tester" or "endpoint"; $2 = variable name to receive the SG ID.
+_aws_create_security_group() {
+    local component="$1" sg_var="$2"
+    local sg_name="networker-sg-${component}"
+
+    # Reuse existing SG with same name if present (idempotent re-runs)
+    local existing
+    existing="$(aws ec2 describe-security-groups \
+        --region "$AWS_REGION" \
+        --filters "Name=group-name,Values=${sg_name}" \
+        --query "SecurityGroups[0].GroupId" \
+        --output text 2>/dev/null || echo "")"
+
+    if [[ -n "$existing" && "$existing" != "None" ]]; then
+        printf -v "$sg_var" "%s" "$existing"
+        print_ok "Reusing existing security group: $existing  ($sg_name)"
+        return 0
+    fi
+
+    print_info "Creating security group '$sg_name'…"
+    local sg_id
+    sg_id="$(aws ec2 create-security-group \
+        --region "$AWS_REGION" \
+        --group-name "$sg_name" \
+        --description "Networker ${component} security group" \
+        --query "GroupId" \
+        --output text)"
+
+    # SSH (always)
+    aws ec2 authorize-security-group-ingress \
+        --region "$AWS_REGION" --group-id "$sg_id" \
+        --protocol tcp --port 22 --cidr 0.0.0.0/0 --output none
+
+    if [[ "$component" == "endpoint" ]]; then
+        # TCP 8080, 8443
+        aws ec2 authorize-security-group-ingress \
+            --region "$AWS_REGION" --group-id "$sg_id" \
+            --protocol tcp --port 8080 --cidr 0.0.0.0/0 --output none
+        aws ec2 authorize-security-group-ingress \
+            --region "$AWS_REGION" --group-id "$sg_id" \
+            --protocol tcp --port 8443 --cidr 0.0.0.0/0 --output none
+        # UDP 8443, 9998, 9999
+        aws ec2 authorize-security-group-ingress \
+            --region "$AWS_REGION" --group-id "$sg_id" \
+            --protocol udp --port 8443 --cidr 0.0.0.0/0 --output none
+        aws ec2 authorize-security-group-ingress \
+            --region "$AWS_REGION" --group-id "$sg_id" \
+            --protocol udp --port 9998 --cidr 0.0.0.0/0 --output none
+        aws ec2 authorize-security-group-ingress \
+            --region "$AWS_REGION" --group-id "$sg_id" \
+            --protocol udp --port 9999 --cidr 0.0.0.0/0 --output none
+        print_ok "Security group created: $sg_id  (TCP 22/8080/8443, UDP 8443/9998/9999)"
+    else
+        print_ok "Security group created: $sg_id  (TCP 22)"
+    fi
+
+    printf -v "$sg_var" "%s" "$sg_id"
+}
+
+# Launch an EC2 instance and wait until it is running.
+# $1 = label, $2 = instance type, $3 = name tag,
+# $4 = SG ID, $5 = instance_id var, $6 = ip var
+_aws_launch_instance() {
+    local label="$1" instance_type="$2" name_tag="$3"
+    local sg_id="$4" instance_id_var="$5" ip_var="$6"
+
+    print_info "Launching EC2 instance ($instance_type, $name_tag)…"
+    print_dim "This typically takes 1–2 minutes…"
+    echo ""
+
+    local key_opt=""
+    for kf in "${HOME}/.ssh/id_ed25519.pub" "${HOME}/.ssh/id_rsa.pub"; do
+        if [[ -f "$kf" ]]; then
+            key_opt="--key-name networker-keypair"
+            break
+        fi
+    done
+
+    local instance_id
+    instance_id="$(aws ec2 run-instances \
+        --region "$AWS_REGION" \
+        --image-id "$AWS_AMI_ID" \
+        --instance-type "$instance_type" \
+        $key_opt \
+        --security-group-ids "$sg_id" \
+        --tag-specifications \
+            "ResourceType=instance,Tags=[{Key=Name,Value=${name_tag}}]" \
+        --query "Instances[0].InstanceId" \
+        --output text)"
+
+    if [[ -z "$instance_id" || "$instance_id" == "None" ]]; then
+        print_err "Failed to launch EC2 instance."
+        exit 1
+    fi
+    printf -v "$instance_id_var" "%s" "$instance_id"
+    print_ok "Instance launched: $instance_id"
+
+    print_info "Waiting for instance to reach 'running' state…"
+    aws ec2 wait instance-running \
+        --region "$AWS_REGION" \
+        --instance-ids "$instance_id"
+
+    local public_ip
+    public_ip="$(aws ec2 describe-instances \
+        --region "$AWS_REGION" \
+        --instance-ids "$instance_id" \
+        --query "Reservations[0].Instances[0].PublicIpAddress" \
+        --output text)"
+
+    if [[ -z "$public_ip" || "$public_ip" == "None" ]]; then
+        print_err "Instance has no public IP — check that it is in a public subnet."
+        exit 1
+    fi
+    printf -v "$ip_var" "%s" "$public_ip"
+    print_ok "Instance running — Public IP: ${BOLD}${public_ip}${RESET}"
+}
+
+step_aws_deploy_tester() {
+    step_check_aws_prereqs
+    _aws_ensure_keypair
+    _aws_find_ubuntu_ami
+
+    next_step "Create AWS EC2 instance for tester ($AWS_TESTER_NAME, $AWS_REGION)"
+    local sg_id
+    _aws_create_security_group "tester" sg_id
+    _aws_launch_instance "tester" \
+        "$AWS_TESTER_INSTANCE_TYPE" "$AWS_TESTER_NAME" \
+        "$sg_id" "AWS_TESTER_INSTANCE_ID" "AWS_TESTER_IP"
+
+    _wait_for_ssh "$AWS_TESTER_IP" "ubuntu" "tester instance"
+
+    next_step "Install networker-tester on AWS EC2"
+    _remote_install_binary "networker-tester" "$AWS_TESTER_IP" "ubuntu"
+}
+
+step_aws_deploy_endpoint() {
+    # Only check prereqs once
+    if [[ "$TESTER_LOCATION" != "aws" || -z "$AWS_TESTER_IP" ]]; then
+        step_check_aws_prereqs
+        _aws_ensure_keypair
+        _aws_find_ubuntu_ami
+    fi
+
+    next_step "Create AWS EC2 instance for endpoint ($AWS_ENDPOINT_NAME, $AWS_REGION)"
+    local sg_id
+    _aws_create_security_group "endpoint" sg_id
+    _aws_launch_instance "endpoint" \
+        "$AWS_ENDPOINT_INSTANCE_TYPE" "$AWS_ENDPOINT_NAME" \
+        "$sg_id" "AWS_ENDPOINT_INSTANCE_ID" "AWS_ENDPOINT_IP"
+
+    _wait_for_ssh "$AWS_ENDPOINT_IP" "ubuntu" "endpoint instance"
+
+    next_step "Install networker-endpoint on AWS EC2"
+    _remote_install_binary "networker-endpoint" "$AWS_ENDPOINT_IP" "ubuntu"
+
+    next_step "Create networker-endpoint service (AWS)"
+    _remote_create_endpoint_service "$AWS_ENDPOINT_IP" "ubuntu"
+
+    next_step "Verify endpoint health (AWS)"
+    _remote_verify_health "$AWS_ENDPOINT_IP"
+
+    step_generate_config "$AWS_ENDPOINT_IP"
 }
 
 # ── Completion summary ────────────────────────────────────────────────────────
@@ -1481,18 +1938,16 @@ display_completion() {
     echo "${BOLD}══════════════════════════════════════════════════════════${RESET}"
     echo ""
 
-    # ── Local PATH check ──────────────────────────────────────────────────────
     local do_local_tester=0 do_local_endpoint=0
     [[ $DO_INSTALL_TESTER -eq 1 && $DO_REMOTE_TESTER -eq 0 ]]     && do_local_tester=1
     [[ $DO_INSTALL_ENDPOINT -eq 1 && $DO_REMOTE_ENDPOINT -eq 0 ]]  && do_local_endpoint=1
 
+    # ── Local PATH check ──────────────────────────────────────────────────────
     if [[ $do_local_tester -eq 1 || $do_local_endpoint -eq 1 ]]; then
         if ! echo ":${PATH}:" | grep -q ":${INSTALL_DIR}:"; then
             print_warn "${INSTALL_DIR} is not in your shell PATH."
             echo ""
-            echo "  Run now (activates for this terminal session):"
-            echo "    export PATH=\"${INSTALL_DIR}:\$PATH\""
-            echo ""
+            echo "  Run now:      export PATH=\"${INSTALL_DIR}:\$PATH\""
             echo "  Make permanent:"
             echo "    echo 'export PATH=\"${INSTALL_DIR}:\$PATH\"' >> ~/.bashrc   # bash"
             echo "    echo 'export PATH=\"${INSTALL_DIR}:\$PATH\"' >> ~/.zshrc    # zsh"
@@ -1500,7 +1955,7 @@ display_completion() {
         fi
     fi
 
-    # ── Local tester quick start ──────────────────────────────────────────────
+    # ── Local quick starts ────────────────────────────────────────────────────
     if [[ $do_local_tester -eq 1 ]]; then
         echo "  ${BOLD}networker-tester${RESET} quick start:"
         echo "    networker-tester --help"
@@ -1508,7 +1963,6 @@ display_completion() {
         echo ""
     fi
 
-    # ── Local endpoint quick start ────────────────────────────────────────────
     if [[ $do_local_endpoint -eq 1 ]]; then
         echo "  ${BOLD}networker-endpoint${RESET} quick start:"
         echo "    networker-endpoint"
@@ -1517,26 +1971,39 @@ display_completion() {
     fi
 
     # ── Remote tester summary ─────────────────────────────────────────────────
-    if [[ $DO_REMOTE_TESTER -eq 1 && -n "$AZURE_TESTER_IP" ]]; then
-        echo "  ${BOLD}networker-tester${RESET} (Azure VM ${AZURE_TESTER_IP}):"
-        echo "    SSH:   ssh azureuser@${AZURE_TESTER_IP}"
-        if [[ -n "$CONFIG_FILE_PATH" ]]; then
-            echo "    Tests: ssh azureuser@${AZURE_TESTER_IP} 'networker-tester --config ~/networker-azure.json'"
-        else
-            echo "    Run:   ssh azureuser@${AZURE_TESTER_IP} 'networker-tester --help'"
+    if [[ $DO_REMOTE_TESTER -eq 1 ]]; then
+        local t_ip="" t_user="" t_provider=""
+        case "$TESTER_LOCATION" in
+            azure) t_ip="$AZURE_TESTER_IP"; t_user="azureuser"; t_provider="Azure" ;;
+            aws)   t_ip="$AWS_TESTER_IP";   t_user="ubuntu";    t_provider="AWS" ;;
+        esac
+        if [[ -n "$t_ip" ]]; then
+            echo "  ${BOLD}networker-tester${RESET} (${t_provider} ${t_ip}):"
+            echo "    SSH:   ssh ${t_user}@${t_ip}"
+            if [[ -n "$CONFIG_FILE_PATH" ]]; then
+                echo "    Tests: ssh ${t_user}@${t_ip} 'networker-tester --config ~/networker-cloud.json'"
+            else
+                echo "    Run:   ssh ${t_user}@${t_ip} 'networker-tester --help'"
+            fi
+            echo ""
         fi
-        echo "    Logs:  ssh azureuser@${AZURE_TESTER_IP} 'tail -f /tmp/networker.log'"
-        echo ""
     fi
 
     # ── Remote endpoint summary ───────────────────────────────────────────────
-    if [[ $DO_REMOTE_ENDPOINT -eq 1 && -n "$AZURE_ENDPOINT_IP" ]]; then
-        echo "  ${BOLD}networker-endpoint${RESET} (Azure VM ${AZURE_ENDPOINT_IP}):"
-        echo "    Health: curl http://${AZURE_ENDPOINT_IP}:8080/health"
-        echo "    SSH:    ssh azureuser@${AZURE_ENDPOINT_IP}"
-        echo "    Logs:   ssh azureuser@${AZURE_ENDPOINT_IP} 'sudo journalctl -u networker-endpoint -f'"
-        echo "    Stop:   ssh azureuser@${AZURE_ENDPOINT_IP} 'sudo systemctl stop networker-endpoint'"
-        echo ""
+    if [[ $DO_REMOTE_ENDPOINT -eq 1 ]]; then
+        local e_ip="" e_user="" e_provider=""
+        case "$ENDPOINT_LOCATION" in
+            azure) e_ip="$AZURE_ENDPOINT_IP"; e_user="azureuser"; e_provider="Azure" ;;
+            aws)   e_ip="$AWS_ENDPOINT_IP";   e_user="ubuntu";    e_provider="AWS" ;;
+        esac
+        if [[ -n "$e_ip" ]]; then
+            echo "  ${BOLD}networker-endpoint${RESET} (${e_provider} ${e_ip}):"
+            echo "    Health: curl http://${e_ip}:8080/health"
+            echo "    SSH:    ssh ${e_user}@${e_ip}"
+            echo "    Logs:   ssh ${e_user}@${e_ip} 'sudo journalctl -u networker-endpoint -f'"
+            echo "    Stop:   ssh ${e_user}@${e_ip} 'sudo systemctl stop networker-endpoint'"
+            echo ""
+        fi
     fi
 
     # ── Generated config ──────────────────────────────────────────────────────
@@ -1546,14 +2013,27 @@ display_completion() {
         echo ""
     fi
 
-    # ── Cleanup reminder (Azure) ──────────────────────────────────────────────
-    if [[ $DO_REMOTE_TESTER -eq 1 || $DO_REMOTE_ENDPOINT -eq 1 ]]; then
+    # ── Cleanup reminders ─────────────────────────────────────────────────────
+    if [[ "$TESTER_LOCATION" == "azure" || "$ENDPOINT_LOCATION" == "azure" ]]; then
         echo "  ${DIM}Azure cleanup (when done testing):${RESET}"
-        if [[ $DO_REMOTE_ENDPOINT -eq 1 ]]; then
+        if [[ "$TESTER_LOCATION" == "azure" ]]; then
+            printf "  ${DIM}  az group delete --name %s --yes --no-wait${RESET}\n" "$AZURE_TESTER_RG"
+        fi
+        if [[ "$ENDPOINT_LOCATION" == "azure" ]]; then
             printf "  ${DIM}  az group delete --name %s --yes --no-wait${RESET}\n" "$AZURE_ENDPOINT_RG"
         fi
-        if [[ $DO_REMOTE_TESTER -eq 1 ]]; then
-            printf "  ${DIM}  az group delete --name %s --yes --no-wait${RESET}\n" "$AZURE_TESTER_RG"
+        echo ""
+    fi
+
+    if [[ "$TESTER_LOCATION" == "aws" || "$ENDPOINT_LOCATION" == "aws" ]]; then
+        echo "  ${DIM}AWS cleanup (when done testing):${RESET}"
+        if [[ "$TESTER_LOCATION" == "aws" && -n "$AWS_TESTER_INSTANCE_ID" ]]; then
+            printf "  ${DIM}  aws ec2 terminate-instances --region %s --instance-ids %s${RESET}\n" \
+                "$AWS_REGION" "$AWS_TESTER_INSTANCE_ID"
+        fi
+        if [[ "$ENDPOINT_LOCATION" == "aws" && -n "$AWS_ENDPOINT_INSTANCE_ID" ]]; then
+            printf "  ${DIM}  aws ec2 terminate-instances --region %s --instance-ids %s${RESET}\n" \
+                "$AWS_REGION" "$AWS_ENDPOINT_INSTANCE_ID"
         fi
         echo ""
     fi
@@ -1606,32 +2086,24 @@ main() {
         fi
     fi
 
-    # certutil for local Chrome (release or source path)
     if [[ $do_local_tester -eq 1 && ( $CHROME_AVAILABLE -eq 1 || $DO_CHROME_INSTALL -eq 1 ) ]]; then
         step_ensure_certutil
     fi
 
-    # ── Azure: tester VM ─────────────────────────────────────────────────────
+    # ── Remote: tester ────────────────────────────────────────────────────────
     if [[ $DO_REMOTE_TESTER -eq 1 ]]; then
-        step_check_azure_prereqs
-        step_azure_create_vm "tester" \
-            "$AZURE_TESTER_RG" "$AZURE_TESTER_VM" "$AZURE_TESTER_SIZE" "AZURE_TESTER_IP"
-        step_azure_install_binary "networker-tester" "$AZURE_TESTER_IP"
+        case "$TESTER_LOCATION" in
+            azure) step_azure_deploy_tester ;;
+            aws)   step_aws_deploy_tester   ;;
+        esac
     fi
 
-    # ── Azure: endpoint VM ────────────────────────────────────────────────────
+    # ── Remote: endpoint ──────────────────────────────────────────────────────
     if [[ $DO_REMOTE_ENDPOINT -eq 1 ]]; then
-        # Only check prereqs once (already done if tester was also remote)
-        if [[ $DO_REMOTE_TESTER -eq 0 ]]; then
-            step_check_azure_prereqs
-        fi
-        step_azure_create_vm "endpoint" \
-            "$AZURE_ENDPOINT_RG" "$AZURE_ENDPOINT_VM" "$AZURE_ENDPOINT_SIZE" "AZURE_ENDPOINT_IP"
-        step_azure_open_endpoint_ports "$AZURE_ENDPOINT_RG" "$AZURE_ENDPOINT_VM"
-        step_azure_install_binary "networker-endpoint" "$AZURE_ENDPOINT_IP"
-        step_azure_create_endpoint_service "$AZURE_ENDPOINT_IP"
-        step_azure_verify_health "$AZURE_ENDPOINT_IP"
-        step_generate_config "$AZURE_ENDPOINT_IP"
+        case "$ENDPOINT_LOCATION" in
+            azure) step_azure_deploy_endpoint ;;
+            aws)   step_aws_deploy_endpoint   ;;
+        esac
     fi
 
     display_completion
