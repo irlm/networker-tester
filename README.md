@@ -519,7 +519,7 @@ transport and connection model change.
 
 | Mode | Connection model | What makes it realistic |
 |------|-----------------|------------------------|
-| `pageload` | Up to 6 parallel TCP connections | Matches H1.1 browser behaviour (connection pool) |
+| `pageload` | Up to 6 parallel TCP connections | Matches H1.1 browser behavior (connection pool) |
 | `pageload2` | Single TLS connection, all assets multiplexed | H2 stream multiplexing |
 | `pageload3` | Single QUIC connection, all assets multiplexed | H3 / QUIC — no TCP head-of-line blocking |
 | `browser` | Real headless Chromium via CDP | Actual browser events: Load, DOMContentLoaded, sub-resource negotiation |
@@ -549,7 +549,7 @@ Terminal output includes a **Protocol Comparison** table once all runs complete:
   pageload3  ·  Total ms  ·  avg  82.6  min  69.1  max  99.2
 ```
 
-### Customise asset count and size
+### Customize asset count and size
 
 ```bash
 # 50 assets × 50 KiB — heavier page, amplifies H1 head-of-line blocking

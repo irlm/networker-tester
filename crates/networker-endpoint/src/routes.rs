@@ -18,17 +18,33 @@ use tokio::time::{sleep, Duration};
 use tower_http::trace::TraceLayer;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Application state
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Shared state threaded through the Axum router and middleware.
+#[derive(Debug, Clone)]
+pub struct AppState {
+    pub h3_port: Option<u16>,
+    pub http_port: u16,
+    pub https_port: u16,
+    pub udp_port: u16,
+    pub udp_throughput_port: u16,
+    pub started_at: Instant,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Router
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Build the router.
 ///
-/// `h3_port` — when `Some(port)`, every response includes
+/// `state.h3_port` — when `Some(port)`, every response includes
 /// `Alt-Svc: h3=":port"; ma=86400` so that Chrome can discover H3 support
 /// and upgrade to QUIC on subsequent navigations.  Pass `None` when H3 is not
 /// compiled in (the `http3` feature is disabled).
-pub fn build_router(h3_port: Option<u16>) -> Router {
+pub fn build_router(state: AppState) -> Router {
     Router::new()
+        .route("/", get(landing_page))
         .route("/health", get(health))
         .route("/echo", post(echo).get(echo_get))
         .route("/download", get(download))
@@ -41,14 +57,13 @@ pub fn build_router(h3_port: Option<u16>) -> Router {
         .route("/page", get(page_manifest))
         .route("/browser-page", get(browser_page))
         .route("/asset", get(asset_handler))
+        // Provide AppState to all handlers (converts Router<AppState> -> Router<()>).
+        .with_state(state.clone())
         // Remove axum's default 2 MiB body limit so upload probes of arbitrary
         // size are not rejected with 413 before the body is transmitted.
         .layer(DefaultBodyLimit::disable())
         // Add X-Networker-Server-Timestamp (and optionally Alt-Svc) to every response.
-        .layer(middleware::from_fn_with_state(
-            h3_port,
-            add_server_timestamp,
-        ))
+        .layer(middleware::from_fn_with_state(state, add_server_timestamp))
         // Log every request (method + URI) and response (status + latency).
         // Verbosity is controlled by RUST_LOG; defaults to INFO.
         .layer(TraceLayer::new_for_http())
@@ -63,9 +78,9 @@ pub fn build_router(h3_port: Option<u16>) -> Router {
 ///
 /// The `Alt-Svc` header is served on all responses regardless of scheme.
 /// Chrome ignores it for plain-HTTP origins; it only upgrades to QUIC when
-/// the header arrives over HTTPS — exactly the behaviour we want.
+/// the header arrives over HTTPS — exactly the behavior we want.
 async fn add_server_timestamp(
-    State(h3_port): State<Option<u16>>,
+    State(state): State<AppState>,
     req: Request,
     next: Next,
 ) -> Response {
@@ -81,7 +96,7 @@ async fn add_server_timestamp(
         HeaderValue::from_static(env!("CARGO_PKG_VERSION")),
     );
     // Advertise H3 so Chrome can upgrade to QUIC on the next request to this origin.
-    if let Some(port) = h3_port {
+    if let Some(port) = state.h3_port {
         let alt_svc = format!("h3=\":{port}\"; ma=86400");
         if let Ok(val) = HeaderValue::from_str(&alt_svc) {
             response.headers_mut().insert("alt-svc", val);
@@ -105,6 +120,204 @@ fn csw_snapshot() -> (i64, i64) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Handlers
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Landing page helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn format_uptime(secs: u64) -> String {
+    let d = secs / 86400;
+    let h = (secs % 86400) / 3600;
+    let m = (secs % 3600) / 60;
+    let s = secs % 60;
+    if d > 0 {
+        format!("{d}d {h}h {m}m")
+    } else if h > 0 {
+        format!("{h}h {m}m {s}s")
+    } else if m > 0 {
+        format!("{m}m {s}s")
+    } else {
+        format!("{s}s")
+    }
+}
+
+fn get_hostname() -> String {
+    if let Ok(h) = std::env::var("HOSTNAME") {
+        if !h.is_empty() {
+            return h;
+        }
+    }
+    // Linux: /proc/sys/kernel/hostname
+    if let Ok(h) = std::fs::read_to_string("/proc/sys/kernel/hostname") {
+        let h = h.trim().to_string();
+        if !h.is_empty() {
+            return h;
+        }
+    }
+    "unknown".to_string()
+}
+
+// Static CSS + HTML head shared by the landing page (raw string avoids escaping issues).
+const LANDING_HTML_HEAD: &str = r##"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:,">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,-apple-system,sans-serif;background:#0f1117;color:#e8e8e8;padding:2rem 2.5rem;max-width:940px}
+h1{font-size:1.6rem;color:#fff;font-weight:700}
+.meta{color:#7a9aaa;font-size:.85rem;margin:.3rem 0 1.2rem}
+.status{display:inline-flex;align-items:center;gap:.4rem;background:#1b3a1b;color:#4caf50;border:1px solid #2e5a2e;padding:.25rem .8rem;border-radius:20px;font-size:.8rem;font-weight:600;margin-bottom:1.5rem}
+.dot{width:7px;height:7px;background:#4caf50;border-radius:50%;animation:pulse 1.5s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:1rem;margin-bottom:1.5rem}
+.card{background:#1a1a2e;border:1px solid #2a2a40;border-radius:10px;padding:1rem 1.2rem}
+.full{margin-bottom:1.5rem}
+.card-title{font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:#5a6a7a;font-weight:600;margin-bottom:.8rem}
+.row{display:flex;justify-content:space-between;align-items:center;padding:.3rem 0;border-bottom:1px solid #1e1e30}
+.row:last-child{border-bottom:none}
+.lbl{color:#8a9aaa;font-size:.82rem}
+.val{font-family:"SF Mono","Fira Mono",monospace;font-size:.82rem;color:#7ac0ff}
+.proto-list{display:flex;flex-wrap:wrap;gap:.4rem}
+.proto{background:#1a2a40;color:#7ac0ff;border:1px solid #2a3a50;border-radius:4px;padding:.2rem .5rem;font-size:.75rem;font-family:monospace}
+table{width:100%;border-collapse:collapse}
+th{font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:#5a6a7a;padding:.4rem .6rem;border-bottom:1px solid #2a2a40;text-align:left}
+td{padding:.4rem .6rem;border-bottom:1px solid #1e1e30;vertical-align:middle}
+td:first-child{font-family:monospace;color:#7ac0ff;font-size:.82rem}
+.method{font-family:monospace;color:#f0a050;font-size:.75rem}
+.desc{color:#8a9aaa;font-size:.82rem}
+tr:hover td{background:#1a1a28}
+.footer{color:#3a4a5a;font-size:.75rem;margin-top:1.5rem}
+.footer a{color:#4a7a9a;text-decoration:none}
+.footer a:hover{color:#7ac0ff}
+</style>
+</head>
+<body>
+"##;
+
+const LANDING_HTML_FOOT: &str = "</body></html>\n";
+
+/// GET / → HTML status page showing server info, ports, and available endpoints.
+async fn landing_page(State(state): State<AppState>) -> impl IntoResponse {
+    let version = env!("CARGO_PKG_VERSION");
+    let elapsed = state.started_at.elapsed().as_secs();
+    let uptime = format_uptime(elapsed);
+    let hostname = get_hostname();
+    let timestamp = Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
+    let started = Utc::now()
+        .checked_sub_signed(chrono::Duration::seconds(elapsed as i64))
+        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let h3_port_display = state
+        .h3_port
+        .map(|p| p.to_string())
+        .unwrap_or_else(|| "n/a".to_string());
+    let h3_proto = if state.h3_port.is_some() {
+        r#"<span class="proto">HTTP/3</span>"#
+    } else {
+        ""
+    };
+
+    let mut out = String::with_capacity(8 * 1024);
+    out.push_str(LANDING_HTML_HEAD);
+
+    // Header + status badge
+    out.push_str(&format!(
+        "<h1>networker-endpoint</h1>\n\
+         <div class=\"meta\">v{version} &middot; {hostname}</div>\n\
+         <div class=\"status\"><span class=\"dot\"></span>running &nbsp; uptime {uptime}</div>\n"
+    ));
+
+    // Info grid
+    out.push_str("<div class=\"grid\">\n");
+
+    // Ports card
+    out.push_str(&format!(
+        "<div class=\"card\">\n\
+           <div class=\"card-title\">Ports</div>\n\
+           <div class=\"row\"><span class=\"lbl\">HTTP</span><span class=\"val\">:{http_port}</span></div>\n\
+           <div class=\"row\"><span class=\"lbl\">HTTPS / H2</span><span class=\"val\">:{https_port}</span></div>\n\
+           <div class=\"row\"><span class=\"lbl\">HTTP/3 QUIC</span><span class=\"val\">{h3_port_display}</span></div>\n\
+           <div class=\"row\"><span class=\"lbl\">UDP echo</span><span class=\"val\">:{udp_port}</span></div>\n\
+           <div class=\"row\"><span class=\"lbl\">UDP throughput</span><span class=\"val\">:{udp_tp_port}</span></div>\n\
+         </div>\n",
+        http_port = state.http_port,
+        https_port = state.https_port,
+        h3_port_display = h3_port_display,
+        udp_port = state.udp_port,
+        udp_tp_port = state.udp_throughput_port,
+    ));
+
+    // Protocols card
+    out.push_str(&format!(
+        "<div class=\"card\">\n\
+           <div class=\"card-title\">Protocols</div>\n\
+           <div class=\"proto-list\">\n\
+             <span class=\"proto\">HTTP/1.1</span>\n\
+             <span class=\"proto\">HTTP/2</span>\n\
+             {h3_proto}\n\
+             <span class=\"proto\">UDP</span>\n\
+           </div>\n\
+         </div>\n"
+    ));
+
+    // Server info card
+    out.push_str(&format!(
+        "<div class=\"card\">\n\
+           <div class=\"card-title\">Server</div>\n\
+           <div class=\"row\"><span class=\"lbl\">Version</span><span class=\"val\">{version}</span></div>\n\
+           <div class=\"row\"><span class=\"lbl\">Started</span><span class=\"val\">{started}</span></div>\n\
+           <div class=\"row\"><span class=\"lbl\">Now</span><span class=\"val\">{timestamp}</span></div>\n\
+         </div>\n"
+    ));
+
+    out.push_str("</div>\n"); // end .grid
+
+    // Endpoints table
+    out.push_str(
+        "<div class=\"card full\">\n\
+           <div class=\"card-title\">Endpoints</div>\n\
+           <table>\n\
+             <thead><tr><th>Path</th><th>Method</th><th>Description</th></tr></thead>\n\
+             <tbody>\n\
+               <tr><td>/</td><td class=\"method\">GET</td><td class=\"desc\">This status page</td></tr>\n\
+               <tr><td>/health</td><td class=\"method\">GET</td><td class=\"desc\">Health check — 200 + JSON</td></tr>\n\
+               <tr><td>/info</td><td class=\"method\">GET</td><td class=\"desc\">Server capabilities as JSON</td></tr>\n\
+               <tr><td>/echo</td><td class=\"method\">GET / POST</td><td class=\"desc\">Echo request body and headers</td></tr>\n\
+               <tr><td>/download</td><td class=\"method\">GET</td><td class=\"desc\">Stream N zero bytes — ?bytes=N</td></tr>\n\
+               <tr><td>/upload</td><td class=\"method\">POST</td><td class=\"desc\">Drain request body, return byte count</td></tr>\n\
+               <tr><td>/delay</td><td class=\"method\">GET</td><td class=\"desc\">Delay response by N ms — ?ms=N (max 30 s)</td></tr>\n\
+               <tr><td>/headers</td><td class=\"method\">GET</td><td class=\"desc\">Echo all request headers as JSON</td></tr>\n\
+               <tr><td>/status/:code</td><td class=\"method\">GET</td><td class=\"desc\">Return specified HTTP status code</td></tr>\n\
+               <tr><td>/http-version</td><td class=\"method\">GET</td><td class=\"desc\">Return HTTP version used by the client</td></tr>\n\
+               <tr><td>/page</td><td class=\"method\">GET</td><td class=\"desc\">Page-load asset manifest — ?assets=N&amp;bytes=B</td></tr>\n\
+               <tr><td>/browser-page</td><td class=\"method\">GET</td><td class=\"desc\">HTML page with img tags for browser probes</td></tr>\n\
+               <tr><td>/asset</td><td class=\"method\">GET</td><td class=\"desc\">Single binary asset — ?id=X&amp;bytes=B</td></tr>\n\
+             </tbody>\n\
+           </table>\n\
+         </div>\n",
+    );
+
+    // Footer
+    out.push_str(&format!(
+        "<div class=\"footer\">\
+           <a href=\"/health\">/health</a> &nbsp;&middot;&nbsp; \
+           <a href=\"/info\">/info</a> \
+           &nbsp;&middot;&nbsp; networker-endpoint v{version}\
+         </div>\n"
+    ));
+
+    out.push_str(LANDING_HTML_FOOT);
+
+    Response::builder()
+        .status(200)
+        .header("content-type", "text/html; charset=utf-8")
+        .body(Body::from(out))
+        .unwrap()
+}
 
 /// GET /health → 200 JSON { "status": "ok", "timestamp": "..." }
 async fn health() -> impl IntoResponse {
@@ -413,7 +626,34 @@ mod tests {
     use tower::ServiceExt; // for `oneshot`
 
     fn app() -> Router {
-        build_router(None)
+        build_router(AppState {
+            h3_port: None,
+            http_port: 8080,
+            https_port: 8443,
+            udp_port: 9999,
+            udp_throughput_port: 9998,
+            started_at: std::time::Instant::now(),
+        })
+    }
+
+    #[tokio::test]
+    async fn landing_page_returns_html() {
+        let resp = app()
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let ct = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(ct.contains("text/html"), "content-type must be text/html");
+        let body = to_bytes(resp.into_body(), 32 * 1024).await.unwrap();
+        let html = String::from_utf8_lossy(&body);
+        assert!(html.contains("networker-endpoint"), "page must mention service name");
+        assert!(html.contains("/health"), "page must list /health endpoint");
+        assert!(html.contains(":8080"), "page must show HTTP port");
     }
 
     #[tokio::test]
