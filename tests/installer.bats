@@ -382,15 +382,23 @@ STUB
     export PATH="${TEST_TMPDIR}/bin:${PATH}"
 }
 
-@test "_remote_install_binary_from_source: exits when local OS != remote OS" {
+@test "_remote_install_binary_from_source: routes to remote compile on OS mismatch" {
     _make_uname_stub "Darwin"           # local uname returns Darwin
     export STUB_SSH_UNAME="Linux"       # remote VM reports Linux
-    # stub helpers so they don't fail
+    export STUB_SSH_VERSION="networker-endpoint 0.12.65"
     step_ensure_cargo_env() { :; }
     _remote_chrome_available() { return 1; }
     run _remote_install_binary_from_source "networker-endpoint" "1.2.3.4" "azureuser" "x86_64"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"mismatch"* ]]
+    [[ "$output" == *"compiling on VM"* ]] || [[ "$output" == *"compiled on VM"* ]]
+}
+
+@test "_remote_compile_on_vm: exits when no local checkout" {
+    _find_repo_root() { return 1; }     # simulate curl|bash with no local repo
+    run _remote_compile_on_vm "networker-endpoint" "1.2.3.4" "azureuser" ""
     [ "$status" -ne 0 ]
-    [[ "$output" == *"OS mismatch"* ]] || [[ "$output" == *"mismatch"* ]]
+    [[ "$output" == *"not run from a local checkout"* ]]
 }
 
 @test "_remote_install_binary_from_source: succeeds when OS and arch match" {

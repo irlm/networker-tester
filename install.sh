@@ -50,6 +50,23 @@ REPO_SSH="ssh://git@github.com/irlm/networker-tester"
 REPO_GH="irlm/networker-tester"
 INSTALL_DIR="${HOME}/.cargo/bin"
 
+# Locate the Cargo workspace root relative to install.sh.
+# Prints the directory path on success; returns 1 when not found
+# (e.g. installer was downloaded via curl | bash with no local checkout).
+_find_repo_root() {
+    local script_path="${BASH_SOURCE[0]:-$0}"
+    local dir
+    dir="$(cd "$(dirname "$script_path")" 2>/dev/null && pwd)" || return 1
+    while [[ -n "$dir" && "$dir" != "/" ]]; do
+        if [[ -f "${dir}/Cargo.toml" && -d "${dir}/crates" ]]; then
+            printf '%s' "$dir"
+            return 0
+        fi
+        dir="$(dirname "$dir")"
+    done
+    return 1
+}
+
 # ── Colors (ANSI C quoting; safe even when stdin is a curl pipe) ──────────────
 if [ -t 1 ]; then
     BOLD=$'\033[1m'
@@ -255,7 +272,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.12.68"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.12.69"  # fallback when gh is unavailable
 
 DO_SSH_CHECK=1
 DO_RUST_INSTALL=0
@@ -791,11 +808,19 @@ _azure_suggest_name() {
     local c_tag; [[ "$component" == "tester" ]] && c_tag="ts" || c_tag="ep"
     local os_tag; [[ "$os" == "windows" ]] && os_tag="win" || os_tag="lnx"
     local sz_tag; sz_tag="$(_azure_size_slug "$size")"
-    local base="nwk-${c_tag}-${os_tag}-${sz_tag}"
-    local candidate="$base"
+    printf '%s' "nwk-${c_tag}-${os_tag}-${sz_tag}"
+}
+
+# Find a unique VM name within a resource group.
+# Format: <base>-vm, <base>-vm-2, <base>-vm-3, …
+# $1 = resource group name  $2 = base name
+_azure_suggest_vm_name() {
+    local rg="$1" base="$2"
+    local candidate="${base}-vm"
     local n=2
-    while az group show --name "$candidate" --output none 2>/dev/null; do
-        candidate="${base}-${n}"
+    while az vm show --resource-group "$rg" --name "$candidate" \
+              --output none 2>/dev/null; do
+        candidate="${base}-vm-${n}"
         n=$((n + 1))
     done
     printf '%s' "$candidate"
@@ -908,45 +933,43 @@ ask_azure_options() {
         echo ""
     fi
 
-    # Generate a unique suggested name based on the chosen OS and size, then
-    # prompt the user — they can accept the default or type their own.
-    print_info "Checking for existing resource groups…"
+    # Generate a suggested base name from the chosen OS and size, then prompt
+    # the user for RG (reusing an existing RG is fine) and a unique VM name.
     local suggested_base
     suggested_base="$(_azure_suggest_name "$component" "$chosen_os" "$chosen_size")"
-    local suggested_rg="$suggested_base"
-    local suggested_vm="${suggested_base}-vm"
     echo ""
 
     if [[ "$component" == "tester" ]]; then
-        # Warn if the current default already exists (name unchanged from last run)
-        if [[ "$AZURE_TESTER_RG" != "networker-rg-tester" ]] && \
-           az group show --name "$AZURE_TESTER_RG" --output none 2>/dev/null; then
-            print_warn "Resource group '${AZURE_TESTER_RG}' already exists — suggested: ${suggested_rg}"
-        fi
-        printf "  Resource group name [%s]: " "$suggested_rg"
+        printf "  Resource group name [%s]: " "$suggested_base"
         local rg_ans; read -r rg_ans </dev/tty || true
-        AZURE_TESTER_RG="${rg_ans:-$suggested_rg}"
+        AZURE_TESTER_RG="${rg_ans:-$suggested_base}"
 
+        if az group show --name "$AZURE_TESTER_RG" --output none 2>/dev/null; then
+            print_info "Resource group '${AZURE_TESTER_RG}' exists — adding VM to it."
+        fi
+
+        local suggested_vm
+        suggested_vm="$(_azure_suggest_vm_name "$AZURE_TESTER_RG" "$suggested_base")"
         printf "  VM name             [%s]: " "$suggested_vm"
         local vm_ans; read -r vm_ans </dev/tty || true
         AZURE_TESTER_VM="${vm_ans:-$suggested_vm}"
-
         AZURE_TESTER_SIZE="$chosen_size"
         AZURE_TESTER_OS="$chosen_os"
         print_ok "OS: $chosen_os  |  Size: $AZURE_TESTER_SIZE  |  RG: $AZURE_TESTER_RG  |  VM: $AZURE_TESTER_VM"
     else
-        if [[ "$AZURE_ENDPOINT_RG" != "networker-rg-endpoint" ]] && \
-           az group show --name "$AZURE_ENDPOINT_RG" --output none 2>/dev/null; then
-            print_warn "Resource group '${AZURE_ENDPOINT_RG}' already exists — suggested: ${suggested_rg}"
-        fi
-        printf "  Resource group name [%s]: " "$suggested_rg"
+        printf "  Resource group name [%s]: " "$suggested_base"
         local rg_ans; read -r rg_ans </dev/tty || true
-        AZURE_ENDPOINT_RG="${rg_ans:-$suggested_rg}"
+        AZURE_ENDPOINT_RG="${rg_ans:-$suggested_base}"
 
+        if az group show --name "$AZURE_ENDPOINT_RG" --output none 2>/dev/null; then
+            print_info "Resource group '${AZURE_ENDPOINT_RG}' exists — adding VM to it."
+        fi
+
+        local suggested_vm
+        suggested_vm="$(_azure_suggest_vm_name "$AZURE_ENDPOINT_RG" "$suggested_base")"
         printf "  VM name             [%s]: " "$suggested_vm"
         local vm_ans; read -r vm_ans </dev/tty || true
         AZURE_ENDPOINT_VM="${vm_ans:-$suggested_vm}"
-
         AZURE_ENDPOINT_SIZE="$chosen_size"
         AZURE_ENDPOINT_OS="$chosen_os"
         print_ok "OS: $chosen_os  |  Size: $AZURE_ENDPOINT_SIZE  |  RG: $AZURE_ENDPOINT_RG  |  VM: $AZURE_ENDPOINT_VM"
@@ -1827,6 +1850,77 @@ _wait_for_ssh() {
     print_ok "SSH ready"
 }
 
+# Compile a binary natively on the remote VM from a local source checkout.
+# Used when there is no matching pre-built release binary and local OS != remote OS.
+# $1 = binary  $2 = VM IP  $3 = SSH user  $4 = features flag (optional, e.g. "--features browser")
+_remote_compile_on_vm() {
+    local binary="$1" ip="$2" user="$3" features_arg="${4:-}"
+
+    local repo_root
+    if ! repo_root="$(_find_repo_root)"; then
+        print_err "install.sh was not run from a local checkout — cannot copy source to VM."
+        print_err "Options:"
+        echo "    1. Clone the repo locally and run:  bash install.sh"
+        echo "    2. Wait for release CI to finish, then re-run the installer."
+        exit 1
+    fi
+
+    echo ""
+    print_warn "No release binary — copying source to VM and compiling natively."
+    print_dim  "This takes ~5-10 minutes on first build."
+    echo ""
+
+    # Tar workspace essentials: manifests + both crates (no build artifacts, no git).
+    local src_tar="/tmp/networker-src-$$.tar.gz"
+    tar -czf "$src_tar" \
+        --exclude='./target' \
+        --exclude='./.git' \
+        --exclude='./output' \
+        --exclude='./assets' \
+        --exclude='./docs' \
+        --exclude='./tests' \
+        --exclude='./sql' \
+        -C "$repo_root" \
+        ./Cargo.toml ./Cargo.lock ./crates
+
+    local src_size; src_size="$(du -sh "$src_tar" | cut -f1)"
+    print_info "Uploading source (${src_size}) to VM…"
+    scp -o StrictHostKeyChecking=no -q "$src_tar" "${user}@${ip}:/tmp/networker-src.tar.gz"
+    rm -f "$src_tar"
+
+    # shellcheck disable=SC2087
+    ssh -o StrictHostKeyChecking=no "${user}@${ip}" bash <<REMOTE
+set -euo pipefail
+if ! command -v cargo &>/dev/null; then
+    echo "Installing Rust toolchain on VM…"
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
+fi
+source "\$HOME/.cargo/env"
+
+rm -rf ~/networker-src
+mkdir -p ~/networker-src
+tar -xzf /tmp/networker-src.tar.gz -C ~/networker-src
+rm -f /tmp/networker-src.tar.gz
+cd ~/networker-src
+
+echo "Compiling ${binary}…"
+cargo build --release -p ${binary} ${features_arg}
+
+sudo cp target/release/${binary} /usr/local/bin/${binary}
+sudo chmod +x /usr/local/bin/${binary}
+REMOTE
+
+    local remote_ver
+    remote_ver="$(ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
+        "/usr/local/bin/${binary} --version 2>/dev/null" || echo "")"
+    if [[ "$remote_ver" =~ ^networker ]]; then
+        print_ok "${binary} compiled on VM and installed  ($remote_ver)"
+    else
+        print_err "${binary} compiled but failed to run on VM: ${remote_ver:-<no output>}"
+        exit 1
+    fi
+}
+
 # Compile a binary locally from source and upload it to a remote Linux VM.
 # Falls back to this when no GitHub release artifacts are available.
 # $1 = binary, $2 = public IP, $3 = SSH user, $4 = remote arch (uname -m output)
@@ -1847,22 +1941,22 @@ _remote_install_binary_from_source() {
         exit 1
     fi
     if [[ "$local_os" != "$remote_os" ]]; then
-        print_err "OS mismatch: local=${local_os}, remote=${remote_os}."
-        print_err "A ${local_os} binary will not run on a ${remote_os} VM."
-        echo ""
-        echo "  Options:"
-        echo "    1. Fix GitHub Actions billing so release binaries are available:"
-        echo "       https://github.com/settings/billing"
-        echo "    2. Run the installer from a ${remote_os} machine."
-        exit 1
+        print_info "OS mismatch (local=${local_os}, remote=${remote_os}) — compiling on VM."
+        local features_arg=""
+        if [[ "$binary" == "networker-tester" ]] && _remote_chrome_available "$ip" "$user"; then
+            features_arg="--features browser"
+        fi
+        _remote_compile_on_vm "$binary" "$ip" "$user" "$features_arg"
+        return
     fi
     if [[ "$remote_arch" != "$local_arch" ]]; then
-        print_err "Arch mismatch: local=${local_arch}, remote=${remote_arch} — cross-compilation not supported."
-        echo "  Options:"
-        echo "    1. Fix GitHub Actions billing so release binaries are available:"
-        echo "       https://github.com/settings/billing"
-        echo "    2. Run the installer from a machine with the same arch as the remote VM."
-        exit 1
+        print_info "Arch mismatch (local=${local_arch}, remote=${remote_arch}) — compiling on VM."
+        local features_arg=""
+        if [[ "$binary" == "networker-tester" ]] && _remote_chrome_available "$ip" "$user"; then
+            features_arg="--features browser"
+        fi
+        _remote_compile_on_vm "$binary" "$ip" "$user" "$features_arg"
+        return
     fi
 
     echo ""
