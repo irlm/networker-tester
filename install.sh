@@ -111,21 +111,28 @@ _cargo_progress() {
     cols="$(tput cols 2>/dev/null || echo 80)"
 
     while kill -0 "$cargo_pid" 2>/dev/null; do
-        # Extract the most recent interesting line from the build log
-        local phase=""
-        phase="$(grep -oE '(Fetching|Updating|Downloading|Compiling|Linking|Finished|Installing)[[:space:]]+[^[:space:]]+' \
+        # Count crates compiled so far and show the most recent one being compiled
+        local compiled_count=0 phase=""
+        compiled_count="$(grep -c ' Compiling ' "$log_file" 2>/dev/null || echo 0)"
+        phase="$(grep -oE 'Compiling[[:space:]]+[^[:space:]]+' \
                     "$log_file" 2>/dev/null | tail -1)"
+        # Fall back to Fetching/Updating/Linking if no Compiling line yet
+        if [[ -z "$phase" ]]; then
+            phase="$(grep -oE '(Fetching|Updating|Downloading|Linking|Finished|Installing)[[:space:]]+[^[:space:]]+' \
+                        "$log_file" 2>/dev/null | tail -1)"
+        fi
         phase="${phase:-…}"
+        local count_tag="[${compiled_count} crates]"
 
-        local line="  ${spin[$si]}  ${label}  ${DIM}${phase}${RESET}"
-        # Truncate to terminal width
-        local visible="${label}    ${phase}"
-        local trunc=$(( cols - 6 ))
-        [[ ${#visible} -gt $trunc ]] && phase="${phase:0:$(( trunc - ${#label} - 4 ))}…"
-        line="  ${spin[$si]}  ${label}  ${DIM}${phase}${RESET}"
+        # Truncate phase so the whole line fits in the terminal
+        local overhead=$(( ${#label} + ${#count_tag} + 8 ))
+        local max_phase=$(( cols - overhead ))
+        [[ ${#phase} -gt $max_phase && $max_phase -gt 4 ]] && phase="${phase:0:$(( max_phase - 1 ))}…"
 
-        printf "\r%-*s" "$cols" ""   # clear line
-        printf "\r%s" "$line"
+        printf "\r%-*s\r  %s  %s  %s%s %s%s" \
+            "$cols" "" \
+            "${spin[$si]}" "$label" \
+            "$DIM" "$count_tag" "$phase" "$RESET"
 
         si=$(( (si + 1) % ${#spin[@]} ))
         sleep 0.12
@@ -138,11 +145,14 @@ _cargo_progress() {
     printf "\r%-*s\r" "$cols" ""     # clear spinner line
 
     if [[ $rc -eq 0 ]]; then
-        # Pull timing from the Finished line
-        local timing=""
+        # Pull crate count and timing from the build log
+        local final_count timing=""
+        final_count="$(grep -c ' Compiling ' "$log_file" 2>/dev/null || echo 0)"
         timing="$(grep -oE 'Finished[^)]+\)' "$log_file" 2>/dev/null | tail -1)"
+        local count_str=""
+        [[ "$final_count" -gt 0 ]] && count_str="  ${DIM}[${final_count} crates]${RESET}"
         [[ -n "$timing" ]] && timing="  ${DIM}(${timing})${RESET}"
-        print_ok "${label}${timing}"
+        print_ok "${label}${count_str}${timing}"
     else
         print_err "${label} — build failed"
         echo ""
