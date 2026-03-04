@@ -189,7 +189,7 @@ mod real {
     /// Base64-encoded.
     ///
     /// This is the format expected by Chrome's `--ignore-certificate-errors-spki-list`
-    /// flag.  Unlike `--ignore-certificate-errors`, the SPKI list is **honoured by
+    /// flag.  Unlike `--ignore-certificate-errors`, the SPKI list is **honored by
     /// Chrome's QUIC cert verifier**, making it the only reliable cross-platform way
     /// to accept self-signed certs over QUIC/H3.
     ///
@@ -268,7 +268,7 @@ mod real {
 
         // 4. browser3: compute the SPKI hash of the server certificate.
         //
-        // Chrome's `--ignore-certificate-errors-spki-list` flag IS honoured by
+        // Chrome's `--ignore-certificate-errors-spki-list` flag IS honored by
         // Chrome's QUIC TLS cert verifier (unlike `--ignore-certificate-errors`).
         // When the SPKI hash is provided, Chrome accepts the self-signed cert over
         // QUIC/H3 without triggering cert errors, which also means:
@@ -325,7 +325,7 @@ mod real {
                 // self-signed cert, then force QUIC via --origin-to-force-quic-on
                 // so Chrome uses QUIC even before Alt-Svc is cached.
                 //
-                // `--ignore-certificate-errors-spki-list` IS honoured by Chrome's
+                // `--ignore-certificate-errors-spki-list` IS honored by Chrome's
                 // QUIC cert verifier (unlike `--ignore-certificate-errors`).
                 //
                 // Only add these flags when the SPKI hash is available.  Without it,

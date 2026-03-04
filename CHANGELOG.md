@@ -11,6 +11,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.66] – 2026-03-04 — Endpoint landing page; port 80/443 redirect; installer pipe fix; US spelling
+
+### Added
+- **HTML landing page** (`networker-endpoint`): `GET /` now returns a dark-themed
+  HTML status page showing service version, hostname, uptime, all listening ports,
+  supported protocols, and a table of every available endpoint with method and
+  description.  Accessible at `http://VM-IP` and `https://VM-IP` via the iptables
+  redirect added below.
+- **Port 80/443 iptables redirect** (`install.sh`): `_remote_create_endpoint_service()`
+  now adds `iptables -t nat PREROUTING` and `OUTPUT` rules redirecting TCP 80→8080
+  and 443→8443 on the VM, so the landing page and `/health` are reachable on standard
+  HTTP/HTTPS ports.  Rules are persisted via `netfilter-persistent` or `iptables-save`
+  if available.
+- **Firewall ports 80/443 opened** (`install.sh`): Azure NSG and AWS security group
+  now also open TCP 80 and 443 alongside the existing 8080/8443.
+
+### Fixed
+- **Installer pipe regression** (`install.sh`): `curl -fsSL .../install.sh | bash`
+  crashed with `BASH_SOURCE[0]: unbound variable` because `set -u` (nounset) is
+  active and `BASH_SOURCE[0]` is unbound when bash executes from a pipe.
+  Fixed: `${BASH_SOURCE[0]:-$0}` — defaults to `$0` when unbound, which equals `$0`
+  in a pipe so `main` runs correctly.
+
+### Changed
+- All UK English spellings in source code comments replaced with US English:
+  `behaviour`→`behavior`, `honoured`→`honored`, `Colours`→`Colors`,
+  `serialisation`→`serialization`, `Customise`→`Customize`.
+
+---
+
 ## [0.12.65] – 2026-03-04 — Installer: complementary component offer; cargo crate counter; bats tests
 
 ### Added

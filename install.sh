@@ -50,7 +50,7 @@ REPO_SSH="ssh://git@github.com/irlm/networker-tester"
 REPO_GH="irlm/networker-tester"
 INSTALL_DIR="${HOME}/.cargo/bin"
 
-# ── Colours (ANSI C quoting; safe even when stdin is a curl pipe) ─────────────
+# ── Colors (ANSI C quoting; safe even when stdin is a curl pipe) ──────────────
 if [ -t 1 ]; then
     BOLD=$'\033[1m'
     DIM=$'\033[2m'
@@ -748,7 +748,7 @@ display_plan() {
                 ;;
         esac
         echo ""
-        printf "    ${DIM}a. Provision VM + open TCP 8080, 8443 and UDP 8443, 9998, 9999\n"
+        printf "    ${DIM}a. Provision VM + open TCP 80, 443, 8080, 8443 and UDP 8443, 9998, 9999\n"
         printf "    b. Install networker-endpoint + systemd service\n"
         printf "    c. Verify /health endpoint\n"
         printf "    d. Write networker-cloud.json config file${RESET}\n"
@@ -1999,6 +1999,26 @@ UNIT
 sudo systemctl daemon-reload
 sudo systemctl enable networker-endpoint
 sudo systemctl start networker-endpoint
+
+# Redirect standard ports 80/443 to the unprivileged service ports 8080/8443.
+# This lets browsers reach the landing page via http://IP and https://IP.
+if command -v iptables &>/dev/null; then
+    sudo iptables -t nat -C PREROUTING -p tcp --dport 80  -j REDIRECT --to-port 8080 2>/dev/null || \
+        sudo iptables -t nat -A PREROUTING -p tcp --dport 80  -j REDIRECT --to-port 8080
+    sudo iptables -t nat -C PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null || \
+        sudo iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443
+    # Also redirect loopback (OUTPUT chain) so curl from the VM itself works on port 80/443.
+    sudo iptables -t nat -C OUTPUT -p tcp --dport 80  -j REDIRECT --to-port 8080 2>/dev/null || \
+        sudo iptables -t nat -A OUTPUT -p tcp --dport 80  -j REDIRECT --to-port 8080
+    sudo iptables -t nat -C OUTPUT -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null || \
+        sudo iptables -t nat -A OUTPUT -p tcp --dport 443 -j REDIRECT --to-port 8443
+    # Persist rules across reboots if iptables-persistent is available.
+    if command -v netfilter-persistent &>/dev/null; then
+        sudo netfilter-persistent save 2>/dev/null || true
+    elif command -v iptables-save &>/dev/null; then
+        sudo sh -c 'iptables-save > /etc/iptables/rules.v4 2>/dev/null || iptables-save > /etc/iptables.rules 2>/dev/null || true'
+    fi
+fi
 REMOTE
 
     sleep 2
@@ -2300,16 +2320,18 @@ step_azure_create_vm() {
     print_ok "VM created ($os_label) — Public IP: ${BOLD}${ip}${RESET}"
 }
 
-# Open TCP 8080/8443 and UDP 8443/9998/9999 on the NSG for the endpoint VM.
+# Open TCP 80/443/8080/8443 and UDP 8443/9998/9999 on the NSG for the endpoint VM.
 step_azure_open_endpoint_ports() {
     local rg="$1" vm="$2"
 
     next_step "Open firewall ports (Azure)"
 
-    print_info "Opening TCP 8080, 8443…"
-    az vm open-port --resource-group "$rg" --name "$vm" --port 8080 --priority 1001 --output none
-    az vm open-port --resource-group "$rg" --name "$vm" --port 8443 --priority 1002 --output none
-    print_ok "TCP 8080, 8443 open"
+    print_info "Opening TCP 80, 443, 8080, 8443…"
+    az vm open-port --resource-group "$rg" --name "$vm" --port 80   --priority 1000 --output none
+    az vm open-port --resource-group "$rg" --name "$vm" --port 443  --priority 1001 --output none
+    az vm open-port --resource-group "$rg" --name "$vm" --port 8080 --priority 1002 --output none
+    az vm open-port --resource-group "$rg" --name "$vm" --port 8443 --priority 1003 --output none
+    print_ok "TCP 80, 443, 8080, 8443 open"
 
     print_info "Opening UDP 8443, 9998, 9999…"
     local nsg_name
@@ -2654,7 +2676,13 @@ _aws_create_security_group() {
         --protocol tcp --port 22 --cidr 0.0.0.0/0 --output none
 
     if [[ "$component" == "endpoint" ]]; then
-        # TCP 8080, 8443
+        # TCP 80, 443, 8080, 8443 (80/443 redirect to 8080/8443 via iptables on VM)
+        aws ec2 authorize-security-group-ingress \
+            --region "$AWS_REGION" --group-id "$sg_id" \
+            --protocol tcp --port 80 --cidr 0.0.0.0/0 --output none
+        aws ec2 authorize-security-group-ingress \
+            --region "$AWS_REGION" --group-id "$sg_id" \
+            --protocol tcp --port 443 --cidr 0.0.0.0/0 --output none
         aws ec2 authorize-security-group-ingress \
             --region "$AWS_REGION" --group-id "$sg_id" \
             --protocol tcp --port 8080 --cidr 0.0.0.0/0 --output none
@@ -2671,7 +2699,7 @@ _aws_create_security_group() {
         aws ec2 authorize-security-group-ingress \
             --region "$AWS_REGION" --group-id "$sg_id" \
             --protocol udp --port 9999 --cidr 0.0.0.0/0 --output none
-        print_ok "Security group created: $sg_id  (TCP 22/8080/8443, UDP 8443/9998/9999)"
+        print_ok "Security group created: $sg_id  (TCP 22/80/443/8080/8443, UDP 8443/9998/9999)"
     else
         print_ok "Security group created: $sg_id  (TCP 22)"
     fi
@@ -3219,4 +3247,4 @@ main() {
 }
 
 # Run main only when the script is executed directly (not sourced for testing).
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then main "$@"; fi
+if [[ "${BASH_SOURCE[0]:-$0}" == "${0}" ]]; then main "$@"; fi

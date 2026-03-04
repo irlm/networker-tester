@@ -803,7 +803,7 @@ mod tests {
     }
 
     #[test]
-    fn test_json_serialisation() {
+    fn test_json_serialization() {
         let r = DnsResult {
             query_name: "example.com".into(),
             resolved_ips: vec!["93.184.216.34".into()],
