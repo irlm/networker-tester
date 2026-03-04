@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.56] – 2026-03-03 — fix browser probe: use content-length headers for transferred_bytes
+
+### Fixed
+- **`transferred_bytes` browser1 (HTTP/1.1) still under-reported after v0.12.55**: Both
+  `Network.loadingFinished.encodedDataLength` (CDP) and `performance.getEntriesByType('resource')
+  .encodedBodySize` (JS Performance API) give nearly identical low values (~88 KiB vs ~200 KiB
+  expected for 20 × 10 KiB assets).  Root cause: Chrome tracks socket-level byte accounting
+  identically for both APIs — the under-reporting is intrinsic to how Chrome measures H1.1
+  connection-reuse bytes, not to the measurement API.
+- **Fix**: Replaced the JS bytes evaluation entirely with content-length header summing inside
+  the existing `EventResponseReceived` drain loop.  `Headers::inner()` exposes the
+  `serde_json::Value`; the code reads `content-length` (H2/H3 lowercase) with fallback to
+  `Content-Length` (H1.1 title-case).  The server sets `content-length` explicitly on every
+  asset response, so this produces accurate, consistent byte counts for all protocols.
+
+---
+
 ## [0.12.55] – 2026-03-03 — fix browser probe: use JS Performance API for transferred_bytes
 
 ### Fixed
