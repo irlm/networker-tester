@@ -2777,8 +2777,86 @@ display_completion() {
         echo ""
     fi
 
+    # ── Offer quick test against the endpoint ────────────────────────────────
+    _offer_quick_test
+
     # ── Offer to open SSH session ─────────────────────────────────────────────
     _offer_ssh_connect
+}
+
+# Run a quick networker-tester probe against the newly deployed endpoint from
+# the local machine.  Only shown when a remote endpoint was just installed and
+# networker-tester is available locally (or was just installed locally).
+_offer_quick_test() {
+    [[ $DO_REMOTE_ENDPOINT -eq 0 ]] && return 0   # no remote endpoint deployed
+
+    # Determine endpoint IP
+    local e_ip=""
+    case "$ENDPOINT_LOCATION" in
+        azure) e_ip="$AZURE_ENDPOINT_IP" ;;
+        aws)   e_ip="$AWS_ENDPOINT_IP"   ;;
+    esac
+    [[ -z "$e_ip" ]] && return 0
+
+    # Find networker-tester (locally installed or just built)
+    local tester_bin=""
+    if command -v networker-tester &>/dev/null; then
+        tester_bin="networker-tester"
+    elif [[ -x "${INSTALL_DIR}/networker-tester" ]]; then
+        tester_bin="${INSTALL_DIR}/networker-tester"
+    elif [[ -x "./target/release/networker-tester" ]]; then
+        tester_bin="./target/release/networker-tester"
+    fi
+
+    if [[ -z "$tester_bin" ]]; then
+        # Can't run locally — show the command instead
+        echo ""
+        print_info "Run a quick test against the endpoint from this machine:"
+        echo "  networker-tester \\"
+        echo "    --target https://${e_ip}:8443/health \\"
+        echo "    --modes http1,http2,http3 --runs 5 --insecure"
+        return 0
+    fi
+
+    echo ""
+    echo "${BOLD}──────────────────────────────────────────────────────────${RESET}"
+    print_info "The endpoint is live at ${e_ip}."
+    print_info "Quick test: HTTP/1.1 + HTTP/2 + HTTP/3, 5 runs each."
+
+    if ! ask_yn "Run a quick test against the endpoint now (from this machine)?" "y"; then
+        echo ""
+        print_info "Run it later:"
+        echo "  networker-tester --target https://${e_ip}:8443/health --modes http1,http2,http3 --runs 5 --insecure"
+        return 0
+    fi
+
+    echo ""
+    print_info "Running quick test — press Ctrl-C to stop early."
+    echo ""
+
+    # Use the generated config if available; otherwise use sensible defaults.
+    if [[ -n "$CONFIG_FILE_PATH" && -f "$CONFIG_FILE_PATH" ]]; then
+        "$tester_bin" --config "$CONFIG_FILE_PATH" --runs 5
+    else
+        "$tester_bin" \
+            --target "https://${e_ip}:8443/health" \
+            --modes http1,http2,http3,download,pageload,pageload2,pageload3 \
+            --payload-sizes 1m \
+            --page-assets 10 \
+            --runs 5 \
+            --insecure \
+            --html
+    fi
+
+    echo ""
+    if [[ -f "output/report.html" ]]; then
+        print_ok "Report saved: output/report.html"
+        echo ""
+        case "$SYS_OS" in
+            Darwin) echo "  open output/report.html" ;;
+            Linux)  echo "  xdg-open output/report.html" ;;
+        esac
+    fi
 }
 
 # Offer an interactive SSH session into the newly provisioned VM(s).
