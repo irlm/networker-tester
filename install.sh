@@ -70,6 +70,91 @@ print_err()  { printf "${RED}  ✗${RESET} %s\n" "$*" >&2; }
 print_info() { printf "${CYAN}  →${RESET} %s\n" "$*"; }
 print_dim()  { printf "${DIM}    %s${RESET}\n" "$*"; }
 
+# Run a command (typically cargo) showing a single updating spinner line instead
+# of per-crate output.  Falls back to plain output when stdout is not a TTY.
+#
+# Usage: _cargo_progress "label" [env VAR=val ...] command [args...]
+#
+# The spinner line shows what cargo is currently doing (Fetching / Compiling /
+# Linking) extracted from the build log.  On failure the last 40 lines of the
+# log are printed so the user can see the error.
+_cargo_progress() {
+    local label="$1"; shift
+
+    local log_file
+    log_file="$(mktemp /tmp/networker-cargo-XXXXXX.log)"
+
+    # Non-interactive: just stream output normally
+    if [[ ! -t 1 ]]; then
+        "$@" </dev/null 2>&1 | tee "$log_file"
+        local rc=${PIPESTATUS[0]}
+        rm -f "$log_file"
+        return $rc
+    fi
+
+    # Spinner characters (Unicode braille; falls back to ASCII on dumb terms)
+    local spin
+    if [[ "${TERM:-}" == "dumb" ]]; then
+        spin=('-' '\\' '|' '/')
+    else
+        spin=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+    fi
+    local si=0
+
+    # Launch cargo in background; stdin from /dev/null to prevent hangs
+    "$@" </dev/null >"$log_file" 2>&1 &
+    local cargo_pid=$!
+
+    tput civis 2>/dev/null || true   # hide cursor
+
+    local cols
+    cols="$(tput cols 2>/dev/null || echo 80)"
+
+    while kill -0 "$cargo_pid" 2>/dev/null; do
+        # Extract the most recent interesting line from the build log
+        local phase=""
+        phase="$(grep -oE '(Fetching|Updating|Downloading|Compiling|Linking|Finished|Installing)[[:space:]]+[^[:space:]]+' \
+                    "$log_file" 2>/dev/null | tail -1)"
+        phase="${phase:-…}"
+
+        local line="  ${spin[$si]}  ${label}  ${DIM}${phase}${RESET}"
+        # Truncate to terminal width
+        local visible="${label}    ${phase}"
+        local trunc=$(( cols - 6 ))
+        [[ ${#visible} -gt $trunc ]] && phase="${phase:0:$(( trunc - ${#label} - 4 ))}…"
+        line="  ${spin[$si]}  ${label}  ${DIM}${phase}${RESET}"
+
+        printf "\r%-*s" "$cols" ""   # clear line
+        printf "\r%s" "$line"
+
+        si=$(( (si + 1) % ${#spin[@]} ))
+        sleep 0.12
+    done
+
+    wait "$cargo_pid"
+    local rc=$?
+
+    tput cnorm 2>/dev/null || true   # restore cursor
+    printf "\r%-*s\r" "$cols" ""     # clear spinner line
+
+    if [[ $rc -eq 0 ]]; then
+        # Pull timing from the Finished line
+        local timing=""
+        timing="$(grep -oE 'Finished[^)]+\)' "$log_file" 2>/dev/null | tail -1)"
+        [[ -n "$timing" ]] && timing="  ${DIM}(${timing})${RESET}"
+        print_ok "${label}${timing}"
+    else
+        print_err "${label} — build failed"
+        echo ""
+        echo "  Last 40 lines of build output:"
+        tail -40 "$log_file" | sed 's/^/    /'
+        echo ""
+    fi
+
+    rm -f "$log_file"
+    return $rc
+}
+
 print_banner() {
     echo ""
     echo "${BOLD}══════════════════════════════════════════════════════════${RESET}"
@@ -1640,10 +1725,12 @@ step_cargo_install() {
     fi
 
     if command -v git &>/dev/null; then
-        CARGO_NET_GIT_FETCH_WITH_CLI=true \
-            cargo install --git "$REPO_SSH" "$binary" --locked --force $features_arg </dev/null
+        _cargo_progress "Building $binary" \
+            env CARGO_NET_GIT_FETCH_WITH_CLI=true \
+            cargo install --git "$REPO_SSH" "$binary" --locked --force $features_arg
     else
-        cargo install --git "$REPO_SSH" "$binary" --locked --force $features_arg </dev/null
+        _cargo_progress "Building $binary" \
+            cargo install --git "$REPO_SSH" "$binary" --locked --force $features_arg
     fi
 
     local installed_ver
@@ -1726,14 +1813,15 @@ _remote_install_binary_from_source() {
         fi
     fi
 
-    print_info "Building ${binary} from source…"
     if command -v git &>/dev/null; then
-        CARGO_NET_GIT_FETCH_WITH_CLI=true \
+        _cargo_progress "Building ${binary} (for remote VM)" \
+            env CARGO_NET_GIT_FETCH_WITH_CLI=true \
             cargo install --git "$REPO_SSH" "$binary" \
-            --locked --force --root "$tmp_root" $features_arg </dev/null
+            --locked --force --root "$tmp_root" $features_arg
     else
-        cargo install --git "$REPO_SSH" "$binary" \
-            --locked --force --root "$tmp_root" $features_arg </dev/null
+        _cargo_progress "Building ${binary} (for remote VM)" \
+            cargo install --git "$REPO_SSH" "$binary" \
+            --locked --force --root "$tmp_root" $features_arg
     fi
 
     local compiled_bin="${tmp_root}/bin/${binary}"
