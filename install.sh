@@ -255,7 +255,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.12.66"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.12.68"  # fallback when gh is unavailable
 
 DO_SSH_CHECK=1
 DO_RUST_INSTALL=0
@@ -770,6 +770,37 @@ _nss_pkg_name() {
     printf -v "$varname" "%s" "$pkg"
 }
 
+# ── Azure naming helpers ──────────────────────────────────────────────────────
+
+# Convert an Azure VM size to a short lowercase slug used in resource names.
+# e.g. Standard_B1s → b1s, Standard_D2s_v3 → d2sv3
+_azure_size_slug() {
+    local size="${1#Standard_}"      # strip "Standard_"
+    printf '%s' "$size" | tr '[:upper:]' '[:lower:]' | tr -d '_'
+}
+
+# Suggest a unique resource-group base name encoding the component, OS, and size.
+# Format:  nwk-<ep|ts>-<lnx|win>-<size_slug>
+# If the derived name already exists as an Azure resource group, appends -2, -3, …
+# $1 = component ("endpoint"|"tester")
+# $2 = os        ("linux"|"windows")
+# $3 = size       e.g. "Standard_B1s"
+# Prints the unique base name; append -vm for the VM name.
+_azure_suggest_name() {
+    local component="$1" os="$2" size="$3"
+    local c_tag; [[ "$component" == "tester" ]] && c_tag="ts" || c_tag="ep"
+    local os_tag; [[ "$os" == "windows" ]] && os_tag="win" || os_tag="lnx"
+    local sz_tag; sz_tag="$(_azure_size_slug "$size")"
+    local base="nwk-${c_tag}-${os_tag}-${sz_tag}"
+    local candidate="$base"
+    local n=2
+    while az group show --name "$candidate" --output none 2>/dev/null; do
+        candidate="${base}-${n}"
+        n=$((n + 1))
+    done
+    printf '%s' "$candidate"
+}
+
 # ── Azure interactive configuration ──────────────────────────────────────────
 ask_azure_options() {
     local component="$1"  # "tester" or "endpoint"
@@ -877,26 +908,44 @@ ask_azure_options() {
         echo ""
     fi
 
-    if [[ "$component" == "tester" ]]; then
-        printf "  Resource group name [%s]: " "$AZURE_TESTER_RG"
-        local rg_ans; read -r rg_ans </dev/tty || true
-        AZURE_TESTER_RG="${rg_ans:-$AZURE_TESTER_RG}"
+    # Generate a unique suggested name based on the chosen OS and size, then
+    # prompt the user — they can accept the default or type their own.
+    print_info "Checking for existing resource groups…"
+    local suggested_base
+    suggested_base="$(_azure_suggest_name "$component" "$chosen_os" "$chosen_size")"
+    local suggested_rg="$suggested_base"
+    local suggested_vm="${suggested_base}-vm"
+    echo ""
 
-        printf "  VM name             [%s]: " "$AZURE_TESTER_VM"
+    if [[ "$component" == "tester" ]]; then
+        # Warn if the current default already exists (name unchanged from last run)
+        if [[ "$AZURE_TESTER_RG" != "networker-rg-tester" ]] && \
+           az group show --name "$AZURE_TESTER_RG" --output none 2>/dev/null; then
+            print_warn "Resource group '${AZURE_TESTER_RG}' already exists — suggested: ${suggested_rg}"
+        fi
+        printf "  Resource group name [%s]: " "$suggested_rg"
+        local rg_ans; read -r rg_ans </dev/tty || true
+        AZURE_TESTER_RG="${rg_ans:-$suggested_rg}"
+
+        printf "  VM name             [%s]: " "$suggested_vm"
         local vm_ans; read -r vm_ans </dev/tty || true
-        AZURE_TESTER_VM="${vm_ans:-$AZURE_TESTER_VM}"
+        AZURE_TESTER_VM="${vm_ans:-$suggested_vm}"
 
         AZURE_TESTER_SIZE="$chosen_size"
         AZURE_TESTER_OS="$chosen_os"
         print_ok "OS: $chosen_os  |  Size: $AZURE_TESTER_SIZE  |  RG: $AZURE_TESTER_RG  |  VM: $AZURE_TESTER_VM"
     else
-        printf "  Resource group name [%s]: " "$AZURE_ENDPOINT_RG"
+        if [[ "$AZURE_ENDPOINT_RG" != "networker-rg-endpoint" ]] && \
+           az group show --name "$AZURE_ENDPOINT_RG" --output none 2>/dev/null; then
+            print_warn "Resource group '${AZURE_ENDPOINT_RG}' already exists — suggested: ${suggested_rg}"
+        fi
+        printf "  Resource group name [%s]: " "$suggested_rg"
         local rg_ans; read -r rg_ans </dev/tty || true
-        AZURE_ENDPOINT_RG="${rg_ans:-$AZURE_ENDPOINT_RG}"
+        AZURE_ENDPOINT_RG="${rg_ans:-$suggested_rg}"
 
-        printf "  VM name             [%s]: " "$AZURE_ENDPOINT_VM"
+        printf "  VM name             [%s]: " "$suggested_vm"
         local vm_ans; read -r vm_ans </dev/tty || true
-        AZURE_ENDPOINT_VM="${vm_ans:-$AZURE_ENDPOINT_VM}"
+        AZURE_ENDPOINT_VM="${vm_ans:-$suggested_vm}"
 
         AZURE_ENDPOINT_SIZE="$chosen_size"
         AZURE_ENDPOINT_OS="$chosen_os"

@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.68] – 2026-03-04 — Smart Azure resource naming
+
+### Added
+- **Smart Azure resource naming** (`install.sh`): resource group and VM names are now
+  auto-generated from component (`ep`/`ts`), OS (`lnx`/`win`), and size slug
+  (`b1s`, `b2s`, `d2sv3`, …) — e.g. `nwk-ep-lnx-b1s` / `nwk-ep-lnx-b1s-vm`.
+  If the generated name already exists as an Azure resource group, a numeric
+  suffix is appended (`-2`, `-3`, …) until a free name is found.  Users can
+  still type their own name at the prompt; the generated name is shown as the
+  default.  This makes it safe to deploy multiple VMs of different OS/size
+  combinations without name collisions.
+
+---
+
 ## [0.12.66] – 2026-03-04 — Endpoint landing page; port 80/443 redirect; installer pipe fix; US spelling
 
 ### Added
