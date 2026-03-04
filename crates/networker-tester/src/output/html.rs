@@ -718,10 +718,11 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
                 }
             }
 
-            // Chart 3: Browser Load Time Distribution (box-and-whisker)
+            // Chart 3: Load Time Distribution (box-and-whisker) — All Protocols
             // Inspired by Paper 1 (GLOBECOM 2016) which uses box plots to show
             // that variance — not just average — matters when comparing protocols.
-            if !chart_browser.is_empty() {
+            // Includes real-browser and synthetic pageload side-by-side.
+            {
                 let mut groups: Vec<(String, Vec<f64>, &'static str)> = Vec::new();
                 for (proto, color) in [
                     (Protocol::Browser1, "#e07b39"),
@@ -738,13 +739,107 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
                         groups.push((proto.to_string(), data, color));
                     }
                 }
+                for (proto, color) in [
+                    (Protocol::PageLoad, "#e07b39"),
+                    (Protocol::PageLoad2, "#4e79a7"),
+                    (Protocol::PageLoad3, "#59a14f"),
+                ] {
+                    let data: Vec<f64> = chart_pl
+                        .iter()
+                        .filter(|a| a.protocol == proto)
+                        .filter_map(|a| a.page_load.as_ref().map(|p| p.total_ms))
+                        .collect();
+                    if data.len() >= 4 {
+                        groups.push((proto.to_string(), data, color));
+                    }
+                }
                 if !groups.is_empty() {
                     let group_refs: Vec<(&str, &[f64], &str)> = groups
                         .iter()
                         .map(|(l, v, c)| (l.as_str(), v.as_slice(), *c))
                         .collect();
                     let svg = svg_boxplot(
-                        "Load Time Distribution (p5\u{2013}p95 whiskers, IQR box)",
+                        "Load Time Distribution \u{2014} All Protocols (p5\u{2013}p95, IQR box)",
+                        &group_refs,
+                        "ms",
+                    );
+                    let _ = writeln!(out, "<div>{}</div>", svg);
+                }
+            }
+
+            // Chart 3b: TTFB Distribution (box-and-whisker) — Browser + PageLoad
+            // TTFB is the first-byte latency; shows network RTT + server processing variance.
+            {
+                let mut groups: Vec<(String, Vec<f64>, &'static str)> = Vec::new();
+                for (proto, color) in [
+                    (Protocol::Browser1, "#e07b39"),
+                    (Protocol::Browser2, "#4e79a7"),
+                    (Protocol::Browser3, "#59a14f"),
+                    (Protocol::Browser, "#8c6bb1"),
+                ] {
+                    let data: Vec<f64> = chart_browser
+                        .iter()
+                        .filter(|a| a.protocol == proto)
+                        .filter_map(|a| a.browser.as_ref().map(|b| b.ttfb_ms))
+                        .collect();
+                    if data.len() >= 4 {
+                        groups.push((proto.to_string(), data, color));
+                    }
+                }
+                for (proto, color) in [
+                    (Protocol::PageLoad, "#e07b39"),
+                    (Protocol::PageLoad2, "#4e79a7"),
+                    (Protocol::PageLoad3, "#59a14f"),
+                ] {
+                    let data: Vec<f64> = chart_pl
+                        .iter()
+                        .filter(|a| a.protocol == proto)
+                        .filter_map(|a| a.page_load.as_ref().map(|p| p.ttfb_ms))
+                        .collect();
+                    if data.len() >= 4 {
+                        groups.push((proto.to_string(), data, color));
+                    }
+                }
+                if !groups.is_empty() {
+                    let group_refs: Vec<(&str, &[f64], &str)> = groups
+                        .iter()
+                        .map(|(l, v, c)| (l.as_str(), v.as_slice(), *c))
+                        .collect();
+                    let svg = svg_boxplot(
+                        "TTFB Distribution \u{2014} All Protocols (p5\u{2013}p95, IQR box)",
+                        &group_refs,
+                        "ms",
+                    );
+                    let _ = writeln!(out, "<div>{}</div>", svg);
+                }
+            }
+
+            // Chart 3c: DOM Content Loaded Distribution (box-and-whisker) — Browser only
+            // DCL fires when the HTML is parsed; shows rendering-pipeline variance across H1/H2/H3.
+            if !chart_browser.is_empty() {
+                let mut groups: Vec<(String, Vec<f64>, &'static str)> = Vec::new();
+                for (proto, color) in [
+                    (Protocol::Browser1, "#e07b39"),
+                    (Protocol::Browser2, "#4e79a7"),
+                    (Protocol::Browser3, "#59a14f"),
+                    (Protocol::Browser, "#8c6bb1"),
+                ] {
+                    let data: Vec<f64> = chart_browser
+                        .iter()
+                        .filter(|a| a.protocol == proto)
+                        .filter_map(|a| a.browser.as_ref().map(|b| b.dom_content_loaded_ms))
+                        .collect();
+                    if data.len() >= 4 {
+                        groups.push((proto.to_string(), data, color));
+                    }
+                }
+                if !groups.is_empty() {
+                    let group_refs: Vec<(&str, &[f64], &str)> = groups
+                        .iter()
+                        .map(|(l, v, c)| (l.as_str(), v.as_slice(), *c))
+                        .collect();
+                    let svg = svg_boxplot(
+                        "DOM Content Loaded Distribution (p5\u{2013}p95, IQR box)",
                         &group_refs,
                         "ms",
                     );

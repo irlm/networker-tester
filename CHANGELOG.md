@@ -11,6 +11,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.61] – 2026-03-04 — HTML report: TTFB + DCL box-plot distribution charts
+
+### Added
+- **TTFB Distribution box plot** (`Charts & Analysis` section): box-and-whisker chart
+  (p5–p95 whiskers, IQR box, median line) for TTFB across all browser protocols
+  (`browser1`/`browser2`/`browser3`) and synthetic pageload protocols
+  (`pageload`/`pageload2`/`pageload3`). Shows variance in first-byte latency — not
+  just averages — making connection-setup differences between H1/H2/H3 visible.
+- **DOM Content Loaded Distribution box plot**: same box-and-whisker style for the
+  DCL event across browser protocols. Reveals rendering-pipeline variance that
+  differs from TTFB and total load time.
+
+### Changed
+- **Load Time Distribution box plot** now includes synthetic pageload (`pageload`,
+  `pageload2`, `pageload3`) alongside real-browser data, enabling direct comparison
+  of real browser vs synthetic load time variance by protocol. Title updated to
+  "Load Time Distribution — All Protocols".
+- No installer changes; no binary API changes.
+
+---
+
 ## [0.12.60] – 2026-03-04 — installer: AWS EC2 support + banner version display
 
 ### Added
