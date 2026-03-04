@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.58] – 2026-03-04 — installer: show installed version instead of stale script version
+
+### Changed
+- **`SCRIPT_VERSION` removed from both installers**: `install.sh` and `install.ps1` no longer
+  carry a hardcoded version number that drifts out of sync with the binary.
+- **Dynamic version display**: when `gh` is available and release mode is active, the installer
+  queries the latest GitHub release tag (`gh release list --limit 1 --json tagName`) and shows
+  it in the banner and installation plan.  Users now see exactly which version will be installed
+  (e.g. `v0.12.58`) rather than the script's own stale version.
+- **Fallback**: source-mode installs or environments without `gh` show "Networker Tester
+  Installer" in the banner (no version) and "latest" in the plan steps.
+- **Gist update required** after merge (sync-gist.yml is broken — run the `gh api PATCH` command
+  manually).
+
+---
+
 ## [0.12.57] – 2026-03-04 — HTML report: box-and-whisker chart + CDF chart + new observations
 
 ### Added
