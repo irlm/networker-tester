@@ -1570,6 +1570,37 @@ _wait_for_ssh() {
 _remote_install_binary() {
     local binary="$1" ip="$2" user="$3"
 
+    # Determine release version to use
+    local ver="${NETWORKER_VERSION:-}"
+    if [[ -z "$ver" ]]; then
+        ver="$(gh release list --repo "$REPO_GH" --limit 1 --json tagName \
+               -q '.[0].tagName' 2>/dev/null || echo "")"
+    fi
+    if [[ -z "$ver" ]]; then
+        print_err "Cannot determine release version."
+        exit 1
+    fi
+
+    # Verify the release has pre-built binary assets before attempting any download.
+    # A missing asset means the release workflow did not complete (e.g. billing block).
+    local has_assets
+    has_assets="$(gh release view --repo "$REPO_GH" "$ver" --json assets \
+                  -q '[.assets[].name] | join(" ")' 2>/dev/null || echo "")"
+    if ! printf '%s' "$has_assets" | grep -q "${binary}-"; then
+        echo ""
+        print_err "Release ${ver} has no pre-built binaries for ${binary}."
+        echo ""
+        echo "  This usually means the GitHub Actions release workflow did not complete."
+        echo "  Common cause: GitHub Actions billing limit reached."
+        echo ""
+        echo "  To fix:"
+        echo "    1. Resolve billing at:  https://github.com/settings/billing"
+        echo "    2. Re-run the release:  gh workflow run release.yml --repo $REPO_GH"
+        echo "       or push the tag again to trigger a new run."
+        echo "    3. Then re-run this installer."
+        exit 1
+    fi
+
     # Detect remote architecture
     local remote_arch remote_target
     remote_arch="$(ssh -o StrictHostKeyChecking=no "${user}@${ip}" "uname -m" 2>/dev/null || echo "x86_64")"
@@ -1583,10 +1614,10 @@ _remote_install_binary() {
     local tmp_dir
     tmp_dir="$(mktemp -d)"
 
-    print_info "Downloading ${archive} from GitHub release…"
+    print_info "Downloading ${archive} from GitHub release (${ver})…"
     if gh release download \
             --repo "$REPO_GH" \
-            --latest \
+            --tag "$ver" \
             --pattern "${archive}" \
             --dir "${tmp_dir}" \
             --clobber 2>/dev/null; then
@@ -1606,23 +1637,19 @@ _remote_install_binary() {
     else
         rm -rf "${tmp_dir}"
         # Fallback: download directly on the remote VM
-        local ver="${NETWORKER_VERSION:-}"
-        if [[ -z "$ver" ]]; then
-            ver="$(gh release list --repo "$REPO_GH" --limit 1 --json tagName \
-                   -q '.[0].tagName' 2>/dev/null || echo "")"
-        fi
-        if [[ -z "$ver" ]]; then
-            print_err "Cannot determine release version for remote download."
-            exit 1
-        fi
         print_info "Downloading directly on VM (${ver})…"
-        ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
+        if ! ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
             "curl -fsSL https://github.com/${REPO_GH}/releases/download/${ver}/${archive} \
                -o /tmp/${archive} && \
              tar xzf /tmp/${archive} -C /tmp && \
              sudo mv /tmp/${binary} /usr/local/bin/${binary} && \
              sudo chmod +x /usr/local/bin/${binary} && \
-             rm /tmp/${archive}"
+             rm /tmp/${archive}"; then
+            echo ""
+            print_err "Failed to download ${archive} from release ${ver}."
+            echo "  Check:  https://github.com/${REPO_GH}/releases/${ver}"
+            exit 1
+        fi
     fi
 
     local remote_ver
