@@ -907,22 +907,59 @@ ensure_azure_cli() {
         echo ""
         print_warn "Not logged in to Azure."
         echo ""
-        if ask_yn "Log in to Azure now (opens browser)?" "y"; then
-            az login
-            if az account show &>/dev/null 2>&1; then
-                AZURE_LOGGED_IN=1
-                local sub_name
-                sub_name="$(az account show --query name -o tsv 2>/dev/null || echo "")"
-                print_ok "Logged in: $sub_name"
-            else
-                print_err "Azure login failed — run 'az login' manually then re-run this installer."
+        if ask_yn "Log in to Azure now (device code)?" "y"; then
+            _az_do_login
+            if [[ $AZURE_LOGGED_IN -eq 0 ]]; then
+                print_err "Azure login failed — fix manually then re-run the installer."
+                echo "  Manual fix:  az login --tenant YOUR_TENANT_ID --use-device-code"
                 exit 1
             fi
         else
             print_err "Azure login required for remote deployment."
-            echo "  Run:  az login"
+            echo "  Run:  az login --use-device-code"
             exit 1
         fi
+    fi
+}
+
+# ── Internal: run az login with device-code and optional tenant; retries on
+#    "no subscription found" (common when MFA policy requires a specific tenant)
+_az_do_login() {
+    local tenant="${1:-}"
+    echo ""
+    if [[ -n "$tenant" ]]; then
+        print_info "Logging in to Azure (tenant: $tenant)…"
+        az login --tenant "$tenant" --use-device-code
+    else
+        print_info "Logging in to Azure (device code)…"
+        az login --use-device-code
+    fi
+
+    if az account show &>/dev/null 2>&1; then
+        AZURE_LOGGED_IN=1
+        local sub_name
+        sub_name="$(az account show --query name -o tsv 2>/dev/null || echo "")"
+        print_ok "Logged in: $sub_name"
+        return 0
+    fi
+
+    # Login appeared to succeed but no subscription is visible — common when the
+    # account has multiple tenants and the default one has no subscriptions, or
+    # when MFA policy blocks the default tenant.
+    echo ""
+    print_warn "Logged in but no Azure subscription found."
+    print_info "This usually means your account needs a specific tenant."
+    echo ""
+    echo "  To find your tenant ID:  az account tenant list"
+    echo "  Then retry:              az login --tenant TENANT_ID --use-device-code"
+    echo ""
+    printf "  Enter tenant ID to retry now (or press Enter to cancel): "
+    local tenant_id
+    read -r tenant_id </dev/tty || true
+    tenant_id="${tenant_id// /}"   # strip accidental spaces
+    if [[ -n "$tenant_id" ]]; then
+        az logout 2>/dev/null || true
+        _az_do_login "$tenant_id"
     fi
 }
 
