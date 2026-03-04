@@ -150,7 +150,7 @@ EOF
 }
 
 # ── Script-level state ────────────────────────────────────────────────────────
-COMPONENT="both"
+COMPONENT=""   # "" = not set via CLI; "tester" | "endpoint" | "both" = explicit
 AUTO_YES=0
 FROM_SOURCE=0
 SKIP_SSH=0
@@ -160,7 +160,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.12.62"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.12.63"  # fallback when gh is unavailable
 
 DO_SSH_CHECK=1
 DO_RUST_INSTALL=0
@@ -204,6 +204,10 @@ AZURE_ENDPOINT_SIZE="Standard_B2s"
 AZURE_ENDPOINT_OS="linux"   # "linux" | "windows"
 AZURE_ENDPOINT_IP=""
 
+# Auto-shutdown: "yes" = set Azure auto-shutdown + AWS cron at 04:00 UTC (11 PM EST)
+AZURE_AUTO_SHUTDOWN="yes"
+AZURE_SHUTDOWN_ASKED=0
+
 # Extra endpoint IPs for multi-region comparison (array of "ip:region" pairs)
 AZURE_EXTRA_ENDPOINT_IPS=()
 
@@ -224,6 +228,10 @@ AWS_ENDPOINT_INSTANCE_TYPE="t3.small"
 AWS_ENDPOINT_OS="linux"     # "linux" | "windows"
 AWS_ENDPOINT_INSTANCE_ID=""
 AWS_ENDPOINT_IP=""
+
+# Auto-shutdown: "yes" = install cron job at 04:00 UTC (11 PM EST)
+AWS_AUTO_SHUTDOWN="yes"
+AWS_SHUTDOWN_ASKED=0
 
 CONFIG_FILE_PATH=""
 
@@ -746,6 +754,26 @@ ask_azure_options() {
     [[ "$os_ans" == "2" ]] && chosen_os="windows"
     echo ""
 
+    # Auto-shutdown policy (ask once across all Azure VMs)
+    if [[ $AZURE_SHUTDOWN_ASKED -eq 0 ]]; then
+        AZURE_SHUTDOWN_ASKED=1
+        echo "  Auto-shutdown policy (avoids unexpected charges):"
+        echo "    1) Shut down at 11 PM EST (04:00 UTC) daily  [default]"
+        echo "    2) Leave running — I will stop/delete manually"
+        echo ""
+        printf "  Choice [1]: "
+        local sd_ans; read -r sd_ans </dev/tty || true
+        sd_ans="${sd_ans:-1}"
+        if [[ "$sd_ans" == "2" ]]; then
+            AZURE_AUTO_SHUTDOWN="no"
+            print_warn "VMs will keep running — remember to delete them when done to avoid charges!"
+        else
+            AZURE_AUTO_SHUTDOWN="yes"
+            print_ok "Auto-shutdown: 04:00 UTC (11 PM EST) daily"
+        fi
+        echo ""
+    fi
+
     if [[ "$component" == "tester" ]]; then
         printf "  Resource group name [%s]: " "$AZURE_TESTER_RG"
         local rg_ans; read -r rg_ans </dev/tty || true
@@ -860,6 +888,26 @@ ask_aws_options() {
     local chosen_os="linux"
     [[ "$os_ans" == "2" ]] && chosen_os="windows"
     echo ""
+
+    # Auto-shutdown policy (ask once across all AWS instances)
+    if [[ $AWS_SHUTDOWN_ASKED -eq 0 ]]; then
+        AWS_SHUTDOWN_ASKED=1
+        echo "  Auto-shutdown policy (avoids unexpected charges):"
+        echo "    1) Shut down at 11 PM EST (04:00 UTC) daily  [default]"
+        echo "    2) Leave running — I will terminate manually"
+        echo ""
+        printf "  Choice [1]: "
+        local sd_ans; read -r sd_ans </dev/tty || true
+        sd_ans="${sd_ans:-1}"
+        if [[ "$sd_ans" == "2" ]]; then
+            AWS_AUTO_SHUTDOWN="no"
+            print_warn "Instance will keep running — remember to terminate it when done to avoid charges!"
+        else
+            AWS_AUTO_SHUTDOWN="yes"
+            print_ok "Auto-shutdown: 04:00 UTC (11 PM EST) daily (via cron on the instance)"
+        fi
+        echo ""
+    fi
 
     # Instance Name tag
     if [[ "$component" == "tester" ]]; then
@@ -1137,6 +1185,33 @@ ask_deployment_locations() {
     fi
 }
 
+# ── Component selection (skipped if set via CLI args or -y) ───────────────────
+prompt_component_selection() {
+    # Skip if the user already specified a component on the CLI or is in auto mode
+    [[ $AUTO_YES -eq 1 ]]         && return 0
+    [[ -n "$COMPONENT" ]]         && return 0   # "tester", "endpoint", or "both" from CLI
+
+    print_section "What do you want to install?"
+    echo ""
+    echo "  1) Both  — networker-tester (client) + networker-endpoint (server)  [default]"
+    echo "  2) tester only   — the diagnostic CLI for measuring HTTP/1.1, H2, H3, QUIC"
+    echo "  3) endpoint only — the lightweight HTTP/QUIC test server"
+    echo ""
+    printf "  Choice [1]: "
+    local comp_ans
+    read -r comp_ans </dev/tty || true
+    comp_ans="${comp_ans:-1}"
+    case "$comp_ans" in
+        2) COMPONENT="tester";   DO_INSTALL_TESTER=1; DO_INSTALL_ENDPOINT=0
+           print_ok "Installing: networker-tester only" ;;
+        3) COMPONENT="endpoint"; DO_INSTALL_TESTER=0; DO_INSTALL_ENDPOINT=1
+           print_ok "Installing: networker-endpoint only" ;;
+        *) COMPONENT="both";     DO_INSTALL_TESTER=1; DO_INSTALL_ENDPOINT=1
+           print_ok "Installing: networker-tester + networker-endpoint" ;;
+    esac
+    echo ""
+}
+
 # ── Main interactive prompt ───────────────────────────────────────────────────
 prompt_main() {
     if [[ $AUTO_YES -eq 1 ]]; then
@@ -1302,9 +1377,9 @@ customize_flow() {
     read -r comp_ans </dev/tty || true
     comp_ans="${comp_ans:-1}"
     case "$comp_ans" in
-        2) DO_INSTALL_TESTER=1; DO_INSTALL_ENDPOINT=0 ;;
-        3) DO_INSTALL_TESTER=0; DO_INSTALL_ENDPOINT=1 ;;
-        *) DO_INSTALL_TESTER=1; DO_INSTALL_ENDPOINT=1 ;;
+        2) COMPONENT="tester";   DO_INSTALL_TESTER=1; DO_INSTALL_ENDPOINT=0 ;;
+        3) COMPONENT="endpoint"; DO_INSTALL_TESTER=0; DO_INSTALL_ENDPOINT=1 ;;
+        *) COMPONENT="both";     DO_INSTALL_TESTER=1; DO_INSTALL_ENDPOINT=1 ;;
     esac
 
     ask_deployment_locations
@@ -1598,7 +1673,79 @@ _wait_for_ssh() {
     print_ok "SSH ready"
 }
 
+# Compile a binary locally from source and upload it to a remote Linux VM.
+# Falls back to this when no GitHub release artifacts are available.
+# $1 = binary, $2 = public IP, $3 = SSH user, $4 = remote arch (uname -m output)
+_remote_install_binary_from_source() {
+    local binary="$1" ip="$2" user="$3" remote_arch="$4"
+
+    local local_os local_arch
+    local_os="$(uname -s 2>/dev/null || echo "")"
+    local_arch="$(uname -m 2>/dev/null || echo "")"
+
+    if [[ "$local_os" != "Linux" && "$local_os" != "Darwin" ]]; then
+        print_err "Source compilation fallback requires a Linux or macOS local machine."
+        exit 1
+    fi
+    if [[ "$remote_arch" != "$local_arch" ]]; then
+        print_err "Remote arch ($remote_arch) differs from local ($local_arch) — cross-compilation not supported."
+        echo "  Options:"
+        echo "    1. Fix GitHub Actions billing so release binaries are available:"
+        echo "       https://github.com/settings/billing"
+        echo "    2. Run the installer from a machine with the same arch as the remote VM."
+        exit 1
+    fi
+
+    echo ""
+    print_warn "No release binary available — compiling ${binary} locally and uploading."
+    print_dim  "This takes ~5-10 minutes on first build."
+    echo ""
+
+    step_ensure_cargo_env
+
+    local tmp_root="/tmp/networker-build-$$"
+    mkdir -p "$tmp_root"
+
+    local features_arg=""
+    if [[ $CHROME_AVAILABLE -eq 1 && "$binary" == "networker-tester" ]]; then
+        features_arg="--features browser"
+        print_info "Chrome detected — compiling with browser probe support."
+    fi
+
+    print_info "Building ${binary} from source…"
+    if command -v git &>/dev/null; then
+        CARGO_NET_GIT_FETCH_WITH_CLI=true \
+            cargo install --git "$REPO_SSH" "$binary" \
+            --locked --force --root "$tmp_root" $features_arg </dev/null
+    else
+        cargo install --git "$REPO_SSH" "$binary" \
+            --locked --force --root "$tmp_root" $features_arg </dev/null
+    fi
+
+    local compiled_bin="${tmp_root}/bin/${binary}"
+    if [[ ! -f "$compiled_bin" ]]; then
+        print_err "Build failed — binary not found at ${compiled_bin}"
+        rm -rf "$tmp_root"
+        exit 1
+    fi
+
+    print_info "Uploading compiled binary to VM (${ip})…"
+    scp -o StrictHostKeyChecking=no -q \
+        "$compiled_bin" "${user}@${ip}:/tmp/${binary}"
+    rm -rf "$tmp_root"
+
+    ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
+        "sudo mv /tmp/${binary} /usr/local/bin/${binary} && \
+         sudo chmod +x /usr/local/bin/${binary}"
+
+    local remote_ver
+    remote_ver="$(ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
+        "/usr/local/bin/${binary} --version 2>/dev/null" || echo "unknown")"
+    print_ok "${binary} compiled locally and installed on VM  ($remote_ver)"
+}
+
 # Download binary from GitHub release and install it on a remote host.
+# Falls back to local source compilation when no release assets exist.
 # $1 = binary ("networker-tester" or "networker-endpoint")
 # $2 = public IP
 # $3 = SSH user ("azureuser" or "ubuntu")
@@ -1611,34 +1758,25 @@ _remote_install_binary() {
         ver="$(gh release list --repo "$REPO_GH" --limit 1 --json tagName \
                -q '.[0].tagName' 2>/dev/null || echo "")"
     fi
-    if [[ -z "$ver" ]]; then
-        print_err "Cannot determine release version."
-        exit 1
-    fi
 
-    # Verify the release has pre-built binary assets before attempting any download.
-    # A missing asset means the release workflow did not complete (e.g. billing block).
-    local has_assets
-    has_assets="$(gh release view --repo "$REPO_GH" "$ver" --json assets \
-                  -q '[.assets[].name] | join(" ")' 2>/dev/null || echo "")"
-    if ! printf '%s' "$has_assets" | grep -q "${binary}-"; then
-        echo ""
-        print_err "Release ${ver} has no pre-built binaries for ${binary}."
-        echo ""
-        echo "  This usually means the GitHub Actions release workflow did not complete."
-        echo "  Common cause: GitHub Actions billing limit reached."
-        echo ""
-        echo "  To fix:"
-        echo "    1. Resolve billing at:  https://github.com/settings/billing"
-        echo "    2. Re-run the release:  gh workflow run release.yml --repo $REPO_GH"
-        echo "       or push the tag again to trigger a new run."
-        echo "    3. Then re-run this installer."
-        exit 1
-    fi
-
-    # Detect remote architecture
-    local remote_arch remote_target
+    # Detect remote architecture (needed for both download path and source fallback)
+    local remote_arch
     remote_arch="$(ssh -o StrictHostKeyChecking=no "${user}@${ip}" "uname -m" 2>/dev/null || echo "x86_64")"
+
+    # Check whether release has pre-built assets; compile locally if not.
+    local has_assets=""
+    if [[ -n "$ver" ]]; then
+        has_assets="$(gh release view --repo "$REPO_GH" "$ver" --json assets \
+                      -q '[.assets[].name] | join(" ")' 2>/dev/null || echo "")"
+    fi
+    if [[ -z "$ver" ]] || ! printf '%s' "$has_assets" | grep -q "${binary}-"; then
+        print_warn "Release ${ver:-unknown} has no pre-built binaries for ${binary}."
+        _remote_install_binary_from_source "$binary" "$ip" "$user" "$remote_arch"
+        return
+    fi
+
+    # Map remote arch to Rust target triple
+    local remote_target
     case "$remote_arch" in
         x86_64)        remote_target="x86_64-unknown-linux-gnu" ;;
         aarch64|arm64) remote_target="aarch64-unknown-linux-gnu" ;;
@@ -2057,10 +2195,39 @@ step_azure_open_endpoint_ports() {
     fi
 }
 
+# Set Azure auto-shutdown policy (04:00 UTC = 11 PM EST).
+step_azure_set_auto_shutdown() {
+    local rg="$1" vm="$2" label="${3:-VM}"
+    [[ "$AZURE_AUTO_SHUTDOWN" != "yes" ]] && return 0
+
+    next_step "Set auto-shutdown policy for $label"
+    if az vm auto-shutdown --resource-group "$rg" --name "$vm" \
+            --time 0400 --output none 2>/dev/null; then
+        print_ok "Auto-shutdown set: 04:00 UTC (11 PM EST) daily — VM stops automatically"
+    else
+        print_warn "Could not configure Azure auto-shutdown (non-critical — delete VM manually when done)"
+    fi
+}
+
+# Install an auto-shutdown cron job on a Linux VM via SSH (04:00 UTC = 11 PM EST).
+step_aws_set_auto_shutdown() {
+    local ip="$1" user="$2" label="${3:-instance}"
+    [[ "$AWS_AUTO_SHUTDOWN" != "yes" ]] && return 0
+
+    next_step "Set auto-shutdown cron for $label (04:00 UTC = 11 PM EST)"
+    if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "${user}@${ip}" \
+        "echo '0 4 * * * root /sbin/shutdown -h now' | sudo tee /etc/cron.d/networker-autostop > /dev/null && sudo chmod 644 /etc/cron.d/networker-autostop" 2>/dev/null; then
+        print_ok "Auto-shutdown cron installed: 04:00 UTC (11 PM EST) daily"
+    else
+        print_warn "Could not install auto-shutdown cron (non-critical — terminate instance manually when done)"
+    fi
+}
+
 step_azure_deploy_tester() {
     step_check_azure_prereqs
     step_azure_create_vm "tester" \
         "$AZURE_TESTER_RG" "$AZURE_TESTER_VM" "$AZURE_TESTER_SIZE" "AZURE_TESTER_IP"
+    step_azure_set_auto_shutdown "$AZURE_TESTER_RG" "$AZURE_TESTER_VM" "tester VM"
 
     next_step "Install networker-tester on Azure VM"
     if [[ "$AZURE_TESTER_OS" == "windows" ]]; then
@@ -2089,6 +2256,7 @@ _azure_deploy_one_endpoint() {
 
     step_azure_create_vm "endpoint" "$rg" "$vm" "$size" "$ip_var"
     AZURE_ENDPOINT_OS="$saved_os"
+    step_azure_set_auto_shutdown "$rg" "$vm" "$label"
 
     local ip="${!ip_var}"
 
@@ -2366,6 +2534,7 @@ step_aws_deploy_tester() {
         "$sg_id" "AWS_TESTER_INSTANCE_ID" "AWS_TESTER_IP"
 
     _wait_for_ssh "$AWS_TESTER_IP" "ubuntu" "tester instance"
+    step_aws_set_auto_shutdown "$AWS_TESTER_IP" "ubuntu" "tester instance"
 
     next_step "Install networker-tester on AWS EC2"
     _remote_install_binary "networker-tester" "$AWS_TESTER_IP" "ubuntu"
@@ -2387,6 +2556,7 @@ step_aws_deploy_endpoint() {
         "$sg_id" "AWS_ENDPOINT_INSTANCE_ID" "AWS_ENDPOINT_IP"
 
     _wait_for_ssh "$AWS_ENDPOINT_IP" "ubuntu" "endpoint instance"
+    step_aws_set_auto_shutdown "$AWS_ENDPOINT_IP" "ubuntu" "endpoint instance"
 
     next_step "Install networker-endpoint on AWS EC2"
     _remote_install_binary "networker-endpoint" "$AWS_ENDPOINT_IP" "ubuntu"
@@ -2485,18 +2655,36 @@ display_completion() {
 
     # ── Cleanup reminders ─────────────────────────────────────────────────────
     if [[ "$TESTER_LOCATION" == "azure" || "$ENDPOINT_LOCATION" == "azure" ]]; then
-        echo "  ${DIM}Azure cleanup (when done testing):${RESET}"
+        if [[ "$AZURE_AUTO_SHUTDOWN" == "yes" ]]; then
+            echo "  ${GREEN}Auto-shutdown configured:${RESET} Azure VMs will stop at 04:00 UTC (11 PM EST) daily."
+            echo "  ${DIM}VMs stop but are NOT deleted — storage charges still apply.${RESET}"
+        else
+            echo "  ${YELLOW}${BOLD}⚠ Azure VMs are left running — delete them when done to avoid charges!${RESET}"
+        fi
+        echo ""
+        echo "  ${DIM}Delete Azure resources when done testing:${RESET}"
         if [[ "$TESTER_LOCATION" == "azure" ]]; then
             printf "  ${DIM}  az group delete --name %s --yes --no-wait${RESET}\n" "$AZURE_TESTER_RG"
         fi
         if [[ "$ENDPOINT_LOCATION" == "azure" ]]; then
             printf "  ${DIM}  az group delete --name %s --yes --no-wait${RESET}\n" "$AZURE_ENDPOINT_RG"
         fi
+        for extra in "${AZURE_EXTRA_ENDPOINT_IPS[@]}"; do
+            local extra_rg; extra_rg="$(az vm list --query "[?publicIps=='${extra%%:*}'].resourceGroup | [0]" -o tsv 2>/dev/null || echo "")"
+            [[ -n "$extra_rg" ]] && printf "  ${DIM}  az group delete --name %s --yes --no-wait${RESET}\n" "$extra_rg"
+        done
         echo ""
     fi
 
     if [[ "$TESTER_LOCATION" == "aws" || "$ENDPOINT_LOCATION" == "aws" ]]; then
-        echo "  ${DIM}AWS cleanup (when done testing):${RESET}"
+        if [[ "$AWS_AUTO_SHUTDOWN" == "yes" ]]; then
+            echo "  ${GREEN}Auto-shutdown configured:${RESET} AWS instances will stop at 04:00 UTC (11 PM EST) daily."
+            echo "  ${DIM}Instances stop but are NOT terminated — EBS storage charges still apply.${RESET}"
+        else
+            echo "  ${YELLOW}${BOLD}⚠ AWS instances are left running — terminate them when done to avoid charges!${RESET}"
+        fi
+        echo ""
+        echo "  ${DIM}Terminate AWS instances when done testing:${RESET}"
         if [[ "$TESTER_LOCATION" == "aws" && -n "$AWS_TESTER_INSTANCE_ID" ]]; then
             printf "  ${DIM}  aws ec2 terminate-instances --region %s --instance-ids %s${RESET}\n" \
                 "$AWS_REGION" "$AWS_TESTER_INSTANCE_ID"
@@ -2516,6 +2704,7 @@ main() {
 
     print_banner
     display_system_info
+    prompt_component_selection  # ask tester / endpoint / both (skipped if set via CLI)
     display_plan
     prompt_main
 
