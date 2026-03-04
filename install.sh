@@ -1598,7 +1598,79 @@ _wait_for_ssh() {
     print_ok "SSH ready"
 }
 
+# Compile a binary locally from source and upload it to a remote Linux VM.
+# Falls back to this when no GitHub release artifacts are available.
+# $1 = binary, $2 = public IP, $3 = SSH user, $4 = remote arch (uname -m output)
+_remote_install_binary_from_source() {
+    local binary="$1" ip="$2" user="$3" remote_arch="$4"
+
+    local local_os local_arch
+    local_os="$(uname -s 2>/dev/null || echo "")"
+    local_arch="$(uname -m 2>/dev/null || echo "")"
+
+    if [[ "$local_os" != "Linux" && "$local_os" != "Darwin" ]]; then
+        print_err "Source compilation fallback requires a Linux or macOS local machine."
+        exit 1
+    fi
+    if [[ "$remote_arch" != "$local_arch" ]]; then
+        print_err "Remote arch ($remote_arch) differs from local ($local_arch) — cross-compilation not supported."
+        echo "  Options:"
+        echo "    1. Fix GitHub Actions billing so release binaries are available:"
+        echo "       https://github.com/settings/billing"
+        echo "    2. Run the installer from a machine with the same arch as the remote VM."
+        exit 1
+    fi
+
+    echo ""
+    print_warn "No release binary available — compiling ${binary} locally and uploading."
+    print_dim  "This takes ~5-10 minutes on first build."
+    echo ""
+
+    step_ensure_cargo_env
+
+    local tmp_root="/tmp/networker-build-$$"
+    mkdir -p "$tmp_root"
+
+    local features_arg=""
+    if [[ $CHROME_AVAILABLE -eq 1 && "$binary" == "networker-tester" ]]; then
+        features_arg="--features browser"
+        print_info "Chrome detected — compiling with browser probe support."
+    fi
+
+    print_info "Building ${binary} from source…"
+    if command -v git &>/dev/null; then
+        CARGO_NET_GIT_FETCH_WITH_CLI=true \
+            cargo install --git "$REPO_SSH" "$binary" \
+            --locked --force --root "$tmp_root" $features_arg </dev/null
+    else
+        cargo install --git "$REPO_SSH" "$binary" \
+            --locked --force --root "$tmp_root" $features_arg </dev/null
+    fi
+
+    local compiled_bin="${tmp_root}/bin/${binary}"
+    if [[ ! -f "$compiled_bin" ]]; then
+        print_err "Build failed — binary not found at ${compiled_bin}"
+        rm -rf "$tmp_root"
+        exit 1
+    fi
+
+    print_info "Uploading compiled binary to VM (${ip})…"
+    scp -o StrictHostKeyChecking=no -q \
+        "$compiled_bin" "${user}@${ip}:/tmp/${binary}"
+    rm -rf "$tmp_root"
+
+    ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
+        "sudo mv /tmp/${binary} /usr/local/bin/${binary} && \
+         sudo chmod +x /usr/local/bin/${binary}"
+
+    local remote_ver
+    remote_ver="$(ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
+        "/usr/local/bin/${binary} --version 2>/dev/null" || echo "unknown")"
+    print_ok "${binary} compiled locally and installed on VM  ($remote_ver)"
+}
+
 # Download binary from GitHub release and install it on a remote host.
+# Falls back to local source compilation when no release assets exist.
 # $1 = binary ("networker-tester" or "networker-endpoint")
 # $2 = public IP
 # $3 = SSH user ("azureuser" or "ubuntu")
@@ -1611,34 +1683,25 @@ _remote_install_binary() {
         ver="$(gh release list --repo "$REPO_GH" --limit 1 --json tagName \
                -q '.[0].tagName' 2>/dev/null || echo "")"
     fi
-    if [[ -z "$ver" ]]; then
-        print_err "Cannot determine release version."
-        exit 1
-    fi
 
-    # Verify the release has pre-built binary assets before attempting any download.
-    # A missing asset means the release workflow did not complete (e.g. billing block).
-    local has_assets
-    has_assets="$(gh release view --repo "$REPO_GH" "$ver" --json assets \
-                  -q '[.assets[].name] | join(" ")' 2>/dev/null || echo "")"
-    if ! printf '%s' "$has_assets" | grep -q "${binary}-"; then
-        echo ""
-        print_err "Release ${ver} has no pre-built binaries for ${binary}."
-        echo ""
-        echo "  This usually means the GitHub Actions release workflow did not complete."
-        echo "  Common cause: GitHub Actions billing limit reached."
-        echo ""
-        echo "  To fix:"
-        echo "    1. Resolve billing at:  https://github.com/settings/billing"
-        echo "    2. Re-run the release:  gh workflow run release.yml --repo $REPO_GH"
-        echo "       or push the tag again to trigger a new run."
-        echo "    3. Then re-run this installer."
-        exit 1
-    fi
-
-    # Detect remote architecture
-    local remote_arch remote_target
+    # Detect remote architecture (needed for both download path and source fallback)
+    local remote_arch
     remote_arch="$(ssh -o StrictHostKeyChecking=no "${user}@${ip}" "uname -m" 2>/dev/null || echo "x86_64")"
+
+    # Check whether release has pre-built assets; compile locally if not.
+    local has_assets=""
+    if [[ -n "$ver" ]]; then
+        has_assets="$(gh release view --repo "$REPO_GH" "$ver" --json assets \
+                      -q '[.assets[].name] | join(" ")' 2>/dev/null || echo "")"
+    fi
+    if [[ -z "$ver" ]] || ! printf '%s' "$has_assets" | grep -q "${binary}-"; then
+        print_warn "Release ${ver:-unknown} has no pre-built binaries for ${binary}."
+        _remote_install_binary_from_source "$binary" "$ip" "$user" "$remote_arch"
+        return
+    fi
+
+    # Map remote arch to Rust target triple
+    local remote_target
     case "$remote_arch" in
         x86_64)        remote_target="x86_64-unknown-linux-gnu" ;;
         aarch64|arm64) remote_target="aarch64-unknown-linux-gnu" ;;
