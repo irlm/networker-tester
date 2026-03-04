@@ -195,12 +195,17 @@ AZURE_REGION_ASKED=0
 AZURE_TESTER_RG="networker-rg-tester"
 AZURE_TESTER_VM="networker-tester-vm"
 AZURE_TESTER_SIZE="Standard_B2s"
+AZURE_TESTER_OS="linux"     # "linux" | "windows"
 AZURE_TESTER_IP=""
 
 AZURE_ENDPOINT_RG="networker-rg-endpoint"
 AZURE_ENDPOINT_VM="networker-endpoint-vm"
 AZURE_ENDPOINT_SIZE="Standard_B2s"
+AZURE_ENDPOINT_OS="linux"   # "linux" | "windows"
 AZURE_ENDPOINT_IP=""
+
+# Extra endpoint IPs for multi-region comparison (array of "ip:region" pairs)
+AZURE_EXTRA_ENDPOINT_IPS=()
 
 # ── AWS state ─────────────────────────────────────────────────────────────────
 AWS_CLI_AVAILABLE=0
@@ -210,11 +215,13 @@ AWS_REGION_ASKED=0
 
 AWS_TESTER_NAME="networker-tester"
 AWS_TESTER_INSTANCE_TYPE="t3.small"
+AWS_TESTER_OS="linux"       # "linux" | "windows"
 AWS_TESTER_INSTANCE_ID=""
 AWS_TESTER_IP=""
 
 AWS_ENDPOINT_NAME="networker-endpoint"
 AWS_ENDPOINT_INSTANCE_TYPE="t3.small"
+AWS_ENDPOINT_OS="linux"     # "linux" | "windows"
 AWS_ENDPOINT_INSTANCE_ID=""
 AWS_ENDPOINT_IP=""
 
@@ -727,6 +734,18 @@ ask_azure_options() {
     esac
     echo ""
 
+    # OS choice
+    echo "  Operating System:"
+    echo "    1) Ubuntu 22.04 LTS  (Linux)    [default]"
+    echo "    2) Windows Server 2022"
+    echo ""
+    printf "  Choice [1]: "
+    local os_ans; read -r os_ans </dev/tty || true
+    os_ans="${os_ans:-1}"
+    local chosen_os="linux"
+    [[ "$os_ans" == "2" ]] && chosen_os="windows"
+    echo ""
+
     if [[ "$component" == "tester" ]]; then
         printf "  Resource group name [%s]: " "$AZURE_TESTER_RG"
         local rg_ans; read -r rg_ans </dev/tty || true
@@ -737,7 +756,8 @@ ask_azure_options() {
         AZURE_TESTER_VM="${vm_ans:-$AZURE_TESTER_VM}"
 
         AZURE_TESTER_SIZE="$chosen_size"
-        print_ok "Size: $AZURE_TESTER_SIZE  |  RG: $AZURE_TESTER_RG  |  VM: $AZURE_TESTER_VM"
+        AZURE_TESTER_OS="$chosen_os"
+        print_ok "OS: $chosen_os  |  Size: $AZURE_TESTER_SIZE  |  RG: $AZURE_TESTER_RG  |  VM: $AZURE_TESTER_VM"
     else
         printf "  Resource group name [%s]: " "$AZURE_ENDPOINT_RG"
         local rg_ans; read -r rg_ans </dev/tty || true
@@ -748,7 +768,8 @@ ask_azure_options() {
         AZURE_ENDPOINT_VM="${vm_ans:-$AZURE_ENDPOINT_VM}"
 
         AZURE_ENDPOINT_SIZE="$chosen_size"
-        print_ok "Size: $AZURE_ENDPOINT_SIZE  |  RG: $AZURE_ENDPOINT_RG  |  VM: $AZURE_ENDPOINT_VM"
+        AZURE_ENDPOINT_OS="$chosen_os"
+        print_ok "OS: $chosen_os  |  Size: $AZURE_ENDPOINT_SIZE  |  RG: $AZURE_ENDPOINT_RG  |  VM: $AZURE_ENDPOINT_VM"
     fi
     echo ""
 }
@@ -828,19 +849,33 @@ ask_aws_options() {
     esac
     echo ""
 
+    # OS choice
+    echo "  Operating System:"
+    echo "    1) Amazon Linux 2023 / Ubuntu 22.04  (Linux)  [default]"
+    echo "    2) Windows Server 2022"
+    echo ""
+    printf "  Choice [1]: "
+    local os_ans; read -r os_ans </dev/tty || true
+    os_ans="${os_ans:-1}"
+    local chosen_os="linux"
+    [[ "$os_ans" == "2" ]] && chosen_os="windows"
+    echo ""
+
     # Instance Name tag
     if [[ "$component" == "tester" ]]; then
         printf "  Instance name tag [%s]: " "$AWS_TESTER_NAME"
         local name_ans; read -r name_ans </dev/tty || true
         AWS_TESTER_NAME="${name_ans:-$AWS_TESTER_NAME}"
         AWS_TESTER_INSTANCE_TYPE="$chosen_type"
-        print_ok "Type: $AWS_TESTER_INSTANCE_TYPE  |  Name: $AWS_TESTER_NAME"
+        AWS_TESTER_OS="$chosen_os"
+        print_ok "OS: $chosen_os  |  Type: $AWS_TESTER_INSTANCE_TYPE  |  Name: $AWS_TESTER_NAME"
     else
         printf "  Instance name tag [%s]: " "$AWS_ENDPOINT_NAME"
         local name_ans; read -r name_ans </dev/tty || true
         AWS_ENDPOINT_NAME="${name_ans:-$AWS_ENDPOINT_NAME}"
         AWS_ENDPOINT_INSTANCE_TYPE="$chosen_type"
-        print_ok "Type: $AWS_ENDPOINT_INSTANCE_TYPE  |  Name: $AWS_ENDPOINT_NAME"
+        AWS_ENDPOINT_OS="$chosen_os"
+        print_ok "OS: $chosen_os  |  Type: $AWS_ENDPOINT_INSTANCE_TYPE  |  Name: $AWS_ENDPOINT_NAME"
     fi
     echo ""
 }
@@ -907,22 +942,59 @@ ensure_azure_cli() {
         echo ""
         print_warn "Not logged in to Azure."
         echo ""
-        if ask_yn "Log in to Azure now (opens browser)?" "y"; then
-            az login
-            if az account show &>/dev/null 2>&1; then
-                AZURE_LOGGED_IN=1
-                local sub_name
-                sub_name="$(az account show --query name -o tsv 2>/dev/null || echo "")"
-                print_ok "Logged in: $sub_name"
-            else
-                print_err "Azure login failed — run 'az login' manually then re-run this installer."
+        if ask_yn "Log in to Azure now (device code)?" "y"; then
+            _az_do_login
+            if [[ $AZURE_LOGGED_IN -eq 0 ]]; then
+                print_err "Azure login failed — fix manually then re-run the installer."
+                echo "  Manual fix:  az login --tenant YOUR_TENANT_ID --use-device-code"
                 exit 1
             fi
         else
             print_err "Azure login required for remote deployment."
-            echo "  Run:  az login"
+            echo "  Run:  az login --use-device-code"
             exit 1
         fi
+    fi
+}
+
+# ── Internal: run az login with device-code and optional tenant; retries on
+#    "no subscription found" (common when MFA policy requires a specific tenant)
+_az_do_login() {
+    local tenant="${1:-}"
+    echo ""
+    if [[ -n "$tenant" ]]; then
+        print_info "Logging in to Azure (tenant: $tenant)…"
+        az login --tenant "$tenant" --use-device-code
+    else
+        print_info "Logging in to Azure (device code)…"
+        az login --use-device-code
+    fi
+
+    if az account show &>/dev/null 2>&1; then
+        AZURE_LOGGED_IN=1
+        local sub_name
+        sub_name="$(az account show --query name -o tsv 2>/dev/null || echo "")"
+        print_ok "Logged in: $sub_name"
+        return 0
+    fi
+
+    # Login appeared to succeed but no subscription is visible — common when the
+    # account has multiple tenants and the default one has no subscriptions, or
+    # when MFA policy blocks the default tenant.
+    echo ""
+    print_warn "Logged in but no Azure subscription found."
+    print_info "This usually means your account needs a specific tenant."
+    echo ""
+    echo "  To find your tenant ID:  az account tenant list"
+    echo "  Then retry:              az login --tenant TENANT_ID --use-device-code"
+    echo ""
+    printf "  Enter tenant ID to retry now (or press Enter to cancel): "
+    local tenant_id
+    read -r tenant_id </dev/tty || true
+    tenant_id="${tenant_id// /}"   # strip accidental spaces
+    if [[ -n "$tenant_id" ]]; then
+        az logout 2>/dev/null || true
+        _az_do_login "$tenant_id"
     fi
 }
 
@@ -1533,6 +1605,37 @@ _wait_for_ssh() {
 _remote_install_binary() {
     local binary="$1" ip="$2" user="$3"
 
+    # Determine release version to use
+    local ver="${NETWORKER_VERSION:-}"
+    if [[ -z "$ver" ]]; then
+        ver="$(gh release list --repo "$REPO_GH" --limit 1 --json tagName \
+               -q '.[0].tagName' 2>/dev/null || echo "")"
+    fi
+    if [[ -z "$ver" ]]; then
+        print_err "Cannot determine release version."
+        exit 1
+    fi
+
+    # Verify the release has pre-built binary assets before attempting any download.
+    # A missing asset means the release workflow did not complete (e.g. billing block).
+    local has_assets
+    has_assets="$(gh release view --repo "$REPO_GH" "$ver" --json assets \
+                  -q '[.assets[].name] | join(" ")' 2>/dev/null || echo "")"
+    if ! printf '%s' "$has_assets" | grep -q "${binary}-"; then
+        echo ""
+        print_err "Release ${ver} has no pre-built binaries for ${binary}."
+        echo ""
+        echo "  This usually means the GitHub Actions release workflow did not complete."
+        echo "  Common cause: GitHub Actions billing limit reached."
+        echo ""
+        echo "  To fix:"
+        echo "    1. Resolve billing at:  https://github.com/settings/billing"
+        echo "    2. Re-run the release:  gh workflow run release.yml --repo $REPO_GH"
+        echo "       or push the tag again to trigger a new run."
+        echo "    3. Then re-run this installer."
+        exit 1
+    fi
+
     # Detect remote architecture
     local remote_arch remote_target
     remote_arch="$(ssh -o StrictHostKeyChecking=no "${user}@${ip}" "uname -m" 2>/dev/null || echo "x86_64")"
@@ -1546,10 +1649,10 @@ _remote_install_binary() {
     local tmp_dir
     tmp_dir="$(mktemp -d)"
 
-    print_info "Downloading ${archive} from GitHub release…"
+    print_info "Downloading ${archive} from GitHub release (${ver})…"
     if gh release download \
             --repo "$REPO_GH" \
-            --latest \
+            --tag "$ver" \
             --pattern "${archive}" \
             --dir "${tmp_dir}" \
             --clobber 2>/dev/null; then
@@ -1569,23 +1672,19 @@ _remote_install_binary() {
     else
         rm -rf "${tmp_dir}"
         # Fallback: download directly on the remote VM
-        local ver="${NETWORKER_VERSION:-}"
-        if [[ -z "$ver" ]]; then
-            ver="$(gh release list --repo "$REPO_GH" --limit 1 --json tagName \
-                   -q '.[0].tagName' 2>/dev/null || echo "")"
-        fi
-        if [[ -z "$ver" ]]; then
-            print_err "Cannot determine release version for remote download."
-            exit 1
-        fi
         print_info "Downloading directly on VM (${ver})…"
-        ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
+        if ! ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
             "curl -fsSL https://github.com/${REPO_GH}/releases/download/${ver}/${archive} \
                -o /tmp/${archive} && \
              tar xzf /tmp/${archive} -C /tmp && \
              sudo mv /tmp/${binary} /usr/local/bin/${binary} && \
              sudo chmod +x /usr/local/bin/${binary} && \
-             rm /tmp/${archive}"
+             rm /tmp/${archive}"; then
+            echo ""
+            print_err "Failed to download ${archive} from release ${ver}."
+            echo "  Check:  https://github.com/${REPO_GH}/releases/${ver}"
+            exit 1
+        fi
     fi
 
     local remote_ver
@@ -1655,6 +1754,118 @@ _remote_verify_health() {
 
 # Write networker-cloud.json pointing at the remote endpoint.
 # $1 = endpoint public IP
+# ── Windows VM helpers (Azure run-command / AWS SSM) ─────────────────────────
+
+# Wait for a Windows VM Azure Agent to be responsive (polling via run-command).
+# $1 = resource group, $2 = VM name, $3 = friendly label
+_azure_wait_for_windows_vm() {
+    local rg="$1" vm="$2" label="${3:-VM}"
+    print_info "Waiting for $label Windows VM to be ready (Azure Agent)…"
+    local attempts=0
+    while true; do
+        if az vm run-command invoke \
+                --resource-group "$rg" \
+                --name "$vm" \
+                --command-id RunPowerShellScript \
+                --scripts 'Write-Host ready' \
+                --output none 2>/dev/null; then
+            echo ""
+            print_ok "Windows VM ready"
+            return 0
+        fi
+        attempts=$((attempts + 1))
+        if [[ $attempts -gt 30 ]]; then
+            echo ""
+            print_err "Windows VM not ready after 5 minutes. Check the Azure portal."
+            exit 1
+        fi
+        printf "."
+        sleep 10
+    done
+}
+
+# Install a binary on a Windows Azure VM via run-command (PowerShell).
+# $1 = binary name (no .exe), $2 = resource group, $3 = VM name, $4 = version tag
+_azure_win_install_binary() {
+    local binary="$1" rg="$2" vm="$3" ver="$4"
+    local archive="${binary}-x86_64-pc-windows-msvc.zip"
+    local url="https://github.com/${REPO_GH}/releases/download/${ver}/${archive}"
+    local dest='C:\networker'
+
+    # Pre-check release assets
+    local has_assets
+    has_assets="$(gh release view --repo "$REPO_GH" "$ver" --json assets \
+                  -q '[.assets[].name] | join(" ")' 2>/dev/null || echo "")"
+    if ! printf '%s' "$has_assets" | grep -q "${binary}-.*windows"; then
+        print_err "Release ${ver} has no Windows binary for ${binary}."
+        echo "  Fix GitHub Actions billing then re-run."
+        exit 1
+    fi
+
+    print_info "Installing ${binary}.exe on Windows VM via PowerShell…"
+    local ps_tmp
+    ps_tmp="$(mktemp /tmp/networker-ps-XXXXX.ps1)"
+    cat > "$ps_tmp" <<PSEOF
+\$ErrorActionPreference = 'Stop'
+\$url  = '${url}'
+\$zip  = 'C:\\networker-tmp\\${archive}'
+\$dest = '${dest}'
+New-Item -ItemType Directory -Force -Path C:\\networker-tmp | Out-Null
+New-Item -ItemType Directory -Force -Path \$dest | Out-Null
+Write-Host "Downloading \$url ..."
+Invoke-WebRequest -Uri \$url -OutFile \$zip -UseBasicParsing
+Expand-Archive -Path \$zip -DestinationPath \$dest -Force
+Remove-Item -Recurse -Force C:\\networker-tmp
+\$machinePath = [System.Environment]::GetEnvironmentVariable('Path','Machine')
+if (\$machinePath -notlike "*\$dest*") {
+    [System.Environment]::SetEnvironmentVariable('Path',"\$machinePath;\$dest",'Machine')
+    Write-Host "Added \$dest to system PATH"
+}
+\$ver = & "\$dest\\${binary}.exe" --version 2>&1
+Write-Host "Installed: \$ver"
+PSEOF
+
+    az vm run-command invoke \
+        --resource-group "$rg" --name "$vm" \
+        --command-id RunPowerShellScript \
+        --scripts "@${ps_tmp}" \
+        --output table 2>/dev/null || print_warn "Install command returned non-zero; check VM logs"
+    rm -f "$ps_tmp"
+    print_ok "${binary}.exe installed on Windows VM"
+}
+
+# Create a Windows Service for networker-endpoint on an Azure Windows VM.
+# $1 = resource group, $2 = VM name
+_azure_win_create_endpoint_service() {
+    local rg="$1" vm="$2"
+    print_info "Creating Windows Service and opening firewall ports…"
+    local ps_tmp
+    ps_tmp="$(mktemp /tmp/networker-ps-XXXXX.ps1)"
+    cat > "$ps_tmp" <<'PSEOF'
+$ErrorActionPreference = 'Continue'
+$exe = 'C:\networker\networker-endpoint.exe'
+# Create service (ignore error if already exists)
+sc.exe create networker-endpoint binPath=$exe start=auto | Out-Host
+sc.exe description networker-endpoint 'Networker Endpoint diagnostics server' | Out-Host
+sc.exe start networker-endpoint | Out-Host
+# Windows Firewall rules
+netsh advfirewall firewall add rule name='Networker-HTTP'  protocol=TCP dir=in action=allow localport=8080  | Out-Null
+netsh advfirewall firewall add rule name='Networker-HTTPS' protocol=TCP dir=in action=allow localport=8443  | Out-Null
+netsh advfirewall firewall add rule name='Networker-UDP'   protocol=UDP dir=in action=allow localport='8443,9998,9999' | Out-Null
+sc.exe query networker-endpoint | Select-String 'STATE'
+Write-Host 'Firewall rules added'
+PSEOF
+
+    az vm run-command invoke \
+        --resource-group "$rg" --name "$vm" \
+        --command-id RunPowerShellScript \
+        --scripts "@${ps_tmp}" \
+        --output table 2>/dev/null || print_warn "Service creation returned non-zero; check VM logs"
+    rm -f "$ps_tmp"
+    print_ok "networker-endpoint service created on Windows VM"
+}
+
+# ── step_generate_config: supports multiple endpoint IPs ─────────────────────
 step_generate_config() {
     local endpoint_ip="$1"
 
@@ -1662,9 +1873,21 @@ step_generate_config() {
 
     CONFIG_FILE_PATH="${PWD}/networker-cloud.json"
 
+    # Build targets array: primary endpoint + any extra endpoints deployed
+    local targets_json
+    if [[ ${#AZURE_EXTRA_ENDPOINT_IPS[@]} -eq 0 ]]; then
+        targets_json="\"https://${endpoint_ip}:8443/health\""
+    else
+        targets_json="\"https://${endpoint_ip}:8443/health\""
+        for extra in "${AZURE_EXTRA_ENDPOINT_IPS[@]}"; do
+            local extra_ip="${extra%%:*}"
+            targets_json="${targets_json}, \"https://${extra_ip}:8443/health\""
+        done
+    fi
+
     cat > "$CONFIG_FILE_PATH" <<EOF
 {
-  "target": "https://${endpoint_ip}:8443/health",
+  "targets": [${targets_json}],
   "modes": ["tcp", "http1", "http2", "http3", "udp", "download", "upload",
              "pageload", "pageload2", "pageload3"],
   "runs": 5,
@@ -1676,6 +1899,9 @@ step_generate_config() {
 }
 EOF
     print_ok "Config written to ${CONFIG_FILE_PATH}"
+    if [[ ${#AZURE_EXTRA_ENDPOINT_IPS[@]} -gt 0 ]]; then
+        print_info "Multi-region config: ${#AZURE_EXTRA_ENDPOINT_IPS[@]+1} endpoints in targets list"
+    fi
 
     # If the tester is also remote, upload the config there too
     local tester_ip="" tester_user=""
@@ -1730,6 +1956,10 @@ step_check_azure_prereqs() {
 # $4 = VM size, $5 = name of global variable to receive public IP
 step_azure_create_vm() {
     local label="$1" rg="$2" vm="$3" size="$4" ip_var="$5"
+    # os_type: "linux" | "windows" — read from AZURE_{TESTER,ENDPOINT}_OS
+    local os_type="linux"
+    [[ "$label" == "tester" ]]   && os_type="$AZURE_TESTER_OS"
+    [[ "$label" == "endpoint" ]] && os_type="$AZURE_ENDPOINT_OS"
 
     next_step "Create Azure VM for $label ($vm in $AZURE_REGION)"
 
@@ -1737,16 +1967,27 @@ step_azure_create_vm() {
     az group create --name "$rg" --location "$AZURE_REGION" --output none
     print_ok "Resource group: $rg"
 
-    local ssh_key_option="--generate-ssh-keys"
-    local key_file
-    for key_file in "${HOME}/.ssh/id_ed25519.pub" "${HOME}/.ssh/id_rsa.pub"; do
-        if [[ -f "$key_file" ]]; then
-            ssh_key_option="--ssh-key-values @${key_file}"
-            break
-        fi
-    done
+    local image os_label
+    if [[ "$os_type" == "windows" ]]; then
+        image="Win2022Datacenter"
+        os_label="Windows Server 2022"
+    else
+        image="Ubuntu2204"
+        os_label="Ubuntu 22.04 LTS"
+    fi
 
-    print_info "Creating Ubuntu 22.04 VM '$vm' ($size)…"
+    local auth_options="--generate-ssh-keys"
+    if [[ "$os_type" == "linux" ]]; then
+        local key_file
+        for key_file in "${HOME}/.ssh/id_ed25519.pub" "${HOME}/.ssh/id_rsa.pub"; do
+            if [[ -f "$key_file" ]]; then
+                auth_options="--ssh-key-values @${key_file}"
+                break
+            fi
+        done
+    fi
+
+    print_info "Creating $os_label VM '$vm' ($size)…"
     print_dim "This typically takes 1–2 minutes…"
     echo ""
 
@@ -1754,10 +1995,10 @@ step_azure_create_vm() {
     ip="$(az vm create \
         --resource-group "$rg" \
         --name "$vm" \
-        --image Ubuntu2204 \
+        --image "$image" \
         --size "$size" \
         --admin-username azureuser \
-        $ssh_key_option \
+        $auth_options \
         --output tsv \
         --query publicIpAddress)"
 
@@ -1768,7 +2009,7 @@ step_azure_create_vm() {
     fi
 
     printf -v "$ip_var" "%s" "$ip"
-    print_ok "VM created — Public IP: ${BOLD}${ip}${RESET}"
+    print_ok "VM created ($os_label) — Public IP: ${BOLD}${ip}${RESET}"
 }
 
 # Open TCP 8080/8443 and UDP 8443/9998/9999 on the NSG for the endpoint VM.
@@ -1820,10 +2061,53 @@ step_azure_deploy_tester() {
     step_check_azure_prereqs
     step_azure_create_vm "tester" \
         "$AZURE_TESTER_RG" "$AZURE_TESTER_VM" "$AZURE_TESTER_SIZE" "AZURE_TESTER_IP"
-    _wait_for_ssh "$AZURE_TESTER_IP" "azureuser" "tester VM"
 
     next_step "Install networker-tester on Azure VM"
-    _remote_install_binary "networker-tester" "$AZURE_TESTER_IP" "azureuser"
+    if [[ "$AZURE_TESTER_OS" == "windows" ]]; then
+        _azure_wait_for_windows_vm "$AZURE_TESTER_RG" "$AZURE_TESTER_VM" "tester VM"
+        _azure_win_install_binary "networker-tester" \
+            "$AZURE_TESTER_RG" "$AZURE_TESTER_VM" "${NETWORKER_VERSION:-latest}"
+        echo ""
+        print_info "To connect:  RDP to ${AZURE_TESTER_IP} as azureuser"
+        print_info "Run tester:  networker-tester --target ... --modes http1,http2 --runs 5"
+    else
+        _wait_for_ssh "$AZURE_TESTER_IP" "azureuser" "tester VM"
+        _remote_install_binary "networker-tester" "$AZURE_TESTER_IP" "azureuser"
+        echo ""
+        print_info "To connect:  ssh azureuser@${AZURE_TESTER_IP}"
+    fi
+}
+
+# Deploy one Azure endpoint VM. Callable multiple times for multi-region.
+# $1 = RG, $2 = VM name, $3 = size, $4 = OS ("linux"|"windows"), $5 = ip output var, $6 = label
+_azure_deploy_one_endpoint() {
+    local rg="$1" vm="$2" size="$3" os_type="$4" ip_var="$5" label="${6:-endpoint}"
+
+    # Temporarily override the OS for create_vm to pick up
+    local saved_os="$AZURE_ENDPOINT_OS"
+    AZURE_ENDPOINT_OS="$os_type"
+
+    step_azure_create_vm "endpoint" "$rg" "$vm" "$size" "$ip_var"
+    AZURE_ENDPOINT_OS="$saved_os"
+
+    local ip="${!ip_var}"
+
+    step_azure_open_endpoint_ports "$rg" "$vm"
+
+    next_step "Install networker-endpoint on Azure VM ($label)"
+    if [[ "$os_type" == "windows" ]]; then
+        _azure_wait_for_windows_vm "$rg" "$vm" "$label"
+        _azure_win_install_binary "networker-endpoint" "$rg" "$vm" "${NETWORKER_VERSION:-latest}"
+        next_step "Create networker-endpoint service ($label)"
+        _azure_win_create_endpoint_service "$rg" "$vm"
+    else
+        _wait_for_ssh "$ip" "azureuser" "$label"
+        _remote_install_binary "networker-endpoint" "$ip" "azureuser"
+        next_step "Create networker-endpoint service ($label)"
+        _remote_create_endpoint_service "$ip" "azureuser"
+        next_step "Verify endpoint health ($label)"
+        _remote_verify_health "$ip"
+    fi
 }
 
 step_azure_deploy_endpoint() {
@@ -1831,19 +2115,37 @@ step_azure_deploy_endpoint() {
     if [[ "$TESTER_LOCATION" != "azure" || -z "$AZURE_TESTER_IP" ]]; then
         step_check_azure_prereqs
     fi
-    step_azure_create_vm "endpoint" \
-        "$AZURE_ENDPOINT_RG" "$AZURE_ENDPOINT_VM" "$AZURE_ENDPOINT_SIZE" "AZURE_ENDPOINT_IP"
-    step_azure_open_endpoint_ports "$AZURE_ENDPOINT_RG" "$AZURE_ENDPOINT_VM"
-    _wait_for_ssh "$AZURE_ENDPOINT_IP" "azureuser" "endpoint VM"
 
-    next_step "Install networker-endpoint on Azure VM"
-    _remote_install_binary "networker-endpoint" "$AZURE_ENDPOINT_IP" "azureuser"
+    _azure_deploy_one_endpoint \
+        "$AZURE_ENDPOINT_RG" "$AZURE_ENDPOINT_VM" "$AZURE_ENDPOINT_SIZE" \
+        "$AZURE_ENDPOINT_OS" "AZURE_ENDPOINT_IP" "endpoint ($AZURE_REGION)"
 
-    next_step "Create networker-endpoint service (Azure)"
-    _remote_create_endpoint_service "$AZURE_ENDPOINT_IP" "azureuser"
+    # Offer to deploy additional endpoints in other regions for multi-region comparison
+    local region_counter=2
+    while ask_yn "Deploy another endpoint VM in a different region for comparison?" "n"; do
+        AZURE_REGION_ASKED=0  # reset so user is prompted for a new region
+        local extra_rg="networker-rg-endpoint-${region_counter}"
+        local extra_vm="networker-endpoint-vm-${region_counter}"
 
-    next_step "Verify endpoint health (Azure)"
-    _remote_verify_health "$AZURE_ENDPOINT_IP"
+        print_section "Additional Endpoint VM #${region_counter}"
+        echo ""
+        ask_azure_options "endpoint"   # re-prompts region/size/RG/VM/OS
+
+        # apply the choices just set
+        extra_rg="$AZURE_ENDPOINT_RG"
+        extra_vm="$AZURE_ENDPOINT_VM"
+        local extra_os="$AZURE_ENDPOINT_OS"
+        local extra_ip_var="AZURE_EXTRA_IP_${region_counter}"
+        declare -g "$extra_ip_var"=""
+
+        _azure_deploy_one_endpoint \
+            "$extra_rg" "$extra_vm" "$AZURE_ENDPOINT_SIZE" \
+            "$extra_os" "$extra_ip_var" "endpoint-${region_counter} ($AZURE_REGION)"
+
+        local extra_ip="${!extra_ip_var}"
+        AZURE_EXTRA_ENDPOINT_IPS+=("${extra_ip}:${AZURE_REGION}")
+        region_counter=$((region_counter + 1))
+    done
 
     step_generate_config "$AZURE_ENDPOINT_IP"
 }
