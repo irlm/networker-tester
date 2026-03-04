@@ -336,19 +336,8 @@ teardown() {
 
 
 # ===========================================================================
-# 5. _remote_install_binary_from_source
+# 5. _remote_vm_cargo_install / _remote_install_binary_from_source
 # ===========================================================================
-
-# Create a uname stub that we can configure per-test
-_make_uname_stub() {
-    local result="$1"
-    cat > "${TEST_TMPDIR}/bin/uname" << STUB
-#!/usr/bin/env bash
-echo "${result}"
-STUB
-    chmod +x "${TEST_TMPDIR}/bin/uname"
-    export PATH="${TEST_TMPDIR}/bin:${PATH}"
-}
 
 _make_cargo_stub() {
     # Creates a cargo stub that installs a fake binary to --root/bin/
@@ -382,16 +371,63 @@ STUB
     export PATH="${TEST_TMPDIR}/bin:${PATH}"
 }
 
-@test "_remote_install_binary_from_source: routes to remote compile on OS mismatch" {
-    _make_uname_stub "Darwin"           # local uname returns Darwin
-    export STUB_SSH_UNAME="Linux"       # remote VM reports Linux
-    export STUB_SSH_VERSION="networker-endpoint 0.12.65"
-    step_ensure_cargo_env() { :; }
-    _remote_chrome_available() { return 1; }
-    run _remote_install_binary_from_source "networker-endpoint" "1.2.3.4" "azureuser" "x86_64"
+@test "_remote_vm_cargo_install: succeeds when SSH bash and version check pass" {
+    export STUB_SSH_VERSION="networker-endpoint 0.12.70"
+    REPO_SSH="git@github.com:example/repo.git"
+    run _remote_vm_cargo_install "networker-endpoint" "1.2.3.4" "azureuser" ""
     [ "$status" -eq 0 ]
-    [[ "$output" == *"mismatch"* ]]
-    [[ "$output" == *"compiling on VM"* ]] || [[ "$output" == *"compiled on VM"* ]]
+    [[ "$output" == *"installed on VM from source"* ]]
+    [[ "$output" == *"networker-endpoint"* ]]
+}
+
+@test "_remote_vm_cargo_install: fails when binary version check returns non-networker output" {
+    export STUB_SSH_FAIL_VERSION=1      # --version on VM fails
+    REPO_SSH="git@github.com:example/repo.git"
+    run _remote_vm_cargo_install "networker-endpoint" "1.2.3.4" "azureuser" ""
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"failed to run"* ]]
+}
+
+@test "_remote_vm_cargo_install: passes features flag through to cargo install" {
+    REPO_SSH="git@github.com:example/repo.git"
+    export STUB_SSH_VERSION="networker-tester 0.12.70"
+    # capture what SSH is called with
+    captured_cmd=""
+    ssh() { captured_cmd="$*"; echo "networker-tester 0.12.70"; }
+    _remote_vm_cargo_install "networker-tester" "1.2.3.4" "azureuser" "--features browser" 2>&1 || true
+    [[ "$captured_cmd" == *"--features browser"* ]] || \
+        [[ "$captured_cmd" == *"-A"* ]]
+}
+
+@test "_remote_install_binary_from_source: delegates to _remote_vm_cargo_install" {
+    export STUB_SSH_VERSION="networker-endpoint 0.12.70"
+    REPO_SSH="git@github.com:example/repo.git"
+    _remote_chrome_available() { return 1; }
+    run _remote_install_binary_from_source "networker-endpoint" "1.2.3.4" "azureuser"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"installed on VM from source"* ]]
+}
+
+@test "_remote_install_binary_from_source: adds --features browser when Chrome on VM" {
+    REPO_SSH="git@github.com:example/repo.git"
+    _remote_chrome_available() { return 0; }  # Chrome found on VM
+    captured_features=""
+    _remote_vm_cargo_install() {
+        captured_features="$4"
+    }
+    _remote_install_binary_from_source "networker-tester" "1.2.3.4" "azureuser" 2>&1 || true
+    [ "$captured_features" = "--features browser" ]
+}
+
+@test "_remote_install_binary_from_source: no features for tester when no Chrome on VM" {
+    REPO_SSH="git@github.com:example/repo.git"
+    _remote_chrome_available() { return 1; }  # Chrome NOT on VM
+    captured_features="UNSET"
+    _remote_vm_cargo_install() {
+        captured_features="${4:-}"
+    }
+    _remote_install_binary_from_source "networker-tester" "1.2.3.4" "azureuser" 2>&1 || true
+    [ "$captured_features" = "" ]
 }
 
 @test "_remote_compile_on_vm: exits when no local checkout" {
@@ -399,30 +435,6 @@ STUB
     run _remote_compile_on_vm "networker-endpoint" "1.2.3.4" "azureuser" ""
     [ "$status" -ne 0 ]
     [[ "$output" == *"not run from a local checkout"* ]]
-}
-
-@test "_remote_install_binary_from_source: succeeds when OS and arch match" {
-    _make_uname_stub "Linux"            # local uname -s returns Linux
-    export STUB_SSH_UNAME="Linux"       # remote also Linux
-    export STUB_SSH_VERSION="networker-endpoint 0.12.65"
-    _make_cargo_stub                    # cargo creates binary in --root/bin/
-    step_ensure_cargo_env() { :; }
-    _remote_chrome_available() { return 1; }
-    run _remote_install_binary_from_source "networker-endpoint" "1.2.3.4" "azureuser" "x86_64"
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"networker-endpoint"* ]]
-}
-
-@test "_remote_install_binary_from_source: exits when binary fails to exec on VM" {
-    _make_uname_stub "Linux"
-    export STUB_SSH_UNAME="Linux"
-    export STUB_SSH_FAIL_VERSION=1      # --version on VM fails → Exec format error
-    _make_cargo_stub
-    step_ensure_cargo_env() { :; }
-    _remote_chrome_available() { return 1; }
-    run _remote_install_binary_from_source "networker-endpoint" "1.2.3.4" "azureuser" "x86_64"
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"uploaded but failed"* ]] || [[ "$output" == *"failed to execute"* ]]
 }
 
 

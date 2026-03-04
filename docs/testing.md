@@ -8,7 +8,7 @@ for a research-quality protocol evaluation:
 |---|---|
 | **TTFB** | Head-of-line blocking sensitivity; H/2 and H/3 should win on high-latency links |
 | **Throughput** | Raw transfer rate; H/1.1 often competitive on single large transfers |
-| **Goodput** | True end-to-end rate (incl. connection setup); penalises QUIC's longer handshake |
+| **Goodput** | True end-to-end rate (incl. connection setup); penalizes QUIC's longer handshake |
 | **CPU** | QUIC does TLS in userspace — should be measurably higher than H/1.1 or H/2 |
 | **Client CSW** | Voluntary/involuntary context switches; reflects I/O concurrency differences |
 | **Server CSW** | Server-side scheduling cost per request |

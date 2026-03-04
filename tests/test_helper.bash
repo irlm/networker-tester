@@ -27,7 +27,7 @@ reset_state() {
     RELEASE_AVAILABLE=0
     RELEASE_TARGET=""
     NETWORKER_VERSION=""
-    INSTALLER_VERSION="v0.12.69"
+    INSTALLER_VERSION="v0.12.70"
 
     # Flags
     DO_SSH_CHECK=1
@@ -96,7 +96,7 @@ reset_state() {
     CONFIG_FILE_PATH=""
     INSTALL_DIR="${HOME}/.cargo/bin"
 
-    # Colour codes — always empty in tests (stdout is not a TTY)
+    # Color codes — always empty in tests (stdout is not a TTY)
     BOLD=''; DIM=''; GREEN=''; YELLOW=''; RED=''; CYAN=''; RESET=''
 }
 
