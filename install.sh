@@ -2903,6 +2903,9 @@ display_completion() {
         echo ""
     fi
 
+    # ── Offer the complementary component if only one was installed ──────────
+    _offer_also_endpoint
+
     # ── Offer quick test against the endpoint ────────────────────────────────
     _offer_quick_test
 
@@ -2935,13 +2938,41 @@ _offer_quick_test() {
     fi
 
     if [[ -z "$tester_bin" ]]; then
-        # Can't run locally — show the command instead
         echo ""
-        print_info "Run a quick test against the endpoint from this machine:"
-        echo "  networker-tester \\"
-        echo "    --target https://${e_ip}:8443/health \\"
-        echo "    --modes http1,http2,http3 --runs 5 --insecure"
-        return 0
+        echo "${BOLD}──────────────────────────────────────────────────────────${RESET}"
+        print_info "Endpoint is live at ${e_ip}."
+        print_info "networker-tester is not installed locally — it is needed to run tests from this machine."
+
+        if ! ask_yn "Install networker-tester locally now so you can run a quick test?" "y"; then
+            echo ""
+            print_info "Install it later:"
+            echo "  bash install.sh tester"
+            echo ""
+            print_info "Then run:"
+            echo "  networker-tester --target https://${e_ip}:8443/health --modes http1,http2,http3 --runs 5 --insecure"
+            return 0
+        fi
+
+        echo ""
+        # Install using the same method already resolved for this session
+        if [[ "$INSTALL_METHOD" == "release" ]]; then
+            step_download_release "networker-tester"
+        else
+            step_ensure_cargo_env
+            step_cargo_install "networker-tester"
+        fi
+
+        # Re-locate the binary after install
+        if command -v networker-tester &>/dev/null; then
+            tester_bin="networker-tester"
+        elif [[ -x "${INSTALL_DIR}/networker-tester" ]]; then
+            tester_bin="${INSTALL_DIR}/networker-tester"
+        fi
+
+        if [[ -z "$tester_bin" ]]; then
+            print_warn "networker-tester install did not succeed — skipping quick test."
+            return 0
+        fi
     fi
 
     echo ""
@@ -2985,6 +3016,55 @@ _offer_quick_test() {
             Linux)  echo "  xdg-open output/report.html" ;;
         esac
     fi
+}
+
+# If only the tester was installed (no endpoint anywhere), offer to also install/deploy
+# an endpoint so the user has something to test against.
+_offer_also_endpoint() {
+    # Only relevant when no endpoint is installed or deployed
+    [[ $DO_INSTALL_ENDPOINT -eq 1 || $DO_REMOTE_ENDPOINT -eq 1 ]] && return 0
+    # And we must have actually installed a tester
+    [[ $DO_INSTALL_TESTER -eq 0 && $DO_REMOTE_TESTER -eq 0 ]] && return 0
+
+    echo ""
+    echo "${BOLD}──────────────────────────────────────────────────────────${RESET}"
+    print_info "networker-tester is installed but no endpoint was deployed."
+    print_info "You need an endpoint to test against."
+    echo ""
+    echo "  ${BOLD}1)${RESET} Install networker-endpoint locally (test on this machine)"
+    echo "  ${BOLD}2)${RESET} Deploy a networker-endpoint on a cloud VM (Azure or AWS)"
+    echo "  ${BOLD}3)${RESET} Skip — I already have an endpoint elsewhere"
+    echo ""
+    local ans
+    read -rp "$(printf "%b" "${CYAN}?${RESET} What would you like to do? [1/2/3] ")" ans
+    case "${ans:-3}" in
+        1)
+            echo ""
+            if [[ "$INSTALL_METHOD" == "release" ]]; then
+                step_download_release "networker-endpoint"
+            else
+                step_ensure_cargo_env
+                step_cargo_install "networker-endpoint"
+            fi
+            echo ""
+            print_ok "Start the endpoint with:"
+            echo "  networker-endpoint"
+            echo ""
+            print_ok "Then test with:"
+            echo "  networker-tester --target http://127.0.0.1:8080/health --modes http1,http2,http3 --runs 5"
+            ;;
+        2)
+            echo ""
+            print_info "Run the installer again to deploy a cloud endpoint:"
+            echo "  bash install.sh endpoint --azure   # Azure"
+            echo "  bash install.sh endpoint --aws     # AWS"
+            ;;
+        *)
+            echo ""
+            print_info "Test against any running endpoint:"
+            echo "  networker-tester --target http://<host>:8080/health --modes http1,http2,http3 --runs 5"
+            ;;
+    esac
 }
 
 # Offer an interactive SSH session into the newly provisioned VM(s).

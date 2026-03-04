@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.65] – 2026-03-04 — Installer: offer complementary component after single-component install
+
+### Added
+- **Offer tester install when only endpoint was deployed** (`install.sh`):
+  if `networker-tester` is not found locally after deploying a remote endpoint,
+  the installer now asks "Install networker-tester locally now?" instead of just
+  printing the command.  If the user accepts, the tester is installed immediately
+  (via release download or `cargo install`) and the quick test runs straight away.
+- **Offer endpoint install when only tester was installed** (`install.sh`):
+  new `_offer_also_endpoint()` step at the end of `display_completion()`.  When
+  only `networker-tester` was installed (no endpoint anywhere), a prompt asks
+  whether to: (1) install `networker-endpoint` locally, (2) deploy one on a cloud
+  VM (shows the re-run command), or (3) skip.  This closes the loop for users who
+  install the tester first and then realise they need something to test against.
+
+---
+
 ## [0.12.64] – 2026-03-04 — Installer: fix quick-test --config bug, OS mismatch detection, SSH diagnostics
 
 ### Fixed
