@@ -718,7 +718,90 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
                 }
             }
 
-            // Chart 3: Throughput by Protocol
+            // Chart 3: Browser Load Time Distribution (box-and-whisker)
+            // Inspired by Paper 1 (GLOBECOM 2016) which uses box plots to show
+            // that variance — not just average — matters when comparing protocols.
+            if !chart_browser.is_empty() {
+                let mut groups: Vec<(String, Vec<f64>, &'static str)> = Vec::new();
+                for (proto, color) in [
+                    (Protocol::Browser1, "#e07b39"),
+                    (Protocol::Browser2, "#4e79a7"),
+                    (Protocol::Browser3, "#59a14f"),
+                    (Protocol::Browser, "#8c6bb1"),
+                ] {
+                    let data: Vec<f64> = chart_browser
+                        .iter()
+                        .filter(|a| a.protocol == proto)
+                        .filter_map(|a| a.browser.as_ref().map(|b| b.load_ms))
+                        .collect();
+                    if data.len() >= 4 {
+                        groups.push((proto.to_string(), data, color));
+                    }
+                }
+                if !groups.is_empty() {
+                    let group_refs: Vec<(&str, &[f64], &str)> = groups
+                        .iter()
+                        .map(|(l, v, c)| (l.as_str(), v.as_slice(), *c))
+                        .collect();
+                    let svg = svg_boxplot(
+                        "Load Time Distribution (p5\u{2013}p95 whiskers, IQR box)",
+                        &group_refs,
+                        "ms",
+                    );
+                    let _ = writeln!(out, "<div>{}</div>", svg);
+                }
+            }
+
+            // Chart 4: Browser Load Time CDF
+            // Inspired by Paper 1 (GLOBECOM 2016) Figure 6 / Figure 7 — CDF plots
+            // show whether a protocol is consistently faster or only occasionally faster.
+            {
+                let mut series: Vec<(String, Vec<f64>, &'static str)> = Vec::new();
+                for (proto, color) in [
+                    (Protocol::Browser1, "#e07b39"),
+                    (Protocol::Browser2, "#4e79a7"),
+                    (Protocol::Browser3, "#59a14f"),
+                    (Protocol::Browser, "#8c6bb1"),
+                ] {
+                    let data: Vec<f64> = chart_browser
+                        .iter()
+                        .filter(|a| a.protocol == proto)
+                        .filter_map(|a| a.browser.as_ref().map(|b| b.load_ms))
+                        .collect();
+                    if data.len() >= 2 {
+                        series.push((proto.to_string(), data, color));
+                    }
+                }
+                // Also add pageload series so real-browser vs synthetic comparison is visible.
+                for (proto, color) in [
+                    (Protocol::PageLoad, "#e07b39"),
+                    (Protocol::PageLoad2, "#4e79a7"),
+                    (Protocol::PageLoad3, "#59a14f"),
+                ] {
+                    let data: Vec<f64> = chart_pl
+                        .iter()
+                        .filter(|a| a.protocol == proto)
+                        .filter_map(|a| a.page_load.as_ref().map(|p| p.total_ms))
+                        .collect();
+                    if data.len() >= 2 {
+                        series.push((proto.to_string(), data, color));
+                    }
+                }
+                if series.len() >= 2 {
+                    let series_refs: Vec<(&str, &[f64], &str)> = series
+                        .iter()
+                        .map(|(l, v, c)| (l.as_str(), v.as_slice(), *c))
+                        .collect();
+                    let svg = svg_cdf(
+                        "Load Time CDF \u{2014} All Protocols",
+                        &series_refs,
+                        "ms",
+                    );
+                    let _ = writeln!(out, "<div>{}</div>", svg);
+                }
+            }
+
+            // Chart 5: Throughput by Protocol (MB/s)
             if has_throughput {
                 use std::collections::BTreeSet;
                 let tp_attempts: Vec<&RequestAttempt> = run
@@ -850,6 +933,81 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
                         observations.push(format!(
                             "H2 is {:.1}ms ({:.1}%) faster than H3 ({:.1}ms vs {:.1}ms avg load)",
                             -diff, -pct, h2, h3
+                        ));
+                    }
+                }
+
+                // TTFB leader (Paper 2 highlight: H3 has lower TTFB in most conditions)
+                {
+                    let mut ttfb_vals: Vec<(String, f64)> = Vec::new();
+                    for proto in [
+                        Protocol::Browser1,
+                        Protocol::Browser2,
+                        Protocol::Browser3,
+                        Protocol::Browser,
+                    ] {
+                        let data: Vec<f64> = chart_browser
+                            .iter()
+                            .filter(|a| a.protocol == proto)
+                            .filter_map(|a| a.browser.as_ref().map(|b| b.ttfb_ms))
+                            .collect();
+                        if !data.is_empty() {
+                            let avg = data.iter().sum::<f64>() / data.len() as f64;
+                            ttfb_vals.push((proto.to_string(), avg));
+                        }
+                    }
+                    if ttfb_vals.len() >= 2 {
+                        if let Some((best, best_v)) = ttfb_vals
+                            .iter()
+                            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+                        {
+                            let worst_v = ttfb_vals
+                                .iter()
+                                .map(|(_, v)| *v)
+                                .fold(0.0_f64, f64::max);
+                            observations.push(format!(
+                                "Lowest TTFB: <strong>{best}</strong> at {best_v:.1}ms \
+                                 ({:.1}ms advantage over slowest protocol)",
+                                worst_v - best_v
+                            ));
+                        }
+                    }
+                }
+
+                // Consistency: p95−p50 spread (Paper 1: variance matters as much as average)
+                {
+                    let mut spreads: Vec<(String, f64)> = Vec::new();
+                    for proto in [
+                        Protocol::Browser1,
+                        Protocol::Browser2,
+                        Protocol::Browser3,
+                        Protocol::Browser,
+                    ] {
+                        let mut data: Vec<f64> = chart_browser
+                            .iter()
+                            .filter(|a| a.protocol == proto)
+                            .filter_map(|a| a.browser.as_ref().map(|b| b.load_ms))
+                            .collect();
+                        if data.len() >= 4 {
+                            data.sort_by(|a, b| {
+                                a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+                            });
+                            let n = data.len();
+                            let p50 = data[((n as f64 * 0.50).round() as usize).min(n - 1)];
+                            let p95 = data[((n as f64 * 0.95).round() as usize).min(n - 1)];
+                            spreads.push((proto.to_string(), p95 - p50));
+                        }
+                    }
+                    if spreads.len() >= 2 {
+                        spreads.sort_by(|a, b| {
+                            a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                        let (stable, stable_sp) = &spreads[0];
+                        let (noisy, noisy_sp) = spreads.last().unwrap();
+                        observations.push(format!(
+                            "Consistency (p95\u{2212}p50): \
+                             <strong>{stable}</strong> most stable ({stable_sp:.1}ms spread) vs \
+                             <strong>{noisy}</strong> ({noisy_sp:.1}ms spread)"
                         ));
                     }
                 }
@@ -1741,6 +1899,262 @@ fn escape_html(s: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#39;")
+}
+
+/// Render a self-contained box-and-whisker SVG chart (horizontal layout).
+///
+/// `groups`: `(label, values, fill_color)` — values need at least 4 points.
+/// Draws: p5 whisker ← Q1 box → median line → Q3 box → p95 whisker.
+/// `unit`: appended to the per-row annotation label.
+fn svg_boxplot(title: &str, groups: &[(&str, &[f64], &str)], unit: &str) -> String {
+    const LBL_W: usize = 130;
+    const BOX_AREA: usize = 280;
+    const VAL_W: usize = 130;
+    const BOX_H: usize = 18;
+    const ROW_H: usize = 32;
+    const PAD_TOP: usize = 30;
+    const PAD_BOT: usize = 12;
+
+    struct BoxRow {
+        label: String,
+        color: String,
+        p5: f64,
+        q1: f64,
+        median: f64,
+        q3: f64,
+        p95: f64,
+    }
+
+    let rows: Vec<BoxRow> = groups
+        .iter()
+        .filter(|(_, v, _)| v.len() >= 4)
+        .map(|(label, vals, color)| {
+            let mut sorted = vals.to_vec();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let n = sorted.len();
+            let pct = |p: f64| -> f64 {
+                let idx = (p * (n - 1) as f64).round() as usize;
+                sorted[idx.min(n - 1)]
+            };
+            BoxRow {
+                label: (*label).to_string(),
+                color: (*color).to_string(),
+                p5: pct(0.05),
+                q1: pct(0.25),
+                median: pct(0.50),
+                q3: pct(0.75),
+                p95: pct(0.95),
+            }
+        })
+        .collect();
+
+    if rows.is_empty() {
+        return String::new();
+    }
+
+    // Scale based on p5–p95 range across all rows, with 5% padding.
+    let global_min = rows.iter().map(|r| r.p5).fold(f64::MAX, f64::min);
+    let global_max = rows.iter().map(|r| r.p95).fold(0.0_f64, f64::max);
+    let range = (global_max - global_min).max(1.0);
+    let pad = range * 0.05;
+    let x_lo = (global_min - pad).max(0.0);
+    let x_hi = global_max + pad;
+    let span = x_hi - x_lo;
+    let scale = |v: f64| -> usize { ((v - x_lo) / span * BOX_AREA as f64).round() as usize };
+
+    let total_h = PAD_TOP + rows.len() * ROW_H + PAD_BOT;
+    let total_w = LBL_W + BOX_AREA + VAL_W;
+
+    let mut s = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{total_w}" height="{total_h}" style="font-family:system-ui,sans-serif;font-size:12px">"#
+    );
+    s.push_str(&format!(
+        r##"<text x="{}" y="18" font-weight="bold" font-size="13" fill="#1a1a2e">{}</text>"##,
+        LBL_W + 5,
+        escape_html(title)
+    ));
+    for (i, row) in rows.iter().enumerate() {
+        let y0 = PAD_TOP + i * ROW_H;
+        let cy = y0 + ROW_H / 2;
+        let bx = LBL_W;
+        s.push_str(&format!(
+            r##"<text x="{}" y="{cy}" text-anchor="end" dominant-baseline="middle" fill="#555">{}</text>"##,
+            bx - 5,
+            escape_html(&row.label)
+        ));
+        let p5x = bx + scale(row.p5);
+        let q1x = bx + scale(row.q1);
+        let medx = bx + scale(row.median);
+        let q3x = bx + scale(row.q3);
+        let p95x = bx + scale(row.p95);
+        let box_top = cy - BOX_H / 2;
+        // Dashed whisker p5–p95
+        s.push_str(&format!(
+            r#"<line x1="{p5x}" y1="{cy}" x2="{p95x}" y2="{cy}" stroke="{}" stroke-width="1.5" stroke-dasharray="3,2" opacity="0.5"/>"#,
+            row.color
+        ));
+        // p5 tick
+        s.push_str(&format!(
+            r#"<line x1="{p5x}" y1="{}" x2="{p5x}" y2="{}" stroke="{}" stroke-width="1.5" opacity="0.6"/>"#,
+            cy - 6, cy + 6, row.color
+        ));
+        // p95 tick
+        s.push_str(&format!(
+            r#"<line x1="{p95x}" y1="{}" x2="{p95x}" y2="{}" stroke="{}" stroke-width="1.5" opacity="0.6"/>"#,
+            cy - 6, cy + 6, row.color
+        ));
+        // IQR box Q1–Q3
+        let box_w = q3x.saturating_sub(q1x).max(2);
+        s.push_str(&format!(
+            r#"<rect x="{q1x}" y="{box_top}" width="{box_w}" height="{BOX_H}" rx="2" fill="{}" opacity="0.75"/>"#,
+            row.color
+        ));
+        // Median line
+        s.push_str(&format!(
+            r#"<line x1="{medx}" y1="{box_top}" x2="{medx}" y2="{}" stroke="white" stroke-width="2.5"/>"#,
+            box_top + BOX_H
+        ));
+        // Annotation
+        s.push_str(&format!(
+            r##"<text x="{}" y="{cy}" dominant-baseline="middle" fill="#555" font-size="11">p50={:.1}  p95={:.1} {unit}</text>"##,
+            bx + BOX_AREA + 6,
+            row.median,
+            row.p95
+        ));
+    }
+    s.push_str("</svg>");
+    s
+}
+
+/// Render a self-contained empirical CDF (step-function) SVG chart.
+///
+/// `series`: `(label, values, stroke_color)` — values need not be pre-sorted.
+/// Series with fewer than 2 values are skipped.
+/// `unit`: appended on x-axis tick labels.
+fn svg_cdf(title: &str, series: &[(&str, &[f64], &str)], unit: &str) -> String {
+    const W: usize = 490;
+    const PAD_L: usize = 46;
+    const PAD_R: usize = 10;
+    const PAD_T: usize = 30;
+    const PAD_B: usize = 36;
+    const PLOT_H: usize = 150;
+    const LEG_ROW: usize = 18;
+
+    let sorted_series: Vec<(&str, Vec<f64>, &str)> = series
+        .iter()
+        .filter(|(_, v, _)| v.len() >= 2)
+        .map(|(lbl, vals, col)| {
+            let mut sv = vals.to_vec();
+            sv.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            (*lbl, sv, *col)
+        })
+        .collect();
+
+    if sorted_series.is_empty() {
+        return String::new();
+    }
+
+    // x range: 0 to 99th-percentile max (prevents outlier stretch).
+    let p99_val = |v: &[f64]| {
+        let i = ((v.len() - 1) as f64 * 0.99).round() as usize;
+        v[i.min(v.len() - 1)]
+    };
+    let x_max = sorted_series
+        .iter()
+        .map(|(_, v, _)| p99_val(v))
+        .fold(0.0_f64, f64::max)
+        * 1.05;
+
+    let plot_w = W - PAD_L - PAD_R;
+    let leg_rows = (sorted_series.len() + 2) / 3;
+    let total_h = PAD_T + PLOT_H + PAD_B + leg_rows * LEG_ROW;
+
+    let sx = |v: f64| PAD_L + (v.min(x_max) / x_max * plot_w as f64).round() as usize;
+    let sy = |p: f64| PAD_T + ((1.0 - p) * PLOT_H as f64).round() as usize;
+
+    let mut s = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{total_h}" style="font-family:system-ui,sans-serif;font-size:11px">"#
+    );
+    s.push_str(&format!(
+        r##"<text x="{}" y="18" text-anchor="middle" font-weight="bold" font-size="13" fill="#1a1a2e">{}</text>"##,
+        W / 2,
+        escape_html(title)
+    ));
+    // Plot background
+    s.push_str(&format!(
+        r##"<rect x="{PAD_L}" y="{PAD_T}" width="{plot_w}" height="{PLOT_H}" fill="#f8f9fa" stroke="#ddd" stroke-width="1"/>"##
+    ));
+    // Y-axis grid + labels
+    for &pct in &[0u32, 25, 50, 75, 100] {
+        let p = pct as f64 / 100.0;
+        let y = sy(p);
+        let stroke = if pct == 0 || pct == 100 { "#ccc" } else { "#e8e8e8" };
+        s.push_str(&format!(
+            r#"<line x1="{PAD_L}" y1="{y}" x2="{}" y2="{y}" stroke="{stroke}" stroke-width="1"/>"#,
+            PAD_L + plot_w
+        ));
+        s.push_str(&format!(
+            r##"<text x="{}" y="{y}" text-anchor="end" dominant-baseline="middle" fill="#999">{pct}%</text>"##,
+            PAD_L - 4
+        ));
+    }
+    // X-axis ticks (5 evenly spaced)
+    let y_bot = PAD_T + PLOT_H;
+    for step in 0..=4usize {
+        let v = x_max * step as f64 / 4.0;
+        let x = sx(v);
+        if step > 0 {
+            s.push_str(&format!(
+                r##"<line x1="{x}" y1="{PAD_T}" x2="{x}" y2="{y_bot}" stroke="#e8e8e8" stroke-width="1"/>"##
+            ));
+        }
+        s.push_str(&format!(
+            r##"<line x1="{x}" y1="{y_bot}" x2="{x}" y2="{}" stroke="#aaa" stroke-width="1"/>"##,
+            y_bot + 4
+        ));
+        s.push_str(&format!(
+            r##"<text x="{x}" y="{}" text-anchor="middle" fill="#999">{:.0} {unit}</text>"##,
+            y_bot + 16,
+            v
+        ));
+    }
+    // CDF step-function polylines
+    for (_, vals, color) in &sorted_series {
+        let n = vals.len();
+        let mut pts = format!("{},{}", sx(0.0), sy(0.0));
+        for (i, &v) in vals.iter().enumerate() {
+            let x = sx(v);
+            pts.push_str(&format!(
+                " {},{} {},{}",
+                x,
+                sy(i as f64 / n as f64),
+                x,
+                sy((i + 1) as f64 / n as f64)
+            ));
+        }
+        s.push_str(&format!(
+            r#"<polyline points="{pts}" fill="none" stroke="{color}" stroke-width="2" stroke-linejoin="miter"/>"#
+        ));
+    }
+    // Legend
+    let leg_y0 = y_bot + PAD_B - 6;
+    for (i, (lbl, _, color)) in sorted_series.iter().enumerate() {
+        let col = i % 3;
+        let row = i / 3;
+        let lx = PAD_L + col * (plot_w / 3);
+        let ly = leg_y0 + row * LEG_ROW;
+        s.push_str(&format!(
+            r#"<rect x="{lx}" y="{}" width="12" height="10" fill="{color}" rx="2"/>"#,
+            ly - 5
+        ));
+        s.push_str(&format!(
+            r##"<text x="{}" y="{ly}" dominant-baseline="middle" fill="#555">{}</text>"##,
+            lx + 16,
+            escape_html(lbl)
+        ));
+    }
+    s.push_str("</svg>");
+    s
 }
 
 /// Render a self-contained horizontal SVG bar chart.
