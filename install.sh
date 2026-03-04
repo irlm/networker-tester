@@ -2321,50 +2321,63 @@ step_azure_create_vm() {
 }
 
 # Open TCP 80/443/8080/8443 and UDP 8443/9998/9999 on the NSG for the endpoint VM.
+# Uses az network nsg rule create (not az vm open-port) to avoid priority conflicts
+# with the default-allow-ssh rule that Azure always places at priority 1000.
 step_azure_open_endpoint_ports() {
     local rg="$1" vm="$2"
 
     next_step "Open firewall ports (Azure)"
 
-    print_info "Opening TCP 80, 443, 8080, 8443…"
-    az vm open-port --resource-group "$rg" --name "$vm" --port 80   --priority 1000 --output none
-    az vm open-port --resource-group "$rg" --name "$vm" --port 443  --priority 1001 --output none
-    az vm open-port --resource-group "$rg" --name "$vm" --port 8080 --priority 1002 --output none
-    az vm open-port --resource-group "$rg" --name "$vm" --port 8443 --priority 1003 --output none
-    print_ok "TCP 80, 443, 8080, 8443 open"
-
-    print_info "Opening UDP 8443, 9998, 9999…"
+    # Locate the NSG attached to this VM.
     local nsg_name
     nsg_name="$(az network nsg list \
         --resource-group "$rg" \
         --query "[?contains(name, '${vm}')].name | [0]" \
         -o tsv 2>/dev/null || echo "")"
 
-    if [[ -z "$nsg_name" ]]; then
+    if [[ -z "$nsg_name" || "$nsg_name" == "None" ]]; then
         nsg_name="$(az network nsg list \
             --resource-group "$rg" \
             --query "[0].name" \
             -o tsv 2>/dev/null || echo "")"
     fi
 
-    if [[ -z "$nsg_name" ]]; then
-        print_warn "Could not detect NSG name; UDP ports may not be open."
-        print_warn "Open manually: az network nsg rule create --resource-group $rg --nsg-name <nsg> \\"
-        print_warn "  --name Networker-UDP --protocol Udp --direction Inbound \\"
-        print_warn "  --priority 1010 --destination-port-ranges 8443 9998 9999 --access Allow"
-    else
-        az network nsg rule create \
-            --resource-group "$rg" \
-            --nsg-name "$nsg_name" \
-            --name "Networker-UDP" \
-            --protocol Udp \
-            --direction Inbound \
-            --priority 1010 \
-            --destination-port-ranges 8443 9998 9999 \
-            --access Allow \
-            --output none
-        print_ok "UDP 8443, 9998, 9999 open"
+    if [[ -z "$nsg_name" || "$nsg_name" == "None" ]]; then
+        print_warn "Could not detect NSG name — open ports manually:"
+        print_warn "  az network nsg rule create --resource-group $rg --nsg-name <nsg> \\"
+        print_warn "    --name Networker-TCP --protocol Tcp --direction Inbound \\"
+        print_warn "    --priority 1100 --destination-port-ranges 80 443 8080 8443 --access Allow"
+        print_warn "  az network nsg rule create --resource-group $rg --nsg-name <nsg> \\"
+        print_warn "    --name Networker-UDP --protocol Udp --direction Inbound \\"
+        print_warn "    --priority 1110 --destination-port-ranges 8443 9998 9999 --access Allow"
+        return 0
     fi
+
+    print_info "Opening TCP 80, 443, 8080, 8443…"
+    az network nsg rule create \
+        --resource-group "$rg" \
+        --nsg-name "$nsg_name" \
+        --name "Networker-TCP" \
+        --protocol Tcp \
+        --direction Inbound \
+        --priority 1100 \
+        --destination-port-ranges 80 443 8080 8443 \
+        --access Allow \
+        --output none
+    print_ok "TCP 80, 443, 8080, 8443 open"
+
+    print_info "Opening UDP 8443, 9998, 9999…"
+    az network nsg rule create \
+        --resource-group "$rg" \
+        --nsg-name "$nsg_name" \
+        --name "Networker-UDP" \
+        --protocol Udp \
+        --direction Inbound \
+        --priority 1110 \
+        --destination-port-ranges 8443 9998 9999 \
+        --access Allow \
+        --output none
+    print_ok "UDP 8443, 9998, 9999 open"
 }
 
 # Set Azure auto-shutdown policy (04:00 UTC = 11 PM EST).
