@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.70] – 2026-03-04 — Fix source installs: drop --locked, always compile on VM
+
+### Fixed
+- **`--locked` breaks source installs** (`install.sh`): `Cargo.lock` in the v0.12.69 tag
+  still had workspace package versions at `0.12.66` (lock file was not staged with the
+  version bump commit). Dropped `--locked` from all four `cargo install --git` calls —
+  the git tag/commit already pins the code; `--locked` is redundant and fragile when the
+  lock file can drift.
+- **Remote VM installs compiled locally** (`install.sh`): the source-build fallback path
+  compiled the binary on the **local machine** and SCP-uploaded it, requiring local Rust +
+  git and failing silently for cross-OS scenarios. Replaced `_remote_install_binary_from_source`
+  with a new approach: SSH to the VM with agent forwarding (`-A`), install Rust on the VM
+  if absent, then run `cargo install --git` directly on the VM. Also updated `Cargo.lock`
+  to reflect the 0.12.70 workspace version.
+
+### Added
+- **`_remote_vm_cargo_install()`** (`install.sh`): new helper that SSHes to a remote VM
+  with agent forwarding and runs `cargo install --git $REPO_SSH` directly on the VM.
+  No local Rust or cross-compilation required; SSH agent forwards credentials so the VM
+  can clone the private GitHub repo.
+
+---
+
 ## [0.12.69] – 2026-03-04 — Azure RG reuse; remote source compilation
 
 ### Changed

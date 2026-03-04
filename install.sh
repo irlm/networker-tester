@@ -272,7 +272,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.12.69"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.12.70"  # fallback when gh is unavailable
 
 DO_SSH_CHECK=1
 DO_RUST_INSTALL=0
@@ -1809,10 +1809,10 @@ step_cargo_install() {
     if command -v git &>/dev/null; then
         _cargo_progress "Building $binary" \
             env CARGO_NET_GIT_FETCH_WITH_CLI=true \
-            cargo install --git "$REPO_SSH" "$binary" --locked --force $features_arg
+            cargo install --git "$REPO_SSH" "$binary" --force $features_arg
     else
         _cargo_progress "Building $binary" \
-            cargo install --git "$REPO_SSH" "$binary" --locked --force $features_arg
+            cargo install --git "$REPO_SSH" "$binary" --force $features_arg
     fi
 
     local installed_ver
@@ -1921,111 +1921,62 @@ REMOTE
     fi
 }
 
-# Compile a binary locally from source and upload it to a remote Linux VM.
-# Falls back to this when no GitHub release artifacts are available.
-# $1 = binary, $2 = public IP, $3 = SSH user, $4 = remote arch (uname -m output)
-_remote_install_binary_from_source() {
-    local binary="$1" ip="$2" user="$3" remote_arch="$4"
-
-    local local_os local_arch
-    local_os="$(uname -s 2>/dev/null || echo "")"
-    local_arch="$(uname -m 2>/dev/null || echo "")"
-
-    # Detect remote OS for compatibility check
-    local remote_os
-    remote_os="$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "${user}@${ip}" \
-        "uname -s" 2>/dev/null || echo "Linux")"
-
-    if [[ "$local_os" != "Linux" && "$local_os" != "Darwin" ]]; then
-        print_err "Source compilation fallback requires a Linux or macOS local machine."
-        exit 1
-    fi
-    if [[ "$local_os" != "$remote_os" ]]; then
-        print_info "OS mismatch (local=${local_os}, remote=${remote_os}) — compiling on VM."
-        local features_arg=""
-        if [[ "$binary" == "networker-tester" ]] && _remote_chrome_available "$ip" "$user"; then
-            features_arg="--features browser"
-        fi
-        _remote_compile_on_vm "$binary" "$ip" "$user" "$features_arg"
-        return
-    fi
-    if [[ "$remote_arch" != "$local_arch" ]]; then
-        print_info "Arch mismatch (local=${local_arch}, remote=${remote_arch}) — compiling on VM."
-        local features_arg=""
-        if [[ "$binary" == "networker-tester" ]] && _remote_chrome_available "$ip" "$user"; then
-            features_arg="--features browser"
-        fi
-        _remote_compile_on_vm "$binary" "$ip" "$user" "$features_arg"
-        return
-    fi
+# Install a binary on a remote VM by running cargo install directly on the VM.
+# Uses SSH agent forwarding (-A) so the VM can clone the private GitHub repo.
+# $1 = binary  $2 = VM IP  $3 = SSH user  $4 = features flag (e.g. "--features browser")
+_remote_vm_cargo_install() {
+    local binary="$1" ip="$2" user="$3" features_arg="${4:-}"
 
     echo ""
-    print_warn "No release binary available — compiling ${binary} locally and uploading."
+    print_warn "No release binary — installing ${binary} on VM from source."
     print_dim  "This takes ~5-10 minutes on first build."
     echo ""
 
-    step_ensure_cargo_env
+    # shellcheck disable=SC2087
+    ssh -A -o StrictHostKeyChecking=no "${user}@${ip}" bash <<REMOTE
+set -euo pipefail
+if ! command -v cargo &>/dev/null; then
+    echo "Installing Rust toolchain on VM…"
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
+fi
+source "\$HOME/.cargo/env"
+if ! command -v git &>/dev/null; then
+    sudo apt-get install -y git 2>/dev/null || sudo yum install -y git 2>/dev/null || true
+fi
+echo "Installing ${binary} from source on VM…"
+env CARGO_NET_GIT_FETCH_WITH_CLI=true \
+    GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no' \
+    cargo install --git ${REPO_SSH} ${binary} --force ${features_arg}
+REMOTE
 
-    local tmp_root="/tmp/networker-build-$$"
-    mkdir -p "$tmp_root"
+    local remote_ver
+    remote_ver="$(ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
+        "${binary} --version 2>/dev/null" || echo "")"
+    if [[ "$remote_ver" =~ ^networker ]]; then
+        print_ok "${binary} installed on VM from source  ($remote_ver)"
+    else
+        print_err "${binary} cargo install on VM succeeded but binary failed to run: ${remote_ver:-<no output>}"
+        exit 1
+    fi
+}
+
+# Compile and install a binary on a remote Linux VM when no release binary is available.
+# $1 = binary  $2 = VM IP  $3 = SSH user
+_remote_install_binary_from_source() {
+    local binary="$1" ip="$2" user="$3"
 
     local features_arg=""
     if [[ "$binary" == "networker-tester" ]]; then
-        # Check Chrome on the *remote* VM (not locally — this binary will run there)
         if _remote_chrome_available "$ip" "$user"; then
             features_arg="--features browser"
-            print_info "Chrome detected on remote VM — compiling with browser probe support."
+            print_info "Chrome detected on VM — compiling with browser probe support."
         else
-            print_info "Chrome not found on remote VM — compiling without browser probe."
-            print_dim  "  To enable later: install Chrome on the VM then re-run:  cargo install --git $REPO_SSH networker-tester --features browser"
+            print_info "Chrome not found on VM — compiling without browser probe."
+            print_dim  "  To enable later: install Chrome then re-run cargo install --git $REPO_SSH networker-tester --features browser"
         fi
     fi
 
-    if command -v git &>/dev/null; then
-        _cargo_progress "Building ${binary} (for remote VM)" \
-            env CARGO_NET_GIT_FETCH_WITH_CLI=true \
-            cargo install --git "$REPO_SSH" "$binary" \
-            --locked --force --root "$tmp_root" $features_arg
-    else
-        _cargo_progress "Building ${binary} (for remote VM)" \
-            cargo install --git "$REPO_SSH" "$binary" \
-            --locked --force --root "$tmp_root" $features_arg
-    fi
-
-    local compiled_bin="${tmp_root}/bin/${binary}"
-    if [[ ! -f "$compiled_bin" ]]; then
-        print_err "Build failed — binary not found at ${compiled_bin}"
-        rm -rf "$tmp_root"
-        exit 1
-    fi
-
-    print_info "Uploading compiled binary to VM (${ip})…"
-    scp -o StrictHostKeyChecking=no -q \
-        "$compiled_bin" "${user}@${ip}:/tmp/${binary}"
-    rm -rf "$tmp_root"
-
-    ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
-        "sudo mv /tmp/${binary} /usr/local/bin/${binary} && \
-         sudo chmod +x /usr/local/bin/${binary}"
-
-    # Verify the binary actually runs on the remote VM
-    local remote_ver exec_err
-    exec_err="$(ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
-        "/usr/local/bin/${binary} --version 2>&1" || echo "")"
-    if [[ "$exec_err" =~ ^networker ]]; then
-        remote_ver="$exec_err"
-        print_ok "${binary} compiled locally and installed on VM  ($remote_ver)"
-    else
-        echo ""
-        print_err "${binary} was uploaded but failed to execute on the VM!"
-        echo "  Output: ${exec_err:-<none>}"
-        echo ""
-        echo "  This usually means the binary was compiled for a different OS or architecture."
-        echo "  Check: ssh ${user}@${ip} 'file /usr/local/bin/${binary}'"
-        echo "  Common fix: resolve GitHub Actions billing so release binaries are used instead:"
-        echo "    https://github.com/settings/billing"
-        exit 1
-    fi
+    _remote_vm_cargo_install "$binary" "$ip" "$user" "$features_arg"
 }
 
 # Download binary from GitHub release and install it on a remote host.
@@ -2055,7 +2006,7 @@ _remote_install_binary() {
     fi
     if [[ -z "$ver" ]] || ! printf '%s' "$has_assets" | grep -q "${binary}-"; then
         print_warn "Release ${ver:-unknown} has no pre-built binaries for ${binary}."
-        _remote_install_binary_from_source "$binary" "$ip" "$user" "$remote_arch"
+        _remote_install_binary_from_source "$binary" "$ip" "$user"
         return
     fi
 
