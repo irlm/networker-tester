@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Stub for az (Azure CLI).
+#
+# STUB_AZ_FAIL   If set to "1", always exit 1
+
+if [[ "${STUB_AZ_FAIL:-}" == "1" ]]; then
+    exit 1
+fi
+echo "{}"
+exit 0

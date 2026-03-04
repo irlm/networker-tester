@@ -3208,4 +3208,5 @@ main() {
     display_completion
 }
 
-main "$@"
+# Run main only when the script is executed directly (not sourced for testing).
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then main "$@"; fi

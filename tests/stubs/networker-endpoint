@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Stub for networker-endpoint binary.
+
+if [[ "$1" == "--version" ]]; then
+    echo "networker-endpoint 0.12.65"
+    exit 0
+fi
+echo "Listening on :8080"
+exit 0
