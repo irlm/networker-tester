@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.12.63] – 2026-03-04 — Installer: source-build fallback + VM auto-shutdown + component prompt
+## [0.12.63] – 2026-03-04 — Installer: source-build fallback + VM auto-shutdown + component prompt + remote Chrome check
 
 ### Added
 - **Local source-build fallback** (`install.sh`): when no GitHub release artifacts exist
@@ -27,6 +27,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   positional argument (i.e. not `install.sh tester` / `install.sh endpoint`), a
   friendly menu now asks "what do you want to install?" before displaying the plan —
   so users are no longer silently defaulted to installing both components.
+
+### Fixed
+- **Remote Chrome detection** (`install.sh`): Chrome is now checked on the **remote VM**
+  (not locally) when deploying a remote tester.
+  - Linux VMs: SSHes to detect Chrome; offers to install Chromium via the distro package
+    manager if absent, then compiles `networker-tester` with `--features browser` accordingly.
+  - Windows VMs: checks via `az vm run-command` PowerShell; shows a manual-install reminder
+    if Chrome is missing.
+  - `display_plan()` no longer shows a local Chrome install step when the tester is
+    remote-only.
 
 ---
 
