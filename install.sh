@@ -103,10 +103,17 @@ _cargo_progress() {
 
     # Non-interactive: just stream output normally
     if [[ ! -t 1 ]]; then
+        # set +e so that a cargo failure doesn't trigger errexit before we can
+        # capture PIPESTATUS and print a clear error banner.
+        set +e
         "$@" </dev/null 2>&1 | tee "$log_file"
-        local rc=${PIPESTATUS[0]}
+        local rc="${PIPESTATUS[0]}"
+        set -e
+        if [[ $rc -ne 0 ]]; then
+            print_err "${label} — build failed (see output above)"
+        fi
         rm -f "$log_file"
-        return $rc
+        return "$rc"
     fi
 
     # Spinner characters (Unicode braille; falls back to ASCII on dumb terms)
@@ -131,12 +138,14 @@ _cargo_progress() {
         # Count crates compiled so far and show the most recent one being compiled
         local compiled_count=0 phase=""
         compiled_count="$(grep -c ' Compiling ' "$log_file" 2>/dev/null || echo 0)"
+        # || true prevents set -e from firing when grep finds no matches (exit 1)
+        # which happens every iteration while the log is still empty.
         phase="$(grep -oE 'Compiling[[:space:]]+[^[:space:]]+' \
-                    "$log_file" 2>/dev/null | tail -1)"
+                    "$log_file" 2>/dev/null | tail -1 || true)"
         # Fall back to Fetching/Updating/Linking if no Compiling line yet
         if [[ -z "$phase" ]]; then
             phase="$(grep -oE '(Fetching|Updating|Downloading|Linking|Finished|Installing)[[:space:]]+[^[:space:]]+' \
-                        "$log_file" 2>/dev/null | tail -1)"
+                        "$log_file" 2>/dev/null | tail -1 || true)"
         fi
         phase="${phase:-…}"
         local count_tag="[${compiled_count} crates]"
@@ -165,7 +174,7 @@ _cargo_progress() {
         # Pull crate count and timing from the build log
         local final_count timing=""
         final_count="$(grep -c ' Compiling ' "$log_file" 2>/dev/null || echo 0)"
-        timing="$(grep -oE 'Finished[^)]+\)' "$log_file" 2>/dev/null | tail -1)"
+        timing="$(grep -oE 'Finished[^)]+\)' "$log_file" 2>/dev/null | tail -1 || true)"
         local count_str=""
         [[ "$final_count" -gt 0 ]] && count_str="  ${DIM}[${final_count} crates]${RESET}"
         [[ -n "$timing" ]] && timing="  ${DIM}(${timing})${RESET}"
@@ -272,7 +281,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.12.70"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.12.71"  # fallback when gh is unavailable
 
 DO_SSH_CHECK=1
 DO_RUST_INSTALL=0
