@@ -252,5 +252,5 @@ teardown_file() {
         --modes http1 \
         --runs 3 \
         --insecure \
-        --quiet
+        --output-dir /tmp/nwk-local-test
 }
