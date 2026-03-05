@@ -11,6 +11,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.78] – 2026-03-05 — Fix HTTP/2 ~40 ms latency spikes (Nagle + delayed-ACK)
+
+### Fixed
+- **TCP_NODELAY on all HTTP/1+2 connections (client and server).**
+  HTTP/2 probes showed intermittent ~40–42 ms TTFB spikes (1–2 of every 5 runs)
+  due to the classic Linux Nagle + delayed-ACK interaction: during the HTTP/2
+  SETTINGS handshake, one side holds a small segment (SETTINGS/SETTINGS_ACK)
+  waiting for data to piggyback the ACK on, while the other side waits for an ACK
+  before sending. The TCP delayed-ACK timer fires after 40 ms, unblocking both.
+
+  Fix:
+  - **Tester (`http.rs`, `native.rs`)**: call `set_nodelay(true)` on the
+    `TcpStream` immediately after `connect()`, before passing it to hyper.
+  - **Endpoint (`lib.rs`)**: use `axum_server::accept::NoDelayAcceptor` (plain
+    HTTP server) and `RustlsAcceptor::new(cfg).acceptor(NoDelayAcceptor)` (HTTPS
+    server) so every accepted socket has TCP_NODELAY set before the TLS handshake.
+
+  HTTP/2 mean TTFB drops from ~9 ms (with occasional 41 ms outliers) to sub-1 ms,
+  matching HTTP/1.1 on the same connection.
+
+---
+
 ## [0.12.77] – 2026-03-05 — Fix installer prompts in non-interactive mode; fix Azure two-VM integration test
 
 ### Fixed

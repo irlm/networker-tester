@@ -283,6 +283,9 @@ async fn run_http_or_tcp(
         }
     };
     let tcp_duration_ms = t_tcp.elapsed().as_secs_f64() * 1000.0;
+    // Disable Nagle's algorithm to prevent 40 ms delayed-ACK stalls during
+    // the HTTP/2 SETTINGS handshake (Nagle + delayed-ACK interaction).
+    let _ = tcp_stream.set_nodelay(true);
     let local_addr = tcp_stream.local_addr().ok().map(|a| a.to_string());
 
     let sock_info = SocketInfo::from_stream(&tcp_stream);

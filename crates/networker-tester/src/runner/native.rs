@@ -205,6 +205,7 @@ async fn run_native_probe_impl(
         }
     };
     let tcp_duration_ms = t_tcp.elapsed().as_secs_f64() * 1000.0;
+    let _ = tcp_stream.set_nodelay(true);
     let local_addr = tcp_stream.local_addr().ok().map(|a| a.to_string());
     let sock_info = SocketInfo::from_stream(&tcp_stream);
     let tcp_result = TcpResult {

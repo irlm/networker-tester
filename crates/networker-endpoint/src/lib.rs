@@ -4,7 +4,8 @@ mod udp_echo;
 mod udp_throughput;
 
 use anyhow::Context;
-use axum_server::tls_rustls::RustlsConfig;
+use axum_server::accept::NoDelayAcceptor;
+use axum_server::tls_rustls::{RustlsAcceptor, RustlsConfig};
 pub use routes::{build_router, AppState};
 use std::net::SocketAddr;
 use tokio::sync::oneshot;
@@ -88,18 +89,24 @@ pub async fn run_with_shutdown(
     // Spawn UDP throughput server
     let udp_tp_handle = tokio::spawn(udp_throughput::run_udp_throughput(cfg.udp_throughput_port));
 
-    // HTTP server
+    // HTTP server — NoDelayAcceptor sets TCP_NODELAY on every accepted socket,
+    // preventing 40 ms Nagle + delayed-ACK stalls during the HTTP/2 handshake.
     let http_router = router.clone();
     let http_handle = tokio::spawn(async move {
         axum_server::bind(http_addr)
+            .acceptor(NoDelayAcceptor)
             .serve(http_router.into_make_service())
             .await
             .expect("HTTP server error");
     });
 
-    // HTTPS server – axum-server handles HTTP/1.1 + HTTP/2 ALPN automatically
+    // HTTPS server – axum-server handles HTTP/1.1 + HTTP/2 ALPN automatically.
+    // Chain NoDelayAcceptor inside RustlsAcceptor so TCP_NODELAY is set before
+    // the TLS handshake begins.
     let https_handle = tokio::spawn(async move {
-        axum_server::bind_rustls(https_addr, tls_config)
+        let acceptor = RustlsAcceptor::new(tls_config).acceptor(NoDelayAcceptor);
+        axum_server::Server::bind(https_addr)
+            .acceptor(acceptor)
             .serve(router.into_make_service())
             .await
             .expect("HTTPS server error");
