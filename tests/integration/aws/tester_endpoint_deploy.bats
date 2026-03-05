@@ -111,7 +111,7 @@ setup_file() {
     sg_id="$(aws ec2 create-security-group \
         --region "$REGION" \
         --group-name "$sg_name" \
-        --description "networker integration test — tester+endpoint (auto-cleanup)" \
+        --description "networker integration test - tester+endpoint (auto-cleanup)" \
         --query "GroupId" \
         --output text)"
     _save sg_id "$sg_id"
