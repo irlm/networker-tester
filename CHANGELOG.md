@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.73] – 2026-03-05 — Fix build spinner and iptables persistence on fresh VMs
+
+### Fixed
+- **Build spinner**: each spinner frame was printing on a new line instead of updating
+  in place when the terminal was narrow. Replaced `\r%-*s\r` column-padding with
+  `\r\033[2K` (ANSI erase-line), which reliably clears the current line without
+  requiring accurate column counting. Also added a `max_phase <= 0` guard to prevent
+  an empty `phase` variable from causing an arithmetic overflow.
+- **iptables persistence** (`step_setup_endpoint_service` and
+  `_remote_create_endpoint_service`): `sh: cannot create /etc/iptables/rules.v4:
+  Directory nonexistent` error when `/etc/iptables/` did not exist (systems without
+  `iptables-persistent` pre-installed). Fix: `sudo mkdir -p /etc/iptables` before
+  attempting `iptables-save`.
+
+---
+
 ## [0.12.72] – 2026-03-04 — Public repo: HTTPS install, VM bootstrap, local service setup
 
 ### Changed
