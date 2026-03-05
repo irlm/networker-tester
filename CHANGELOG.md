@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.75] – 2026-03-05 — Sync install.ps1 to public repo (remove SSH, --locked)
+
+### Fixed
+- **install.ps1 still used SSH URL and SSH check** after the repo went public in
+  v0.12.72. `$RepoSsh` renamed to `$RepoHttps` (`https://github.com/irlm/networker-tester`);
+  `Invoke-SshStep`, `$script:DoSshCheck`, and `-SkipSshCheck` parameter removed;
+  `--locked` dropped from both `cargo install` calls; `CARGO_NET_GIT_FETCH_WITH_CLI`
+  removed; "private Git repo" and SSH-key prerequisite language updated throughout
+  (`Show-Help`, `Show-Plan`, `Invoke-CustomizeFlow`, `Invoke-CargoInstallStep`).
+
+---
+
 ## [0.12.74] – 2026-03-05 — Auto-install build tools; fix spinner when stdin is piped
 
 ### Fixed
