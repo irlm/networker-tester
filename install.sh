@@ -114,8 +114,17 @@ _cargo_progress() {
 
     tput civis 2>/dev/null || true   # hide cursor
 
+    # Get terminal width reliably even when stdin is a pipe (curl|bash).
+    # stty </dev/tty queries the terminal directly regardless of stdin.
     local cols
-    cols="$(tput cols 2>/dev/null || echo 80)"
+    cols="$(stty size </dev/tty 2>/dev/null | cut -d' ' -f2 || true)"
+    if [[ -z "$cols" || ! "$cols" =~ ^[0-9]+$ || $cols -le 0 ]]; then
+        cols="$(tput cols 2>/dev/null || true)"
+    fi
+    if [[ -z "$cols" || ! "$cols" =~ ^[0-9]+$ || $cols -le 0 ]]; then
+        cols="${COLUMNS:-80}"
+    fi
+    [[ $cols -lt 20 ]] && cols=20
 
     while kill -0 "$cargo_pid" 2>/dev/null; do
         # Count crates compiled so far and show the most recent one being compiled
@@ -133,23 +142,23 @@ _cargo_progress() {
         phase="${phase:-…}"
         local count_tag="[${compiled_count} crates]"
 
-        # Fit content within terminal width.
-        # If the terminal is too narrow to show phase, drop it entirely to prevent
-        # the line from overflowing, which causes \r to land on the wrong line and
-        # the spinner to scroll down instead of updating in place.
-        local overhead=$(( ${#label} + ${#count_tag} + 8 ))
-        local max_phase=$(( cols - overhead ))
-        if [[ $max_phase -le 0 ]]; then
-            phase=""
-        elif [[ ${#phase} -gt $max_phase ]]; then
-            phase="${phase:0:$(( max_phase - 1 ))}…"
+        # Build the full visible line as plain text (no ANSI codes), then
+        # hard-limit it to cols-1 characters so it can never wrap.  Wrapping
+        # is what causes \r to land on the wrong line and each frame to appear
+        # on a new row instead of overwriting the previous one.
+        local line="  ${spin[$si]}  ${label}  ${count_tag} ${phase}"
+        if [[ ${#line} -ge $cols ]]; then
+            line="${line:0:$(( cols - 2 ))}…"
         fi
 
-        # \033[2K erases the entire current line — more reliable than padding
-        # with spaces because it works even when cols is reported incorrectly.
-        printf "\r\033[2K  %s  %s  %s%s%s%s" \
-            "${spin[$si]}" "$label" \
-            "$DIM" "$count_tag" "${phase:+ }${phase}" "$RESET"
+        # Re-split into the unstyled prefix (spinner+label) and the dim suffix
+        # (count+phase) based on the known fixed prefix length.
+        local pfx_len=$(( 2 + 1 + 2 + ${#label} + 2 ))   # "  X  label  "
+        local pfx="${line:0:$pfx_len}"
+        local sfx="${line:$pfx_len}"
+
+        # \033[2K erases the entire current line before printing.
+        printf "\r\033[2K%s%s%s%s" "$pfx" "$DIM" "$sfx" "$RESET"
 
         si=$(( (si + 1) % ${#spin[@]} ))
         sleep 0.12
@@ -270,7 +279,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.12.73"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.12.74"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -1734,24 +1743,33 @@ step_cargo_install() {
 
     if ! command -v cc &>/dev/null && ! command -v gcc &>/dev/null && ! command -v clang &>/dev/null; then
         echo ""
-        print_warn "No C linker found (cc/gcc/clang) — cargo will likely fail."
         case "$SYS_OS" in
             Darwin)
-                echo "  Install Xcode Command Line Tools:"
+                print_warn "No C linker found — install Xcode Command Line Tools then re-run:"
                 echo "    xcode-select --install"
+                exit 1
                 ;;
             Linux)
+                print_info "No C linker found — installing build tools automatically…"
                 case "$PKG_MGR" in
-                    apt-get) echo "  sudo apt-get install -y build-essential" ;;
-                    dnf)     echo "  sudo dnf install -y gcc gcc-c++ make" ;;
-                    pacman)  echo "  sudo pacman -S --noconfirm base-devel" ;;
-                    zypper)  echo "  sudo zypper install -y gcc make" ;;
-                    apk)     echo "  sudo apk add build-base" ;;
-                    *)       echo "  Install gcc or clang via your package manager." ;;
+                    apt-get) sudo apt-get install -y build-essential 2>&1 | tail -3 || true ;;
+                    dnf)     sudo dnf install -y gcc gcc-c++ make    2>&1 | tail -3 || true ;;
+                    pacman)  sudo pacman -S --noconfirm base-devel   2>&1 | tail -3 || true ;;
+                    zypper)  sudo zypper install -y gcc make          2>&1 | tail -3 || true ;;
+                    apk)     sudo apk add build-base                  2>&1 | tail -3 || true ;;
+                    *)
+                        print_warn "Cannot auto-install: unknown package manager."
+                        print_warn "Install gcc or clang then re-run this installer."
+                        exit 1
+                        ;;
                 esac
+                if ! command -v cc &>/dev/null && ! command -v gcc &>/dev/null && ! command -v clang &>/dev/null; then
+                    print_err "C linker still not found after install attempt — aborting."
+                    exit 1
+                fi
+                print_ok "Build tools installed"
                 ;;
         esac
-        echo "  Then re-run this installer."
     fi
     echo ""
 
@@ -2327,6 +2345,7 @@ step_azure_create_vm() {
         --size "$size" \
         --admin-username azureuser \
         $auth_options \
+        --only-show-errors \
         --output tsv \
         --query publicIpAddress)"
 

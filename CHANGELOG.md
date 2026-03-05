@@ -11,6 +11,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.74] – 2026-03-05 — Auto-install build tools; fix spinner when stdin is piped
+
+### Fixed
+- **Missing C linker no longer aborts with a cryptic cargo error.** When `cc`/`gcc`/`clang`
+  is absent on Linux the installer now automatically runs the appropriate package manager
+  command (`apt-get install -y build-essential`, `dnf install -y gcc gcc-c++ make`, etc.)
+  before invoking `cargo install`. This affects both local source builds and the
+  remote VM bootstrap path (the VM's own installer runs the same code).
+  On macOS the installer still prints the `xcode-select --install` instruction and exits
+  cleanly (Xcode CLI tools cannot be installed non-interactively).
+- **Build spinner prints on a new line every frame when running as `curl | bash`.**
+  Root cause: when bash's stdin is a pipe, `tput cols` queries stdin (which is the
+  pipe, not the terminal) and returns 0. With `cols=0` the phase was dropped but
+  `count_tag` still made the line long enough to wrap on narrow terminals. Wrapping
+  causes `\r` to land on the overflow line, so each frame scrolls down instead of
+  overwriting in place. Fix: use `stty size </dev/tty` as primary width source
+  (queries the terminal directly regardless of stdin), with `tput cols` and
+  `$COLUMNS` as fallbacks. Also hard-limit the entire visible line to `cols-1`
+  characters so wrapping is impossible even if width is mis-detected.
+
+---
+
 ## [0.12.73] – 2026-03-05 — Fix build spinner and iptables persistence on fresh VMs
 
 ### Fixed
