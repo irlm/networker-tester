@@ -1,0 +1,8 @@
+# Integration test reports are saved here with names like:
+#   azure-eastus-Ubuntu22-2026-03-05T14-32-00.json
+#   aws-us-east-1-Ubuntu22-2026-03-05T14-32-00.json
+# They are excluded from version control — keep locally for analysis.
+*.json
+*.html
+*.xlsx
+*.csv

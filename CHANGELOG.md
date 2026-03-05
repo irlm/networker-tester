@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.76] – 2026-03-05 — Fix source install on fresh Linux VMs (apt-get update, binary path)
+
+### Fixed
+- **`apt-get install build-essential` now runs `apt-get update -qq` first.**
+  Fresh Ubuntu VMs (Azure/AWS) have stale package metadata and fail with 404
+  errors when trying to install GCC without updating first.
+- **`networker-endpoint` systemd service now copies binary to `/usr/local/bin/`**
+  before writing the unit file. The `networker` system user cannot traverse
+  `/home/<user>/.cargo/bin/` on Ubuntu 22.04 where home dirs are `drwx------`.
+  The binary is now copied to a world-executable location so the service starts.
+- **`aws ec2` commands: replace `--output none` with `--output text >/dev/null`.**
+  AWS CLI v2 does not support `--output none` (unlike Azure CLI); all AWS EC2
+  calls in the installer now redirect output silently.
+
+### Tests
+- AWS integration test (`tests/integration/aws/endpoint_deploy.bats`): 7/7 pass
+  end-to-end against a real `t3.small` in `us-east-1`.
+- Both Azure and AWS integration tests now use `BATS_FILE_TMPDIR` state files
+  to pass VM IP / instance ID between `setup_file` and `@test` subshells
+  (bats runs each `@test` in a subshell; exported vars don't propagate).
+
+---
+
 ## [0.12.75] – 2026-03-05 — Sync install.ps1 to public repo; fix spinner in curl|bash
 
 ### Fixed
