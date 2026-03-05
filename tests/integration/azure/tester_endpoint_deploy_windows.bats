@@ -208,16 +208,17 @@ Write-Host "vcvars64 exists: $(Test-Path $vcvars)"
 cmd /c "`"$vcvars`" && C:\cargo\bin\cargo.exe install --git https://github.com/irlm/networker-tester networker-endpoint --force 2>&1"
 Write-Host "cargo exit: $LASTEXITCODE"
 
-Write-Host "=== Step 4: Create Windows Service ==="
-sc.exe create networker-endpoint binPath='C:\cargo\bin\networker-endpoint.exe' start=auto 2>&1 | Write-Host
-sc.exe start networker-endpoint 2>&1 | Write-Host
-
-Write-Host "=== Step 5: Open Windows Firewall ==="
+Write-Host "=== Step 4: Start networker-endpoint ==="
 netsh advfirewall firewall add rule name='Networker-TCP' protocol=TCP dir=in action=allow localport='80,443,8080,8443' 2>&1 | Out-Null
 netsh advfirewall firewall add rule name='Networker-UDP' protocol=UDP dir=in action=allow localport='8443,9998,9999' 2>&1 | Out-Null
 Write-Host "Firewall rules added"
 
-sc.exe query networker-endpoint | Select-String 'STATE' | Write-Host
+Start-Process -FilePath 'C:\cargo\bin\networker-endpoint.exe' -WindowStyle Hidden
+Start-Sleep -Seconds 5
+$proc = Get-Process networker-endpoint -ErrorAction SilentlyContinue
+if ($proc) { Write-Host "networker-endpoint: RUNNING (PID $($proc.Id))" }
+else        { Write-Host "networker-endpoint: NOT RUNNING" }
+
 $ver = & 'C:\cargo\bin\networker-endpoint.exe' --version 2>&1
 Write-Host "Endpoint version: $ver"
 PSEOF
@@ -372,10 +373,12 @@ teardown_file() {
 # Tests
 # ---------------------------------------------------------------------------
 
-@test "networker-endpoint service is RUNNING on endpoint VM" {
+@test "networker-endpoint process is RUNNING on endpoint VM" {
     local rg; rg="$(_load rg)"
     local out
-    out="$(_az_ps "$rg" "$EP_VM" 'sc.exe query networker-endpoint')"
+    out="$(_az_ps "$rg" "$EP_VM" \
+        'Get-Process networker-endpoint -ErrorAction SilentlyContinue | ForEach-Object { "RUNNING" }')"
+    echo "process check: $out"
     echo "$out" | grep -qi "RUNNING"
 }
 
