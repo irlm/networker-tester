@@ -201,6 +201,20 @@ Invoke-WebRequest -Uri 'https://win.rustup.rs/x86_64' -OutFile 'C:\rustup-init.e
 Remove-Item 'C:\rustup-init.exe' -Force -ErrorAction SilentlyContinue
 
 $env:PATH = "C:\cargo\bin;$env:PATH"
+
+Write-Host "=== Step 2b: Add MSVC linker to PATH ==="
+$msvcBase = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC'
+$msvcVer = (Get-ChildItem $msvcBase -ErrorAction SilentlyContinue |
+    Sort-Object Name -Descending | Select-Object -First 1).Name
+if ($msvcVer) {
+    $linkDir = "$msvcBase\$msvcVer\bin\Hostx64\x64"
+    $env:PATH = "$linkDir;$env:PATH"
+    Write-Host "MSVC linker dir: $linkDir"
+    Write-Host "link.exe present: $(Test-Path $linkDir\link.exe)"
+} else {
+    Write-Host "WARNING: no MSVC version found under $msvcBase"
+}
+
 Write-Host "=== Step 3: cargo install networker-endpoint ==="
 & 'C:\cargo\bin\cargo.exe' install --git https://github.com/irlm/networker-tester networker-endpoint --force 2>&1 | Write-Host
 Write-Host "cargo exit: $LASTEXITCODE"
@@ -241,6 +255,20 @@ Invoke-WebRequest -Uri 'https://win.rustup.rs/x86_64' -OutFile 'C:\rustup-init.e
 Remove-Item 'C:\rustup-init.exe' -Force -ErrorAction SilentlyContinue
 
 $env:PATH = "C:\cargo\bin;$env:PATH"
+
+Write-Host "=== Step 2b: Add MSVC linker to PATH ==="
+$msvcBase = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC'
+$msvcVer = (Get-ChildItem $msvcBase -ErrorAction SilentlyContinue |
+    Sort-Object Name -Descending | Select-Object -First 1).Name
+if ($msvcVer) {
+    $linkDir = "$msvcBase\$msvcVer\bin\Hostx64\x64"
+    $env:PATH = "$linkDir;$env:PATH"
+    Write-Host "MSVC linker dir: $linkDir"
+    Write-Host "link.exe present: $(Test-Path $linkDir\link.exe)"
+} else {
+    Write-Host "WARNING: no MSVC version found under $msvcBase"
+}
+
 Write-Host "=== Step 3: cargo install networker-tester ==="
 & 'C:\cargo\bin\cargo.exe' install --git https://github.com/irlm/networker-tester networker-tester --force 2>&1 | Write-Host
 Write-Host "cargo exit: $LASTEXITCODE"
