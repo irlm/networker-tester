@@ -6,7 +6,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version     = "0.12.76"
+version     = "0.12.77"
 edition     = "2021"
 authors     = ["NetworkerTester Contributors"]
 license     = "MIT"

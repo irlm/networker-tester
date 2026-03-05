@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.77] – 2026-03-05 — Fix installer prompts in non-interactive mode; fix Azure two-VM integration test
+
+### Fixed
+- **`_offer_also_endpoint` now skips in auto-yes (`-y`) mode.**
+  When installing only `networker-tester` with `-y` (e.g., via the Azure two-VM
+  integration test), the "also install endpoint?" prompt would hang or exit non-zero
+  because there is no stdin terminal. Added `[[ $AUTO_YES -eq 1 ]] && return 0`.
+- **Azure two-VM integration test: fixed `networker-tester` invocation.**
+  - Replaced `--output json --report <path>` (invalid flags) with `--output-dir <dir>`.
+  - Removed `--quiet` flag (does not exist in the CLI).
+  - Tester output dir is now `ls`-ed to find the `run-*.json` artifact before SCP.
+
+### Integration tests
+- `tests/integration/azure/tester_endpoint_deploy.bats` — **7/7 pass** end-to-end:
+  endpoint service active, /health HTTP, tester binary, HTTP/1.1 probe, HTTP/2 probe,
+  JSON report downloaded (azure-eastus-Ubuntu22-<timestamp>.json), report fields valid.
+
+---
+
 ## [0.12.76] – 2026-03-05 — Fix source install on fresh Linux VMs (apt-get update, binary path)
 
 ### Fixed

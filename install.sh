@@ -283,7 +283,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.12.76"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.12.77"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -1227,43 +1227,43 @@ ensure_aws_cli() {
         echo ""
         echo "  The AWS CLI is required to provision EC2 instances and manage resources."
         echo ""
-        if [[ -n "$PKG_MGR" ]]; then
-            local install_cmd
-            case "$PKG_MGR" in
-                brew)    install_cmd="brew install awscli" ;;
-                apt-get) install_cmd="sudo apt-get install -y awscli" ;;
-                dnf)     install_cmd="sudo dnf install -y awscli" ;;
-                pacman)  install_cmd="sudo pacman -S --noconfirm aws-cli" ;;
-                zypper)  install_cmd="sudo zypper install -y aws-cli" ;;
-                *)       install_cmd="" ;;
-            esac
-            if [[ -n "$install_cmd" ]]; then
-                echo "  Install command:  $install_cmd"
+        # Determine install method. On Linux use the official AWS CLI v2 zip installer
+        # (apt-get/dnf ship an outdated v1 package that is often missing entirely).
+        local install_cmd=""
+        if [[ "$PKG_MGR" == "brew" ]]; then
+            install_cmd="brew install awscli"
+        elif [[ "$SYS_OS" == "Linux" ]]; then
+            install_cmd="official AWS CLI v2 installer (curl + unzip)"
+        fi
+
+        if [[ -n "$install_cmd" ]]; then
+            echo "  Install command:  $install_cmd"
+            echo ""
+            if ask_yn "Install AWS CLI now?" "y"; then
                 echo ""
-                if ask_yn "Install AWS CLI now?" "y"; then
-                    echo ""
-                    case "$PKG_MGR" in
-                        brew)    brew install awscli ;;
-                        apt-get) sudo apt-get install -y awscli ;;
-                        dnf)     sudo dnf install -y awscli ;;
-                        pacman)  sudo pacman -S --noconfirm aws-cli ;;
-                        zypper)  sudo zypper install -y aws-cli ;;
-                    esac
-                    if command -v aws &>/dev/null; then
-                        AWS_CLI_AVAILABLE=1
-                        print_ok "AWS CLI installed"
-                    else
-                        print_err "AWS CLI installation failed — install manually from https://aws.amazon.com/cli/"
-                        echo "  Then re-run this installer."
-                        exit 1
-                    fi
+                if [[ "$PKG_MGR" == "brew" ]]; then
+                    brew install awscli
                 else
-                    print_err "AWS CLI is required for remote AWS deployment."
-                    echo "  Install from: https://aws.amazon.com/cli/"
-                    echo "  Then re-run:  bash install.sh --aws"
+                    # Official AWS CLI v2 for Linux (x86_64 and arm64)
+                    local arch_url="https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip"
+                    [[ "$(uname -m)" == "aarch64" ]] && \
+                        arch_url="https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip"
+                    print_info "Downloading AWS CLI v2…"
+                    curl -fsSL "$arch_url" -o /tmp/awscliv2.zip
+                    unzip -q /tmp/awscliv2.zip -d /tmp/awscli-install
+                    sudo /tmp/awscli-install/aws/install --update
+                    rm -rf /tmp/awscliv2.zip /tmp/awscli-install
+                fi
+                if command -v aws &>/dev/null; then
+                    AWS_CLI_AVAILABLE=1
+                    print_ok "AWS CLI installed  ($(aws --version 2>&1 | head -1))"
+                else
+                    print_err "AWS CLI installation failed — install manually from https://aws.amazon.com/cli/"
+                    echo "  Then re-run this installer."
                     exit 1
                 fi
             else
+                print_err "AWS CLI is required for remote AWS deployment."
                 echo "  Install from: https://aws.amazon.com/cli/"
                 echo "  Then re-run:  bash install.sh --aws"
                 exit 1
@@ -3128,6 +3128,8 @@ _offer_also_endpoint() {
     [[ $DO_INSTALL_ENDPOINT -eq 1 || $DO_REMOTE_ENDPOINT -eq 1 ]] && return 0
     # And we must have actually installed a tester
     [[ $DO_INSTALL_TESTER -eq 0 && $DO_REMOTE_TESTER -eq 0 ]] && return 0
+    # Skip in non-interactive / auto-yes mode
+    [[ $AUTO_YES -eq 1 ]] && return 0
 
     echo ""
     echo "${BOLD}──────────────────────────────────────────────────────────${RESET}"

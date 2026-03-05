@@ -134,23 +134,28 @@ setup_file() {
 
     # --- Run the tester and save the remote report path ---
     echo "=== Running networker-tester on tester VM → endpoint VM ===" >&3
-    local remote_report="/tmp/nwk-inttest-report.json"
+    local remote_outdir="/tmp/nwk-inttest-report"
     ssh_run "$ts_ip" "$SSH_USER" \
-        "~/.cargo/bin/networker-tester \
+        "mkdir -p ${remote_outdir} && \
+         ~/.cargo/bin/networker-tester \
             --target https://${ep_ip}:8443/health \
             --modes http1,http2,http3 \
             --runs 5 \
             --insecure \
-            --output json \
-            --report ${remote_report}" >&3 2>&3 || true
-    _save remote_report "$remote_report"
+            --output-dir ${remote_outdir}" >&3 2>&3 || true
+
+    # Find the JSON artifact written by the tester (run-<ts>.json)
+    local remote_report
+    remote_report="$(ssh_run "$ts_ip" "$SSH_USER" \
+        "ls ${remote_outdir}/run-*.json 2>/dev/null | head -1" || echo "")"
+    _save remote_report "${remote_report:-}"
 
     # --- Download report to local results/ directory ---
     mkdir -p "$RESULTS_DIR"
     local timestamp; timestamp="$(date -u +%Y-%m-%dT%H-%M-%S)"
     local local_report="${RESULTS_DIR}/azure-${REGION}-Ubuntu22-${timestamp}.json"
     _save local_report "$local_report"
-    if scp -o StrictHostKeyChecking=no -q \
+    if [[ -n "$remote_report" ]] && scp -o StrictHostKeyChecking=no -q \
            "${SSH_USER}@${ts_ip}:${remote_report}" "$local_report" 2>/dev/null; then
         echo "=== Report saved locally: $local_report ===" >&3
     else
@@ -208,7 +213,7 @@ teardown_file() {
     out="$(ssh_run "$ts_ip" "$SSH_USER" \
         "~/.cargo/bin/networker-tester \
             --target http://${ep_ip}:8080/health \
-            --modes http1 --runs 3 --quiet 2>&1")"
+            --modes http1 --runs 3 2>&1")"
     echo "$out" | grep -qi "http1\|pass\|ms\|networker"
 }
 
@@ -219,7 +224,7 @@ teardown_file() {
     out="$(ssh_run "$ts_ip" "$SSH_USER" \
         "~/.cargo/bin/networker-tester \
             --target https://${ep_ip}:8443/health \
-            --modes http2 --runs 3 --insecure --quiet 2>&1")"
+            --modes http2 --runs 3 --insecure 2>&1")"
     echo "$out" | grep -qi "http2\|pass\|ms\|networker"
 }
 
