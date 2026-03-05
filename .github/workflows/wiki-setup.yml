@@ -13,6 +13,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
+          WORKSPACE: ${{ github.workspace }}
         run: |
           set -euo pipefail
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
@@ -22,12 +23,13 @@ jobs:
             echo "Wiki already initialized"
           else
             echo "Bootstrapping wiki"
-            mkdir -p /tmp/wiki && cd /tmp/wiki
+            mkdir -p /tmp/wiki
+            cd /tmp/wiki
             git init -b master
             git remote add origin "$WIKI_URL"
-            cd /
+            cd "$WORKSPACE"
           fi
-          cp .github/wiki-pages/*.md /tmp/wiki/
+          cp "$WORKSPACE/.github/wiki-pages/"*.md /tmp/wiki/
           cd /tmp/wiki
           ls -la
           git add .
