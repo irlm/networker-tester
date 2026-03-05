@@ -133,15 +133,23 @@ _cargo_progress() {
         phase="${phase:-…}"
         local count_tag="[${compiled_count} crates]"
 
-        # Truncate phase so the whole line fits in the terminal
+        # Fit content within terminal width.
+        # If the terminal is too narrow to show phase, drop it entirely to prevent
+        # the line from overflowing, which causes \r to land on the wrong line and
+        # the spinner to scroll down instead of updating in place.
         local overhead=$(( ${#label} + ${#count_tag} + 8 ))
         local max_phase=$(( cols - overhead ))
-        [[ ${#phase} -gt $max_phase && $max_phase -gt 4 ]] && phase="${phase:0:$(( max_phase - 1 ))}…"
+        if [[ $max_phase -le 0 ]]; then
+            phase=""
+        elif [[ ${#phase} -gt $max_phase ]]; then
+            phase="${phase:0:$(( max_phase - 1 ))}…"
+        fi
 
-        printf "\r%-*s\r  %s  %s  %s%s %s%s" \
-            "$cols" "" \
+        # \033[2K erases the entire current line — more reliable than padding
+        # with spaces because it works even when cols is reported incorrectly.
+        printf "\r\033[2K  %s  %s  %s%s%s%s" \
             "${spin[$si]}" "$label" \
-            "$DIM" "$count_tag" "$phase" "$RESET"
+            "$DIM" "$count_tag" "${phase:+ }${phase}" "$RESET"
 
         si=$(( (si + 1) % ${#spin[@]} ))
         sleep 0.12
@@ -151,7 +159,7 @@ _cargo_progress() {
     local rc=$?
 
     tput cnorm 2>/dev/null || true   # restore cursor
-    printf "\r%-*s\r" "$cols" ""     # clear spinner line
+    printf "\r\033[2K"               # clear spinner line
 
     if [[ $rc -eq 0 ]]; then
         # Pull crate count and timing from the build log
@@ -262,7 +270,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.12.72"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.12.73"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -1960,7 +1968,9 @@ if command -v iptables &>/dev/null; then
     if command -v netfilter-persistent &>/dev/null; then
         sudo netfilter-persistent save 2>/dev/null || true
     elif command -v iptables-save &>/dev/null; then
-        sudo sh -c 'iptables-save > /etc/iptables/rules.v4 2>/dev/null || iptables-save > /etc/iptables.rules 2>/dev/null || true'
+        sudo mkdir -p /etc/iptables 2>/dev/null || true
+        sudo sh -c 'iptables-save > /etc/iptables/rules.v4' 2>/dev/null || \
+            sudo sh -c 'iptables-save > /etc/iptables.rules' 2>/dev/null || true
     fi
 fi
 REMOTE
@@ -2025,7 +2035,9 @@ UNIT
         if command -v netfilter-persistent &>/dev/null; then
             sudo netfilter-persistent save 2>/dev/null || true
         elif command -v iptables-save &>/dev/null; then
-            sudo sh -c 'iptables-save > /etc/iptables/rules.v4 2>/dev/null || iptables-save > /etc/iptables.rules 2>/dev/null || true'
+            sudo mkdir -p /etc/iptables 2>/dev/null || true
+            sudo sh -c 'iptables-save > /etc/iptables/rules.v4' 2>/dev/null || \
+                sudo sh -c 'iptables-save > /etc/iptables.rules' 2>/dev/null || true
         fi
     fi
 
