@@ -19,20 +19,39 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
           WIKI_URL="https://x-access-token:${GH_TOKEN}@github.com/${REPO}.wiki.git"
-          if git clone "$WIKI_URL" /tmp/wiki 2>/dev/null; then
-            echo "Wiki already initialized"
+
+          echo "Attempting to clone wiki repo..."
+          if git clone "$WIKI_URL" /tmp/wiki 2>&1; then
+            echo "Wiki already initialized — updating pages"
           else
-            echo "Bootstrapping wiki"
-            mkdir -p /tmp/wiki
-            cd /tmp/wiki
-            git init -b master
-            git remote add origin "$WIKI_URL"
-            cd "$WORKSPACE"
+            echo "Wiki repo not yet initialized."
+            echo ""
+            echo "To bootstrap the wiki, go to:"
+            echo "  https://github.com/${REPO}/wiki"
+            echo "Click 'Create the first page', save any content (e.g. 'placeholder'),"
+            echo "then re-run this workflow."
+            echo ""
+            echo "After initialization, this workflow will push all 5 wiki pages automatically."
+            exit 1
           fi
+
           cp "$WORKSPACE/.github/wiki-pages/"*.md /tmp/wiki/
           cd /tmp/wiki
           ls -la
           git add .
           git status
           git commit -m "Add wiki pages: Home, Installation, Usage, Protocol-Comparison, Cloud-Deployment" || echo "Nothing to commit"
-          git push origin master --force || git push origin HEAD:master --force
+          git push origin HEAD
+
+      - name: Delete this workflow file
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          SHA=$(gh api "/repos/$REPO/contents/.github/workflows/wiki-setup.yml" --jq '.sha' 2>/dev/null || echo "")
+          if [ -n "$SHA" ]; then
+            gh api --method DELETE "/repos/$REPO/contents/.github/workflows/wiki-setup.yml" \
+              -f message="Remove one-time wiki setup workflow after successful initialization" \
+              -f sha="$SHA" && echo "Workflow self-deleted" || echo "Could not self-delete (ok)"
+          fi
