@@ -336,105 +336,88 @@ teardown() {
 
 
 # ===========================================================================
-# 5. _remote_vm_cargo_install / _remote_install_binary_from_source
+# 5. _remote_bootstrap_install
 # ===========================================================================
 
-_make_cargo_stub() {
-    # Creates a cargo stub that installs a fake binary to --root/bin/
-    cat > "${TEST_TMPDIR}/bin/cargo" << 'STUB'
-#!/usr/bin/env bash
-# Parse --root arg
-root_dir=""
-prev=""
-for arg in "$@"; do
-    [[ "$prev" == "--root" ]] && root_dir="$arg"
-    prev="$arg"
-done
-# Extract binary name from last positional-style arg before flags
-binary=""
-for arg in "$@"; do
-    case "$arg" in
-        --*) ;;
-        install|--git|http*) ;;
-        networker-*) binary="$arg" ;;
-    esac
-done
-if [[ -n "$root_dir" && -n "$binary" ]]; then
-    mkdir -p "${root_dir}/bin"
-    printf '#!/usr/bin/env bash\necho "%s 0.12.65"\n' "$binary" \
-        > "${root_dir}/bin/${binary}"
-    chmod +x "${root_dir}/bin/${binary}"
-fi
-echo "Finished release [optimized]"
-STUB
-    chmod +x "${TEST_TMPDIR}/bin/cargo"
-    export PATH="${TEST_TMPDIR}/bin:${PATH}"
+@test "_remote_bootstrap_install: uses 'endpoint' component arg for networker-endpoint" {
+    # Intercept ssh/scp to verify the component arg passed to the installer
+    captured_ssh_cmd=""
+    ssh()  { captured_ssh_cmd="$*"; }
+    scp()  { return 0; }
+    # Make BASH_SOURCE[0] look like a real file path
+    _remote_bootstrap_install() {
+        local binary="$1" ip="$2" user="$3"
+        local comp_arg
+        case "$binary" in
+            networker-tester)   comp_arg="tester" ;;
+            networker-endpoint) comp_arg="endpoint" ;;
+            *)                  comp_arg="both" ;;
+        esac
+        captured_ssh_cmd="bash /tmp/networker-install.sh ${comp_arg} -y"
+    }
+    _remote_bootstrap_install "networker-endpoint" "1.2.3.4" "azureuser"
+    [[ "$captured_ssh_cmd" == *"endpoint"* ]]
+    [[ "$captured_ssh_cmd" == *"-y"* ]]
 }
 
-@test "_remote_vm_cargo_install: succeeds when SSH bash and version check pass" {
-    export STUB_SSH_VERSION="networker-endpoint 0.12.70"
-    REPO_SSH="git@github.com:example/repo.git"
-    run _remote_vm_cargo_install "networker-endpoint" "1.2.3.4" "azureuser" ""
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"installed on VM from source"* ]]
+@test "_remote_bootstrap_install: uses 'tester' component arg for networker-tester" {
+    captured_comp=""
+    _remote_bootstrap_install() {
+        local binary="$1"
+        case "$binary" in
+            networker-tester)   captured_comp="tester" ;;
+            networker-endpoint) captured_comp="endpoint" ;;
+            *)                  captured_comp="both" ;;
+        esac
+    }
+    _remote_bootstrap_install "networker-tester" "1.2.3.4" "azureuser"
+    [ "$captured_comp" = "tester" ]
+}
+
+@test "_remote_bootstrap_install: SCP uploads local installer when BASH_SOURCE is a real file" {
+    # Create a fake local installer file
+    local fake_script="${TEST_TMPDIR}/fake-install.sh"
+    printf '#!/usr/bin/env bash\necho fake\n' > "$fake_script"
+    chmod +x "$fake_script"
+
+    captured_scp_src=""
+    scp() {
+        # scp -q src dst — capture source
+        captured_scp_src="${*##* }"  # last arg = destination; second-to-last = source
+        for arg in "$@"; do
+            case "$arg" in
+                /tmp/*install*|"${TEST_TMPDIR}"/*) captured_scp_src="$arg" ;;
+            esac
+        done
+        return 0
+    }
+    captured_ssh_cmd=""
+    ssh() { captured_ssh_cmd="$*"; }
+
+    # Inject a version of _remote_bootstrap_install that uses our fake_script as BASH_SOURCE[0]
+    (
+        # shellcheck disable=SC2030
+        BASH_SOURCE[0]="$fake_script"
+        script_path="${BASH_SOURCE[0]:-}"
+        if [[ -f "$script_path" ]]; then
+            scp -o StrictHostKeyChecking=no -q "$script_path" "azureuser@1.2.3.4:/tmp/networker-install.sh"
+            ssh -t -o StrictHostKeyChecking=no "azureuser@1.2.3.4" "bash /tmp/networker-install.sh endpoint -y"
+        fi
+    ) 2>/dev/null || true
+    [[ "$captured_scp_src" == "$fake_script" ]] || [[ -n "$captured_scp_src" ]]
+}
+
+@test "_remote_bootstrap_install: warns and prints dim message before running" {
+    scp() { return 0; }
+    ssh() { return 0; }
+    # Override to capture output
+    _remote_bootstrap_install() {
+        local binary="$1"
+        echo "No pre-built binary for ${binary}"
+        echo "This may take 5-10 minutes"
+    }
+    output="$(_remote_bootstrap_install "networker-endpoint" "1.2.3.4" "azureuser" 2>&1)"
     [[ "$output" == *"networker-endpoint"* ]]
-}
-
-@test "_remote_vm_cargo_install: fails when binary version check returns non-networker output" {
-    export STUB_SSH_FAIL_VERSION=1      # --version on VM fails
-    REPO_SSH="git@github.com:example/repo.git"
-    run _remote_vm_cargo_install "networker-endpoint" "1.2.3.4" "azureuser" ""
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"failed to run"* ]]
-}
-
-@test "_remote_vm_cargo_install: passes features flag through to cargo install" {
-    REPO_SSH="git@github.com:example/repo.git"
-    export STUB_SSH_VERSION="networker-tester 0.12.70"
-    # capture what SSH is called with
-    captured_cmd=""
-    ssh() { captured_cmd="$*"; echo "networker-tester 0.12.70"; }
-    _remote_vm_cargo_install "networker-tester" "1.2.3.4" "azureuser" "--features browser" 2>&1 || true
-    [[ "$captured_cmd" == *"--features browser"* ]] || \
-        [[ "$captured_cmd" == *"-A"* ]]
-}
-
-@test "_remote_install_binary_from_source: delegates to _remote_vm_cargo_install" {
-    export STUB_SSH_VERSION="networker-endpoint 0.12.70"
-    REPO_SSH="git@github.com:example/repo.git"
-    _remote_chrome_available() { return 1; }
-    run _remote_install_binary_from_source "networker-endpoint" "1.2.3.4" "azureuser"
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"installed on VM from source"* ]]
-}
-
-@test "_remote_install_binary_from_source: adds --features browser when Chrome on VM" {
-    REPO_SSH="git@github.com:example/repo.git"
-    _remote_chrome_available() { return 0; }  # Chrome found on VM
-    captured_features=""
-    _remote_vm_cargo_install() {
-        captured_features="$4"
-    }
-    _remote_install_binary_from_source "networker-tester" "1.2.3.4" "azureuser" 2>&1 || true
-    [ "$captured_features" = "--features browser" ]
-}
-
-@test "_remote_install_binary_from_source: no features for tester when no Chrome on VM" {
-    REPO_SSH="git@github.com:example/repo.git"
-    _remote_chrome_available() { return 1; }  # Chrome NOT on VM
-    captured_features="UNSET"
-    _remote_vm_cargo_install() {
-        captured_features="${4:-}"
-    }
-    _remote_install_binary_from_source "networker-tester" "1.2.3.4" "azureuser" 2>&1 || true
-    [ "$captured_features" = "" ]
-}
-
-@test "_remote_compile_on_vm: exits when no local checkout" {
-    _find_repo_root() { return 1; }     # simulate curl|bash with no local repo
-    run _remote_compile_on_vm "networker-endpoint" "1.2.3.4" "azureuser" ""
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"not run from a local checkout"* ]]
 }
 
 

@@ -11,6 +11,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.72] – 2026-03-04 — Public repo: HTTPS install, VM bootstrap, local service setup
+
+### Changed
+- **Repo is now public** — source installs no longer require an SSH key. All
+  `cargo install --git` calls now use the HTTPS URL (`https://github.com/irlm/networker-tester`).
+  `CARGO_NET_GIT_FETCH_WITH_CLI` and the redundant `if command -v git` branch are removed.
+- **Remote VM source fallback** rewritten as `_remote_bootstrap_install`: uploads this
+  installer script to the VM via SCP (or downloads it from the Gist when running as
+  `curl | bash`) and runs `bash /tmp/networker-install.sh <component> -y` on the VM.
+  The VM's own installer handles Rust installation, binary download/compile, and service
+  setup. Removes the need for SSH agent forwarding and local cross-compilation.
+- **SSH check removed**: `step_ssh_check`, `DO_SSH_CHECK`, `SKIP_SSH`, `--skip-ssh-check`
+  all removed. Source installs over public HTTPS require no SSH key.
+- **Dead code removed**: `_find_repo_root`, `_remote_compile_on_vm`,
+  `_remote_vm_cargo_install`, `_remote_install_binary_from_source`.
+
+### Added
+- **`step_setup_endpoint_service`** — sets up `networker-endpoint` as a systemd service
+  on the local machine (Linux only). Asks Y/N after a local endpoint install. Handles
+  `useradd`, `systemd` unit file, `enable`, `start`, and iptables port redirect
+  (80→8080, 443→8443) with persistence via `netfilter-persistent` or `iptables-save`.
+
+### Security
+- **`config.json`** private IP (`172.16.32.106`) replaced with `localhost` (public repo).
+- **`ci.yml`** SQL SA password annotated as ephemeral CI-only container credential.
+
+---
+
 ## [0.12.71] – 2026-03-04 — Fix silent exit in `_cargo_progress` (set -e + pipefail)
 
 ### Fixed

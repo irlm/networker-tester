@@ -78,7 +78,7 @@ jobs:
         image: mcr.microsoft.com/mssql/server:2022-latest
         env:
           ACCEPT_EULA: "Y"
-          SA_PASSWORD: "NetworkerTest1!"
+          SA_PASSWORD: "NetworkerTest1!"  # ephemeral CI-only container
         ports:
           - 1433:1433
         options: >-
@@ -196,7 +196,7 @@ jobs:
         image: mcr.microsoft.com/mssql/server:2022-latest
         env:
           ACCEPT_EULA: "Y"
-          SA_PASSWORD: "NetworkerTest1!"
+          SA_PASSWORD: "NetworkerTest1!"  # ephemeral CI-only container
         ports:
           - 1433:1433
         options: >-

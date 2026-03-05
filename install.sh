@@ -10,7 +10,7 @@
 #   release  – download pre-built binary from the latest GitHub release via
 #              gh CLI (fast, ~10 s); requires: gh installed + gh auth login
 #   source   – compile from source via cargo install (slower, ~5-10 min);
-#              requires: SSH key for the private repo + Rust/cargo
+#              requires: Rust/cargo (repo is public — no SSH key needed)
 #
 # Usage (piped from curl):
 #   curl -fsSL <raw-gist-url>/install.sh | bash -s -- [OPTIONS] [tester|endpoint|both]
@@ -46,26 +46,9 @@
 # ──────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-REPO_SSH="ssh://git@github.com/irlm/networker-tester"
+REPO_HTTPS="https://github.com/irlm/networker-tester"
 REPO_GH="irlm/networker-tester"
 INSTALL_DIR="${HOME}/.cargo/bin"
-
-# Locate the Cargo workspace root relative to install.sh.
-# Prints the directory path on success; returns 1 when not found
-# (e.g. installer was downloaded via curl | bash with no local checkout).
-_find_repo_root() {
-    local script_path="${BASH_SOURCE[0]:-$0}"
-    local dir
-    dir="$(cd "$(dirname "$script_path")" 2>/dev/null && pwd)" || return 1
-    while [[ -n "$dir" && "$dir" != "/" ]]; do
-        if [[ -f "${dir}/Cargo.toml" && -d "${dir}/crates" ]]; then
-            printf '%s' "$dir"
-            return 0
-        fi
-        dir="$(dirname "$dir")"
-    done
-    return 1
-}
 
 # ── Colors (ANSI C quoting; safe even when stdin is a curl pipe) ──────────────
 if [ -t 1 ]; then
@@ -230,13 +213,12 @@ Install location (interactive; can also be set via flags):
 Local install modes (auto-detected; override in customize flow or via flag):
   release   Download pre-built binary via gh CLI — fast (~10 s)
             Requires: gh installed and authenticated (gh auth login)
-  source    Compile from private Git repo via cargo install — slower (~5-10 min)
-            Requires: SSH key for github.com + Rust/cargo
+  source    Compile from GitHub via cargo install — slower (~5-10 min)
+            Requires: Rust/cargo (no SSH key needed — repo is public)
 
 Options:
   -y, --yes                Non-interactive: accept all defaults (local install)
   --from-source            Force source-compile mode (skip release detection)
-  --skip-ssh-check         Skip the GitHub SSH connectivity test (source mode only)
   --skip-rust              Skip Rust installation (source mode only)
 
 Azure options:
@@ -274,16 +256,14 @@ EOF
 COMPONENT=""   # "" = not set via CLI; "tester" | "endpoint" | "both" = explicit
 AUTO_YES=0
 FROM_SOURCE=0
-SKIP_SSH=0
 SKIP_RUST=0
 
 INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.12.71"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.12.72"  # fallback when gh is unavailable
 
-DO_SSH_CHECK=1
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
 DO_INSTALL_ENDPOINT=1
@@ -366,8 +346,6 @@ parse_args() {
                 AUTO_YES=1 ;;
             --from-source)
                 FROM_SOURCE=1 ;;
-            --skip-ssh-check)
-                SKIP_SSH=1 ;;
             --skip-rust)
                 SKIP_RUST=1 ;;
             # Azure
@@ -422,9 +400,6 @@ parse_args() {
         both)     ;;
     esac
 
-    if [[ $SKIP_SSH -eq 1 ]]; then
-        DO_SSH_CHECK=0
-    fi
 
     # If a cloud flag was set but matching component wasn't enabled, enable it
     if [[ $DO_REMOTE_ENDPOINT -eq 1 && $DO_INSTALL_ENDPOINT -eq 0 ]]; then
@@ -689,13 +664,6 @@ display_plan() {
                 fi
             fi
 
-            if [[ $DO_SSH_CHECK -eq 1 ]]; then
-                printf "    %s. ${BOLD}SSH check${RESET}              Verify GitHub SSH access\n" "$step"
-                step=$((step + 1))
-            else
-                printf "    ${DIM}-. SSH check              (skipped)${RESET}\n"
-            fi
-
             if [[ $DO_RUST_INSTALL -eq 1 ]]; then
                 printf "    %s. ${BOLD}Install Rust${RESET}           Download rustup and run installer\n" "$step"
                 step=$((step + 1))
@@ -710,11 +678,11 @@ display_plan() {
                 browser_note="  ${DIM}[+browser feature]${RESET}"
             fi
             if [[ $do_local_tester -eq 1 ]]; then
-                printf "    %s. ${BOLD}Install networker-tester${RESET}   cargo install from private Git repo%s\n" "$step" "$browser_note"
+                printf "    %s. ${BOLD}Install networker-tester${RESET}   cargo install from GitHub%s\n" "$step" "$browser_note"
                 step=$((step + 1))
             fi
             if [[ $do_local_endpoint -eq 1 ]]; then
-                printf "    %s. ${BOLD}Install networker-endpoint${RESET} cargo install from private Git repo\n" "$step"
+                printf "    %s. ${BOLD}Install networker-endpoint${RESET} cargo install from GitHub\n" "$step"
                 step=$((step + 1))
             fi
 
@@ -726,7 +694,7 @@ display_plan() {
                 step=$((step + 1))
             fi
             echo ""
-            print_dim "Repository:  $REPO_SSH"
+            print_dim "Repository:  $REPO_HTTPS"
             print_dim "Source code is compiled locally — no pre-built binaries are downloaded."
         fi
     fi
@@ -1529,12 +1497,6 @@ customize_flow() {
             echo ""
         fi
 
-        if ask_yn "Run SSH connectivity check for GitHub?" "y"; then
-            DO_SSH_CHECK=1
-        else
-            DO_SSH_CHECK=0
-        fi
-
         if [[ $RUST_EXISTS -eq 0 ]]; then
             echo ""
             if ask_yn "Install Rust via rustup (sh.rustup.rs)?" "y"; then
@@ -1621,30 +1583,6 @@ step_download_release() {
 }
 
 # ── Source-mode steps ─────────────────────────────────────────────────────────
-step_ssh_check() {
-    next_step "Verify GitHub SSH access"
-    print_info "Connecting to git@github.com…"
-
-    local ssh_out
-    ssh_out=$(ssh -o BatchMode=yes \
-                  -o StrictHostKeyChecking=accept-new \
-                  -o ConnectTimeout=10 \
-                  -T git@github.com </dev/null 2>&1 || true)
-
-    if printf '%s' "$ssh_out" | grep -q "successfully authenticated"; then
-        print_ok "SSH access confirmed"
-    else
-        echo ""
-        print_err "SSH authentication to GitHub failed."
-        echo ""
-        echo "  Raw output: $ssh_out"
-        echo ""
-        echo "  Ensure your SSH key is loaded and has access to the private repo."
-        echo "  Test manually:  ssh -T git@github.com"
-        exit 1
-    fi
-}
-
 step_install_git() {
     next_step "Install git"
     print_info "Installing git via ${PKG_MGR}…"
@@ -1784,7 +1722,7 @@ step_cargo_install() {
     local binary="$1"
     next_step "Install $binary"
     print_info "Building and installing $binary from source…"
-    print_dim "This compiles from the private Git repo and may take a few minutes."
+    print_dim "Compiling from GitHub — may take a few minutes on first build."
 
     if ! command -v cc &>/dev/null && ! command -v gcc &>/dev/null && ! command -v clang &>/dev/null; then
         echo ""
@@ -1815,14 +1753,8 @@ step_cargo_install() {
         print_info "Chrome detected — compiling with browser probe support."
     fi
 
-    if command -v git &>/dev/null; then
-        _cargo_progress "Building $binary" \
-            env CARGO_NET_GIT_FETCH_WITH_CLI=true \
-            cargo install --git "$REPO_SSH" "$binary" --force $features_arg
-    else
-        _cargo_progress "Building $binary" \
-            cargo install --git "$REPO_SSH" "$binary" --force $features_arg
-    fi
+    _cargo_progress "Building $binary" \
+        cargo install --git "$REPO_HTTPS" "$binary" --force $features_arg
 
     local installed_ver
     installed_ver="$("${INSTALL_DIR}/${binary}" --version 2>/dev/null || echo "unknown")"
@@ -1859,133 +1791,42 @@ _wait_for_ssh() {
     print_ok "SSH ready"
 }
 
-# Compile a binary natively on the remote VM from a local source checkout.
-# Used when there is no matching pre-built release binary and local OS != remote OS.
-# $1 = binary  $2 = VM IP  $3 = SSH user  $4 = features flag (optional, e.g. "--features browser")
-_remote_compile_on_vm() {
-    local binary="$1" ip="$2" user="$3" features_arg="${4:-}"
-
-    local repo_root
-    if ! repo_root="$(_find_repo_root)"; then
-        print_err "install.sh was not run from a local checkout — cannot copy source to VM."
-        print_err "Options:"
-        echo "    1. Clone the repo locally and run:  bash install.sh"
-        echo "    2. Wait for release CI to finish, then re-run the installer."
-        exit 1
-    fi
-
-    echo ""
-    print_warn "No release binary — copying source to VM and compiling natively."
-    print_dim  "This takes ~5-10 minutes on first build."
-    echo ""
-
-    # Tar workspace essentials: manifests + both crates (no build artifacts, no git).
-    local src_tar="/tmp/networker-src-$$.tar.gz"
-    tar -czf "$src_tar" \
-        --exclude='./target' \
-        --exclude='./.git' \
-        --exclude='./output' \
-        --exclude='./assets' \
-        --exclude='./docs' \
-        --exclude='./tests' \
-        --exclude='./sql' \
-        -C "$repo_root" \
-        ./Cargo.toml ./Cargo.lock ./crates
-
-    local src_size; src_size="$(du -sh "$src_tar" | cut -f1)"
-    print_info "Uploading source (${src_size}) to VM…"
-    scp -o StrictHostKeyChecking=no -q "$src_tar" "${user}@${ip}:/tmp/networker-src.tar.gz"
-    rm -f "$src_tar"
-
-    # shellcheck disable=SC2087
-    ssh -o StrictHostKeyChecking=no "${user}@${ip}" bash <<REMOTE
-set -euo pipefail
-if ! command -v cargo &>/dev/null; then
-    echo "Installing Rust toolchain on VM…"
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
-fi
-source "\$HOME/.cargo/env"
-
-rm -rf ~/networker-src
-mkdir -p ~/networker-src
-tar -xzf /tmp/networker-src.tar.gz -C ~/networker-src
-rm -f /tmp/networker-src.tar.gz
-cd ~/networker-src
-
-echo "Compiling ${binary}…"
-cargo build --release -p ${binary} ${features_arg}
-
-sudo cp target/release/${binary} /usr/local/bin/${binary}
-sudo chmod +x /usr/local/bin/${binary}
-REMOTE
-
-    local remote_ver
-    remote_ver="$(ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
-        "/usr/local/bin/${binary} --version 2>/dev/null" || echo "")"
-    if [[ "$remote_ver" =~ ^networker ]]; then
-        print_ok "${binary} compiled on VM and installed  ($remote_ver)"
-    else
-        print_err "${binary} compiled but failed to run on VM: ${remote_ver:-<no output>}"
-        exit 1
-    fi
-}
-
-# Install a binary on a remote VM by running cargo install directly on the VM.
-# Uses SSH agent forwarding (-A) so the VM can clone the private GitHub repo.
-# $1 = binary  $2 = VM IP  $3 = SSH user  $4 = features flag (e.g. "--features browser")
-_remote_vm_cargo_install() {
-    local binary="$1" ip="$2" user="$3" features_arg="${4:-}"
-
-    echo ""
-    print_warn "No release binary — installing ${binary} on VM from source."
-    print_dim  "This takes ~5-10 minutes on first build."
-    echo ""
-
-    # shellcheck disable=SC2087
-    ssh -A -o StrictHostKeyChecking=no "${user}@${ip}" bash <<REMOTE
-set -euo pipefail
-if ! command -v cargo &>/dev/null; then
-    echo "Installing Rust toolchain on VM…"
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
-fi
-source "\$HOME/.cargo/env"
-if ! command -v git &>/dev/null; then
-    sudo apt-get install -y git 2>/dev/null || sudo yum install -y git 2>/dev/null || true
-fi
-echo "Installing ${binary} from source on VM…"
-env CARGO_NET_GIT_FETCH_WITH_CLI=true \
-    GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no' \
-    cargo install --git ${REPO_SSH} ${binary} --force ${features_arg}
-REMOTE
-
-    local remote_ver
-    remote_ver="$(ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
-        "${binary} --version 2>/dev/null" || echo "")"
-    if [[ "$remote_ver" =~ ^networker ]]; then
-        print_ok "${binary} installed on VM from source  ($remote_ver)"
-    else
-        print_err "${binary} cargo install on VM succeeded but binary failed to run: ${remote_ver:-<no output>}"
-        exit 1
-    fi
-}
-
-# Compile and install a binary on a remote Linux VM when no release binary is available.
+# Install a binary on a remote Linux VM when no pre-built release binary exists.
+# Uploads this installer script to the VM and runs it there with --yes, so the VM
+# handles Rust install, cargo install from the public GitHub repo, and service setup.
 # $1 = binary  $2 = VM IP  $3 = SSH user
-_remote_install_binary_from_source() {
+_remote_bootstrap_install() {
     local binary="$1" ip="$2" user="$3"
 
-    local features_arg=""
-    if [[ "$binary" == "networker-tester" ]]; then
-        if _remote_chrome_available "$ip" "$user"; then
-            features_arg="--features browser"
-            print_info "Chrome detected on VM — compiling with browser probe support."
-        else
-            print_info "Chrome not found on VM — compiling without browser probe."
-            print_dim  "  To enable later: install Chrome then re-run cargo install --git $REPO_SSH networker-tester --features browser"
-        fi
+    local comp_arg
+    case "$binary" in
+        networker-tester)   comp_arg="tester" ;;
+        networker-endpoint) comp_arg="endpoint" ;;
+        *)                  comp_arg="both" ;;
+    esac
+
+    echo ""
+    print_warn "No pre-built binary for ${binary} — running installer on VM to build from source."
+    print_dim  "This may take 5–10 minutes (Rust install + compile)."
+    echo ""
+
+    # Upload this installer to the VM, or download from Gist if running as a pipe
+    local script_path="${BASH_SOURCE[0]:-}"
+    local installer_url="https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh"
+    if [[ -f "$script_path" ]]; then
+        print_info "Uploading installer to VM…"
+        scp -o StrictHostKeyChecking=no -q "$script_path" "${user}@${ip}:/tmp/networker-install.sh"
+    else
+        print_info "Downloading installer on VM from Gist…"
+        ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
+            "curl -fsSL '${installer_url}' -o /tmp/networker-install.sh"
     fi
 
-    _remote_vm_cargo_install "$binary" "$ip" "$user" "$features_arg"
+    print_info "Running installer on VM (the terminal will show the VM's install progress)…"
+    echo ""
+    # -t allocates a pseudo-TTY so the VM's spinner + colors work
+    ssh -t -o StrictHostKeyChecking=no "${user}@${ip}" \
+        "bash /tmp/networker-install.sh ${comp_arg} -y"
 }
 
 # Download binary from GitHub release and install it on a remote host.
@@ -2015,7 +1856,7 @@ _remote_install_binary() {
     fi
     if [[ -z "$ver" ]] || ! printf '%s' "$has_assets" | grep -q "${binary}-"; then
         print_warn "Release ${ver:-unknown} has no pre-built binaries for ${binary}."
-        _remote_install_binary_from_source "$binary" "$ip" "$user"
+        _remote_bootstrap_install "$binary" "$ip" "$user"
         return
     fi
 
@@ -2126,6 +1967,70 @@ REMOTE
 
     sleep 2
     print_ok "networker-endpoint service enabled and started"
+}
+
+# Set up networker-endpoint as a systemd service on the LOCAL machine (Linux only).
+# Requires sudo. Idempotent — safe to run multiple times.
+step_setup_endpoint_service() {
+    next_step "Set up networker-endpoint systemd service"
+
+    if [[ "$SYS_OS" != "Linux" ]]; then
+        print_info "Systemd service setup is Linux-only — skipping."
+        print_dim  "  On macOS: run networker-endpoint manually in a terminal."
+        return 0
+    fi
+    if ! command -v systemctl &>/dev/null; then
+        print_info "systemd not found — skipping service setup."
+        return 0
+    fi
+
+    # Prefer the cargo install location; fall back to /usr/local/bin
+    local binary_path="${INSTALL_DIR}/networker-endpoint"
+    if [[ ! -x "$binary_path" ]]; then
+        binary_path="/usr/local/bin/networker-endpoint"
+    fi
+
+    sudo useradd --system --no-create-home --shell /usr/sbin/nologin networker 2>/dev/null || true
+
+    sudo tee /etc/systemd/system/networker-endpoint.service > /dev/null <<UNIT
+[Unit]
+Description=Networker Endpoint
+After=network.target
+
+[Service]
+User=networker
+ExecStart=${binary_path}
+Restart=always
+RestartSec=5
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable networker-endpoint
+    sudo systemctl start networker-endpoint
+
+    # Redirect privileged ports 80/443 → 8080/8443 so browsers can reach the server
+    if command -v iptables &>/dev/null; then
+        sudo iptables -t nat -C PREROUTING -p tcp --dport 80  -j REDIRECT --to-port 8080 2>/dev/null || \
+            sudo iptables -t nat -A PREROUTING -p tcp --dport 80  -j REDIRECT --to-port 8080
+        sudo iptables -t nat -C PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null || \
+            sudo iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443
+        sudo iptables -t nat -C OUTPUT -p tcp --dport 80  -j REDIRECT --to-port 8080 2>/dev/null || \
+            sudo iptables -t nat -A OUTPUT -p tcp --dport 80  -j REDIRECT --to-port 8080
+        sudo iptables -t nat -C OUTPUT -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null || \
+            sudo iptables -t nat -A OUTPUT -p tcp --dport 443 -j REDIRECT --to-port 8443
+        if command -v netfilter-persistent &>/dev/null; then
+            sudo netfilter-persistent save 2>/dev/null || true
+        elif command -v iptables-save &>/dev/null; then
+            sudo sh -c 'iptables-save > /etc/iptables/rules.v4 2>/dev/null || iptables-save > /etc/iptables.rules 2>/dev/null || true'
+        fi
+    fi
+
+    sleep 2
+    print_ok "networker-endpoint service started — auto-starts on boot"
 }
 
 # Poll /health until the endpoint responds.
@@ -3322,9 +3227,6 @@ main() {
         if [[ $DO_GIT_INSTALL -eq 1 ]]; then
             step_install_git
         fi
-        if [[ $DO_SSH_CHECK -eq 1 ]]; then
-            step_ssh_check
-        fi
         if [[ $DO_RUST_INSTALL -eq 1 ]]; then
             step_install_rust
         fi
@@ -3341,6 +3243,14 @@ main() {
 
     if [[ $do_local_tester -eq 1 && ( $CHROME_AVAILABLE -eq 1 || $DO_CHROME_INSTALL -eq 1 ) ]]; then
         step_ensure_certutil
+    fi
+
+    # ── Local endpoint: offer systemd service (Linux only) ────────────────────
+    if [[ $do_local_endpoint -eq 1 && "$SYS_OS" == "Linux" ]] && command -v systemctl &>/dev/null; then
+        echo ""
+        if ask_yn "Set up networker-endpoint as a systemd service (auto-starts on boot)?" "y"; then
+            step_setup_endpoint_service
+        fi
     fi
 
     # ── Remote: tester ────────────────────────────────────────────────────────
