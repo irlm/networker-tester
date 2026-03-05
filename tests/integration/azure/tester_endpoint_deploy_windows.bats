@@ -186,12 +186,12 @@ $env:RUSTUP_HOME = 'C:\rustup'
 $env:CARGO_HOME  = 'C:\cargo'
 [Net.ServicePointManager]::SecurityProtocol = 'Tls12'
 
-Write-Host "=== Step 1: Install VS Build Tools ==="
+Write-Host "=== Step 1: Install VS Build Tools (with Windows SDK) ==="
 Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vs_BuildTools.exe' `
     -OutFile 'C:\vs_buildtools.exe' -UseBasicParsing
 & 'C:\vs_buildtools.exe' --quiet --wait --norestart `
     --add Microsoft.VisualStudio.Workload.VCTools `
-    --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 2>&1 | Out-Null
+    --includeRecommended 2>&1 | Out-Null
 Write-Host "VS Build Tools exit: $LASTEXITCODE"
 Remove-Item 'C:\vs_buildtools.exe' -Force -ErrorAction SilentlyContinue
 
@@ -202,22 +202,10 @@ Remove-Item 'C:\rustup-init.exe' -Force -ErrorAction SilentlyContinue
 
 $env:PATH = "C:\cargo\bin;$env:PATH"
 
-Write-Host "=== Step 2b: Load MSVC build environment (vcvars64) ==="
+Write-Host "=== Step 3: cargo install networker-endpoint (via vcvars64 env) ==="
 $vcvars = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat'
-if (Test-Path $vcvars) {
-    $envOut = cmd /c "`"$vcvars`" && set" 2>&1
-    foreach ($line in $envOut) {
-        if ($line -match '^([^=]+)=(.*)$') {
-            [System.Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process')
-        }
-    }
-    Write-Host "vcvars64 loaded; LIB=$env:LIB"
-} else {
-    Write-Host "ERROR: vcvars64.bat not found at $vcvars"
-}
-
-Write-Host "=== Step 3: cargo install networker-endpoint ==="
-& 'C:\cargo\bin\cargo.exe' install --git https://github.com/irlm/networker-tester networker-endpoint --force 2>&1 | Write-Host
+Write-Host "vcvars64 exists: $(Test-Path $vcvars)"
+cmd /c "`"$vcvars`" && C:\cargo\bin\cargo.exe install --git https://github.com/irlm/networker-tester networker-endpoint --force 2>&1"
 Write-Host "cargo exit: $LASTEXITCODE"
 
 Write-Host "=== Step 4: Create Windows Service ==="
@@ -241,12 +229,12 @@ $env:RUSTUP_HOME = 'C:\rustup'
 $env:CARGO_HOME  = 'C:\cargo'
 [Net.ServicePointManager]::SecurityProtocol = 'Tls12'
 
-Write-Host "=== Step 1: Install VS Build Tools ==="
+Write-Host "=== Step 1: Install VS Build Tools (with Windows SDK) ==="
 Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vs_BuildTools.exe' `
     -OutFile 'C:\vs_buildtools.exe' -UseBasicParsing
 & 'C:\vs_buildtools.exe' --quiet --wait --norestart `
     --add Microsoft.VisualStudio.Workload.VCTools `
-    --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 2>&1 | Out-Null
+    --includeRecommended 2>&1 | Out-Null
 Write-Host "VS Build Tools exit: $LASTEXITCODE"
 Remove-Item 'C:\vs_buildtools.exe' -Force -ErrorAction SilentlyContinue
 
@@ -257,22 +245,10 @@ Remove-Item 'C:\rustup-init.exe' -Force -ErrorAction SilentlyContinue
 
 $env:PATH = "C:\cargo\bin;$env:PATH"
 
-Write-Host "=== Step 2b: Load MSVC build environment (vcvars64) ==="
+Write-Host "=== Step 3: cargo install networker-tester (via vcvars64 env) ==="
 $vcvars = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat'
-if (Test-Path $vcvars) {
-    $envOut = cmd /c "`"$vcvars`" && set" 2>&1
-    foreach ($line in $envOut) {
-        if ($line -match '^([^=]+)=(.*)$') {
-            [System.Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process')
-        }
-    }
-    Write-Host "vcvars64 loaded; LIB=$env:LIB"
-} else {
-    Write-Host "ERROR: vcvars64.bat not found at $vcvars"
-}
-
-Write-Host "=== Step 3: cargo install networker-tester ==="
-& 'C:\cargo\bin\cargo.exe' install --git https://github.com/irlm/networker-tester networker-tester --force 2>&1 | Write-Host
+Write-Host "vcvars64 exists: $(Test-Path $vcvars)"
+cmd /c "`"$vcvars`" && C:\cargo\bin\cargo.exe install --git https://github.com/irlm/networker-tester networker-tester --force 2>&1"
 Write-Host "cargo exit: $LASTEXITCODE"
 
 $ver = & 'C:\cargo\bin\networker-tester.exe' --version 2>&1
