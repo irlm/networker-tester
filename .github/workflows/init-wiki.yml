@@ -1,0 +1,851 @@
+name: Initialize Wiki
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  init-wiki:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write wiki pages and push
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+
+          WIKI_URL="https://x-access-token:${GH_TOKEN}@github.com/${REPO}.wiki.git"
+
+          # Try cloning first (works if wiki already initialized)
+          if git clone "$WIKI_URL" /tmp/wiki 2>/dev/null; then
+            echo "Wiki already initialized, updating pages"
+          else
+            echo "Wiki not initialized, bootstrapping"
+            mkdir -p /tmp/wiki
+            cd /tmp/wiki
+            git init -b master
+            git remote add origin "$WIKI_URL"
+          fi
+
+          cd /tmp/wiki
+
+          cat > Home.md << 'MARKDOWN'
+# Networker Tester
+
+A cross-platform network diagnostics suite that probes an endpoint across TCP, HTTP/1.1,
+HTTP/2, HTTP/3, and UDP — collecting per-phase telemetry that is normally buried in the
+kernel or scattered across multiple tools.
+
+```
+networker-tester  ──────────────────────►  networker-endpoint
+(Rust CLI)           TCP / HTTP1 / HTTP2   (Rust server)
+                      HTTP3 (QUIC)
+                      UDP echo
+        │
+        ▼
+JSON artifact  ·  HTML report  ·  Excel workbook
+```
+
+---
+
+## What It Measures
+
+| Metric | Why it matters |
+|--------|---------------|
+| **TTFB** | Head-of-line blocking sensitivity; H/2 and H/3 should win on high-latency links |
+| **Throughput / Goodput** | Raw transfer rate vs. true end-to-end rate (including connection setup) |
+| **CPU** | QUIC does TLS in userspace — measurably higher than H/1.1 or H/2 |
+| **Context switches** | Voluntary (I/O yield) and involuntary (preemption); reflects concurrency differences |
+| **Page-load total** | Wall-clock impact of multiplexing; H/2 and H/3 win on multi-asset pages |
+| **TCP kernel stats** | RTT, cwnd, ssthresh, retransmits, delivery rate — via `getsockopt`, no root needed |
+| **TLS details** | Version, cipher suite, ALPN, full certificate chain |
+| **UDP RTT / jitter / loss** | Raw UDP path quality |
+
+---
+
+## Quick Install
+
+### macOS and Linux
+
+```bash
+# Install the diagnostic CLI
+curl -fsSL https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh | bash -s -- tester
+
+# Install the test server (run on the machine you want to probe)
+curl -fsSL https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh | bash -s -- endpoint
+```
+
+### Windows (PowerShell)
+
+```powershell
+Invoke-RestMethod 'https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.ps1' | Invoke-Expression
+```
+
+---
+
+## Quick Start (60 seconds)
+
+```bash
+# 1. Start the endpoint
+networker-endpoint
+
+# 2. Run your first probe
+networker-tester \
+  --target https://127.0.0.1:8443/health \
+  --modes http1,http2,http3 \
+  --runs 5 \
+  --insecure \
+  --output-dir ./output
+```
+
+Open `output/report.html` in any browser.
+
+---
+
+## Wiki Pages
+
+| Page | Contents |
+|------|---------|
+| [[Installation]] | curl one-liners, local install options, cloud deploy |
+| [[Usage]] | All flags, all modes, output formats, config file |
+| [[Protocol-Comparison]] | H1 vs H2 vs H3 — what to run and how to read results |
+| [[Cloud-Deployment]] | Azure and AWS deployment, auto-shutdown, multi-region |
+
+---
+
+## Two Binaries
+
+| Binary | Role |
+|--------|------|
+| `networker-tester` | CLI client — sends probes, collects metrics, writes reports |
+| `networker-endpoint` | Diagnostic server — serves `/health`, `/download`, `/upload`, `/page`, `/browser-page` |
+
+Both are written in Rust and ship as single static binaries for macOS (Apple Silicon + Intel),
+Linux (x86-64 + ARM64), and Windows (x86-64).
+MARKDOWN
+
+          cat > Installation.md << 'MARKDOWN'
+# Installation
+
+---
+
+## Quick Install (recommended)
+
+The installer uses a **rustup-style interactive UX**: it shows a system info table, a
+numbered plan, and a `1) Proceed / 2) Customize / 3) Cancel` prompt before doing anything.
+
+### macOS and Linux
+
+```bash
+# Install the diagnostic CLI (networker-tester)
+curl -fsSL https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh | bash -s -- tester
+
+# Install the test server (networker-endpoint)
+curl -fsSL https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh | bash -s -- endpoint
+
+# Install both on the same machine
+curl -fsSL https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh | bash -s -- both
+```
+
+### Windows (PowerShell)
+
+```powershell
+$GistUrl = 'https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.ps1'
+
+# Install the diagnostic CLI (default)
+Invoke-RestMethod $GistUrl | Invoke-Expression
+
+# Install the test server
+Invoke-WebRequest $GistUrl -OutFile "$env:TEMP\networker-install.ps1"
+& "$env:TEMP\networker-install.ps1" -Component endpoint
+```
+
+Compatible with Windows PowerShell 5.1 and PowerShell 7+.
+
+---
+
+## What the Installer Does
+
+The installer auto-detects the fastest available install method:
+
+| Mode | When used | Speed |
+|------|-----------|-------|
+| **Release** | `gh` CLI is installed and authenticated | ~10 seconds |
+| **Source** | `gh` not available; compiles from GitHub repo via `cargo install` | 2–10 minutes |
+
+In source mode, the installer also offers to install missing dependencies:
+- Git (via `brew` / `apt-get` / `dnf` / `pacman` / `zypper` / `apk` / `winget`)
+- Visual C++ Build Tools on Windows (via `winget`)
+- Rust (via [rustup](https://rustup.rs/))
+
+---
+
+## Local Install Options
+
+### Non-interactive (accept all defaults)
+
+```bash
+bash install.sh -y tester
+bash install.sh -y endpoint
+```
+
+### Force source compile
+
+```bash
+bash install.sh --from-source tester
+```
+
+### Skip Rust installation check
+
+```bash
+bash install.sh --skip-rust tester
+```
+
+---
+
+## Cloud Deployment
+
+The installer can provision a VM and deploy the endpoint (or tester) to it automatically.
+
+### Azure
+
+```bash
+# Deploy endpoint to Azure VM (interactive — picks defaults, shows plan)
+bash install.sh --azure endpoint
+
+# With explicit options
+bash install.sh --azure endpoint \
+  --region eastus \
+  --rg my-resource-group \
+  --vm my-endpoint-vm \
+  --vm-size Standard_B2s
+```
+
+### AWS
+
+```bash
+# Deploy endpoint to AWS EC2 (interactive)
+bash install.sh --aws endpoint
+
+# With explicit options
+bash install.sh --aws endpoint \
+  --aws-region us-east-1 \
+  --aws-instance-type t3.small \
+  --aws-endpoint-name networker-endpoint
+```
+
+See [[Cloud-Deployment]] for a full walkthrough.
+
+---
+
+## Build from Source
+
+```bash
+git clone https://github.com/irlm/networker-tester.git
+cd networker-tester
+cargo build --release
+# Binaries at: target/release/networker-tester
+#              target/release/networker-endpoint
+```
+
+### With browser probe support
+
+```bash
+cargo build --release --features browser -p networker-tester
+```
+
+Requires Chrome or Chromium installed locally.
+
+---
+
+## Upgrading
+
+Re-run the same install command on every machine where the binary is used.
+
+---
+
+## Requirements
+
+| Component | Requirement |
+|-----------|------------|
+| macOS | 11+ (Apple Silicon or Intel) |
+| Linux | Any modern distribution (glibc or musl) |
+| Windows | Windows 10+ with PowerShell 5.1 or 7+ |
+| HTTP/3 | Included by default (UDP port 8443 must not be firewalled) |
+| Browser probe | Chrome or Chromium installed; build with `--features browser` |
+| Source compile | Rust stable toolchain via [rustup](https://rustup.rs/) |
+MARKDOWN
+
+          cat > Usage.md << 'MARKDOWN'
+# Usage
+
+---
+
+## Basic Usage
+
+```bash
+# Start the endpoint (HTTP :8080, HTTPS :8443, UDP echo :9999)
+networker-endpoint
+
+# Run a probe against it
+networker-tester \
+  --target https://127.0.0.1:8443/health \
+  --modes http1,http2,http3 \
+  --runs 5 \
+  --insecure \
+  --output-dir ./output
+```
+
+Open `output/report.html` in any browser.
+
+---
+
+## All Probe Modes
+
+| Mode | Transport | What it measures | Notes |
+|------|-----------|-----------------|-------|
+| `tcp` | TCP | DNS + TCP connect time only | No HTTP |
+| `http1` | HTTP/1.1 | DNS, TCP, TLS, TTFB, Total | Works over plain HTTP or HTTPS |
+| `http2` | HTTP/2 | DNS, TCP, TLS (ALPN h2), TTFB, Total | Requires HTTPS |
+| `http3` | QUIC | QUIC handshake, TTFB, Total | UDP-based; no separate DNS/TCP phases |
+| `dns` | DNS | Standalone DNS resolution with resolved IPs | No TCP |
+| `tls` | TCP + TLS | Full cert chain, cipher suite, ALPN, expiry | No HTTP body |
+| `udp` | UDP | RTT min/avg/p95, jitter, loss% | UDP echo server |
+| `udpdownload` | UDP bulk | NWKT protocol throughput, server to client | Requires `--payload-sizes` |
+| `udpupload` | UDP bulk | NWKT protocol throughput, client to server | Requires `--payload-sizes` |
+| `download` | HTTP | Throughput MB/s, server to client | URL rewritten to `/download?bytes=N`; requires `--payload-sizes` |
+| `upload` | HTTP | Throughput MB/s, client to server | URL rewritten to `/upload`; requires `--payload-sizes` |
+| `webdownload` | HTTP | Download throughput from any URL (no rewrite) | Use for external URLs |
+| `webupload` | HTTP | Upload throughput to any URL (no rewrite) | Requires `--payload-sizes` |
+| `pageload` | HTTP/1.1 | Multi-asset page load, up to 6 parallel connections | Requires HTTPS target |
+| `pageload2` | HTTP/2 | Multi-asset page load, single connection multiplexed | Requires HTTPS target |
+| `pageload3` | HTTP/3 | Multi-asset page load, QUIC multiplexed | Requires HTTPS target |
+| `browser` | Chromium | Real headless browser: Load/DCL/TTFB/bytes/protocols | Requires `--features browser` + Chrome |
+
+### Aggregate shortcuts
+
+- `pageload` by itself expands to `pageload` (H1.1) + `pageload2` (H2) + `pageload3` (H3)
+- `browser` by itself expands to `browser1` (H1.1) + `browser2` (H2) + `browser3` (H3)
+
+---
+
+## Common Examples
+
+### Latency comparison across protocols
+
+```bash
+networker-tester \
+  --target https://127.0.0.1:8443/health \
+  --modes http1,http2,http3 \
+  --runs 20 \
+  --insecure
+```
+
+### Download throughput
+
+```bash
+networker-tester \
+  --target https://127.0.0.1:8443/health \
+  --modes download \
+  --payload-sizes 1m,10m,100m \
+  --runs 5 \
+  --insecure
+```
+
+### Page-load comparison (H1 vs H2 vs H3)
+
+```bash
+networker-tester \
+  --target https://127.0.0.1:8443/health \
+  --modes pageload,pageload2,pageload3 \
+  --page-assets 30 \
+  --page-asset-size 50k \
+  --runs 10 \
+  --insecure
+```
+
+### Multi-target comparison (local vs cloud)
+
+```bash
+networker-tester \
+  --target http://127.0.0.1:8080/health \
+  --target https://<cloud-ip>:8443/health \
+  --modes tcp,http1,http2,http3,udp,download \
+  --payload-sizes 1m \
+  --runs 5 \
+  --insecure \
+  --output-dir ./output
+```
+
+---
+
+## All Flags
+
+### Targeting
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--target URL` | `http://localhost:8080/health` | URL to probe. Repeat for multi-target. |
+| `--modes MODE,...` | `http1,http2,udp` | Comma-separated probe modes |
+| `--runs N` | `3` | Repetitions per mode |
+| `--concurrency N` | `1` | Concurrent requests per run |
+| `--timeout N` | `30` | Per-request timeout in seconds |
+| `--retries N` | `0` | Retry failed probes up to N times |
+
+### Payload and throughput
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--payload-sizes LIST` | — | Sizes for download/upload (e.g. `64k,1m,10m`). Each size = separate probe. |
+
+Size suffixes: `k` = KiB, `m` = MiB, `g` = GiB.
+
+### Page-load tuning
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--page-assets N` | `20` | Number of assets per page-load simulation |
+| `--page-asset-size SZ` | `10k` | Size of each simulated asset |
+
+### Connection options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--insecure` | — | Skip TLS certificate verification |
+| `--ipv4-only` | — | Restrict to IPv4 |
+| `--ipv6-only` | — | Restrict to IPv6 |
+| `--no-proxy` | — | Bypass system proxy |
+
+### Output
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--output-dir PATH` | `./output` | Directory for reports |
+| `--html` | — | Write HTML report to `output/report.html` |
+| `--excel` | — | Write Excel workbook to `output/report.xlsx` (8 sheets) |
+| `--json` | — | Write structured JSON to stdout |
+| `--verbose` / `-v` | — | Enable debug logging |
+
+---
+
+## Output Formats
+
+### Terminal output
+
+Every probe prints one line as it completes:
+
+```
+checkmark #1 [http2] 200 HTTP/2  DNS:0.3ms TCP:0.2ms TLS:3.9ms TTFB:0.4ms Total:4.6ms CPU:0.9ms CSW:3v/0i
+checkmark #1 [http3] 200 HTTP/3  QUIC:1.5ms TTFB:0.4ms Total:2.1ms CPU:2.4ms CSW:4v/1i
+```
+
+HTTP/3 shows `QUIC:Xms` instead of separate DNS/TCP/TLS phases because QUIC combines
+transport and crypto into a single UDP-based handshake.
+
+### HTML report (`--html`)
+
+Sections: Run Summary, Timing Breakdown, Protocol Comparison, Throughput Results,
+All Attempts, TCP Stats, TLS Details, UDP Statistics.
+
+For multiple targets, a Cross-Target Comparison table appears at the top with % delta
+vs the first (baseline) target.
+
+### Excel workbook (`--excel`)
+
+Eight worksheets: Summary, HTTP Timings, TCP Stats, TLS Details, UDP Stats, Throughput,
+Server Timing, Errors.
+
+---
+
+## Configuration File
+
+```json
+{
+  "targets": [
+    "http://127.0.0.1:8080/health",
+    "https://remote:8443/health"
+  ],
+  "modes": ["http1", "http2", "http3", "udp"],
+  "runs": 5,
+  "payload_sizes": ["1m"],
+  "insecure": true,
+  "output_dir": "./output"
+}
+```
+
+```bash
+networker-tester --config my-config.json
+networker-tester --config my-config.json --runs 10  # CLI flags override config
+```
+
+---
+
+## Endpoint Routes
+
+| Route | Method | Description |
+|-------|--------|-------------|
+| `/` | GET | HTML landing page with server info |
+| `/health` | GET | `{"status":"ok"}` with version header |
+| `/download?bytes=N` | GET | Returns N bytes with timing headers |
+| `/upload` | POST | Drains body, returns byte count |
+| `/page` | GET | JSON manifest for pageload probes |
+| `/browser-page` | GET | HTML page with img tags for browser probes |
+| `/echo` | POST | Echoes request body |
+| `/delay?ms=N` | GET | Sleeps N ms then responds |
+MARKDOWN
+
+          cat > Protocol-Comparison.md << 'MARKDOWN'
+# Protocol Comparison: H1 vs H2 vs H3
+
+---
+
+## Background
+
+| Aspect | HTTP/1.1 | HTTP/2 | HTTP/3 |
+|--------|----------|--------|--------|
+| Transport | TCP | TCP | QUIC (UDP) |
+| Multiplexing | None | Full (streams over one TCP conn) | Full (streams over one QUIC conn) |
+| Head-of-line blocking | TCP + HTTP level | TCP level only | None |
+| TLS | Kernel-offloaded | Kernel-offloaded | Userspace (per-datagram) |
+| Connections for page loads | Up to 6 per host | 1 | 1 |
+| Handshake phases | DNS + TCP + TLS | DNS + TCP + TLS | QUIC (combined, shown as `QUIC:Xms`) |
+
+---
+
+## Test 1: Request Latency
+
+```bash
+networker-tester \
+  --target https://127.0.0.1:8443/health \
+  --modes http1,http2,http3 \
+  --runs 20 \
+  --insecure
+```
+
+**Expected patterns:**
+- CPU for HTTP/3 is 2-5x higher — QUIC encryption runs in userspace
+- TTFB is similar on loopback; differences appear on real network links
+- HTTP/3 shows `QUIC:Xms` (no separate DNS/TCP/TLS — QUIC combines them)
+
+---
+
+## Test 2: Download Throughput
+
+```bash
+networker-tester \
+  --target https://127.0.0.1:8443/health \
+  --modes download \
+  --payload-sizes 1m,10m,100m \
+  --runs 5 \
+  --insecure
+```
+
+**Key metrics:**
+- **Throughput** = body transfer rate (excludes connection setup)
+- **Goodput** = full delivery rate (includes setup); always less than Throughput
+- **Goodput gap is larger for H3** — the QUIC handshake is longer
+
+---
+
+## Test 3: Page-Load Comparison (the key test)
+
+Simulates a browser fetching an HTML page with N parallel assets.
+
+```bash
+networker-tester \
+  --target https://127.0.0.1:8443/health \
+  --modes pageload,pageload2,pageload3 \
+  --page-assets 30 \
+  --page-asset-size 50k \
+  --runs 10 \
+  --insecure \
+  --output-dir ./output
+```
+
+**Expected results:**
+
+| Metric | H1.1 (`pageload`) | H2 (`pageload2`) | H3 (`pageload3`) |
+|--------|-------------------|-------------------|-------------------|
+| `total_ms` | Highest (HOL blocking + 6 conns) | Lower (full multiplex) | Similar to H/2 |
+| `connections_opened` | Up to 6 | 1 | 1 |
+| `tls_overhead_ratio` | Higher (6 TLS handshakes) | Lower (1 TLS handshake) | Similar to H/2 |
+| `cpu_time_ms` | Lowest | Moderate | Highest (QUIC userspace) |
+
+---
+
+## Test 4: Asset Count Sweep
+
+Find the crossover point where H2 multiplexing beats H1.1 connection pools (~6-10 assets):
+
+```bash
+for N in 5 10 20 40 80; do
+  echo "=== $N assets ==="
+  networker-tester \
+    --target https://127.0.0.1:8443/health \
+    --modes pageload,pageload2 \
+    --page-assets $N \
+    --page-asset-size 10k \
+    --runs 5 \
+    --insecure
+done
+```
+
+---
+
+## Test 5: Add Real Browser Metrics
+
+```bash
+# Requires: cargo build --release --features browser + Chrome/Chromium installed
+networker-tester \
+  --target https://127.0.0.1:8443/health \
+  --modes pageload,pageload2,pageload3,browser \
+  --page-assets 30 \
+  --page-asset-size 50k \
+  --runs 10 \
+  --insecure \
+  --output-dir ./output
+```
+
+Browser probe captures: Load time, DOMContentLoaded, TTFB, resource count,
+bytes transferred, and per-protocol resource counts (e.g. `h2x18 h3x2`).
+
+---
+
+## Interpreting Results
+
+| What to compare | What it tells you |
+|-----------------|-------------------|
+| `pageload` vs `pageload2` total_ms | Benefit of H2 multiplexing over H1.1 connection pools |
+| `pageload2` vs `pageload3` total_ms | QUIC advantage on lossy/high-latency links |
+| `connections_opened` in `pageload` | Should be <= 6; more connections = more TLS cost |
+| `tls_overhead_ratio` in `pageload` | TLS as % of total — high = connection reuse helps |
+| `cpu_time_ms` across protocols | H3 always higher due to userspace QUIC encryption |
+| `browser` Load event vs `pageload` total | Gap = browser render/parse/JS overhead |
+
+---
+
+## CPU and Context Switch Interpretation
+
+### CPU (`cpu_time_ms`)
+
+- `http1`: lowest — kernel handles TCP; one TLS record layer
+- `http2`: slightly higher — HPACK header compression
+- `http3`: 2-5x higher — QUIC encrypts every UDP packet in userspace
+
+The gap grows on real networks with large payloads because H3 processes more
+packets (MTU-limited datagrams vs. larger TCP segments).
+
+### Context switches (`CSW`)
+
+- **Voluntary** (`v`): process yielded CPU waiting for I/O — higher for async-heavy protocols
+- **Involuntary** (`i`): kernel preempted the process — higher under CPU pressure
+- Server CSW (`sCSW`) is reported via `Server-Timing: csw-v;dur=N, csw-i;dur=N`
+MARKDOWN
+
+          cat > Cloud-Deployment.md << 'MARKDOWN'
+# Cloud Deployment
+
+Deploy `networker-endpoint` to a cloud VM for real-world latency and throughput measurements.
+
+---
+
+## Overview
+
+The installer handles the full provisioning flow:
+1. Creates VM (or reuses an existing resource group)
+2. Opens required firewall ports (TCP 8080, 8443; UDP 8443)
+3. Compiles or downloads the binary
+4. Starts the server
+5. Runs a health check and writes `networker-cloud.json` with the VM IP
+
+---
+
+## Azure Deployment
+
+### Prerequisites
+
+```bash
+az login    # sign in to Azure
+```
+
+### Deploy the endpoint
+
+```bash
+# Interactive — shows a plan and prompts before doing anything
+bash install.sh --azure endpoint
+
+# With explicit options
+bash install.sh --azure endpoint \
+  --region eastus \
+  --rg networker-rg \
+  --vm networker-endpoint-vm \
+  --vm-size Standard_B2s
+```
+
+### Azure flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--region REGION` | `eastus` | Azure region |
+| `--rg NAME` | `networker-rg-endpoint` | Resource group name |
+| `--vm NAME` | auto-generated | VM name (smart naming: `nwk-ep-lnx-b1s`, with collision detection) |
+| `--vm-size SIZE` | `Standard_B2s` | Azure VM size |
+
+### Run a local-vs-Azure comparison
+
+```bash
+# Start the local endpoint
+networker-endpoint
+
+# Run the tester against both
+networker-tester \
+  --target http://127.0.0.1:8080/health \
+  --target https://<azure-vm-ip>:8443/health \
+  --modes tcp,http1,http2,http3,udp,download,pageload,pageload2,pageload3 \
+  --payload-sizes 1m \
+  --runs 5 \
+  --insecure \
+  --output-dir ./output
+```
+
+---
+
+## AWS Deployment
+
+### Prerequisites
+
+```bash
+aws configure   # set access key, secret, region
+```
+
+### Deploy the endpoint
+
+```bash
+# Interactive
+bash install.sh --aws endpoint
+
+# With explicit options
+bash install.sh --aws endpoint \
+  --aws-region us-east-1 \
+  --aws-instance-type t3.small \
+  --aws-endpoint-name networker-endpoint
+```
+
+### AWS flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--aws-region REGION` | `us-east-1` | AWS region |
+| `--aws-instance-type TYPE` | `t3.small` | EC2 instance type |
+| `--aws-endpoint-name NAME` | `networker-endpoint` | EC2 Name tag |
+
+---
+
+## Auto-Shutdown
+
+The installer configures automatic VM shutdown at 11 PM EST by default.
+
+### Azure
+
+```bash
+# Change shutdown time
+az vm auto-shutdown \
+  --resource-group networker-rg \
+  --name networker-endpoint-vm \
+  --time 2300 \
+  --timezone "Eastern Standard Time"
+
+# Disable auto-shutdown
+az vm auto-shutdown \
+  --resource-group networker-rg \
+  --name networker-endpoint-vm \
+  --off
+```
+
+### AWS
+
+The installer adds a cron job on the instance. To modify it:
+
+```bash
+# SSH into the instance and edit the crontab:
+crontab -e
+# Change shutdown hour (UTC):
+0 22 * * * /sbin/shutdown -h now
+```
+
+---
+
+## Multi-Region Comparison
+
+### 1. Deploy endpoints in multiple regions
+
+```bash
+bash install.sh --azure endpoint --region eastus        --rg networker-rg-eastus
+bash install.sh --azure endpoint --region uksouth       --rg networker-rg-uksouth
+bash install.sh --azure endpoint --region southeastasia --rg networker-rg-sea
+```
+
+### 2. Run a multi-target comparison
+
+```bash
+networker-tester \
+  --target http://127.0.0.1:8080/health \
+  --target https://<eastus-ip>:8443/health \
+  --target https://<uksouth-ip>:8443/health \
+  --target https://<sea-ip>:8443/health \
+  --modes tcp,http1,http2,http3,download \
+  --payload-sizes 1m \
+  --runs 10 \
+  --insecure \
+  --output-dir ./output
+```
+
+### 3. What to look for
+
+| Metric | What it tells you |
+|--------|-------------------|
+| `tcp` connect_ms delta | Raw TCP round-trip per region |
+| `http1`/`http2`/`http3` total_ms delta | Protocol overhead added on top of RTT |
+| `download` throughput delta | Available bandwidth per region |
+| `pageload`/`pageload2`/`pageload3` total_ms delta | Real page-load impact at WAN latency |
+
+**Typical patterns:**
+- WAN HTTP total_ms is 5-50x higher than loopback
+- H3 may show a larger delta than H2 on high-latency links (QUIC handshake cost)
+- Download throughput is limited by the uplink/downlink of both sides
+
+---
+
+## Troubleshooting
+
+| Issue | Cause | Fix |
+|-------|-------|-----|
+| Health check times out | Firewall propagation delay | Wait 30-60 s and retry |
+| HTTP/3 not working | UDP 8443 blocked | Check NSG / security group rules |
+| SSH key mismatch | Wrong SSH key | Set `NETWORKER_SSH_KEY` env var |
+| No pre-built binary for VM OS | Source-build fallback triggered | Normal; installer compiles on VM (~5 min) |
+MARKDOWN
+
+          # Commit and push
+          git add Home.md Installation.md Usage.md Protocol-Comparison.md Cloud-Deployment.md
+          git status
+          git commit -m "Add wiki pages: Home, Installation, Usage, Protocol-Comparison, Cloud-Deployment"
+          git push origin master --force || git push origin HEAD:master --force
+
+      - name: Delete this workflow file
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          SHA=$(gh api "/repos/$REPO/contents/.github/workflows/init-wiki.yml" --jq '.sha' 2>/dev/null || echo "")
+          if [ -n "$SHA" ]; then
+            gh api --method DELETE "/repos/$REPO/contents/.github/workflows/init-wiki.yml" \
+              -f message="Remove one-time wiki init workflow" \
+              -f sha="$SHA" && echo "Workflow self-deleted" || echo "Could not self-delete"
+          fi
