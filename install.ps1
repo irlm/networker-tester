@@ -6,31 +6,26 @@
 #   release  – download pre-built binary from the latest GitHub release via
 #              gh CLI (fast, ~10 s); requires: gh installed + gh auth login
 #   source   – compile from source via cargo install (slower, ~5-10 min);
-#              requires: SSH key for the private repo + Rust/cargo
+#              requires: Rust/cargo  (repo is public – no SSH key needed)
 #
 # Usage (piped):
 #   irm <raw-gist-url>/install.ps1 | iex
 #
 # Usage (downloaded):
 #   .\install.ps1 [-Component tester|endpoint|both] [-Yes] [-FromSource]
-#                 [-SkipSshCheck] [-SkipRust] [-Help]
-#
-# Prerequisites (source mode):
-#   - Git for Windows (includes ssh.exe) – https://git-scm.com/
-#   - SSH key configured for github.com in %USERPROFILE%\.ssh\
+#                 [-SkipRust] [-Help]
 # ──────────────────────────────────────────────────────────────────────────────
 param(
     [string]$Component  = "both",
     [switch]$Yes,
     [switch]$FromSource,
-    [switch]$SkipSshCheck,
     [switch]$SkipRust,
     [switch]$Help
 )
 
 $ErrorActionPreference = "Stop"
 
-$RepoSsh       = "ssh://git@github.com/irlm/networker-tester"
+$RepoHttps     = "https://github.com/irlm/networker-tester"
 $RepoGh        = "irlm/networker-tester"
 $CargoBin      = Join-Path $env:USERPROFILE ".cargo\bin"
 
@@ -73,12 +68,11 @@ function Show-Help {
     Write-Host "Install modes (auto-detected; override in customize flow or via flag):"
     Write-Host "  release   Download pre-built binary via gh CLI -- fast (~10 s)"
     Write-Host "            Requires: gh installed and authenticated (gh auth login)"
-    Write-Host "  source    Compile from private Git repo via cargo install -- slower"
-    Write-Host "            Requires: SSH key for github.com + Rust/cargo"
+    Write-Host "  source    Compile from source via cargo install -- slower (~5-10 min)"
+    Write-Host "            Repo is public -- no SSH key required"
     Write-Host ""
     Write-Host "  -Yes           Non-interactive: accept all defaults"
     Write-Host "  -FromSource    Force source-compile mode (skip release detection)"
-    Write-Host "  -SkipSshCheck  Skip the GitHub SSH connectivity test (source mode)"
     Write-Host "  -SkipRust      Skip Rust installation (source mode)"
     Write-Host "  -Help          Show this help message"
     Write-Host ""
@@ -93,7 +87,6 @@ $script:InstallMethod     = "source"   # "release" | "source"
 $script:ReleaseAvailable  = $false
 $script:ReleaseTarget     = ""
 $script:NetworkerVersion  = ""        # populated in Invoke-DiscoverSystem when gh is available
-$script:DoSshCheck        = $true
 $script:DoRustInstall     = $false
 $script:DoInstallTester   = $true
 $script:DoInstallEndpoint = $true
@@ -151,7 +144,6 @@ function Invoke-DiscoverSystem {
     }
 
     if (-not $script:RustExists -and -not $SkipRust) { $script:DoRustInstall = $true }
-    if ($SkipSshCheck) { $script:DoSshCheck = $false }
 
     # Git + winget detection (winget checked regardless of git status)
     $script:GitAvailable    = $null -ne (Get-Command git    -ErrorAction SilentlyContinue)
@@ -290,12 +282,6 @@ function Show-Plan {
             }
         }
 
-        if ($script:DoSshCheck) {
-            Write-Host ("    {0}. SSH check              Verify GitHub SSH access" -f $step)
-            $step++
-        } else {
-            Write-Host "    -. SSH check              (skipped)" -ForegroundColor DarkGray
-        }
         if ($script:DoRustInstall) {
             Write-Host ("    {0}. Install Rust           Download rustup-init.exe from win.rustup.rs" -f $step)
             $step++
@@ -316,15 +302,15 @@ function Show-Plan {
         }
         $browserNote = if ($script:ChromeAvailable -or $script:DoChromiumInstall) { "  [+browser feature]" } else { "" }
         if ($script:DoInstallTester) {
-            Write-Host ("    {0}. Install networker-tester    cargo install from private Git repo{1}" -f $step, $browserNote)
+            Write-Host ("    {0}. Install networker-tester    cargo install from GitHub{1}" -f $step, $browserNote)
             $step++
         }
         if ($script:DoInstallEndpoint) {
-            Write-Host ("    {0}. Install networker-endpoint  cargo install from private Git repo" -f $step)
+            Write-Host ("    {0}. Install networker-endpoint  cargo install from GitHub" -f $step)
             $step++
         }
         Write-Host ""
-        Write-Dim "Repository:  $RepoSsh"
+        Write-Dim "Repository:  $RepoHttps"
         Write-Dim "Source code is compiled locally -- no pre-built binaries are downloaded."
     }
 }
@@ -391,7 +377,7 @@ function Invoke-CustomizeFlow {
     if ($script:ReleaseAvailable) {
         Write-Host "  Install method:"
         Write-Host "    1) Download binary from latest release  (fast, recommended)"
-        Write-Host "    2) Compile from source  (requires SSH key + Rust)"
+        Write-Host "    2) Compile from source  (requires Rust)"
         Write-Host ""
         $methodAns = Read-Host "  Choice [1]"
         if ([string]::IsNullOrWhiteSpace($methodAns)) { $methodAns = "1" }
@@ -410,8 +396,7 @@ function Invoke-CustomizeFlow {
                 $script:DoGitInstall = Invoke-AskYN "git is not installed -- install it via winget?" "y"
                 if (-not $script:DoGitInstall) {
                     Write-Host ""
-                    Write-Warn "Skipping git -- cargo will use its built-in libgit2 for SSH."
-                    Write-Warn "If authentication fails, install git from: https://git-scm.com/"
+                    Write-Warn "Skipping git -- cargo will fetch the public repo directly via HTTPS."
                 }
             } else {
                 Write-Host ""
@@ -460,7 +445,6 @@ function Invoke-CustomizeFlow {
             Write-Host ""
         }
 
-        $script:DoSshCheck = Invoke-AskYN "Run SSH connectivity check for GitHub?" "y"
         if (-not $script:RustExists) {
             Write-Host ""
             $script:DoRustInstall = Invoke-AskYN "Install Rust via rustup (win.rustup.rs)?" "y"
@@ -690,39 +674,8 @@ function Invoke-GitInstallStep {
         Write-Ok ("git installed: " + (& git --version 2>&1))
     } else {
         Write-Warn "git was installed but is not yet in PATH."
-        Write-Warn "You may need to reopen your terminal. Continuing with built-in libgit2..."
+        Write-Warn "You may need to reopen your terminal. Continuing..."
         $script:GitAvailable = $false
-    }
-}
-
-function Invoke-SshStep {
-    Invoke-NextStep "Verify GitHub SSH access"
-
-    $sshCmd = Get-Command ssh -ErrorAction SilentlyContinue
-    $sshExe = if ($sshCmd) { $sshCmd.Source } else { $null }
-    if (-not $sshExe) {
-        Write-Host ""
-        Write-Err "ssh.exe not found."
-        Write-Host "  Install Git for Windows (https://git-scm.com/) which bundles OpenSSH." -ForegroundColor Red
-        exit 1
-    }
-
-    Write-Info "Connecting to git@github.com..."
-    $prevErr = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
-    $sshOutput = & $sshExe -o BatchMode=yes -o StrictHostKeyChecking=accept-new `
-                            -o ConnectTimeout=10 -T git@github.com 2>&1
-    $ErrorActionPreference = $prevErr
-
-    if ($sshOutput -match "successfully authenticated") {
-        Write-Ok "SSH access confirmed"
-    } else {
-        Write-Host ""
-        Write-Err "SSH authentication to GitHub failed."
-        Write-Host "  Output: $sshOutput" -ForegroundColor Red
-        Write-Host "  Ensure your SSH key is loaded and has access to the private repo."
-        Write-Host "  Test manually: ssh -T git@github.com"
-        exit 1
     }
 }
 
@@ -757,7 +710,7 @@ function Invoke-EnsureCargoEnv {
 function Invoke-CargoInstallStep ($binary) {
     Invoke-NextStep "Install $binary"
     Write-Info "Building and installing $binary from source..."
-    Write-Dim "This compiles from the private Git repo and may take a few minutes."
+    Write-Dim "Compiling from GitHub -- may take a few minutes on first build."
 
     # Pre-flight: warn if MSVC linker is still absent (user skipped install or no winget)
     if (-not $script:MsvcAvailable) {
@@ -771,14 +724,6 @@ function Invoke-CargoInstallStep ($binary) {
         Write-Host ""
     }
 
-    # CARGO_NET_GIT_FETCH_WITH_CLI=true delegates git operations to the system
-    # git binary rather than libgit2, which reliably picks up the SSH agent.
-    # Only set it when git.exe is actually on PATH; if git is absent, cargo falls
-    # back to its built-in libgit2 (which reads keys from %USERPROFILE%\.ssh\).
-    # --features browser is added only when Chrome/Chromium is available.
-    $gitAvailable = $null -ne (Get-Command git -ErrorAction SilentlyContinue)
-    if ($gitAvailable) { $env:CARGO_NET_GIT_FETCH_WITH_CLI = "true" }
-
     if ($script:ChromeAvailable -and $binary -eq "networker-tester") {
         Write-Info "Chrome detected -- compiling with browser probe support."
     }
@@ -786,23 +731,16 @@ function Invoke-CargoInstallStep ($binary) {
     $prevErr = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     if ($script:ChromeAvailable -and $binary -eq "networker-tester") {
-        & cargo install --git $RepoSsh $binary --locked --force --features browser
+        & cargo install --git $RepoHttps $binary --force --features browser
     } else {
-        & cargo install --git $RepoSsh $binary --locked --force
+        & cargo install --git $RepoHttps $binary --force
     }
     $exitCode = $LASTEXITCODE
     $ErrorActionPreference = $prevErr
 
-    if ($gitAvailable) { $env:CARGO_NET_GIT_FETCH_WITH_CLI = $null }
-
     if ($exitCode -ne 0) {
         Write-Host ""
         Write-Err "cargo install failed (exit code $exitCode)."
-        if (-not $gitAvailable) {
-            Write-Host "  git.exe was not found -- cargo used built-in libgit2 for SSH."
-            Write-Host "  If the error is SSH-related, install Git for Windows and retry:"
-            Write-Host "    https://git-scm.com/"
-        }
         exit 1
     }
 
@@ -869,7 +807,6 @@ if ($script:InstallMethod -eq "release") {
     if ($script:DoChromiumInstall) { Invoke-ChromeInstallStep }
     if ($script:DoMsvcInstall)     { Invoke-MsvcInstallStep }
     if ($script:DoGitInstall)      { Invoke-GitInstallStep }
-    if ($script:DoSshCheck)        { Invoke-SshStep }
     if ($script:DoRustInstall)     { Invoke-RustInstallStep }
     Invoke-EnsureCargoEnv
     if ($script:DoInstallTester)   { Invoke-CargoInstallStep "networker-tester" }

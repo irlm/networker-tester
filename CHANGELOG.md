@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.75] – 2026-03-05 — Sync install.ps1 to public repo; fix spinner in curl|bash
+
+### Fixed
+- **install.ps1 still used SSH URL and SSH check** after the repo went public in
+  v0.12.72. `$RepoSsh` renamed to `$RepoHttps` (`https://github.com/irlm/networker-tester`);
+  `Invoke-SshStep`, `$script:DoSshCheck`, and `-SkipSshCheck` parameter removed;
+  `--locked` dropped from both `cargo install` calls; `CARGO_NET_GIT_FETCH_WITH_CLI`
+  removed; "private Git repo" and SSH-key prerequisite language updated throughout
+  (`Show-Help`, `Show-Plan`, `Invoke-CustomizeFlow`, `Invoke-CargoInstallStep`).
+- **Spinner showed `[0` on a new line each frame in `curl | bash` installs.**
+  Root cause: `\r` (carriage return) is unreliable as an in-place overwrite mechanism
+  when stdin is a pipe — any terminal line-wrapping causes `\r` to land on the overflow
+  row instead of the spinner row, leaving every frame permanently visible. Fix: replaced
+  the `\r\033[2K` pattern with `printf "\n"` before the loop and `\033[1A\033[2K...\n`
+  inside (VT100 cursor-up + erase-line + newline). This is unambiguous on all terminals
+  regardless of stdin mode.
+
+---
+
 ## [0.12.74] – 2026-03-05 — Auto-install build tools; fix spinner when stdin is piped
 
 ### Fixed

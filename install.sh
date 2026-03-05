@@ -126,6 +126,9 @@ _cargo_progress() {
     fi
     [[ $cols -lt 20 ]] && cols=20
 
+    # Reserve a blank line — the spinner will live on this line (cursor up from below).
+    printf "\n"
+
     while kill -0 "$cargo_pid" 2>/dev/null; do
         # Count crates compiled so far and show the most recent one being compiled
         local compiled_count=0 phase=""
@@ -142,10 +145,7 @@ _cargo_progress() {
         phase="${phase:-…}"
         local count_tag="[${compiled_count} crates]"
 
-        # Build the full visible line as plain text (no ANSI codes), then
-        # hard-limit it to cols-1 characters so it can never wrap.  Wrapping
-        # is what causes \r to land on the wrong line and each frame to appear
-        # on a new row instead of overwriting the previous one.
+        # Build the full visible line and hard-limit to cols-1 characters.
         local line="  ${spin[$si]}  ${label}  ${count_tag} ${phase}"
         if [[ ${#line} -ge $cols ]]; then
             line="${line:0:$(( cols - 2 ))}…"
@@ -157,8 +157,12 @@ _cargo_progress() {
         local pfx="${line:0:$pfx_len}"
         local sfx="${line:$pfx_len}"
 
-        # \033[2K erases the entire current line before printing.
-        printf "\r\033[2K%s%s%s%s" "$pfx" "$DIM" "$sfx" "$RESET"
+        # Move up one line, erase it, print the updated spinner frame, then \n
+        # so the cursor sits below the spinner line.
+        # Using \033[1A (cursor up) + \033[2K (erase line) + \n avoids \r entirely.
+        # \r is unreliable in curl|bash because terminal mapping can vary and any
+        # line wrapping causes \r to land on the overflow row instead of the spinner.
+        printf "\033[1A\033[2K%s%s%s%s\n" "$pfx" "$DIM" "$sfx" "$RESET"
 
         si=$(( (si + 1) % ${#spin[@]} ))
         sleep 0.12
@@ -168,7 +172,7 @@ _cargo_progress() {
     local rc=$?
 
     tput cnorm 2>/dev/null || true   # restore cursor
-    printf "\r\033[2K"               # clear spinner line
+    printf "\033[1A\033[2K"          # move up and clear spinner line
 
     if [[ $rc -eq 0 ]]; then
         # Pull crate count and timing from the build log
@@ -279,7 +283,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.12.74"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.12.75"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
