@@ -30,21 +30,21 @@ REGION="${AWS_REGION:-us-east-1}"
 INSTANCE_TYPE="${AWS_INSTANCE_TYPE:-t3.small}"
 SSH_USER="ubuntu"
 KEY_NAME="networker-keypair"
-SG_NAME="networker-inttest-sg-$(date +%s)"   # unique per run to avoid conflicts
-INSTANCE_NAME="nwk-inttest-$(date +%s)"
 INSTALLER="${INSTALLER:-$(cd "$(dirname "$BATS_TEST_FILENAME")/../../.." && pwd)/install.sh}"
 
-# Global state set in setup_file, used by tests and teardown_file
-INSTANCE_ID=""
-SG_ID=""
-VM_IP=""
+# ---------------------------------------------------------------------------
+# Helpers: persist/load state across setup_file → tests → teardown_file
+# (bats runs each @test in a subshell so exported vars don't propagate)
+# ---------------------------------------------------------------------------
+_save() { echo "$2" > "${BATS_FILE_TMPDIR}/${1}"; }
+_load() { cat "${BATS_FILE_TMPDIR}/${1}" 2>/dev/null || echo ""; }
 
 # ---------------------------------------------------------------------------
 # setup_file — runs once before all tests; creates instance
 # ---------------------------------------------------------------------------
 setup_file() {
     # Verify prerequisites
-    if ! aws sts get-caller-identity --output none 2>/dev/null; then
+    if ! aws sts get-caller-identity --output text >/dev/null 2>&1; then
         echo "ERROR: AWS credentials not configured — run 'aws configure' first" >&2
         exit 1
     fi
@@ -53,7 +53,8 @@ setup_file() {
         exit 1
     fi
 
-    export REGION INSTANCE_TYPE SSH_USER KEY_NAME SG_NAME INSTANCE_NAME INSTALLER
+    local sg_name="networker-inttest-sg-$(date +%s)"
+    local instance_name="nwk-inttest-$(date +%s)"
 
     # --- AMI lookup ---
     echo "=== Looking up Ubuntu 22.04 LTS AMI in $REGION ===" >&3
@@ -74,88 +75,89 @@ setup_file() {
     echo "    AMI: $ami" >&3
 
     # --- SSH key import (idempotent) ---
-    local ssh_key=""
+    local ssh_key="" key_opt=""
     for kf in "${HOME}/.ssh/id_ed25519.pub" "${HOME}/.ssh/id_rsa.pub"; do
         [[ -f "$kf" ]] && { ssh_key="$kf"; break; }
     done
-    local key_opt=""
     if [[ -n "$ssh_key" ]]; then
         echo "=== Importing SSH key as $KEY_NAME ===" >&3
         aws ec2 import-key-pair \
             --region "$REGION" \
             --key-name "$KEY_NAME" \
             --public-key-material "fileb://${ssh_key}" \
-            --output none 2>/dev/null || true   # ignore "already exists"
+            --output text >/dev/null 2>&1 || true   # ignore "already exists"
         key_opt="--key-name $KEY_NAME"
     fi
 
     # --- Security group ---
-    echo "=== Creating security group: $SG_NAME ===" >&3
-    SG_ID="$(aws ec2 create-security-group \
+    echo "=== Creating security group: $sg_name ===" >&3
+    local sg_id
+    sg_id="$(aws ec2 create-security-group \
         --region "$REGION" \
-        --group-name "$SG_NAME" \
+        --group-name "$sg_name" \
         --description "networker integration test (auto-cleanup)" \
         --query "GroupId" \
         --output text)"
-    export SG_ID
-    echo "    SG: $SG_ID" >&3
+    _save sg_id "$sg_id"
+    echo "    SG: $sg_id" >&3
 
     # SSH
     aws ec2 authorize-security-group-ingress \
-        --region "$REGION" --group-id "$SG_ID" \
-        --protocol tcp --port 22 --cidr 0.0.0.0/0 --output none
+        --region "$REGION" --group-id "$sg_id" \
+        --protocol tcp --port 22 --cidr 0.0.0.0/0 --output text >/dev/null
     # TCP 80, 443, 8080, 8443
     for port in 80 443 8080 8443; do
         aws ec2 authorize-security-group-ingress \
-            --region "$REGION" --group-id "$SG_ID" \
-            --protocol tcp --port "$port" --cidr 0.0.0.0/0 --output none
+            --region "$REGION" --group-id "$sg_id" \
+            --protocol tcp --port "$port" --cidr 0.0.0.0/0 --output text >/dev/null
     done
     # UDP 8443, 9998, 9999
     for port in 8443 9998 9999; do
         aws ec2 authorize-security-group-ingress \
-            --region "$REGION" --group-id "$SG_ID" \
-            --protocol udp --port "$port" --cidr 0.0.0.0/0 --output none
+            --region "$REGION" --group-id "$sg_id" \
+            --protocol udp --port "$port" --cidr 0.0.0.0/0 --output text >/dev/null
     done
 
     # --- Launch instance ---
     echo "=== Launching EC2 instance ($INSTANCE_TYPE, Ubuntu 22.04) ===" >&3
-    INSTANCE_ID="$(aws ec2 run-instances \
+    local instance_id
+    instance_id="$(aws ec2 run-instances \
         --region "$REGION" \
         --image-id "$ami" \
         --instance-type "$INSTANCE_TYPE" \
         $key_opt \
-        --security-group-ids "$SG_ID" \
+        --security-group-ids "$sg_id" \
         --tag-specifications \
-            "ResourceType=instance,Tags=[{Key=Name,Value=${INSTANCE_NAME}}]" \
+            "ResourceType=instance,Tags=[{Key=Name,Value=${instance_name}}]" \
         --query "Instances[0].InstanceId" \
         --output text)"
-    export INSTANCE_ID
-    echo "    Instance: $INSTANCE_ID" >&3
+    _save instance_id "$instance_id"
+    echo "    Instance: $instance_id" >&3
 
     echo "=== Waiting for instance to reach 'running' state ===" >&3
-    aws ec2 wait instance-running \
-        --region "$REGION" \
-        --instance-ids "$INSTANCE_ID"
+    aws ec2 wait instance-running --region "$REGION" --instance-ids "$instance_id"
 
-    VM_IP="$(aws ec2 describe-instances \
+    local vm_ip
+    vm_ip="$(aws ec2 describe-instances \
         --region "$REGION" \
-        --instance-ids "$INSTANCE_ID" \
+        --instance-ids "$instance_id" \
         --query "Reservations[0].Instances[0].PublicIpAddress" \
         --output text)"
-    export VM_IP
-    echo "    Public IP: $VM_IP" >&3
+    _save vm_ip "$vm_ip"
+    echo "    Public IP: $vm_ip" >&3
 
     # --- Wait for SSH ---
-    echo "=== Waiting for SSH on $VM_IP ===" >&3
-    wait_for_ssh "$VM_IP" "$SSH_USER" 180
+    echo "=== Waiting for SSH on $vm_ip ===" >&3
+    wait_for_ssh "$vm_ip" "$SSH_USER" 180
 
     # --- Upload and run installer ---
     echo "=== Uploading installer to instance ===" >&3
     scp -o StrictHostKeyChecking=no -q "$INSTALLER" \
-        "${SSH_USER}@${VM_IP}:/tmp/networker-install.sh"
+        "${SSH_USER}@${vm_ip}:/tmp/networker-install.sh"
 
     echo "=== Running installer on instance (endpoint -y) ===" >&3
-    ssh -t -o StrictHostKeyChecking=no "${SSH_USER}@${VM_IP}" \
+    # -t allocates a pseudo-TTY so the installer's ask_yn can read from /dev/tty
+    ssh -t -o StrictHostKeyChecking=no "${SSH_USER}@${vm_ip}" \
         "bash /tmp/networker-install.sh endpoint -y" >&3 2>&3
 }
 
@@ -163,26 +165,25 @@ setup_file() {
 # teardown_file — runs once after all tests; always cleans up AWS resources
 # ---------------------------------------------------------------------------
 teardown_file() {
-    if [[ -n "$INSTANCE_ID" ]]; then
-        echo "=== Terminating instance: $INSTANCE_ID ===" >&3
-        aws ec2 terminate-instances \
-            --region "$REGION" \
-            --instance-ids "$INSTANCE_ID" \
-            --output none 2>/dev/null || true
+    local instance_id sg_id
+    instance_id="$(_load instance_id)"
+    sg_id="$(_load sg_id)"
 
-        # Wait for termination before deleting SG (SG can't be deleted while in use)
+    if [[ -n "$instance_id" ]]; then
+        echo "=== Terminating instance: $instance_id ===" >&3
+        aws ec2 terminate-instances \
+            --region "$REGION" --instance-ids "$instance_id" \
+            --output text >/dev/null 2>&1 || true
         echo "=== Waiting for instance to terminate ===" >&3
         aws ec2 wait instance-terminated \
-            --region "$REGION" \
-            --instance-ids "$INSTANCE_ID" 2>/dev/null || true
+            --region "$REGION" --instance-ids "$instance_id" 2>/dev/null || true
     fi
 
-    if [[ -n "$SG_ID" ]]; then
-        echo "=== Deleting security group: $SG_ID ===" >&3
+    if [[ -n "$sg_id" ]]; then
+        echo "=== Deleting security group: $sg_id ===" >&3
         aws ec2 delete-security-group \
-            --region "$REGION" \
-            --group-id "$SG_ID" \
-            --output none 2>/dev/null || true
+            --region "$REGION" --group-id "$sg_id" \
+            --output text >/dev/null 2>&1 || true
     fi
 }
 
@@ -191,46 +192,53 @@ teardown_file() {
 # ---------------------------------------------------------------------------
 
 @test "networker-endpoint binary is installed on the instance" {
+    local vm_ip; vm_ip="$(_load vm_ip)"
     local ver
-    ver="$(ssh_run "$VM_IP" "$SSH_USER" "networker-endpoint --version 2>/dev/null || ~/.cargo/bin/networker-endpoint --version 2>/dev/null")"
+    ver="$(ssh_run "$vm_ip" "$SSH_USER" \
+        "networker-endpoint --version 2>/dev/null || ~/.cargo/bin/networker-endpoint --version 2>/dev/null")"
     [[ "$ver" == networker-endpoint* ]]
 }
 
 @test "networker-endpoint version matches expected release" {
+    local vm_ip; vm_ip="$(_load vm_ip)"
     local expected
     expected="$(grep -E '^version\s*=' "$(dirname "$INSTALLER")/Cargo.toml" \
                 | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
     local actual
-    actual="$(ssh_run "$VM_IP" "$SSH_USER" \
+    actual="$(ssh_run "$vm_ip" "$SSH_USER" \
         "networker-endpoint --version 2>/dev/null || ~/.cargo/bin/networker-endpoint --version 2>/dev/null" \
         | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
     [[ "$actual" == "$expected" ]]
 }
 
 @test "networker-endpoint systemd service is active" {
+    local vm_ip; vm_ip="$(_load vm_ip)"
     local status
-    status="$(ssh_run "$VM_IP" "$SSH_USER" \
+    status="$(ssh_run "$vm_ip" "$SSH_USER" \
         "systemctl is-active networker-endpoint 2>/dev/null")"
     [[ "$status" == "active" ]]
 }
 
 @test "networker-endpoint responds on /health (port 8080)" {
+    local vm_ip; vm_ip="$(_load vm_ip)"
     local resp
-    resp="$(curl -sf --max-time 10 "http://${VM_IP}:8080/health" 2>/dev/null)"
+    resp="$(curl -sf --max-time 10 "http://${vm_ip}:8080/health" 2>/dev/null)"
     [[ -n "$resp" ]]
     echo "$resp" | grep -qi "ok\|healthy\|networker"
 }
 
 @test "networker-endpoint responds on HTTPS /health (port 8443)" {
+    local vm_ip; vm_ip="$(_load vm_ip)"
     local resp
-    resp="$(curl -sfk --max-time 10 "https://${VM_IP}:8443/health" 2>/dev/null)"
+    resp="$(curl -sfk --max-time 10 "https://${vm_ip}:8443/health" 2>/dev/null)"
     [[ -n "$resp" ]]
     echo "$resp" | grep -qi "ok\|healthy\|networker"
 }
 
 @test "networker-endpoint landing page responds on port 80 (iptables redirect)" {
+    local vm_ip; vm_ip="$(_load vm_ip)"
     local http_code
-    http_code="$(curl -so /dev/null -w "%{http_code}" --max-time 10 "http://${VM_IP}/" 2>/dev/null)"
+    http_code="$(curl -so /dev/null -w "%{http_code}" --max-time 10 "http://${vm_ip}/" 2>/dev/null)"
     [[ "$http_code" == "200" ]]
 }
 
@@ -238,8 +246,9 @@ teardown_file() {
     if ! command -v networker-tester &>/dev/null; then
         skip "networker-tester not installed locally"
     fi
+    local vm_ip; vm_ip="$(_load vm_ip)"
     networker-tester \
-        --target "https://${VM_IP}:8443/health" \
+        --target "https://${vm_ip}:8443/health" \
         --modes http1 \
         --runs 3 \
         --insecure \

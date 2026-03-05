@@ -1756,7 +1756,7 @@ step_cargo_install() {
             Linux)
                 print_info "No C linker found — installing build tools automatically…"
                 case "$PKG_MGR" in
-                    apt-get) sudo apt-get install -y build-essential 2>&1 | tail -3 || true ;;
+                    apt-get) sudo apt-get update -qq 2>/dev/null; sudo apt-get install -y build-essential 2>&1 | tail -3 || true ;;
                     dnf)     sudo dnf install -y gcc gcc-c++ make    2>&1 | tail -3 || true ;;
                     pacman)  sudo pacman -S --noconfirm base-devel   2>&1 | tail -3 || true ;;
                     zypper)  sudo zypper install -y gcc make          2>&1 | tail -3 || true ;;
@@ -2016,9 +2016,18 @@ step_setup_endpoint_service() {
         return 0
     fi
 
-    # Prefer the cargo install location; fall back to /usr/local/bin
+    # Locate the binary (cargo install puts it in ~/.cargo/bin)
     local binary_path="${INSTALL_DIR}/networker-endpoint"
     if [[ ! -x "$binary_path" ]]; then
+        binary_path="/usr/local/bin/networker-endpoint"
+    fi
+
+    # Copy to /usr/local/bin so the 'networker' system user can execute it.
+    # The cargo install dir (~/.cargo/bin) may not be traversable by system users
+    # whose home dir is restricted (Ubuntu 22.04 default: drwx------).
+    if [[ "$binary_path" != "/usr/local/bin/networker-endpoint" && -x "$binary_path" ]]; then
+        sudo cp "$binary_path" /usr/local/bin/networker-endpoint
+        sudo chmod 755 /usr/local/bin/networker-endpoint
         binary_path="/usr/local/bin/networker-endpoint"
     fi
 
@@ -2671,7 +2680,7 @@ _aws_ensure_keypair() {
         --region "$AWS_REGION" \
         --key-name "networker-keypair" \
         --public-key-material "fileb://${ssh_key_file}" \
-        --output none 2>/dev/null || true
+        --output text >/dev/null 2>&1 || true
     print_ok "Key pair: networker-keypair"
 }
 
@@ -2729,32 +2738,32 @@ _aws_create_security_group() {
     # SSH (always)
     aws ec2 authorize-security-group-ingress \
         --region "$AWS_REGION" --group-id "$sg_id" \
-        --protocol tcp --port 22 --cidr 0.0.0.0/0 --output none
+        --protocol tcp --port 22 --cidr 0.0.0.0/0 --output text >/dev/null
 
     if [[ "$component" == "endpoint" ]]; then
         # TCP 80, 443, 8080, 8443 (80/443 redirect to 8080/8443 via iptables on VM)
         aws ec2 authorize-security-group-ingress \
             --region "$AWS_REGION" --group-id "$sg_id" \
-            --protocol tcp --port 80 --cidr 0.0.0.0/0 --output none
+            --protocol tcp --port 80 --cidr 0.0.0.0/0 --output text >/dev/null
         aws ec2 authorize-security-group-ingress \
             --region "$AWS_REGION" --group-id "$sg_id" \
-            --protocol tcp --port 443 --cidr 0.0.0.0/0 --output none
+            --protocol tcp --port 443 --cidr 0.0.0.0/0 --output text >/dev/null
         aws ec2 authorize-security-group-ingress \
             --region "$AWS_REGION" --group-id "$sg_id" \
-            --protocol tcp --port 8080 --cidr 0.0.0.0/0 --output none
+            --protocol tcp --port 8080 --cidr 0.0.0.0/0 --output text >/dev/null
         aws ec2 authorize-security-group-ingress \
             --region "$AWS_REGION" --group-id "$sg_id" \
-            --protocol tcp --port 8443 --cidr 0.0.0.0/0 --output none
+            --protocol tcp --port 8443 --cidr 0.0.0.0/0 --output text >/dev/null
         # UDP 8443, 9998, 9999
         aws ec2 authorize-security-group-ingress \
             --region "$AWS_REGION" --group-id "$sg_id" \
-            --protocol udp --port 8443 --cidr 0.0.0.0/0 --output none
+            --protocol udp --port 8443 --cidr 0.0.0.0/0 --output text >/dev/null
         aws ec2 authorize-security-group-ingress \
             --region "$AWS_REGION" --group-id "$sg_id" \
-            --protocol udp --port 9998 --cidr 0.0.0.0/0 --output none
+            --protocol udp --port 9998 --cidr 0.0.0.0/0 --output text >/dev/null
         aws ec2 authorize-security-group-ingress \
             --region "$AWS_REGION" --group-id "$sg_id" \
-            --protocol udp --port 9999 --cidr 0.0.0.0/0 --output none
+            --protocol udp --port 9999 --cidr 0.0.0.0/0 --output text >/dev/null
         print_ok "Security group created: $sg_id  (TCP 22/80/443/8080/8443, UDP 8443/9998/9999)"
     else
         print_ok "Security group created: $sg_id  (TCP 22)"
