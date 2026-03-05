@@ -202,17 +202,18 @@ Remove-Item 'C:\rustup-init.exe' -Force -ErrorAction SilentlyContinue
 
 $env:PATH = "C:\cargo\bin;$env:PATH"
 
-Write-Host "=== Step 2b: Add MSVC linker to PATH ==="
-$msvcBase = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC'
-$msvcVer = (Get-ChildItem $msvcBase -ErrorAction SilentlyContinue |
-    Sort-Object Name -Descending | Select-Object -First 1).Name
-if ($msvcVer) {
-    $linkDir = "$msvcBase\$msvcVer\bin\Hostx64\x64"
-    $env:PATH = "$linkDir;$env:PATH"
-    Write-Host "MSVC linker dir: $linkDir"
-    Write-Host "link.exe present: $(Test-Path $linkDir\link.exe)"
+Write-Host "=== Step 2b: Load MSVC build environment (vcvars64) ==="
+$vcvars = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat'
+if (Test-Path $vcvars) {
+    $envOut = cmd /c "`"$vcvars`" && set" 2>&1
+    foreach ($line in $envOut) {
+        if ($line -match '^([^=]+)=(.*)$') {
+            [System.Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process')
+        }
+    }
+    Write-Host "vcvars64 loaded; LIB=$env:LIB"
 } else {
-    Write-Host "WARNING: no MSVC version found under $msvcBase"
+    Write-Host "ERROR: vcvars64.bat not found at $vcvars"
 }
 
 Write-Host "=== Step 3: cargo install networker-endpoint ==="
@@ -256,17 +257,18 @@ Remove-Item 'C:\rustup-init.exe' -Force -ErrorAction SilentlyContinue
 
 $env:PATH = "C:\cargo\bin;$env:PATH"
 
-Write-Host "=== Step 2b: Add MSVC linker to PATH ==="
-$msvcBase = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC'
-$msvcVer = (Get-ChildItem $msvcBase -ErrorAction SilentlyContinue |
-    Sort-Object Name -Descending | Select-Object -First 1).Name
-if ($msvcVer) {
-    $linkDir = "$msvcBase\$msvcVer\bin\Hostx64\x64"
-    $env:PATH = "$linkDir;$env:PATH"
-    Write-Host "MSVC linker dir: $linkDir"
-    Write-Host "link.exe present: $(Test-Path $linkDir\link.exe)"
+Write-Host "=== Step 2b: Load MSVC build environment (vcvars64) ==="
+$vcvars = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat'
+if (Test-Path $vcvars) {
+    $envOut = cmd /c "`"$vcvars`" && set" 2>&1
+    foreach ($line in $envOut) {
+        if ($line -match '^([^=]+)=(.*)$') {
+            [System.Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process')
+        }
+    }
+    Write-Host "vcvars64 loaded; LIB=$env:LIB"
 } else {
-    Write-Host "WARNING: no MSVC version found under $msvcBase"
+    Write-Host "ERROR: vcvars64.bat not found at $vcvars"
 }
 
 Write-Host "=== Step 3: cargo install networker-tester ==="
