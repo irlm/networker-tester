@@ -391,10 +391,11 @@ teardown_file() {
 @test "networker-endpoint is listening on port 8080 on endpoint VM" {
     local rg; rg="$(_load rg)"
     local out
+    # Use cmd findstr via Write-Host — implicit PS output is not captured in [stdout]
     out="$(_az_ps "$rg" "$EP_VM" \
-        '(Test-NetConnection -ComputerName localhost -Port 8080 -InformationLevel Quiet).TcpTestSucceeded')"
+        'cmd /c "netstat -an | findstr :8080" 2>&1 | Write-Host')"
     echo "port 8080 check: $out"
-    echo "$out" | grep -qi "True"
+    [[ "$out" == *":8080"* ]]
 }
 
 @test "networker-endpoint responds on /health (port 8080)" {
@@ -408,8 +409,9 @@ teardown_file() {
 @test "networker-tester binary is installed on tester VM" {
     local rg; rg="$(_load rg)"
     local ver
+    # Pipe through Write-Host — az run-command [stdout] only captures explicit Write-Host output
     ver="$(_az_ps "$rg" "$TS_VM" \
-        'C:\cargo\bin\networker-tester.exe --version 2>&1')"
+        "& 'C:\\cargo\\bin\\networker-tester.exe' --version 2>&1 | Write-Host")"
     [[ "$ver" == networker-tester* ]]
 }
 
@@ -417,8 +419,10 @@ teardown_file() {
     local rg ep_ip
     rg="$(_load rg)"; ep_ip="$(_load ep_private_ip)"
     local out
+    # Use private IP: Azure VMs in the same VNet cannot reach each other via public IP.
+    # Pipe through Write-Host so output appears in az run-command [stdout].
     out="$(_az_ps "$rg" "$TS_VM" \
-        "C:\\cargo\\bin\\networker-tester.exe --target http://${ep_ip}:8080/health --modes http1 --runs 3 2>&1")"
+        "& 'C:\\cargo\\bin\\networker-tester.exe' --target 'http://${ep_ip}:8080/health' --modes http1 --runs 3 2>&1 | Write-Host")"
     echo "$out" | grep -qi "http1\|pass\|ms\|networker"
 }
 
@@ -426,8 +430,10 @@ teardown_file() {
     local rg ep_ip
     rg="$(_load rg)"; ep_ip="$(_load ep_private_ip)"
     local out
+    # Use private IP: Azure VMs in the same VNet cannot reach each other via public IP.
+    # Pipe through Write-Host so output appears in az run-command [stdout].
     out="$(_az_ps "$rg" "$TS_VM" \
-        "C:\\cargo\\bin\\networker-tester.exe --target https://${ep_ip}:8443/health --modes http2 --runs 3 --insecure 2>&1")"
+        "& 'C:\\cargo\\bin\\networker-tester.exe' --target 'https://${ep_ip}:8443/health' --modes http2 --runs 3 --insecure 2>&1 | Write-Host")"
     echo "$out" | grep -qi "http2\|pass\|ms\|networker"
 }
 
