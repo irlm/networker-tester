@@ -2760,7 +2760,7 @@ step_generate_config() {
 EOF
     print_ok "Config written to ${CONFIG_FILE_PATH}"
     if [[ ${#AZURE_EXTRA_ENDPOINT_IPS[@]} -gt 0 ]]; then
-        print_info "Multi-region config: ${#AZURE_EXTRA_ENDPOINT_IPS[@]+1} endpoints in targets list"
+        print_info "Multi-region config: $(( ${#AZURE_EXTRA_ENDPOINT_IPS[@]} + 1 )) endpoints in targets list"
     fi
 
     # If the tester is also remote, upload the config there too
