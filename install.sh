@@ -283,7 +283,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.12.78"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.12.80"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -1248,6 +1248,15 @@ ensure_aws_cli() {
                     local arch_url="https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip"
                     [[ "$(uname -m)" == "aarch64" ]] && \
                         arch_url="https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip"
+                    if ! command -v unzip &>/dev/null; then
+                        case "$PKG_MGR" in
+                            apt-get) sudo apt-get install -y unzip 2>&1 | tail -1 || true ;;
+                            dnf)     sudo dnf install -y unzip     2>&1 | tail -1 || true ;;
+                            yum)     sudo yum install -y unzip     2>&1 | tail -1 || true ;;
+                            pacman)  sudo pacman -S --noconfirm unzip 2>&1 | tail -1 || true ;;
+                            *)       print_err "unzip not found — install it then re-run." ; exit 1 ;;
+                        esac
+                    fi
                     print_info "Downloading AWS CLI v2…"
                     curl -fsSL "$arch_url" -o /tmp/awscliv2.zip
                     unzip -q /tmp/awscliv2.zip -d /tmp/awscli-install
@@ -2322,7 +2331,7 @@ step_azure_create_vm() {
 
     next_step "Create Azure VM for $label ($vm in $AZURE_REGION)"
 
-    print_info "Creating resource group '$rg' in $AZURE_REGION…"
+    print_info "Creating resource group '$rg' in ${AZURE_REGION}…"
     az group create --name "$rg" --location "$AZURE_REGION" --output none
     print_ok "Resource group: $rg"
 
@@ -2688,7 +2697,7 @@ _aws_ensure_keypair() {
 # Sets the global AWS_AMI_ID.
 AWS_AMI_ID=""
 _aws_find_ubuntu_ami() {
-    print_info "Looking up Ubuntu 22.04 LTS AMI in $AWS_REGION…"
+    print_info "Looking up Ubuntu 22.04 LTS AMI in ${AWS_REGION}…"
     AWS_AMI_ID="$(aws ec2 describe-images \
         --region "$AWS_REGION" \
         --owners 099720109477 \
@@ -3107,8 +3116,7 @@ _offer_quick_test() {
         --payload-sizes 1m \
         --page-assets 10 \
         --runs 5 \
-        --insecure \
-        --html
+        --insecure
 
     echo ""
     if [[ -f "output/report.html" ]]; then
