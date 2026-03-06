@@ -205,9 +205,9 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
 "#
         );
         for (i, run) in runs.iter().enumerate() {
-            let _ = write!(
+            let _ = writeln!(
                 out,
-                "        <th>Target {} <small>{}</small></th>\n",
+                "        <th>Target {} <small>{}</small></th>",
                 i + 1,
                 escape_html(&run.target_url)
             );
@@ -228,9 +228,8 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
                     }
                     Some(v) => {
                         if i == 0 || baseline.is_none() {
-                            let _ = write!(out, "        <td>{v:.2}</td>\n");
-                        } else {
-                            let base = baseline.unwrap();
+                            let _ = writeln!(out, "        <td>{v:.2}</td>");
+                        } else if let Some(base) = baseline {
                             // For latency metrics (lower = better): negative diff = faster.
                             // For throughput metrics (higher = better): positive diff = faster.
                             let is_throughput = matches!(
@@ -255,9 +254,9 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
                             };
                             let diff_class = if is_faster { "diff-fast" } else { "diff-slow" };
                             let sign = if diff_pct >= 0.0 { "+" } else { "" };
-                            let _ = write!(
+                            let _ = writeln!(
                                 out,
-                                "        <td>{v:.2}<span class=\"{diff_class}\">{sign}{diff_pct:.1}%</span></td>\n",
+                                "        <td>{v:.2}<span class=\"{diff_class}\">{sign}{diff_pct:.1}%</span></td>",
                             );
                         }
                     }
@@ -375,15 +374,15 @@ fn write_host_info_card(label: &str, info: &HostInfo, out: &mut String) {
         cpu = info.cpu_cores,
     );
     if label == "Server" {
-        let _ = write!(
+        let _ = writeln!(
             out,
-            "    <dt>Version</dt>      <dd>{}</dd>\n",
+            "    <dt>Version</dt>      <dd>{}</dd>",
             escape_html(version),
         );
         if let Some(ref up) = uptime {
-            let _ = write!(
+            let _ = writeln!(
                 out,
-                "    <dt>Uptime</dt>       <dd>{}</dd>\n",
+                "    <dt>Uptime</dt>       <dd>{}</dd>",
                 escape_html(up),
             );
         }
@@ -391,7 +390,7 @@ fn write_host_info_card(label: &str, info: &HostInfo, out: &mut String) {
     let _ = write!(out, "  </dl>\n</section>\n");
 }
 
-fn write_run_sections(run: &TestRun, mut out: &mut String) {
+fn write_run_sections(run: &TestRun, out: &mut String) {
     // ── Header ────────────────────────────────────────────────────────────────
     let _ = write!(
         out,
@@ -465,7 +464,7 @@ fn write_run_sections(run: &TestRun, mut out: &mut String) {
     if let Some(ref info) = run.server_info {
         write_host_info_card("Server", info, out);
     }
-    let _ = write!(out, "</div>\n");
+    let _ = writeln!(out, "</div>");
 
     // ── Per-protocol timing table ─────────────────────────────────────────────
     let _ = write!(
@@ -519,7 +518,7 @@ fn write_run_sections(run: &TestRun, mut out: &mut String) {
         if rows.is_empty() {
             continue;
         }
-        append_proto_row(&mut out, proto, &rows);
+        append_proto_row(out, proto, &rows);
     }
     let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
 
@@ -1932,7 +1931,7 @@ fn write_run_sections(run: &TestRun, mut out: &mut String) {
         );
 
         for a in &run.attempts {
-            append_attempt_row(&mut out, a);
+            append_attempt_row(out, a);
         }
         let _ = writeln!(
             out,
@@ -2488,7 +2487,7 @@ fn svg_cdf(title: &str, series: &[(&str, &[f64], &str)], unit: &str) -> String {
         * 1.05;
 
     let plot_w = W - PAD_L - PAD_R;
-    let leg_rows = (sorted_series.len() + 2) / 3;
+    let leg_rows = sorted_series.len().div_ceil(3);
     let total_h = PAD_T + PLOT_H + PAD_B + leg_rows * LEG_ROW;
 
     let sx = |v: f64| PAD_L + (v.min(x_max) / x_max * plot_w as f64).round() as usize;

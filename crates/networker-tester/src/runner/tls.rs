@@ -636,6 +636,7 @@ mod tests {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn make_failed(
     run_id: Uuid,
     attempt_id: Uuid,
