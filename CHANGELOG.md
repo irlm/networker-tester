@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.86] – 2026-03-06 — Installer: GLIBC compatibility check, multi-region fix
+
+### Fixed
+- **Installer**: downloaded binaries are now verified with `--version` before declaring
+  success. If the binary fails to run (e.g., GLIBC mismatch on Ubuntu 22.04), it is
+  removed and the installer falls back to source compilation automatically.
+- **Installer**: fixed `bad substitution` error in multi-region endpoint count display
+  (`${#arr[@]+1}` → `$(( ${#arr[@]} + 1 ))`).
+
+---
+
 ## [0.12.85] – 2026-03-06 — Installer: binary-first install, spinner fix, region-aware names
 
 ### Fixed
