@@ -116,6 +116,42 @@ teardown() {
     [ "$DO_INSTALL_TESTER"  -eq 0           ]
 }
 
+@test "parse_args: --gcp sets endpoint location and flag" {
+    parse_args --gcp
+    [ "$ENDPOINT_LOCATION"  = "gcp" ]
+    [ "$DO_REMOTE_ENDPOINT" -eq 1   ]
+}
+
+@test "parse_args: --tester-gcp sets tester location and flag" {
+    parse_args --tester-gcp
+    [ "$TESTER_LOCATION"  = "gcp" ]
+    [ "$DO_REMOTE_TESTER" -eq 1   ]
+}
+
+@test "parse_args: --gcp-zone overrides GCP zone and derives region" {
+    parse_args --gcp-zone europe-west1-b
+    [ "$GCP_ZONE" = "europe-west1-b" ]
+}
+
+@test "parse_args: --gcp-machine-type overrides machine type" {
+    parse_args --gcp-machine-type e2-medium
+    [ "$GCP_TESTER_MACHINE_TYPE"   = "e2-medium" ]
+    [ "$GCP_ENDPOINT_MACHINE_TYPE" = "e2-medium" ]
+}
+
+@test "parse_args: --gcp-project sets GCP project" {
+    parse_args --gcp-project my-project-123
+    [ "$GCP_PROJECT" = "my-project-123" ]
+}
+
+@test "parse_args: combined flags — endpoint + gcp + zone" {
+    parse_args endpoint --gcp --gcp-zone asia-east1-a
+    [ "$COMPONENT"          = "endpoint"    ]
+    [ "$ENDPOINT_LOCATION"  = "gcp"         ]
+    [ "$GCP_ZONE"           = "asia-east1-a" ]
+    [ "$DO_INSTALL_TESTER"  -eq 0           ]
+}
+
 
 # ===========================================================================
 # 2. _offer_quick_test
