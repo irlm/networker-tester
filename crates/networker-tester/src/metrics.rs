@@ -8,6 +8,29 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Host information (shared between client and server)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Non-sensitive system metadata for a host (client or server).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostInfo {
+    pub os: String,
+    pub arch: String,
+    pub cpu_cores: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_memory_mb: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_version: Option<String>,
+    /// Server uptime in seconds (server only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uptime_secs: Option<u64>,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Top-level run
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -24,6 +47,12 @@ pub struct TestRun {
     pub timeout_ms: u64,
     pub client_os: String,
     pub client_version: String,
+    /// Server system metadata fetched from GET /info before probes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_info: Option<HostInfo>,
+    /// Client system metadata collected locally.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_info: Option<HostInfo>,
     pub attempts: Vec<RequestAttempt>,
 }
 
@@ -49,6 +78,129 @@ impl TestRun {
             })
             .collect()
     }
+}
+
+impl HostInfo {
+    /// Collect system info for the local machine (client side).
+    pub fn collect_local() -> Self {
+        Self {
+            os: std::env::consts::OS.to_string(),
+            arch: std::env::consts::ARCH.to_string(),
+            cpu_cores: std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1),
+            total_memory_mb: detect_total_memory_mb(),
+            os_version: detect_os_version(),
+            hostname: detect_hostname(),
+            server_version: None,
+            uptime_secs: None,
+        }
+    }
+}
+
+fn detect_total_memory_mb() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
+        for line in meminfo.lines() {
+            if let Some(rest) = line.strip_prefix("MemTotal:") {
+                let kb: u64 = rest.trim().split_whitespace().next()?.parse().ok()?;
+                return Some(kb / 1024);
+            }
+        }
+        None
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let out = std::process::Command::new("sysctl")
+            .args(["-n", "hw.memsize"])
+            .output()
+            .ok()?;
+        let bytes: u64 = String::from_utf8_lossy(&out.stdout).trim().parse().ok()?;
+        Some(bytes / (1024 * 1024))
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let out = std::process::Command::new("wmic")
+            .args(["computersystem", "get", "TotalPhysicalMemory", "/value"])
+            .output()
+            .ok()?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        for line in text.lines() {
+            if let Some(val) = line.strip_prefix("TotalPhysicalMemory=") {
+                let bytes: u64 = val.trim().parse().ok()?;
+                return Some(bytes / (1024 * 1024));
+            }
+        }
+        None
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        None
+    }
+}
+
+fn detect_os_version() -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        let release = std::fs::read_to_string("/etc/os-release").ok()?;
+        for line in release.lines() {
+            if let Some(val) = line.strip_prefix("PRETTY_NAME=") {
+                return Some(val.trim_matches('"').to_string());
+            }
+        }
+        None
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let out = std::process::Command::new("sw_vers")
+            .arg("-productVersion")
+            .output()
+            .ok()?;
+        let ver = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if ver.is_empty() { None } else { Some(format!("macOS {ver}")) }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let out = std::process::Command::new("cmd")
+            .args(["/c", "ver"])
+            .output()
+            .ok()?;
+        let ver = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if ver.is_empty() { None } else { Some(ver) }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        None
+    }
+}
+
+fn detect_hostname() -> Option<String> {
+    if let Ok(h) = std::env::var("HOSTNAME") {
+        if !h.is_empty() {
+            return Some(h);
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(h) = std::fs::read_to_string("/proc/sys/kernel/hostname") {
+            let h = h.trim().to_string();
+            if !h.is_empty() {
+                return Some(h);
+            }
+        }
+    }
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        let out = std::process::Command::new("hostname")
+            .output()
+            .ok()?;
+        let h = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !h.is_empty() {
+            return Some(h);
+        }
+    }
+    None
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -796,6 +948,8 @@ mod tests {
             timeout_ms: 5000,
             client_os: "test".into(),
             client_version: "0.1.0".into(),
+            server_info: None,
+            client_info: None,
             attempts: vec![mk(true), mk(false), mk(true)],
         };
         assert_eq!(run.success_count(), 2);
@@ -1068,6 +1222,8 @@ mod tests {
             timeout_ms: 5000,
             client_os: "test".into(),
             client_version: "0.1.0".into(),
+            server_info: None,
+            client_info: None,
             attempts: vec![
                 mk(Protocol::Http1),
                 mk(Protocol::Http2),

@@ -6,7 +6,7 @@ mod udp_throughput;
 use anyhow::Context;
 use axum_server::accept::NoDelayAcceptor;
 use axum_server::tls_rustls::{RustlsAcceptor, RustlsConfig};
-pub use routes::{build_router, AppState};
+pub use routes::{build_router, AppState, SystemMeta};
 use std::net::SocketAddr;
 use tokio::sync::oneshot;
 use tracing::info;
@@ -73,6 +73,16 @@ pub async fn run_with_shutdown(
     #[cfg(not(feature = "http3"))]
     let h3_port: Option<u16> = None;
 
+    let system_meta = SystemMeta::collect();
+    info!(
+        "System: {} {} | {} cores | {} MB RAM | {}",
+        system_meta.os,
+        system_meta.arch,
+        system_meta.cpu_cores,
+        system_meta.total_memory_mb.unwrap_or(0),
+        system_meta.os_version.as_deref().unwrap_or("unknown"),
+    );
+
     let state = AppState {
         h3_port,
         http_port: cfg.http_port,
@@ -80,6 +90,7 @@ pub async fn run_with_shutdown(
         udp_port: cfg.udp_port,
         udp_throughput_port: cfg.udp_throughput_port,
         started_at: std::time::Instant::now(),
+        system_meta,
     };
 
     let router = build_router(state);

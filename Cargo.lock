@@ -1533,7 +1533,7 @@ dependencies = [
 
 [[package]]
 name = "networker-endpoint"
-version = "0.12.80"
+version = "0.12.82"
 dependencies = [
  "anyhow",
  "axum",
@@ -1565,7 +1565,7 @@ dependencies = [
 
 [[package]]
 name = "networker-tester"
-version = "0.12.80"
+version = "0.12.82"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1587,6 +1587,7 @@ dependencies = [
  "networker-endpoint",
  "quinn",
  "rcgen",
+ "reqwest 0.12.28",
  "rust_xlsxwriter",
  "rustls 0.23.37",
  "rustls-native-certs 0.8.3",

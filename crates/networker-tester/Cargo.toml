@@ -75,6 +75,7 @@ cpu-time.workspace = true
 # --- utilities ---
 futures  = "0.3"
 libc     = "0.2"
+reqwest  = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 [features]
 default = ["http3"]

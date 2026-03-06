@@ -30,6 +30,120 @@ pub struct AppState {
     pub udp_port: u16,
     pub udp_throughput_port: u16,
     pub started_at: Instant,
+    pub system_meta: SystemMeta,
+}
+
+/// Non-sensitive system metadata exposed via GET /info.
+#[derive(Debug, Clone, Serialize)]
+pub struct SystemMeta {
+    pub os: String,
+    pub arch: String,
+    pub cpu_cores: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_memory_mb: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub os_version: Option<String>,
+    pub hostname: String,
+}
+
+impl SystemMeta {
+    pub fn collect() -> Self {
+        Self {
+            os: std::env::consts::OS.to_string(),
+            arch: std::env::consts::ARCH.to_string(),
+            cpu_cores: std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1),
+            total_memory_mb: detect_total_memory_mb(),
+            os_version: detect_os_version(),
+            hostname: get_hostname(),
+        }
+    }
+}
+
+fn detect_total_memory_mb() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
+        for line in meminfo.lines() {
+            if let Some(rest) = line.strip_prefix("MemTotal:") {
+                let kb: u64 = rest.trim().split_whitespace().next()?.parse().ok()?;
+                return Some(kb / 1024);
+            }
+        }
+        None
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let out = std::process::Command::new("sysctl")
+            .args(["-n", "hw.memsize"])
+            .output()
+            .ok()?;
+        let bytes: u64 = String::from_utf8_lossy(&out.stdout).trim().parse().ok()?;
+        Some(bytes / (1024 * 1024))
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let out = std::process::Command::new("wmic")
+            .args(["computersystem", "get", "TotalPhysicalMemory", "/value"])
+            .output()
+            .ok()?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        for line in text.lines() {
+            if let Some(val) = line.strip_prefix("TotalPhysicalMemory=") {
+                let bytes: u64 = val.trim().parse().ok()?;
+                return Some(bytes / (1024 * 1024));
+            }
+        }
+        None
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        None
+    }
+}
+
+fn detect_os_version() -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        let release = std::fs::read_to_string("/etc/os-release").ok()?;
+        for line in release.lines() {
+            if let Some(val) = line.strip_prefix("PRETTY_NAME=") {
+                return Some(val.trim_matches('"').to_string());
+            }
+        }
+        None
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let out = std::process::Command::new("sw_vers")
+            .arg("-productVersion")
+            .output()
+            .ok()?;
+        let ver = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if ver.is_empty() {
+            None
+        } else {
+            Some(format!("macOS {ver}"))
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let out = std::process::Command::new("cmd")
+            .args(["/c", "ver"])
+            .output()
+            .ok()?;
+        let ver = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if ver.is_empty() {
+            None
+        } else {
+            Some(ver)
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        None
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -528,8 +642,9 @@ async fn http_version(req: Request) -> impl IntoResponse {
     }))
 }
 
-/// GET /info – server capabilities
-async fn server_info() -> impl IntoResponse {
+/// GET /info – server capabilities and system metadata
+async fn server_info(State(state): State<AppState>) -> impl IntoResponse {
+    let uptime_secs = state.started_at.elapsed().as_secs();
     Json(serde_json::json!({
         "service": "networker-endpoint",
         "version": env!("CARGO_PKG_VERSION"),
@@ -543,6 +658,8 @@ async fn server_info() -> impl IntoResponse {
             "/health", "/echo", "/download", "/upload",
             "/delay", "/headers", "/status/:code", "/http-version", "/info"
         ],
+        "system": &state.system_meta,
+        "uptime_secs": uptime_secs,
         "timestamp": Utc::now().to_rfc3339(),
     }))
 }
@@ -633,6 +750,7 @@ mod tests {
             udp_port: 9999,
             udp_throughput_port: 9998,
             started_at: std::time::Instant::now(),
+            system_meta: SystemMeta::collect(),
         })
     }
 

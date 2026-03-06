@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.82] – 2026-03-06 — Server & client system info in reports
+
+### Added
+- **Endpoint**: `GET /info` now returns system metadata (`system` object):
+  OS, architecture, CPU cores, total memory, OS version, hostname, uptime.
+  Computed at startup; no external dependencies.
+- **Tester**: fetches `/info` from the target before running probes (doubles
+  as a connectivity check). Server metadata stored in `TestRun.server_info`.
+- **Tester**: collects local client system info (`TestRun.client_info`).
+- **HTML report**: "Client Info" and "Server Info" cards displayed side-by-side
+  after the Run Summary. Multi-target summary table shows server hostname,
+  OS, cores, and memory per target for easy comparison.
+- **JSON output**: `server_info` and `client_info` fields included in the
+  serialized `TestRun` (backward-compatible via `#[serde(default)]`).
+
+---
+
 ## [0.12.81] – 2026-03-06 — Installer: AWS SSO device-code login
 
 ### Added

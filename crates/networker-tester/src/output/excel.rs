@@ -906,6 +906,8 @@ mod tests {
             timeout_ms: 5000,
             client_os: "linux".into(),
             client_version: "0.11.3".into(),
+            server_info: None,
+            client_info: None,
             attempts: vec![
                 http_attempt,
                 udp_attempt,
@@ -946,6 +948,8 @@ mod tests {
             timeout_ms: 5000,
             client_os: "test".into(),
             client_version: "0.0.0".into(),
+            server_info: None,
+            client_info: None,
             attempts: vec![],
         };
         save(&run, tmp.path()).unwrap();
@@ -1043,6 +1047,8 @@ mod tests {
             timeout_ms: 5000,
             client_os: "test".into(),
             client_version: "0.0.0".into(),
+            server_info: None,
+            client_info: None,
             attempts: vec![download_attempt, upload_attempt],
         };
 

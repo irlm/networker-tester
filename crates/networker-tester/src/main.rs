@@ -4,7 +4,7 @@ use clap::Parser;
 use networker_tester::cli;
 use networker_tester::metrics::{
     attempt_payload_bytes, compute_stats, primary_metric_label, primary_metric_value,
-    PageLoadResult, Protocol, RequestAttempt, TestRun,
+    HostInfo, PageLoadResult, Protocol, RequestAttempt, TestRun,
 };
 use networker_tester::output::{excel, html, json, sql};
 use networker_tester::runner::{
@@ -212,6 +212,27 @@ async fn run_for_target(
         }
     }
 
+    // ── Fetch server info (connectivity check + metadata) ─────────────────────
+    let server_info = match fetch_server_info(&target, cfg.insecure).await {
+        Some(info) => {
+            info!(
+                "Server: {} {} | {} cores | {} MB RAM | {} | v{}",
+                info.os,
+                info.arch,
+                info.cpu_cores,
+                info.total_memory_mb.unwrap_or(0),
+                info.os_version.as_deref().unwrap_or("?"),
+                info.server_version.as_deref().unwrap_or("?"),
+            );
+            Some(info)
+        }
+        None => {
+            warn!("Could not fetch server info from /info — server may not be a networker-endpoint");
+            None
+        }
+    };
+    let client_info = Some(HostInfo::collect_local());
+
     let run_id = Uuid::new_v4();
     let started_at = Utc::now();
 
@@ -370,6 +391,8 @@ async fn run_for_target(
         timeout_ms: cfg.timeout * 1000,
         client_os: std::env::consts::OS.to_string(),
         client_version: env!("CARGO_PKG_VERSION").to_string(),
+        server_info,
+        client_info,
         attempts: all_attempts,
     };
 
@@ -381,6 +404,37 @@ async fn run_for_target(
     );
 
     Ok(run)
+}
+
+/// Fetch server metadata from GET /info before probes begin.
+async fn fetch_server_info(target: &url::Url, insecure: bool) -> Option<HostInfo> {
+    let info_url = {
+        let mut u = target.clone();
+        u.set_path("/info");
+        u.set_query(None);
+        u.to_string()
+    };
+
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(insecure)
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .ok()?;
+
+    let resp = client.get(&info_url).send().await.ok()?;
+    let json: serde_json::Value = resp.json().await.ok()?;
+
+    let sys = json.get("system")?;
+    Some(HostInfo {
+        os: sys.get("os")?.as_str()?.to_string(),
+        arch: sys.get("arch")?.as_str()?.to_string(),
+        cpu_cores: sys.get("cpu_cores")?.as_u64()? as usize,
+        total_memory_mb: sys.get("total_memory_mb").and_then(|v| v.as_u64()),
+        os_version: sys.get("os_version").and_then(|v| v.as_str()).map(String::from),
+        hostname: sys.get("hostname").and_then(|v| v.as_str()).map(String::from),
+        server_version: json.get("version").and_then(|v| v.as_str()).map(String::from),
+        uptime_secs: json.get("uptime_secs").and_then(|v| v.as_u64()),
+    })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
