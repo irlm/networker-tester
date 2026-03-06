@@ -137,6 +137,8 @@ _cargo_progress() {
     # Reserve a blank line — the spinner will live on this line (cursor up from below).
     printf "\n"
 
+    local prev_count=0 prev_phase=""
+
     while kill -0 "$cargo_pid" 2>/dev/null; do
         # Count crates compiled so far and show the most recent one being compiled
         local compiled_count=0 phase=""
@@ -151,28 +153,41 @@ _cargo_progress() {
                         "$log_file" 2>/dev/null | tail -1 || true)"
         fi
         phase="${phase:-…}"
-        local count_tag="[${compiled_count} crates]"
 
-        # Build the full visible line and hard-limit to cols-1 characters.
-        local line="  ${spin[$si]}  ${label}  ${count_tag} ${phase}"
-        if [[ ${#line} -ge $cols ]]; then
-            line="${line:0:$(( cols - 2 ))}…"
+        # Only redraw when something changed (count or phase).
+        # This prevents flooding the terminal with identical frames —
+        # on terminals where cursor-up doesn't work (some SSH pseudo-TTYs),
+        # each printf creates a new line.  By only printing on change, the
+        # output stays compact: one line per new crate instead of 10/sec.
+        if [[ "$compiled_count" != "$prev_count" || "$phase" != "$prev_phase" ]]; then
+            prev_count="$compiled_count"
+            prev_phase="$phase"
+
+            # Only show crate count once compilation has actually started
+            local count_tag=""
+            [[ "$compiled_count" -gt 0 ]] && count_tag="  [${compiled_count} crates]"
+
+            # Build the full visible line and hard-limit to cols-1 characters.
+            local line="  ${spin[$si]}  ${label}${count_tag}  ${phase}"
+            if [[ ${#line} -ge $cols ]]; then
+                line="${line:0:$(( cols - 2 ))}…"
+            fi
+
+            # Re-split into the unstyled prefix (spinner+label) and the dim suffix
+            # (count+phase) based on the known fixed prefix length.
+            local pfx_len=$(( 2 + 1 + 2 + ${#label} + 2 ))   # "  X  label  "
+            local pfx="${line:0:$pfx_len}"
+            local sfx="${line:$pfx_len}"
+
+            # Move up one line, erase it, print the updated spinner frame, then \n
+            # so the cursor sits below the spinner line.
+            # Using \033[1A (cursor up) + \033[2K (erase line) + \n avoids \r entirely.
+            # \r is unreliable in curl|bash because terminal mapping can vary and any
+            # line wrapping causes \r to land on the overflow row instead of the spinner.
+            printf "\033[1A\033[2K%s%s%s%s\n" "$pfx" "$DIM" "$sfx" "$RESET"
+
+            si=$(( (si + 1) % ${#spin[@]} ))
         fi
-
-        # Re-split into the unstyled prefix (spinner+label) and the dim suffix
-        # (count+phase) based on the known fixed prefix length.
-        local pfx_len=$(( 2 + 1 + 2 + ${#label} + 2 ))   # "  X  label  "
-        local pfx="${line:0:$pfx_len}"
-        local sfx="${line:$pfx_len}"
-
-        # Move up one line, erase it, print the updated spinner frame, then \n
-        # so the cursor sits below the spinner line.
-        # Using \033[1A (cursor up) + \033[2K (erase line) + \n avoids \r entirely.
-        # \r is unreliable in curl|bash because terminal mapping can vary and any
-        # line wrapping causes \r to land on the overflow row instead of the spinner.
-        printf "\033[1A\033[2K%s%s%s%s\n" "$pfx" "$DIM" "$sfx" "$RESET"
-
-        si=$(( (si + 1) % ${#spin[@]} ))
         sleep 0.12
     done
 
