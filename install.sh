@@ -114,7 +114,6 @@ _cargo_progress() {
     else
         spin=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
     fi
-    local si=0
 
     # Launch cargo in background; stdin from /dev/null to prevent hangs
     "$@" </dev/null >"$log_file" 2>&1 &
@@ -134,41 +133,34 @@ _cargo_progress() {
     fi
     [[ $cols -lt 20 ]] && cols=20
 
-    # Reserve a blank line — the spinner will live on this line (cursor up from below).
-    printf "\n"
-
-    local prev_count=0 prev_phase=""
+    # Print the initial spinner line (no cursor-up for the first frame).
+    printf "  %s  %s  …\n" "${spin[0]}" "$label"
+    local si=1
+    local prev_count=0
 
     while kill -0 "$cargo_pid" 2>/dev/null; do
-        # Count crates compiled so far and show the most recent one being compiled
-        local compiled_count=0 phase=""
+        # Count crates compiled so far
+        local compiled_count=0
         compiled_count="$(grep -c ' Compiling ' "$log_file" 2>/dev/null || echo 0)"
-        # || true prevents set -e from firing when grep finds no matches (exit 1)
-        # which happens every iteration while the log is still empty.
-        phase="$(grep -oE 'Compiling[[:space:]]+[^[:space:]]+' \
-                    "$log_file" 2>/dev/null | tail -1 || true)"
-        # Fall back to Fetching/Updating/Linking if no Compiling line yet
-        if [[ -z "$phase" ]]; then
-            phase="$(grep -oE '(Fetching|Updating|Downloading|Linking|Finished|Installing)[[:space:]]+[^[:space:]]+' \
-                        "$log_file" 2>/dev/null | tail -1 || true)"
-        fi
-        phase="${phase:-…}"
+        # Strip any non-digit characters (trailing \r, whitespace, etc.)
+        compiled_count="${compiled_count//[!0-9]/}"
+        compiled_count="${compiled_count:-0}"
 
-        # Only redraw when something changed (count or phase).
-        # This prevents flooding the terminal with identical frames —
-        # on terminals where cursor-up doesn't work (some SSH pseudo-TTYs),
-        # each printf creates a new line.  By only printing on change, the
-        # output stays compact: one line per new crate instead of 10/sec.
-        if [[ "$compiled_count" != "$prev_count" || "$phase" != "$prev_phase" ]]; then
+        # Only redraw when the compiled crate count changes.
+        # On terminals where cursor-up doesn't work (some SSH pseudo-TTYs,
+        # curl|bash), each printf creates a new visible line.  By only
+        # printing when the count advances, the output stays compact.
+        if [[ "$compiled_count" -gt 0 && "$compiled_count" != "$prev_count" ]]; then
             prev_count="$compiled_count"
-            prev_phase="$phase"
 
-            # Only show crate count once compilation has actually started
-            local count_tag=""
-            [[ "$compiled_count" -gt 0 ]] && count_tag="  [${compiled_count} crates]"
+            # Get the most recent crate being compiled
+            local phase=""
+            phase="$(grep -oE 'Compiling[[:space:]]+[^[:space:]]+' \
+                        "$log_file" 2>/dev/null | tail -1 || true)"
+            phase="${phase:-…}"
 
             # Build the full visible line and hard-limit to cols-1 characters.
-            local line="  ${spin[$si]}  ${label}${count_tag}  ${phase}"
+            local line="  ${spin[$si]}  ${label}  [${compiled_count} crates]  ${phase}"
             if [[ ${#line} -ge $cols ]]; then
                 line="${line:0:$(( cols - 2 ))}…"
             fi
@@ -181,14 +173,11 @@ _cargo_progress() {
 
             # Move up one line, erase it, print the updated spinner frame, then \n
             # so the cursor sits below the spinner line.
-            # Using \033[1A (cursor up) + \033[2K (erase line) + \n avoids \r entirely.
-            # \r is unreliable in curl|bash because terminal mapping can vary and any
-            # line wrapping causes \r to land on the overflow row instead of the spinner.
             printf "\033[1A\033[2K%s%s%s%s\n" "$pfx" "$DIM" "$sfx" "$RESET"
 
             si=$(( (si + 1) % ${#spin[@]} ))
         fi
-        sleep 0.12
+        sleep 0.25
     done
 
     wait "$cargo_pid"
@@ -201,6 +190,8 @@ _cargo_progress() {
         # Pull crate count and timing from the build log
         local final_count timing=""
         final_count="$(grep -c ' Compiling ' "$log_file" 2>/dev/null || echo 0)"
+        final_count="${final_count//[!0-9]/}"
+        final_count="${final_count:-0}"
         timing="$(grep -oE 'Finished[^)]+\)' "$log_file" 2>/dev/null | tail -1 || true)"
         local count_str=""
         [[ "$final_count" -gt 0 ]] && count_str="  ${DIM}[${final_count} crates]${RESET}"
