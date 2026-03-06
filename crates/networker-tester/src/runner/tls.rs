@@ -467,6 +467,44 @@ impl rustls::client::danger::ServerCertVerifier for NoVerifier {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]
+fn make_failed(
+    run_id: Uuid,
+    attempt_id: Uuid,
+    sequence_num: u32,
+    started_at: chrono::DateTime<Utc>,
+    category: ErrorCategory,
+    message: String,
+    detail: Option<String>,
+    dns: Option<crate::metrics::DnsResult>,
+    tcp: Option<crate::metrics::TcpResult>,
+) -> RequestAttempt {
+    RequestAttempt {
+        attempt_id,
+        run_id,
+        protocol: Protocol::Tls,
+        sequence_num,
+        started_at,
+        finished_at: Some(Utc::now()),
+        success: false,
+        dns,
+        tcp,
+        tls: None,
+        http: None,
+        udp: None,
+        error: Some(ErrorRecord {
+            category,
+            message,
+            detail,
+            occurred_at: Utc::now(),
+        }),
+        retry_count: 0,
+        server_timing: None,
+        udp_throughput: None,
+        page_load: None,
+        browser: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -633,44 +671,5 @@ mod tests {
         let der = self_signed_der();
         let entry = parse_cert_entry(&der).unwrap();
         assert!(entry.expiry.is_some(), "expiry should be present");
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn make_failed(
-    run_id: Uuid,
-    attempt_id: Uuid,
-    sequence_num: u32,
-    started_at: chrono::DateTime<Utc>,
-    category: ErrorCategory,
-    message: String,
-    detail: Option<String>,
-    dns: Option<crate::metrics::DnsResult>,
-    tcp: Option<crate::metrics::TcpResult>,
-) -> RequestAttempt {
-    RequestAttempt {
-        attempt_id,
-        run_id,
-        protocol: Protocol::Tls,
-        sequence_num,
-        started_at,
-        finished_at: Some(Utc::now()),
-        success: false,
-        dns,
-        tcp,
-        tls: None,
-        http: None,
-        udp: None,
-        error: Some(ErrorRecord {
-            category,
-            message,
-            detail,
-            occurred_at: Utc::now(),
-        }),
-        retry_count: 0,
-        server_timing: None,
-        udp_throughput: None,
-        page_load: None,
-        browser: None,
     }
 }

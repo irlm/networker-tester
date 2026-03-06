@@ -140,10 +140,10 @@ mod tests {
         // "localhost" may or may not have AAAA records depending on the OS.
         // We just verify the filter is applied — if it returns Ok, all IPs are v6;
         // if it returns Err (no IPv6 for localhost), that's also valid.
-        match resolve("localhost", false, true).await {
-            Ok((ips, _)) => assert!(ips.iter().all(|ip| ip.is_ipv6())),
-            Err(_) => {} // no IPv6 address for localhost — filter worked correctly
+        if let Ok((ips, _)) = resolve("localhost", false, true).await {
+            assert!(ips.iter().all(|ip| ip.is_ipv6()));
         }
+        // Err = no IPv6 address for localhost — filter worked correctly
     }
 
     #[tokio::test]
