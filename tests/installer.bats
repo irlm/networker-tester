@@ -462,14 +462,14 @@ teardown() {
 # ===========================================================================
 
 @test "step_download_release: installs binary to INSTALL_DIR" {
-    RELEASE_TARGET="x86_64-unknown-linux-gnu"
+    RELEASE_TARGET="x86_64-unknown-linux-musl"
     # stubs/gh creates a tar.gz with a fake binary inside
     step_download_release "networker-tester"
     [ -x "${INSTALL_DIR}/networker-tester" ]
 }
 
 @test "step_download_release: exits on gh download failure" {
-    RELEASE_TARGET="x86_64-unknown-linux-gnu"
+    RELEASE_TARGET="x86_64-unknown-linux-musl"
     export STUB_GH_FAIL=1
     run step_download_release "networker-tester"
     [ "$status" -ne 0 ]

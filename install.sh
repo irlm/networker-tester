@@ -548,7 +548,7 @@ detect_release_target() {
     case "$os" in
         Linux)
             case "$arch" in
-                x86_64) echo "x86_64-unknown-linux-gnu" ;;
+                x86_64) echo "x86_64-unknown-linux-musl" ;;
                 *)      echo "" ;;
             esac ;;
         Darwin)
@@ -2404,9 +2404,9 @@ _remote_install_binary() {
     # Map remote arch to Rust target triple
     local remote_target
     case "$remote_arch" in
-        x86_64)        remote_target="x86_64-unknown-linux-gnu" ;;
-        aarch64|arm64) remote_target="aarch64-unknown-linux-gnu" ;;
-        *)             remote_target="x86_64-unknown-linux-gnu" ;;
+        x86_64)        remote_target="x86_64-unknown-linux-musl" ;;
+        aarch64|arm64) remote_target="aarch64-unknown-linux-musl" ;;
+        *)             remote_target="x86_64-unknown-linux-musl" ;;
     esac
 
     local archive="${binary}-${remote_target}.tar.gz"
