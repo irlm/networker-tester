@@ -11,6 +11,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.83] – 2026-03-06 — Google Cloud Platform (GCP) support in installer
+
+### Added
+- **Installer**: GCP / Google Cloud Engine (GCE) support — provision and deploy
+  networker-tester and networker-endpoint on GCE instances, alongside existing
+  Azure and AWS support.
+- New CLI flags: `--gcp`, `--tester-gcp`, `--gcp-region`, `--gcp-zone`,
+  `--gcp-machine-type`, `--gcp-project`.
+- Interactive deployment: zone selection (8 regions), machine type, project
+  auto-detection from `gcloud config`, auto-shutdown via cron.
+- `ensure_gcp_cli()`: install gcloud SDK (brew on macOS), device-code login
+  via `gcloud auth login --no-launch-browser`.
+- `ask_gcp_options()`: interactive zone/machine-type/name prompts.
+- GCE deployment: `gcloud compute instances create` (Ubuntu 22.04 LTS),
+  firewall rules (tagged `networker-endpoint`), SSH via `gcloud compute ssh`,
+  systemd service + iptables redirects, health check verification.
+- Completion summary shows GCP-specific SSH commands (`gcloud compute ssh`)
+  and cleanup instructions (`gcloud compute instances delete`).
+- `INSTALLER_VERSION` bumped to v0.12.83.
+
+---
+
 ## [0.12.82] – 2026-03-06 — Server & client system info in reports
 
 ### Added

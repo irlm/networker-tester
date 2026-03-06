@@ -4,7 +4,7 @@
 #
 # Installs networker-tester and/or networker-endpoint either:
 #   locally  – on this machine (release binary download or source compile)
-#   remotely – provisioned on a cloud VM (Azure and AWS supported)
+#   remotely – provisioned on a cloud VM (Azure, AWS, and GCP supported)
 #
 # Two local install modes (auto-detected, or choose in customize flow):
 #   release  – download pre-built binary from the latest GitHub release via
@@ -41,6 +41,14 @@
 #   --aws-instance-type TYPE EC2 instance type (default: t3.small)
 #   --aws-endpoint-name NAME EC2 Name tag for endpoint (default: networker-endpoint)
 #   --aws-tester-name NAME   EC2 Name tag for tester (default: networker-tester)
+#
+#   GCP:
+#   --gcp                    Deploy endpoint to GCP GCE (interactive options)
+#   --tester-gcp             Deploy tester to GCP GCE (interactive options)
+#   --gcp-region REGION      GCP region (default: us-central1)
+#   --gcp-zone ZONE          GCP zone (default: us-central1-a)
+#   --gcp-machine-type TYPE  GCE machine type (default: e2-small)
+#   --gcp-project PROJECT    GCP project ID (default: auto-detected from gcloud config)
 #
 #   -h, --help               Show this help message
 # ──────────────────────────────────────────────────────────────────────────────
@@ -230,6 +238,7 @@ Install location (interactive; can also be set via flags):
   local     Install on this machine  [default]
   azure     Provision Azure VM and deploy there (requires az CLI + az login)
   aws       Provision AWS EC2 instance and deploy there (requires aws CLI)
+  gcp       Provision GCP GCE instance and deploy there (requires gcloud CLI)
 
 Local install modes (auto-detected; override in customize flow or via flag):
   release   Download pre-built binary via gh CLI — fast (~10 s)
@@ -260,6 +269,14 @@ AWS options:
   --aws-endpoint-name NAME EC2 Name tag for endpoint instance (default: networker-endpoint)
   --aws-tester-name NAME   EC2 Name tag for tester instance (default: networker-tester)
 
+GCP options:
+  --gcp                    Deploy endpoint to GCP GCE (interactive: choose region/type)
+  --tester-gcp             Deploy tester to GCP GCE (interactive: choose region/type)
+  --gcp-region REGION      GCP region (default: us-central1)
+  --gcp-zone ZONE          GCP zone (default: us-central1-a)
+  --gcp-machine-type TYPE  GCE machine type (default: e2-small)
+  --gcp-project PROJECT    GCP project ID (default: auto-detected from gcloud config)
+
   -h, --help               Show this help message
 
 Examples:
@@ -268,8 +285,11 @@ Examples:
   bash install.sh --azure --region westeurope both
   bash install.sh --aws endpoint
   bash install.sh --aws --aws-region eu-west-1 both
+  bash install.sh --gcp endpoint
+  bash install.sh --gcp --gcp-zone europe-west1-b both
   bash install.sh --tester-aws --aws both          # both on separate AWS instances
   bash install.sh --tester-azure --aws both        # tester on Azure, endpoint on AWS
+  bash install.sh --tester-gcp --gcp both          # both on separate GCP instances
 EOF
 }
 
@@ -283,7 +303,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.12.81"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.12.83"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -355,6 +375,28 @@ AWS_ENDPOINT_IP=""
 AWS_AUTO_SHUTDOWN="yes"
 AWS_SHUTDOWN_ASKED=0
 
+# ── GCP state ────────────────────────────────────────────────────────────────
+GCP_CLI_AVAILABLE=0
+GCP_LOGGED_IN=0
+GCP_PROJECT=""
+GCP_REGION="us-central1"
+GCP_ZONE="us-central1-a"
+GCP_REGION_ASKED=0
+
+GCP_TESTER_NAME="networker-tester"
+GCP_TESTER_MACHINE_TYPE="e2-small"
+GCP_TESTER_OS="linux"
+GCP_TESTER_IP=""
+
+GCP_ENDPOINT_NAME="networker-endpoint"
+GCP_ENDPOINT_MACHINE_TYPE="e2-small"
+GCP_ENDPOINT_OS="linux"
+GCP_ENDPOINT_IP=""
+
+# Auto-shutdown: "yes" = install cron job at 04:00 UTC (11 PM EST)
+GCP_AUTO_SHUTDOWN="yes"
+GCP_SHUTDOWN_ASKED=0
+
 CONFIG_FILE_PATH=""
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
@@ -403,6 +445,21 @@ parse_args() {
                 shift; AWS_ENDPOINT_NAME="${1:-networker-endpoint}" ;;
             --aws-tester-name)
                 shift; AWS_TESTER_NAME="${1:-networker-tester}" ;;
+            # GCP
+            --gcp)
+                ENDPOINT_LOCATION="gcp"; DO_REMOTE_ENDPOINT=1 ;;
+            --tester-gcp)
+                TESTER_LOCATION="gcp"; DO_REMOTE_TESTER=1 ;;
+            --gcp-region)
+                shift; GCP_REGION="${1:-us-central1}" ;;
+            --gcp-zone)
+                shift; GCP_ZONE="${1:-us-central1-a}" ;;
+            --gcp-machine-type)
+                shift
+                GCP_TESTER_MACHINE_TYPE="${1:-e2-small}"
+                GCP_ENDPOINT_MACHINE_TYPE="${1:-e2-small}" ;;
+            --gcp-project)
+                shift; GCP_PROJECT="${1:-}" ;;
             -h|--help)
                 show_help; exit 0 ;;
             *)
@@ -577,6 +634,20 @@ discover_system() {
             AWS_LOGGED_IN=1
         fi
     fi
+
+    # GCP CLI detection
+    if command -v gcloud &>/dev/null; then
+        GCP_CLI_AVAILABLE=1
+        local gcp_account
+        gcp_account="$(gcloud config get-value account 2>/dev/null || echo "")"
+        if [[ -n "$gcp_account" && "$gcp_account" != "(unset)" ]]; then
+            GCP_LOGGED_IN=1
+        fi
+        if [[ -z "$GCP_PROJECT" ]]; then
+            GCP_PROJECT="$(gcloud config get-value project 2>/dev/null || echo "")"
+            [[ "$GCP_PROJECT" == "(unset)" ]] && GCP_PROJECT=""
+        fi
+    fi
 }
 
 display_system_info() {
@@ -620,6 +691,16 @@ display_system_info() {
             printf "    %-22s %s\n" "AWS CLI:" "authenticated ✓  (account: ${aws_account})"
         else
             printf "    %-22s %s\n" "AWS CLI:" "installed  (run: aws sso login / aws configure)"
+        fi
+    fi
+
+    if [[ $GCP_CLI_AVAILABLE -eq 1 ]]; then
+        if [[ $GCP_LOGGED_IN -eq 1 ]]; then
+            local gcp_account
+            gcp_account="$(gcloud config get-value account 2>/dev/null || echo "")"
+            printf "    %-22s %s\n" "GCP CLI:" "authenticated ✓  (${gcp_account})"
+        else
+            printf "    %-22s %s\n" "GCP CLI:" "installed  (run: gcloud auth login)"
         fi
     fi
 }
@@ -737,6 +818,13 @@ display_plan() {
                 printf "    %-22s %s\n" "Instance name:"  "$AWS_TESTER_NAME"
                 printf "    %-22s %s\n" "Instance type:"  "$AWS_TESTER_INSTANCE_TYPE"
                 ;;
+            gcp)
+                printf "    ${BOLD}networker-tester:${RESET}  Remote — GCP GCE\n"
+                printf "    %-22s %s\n" "Zone:"           "$GCP_ZONE"
+                printf "    %-22s %s\n" "Instance name:"  "$GCP_TESTER_NAME"
+                printf "    %-22s %s\n" "Machine type:"   "$GCP_TESTER_MACHINE_TYPE"
+                printf "    %-22s %s\n" "Project:"        "$GCP_PROJECT"
+                ;;
         esac
         echo ""
         printf "    ${DIM}a. Provision VM (Ubuntu 22.04)\n"
@@ -760,6 +848,13 @@ display_plan() {
                 printf "    %-22s %s\n" "Region:"         "$AWS_REGION"
                 printf "    %-22s %s\n" "Instance name:"  "$AWS_ENDPOINT_NAME"
                 printf "    %-22s %s\n" "Instance type:"  "$AWS_ENDPOINT_INSTANCE_TYPE"
+                ;;
+            gcp)
+                printf "    ${BOLD}networker-endpoint:${RESET}  Remote — GCP GCE\n"
+                printf "    %-22s %s\n" "Zone:"           "$GCP_ZONE"
+                printf "    %-22s %s\n" "Instance name:"  "$GCP_ENDPOINT_NAME"
+                printf "    %-22s %s\n" "Machine type:"   "$GCP_ENDPOINT_MACHINE_TYPE"
+                printf "    %-22s %s\n" "Project:"        "$GCP_PROJECT"
                 ;;
         esac
         echo ""
@@ -1101,6 +1196,140 @@ ask_aws_options() {
     echo ""
 }
 
+# ── GCP interactive configuration ────────────────────────────────────────────
+ask_gcp_options() {
+    local component="$1"  # "tester" or "endpoint"
+    local title
+    case "$component" in
+        tester)   title="networker-tester" ;;
+        endpoint) title="networker-endpoint" ;;
+    esac
+
+    print_section "GCP options for $title"
+    echo ""
+
+    # Project (ask once, auto-detect from gcloud config)
+    if [[ -z "$GCP_PROJECT" ]]; then
+        GCP_PROJECT="$(gcloud config get-value project 2>/dev/null || echo "")"
+        [[ "$GCP_PROJECT" == "(unset)" ]] && GCP_PROJECT=""
+    fi
+    if [[ -z "$GCP_PROJECT" ]]; then
+        echo "  No GCP project is set."
+        printf "  Enter your GCP project ID: "
+        local proj_ans
+        read -r proj_ans </dev/tty || true
+        if [[ -z "$proj_ans" ]]; then
+            print_err "GCP project ID is required."
+            exit 1
+        fi
+        GCP_PROJECT="$proj_ans"
+        gcloud config set project "$GCP_PROJECT" 2>/dev/null || true
+    fi
+    print_ok "Project: $GCP_PROJECT"
+    echo ""
+
+    # Region / Zone (shared; ask once)
+    if [[ $GCP_REGION_ASKED -eq 0 ]]; then
+        GCP_REGION_ASKED=1
+        local zones=(
+            "us-central1-a:US Central (Iowa)"
+            "us-east1-b:US East (South Carolina)"
+            "us-west1-a:US West (Oregon)"
+            "europe-west1-b:Europe West (Belgium)"
+            "europe-west2-a:Europe West (London)"
+            "asia-east1-a:Asia East (Taiwan)"
+            "asia-northeast1-a:Asia NE (Tokyo)"
+            "australia-southeast1-a:Australia SE (Sydney)"
+        )
+        echo "  GCP zone:"
+        local i=1
+        for z in "${zones[@]}"; do
+            local code="${z%%:*}"
+            local label="${z#*:}"
+            if [[ "$code" == "$GCP_ZONE" ]]; then
+                printf "    %s) %-28s %s  ${DIM}[current]${RESET}\n" "$i" "$code" "$label"
+            else
+                printf "    %s) %-28s %s\n" "$i" "$code" "$label"
+            fi
+            i=$((i + 1))
+        done
+        echo ""
+        printf "  Choice [1]: "
+        local zone_ans
+        read -r zone_ans </dev/tty || true
+        zone_ans="${zone_ans:-1}"
+        if [[ "$zone_ans" =~ ^[0-9]+$ ]] && \
+           [[ "$zone_ans" -ge 1 ]] && \
+           [[ "$zone_ans" -le "${#zones[@]}" ]]; then
+            local chosen="${zones[$((zone_ans - 1))]}"
+            GCP_ZONE="${chosen%%:*}"
+        fi
+        # Derive region from zone (strip trailing -[a-z])
+        GCP_REGION="${GCP_ZONE%-*}"
+        print_ok "Zone: $GCP_ZONE  (region: $GCP_REGION)"
+        echo ""
+    else
+        print_info "Zone: $GCP_ZONE  (shared with other GCP instance)"
+        echo ""
+    fi
+
+    # Machine type
+    echo "  GCE machine type:"
+    echo "    1) e2-micro      2 vCPU (shared), 1 GB RAM  ~\$7/mo   (free-tier eligible)"
+    echo "    2) e2-small      2 vCPU (shared), 2 GB RAM  ~\$15/mo  [default]"
+    echo "    3) e2-medium     2 vCPU (shared), 4 GB RAM  ~\$27/mo"
+    echo "    4) e2-standard-2 2 vCPU,          8 GB RAM  ~\$49/mo"
+    echo ""
+    printf "  Choice [2]: "
+    local type_ans
+    read -r type_ans </dev/tty || true
+    type_ans="${type_ans:-2}"
+    local chosen_type
+    case "$type_ans" in
+        1) chosen_type="e2-micro" ;;
+        3) chosen_type="e2-medium" ;;
+        4) chosen_type="e2-standard-2" ;;
+        *) chosen_type="e2-small" ;;
+    esac
+    echo ""
+
+    # Auto-shutdown policy (ask once across all GCP instances)
+    if [[ $GCP_SHUTDOWN_ASKED -eq 0 ]]; then
+        GCP_SHUTDOWN_ASKED=1
+        echo "  Auto-shutdown policy (avoids unexpected charges):"
+        echo "    1) Shut down at 11 PM EST (04:00 UTC) daily  [default]"
+        echo "    2) Leave running — I will stop/delete manually"
+        echo ""
+        printf "  Choice [1]: "
+        local sd_ans; read -r sd_ans </dev/tty || true
+        sd_ans="${sd_ans:-1}"
+        if [[ "$sd_ans" == "2" ]]; then
+            GCP_AUTO_SHUTDOWN="no"
+            print_warn "Instance will keep running — remember to delete it when done to avoid charges!"
+        else
+            GCP_AUTO_SHUTDOWN="yes"
+            print_ok "Auto-shutdown: 04:00 UTC (11 PM EST) daily (via cron on the instance)"
+        fi
+        echo ""
+    fi
+
+    # Instance name
+    if [[ "$component" == "tester" ]]; then
+        printf "  Instance name [%s]: " "$GCP_TESTER_NAME"
+        local name_ans; read -r name_ans </dev/tty || true
+        GCP_TESTER_NAME="${name_ans:-$GCP_TESTER_NAME}"
+        GCP_TESTER_MACHINE_TYPE="$chosen_type"
+        print_ok "Type: $GCP_TESTER_MACHINE_TYPE  |  Name: $GCP_TESTER_NAME  |  Zone: $GCP_ZONE"
+    else
+        printf "  Instance name [%s]: " "$GCP_ENDPOINT_NAME"
+        local name_ans; read -r name_ans </dev/tty || true
+        GCP_ENDPOINT_NAME="${name_ans:-$GCP_ENDPOINT_NAME}"
+        GCP_ENDPOINT_MACHINE_TYPE="$chosen_type"
+        print_ok "Type: $GCP_ENDPOINT_MACHINE_TYPE  |  Name: $GCP_ENDPOINT_NAME  |  Zone: $GCP_ZONE"
+    fi
+    echo ""
+}
+
 # ── Ensure Azure CLI is installed and authenticated ───────────────────────────
 ensure_azure_cli() {
     if [[ $AZURE_CLI_AVAILABLE -eq 0 ]]; then
@@ -1403,6 +1632,96 @@ _aws_check_identity() {
     fi
 }
 
+# ── Ensure GCP CLI (gcloud) is installed and authenticated ────────────────────
+ensure_gcp_cli() {
+    if [[ $GCP_CLI_AVAILABLE -eq 0 ]]; then
+        echo ""
+        print_warn "Google Cloud SDK (gcloud) is not installed."
+        echo ""
+        echo "  The gcloud CLI is required to provision GCE instances and manage resources."
+        echo ""
+        echo "  Install from: https://cloud.google.com/sdk/docs/install"
+        if [[ "$PKG_MGR" == "brew" ]]; then
+            echo "    macOS:  brew install --cask google-cloud-sdk"
+        fi
+        echo ""
+        if [[ "$PKG_MGR" == "brew" ]]; then
+            if ask_yn "Install Google Cloud SDK now (via brew)?" "y"; then
+                echo ""
+                brew install --cask google-cloud-sdk
+                # Source gcloud shell completions / PATH additions
+                if [[ -f "$(brew --prefix)/share/google-cloud-sdk/path.bash.inc" ]]; then
+                    # shellcheck disable=SC1091
+                    source "$(brew --prefix)/share/google-cloud-sdk/path.bash.inc"
+                fi
+                if command -v gcloud &>/dev/null; then
+                    GCP_CLI_AVAILABLE=1
+                    print_ok "Google Cloud SDK installed"
+                else
+                    print_err "Google Cloud SDK installation failed — install manually."
+                    echo "  https://cloud.google.com/sdk/docs/install"
+                    exit 1
+                fi
+            else
+                print_err "Google Cloud SDK is required for GCP deployment."
+                echo "  Install from: https://cloud.google.com/sdk/docs/install"
+                exit 1
+            fi
+        else
+            echo "  Install manually, then re-run: bash install.sh --gcp"
+            exit 1
+        fi
+    fi
+
+    if [[ $GCP_LOGGED_IN -eq 0 ]]; then
+        echo ""
+        print_warn "Not logged in to GCP."
+        echo ""
+        if ask_yn "Log in to GCP now (device code — opens browser)?" "y"; then
+            echo ""
+            print_info "Logging in to GCP (device code)…"
+            gcloud auth login --no-launch-browser
+            local gcp_account
+            gcp_account="$(gcloud config get-value account 2>/dev/null || echo "")"
+            if [[ -n "$gcp_account" && "$gcp_account" != "(unset)" ]]; then
+                GCP_LOGGED_IN=1
+                print_ok "Logged in: $gcp_account"
+            else
+                print_err "GCP login failed — fix manually then re-run the installer."
+                echo "  Run:  gcloud auth login"
+                exit 1
+            fi
+        else
+            print_err "GCP login required for remote deployment."
+            echo "  Run:  gcloud auth login"
+            exit 1
+        fi
+    fi
+
+    # Ensure a project is set
+    if [[ -z "$GCP_PROJECT" ]]; then
+        GCP_PROJECT="$(gcloud config get-value project 2>/dev/null || echo "")"
+        [[ "$GCP_PROJECT" == "(unset)" ]] && GCP_PROJECT=""
+    fi
+    if [[ -z "$GCP_PROJECT" ]]; then
+        echo ""
+        print_warn "No GCP project set."
+        echo ""
+        echo "  List your projects:  gcloud projects list"
+        echo ""
+        printf "  Enter your GCP project ID: "
+        local proj_ans
+        read -r proj_ans </dev/tty || true
+        if [[ -z "$proj_ans" ]]; then
+            print_err "GCP project ID is required."
+            exit 1
+        fi
+        GCP_PROJECT="$proj_ans"
+        gcloud config set project "$GCP_PROJECT" 2>/dev/null || true
+        print_ok "Project: $GCP_PROJECT"
+    fi
+}
+
 # Ask where to install each component.  Skipped when AUTO_YES=1.
 ask_deployment_locations() {
     [[ $AUTO_YES -eq 1 ]] && return 0
@@ -1415,6 +1734,7 @@ ask_deployment_locations() {
             echo "    1) Locally on this machine  [default]"
             echo "    2) Remote: Azure VM"
             echo "    3) Remote: AWS EC2"
+            echo "    4) Remote: Google Cloud GCE"
             echo ""
             printf "  Choice [1]: "
             local ans
@@ -1423,12 +1743,14 @@ ask_deployment_locations() {
             case "$ans" in
                 2) TESTER_LOCATION="azure"; DO_REMOTE_TESTER=1 ;;
                 3) TESTER_LOCATION="aws";   DO_REMOTE_TESTER=1 ;;
+                4) TESTER_LOCATION="gcp";   DO_REMOTE_TESTER=1 ;;
             esac
         fi
         if [[ $DO_REMOTE_TESTER -eq 1 ]]; then
             case "$TESTER_LOCATION" in
                 azure) ensure_azure_cli; ask_azure_options "tester" ;;
                 aws)   ensure_aws_cli;   ask_aws_options   "tester" ;;
+                gcp)   ensure_gcp_cli;   ask_gcp_options   "tester" ;;
             esac
         fi
     fi
@@ -1441,6 +1763,7 @@ ask_deployment_locations() {
             echo "    1) Locally on this machine  [default]"
             echo "    2) Remote: Azure VM"
             echo "    3) Remote: AWS EC2"
+            echo "    4) Remote: Google Cloud GCE"
             echo ""
             printf "  Choice [1]: "
             local ans
@@ -1449,12 +1772,14 @@ ask_deployment_locations() {
             case "$ans" in
                 2) ENDPOINT_LOCATION="azure"; DO_REMOTE_ENDPOINT=1 ;;
                 3) ENDPOINT_LOCATION="aws";   DO_REMOTE_ENDPOINT=1 ;;
+                4) ENDPOINT_LOCATION="gcp";   DO_REMOTE_ENDPOINT=1 ;;
             esac
         fi
         if [[ $DO_REMOTE_ENDPOINT -eq 1 ]]; then
             case "$ENDPOINT_LOCATION" in
                 azure) ensure_azure_cli; ask_azure_options "endpoint" ;;
                 aws)   ensure_aws_cli;   ask_aws_options   "endpoint" ;;
+                gcp)   ensure_gcp_cli;   ask_gcp_options   "endpoint" ;;
             esac
         fi
     fi
@@ -2369,6 +2694,7 @@ EOF
     case "$TESTER_LOCATION" in
         azure) tester_ip="$AZURE_TESTER_IP"; tester_user="azureuser" ;;
         aws)   tester_ip="$AWS_TESTER_IP";   tester_user="ubuntu" ;;
+        gcp)   tester_ip="$GCP_TESTER_IP";   tester_user="$(whoami)" ;;
     esac
     if [[ -n "$tester_ip" ]]; then
         print_info "Uploading config to tester VM ($tester_ip)…"
@@ -2997,6 +3323,298 @@ step_aws_deploy_endpoint() {
     step_generate_config "$AWS_ENDPOINT_IP"
 }
 
+# ──────────────────────────────────────────────────────────────────────────────
+# GCP deployment steps
+# ──────────────────────────────────────────────────────────────────────────────
+
+step_check_gcp_prereqs() {
+    next_step "Check GCP prerequisites"
+
+    if [[ $GCP_CLI_AVAILABLE -eq 0 ]]; then
+        print_err "Google Cloud SDK (gcloud) is not installed."
+        echo ""
+        echo "  Install from: https://cloud.google.com/sdk/docs/install"
+        echo "    macOS:  brew install --cask google-cloud-sdk"
+        exit 1
+    fi
+    print_ok "gcloud CLI found"
+
+    if [[ $GCP_LOGGED_IN -eq 0 ]]; then
+        echo ""
+        print_warn "Not logged in to GCP."
+        print_info "Logging in via device code…"
+        gcloud auth login --no-launch-browser
+        local gcp_account
+        gcp_account="$(gcloud config get-value account 2>/dev/null || echo "")"
+        if [[ -n "$gcp_account" && "$gcp_account" != "(unset)" ]]; then
+            GCP_LOGGED_IN=1
+        else
+            print_err "GCP login failed."
+            echo "  Run:  gcloud auth login"
+            exit 1
+        fi
+    fi
+
+    if [[ -z "$GCP_PROJECT" ]]; then
+        print_err "No GCP project set."
+        echo "  Run:  gcloud config set project YOUR_PROJECT_ID"
+        exit 1
+    fi
+
+    local gcp_account
+    gcp_account="$(gcloud config get-value account 2>/dev/null || echo "")"
+    print_ok "Account: ${gcp_account}  (project: ${GCP_PROJECT})"
+}
+
+# Create a GCE firewall rule for the endpoint ports (idempotent).
+_gcp_create_firewall_rule() {
+    local rule_name="networker-endpoint-allow"
+
+    # Check if already exists
+    if gcloud compute firewall-rules describe "$rule_name" \
+            --project "$GCP_PROJECT" &>/dev/null 2>&1; then
+        print_ok "Firewall rule '$rule_name' already exists — reusing"
+        return 0
+    fi
+
+    print_info "Creating firewall rule '$rule_name'…"
+    gcloud compute firewall-rules create "$rule_name" \
+        --project "$GCP_PROJECT" \
+        --direction=INGRESS \
+        --priority=1000 \
+        --network=default \
+        --action=ALLOW \
+        --rules=tcp:22,tcp:80,tcp:443,tcp:8080,tcp:8443,udp:8443,udp:9998,udp:9999 \
+        --source-ranges=0.0.0.0/0 \
+        --target-tags=networker-endpoint \
+        --quiet
+    print_ok "Firewall rule created: TCP 22/80/443/8080/8443, UDP 8443/9998/9999"
+}
+
+# Create a GCE instance.
+# $1 = label ("tester"|"endpoint"), $2 = instance name, $3 = machine type,
+# $4 = name of global variable to receive public IP
+_gcp_create_instance() {
+    local label="$1" name="$2" machine_type="$3" ip_var="$4"
+
+    next_step "Create GCE instance for $label ($name in $GCP_ZONE)"
+
+    local tags_opt=""
+    [[ "$label" == "endpoint" ]] && tags_opt="--tags=networker-endpoint"
+
+    print_info "Creating Ubuntu 22.04 VM '$name' ($machine_type)…"
+    print_dim "This typically takes 1–2 minutes…"
+    echo ""
+
+    gcloud compute instances create "$name" \
+        --project "$GCP_PROJECT" \
+        --zone "$GCP_ZONE" \
+        --machine-type "$machine_type" \
+        --image-family ubuntu-2204-lts \
+        --image-project ubuntu-os-cloud \
+        $tags_opt \
+        --quiet
+
+    # Retrieve the external IP
+    local ip
+    ip="$(gcloud compute instances describe "$name" \
+        --project "$GCP_PROJECT" \
+        --zone "$GCP_ZONE" \
+        --format='get(networkInterfaces[0].accessConfigs[0].natIP)' 2>/dev/null || echo "")"
+
+    if [[ -z "$ip" ]]; then
+        print_err "Failed to retrieve instance public IP."
+        echo "  Check the GCP Console for instance: $name"
+        exit 1
+    fi
+
+    printf -v "$ip_var" "%s" "$ip"
+    print_ok "Instance created — Public IP: ${BOLD}${ip}${RESET}"
+}
+
+# Wait for SSH access on a GCE instance via gcloud compute ssh (OS Login or metadata keys).
+_gcp_wait_for_ssh() {
+    local name="$1" label="${2:-instance}"
+    print_info "Waiting for SSH access to $label…"
+    local attempt=0
+    while [[ $attempt -lt 30 ]]; do
+        if gcloud compute ssh "$name" \
+                --project "$GCP_PROJECT" \
+                --zone "$GCP_ZONE" \
+                --command "echo ok" \
+                --quiet \
+                --ssh-flag="-o ConnectTimeout=5" \
+                --ssh-flag="-o StrictHostKeyChecking=no" \
+                &>/dev/null 2>&1; then
+            print_ok "SSH available on $label"
+            return 0
+        fi
+        attempt=$((attempt + 1))
+        sleep 5
+    done
+    print_warn "SSH not available after 150s — continuing anyway"
+}
+
+# Run a command on a GCE instance via gcloud compute ssh.
+_gcp_ssh_run() {
+    local name="$1"
+    shift
+    gcloud compute ssh "$name" \
+        --project "$GCP_PROJECT" \
+        --zone "$GCP_ZONE" \
+        --quiet \
+        --ssh-flag="-o StrictHostKeyChecking=no" \
+        --command "$*"
+}
+
+# Install a binary on a GCE instance using the bootstrap installer.
+_gcp_install_binary() {
+    local binary="$1" name="$2"
+    local component
+    [[ "$binary" == "networker-tester" ]] && component="tester" || component="endpoint"
+
+    next_step "Install $binary on GCE instance"
+
+    # Upload installer script and run it
+    print_info "Uploading installer to instance…"
+    local script_path
+    script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+    if [[ -f "$script_path" ]]; then
+        gcloud compute scp "$script_path" "${name}:/tmp/networker-install.sh" \
+            --project "$GCP_PROJECT" \
+            --zone "$GCP_ZONE" \
+            --quiet 2>/dev/null || true
+    fi
+
+    # Try running the uploaded installer; fall back to downloading binary directly
+    if _gcp_ssh_run "$name" "test -f /tmp/networker-install.sh" 2>/dev/null; then
+        print_info "Running installer on instance ($component)…"
+        _gcp_ssh_run "$name" "bash /tmp/networker-install.sh $component -y" 2>&1 | tail -20
+    else
+        # Fallback: download binary directly via gh release
+        print_info "Installing binary via cargo install…"
+        _gcp_ssh_run "$name" \
+            "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
+             source \"\$HOME/.cargo/env\" && \
+             cargo install --git ${REPO_HTTPS} ${binary}" 2>&1 | tail -20
+    fi
+
+    # Verify
+    if _gcp_ssh_run "$name" "command -v $binary || test -f \"\$HOME/.cargo/bin/$binary\"" &>/dev/null 2>&1; then
+        print_ok "$binary installed on GCE instance"
+    else
+        print_warn "$binary may not have installed correctly — check the instance manually"
+    fi
+}
+
+# Create the endpoint systemd service on a GCE instance.
+_gcp_create_endpoint_service() {
+    local name="$1"
+    next_step "Create networker-endpoint service (GCP)"
+
+    # Find the binary path on the remote
+    local bin_path
+    bin_path="$(_gcp_ssh_run "$name" "command -v networker-endpoint || echo \"\$HOME/.cargo/bin/networker-endpoint\"" 2>/dev/null)"
+    bin_path="${bin_path:-/usr/local/bin/networker-endpoint}"
+
+    # Copy binary to /usr/local/bin if it's in .cargo
+    _gcp_ssh_run "$name" "
+        if [[ -f \"\$HOME/.cargo/bin/networker-endpoint\" ]]; then
+            sudo cp \"\$HOME/.cargo/bin/networker-endpoint\" /usr/local/bin/networker-endpoint
+            sudo chmod +x /usr/local/bin/networker-endpoint
+        fi
+    " 2>/dev/null || true
+
+    _gcp_ssh_run "$name" "
+        sudo useradd -r -s /bin/false networker 2>/dev/null || true
+        sudo tee /etc/systemd/system/networker-endpoint.service > /dev/null <<'UNIT'
+[Unit]
+Description=Networker Endpoint
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/networker-endpoint
+Restart=always
+User=networker
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+        sudo systemctl daemon-reload
+        sudo systemctl enable networker-endpoint
+        sudo systemctl start networker-endpoint
+    "
+    print_ok "networker-endpoint service started"
+
+    # Set up iptables redirects (80→8080, 443→8443)
+    _gcp_ssh_run "$name" "
+        sudo iptables -t nat -A PREROUTING -p tcp --dport 80  -j REDIRECT --to-port 8080
+        sudo iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443
+        sudo mkdir -p /etc/iptables
+        sudo sh -c 'iptables-save > /etc/iptables/rules.v4'
+    " 2>/dev/null || true
+    print_ok "iptables port redirects configured (80→8080, 443→8443)"
+}
+
+# Verify endpoint health on a GCE instance.
+_gcp_verify_health() {
+    local name="$1" ip="$2"
+    next_step "Verify endpoint health (GCP)"
+    local attempt=0
+    while [[ $attempt -lt 12 ]]; do
+        if curl -sf --max-time 5 "http://${ip}:8080/health" &>/dev/null; then
+            print_ok "Endpoint is healthy at http://${ip}:8080/health"
+            return 0
+        fi
+        attempt=$((attempt + 1))
+        sleep 5
+    done
+    print_warn "Could not reach endpoint health check — verify manually: curl http://${ip}:8080/health"
+}
+
+# Set auto-shutdown cron on a GCE instance (04:00 UTC = 11 PM EST).
+_gcp_set_auto_shutdown() {
+    local name="$1" label="${2:-instance}"
+    [[ "$GCP_AUTO_SHUTDOWN" != "yes" ]] && return 0
+
+    next_step "Set auto-shutdown cron for $label (04:00 UTC = 11 PM EST)"
+    if _gcp_ssh_run "$name" \
+        "echo '0 4 * * * root /sbin/shutdown -h now' | sudo tee /etc/cron.d/networker-autostop > /dev/null && sudo chmod 644 /etc/cron.d/networker-autostop" 2>/dev/null; then
+        print_ok "Auto-shutdown cron installed: 04:00 UTC (11 PM EST) daily"
+    else
+        print_warn "Could not install auto-shutdown cron (non-critical — delete instance manually when done)"
+    fi
+}
+
+step_gcp_deploy_tester() {
+    step_check_gcp_prereqs
+    _gcp_create_instance "tester" "$GCP_TESTER_NAME" "$GCP_TESTER_MACHINE_TYPE" "GCP_TESTER_IP"
+    _gcp_wait_for_ssh "$GCP_TESTER_NAME" "tester instance"
+    _gcp_set_auto_shutdown "$GCP_TESTER_NAME" "tester instance"
+    _gcp_install_binary "networker-tester" "$GCP_TESTER_NAME"
+    echo ""
+    print_info "To connect:  gcloud compute ssh $GCP_TESTER_NAME --zone $GCP_ZONE"
+}
+
+step_gcp_deploy_endpoint() {
+    # Only check prereqs once
+    if [[ "$TESTER_LOCATION" != "gcp" || -z "$GCP_TESTER_IP" ]]; then
+        step_check_gcp_prereqs
+    fi
+
+    _gcp_create_firewall_rule
+    _gcp_create_instance "endpoint" "$GCP_ENDPOINT_NAME" "$GCP_ENDPOINT_MACHINE_TYPE" "GCP_ENDPOINT_IP"
+    _gcp_wait_for_ssh "$GCP_ENDPOINT_NAME" "endpoint instance"
+    _gcp_set_auto_shutdown "$GCP_ENDPOINT_NAME" "endpoint instance"
+    _gcp_install_binary "networker-endpoint" "$GCP_ENDPOINT_NAME"
+    _gcp_create_endpoint_service "$GCP_ENDPOINT_NAME"
+    _gcp_verify_health "$GCP_ENDPOINT_NAME" "$GCP_ENDPOINT_IP"
+    step_generate_config "$GCP_ENDPOINT_IP"
+}
+
 # ── Completion summary ────────────────────────────────────────────────────────
 display_completion() {
     echo ""
@@ -3039,18 +3657,30 @@ display_completion() {
 
     # ── Remote tester summary ─────────────────────────────────────────────────
     if [[ $DO_REMOTE_TESTER -eq 1 ]]; then
-        local t_ip="" t_user="" t_provider=""
+        local t_ip="" t_user="" t_provider="" t_ssh_cmd=""
         case "$TESTER_LOCATION" in
-            azure) t_ip="$AZURE_TESTER_IP"; t_user="azureuser"; t_provider="Azure" ;;
-            aws)   t_ip="$AWS_TESTER_IP";   t_user="ubuntu";    t_provider="AWS" ;;
+            azure) t_ip="$AZURE_TESTER_IP"; t_user="azureuser"; t_provider="Azure";
+                   t_ssh_cmd="ssh azureuser@${AZURE_TESTER_IP}" ;;
+            aws)   t_ip="$AWS_TESTER_IP";   t_user="ubuntu";    t_provider="AWS";
+                   t_ssh_cmd="ssh ubuntu@${AWS_TESTER_IP}" ;;
+            gcp)   t_ip="$GCP_TESTER_IP";   t_user=""; t_provider="GCP";
+                   t_ssh_cmd="gcloud compute ssh $GCP_TESTER_NAME --zone $GCP_ZONE" ;;
         esac
         if [[ -n "$t_ip" ]]; then
             echo "  ${BOLD}networker-tester${RESET} (${t_provider} ${t_ip}):"
-            echo "    SSH:   ssh ${t_user}@${t_ip}"
+            echo "    SSH:   ${t_ssh_cmd}"
             if [[ -n "$CONFIG_FILE_PATH" ]]; then
-                echo "    Tests: ssh ${t_user}@${t_ip} 'networker-tester --config ~/networker-cloud.json'"
+                if [[ "$TESTER_LOCATION" == "gcp" ]]; then
+                    echo "    Tests: ${t_ssh_cmd} -- 'networker-tester --config ~/networker-cloud.json'"
+                else
+                    echo "    Tests: ssh ${t_user}@${t_ip} 'networker-tester --config ~/networker-cloud.json'"
+                fi
             else
-                echo "    Run:   ssh ${t_user}@${t_ip} 'networker-tester --help'"
+                if [[ "$TESTER_LOCATION" == "gcp" ]]; then
+                    echo "    Run:   ${t_ssh_cmd} -- 'networker-tester --help'"
+                else
+                    echo "    Run:   ssh ${t_user}@${t_ip} 'networker-tester --help'"
+                fi
             fi
             echo ""
         fi
@@ -3058,17 +3688,26 @@ display_completion() {
 
     # ── Remote endpoint summary ───────────────────────────────────────────────
     if [[ $DO_REMOTE_ENDPOINT -eq 1 ]]; then
-        local e_ip="" e_user="" e_provider=""
+        local e_ip="" e_user="" e_provider="" e_ssh_cmd=""
         case "$ENDPOINT_LOCATION" in
-            azure) e_ip="$AZURE_ENDPOINT_IP"; e_user="azureuser"; e_provider="Azure" ;;
-            aws)   e_ip="$AWS_ENDPOINT_IP";   e_user="ubuntu";    e_provider="AWS" ;;
+            azure) e_ip="$AZURE_ENDPOINT_IP"; e_user="azureuser"; e_provider="Azure";
+                   e_ssh_cmd="ssh azureuser@${AZURE_ENDPOINT_IP}" ;;
+            aws)   e_ip="$AWS_ENDPOINT_IP";   e_user="ubuntu";    e_provider="AWS";
+                   e_ssh_cmd="ssh ubuntu@${AWS_ENDPOINT_IP}" ;;
+            gcp)   e_ip="$GCP_ENDPOINT_IP";   e_user=""; e_provider="GCP";
+                   e_ssh_cmd="gcloud compute ssh $GCP_ENDPOINT_NAME --zone $GCP_ZONE" ;;
         esac
         if [[ -n "$e_ip" ]]; then
             echo "  ${BOLD}networker-endpoint${RESET} (${e_provider} ${e_ip}):"
             echo "    Health: curl http://${e_ip}:8080/health"
-            echo "    SSH:    ssh ${e_user}@${e_ip}"
-            echo "    Logs:   ssh ${e_user}@${e_ip} 'sudo journalctl -u networker-endpoint -f'"
-            echo "    Stop:   ssh ${e_user}@${e_ip} 'sudo systemctl stop networker-endpoint'"
+            echo "    SSH:    ${e_ssh_cmd}"
+            if [[ "$ENDPOINT_LOCATION" == "gcp" ]]; then
+                echo "    Logs:   ${e_ssh_cmd} -- 'sudo journalctl -u networker-endpoint -f'"
+                echo "    Stop:   ${e_ssh_cmd} -- 'sudo systemctl stop networker-endpoint'"
+            else
+                echo "    Logs:   ssh ${e_user}@${e_ip} 'sudo journalctl -u networker-endpoint -f'"
+                echo "    Stop:   ssh ${e_user}@${e_ip} 'sudo systemctl stop networker-endpoint'"
+            fi
             echo ""
         fi
     fi
@@ -3123,6 +3762,26 @@ display_completion() {
         echo ""
     fi
 
+    if [[ "$TESTER_LOCATION" == "gcp" || "$ENDPOINT_LOCATION" == "gcp" ]]; then
+        if [[ "$GCP_AUTO_SHUTDOWN" == "yes" ]]; then
+            echo "  ${GREEN}Auto-shutdown configured:${RESET} GCP instances will stop at 04:00 UTC (11 PM EST) daily."
+            echo "  ${DIM}Instances stop but are NOT deleted — disk storage charges still apply.${RESET}"
+        else
+            echo "  ${YELLOW}${BOLD}⚠ GCP instances are left running — delete them when done to avoid charges!${RESET}"
+        fi
+        echo ""
+        echo "  ${DIM}Delete GCP instances when done testing:${RESET}"
+        if [[ "$TESTER_LOCATION" == "gcp" ]]; then
+            printf "  ${DIM}  gcloud compute instances delete %s --zone %s --quiet${RESET}\n" \
+                "$GCP_TESTER_NAME" "$GCP_ZONE"
+        fi
+        if [[ "$ENDPOINT_LOCATION" == "gcp" ]]; then
+            printf "  ${DIM}  gcloud compute instances delete %s --zone %s --quiet${RESET}\n" \
+                "$GCP_ENDPOINT_NAME" "$GCP_ZONE"
+        fi
+        echo ""
+    fi
+
     # ── Offer the complementary component if only one was installed ──────────
     _offer_also_endpoint
 
@@ -3144,6 +3803,7 @@ _offer_quick_test() {
     case "$ENDPOINT_LOCATION" in
         azure) e_ip="$AZURE_ENDPOINT_IP" ;;
         aws)   e_ip="$AWS_ENDPOINT_IP"   ;;
+        gcp)   e_ip="$GCP_ENDPOINT_IP"   ;;
     esac
     [[ -z "$e_ip" ]] && return 0
 
@@ -3253,7 +3913,7 @@ _offer_also_endpoint() {
     print_info "You need an endpoint to test against."
     echo ""
     echo "  ${BOLD}1)${RESET} Install networker-endpoint locally (test on this machine)"
-    echo "  ${BOLD}2)${RESET} Deploy a networker-endpoint on a cloud VM (Azure or AWS)"
+    echo "  ${BOLD}2)${RESET} Deploy a networker-endpoint on a cloud VM (Azure, AWS, or GCP)"
     echo "  ${BOLD}3)${RESET} Skip — I already have an endpoint elsewhere"
     echo ""
     local ans
@@ -3279,6 +3939,7 @@ _offer_also_endpoint() {
             print_info "Run the installer again to deploy a cloud endpoint:"
             echo "  bash install.sh endpoint --azure   # Azure"
             echo "  bash install.sh endpoint --aws     # AWS"
+            echo "  bash install.sh endpoint --gcp     # GCP"
             ;;
         *)
             echo ""
@@ -3303,6 +3964,10 @@ _offer_ssh_connect() {
                 [[ "$AWS_TESTER_OS" != "windows" && -n "$AWS_TESTER_IP" ]] && \
                     ssh_targets+=("networker-tester (AWS)|ubuntu@${AWS_TESTER_IP}")
                 ;;
+            gcp)
+                [[ -n "$GCP_TESTER_IP" ]] && \
+                    ssh_targets+=("networker-tester (GCP)|gcloud:${GCP_TESTER_NAME}")
+                ;;
         esac
     fi
 
@@ -3316,6 +3981,10 @@ _offer_ssh_connect() {
                 [[ "$AWS_ENDPOINT_OS" != "windows" && -n "$AWS_ENDPOINT_IP" ]] && \
                     ssh_targets+=("networker-endpoint (AWS)|ubuntu@${AWS_ENDPOINT_IP}")
                 ;;
+            gcp)
+                [[ -n "$GCP_ENDPOINT_IP" ]] && \
+                    ssh_targets+=("networker-endpoint (GCP)|gcloud:${GCP_ENDPOINT_NAME}")
+                ;;
         esac
     fi
 
@@ -3324,14 +3993,38 @@ _offer_ssh_connect() {
     echo ""
     echo "${BOLD}──────────────────────────────────────────────────────────${RESET}"
 
+    # Helper: connect to a target (handles gcloud: prefix for GCP)
+    _ssh_connect_target() {
+        local dest="$1"
+        if [[ "$dest" == gcloud:* ]]; then
+            local instance_name="${dest#gcloud:}"
+            gcloud compute ssh "$instance_name" \
+                --project "$GCP_PROJECT" \
+                --zone "$GCP_ZONE" \
+                --quiet
+        else
+            ssh -o StrictHostKeyChecking=no "$dest"
+        fi
+    }
+
+    _ssh_display_dest() {
+        local dest="$1"
+        if [[ "$dest" == gcloud:* ]]; then
+            echo "gcloud compute ssh ${dest#gcloud:} --zone $GCP_ZONE"
+        else
+            echo "ssh $dest"
+        fi
+    }
+
     if [[ ${#ssh_targets[@]} -eq 1 ]]; then
         local label="${ssh_targets[0]%%|*}"
         local dest="${ssh_targets[0]##*|}"
-        if ask_yn "Connect to ${label} via SSH now?  (ssh ${dest})" "y"; then
+        local display; display="$(_ssh_display_dest "$dest")"
+        if ask_yn "Connect to ${label} via SSH now?  (${display})" "y"; then
             echo ""
             print_info "Connecting — type 'exit' to return to your shell."
             echo ""
-            ssh -o StrictHostKeyChecking=no "${dest}"
+            _ssh_connect_target "$dest"
         fi
     else
         echo "  Connect to a VM via SSH now?"
@@ -3339,7 +4032,8 @@ _offer_ssh_connect() {
         for t in "${ssh_targets[@]}"; do
             local label="${t%%|*}"
             local dest="${t##*|}"
-            printf "    %s) %s  (ssh %s)\n" "$i" "$label" "$dest"
+            local display; display="$(_ssh_display_dest "$dest")"
+            printf "    %s) %s  (%s)\n" "$i" "$label" "$display"
             i=$((i + 1))
         done
         printf "    %s) Skip\n" "$i"
@@ -3353,7 +4047,7 @@ _offer_ssh_connect() {
             echo ""
             print_info "Connecting — type 'exit' to return to your shell."
             echo ""
-            ssh -o StrictHostKeyChecking=no "${dest}"
+            _ssh_connect_target "$dest"
         fi
     fi
 }
@@ -3420,6 +4114,7 @@ main() {
         case "$TESTER_LOCATION" in
             azure) step_azure_deploy_tester ;;
             aws)   step_aws_deploy_tester   ;;
+            gcp)   step_gcp_deploy_tester   ;;
         esac
     fi
 
@@ -3428,6 +4123,7 @@ main() {
         case "$ENDPOINT_LOCATION" in
             azure) step_azure_deploy_endpoint ;;
             aws)   step_aws_deploy_endpoint   ;;
+            gcp)   step_gcp_deploy_endpoint   ;;
         esac
     fi
 
