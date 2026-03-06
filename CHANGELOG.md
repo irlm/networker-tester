@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.85] – 2026-03-06 — Installer: binary-first install, spinner fix, region-aware names
+
+### Fixed
+- **Installer**: build spinner no longer floods terminal with identical lines on SSH
+  pseudo-TTYs — only redraws when compiled crate count changes; hides `[0 crates]`
+  during fetch phase; sanitizes `grep -c` output (fixes `[[: 0` error on some systems).
+- **Installer**: suggested VM/RG names now include the region (e.g.,
+  `nwk-ep-lnx-b1s-eastus`) to avoid cross-region resource conflicts when creating
+  VMs in different regions.
+
+### Changed
+- **Installer**: tries downloading pre-built binary from GitHub releases via `curl`
+  before falling back to source compilation. Works without `gh` CLI — queries GitHub
+  API directly for the latest release tag. Fresh VM installs go from ~5-10 min compile
+  to seconds (when release binaries exist).
+
+---
+
 ## [0.12.84] – 2026-03-06 — Network baseline RTT, cloud region, network type
 
 ### Added
