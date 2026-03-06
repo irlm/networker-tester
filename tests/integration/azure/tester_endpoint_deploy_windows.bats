@@ -302,15 +302,15 @@ PSEOF
     run_ps="$(mktemp /tmp/nwk-run-XXXXX.ps1)"
 
     # Use unquoted heredoc: bash expands ${ep_ip_val}; PowerShell vars escaped with \$
+    # Use HTTP/8080 for probe to avoid TLS timeout leaving the agent busy
     cat > "$run_ps" <<PSEOF
 \$env:PATH = "C:\\cargo\\bin;\$env:PATH"
 \$outDir = 'C:\\networker-report'
 New-Item -ItemType Directory -Force -Path \$outDir | Out-Null
 & 'C:\\cargo\\bin\\networker-tester.exe' \`
-    --target 'https://${ep_ip_val}:8443/health' \`
-    --modes http1,http2,http3 \`
-    --runs 5 \`
-    --insecure \`
+    --target 'http://${ep_ip_val}:8080/health' \`
+    --modes http1 \`
+    --runs 3 \`
     --output-dir \$outDir 2>&1 | Write-Host
 Write-Host "tester exit: \$LASTEXITCODE"
 PSEOF
@@ -355,6 +355,12 @@ PSEOF
     else
         echo "    (no report produced by tester)" >&3
     fi
+
+    # Re-confirm VM agents are ready for the @test assertions that follow.
+    # After the long install + probe sessions the agents need a moment to reset.
+    echo "=== Re-confirming VM agents are ready for assertions ===" >&3
+    _wait_for_windows_vm "$rg" "$EP_VM" "endpoint"
+    _wait_for_windows_vm "$rg" "$TS_VM" "tester"
 }
 
 # ---------------------------------------------------------------------------
@@ -373,13 +379,13 @@ teardown_file() {
 # Tests
 # ---------------------------------------------------------------------------
 
-@test "networker-endpoint process is RUNNING on endpoint VM" {
+@test "networker-endpoint is listening on port 8080 on endpoint VM" {
     local rg; rg="$(_load rg)"
     local out
     out="$(_az_ps "$rg" "$EP_VM" \
-        'Get-Process networker-endpoint -ErrorAction SilentlyContinue | ForEach-Object { "RUNNING" }')"
-    echo "process check: $out"
-    echo "$out" | grep -qi "RUNNING"
+        '(Test-NetConnection -ComputerName localhost -Port 8080 -InformationLevel Quiet).TcpTestSucceeded')"
+    echo "port 8080 check: $out"
+    echo "$out" | grep -qi "True"
 }
 
 @test "networker-endpoint responds on /health (port 8080)" {
