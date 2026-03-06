@@ -288,7 +288,157 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
             }
             let _ = writeln!(out, "      </tr>");
         }
-        let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
+        let _ = writeln!(out, "    </tbody>\n  </table>");
+
+        // ── Cross-target observations ────────────────────────────────────────
+        {
+            let mut observations: Vec<String> = Vec::new();
+
+            // For each active protocol, find fastest/slowest target
+            for proto in &active_protos {
+                let avgs: Vec<(usize, f64)> = runs
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, r)| avg_primary(r, proto).map(|v| (i, v)))
+                    .collect();
+                if avgs.len() >= 2 {
+                    let is_throughput = matches!(
+                        proto,
+                        Protocol::Download
+                            | Protocol::Upload
+                            | Protocol::WebDownload
+                            | Protocol::WebUpload
+                            | Protocol::UdpDownload
+                            | Protocol::UdpUpload
+                    );
+                    let (best_idx, best_v) = if is_throughput {
+                        *avgs
+                            .iter()
+                            .max_by(|a, b| {
+                                a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+                            })
+                            .unwrap()
+                    } else {
+                        *avgs
+                            .iter()
+                            .min_by(|a, b| {
+                                a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+                            })
+                            .unwrap()
+                    };
+                    let (worst_idx, worst_v) = if is_throughput {
+                        *avgs
+                            .iter()
+                            .min_by(|a, b| {
+                                a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+                            })
+                            .unwrap()
+                    } else {
+                        *avgs
+                            .iter()
+                            .max_by(|a, b| {
+                                a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+                            })
+                            .unwrap()
+                    };
+                    if (best_v - worst_v).abs() > 0.01 {
+                        let diff_pct = if worst_v.abs() > 0.001 {
+                            (worst_v - best_v).abs() / worst_v * 100.0
+                        } else {
+                            0.0
+                        };
+                        let label = primary_metric_label(proto);
+                        let word = if is_throughput { "higher" } else { "faster" };
+                        observations.push(format!(
+                            "<strong>{proto}</strong> ({label}): Target {} is fastest ({best_v:.2}) \u{2014} \
+                             {diff_pct:.1}% {word} than Target {} ({worst_v:.2})",
+                            best_idx + 1,
+                            worst_idx + 1,
+                        ));
+                    }
+                }
+            }
+
+            // Network type comparison
+            let net_types: Vec<(usize, &str)> = runs
+                .iter()
+                .enumerate()
+                .filter_map(|(i, r)| {
+                    r.baseline.as_ref().map(|b| {
+                        (
+                            i,
+                            match b.network_type {
+                                NetworkType::Loopback => "Loopback",
+                                NetworkType::LAN => "LAN",
+                                NetworkType::Internet => "Internet",
+                            },
+                        )
+                    })
+                })
+                .collect();
+            if net_types.len() >= 2 {
+                let types_summary: Vec<String> = net_types
+                    .iter()
+                    .map(|(i, t)| format!("Target {} = {t}", i + 1))
+                    .collect();
+                let all_same = net_types.iter().all(|(_, t)| *t == net_types[0].1);
+                if all_same {
+                    observations.push(format!(
+                        "All targets are {} connections ({})",
+                        net_types[0].1,
+                        types_summary.join(", ")
+                    ));
+                } else {
+                    observations.push(format!(
+                        "Mixed network types: {} \u{2014} latency differences may reflect network distance",
+                        types_summary.join(", ")
+                    ));
+                }
+            }
+
+            // RTT baseline comparison
+            let rtts: Vec<(usize, f64)> = runs
+                .iter()
+                .enumerate()
+                .filter_map(|(i, r)| r.baseline.as_ref().map(|b| (i, b.rtt_avg_ms)))
+                .collect();
+            if rtts.len() >= 2 {
+                let best = rtts
+                    .iter()
+                    .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+                    .unwrap();
+                let worst = rtts
+                    .iter()
+                    .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+                    .unwrap();
+                if (worst.1 - best.1) > 0.01 {
+                    observations.push(format!(
+                        "Baseline RTT: Target {} lowest ({:.2}ms avg), Target {} highest ({:.2}ms avg) \u{2014} {:.1}ms difference",
+                        best.0 + 1,
+                        best.1,
+                        worst.0 + 1,
+                        worst.1,
+                        worst.1 - best.1
+                    ));
+                }
+            }
+
+            if !observations.is_empty() {
+                let _ = writeln!(
+                    out,
+                    "  <div class=\"analysis\"><h3>Cross-Target Observations</h3><ul>"
+                );
+                for obs in &observations {
+                    let _ = writeln!(out, "    <li>{obs}</li>");
+                }
+                let _ = writeln!(out, "  </ul></div>");
+            }
+        }
+
+        let _ = writeln!(out, "</section>");
+
+        // ── Per-target load time distribution + observations (2-col grid) ────
+        write_multi_target_charts(runs, &mut out);
     }
 
     // ── Per-target collapsible sections ───────────────────────────────────────
@@ -335,6 +485,173 @@ fn write_html_head(title: &str, css_href: Option<&str>, out: &mut String) {
         );
     }
     let _ = writeln!(out, "</head>\n<body>");
+}
+
+/// Per-target load time distribution charts + observations in a 2-column grid.
+/// Only rendered when there are multiple targets and at least one has pageload/browser data.
+fn write_multi_target_charts(runs: &[TestRun], out: &mut String) {
+    // Collect per-target chart data
+    struct TargetChartData {
+        idx: usize,
+        url: String,
+        boxplot_groups: Vec<(String, Vec<f64>, &'static str)>,
+        observations: Vec<String>,
+    }
+
+    let proto_colors: &[(Protocol, &str)] = &[
+        (Protocol::Browser1, "#e07b39"),
+        (Protocol::Browser2, "#4e79a7"),
+        (Protocol::Browser3, "#59a14f"),
+        (Protocol::Browser, "#8c6bb1"),
+        (Protocol::PageLoad, "#e07b39"),
+        (Protocol::PageLoad2, "#4e79a7"),
+        (Protocol::PageLoad3, "#59a14f"),
+    ];
+
+    let mut targets: Vec<TargetChartData> = Vec::new();
+
+    for (i, run) in runs.iter().enumerate() {
+        let mut groups: Vec<(String, Vec<f64>, &'static str)> = Vec::new();
+        let mut observations: Vec<String> = Vec::new();
+
+        // Collect load time data per protocol
+        for (proto, color) in proto_colors {
+            let data: Vec<f64> = run
+                .attempts
+                .iter()
+                .filter(|a| &a.protocol == proto)
+                .filter_map(|a| {
+                    if matches!(
+                        proto,
+                        Protocol::Browser
+                            | Protocol::Browser1
+                            | Protocol::Browser2
+                            | Protocol::Browser3
+                    ) {
+                        a.browser.as_ref().map(|b| b.load_ms)
+                    } else {
+                        a.page_load.as_ref().map(|p| p.total_ms)
+                    }
+                })
+                .collect();
+            if data.len() >= 2 {
+                groups.push((proto.to_string(), data, color));
+            }
+        }
+
+        if groups.is_empty() {
+            continue;
+        }
+
+        // Observations for this target
+        // Fastest protocol
+        let mut fastest: Option<(&str, f64)> = None;
+        for (label, data, _) in &groups {
+            let avg = data.iter().sum::<f64>() / data.len() as f64;
+            if fastest.map(|(_, v)| avg < v).unwrap_or(true) {
+                fastest = Some((label.as_str(), avg));
+            }
+        }
+        if let Some((proto, ms)) = fastest {
+            observations.push(format!("Fastest: <strong>{proto}</strong> ({ms:.1}ms avg)"));
+        }
+
+        // H2 vs H3 comparison
+        let h2_avg = groups
+            .iter()
+            .find(|(l, _, _)| l == "browser2" || l == "pageload2")
+            .map(|(_, d, _)| d.iter().sum::<f64>() / d.len() as f64);
+        let h3_avg = groups
+            .iter()
+            .find(|(l, _, _)| l == "browser3" || l == "pageload3")
+            .map(|(_, d, _)| d.iter().sum::<f64>() / d.len() as f64);
+        if let (Some(h2), Some(h3)) = (h2_avg, h3_avg) {
+            let diff = h2 - h3;
+            let pct = diff / h2 * 100.0;
+            if diff > 0.0 {
+                observations.push(format!("H3 is {:.1}ms ({:.1}%) faster than H2", diff, pct));
+            } else {
+                observations.push(format!(
+                    "H2 is {:.1}ms ({:.1}%) faster than H3",
+                    -diff, -pct
+                ));
+            }
+        }
+
+        // Consistency (p95−p50)
+        let mut spreads: Vec<(&str, f64)> = Vec::new();
+        for (label, data, _) in &groups {
+            if data.len() >= 4 {
+                let mut sorted = data.clone();
+                sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                let n = sorted.len();
+                let p50 = sorted[((n as f64 * 0.50).round() as usize).min(n - 1)];
+                let p95 = sorted[((n as f64 * 0.95).round() as usize).min(n - 1)];
+                spreads.push((label.as_str(), p95 - p50));
+            }
+        }
+        if spreads.len() >= 2 {
+            spreads.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+            let (stable, sp) = spreads[0];
+            observations.push(format!(
+                "Most consistent: <strong>{stable}</strong> (p95\u{2212}p50 = {sp:.1}ms)"
+            ));
+        }
+
+        // RTT baseline context
+        if let Some(b) = &run.baseline {
+            observations.push(format!(
+                "Network: {} \u{2014} RTT {:.2}ms avg",
+                b.network_type, b.rtt_avg_ms
+            ));
+        }
+
+        targets.push(TargetChartData {
+            idx: i,
+            url: run.target_url.clone(),
+            boxplot_groups: groups,
+            observations,
+        });
+    }
+
+    if targets.is_empty() {
+        return;
+    }
+
+    let _ = writeln!(
+        out,
+        r##"
+<section class="card">
+  <h2>Per-Target Load Time Distribution</h2>
+  <div class="target-charts-grid">"##
+    );
+
+    for t in &targets {
+        let group_refs: Vec<(&str, &[f64], &str)> = t
+            .boxplot_groups
+            .iter()
+            .map(|(l, v, c)| (l.as_str(), v.as_slice(), *c))
+            .collect();
+        let title = format!("Target {} \u{2014} {}", t.idx + 1, t.url);
+        let svg = svg_boxplot(&title, &group_refs, "ms");
+
+        let _ = write!(out, "    <div class=\"target-chart-cell\">\n      {svg}\n");
+
+        if !t.observations.is_empty() {
+            let _ = writeln!(
+                out,
+                "      <div class=\"analysis\"><h3>Observations</h3><ul>"
+            );
+            for obs in &t.observations {
+                let _ = writeln!(out, "        <li>{obs}</li>");
+            }
+            let _ = writeln!(out, "      </ul></div>");
+        }
+
+        let _ = writeln!(out, "    </div>");
+    }
+
+    let _ = writeln!(out, "  </div>\n</section>");
 }
 
 fn write_html_footer(timestamp: DateTime<chrono::Utc>, out: &mut String) {
@@ -2775,6 +3092,10 @@ const INLINE_CSS: &str = r#"
   .multi-target-details>.page-header{border-radius:0;margin:0}
   .diff-fast{color:#2e7d32;font-size:.8em;margin-left:.3em}
   .diff-slow{color:#c62828;font-size:.8em;margin-left:.3em}
+  .target-charts-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:1.5rem;margin-top:.5rem}
+  .target-chart-cell{background:#fafbfc;border:1px solid #e8e8e8;border-radius:6px;padding:1rem}
+  .target-chart-cell .analysis{margin-top:.5rem}
+  @media(max-width:900px){.target-charts-grid{grid-template-columns:1fr}}
 "#;
 
 // ─────────────────────────────────────────────────────────────────────────────
