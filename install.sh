@@ -889,19 +889,23 @@ _azure_size_slug() {
     printf '%s' "$size" | tr '[:upper:]' '[:lower:]' | tr -d '_'
 }
 
-# Suggest a unique resource-group base name encoding the component, OS, and size.
-# Format:  nwk-<ep|ts>-<lnx|win>-<size_slug>
-# If the derived name already exists as an Azure resource group, appends -2, -3, …
+# Suggest a unique resource-group base name encoding the component, OS, size, and region.
+# Format:  nwk-<ep|ts>-<lnx|win>-<size_slug>-<region>
 # $1 = component ("endpoint"|"tester")
 # $2 = os        ("linux"|"windows")
 # $3 = size       e.g. "Standard_B1s"
+# $4 = region     e.g. "eastus", "westeurope"
 # Prints the unique base name; append -vm for the VM name.
 _azure_suggest_name() {
-    local component="$1" os="$2" size="$3"
+    local component="$1" os="$2" size="$3" region="${4:-}"
     local c_tag; [[ "$component" == "tester" ]] && c_tag="ts" || c_tag="ep"
     local os_tag; [[ "$os" == "windows" ]] && os_tag="win" || os_tag="lnx"
     local sz_tag; sz_tag="$(_azure_size_slug "$size")"
-    printf '%s' "nwk-${c_tag}-${os_tag}-${sz_tag}"
+    if [[ -n "$region" ]]; then
+        printf '%s' "nwk-${c_tag}-${os_tag}-${sz_tag}-${region}"
+    else
+        printf '%s' "nwk-${c_tag}-${os_tag}-${sz_tag}"
+    fi
 }
 
 # Find a unique VM name within a resource group.
@@ -1029,7 +1033,7 @@ ask_azure_options() {
     # Generate a suggested base name from the chosen OS and size, then prompt
     # the user for RG (reusing an existing RG is fine) and a unique VM name.
     local suggested_base
-    suggested_base="$(_azure_suggest_name "$component" "$chosen_os" "$chosen_size")"
+    suggested_base="$(_azure_suggest_name "$component" "$chosen_os" "$chosen_size" "$AZURE_REGION")"
     echo ""
 
     if [[ "$component" == "tester" ]]; then
@@ -1177,18 +1181,20 @@ ask_aws_options() {
         echo ""
     fi
 
-    # Instance Name tag
+    # Instance Name tag — include region so different-region VMs get unique names
     if [[ "$component" == "tester" ]]; then
-        printf "  Instance name tag [%s]: " "$AWS_TESTER_NAME"
+        local suggested="networker-tester-${AWS_REGION}"
+        printf "  Instance name tag [%s]: " "$suggested"
         local name_ans; read -r name_ans </dev/tty || true
-        AWS_TESTER_NAME="${name_ans:-$AWS_TESTER_NAME}"
+        AWS_TESTER_NAME="${name_ans:-$suggested}"
         AWS_TESTER_INSTANCE_TYPE="$chosen_type"
         AWS_TESTER_OS="$chosen_os"
         print_ok "OS: $chosen_os  |  Type: $AWS_TESTER_INSTANCE_TYPE  |  Name: $AWS_TESTER_NAME"
     else
-        printf "  Instance name tag [%s]: " "$AWS_ENDPOINT_NAME"
+        local suggested="networker-endpoint-${AWS_REGION}"
+        printf "  Instance name tag [%s]: " "$suggested"
         local name_ans; read -r name_ans </dev/tty || true
-        AWS_ENDPOINT_NAME="${name_ans:-$AWS_ENDPOINT_NAME}"
+        AWS_ENDPOINT_NAME="${name_ans:-$suggested}"
         AWS_ENDPOINT_INSTANCE_TYPE="$chosen_type"
         AWS_ENDPOINT_OS="$chosen_os"
         print_ok "OS: $chosen_os  |  Type: $AWS_ENDPOINT_INSTANCE_TYPE  |  Name: $AWS_ENDPOINT_NAME"
@@ -1313,17 +1319,21 @@ ask_gcp_options() {
         echo ""
     fi
 
-    # Instance name
+    # Instance name — include region so different-region VMs get unique names
+    # GCP names must be lowercase, alphanumeric, and hyphens only
+    local region_tag="${GCP_REGION:-${GCP_ZONE%-*}}"
     if [[ "$component" == "tester" ]]; then
-        printf "  Instance name [%s]: " "$GCP_TESTER_NAME"
+        local suggested="networker-tester-${region_tag}"
+        printf "  Instance name [%s]: " "$suggested"
         local name_ans; read -r name_ans </dev/tty || true
-        GCP_TESTER_NAME="${name_ans:-$GCP_TESTER_NAME}"
+        GCP_TESTER_NAME="${name_ans:-$suggested}"
         GCP_TESTER_MACHINE_TYPE="$chosen_type"
         print_ok "Type: $GCP_TESTER_MACHINE_TYPE  |  Name: $GCP_TESTER_NAME  |  Zone: $GCP_ZONE"
     else
-        printf "  Instance name [%s]: " "$GCP_ENDPOINT_NAME"
+        local suggested="networker-endpoint-${region_tag}"
+        printf "  Instance name [%s]: " "$suggested"
         local name_ans; read -r name_ans </dev/tty || true
-        GCP_ENDPOINT_NAME="${name_ans:-$GCP_ENDPOINT_NAME}"
+        GCP_ENDPOINT_NAME="${name_ans:-$suggested}"
         GCP_ENDPOINT_MACHINE_TYPE="$chosen_type"
         print_ok "Type: $GCP_ENDPOINT_MACHINE_TYPE  |  Name: $GCP_ENDPOINT_NAME  |  Zone: $GCP_ZONE"
     fi
