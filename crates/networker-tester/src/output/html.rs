@@ -4,8 +4,8 @@
 /// adds a `<link rel="stylesheet">` for the external `report.css` file so
 /// operators can customize the look without editing generated HTML.
 use crate::metrics::{
-    attempt_payload_bytes, compute_stats, primary_metric_label, primary_metric_value, Protocol,
-    RequestAttempt, TestRun,
+    attempt_payload_bytes, compute_stats, primary_metric_label, primary_metric_value, HostInfo,
+    Protocol, RequestAttempt, TestRun,
 };
 use chrono::DateTime;
 use std::fmt::Write as FmtWrite;
@@ -76,7 +76,7 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
   <table>
     <thead>
       <tr>
-        <th>#</th><th>Target</th><th>Runs</th><th>Modes</th>
+        <th>#</th><th>Target</th><th>Server</th>
         <th>Attempts</th><th>Succeeded</th><th>Failed</th><th>Duration</th>
       </tr>
     </thead>
@@ -94,13 +94,38 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
             })
             .unwrap_or_else(|| "—".into());
         let fail = run.failure_count();
+        let server_summary = run
+            .server_info
+            .as_ref()
+            .map(|s| {
+                let hostname = s.hostname.as_deref().unwrap_or("");
+                let os = s.os_version.as_deref().unwrap_or(&s.os);
+                let mem = s
+                    .total_memory_mb
+                    .map(|mb| {
+                        if mb >= 1024 {
+                            format!("{:.0} GB", mb as f64 / 1024.0)
+                        } else {
+                            format!("{mb} MB")
+                        }
+                    })
+                    .unwrap_or_default();
+                if hostname.is_empty() {
+                    format!("{os} | {} cores | {mem}", s.cpu_cores)
+                } else {
+                    format!(
+                        "{hostname}<br><small>{os} | {} cores | {mem}</small>",
+                        s.cpu_cores
+                    )
+                }
+            })
+            .unwrap_or_else(|| "—".into());
         let _ = write!(
             out,
             r#"      <tr>
         <td>{idx}</td>
         <td><a href="{url}">{url}</a></td>
-        <td>{total_runs}</td>
-        <td>{modes}</td>
+        <td>{server}</td>
         <td>{attempts}</td>
         <td class="ok">{ok}</td>
         <td class="{fail_cls}">{fail}</td>
@@ -109,8 +134,7 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
 "#,
             idx = i + 1,
             url = escape_html(&run.target_url),
-            total_runs = run.total_runs,
-            modes = run.modes.join(", "),
+            server = server_summary,
             attempts = run.attempts.len(),
             ok = run.success_count(),
             fail_cls = if fail > 0 { "err" } else { "ok" },
@@ -181,9 +205,9 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
 "#
         );
         for (i, run) in runs.iter().enumerate() {
-            let _ = write!(
+            let _ = writeln!(
                 out,
-                "        <th>Target {} <small>{}</small></th>\n",
+                "        <th>Target {} <small>{}</small></th>",
                 i + 1,
                 escape_html(&run.target_url)
             );
@@ -204,9 +228,8 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
                     }
                     Some(v) => {
                         if i == 0 || baseline.is_none() {
-                            let _ = write!(out, "        <td>{v:.2}</td>\n");
-                        } else {
-                            let base = baseline.unwrap();
+                            let _ = writeln!(out, "        <td>{v:.2}</td>");
+                        } else if let Some(base) = baseline {
                             // For latency metrics (lower = better): negative diff = faster.
                             // For throughput metrics (higher = better): positive diff = faster.
                             let is_throughput = matches!(
@@ -231,9 +254,9 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
                             };
                             let diff_class = if is_faster { "diff-fast" } else { "diff-slow" };
                             let sign = if diff_pct >= 0.0 { "+" } else { "" };
-                            let _ = write!(
+                            let _ = writeln!(
                                 out,
-                                "        <td>{v:.2}<span class=\"{diff_class}\">{sign}{diff_pct:.1}%</span></td>\n",
+                                "        <td>{v:.2}<span class=\"{diff_class}\">{sign}{diff_pct:.1}%</span></td>",
                             );
                         }
                     }
@@ -309,7 +332,65 @@ fn write_html_footer(timestamp: DateTime<chrono::Utc>, out: &mut String) {
 ///
 /// This is used by both `render()` (directly) and `render_multi()` (wrapped
 /// in a per-target `<details>` block).
-fn write_run_sections(run: &TestRun, mut out: &mut String) {
+fn write_host_info_card(label: &str, info: &HostInfo, out: &mut String) {
+    let mem = info
+        .total_memory_mb
+        .map(|mb| {
+            if mb >= 1024 {
+                format!("{:.1} GB", mb as f64 / 1024.0)
+            } else {
+                format!("{mb} MB")
+            }
+        })
+        .unwrap_or_else(|| "—".into());
+    let os_ver = info.os_version.as_deref().unwrap_or("—");
+    let hostname = info.hostname.as_deref().unwrap_or("—");
+    let version = info.server_version.as_deref().unwrap_or("—");
+    let uptime = info.uptime_secs.map(|s| {
+        if s >= 86400 {
+            format!("{}d {}h", s / 86400, (s % 86400) / 3600)
+        } else if s >= 3600 {
+            format!("{}h {}m", s / 3600, (s % 3600) / 60)
+        } else {
+            format!("{}m {}s", s / 60, s % 60)
+        }
+    });
+
+    let _ = write!(
+        out,
+        r##"
+<section class="card" style="flex:1;min-width:280px;margin:0">
+  <h2>{label} Info</h2>
+  <dl class="summary-grid">
+    <dt>Hostname</dt>     <dd>{hostname}</dd>
+    <dt>OS</dt>           <dd>{os_ver}</dd>
+    <dt>Architecture</dt> <dd>{arch}</dd>
+    <dt>CPU Cores</dt>    <dd>{cpu}</dd>
+    <dt>Memory</dt>       <dd>{mem}</dd>
+"##,
+        hostname = escape_html(hostname),
+        os_ver = escape_html(os_ver),
+        arch = escape_html(&info.arch),
+        cpu = info.cpu_cores,
+    );
+    if label == "Server" {
+        let _ = writeln!(
+            out,
+            "    <dt>Version</dt>      <dd>{}</dd>",
+            escape_html(version),
+        );
+        if let Some(ref up) = uptime {
+            let _ = writeln!(
+                out,
+                "    <dt>Uptime</dt>       <dd>{}</dd>",
+                escape_html(up),
+            );
+        }
+    }
+    let _ = write!(out, "  </dl>\n</section>\n");
+}
+
+fn write_run_sections(run: &TestRun, out: &mut String) {
     // ── Header ────────────────────────────────────────────────────────────────
     let _ = write!(
         out,
@@ -346,7 +427,7 @@ fn write_run_sections(run: &TestRun, mut out: &mut String) {
 
     let _ = write!(
         out,
-        r#"
+        r##"
 <section class="card">
   <h2>Run Summary</h2>
   <dl class="summary-grid">
@@ -356,12 +437,11 @@ fn write_run_sections(run: &TestRun, mut out: &mut String) {
     <dt>Succeeded</dt>       <dd class="ok">{ok}</dd>
     <dt>Failed</dt>          <dd class="{fail_cls}">{fail}</dd>
     <dt>Total Duration</dt>  <dd>{dur}</dd>
-    <dt>OS</dt>              <dd>{os}</dd>
     <dt>Client version</dt>  <dd>{client_ver}</dd>
     <dt>Server version</dt>  <dd>{server_ver}</dd>
   </dl>
 </section>
-"#,
+"##,
         url = escape_html(&run.target_url),
         modes = run.modes.join(", "),
         total = run.attempts.len(),
@@ -369,10 +449,22 @@ fn write_run_sections(run: &TestRun, mut out: &mut String) {
         fail = run.failure_count(),
         fail_cls = if run.failure_count() > 0 { "err" } else { "ok" },
         dur = duration_s,
-        os = escape_html(&run.client_os),
         client_ver = escape_html(&run.client_version),
         server_ver = escape_html(server_ver),
     );
+
+    // ── Client & Server Info cards ───────────────────────────────────────────
+    let _ = write!(
+        out,
+        r##"<div style="display:flex;flex-wrap:wrap;gap:1.5rem;margin:0 2rem">"##
+    );
+    if let Some(ref info) = run.client_info {
+        write_host_info_card("Client", info, out);
+    }
+    if let Some(ref info) = run.server_info {
+        write_host_info_card("Server", info, out);
+    }
+    let _ = writeln!(out, "</div>");
 
     // ── Per-protocol timing table ─────────────────────────────────────────────
     let _ = write!(
@@ -426,7 +518,7 @@ fn write_run_sections(run: &TestRun, mut out: &mut String) {
         if rows.is_empty() {
             continue;
         }
-        append_proto_row(&mut out, proto, &rows);
+        append_proto_row(out, proto, &rows);
     }
     let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
 
@@ -1839,7 +1931,7 @@ fn write_run_sections(run: &TestRun, mut out: &mut String) {
         );
 
         for a in &run.attempts {
-            append_attempt_row(&mut out, a);
+            append_attempt_row(out, a);
         }
         let _ = writeln!(
             out,
@@ -2395,7 +2487,7 @@ fn svg_cdf(title: &str, series: &[(&str, &[f64], &str)], unit: &str) -> String {
         * 1.05;
 
     let plot_w = W - PAD_L - PAD_R;
-    let leg_rows = (sorted_series.len() + 2) / 3;
+    let leg_rows = sorted_series.len().div_ceil(3);
     let total_h = PAD_T + PLOT_H + PAD_B + leg_rows * LEG_ROW;
 
     let sx = |v: f64| PAD_L + (v.min(x_max) / x_max * plot_w as f64).round() as usize;
@@ -2642,6 +2734,8 @@ mod tests {
             timeout_ms: 5000,
             client_os: "test".into(),
             client_version: "0.1.0".into(),
+            server_info: None,
+            client_info: None,
             attempts: vec![RequestAttempt {
                 attempt_id: Uuid::new_v4(),
                 run_id,
@@ -2830,6 +2924,8 @@ mod tests {
             timeout_ms: 5000,
             client_os: "test".into(),
             client_version: "0.1.0".into(),
+            server_info: None,
+            client_info: None,
             attempts: vec![RequestAttempt {
                 attempt_id: Uuid::new_v4(),
                 run_id,
@@ -2877,6 +2973,8 @@ mod tests {
             timeout_ms: 5000,
             client_os: "test".into(),
             client_version: "0.1.0".into(),
+            server_info: None,
+            client_info: None,
             attempts: vec![RequestAttempt {
                 attempt_id: Uuid::new_v4(),
                 run_id,
@@ -2938,6 +3036,8 @@ mod tests {
             timeout_ms: 5000,
             client_os: "test".into(),
             client_version: "0.1.0".into(),
+            server_info: None,
+            client_info: None,
             attempts: vec![RequestAttempt {
                 attempt_id: Uuid::new_v4(),
                 run_id,
@@ -2995,6 +3095,8 @@ mod tests {
             timeout_ms: 5000,
             client_os: "test".into(),
             client_version: "0.1.0".into(),
+            server_info: None,
+            client_info: None,
             attempts: vec![RequestAttempt {
                 attempt_id: Uuid::new_v4(),
                 run_id,
@@ -3334,6 +3436,8 @@ mod tests {
             timeout_ms: 5000,
             client_os: "test".into(),
             client_version: "0.1.0".into(),
+            server_info: None,
+            client_info: None,
             attempts: vec![RequestAttempt {
                 attempt_id: Uuid::new_v4(),
                 run_id,

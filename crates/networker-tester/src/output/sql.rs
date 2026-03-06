@@ -393,6 +393,8 @@ mod tests {
             timeout_ms: 5000,
             client_os: std::env::consts::OS.into(),
             client_version: env!("CARGO_PKG_VERSION").into(),
+            server_info: None,
+            client_info: None,
             attempts,
         }
     }
