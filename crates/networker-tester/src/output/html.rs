@@ -2595,6 +2595,23 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
                 cong = t.congestion_algorithm.as_deref().unwrap_or("—"),
             );
         }
+        // Note explaining why browser probes are absent from TCP Stats.
+        let has_browser = run.attempts.iter().any(|a| {
+            matches!(
+                a.protocol,
+                crate::metrics::Protocol::Browser
+                    | crate::metrics::Protocol::Browser1
+                    | crate::metrics::Protocol::Browser2
+                    | crate::metrics::Protocol::Browser3
+            )
+        });
+        if has_browser {
+            let _ = write!(
+                out,
+                r##"  <p class="note">Browser probes (browser1/browser2/browser3) are not shown here &mdash; Chrome owns the TCP connections internally, so kernel-level socket stats (MSS, cwnd, retransmits, congestion algorithm, etc.) are not accessible from our process.</p>
+"##
+            );
+        }
         let _ = writeln!(
             out,
             "      </tbody>\n    </table>\n  </details>\n</section>"
@@ -3236,6 +3253,7 @@ const INLINE_CSS: &str = r#"
   details summary::before{content:"▶";font-size:.7rem;flex-shrink:0}
   details[open]>summary::before{content:"▼"}
   .grp-lbl{font-weight:600;flex:1}
+  .note{font-size:.85rem;color:#666;font-style:italic;margin:.6rem 0 0}
   .grp-meta{opacity:.7;font-family:monospace;font-size:.82rem}
   details table{margin-top:.5rem}
   .charts-grid{display:flex;flex-wrap:wrap;gap:1.5rem;align-items:flex-start;margin-top:.5rem}

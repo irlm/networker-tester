@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.87] – 2026-03-06 — TCP Stats browser note, installer version-aware fallback
+
+### Fixed
+- Installer: source-compile fallback now checks binary version, not just existence — old version on PATH no longer silently skips recompilation
+### Added
+- HTML report: note in TCP Stats section explaining why browser probes are absent (Chrome owns the TCP connections)
+
+---
+
 ## [0.12.86] – 2026-03-06 — Installer: GLIBC compatibility check, multi-region fix
 
 ### Fixed

@@ -309,7 +309,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.12.86"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.12.87"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -2332,6 +2332,26 @@ _wait_for_ssh() {
     print_ok "SSH ready"
 }
 
+# Check if a binary is already installed with the expected version.
+# Returns 0 (true) if the binary exists and its version matches NETWORKER_VERSION.
+# Returns 1 (false) if the binary is missing, not executable, or wrong version.
+_binary_version_ok() {
+    local binary="$1"
+    local bin_path
+    bin_path="$(command -v "$binary" 2>/dev/null || echo "${INSTALL_DIR}/${binary}")"
+    if [[ ! -x "$bin_path" ]]; then
+        return 1
+    fi
+    local installed_ver
+    installed_ver="$("$bin_path" --version 2>/dev/null)" || return 1
+    local expected="${NETWORKER_VERSION#v}"  # strip leading v if present
+    if [[ "$installed_ver" == *"$expected"* ]]; then
+        print_ok "$binary already at version $expected — skipping."
+        return 0
+    fi
+    return 1
+}
+
 # Install a binary on a remote Linux VM when no pre-built release binary exists.
 # Uploads this installer script to the VM and runs it there with --yes, so the VM
 # handles Rust install, cargo install from the public GitHub repo, and service setup.
@@ -4177,12 +4197,10 @@ main() {
             print_info "Falling back to source compile for failed downloads…"
             if [[ $DO_RUST_INSTALL -eq 1 ]]; then step_install_rust; fi
             step_ensure_cargo_env
-            if [[ $do_local_tester -eq 1 ]] && ! command -v networker-tester &>/dev/null \
-               && [[ ! -x "${INSTALL_DIR}/networker-tester" ]]; then
+            if [[ $do_local_tester -eq 1 ]] && ! _binary_version_ok "networker-tester"; then
                 step_cargo_install "networker-tester"
             fi
-            if [[ $do_local_endpoint -eq 1 ]] && ! command -v networker-endpoint &>/dev/null \
-               && [[ ! -x "${INSTALL_DIR}/networker-endpoint" ]]; then
+            if [[ $do_local_endpoint -eq 1 ]] && ! _binary_version_ok "networker-endpoint"; then
                 step_cargo_install "networker-endpoint"
             fi
         fi
