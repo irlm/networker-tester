@@ -490,12 +490,15 @@ fn write_html_head(title: &str, css_href: Option<&str>, out: &mut String) {
 /// Per-target load time distribution charts + observations in a 2-column grid.
 /// Only rendered when there are multiple targets and at least one has pageload/browser data.
 fn write_multi_target_charts(runs: &[TestRun], out: &mut String) {
-    // Collect per-target chart data
     struct TargetChartData {
         idx: usize,
         url: String,
+        server_info: String,
+        network_type: NetworkType,
+        rtt_avg_ms: f64,
         boxplot_groups: Vec<(String, Vec<f64>, &'static str)>,
         observations: Vec<String>,
+        best_avg_ms: f64, // best protocol avg for cross-group comparison
     }
 
     let proto_colors: &[(Protocol, &str)] = &[
@@ -514,7 +517,6 @@ fn write_multi_target_charts(runs: &[TestRun], out: &mut String) {
         let mut groups: Vec<(String, Vec<f64>, &'static str)> = Vec::new();
         let mut observations: Vec<String> = Vec::new();
 
-        // Collect load time data per protocol
         for (proto, color) in proto_colors {
             let data: Vec<f64> = run
                 .attempts
@@ -543,12 +545,13 @@ fn write_multi_target_charts(runs: &[TestRun], out: &mut String) {
             continue;
         }
 
-        // Observations for this target
-        // Fastest protocol
+        // Best avg across all protocols for this target
+        let mut best_avg = f64::MAX;
         let mut fastest: Option<(&str, f64)> = None;
         for (label, data, _) in &groups {
             let avg = data.iter().sum::<f64>() / data.len() as f64;
-            if fastest.map(|(_, v)| avg < v).unwrap_or(true) {
+            if avg < best_avg {
+                best_avg = avg;
                 fastest = Some((label.as_str(), avg));
             }
         }
@@ -556,7 +559,6 @@ fn write_multi_target_charts(runs: &[TestRun], out: &mut String) {
             observations.push(format!("Fastest: <strong>{proto}</strong> ({ms:.1}ms avg)"));
         }
 
-        // H2 vs H3 comparison
         let h2_avg = groups
             .iter()
             .find(|(l, _, _)| l == "browser2" || l == "pageload2")
@@ -578,7 +580,6 @@ fn write_multi_target_charts(runs: &[TestRun], out: &mut String) {
             }
         }
 
-        // Consistency (p95−p50)
         let mut spreads: Vec<(&str, f64)> = Vec::new();
         for (label, data, _) in &groups {
             if data.len() >= 4 {
@@ -598,25 +599,152 @@ fn write_multi_target_charts(runs: &[TestRun], out: &mut String) {
             ));
         }
 
-        // RTT baseline context
-        if let Some(b) = &run.baseline {
-            observations.push(format!(
-                "Network: {} \u{2014} RTT {:.2}ms avg",
-                b.network_type, b.rtt_avg_ms
-            ));
-        }
+        // Server info summary
+        let server_info = run
+            .server_info
+            .as_ref()
+            .map(|s| {
+                let hostname = s.hostname.as_deref().unwrap_or("");
+                let os = s.os_version.as_deref().unwrap_or(&s.os);
+                let mem = s
+                    .total_memory_mb
+                    .map(|mb| {
+                        if mb >= 1024 {
+                            format!("{:.0} GB", mb as f64 / 1024.0)
+                        } else {
+                            format!("{mb} MB")
+                        }
+                    })
+                    .unwrap_or_default();
+                let region = s
+                    .region
+                    .as_ref()
+                    .map(|r| format!(" | {r}"))
+                    .unwrap_or_default();
+                if hostname.is_empty() {
+                    format!("{os} | {} cores | {mem}{region}", s.cpu_cores)
+                } else {
+                    format!("{hostname} | {os} | {} cores | {mem}{region}", s.cpu_cores)
+                }
+            })
+            .unwrap_or_default();
+
+        let net_type = run
+            .baseline
+            .as_ref()
+            .map(|b| b.network_type)
+            .unwrap_or(NetworkType::Internet);
+        let rtt = run.baseline.as_ref().map(|b| b.rtt_avg_ms).unwrap_or(0.0);
 
         targets.push(TargetChartData {
             idx: i,
             url: run.target_url.clone(),
+            server_info,
+            network_type: net_type,
+            rtt_avg_ms: rtt,
             boxplot_groups: groups,
             observations,
+            best_avg_ms: best_avg,
         });
     }
 
     if targets.is_empty() {
         return;
     }
+
+    // Split targets by network type
+    let internet_targets: Vec<&TargetChartData> = targets
+        .iter()
+        .filter(|t| t.network_type == NetworkType::Internet)
+        .collect();
+    let lan_targets: Vec<&TargetChartData> = targets
+        .iter()
+        .filter(|t| t.network_type == NetworkType::LAN || t.network_type == NetworkType::Loopback)
+        .collect();
+
+    // Helper closure to write a group of target cells
+    let write_target_group = |group: &[&TargetChartData], group_label: &str, out: &mut String| {
+        if group.is_empty() {
+            return;
+        }
+        let _ = writeln!(
+            out,
+            "    <div class=\"target-group-header\">{group_label}</div>"
+        );
+        for t in group {
+            let group_refs: Vec<(&str, &[f64], &str)> = t
+                .boxplot_groups
+                .iter()
+                .map(|(l, v, c)| (l.as_str(), v.as_slice(), *c))
+                .collect();
+            let title = format!("Target {} \u{2014} {}", t.idx + 1, t.url);
+            let svg = svg_boxplot(&title, &group_refs, "ms");
+
+            let _ = write!(out, "    <div class=\"target-chart-cell\">\n");
+            // Server info bar
+            let net_badge = match t.network_type {
+                NetworkType::Loopback => r#"<span class="ok">Loopback</span>"#,
+                NetworkType::LAN => r#"<span class="warn">LAN</span>"#,
+                NetworkType::Internet => r#"<span class="err">Internet</span>"#,
+            };
+            let _ = writeln!(
+                    out,
+                    "      <div class=\"target-server-info\">{net_badge} RTT {:.2}ms &bull; <small>{}</small></div>",
+                    t.rtt_avg_ms,
+                    escape_html(&t.server_info)
+                );
+            let _ = writeln!(out, "      {svg}");
+
+            if !t.observations.is_empty() {
+                let _ = writeln!(
+                    out,
+                    "      <div class=\"analysis\"><h3>Observations</h3><ul>"
+                );
+                for obs in &t.observations {
+                    let _ = writeln!(out, "        <li>{obs}</li>");
+                }
+                let _ = writeln!(out, "      </ul></div>");
+            }
+
+            let _ = writeln!(out, "    </div>");
+        }
+
+        // Intra-group comparison (when 2+ targets in same network type)
+        if group.len() >= 2 {
+            let best = group
+                .iter()
+                .min_by(|a, b| {
+                    a.best_avg_ms
+                        .partial_cmp(&b.best_avg_ms)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .unwrap();
+            let worst = group
+                .iter()
+                .max_by(|a, b| {
+                    a.best_avg_ms
+                        .partial_cmp(&b.best_avg_ms)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .unwrap();
+            if (worst.best_avg_ms - best.best_avg_ms).abs() > 0.01 {
+                let pct = (worst.best_avg_ms - best.best_avg_ms) / worst.best_avg_ms * 100.0;
+                let _ = writeln!(
+                    out,
+                    "    <div class=\"target-group-comparison analysis\">\
+                         <strong>Target {} is {:.1}% faster</strong> than Target {} \
+                         ({:.1}ms vs {:.1}ms best protocol avg) \u{2014} \
+                         RTT difference: {:.1}ms</div>",
+                    best.idx + 1,
+                    pct,
+                    worst.idx + 1,
+                    best.best_avg_ms,
+                    worst.best_avg_ms,
+                    (worst.rtt_avg_ms - best.rtt_avg_ms).abs()
+                );
+            }
+        }
+    };
 
     let _ = writeln!(
         out,
@@ -626,29 +754,64 @@ fn write_multi_target_charts(runs: &[TestRun], out: &mut String) {
   <div class="target-charts-grid">"##
     );
 
-    for t in &targets {
-        let group_refs: Vec<(&str, &[f64], &str)> = t
-            .boxplot_groups
+    // Render Internet targets first, then LAN targets
+    if !internet_targets.is_empty() && !lan_targets.is_empty() {
+        write_target_group(&internet_targets, "\u{1f310} Internet Targets", out);
+        write_target_group(&lan_targets, "\u{1f3e0} LAN / Local Targets", out);
+
+        // Cross-group comparison: best Internet vs best LAN
+        let best_internet = internet_targets
             .iter()
-            .map(|(l, v, c)| (l.as_str(), v.as_slice(), *c))
-            .collect();
-        let title = format!("Target {} \u{2014} {}", t.idx + 1, t.url);
-        let svg = svg_boxplot(&title, &group_refs, "ms");
+            .min_by(|a, b| {
+                a.best_avg_ms
+                    .partial_cmp(&b.best_avg_ms)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap();
+        let best_lan = lan_targets
+            .iter()
+            .min_by(|a, b| {
+                a.best_avg_ms
+                    .partial_cmp(&b.best_avg_ms)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap();
 
-        let _ = write!(out, "    <div class=\"target-chart-cell\">\n      {svg}\n");
-
-        if !t.observations.is_empty() {
-            let _ = writeln!(
-                out,
-                "      <div class=\"analysis\"><h3>Observations</h3><ul>"
-            );
-            for obs in &t.observations {
-                let _ = writeln!(out, "        <li>{obs}</li>");
-            }
-            let _ = writeln!(out, "      </ul></div>");
-        }
-
-        let _ = writeln!(out, "    </div>");
+        let overhead = best_internet.best_avg_ms - best_lan.best_avg_ms;
+        let factor = if best_lan.best_avg_ms > 0.01 {
+            best_internet.best_avg_ms / best_lan.best_avg_ms
+        } else {
+            0.0
+        };
+        let _ = writeln!(
+            out,
+            r##"    <div class="target-group-header">LAN vs Internet &mdash; Best of Each</div>
+    <div class="target-group-comparison analysis" style="grid-column:1/-1">
+      <h3>LAN Baseline vs Internet Reality</h3>
+      <ul>
+        <li>Best LAN: <strong>Target {lan_idx}</strong> &mdash; {lan_ms:.1}ms (RTT {lan_rtt:.2}ms)</li>
+        <li>Best Internet: <strong>Target {inet_idx}</strong> &mdash; {inet_ms:.1}ms (RTT {inet_rtt:.2}ms)</li>
+        <li>Internet overhead: <strong>+{overhead:.1}ms</strong> ({factor:.1}x slower than LAN baseline)</li>
+        <li>The LAN result represents the achievable performance without network latency &mdash;
+           the Internet result shows the real-world impact of {rtt_diff:.0}ms RTT + jitter + congestion</li>
+      </ul>
+    </div>"##,
+            lan_idx = best_lan.idx + 1,
+            lan_ms = best_lan.best_avg_ms,
+            lan_rtt = best_lan.rtt_avg_ms,
+            inet_idx = best_internet.idx + 1,
+            inet_ms = best_internet.best_avg_ms,
+            inet_rtt = best_internet.rtt_avg_ms,
+            rtt_diff = best_internet.rtt_avg_ms - best_lan.rtt_avg_ms,
+        );
+    } else {
+        // All same network type — just render them all
+        let label = if !internet_targets.is_empty() {
+            "\u{1f310} Internet Targets"
+        } else {
+            "\u{1f3e0} LAN / Local Targets"
+        };
+        write_target_group(&targets.iter().collect::<Vec<_>>(), label, out);
     }
 
     let _ = writeln!(out, "  </div>\n</section>");
@@ -3095,6 +3258,11 @@ const INLINE_CSS: &str = r#"
   .target-charts-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:1.5rem;margin-top:.5rem}
   .target-chart-cell{background:#fafbfc;border:1px solid #e8e8e8;border-radius:6px;padding:1rem}
   .target-chart-cell .analysis{margin-top:.5rem}
+  .target-server-info{font-size:.82rem;color:#555;padding:.4rem .6rem;background:#f0f2f5;
+    border-radius:4px;margin-bottom:.6rem;line-height:1.4}
+  .target-group-header{grid-column:1/-1;font-size:1rem;font-weight:600;color:#1a1a2e;
+    padding:.3rem 0;margin-top:.5rem;border-bottom:2px solid #e8e8e8}
+  .target-group-comparison{grid-column:1/-1;margin:0}
   @media(max-width:900px){.target-charts-grid{grid-template-columns:1fr}}
 "#;
 
