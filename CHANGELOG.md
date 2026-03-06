@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.79] – 2026-03-06 — AWS Windows two-VM integration test
+
+### Added
+- **AWS Windows integration test** (`tests/integration/aws/tester_endpoint_deploy_windows.bats`):
+  deploys networker-endpoint and networker-tester on two Windows Server 2022 EC2 instances
+  via AWS SSM, runs HTTP/1.1 and HTTP/2 probes, downloads JSON report; 7/7 pass.
+  Uses `m7i-flex.large` (2 vCPU, 4 GB; free-tier eligible), IAM role `nwk-ssm-role` with
+  `AmazonSSMManagedInstanceCore`, and `AWS-RunPowerShellScript` document.
+  SSM parameters passed as `{"commands":[...]}` JSON object; multi-line PS scripts split
+  line-by-line so SSM writes a proper `.ps1` file preserving backtick line-continuation.
+
+---
+
 ## [0.12.78] – 2026-03-05 — Fix HTTP/2 ~40 ms latency spikes (Nagle + delayed-ACK)
 
 ### Fixed
