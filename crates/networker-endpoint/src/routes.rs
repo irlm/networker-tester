@@ -44,6 +44,9 @@ pub struct SystemMeta {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub os_version: Option<String>,
     pub hostname: String,
+    /// Cloud region (auto-detected from cloud metadata at startup).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
 }
 
 impl SystemMeta {
@@ -57,7 +60,91 @@ impl SystemMeta {
             total_memory_mb: detect_total_memory_mb(),
             os_version: detect_os_version(),
             hostname: get_hostname(),
+            region: detect_cloud_region(),
         }
+    }
+}
+
+/// Attempt to detect cloud region from instance metadata APIs.
+/// Tries Azure, then AWS, then GCP. Returns None if not on a cloud instance.
+fn detect_cloud_region() -> Option<String> {
+    // Azure: http://169.254.169.254/metadata/instance/compute/location
+    if let Some(r) = cloud_metadata_get_raw(
+        "169.254.169.254:80",
+        "169.254.169.254",
+        "/metadata/instance/compute/location?api-version=2021-02-01&format=text",
+        &[("Metadata", "true")],
+    ) {
+        return Some(format!("azure/{r}"));
+    }
+    // AWS: http://169.254.169.254/latest/meta-data/placement/region
+    if let Some(r) = cloud_metadata_get_raw(
+        "169.254.169.254:80",
+        "169.254.169.254",
+        "/latest/meta-data/placement/region",
+        &[],
+    ) {
+        return Some(format!("aws/{r}"));
+    }
+    // GCP: http://metadata.google.internal/computeMetadata/v1/instance/zone
+    // Use the well-known IP (169.254.169.254) since DNS for metadata.google.internal
+    // may not resolve outside GCE.
+    if let Some(zone) = cloud_metadata_get_raw(
+        "169.254.169.254:80",
+        "metadata.google.internal",
+        "/computeMetadata/v1/instance/zone",
+        &[("Metadata-Flavor", "Google")],
+    ) {
+        // zone is "projects/123/zones/us-central1-a" — extract zone name
+        let z = zone.rsplit('/').next().unwrap_or(&zone);
+        // Derive region: strip trailing -[a-z]
+        let region = z.rsplitn(2, '-').last().unwrap_or(z);
+        return Some(format!("gcp/{region} ({z})"));
+    }
+    None
+}
+
+/// Blocking HTTP GET to a metadata endpoint with a short timeout.
+/// Called once at startup — blocking is acceptable.
+///
+/// `host_port` = "169.254.169.254:80" or "metadata.google.internal:80"
+/// `path_query` = "/metadata/instance/compute/location?api-version=..."
+fn cloud_metadata_get_raw(
+    host_port: &str,
+    host_header: &str,
+    path_query: &str,
+    headers: &[(&str, &str)],
+) -> Option<String> {
+    use std::io::Read;
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    let mut req =
+        format!("GET {path_query} HTTP/1.1\r\nHost: {host_header}\r\nConnection: close\r\n");
+    for (k, v) in headers {
+        req.push_str(&format!("{k}: {v}\r\n"));
+    }
+    req.push_str("\r\n");
+
+    let mut stream =
+        TcpStream::connect_timeout(&host_port.parse().ok()?, Duration::from_millis(500)).ok()?;
+    stream
+        .set_read_timeout(Some(Duration::from_millis(1000)))
+        .ok()?;
+    std::io::Write::write_all(&mut stream, req.as_bytes()).ok()?;
+
+    let mut resp = String::new();
+    stream.read_to_string(&mut resp).ok();
+
+    let first_line = resp.lines().next()?;
+    if !first_line.contains("200") {
+        return None;
+    }
+    let body = resp.split("\r\n\r\n").nth(1)?.trim().to_string();
+    if body.is_empty() {
+        None
+    } else {
+        Some(body)
     }
 }
 
@@ -655,6 +742,7 @@ async fn server_info(State(state): State<AppState>) -> impl IntoResponse {
             "/delay", "/headers", "/status/:code", "/http-version", "/info"
         ],
         "system": &state.system_meta,
+        "region": &state.system_meta.region,
         "uptime_secs": uptime_secs,
         "timestamp": Utc::now().to_rfc3339(),
     }))

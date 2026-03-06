@@ -39,6 +39,7 @@ mod tests {
             client_version: "0.1.0".into(),
             server_info: None,
             client_info: None,
+            baseline: None,
             attempts: vec![RequestAttempt {
                 attempt_id: Uuid::new_v4(),
                 run_id,

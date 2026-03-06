@@ -28,6 +28,53 @@ pub struct HostInfo {
     /// Server uptime in seconds (server only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uptime_secs: Option<u64>,
+    /// Cloud region or location (auto-detected from cloud metadata on the server).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Network baseline (RTT measurement before probes)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Classification of the network path between client and target.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum NetworkType {
+    /// Loopback (127.x.x.x / ::1)
+    Loopback,
+    /// Private/LAN (10.x, 172.16-31.x, 192.168.x, fe80::, etc.)
+    LAN,
+    /// Public internet
+    Internet,
+}
+
+impl std::fmt::Display for NetworkType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NetworkType::Loopback => write!(f, "Loopback"),
+            NetworkType::LAN => write!(f, "LAN"),
+            NetworkType::Internet => write!(f, "Internet"),
+        }
+    }
+}
+
+/// RTT baseline measured before probes start (N TCP connect round-trips).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkBaseline {
+    /// Number of RTT samples collected.
+    pub samples: u32,
+    /// Minimum RTT in milliseconds.
+    pub rtt_min_ms: f64,
+    /// Average RTT in milliseconds.
+    pub rtt_avg_ms: f64,
+    /// Maximum RTT in milliseconds.
+    pub rtt_max_ms: f64,
+    /// Median (p50) RTT in milliseconds.
+    pub rtt_p50_ms: f64,
+    /// 95th percentile RTT in milliseconds.
+    pub rtt_p95_ms: f64,
+    /// Network classification based on target IP.
+    pub network_type: NetworkType,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -53,6 +100,9 @@ pub struct TestRun {
     /// Client system metadata collected locally.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_info: Option<HostInfo>,
+    /// Network baseline RTT measured before probes start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline: Option<NetworkBaseline>,
     pub attempts: Vec<RequestAttempt>,
 }
 
@@ -94,6 +144,7 @@ impl HostInfo {
             hostname: detect_hostname(),
             server_version: None,
             uptime_secs: None,
+            region: None,
         }
     }
 }
@@ -956,6 +1007,7 @@ mod tests {
             client_version: "0.1.0".into(),
             server_info: None,
             client_info: None,
+            baseline: None,
             attempts: vec![mk(true), mk(false), mk(true)],
         };
         assert_eq!(run.success_count(), 2);
@@ -1230,6 +1282,7 @@ mod tests {
             client_version: "0.1.0".into(),
             server_info: None,
             client_info: None,
+            baseline: None,
             attempts: vec![
                 mk(Protocol::Http1),
                 mk(Protocol::Http2),

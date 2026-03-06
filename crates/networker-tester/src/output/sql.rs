@@ -395,6 +395,7 @@ mod tests {
             client_version: env!("CARGO_PKG_VERSION").into(),
             server_info: None,
             client_info: None,
+            baseline: None,
             attempts,
         }
     }

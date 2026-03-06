@@ -5,7 +5,7 @@
 /// operators can customize the look without editing generated HTML.
 use crate::metrics::{
     attempt_payload_bytes, compute_stats, primary_metric_label, primary_metric_value, HostInfo,
-    Protocol, RequestAttempt, TestRun,
+    NetworkType, Protocol, RequestAttempt, TestRun,
 };
 use chrono::DateTime;
 use std::fmt::Write as FmtWrite;
@@ -76,7 +76,7 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
   <table>
     <thead>
       <tr>
-        <th>#</th><th>Target</th><th>Server</th>
+        <th>#</th><th>Target</th><th>Server</th><th>Network</th><th>RTT (avg)</th>
         <th>Attempts</th><th>Succeeded</th><th>Failed</th><th>Duration</th>
       </tr>
     </thead>
@@ -110,15 +110,37 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
                         }
                     })
                     .unwrap_or_default();
+                let region = s
+                    .region
+                    .as_ref()
+                    .map(|r| format!("<br><small>Region: {r}</small>"))
+                    .unwrap_or_default();
                 if hostname.is_empty() {
-                    format!("{os} | {} cores | {mem}", s.cpu_cores)
+                    format!("{os} | {} cores | {mem}{region}", s.cpu_cores)
                 } else {
                     format!(
-                        "{hostname}<br><small>{os} | {} cores | {mem}</small>",
+                        "{hostname}<br><small>{os} | {} cores | {mem}</small>{region}",
                         s.cpu_cores
                     )
                 }
             })
+            .unwrap_or_else(|| "—".into());
+        let net_type = run
+            .baseline
+            .as_ref()
+            .map(|b| {
+                let badge_cls = match b.network_type {
+                    NetworkType::Loopback => "ok",
+                    NetworkType::LAN => "warn",
+                    NetworkType::Internet => "err",
+                };
+                format!(r#"<span class="{badge_cls}">{}</span>"#, b.network_type)
+            })
+            .unwrap_or_else(|| "—".into());
+        let rtt_avg = run
+            .baseline
+            .as_ref()
+            .map(|b| format!("{:.2} ms", b.rtt_avg_ms))
             .unwrap_or_else(|| "—".into());
         let _ = write!(
             out,
@@ -126,6 +148,8 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
         <td>{idx}</td>
         <td><a href="{url}">{url}</a></td>
         <td>{server}</td>
+        <td>{net_type}</td>
+        <td>{rtt_avg}</td>
         <td>{attempts}</td>
         <td class="ok">{ok}</td>
         <td class="{fail_cls}">{fail}</td>
@@ -386,6 +410,13 @@ fn write_host_info_card(label: &str, info: &HostInfo, out: &mut String) {
                 escape_html(up),
             );
         }
+        if let Some(ref region) = info.region {
+            let _ = writeln!(
+                out,
+                "    <dt>Region</dt>       <dd>{}</dd>",
+                escape_html(region),
+            );
+        }
     }
     let _ = write!(out, "  </dl>\n</section>\n");
 }
@@ -463,6 +494,38 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
     }
     if let Some(ref info) = run.server_info {
         write_host_info_card("Server", info, out);
+    }
+    if let Some(ref bl) = run.baseline {
+        let net_cls = match bl.network_type {
+            NetworkType::Loopback => "ok",
+            NetworkType::LAN => "warn",
+            NetworkType::Internet => "err",
+        };
+        let _ = write!(
+            out,
+            r##"
+<section class="card" style="flex:1;min-width:280px;margin:0">
+  <h2>Network Baseline</h2>
+  <dl class="summary-grid">
+    <dt>Network Type</dt>  <dd><span class="{net_cls}">{net_type}</span></dd>
+    <dt>RTT Avg</dt>       <dd>{avg:.2} ms</dd>
+    <dt>RTT Min</dt>       <dd>{min:.2} ms</dd>
+    <dt>RTT Max</dt>       <dd>{max:.2} ms</dd>
+    <dt>RTT p50</dt>       <dd>{p50:.2} ms</dd>
+    <dt>RTT p95</dt>       <dd>{p95:.2} ms</dd>
+    <dt>Samples</dt>       <dd>{samples}</dd>
+  </dl>
+</section>
+"##,
+            net_cls = net_cls,
+            net_type = bl.network_type,
+            avg = bl.rtt_avg_ms,
+            min = bl.rtt_min_ms,
+            max = bl.rtt_max_ms,
+            p50 = bl.rtt_p50_ms,
+            p95 = bl.rtt_p95_ms,
+            samples = bl.samples,
+        );
     }
     let _ = writeln!(out, "</div>");
 
@@ -2736,6 +2799,7 @@ mod tests {
             client_version: "0.1.0".into(),
             server_info: None,
             client_info: None,
+            baseline: None,
             attempts: vec![RequestAttempt {
                 attempt_id: Uuid::new_v4(),
                 run_id,
@@ -2926,6 +2990,7 @@ mod tests {
             client_version: "0.1.0".into(),
             server_info: None,
             client_info: None,
+            baseline: None,
             attempts: vec![RequestAttempt {
                 attempt_id: Uuid::new_v4(),
                 run_id,
@@ -2975,6 +3040,7 @@ mod tests {
             client_version: "0.1.0".into(),
             server_info: None,
             client_info: None,
+            baseline: None,
             attempts: vec![RequestAttempt {
                 attempt_id: Uuid::new_v4(),
                 run_id,
@@ -3038,6 +3104,7 @@ mod tests {
             client_version: "0.1.0".into(),
             server_info: None,
             client_info: None,
+            baseline: None,
             attempts: vec![RequestAttempt {
                 attempt_id: Uuid::new_v4(),
                 run_id,
@@ -3097,6 +3164,7 @@ mod tests {
             client_version: "0.1.0".into(),
             server_info: None,
             client_info: None,
+            baseline: None,
             attempts: vec![RequestAttempt {
                 attempt_id: Uuid::new_v4(),
                 run_id,
@@ -3438,6 +3506,7 @@ mod tests {
             client_version: "0.1.0".into(),
             server_info: None,
             client_info: None,
+            baseline: None,
             attempts: vec![RequestAttempt {
                 attempt_id: Uuid::new_v4(),
                 run_id,

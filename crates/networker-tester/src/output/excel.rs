@@ -908,6 +908,7 @@ mod tests {
             client_version: "0.11.3".into(),
             server_info: None,
             client_info: None,
+            baseline: None,
             attempts: vec![
                 http_attempt,
                 udp_attempt,
@@ -950,6 +951,7 @@ mod tests {
             client_version: "0.0.0".into(),
             server_info: None,
             client_info: None,
+            baseline: None,
             attempts: vec![],
         };
         save(&run, tmp.path()).unwrap();
@@ -1049,6 +1051,7 @@ mod tests {
             client_version: "0.0.0".into(),
             server_info: None,
             client_info: None,
+            baseline: None,
             attempts: vec![download_attempt, upload_attempt],
         };
 

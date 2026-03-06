@@ -11,6 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.84] – 2026-03-06 — Network baseline RTT, cloud region, network type
+
+### Added
+- **Endpoint**: `GET /info` now includes `region` field, auto-detected from cloud
+  instance metadata at startup (Azure, AWS, GCP). Shows `azure/eastus`,
+  `aws/us-east-1`, `gcp/us-central1 (us-central1-a)`, or `null` if not on cloud.
+- **Tester**: measures network baseline RTT before probes start — 5 TCP connect
+  round-trips with min/avg/max/p50/p95 statistics.
+- **Tester**: classifies network path as Loopback (127.x), LAN (10.x/172.16-31.x/
+  192.168.x/fe80::/fc00::), or Internet (public IP).
+- **HTML report**: "Network Baseline" card shows RTT stats and network type
+  badge (green=Loopback, orange=LAN, red=Internet).
+- **HTML report**: Multi-target summary table now includes Network type and RTT
+  columns for at-a-glance latency comparison between targets.
+- **HTML report**: Server info card shows cloud region when available.
+- **JSON output**: `baseline` object (RTT + network_type) and `region` in
+  `server_info` / `HostInfo` (backward-compatible via `#[serde(default)]`).
+
+---
+
 ## [0.12.83] – 2026-03-06 — Google Cloud Platform (GCP) support in installer
 
 ### Added
