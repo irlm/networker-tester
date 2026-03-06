@@ -2225,8 +2225,8 @@ step_cargo_install() {
     next_step "Install $binary"
 
     # Try binary download first (much faster than compiling from source).
-    # This works even without gh CLI — uses direct curl from GitHub releases.
-    if [[ -n "$RELEASE_TARGET" && "$FROM_SOURCE" -eq 0 ]]; then
+    # Skip if RELEASE_DOWNLOAD_FAILED is set (already tried and failed in step_download_release).
+    if [[ -n "$RELEASE_TARGET" && "$FROM_SOURCE" -eq 0 && "${RELEASE_DOWNLOAD_FAILED:-0}" -eq 0 ]]; then
         local archive="${binary}-${RELEASE_TARGET}.tar.gz"
         local ver="${NETWORKER_VERSION:-}"
         if [[ -n "$ver" ]] && command -v curl &>/dev/null; then
@@ -4173,6 +4173,7 @@ main() {
         fi
         # If any download failed, fall back to source compile for the failed ones
         if [[ $need_source_fallback -eq 1 ]]; then
+            RELEASE_DOWNLOAD_FAILED=1
             print_info "Falling back to source compile for failed downloads…"
             if [[ $DO_RUST_INSTALL -eq 1 ]]; then step_install_rust; fi
             step_ensure_cargo_env
