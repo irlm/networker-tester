@@ -133,6 +133,15 @@ setup_file() {
     _save ep_ip "$ep_ip"
     echo "    Endpoint IP: $ep_ip" >&3
 
+    # Save the private IP for intra-VNet probes (tester→endpoint within same VNet).
+    # In Azure, VMs in the same VNet cannot reach each other via public IP.
+    local ep_private_ip
+    ep_private_ip="$(az vm list-ip-addresses \
+        --resource-group "$rg" --name "$EP_VM" \
+        --query '[0].virtualMachine.network.privateIpAddresses[0]' -o tsv 2>/dev/null)"
+    _save ep_private_ip "$ep_private_ip"
+    echo "    Endpoint private IP: $ep_private_ip" >&3
+
     # Open Azure NSG ports on endpoint VM
     local ep_nsg
     ep_nsg="$(az network nsg list --resource-group "$rg" \
@@ -297,18 +306,18 @@ PSEOF
     # Run the tester against the endpoint
     # -------------------------------------------------------------------------
     echo "=== Running networker-tester on tester VM → endpoint VM ===" >&3
-    local run_ps ep_ip_val
-    ep_ip_val="$(_load ep_ip)"
+    local run_ps ep_priv_ip_val
+    ep_priv_ip_val="$(_load ep_private_ip)"
     run_ps="$(mktemp /tmp/nwk-run-XXXXX.ps1)"
 
-    # Use unquoted heredoc: bash expands ${ep_ip_val}; PowerShell vars escaped with \$
-    # Use HTTP/8080 for probe to avoid TLS timeout leaving the agent busy
+    # Use unquoted heredoc: bash expands ${ep_priv_ip_val}; PowerShell vars escaped with \$
+    # Use private IP: in Azure, VMs in the same VNet cannot reach each other via public IP.
     cat > "$run_ps" <<PSEOF
 \$env:PATH = "C:\\cargo\\bin;\$env:PATH"
 \$outDir = 'C:\\networker-report'
 New-Item -ItemType Directory -Force -Path \$outDir | Out-Null
 & 'C:\\cargo\\bin\\networker-tester.exe' \`
-    --target 'http://${ep_ip_val}:8080/health' \`
+    --target 'http://${ep_priv_ip_val}:8080/health' \`
     --modes http1 \`
     --runs 3 \`
     --output-dir \$outDir 2>&1 | Write-Host
@@ -406,7 +415,7 @@ teardown_file() {
 
 @test "networker-tester can probe endpoint via HTTP/1.1 from tester VM" {
     local rg ep_ip
-    rg="$(_load rg)"; ep_ip="$(_load ep_ip)"
+    rg="$(_load rg)"; ep_ip="$(_load ep_private_ip)"
     local out
     out="$(_az_ps "$rg" "$TS_VM" \
         "C:\\cargo\\bin\\networker-tester.exe --target http://${ep_ip}:8080/health --modes http1 --runs 3 2>&1")"
@@ -415,7 +424,7 @@ teardown_file() {
 
 @test "networker-tester can probe endpoint via HTTP/2 from tester VM" {
     local rg ep_ip
-    rg="$(_load rg)"; ep_ip="$(_load ep_ip)"
+    rg="$(_load rg)"; ep_ip="$(_load ep_private_ip)"
     local out
     out="$(_az_ps "$rg" "$TS_VM" \
         "C:\\cargo\\bin\\networker-tester.exe --target https://${ep_ip}:8443/health --modes http2 --runs 3 --insecure 2>&1")"
