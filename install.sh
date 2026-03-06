@@ -589,13 +589,26 @@ discover_system() {
 
     if [[ $FROM_SOURCE -eq 0 ]]; then
         RELEASE_TARGET="$(detect_release_target)"
-        if [[ -n "$RELEASE_TARGET" ]] \
-           && command -v gh &>/dev/null \
-           && gh auth status &>/dev/null 2>&1; then
-            RELEASE_AVAILABLE=1
-            INSTALL_METHOD="release"
-            NETWORKER_VERSION="$(gh release list --repo "$REPO_GH" \
-                --limit 1 --json tagName -q '.[0].tagName' 2>/dev/null || echo "")"
+        if [[ -n "$RELEASE_TARGET" ]]; then
+            if command -v gh &>/dev/null \
+               && gh auth status &>/dev/null 2>&1; then
+                RELEASE_AVAILABLE=1
+                INSTALL_METHOD="release"
+                NETWORKER_VERSION="$(gh release list --repo "$REPO_GH" \
+                    --limit 1 --json tagName -q '.[0].tagName' 2>/dev/null || echo "")"
+            elif command -v curl &>/dev/null; then
+                # No gh CLI — try to resolve latest release via GitHub API (unauthenticated)
+                local api_tag=""
+                api_tag="$(curl -fsSL --connect-timeout 5 \
+                    "https://api.github.com/repos/${REPO_GH}/releases/latest" 2>/dev/null \
+                    | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' \
+                    | head -1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || echo "")"
+                if [[ -n "$api_tag" ]]; then
+                    RELEASE_AVAILABLE=1
+                    INSTALL_METHOD="release"
+                    NETWORKER_VERSION="$api_tag"
+                fi
+            fi
         fi
     fi
 
@@ -746,7 +759,11 @@ display_plan() {
             echo ""
             print_dim "Repository:  $REPO_GH  (${NETWORKER_VERSION:-latest release})"
         else
-            printf "    ${BOLD}Local method:${RESET}  Compile from source  ${DIM}(~5-10 min)${RESET}\n"
+            if [[ -n "$RELEASE_TARGET" ]]; then
+                printf "    ${BOLD}Local method:${RESET}  Download binary or compile from source\n"
+            else
+                printf "    ${BOLD}Local method:${RESET}  Compile from source  ${DIM}(~5-10 min)${RESET}\n"
+            fi
             echo ""
             local step=1
 
@@ -2017,23 +2034,38 @@ step_download_release() {
     local archive="${binary}-${RELEASE_TARGET}.tar.gz"
     local tmp_dir
     tmp_dir="$(mktemp -d)"
+    local ver="${NETWORKER_VERSION:-latest}"
 
     next_step "Download $binary"
-    print_info "Fetching ${archive} from latest GitHub release…"
+    print_info "Fetching ${archive} (${ver})…"
 
-    if ! gh release download \
-            --repo "$REPO_GH" \
-            --latest \
-            --pattern "${archive}" \
-            --dir "${tmp_dir}" \
-            --clobber; then
-        echo ""
-        print_err "gh release download failed."
-        echo ""
-        echo "  Expected asset: ${archive}"
-        echo "  Check available releases: gh release list --repo $REPO_GH"
+    local download_ok=0
+
+    if command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then
+        # Prefer gh CLI if available and authenticated
+        if gh release download \
+                --repo "$REPO_GH" \
+                "$ver" \
+                --pattern "${archive}" \
+                --dir "${tmp_dir}" \
+                --clobber 2>/dev/null; then
+            download_ok=1
+        fi
+    fi
+
+    if [[ $download_ok -eq 0 ]] && command -v curl &>/dev/null && [[ "$ver" != "latest" ]]; then
+        # Direct curl download — no gh CLI needed
+        local url="https://github.com/${REPO_GH}/releases/download/${ver}/${archive}"
+        print_dim "Downloading from ${url}"
+        if curl -fsSL --connect-timeout 10 -o "${tmp_dir}/${archive}" "$url" 2>/dev/null; then
+            download_ok=1
+        fi
+    fi
+
+    if [[ $download_ok -eq 0 ]]; then
+        print_warn "Binary download failed — falling back to source compile."
         rm -rf "$tmp_dir"
-        exit 1
+        return 1
     fi
 
     mkdir -p "$INSTALL_DIR"
@@ -2185,6 +2217,32 @@ step_ensure_cargo_env() {
 step_cargo_install() {
     local binary="$1"
     next_step "Install $binary"
+
+    # Try binary download first (much faster than compiling from source).
+    # This works even without gh CLI — uses direct curl from GitHub releases.
+    if [[ -n "$RELEASE_TARGET" && "$FROM_SOURCE" -eq 0 ]]; then
+        local archive="${binary}-${RELEASE_TARGET}.tar.gz"
+        local ver="${NETWORKER_VERSION:-}"
+        if [[ -n "$ver" ]] && command -v curl &>/dev/null; then
+            local url="https://github.com/${REPO_GH}/releases/download/${ver}/${archive}"
+            local tmp_dir
+            tmp_dir="$(mktemp -d)"
+            print_info "Trying binary download (${ver})…"
+            mkdir -p "$INSTALL_DIR"
+            if curl -fsSL --connect-timeout 10 -o "${tmp_dir}/${archive}" "$url" 2>/dev/null \
+               && tar xzf "${tmp_dir}/${archive}" -C "$INSTALL_DIR" 2>/dev/null; then
+                chmod +x "${INSTALL_DIR}/${binary}"
+                rm -rf "$tmp_dir"
+                local installed_ver
+                installed_ver="$("${INSTALL_DIR}/${binary}" --version 2>/dev/null || echo "unknown")"
+                print_ok "$binary installed → ${INSTALL_DIR}/${binary}  ($installed_ver)"
+                return 0
+            fi
+            rm -rf "$tmp_dir"
+            print_dim "No pre-built binary available — compiling from source."
+        fi
+    fi
+
     print_info "Building and installing $binary from source…"
     print_dim "Compiling from GitHub — may take a few minutes on first build."
 
@@ -3852,7 +3910,10 @@ _offer_quick_test() {
         echo ""
         # Install using the same method already resolved for this session
         if [[ "$INSTALL_METHOD" == "release" ]]; then
-            step_download_release "networker-tester"
+            if ! step_download_release "networker-tester"; then
+                step_ensure_cargo_env
+                step_cargo_install "networker-tester"
+            fi
         else
             step_ensure_cargo_env
             step_cargo_install "networker-tester"
@@ -3938,7 +3999,10 @@ _offer_also_endpoint() {
         1)
             echo ""
             if [[ "$INSTALL_METHOD" == "release" ]]; then
-                step_download_release "networker-endpoint"
+                if ! step_download_release "networker-endpoint"; then
+                    step_ensure_cargo_env
+                    step_cargo_install "networker-endpoint"
+                fi
             else
                 step_ensure_cargo_env
                 step_cargo_install "networker-endpoint"
@@ -4086,11 +4150,30 @@ main() {
 
     if [[ "$INSTALL_METHOD" == "release" ]]; then
         mkdir -p "$INSTALL_DIR"
+        local need_source_fallback=0
         if [[ $do_local_tester -eq 1 ]]; then
-            step_download_release "networker-tester"
+            if ! step_download_release "networker-tester"; then
+                need_source_fallback=1
+            fi
         fi
         if [[ $do_local_endpoint -eq 1 ]]; then
-            step_download_release "networker-endpoint"
+            if ! step_download_release "networker-endpoint"; then
+                need_source_fallback=1
+            fi
+        fi
+        # If any download failed, fall back to source compile for the failed ones
+        if [[ $need_source_fallback -eq 1 ]]; then
+            print_info "Falling back to source compile for failed downloads…"
+            if [[ $DO_RUST_INSTALL -eq 1 ]]; then step_install_rust; fi
+            step_ensure_cargo_env
+            if [[ $do_local_tester -eq 1 ]] && ! command -v networker-tester &>/dev/null \
+               && [[ ! -x "${INSTALL_DIR}/networker-tester" ]]; then
+                step_cargo_install "networker-tester"
+            fi
+            if [[ $do_local_endpoint -eq 1 ]] && ! command -v networker-endpoint &>/dev/null \
+               && [[ ! -x "${INSTALL_DIR}/networker-endpoint" ]]; then
+                step_cargo_install "networker-endpoint"
+            fi
         fi
     else
         if [[ $DO_CHROME_INSTALL -eq 1 ]]; then
