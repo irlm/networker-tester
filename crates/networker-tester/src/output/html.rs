@@ -2124,18 +2124,23 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
     // ── TLS info ─────────────────────────────────────────────────────────────
     let tls_rows: Vec<&RequestAttempt> = run.attempts.iter().filter(|a| a.tls.is_some()).collect();
     if !tls_rows.is_empty() {
+        let open_attr = if tls_rows.len() <= 20 { " open" } else { "" };
         let _ = write!(
             out,
             r#"
 <section class="card">
   <h2>TLS Details</h2>
-  <table>
-    <thead>
-      <tr><th>#</th><th>Version</th><th>Cipher</th><th>ALPN</th>
-          <th>Cert Subject</th><th>Cert Expiry</th><th>Handshake (ms)</th></tr>
-    </thead>
-    <tbody>
-"#
+  <details{open}>
+    <summary><span class="grp-lbl">{n} handshakes</span></summary>
+    <table>
+      <thead>
+        <tr><th>#</th><th>Version</th><th>Cipher</th><th>ALPN</th>
+            <th>Cert Subject</th><th>Cert Expiry</th><th>Handshake (ms)</th></tr>
+      </thead>
+      <tbody>
+"#,
+            open = open_attr,
+            n = tls_rows.len(),
         );
         for a in &tls_rows {
             let t = a.tls.as_ref().unwrap();
@@ -2167,7 +2172,10 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
                 hs = t.handshake_duration_ms,
             );
         }
-        let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
+        let _ = writeln!(
+            out,
+            "      </tbody>\n    </table>\n  </details>\n</section>"
+        );
     }
 
     // ── Errors ────────────────────────────────────────────────────────────────
