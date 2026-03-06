@@ -16,6 +16,7 @@ use crate::metrics::{
 };
 use crate::runner::dns as dns_runner;
 use crate::runner::http::{build_tls_config, RunConfig};
+use crate::runner::socket_info::SocketInfo;
 use bytes::Bytes;
 use chrono::Utc;
 use http_body_util::{BodyExt, Full};
@@ -396,7 +397,9 @@ async fn run_h1_keepalive_connection(
         }
     };
     let tcp_ms = t_tcp.elapsed().as_secs_f64() * 1000.0;
+    let _ = tcp_stream.set_nodelay(true);
     let local_addr = tcp_stream.local_addr().ok().map(|a| a.to_string());
+    let sock_info = SocketInfo::from_stream(&tcp_stream);
     let tcp_result_data = TcpResult {
         local_addr,
         remote_addr: server_addr.to_string(),
@@ -404,19 +407,19 @@ async fn run_h1_keepalive_connection(
         attempt_count: 1,
         started_at: tcp_started_at,
         success: true,
-        mss_bytes: None,
-        rtt_estimate_ms: None,
-        retransmits: None,
-        total_retrans: None,
-        snd_cwnd: None,
-        snd_ssthresh: None,
-        rtt_variance_ms: None,
-        rcv_space: None,
-        segs_out: None,
-        segs_in: None,
-        congestion_algorithm: None,
-        delivery_rate_bps: None,
-        min_rtt_ms: None,
+        mss_bytes: sock_info.mss_bytes,
+        rtt_estimate_ms: sock_info.rtt_estimate_ms,
+        retransmits: sock_info.retransmits,
+        total_retrans: sock_info.total_retrans,
+        snd_cwnd: sock_info.snd_cwnd,
+        snd_ssthresh: sock_info.snd_ssthresh,
+        rtt_variance_ms: sock_info.rtt_variance_ms,
+        rcv_space: sock_info.rcv_space,
+        segs_out: sock_info.segs_out,
+        segs_in: sock_info.segs_in,
+        congestion_algorithm: sock_info.congestion_algorithm,
+        delivery_rate_bps: sock_info.delivery_rate_bps,
+        min_rtt_ms: sock_info.min_rtt_ms,
     };
 
     // ── TLS (if HTTPS) or plain TCP → hyper H1.1 handshake ───────────────────
@@ -731,7 +734,9 @@ pub async fn run_pageload2_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
         }
     };
     let tcp_duration_ms = t_tcp.elapsed().as_secs_f64() * 1000.0;
+    let _ = tcp_stream.set_nodelay(true);
     let local_addr = tcp_stream.local_addr().ok().map(|a| a.to_string());
+    let sock_info = SocketInfo::from_stream(&tcp_stream);
     let tcp_result = TcpResult {
         local_addr,
         remote_addr: addr.to_string(),
@@ -739,19 +744,19 @@ pub async fn run_pageload2_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
         attempt_count: 1,
         started_at: tcp_started_at,
         success: true,
-        mss_bytes: None,
-        rtt_estimate_ms: None,
-        retransmits: None,
-        total_retrans: None,
-        snd_cwnd: None,
-        snd_ssthresh: None,
-        rtt_variance_ms: None,
-        rcv_space: None,
-        segs_out: None,
-        segs_in: None,
-        congestion_algorithm: None,
-        delivery_rate_bps: None,
-        min_rtt_ms: None,
+        mss_bytes: sock_info.mss_bytes,
+        rtt_estimate_ms: sock_info.rtt_estimate_ms,
+        retransmits: sock_info.retransmits,
+        total_retrans: sock_info.total_retrans,
+        snd_cwnd: sock_info.snd_cwnd,
+        snd_ssthresh: sock_info.snd_ssthresh,
+        rtt_variance_ms: sock_info.rtt_variance_ms,
+        rcv_space: sock_info.rcv_space,
+        segs_out: sock_info.segs_out,
+        segs_in: sock_info.segs_in,
+        congestion_algorithm: sock_info.congestion_algorithm,
+        delivery_rate_bps: sock_info.delivery_rate_bps,
+        min_rtt_ms: sock_info.min_rtt_ms,
     };
 
     // ── TLS handshake with ALPN h2 ───────────────────────────────────────────

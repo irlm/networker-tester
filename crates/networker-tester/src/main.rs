@@ -4,7 +4,7 @@ use clap::Parser;
 use networker_tester::cli;
 use networker_tester::metrics::{
     attempt_payload_bytes, compute_stats, primary_metric_label, primary_metric_value, HostInfo,
-    PageLoadResult, Protocol, RequestAttempt, TestRun,
+    NetworkBaseline, NetworkType, PageLoadResult, Protocol, RequestAttempt, TestRun,
 };
 use networker_tester::output::{excel, html, json, sql};
 use networker_tester::runner::{
@@ -216,13 +216,14 @@ async fn run_for_target(
     let server_info = match fetch_server_info(&target, cfg.insecure).await {
         Some(info) => {
             info!(
-                "Server: {} {} | {} cores | {} MB RAM | {} | v{}",
+                "Server: {} {} | {} cores | {} MB RAM | {} | v{} | region: {}",
                 info.os,
                 info.arch,
                 info.cpu_cores,
                 info.total_memory_mb.unwrap_or(0),
                 info.os_version.as_deref().unwrap_or("?"),
                 info.server_version.as_deref().unwrap_or("?"),
+                info.region.as_deref().unwrap_or("unknown"),
             );
             Some(info)
         }
@@ -234,6 +235,22 @@ async fn run_for_target(
         }
     };
     let client_info = Some(HostInfo::collect_local());
+
+    // ── Measure network baseline RTT ────────────────────────────────────────
+    let baseline = match measure_baseline(&target).await {
+        Some(bl) => {
+            info!(
+                "Network baseline: {} | RTT avg={:.2}ms min={:.2}ms max={:.2}ms p50={:.2}ms p95={:.2}ms ({} samples)",
+                bl.network_type, bl.rtt_avg_ms, bl.rtt_min_ms, bl.rtt_max_ms,
+                bl.rtt_p50_ms, bl.rtt_p95_ms, bl.samples,
+            );
+            Some(bl)
+        }
+        None => {
+            warn!("Could not measure network baseline RTT");
+            None
+        }
+    };
 
     let run_id = Uuid::new_v4();
     let started_at = Utc::now();
@@ -395,6 +412,7 @@ async fn run_for_target(
         client_version: env!("CARGO_PKG_VERSION").to_string(),
         server_info,
         client_info,
+        baseline,
         attempts: all_attempts,
     };
 
@@ -406,6 +424,127 @@ async fn run_for_target(
     );
 
     Ok(run)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Network baseline: RTT measurement + network type classification
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Classify an IP address as Loopback, LAN (private), or Internet (public).
+fn classify_ip(ip: &std::net::IpAddr) -> NetworkType {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            if v4.is_loopback() {
+                NetworkType::Loopback
+            } else if v4.is_private()
+                || v4.is_link_local()
+                || v4.octets()[0] == 100 && (v4.octets()[1] & 0xC0) == 64
+            {
+                // 10.x, 172.16-31.x, 192.168.x, 169.254.x, 100.64-127.x (CGNAT)
+                NetworkType::LAN
+            } else {
+                NetworkType::Internet
+            }
+        }
+        std::net::IpAddr::V6(v6) => {
+            if v6.is_loopback() {
+                NetworkType::Loopback
+            } else {
+                let segs = v6.segments();
+                if segs[0] == 0xfe80 || segs[0] & 0xfe00 == 0xfc00 {
+                    // Link-local (fe80::) or ULA (fc00::/7)
+                    NetworkType::LAN
+                } else {
+                    NetworkType::Internet
+                }
+            }
+        }
+    }
+}
+
+/// Classify the network type based on the target hostname/IP.
+fn classify_target(host: &str) -> NetworkType {
+    if host == "localhost" {
+        return NetworkType::Loopback;
+    }
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return classify_ip(&ip);
+    }
+    // For hostnames, try DNS resolution and classify the first IP
+    use std::net::ToSocketAddrs;
+    if let Ok(mut addrs) = (host, 0u16).to_socket_addrs() {
+        if let Some(addr) = addrs.next() {
+            return classify_ip(&addr.ip());
+        }
+    }
+    NetworkType::Internet // default for unresolvable hostnames
+}
+
+/// Measure TCP connect RTT to a target N times (returns sorted RTTs in ms).
+async fn measure_rtt(host: &str, port: u16, samples: u32) -> Vec<f64> {
+    let mut rtts = Vec::with_capacity(samples as usize);
+    let addr = format!("{host}:{port}");
+    for _ in 0..samples {
+        let t0 = std::time::Instant::now();
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            tokio::net::TcpStream::connect(&addr),
+        )
+        .await
+        {
+            Ok(Ok(_stream)) => {
+                rtts.push(t0.elapsed().as_secs_f64() * 1000.0);
+            }
+            _ => {
+                // Connection failed or timed out; skip this sample
+            }
+        }
+        // Small delay between samples to avoid flooding
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    rtts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    rtts
+}
+
+/// Compute a percentile from a sorted slice (linear interpolation).
+fn percentile(sorted: &[f64], p: f64) -> f64 {
+    if sorted.is_empty() {
+        return 0.0;
+    }
+    if sorted.len() == 1 {
+        return sorted[0];
+    }
+    let idx = p / 100.0 * (sorted.len() - 1) as f64;
+    let lo = idx.floor() as usize;
+    let hi = idx.ceil() as usize;
+    if lo == hi {
+        sorted[lo]
+    } else {
+        sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo as f64)
+    }
+}
+
+/// Run a network baseline measurement: TCP RTT probes + network classification.
+async fn measure_baseline(target: &url::Url) -> Option<NetworkBaseline> {
+    let host = target.host_str()?;
+    let port = target.port_or_known_default()?;
+    let network_type = classify_target(host);
+
+    let rtts = measure_rtt(host, port, 5).await;
+    if rtts.is_empty() {
+        return None;
+    }
+
+    let sum: f64 = rtts.iter().sum();
+    Some(NetworkBaseline {
+        samples: rtts.len() as u32,
+        rtt_min_ms: rtts[0],
+        rtt_avg_ms: sum / rtts.len() as f64,
+        rtt_max_ms: rtts[rtts.len() - 1],
+        rtt_p50_ms: percentile(&rtts, 50.0),
+        rtt_p95_ms: percentile(&rtts, 95.0),
+        network_type,
+    })
 }
 
 /// Fetch server metadata from GET /info before probes begin.
@@ -445,6 +584,10 @@ async fn fetch_server_info(target: &url::Url, insecure: bool) -> Option<HostInfo
             .and_then(|v| v.as_str())
             .map(String::from),
         uptime_secs: json.get("uptime_secs").and_then(|v| v.as_u64()),
+        region: json
+            .get("region")
+            .and_then(|v| v.as_str())
+            .map(String::from),
     })
 }
 
