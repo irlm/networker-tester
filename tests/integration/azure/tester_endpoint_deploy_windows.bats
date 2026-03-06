@@ -392,24 +392,18 @@ teardown_file() {
 
 @test "networker-endpoint is listening on port 8080 on endpoint VM" {
     local rg; rg="$(_load rg)"
-    local ps_file; ps_file="$(mktemp /tmp/nwk-t1-XXXXX.ps1)"
-    # Use PS-native Get-NetTCPConnection (no cmd.exe) and variable-capture to avoid
-    # pipe+ErrorRecord terminating errors under Azure's default $ErrorActionPreference='Stop'.
-    cat > "$ps_file" <<'PS'
-$ErrorActionPreference = 'Continue'
-Write-Host "Checking port 8080..."
-$conn = Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue
-if ($conn) {
-    Write-Host "LISTENING :8080 (state=$($conn[0].State))"
-} else {
-    Write-Host "NOT_LISTENING :8080"
-}
-PS
-    local out
-    out="$(_az_ps_file "$rg" "$EP_VM" "$ps_file")"
-    rm -f "$ps_file"
-    echo "port 8080 check: $out"
-    [[ "$out" == *"LISTENING :8080"* ]]
+    # Mirror _wait_for_windows_vm exactly: inline --scripts, full jq message (no awk filter),
+    # grep the full message.  File-based _az_ps_file consistently returns empty post-install;
+    # inline single-line scripts (like 'Write-Host ready') are the proven-working pattern.
+    local msg
+    msg="$(az vm run-command invoke \
+        --resource-group "$rg" --name "$EP_VM" \
+        --command-id RunPowerShellScript \
+        --scripts 'Write-Host "PORTCHK"; $c=Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue; if($c){Write-Host "LISTEN_8080"}else{Write-Host "NO_8080"}' \
+        --output json 2>/dev/null \
+      | jq -r '.value[0].message // ""' 2>/dev/null)"
+    echo "t1 msg: ${msg:0:400}" >&3
+    echo "$msg" | grep -q "LISTEN_8080"
 }
 
 @test "networker-endpoint responds on /health (port 8080)" {
@@ -422,61 +416,47 @@ PS
 
 @test "networker-tester binary is installed on tester VM" {
     local rg; rg="$(_load rg)"
-    local ps_file; ps_file="$(mktemp /tmp/nwk-t3-XXXXX.ps1)"
-    # Capture output to variable before Write-Host to avoid pipe+ErrorRecord issues.
-    cat > "$ps_file" <<'PS'
-$ErrorActionPreference = 'Continue'
-Write-Host "Checking tester version..."
-$v = & 'C:\cargo\bin\networker-tester.exe' --version 2>&1
-Write-Host "$v"
-PS
-    local ver
-    ver="$(_az_ps_file "$rg" "$TS_VM" "$ps_file")"
-    rm -f "$ps_file"
-    echo "tester version: $ver"
-    [[ "$ver" == *networker-tester* ]]
+    # Inline single-line PS; Write-Host wrapping exe output (parenthesised call).
+    local msg
+    msg="$(az vm run-command invoke \
+        --resource-group "$rg" --name "$TS_VM" \
+        --command-id RunPowerShellScript \
+        --scripts "Write-Host 'VERCHK'; Write-Host (& 'C:\\cargo\\bin\\networker-tester.exe' --version 2>&1)" \
+        --output json 2>/dev/null \
+      | jq -r '.value[0].message // ""' 2>/dev/null)"
+    echo "t3 msg: ${msg:0:400}" >&3
+    echo "$msg" | grep -qi "networker-tester"
 }
 
 @test "networker-tester can probe endpoint via HTTP/1.1 from tester VM" {
     local rg ep_ip
     rg="$(_load rg)"; ep_ip="$(_load ep_private_ip)"
-    local ps_file; ps_file="$(mktemp /tmp/nwk-t4-XXXXX.ps1)"
-    # Use private IP: Azure VMs in the same VNet cannot reach each other via public IP.
-    # Variable capture avoids pipe+ErrorRecord terminating errors.
-    cat > "$ps_file" <<PSEOF
-\$ErrorActionPreference = 'Continue'
-\$env:PATH = "C:\\cargo\\bin;\$env:PATH"
-Write-Host "Probing http://${ep_ip}:8080/health via HTTP/1.1 ..."
-\$r = & 'C:\\cargo\\bin\\networker-tester.exe' --target 'http://${ep_ip}:8080/health' --modes http1 --runs 3 2>&1
-Write-Host "exit: \$LASTEXITCODE"
-Write-Host "\$r"
-PSEOF
-    local out
-    out="$(_az_ps_file "$rg" "$TS_VM" "$ps_file")"
-    rm -f "$ps_file"
-    echo "http1 probe: $out"
-    echo "$out" | grep -qi "http1\|pass\|ms\|networker"
+    # Inline single-line PS with bash variable expansion for private IP.
+    # \$ → $ (PS var)  \\  → \  (Windows path)  ${ep_ip} expands in bash double-quotes.
+    local msg
+    msg="$(az vm run-command invoke \
+        --resource-group "$rg" --name "$TS_VM" \
+        --command-id RunPowerShellScript \
+        --scripts "\$ErrorActionPreference='Continue'; Write-Host 'PROBE1'; \$r=& 'C:\\cargo\\bin\\networker-tester.exe' --target 'http://${ep_ip}:8080/health' --modes http1 --runs 3 2>&1; Write-Host \"EXIT:\$LASTEXITCODE\"; Write-Host \$r" \
+        --output json 2>/dev/null \
+      | jq -r '.value[0].message // ""' 2>/dev/null)"
+    echo "t4 msg: ${msg:0:600}" >&3
+    echo "$msg" | grep -qi "http1\|pass\|ms\|networker"
 }
 
 @test "networker-tester can probe endpoint via HTTP/2 from tester VM" {
     local rg ep_ip
     rg="$(_load rg)"; ep_ip="$(_load ep_private_ip)"
-    local ps_file; ps_file="$(mktemp /tmp/nwk-t5-XXXXX.ps1)"
-    # Use private IP: Azure VMs in the same VNet cannot reach each other via public IP.
-    # Variable capture avoids pipe+ErrorRecord terminating errors.
-    cat > "$ps_file" <<PSEOF
-\$ErrorActionPreference = 'Continue'
-\$env:PATH = "C:\\cargo\\bin;\$env:PATH"
-Write-Host "Probing https://${ep_ip}:8443/health via HTTP/2 ..."
-\$r = & 'C:\\cargo\\bin\\networker-tester.exe' --target 'https://${ep_ip}:8443/health' --modes http2 --runs 3 --insecure 2>&1
-Write-Host "exit: \$LASTEXITCODE"
-Write-Host "\$r"
-PSEOF
-    local out
-    out="$(_az_ps_file "$rg" "$TS_VM" "$ps_file")"
-    rm -f "$ps_file"
-    echo "http2 probe: $out"
-    echo "$out" | grep -qi "http2\|pass\|ms\|networker"
+    # Inline single-line PS with bash variable expansion for private IP.
+    local msg
+    msg="$(az vm run-command invoke \
+        --resource-group "$rg" --name "$TS_VM" \
+        --command-id RunPowerShellScript \
+        --scripts "\$ErrorActionPreference='Continue'; Write-Host 'PROBE2'; \$r=& 'C:\\cargo\\bin\\networker-tester.exe' --target 'https://${ep_ip}:8443/health' --modes http2 --runs 3 --insecure 2>&1; Write-Host \"EXIT:\$LASTEXITCODE\"; Write-Host \$r" \
+        --output json 2>/dev/null \
+      | jq -r '.value[0].message // ""' 2>/dev/null)"
+    echo "t5 msg: ${msg:0:600}" >&3
+    echo "$msg" | grep -qi "http2\|pass\|ms\|networker"
 }
 
 @test "JSON report was generated and downloaded locally" {
