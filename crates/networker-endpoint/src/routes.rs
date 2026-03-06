@@ -67,7 +67,7 @@ fn detect_total_memory_mb() -> Option<u64> {
         let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
         for line in meminfo.lines() {
             if let Some(rest) = line.strip_prefix("MemTotal:") {
-                let kb: u64 = rest.trim().split_whitespace().next()?.parse().ok()?;
+                let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
                 return Some(kb / 1024);
             }
         }
