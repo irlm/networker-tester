@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.81] – 2026-03-06 — Installer: AWS SSO device-code login
+
+### Added
+- **AWS SSO / Identity Center login**: new device-code authentication flow
+  (similar to Azure's `az login --use-device-code`). Users are now prompted to
+  choose between SSO (opens browser, no keys needed) and classic access keys.
+  SSO is the default option.
+- Detects existing SSO profiles and offers to reuse them or create a new one.
+- `AWS_PROFILE` is exported after SSO login so subsequent AWS commands use the
+  SSO session automatically.
+
+---
+
 ## [0.12.80] – 2026-03-06 — Fix installer bugs: unzip, $VAR…, --html
 
 ### Fixed

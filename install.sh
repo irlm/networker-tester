@@ -283,7 +283,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.12.80"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.12.81"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -619,7 +619,7 @@ display_system_info() {
             aws_account="$(aws sts get-caller-identity --query Account --output text 2>/dev/null || echo "")"
             printf "    %-22s %s\n" "AWS CLI:" "authenticated ✓  (account: ${aws_account})"
         else
-            printf "    %-22s %s\n" "AWS CLI:" "installed  (run: aws configure)"
+            printf "    %-22s %s\n" "AWS CLI:" "installed  (run: aws sso login / aws configure)"
         fi
     fi
 }
@@ -1288,25 +1288,118 @@ ensure_aws_cli() {
         echo ""
         print_warn "AWS CLI is not configured or credentials are not valid."
         echo ""
-        echo "  Run 'aws configure' to set up your access key, secret, and default region."
-        echo "  Or set environment variables: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION"
+        echo "  Choose an authentication method:"
+        echo "    1) AWS SSO / Identity Center  (device code — opens browser, no keys needed)"
+        echo "    2) Access keys                (AWS_ACCESS_KEY_ID + secret)"
         echo ""
-        if ask_yn "Run 'aws configure' now?" "y"; then
-            aws configure
-            if aws sts get-caller-identity &>/dev/null 2>&1; then
-                AWS_LOGGED_IN=1
-                local aws_account
-                aws_account="$(aws sts get-caller-identity --query Account --output text 2>/dev/null || echo "")"
-                print_ok "AWS authenticated  (account: $aws_account)"
+        if ask_yn "Log in to AWS now?" "y"; then
+            echo ""
+            printf "  Auth method [1/2, default 1]: "
+            local aws_auth_method
+            read -r aws_auth_method </dev/tty || true
+            aws_auth_method="${aws_auth_method:-1}"
+
+            if [[ "$aws_auth_method" == "2" ]]; then
+                _aws_do_login_keys
             else
-                print_err "AWS credentials invalid — run 'aws configure' then re-run this installer."
+                _aws_do_login_sso
+            fi
+
+            if [[ $AWS_LOGGED_IN -eq 0 ]]; then
+                print_err "AWS authentication failed — fix manually then re-run the installer."
+                echo "  SSO:         aws configure sso && aws sso login"
+                echo "  Access keys: aws configure"
                 exit 1
             fi
         else
             print_err "AWS credentials required for remote deployment."
-            echo "  Run:  aws configure"
+            echo "  SSO:         aws configure sso && aws sso login"
+            echo "  Access keys: aws configure"
             exit 1
         fi
+    fi
+}
+
+# ── Internal: AWS SSO device-code login (similar to az login --use-device-code)
+_aws_do_login_sso() {
+    echo ""
+
+    # Check if an SSO profile already exists (user ran configure sso before)
+    local sso_profiles
+    sso_profiles="$(aws configure list-profiles 2>/dev/null | while read -r p; do
+        if aws configure get sso_start_url --profile "$p" &>/dev/null 2>&1; then
+            echo "$p"
+        fi
+    done || true)"
+
+    if [[ -z "$sso_profiles" ]]; then
+        print_info "Setting up AWS SSO profile (one-time setup)…"
+        echo ""
+        echo "  You will need your SSO start URL (e.g. https://my-org.awsapps.com/start)"
+        echo "  and your SSO region (e.g. us-east-1)."
+        echo ""
+        aws configure sso
+    else
+        # Pick an existing SSO profile or create a new one
+        local profile_count
+        profile_count="$(echo "$sso_profiles" | wc -l | tr -d ' ')"
+        if [[ "$profile_count" -eq 1 ]]; then
+            local sso_profile="$sso_profiles"
+            print_info "Using SSO profile: $sso_profile"
+        else
+            echo "  Existing SSO profiles:"
+            local i=1
+            while IFS= read -r p; do
+                echo "    $i) $p"
+                i=$((i + 1))
+            done <<< "$sso_profiles"
+            echo "    $i) Configure a new SSO profile"
+            echo ""
+            printf "  Select profile [1]: "
+            local choice
+            read -r choice </dev/tty || true
+            choice="${choice:-1}"
+
+            if [[ "$choice" -eq "$i" ]]; then
+                aws configure sso
+                _aws_check_identity
+                return
+            else
+                local sso_profile
+                sso_profile="$(echo "$sso_profiles" | sed -n "${choice}p")"
+                if [[ -z "$sso_profile" ]]; then
+                    sso_profile="$(echo "$sso_profiles" | head -1)"
+                fi
+            fi
+        fi
+
+        print_info "Logging in via AWS SSO (device code)…"
+        aws sso login --profile "$sso_profile"
+
+        # Export the profile so subsequent aws commands use it
+        export AWS_PROFILE="$sso_profile"
+    fi
+
+    _aws_check_identity
+}
+
+# ── Internal: AWS access-key login (classic aws configure)
+_aws_do_login_keys() {
+    echo ""
+    print_info "Running aws configure (access key + secret)…"
+    echo ""
+    aws configure
+
+    _aws_check_identity
+}
+
+# ── Internal: verify AWS identity after login attempt
+_aws_check_identity() {
+    if aws sts get-caller-identity &>/dev/null 2>&1; then
+        AWS_LOGGED_IN=1
+        local aws_account
+        aws_account="$(aws sts get-caller-identity --query Account --output text 2>/dev/null || echo "")"
+        print_ok "AWS authenticated  (account: $aws_account)"
     fi
 }
 
@@ -2649,15 +2742,30 @@ step_check_aws_prereqs() {
     print_ok "aws CLI found"
 
     if [[ $AWS_LOGGED_IN -eq 0 ]]; then
-        print_info "No active AWS credentials — running aws configure…"
-        print_info "You need: Access Key ID, Secret Access Key, and default region."
-        aws configure
-        if ! aws sts get-caller-identity &>/dev/null 2>&1; then
+        echo ""
+        print_warn "No active AWS credentials."
+        echo ""
+        echo "  Choose an authentication method:"
+        echo "    1) AWS SSO / Identity Center  (device code — opens browser, no keys needed)"
+        echo "    2) Access keys                (AWS_ACCESS_KEY_ID + secret)"
+        echo ""
+        printf "  Auth method [1/2, default 1]: "
+        local aws_auth_method
+        read -r aws_auth_method </dev/tty || true
+        aws_auth_method="${aws_auth_method:-1}"
+
+        if [[ "$aws_auth_method" == "2" ]]; then
+            _aws_do_login_keys
+        else
+            _aws_do_login_sso
+        fi
+
+        if [[ $AWS_LOGGED_IN -eq 0 ]]; then
             print_err "AWS credentials are not valid."
-            echo "  Run: aws configure"
+            echo "  SSO:         aws configure sso && aws sso login"
+            echo "  Access keys: aws configure"
             exit 1
         fi
-        AWS_LOGGED_IN=1
     fi
 
     local aws_acct aws_arn
