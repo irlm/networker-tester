@@ -2073,9 +2073,15 @@ step_download_release() {
     chmod +x "${INSTALL_DIR}/${binary}"
     rm -rf "$tmp_dir"
 
+    # Verify the binary actually runs (catches GLIBC mismatch, wrong arch, etc.)
     local installed_ver
-    installed_ver="$("${INSTALL_DIR}/${binary}" --version 2>/dev/null || echo "unknown")"
-    print_ok "$binary installed → ${INSTALL_DIR}/${binary}  ($installed_ver)"
+    if installed_ver="$("${INSTALL_DIR}/${binary}" --version 2>&1)"; then
+        print_ok "$binary installed → ${INSTALL_DIR}/${binary}  ($installed_ver)"
+    else
+        print_warn "Downloaded binary failed to run: ${installed_ver}"
+        rm -f "${INSTALL_DIR}/${binary}"
+        return 1
+    fi
 }
 
 # ── Source-mode steps ─────────────────────────────────────────────────────────
@@ -2233,13 +2239,17 @@ step_cargo_install() {
                && tar xzf "${tmp_dir}/${archive}" -C "$INSTALL_DIR" 2>/dev/null; then
                 chmod +x "${INSTALL_DIR}/${binary}"
                 rm -rf "$tmp_dir"
+                # Verify the binary actually runs (catches GLIBC mismatch, wrong arch, etc.)
                 local installed_ver
-                installed_ver="$("${INSTALL_DIR}/${binary}" --version 2>/dev/null || echo "unknown")"
-                print_ok "$binary installed → ${INSTALL_DIR}/${binary}  ($installed_ver)"
-                return 0
+                installed_ver="$("${INSTALL_DIR}/${binary}" --version 2>&1)" && {
+                    print_ok "$binary installed → ${INSTALL_DIR}/${binary}  ($installed_ver)"
+                    return 0
+                }
+                print_warn "Downloaded binary failed to run: ${installed_ver}"
+                rm -f "${INSTALL_DIR}/${binary}"
             fi
             rm -rf "$tmp_dir"
-            print_dim "No pre-built binary available — compiling from source."
+            print_dim "Pre-built binary unavailable or incompatible — compiling from source."
         fi
     fi
 
