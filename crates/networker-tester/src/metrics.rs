@@ -158,7 +158,11 @@ fn detect_os_version() -> Option<String> {
             .output()
             .ok()?;
         let ver = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if ver.is_empty() { None } else { Some(format!("macOS {ver}")) }
+        if ver.is_empty() {
+            None
+        } else {
+            Some(format!("macOS {ver}"))
+        }
     }
     #[cfg(target_os = "windows")]
     {
@@ -167,7 +171,11 @@ fn detect_os_version() -> Option<String> {
             .output()
             .ok()?;
         let ver = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if ver.is_empty() { None } else { Some(ver) }
+        if ver.is_empty() {
+            None
+        } else {
+            Some(ver)
+        }
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
@@ -192,9 +200,7 @@ fn detect_hostname() -> Option<String> {
     }
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
-        let out = std::process::Command::new("hostname")
-            .output()
-            .ok()?;
+        let out = std::process::Command::new("hostname").output().ok()?;
         let h = String::from_utf8_lossy(&out.stdout).trim().to_string();
         if !h.is_empty() {
             return Some(h);

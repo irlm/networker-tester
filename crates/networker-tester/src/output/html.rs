@@ -113,7 +113,10 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
                 if hostname.is_empty() {
                     format!("{os} | {} cores | {mem}", s.cpu_cores)
                 } else {
-                    format!("{hostname}<br><small>{os} | {} cores | {mem}</small>", s.cpu_cores)
+                    format!(
+                        "{hostname}<br><small>{os} | {} cores | {mem}</small>",
+                        s.cpu_cores
+                    )
                 }
             })
             .unwrap_or_else(|| "—".into());
@@ -344,17 +347,15 @@ fn write_host_info_card(label: &str, info: &HostInfo, out: &mut String) {
     let os_ver = info.os_version.as_deref().unwrap_or("—");
     let hostname = info.hostname.as_deref().unwrap_or("—");
     let version = info.server_version.as_deref().unwrap_or("—");
-    let uptime = info
-        .uptime_secs
-        .map(|s| {
-            if s >= 86400 {
-                format!("{}d {}h", s / 86400, (s % 86400) / 3600)
-            } else if s >= 3600 {
-                format!("{}h {}m", s / 3600, (s % 3600) / 60)
-            } else {
-                format!("{}m {}s", s / 60, s % 60)
-            }
-        });
+    let uptime = info.uptime_secs.map(|s| {
+        if s >= 86400 {
+            format!("{}d {}h", s / 86400, (s % 86400) / 3600)
+        } else if s >= 3600 {
+            format!("{}h {}m", s / 3600, (s % 3600) / 60)
+        } else {
+            format!("{}m {}s", s / 60, s % 60)
+        }
+    });
 
     let _ = write!(
         out,
@@ -454,7 +455,10 @@ fn write_run_sections(run: &TestRun, mut out: &mut String) {
     );
 
     // ── Client & Server Info cards ───────────────────────────────────────────
-    let _ = write!(out, r##"<div style="display:flex;flex-wrap:wrap;gap:1.5rem;margin:0 2rem">"##);
+    let _ = write!(
+        out,
+        r##"<div style="display:flex;flex-wrap:wrap;gap:1.5rem;margin:0 2rem">"##
+    );
     if let Some(ref info) = run.client_info {
         write_host_info_card("Client", info, out);
     }

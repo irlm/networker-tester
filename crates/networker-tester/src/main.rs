@@ -3,8 +3,8 @@ use chrono::Utc;
 use clap::Parser;
 use networker_tester::cli;
 use networker_tester::metrics::{
-    attempt_payload_bytes, compute_stats, primary_metric_label, primary_metric_value,
-    HostInfo, PageLoadResult, Protocol, RequestAttempt, TestRun,
+    attempt_payload_bytes, compute_stats, primary_metric_label, primary_metric_value, HostInfo,
+    PageLoadResult, Protocol, RequestAttempt, TestRun,
 };
 use networker_tester::output::{excel, html, json, sql};
 use networker_tester::runner::{
@@ -227,7 +227,9 @@ async fn run_for_target(
             Some(info)
         }
         None => {
-            warn!("Could not fetch server info from /info — server may not be a networker-endpoint");
+            warn!(
+                "Could not fetch server info from /info — server may not be a networker-endpoint"
+            );
             None
         }
     };
@@ -430,9 +432,18 @@ async fn fetch_server_info(target: &url::Url, insecure: bool) -> Option<HostInfo
         arch: sys.get("arch")?.as_str()?.to_string(),
         cpu_cores: sys.get("cpu_cores")?.as_u64()? as usize,
         total_memory_mb: sys.get("total_memory_mb").and_then(|v| v.as_u64()),
-        os_version: sys.get("os_version").and_then(|v| v.as_str()).map(String::from),
-        hostname: sys.get("hostname").and_then(|v| v.as_str()).map(String::from),
-        server_version: json.get("version").and_then(|v| v.as_str()).map(String::from),
+        os_version: sys
+            .get("os_version")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        hostname: sys
+            .get("hostname")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        server_version: json
+            .get("version")
+            .and_then(|v| v.as_str())
+            .map(String::from),
         uptime_secs: json.get("uptime_secs").and_then(|v| v.as_u64()),
     })
 }

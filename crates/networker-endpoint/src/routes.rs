@@ -193,11 +193,7 @@ pub fn build_router(state: AppState) -> Router {
 /// The `Alt-Svc` header is served on all responses regardless of scheme.
 /// Chrome ignores it for plain-HTTP origins; it only upgrades to QUIC when
 /// the header arrives over HTTPS — exactly the behavior we want.
-async fn add_server_timestamp(
-    State(state): State<AppState>,
-    req: Request,
-    next: Next,
-) -> Response {
+async fn add_server_timestamp(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let mut response = next.run(req).await;
     let ts = Utc::now().to_rfc3339();
     if let Ok(val) = HeaderValue::from_str(&ts) {
@@ -769,7 +765,10 @@ mod tests {
         assert!(ct.contains("text/html"), "content-type must be text/html");
         let body = to_bytes(resp.into_body(), 32 * 1024).await.unwrap();
         let html = String::from_utf8_lossy(&body);
-        assert!(html.contains("networker-endpoint"), "page must mention service name");
+        assert!(
+            html.contains("networker-endpoint"),
+            "page must mention service name"
+        );
         assert!(html.contains("/health"), "page must list /health endpoint");
         assert!(html.contains(":8080"), "page must show HTTP port");
     }
