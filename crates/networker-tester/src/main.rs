@@ -14,7 +14,10 @@ use networker_tester::runner::{
     http::{run_probe, RunConfig},
     http3::run_http3_probe,
     native::run_native_probe,
-    pageload::{run_pageload2_probe, run_pageload3_probe, run_pageload_probe, PageLoadConfig},
+    pageload::{
+        run_pageload2_probe, run_pageload2_warm, run_pageload3_probe, run_pageload3_warm,
+        run_pageload_probe, warmup_pageload2, warmup_pageload3, PageLoadConfig, SharedH2Conn,
+    },
     throughput::{
         run_download_probe, run_upload_probe, run_webdownload_probe, run_webupload_probe,
         ThroughputConfig,
@@ -320,10 +323,48 @@ async fn run_for_target(
         timeout_ms: cfg.timeout * 1000,
     };
 
-    // ── Collect all attempts ──────────────────────────────────────────────────
+    // ── Connection reuse: warmup ──────────────────────────────────────────────
+    let has_pageload2 = modes.iter().any(|m| matches!(m, Protocol::PageLoad2));
+    let has_pageload3 = modes.iter().any(|m| matches!(m, Protocol::PageLoad3));
+
+    let shared_h2: Option<std::sync::Arc<SharedH2Conn>> = if cfg.connection_reuse && has_pageload2 {
+        None // initialized below after warmup
+    } else {
+        None
+    };
+    #[cfg(feature = "http3")]
+    let shared_h3: Option<std::sync::Arc<tokio::sync::Mutex<networker_tester::runner::pageload::SharedH3Conn>>> =
+        None;
+
     let retries = cfg.retries;
     let mut all_attempts = Vec::new();
     let mut seq = 0u32;
+
+    // Warmup probes for connection-reuse modes
+    let shared_h2 = if cfg.connection_reuse && has_pageload2 {
+        info!("Connection reuse: warming up HTTP/2 connection…");
+        let (warmup, conn) = warmup_pageload2(run_id, seq, &pageload_cfg).await;
+        log_attempt(&warmup);
+        all_attempts.push(warmup);
+        seq += 1;
+        conn.map(std::sync::Arc::new)
+    } else {
+        shared_h2
+    };
+
+    #[cfg(feature = "http3")]
+    let shared_h3 = if cfg.connection_reuse && has_pageload3 {
+        info!("Connection reuse: warming up HTTP/3 QUIC connection…");
+        let (warmup, conn) = warmup_pageload3(run_id, seq, &pageload_cfg).await;
+        log_attempt(&warmup);
+        all_attempts.push(warmup);
+        seq += 1;
+        conn.map(|c| std::sync::Arc::new(tokio::sync::Mutex::new(c)))
+    } else {
+        shared_h3
+    };
+    #[cfg(not(feature = "http3"))]
+    let shared_h3: Option<std::sync::Arc<tokio::sync::Mutex<()>>> = None;
 
     for run_num in 0..cfg.runs {
         info!("Run {}/{}", run_num + 1, cfg.runs);
@@ -339,43 +380,41 @@ async fn run_for_target(
                 let udp_throughput_cfg_clone = udp_throughput_cfg.clone();
                 let throughput_cfg_clone = throughput_cfg.clone();
                 let pageload_cfg_clone = pageload_cfg.clone();
+                let shared_h2_clone = shared_h2.clone();
+                let shared_h3_clone = shared_h3.clone();
                 let current_seq = seq;
                 seq += 1;
 
                 async move {
+                    // Helper macro to dispatch: warm probe if shared conn, else cold
+                    macro_rules! do_dispatch {
+                        () => {{
+                            if matches!(proto, Protocol::PageLoad2) {
+                                if let Some(ref h2) = shared_h2_clone {
+                                    run_pageload2_warm(run_id, current_seq, &pageload_cfg_clone, h2).await
+                                } else {
+                                    dispatch_once(&proto, payload_sz, run_id, current_seq, &target_clone, &probe_cfg_clone, &udp_cfg_clone, &udp_throughput_cfg_clone, &throughput_cfg_clone, &pageload_cfg_clone).await
+                                }
+                            } else if matches!(proto, Protocol::PageLoad3) && shared_h3_clone.is_some() {
+                                #[cfg(feature = "http3")]
+                                { run_pageload3_warm(run_id, current_seq, &pageload_cfg_clone, shared_h3_clone.as_ref().unwrap()).await }
+                                #[cfg(not(feature = "http3"))]
+                                { dispatch_once(&proto, payload_sz, run_id, current_seq, &target_clone, &probe_cfg_clone, &udp_cfg_clone, &udp_throughput_cfg_clone, &throughput_cfg_clone, &pageload_cfg_clone).await }
+                            } else {
+                                dispatch_once(&proto, payload_sz, run_id, current_seq, &target_clone, &probe_cfg_clone, &udp_cfg_clone, &udp_throughput_cfg_clone, &throughput_cfg_clone, &pageload_cfg_clone).await
+                            }
+                        }};
+                    }
+
                     // First attempt
-                    let mut a = dispatch_once(
-                        &proto,
-                        payload_sz,
-                        run_id,
-                        current_seq,
-                        &target_clone,
-                        &probe_cfg_clone,
-                        &udp_cfg_clone,
-                        &udp_throughput_cfg_clone,
-                        &throughput_cfg_clone,
-                        &pageload_cfg_clone,
-                    )
-                    .await;
+                    let mut a = do_dispatch!();
 
                     // Retry loop
                     for retry_num in 1..=retries {
                         if a.success {
                             break;
                         }
-                        let mut retry_a = dispatch_once(
-                            &proto,
-                            payload_sz,
-                            run_id,
-                            current_seq,
-                            &target_clone,
-                            &probe_cfg_clone,
-                            &udp_cfg_clone,
-                            &udp_throughput_cfg_clone,
-                            &throughput_cfg_clone,
-                            &pageload_cfg_clone,
-                        )
-                        .await;
+                        let mut retry_a = do_dispatch!();
                         retry_a.retry_count = retry_num;
                         a = retry_a;
                     }

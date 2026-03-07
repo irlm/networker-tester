@@ -658,6 +658,10 @@ pub struct PageLoadResult {
     /// Highest for HTTP/3 due to QUIC userspace encryption. None if unavailable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpu_time_ms: Option<f64>,
+    /// True when a pre-established connection was reused (--connection-reuse).
+    /// Warm probes skip DNS/TCP/TLS setup; compare with cold probes to see savings.
+    #[serde(default)]
+    pub connection_reused: bool,
 }
 
 /// Real-browser page-load result (browser mode, requires `--features browser`).

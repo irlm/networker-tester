@@ -859,6 +859,7 @@ mod tests {
                 tls_overhead_ratio: 0.19,
                 per_connection_tls_ms: vec![4.0; 6],
                 cpu_time_ms: Some(8.3),
+                connection_reused: false,
             }),
             browser: None,
         };

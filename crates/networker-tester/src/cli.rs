@@ -89,7 +89,9 @@ pub struct Cli {
     pub udp_probes: Option<u32>,
 
     // ── Connection options ────────────────────────────────────────────────────
-    /// Reuse a single TCP connection across HTTP requests
+    /// Reuse connections across pageload runs (warmup + warm probes).
+    /// A warmup probe establishes the connection (cold); subsequent runs reuse it (warm).
+    /// Applies to pageload2 (HTTP/2) and pageload3 (HTTP/3). Compare cold vs warm in the report.
     #[arg(long)]
     pub connection_reuse: bool,
 
