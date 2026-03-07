@@ -327,14 +327,12 @@ async fn run_for_target(
     let has_pageload2 = modes.iter().any(|m| matches!(m, Protocol::PageLoad2));
     let has_pageload3 = modes.iter().any(|m| matches!(m, Protocol::PageLoad3));
 
-    let shared_h2: Option<std::sync::Arc<SharedH2Conn>> = if cfg.connection_reuse && has_pageload2 {
-        None // initialized below after warmup
-    } else {
-        None
-    };
+    // Initialized below after warmup when connection_reuse && has_pageload2
+    let shared_h2: Option<std::sync::Arc<SharedH2Conn>> = None;
     #[cfg(feature = "http3")]
-    let shared_h3: Option<std::sync::Arc<tokio::sync::Mutex<networker_tester::runner::pageload::SharedH3Conn>>> =
-        None;
+    let shared_h3: Option<
+        std::sync::Arc<tokio::sync::Mutex<networker_tester::runner::pageload::SharedH3Conn>>,
+    > = None;
 
     let retries = cfg.retries;
     let mut all_attempts = Vec::new();
@@ -391,17 +389,66 @@ async fn run_for_target(
                         () => {{
                             if matches!(proto, Protocol::PageLoad2) {
                                 if let Some(ref h2) = shared_h2_clone {
-                                    run_pageload2_warm(run_id, current_seq, &pageload_cfg_clone, h2).await
+                                    run_pageload2_warm(run_id, current_seq, &pageload_cfg_clone, h2)
+                                        .await
                                 } else {
-                                    dispatch_once(&proto, payload_sz, run_id, current_seq, &target_clone, &probe_cfg_clone, &udp_cfg_clone, &udp_throughput_cfg_clone, &throughput_cfg_clone, &pageload_cfg_clone).await
+                                    dispatch_once(
+                                        &proto,
+                                        payload_sz,
+                                        run_id,
+                                        current_seq,
+                                        &target_clone,
+                                        &probe_cfg_clone,
+                                        &udp_cfg_clone,
+                                        &udp_throughput_cfg_clone,
+                                        &throughput_cfg_clone,
+                                        &pageload_cfg_clone,
+                                    )
+                                    .await
                                 }
-                            } else if matches!(proto, Protocol::PageLoad3) && shared_h3_clone.is_some() {
+                            } else if matches!(proto, Protocol::PageLoad3)
+                                && shared_h3_clone.is_some()
+                            {
                                 #[cfg(feature = "http3")]
-                                { run_pageload3_warm(run_id, current_seq, &pageload_cfg_clone, shared_h3_clone.as_ref().unwrap()).await }
+                                {
+                                    run_pageload3_warm(
+                                        run_id,
+                                        current_seq,
+                                        &pageload_cfg_clone,
+                                        shared_h3_clone.as_ref().unwrap(),
+                                    )
+                                    .await
+                                }
                                 #[cfg(not(feature = "http3"))]
-                                { dispatch_once(&proto, payload_sz, run_id, current_seq, &target_clone, &probe_cfg_clone, &udp_cfg_clone, &udp_throughput_cfg_clone, &throughput_cfg_clone, &pageload_cfg_clone).await }
+                                {
+                                    dispatch_once(
+                                        &proto,
+                                        payload_sz,
+                                        run_id,
+                                        current_seq,
+                                        &target_clone,
+                                        &probe_cfg_clone,
+                                        &udp_cfg_clone,
+                                        &udp_throughput_cfg_clone,
+                                        &throughput_cfg_clone,
+                                        &pageload_cfg_clone,
+                                    )
+                                    .await
+                                }
                             } else {
-                                dispatch_once(&proto, payload_sz, run_id, current_seq, &target_clone, &probe_cfg_clone, &udp_cfg_clone, &udp_throughput_cfg_clone, &throughput_cfg_clone, &pageload_cfg_clone).await
+                                dispatch_once(
+                                    &proto,
+                                    payload_sz,
+                                    run_id,
+                                    current_seq,
+                                    &target_clone,
+                                    &probe_cfg_clone,
+                                    &udp_cfg_clone,
+                                    &udp_throughput_cfg_clone,
+                                    &throughput_cfg_clone,
+                                    &pageload_cfg_clone,
+                                )
+                                .await
                             }
                         }};
                     }

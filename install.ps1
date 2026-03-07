@@ -1515,7 +1515,7 @@ function Invoke-VmExistsCheck {
                         --show-details --query powerState -o tsv 2>$null) -join ""
                     if ($powerState -and $powerState -ne "VM running") {
                         Write-Info "VM is '$powerState' -- starting it..."
-                        & az vm start --resource-group $rg --name $Name --output none 2>&1
+                        $null = & az vm start --resource-group $rg --name $Name --output none 2>&1
                         Write-Ok "VM started"
                     }
                     $ip = (& az vm show --resource-group $rg --name $Name `
@@ -1536,8 +1536,8 @@ function Invoke-VmExistsCheck {
                             --query "Reservations[0].Instances[0].InstanceId" `
                             --output text 2>$null) -join ""
                         if ($iid -and $iid -ne "None") {
-                            & aws ec2 start-instances --region $script:AwsRegion --instance-ids $iid --output text >$null 2>&1
-                            & aws ec2 wait instance-running --region $script:AwsRegion --instance-ids $iid 2>$null
+                            $null = & aws ec2 start-instances --region $script:AwsRegion --instance-ids $iid --output text 2>&1
+                            $null = & aws ec2 wait instance-running --region $script:AwsRegion --instance-ids $iid 2>&1
                             $ip = (& aws ec2 describe-instances `
                                 --region $script:AwsRegion --instance-ids $iid `
                                 --query "Reservations[0].Instances[0].PublicIpAddress" `
@@ -1602,7 +1602,7 @@ function Invoke-VmExistsCheck {
             switch ($Provider) {
                 "azure" {
                     $rg = if ($Label -eq "tester") { $script:AzureTesterRg } else { $script:AzureEndpointRg }
-                    & az vm delete --resource-group $rg --name $Name --yes --output none 2>&1
+                    $null = & az vm delete --resource-group $rg --name $Name --yes --output none 2>&1
                 }
                 "aws" {
                     $iid = (& aws ec2 describe-instances `
@@ -1611,12 +1611,12 @@ function Invoke-VmExistsCheck {
                         --query "Reservations[0].Instances[0].InstanceId" `
                         --output text 2>$null) -join ""
                     if ($iid -and $iid -ne "None") {
-                        & aws ec2 terminate-instances --region $script:AwsRegion --instance-ids $iid --output text >$null 2>&1
-                        & aws ec2 wait instance-terminated --region $script:AwsRegion --instance-ids $iid 2>$null
+                        $null = & aws ec2 terminate-instances --region $script:AwsRegion --instance-ids $iid --output text 2>&1
+                        $null = & aws ec2 wait instance-terminated --region $script:AwsRegion --instance-ids $iid 2>&1
                     }
                 }
                 "gcp" {
-                    & gcloud compute instances delete $Name `
+                    $null = & gcloud compute instances delete $Name `
                         --project $script:GcpProject --zone $script:GcpZone --quiet 2>&1
                 }
             }
