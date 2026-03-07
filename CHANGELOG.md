@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.89] – 2026-03-07 — Fix AWS security group printf-v shadowing
+
+### Fixed
+- Installer: AWS `sg_id` variable shadowed by `local` inside `_aws_create_security_group` — `printf -v` wrote to the function's local, leaving caller's variable unset (`unbound variable` crash)
+
+---
+
 ## [0.12.88] – 2026-03-06 — Installer: curl|bash fixes, Windows VM, GCP auto-install
 
 ### Fixed
