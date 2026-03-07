@@ -3549,6 +3549,48 @@ step_check_gcp_prereqs() {
     local gcp_account
     gcp_account="$(gcloud config get-value account 2>/dev/null || echo "")"
     print_ok "Account: ${gcp_account}  (project: ${GCP_PROJECT})"
+
+    # Ensure Compute Engine API is enabled (required for VM creation, firewall rules, etc.)
+    print_info "Checking Compute Engine API…"
+    local api_status
+    api_status="$(gcloud services list --enabled \
+        --filter="config.name=compute.googleapis.com" \
+        --format="value(config.name)" \
+        --project="$GCP_PROJECT" 2>/dev/null || echo "")"
+    if [[ "$api_status" != "compute.googleapis.com" ]]; then
+        print_warn "Compute Engine API is not enabled on project $GCP_PROJECT."
+        if ask_yn "Enable Compute Engine API now?" "y"; then
+            print_info "Enabling Compute Engine API (may take a minute)…"
+            if gcloud services enable compute.googleapis.com \
+                    --project="$GCP_PROJECT" 2>&1; then
+                print_ok "Compute Engine API enabled"
+            else
+                print_err "Failed to enable Compute Engine API."
+                echo "  Enable manually: https://console.developers.google.com/apis/api/compute.googleapis.com/overview?project=${GCP_PROJECT}"
+                exit 1
+            fi
+        else
+            print_err "Compute Engine API is required for GCE deployment."
+            echo "  Enable at: https://console.developers.google.com/apis/api/compute.googleapis.com/overview?project=${GCP_PROJECT}"
+            exit 1
+        fi
+    else
+        print_ok "Compute Engine API enabled"
+    fi
+
+    # Ensure billing is configured (Compute Engine requires an active billing account)
+    local billing_enabled
+    billing_enabled="$(gcloud billing projects describe "$GCP_PROJECT" \
+        --format="value(billingEnabled)" 2>/dev/null || echo "")"
+    if [[ "$billing_enabled" != "True" ]]; then
+        print_warn "Billing is not enabled on project $GCP_PROJECT."
+        echo "  GCE instances require an active billing account."
+        echo "  Enable at: https://console.cloud.google.com/billing/linkedaccount?project=${GCP_PROJECT}"
+        echo ""
+        if ! ask_yn "Continue anyway (may fail at instance creation)?" "n"; then
+            exit 1
+        fi
+    fi
 }
 
 # Create a GCE firewall rule for the endpoint ports (idempotent).
