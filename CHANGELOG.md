@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.91] – 2026-03-07 — Installer: fix GCP re-login on every run
+
+### Fixed
+- Installer: GCP login status now checked in `ensure_gcp_cli` before prompting — since `discover_system` defers all gcloud execution, `GCP_LOGGED_IN` was always 0, causing unnecessary re-login every run
+
+---
+
 ## [0.12.90] – 2026-03-07 — Installer: GCP improvements, curl|bash robustness
 
 ### Fixed
