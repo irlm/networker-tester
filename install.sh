@@ -4024,7 +4024,8 @@ _offer_also_endpoint() {
     echo "  ${BOLD}3)${RESET} Skip — I already have an endpoint elsewhere"
     echo ""
     local ans
-    read -rp "$(printf "%b" "${CYAN}?${RESET} What would you like to do? [1/2/3] ")" ans
+    printf "%b" "${CYAN}?${RESET} What would you like to do? [1/2/3] "
+    read -r ans </dev/tty || true
     case "${ans:-3}" in
         1)
             echo ""
