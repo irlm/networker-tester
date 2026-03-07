@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.92] – 2026-03-07 — Installer: GCP VM existence check
+
+### Fixed
+- Installer: GCP VM creation checks if instance already exists — offers reuse, rename, or delete+recreate (was crashing with "already exists" error)
+
+---
+
 ## [0.12.91] – 2026-03-07 — Installer: fix GCP re-login on every run
 
 ### Fixed

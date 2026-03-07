@@ -309,7 +309,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.12.91"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.12.92"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -3632,6 +3632,62 @@ _gcp_create_instance() {
     local label="$1" name="$2" machine_type="$3" ip_var="$4"
 
     next_step "Create GCE instance for $label ($name in $GCP_ZONE)"
+
+    # Check if instance already exists
+    if gcloud compute instances describe "$name" \
+            --project "$GCP_PROJECT" \
+            --zone "$GCP_ZONE" &>/dev/null 2>&1; then
+        echo ""
+        print_warn "Instance '$name' already exists in $GCP_ZONE."
+        echo ""
+        echo "    1) Reuse existing instance  [default]"
+        echo "    2) Pick a different name"
+        echo "    3) Delete and recreate"
+        echo ""
+        printf "  Choice [1]: "
+        local choice; read -r choice </dev/tty || true
+        choice="${choice:-1}"
+
+        case "$choice" in
+            1)
+                local ip
+                ip="$(gcloud compute instances describe "$name" \
+                    --project "$GCP_PROJECT" \
+                    --zone "$GCP_ZONE" \
+                    --format='get(networkInterfaces[0].accessConfigs[0].natIP)' 2>/dev/null || echo "")"
+                if [[ -z "$ip" ]]; then
+                    print_err "Failed to retrieve instance public IP."
+                    exit 1
+                fi
+                printf -v "$ip_var" "%s" "$ip"
+                print_ok "Reusing instance '$name' — Public IP: ${BOLD}${ip}${RESET}"
+                return 0
+                ;;
+            2)
+                printf "  New instance name: "
+                local new_name; read -r new_name </dev/tty || true
+                if [[ -z "$new_name" ]]; then
+                    print_err "Instance name is required."
+                    exit 1
+                fi
+                name="$new_name"
+                # Update the global variable so later steps use the new name
+                if [[ "$label" == "tester" ]]; then
+                    GCP_TESTER_NAME="$name"
+                else
+                    GCP_ENDPOINT_NAME="$name"
+                fi
+                ;;
+            3)
+                print_info "Deleting instance '$name'…"
+                gcloud compute instances delete "$name" \
+                    --project "$GCP_PROJECT" \
+                    --zone "$GCP_ZONE" \
+                    --quiet
+                print_ok "Instance deleted"
+                ;;
+        esac
+    fi
 
     local tags_opt=""
     [[ "$label" == "endpoint" ]] && tags_opt="--tags=networker-endpoint"
