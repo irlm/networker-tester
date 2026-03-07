@@ -20,6 +20,13 @@
 #                 [-SkipRust] [-Azure] [-TesterAzure] [-Aws] [-TesterAws]
 #                 [-Gcp] [-TesterGcp] [-Help]
 # ──────────────────────────────────────────────────────────────────────────────
+
+# PSScriptAnalyzer suppressions — interactive installer uses Write-Host for
+# colored output, plural nouns for clarity, params consumed via $script: scope.
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseBOMForUnicodeEncodedFile', '')]
 param(
     [string]$Component  = "",
     [switch]$Yes,
