@@ -26,18 +26,15 @@ jobs:
           GIST_ID: 37a1af64b70ef6e58ea117839407f4f9
           GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
         run: |
-          sh_content=$(cat install.sh)
-          ps1_content=$(cat install.ps1)
-          payload=$(jq -n \
-            --arg sh  "$sh_content" \
-            --arg ps1 "$ps1_content" \
-            '{"files": {"install.sh": {"content": $sh}, "install.ps1": {"content": $ps1}}}')
+          jq -n --rawfile sh install.sh --rawfile ps1 install.ps1 \
+            '{"files": {"install.sh": {"content": $sh}, "install.ps1": {"content": $ps1}}}' \
+            > /tmp/gist_payload.json
           curl -fsSL \
             -X PATCH \
             -H "Authorization: token ${GIST_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             -H "Content-Type: application/json" \
-            -d "$payload" \
+            -d @/tmp/gist_payload.json \
             "https://api.github.com/gists/${GIST_ID}" \
             | jq -r '.updated_at // "no updated_at in response"'
           echo "Gist updated."
