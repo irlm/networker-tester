@@ -680,7 +680,7 @@ fn write_multi_target_charts(runs: &[TestRun], out: &mut String) {
             let title = format!("Target {} \u{2014} {}", t.idx + 1, t.url);
             let svg = svg_boxplot(&title, &group_refs, "ms");
 
-            let _ = write!(out, "    <div class=\"target-chart-cell\">\n");
+            let _ = writeln!(out, "    <div class=\"target-chart-cell\">");
             // Server info bar
             let net_badge = match t.network_type {
                 NetworkType::Loopback => r#"<span class="ok">Loopback</span>"#,
@@ -2695,10 +2695,9 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
             )
         });
         if has_browser {
-            let _ = write!(
+            let _ = writeln!(
                 out,
-                r##"  <p class="note">Browser probes (browser1/browser2/browser3) are not shown here &mdash; Chrome owns the TCP connections internally, so kernel-level socket stats (MSS, cwnd, retransmits, congestion algorithm, etc.) are not accessible from our process.</p>
-"##
+                r##"  <p class="note">Browser probes (browser1/browser2/browser3) are not shown here &mdash; Chrome owns the TCP connections internally, so kernel-level socket stats (MSS, cwnd, retransmits, congestion algorithm, etc.) are not accessible from our process.</p>"##
             );
         }
         let _ = writeln!(
