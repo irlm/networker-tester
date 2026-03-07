@@ -3017,7 +3017,7 @@ step_azure_set_auto_shutdown() {
     next_step "Set auto-shutdown policy for $label"
     local shutdown_err
     if shutdown_err="$(az vm auto-shutdown --resource-group "$rg" --name "$vm" \
-            --time 0400 --output none 2>&1)"; then
+            --location "$AZURE_REGION" --time 0400 --output none 2>&1)"; then
         print_ok "Auto-shutdown set: 04:00 UTC (11 PM EST) daily — VM stops automatically"
     else
         print_warn "Could not configure Azure auto-shutdown: ${shutdown_err}"
