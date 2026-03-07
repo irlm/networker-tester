@@ -591,16 +591,16 @@ discover_system() {
         RELEASE_TARGET="$(detect_release_target)"
         if [[ -n "$RELEASE_TARGET" ]]; then
             if command -v gh &>/dev/null \
-               && gh auth status &>/dev/null 2>&1; then
+               && gh auth status &>/dev/null 2>&1 </dev/null; then
                 RELEASE_AVAILABLE=1
                 INSTALL_METHOD="release"
                 NETWORKER_VERSION="$(gh release list --repo "$REPO_GH" \
-                    --limit 1 --json tagName -q '.[0].tagName' 2>/dev/null || echo "")"
+                    --limit 1 --json tagName -q '.[0].tagName' 2>/dev/null </dev/null || echo "")"
             elif command -v curl &>/dev/null; then
                 # No gh CLI — try to resolve latest release via GitHub API (unauthenticated)
                 local api_tag=""
                 api_tag="$(curl -fsSL --connect-timeout 5 \
-                    "https://api.github.com/repos/${REPO_GH}/releases/latest" 2>/dev/null \
+                    "https://api.github.com/repos/${REPO_GH}/releases/latest" 2>/dev/null </dev/null \
                     | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' \
                     | head -1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || echo "")"
                 if [[ -n "$api_tag" ]]; then
@@ -631,7 +631,7 @@ discover_system() {
     # source mode — requires gh installed and authenticated, fails silently if not.
     if [[ -z "$NETWORKER_VERSION" ]] && command -v gh &>/dev/null; then
         NETWORKER_VERSION="$(gh release list --repo "$REPO_GH" \
-            --limit 1 --json tagName -q '.[0].tagName' 2>/dev/null || echo "")"
+            --limit 1 --json tagName -q '.[0].tagName' 2>/dev/null </dev/null || echo "")"
     fi
     # Fallback: use the version embedded in this installer script
     if [[ -z "$NETWORKER_VERSION" ]]; then
@@ -641,7 +641,7 @@ discover_system() {
     # Azure CLI detection
     if command -v az &>/dev/null; then
         AZURE_CLI_AVAILABLE=1
-        if az account show &>/dev/null 2>&1; then
+        if az account show &>/dev/null 2>&1 </dev/null; then
             AZURE_LOGGED_IN=1
         fi
     fi
@@ -649,7 +649,7 @@ discover_system() {
     # AWS CLI detection
     if command -v aws &>/dev/null; then
         AWS_CLI_AVAILABLE=1
-        if aws sts get-caller-identity &>/dev/null 2>&1; then
+        if aws sts get-caller-identity &>/dev/null 2>&1 </dev/null; then
             AWS_LOGGED_IN=1
         fi
     fi
@@ -661,12 +661,12 @@ discover_system() {
     if command -v gcloud &>/dev/null; then
         GCP_CLI_AVAILABLE=1
         local gcp_account
-        gcp_account="$(gcloud config get-value account 2>/dev/null || echo "")"
+        gcp_account="$(gcloud config get-value account 2>/dev/null </dev/null || echo "")"
         if [[ -n "$gcp_account" && "$gcp_account" != "(unset)" ]]; then
             GCP_LOGGED_IN=1
         fi
         if [[ -z "$GCP_PROJECT" ]]; then
-            GCP_PROJECT="$(gcloud config get-value project 2>/dev/null || echo "")"
+            GCP_PROJECT="$(gcloud config get-value project 2>/dev/null </dev/null || echo "")"
             [[ "$GCP_PROJECT" == "(unset)" ]] && GCP_PROJECT=""
         fi
     fi
