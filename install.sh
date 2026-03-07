@@ -309,7 +309,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.12.90"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.12.91"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -654,23 +654,15 @@ discover_system() {
         fi
     fi
 
-    # GCP CLI detection — also check common install location
+    # GCP CLI detection — only check if binary exists, don't run it.
+    # Running gcloud (Python) during discover_system can consume stdin
+    # in curl|bash mode. Login/project status is checked later in
+    # ensure_gcp_cli / step_check_gcp_prereqs when GCP is actually needed.
     if ! command -v gcloud &>/dev/null && [[ -x "${HOME}/google-cloud-sdk/bin/gcloud" ]]; then
         export PATH="${HOME}/google-cloud-sdk/bin:${PATH}"
     fi
-    # Run gcloud queries in a subshell with closed stdin to prevent
-    # Python/gcloud from consuming script lines in curl|bash mode.
     if command -v gcloud &>/dev/null; then
         GCP_CLI_AVAILABLE=1
-        local gcp_account
-        gcp_account="$(gcloud config get-value account 2>/dev/null < /dev/null)" || gcp_account=""
-        if [[ -n "$gcp_account" && "$gcp_account" != "(unset)" ]]; then
-            GCP_LOGGED_IN=1
-        fi
-        if [[ -z "$GCP_PROJECT" ]]; then
-            GCP_PROJECT="$(gcloud config get-value project 2>/dev/null < /dev/null)" || GCP_PROJECT=""
-            [[ "$GCP_PROJECT" == "(unset)" ]] && GCP_PROJECT=""
-        fi
     fi
 }
 
@@ -719,13 +711,7 @@ display_system_info() {
     fi
 
     if [[ $GCP_CLI_AVAILABLE -eq 1 ]]; then
-        if [[ $GCP_LOGGED_IN -eq 1 ]]; then
-            local gcp_account
-            gcp_account="$(gcloud config get-value account 2>/dev/null || echo "")"
-            printf "    %-22s %s\n" "GCP CLI:" "authenticated ✓  (${gcp_account})"
-        else
-            printf "    %-22s %s\n" "GCP CLI:" "installed  (run: gcloud auth login)"
-        fi
+        printf "    %-22s %s\n" "GCP CLI:" "installed ✓"
     fi
 }
 
@@ -1736,7 +1722,7 @@ ensure_gcp_cli() {
                 fi
                 if command -v gcloud &>/dev/null; then
                     GCP_CLI_AVAILABLE=1
-                    print_ok "Google Cloud SDK installed  ($(gcloud --version 2>&1 | head -1))"
+                    print_ok "Google Cloud SDK installed  ($(gcloud --version 2>&1 < /dev/null | head -1))"
                 else
                     print_err "Google Cloud SDK installation failed — install manually."
                     echo "  https://cloud.google.com/sdk/docs/install"
@@ -1751,6 +1737,16 @@ ensure_gcp_cli() {
             echo "  Install from: https://cloud.google.com/sdk/docs/install"
             echo "  Install manually, then re-run: bash install.sh --gcp"
             exit 1
+        fi
+    fi
+
+    # discover_system defers gcloud execution, so check login status now.
+    if [[ $GCP_LOGGED_IN -eq 0 ]]; then
+        local gcp_account
+        gcp_account="$(gcloud config get-value account 2>/dev/null < /dev/null || echo "")"
+        if [[ -n "$gcp_account" && "$gcp_account" != "(unset)" ]]; then
+            GCP_LOGGED_IN=1
+            print_ok "Logged in: $gcp_account"
         fi
     fi
 
