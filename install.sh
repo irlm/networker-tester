@@ -658,15 +658,17 @@ discover_system() {
     if ! command -v gcloud &>/dev/null && [[ -x "${HOME}/google-cloud-sdk/bin/gcloud" ]]; then
         export PATH="${HOME}/google-cloud-sdk/bin:${PATH}"
     fi
+    # Run gcloud queries in a subshell with closed stdin to prevent
+    # Python/gcloud from consuming script lines in curl|bash mode.
     if command -v gcloud &>/dev/null; then
         GCP_CLI_AVAILABLE=1
         local gcp_account
-        gcp_account="$(gcloud config get-value account 2>/dev/null </dev/null || echo "")"
+        gcp_account="$(gcloud config get-value account 2>/dev/null < /dev/null)" || gcp_account=""
         if [[ -n "$gcp_account" && "$gcp_account" != "(unset)" ]]; then
             GCP_LOGGED_IN=1
         fi
         if [[ -z "$GCP_PROJECT" ]]; then
-            GCP_PROJECT="$(gcloud config get-value project 2>/dev/null </dev/null || echo "")"
+            GCP_PROJECT="$(gcloud config get-value project 2>/dev/null < /dev/null)" || GCP_PROJECT=""
             [[ "$GCP_PROJECT" == "(unset)" ]] && GCP_PROJECT=""
         fi
     fi
