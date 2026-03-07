@@ -11,10 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.12.92] – 2026-03-07 — Installer: GCP VM existence check
+## [0.12.93] – 2026-03-07 — Installer: VM existence check (Azure, AWS, GCP)
 
 ### Fixed
-- Installer: GCP VM creation checks if instance already exists — offers reuse, rename, or delete+recreate (was crashing with "already exists" error)
+- Installer: All three cloud providers (Azure, AWS, GCP) now check if VM/instance already exists before creation — offers reuse, rename, or delete+recreate instead of crashing
 
 ---
 
