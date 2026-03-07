@@ -3269,12 +3269,28 @@ _aws_ensure_keypair() {
     fi
 
     print_info "Importing SSH public key as 'networker-keypair'…"
-    # Import is idempotent when the key already exists (returns existing key)
+
+    # Check if key pair already exists
+    local existing_fp
+    existing_fp="$(aws ec2 describe-key-pairs \
+        --region "$AWS_REGION" \
+        --key-names networker-keypair \
+        --query "KeyPairs[0].KeyFingerprint" \
+        --output text 2>/dev/null || echo "")"
+
+    if [[ -n "$existing_fp" && "$existing_fp" != "None" ]]; then
+        # Key exists — delete and re-import to ensure it matches the local key
+        aws ec2 delete-key-pair \
+            --region "$AWS_REGION" \
+            --key-name "networker-keypair" \
+            --output text >/dev/null 2>&1 || true
+    fi
+
     aws ec2 import-key-pair \
         --region "$AWS_REGION" \
         --key-name "networker-keypair" \
         --public-key-material "fileb://${ssh_key_file}" \
-        --output text >/dev/null 2>&1 || true
+        --output text >/dev/null
     print_ok "Key pair: networker-keypair"
 }
 
