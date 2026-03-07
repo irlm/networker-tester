@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.90] – 2026-03-07 — Installer: GCP improvements, curl|bash robustness
+
+### Fixed
+- Installer: AWS keypair import — delete and re-import to match local key (was silently reusing stale keypair)
+- Installer: GCP project number auto-resolved to project ID in all code paths
+- Installer: GCP auto-enable Compute Engine API + billing check in prerequisites
+- Installer: GCP gcloud detected in `~/google-cloud-sdk/bin` on repeat runs
+- Installer: GCP login re-checked before prompting (avoids re-login every run)
+- Installer: GCP VM install downloads installer from Gist when running via `curl|bash` (SCP fails when no local file)
+- Installer: GCP SSH runner uses `< /dev/null` to prevent stdin consumption
+- Installer: prevent CLI tools (`gh`, `az`, `aws`, `gcloud`) from consuming stdin in `curl|bash` mode
+
+---
+
 ## [0.12.89] – 2026-03-07 — Fix AWS security group printf-v shadowing
 
 ### Fixed
