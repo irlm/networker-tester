@@ -1678,18 +1678,44 @@ ensure_gcp_cli() {
             echo "    macOS:  brew install --cask google-cloud-sdk"
         fi
         echo ""
+        local gcp_install_cmd=""
         if [[ "$PKG_MGR" == "brew" ]]; then
-            if ask_yn "Install Google Cloud SDK now (via brew)?" "y"; then
+            gcp_install_cmd="brew install --cask google-cloud-sdk"
+        elif [[ "$SYS_OS" == "Linux" ]]; then
+            gcp_install_cmd="official Google Cloud SDK installer (curl + tar)"
+        fi
+
+        if [[ -n "$gcp_install_cmd" ]]; then
+            echo "  Install command:  $gcp_install_cmd"
+            echo ""
+            if ask_yn "Install Google Cloud SDK now?" "y"; then
                 echo ""
-                brew install --cask google-cloud-sdk
-                # Source gcloud shell completions / PATH additions
-                if [[ -f "$(brew --prefix)/share/google-cloud-sdk/path.bash.inc" ]]; then
-                    # shellcheck disable=SC1091
-                    source "$(brew --prefix)/share/google-cloud-sdk/path.bash.inc"
+                if [[ "$PKG_MGR" == "brew" ]]; then
+                    brew install --cask google-cloud-sdk
+                    if [[ -f "$(brew --prefix)/share/google-cloud-sdk/path.bash.inc" ]]; then
+                        # shellcheck disable=SC1091
+                        source "$(brew --prefix)/share/google-cloud-sdk/path.bash.inc"
+                    fi
+                else
+                    # Official Google Cloud SDK for Linux (installs to ~/google-cloud-sdk)
+                    local gcp_arch="x86_64"
+                    [[ "$(uname -m)" == "aarch64" ]] && gcp_arch="arm"
+                    local gcp_url="https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-linux-${gcp_arch}.tar.gz"
+                    print_info "Downloading Google Cloud SDK…"
+                    curl -fsSL "$gcp_url" -o /tmp/google-cloud-sdk.tar.gz
+                    tar xzf /tmp/google-cloud-sdk.tar.gz -C "${HOME}"
+                    "${HOME}/google-cloud-sdk/install.sh" --quiet --path-update true \
+                        --usage-reporting false --command-completion false
+                    rm -f /tmp/google-cloud-sdk.tar.gz
+                    export PATH="${HOME}/google-cloud-sdk/bin:${PATH}"
+                    if [[ -f "${HOME}/google-cloud-sdk/path.bash.inc" ]]; then
+                        # shellcheck disable=SC1091
+                        source "${HOME}/google-cloud-sdk/path.bash.inc"
+                    fi
                 fi
                 if command -v gcloud &>/dev/null; then
                     GCP_CLI_AVAILABLE=1
-                    print_ok "Google Cloud SDK installed"
+                    print_ok "Google Cloud SDK installed  ($(gcloud --version 2>&1 | head -1))"
                 else
                     print_err "Google Cloud SDK installation failed — install manually."
                     echo "  https://cloud.google.com/sdk/docs/install"
@@ -1701,6 +1727,7 @@ ensure_gcp_cli() {
                 exit 1
             fi
         else
+            echo "  Install from: https://cloud.google.com/sdk/docs/install"
             echo "  Install manually, then re-run: bash install.sh --gcp"
             exit 1
         fi
