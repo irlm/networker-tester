@@ -439,7 +439,19 @@ async fn run_for_target(
                                     .await
                                 }
                             } else {
-                                dispatch_once(&proto, payload_sz, run_id, current_seq, &target_clone, &probe_cfg_clone, &udp_cfg_clone, &udp_throughput_cfg_clone, &throughput_cfg_clone, &pageload_cfg_clone).await
+                                dispatch_once(
+                                    &proto,
+                                    payload_sz,
+                                    run_id,
+                                    current_seq,
+                                    &target_clone,
+                                    &probe_cfg_clone,
+                                    &udp_cfg_clone,
+                                    &udp_throughput_cfg_clone,
+                                    &throughput_cfg_clone,
+                                    &pageload_cfg_clone,
+                                )
+                                .await
                             }
                         }};
                     }

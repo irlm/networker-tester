@@ -1675,14 +1675,7 @@ pub async fn warmup_pageload2(
             }
             Err(e) => {
                 return (
-                    error_attempt(
-                        attempt_id,
-                        run_id,
-                        seq,
-                        started_at,
-                        e.category,
-                        e.message,
-                    ),
+                    error_attempt(attempt_id, run_id, seq, started_at, e.category, e.message),
                     None,
                 );
             }
@@ -2476,16 +2469,7 @@ pub async fn run_pageload3_warm(
     let t_wall = Instant::now();
 
     fetch_h3_pageload(
-        attempt_id,
-        run_id,
-        seq,
-        started_at,
-        t_wall,
-        cpu_start,
-        cfg,
-        conn,
-        0.0,
-        true,
+        attempt_id, run_id, seq, started_at, t_wall, cpu_start, cfg, conn, 0.0, true,
     )
     .await
 }
@@ -2697,7 +2681,11 @@ async fn fetch_h3_pageload(
         success: assets_fetched == n,
         dns: None,
         tcp: None,
-        tls: if connection_reused { None } else { Some(tls_result) },
+        tls: if connection_reused {
+            None
+        } else {
+            Some(tls_result)
+        },
         http: Some(manifest_http),
         udp: None,
         error: None,
