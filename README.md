@@ -177,7 +177,7 @@ labeling a named group separately in the report.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--config` / `-c` | — | Path to a JSON config file (see [Configuration File](#configuration-file)) |
-| `--log-level` | — | `tracing` filter string (e.g. `"debug"`, `"info,tower_http=debug"`). Overrides `--verbose` and `RUST_LOG` |
+| `--log-level` | — | `tracing` filter string (e.g. `"debug"`, `"info,tower_http=debug"`). Overrides `RUST_LOG` (and `--verbose` on tester) |
 
 ### Targeting
 
@@ -225,7 +225,7 @@ Size suffixes: `k` = KiB (×1024), `m` = MiB (×1024²), `g` = GiB (×1024³).
 | `--html-report` | `report.html` | HTML filename (relative to `--output-dir`) |
 | `--css` | `report.css` | CSS `<link>` href embedded in the HTML |
 | `--excel` | — | Write a `.xlsx` workbook with 8 sheets alongside JSON + HTML |
-| `--verbose` / `-v` | — | Enable debug logging (equivalent to `--log-level debug`) |
+| `--verbose` / `-v` | — | Enable debug logging (equivalent to `--log-level debug`). Tester only. |
 
 ### SQL Server
 

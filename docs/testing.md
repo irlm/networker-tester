@@ -355,15 +355,14 @@ the % delta vs the first (local) target:
 
 ### JSON (default — every run)
 
-Output is logged to `stdout` as structured JSON by default when `--json` is passed:
+JSON output is written automatically to `output/` on every run:
 
 ```bash
 ./target/release/networker-tester \
   --target https://127.0.0.1:8443/health \
   --modes http1,http2 \
   --runs 20 \
-  --insecure \
-  --json > results.json
+  --insecure
 ```
 
 ### HTML Report
@@ -375,8 +374,7 @@ Output is logged to `stdout` as structured JSON by default when `--json` is pass
   --payload-sizes 1m \
   --page-assets 20 \
   --runs 5 \
-  --insecure \
-  --html
+  --insecure
 ```
 
 ```bash
@@ -454,9 +452,9 @@ Server CSW (`sCSW`) is reported by the endpoint via `Server-Timing: csw-v;dur=N,
 | `--payload-sizes LIST` | none | Sizes for download/upload (e.g., `64k,1m`) |
 | `--page-assets N` | `20` | Assets per page-load simulation |
 | `--page-asset-size SZ` | `10k` | Size of each simulated asset |
-| `--html` | false | Write HTML report to `output/report.html` |
+| `--html-report` | `report.html` | HTML filename (relative to `--output-dir`) |
 | `--excel` | false | Write Excel report to `output/report.xlsx` |
-| `--json` | false | Write JSON results to stdout |
+| `--output-dir` | `./output` | Directory for JSON, HTML, and Excel output |
 | `--retries N` | `0` | Retry failed probes |
 | `--no-default-features` | off | Exclude HTTP/3 for a minimal build |
 
