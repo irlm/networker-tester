@@ -327,11 +327,8 @@ async fn run_for_target(
     let has_pageload2 = modes.iter().any(|m| matches!(m, Protocol::PageLoad2));
     let has_pageload3 = modes.iter().any(|m| matches!(m, Protocol::PageLoad3));
 
-    let shared_h2: Option<std::sync::Arc<SharedH2Conn>> = if cfg.connection_reuse && has_pageload2 {
-        None // initialized below after warmup
-    } else {
-        None
-    };
+    // Initialized below after warmup when connection_reuse && has_pageload2
+    let shared_h2: Option<std::sync::Arc<SharedH2Conn>> = None;
     #[cfg(feature = "http3")]
     let shared_h3: Option<
         std::sync::Arc<tokio::sync::Mutex<networker_tester::runner::pageload::SharedH3Conn>>,
