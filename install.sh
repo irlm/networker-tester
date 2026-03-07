@@ -3702,7 +3702,7 @@ _gcp_ssh_run() {
         --zone "$GCP_ZONE" \
         --quiet \
         --ssh-flag="-o StrictHostKeyChecking=no" \
-        --command "$*"
+        --command "$*" < /dev/null
 }
 
 # Install a binary on a GCE instance using the bootstrap installer.
@@ -3735,7 +3735,7 @@ _gcp_install_binary() {
     # Run the installer on the VM (handles Rust, build tools, binary install)
     if _gcp_ssh_run "$name" "test -f /tmp/networker-install.sh" 2>/dev/null; then
         print_info "Running installer on instance ($component)…"
-        _gcp_ssh_run "$name" "bash /tmp/networker-install.sh $component -y" 2>&1 | tail -20
+        _gcp_ssh_run "$name" "bash /tmp/networker-install.sh $component -y" 2>&1
     else
         # Last resort: install build tools + Rust + cargo install
         print_info "Installing binary via cargo install…"
@@ -3743,7 +3743,7 @@ _gcp_install_binary() {
             "sudo apt-get update -qq && sudo apt-get install -y build-essential 2>&1 | tail -1 ; \
              curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
              source \"\$HOME/.cargo/env\" && \
-             cargo install --git ${REPO_HTTPS} ${binary}" 2>&1 | tail -20
+             cargo install --git ${REPO_HTTPS} ${binary}" 2>&1
     fi
 
     # Verify
