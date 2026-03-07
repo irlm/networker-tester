@@ -11,10 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.12.93] – 2026-03-07 — Installer: VM existence check (Azure, AWS, GCP)
+## [0.12.93] – 2026-03-07 — Windows installer: cloud deployment parity
+
+### Added
+- `install.ps1`: Full cloud deployment support matching `install.sh` — Azure, AWS, and GCP VM provisioning from Windows
+- `install.ps1`: Cloud CLI detection (az, aws, gcloud) with auto-install via winget
+- `install.ps1`: Interactive region/size/OS/auto-shutdown prompts for all three providers
+- `install.ps1`: VM existence check (reuse/rename/delete) for all providers
+- `install.ps1`: Remote binary install via SSH + Gist bootstrap installer
+- `install.ps1`: Component selection and where-to-install prompts
+- `install.ps1`: INSTALLER_VERSION fallback when gh CLI is unavailable
+- `install.ps1`: Config file generation and completion summary with cleanup commands
 
 ### Fixed
-- Installer: All three cloud providers (Azure, AWS, GCP) now check if VM/instance already exists before creation — offers reuse, rename, or delete+recreate instead of crashing
+- Installer (both): All three cloud providers now check if VM/instance already exists before creation — offers reuse, rename, or delete+recreate instead of crashing
 
 ---
 
