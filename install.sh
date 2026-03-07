@@ -2868,7 +2868,13 @@ step_azure_create_vm() {
     fi
 
     local auth_options="--generate-ssh-keys"
-    if [[ "$os_type" == "linux" ]]; then
+    if [[ "$os_type" == "windows" ]]; then
+        # Windows VMs require --admin-password (SSH keys not supported).
+        # Generate a random password meeting Azure complexity requirements.
+        local win_pass
+        win_pass="Nwk$(openssl rand -base64 12 | tr -dc 'A-Za-z0-9' | head -c 12)!1"
+        auth_options="--admin-password ${win_pass}"
+    elif [[ "$os_type" == "linux" ]]; then
         local key_file
         for key_file in "${HOME}/.ssh/id_ed25519.pub" "${HOME}/.ssh/id_rsa.pub"; do
             if [[ -f "$key_file" ]]; then
@@ -2902,6 +2908,18 @@ step_azure_create_vm() {
 
     printf -v "$ip_var" "%s" "$ip"
     print_ok "VM created ($os_label) — Public IP: ${BOLD}${ip}${RESET}"
+
+    if [[ "$os_type" == "windows" && -n "${win_pass:-}" ]]; then
+        # Store credentials for later display in the summary
+        local pass_var="AZURE_${label^^}_WIN_PASS"
+        printf -v "$pass_var" "%s" "$win_pass"
+        echo ""
+        print_info "Windows credentials:"
+        echo "    User:     azureuser"
+        echo "    Password: ${win_pass}"
+        echo "    RDP:      mstsc /v:${ip}"
+        echo ""
+    fi
 }
 
 # Open TCP 80/443/8080/8443 and UDP 8443/9998/9999 on the NSG for the endpoint VM.
