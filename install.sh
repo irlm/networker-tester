@@ -1600,7 +1600,7 @@ _aws_do_login_sso() {
         echo "  You will need your SSO start URL (e.g. https://my-org.awsapps.com/start)"
         echo "  and your SSO region (e.g. us-east-1)."
         echo ""
-        aws configure sso
+        aws configure sso </dev/tty
     else
         # Pick an existing SSO profile or create a new one
         local profile_count
@@ -1623,7 +1623,7 @@ _aws_do_login_sso() {
             choice="${choice:-1}"
 
             if [[ "$choice" -eq "$i" ]]; then
-                aws configure sso
+                aws configure sso </dev/tty
                 _aws_check_identity
                 return
             else
@@ -1636,7 +1636,7 @@ _aws_do_login_sso() {
         fi
 
         print_info "Logging in via AWS SSO (device code)…"
-        aws sso login --profile "$sso_profile"
+        aws sso login --profile "$sso_profile" </dev/tty
 
         # Export the profile so subsequent aws commands use it
         export AWS_PROFILE="$sso_profile"
@@ -1650,7 +1650,7 @@ _aws_do_login_keys() {
     echo ""
     print_info "Running aws configure (access key + secret)…"
     echo ""
-    aws configure
+    aws configure </dev/tty
 
     _aws_check_identity
 }
@@ -1678,18 +1678,44 @@ ensure_gcp_cli() {
             echo "    macOS:  brew install --cask google-cloud-sdk"
         fi
         echo ""
+        local gcp_install_cmd=""
         if [[ "$PKG_MGR" == "brew" ]]; then
-            if ask_yn "Install Google Cloud SDK now (via brew)?" "y"; then
+            gcp_install_cmd="brew install --cask google-cloud-sdk"
+        elif [[ "$SYS_OS" == "Linux" ]]; then
+            gcp_install_cmd="official Google Cloud SDK installer (curl + tar)"
+        fi
+
+        if [[ -n "$gcp_install_cmd" ]]; then
+            echo "  Install command:  $gcp_install_cmd"
+            echo ""
+            if ask_yn "Install Google Cloud SDK now?" "y"; then
                 echo ""
-                brew install --cask google-cloud-sdk
-                # Source gcloud shell completions / PATH additions
-                if [[ -f "$(brew --prefix)/share/google-cloud-sdk/path.bash.inc" ]]; then
-                    # shellcheck disable=SC1091
-                    source "$(brew --prefix)/share/google-cloud-sdk/path.bash.inc"
+                if [[ "$PKG_MGR" == "brew" ]]; then
+                    brew install --cask google-cloud-sdk
+                    if [[ -f "$(brew --prefix)/share/google-cloud-sdk/path.bash.inc" ]]; then
+                        # shellcheck disable=SC1091
+                        source "$(brew --prefix)/share/google-cloud-sdk/path.bash.inc"
+                    fi
+                else
+                    # Official Google Cloud SDK for Linux (installs to ~/google-cloud-sdk)
+                    local gcp_arch="x86_64"
+                    [[ "$(uname -m)" == "aarch64" ]] && gcp_arch="arm"
+                    local gcp_url="https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-linux-${gcp_arch}.tar.gz"
+                    print_info "Downloading Google Cloud SDK…"
+                    curl -fsSL "$gcp_url" -o /tmp/google-cloud-sdk.tar.gz
+                    tar xzf /tmp/google-cloud-sdk.tar.gz -C "${HOME}"
+                    "${HOME}/google-cloud-sdk/install.sh" --quiet --path-update true \
+                        --usage-reporting false --command-completion false
+                    rm -f /tmp/google-cloud-sdk.tar.gz
+                    export PATH="${HOME}/google-cloud-sdk/bin:${PATH}"
+                    if [[ -f "${HOME}/google-cloud-sdk/path.bash.inc" ]]; then
+                        # shellcheck disable=SC1091
+                        source "${HOME}/google-cloud-sdk/path.bash.inc"
+                    fi
                 fi
                 if command -v gcloud &>/dev/null; then
                     GCP_CLI_AVAILABLE=1
-                    print_ok "Google Cloud SDK installed"
+                    print_ok "Google Cloud SDK installed  ($(gcloud --version 2>&1 | head -1))"
                 else
                     print_err "Google Cloud SDK installation failed — install manually."
                     echo "  https://cloud.google.com/sdk/docs/install"
@@ -1701,6 +1727,7 @@ ensure_gcp_cli() {
                 exit 1
             fi
         else
+            echo "  Install from: https://cloud.google.com/sdk/docs/install"
             echo "  Install manually, then re-run: bash install.sh --gcp"
             exit 1
         fi
@@ -1713,7 +1740,7 @@ ensure_gcp_cli() {
         if ask_yn "Log in to GCP now (device code — opens browser)?" "y"; then
             echo ""
             print_info "Logging in to GCP (device code)…"
-            gcloud auth login --no-launch-browser
+            gcloud auth login --no-launch-browser </dev/tty
             local gcp_account
             gcp_account="$(gcloud config get-value account 2>/dev/null || echo "")"
             if [[ -n "$gcp_account" && "$gcp_account" != "(unset)" ]]; then
@@ -2828,7 +2855,7 @@ step_check_azure_prereqs() {
 
     if [[ $AZURE_LOGGED_IN -eq 0 ]]; then
         print_info "Not logged in to Azure — running az login…"
-        az login
+        az login --use-device-code </dev/tty
         if ! az account show &>/dev/null 2>&1; then
             print_err "Azure login failed."
             exit 1
@@ -2868,7 +2895,13 @@ step_azure_create_vm() {
     fi
 
     local auth_options="--generate-ssh-keys"
-    if [[ "$os_type" == "linux" ]]; then
+    if [[ "$os_type" == "windows" ]]; then
+        # Windows VMs require --admin-password (SSH keys not supported).
+        # Generate a random password meeting Azure complexity requirements.
+        local win_pass
+        win_pass="Nwk$(openssl rand -base64 12 | tr -dc 'A-Za-z0-9' | head -c 12)!1"
+        auth_options="--admin-password ${win_pass}"
+    elif [[ "$os_type" == "linux" ]]; then
         local key_file
         for key_file in "${HOME}/.ssh/id_ed25519.pub" "${HOME}/.ssh/id_rsa.pub"; do
             if [[ -f "$key_file" ]]; then
@@ -2902,6 +2935,18 @@ step_azure_create_vm() {
 
     printf -v "$ip_var" "%s" "$ip"
     print_ok "VM created ($os_label) — Public IP: ${BOLD}${ip}${RESET}"
+
+    if [[ "$os_type" == "windows" && -n "${win_pass:-}" ]]; then
+        # Store credentials for later display in the summary
+        local pass_var="AZURE_${label^^}_WIN_PASS"
+        printf -v "$pass_var" "%s" "$win_pass"
+        echo ""
+        print_info "Windows credentials:"
+        echo "    User:     azureuser"
+        echo "    Password: ${win_pass}"
+        echo "    RDP:      mstsc /v:${ip}"
+        echo ""
+    fi
 }
 
 # Open TCP 80/443/8080/8443 and UDP 8443/9998/9999 on the NSG for the endpoint VM.
@@ -2970,11 +3015,13 @@ step_azure_set_auto_shutdown() {
     [[ "$AZURE_AUTO_SHUTDOWN" != "yes" ]] && return 0
 
     next_step "Set auto-shutdown policy for $label"
-    if az vm auto-shutdown --resource-group "$rg" --name "$vm" \
-            --time 0400 --output none 2>/dev/null; then
+    local shutdown_err
+    if shutdown_err="$(az vm auto-shutdown --resource-group "$rg" --name "$vm" \
+            --location "$AZURE_REGION" --time 0400 --output none 2>&1)"; then
         print_ok "Auto-shutdown set: 04:00 UTC (11 PM EST) daily — VM stops automatically"
     else
-        print_warn "Could not configure Azure auto-shutdown (non-critical — delete VM manually when done)"
+        print_warn "Could not configure Azure auto-shutdown: ${shutdown_err}"
+        print_warn "Set it manually:  az vm auto-shutdown -g $rg -n $vm --time 0400"
     fi
 }
 
@@ -4024,7 +4071,8 @@ _offer_also_endpoint() {
     echo "  ${BOLD}3)${RESET} Skip — I already have an endpoint elsewhere"
     echo ""
     local ans
-    read -rp "$(printf "%b" "${CYAN}?${RESET} What would you like to do? [1/2/3] ")" ans
+    printf "%b" "${CYAN}?${RESET} What would you like to do? [1/2/3] "
+    read -r ans </dev/tty || true
     case "${ans:-3}" in
         1)
             echo ""
