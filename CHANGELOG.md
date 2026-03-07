@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.95] – 2026-03-07 — Connection reuse for pageload probes
+
+### Added
+- `--connection-reuse` flag: warmup + warm probes for pageload2 (HTTP/2) and pageload3 (HTTP/3 QUIC)
+- Warmup probe establishes connection (cold, visible in report); subsequent runs reuse it (warm)
+- Matches Chrome browser3's behavior (Alt-Svc warmup + QUIC 0-RTT session reuse)
+- `connection_reused` field in `PageLoadResult` JSON output
+- HTML report: Protocol Comparison table splits into cold/warm rows when reuse is detected
+- HTML report: Observations section shows cold→warm timing, % improvement, and TLS savings
+
+---
+
 ## [0.12.94] – 2026-03-07 — Docs: correct CLI flag descriptions
 
 ### Fixed
