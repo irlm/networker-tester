@@ -43,7 +43,7 @@ $ErrorActionPreference = "Stop"
 $RepoHttps     = "https://github.com/irlm/networker-tester"
 $RepoGh        = "irlm/networker-tester"
 $CargoBin      = Join-Path $env:USERPROFILE ".cargo\bin"
-$InstallerVersion = "v0.12.93"  # fallback when gh is unavailable
+$InstallerVersion = "v0.12.96"  # fallback when gh is unavailable
 
 # ── Print helpers ──────────────────────────────────────────────────────────────
 function Write-Ok   ($msg) { Write-Host "  v " -NoNewline -ForegroundColor Green;   Write-Host $msg }
@@ -715,6 +715,24 @@ function Invoke-EnsureAzureCli {
         $ErrorActionPreference = $prevErr
     }
 
+    # Check service principal env vars
+    if (-not $script:AzureLoggedIn -and $env:AZURE_CLIENT_ID -and $env:AZURE_CLIENT_SECRET -and $env:AZURE_TENANT_ID) {
+        $prevErr = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $null = & az login --service-principal `
+            -u $env:AZURE_CLIENT_ID `
+            -p $env:AZURE_CLIENT_SECRET `
+            --tenant $env:AZURE_TENANT_ID `
+            --output none 2>&1
+        $script:AzureLoggedIn = ($LASTEXITCODE -eq 0)
+        $ErrorActionPreference = $prevErr
+        if ($script:AzureLoggedIn) {
+            $sub = (& az account show --query name --output tsv 2>$null) -join ""
+            if (-not $sub) { $sub = "unknown" }
+            Write-Ok "Azure credentials found  (subscription: $sub)"
+        }
+    }
+
     if (-not $script:AzureLoggedIn) {
         Write-Host ""
         Write-Warn "Not logged in to Azure."
@@ -864,6 +882,19 @@ function Invoke-EnsureGcpCli {
         if ($acct -and $acct -ne "(unset)") {
             $script:GcpLoggedIn = $true
             Write-Ok "Logged in: $acct"
+        }
+    }
+
+    # Check GOOGLE_APPLICATION_CREDENTIALS (service account key file)
+    if (-not $script:GcpLoggedIn -and $env:GOOGLE_APPLICATION_CREDENTIALS -and (Test-Path $env:GOOGLE_APPLICATION_CREDENTIALS)) {
+        $prevErr = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        & gcloud auth activate-service-account --key-file $env:GOOGLE_APPLICATION_CREDENTIALS --quiet 2>$null
+        $acct = (& gcloud config get-value account 2>$null) -join ""
+        $ErrorActionPreference = $prevErr
+        if ($acct -and $acct -ne "(unset)") {
+            $script:GcpLoggedIn = $true
+            Write-Ok "GCP credentials found  ($acct)"
         }
     }
 
@@ -1885,16 +1916,31 @@ function Invoke-GcpCheckPrereqs {
         $ErrorActionPreference = $prevErr
         if ($acct -and $acct -ne "(unset)") {
             $script:GcpLoggedIn = $true
+        }
+    }
+
+    # Check GOOGLE_APPLICATION_CREDENTIALS (service account key file)
+    if (-not $script:GcpLoggedIn -and $env:GOOGLE_APPLICATION_CREDENTIALS -and (Test-Path $env:GOOGLE_APPLICATION_CREDENTIALS)) {
+        $prevErr = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        & gcloud auth activate-service-account --key-file $env:GOOGLE_APPLICATION_CREDENTIALS --quiet 2>$null
+        $acct = (& gcloud config get-value account 2>$null) -join ""
+        $ErrorActionPreference = $prevErr
+        if ($acct -and $acct -ne "(unset)") {
+            $script:GcpLoggedIn = $true
+            Write-Ok "GCP credentials found  ($acct)"
+        }
+    }
+
+    if (-not $script:GcpLoggedIn) {
+        Write-Warn "Not logged in to GCP."
+        & gcloud auth login --no-launch-browser
+        $acct = (& gcloud config get-value account 2>$null) -join ""
+        if ($acct -and $acct -ne "(unset)") {
+            $script:GcpLoggedIn = $true
         } else {
-            Write-Warn "Not logged in to GCP."
-            & gcloud auth login --no-launch-browser
-            $acct = (& gcloud config get-value account 2>$null) -join ""
-            if ($acct -and $acct -ne "(unset)") {
-                $script:GcpLoggedIn = $true
-            } else {
-                Write-Err "GCP login failed."
-                exit 1
-            }
+            Write-Err "GCP login failed."
+            exit 1
         }
     }
 

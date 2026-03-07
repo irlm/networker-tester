@@ -21,6 +21,7 @@ in the kernel or scattered across multiple tools.
 ## Contents
 
 - [Installation](#installation)
+- [Cloud Deployment Authentication](#cloud-deployment-authentication)
 - [Quick Start](#quick-start)
 - [Probe Modes](#probe-modes)
 - [CLI Reference](#cli-reference)
@@ -103,6 +104,100 @@ cd networker-tester
 cargo build --release
 # Binaries: target/release/networker-tester  target/release/networker-endpoint
 ```
+
+---
+
+## Cloud Deployment Authentication
+
+The installer can deploy `networker-tester` and `networker-endpoint` to cloud VMs
+on **Azure**, **AWS**, and **GCP**. Before prompting for interactive login, the installer
+checks for environment-based credentials — useful for CI/CD pipelines, automation, and
+headless environments.
+
+### Authentication flow (all providers)
+
+1. Check if the CLI is already authenticated (cached session)
+2. Check for environment variable credentials (see below)
+3. If found, display the identity and skip the interactive login prompt
+4. If not found, offer interactive login (device code / browser)
+
+### AWS
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `AWS_ACCESS_KEY_ID` | Yes | IAM access key ID |
+| `AWS_SECRET_ACCESS_KEY` | Yes | IAM secret access key |
+| `AWS_SESSION_TOKEN` | No | Temporary session token (for STS/assumed roles) |
+
+When both `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` are set, the installer
+validates them with `aws sts get-caller-identity` and shows the ARN on success.
+
+**Setup guide:** [AWS CLI environment variables](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html)
+
+```bash
+# Example: export IAM credentials
+export AWS_ACCESS_KEY_ID="AKIAIOSFODNN7EXAMPLE"
+export AWS_SECRET_ACCESS_KEY="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+```
+
+```powershell
+# PowerShell
+$env:AWS_ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"
+$env:AWS_SECRET_ACCESS_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+```
+
+### Azure
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `AZURE_CLIENT_ID` | Yes | Service principal (app) client ID |
+| `AZURE_CLIENT_SECRET` | Yes | Service principal client secret |
+| `AZURE_TENANT_ID` | Yes | Azure AD tenant ID |
+
+When all three variables are set, the installer authenticates with
+`az login --service-principal` and shows the subscription name on success.
+
+**Setup guide:** [Azure service principal authentication](https://learn.microsoft.com/en-us/cli/azure/authenticate-azure-cli-service-principal)
+
+```bash
+# Example: export service principal credentials
+export AZURE_CLIENT_ID="00000000-0000-0000-0000-000000000000"
+export AZURE_CLIENT_SECRET="your-client-secret"
+export AZURE_TENANT_ID="00000000-0000-0000-0000-000000000000"
+```
+
+```powershell
+# PowerShell
+$env:AZURE_CLIENT_ID = "00000000-0000-0000-0000-000000000000"
+$env:AZURE_CLIENT_SECRET = "your-client-secret"
+$env:AZURE_TENANT_ID = "00000000-0000-0000-0000-000000000000"
+```
+
+### GCP
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `GOOGLE_APPLICATION_CREDENTIALS` | Yes | Absolute path to a service account JSON key file |
+
+When `GOOGLE_APPLICATION_CREDENTIALS` points to an existing file, the installer
+activates it with `gcloud auth activate-service-account --key-file` and shows the
+service account email on success.
+
+**Setup guide:** [GCP service account keys](https://cloud.google.com/iam/docs/keys-create-delete)
+
+```bash
+# Example: export service account key path
+export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account-key.json"
+```
+
+```powershell
+# PowerShell
+$env:GOOGLE_APPLICATION_CREDENTIALS = "C:\path\to\service-account-key.json"
+```
+
+> **Security note:** Prefer short-lived credentials (AWS STS, Azure federated tokens,
+> GCP Workload Identity) over long-lived secrets in production. The environment variable
+> approach is best suited for local development, CI runners, and controlled automation.
 
 ---
 

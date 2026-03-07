@@ -309,7 +309,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.12.93"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.12.96"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -1428,7 +1428,18 @@ ensure_azure_cli() {
         fi
     fi
 
-    if [[ $AZURE_LOGGED_IN -eq 0 ]]; then
+    # Re-check: service principal env vars may have been set after discover_system
+    if [[ $AZURE_LOGGED_IN -eq 0 && -n "${AZURE_CLIENT_ID:-}" && -n "${AZURE_CLIENT_SECRET:-}" && -n "${AZURE_TENANT_ID:-}" ]]; then
+        if az account show &>/dev/null 2>&1 </dev/null; then
+            AZURE_LOGGED_IN=1
+        fi
+    fi
+
+    if [[ $AZURE_LOGGED_IN -eq 1 ]]; then
+        local az_sub
+        az_sub="$(az account show --query name -o tsv 2>/dev/null </dev/null || echo 'unknown')"
+        print_ok "Azure credentials found  (subscription: $az_sub)"
+    else
         echo ""
         print_warn "Not logged in to Azure."
         echo ""
@@ -1757,11 +1768,21 @@ ensure_gcp_cli() {
         gcp_account="$(gcloud config get-value account 2>/dev/null < /dev/null || echo "")"
         if [[ -n "$gcp_account" && "$gcp_account" != "(unset)" ]]; then
             GCP_LOGGED_IN=1
-            print_ok "Logged in: $gcp_account"
         fi
     fi
 
-    if [[ $GCP_LOGGED_IN -eq 0 ]]; then
+    # Check GOOGLE_APPLICATION_CREDENTIALS (service account key file)
+    if [[ $GCP_LOGGED_IN -eq 0 && -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" && -f "${GOOGLE_APPLICATION_CREDENTIALS}" ]]; then
+        if gcloud auth list --filter="status:ACTIVE" --format="value(account)" 2>/dev/null </dev/null | grep -q .; then
+            GCP_LOGGED_IN=1
+        fi
+    fi
+
+    if [[ $GCP_LOGGED_IN -eq 1 ]]; then
+        local gcp_account
+        gcp_account="$(gcloud config get-value account 2>/dev/null < /dev/null || echo 'unknown')"
+        print_ok "GCP credentials found  ($gcp_account)"
+    else
         echo ""
         print_warn "Not logged in to GCP."
         echo ""
@@ -2882,7 +2903,19 @@ step_check_azure_prereqs() {
     fi
     print_ok "az CLI found"
 
-    if [[ $AZURE_LOGGED_IN -eq 0 ]]; then
+    # Re-check: service principal env vars may have been set after discover_system
+    if [[ $AZURE_LOGGED_IN -eq 0 && -n "${AZURE_CLIENT_ID:-}" && -n "${AZURE_CLIENT_SECRET:-}" && -n "${AZURE_TENANT_ID:-}" ]]; then
+        if az account show &>/dev/null 2>&1 </dev/null; then
+            AZURE_LOGGED_IN=1
+        fi
+    fi
+
+    if [[ $AZURE_LOGGED_IN -eq 1 ]]; then
+        local sub_name sub_id
+        sub_name="$(az account show --query name -o tsv 2>/dev/null || echo "unknown")"
+        sub_id="$(az account show --query id -o tsv 2>/dev/null || echo "")"
+        print_ok "Azure credentials found  (subscription: ${sub_name}, ${sub_id})"
+    else
         print_info "Not logged in to Azure — running az login…"
         az login --use-device-code </dev/tty
         if ! az account show &>/dev/null 2>&1; then
@@ -2890,12 +2923,11 @@ step_check_azure_prereqs() {
             exit 1
         fi
         AZURE_LOGGED_IN=1
+        local sub_name sub_id
+        sub_name="$(az account show --query name -o tsv 2>/dev/null || echo "unknown")"
+        sub_id="$(az account show --query id -o tsv 2>/dev/null || echo "")"
+        print_ok "Subscription: ${sub_name}  (${sub_id})"
     fi
-
-    local sub_name sub_id
-    sub_name="$(az account show --query name -o tsv 2>/dev/null || echo "unknown")"
-    sub_id="$(az account show --query id -o tsv 2>/dev/null || echo "")"
-    print_ok "Subscription: ${sub_name}  (${sub_id})"
 }
 
 # Create an Azure resource group and Ubuntu 22.04 VM.
@@ -3676,19 +3708,33 @@ step_check_gcp_prereqs() {
         gcp_account="$(gcloud config get-value account 2>/dev/null || echo "")"
         if [[ -n "$gcp_account" && "$gcp_account" != "(unset)" ]]; then
             GCP_LOGGED_IN=1
+        fi
+    fi
+
+    # Check GOOGLE_APPLICATION_CREDENTIALS (service account key file)
+    if [[ $GCP_LOGGED_IN -eq 0 && -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" && -f "${GOOGLE_APPLICATION_CREDENTIALS}" ]]; then
+        if gcloud auth list --filter="status:ACTIVE" --format="value(account)" 2>/dev/null </dev/null | grep -q .; then
+            GCP_LOGGED_IN=1
+        fi
+    fi
+
+    if [[ $GCP_LOGGED_IN -eq 1 ]]; then
+        local gcp_account
+        gcp_account="$(gcloud config get-value account 2>/dev/null </dev/null || echo 'unknown')"
+        print_ok "GCP credentials found  ($gcp_account)"
+    else
+        echo ""
+        print_warn "Not logged in to GCP."
+        print_info "Logging in via device code…"
+        gcloud auth login --no-launch-browser </dev/tty
+        local gcp_account
+        gcp_account="$(gcloud config get-value account 2>/dev/null || echo "")"
+        if [[ -n "$gcp_account" && "$gcp_account" != "(unset)" ]]; then
+            GCP_LOGGED_IN=1
         else
-            echo ""
-            print_warn "Not logged in to GCP."
-            print_info "Logging in via device code…"
-            gcloud auth login --no-launch-browser </dev/tty
-            gcp_account="$(gcloud config get-value account 2>/dev/null || echo "")"
-            if [[ -n "$gcp_account" && "$gcp_account" != "(unset)" ]]; then
-                GCP_LOGGED_IN=1
-            else
-                print_err "GCP login failed."
-                echo "  Run:  gcloud auth login"
-                exit 1
-            fi
+            print_err "GCP login failed."
+            echo "  Run:  gcloud auth login"
+            exit 1
         fi
     fi
 
