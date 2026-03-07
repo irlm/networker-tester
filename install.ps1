@@ -2,7 +2,11 @@
 # ──────────────────────────────────────────────────────────────────────────────
 # Networker Tester – Windows interactive installer (rustup-style)
 #
-# Two install modes (auto-detected, or choose in customize flow):
+# Installs networker-tester and/or networker-endpoint either:
+#   locally  – on this machine (release binary download or source compile)
+#   remotely – provisioned on a cloud VM (Azure, AWS, and GCP supported)
+#
+# Two local install modes (auto-detected, or choose in customize flow):
 #   release  – download pre-built binary from the latest GitHub release via
 #              gh CLI (fast, ~10 s); requires: gh installed + gh auth login
 #   source   – compile from source via cargo install (slower, ~5-10 min);
@@ -13,13 +17,24 @@
 #
 # Usage (downloaded):
 #   .\install.ps1 [-Component tester|endpoint|both] [-Yes] [-FromSource]
-#                 [-SkipRust] [-Help]
+#                 [-SkipRust] [-Azure] [-TesterAzure] [-Aws] [-TesterAws]
+#                 [-Gcp] [-TesterGcp] [-Help]
 # ──────────────────────────────────────────────────────────────────────────────
 param(
-    [string]$Component  = "both",
+    [string]$Component  = "",
     [switch]$Yes,
     [switch]$FromSource,
     [switch]$SkipRust,
+    [switch]$Azure,
+    [switch]$TesterAzure,
+    [switch]$Aws,
+    [switch]$TesterAws,
+    [switch]$Gcp,
+    [switch]$TesterGcp,
+    [string]$Region     = "",
+    [string]$AwsRegion  = "",
+    [string]$GcpProject = "",
+    [string]$GcpZone    = "",
     [switch]$Help
 )
 
@@ -28,6 +43,7 @@ $ErrorActionPreference = "Stop"
 $RepoHttps     = "https://github.com/irlm/networker-tester"
 $RepoGh        = "irlm/networker-tester"
 $CargoBin      = Join-Path $env:USERPROFILE ".cargo\bin"
+$InstallerVersion = "v0.12.93"  # fallback when gh is unavailable
 
 # ── Print helpers ──────────────────────────────────────────────────────────────
 function Write-Ok   ($msg) { Write-Host "  v " -NoNewline -ForegroundColor Green;   Write-Host $msg }
@@ -71,6 +87,18 @@ function Show-Help {
     Write-Host "  source    Compile from source via cargo install -- slower (~5-10 min)"
     Write-Host "            Repo is public -- no SSH key required"
     Write-Host ""
+    Write-Host "Cloud deployment (deploy to remote VM):"
+    Write-Host "  -Azure           Deploy endpoint to Azure VM"
+    Write-Host "  -TesterAzure     Deploy tester to Azure VM"
+    Write-Host "  -Aws             Deploy endpoint to AWS EC2"
+    Write-Host "  -TesterAws       Deploy tester to AWS EC2"
+    Write-Host "  -Gcp             Deploy endpoint to GCP GCE"
+    Write-Host "  -TesterGcp       Deploy tester to GCP GCE"
+    Write-Host "  -Region REGION   Azure region (default: eastus)"
+    Write-Host "  -AwsRegion REG   AWS region (default: us-east-1)"
+    Write-Host "  -GcpProject ID   GCP project ID"
+    Write-Host "  -GcpZone ZONE    GCP zone (default: us-central1-a)"
+    Write-Host ""
     Write-Host "  -Yes           Non-interactive: accept all defaults"
     Write-Host "  -FromSource    Force source-compile mode (skip release detection)"
     Write-Host "  -SkipRust      Skip Rust installation (source mode)"
@@ -79,14 +107,15 @@ function Show-Help {
     Write-Host "Examples:"
     Write-Host "  .\install.ps1 -Component tester"
     Write-Host "  .\install.ps1 -Yes -Component endpoint"
-    Write-Host "  .\install.ps1 -FromSource -SkipRust -Component both"
+    Write-Host "  .\install.ps1 -Azure -Component endpoint"
+    Write-Host "  .\install.ps1 -TesterAws -Aws"
 }
 
-# ── Script-level state ($script: prefix required to mutate from inside functions)
+# ── Script-level state ────────────────────────────────────────────────────────
 $script:InstallMethod     = "source"   # "release" | "source"
 $script:ReleaseAvailable  = $false
 $script:ReleaseTarget     = ""
-$script:NetworkerVersion  = ""        # populated in Invoke-DiscoverSystem when gh is available
+$script:NetworkerVersion  = ""
 $script:DoRustInstall     = $false
 $script:DoInstallTester   = $true
 $script:DoInstallEndpoint = $true
@@ -99,10 +128,71 @@ $script:MsvcAvailable     = $true
 $script:DoMsvcInstall     = $false
 $script:ChromeAvailable   = $false
 $script:ChromePath        = ""
-$script:DoChromiumInstall = $false
+$script:DoChromiumInstall  = $false
 $script:SysOs             = ""
 $script:SysArch           = ""
 $script:StepNum           = 0
+
+# ── Remote deployment state ───────────────────────────────────────────────────
+$script:TesterLocation    = "local"    # "local" | "azure" | "aws" | "gcp"
+$script:EndpointLocation  = "local"    # "local" | "azure" | "aws" | "gcp"
+$script:DoRemoteTester    = $false
+$script:DoRemoteEndpoint  = $false
+
+# ── Azure state ──────────────────────────────────────────────────────────────
+$script:AzureCliAvailable = $false
+$script:AzureLoggedIn     = $false
+$script:AzureRegion       = "eastus"
+$script:AzureRegionAsked  = $false
+$script:AzureTesterRg     = "networker-rg-tester"
+$script:AzureTesterVm     = "networker-tester-vm"
+$script:AzureTesterSize   = "Standard_B2s"
+$script:AzureTesterOs     = "linux"
+$script:AzureTesterIp     = ""
+$script:AzureEndpointRg   = "networker-rg-endpoint"
+$script:AzureEndpointVm   = "networker-endpoint-vm"
+$script:AzureEndpointSize = "Standard_B2s"
+$script:AzureEndpointOs   = "linux"
+$script:AzureEndpointIp   = ""
+$script:AzureAutoShutdown = "yes"
+$script:AzureShutdownAsked = $false
+
+# ── AWS state ────────────────────────────────────────────────────────────────
+$script:AwsCliAvailable   = $false
+$script:AwsLoggedIn       = $false
+$script:AwsRegion         = "us-east-1"
+$script:AwsRegionAsked    = $false
+$script:AwsTesterName     = "networker-tester"
+$script:AwsTesterType     = "t3.small"
+$script:AwsTesterOs       = "linux"
+$script:AwsTesterInstanceId = ""
+$script:AwsTesterIp       = ""
+$script:AwsEndpointName   = "networker-endpoint"
+$script:AwsEndpointType   = "t3.small"
+$script:AwsEndpointOs     = "linux"
+$script:AwsEndpointInstanceId = ""
+$script:AwsEndpointIp     = ""
+$script:AwsAutoShutdown   = "yes"
+$script:AwsShutdownAsked  = $false
+$script:AwsAmiId          = ""
+
+# ── GCP state ────────────────────────────────────────────────────────────────
+$script:GcpCliAvailable   = $false
+$script:GcpLoggedIn       = $false
+$script:GcpProject        = ""
+$script:GcpRegion         = "us-central1"
+$script:GcpZone           = "us-central1-a"
+$script:GcpRegionAsked    = $false
+$script:GcpTesterName     = "networker-tester"
+$script:GcpTesterMachineType = "e2-small"
+$script:GcpTesterIp       = ""
+$script:GcpEndpointName   = "networker-endpoint"
+$script:GcpEndpointMachineType = "e2-small"
+$script:GcpEndpointIp     = ""
+$script:GcpAutoShutdown   = "yes"
+$script:GcpShutdownAsked  = $false
+
+$script:ConfigFilePath    = ""
 
 # ── Target triple detection ────────────────────────────────────────────────────
 function Get-ReleaseTarget {
@@ -129,6 +219,36 @@ function Get-ChromePath {
     return $null
 }
 
+# ── Yes/No helper ─────────────────────────────────────────────────────────────
+function Invoke-AskYN ($prompt, $default) {
+    if ($Yes) {
+        return ($default -eq "y")
+    }
+    while ($true) {
+        if ($default -eq "y") {
+            $ans = Read-Host "  $prompt [Y/n]"
+        } else {
+            $ans = Read-Host "  $prompt [y/N]"
+        }
+        if ([string]::IsNullOrWhiteSpace($ans)) { $ans = $default }
+        switch ($ans.Trim().ToLower()) {
+            "y"   { return $true  }
+            "yes" { return $true  }
+            "n"   { return $false }
+            "no"  { return $false }
+            default { Write-Warn "Please enter y or n." }
+        }
+    }
+}
+
+# ── Read-Host with default ────────────────────────────────────────────────────
+function Read-HostDefault ($prompt, $default) {
+    if ($Yes) { return $default }
+    $ans = Read-Host $prompt
+    if ([string]::IsNullOrWhiteSpace($ans)) { return $default }
+    return $ans.Trim()
+}
+
 # ── System discovery ───────────────────────────────────────────────────────────
 function Invoke-DiscoverSystem {
     $script:SysOs   = [System.Environment]::OSVersion.VersionString
@@ -145,12 +265,11 @@ function Invoke-DiscoverSystem {
 
     if (-not $script:RustExists -and -not $SkipRust) { $script:DoRustInstall = $true }
 
-    # Git + winget detection (winget checked regardless of git status)
+    # Git + winget detection
     $script:GitAvailable    = $null -ne (Get-Command git    -ErrorAction SilentlyContinue)
     $script:WingetAvailable = $null -ne (Get-Command winget -ErrorAction SilentlyContinue)
 
-    # MSVC C++ Build Tools detection (required by Rust's default msvc target)
-    # vswhere.exe is the authoritative way to query Visual Studio installations.
+    # MSVC C++ Build Tools detection
     $vswhereExe = Join-Path ([System.Environment]::GetFolderPath('ProgramFilesX86')) `
                              "Microsoft Visual Studio\Installer\vswhere.exe"
     if (Test-Path $vswhereExe) {
@@ -159,7 +278,6 @@ function Invoke-DiscoverSystem {
             -property installationPath 2>&1
         $script:MsvcAvailable = -not [string]::IsNullOrWhiteSpace($vsPath)
     } else {
-        # vswhere absent → VS not installed; check for link.exe on PATH as fallback
         $script:MsvcAvailable = $null -ne (Get-Command link -ErrorAction SilentlyContinue)
     }
 
@@ -182,14 +300,18 @@ function Invoke-DiscoverSystem {
                 $script:ReleaseTarget    = $target
                 $script:ReleaseAvailable = $true
                 $script:InstallMethod    = "release"
-                # Resolve the exact version that will be installed.
                 $script:NetworkerVersion = (& gh release list --repo $RepoGh `
                     --limit 1 --json tagName --jq ".[0].tagName" 2>$null) -join ""
             }
         }
     }
 
-    # Auto-offer git install only in source mode (release mode uses gh, not git)
+    # Fallback version if gh not available
+    if (-not $script:NetworkerVersion) {
+        $script:NetworkerVersion = $InstallerVersion
+    }
+
+    # Auto-offer git install only in source mode
     if ($script:InstallMethod -eq "source" -and -not $script:GitAvailable -and $script:WingetAvailable) {
         $script:DoGitInstall = $true
     }
@@ -199,10 +321,51 @@ function Invoke-DiscoverSystem {
         $script:DoMsvcInstall = $true
     }
 
-    # Chrome detection (affects --features browser in source mode)
+    # Chrome detection
     $script:ChromePath      = Get-ChromePath
     $script:ChromeAvailable = -not [string]::IsNullOrWhiteSpace($script:ChromePath)
-    # DoChromiumInstall stays $false here — user is asked in Invoke-MainPrompt / Invoke-CustomizeFlow
+
+    # ── Cloud CLI detection ──────────────────────────────────────────────────
+    $script:AzureCliAvailable = $null -ne (Get-Command az -ErrorAction SilentlyContinue)
+    if ($script:AzureCliAvailable) {
+        $prevErr = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $null = & az account show --output none 2>&1
+        $script:AzureLoggedIn = ($LASTEXITCODE -eq 0)
+        $ErrorActionPreference = $prevErr
+    }
+
+    $script:AwsCliAvailable = $null -ne (Get-Command aws -ErrorAction SilentlyContinue)
+    if ($script:AwsCliAvailable) {
+        $prevErr = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $null = & aws sts get-caller-identity 2>&1
+        $script:AwsLoggedIn = ($LASTEXITCODE -eq 0)
+        $ErrorActionPreference = $prevErr
+    }
+
+    $script:GcpCliAvailable = $null -ne (Get-Command gcloud -ErrorAction SilentlyContinue)
+    if ($script:GcpCliAvailable) {
+        $prevErr = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $acct = (& gcloud config get-value account 2>$null) -join ""
+        if ($acct -and $acct -ne "(unset)") {
+            $script:GcpLoggedIn = $true
+        }
+        $ErrorActionPreference = $prevErr
+    }
+
+    # Handle CLI flags for remote deployment
+    if ($Azure)       { $script:EndpointLocation = "azure"; $script:DoRemoteEndpoint = $true }
+    if ($TesterAzure) { $script:TesterLocation   = "azure"; $script:DoRemoteTester   = $true }
+    if ($Aws)         { $script:EndpointLocation = "aws";   $script:DoRemoteEndpoint = $true }
+    if ($TesterAws)   { $script:TesterLocation   = "aws";   $script:DoRemoteTester   = $true }
+    if ($Gcp)         { $script:EndpointLocation = "gcp";   $script:DoRemoteEndpoint = $true }
+    if ($TesterGcp)   { $script:TesterLocation   = "gcp";   $script:DoRemoteTester   = $true }
+    if ($Region)      { $script:AzureRegion = $Region }
+    if ($AwsRegion)   { $script:AwsRegion   = $AwsRegion }
+    if ($GcpProject)  { $script:GcpProject  = $GcpProject }
+    if ($GcpZone)     { $script:GcpZone     = $GcpZone; $script:GcpRegion = $GcpZone -replace '-[a-z]$','' }
 }
 
 # ── Display helpers ────────────────────────────────────────────────────────────
@@ -233,6 +396,18 @@ function Show-SystemInfo {
     if ($script:ReleaseAvailable) {
         Write-Host ("    {0,-22} {1}" -f "gh CLI:", "authenticated v")
     }
+    if ($script:AzureCliAvailable) {
+        $azLabel = if ($script:AzureLoggedIn) { "authenticated v" } else { "installed  (run: az login)" }
+        Write-Host ("    {0,-22} {1}" -f "Azure CLI:", $azLabel)
+    }
+    if ($script:AwsCliAvailable) {
+        $awsLabel = if ($script:AwsLoggedIn) { "authenticated v" } else { "installed  (run: aws configure)" }
+        Write-Host ("    {0,-22} {1}" -f "AWS CLI:", $awsLabel)
+    }
+    if ($script:GcpCliAvailable) {
+        $gcpLabel = if ($script:GcpLoggedIn) { "authenticated v" } else { "installed  (run: gcloud auth login)" }
+        Write-Host ("    {0,-22} {1}" -f "GCP CLI:", $gcpLabel)
+    }
 }
 
 function Show-Plan {
@@ -240,78 +415,146 @@ function Show-Plan {
     Write-Host ""
     $step = 1
 
-    if ($script:InstallMethod -eq "release") {
-        Write-Host "    Method:  Download binary from GitHub release  (fast)" -ForegroundColor White
-        Write-Host ("    Target:  " + $script:ReleaseTarget) -ForegroundColor DarkGray
-        Write-Host ""
-        $verLabel = if ($script:NetworkerVersion) { $script:NetworkerVersion } else { "latest" }
-        if ($script:DoInstallTester) {
-            Write-Host ("    {0}. Download networker-tester    {1}" -f $step, $verLabel)
-            $step++
-        }
-        if ($script:DoInstallEndpoint) {
-            Write-Host ("    {0}. Download networker-endpoint  {1}" -f $step, $verLabel)
-            $step++
-        }
-        Write-Host ""
-        $releaseLabel = if ($script:NetworkerVersion) { $script:NetworkerVersion } else { "latest release" }
-        Write-Dim "Repository:  $RepoGh  ($releaseLabel)"
-    } else {
-        Write-Host "    Method:  Compile from source  (~5-10 min)" -ForegroundColor White
-        Write-Host ""
+    # Show local install plan
+    $doLocalTester   = $script:DoInstallTester   -and -not $script:DoRemoteTester
+    $doLocalEndpoint = $script:DoInstallEndpoint -and -not $script:DoRemoteEndpoint
 
-        if (-not $script:GitAvailable) {
-            if ($script:DoGitInstall) {
-                Write-Host ("    {0}. Install git            Install via winget" -f $step)
+    if ($doLocalTester -or $doLocalEndpoint) {
+        if ($script:InstallMethod -eq "release") {
+            Write-Host "    Method:  Download binary from GitHub release  (fast)" -ForegroundColor White
+            Write-Host ("    Target:  " + $script:ReleaseTarget) -ForegroundColor DarkGray
+            Write-Host ""
+            $verLabel = if ($script:NetworkerVersion) { $script:NetworkerVersion } else { "latest" }
+            if ($doLocalTester) {
+                Write-Host ("    {0}. Download networker-tester    {1}" -f $step, $verLabel)
                 $step++
-            } elseif ($script:WingetAvailable) {
-                Write-Host "    -. Install git            (skip -- toggle in Customize)" -ForegroundColor DarkGray
-            } else {
-                Write-Host "    -. Install git            (not installed -- visit https://git-scm.com/)" -ForegroundColor DarkGray
             }
-        }
-
-        if (-not $script:ChromeAvailable -and $script:DoInstallTester) {
-            if ($script:DoChromiumInstall) {
-                Write-Host ("    {0}. Install Chrome         winget install Google.Chrome (browser probe)" -f $step)
+            if ($doLocalEndpoint) {
+                Write-Host ("    {0}. Download networker-endpoint  {1}" -f $step, $verLabel)
                 $step++
-            } elseif ($script:WingetAvailable) {
-                Write-Host "    -. Install Chrome         (will ask -- browser probe disabled if skipped)" -ForegroundColor DarkGray
-            } else {
-                Write-Host "    -. Install Chrome         (not installed -- https://www.google.com/chrome/)" -ForegroundColor DarkGray
             }
-        }
-
-        if ($script:DoRustInstall) {
-            Write-Host ("    {0}. Install Rust           Download rustup-init.exe from win.rustup.rs" -f $step)
-            $step++
-        } elseif (-not $script:RustExists) {
-            Write-Host "    -. Install Rust            (skipped -- -SkipRust)" -ForegroundColor DarkGray
+            Write-Host ""
+            $releaseLabel = if ($script:NetworkerVersion) { $script:NetworkerVersion } else { "latest release" }
+            Write-Dim "Repository:  $RepoGh  ($releaseLabel)"
         } else {
-            Write-Host ("    -. Install Rust            (skip -- already installed: {0})" -f $script:RustVer) -ForegroundColor DarkGray
+            Write-Host "    Method:  Compile from source  (~5-10 min)" -ForegroundColor White
+            Write-Host ""
+            if (-not $script:GitAvailable) {
+                if ($script:DoGitInstall) {
+                    Write-Host ("    {0}. Install git            Install via winget" -f $step); $step++
+                }
+            }
+            if (-not $script:ChromeAvailable -and $doLocalTester) {
+                if ($script:DoChromiumInstall) {
+                    Write-Host ("    {0}. Install Chrome         winget install Google.Chrome" -f $step); $step++
+                }
+            }
+            if ($script:DoRustInstall) {
+                Write-Host ("    {0}. Install Rust           Download rustup-init.exe" -f $step); $step++
+            }
+            if (-not $script:MsvcAvailable -and $script:DoMsvcInstall) {
+                Write-Host ("    {0}. Install VC++ Build Tools  winget install" -f $step); $step++
+            }
+            $browserNote = if ($script:ChromeAvailable -or $script:DoChromiumInstall) { "  [+browser feature]" } else { "" }
+            if ($doLocalTester) {
+                Write-Host ("    {0}. Install networker-tester    cargo install from GitHub{1}" -f $step, $browserNote); $step++
+            }
+            if ($doLocalEndpoint) {
+                Write-Host ("    {0}. Install networker-endpoint  cargo install from GitHub" -f $step); $step++
+            }
+            Write-Host ""
+            Write-Dim "Repository:  $RepoHttps"
+            Write-Dim "Source code is compiled locally -- no pre-built binaries are downloaded."
         }
-        if (-not $script:MsvcAvailable) {
-            if ($script:DoMsvcInstall) {
-                Write-Host ("    {0}. Install VC++ Build Tools  winget install  (~2-3 GB, 5-15 min)" -f $step)
-                $step++
-            } elseif ($script:WingetAvailable) {
-                Write-Host "    -. Install VC++ Build Tools  (skip -- toggle in Customize)" -ForegroundColor DarkGray
-            } else {
-                Write-Host "    -. Install VC++ Build Tools  (not installed -- https://aka.ms/vs/buildtools)" -ForegroundColor DarkGray
+    }
+
+    # Show remote deployment plan
+    if ($script:DoRemoteTester) {
+        Write-Host ""
+        $provider = $script:TesterLocation.ToUpper()
+        Write-Host ("    {0}. Deploy networker-tester to {1} VM" -f $step, $provider); $step++
+    }
+    if ($script:DoRemoteEndpoint) {
+        Write-Host ""
+        $provider = $script:EndpointLocation.ToUpper()
+        Write-Host ("    {0}. Deploy networker-endpoint to {1} VM" -f $step, $provider); $step++
+    }
+}
+
+# ── Component selection prompt ─────────────────────────────────────────────────
+function Invoke-ComponentSelection {
+    if ($Yes) { return }
+    if ($Component) { return }
+
+    Write-Section "What do you want to install?"
+    Write-Host ""
+    Write-Host "  1) Both  -- networker-tester (client) + networker-endpoint (server)  [default]"
+    Write-Host "  2) tester only   -- the diagnostic CLI for measuring HTTP/1.1, H2, H3, QUIC"
+    Write-Host "  3) endpoint only -- the lightweight HTTP/QUIC test server"
+    Write-Host ""
+
+    $ans = Read-HostDefault "  Choice [1]" "1"
+    switch ($ans) {
+        "2" { $script:DoInstallTester = $true;  $script:DoInstallEndpoint = $false
+              Write-Ok "Installing: networker-tester only" }
+        "3" { $script:DoInstallTester = $false; $script:DoInstallEndpoint = $true
+              Write-Ok "Installing: networker-endpoint only" }
+        default { $script:DoInstallTester = $true; $script:DoInstallEndpoint = $true
+                  Write-Ok "Installing: networker-tester + networker-endpoint" }
+    }
+    Write-Host ""
+}
+
+# ── Where-to-install prompts ──────────────────────────────────────────────────
+function Invoke-DeploymentLocationPrompt {
+    if ($Yes) { return }
+
+    # Tester location
+    if ($script:DoInstallTester -and -not $script:DoRemoteTester) {
+        Write-Host ""
+        Write-Host "  Where to install networker-tester?" -ForegroundColor White
+        Write-Host "    1) Locally on this machine  [default]"
+        Write-Host "    2) Remote: Azure VM"
+        Write-Host "    3) Remote: AWS EC2"
+        Write-Host "    4) Remote: Google Cloud GCE"
+        Write-Host ""
+        $ans = Read-HostDefault "  Choice [1]" "1"
+        switch ($ans) {
+            "2" { $script:TesterLocation = "azure"; $script:DoRemoteTester = $true }
+            "3" { $script:TesterLocation = "aws";   $script:DoRemoteTester = $true }
+            "4" { $script:TesterLocation = "gcp";   $script:DoRemoteTester = $true }
+        }
+        if ($script:DoRemoteTester) {
+            switch ($script:TesterLocation) {
+                "azure" { Invoke-EnsureAzureCli; Invoke-AzureOptions "tester" }
+                "aws"   { Invoke-EnsureAwsCli;   Invoke-AwsOptions   "tester" }
+                "gcp"   { Invoke-EnsureGcpCli;   Invoke-GcpOptions   "tester" }
             }
         }
-        $browserNote = if ($script:ChromeAvailable -or $script:DoChromiumInstall) { "  [+browser feature]" } else { "" }
-        if ($script:DoInstallTester) {
-            Write-Host ("    {0}. Install networker-tester    cargo install from GitHub{1}" -f $step, $browserNote)
-            $step++
-        }
-        if ($script:DoInstallEndpoint) {
-            Write-Host ("    {0}. Install networker-endpoint  cargo install from GitHub" -f $step)
-            $step++
-        }
+    }
+
+    # Endpoint location
+    if ($script:DoInstallEndpoint -and -not $script:DoRemoteEndpoint) {
         Write-Host ""
-        Write-Dim "Repository:  $RepoHttps"
-        Write-Dim "Source code is compiled locally -- no pre-built binaries are downloaded."
+        Write-Host "  Where to install networker-endpoint?" -ForegroundColor White
+        Write-Host "    1) Locally on this machine  [default]"
+        Write-Host "    2) Remote: Azure VM"
+        Write-Host "    3) Remote: AWS EC2"
+        Write-Host "    4) Remote: Google Cloud GCE"
+        Write-Host ""
+        $ans = Read-HostDefault "  Choice [1]" "1"
+        switch ($ans) {
+            "2" { $script:EndpointLocation = "azure"; $script:DoRemoteEndpoint = $true }
+            "3" { $script:EndpointLocation = "aws";   $script:DoRemoteEndpoint = $true }
+            "4" { $script:EndpointLocation = "gcp";   $script:DoRemoteEndpoint = $true }
+        }
+        if ($script:DoRemoteEndpoint) {
+            switch ($script:EndpointLocation) {
+                "azure" { Invoke-EnsureAzureCli; Invoke-AzureOptions "endpoint" }
+                "aws"   { Invoke-EnsureAwsCli;   Invoke-AwsOptions   "endpoint" }
+                "gcp"   { Invoke-EnsureGcpCli;   Invoke-GcpOptions   "endpoint" }
+            }
+        }
     }
 }
 
@@ -333,38 +576,19 @@ function Invoke-MainPrompt {
         switch ($ans.Trim()) {
             "1" {
                 # Ask about Chrome if not already available (source mode, winget present)
-                if (-not $script:ChromeAvailable -and $script:InstallMethod -eq "source" -and $script:WingetAvailable -and $script:DoInstallTester) {
+                if (-not $script:ChromeAvailable -and $script:InstallMethod -eq "source" -and $script:WingetAvailable -and $script:DoInstallTester -and -not $script:DoRemoteTester) {
                     Write-Host ""
                     $script:DoChromiumInstall = Invoke-AskYN "Chrome/Chromium not found -- install it to enable the browser probe?" "y"
                     if (-not $script:DoChromiumInstall) {
                         Write-Info "Skipping Chrome -- browser probe will be disabled."
-                        Write-Info "To enable later: install Chrome then re-run this installer."
                     }
                 }
+                Invoke-DeploymentLocationPrompt
                 return
             }
             "2" { Invoke-CustomizeFlow; return }
             "3" { Write-Host ""; Write-Host "Installation cancelled."; exit 0 }
             default { Write-Warn "Please enter 1, 2, or 3." }
-        }
-    }
-}
-
-# ── Yes/No helper ──────────────────────────────────────────────────────────────
-function Invoke-AskYN ($prompt, $default) {
-    while ($true) {
-        if ($default -eq "y") {
-            $ans = Read-Host "  $prompt [Y/n]"
-        } else {
-            $ans = Read-Host "  $prompt [y/N]"
-        }
-        if ([string]::IsNullOrWhiteSpace($ans)) { $ans = $default }
-        switch ($ans.Trim().ToLower()) {
-            "y"   { return $true  }
-            "yes" { return $true  }
-            "n"   { return $false }
-            "no"  { return $false }
-            default { Write-Warn "Please enter y or n." }
         }
     }
 }
@@ -379,9 +603,8 @@ function Invoke-CustomizeFlow {
         Write-Host "    1) Download binary from latest release  (fast, recommended)"
         Write-Host "    2) Compile from source  (requires Rust)"
         Write-Host ""
-        $methodAns = Read-Host "  Choice [1]"
-        if ([string]::IsNullOrWhiteSpace($methodAns)) { $methodAns = "1" }
-        switch ($methodAns.Trim()) {
+        $methodAns = Read-HostDefault "  Choice [1]" "1"
+        switch ($methodAns) {
             "2"     { $script:InstallMethod = "source"  }
             default { $script:InstallMethod = "release" }
         }
@@ -389,73 +612,24 @@ function Invoke-CustomizeFlow {
     }
 
     if ($script:InstallMethod -eq "source") {
-        # git install (only offered when git is absent)
-        if (-not $script:GitAvailable) {
-            if ($script:WingetAvailable) {
-                Write-Host ""
-                $script:DoGitInstall = Invoke-AskYN "git is not installed -- install it via winget?" "y"
-                if (-not $script:DoGitInstall) {
-                    Write-Host ""
-                    Write-Warn "Skipping git -- cargo will fetch the public repo directly via HTTPS."
-                }
-            } else {
-                Write-Host ""
-                Write-Warn "git is not installed and winget was not found."
-                Write-Host "  Install Git from: https://git-scm.com/"
-                Write-Host "  Then re-run this installer."
-            }
+        if (-not $script:GitAvailable -and $script:WingetAvailable) {
+            $script:DoGitInstall = Invoke-AskYN "git is not installed -- install it via winget?" "y"
             Write-Host ""
         }
-
-        # MSVC Build Tools offer (only when absent in source mode)
-        if (-not $script:MsvcAvailable) {
-            if ($script:WingetAvailable) {
-                Write-Host ""
-                $script:DoMsvcInstall = Invoke-AskYN "VC++ Build Tools not found -- install via winget? (~2-3 GB)" "y"
-                if (-not $script:DoMsvcInstall) {
-                    Write-Host ""
-                    Write-Warn "Skipping -- cargo will fail with 'linker not found' without MSVC tools."
-                    Write-Host "  Install manually from: https://aka.ms/vs/buildtools"
-                    Write-Host "  Select 'Desktop development with C++' workload, then re-run."
-                }
-            } else {
-                Write-Host ""
-                Write-Warn "VC++ Build Tools are not installed (winget not found to auto-install)."
-                Write-Host "  Install from: https://aka.ms/vs/buildtools"
-                Write-Host "  Select 'Desktop development with C++' workload, then re-run."
-            }
-            Write-Host ""
-        }
-
-        # Chrome install (only offered when Chrome is absent and tester is being installed)
         if (-not $script:ChromeAvailable -and $script:DoInstallTester) {
             if ($script:WingetAvailable) {
-                Write-Host ""
                 $script:DoChromiumInstall = Invoke-AskYN "Chrome/Chromium not found -- install it to enable the browser probe?" "y"
-                if (-not $script:DoChromiumInstall) {
-                    Write-Host ""
-                    Write-Warn "Skipping Chrome -- networker-tester will be compiled without the browser probe."
-                    Write-Warn "To enable later: install Chrome then re-run this installer."
-                }
-            } else {
                 Write-Host ""
-                Write-Warn "Chrome/Chromium is not installed (winget not found to auto-install)."
-                Write-Host "  Install from: https://www.google.com/chrome/"
             }
-            Write-Host ""
         }
-
         if (-not $script:RustExists) {
-            Write-Host ""
             $script:DoRustInstall = Invoke-AskYN "Install Rust via rustup (win.rustup.rs)?" "y"
-            if (-not $script:DoRustInstall) {
-                Write-Host ""
-                Write-Warn "Rust is not installed -- cargo must be on PATH before proceeding."
-                Write-Host "  Install manually: https://rustup.rs"
-                Write-Host "  Then re-run this script with -SkipRust"
-            }
+            Write-Host ""
         }
-        Write-Host ""
+        if (-not $script:MsvcAvailable -and $script:WingetAvailable) {
+            $script:DoMsvcInstall = Invoke-AskYN "VC++ Build Tools not found -- install via winget?" "y"
+            Write-Host ""
+        }
     }
 
     Write-Host "  Which components do you want to install?"
@@ -465,13 +639,14 @@ function Invoke-CustomizeFlow {
     Write-Host "    3) endpoint only -- the target test server"
     Write-Host ""
 
-    $compAns = Read-Host "  Choice [1]"
-    if ([string]::IsNullOrWhiteSpace($compAns)) { $compAns = "1" }
-    switch ($compAns.Trim()) {
+    $compAns = Read-HostDefault "  Choice [1]" "1"
+    switch ($compAns) {
         "2" { $script:DoInstallTester = $true;  $script:DoInstallEndpoint = $false }
         "3" { $script:DoInstallTester = $false; $script:DoInstallEndpoint = $true  }
         default { $script:DoInstallTester = $true; $script:DoInstallEndpoint = $true }
     }
+
+    Invoke-DeploymentLocationPrompt
 
     Write-Host ""
     Show-Plan
@@ -490,7 +665,461 @@ function Invoke-NextStep ($title) {
     Write-StepHeader $script:StepNum $title
 }
 
-# ── Release-mode steps ─────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+#  CLOUD CLI HELPERS
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Ensure Azure CLI ──────────────────────────────────────────────────────────
+function Invoke-EnsureAzureCli {
+    if (-not $script:AzureCliAvailable) {
+        Write-Host ""
+        Write-Warn "Azure CLI (az) is not installed."
+        Write-Host ""
+        Write-Host "  Install from: https://docs.microsoft.com/cli/azure/install-azure-cli"
+        if ($script:WingetAvailable) {
+            Write-Host "  Or:  winget install Microsoft.AzureCLI"
+            Write-Host ""
+            if (Invoke-AskYN "Install Azure CLI via winget now?" "y") {
+                $prevErr = $ErrorActionPreference
+                $ErrorActionPreference = "Continue"
+                & winget install --id Microsoft.AzureCLI -e --source winget `
+                    --accept-package-agreements --accept-source-agreements
+                $ErrorActionPreference = $prevErr
+                # Refresh PATH
+                $machinePath = [System.Environment]::GetEnvironmentVariable("PATH", "Machine")
+                $userPath    = [System.Environment]::GetEnvironmentVariable("PATH", "User")
+                $env:PATH    = "$machinePath;$userPath"
+                if (Get-Command az -ErrorAction SilentlyContinue) {
+                    $script:AzureCliAvailable = $true
+                    Write-Ok "Azure CLI installed"
+                } else {
+                    Write-Err "Azure CLI installation failed."
+                    exit 1
+                }
+            } else {
+                Write-Err "Azure CLI is required for Azure deployment."
+                exit 1
+            }
+        } else {
+            Write-Err "Azure CLI is required. Install from: https://aka.ms/installazurecliwindows"
+            exit 1
+        }
+    }
+
+    if (-not $script:AzureLoggedIn) {
+        Write-Host ""
+        Write-Warn "Not logged in to Azure."
+        Write-Host ""
+        if (Invoke-AskYN "Log in to Azure now (opens browser)?" "y") {
+            Write-Info "Logging in to Azure..."
+            $prevErr = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            & az login --use-device-code
+            $script:AzureLoggedIn = ($LASTEXITCODE -eq 0)
+            $ErrorActionPreference = $prevErr
+            if ($script:AzureLoggedIn) {
+                Write-Ok "Logged in to Azure"
+            } else {
+                Write-Err "Azure login failed."
+                exit 1
+            }
+        } else {
+            Write-Err "Azure login required for deployment."
+            exit 1
+        }
+    }
+}
+
+# ── Ensure AWS CLI ────────────────────────────────────────────────────────────
+function Invoke-EnsureAwsCli {
+    if (-not $script:AwsCliAvailable) {
+        Write-Host ""
+        Write-Warn "AWS CLI is not installed."
+        Write-Host "  Install from: https://aws.amazon.com/cli/"
+        if ($script:WingetAvailable) {
+            Write-Host "  Or:  winget install Amazon.AWSCLI"
+            Write-Host ""
+            if (Invoke-AskYN "Install AWS CLI via winget now?" "y") {
+                $prevErr = $ErrorActionPreference
+                $ErrorActionPreference = "Continue"
+                & winget install --id Amazon.AWSCLI -e --source winget `
+                    --accept-package-agreements --accept-source-agreements
+                $ErrorActionPreference = $prevErr
+                $machinePath = [System.Environment]::GetEnvironmentVariable("PATH", "Machine")
+                $userPath    = [System.Environment]::GetEnvironmentVariable("PATH", "User")
+                $env:PATH    = "$machinePath;$userPath"
+                if (Get-Command aws -ErrorAction SilentlyContinue) {
+                    $script:AwsCliAvailable = $true
+                    Write-Ok "AWS CLI installed"
+                } else {
+                    Write-Err "AWS CLI installation failed."
+                    exit 1
+                }
+            } else {
+                Write-Err "AWS CLI is required for AWS deployment."
+                exit 1
+            }
+        } else {
+            Write-Err "AWS CLI is required. Install from: https://aws.amazon.com/cli/"
+            exit 1
+        }
+    }
+
+    if (-not $script:AwsLoggedIn) {
+        Write-Host ""
+        Write-Warn "Not logged in to AWS."
+        Write-Host ""
+        if (Invoke-AskYN "Configure AWS credentials now?" "y") {
+            Write-Info "Running aws configure..."
+            & aws configure
+            $prevErr = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            $null = & aws sts get-caller-identity 2>&1
+            $script:AwsLoggedIn = ($LASTEXITCODE -eq 0)
+            $ErrorActionPreference = $prevErr
+            if ($script:AwsLoggedIn) {
+                Write-Ok "AWS credentials configured"
+            } else {
+                Write-Err "AWS authentication failed."
+                exit 1
+            }
+        } else {
+            Write-Err "AWS credentials required for deployment."
+            exit 1
+        }
+    }
+}
+
+# ── Ensure GCP CLI ────────────────────────────────────────────────────────────
+function Invoke-EnsureGcpCli {
+    if (-not $script:GcpCliAvailable) {
+        Write-Host ""
+        Write-Warn "Google Cloud SDK (gcloud) is not installed."
+        Write-Host "  Install from: https://cloud.google.com/sdk/docs/install"
+        Write-Err "gcloud CLI is required for GCP deployment."
+        exit 1
+    }
+
+    if (-not $script:GcpLoggedIn) {
+        # Re-check in case session is active
+        $prevErr = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $acct = (& gcloud config get-value account 2>$null) -join ""
+        $ErrorActionPreference = $prevErr
+        if ($acct -and $acct -ne "(unset)") {
+            $script:GcpLoggedIn = $true
+            Write-Ok "Logged in: $acct"
+        }
+    }
+
+    if (-not $script:GcpLoggedIn) {
+        Write-Host ""
+        Write-Warn "Not logged in to GCP."
+        Write-Host ""
+        if (Invoke-AskYN "Log in to GCP now?" "y") {
+            Write-Info "Logging in to GCP..."
+            $prevErr = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            & gcloud auth login --no-launch-browser
+            $acct = (& gcloud config get-value account 2>$null) -join ""
+            $ErrorActionPreference = $prevErr
+            if ($acct -and $acct -ne "(unset)") {
+                $script:GcpLoggedIn = $true
+                Write-Ok "Logged in: $acct"
+            } else {
+                Write-Err "GCP login failed."
+                exit 1
+            }
+        } else {
+            Write-Err "GCP login required for deployment."
+            exit 1
+        }
+    }
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  CLOUD OPTION PROMPTS
+# ══════════════════════════════════════════════════════════════════════════════
+
+function Invoke-AzureOptions ($component) {
+    $title = if ($component -eq "tester") { "networker-tester" } else { "networker-endpoint" }
+    Write-Section "Azure options for $title"
+    Write-Host ""
+
+    # Region (shared; ask once)
+    if (-not $script:AzureRegionAsked) {
+        $script:AzureRegionAsked = $true
+        $regions = @(
+            @{ Code="eastus";        Label="East US (Virginia)" },
+            @{ Code="westus2";       Label="West US 2 (Washington)" },
+            @{ Code="westeurope";    Label="West Europe (Netherlands)" },
+            @{ Code="northeurope";   Label="North Europe (Ireland)" },
+            @{ Code="southeastasia"; Label="Southeast Asia (Singapore)" },
+            @{ Code="australiaeast"; Label="Australia East (NSW)" },
+            @{ Code="uksouth";       Label="UK South (London)" },
+            @{ Code="japaneast";     Label="Japan East (Tokyo)" }
+        )
+        Write-Host "  Azure region:"
+        for ($i = 0; $i -lt $regions.Count; $i++) {
+            $tag = if ($regions[$i].Code -eq $script:AzureRegion) { "  [current]" } else { "" }
+            Write-Host ("    {0}) {1,-20} {2}{3}" -f ($i+1), $regions[$i].Code, $regions[$i].Label, $tag)
+        }
+        Write-Host ""
+        $regAns = Read-HostDefault "  Choice [1]" "1"
+        $idx = 0; if ([int]::TryParse($regAns, [ref]$idx) -and $idx -ge 1 -and $idx -le $regions.Count) {
+            $script:AzureRegion = $regions[$idx-1].Code
+        }
+        Write-Ok "Region: $($script:AzureRegion)"
+        Write-Host ""
+    } else {
+        Write-Info "Region: $($script:AzureRegion)  (shared with other Azure VM)"
+        Write-Host ""
+    }
+
+    # VM size
+    Write-Host "  VM size:"
+    Write-Host "    1) Standard_B1s     1 vCPU,  1 GB RAM  ~`$7/mo"
+    Write-Host "    2) Standard_B2s     2 vCPU,  4 GB RAM  ~`$30/mo  [default]"
+    Write-Host "    3) Standard_D2s_v3  2 vCPU,  8 GB RAM  ~`$70/mo"
+    Write-Host "    4) Standard_D4s_v3  4 vCPU, 16 GB RAM  ~`$140/mo"
+    Write-Host ""
+    $sizeAns = Read-HostDefault "  Choice [2]" "2"
+    $chosenSize = switch ($sizeAns) {
+        "1" { "Standard_B1s" }
+        "3" { "Standard_D2s_v3" }
+        "4" { "Standard_D4s_v3" }
+        default { "Standard_B2s" }
+    }
+    Write-Host ""
+
+    # OS choice
+    Write-Host "  Operating System:"
+    Write-Host "    1) Ubuntu 22.04 LTS  (Linux)    [default]"
+    Write-Host "    2) Windows Server 2022"
+    Write-Host ""
+    $osAns = Read-HostDefault "  Choice [1]" "1"
+    $chosenOs = if ($osAns -eq "2") { "windows" } else { "linux" }
+    Write-Host ""
+
+    # Auto-shutdown
+    if (-not $script:AzureShutdownAsked) {
+        $script:AzureShutdownAsked = $true
+        Write-Host "  Auto-shutdown policy (avoids unexpected charges):"
+        Write-Host "    1) Shut down at 11 PM EST (04:00 UTC) daily  [default]"
+        Write-Host "    2) Leave running -- I will stop/delete manually"
+        Write-Host ""
+        $sdAns = Read-HostDefault "  Choice [1]" "1"
+        if ($sdAns -eq "2") {
+            $script:AzureAutoShutdown = "no"
+            Write-Warn "VMs will keep running -- remember to delete them when done!"
+        } else {
+            $script:AzureAutoShutdown = "yes"
+            Write-Ok "Auto-shutdown: 04:00 UTC (11 PM EST) daily"
+        }
+        Write-Host ""
+    }
+
+    # Names
+    $suggestedRg = "nwk-$component-$($script:AzureRegion)"
+    $rg = Read-HostDefault "  Resource group name [$suggestedRg]" $suggestedRg
+    $suggestedVm = "$suggestedRg-vm"
+    $vm = Read-HostDefault "  VM name [$suggestedVm]" $suggestedVm
+
+    if ($component -eq "tester") {
+        $script:AzureTesterRg = $rg; $script:AzureTesterVm = $vm
+        $script:AzureTesterSize = $chosenSize; $script:AzureTesterOs = $chosenOs
+    } else {
+        $script:AzureEndpointRg = $rg; $script:AzureEndpointVm = $vm
+        $script:AzureEndpointSize = $chosenSize; $script:AzureEndpointOs = $chosenOs
+    }
+    Write-Ok "OS: $chosenOs  |  Size: $chosenSize  |  RG: $rg  |  VM: $vm"
+    Write-Host ""
+}
+
+function Invoke-AwsOptions ($component) {
+    $title = if ($component -eq "tester") { "networker-tester" } else { "networker-endpoint" }
+    Write-Section "AWS options for $title"
+    Write-Host ""
+
+    if (-not $script:AwsRegionAsked) {
+        $script:AwsRegionAsked = $true
+        $regions = @(
+            @{ Code="us-east-1";      Label="US East (N. Virginia)" },
+            @{ Code="us-west-2";      Label="US West (Oregon)" },
+            @{ Code="eu-west-1";      Label="EU West (Ireland)" },
+            @{ Code="eu-central-1";   Label="EU Central (Frankfurt)" },
+            @{ Code="ap-southeast-1"; Label="Asia Pacific (Singapore)" },
+            @{ Code="ap-northeast-1"; Label="Asia Pacific (Tokyo)" },
+            @{ Code="ap-southeast-2"; Label="Asia Pacific (Sydney)" },
+            @{ Code="sa-east-1";      Label="South America (Sao Paulo)" }
+        )
+        Write-Host "  AWS region:"
+        for ($i = 0; $i -lt $regions.Count; $i++) {
+            $tag = if ($regions[$i].Code -eq $script:AwsRegion) { "  [current]" } else { "" }
+            Write-Host ("    {0}) {1,-20} {2}{3}" -f ($i+1), $regions[$i].Code, $regions[$i].Label, $tag)
+        }
+        Write-Host ""
+        $regAns = Read-HostDefault "  Choice [1]" "1"
+        $idx = 0; if ([int]::TryParse($regAns, [ref]$idx) -and $idx -ge 1 -and $idx -le $regions.Count) {
+            $script:AwsRegion = $regions[$idx-1].Code
+        }
+        Write-Ok "Region: $($script:AwsRegion)"
+        Write-Host ""
+    } else {
+        Write-Info "Region: $($script:AwsRegion)  (shared with other AWS instance)"
+        Write-Host ""
+    }
+
+    Write-Host "  EC2 instance type:"
+    Write-Host "    1) t3.micro   2 vCPU,  1 GB RAM  ~`$7/mo"
+    Write-Host "    2) t3.small   2 vCPU,  2 GB RAM  ~`$15/mo  [default]"
+    Write-Host "    3) t3.medium  2 vCPU,  4 GB RAM  ~`$30/mo"
+    Write-Host "    4) t3.large   2 vCPU,  8 GB RAM  ~`$60/mo"
+    Write-Host ""
+    $typeAns = Read-HostDefault "  Choice [2]" "2"
+    $chosenType = switch ($typeAns) {
+        "1" { "t3.micro" }
+        "3" { "t3.medium" }
+        "4" { "t3.large" }
+        default { "t3.small" }
+    }
+    Write-Host ""
+
+    # OS
+    Write-Host "  Operating System:"
+    Write-Host "    1) Ubuntu 22.04  (Linux)  [default]"
+    Write-Host "    2) Windows Server 2022"
+    Write-Host ""
+    $osAns = Read-HostDefault "  Choice [1]" "1"
+    $chosenOs = if ($osAns -eq "2") { "windows" } else { "linux" }
+    Write-Host ""
+
+    # Auto-shutdown
+    if (-not $script:AwsShutdownAsked) {
+        $script:AwsShutdownAsked = $true
+        Write-Host "  Auto-shutdown policy (avoids unexpected charges):"
+        Write-Host "    1) Shut down at 11 PM EST (04:00 UTC) daily  [default]"
+        Write-Host "    2) Leave running -- I will terminate manually"
+        Write-Host ""
+        $sdAns = Read-HostDefault "  Choice [1]" "1"
+        if ($sdAns -eq "2") { $script:AwsAutoShutdown = "no"; Write-Warn "Instance will keep running!" }
+        else { $script:AwsAutoShutdown = "yes"; Write-Ok "Auto-shutdown: 04:00 UTC (11 PM EST) daily" }
+        Write-Host ""
+    }
+
+    $suggested = "networker-$component-$($script:AwsRegion)"
+    $name = Read-HostDefault "  Instance name tag [$suggested]" $suggested
+
+    if ($component -eq "tester") {
+        $script:AwsTesterName = $name; $script:AwsTesterType = $chosenType; $script:AwsTesterOs = $chosenOs
+    } else {
+        $script:AwsEndpointName = $name; $script:AwsEndpointType = $chosenType; $script:AwsEndpointOs = $chosenOs
+    }
+    Write-Ok "OS: $chosenOs  |  Type: $chosenType  |  Name: $name"
+    Write-Host ""
+}
+
+function Invoke-GcpOptions ($component) {
+    $title = if ($component -eq "tester") { "networker-tester" } else { "networker-endpoint" }
+    Write-Section "GCP options for $title"
+    Write-Host ""
+
+    # Project
+    if (-not $script:GcpProject) {
+        $prevErr = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $script:GcpProject = ((& gcloud config get-value project 2>$null) -join "").Trim()
+        $ErrorActionPreference = $prevErr
+        if ($script:GcpProject -eq "(unset)") { $script:GcpProject = "" }
+    }
+    if (-not $script:GcpProject) {
+        $script:GcpProject = Read-HostDefault "  Enter your GCP project ID" ""
+        if (-not $script:GcpProject) { Write-Err "GCP project ID is required."; exit 1 }
+        $prevErr = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        & gcloud config set project $script:GcpProject 2>$null
+        $ErrorActionPreference = $prevErr
+    }
+    Write-Ok "Project: $($script:GcpProject)"
+    Write-Host ""
+
+    # Zone
+    if (-not $script:GcpRegionAsked) {
+        $script:GcpRegionAsked = $true
+        $zones = @(
+            @{ Code="us-central1-a";        Label="US Central (Iowa)" },
+            @{ Code="us-east1-b";            Label="US East (South Carolina)" },
+            @{ Code="us-west1-a";            Label="US West (Oregon)" },
+            @{ Code="europe-west1-b";        Label="Europe West (Belgium)" },
+            @{ Code="europe-west2-a";        Label="Europe West (London)" },
+            @{ Code="asia-east1-a";          Label="Asia East (Taiwan)" },
+            @{ Code="asia-northeast1-a";     Label="Asia NE (Tokyo)" },
+            @{ Code="australia-southeast1-a";Label="Australia SE (Sydney)" }
+        )
+        Write-Host "  GCP zone:"
+        for ($i = 0; $i -lt $zones.Count; $i++) {
+            $tag = if ($zones[$i].Code -eq $script:GcpZone) { "  [current]" } else { "" }
+            Write-Host ("    {0}) {1,-28} {2}{3}" -f ($i+1), $zones[$i].Code, $zones[$i].Label, $tag)
+        }
+        Write-Host ""
+        $zoneAns = Read-HostDefault "  Choice [1]" "1"
+        $idx = 0; if ([int]::TryParse($zoneAns, [ref]$idx) -and $idx -ge 1 -and $idx -le $zones.Count) {
+            $script:GcpZone = $zones[$idx-1].Code
+        }
+        $script:GcpRegion = $script:GcpZone -replace '-[a-z]$',''
+        Write-Ok "Zone: $($script:GcpZone)  (region: $($script:GcpRegion))"
+        Write-Host ""
+    } else {
+        Write-Info "Zone: $($script:GcpZone)  (shared with other GCP instance)"
+        Write-Host ""
+    }
+
+    # Machine type
+    Write-Host "  GCE machine type:"
+    Write-Host "    1) e2-micro      2 vCPU (shared), 1 GB RAM  ~`$7/mo"
+    Write-Host "    2) e2-small      2 vCPU (shared), 2 GB RAM  ~`$15/mo  [default]"
+    Write-Host "    3) e2-medium     2 vCPU (shared), 4 GB RAM  ~`$27/mo"
+    Write-Host "    4) e2-standard-2 2 vCPU,          8 GB RAM  ~`$49/mo"
+    Write-Host ""
+    $typeAns = Read-HostDefault "  Choice [2]" "2"
+    $chosenType = switch ($typeAns) {
+        "1" { "e2-micro" }
+        "3" { "e2-medium" }
+        "4" { "e2-standard-2" }
+        default { "e2-small" }
+    }
+    Write-Host ""
+
+    # Auto-shutdown
+    if (-not $script:GcpShutdownAsked) {
+        $script:GcpShutdownAsked = $true
+        Write-Host "  Auto-shutdown policy (avoids unexpected charges):"
+        Write-Host "    1) Shut down at 11 PM EST (04:00 UTC) daily  [default]"
+        Write-Host "    2) Leave running -- I will stop/delete manually"
+        Write-Host ""
+        $sdAns = Read-HostDefault "  Choice [1]" "1"
+        if ($sdAns -eq "2") { $script:GcpAutoShutdown = "no"; Write-Warn "Instance will keep running!" }
+        else { $script:GcpAutoShutdown = "yes"; Write-Ok "Auto-shutdown: 04:00 UTC (11 PM EST) daily" }
+        Write-Host ""
+    }
+
+    $regionTag = $script:GcpRegion
+    $suggested = "networker-$component-$regionTag"
+    $name = Read-HostDefault "  Instance name [$suggested]" $suggested
+
+    if ($component -eq "tester") {
+        $script:GcpTesterName = $name; $script:GcpTesterMachineType = $chosenType
+    } else {
+        $script:GcpEndpointName = $name; $script:GcpEndpointMachineType = $chosenType
+    }
+    Write-Ok "Type: $chosenType  |  Name: $name  |  Zone: $($script:GcpZone)"
+    Write-Host ""
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  LOCAL INSTALL STEPS
+# ══════════════════════════════════════════════════════════════════════════════
+
 function Invoke-DownloadReleaseStep ($binary) {
     Invoke-NextStep "Download $binary"
     $archive = "$binary-$($script:ReleaseTarget).zip"
@@ -510,7 +1139,6 @@ function Invoke-DownloadReleaseStep ($binary) {
         Write-Host ""
         Write-Err "gh release download failed."
         Write-Host "  Expected asset: $archive"
-        Write-Host "  Check releases: gh release list --repo $RepoGh"
         Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
         exit 1
     }
@@ -526,15 +1154,12 @@ function Invoke-DownloadReleaseStep ($binary) {
     Write-Ok "$binary installed -> $installedPath  ($installedVer)"
 }
 
-# ── Source-mode steps ──────────────────────────────────────────────────────────
 function Invoke-MsvcInstallStep {
     Invoke-NextStep "Install Visual C++ Build Tools"
     Write-Info "Installing MSVC build tools via winget..."
     Write-Dim "Includes the C++ linker (link.exe) required to compile Rust on Windows."
-    Write-Dim "The VS bootstrapper (~4 MB) then downloads and installs the full toolchain (~2 GB)."
     Write-Host ""
 
-    # --wait tells the VS installer to block until installation is fully complete.
     $prevErr = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     & winget install --id Microsoft.VisualStudio.2022.BuildTools -e --source winget `
@@ -544,21 +1169,16 @@ function Invoke-MsvcInstallStep {
     $ErrorActionPreference = $prevErr
 
     if ($exitCode -ne 0) {
-        Write-Host ""
         Write-Err "winget install failed (exit code $exitCode)."
         Write-Host "  Install manually from: https://aka.ms/vs/buildtools"
-        Write-Host "  Select the 'Desktop development with C++' workload, then re-run."
         exit 1
     }
 
-    # VS installs asynchronously even after winget reports success (the bootstrapper
-    # launches a background process for the real 2 GB install).  Poll vswhere until
-    # the VC++ toolchain component is fully registered — timeout after 15 minutes.
     $vswhereExe = Join-Path ([System.Environment]::GetFolderPath('ProgramFilesX86')) `
                              "Microsoft Visual Studio\Installer\vswhere.exe"
     $vsPath  = $null
     $elapsed = 0
-    $timeout = 900  # 15 min
+    $timeout = 900
 
     Write-Info "Waiting for Visual Studio installation to complete..."
     while ($elapsed -lt $timeout) {
@@ -566,7 +1186,6 @@ function Invoke-MsvcInstallStep {
             $raw = & $vswhereExe -latest -products * `
                 -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
                 -property installationPath 2>&1
-            # $raw may be $null if VS hasn't registered yet — guard with [string] cast
             if (-not [string]::IsNullOrWhiteSpace([string]$raw)) {
                 $vsPath = ([string]$raw).Trim()
                 break
@@ -578,13 +1197,10 @@ function Invoke-MsvcInstallStep {
     }
 
     if (-not $vsPath) {
-        Write-Host ""
         Write-Warn "VS Build Tools did not finish within ${timeout}s."
-        Write-Host "  Once Visual Studio finishes installing, re-run this installer."
         exit 1
     }
 
-    # Source vcvars64.bat to make link.exe available in this terminal session
     try {
         $vcvars = Join-Path $vsPath "VC\Auxiliary\Build\vcvars64.bat"
         if (Test-Path $vcvars) {
@@ -596,15 +1212,13 @@ function Invoke-MsvcInstallStep {
                 }
             }
             $script:MsvcAvailable = $true
-            Write-Ok "VC++ Build Tools installed and loaded for this session"
+            Write-Ok "VC++ Build Tools installed and loaded"
         } else {
-            Write-Warn "vcvars64.bat not found at expected path."
-            Write-Warn "Reopen your terminal and re-run this installer."
+            Write-Warn "vcvars64.bat not found. Reopen terminal and re-run."
             exit 1
         }
     } catch {
         Write-Warn ("Could not load MSVC environment: {0}" -f $_.Exception.Message)
-        Write-Warn "Reopen your terminal and re-run this installer."
         exit 1
     }
 }
@@ -612,7 +1226,6 @@ function Invoke-MsvcInstallStep {
 function Invoke-ChromeInstallStep {
     Invoke-NextStep "Install Chrome (browser probe)"
     Write-Info "Installing Google Chrome via winget..."
-    Write-Dim "Required at runtime for the 'browser' probe (headless Chromium via CDP)."
     Write-Host ""
 
     $prevErr = $ErrorActionPreference
@@ -623,23 +1236,18 @@ function Invoke-ChromeInstallStep {
     $ErrorActionPreference = $prevErr
 
     if ($exitCode -ne 0) {
-        Write-Host ""
-        Write-Warn "Chrome install failed (exit code $exitCode) -- browser probe will not be compiled."
-        Write-Warn "Install Chrome manually from: https://www.google.com/chrome/"
+        Write-Warn "Chrome install failed -- browser probe will not be compiled."
         $script:ChromeAvailable = $false
-        return   # Don't exit; continue installing without browser feature
+        return
     }
 
-    # Re-detect after install (Chrome may need a PATH refresh)
     $script:ChromePath = Get-ChromePath
     if ($script:ChromePath) {
         $script:ChromeAvailable = $true
         Write-Ok "Chrome installed: $($script:ChromePath)"
     } else {
-        # Installed but not in standard paths yet — compile with feature anyway
         $script:ChromeAvailable = $true
-        Write-Warn "Chrome installed but not yet detectable in standard paths."
-        Write-Warn "browser probe compiled in; set NETWORKER_CHROME_PATH env var if needed."
+        Write-Warn "Chrome installed but not yet detectable."
     }
 }
 
@@ -656,14 +1264,11 @@ function Invoke-GitInstallStep {
     $ErrorActionPreference = $prevErr
 
     if ($exitCode -ne 0) {
-        Write-Host ""
         Write-Err "winget install failed (exit code $exitCode)."
-        Write-Host "  Install Git manually from: https://git-scm.com/"
-        Write-Host "  Then re-run this installer."
+        Write-Host "  Install Git from: https://git-scm.com/"
         exit 1
     }
 
-    # Refresh PATH so git.exe is visible without reopening the terminal
     $machinePath = [System.Environment]::GetEnvironmentVariable("PATH", "Machine")
     $userPath    = [System.Environment]::GetEnvironmentVariable("PATH", "User")
     $env:PATH    = "$machinePath;$userPath"
@@ -673,9 +1278,7 @@ function Invoke-GitInstallStep {
         $script:GitAvailable = $true
         Write-Ok ("git installed: " + (& git --version 2>&1))
     } else {
-        Write-Warn "git was installed but is not yet in PATH."
-        Write-Warn "You may need to reopen your terminal. Continuing..."
-        $script:GitAvailable = $false
+        Write-Warn "git installed but not yet in PATH."
     }
 }
 
@@ -702,7 +1305,6 @@ function Invoke-EnsureCargoEnv {
     }
     if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
         Write-Err "cargo not found -- cannot install binaries."
-        Write-Host "  If Rust was just installed, open a new terminal and re-run this script."
         exit 1
     }
 }
@@ -712,14 +1314,9 @@ function Invoke-CargoInstallStep ($binary) {
     Write-Info "Building and installing $binary from source..."
     Write-Dim "Compiling from GitHub -- may take a few minutes on first build."
 
-    # Pre-flight: warn if MSVC linker is still absent (user skipped install or no winget)
     if (-not $script:MsvcAvailable) {
         Write-Host ""
-        Write-Warn "VC++ Build Tools not detected -- cargo will likely fail with 'linker not found'."
-        Write-Host "  To install now, run:"
-        Write-Host "    winget install --id Microsoft.VisualStudio.2022.BuildTools -e --override `"--quiet --add Microsoft.VisualStudio.Workload.VCTools`""
-        Write-Host "  Then re-run this installer."
-        Write-Host ""
+        Write-Warn "VC++ Build Tools not detected -- cargo will likely fail."
     } else {
         Write-Host ""
     }
@@ -739,7 +1336,6 @@ function Invoke-CargoInstallStep ($binary) {
     $ErrorActionPreference = $prevErr
 
     if ($exitCode -ne 0) {
-        Write-Host ""
         Write-Err "cargo install failed (exit code $exitCode)."
         exit 1
     }
@@ -751,6 +1347,783 @@ function Invoke-CargoInstallStep ($binary) {
     Write-Ok "$binary installed -> $installedPath  ($installedVer)"
 }
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  CLOUD DEPLOYMENT STEPS
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── VM existence check (reuse/rename/delete) ──────────────────────────────────
+# Returns $true if the VM was reused (caller should skip creation).
+function Invoke-VmExistsCheck {
+    param([string]$Provider, [string]$Label, [string]$Name)
+
+    $exists = $false
+    $prevErr = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+
+    switch ($Provider) {
+        "azure" {
+            $rg = if ($Label -eq "tester") { $script:AzureTesterRg } else { $script:AzureEndpointRg }
+            $null = & az vm show --resource-group $rg --name $Name --output none 2>&1
+            $exists = ($LASTEXITCODE -eq 0)
+        }
+        "aws" {
+            $existingId = (& aws ec2 describe-instances `
+                --region $script:AwsRegion `
+                --filters "Name=tag:Name,Values=$Name" "Name=instance-state-name,Values=running,stopped,pending" `
+                --query "Reservations[0].Instances[0].InstanceId" `
+                --output text 2>$null) -join ""
+            $exists = ($existingId -and $existingId -ne "None")
+        }
+        "gcp" {
+            $null = & gcloud compute instances describe $Name `
+                --project $script:GcpProject --zone $script:GcpZone 2>&1
+            $exists = ($LASTEXITCODE -eq 0)
+        }
+    }
+    $ErrorActionPreference = $prevErr
+
+    if (-not $exists) { return $false }
+
+    Write-Host ""
+    Write-Warn "$Provider instance '$Name' already exists."
+    Write-Host ""
+    Write-Host "    1) Reuse existing instance  [default]"
+    Write-Host "    2) Pick a different name"
+    Write-Host "    3) Delete and recreate"
+    Write-Host ""
+    $choice = Read-HostDefault "  Choice [1]" "1"
+
+    switch ($choice) {
+        "1" {
+            # Get IP and return reused
+            $ip = ""
+            $prevErr2 = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            switch ($Provider) {
+                "azure" {
+                    $rg = if ($Label -eq "tester") { $script:AzureTesterRg } else { $script:AzureEndpointRg }
+                    $ip = (& az vm show --resource-group $rg --name $Name `
+                        --show-details --query publicIps -o tsv 2>$null) -join ""
+                }
+                "aws" {
+                    $ip = (& aws ec2 describe-instances `
+                        --region $script:AwsRegion `
+                        --filters "Name=tag:Name,Values=$Name" "Name=instance-state-name,Values=running,stopped,pending" `
+                        --query "Reservations[0].Instances[0].PublicIpAddress" `
+                        --output text 2>$null) -join ""
+                    if (-not $ip -or $ip -eq "None") {
+                        # Start stopped instance
+                        Write-Info "Starting stopped instance..."
+                        $iid = (& aws ec2 describe-instances `
+                            --region $script:AwsRegion `
+                            --filters "Name=tag:Name,Values=$Name" "Name=instance-state-name,Values=stopped" `
+                            --query "Reservations[0].Instances[0].InstanceId" `
+                            --output text 2>$null) -join ""
+                        if ($iid -and $iid -ne "None") {
+                            & aws ec2 start-instances --region $script:AwsRegion --instance-ids $iid --output text >$null 2>&1
+                            & aws ec2 wait instance-running --region $script:AwsRegion --instance-ids $iid 2>$null
+                            $ip = (& aws ec2 describe-instances `
+                                --region $script:AwsRegion --instance-ids $iid `
+                                --query "Reservations[0].Instances[0].PublicIpAddress" `
+                                --output text 2>$null) -join ""
+                            if ($Label -eq "tester") { $script:AwsTesterInstanceId = $iid }
+                            else { $script:AwsEndpointInstanceId = $iid }
+                        }
+                    }
+                }
+                "gcp" {
+                    $ip = (& gcloud compute instances describe $Name `
+                        --project $script:GcpProject --zone $script:GcpZone `
+                        --format "get(networkInterfaces[0].accessConfigs[0].natIP)" 2>$null) -join ""
+                }
+            }
+            $ErrorActionPreference = $prevErr2
+
+            if (-not $ip -or $ip -eq "None") {
+                Write-Err "Failed to retrieve instance public IP."
+                exit 1
+            }
+            # Store IP
+            if ($Label -eq "tester") {
+                switch ($Provider) {
+                    "azure" { $script:AzureTesterIp = $ip }
+                    "aws"   { $script:AwsTesterIp = $ip }
+                    "gcp"   { $script:GcpTesterIp = $ip }
+                }
+            } else {
+                switch ($Provider) {
+                    "azure" { $script:AzureEndpointIp = $ip }
+                    "aws"   { $script:AwsEndpointIp = $ip }
+                    "gcp"   { $script:GcpEndpointIp = $ip }
+                }
+            }
+            Write-Ok "Reusing instance '$Name' -- Public IP: $ip"
+            return $true
+        }
+        "2" {
+            $newName = Read-Host "  New instance name"
+            if (-not $newName) { Write-Err "Instance name is required."; exit 1 }
+            # Update the name in state
+            if ($Label -eq "tester") {
+                switch ($Provider) {
+                    "azure" { $script:AzureTesterVm = $newName }
+                    "aws"   { $script:AwsTesterName = $newName }
+                    "gcp"   { $script:GcpTesterName = $newName }
+                }
+            } else {
+                switch ($Provider) {
+                    "azure" { $script:AzureEndpointVm = $newName }
+                    "aws"   { $script:AwsEndpointName = $newName }
+                    "gcp"   { $script:GcpEndpointName = $newName }
+                }
+            }
+            return $false
+        }
+        "3" {
+            Write-Info "Deleting instance '$Name'..."
+            $prevErr2 = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            switch ($Provider) {
+                "azure" {
+                    $rg = if ($Label -eq "tester") { $script:AzureTesterRg } else { $script:AzureEndpointRg }
+                    & az vm delete --resource-group $rg --name $Name --yes --output none 2>&1
+                }
+                "aws" {
+                    $iid = (& aws ec2 describe-instances `
+                        --region $script:AwsRegion `
+                        --filters "Name=tag:Name,Values=$Name" "Name=instance-state-name,Values=running,stopped,pending" `
+                        --query "Reservations[0].Instances[0].InstanceId" `
+                        --output text 2>$null) -join ""
+                    if ($iid -and $iid -ne "None") {
+                        & aws ec2 terminate-instances --region $script:AwsRegion --instance-ids $iid --output text >$null 2>&1
+                        & aws ec2 wait instance-terminated --region $script:AwsRegion --instance-ids $iid 2>$null
+                    }
+                }
+                "gcp" {
+                    & gcloud compute instances delete $Name `
+                        --project $script:GcpProject --zone $script:GcpZone --quiet 2>&1
+                }
+            }
+            $ErrorActionPreference = $prevErr2
+            Write-Ok "Instance deleted"
+            return $false
+        }
+    }
+    return $false
+}
+
+# ── Azure deployment ──────────────────────────────────────────────────────────
+function Invoke-AzureDeployTester {
+    Invoke-AzureCreateVm "tester" $script:AzureTesterRg $script:AzureTesterVm `
+        $script:AzureTesterSize $script:AzureTesterOs
+    if ($script:AzureAutoShutdown -eq "yes") {
+        Invoke-AzureAutoShutdown $script:AzureTesterVm $script:AzureTesterRg
+    }
+    Invoke-WaitForSsh $script:AzureTesterIp "azureuser" "tester instance"
+    Invoke-RemoteInstallBinary "networker-tester" $script:AzureTesterIp "azureuser"
+}
+
+function Invoke-AzureDeployEndpoint {
+    Invoke-AzureCreateVm "endpoint" $script:AzureEndpointRg $script:AzureEndpointVm `
+        $script:AzureEndpointSize $script:AzureEndpointOs
+    Invoke-AzureOpenPorts $script:AzureEndpointRg $script:AzureEndpointVm
+    if ($script:AzureAutoShutdown -eq "yes") {
+        Invoke-AzureAutoShutdown $script:AzureEndpointVm $script:AzureEndpointRg
+    }
+    Invoke-WaitForSsh $script:AzureEndpointIp "azureuser" "endpoint instance"
+    Invoke-RemoteInstallBinary "networker-endpoint" $script:AzureEndpointIp "azureuser"
+    Invoke-RemoteCreateEndpointService $script:AzureEndpointIp "azureuser"
+    Invoke-RemoteVerifyHealth $script:AzureEndpointIp
+    Invoke-GenerateConfig $script:AzureEndpointIp
+}
+
+function Invoke-AzureCreateVm ($label, $rg, $vm, $size, $osType) {
+    Invoke-NextStep "Create Azure VM for $label ($vm in $($script:AzureRegion))"
+
+    # Check existence
+    $name = if ($label -eq "tester") { $script:AzureTesterVm } else { $script:AzureEndpointVm }
+    $reused = Invoke-VmExistsCheck -Provider "azure" -Label $label -Name $name
+    if ($reused) { return }
+    # Re-read name in case it was changed
+    $vm = if ($label -eq "tester") { $script:AzureTesterVm } else { $script:AzureEndpointVm }
+
+    Write-Info "Creating resource group '$rg' in $($script:AzureRegion)..."
+    & az group create --name $rg --location $script:AzureRegion --output none
+    Write-Ok "Resource group: $rg"
+
+    $image   = if ($osType -eq "windows") { "Win2022Datacenter" } else { "Ubuntu2204" }
+    $osLabel = if ($osType -eq "windows") { "Windows Server 2022" } else { "Ubuntu 22.04 LTS" }
+
+    $authOpts = @("--generate-ssh-keys")
+    if ($osType -eq "windows") {
+        $winPass = "Nwk" + (-join ((65..90) + (97..122) + (48..57) | Get-Random -Count 12 | ForEach-Object {[char]$_})) + "!1"
+        $authOpts = @("--admin-password", $winPass)
+    }
+
+    Write-Info "Creating $osLabel VM '$vm' ($size)..."
+    Write-Dim "This typically takes 1-2 minutes..."
+    Write-Host ""
+
+    $ip = & az vm create `
+        --resource-group $rg `
+        --name $vm `
+        --image $image `
+        --size $size `
+        --admin-username azureuser `
+        @authOpts `
+        --only-show-errors `
+        --output tsv `
+        --query publicIpAddress
+
+    if (-not $ip) {
+        Write-Err "Failed to retrieve VM public IP."
+        exit 1
+    }
+
+    if ($label -eq "tester") { $script:AzureTesterIp = $ip }
+    else { $script:AzureEndpointIp = $ip }
+    Write-Ok "VM created ($osLabel) -- Public IP: $ip"
+
+    if ($osType -eq "windows" -and $winPass) {
+        Write-Host ""
+        Write-Info "Windows credentials:"
+        Write-Host "    User:     azureuser"
+        Write-Host "    Password: $winPass"
+        Write-Host "    RDP:      mstsc /v:$ip"
+        Write-Host ""
+    }
+}
+
+function Invoke-AzureOpenPorts ($rg, $vm) {
+    Invoke-NextStep "Open endpoint ports on Azure NSG"
+    $prevErr = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    & az vm open-port --resource-group $rg --name $vm `
+        --port "80,443,8080,8443" --priority 1100 --output none 2>&1
+    $ErrorActionPreference = $prevErr
+    Write-Ok "Ports opened: 80, 443, 8080, 8443"
+}
+
+function Invoke-AzureAutoShutdown ($vm, $rg) {
+    Invoke-NextStep "Set Azure auto-shutdown"
+    $prevErr = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    & az vm auto-shutdown --resource-group $rg --name $vm `
+        --time "0400" --location $script:AzureRegion --output none 2>&1
+    $ErrorActionPreference = $prevErr
+    Write-Ok "Auto-shutdown: 04:00 UTC (11 PM EST) daily"
+}
+
+# ── AWS deployment ────────────────────────────────────────────────────────────
+function Invoke-AwsFindUbuntuAmi {
+    Write-Info "Looking up latest Ubuntu 22.04 AMI..."
+    $script:AwsAmiId = (& aws ec2 describe-images `
+        --region $script:AwsRegion `
+        --owners 099720109477 `
+        --filters "Name=name,Values=ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*" `
+                  "Name=state,Values=available" `
+        --query "sort_by(Images, &CreationDate)[-1].ImageId" `
+        --output text 2>$null) -join ""
+    if (-not $script:AwsAmiId -or $script:AwsAmiId -eq "None") {
+        Write-Err "Failed to find Ubuntu 22.04 AMI in $($script:AwsRegion)."
+        exit 1
+    }
+    Write-Ok "AMI: $($script:AwsAmiId)"
+}
+
+function Invoke-AwsCreateSecurityGroup ($label) {
+    $sgName = "networker-$label-sg"
+    Write-Info "Creating security group '$sgName'..."
+    $prevErr = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+
+    $sgId = (& aws ec2 describe-security-groups `
+        --region $script:AwsRegion `
+        --group-names $sgName `
+        --query "SecurityGroups[0].GroupId" `
+        --output text 2>$null) -join ""
+
+    if (-not $sgId -or $sgId -eq "None") {
+        $sgId = (& aws ec2 create-security-group `
+            --region $script:AwsRegion `
+            --group-name $sgName `
+            --description "Networker $label ports" `
+            --query "GroupId" `
+            --output text 2>$null) -join ""
+
+        # Open SSH
+        & aws ec2 authorize-security-group-ingress `
+            --region $script:AwsRegion --group-id $sgId `
+            --protocol tcp --port 22 --cidr 0.0.0.0/0 --output text >$null 2>&1
+
+        if ($label -eq "endpoint") {
+            foreach ($port in @(80, 443, 8080, 8443)) {
+                & aws ec2 authorize-security-group-ingress `
+                    --region $script:AwsRegion --group-id $sgId `
+                    --protocol tcp --port $port --cidr 0.0.0.0/0 --output text >$null 2>&1
+            }
+            foreach ($port in @(8443, 9998, 9999)) {
+                & aws ec2 authorize-security-group-ingress `
+                    --region $script:AwsRegion --group-id $sgId `
+                    --protocol udp --port $port --cidr 0.0.0.0/0 --output text >$null 2>&1
+            }
+        }
+    }
+    $ErrorActionPreference = $prevErr
+    Write-Ok "Security group: $sgId"
+    return $sgId
+}
+
+function Invoke-AwsEnsureKeypair {
+    # Check if SSH key exists locally
+    $keyFile = $null
+    foreach ($kf in @("$env:USERPROFILE\.ssh\id_ed25519.pub", "$env:USERPROFILE\.ssh\id_rsa.pub")) {
+        if (Test-Path $kf) { $keyFile = $kf; break }
+    }
+    if (-not $keyFile) { return }  # No local key — EC2 will use password/SSM
+
+    Write-Info "Ensuring SSH keypair 'networker-keypair'..."
+    $prevErr = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    # Delete existing (may be stale)
+    & aws ec2 delete-key-pair --region $script:AwsRegion --key-name networker-keypair --output text >$null 2>&1
+    # Import current key
+    & aws ec2 import-key-pair --region $script:AwsRegion `
+        --key-name networker-keypair `
+        --public-key-material "fileb://$keyFile" --output text >$null 2>&1
+    $ErrorActionPreference = $prevErr
+    Write-Ok "SSH keypair imported"
+}
+
+function Invoke-AwsLaunchInstance ($label, $instanceType, $nameTag, $sgId) {
+    Invoke-NextStep "Create AWS EC2 instance for $label ($nameTag, $($script:AwsRegion))"
+
+    # Check existence
+    $reused = Invoke-VmExistsCheck -Provider "aws" -Label $label -Name $nameTag
+    if ($reused) { return }
+    $nameTag = if ($label -eq "tester") { $script:AwsTesterName } else { $script:AwsEndpointName }
+
+    Write-Info "Launching EC2 instance ($instanceType, $nameTag)..."
+    Write-Dim "This typically takes 1-2 minutes..."
+    Write-Host ""
+
+    $keyOpt = @()
+    foreach ($kf in @("$env:USERPROFILE\.ssh\id_ed25519.pub", "$env:USERPROFILE\.ssh\id_rsa.pub")) {
+        if (Test-Path $kf) { $keyOpt = @("--key-name", "networker-keypair"); break }
+    }
+
+    $instanceId = (& aws ec2 run-instances `
+        --region $script:AwsRegion `
+        --image-id $script:AwsAmiId `
+        --instance-type $instanceType `
+        @keyOpt `
+        --security-group-ids $sgId `
+        --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$nameTag}]" `
+        --query "Instances[0].InstanceId" `
+        --output text 2>$null) -join ""
+
+    if (-not $instanceId -or $instanceId -eq "None") {
+        Write-Err "Failed to launch EC2 instance."
+        exit 1
+    }
+    if ($label -eq "tester") { $script:AwsTesterInstanceId = $instanceId }
+    else { $script:AwsEndpointInstanceId = $instanceId }
+    Write-Ok "Instance launched: $instanceId"
+
+    Write-Info "Waiting for instance to reach 'running' state..."
+    & aws ec2 wait instance-running --region $script:AwsRegion --instance-ids $instanceId
+
+    $publicIp = (& aws ec2 describe-instances `
+        --region $script:AwsRegion --instance-ids $instanceId `
+        --query "Reservations[0].Instances[0].PublicIpAddress" `
+        --output text 2>$null) -join ""
+
+    if (-not $publicIp -or $publicIp -eq "None") {
+        Write-Err "Instance has no public IP."
+        exit 1
+    }
+    if ($label -eq "tester") { $script:AwsTesterIp = $publicIp }
+    else { $script:AwsEndpointIp = $publicIp }
+    Write-Ok "Instance running -- Public IP: $publicIp"
+}
+
+function Invoke-AwsDeployTester {
+    Invoke-AwsEnsureKeypair
+    Invoke-AwsFindUbuntuAmi
+    $sgId = Invoke-AwsCreateSecurityGroup "tester"
+    Invoke-AwsLaunchInstance "tester" $script:AwsTesterType $script:AwsTesterName $sgId
+    Invoke-WaitForSsh $script:AwsTesterIp "ubuntu" "tester instance"
+    if ($script:AwsAutoShutdown -eq "yes") {
+        Invoke-RemoteAutoShutdownCron $script:AwsTesterIp "ubuntu"
+    }
+    Invoke-RemoteInstallBinary "networker-tester" $script:AwsTesterIp "ubuntu"
+}
+
+function Invoke-AwsDeployEndpoint {
+    if (-not $script:AwsAmiId) {
+        Invoke-AwsEnsureKeypair
+        Invoke-AwsFindUbuntuAmi
+    }
+    $sgId = Invoke-AwsCreateSecurityGroup "endpoint"
+    Invoke-AwsLaunchInstance "endpoint" $script:AwsEndpointType $script:AwsEndpointName $sgId
+    Invoke-WaitForSsh $script:AwsEndpointIp "ubuntu" "endpoint instance"
+    if ($script:AwsAutoShutdown -eq "yes") {
+        Invoke-RemoteAutoShutdownCron $script:AwsEndpointIp "ubuntu"
+    }
+    Invoke-RemoteInstallBinary "networker-endpoint" $script:AwsEndpointIp "ubuntu"
+    Invoke-RemoteCreateEndpointService $script:AwsEndpointIp "ubuntu"
+    Invoke-RemoteVerifyHealth $script:AwsEndpointIp
+    Invoke-GenerateConfig $script:AwsEndpointIp
+}
+
+# ── GCP deployment ────────────────────────────────────────────────────────────
+function Invoke-GcpCheckPrereqs {
+    Invoke-NextStep "Check GCP prerequisites"
+
+    Write-Ok "gcloud CLI found"
+
+    # Ensure logged in
+    if (-not $script:GcpLoggedIn) {
+        $prevErr = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $acct = (& gcloud config get-value account 2>$null) -join ""
+        $ErrorActionPreference = $prevErr
+        if ($acct -and $acct -ne "(unset)") {
+            $script:GcpLoggedIn = $true
+        } else {
+            Write-Warn "Not logged in to GCP."
+            & gcloud auth login --no-launch-browser
+            $acct = (& gcloud config get-value account 2>$null) -join ""
+            if ($acct -and $acct -ne "(unset)") {
+                $script:GcpLoggedIn = $true
+            } else {
+                Write-Err "GCP login failed."
+                exit 1
+            }
+        }
+    }
+
+    $prevErr = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $acct = (& gcloud config get-value account 2>$null) -join ""
+    $ErrorActionPreference = $prevErr
+    Write-Ok "Account: $acct  (project: $($script:GcpProject))"
+
+    # Enable Compute Engine API
+    Write-Info "Checking Compute Engine API..."
+    $prevErr = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $apiStatus = (& gcloud services list --enabled `
+        --filter "config.name=compute.googleapis.com" `
+        --format "value(config.name)" `
+        --project $script:GcpProject 2>$null) -join ""
+    $ErrorActionPreference = $prevErr
+
+    if ($apiStatus -ne "compute.googleapis.com") {
+        Write-Warn "Compute Engine API is not enabled."
+        if (Invoke-AskYN "Enable Compute Engine API now?" "y") {
+            & gcloud services enable compute.googleapis.com --project $script:GcpProject
+            Write-Ok "Compute Engine API enabled"
+        } else {
+            Write-Err "Compute Engine API is required."
+            exit 1
+        }
+    } else {
+        Write-Ok "Compute Engine API enabled"
+    }
+}
+
+function Invoke-GcpCreateFirewallRule {
+    $ruleName = "networker-endpoint-allow"
+    $prevErr = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $null = & gcloud compute firewall-rules describe $ruleName --project $script:GcpProject 2>&1
+    $ruleExists = ($LASTEXITCODE -eq 0)
+    $ErrorActionPreference = $prevErr
+
+    if ($ruleExists) {
+        Write-Ok "Firewall rule '$ruleName' already exists -- reusing"
+        return
+    }
+
+    Write-Info "Creating firewall rule '$ruleName'..."
+    & gcloud compute firewall-rules create $ruleName `
+        --project $script:GcpProject `
+        --direction INGRESS `
+        --action ALLOW `
+        --rules "tcp:22,tcp:80,tcp:443,tcp:8080,tcp:8443,udp:8443,udp:9998,udp:9999" `
+        --source-ranges "0.0.0.0/0" `
+        --target-tags networker-endpoint `
+        --quiet
+    Write-Ok "Firewall rule created"
+}
+
+function Invoke-GcpCreateInstance ($label, $name, $machineType) {
+    Invoke-NextStep "Create GCE instance for $label ($name in $($script:GcpZone))"
+
+    $reused = Invoke-VmExistsCheck -Provider "gcp" -Label $label -Name $name
+    if ($reused) { return }
+    $name = if ($label -eq "tester") { $script:GcpTesterName } else { $script:GcpEndpointName }
+
+    $tagsOpt = @()
+    if ($label -eq "endpoint") { $tagsOpt = @("--tags=networker-endpoint") }
+
+    Write-Info "Creating Ubuntu 22.04 VM '$name' ($machineType)..."
+    Write-Dim "This typically takes 1-2 minutes..."
+    Write-Host ""
+
+    & gcloud compute instances create $name `
+        --project $script:GcpProject `
+        --zone $script:GcpZone `
+        --machine-type $machineType `
+        --image-family ubuntu-2204-lts `
+        --image-project ubuntu-os-cloud `
+        @tagsOpt `
+        --quiet
+
+    $prevErr = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $ip = (& gcloud compute instances describe $name `
+        --project $script:GcpProject `
+        --zone $script:GcpZone `
+        --format "get(networkInterfaces[0].accessConfigs[0].natIP)" 2>$null) -join ""
+    $ErrorActionPreference = $prevErr
+
+    if (-not $ip) {
+        Write-Err "Failed to retrieve instance public IP."
+        exit 1
+    }
+
+    if ($label -eq "tester") { $script:GcpTesterIp = $ip }
+    else { $script:GcpEndpointIp = $ip }
+    Write-Ok "Instance created -- Public IP: $ip"
+}
+
+function Invoke-GcpWaitForSsh ($name, $label) {
+    Write-Info "Waiting for SSH access to $label..."
+    $attempt = 0
+    $prevErr = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    while ($attempt -lt 30) {
+        $null = & gcloud compute ssh $name `
+            --project $script:GcpProject `
+            --zone $script:GcpZone `
+            --command "echo ok" `
+            --quiet `
+            --ssh-flag="-o ConnectTimeout=5" `
+            --ssh-flag="-o StrictHostKeyChecking=no" 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            $ErrorActionPreference = $prevErr
+            Write-Ok "SSH available on $label"
+            return
+        }
+        $attempt++
+        Start-Sleep -Seconds 5
+    }
+    $ErrorActionPreference = $prevErr
+    Write-Warn "SSH not available after 150s -- continuing anyway"
+}
+
+function Invoke-GcpSshRun ($name, $command) {
+    & gcloud compute ssh $name `
+        --project $script:GcpProject `
+        --zone $script:GcpZone `
+        --quiet `
+        --ssh-flag="-o StrictHostKeyChecking=no" `
+        --command $command
+}
+
+function Invoke-GcpDeployTester {
+    Invoke-GcpCheckPrereqs
+    Invoke-GcpCreateInstance "tester" $script:GcpTesterName $script:GcpTesterMachineType
+    Invoke-GcpWaitForSsh $script:GcpTesterName "tester instance"
+    if ($script:GcpAutoShutdown -eq "yes") {
+        Invoke-NextStep "Set auto-shutdown cron for tester"
+        Invoke-GcpSshRun $script:GcpTesterName "(crontab -l 2>/dev/null; echo '0 4 * * * /sbin/shutdown -h now') | crontab -"
+        Write-Ok "Auto-shutdown cron installed"
+    }
+    Invoke-NextStep "Install networker-tester on GCE instance"
+    Invoke-GcpInstallBinary "networker-tester" $script:GcpTesterName
+}
+
+function Invoke-GcpDeployEndpoint {
+    Invoke-GcpCheckPrereqs
+    Invoke-GcpCreateFirewallRule
+    Invoke-GcpCreateInstance "endpoint" $script:GcpEndpointName $script:GcpEndpointMachineType
+    Invoke-GcpWaitForSsh $script:GcpEndpointName "endpoint instance"
+    if ($script:GcpAutoShutdown -eq "yes") {
+        Invoke-NextStep "Set auto-shutdown cron for endpoint"
+        Invoke-GcpSshRun $script:GcpEndpointName "(crontab -l 2>/dev/null; echo '0 4 * * * /sbin/shutdown -h now') | crontab -"
+        Write-Ok "Auto-shutdown cron installed"
+    }
+    Invoke-NextStep "Install networker-endpoint on GCE instance"
+    Invoke-GcpInstallBinary "networker-endpoint" $script:GcpEndpointName
+    Invoke-NextStep "Create networker-endpoint service (GCP)"
+    Invoke-GcpSshRun $script:GcpEndpointName @"
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin networker 2>/dev/null || true
+sudo tee /etc/systemd/system/networker-endpoint.service > /dev/null <<'UNIT'
+[Unit]
+Description=Networker Endpoint
+After=network.target
+[Service]
+User=networker
+ExecStart=/usr/local/bin/networker-endpoint
+Restart=always
+RestartSec=5
+Environment=RUST_LOG=info
+[Install]
+WantedBy=multi-user.target
+UNIT
+sudo systemctl daemon-reload
+sudo systemctl enable networker-endpoint
+sudo systemctl start networker-endpoint
+if command -v iptables &>/dev/null; then
+    sudo iptables -t nat -C PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080 2>/dev/null || sudo iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080
+    sudo iptables -t nat -C PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null || sudo iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443
+fi
+"@
+    Write-Ok "Endpoint service enabled and started"
+
+    Invoke-NextStep "Verify endpoint health (GCP)"
+    Start-Sleep -Seconds 3
+    $prevErr = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $health = Invoke-GcpSshRun $script:GcpEndpointName "curl -sf http://localhost:8080/health 2>/dev/null"
+    $ErrorActionPreference = $prevErr
+    if ($health) { Write-Ok "Endpoint healthy" }
+    else { Write-Warn "Health check inconclusive -- endpoint may still be starting" }
+
+    Invoke-GenerateConfig $script:GcpEndpointIp
+}
+
+function Invoke-GcpInstallBinary ($binary, $name) {
+    $component = if ($binary -eq "networker-tester") { "tester" } else { "endpoint" }
+    $installerUrl = "https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh"
+
+    Write-Info "Downloading installer on instance..."
+    Invoke-GcpSshRun $name "curl -fsSL '$installerUrl' -o /tmp/networker-install.sh"
+
+    Write-Info "Running installer on instance ($component)..."
+    Invoke-GcpSshRun $name "bash /tmp/networker-install.sh $component -y"
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  REMOTE HELPERS (SSH-based — for Azure and AWS Linux VMs)
+# ══════════════════════════════════════════════════════════════════════════════
+
+function Invoke-WaitForSsh ($ip, $user, $label) {
+    Invoke-NextStep "Wait for SSH on $label"
+    Write-Info "Waiting for SSH access to $label..."
+    $attempt = 0
+    while ($attempt -lt 30) {
+        $prevErr = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $null = & ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 `
+            "${user}@${ip}" "echo ok" 2>&1
+        $ok = ($LASTEXITCODE -eq 0)
+        $ErrorActionPreference = $prevErr
+        if ($ok) {
+            Write-Ok "SSH available on $label"
+            return
+        }
+        $attempt++
+        Start-Sleep -Seconds 5
+    }
+    Write-Warn "SSH not available after 150s -- continuing anyway"
+}
+
+function Invoke-RemoteInstallBinary ($binary, $ip, $user) {
+    Invoke-NextStep "Install $binary on remote VM"
+
+    $component = if ($binary -eq "networker-tester") { "tester" } else { "endpoint" }
+    $installerUrl = "https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh"
+
+    Write-Info "Downloading and running installer on VM..."
+    $prevErr = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    & ssh -o StrictHostKeyChecking=no "${user}@${ip}" `
+        "curl -fsSL '${installerUrl}' -o /tmp/networker-install.sh && bash /tmp/networker-install.sh ${component} -y"
+    $ErrorActionPreference = $prevErr
+
+    # Verify
+    $prevErr = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $ver = (& ssh -o StrictHostKeyChecking=no "${user}@${ip}" `
+        "/usr/local/bin/${binary} --version 2>/dev/null || ~/.cargo/bin/${binary} --version 2>/dev/null" 2>$null) -join ""
+    $ErrorActionPreference = $prevErr
+    if ($ver) { Write-Ok "$binary installed on VM  ($ver)" }
+    else { Write-Warn "$binary install may have failed -- check VM manually" }
+}
+
+function Invoke-RemoteCreateEndpointService ($ip, $user) {
+    Invoke-NextStep "Create networker-endpoint service"
+    $prevErr = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    & ssh -o StrictHostKeyChecking=no "${user}@${ip}" @"
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin networker 2>/dev/null || true
+sudo tee /etc/systemd/system/networker-endpoint.service > /dev/null <<'UNIT'
+[Unit]
+Description=Networker Endpoint
+After=network.target
+[Service]
+User=networker
+ExecStart=/usr/local/bin/networker-endpoint
+Restart=always
+RestartSec=5
+Environment=RUST_LOG=info
+[Install]
+WantedBy=multi-user.target
+UNIT
+sudo systemctl daemon-reload
+sudo systemctl enable networker-endpoint
+sudo systemctl start networker-endpoint
+if command -v iptables &>/dev/null; then
+    sudo iptables -t nat -C PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080 2>/dev/null || sudo iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080
+    sudo iptables -t nat -C PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null || sudo iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443
+fi
+"@
+    $ErrorActionPreference = $prevErr
+    Start-Sleep -Seconds 2
+    Write-Ok "networker-endpoint service enabled and started"
+}
+
+function Invoke-RemoteVerifyHealth ($ip) {
+    Invoke-NextStep "Verify endpoint health"
+    Start-Sleep -Seconds 3
+    $prevErr = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $health = Invoke-WebRequest -Uri "http://${ip}:8080/health" -UseBasicParsing -TimeoutSec 10
+        Write-Ok "Endpoint healthy (HTTP $($health.StatusCode))"
+    } catch {
+        Write-Warn "Health check failed -- endpoint may still be starting"
+    }
+    $ErrorActionPreference = $prevErr
+}
+
+function Invoke-RemoteAutoShutdownCron ($ip, $user) {
+    Invoke-NextStep "Set auto-shutdown cron"
+    $prevErr = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    & ssh -o StrictHostKeyChecking=no "${user}@${ip}" `
+        "(crontab -l 2>/dev/null; echo '0 4 * * * /sbin/shutdown -h now') | crontab -"
+    $ErrorActionPreference = $prevErr
+    Write-Ok "Auto-shutdown cron installed: 04:00 UTC (11 PM EST) daily"
+}
+
+function Invoke-GenerateConfig ($endpointIp) {
+    Invoke-NextStep "Generate test config"
+    $configPath = Join-Path $env:USERPROFILE "networker-cloud.json"
+    $config = @{
+        target = "http://${endpointIp}:8080/health"
+        modes  = @("http1", "http2", "tcp", "tls", "dns")
+        runs   = 5
+    } | ConvertTo-Json -Depth 3
+    Set-Content -Path $configPath -Value $config -Encoding UTF8
+    $script:ConfigFilePath = $configPath
+    Write-Ok "Config saved: $configPath"
+}
+
 # ── Completion summary ─────────────────────────────────────────────────────────
 function Show-Completion {
     Write-Host ""
@@ -759,35 +2132,128 @@ function Show-Completion {
     Write-Host ("=" * 58) -ForegroundColor Green
     Write-Host ""
 
-    if ($env:PATH -notlike "*$CargoBin*") {
+    $doLocalTester   = $script:DoInstallTester   -and -not $script:DoRemoteTester
+    $doLocalEndpoint = $script:DoInstallEndpoint -and -not $script:DoRemoteEndpoint
+
+    if (($doLocalTester -or $doLocalEndpoint) -and $env:PATH -notlike "*$CargoBin*") {
         Write-Warn "$CargoBin is not in PATH for this session."
         Write-Host ""
-        Write-Host "  Run now:"
-        Write-Host ('    $env:PATH = "' + $CargoBin + ';$env:PATH"')
-        Write-Host ""
-        Write-Host "  Make permanent (User scope):"
-        Write-Host ('    [Environment]::SetEnvironmentVariable("PATH","' + $CargoBin + ';$env:PATH","User")')
+        Write-Host ('  Run now:  $env:PATH = "' + $CargoBin + ';$env:PATH"')
         Write-Host ""
     }
 
-    if ($script:DoInstallTester) {
+    if ($doLocalTester) {
         Write-Host "  networker-tester quick start:" -ForegroundColor White
         Write-Host "    networker-tester --help"
         Write-Host "    networker-tester --target http://localhost:8080/health --modes http1 --runs 3"
         Write-Host ""
     }
-    if ($script:DoInstallEndpoint) {
+    if ($doLocalEndpoint) {
         Write-Host "  networker-endpoint quick start:" -ForegroundColor White
         Write-Host "    networker-endpoint"
         Write-Host "    # Listens on :8080 HTTP, :8443 HTTPS/H2/H3, :9998 UDP throughput, :9999 UDP echo"
         Write-Host ""
     }
+
+    # Remote tester summary
+    if ($script:DoRemoteTester) {
+        $tIp = ""; $tSsh = ""
+        switch ($script:TesterLocation) {
+            "azure" { $tIp = $script:AzureTesterIp; $tSsh = "ssh azureuser@$tIp" }
+            "aws"   { $tIp = $script:AwsTesterIp;   $tSsh = "ssh ubuntu@$tIp" }
+            "gcp"   { $tIp = $script:GcpTesterIp;   $tSsh = "gcloud compute ssh $($script:GcpTesterName) --zone $($script:GcpZone)" }
+        }
+        if ($tIp) {
+            $provider = $script:TesterLocation.ToUpper()
+            Write-Host "  networker-tester ($provider $tIp):" -ForegroundColor White
+            Write-Host "    SSH: $tSsh"
+            Write-Host ""
+        }
+    }
+
+    # Remote endpoint summary
+    if ($script:DoRemoteEndpoint) {
+        $eIp = ""; $eSsh = ""
+        switch ($script:EndpointLocation) {
+            "azure" { $eIp = $script:AzureEndpointIp; $eSsh = "ssh azureuser@$eIp" }
+            "aws"   { $eIp = $script:AwsEndpointIp;   $eSsh = "ssh ubuntu@$eIp" }
+            "gcp"   { $eIp = $script:GcpEndpointIp;   $eSsh = "gcloud compute ssh $($script:GcpEndpointName) --zone $($script:GcpZone)" }
+        }
+        if ($eIp) {
+            $provider = $script:EndpointLocation.ToUpper()
+            Write-Host "  networker-endpoint ($provider $eIp):" -ForegroundColor White
+            Write-Host "    Health: curl http://${eIp}:8080/health"
+            Write-Host "    SSH:    $eSsh"
+            Write-Host ""
+        }
+    }
+
+    # Config file
+    if ($script:ConfigFilePath) {
+        Write-Host "  Test config:  $($script:ConfigFilePath)" -ForegroundColor White
+        Write-Host "    networker-tester --config $($script:ConfigFilePath)"
+        Write-Host ""
+    }
+
+    # Cleanup reminders
+    if ($script:TesterLocation -eq "azure" -or $script:EndpointLocation -eq "azure") {
+        if ($script:AzureAutoShutdown -eq "yes") {
+            Write-Host "  Auto-shutdown configured: Azure VMs will stop at 04:00 UTC daily." -ForegroundColor Green
+        } else {
+            Write-Warn "Azure VMs are left running -- delete when done to avoid charges!"
+        }
+        Write-Host ""
+        Write-Dim "Delete Azure resources when done:"
+        if ($script:TesterLocation -eq "azure") {
+            Write-Dim "  az group delete --name $($script:AzureTesterRg) --yes --no-wait"
+        }
+        if ($script:EndpointLocation -eq "azure") {
+            Write-Dim "  az group delete --name $($script:AzureEndpointRg) --yes --no-wait"
+        }
+        Write-Host ""
+    }
+
+    if ($script:TesterLocation -eq "aws" -or $script:EndpointLocation -eq "aws") {
+        if ($script:AwsAutoShutdown -eq "yes") {
+            Write-Host "  Auto-shutdown configured: AWS instances will stop at 04:00 UTC daily." -ForegroundColor Green
+        } else {
+            Write-Warn "AWS instances are left running -- terminate when done!"
+        }
+        Write-Host ""
+        Write-Dim "Terminate AWS instances when done:"
+        if ($script:TesterLocation -eq "aws" -and $script:AwsTesterInstanceId) {
+            Write-Dim "  aws ec2 terminate-instances --region $($script:AwsRegion) --instance-ids $($script:AwsTesterInstanceId)"
+        }
+        if ($script:EndpointLocation -eq "aws" -and $script:AwsEndpointInstanceId) {
+            Write-Dim "  aws ec2 terminate-instances --region $($script:AwsRegion) --instance-ids $($script:AwsEndpointInstanceId)"
+        }
+        Write-Host ""
+    }
+
+    if ($script:TesterLocation -eq "gcp" -or $script:EndpointLocation -eq "gcp") {
+        if ($script:GcpAutoShutdown -eq "yes") {
+            Write-Host "  Auto-shutdown configured: GCP instances will stop at 04:00 UTC daily." -ForegroundColor Green
+        } else {
+            Write-Warn "GCP instances are left running -- delete when done!"
+        }
+        Write-Host ""
+        Write-Dim "Delete GCP instances when done:"
+        if ($script:TesterLocation -eq "gcp") {
+            Write-Dim "  gcloud compute instances delete $($script:GcpTesterName) --zone $($script:GcpZone) --quiet"
+        }
+        if ($script:EndpointLocation -eq "gcp") {
+            Write-Dim "  gcloud compute instances delete $($script:GcpEndpointName) --zone $($script:GcpZone) --quiet"
+        }
+        Write-Host ""
+    }
 }
 
-# ── Entry point ────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+#  ENTRY POINT
+# ══════════════════════════════════════════════════════════════════════════════
 if ($Help) { Show-Help; exit 0 }
 
-if ($Component -notin @("tester", "endpoint", "both")) {
+if ($Component -and $Component -notin @("tester", "endpoint", "both", "")) {
     Write-Err "Invalid -Component value '$Component'. Use: tester, endpoint, or both."
     exit 1
 }
@@ -796,21 +2262,46 @@ Invoke-DiscoverSystem
 
 Write-Banner
 Show-SystemInfo
+
+Invoke-ComponentSelection
 Show-Plan
 Invoke-MainPrompt
 
-if ($script:InstallMethod -eq "release") {
-    New-Item -ItemType Directory -Force $CargoBin | Out-Null
-    if ($script:DoInstallTester)   { Invoke-DownloadReleaseStep "networker-tester" }
-    if ($script:DoInstallEndpoint) { Invoke-DownloadReleaseStep "networker-endpoint" }
-} else {
-    if ($script:DoChromiumInstall) { Invoke-ChromeInstallStep }
-    if ($script:DoMsvcInstall)     { Invoke-MsvcInstallStep }
-    if ($script:DoGitInstall)      { Invoke-GitInstallStep }
-    if ($script:DoRustInstall)     { Invoke-RustInstallStep }
-    Invoke-EnsureCargoEnv
-    if ($script:DoInstallTester)   { Invoke-CargoInstallStep "networker-tester" }
-    if ($script:DoInstallEndpoint) { Invoke-CargoInstallStep "networker-endpoint" }
+# ── Execute local install steps ──────────────────────────────────────────────
+$doLocalTester   = $script:DoInstallTester   -and -not $script:DoRemoteTester
+$doLocalEndpoint = $script:DoInstallEndpoint -and -not $script:DoRemoteEndpoint
+
+if ($doLocalTester -or $doLocalEndpoint) {
+    if ($script:InstallMethod -eq "release") {
+        New-Item -ItemType Directory -Force $CargoBin | Out-Null
+        if ($doLocalTester)   { Invoke-DownloadReleaseStep "networker-tester" }
+        if ($doLocalEndpoint) { Invoke-DownloadReleaseStep "networker-endpoint" }
+    } else {
+        if ($script:DoChromiumInstall) { Invoke-ChromeInstallStep }
+        if ($script:DoMsvcInstall)     { Invoke-MsvcInstallStep }
+        if ($script:DoGitInstall)      { Invoke-GitInstallStep }
+        if ($script:DoRustInstall)     { Invoke-RustInstallStep }
+        Invoke-EnsureCargoEnv
+        if ($doLocalTester)   { Invoke-CargoInstallStep "networker-tester" }
+        if ($doLocalEndpoint) { Invoke-CargoInstallStep "networker-endpoint" }
+    }
+}
+
+# ── Execute remote deployments ───────────────────────────────────────────────
+if ($script:DoRemoteTester) {
+    switch ($script:TesterLocation) {
+        "azure" { Invoke-AzureDeployTester }
+        "aws"   { Invoke-AwsDeployTester }
+        "gcp"   { Invoke-GcpDeployTester }
+    }
+}
+
+if ($script:DoRemoteEndpoint) {
+    switch ($script:EndpointLocation) {
+        "azure" { Invoke-AzureDeployEndpoint }
+        "aws"   { Invoke-AwsDeployEndpoint }
+        "gcp"   { Invoke-GcpDeployEndpoint }
+    }
 }
 
 Show-Completion

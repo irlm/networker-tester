@@ -309,7 +309,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.12.91"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.12.93"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -2929,6 +2929,54 @@ step_azure_create_vm() {
         done
     fi
 
+    # Check if VM already exists in the resource group
+    if az vm show --resource-group "$rg" --name "$vm" --output none 2>/dev/null; then
+        echo ""
+        print_warn "VM '$vm' already exists in resource group '$rg'."
+        echo ""
+        echo "    1) Reuse existing VM  [default]"
+        echo "    2) Pick a different name"
+        echo "    3) Delete and recreate"
+        echo ""
+        printf "  Choice [1]: "
+        local choice; read -r choice </dev/tty || true
+        choice="${choice:-1}"
+
+        case "$choice" in
+            1)
+                local ip
+                ip="$(az vm show --resource-group "$rg" --name "$vm" \
+                    --show-details --query publicIps -o tsv 2>/dev/null || echo "")"
+                if [[ -z "$ip" ]]; then
+                    print_err "Failed to retrieve VM public IP."
+                    exit 1
+                fi
+                printf -v "$ip_var" "%s" "$ip"
+                print_ok "Reusing VM '$vm' — Public IP: ${BOLD}${ip}${RESET}"
+                return 0
+                ;;
+            2)
+                printf "  New VM name: "
+                local new_name; read -r new_name </dev/tty || true
+                if [[ -z "$new_name" ]]; then
+                    print_err "VM name is required."
+                    exit 1
+                fi
+                vm="$new_name"
+                if [[ "$label" == "tester" ]]; then
+                    AZURE_TESTER_VM="$vm"
+                else
+                    AZURE_ENDPOINT_VM="$vm"
+                fi
+                ;;
+            3)
+                print_info "Deleting VM '$vm'…"
+                az vm delete --resource-group "$rg" --name "$vm" --yes --output none
+                print_ok "VM deleted"
+                ;;
+        esac
+    fi
+
     print_info "Creating $os_label VM '$vm' ($size)…"
     print_dim "This typically takes 1–2 minutes…"
     echo ""
@@ -3407,6 +3455,82 @@ _aws_launch_instance() {
     local label="$1" instance_type="$2" name_tag="$3"
     local sg_id="$4" instance_id_var="$5" ip_var="$6"
 
+    # Check if an instance with this Name tag already exists (running or stopped)
+    local existing_id
+    existing_id="$(aws ec2 describe-instances \
+        --region "$AWS_REGION" \
+        --filters "Name=tag:Name,Values=${name_tag}" \
+                  "Name=instance-state-name,Values=running,stopped,pending" \
+        --query "Reservations[0].Instances[0].InstanceId" \
+        --output text 2>/dev/null || echo "")"
+
+    if [[ -n "$existing_id" && "$existing_id" != "None" ]]; then
+        echo ""
+        print_warn "EC2 instance '$name_tag' already exists ($existing_id)."
+        echo ""
+        echo "    1) Reuse existing instance  [default]"
+        echo "    2) Pick a different name"
+        echo "    3) Terminate and recreate"
+        echo ""
+        printf "  Choice [1]: "
+        local choice; read -r choice </dev/tty || true
+        choice="${choice:-1}"
+
+        case "$choice" in
+            1)
+                printf -v "$instance_id_var" "%s" "$existing_id"
+                local public_ip
+                public_ip="$(aws ec2 describe-instances \
+                    --region "$AWS_REGION" \
+                    --instance-ids "$existing_id" \
+                    --query "Reservations[0].Instances[0].PublicIpAddress" \
+                    --output text 2>/dev/null || echo "")"
+                if [[ -z "$public_ip" || "$public_ip" == "None" ]]; then
+                    # Instance may be stopped — start it
+                    print_info "Starting stopped instance…"
+                    aws ec2 start-instances --region "$AWS_REGION" \
+                        --instance-ids "$existing_id" --output text >/dev/null
+                    aws ec2 wait instance-running --region "$AWS_REGION" \
+                        --instance-ids "$existing_id"
+                    public_ip="$(aws ec2 describe-instances \
+                        --region "$AWS_REGION" \
+                        --instance-ids "$existing_id" \
+                        --query "Reservations[0].Instances[0].PublicIpAddress" \
+                        --output text 2>/dev/null || echo "")"
+                fi
+                if [[ -z "$public_ip" || "$public_ip" == "None" ]]; then
+                    print_err "Instance has no public IP."
+                    exit 1
+                fi
+                printf -v "$ip_var" "%s" "$public_ip"
+                print_ok "Reusing instance '$name_tag' — Public IP: ${BOLD}${public_ip}${RESET}"
+                return 0
+                ;;
+            2)
+                printf "  New instance name: "
+                local new_name; read -r new_name </dev/tty || true
+                if [[ -z "$new_name" ]]; then
+                    print_err "Instance name is required."
+                    exit 1
+                fi
+                name_tag="$new_name"
+                if [[ "$label" == "tester" ]]; then
+                    AWS_TESTER_NAME="$name_tag"
+                else
+                    AWS_ENDPOINT_NAME="$name_tag"
+                fi
+                ;;
+            3)
+                print_info "Terminating instance '$name_tag' ($existing_id)…"
+                aws ec2 terminate-instances --region "$AWS_REGION" \
+                    --instance-ids "$existing_id" --output text >/dev/null
+                aws ec2 wait instance-terminated --region "$AWS_REGION" \
+                    --instance-ids "$existing_id"
+                print_ok "Instance terminated"
+                ;;
+        esac
+    fi
+
     print_info "Launching EC2 instance ($instance_type, $name_tag)…"
     print_dim "This typically takes 1–2 minutes…"
     echo ""
@@ -3632,6 +3756,62 @@ _gcp_create_instance() {
     local label="$1" name="$2" machine_type="$3" ip_var="$4"
 
     next_step "Create GCE instance for $label ($name in $GCP_ZONE)"
+
+    # Check if instance already exists
+    if gcloud compute instances describe "$name" \
+            --project "$GCP_PROJECT" \
+            --zone "$GCP_ZONE" &>/dev/null 2>&1; then
+        echo ""
+        print_warn "Instance '$name' already exists in $GCP_ZONE."
+        echo ""
+        echo "    1) Reuse existing instance  [default]"
+        echo "    2) Pick a different name"
+        echo "    3) Delete and recreate"
+        echo ""
+        printf "  Choice [1]: "
+        local choice; read -r choice </dev/tty || true
+        choice="${choice:-1}"
+
+        case "$choice" in
+            1)
+                local ip
+                ip="$(gcloud compute instances describe "$name" \
+                    --project "$GCP_PROJECT" \
+                    --zone "$GCP_ZONE" \
+                    --format='get(networkInterfaces[0].accessConfigs[0].natIP)' 2>/dev/null || echo "")"
+                if [[ -z "$ip" ]]; then
+                    print_err "Failed to retrieve instance public IP."
+                    exit 1
+                fi
+                printf -v "$ip_var" "%s" "$ip"
+                print_ok "Reusing instance '$name' — Public IP: ${BOLD}${ip}${RESET}"
+                return 0
+                ;;
+            2)
+                printf "  New instance name: "
+                local new_name; read -r new_name </dev/tty || true
+                if [[ -z "$new_name" ]]; then
+                    print_err "Instance name is required."
+                    exit 1
+                fi
+                name="$new_name"
+                # Update the global variable so later steps use the new name
+                if [[ "$label" == "tester" ]]; then
+                    GCP_TESTER_NAME="$name"
+                else
+                    GCP_ENDPOINT_NAME="$name"
+                fi
+                ;;
+            3)
+                print_info "Deleting instance '$name'…"
+                gcloud compute instances delete "$name" \
+                    --project "$GCP_PROJECT" \
+                    --zone "$GCP_ZONE" \
+                    --quiet
+                print_ok "Instance deleted"
+                ;;
+        esac
+    fi
 
     local tags_opt=""
     [[ "$label" == "endpoint" ]] && tags_opt="--tags=networker-endpoint"
