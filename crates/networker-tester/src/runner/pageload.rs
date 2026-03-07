@@ -1638,14 +1638,28 @@ pub async fn warmup_pageload2(
         Some(h) => h.to_string(),
         None => {
             return (
-                error_attempt(attempt_id, run_id, seq, started_at, ErrorCategory::Config, "Target URL has no host".into()),
+                error_attempt(
+                    attempt_id,
+                    run_id,
+                    seq,
+                    started_at,
+                    ErrorCategory::Config,
+                    "Target URL has no host".into(),
+                ),
                 None,
             );
         }
     };
     if target.scheme() != "https" {
         return (
-            error_attempt(attempt_id, run_id, seq, started_at, ErrorCategory::Config, "pageload2 requires HTTPS".into()),
+            error_attempt(
+                attempt_id,
+                run_id,
+                seq,
+                started_at,
+                ErrorCategory::Config,
+                "pageload2 requires HTTPS".into(),
+            ),
             None,
         );
     }
@@ -1660,7 +1674,17 @@ pub async fn warmup_pageload2(
                 (std::net::SocketAddr::new(ip, port), Some(r))
             }
             Err(e) => {
-                return (error_attempt(attempt_id, run_id, seq, started_at, e.category, e.message), None);
+                return (
+                    error_attempt(
+                        attempt_id,
+                        run_id,
+                        seq,
+                        started_at,
+                        e.category,
+                        e.message,
+                    ),
+                    None,
+                );
             }
         }
     } else {
@@ -1668,7 +1692,14 @@ pub async fn warmup_pageload2(
             Ok(ip) => (std::net::SocketAddr::new(ip, port), None),
             Err(_) => {
                 return (
-                    error_attempt(attempt_id, run_id, seq, started_at, ErrorCategory::Config, format!("dns_enabled=false but '{host}' is not a valid IP")),
+                    error_attempt(
+                        attempt_id,
+                        run_id,
+                        seq,
+                        started_at,
+                        ErrorCategory::Config,
+                        format!("dns_enabled=false but '{host}' is not a valid IP"),
+                    ),
                     None,
                 );
             }
@@ -1681,13 +1712,35 @@ pub async fn warmup_pageload2(
     let tcp_stream = match tokio::time::timeout(
         std::time::Duration::from_millis(run_cfg.timeout_ms),
         tokio::net::TcpStream::connect(addr),
-    ).await {
+    )
+    .await
+    {
         Ok(Ok(s)) => s,
         Ok(Err(e)) => {
-            return (error_attempt(attempt_id, run_id, seq, started_at, ErrorCategory::Tcp, e.to_string()), None);
+            return (
+                error_attempt(
+                    attempt_id,
+                    run_id,
+                    seq,
+                    started_at,
+                    ErrorCategory::Tcp,
+                    e.to_string(),
+                ),
+                None,
+            );
         }
         Err(_) => {
-            return (error_attempt(attempt_id, run_id, seq, started_at, ErrorCategory::Timeout, format!("TCP timed out after {}ms", run_cfg.timeout_ms)), None);
+            return (
+                error_attempt(
+                    attempt_id,
+                    run_id,
+                    seq,
+                    started_at,
+                    ErrorCategory::Timeout,
+                    format!("TCP timed out after {}ms", run_cfg.timeout_ms),
+                ),
+                None,
+            );
         }
     };
     let tcp_duration_ms = t_tcp.elapsed().as_secs_f64() * 1000.0;
@@ -1719,37 +1772,92 @@ pub async fn warmup_pageload2(
     // ── TLS handshake ──
     let tls_started_at = Utc::now();
     let t_tls = Instant::now();
-    let tls_config = match build_tls_config(&Protocol::Http2, run_cfg.insecure, run_cfg.ca_bundle.as_deref()) {
+    let tls_config = match build_tls_config(
+        &Protocol::Http2,
+        run_cfg.insecure,
+        run_cfg.ca_bundle.as_deref(),
+    ) {
         Ok(c) => c,
         Err(e) => {
-            return (error_attempt(attempt_id, run_id, seq, started_at, ErrorCategory::Tls, e.to_string()), None);
+            return (
+                error_attempt(
+                    attempt_id,
+                    run_id,
+                    seq,
+                    started_at,
+                    ErrorCategory::Tls,
+                    e.to_string(),
+                ),
+                None,
+            );
         }
     };
     let connector = TlsConnector::from(Arc::new(tls_config));
     let server_name = match ServerName::try_from(host.clone()) {
         Ok(n) => n,
         Err(e) => {
-            return (error_attempt(attempt_id, run_id, seq, started_at, ErrorCategory::Tls, format!("Invalid SNI: {e}")), None);
+            return (
+                error_attempt(
+                    attempt_id,
+                    run_id,
+                    seq,
+                    started_at,
+                    ErrorCategory::Tls,
+                    format!("Invalid SNI: {e}"),
+                ),
+                None,
+            );
         }
     };
     let tls_stream = match tokio::time::timeout(
         std::time::Duration::from_millis(run_cfg.timeout_ms),
         connector.connect(server_name, tcp_stream),
-    ).await {
+    )
+    .await
+    {
         Ok(Ok(s)) => s,
         Ok(Err(e)) => {
-            return (error_attempt(attempt_id, run_id, seq, started_at, ErrorCategory::Tls, e.to_string()), None);
+            return (
+                error_attempt(
+                    attempt_id,
+                    run_id,
+                    seq,
+                    started_at,
+                    ErrorCategory::Tls,
+                    e.to_string(),
+                ),
+                None,
+            );
         }
         Err(_) => {
-            return (error_attempt(attempt_id, run_id, seq, started_at, ErrorCategory::Timeout, format!("TLS timed out after {}ms", run_cfg.timeout_ms)), None);
+            return (
+                error_attempt(
+                    attempt_id,
+                    run_id,
+                    seq,
+                    started_at,
+                    ErrorCategory::Timeout,
+                    format!("TLS timed out after {}ms", run_cfg.timeout_ms),
+                ),
+                None,
+            );
         }
     };
     let tls_duration_ms = t_tls.elapsed().as_secs_f64() * 1000.0;
     let tls_result = {
         let (_, conn) = tls_stream.get_ref();
-        let protocol_version = conn.protocol_version().map(|v| format!("{v:?}")).unwrap_or_else(|| "unknown".into());
-        let cipher_suite = conn.negotiated_cipher_suite().map(|c| format!("{:?}", c.suite())).unwrap_or_else(|| "unknown".into());
-        let alpn_negotiated = conn.alpn_protocol().and_then(|b| std::str::from_utf8(b).ok()).map(String::from);
+        let protocol_version = conn
+            .protocol_version()
+            .map(|v| format!("{v:?}"))
+            .unwrap_or_else(|| "unknown".into());
+        let cipher_suite = conn
+            .negotiated_cipher_suite()
+            .map(|c| format!("{:?}", c.suite()))
+            .unwrap_or_else(|| "unknown".into());
+        let alpn_negotiated = conn
+            .alpn_protocol()
+            .and_then(|b| std::str::from_utf8(b).ok())
+            .map(String::from);
         TlsResult {
             protocol_version,
             cipher_suite,
@@ -1767,13 +1875,30 @@ pub async fn warmup_pageload2(
 
     // ── HTTP/2 handshake ──
     let io = TokioIo::new(tls_stream);
-    let (sender, conn) = match hyper::client::conn::http2::handshake::<_, _, Full<Bytes>>(TokioExecutor::new(), io).await {
-        Ok(pair) => pair,
-        Err(e) => {
-            return (error_attempt(attempt_id, run_id, seq, started_at, ErrorCategory::Http, format!("HTTP/2 handshake: {e}")), None);
+    let (sender, conn) =
+        match hyper::client::conn::http2::handshake::<_, _, Full<Bytes>>(TokioExecutor::new(), io)
+            .await
+        {
+            Ok(pair) => pair,
+            Err(e) => {
+                return (
+                    error_attempt(
+                        attempt_id,
+                        run_id,
+                        seq,
+                        started_at,
+                        ErrorCategory::Http,
+                        format!("HTTP/2 handshake: {e}"),
+                    ),
+                    None,
+                );
+            }
+        };
+    tokio::spawn(async move {
+        if let Err(e) = conn.await {
+            debug!("warmup H2 conn error: {e}");
         }
-    };
-    tokio::spawn(async move { if let Err(e) = conn.await { debug!("warmup H2 conn error: {e}"); } });
+    });
 
     let shared = SharedH2Conn {
         sender: sender.clone(),
@@ -1787,11 +1912,22 @@ pub async fn warmup_pageload2(
 
     // ── Warmup fetch (same as a normal pageload2 fetch) ──
     let warmup = fetch_h2_pageload(
-        attempt_id, run_id, seq, started_at, t_wall, cpu_start,
-        cfg, sender, &host,
-        dns_result, Some(tcp_result), Some(tls_result), tls_duration_ms,
+        attempt_id,
+        run_id,
+        seq,
+        started_at,
+        t_wall,
+        cpu_start,
+        cfg,
+        sender,
+        &host,
+        dns_result,
+        Some(tcp_result),
+        Some(tls_result),
+        tls_duration_ms,
         false, // warmup is a cold probe
-    ).await;
+    )
+    .await;
 
     (warmup, Some(shared))
 }
@@ -1809,11 +1945,22 @@ pub async fn run_pageload2_warm(
     let t_wall = Instant::now();
 
     fetch_h2_pageload(
-        attempt_id, run_id, seq, started_at, t_wall, cpu_start,
-        cfg, conn.sender.clone(), &conn.host,
-        None, None, None, 0.0,
+        attempt_id,
+        run_id,
+        seq,
+        started_at,
+        t_wall,
+        cpu_start,
+        cfg,
+        conn.sender.clone(),
+        &conn.host,
+        None,
+        None,
+        None,
+        0.0,
         true, // warm = connection reused
-    ).await
+    )
+    .await
 }
 
 /// Common H2 page-load fetch logic shared by warmup and warm probes.
@@ -1855,13 +2002,29 @@ async fn fetch_h2_pageload(
     let manifest_resp = match tokio::time::timeout(
         std::time::Duration::from_millis(run_cfg.timeout_ms),
         sender.clone().send_request(manifest_req),
-    ).await {
+    )
+    .await
+    {
         Ok(Ok(r)) => r,
         Ok(Err(e)) => {
-            return error_attempt(attempt_id, run_id, seq, started_at, crate::metrics::ErrorCategory::Http, format!("Manifest: {e}"));
+            return error_attempt(
+                attempt_id,
+                run_id,
+                seq,
+                started_at,
+                crate::metrics::ErrorCategory::Http,
+                format!("Manifest: {e}"),
+            );
         }
         Err(_) => {
-            return error_attempt(attempt_id, run_id, seq, started_at, crate::metrics::ErrorCategory::Timeout, "Manifest timed out".into());
+            return error_attempt(
+                attempt_id,
+                run_id,
+                seq,
+                started_at,
+                crate::metrics::ErrorCategory::Timeout,
+                "Manifest timed out".into(),
+            );
         }
     };
     let ttfb_ms = t_sent.elapsed().as_secs_f64() * 1000.0;
@@ -1875,13 +2038,19 @@ async fn fetch_h2_pageload(
     let manifest_http = crate::metrics::HttpResult {
         negotiated_version: "HTTP/2".into(),
         status_code: manifest_status,
-        headers_size_bytes: manifest_headers.iter().map(|(k, v)| k.as_str().len() + v.len() + 4).sum(),
+        headers_size_bytes: manifest_headers
+            .iter()
+            .map(|(k, v)| k.as_str().len() + v.len() + 4)
+            .sum(),
         body_size_bytes: manifest_body_bytes,
         ttfb_ms,
         total_duration_ms: manifest_total_ms,
         redirect_count: 0,
         started_at: manifest_send_at,
-        response_headers: manifest_headers.iter().map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string())).collect(),
+        response_headers: manifest_headers
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+            .collect(),
         payload_bytes: 0,
         throughput_mbps: None,
         goodput_mbps: None,
@@ -1894,32 +2063,44 @@ async fn fetch_h2_pageload(
     let asset_urls = build_asset_urls(&cfg.base_url, &cfg.asset_sizes);
     let n = asset_urls.len();
 
-    let asset_futures: Vec<_> = asset_urls.iter().map(|url| {
-        let path = format!("{}{}", url.path(), url.query().map(|q| format!("?{q}")).unwrap_or_default());
-        let req = Request::builder()
-            .method("GET")
-            .uri(&path)
-            .header("host", host)
-            .header("user-agent", "networker-tester/0.1")
-            .header("accept", "*/*")
-            .body(Full::new(Bytes::new()))
-            .expect("valid asset request");
-        let mut s = sender.clone();
-        let timeout_ms = run_cfg.timeout_ms;
-        async move {
-            let t0 = Instant::now();
-            match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), s.send_request(req)).await {
-                Ok(Ok(resp)) => {
-                    let status = resp.status().as_u16();
-                    let body = resp.collect().await.ok().map(|b| b.to_bytes());
-                    let elapsed = t0.elapsed().as_secs_f64() * 1000.0;
-                    let body_bytes = body.as_ref().map(|b| b.len()).unwrap_or(0);
-                    Some((status, body_bytes, elapsed))
+    let asset_futures: Vec<_> = asset_urls
+        .iter()
+        .map(|url| {
+            let path = format!(
+                "{}{}",
+                url.path(),
+                url.query().map(|q| format!("?{q}")).unwrap_or_default()
+            );
+            let req = Request::builder()
+                .method("GET")
+                .uri(&path)
+                .header("host", host)
+                .header("user-agent", "networker-tester/0.1")
+                .header("accept", "*/*")
+                .body(Full::new(Bytes::new()))
+                .expect("valid asset request");
+            let mut s = sender.clone();
+            let timeout_ms = run_cfg.timeout_ms;
+            async move {
+                let t0 = Instant::now();
+                match tokio::time::timeout(
+                    std::time::Duration::from_millis(timeout_ms),
+                    s.send_request(req),
+                )
+                .await
+                {
+                    Ok(Ok(resp)) => {
+                        let status = resp.status().as_u16();
+                        let body = resp.collect().await.ok().map(|b| b.to_bytes());
+                        let elapsed = t0.elapsed().as_secs_f64() * 1000.0;
+                        let body_bytes = body.as_ref().map(|b| b.len()).unwrap_or(0);
+                        Some((status, body_bytes, elapsed))
+                    }
+                    _ => None,
                 }
-                _ => None,
             }
-        }
-    }).collect();
+        })
+        .collect();
 
     let asset_results = futures::future::join_all(asset_futures).await;
     let mut assets_fetched = 0usize;
@@ -1935,7 +2116,11 @@ async fn fetch_h2_pageload(
 
     let cpu_time_ms = Some(cpu_start.elapsed().as_secs_f64() * 1000.0);
     let total_ms = t_wall.elapsed().as_secs_f64() * 1000.0;
-    let tls_overhead_ratio = if total_ms > 0.0 && !connection_reused { tls_duration_ms / total_ms } else { 0.0 };
+    let tls_overhead_ratio = if total_ms > 0.0 && !connection_reused {
+        tls_duration_ms / total_ms
+    } else {
+        0.0
+    };
 
     let page_load = PageLoadResult {
         asset_count: n,
@@ -1948,7 +2133,11 @@ async fn fetch_h2_pageload(
         started_at,
         tls_setup_ms: tls_duration_ms,
         tls_overhead_ratio,
-        per_connection_tls_ms: if connection_reused { vec![] } else { vec![tls_duration_ms] },
+        per_connection_tls_ms: if connection_reused {
+            vec![]
+        } else {
+            vec![tls_duration_ms]
+        },
         cpu_time_ms,
         connection_reused,
     };
@@ -1981,18 +2170,40 @@ async fn fetch_h2_pageload(
 
 #[cfg(not(feature = "http3"))]
 pub async fn warmup_pageload3(
-    run_id: Uuid, seq: u32, _cfg: &PageLoadConfig,
+    run_id: Uuid,
+    seq: u32,
+    _cfg: &PageLoadConfig,
 ) -> (RequestAttempt, Option<()>) {
-    (error_attempt_proto(Uuid::new_v4(), run_id, seq, Utc::now(), Protocol::PageLoad3, crate::metrics::ErrorCategory::Config,
-        "HTTP/3 excluded at compile time".into()), None)
+    (
+        error_attempt_proto(
+            Uuid::new_v4(),
+            run_id,
+            seq,
+            Utc::now(),
+            Protocol::PageLoad3,
+            crate::metrics::ErrorCategory::Config,
+            "HTTP/3 excluded at compile time".into(),
+        ),
+        None,
+    )
 }
 
 #[cfg(not(feature = "http3"))]
 pub async fn run_pageload3_warm(
-    run_id: Uuid, seq: u32, _cfg: &PageLoadConfig, _conn: &tokio::sync::Mutex<()>,
+    run_id: Uuid,
+    seq: u32,
+    _cfg: &PageLoadConfig,
+    _conn: &tokio::sync::Mutex<()>,
 ) -> RequestAttempt {
-    error_attempt_proto(Uuid::new_v4(), run_id, seq, Utc::now(), Protocol::PageLoad3, crate::metrics::ErrorCategory::Config,
-        "HTTP/3 excluded at compile time".into())
+    error_attempt_proto(
+        Uuid::new_v4(),
+        run_id,
+        seq,
+        Utc::now(),
+        Protocol::PageLoad3,
+        crate::metrics::ErrorCategory::Config,
+        "HTTP/3 excluded at compile time".into(),
+    )
 }
 
 #[cfg(feature = "http3")]
@@ -2013,20 +2224,57 @@ pub async fn warmup_pageload3(
     let host = match target.host_str() {
         Some(h) => h.to_string(),
         None => {
-            return (error_attempt_proto(attempt_id, run_id, seq, started_at, Protocol::PageLoad3, crate::metrics::ErrorCategory::Config, "No host".into()), None);
+            return (
+                error_attempt_proto(
+                    attempt_id,
+                    run_id,
+                    seq,
+                    started_at,
+                    Protocol::PageLoad3,
+                    crate::metrics::ErrorCategory::Config,
+                    "No host".into(),
+                ),
+                None,
+            );
         }
     };
     if target.scheme() != "https" {
-        return (error_attempt_proto(attempt_id, run_id, seq, started_at, Protocol::PageLoad3, crate::metrics::ErrorCategory::Config, "pageload3 requires HTTPS".into()), None);
+        return (
+            error_attempt_proto(
+                attempt_id,
+                run_id,
+                seq,
+                started_at,
+                Protocol::PageLoad3,
+                crate::metrics::ErrorCategory::Config,
+                "pageload3 requires HTTPS".into(),
+            ),
+            None,
+        );
     }
     let port = target.port().unwrap_or(443);
     let run_cfg = &cfg.run_cfg;
 
     // ── TLS / QUIC config ──
-    let mut tls_cfg = match build_tls_config(&Protocol::Http1, run_cfg.insecure, run_cfg.ca_bundle.as_deref()) {
+    let mut tls_cfg = match build_tls_config(
+        &Protocol::Http1,
+        run_cfg.insecure,
+        run_cfg.ca_bundle.as_deref(),
+    ) {
         Ok(c) => c,
         Err(e) => {
-            return (error_attempt_proto(attempt_id, run_id, seq, started_at, Protocol::PageLoad3, crate::metrics::ErrorCategory::Tls, format!("TLS: {e}")), None);
+            return (
+                error_attempt_proto(
+                    attempt_id,
+                    run_id,
+                    seq,
+                    started_at,
+                    Protocol::PageLoad3,
+                    crate::metrics::ErrorCategory::Tls,
+                    format!("TLS: {e}"),
+                ),
+                None,
+            );
         }
     };
     tls_cfg.alpn_protocols = vec![b"h3".to_vec()];
@@ -2034,7 +2282,18 @@ pub async fn warmup_pageload3(
         match quinn::crypto::rustls::QuicClientConfig::try_from(tls_cfg) {
             Ok(c) => c,
             Err(e) => {
-                return (error_attempt_proto(attempt_id, run_id, seq, started_at, Protocol::PageLoad3, crate::metrics::ErrorCategory::Tls, format!("QUIC TLS: {e}")), None);
+                return (
+                    error_attempt_proto(
+                        attempt_id,
+                        run_id,
+                        seq,
+                        started_at,
+                        Protocol::PageLoad3,
+                        crate::metrics::ErrorCategory::Tls,
+                        format!("QUIC TLS: {e}"),
+                    ),
+                    None,
+                );
             }
         },
     ));
@@ -2042,7 +2301,18 @@ pub async fn warmup_pageload3(
     let mut endpoint = match Endpoint::client("0.0.0.0:0".parse().unwrap()) {
         Ok(e) => e,
         Err(e) => {
-            return (error_attempt_proto(attempt_id, run_id, seq, started_at, Protocol::PageLoad3, crate::metrics::ErrorCategory::Config, format!("QUIC endpoint: {e}")), None);
+            return (
+                error_attempt_proto(
+                    attempt_id,
+                    run_id,
+                    seq,
+                    started_at,
+                    Protocol::PageLoad3,
+                    crate::metrics::ErrorCategory::Config,
+                    format!("QUIC endpoint: {e}"),
+                ),
+                None,
+            );
         }
     };
     endpoint.set_default_client_config(quinn_tls);
@@ -2055,11 +2325,33 @@ pub async fn warmup_pageload3(
             Ok(mut a) => match a.next() {
                 Some(sa) => sa,
                 None => {
-                    return (error_attempt_proto(attempt_id, run_id, seq, started_at, Protocol::PageLoad3, crate::metrics::ErrorCategory::Dns, format!("No addresses for {host}")), None);
+                    return (
+                        error_attempt_proto(
+                            attempt_id,
+                            run_id,
+                            seq,
+                            started_at,
+                            Protocol::PageLoad3,
+                            crate::metrics::ErrorCategory::Dns,
+                            format!("No addresses for {host}"),
+                        ),
+                        None,
+                    );
                 }
             },
             Err(e) => {
-                return (error_attempt_proto(attempt_id, run_id, seq, started_at, Protocol::PageLoad3, crate::metrics::ErrorCategory::Dns, format!("DNS: {e}")), None);
+                return (
+                    error_attempt_proto(
+                        attempt_id,
+                        run_id,
+                        seq,
+                        started_at,
+                        Protocol::PageLoad3,
+                        crate::metrics::ErrorCategory::Dns,
+                        format!("DNS: {e}"),
+                    ),
+                    None,
+                );
             }
         },
     };
@@ -2069,16 +2361,54 @@ pub async fn warmup_pageload3(
     let connecting = match endpoint.connect(server_addr, &host) {
         Ok(c) => c,
         Err(e) => {
-            return (error_attempt_proto(attempt_id, run_id, seq, started_at, Protocol::PageLoad3, crate::metrics::ErrorCategory::Tcp, format!("QUIC connect: {e}")), None);
+            return (
+                error_attempt_proto(
+                    attempt_id,
+                    run_id,
+                    seq,
+                    started_at,
+                    Protocol::PageLoad3,
+                    crate::metrics::ErrorCategory::Tcp,
+                    format!("QUIC connect: {e}"),
+                ),
+                None,
+            );
         }
     };
-    let conn = match tokio::time::timeout(std::time::Duration::from_millis(run_cfg.timeout_ms), connecting).await {
+    let conn = match tokio::time::timeout(
+        std::time::Duration::from_millis(run_cfg.timeout_ms),
+        connecting,
+    )
+    .await
+    {
         Ok(Ok(c)) => c,
         Ok(Err(e)) => {
-            return (error_attempt_proto(attempt_id, run_id, seq, started_at, Protocol::PageLoad3, crate::metrics::ErrorCategory::Tcp, format!("QUIC: {e}")), None);
+            return (
+                error_attempt_proto(
+                    attempt_id,
+                    run_id,
+                    seq,
+                    started_at,
+                    Protocol::PageLoad3,
+                    crate::metrics::ErrorCategory::Tcp,
+                    format!("QUIC: {e}"),
+                ),
+                None,
+            );
         }
         Err(_) => {
-            return (error_attempt_proto(attempt_id, run_id, seq, started_at, Protocol::PageLoad3, crate::metrics::ErrorCategory::Timeout, format!("QUIC timed out after {}ms", run_cfg.timeout_ms)), None);
+            return (
+                error_attempt_proto(
+                    attempt_id,
+                    run_id,
+                    seq,
+                    started_at,
+                    Protocol::PageLoad3,
+                    crate::metrics::ErrorCategory::Timeout,
+                    format!("QUIC timed out after {}ms", run_cfg.timeout_ms),
+                ),
+                None,
+            );
         }
     };
     let handshake_ms = t_handshake.elapsed().as_secs_f64() * 1000.0;
@@ -2087,18 +2417,46 @@ pub async fn warmup_pageload3(
     let (mut driver, send_req) = match h3::client::new(QuinnH3Connection::new(conn)).await {
         Ok(pair) => pair,
         Err(e) => {
-            return (error_attempt_proto(attempt_id, run_id, seq, started_at, Protocol::PageLoad3, crate::metrics::ErrorCategory::Http, format!("H3: {e}")), None);
+            return (
+                error_attempt_proto(
+                    attempt_id,
+                    run_id,
+                    seq,
+                    started_at,
+                    Protocol::PageLoad3,
+                    crate::metrics::ErrorCategory::Http,
+                    format!("H3: {e}"),
+                ),
+                None,
+            );
         }
     };
-    tokio::spawn(async move { let _ = futures::future::poll_fn(|cx| driver.poll_close(cx)).await; });
+    tokio::spawn(async move {
+        let _ = futures::future::poll_fn(|cx| driver.poll_close(cx)).await;
+    });
 
     // ── Warmup fetch ──
-    let shared = SharedH3Conn { send_req, _endpoint: endpoint, host: host.clone(), port, handshake_ms };
+    let shared = SharedH3Conn {
+        send_req,
+        _endpoint: endpoint,
+        host: host.clone(),
+        port,
+        handshake_ms,
+    };
     let mutex = tokio::sync::Mutex::new(shared);
     let warmup = fetch_h3_pageload(
-        attempt_id, run_id, seq, started_at, t_wall, cpu_start,
-        cfg, &mutex, handshake_ms, false,
-    ).await;
+        attempt_id,
+        run_id,
+        seq,
+        started_at,
+        t_wall,
+        cpu_start,
+        cfg,
+        &mutex,
+        handshake_ms,
+        false,
+    )
+    .await;
 
     let shared = mutex.into_inner();
     (warmup, Some(shared))
@@ -2118,9 +2476,18 @@ pub async fn run_pageload3_warm(
     let t_wall = Instant::now();
 
     fetch_h3_pageload(
-        attempt_id, run_id, seq, started_at, t_wall, cpu_start,
-        cfg, conn, 0.0, true,
-    ).await
+        attempt_id,
+        run_id,
+        seq,
+        started_at,
+        t_wall,
+        cpu_start,
+        cfg,
+        conn,
+        0.0,
+        true,
+    )
+    .await
 }
 
 /// Common H3 page-load fetch logic shared by warmup and warm probes.
@@ -2161,7 +2528,15 @@ async fn fetch_h3_pageload(
     let mut manifest_stream = match conn.send_req.send_request(manifest_req).await {
         Ok(s) => s,
         Err(e) => {
-            return error_attempt_proto(attempt_id, run_id, seq, started_at, Protocol::PageLoad3, crate::metrics::ErrorCategory::Http, format!("Manifest: {e}"));
+            return error_attempt_proto(
+                attempt_id,
+                run_id,
+                seq,
+                started_at,
+                Protocol::PageLoad3,
+                crate::metrics::ErrorCategory::Http,
+                format!("Manifest: {e}"),
+            );
         }
     };
     manifest_stream.finish().await.ok();
@@ -2169,7 +2544,15 @@ async fn fetch_h3_pageload(
     let manifest_resp = match manifest_stream.recv_response().await {
         Ok(r) => r,
         Err(e) => {
-            return error_attempt_proto(attempt_id, run_id, seq, started_at, Protocol::PageLoad3, crate::metrics::ErrorCategory::Http, format!("Manifest recv: {e}"));
+            return error_attempt_proto(
+                attempt_id,
+                run_id,
+                seq,
+                started_at,
+                Protocol::PageLoad3,
+                crate::metrics::ErrorCategory::Http,
+                format!("Manifest recv: {e}"),
+            );
         }
     };
     let ttfb_ms = t_sent.elapsed().as_secs_f64() * 1000.0;
@@ -2198,13 +2581,19 @@ async fn fetch_h3_pageload(
     let manifest_http = crate::metrics::HttpResult {
         negotiated_version: "HTTP/3".into(),
         status_code: manifest_status,
-        headers_size_bytes: manifest_headers.iter().map(|(k, v)| k.as_str().len() + v.len() + 4).sum(),
+        headers_size_bytes: manifest_headers
+            .iter()
+            .map(|(k, v)| k.as_str().len() + v.len() + 4)
+            .sum(),
         body_size_bytes: manifest_body_bytes,
         ttfb_ms,
         total_duration_ms: manifest_total_ms,
         redirect_count: 0,
         started_at: http_started_at,
-        response_headers: manifest_headers.iter().map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string())).collect(),
+        response_headers: manifest_headers
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+            .collect(),
         payload_bytes: 0,
         throughput_mbps: None,
         goodput_mbps: None,
@@ -2230,7 +2619,10 @@ async fn fetch_h3_pageload(
             .body(())
             .expect("valid asset request");
         match tokio::time::timeout(dur, conn.send_req.send_request(req)).await {
-            Ok(Ok(mut s)) => { s.finish().await.ok(); streams.push(Some(s)); }
+            Ok(Ok(mut s)) => {
+                s.finish().await.ok();
+                streams.push(Some(s));
+            }
             _ => streams.push(None),
         }
     }
@@ -2239,18 +2631,21 @@ async fn fetch_h3_pageload(
     drop(conn);
 
     // Phase 2: receive all responses concurrently
-    let asset_futures: Vec<_> = streams.into_iter().map(|maybe_stream| async move {
-        let mut stream = maybe_stream?;
-        let t0 = Instant::now();
-        let resp = stream.recv_response().await.ok()?;
-        let status = resp.status().as_u16();
-        let mut body_bytes = 0usize;
-        while let Some(chunk) = stream.recv_data().await.ok().flatten() {
-            body_bytes += chunk.remaining();
-        }
-        let elapsed = t0.elapsed().as_secs_f64() * 1000.0;
-        Some((status, body_bytes, elapsed))
-    }).collect();
+    let asset_futures: Vec<_> = streams
+        .into_iter()
+        .map(|maybe_stream| async move {
+            let mut stream = maybe_stream?;
+            let t0 = Instant::now();
+            let resp = stream.recv_response().await.ok()?;
+            let status = resp.status().as_u16();
+            let mut body_bytes = 0usize;
+            while let Some(chunk) = stream.recv_data().await.ok().flatten() {
+                body_bytes += chunk.remaining();
+            }
+            let elapsed = t0.elapsed().as_secs_f64() * 1000.0;
+            Some((status, body_bytes, elapsed))
+        })
+        .collect();
 
     let asset_results = futures::future::join_all(asset_futures).await;
     let mut assets_fetched = 0usize;
@@ -2266,7 +2661,11 @@ async fn fetch_h3_pageload(
 
     let cpu_time_ms = Some(cpu_start.elapsed().as_secs_f64() * 1000.0);
     let total_ms = t_wall.elapsed().as_secs_f64() * 1000.0;
-    let tls_overhead_ratio = if total_ms > 0.0 && !connection_reused { handshake_ms / total_ms } else { 0.0 };
+    let tls_overhead_ratio = if total_ms > 0.0 && !connection_reused {
+        handshake_ms / total_ms
+    } else {
+        0.0
+    };
 
     let page_load = PageLoadResult {
         asset_count: n,
@@ -2279,7 +2678,11 @@ async fn fetch_h3_pageload(
         started_at,
         tls_setup_ms: handshake_ms,
         tls_overhead_ratio,
-        per_connection_tls_ms: if connection_reused { vec![] } else { vec![handshake_ms] },
+        per_connection_tls_ms: if connection_reused {
+            vec![]
+        } else {
+            vec![handshake_ms]
+        },
         cpu_time_ms,
         connection_reused,
     };
