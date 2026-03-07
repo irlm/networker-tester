@@ -1553,7 +1553,18 @@ ensure_aws_cli() {
         fi
     fi
 
-    if [[ $AWS_LOGGED_IN -eq 0 ]]; then
+    # Re-check: env vars may have been set after discover_system ran
+    if [[ $AWS_LOGGED_IN -eq 0 && -n "${AWS_ACCESS_KEY_ID:-}" && -n "${AWS_SECRET_ACCESS_KEY:-}" ]]; then
+        if aws sts get-caller-identity &>/dev/null 2>&1 </dev/null; then
+            AWS_LOGGED_IN=1
+        fi
+    fi
+
+    if [[ $AWS_LOGGED_IN -eq 1 ]]; then
+        local aws_ident
+        aws_ident="$(aws sts get-caller-identity --query 'Arn' --output text 2>/dev/null </dev/null || echo 'unknown')"
+        print_ok "AWS credentials found  ($aws_ident)"
+    else
         echo ""
         print_warn "AWS CLI is not configured or credentials are not valid."
         echo ""
@@ -3284,7 +3295,18 @@ step_check_aws_prereqs() {
     fi
     print_ok "aws CLI found"
 
-    if [[ $AWS_LOGGED_IN -eq 0 ]]; then
+    # Re-check: env vars may have been set after discover_system ran
+    if [[ $AWS_LOGGED_IN -eq 0 && -n "${AWS_ACCESS_KEY_ID:-}" && -n "${AWS_SECRET_ACCESS_KEY:-}" ]]; then
+        if aws sts get-caller-identity &>/dev/null 2>&1 </dev/null; then
+            AWS_LOGGED_IN=1
+        fi
+    fi
+
+    if [[ $AWS_LOGGED_IN -eq 1 ]]; then
+        local aws_ident
+        aws_ident="$(aws sts get-caller-identity --query 'Arn' --output text 2>/dev/null </dev/null || echo 'unknown')"
+        print_ok "AWS credentials found  ($aws_ident)"
+    else
         echo ""
         print_warn "No active AWS credentials."
         echo ""

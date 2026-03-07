@@ -804,7 +804,23 @@ function Invoke-EnsureAwsCli {
         }
     }
 
-    if (-not $script:AwsLoggedIn) {
+    # Re-check: env vars may have been set after Discover-System ran
+    if (-not $script:AwsLoggedIn -and $env:AWS_ACCESS_KEY_ID -and $env:AWS_SECRET_ACCESS_KEY) {
+        $prevErr = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $null = & aws sts get-caller-identity 2>&1
+        $script:AwsLoggedIn = ($LASTEXITCODE -eq 0)
+        $ErrorActionPreference = $prevErr
+    }
+
+    if ($script:AwsLoggedIn) {
+        $prevErr = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $awsArn = (& aws sts get-caller-identity --query Arn --output text 2>$null) -join ""
+        $ErrorActionPreference = $prevErr
+        if (-not $awsArn) { $awsArn = "unknown" }
+        Write-Ok "AWS credentials found  ($awsArn)"
+    } else {
         Write-Host ""
         Write-Warn "Not logged in to AWS."
         Write-Host ""
