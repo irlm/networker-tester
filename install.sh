@@ -1600,7 +1600,7 @@ _aws_do_login_sso() {
         echo "  You will need your SSO start URL (e.g. https://my-org.awsapps.com/start)"
         echo "  and your SSO region (e.g. us-east-1)."
         echo ""
-        aws configure sso
+        aws configure sso </dev/tty
     else
         # Pick an existing SSO profile or create a new one
         local profile_count
@@ -1623,7 +1623,7 @@ _aws_do_login_sso() {
             choice="${choice:-1}"
 
             if [[ "$choice" -eq "$i" ]]; then
-                aws configure sso
+                aws configure sso </dev/tty
                 _aws_check_identity
                 return
             else
@@ -1636,7 +1636,7 @@ _aws_do_login_sso() {
         fi
 
         print_info "Logging in via AWS SSO (device code)…"
-        aws sso login --profile "$sso_profile"
+        aws sso login --profile "$sso_profile" </dev/tty
 
         # Export the profile so subsequent aws commands use it
         export AWS_PROFILE="$sso_profile"
@@ -1650,7 +1650,7 @@ _aws_do_login_keys() {
     echo ""
     print_info "Running aws configure (access key + secret)…"
     echo ""
-    aws configure
+    aws configure </dev/tty
 
     _aws_check_identity
 }
@@ -1713,7 +1713,7 @@ ensure_gcp_cli() {
         if ask_yn "Log in to GCP now (device code — opens browser)?" "y"; then
             echo ""
             print_info "Logging in to GCP (device code)…"
-            gcloud auth login --no-launch-browser
+            gcloud auth login --no-launch-browser </dev/tty
             local gcp_account
             gcp_account="$(gcloud config get-value account 2>/dev/null || echo "")"
             if [[ -n "$gcp_account" && "$gcp_account" != "(unset)" ]]; then
@@ -2828,7 +2828,7 @@ step_check_azure_prereqs() {
 
     if [[ $AZURE_LOGGED_IN -eq 0 ]]; then
         print_info "Not logged in to Azure — running az login…"
-        az login
+        az login --use-device-code </dev/tty
         if ! az account show &>/dev/null 2>&1; then
             print_err "Azure login failed."
             exit 1
