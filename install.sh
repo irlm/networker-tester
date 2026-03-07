@@ -654,7 +654,10 @@ discover_system() {
         fi
     fi
 
-    # GCP CLI detection
+    # GCP CLI detection — also check common install location
+    if ! command -v gcloud &>/dev/null && [[ -x "${HOME}/google-cloud-sdk/bin/gcloud" ]]; then
+        export PATH="${HOME}/google-cloud-sdk/bin:${PATH}"
+    fi
     if command -v gcloud &>/dev/null; then
         GCP_CLI_AVAILABLE=1
         local gcp_account
@@ -3524,18 +3527,24 @@ step_check_gcp_prereqs() {
     print_ok "gcloud CLI found"
 
     if [[ $GCP_LOGGED_IN -eq 0 ]]; then
-        echo ""
-        print_warn "Not logged in to GCP."
-        print_info "Logging in via device code…"
-        gcloud auth login --no-launch-browser
+        # Re-check in case gcloud was just added to PATH
         local gcp_account
         gcp_account="$(gcloud config get-value account 2>/dev/null || echo "")"
         if [[ -n "$gcp_account" && "$gcp_account" != "(unset)" ]]; then
             GCP_LOGGED_IN=1
         else
-            print_err "GCP login failed."
-            echo "  Run:  gcloud auth login"
-            exit 1
+            echo ""
+            print_warn "Not logged in to GCP."
+            print_info "Logging in via device code…"
+            gcloud auth login --no-launch-browser </dev/tty
+            gcp_account="$(gcloud config get-value account 2>/dev/null || echo "")"
+            if [[ -n "$gcp_account" && "$gcp_account" != "(unset)" ]]; then
+                GCP_LOGGED_IN=1
+            else
+                print_err "GCP login failed."
+                echo "  Run:  gcloud auth login"
+                exit 1
+            fi
         fi
     fi
 
@@ -3702,7 +3711,7 @@ _gcp_install_binary() {
 
     next_step "Install $binary on GCE instance"
 
-    # Upload installer script and run it
+    # Upload or download installer script on the VM
     print_info "Uploading installer to instance…"
     local script_path
     script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
@@ -3713,15 +3722,24 @@ _gcp_install_binary() {
             --quiet 2>/dev/null || true
     fi
 
-    # Try running the uploaded installer; fall back to downloading binary directly
+    # If SCP failed (e.g. curl|bash — no local file), download from Gist on the VM
+    if ! _gcp_ssh_run "$name" "test -f /tmp/networker-install.sh" 2>/dev/null; then
+        print_dim "Downloading installer on the instance…"
+        _gcp_ssh_run "$name" \
+            "curl -fsSL 'https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh' \
+             -o /tmp/networker-install.sh" 2>/dev/null || true
+    fi
+
+    # Run the installer on the VM (handles Rust, build tools, binary install)
     if _gcp_ssh_run "$name" "test -f /tmp/networker-install.sh" 2>/dev/null; then
         print_info "Running installer on instance ($component)…"
         _gcp_ssh_run "$name" "bash /tmp/networker-install.sh $component -y" 2>&1 | tail -20
     else
-        # Fallback: download binary directly via gh release
+        # Last resort: install build tools + Rust + cargo install
         print_info "Installing binary via cargo install…"
         _gcp_ssh_run "$name" \
-            "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
+            "sudo apt-get update -qq && sudo apt-get install -y build-essential 2>&1 | tail -1 ; \
+             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
              source \"\$HOME/.cargo/env\" && \
              cargo install --git ${REPO_HTTPS} ${binary}" 2>&1 | tail -20
     fi
