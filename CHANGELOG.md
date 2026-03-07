@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.94] – 2026-03-07 — Docs: correct CLI flag descriptions
+
+### Fixed
+- README: clarify `--log-level` overrides `RUST_LOG` (and `--verbose` on tester only)
+- README: note `--verbose` is tester-only
+- docs/testing.md: fix JSON output description — automatic to `output/`, not `--json` to stdout
+- docs/testing.md: update `--html` → `--html-report`, `--json` → `--output-dir` in quick-ref table
+
+---
+
 ## [0.12.93] – 2026-03-07 — Windows installer: cloud deployment parity
 
 ### Added
