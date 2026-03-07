@@ -840,26 +840,122 @@ function Invoke-EnsureAwsCli {
         Write-Ok "AWS credentials found  ($awsArn)"
     } else {
         Write-Host ""
-        Write-Warn "Not logged in to AWS."
+        Write-Warn "AWS CLI is not configured or credentials are not valid."
         Write-Host ""
-        if (Invoke-AskYN "Configure AWS credentials now?" "y") {
-            Write-Info "Running aws configure..."
-            & aws configure
-            $prevErr = $ErrorActionPreference
-            $ErrorActionPreference = "Continue"
-            $null = & aws sts get-caller-identity 2>&1
-            $script:AwsLoggedIn = ($LASTEXITCODE -eq 0)
-            $ErrorActionPreference = $prevErr
-            if ($script:AwsLoggedIn) {
-                Write-Ok "AWS credentials configured"
+        Write-Host "  Choose an authentication method:"
+        Write-Host "    1) AWS SSO / Identity Center  (device code -- opens browser, no keys needed)"
+        Write-Host "    2) Access keys                (AWS_ACCESS_KEY_ID + secret)"
+        Write-Host ""
+        if (Invoke-AskYN "Log in to AWS now?" "y") {
+            Write-Host ""
+            $authMethod = Read-HostDefault "  Auth method [1/2, default 1]" "1"
+
+            if ($authMethod -eq "2") {
+                Invoke-AwsLoginKeys
             } else {
-                Write-Err "AWS authentication failed."
+                Invoke-AwsLoginSso
+            }
+
+            if (-not $script:AwsLoggedIn) {
+                Write-Err "AWS authentication failed -- fix manually then re-run the installer."
+                Write-Host "  SSO:         aws configure sso && aws sso login"
+                Write-Host "  Access keys: aws configure"
                 exit 1
             }
         } else {
-            Write-Err "AWS credentials required for deployment."
+            Write-Err "AWS credentials required for remote deployment."
+            Write-Host "  SSO:         aws configure sso && aws sso login"
+            Write-Host "  Access keys: aws configure"
             exit 1
         }
+    }
+}
+
+# ── Internal: AWS SSO device-code login ──────────────────────────────────────
+function Invoke-AwsLoginSso {
+    Write-Host ""
+
+    # Check if an SSO profile already exists
+    $prevErr = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $allProfiles = @(& aws configure list-profiles 2>$null)
+    $ErrorActionPreference = $prevErr
+
+    $ssoProfiles = @()
+    foreach ($p in $allProfiles) {
+        $p = $p.Trim()
+        if (-not $p) { continue }
+        $prevErr = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $ssoUrl = (& aws configure get sso_start_url --profile $p 2>$null) -join ""
+        $ErrorActionPreference = $prevErr
+        if ($ssoUrl) { $ssoProfiles += $p }
+    }
+
+    if ($ssoProfiles.Count -eq 0) {
+        Write-Info "Setting up AWS SSO profile (one-time setup)..."
+        Write-Host ""
+        Write-Host "  You will need your SSO start URL (e.g. https://my-org.awsapps.com/start)"
+        Write-Host "  and your SSO region (e.g. us-east-1)."
+        Write-Host ""
+        & aws configure sso
+    } else {
+        if ($ssoProfiles.Count -eq 1) {
+            $ssoProfile = $ssoProfiles[0]
+            Write-Info "Using SSO profile: $ssoProfile"
+        } else {
+            Write-Host "  Existing SSO profiles:"
+            for ($i = 0; $i -lt $ssoProfiles.Count; $i++) {
+                Write-Host ("    {0}) {1}" -f ($i+1), $ssoProfiles[$i])
+            }
+            $newIdx = $ssoProfiles.Count + 1
+            Write-Host "    $newIdx) Configure a new SSO profile"
+            Write-Host ""
+            $choice = Read-HostDefault "  Select profile [1]" "1"
+            $idx = 0
+            if ([int]::TryParse($choice, [ref]$idx) -and $idx -eq $newIdx) {
+                & aws configure sso
+                Invoke-AwsCheckIdentity
+                return
+            }
+            if ([int]::TryParse($choice, [ref]$idx) -and $idx -ge 1 -and $idx -le $ssoProfiles.Count) {
+                $ssoProfile = $ssoProfiles[$idx-1]
+            } else {
+                $ssoProfile = $ssoProfiles[0]
+            }
+        }
+
+        Write-Info "Logging in via AWS SSO (device code)..."
+        & aws sso login --profile $ssoProfile
+
+        # Set the profile so subsequent aws commands use it
+        $env:AWS_PROFILE = $ssoProfile
+    }
+
+    Invoke-AwsCheckIdentity
+}
+
+# ── Internal: AWS access-key login ───────────────────────────────────────────
+function Invoke-AwsLoginKeys {
+    Write-Host ""
+    Write-Info "Running aws configure (access key + secret)..."
+    Write-Host ""
+    & aws configure
+
+    Invoke-AwsCheckIdentity
+}
+
+# ── Internal: verify AWS identity after login ────────────────────────────────
+function Invoke-AwsCheckIdentity {
+    $prevErr = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $null = & aws sts get-caller-identity 2>&1
+    $script:AwsLoggedIn = ($LASTEXITCODE -eq 0)
+    $ErrorActionPreference = $prevErr
+    if ($script:AwsLoggedIn) {
+        $awsAccount = (& aws sts get-caller-identity --query Account --output text 2>$null) -join ""
+        if (-not $awsAccount) { $awsAccount = "unknown" }
+        Write-Ok "AWS authenticated  (account: $awsAccount)"
     }
 }
 
@@ -869,8 +965,36 @@ function Invoke-EnsureGcpCli {
         Write-Host ""
         Write-Warn "Google Cloud SDK (gcloud) is not installed."
         Write-Host "  Install from: https://cloud.google.com/sdk/docs/install"
-        Write-Err "gcloud CLI is required for GCP deployment."
-        exit 1
+        if ($script:WingetAvailable) {
+            Write-Host "  Or:  winget install Google.CloudSDK"
+            Write-Host ""
+            if (Invoke-AskYN "Install Google Cloud SDK via winget now?" "y") {
+                $prevErr = $ErrorActionPreference
+                $ErrorActionPreference = "Continue"
+                & winget install --id Google.CloudSDK -e --source winget `
+                    --accept-package-agreements --accept-source-agreements
+                $ErrorActionPreference = $prevErr
+                # Refresh PATH to pick up newly installed gcloud
+                $machinePath = [System.Environment]::GetEnvironmentVariable("PATH", "Machine")
+                $userPath    = [System.Environment]::GetEnvironmentVariable("PATH", "User")
+                $env:PATH    = "$machinePath;$userPath"
+                if (Get-Command gcloud -ErrorAction SilentlyContinue) {
+                    $script:GcpCliAvailable = $true
+                    $ver = (& gcloud --version 2>$null | Select-Object -First 1) -join ""
+                    Write-Ok "Google Cloud SDK installed  ($ver)"
+                } else {
+                    Write-Err "Google Cloud SDK installation failed -- install manually."
+                    Write-Host "  https://cloud.google.com/sdk/docs/install"
+                    exit 1
+                }
+            } else {
+                Write-Err "Google Cloud SDK is required for GCP deployment."
+                exit 1
+            }
+        } else {
+            Write-Err "gcloud CLI is required. Install from: https://cloud.google.com/sdk/docs/install"
+            exit 1
+        }
     }
 
     if (-not $script:GcpLoggedIn) {
@@ -1115,6 +1239,25 @@ function Invoke-AwsOptions ($component) {
     Write-Host ""
 }
 
+# ── Resolve GCP project number to project ID ─────────────────────────────────
+function Invoke-GcpResolveProject {
+    if ($script:GcpProject -match '^\d+$') {
+        $prevErr = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $projId = (& gcloud projects describe $script:GcpProject `
+            --format "value(projectId)" 2>$null) -join ""
+        $ErrorActionPreference = $prevErr
+        if ($projId) {
+            Write-Dim "Resolved project number $($script:GcpProject) -> $projId"
+            $script:GcpProject = $projId
+            $prevErr2 = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            $null = & gcloud config set project $script:GcpProject 2>$null
+            $ErrorActionPreference = $prevErr2
+        }
+    }
+}
+
 function Invoke-GcpOptions ($component) {
     # Guard: skip if already configured
     if ($component -eq "tester" -and $script:GcpTesterOptionsAsked)   { return }
@@ -1140,6 +1283,7 @@ function Invoke-GcpOptions ($component) {
         & gcloud config set project $script:GcpProject 2>$null
         $ErrorActionPreference = $prevErr
     }
+    Invoke-GcpResolveProject
     Write-Ok "Project: $($script:GcpProject)"
     Write-Host ""
 
@@ -1943,6 +2087,8 @@ function Invoke-GcpCheckPrereqs {
             exit 1
         }
     }
+
+    Invoke-GcpResolveProject
 
     $prevErr = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
