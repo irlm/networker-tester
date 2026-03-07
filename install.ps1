@@ -706,6 +706,15 @@ function Invoke-EnsureAzureCli {
         }
     }
 
+    # Re-check login status (may already be logged in from another session)
+    if (-not $script:AzureLoggedIn) {
+        $prevErr = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $null = & az account show --output none 2>&1
+        $script:AzureLoggedIn = ($LASTEXITCODE -eq 0)
+        $ErrorActionPreference = $prevErr
+    }
+
     if (-not $script:AzureLoggedIn) {
         Write-Host ""
         Write-Warn "Not logged in to Azure."
@@ -714,8 +723,38 @@ function Invoke-EnsureAzureCli {
             Write-Info "Logging in to Azure..."
             $prevErr = $ErrorActionPreference
             $ErrorActionPreference = "Continue"
-            & az login --use-device-code
+            $loginOutput = & az login --use-device-code 2>&1
+            $loginOutput | ForEach-Object { Write-Host $_ }
             $script:AzureLoggedIn = ($LASTEXITCODE -eq 0)
+
+            # If login failed (e.g. MFA tenant, no subscriptions found), auto-detect tenant and retry
+            if (-not $script:AzureLoggedIn) {
+                # Try to extract tenant ID from az login output like:
+                #   "please use `az login --tenant TENANT_ID`."
+                #   "1ecbc8ed-6353-... 'Tenant Name'"
+                $tenantId = ""
+                $loginText = ($loginOutput | Out-String)
+                # Match tenant GUID on a line by itself (az lists failed tenants one per line)
+                if ($loginText -match '(?m)^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\s') {
+                    $tenantId = $Matches[1]
+                }
+                Write-Host ""
+                Write-Warn "Default login failed -- this often happens when your subscription"
+                Write-Warn "is in a tenant that requires MFA or when no subscriptions are found."
+                Write-Host ""
+                if ($tenantId) {
+                    Write-Info "Detected tenant: $tenantId -- retrying with --tenant flag..."
+                    & az login --use-device-code --tenant $tenantId
+                    $script:AzureLoggedIn = ($LASTEXITCODE -eq 0)
+                } else {
+                    $tenantId = Read-Host "  Enter tenant ID to retry (or press Enter to abort)"
+                    if ($tenantId) {
+                        Write-Info "Logging in to tenant $tenantId..."
+                        & az login --use-device-code --tenant $tenantId
+                        $script:AzureLoggedIn = ($LASTEXITCODE -eq 0)
+                    }
+                }
+            }
             $ErrorActionPreference = $prevErr
             if ($script:AzureLoggedIn) {
                 Write-Ok "Logged in to Azure"
@@ -842,6 +881,10 @@ function Invoke-EnsureGcpCli {
 # ══════════════════════════════════════════════════════════════════════════════
 
 function Invoke-AzureOptions ($component) {
+    # Guard: skip if already configured (e.g. called from Invoke-DeploymentLocationPrompt)
+    if ($component -eq "tester" -and $script:AzureTesterVm)   { return }
+    if ($component -ne "tester" -and $script:AzureEndpointVm) { return }
+
     $title = if ($component -eq "tester") { "networker-tester" } else { "networker-endpoint" }
     Write-Section "Azure options for $title"
     Write-Host ""
@@ -937,6 +980,10 @@ function Invoke-AzureOptions ($component) {
 }
 
 function Invoke-AwsOptions ($component) {
+    # Guard: skip if already configured
+    if ($component -eq "tester" -and $script:AwsTesterOptionsAsked)   { return }
+    if ($component -ne "tester" -and $script:AwsEndpointOptionsAsked) { return }
+
     $title = if ($component -eq "tester") { "networker-tester" } else { "networker-endpoint" }
     Write-Section "AWS options for $title"
     Write-Host ""
@@ -1012,14 +1059,20 @@ function Invoke-AwsOptions ($component) {
 
     if ($component -eq "tester") {
         $script:AwsTesterName = $name; $script:AwsTesterType = $chosenType; $script:AwsTesterOs = $chosenOs
+        $script:AwsTesterOptionsAsked = $true
     } else {
         $script:AwsEndpointName = $name; $script:AwsEndpointType = $chosenType; $script:AwsEndpointOs = $chosenOs
+        $script:AwsEndpointOptionsAsked = $true
     }
     Write-Ok "OS: $chosenOs  |  Type: $chosenType  |  Name: $name"
     Write-Host ""
 }
 
 function Invoke-GcpOptions ($component) {
+    # Guard: skip if already configured
+    if ($component -eq "tester" -and $script:GcpTesterOptionsAsked)   { return }
+    if ($component -ne "tester" -and $script:GcpEndpointOptionsAsked) { return }
+
     $title = if ($component -eq "tester") { "networker-tester" } else { "networker-endpoint" }
     Write-Section "GCP options for $title"
     Write-Host ""
@@ -1109,8 +1162,10 @@ function Invoke-GcpOptions ($component) {
 
     if ($component -eq "tester") {
         $script:GcpTesterName = $name; $script:GcpTesterMachineType = $chosenType
+        $script:GcpTesterOptionsAsked = $true
     } else {
         $script:GcpEndpointName = $name; $script:GcpEndpointMachineType = $chosenType
+        $script:GcpEndpointOptionsAsked = $true
     }
     Write-Ok "Type: $chosenType  |  Name: $name  |  Zone: $($script:GcpZone)"
     Write-Host ""
@@ -1363,21 +1418,27 @@ function Invoke-VmExistsCheck {
     switch ($Provider) {
         "azure" {
             $rg = if ($Label -eq "tester") { $script:AzureTesterRg } else { $script:AzureEndpointRg }
-            $null = & az vm show --resource-group $rg --name $Name --output none 2>&1
-            $exists = ($LASTEXITCODE -eq 0)
+            try {
+                $null = & az vm show --resource-group $rg --name $Name --output none 2>&1
+                $exists = ($LASTEXITCODE -eq 0)
+            } catch { $exists = $false }
         }
         "aws" {
-            $existingId = (& aws ec2 describe-instances `
-                --region $script:AwsRegion `
-                --filters "Name=tag:Name,Values=$Name" "Name=instance-state-name,Values=running,stopped,pending" `
-                --query "Reservations[0].Instances[0].InstanceId" `
-                --output text 2>$null) -join ""
-            $exists = ($existingId -and $existingId -ne "None")
+            try {
+                $existingId = (& aws ec2 describe-instances `
+                    --region $script:AwsRegion `
+                    --filters "Name=tag:Name,Values=$Name" "Name=instance-state-name,Values=running,stopped,pending" `
+                    --query "Reservations[0].Instances[0].InstanceId" `
+                    --output text 2>$null) -join ""
+                $exists = ($existingId -and $existingId -ne "None")
+            } catch { $exists = $false }
         }
         "gcp" {
-            $null = & gcloud compute instances describe $Name `
-                --project $script:GcpProject --zone $script:GcpZone 2>&1
-            $exists = ($LASTEXITCODE -eq 0)
+            try {
+                $null = & gcloud compute instances describe $Name `
+                    --project $script:GcpProject --zone $script:GcpZone 2>&1
+                $exists = ($LASTEXITCODE -eq 0)
+            } catch { $exists = $false }
         }
     }
     $ErrorActionPreference = $prevErr
@@ -1402,6 +1463,14 @@ function Invoke-VmExistsCheck {
             switch ($Provider) {
                 "azure" {
                     $rg = if ($Label -eq "tester") { $script:AzureTesterRg } else { $script:AzureEndpointRg }
+                    # Check power state and start if deallocated/stopped
+                    $powerState = (& az vm show --resource-group $rg --name $Name `
+                        --show-details --query powerState -o tsv 2>$null) -join ""
+                    if ($powerState -and $powerState -ne "VM running") {
+                        Write-Info "VM is '$powerState' -- starting it..."
+                        & az vm start --resource-group $rg --name $Name --output none 2>&1
+                        Write-Ok "VM started"
+                    }
                     $ip = (& az vm show --resource-group $rg --name $Name `
                         --show-details --query publicIps -o tsv 2>$null) -join ""
                 }
@@ -1598,10 +1667,20 @@ function Invoke-AzureOpenPorts ($rg, $vm) {
     Invoke-NextStep "Open endpoint ports on Azure NSG"
     $prevErr = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
-    & az vm open-port --resource-group $rg --name $vm `
+    $portOut = & az vm open-port --resource-group $rg --name $vm `
         --port "80,443,8080,8443" --priority 1100 --output none 2>&1
     $ErrorActionPreference = $prevErr
-    Write-Ok "Ports opened: 80, 443, 8080, 8443"
+    if ($LASTEXITCODE -ne 0) {
+        $portText = ($portOut | Out-String)
+        if ($portText -match "SecurityRuleConflict|already exists") {
+            Write-Ok "Ports already open (existing NSG rule)"
+        } else {
+            Write-Warn "Port open command returned an error (may already be configured)"
+            Write-Dim ($portText.Trim())
+        }
+    } else {
+        Write-Ok "Ports opened: 80, 443, 8080, 8443"
+    }
 }
 
 function Invoke-AzureAutoShutdown ($vm, $rg) {
@@ -2059,7 +2138,7 @@ function Invoke-RemoteCreateEndpointService ($ip, $user) {
     Invoke-NextStep "Create networker-endpoint service"
     $prevErr = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
-    & ssh -o StrictHostKeyChecking=no "${user}@${ip}" @"
+    $script = @"
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin networker 2>/dev/null || true
 sudo tee /etc/systemd/system/networker-endpoint.service > /dev/null <<'UNIT'
 [Unit]
@@ -2082,6 +2161,9 @@ if command -v iptables &>/dev/null; then
     sudo iptables -t nat -C PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null || sudo iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443
 fi
 "@
+    # Convert CRLF to LF to avoid errors on Linux
+    $script = $script -replace "`r`n", "`n"
+    $script | & ssh -o StrictHostKeyChecking=no "${user}@${ip}" "bash -s"
     $ErrorActionPreference = $prevErr
     Start-Sleep -Seconds 2
     Write-Ok "networker-endpoint service enabled and started"
@@ -2119,7 +2201,7 @@ function Invoke-GenerateConfig ($endpointIp) {
         modes  = @("http1", "http2", "tcp", "tls", "dns")
         runs   = 5
     } | ConvertTo-Json -Depth 3
-    Set-Content -Path $configPath -Value $config -Encoding UTF8
+    [System.IO.File]::WriteAllText($configPath, $config, [System.Text.UTF8Encoding]::new($false))
     $script:ConfigFilePath = $configPath
     Write-Ok "Config saved: $configPath"
 }
@@ -2284,6 +2366,25 @@ if ($doLocalTester -or $doLocalEndpoint) {
         Invoke-EnsureCargoEnv
         if ($doLocalTester)   { Invoke-CargoInstallStep "networker-tester" }
         if ($doLocalEndpoint) { Invoke-CargoInstallStep "networker-endpoint" }
+    }
+}
+
+# ── Ensure cloud CLIs + options for CLI-flag deployments ─────────────────────
+# When using CLI flags (-Azure, -Aws, -Gcp, etc.) the interactive
+# Invoke-DeploymentLocationPrompt is skipped, so Ensure*Cli and *Options
+# were never called. Run them now (idempotent guards prevent double-prompts).
+if ($script:DoRemoteTester) {
+    switch ($script:TesterLocation) {
+        "azure" { Invoke-EnsureAzureCli; Invoke-AzureOptions "tester" }
+        "aws"   { Invoke-EnsureAwsCli;   Invoke-AwsOptions   "tester" }
+        "gcp"   { Invoke-EnsureGcpCli;   Invoke-GcpOptions   "tester" }
+    }
+}
+if ($script:DoRemoteEndpoint) {
+    switch ($script:EndpointLocation) {
+        "azure" { Invoke-EnsureAzureCli; Invoke-AzureOptions "endpoint" }
+        "aws"   { Invoke-EnsureAwsCli;   Invoke-AwsOptions   "endpoint" }
+        "gcp"   { Invoke-EnsureGcpCli;   Invoke-GcpOptions   "endpoint" }
     }
 }
 
