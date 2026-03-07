@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.96] – 2026-03-07 — Cloud env credential checks (Azure, AWS, GCP)
+
+### Added
+- Installer (install.sh + install.ps1): check environment credentials before prompting interactive login for all three cloud providers
+  - **AWS**: `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` — validates with `aws sts get-caller-identity`
+  - **Azure**: `AZURE_CLIENT_ID` + `AZURE_CLIENT_SECRET` + `AZURE_TENANT_ID` — authenticates with `az login --service-principal`
+  - **GCP**: `GOOGLE_APPLICATION_CREDENTIALS` (service account JSON key file) — activates with `gcloud auth activate-service-account`
+- All providers display identity details when env credentials are found (ARN, subscription name, service account email)
+- README: new "Cloud Deployment Authentication" section with env var reference, setup examples, and links to official docs
+
+---
+
 ## [0.12.95] – 2026-03-07 — Connection reuse for pageload probes
 
 ### Added
