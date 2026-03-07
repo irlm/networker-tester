@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.88] – 2026-03-06 — Installer: curl|bash fixes, Windows VM, GCP auto-install
+
+### Fixed
+- Installer: complementary component prompt reads from `/dev/tty` (was exiting silently in `curl|bash`)
+- Installer: Azure Windows VM creation generates admin password (was failing in non-interactive mode)
+- Installer: all interactive CLI logins (`aws configure sso`, `az login`, `gcloud auth login`) redirect stdin from `/dev/tty`
+- Installer: `az vm auto-shutdown` now passes `--location` (was silently failing)
+- Installer: auto-shutdown errors shown instead of suppressed
+
+### Added
+- Installer: auto-install Google Cloud SDK on Linux via official tarball (was manual-only on non-brew systems)
+
+---
+
 ## [0.12.87] – 2026-03-06 — TCP Stats browser note, installer version-aware fallback
 
 ### Fixed
