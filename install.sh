@@ -3321,8 +3321,8 @@ _aws_create_security_group() {
     fi
 
     print_info "Creating security group '$sg_name'…"
-    local sg_id
-    sg_id="$(aws ec2 create-security-group \
+    local _sg_created
+    _sg_created="$(aws ec2 create-security-group \
         --region "$AWS_REGION" \
         --group-name "$sg_name" \
         --description "Networker ${component} security group" \
@@ -3331,39 +3331,39 @@ _aws_create_security_group() {
 
     # SSH (always)
     aws ec2 authorize-security-group-ingress \
-        --region "$AWS_REGION" --group-id "$sg_id" \
+        --region "$AWS_REGION" --group-id "$_sg_created" \
         --protocol tcp --port 22 --cidr 0.0.0.0/0 --output text >/dev/null
 
     if [[ "$component" == "endpoint" ]]; then
         # TCP 80, 443, 8080, 8443 (80/443 redirect to 8080/8443 via iptables on VM)
         aws ec2 authorize-security-group-ingress \
-            --region "$AWS_REGION" --group-id "$sg_id" \
+            --region "$AWS_REGION" --group-id "$_sg_created" \
             --protocol tcp --port 80 --cidr 0.0.0.0/0 --output text >/dev/null
         aws ec2 authorize-security-group-ingress \
-            --region "$AWS_REGION" --group-id "$sg_id" \
+            --region "$AWS_REGION" --group-id "$_sg_created" \
             --protocol tcp --port 443 --cidr 0.0.0.0/0 --output text >/dev/null
         aws ec2 authorize-security-group-ingress \
-            --region "$AWS_REGION" --group-id "$sg_id" \
+            --region "$AWS_REGION" --group-id "$_sg_created" \
             --protocol tcp --port 8080 --cidr 0.0.0.0/0 --output text >/dev/null
         aws ec2 authorize-security-group-ingress \
-            --region "$AWS_REGION" --group-id "$sg_id" \
+            --region "$AWS_REGION" --group-id "$_sg_created" \
             --protocol tcp --port 8443 --cidr 0.0.0.0/0 --output text >/dev/null
         # UDP 8443, 9998, 9999
         aws ec2 authorize-security-group-ingress \
-            --region "$AWS_REGION" --group-id "$sg_id" \
+            --region "$AWS_REGION" --group-id "$_sg_created" \
             --protocol udp --port 8443 --cidr 0.0.0.0/0 --output text >/dev/null
         aws ec2 authorize-security-group-ingress \
-            --region "$AWS_REGION" --group-id "$sg_id" \
+            --region "$AWS_REGION" --group-id "$_sg_created" \
             --protocol udp --port 9998 --cidr 0.0.0.0/0 --output text >/dev/null
         aws ec2 authorize-security-group-ingress \
-            --region "$AWS_REGION" --group-id "$sg_id" \
+            --region "$AWS_REGION" --group-id "$_sg_created" \
             --protocol udp --port 9999 --cidr 0.0.0.0/0 --output text >/dev/null
-        print_ok "Security group created: $sg_id  (TCP 22/80/443/8080/8443, UDP 8443/9998/9999)"
+        print_ok "Security group created: $_sg_created  (TCP 22/80/443/8080/8443, UDP 8443/9998/9999)"
     else
-        print_ok "Security group created: $sg_id  (TCP 22)"
+        print_ok "Security group created: $_sg_created  (TCP 22)"
     fi
 
-    printf -v "$sg_var" "%s" "$sg_id"
+    printf -v "$sg_var" "%s" "$_sg_created"
 }
 
 # Launch an EC2 instance and wait until it is running.
