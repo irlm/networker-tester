@@ -1226,39 +1226,45 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
                 if rows.is_empty() {
                     continue;
                 }
-                let n = rows.len();
-                let pl_rows: Vec<&crate::metrics::PageLoadResult> =
-                    rows.iter().filter_map(|a| a.page_load.as_ref()).collect();
-                let avg_conns = pl_rows
-                    .iter()
-                    .map(|p| p.connections_opened as f64)
-                    .sum::<f64>()
-                    / n as f64;
-                let avg_fetched =
-                    pl_rows.iter().map(|p| p.assets_fetched as f64).sum::<f64>() / n as f64;
-                let total_assets = pl_rows.first().map(|p| p.asset_count).unwrap_or(0);
-                let avg_tls_ms: f64 =
-                    pl_rows.iter().map(|p| p.tls_setup_ms).sum::<f64>() / n as f64;
-                let avg_tls_pct: f64 = pl_rows
-                    .iter()
-                    .map(|p| p.tls_overhead_ratio * 100.0)
-                    .sum::<f64>()
-                    / n as f64;
-                let cpu_vals: Vec<f64> = pl_rows.iter().filter_map(|p| p.cpu_time_ms).collect();
-                let cpu_display = if cpu_vals.is_empty() {
-                    "—".to_string()
+                // Check if any rows use connection reuse
+                let has_cold = rows.iter().any(|a| a.page_load.as_ref().is_some_and(|p| !p.connection_reused));
+                let has_warm = rows.iter().any(|a| a.page_load.as_ref().is_some_and(|p| p.connection_reused));
+                // If both cold and warm exist, show separate rows
+                let subsets: Vec<(&str, Vec<&RequestAttempt>)> = if has_cold && has_warm {
+                    vec![
+                        ("cold", rows.iter().filter(|a| a.page_load.as_ref().is_some_and(|p| !p.connection_reused)).copied().collect()),
+                        ("warm", rows.iter().filter(|a| a.page_load.as_ref().is_some_and(|p| p.connection_reused)).copied().collect()),
+                    ]
                 } else {
-                    format!(
-                        "{:.2}",
-                        cpu_vals.iter().sum::<f64>() / cpu_vals.len() as f64
-                    )
+                    vec![("", rows)]
                 };
-                let total_ms_vals: Vec<f64> = pl_rows.iter().map(|p| p.total_ms).collect();
-                if let Some(s) = compute_stats(&total_ms_vals) {
-                    let _ = write!(
-                        out,
-                        r#"      <tr>
-        <td>{proto}</td>
+                for (suffix, subset) in subsets {
+                    let n = subset.len();
+                    if n == 0 { continue; }
+                    let pl_rows: Vec<&crate::metrics::PageLoadResult> =
+                        subset.iter().filter_map(|a| a.page_load.as_ref()).collect();
+                    let avg_conns = pl_rows.iter().map(|p| p.connections_opened as f64).sum::<f64>() / n as f64;
+                    let avg_fetched = pl_rows.iter().map(|p| p.assets_fetched as f64).sum::<f64>() / n as f64;
+                    let total_assets = pl_rows.first().map(|p| p.asset_count).unwrap_or(0);
+                    let avg_tls_ms: f64 = pl_rows.iter().map(|p| p.tls_setup_ms).sum::<f64>() / n as f64;
+                    let avg_tls_pct: f64 = pl_rows.iter().map(|p| p.tls_overhead_ratio * 100.0).sum::<f64>() / n as f64;
+                    let cpu_vals: Vec<f64> = pl_rows.iter().filter_map(|p| p.cpu_time_ms).collect();
+                    let cpu_display = if cpu_vals.is_empty() {
+                        "—".to_string()
+                    } else {
+                        format!("{:.2}", cpu_vals.iter().sum::<f64>() / cpu_vals.len() as f64)
+                    };
+                    let label = if suffix.is_empty() {
+                        proto.to_string()
+                    } else {
+                        format!("{proto} <small>({suffix})</small>")
+                    };
+                    let total_ms_vals: Vec<f64> = pl_rows.iter().map(|p| p.total_ms).collect();
+                    if let Some(s) = compute_stats(&total_ms_vals) {
+                        let _ = write!(
+                            out,
+                            r#"      <tr>
+        <td>{label}</td>
         <td>{n}</td>
         <td>{fetched:.0}/{total}</td>
         <td>{conns:.1}</td>
@@ -1270,18 +1276,19 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
         <td>{max:.2}</td>
       </tr>
 "#,
-                        proto = proto,
-                        n = n,
-                        fetched = avg_fetched,
-                        total = total_assets,
-                        conns = avg_conns,
-                        tls_ms = avg_tls_ms,
-                        tls_pct = avg_tls_pct,
-                        cpu = cpu_display,
-                        p50 = s.p50,
-                        min = s.min,
-                        max = s.max,
-                    );
+                            label = label,
+                            n = n,
+                            fetched = avg_fetched,
+                            total = total_assets,
+                            conns = avg_conns,
+                            tls_ms = avg_tls_ms,
+                            tls_pct = avg_tls_pct,
+                            cpu = cpu_display,
+                            p50 = s.p50,
+                            min = s.min,
+                            max = s.max,
+                        );
+                    }
                 }
             }
             let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
@@ -2013,6 +2020,45 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
                     observations.push(format!(
                         "Real browser (browser3) overhead vs synthetic (pageload3): {overhead:+.1}ms ({pct:+.1}%)"
                     ));
+                }
+
+                // Connection-reuse analysis: cold (warmup) vs warm probes
+                for proto in &[Protocol::PageLoad2, Protocol::PageLoad3] {
+                    let cold: Vec<f64> = chart_pl.iter()
+                        .filter(|a| &a.protocol == proto)
+                        .filter_map(|a| a.page_load.as_ref())
+                        .filter(|p| !p.connection_reused)
+                        .map(|p| p.total_ms)
+                        .collect();
+                    let warm: Vec<f64> = chart_pl.iter()
+                        .filter(|a| &a.protocol == proto)
+                        .filter_map(|a| a.page_load.as_ref())
+                        .filter(|p| p.connection_reused)
+                        .map(|p| p.total_ms)
+                        .collect();
+                    if !cold.is_empty() && !warm.is_empty() {
+                        let cold_avg = cold.iter().sum::<f64>() / cold.len() as f64;
+                        let warm_avg = warm.iter().sum::<f64>() / warm.len() as f64;
+                        let saved = cold_avg - warm_avg;
+                        let pct = if cold_avg > 0.0 { saved / cold_avg * 100.0 } else { 0.0 };
+                        let label = proto.to_string();
+                        observations.push(format!(
+                            "Connection reuse ({label}): cold {cold_avg:.1}ms → warm {warm_avg:.1}ms \
+                             ({saved:+.1}ms, {pct:.0}% faster)"
+                        ));
+                        // Show TLS savings
+                        let cold_tls: f64 = chart_pl.iter()
+                            .filter(|a| &a.protocol == proto)
+                            .filter_map(|a| a.page_load.as_ref())
+                            .filter(|p| !p.connection_reused)
+                            .map(|p| p.tls_setup_ms)
+                            .sum::<f64>() / cold.len() as f64;
+                        if cold_tls > 0.5 {
+                            observations.push(format!(
+                                "  TLS handshake saved per warm run ({label}): {cold_tls:.1}ms"
+                            ));
+                        }
+                    }
                 }
 
                 // Resource protocol breakdown from last browser run
@@ -3710,6 +3756,7 @@ mod tests {
                     tls_overhead_ratio: 0.19,
                     per_connection_tls_ms: vec![4.0; 6],
                     cpu_time_ms: Some(8.3),
+                    connection_reused: false,
                 }),
                 browser: None,
             }],
