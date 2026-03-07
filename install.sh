@@ -1225,6 +1225,21 @@ ask_aws_options() {
     echo ""
 }
 
+# Resolve GCP project number to project ID if needed.
+# gcloud compute commands require project ID (string), not number (numeric).
+_gcp_resolve_project() {
+    if [[ "$GCP_PROJECT" =~ ^[0-9]+$ ]]; then
+        local proj_id
+        proj_id="$(gcloud projects describe "$GCP_PROJECT" \
+            --format='value(projectId)' 2>/dev/null || echo "")"
+        if [[ -n "$proj_id" ]]; then
+            print_dim "Resolved project number $GCP_PROJECT → $proj_id"
+            GCP_PROJECT="$proj_id"
+            gcloud config set project "$GCP_PROJECT" 2>/dev/null || true
+        fi
+    fi
+}
+
 # ── GCP interactive configuration ────────────────────────────────────────────
 ask_gcp_options() {
     local component="$1"  # "tester" or "endpoint"
@@ -1252,18 +1267,9 @@ ask_gcp_options() {
             exit 1
         fi
         GCP_PROJECT="$proj_ans"
-        # If user entered a numeric project number, resolve to project ID
-        if [[ "$GCP_PROJECT" =~ ^[0-9]+$ ]]; then
-            local proj_id
-            proj_id="$(gcloud projects describe "$GCP_PROJECT" \
-                --format='value(projectId)' 2>/dev/null || echo "")"
-            if [[ -n "$proj_id" ]]; then
-                print_dim "Resolved project number $GCP_PROJECT → $proj_id"
-                GCP_PROJECT="$proj_id"
-            fi
-        fi
         gcloud config set project "$GCP_PROJECT" 2>/dev/null || true
     fi
+    _gcp_resolve_project
     print_ok "Project: $GCP_PROJECT"
     echo ""
 
@@ -1787,19 +1793,10 @@ ensure_gcp_cli() {
             exit 1
         fi
         GCP_PROJECT="$proj_ans"
-        # If user entered a numeric project number, resolve to project ID
-        if [[ "$GCP_PROJECT" =~ ^[0-9]+$ ]]; then
-            local proj_id
-            proj_id="$(gcloud projects describe "$GCP_PROJECT" \
-                --format='value(projectId)' 2>/dev/null || echo "")"
-            if [[ -n "$proj_id" ]]; then
-                print_dim "Resolved project number $GCP_PROJECT → $proj_id"
-                GCP_PROJECT="$proj_id"
-            fi
-        fi
         gcloud config set project "$GCP_PROJECT" 2>/dev/null || true
-        print_ok "Project: $GCP_PROJECT"
     fi
+    _gcp_resolve_project
+    print_ok "Project: $GCP_PROJECT"
 }
 
 # Ask where to install each component.  Skipped when AUTO_YES=1.
@@ -3547,6 +3544,7 @@ step_check_gcp_prereqs() {
         echo "  Run:  gcloud config set project YOUR_PROJECT_ID"
         exit 1
     fi
+    _gcp_resolve_project
 
     local gcp_account
     gcp_account="$(gcloud config get-value account 2>/dev/null || echo "")"
