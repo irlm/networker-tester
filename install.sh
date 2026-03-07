@@ -1252,6 +1252,16 @@ ask_gcp_options() {
             exit 1
         fi
         GCP_PROJECT="$proj_ans"
+        # If user entered a numeric project number, resolve to project ID
+        if [[ "$GCP_PROJECT" =~ ^[0-9]+$ ]]; then
+            local proj_id
+            proj_id="$(gcloud projects describe "$GCP_PROJECT" \
+                --format='value(projectId)' 2>/dev/null || echo "")"
+            if [[ -n "$proj_id" ]]; then
+                print_dim "Resolved project number $GCP_PROJECT → $proj_id"
+                GCP_PROJECT="$proj_id"
+            fi
+        fi
         gcloud config set project "$GCP_PROJECT" 2>/dev/null || true
     fi
     print_ok "Project: $GCP_PROJECT"
@@ -1777,6 +1787,16 @@ ensure_gcp_cli() {
             exit 1
         fi
         GCP_PROJECT="$proj_ans"
+        # If user entered a numeric project number, resolve to project ID
+        if [[ "$GCP_PROJECT" =~ ^[0-9]+$ ]]; then
+            local proj_id
+            proj_id="$(gcloud projects describe "$GCP_PROJECT" \
+                --format='value(projectId)' 2>/dev/null || echo "")"
+            if [[ -n "$proj_id" ]]; then
+                print_dim "Resolved project number $GCP_PROJECT → $proj_id"
+                GCP_PROJECT="$proj_id"
+            fi
+        fi
         gcloud config set project "$GCP_PROJECT" 2>/dev/null || true
         print_ok "Project: $GCP_PROJECT"
     fi
