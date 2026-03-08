@@ -329,10 +329,21 @@ SYS_SHELL=""
 STEP_NUM=0
 
 # ── Remote deployment state ───────────────────────────────────────────────────
-TESTER_LOCATION="local"       # "local" | "azure" | "aws"
-ENDPOINT_LOCATION="local"     # "local" | "azure" | "aws"
+TESTER_LOCATION="local"       # "local" | "azure" | "aws" | "gcp" | "lan"
+ENDPOINT_LOCATION="local"     # "local" | "azure" | "aws" | "gcp" | "lan"
 DO_REMOTE_TESTER=0
 DO_REMOTE_ENDPOINT=0
+
+# ── LAN state ────────────────────────────────────────────────────────────────
+LAN_TESTER_IP=""
+LAN_TESTER_USER=""
+LAN_TESTER_PORT="22"
+LAN_TESTER_OS=""              # auto-detected: "linux" | "windows"
+
+LAN_ENDPOINT_IP=""
+LAN_ENDPOINT_USER=""
+LAN_ENDPOINT_PORT="22"
+LAN_ENDPOINT_OS=""            # auto-detected: "linux" | "windows"
 
 # ── Azure state ───────────────────────────────────────────────────────────────
 AZURE_CLI_AVAILABLE=0
@@ -466,6 +477,31 @@ parse_args() {
                 GCP_ENDPOINT_MACHINE_TYPE="${1:-e2-small}" ;;
             --gcp-project)
                 shift; GCP_PROJECT="${1:-}" ;;
+            # LAN
+            --lan)
+                ENDPOINT_LOCATION="lan"; DO_REMOTE_ENDPOINT=1 ;;
+            --tester-lan)
+                TESTER_LOCATION="lan"; DO_REMOTE_TESTER=1 ;;
+            --lan-ip)
+                shift
+                LAN_TESTER_IP="${1:-}"
+                LAN_ENDPOINT_IP="${1:-}" ;;
+            --lan-user)
+                shift
+                LAN_TESTER_USER="${1:-}"
+                LAN_ENDPOINT_USER="${1:-}" ;;
+            --lan-port)
+                shift
+                LAN_TESTER_PORT="${1:-22}"
+                LAN_ENDPOINT_PORT="${1:-22}" ;;
+            --lan-tester-ip)
+                shift; LAN_TESTER_IP="${1:-}" ;;
+            --lan-tester-user)
+                shift; LAN_TESTER_USER="${1:-}" ;;
+            --lan-endpoint-ip)
+                shift; LAN_ENDPOINT_IP="${1:-}" ;;
+            --lan-endpoint-user)
+                shift; LAN_ENDPOINT_USER="${1:-}" ;;
             -h|--help)
                 show_help; exit 0 ;;
             *)
@@ -819,6 +855,12 @@ display_plan() {
     if [[ $DO_REMOTE_TESTER -eq 1 ]]; then
         echo ""
         case "$TESTER_LOCATION" in
+            lan)
+                printf "    ${BOLD}networker-tester:${RESET}  Remote — LAN (%s)\n" "$LAN_TESTER_OS"
+                printf "    %-22s %s\n" "Host:"       "$LAN_TESTER_IP"
+                printf "    %-22s %s\n" "User:"       "$LAN_TESTER_USER"
+                printf "    %-22s %s\n" "SSH port:"   "$LAN_TESTER_PORT"
+                ;;
             azure)
                 printf "    ${BOLD}networker-tester:${RESET}  Remote — Azure VM\n"
                 printf "    %-22s %s\n" "Region:"         "$AZURE_REGION"
@@ -850,6 +892,12 @@ display_plan() {
     if [[ $DO_REMOTE_ENDPOINT -eq 1 ]]; then
         echo ""
         case "$ENDPOINT_LOCATION" in
+            lan)
+                printf "    ${BOLD}networker-endpoint:${RESET}  Remote — LAN (%s)\n" "$LAN_ENDPOINT_OS"
+                printf "    %-22s %s\n" "Host:"       "$LAN_ENDPOINT_IP"
+                printf "    %-22s %s\n" "User:"       "$LAN_ENDPOINT_USER"
+                printf "    %-22s %s\n" "SSH port:"   "$LAN_ENDPOINT_PORT"
+                ;;
             azure)
                 printf "    ${BOLD}networker-endpoint:${RESET}  Remote — Azure VM\n"
                 printf "    %-22s %s\n" "Region:"         "$AZURE_REGION"
@@ -892,6 +940,343 @@ _nss_pkg_name() {
         *)       pkg="nss-tools" ;;
     esac
     printf -v "$varname" "%s" "$pkg"
+}
+
+# ── LAN deployment ────────────────────────────────────────────────────────────
+
+# Build SSH options for a LAN target.
+# $1 = role ("tester"|"endpoint")  →  sets: _LAN_SSH_OPTS (array), _LAN_SCP_OPTS (array)
+_lan_ssh_vars() {
+    local role="$1"
+    local ip user port
+    if [[ "$role" == "tester" ]]; then
+        ip="$LAN_TESTER_IP"; user="$LAN_TESTER_USER"; port="$LAN_TESTER_PORT"
+    else
+        ip="$LAN_ENDPOINT_IP"; user="$LAN_ENDPOINT_USER"; port="$LAN_ENDPOINT_PORT"
+    fi
+    _LAN_IP="$ip"
+    _LAN_USER="$user"
+    _LAN_PORT="$port"
+    _LAN_SSH_OPTS=(-o StrictHostKeyChecking=no -o ConnectTimeout=10 -p "$port")
+    _LAN_SCP_OPTS=(-o StrictHostKeyChecking=no -P "$port" -q)
+    _LAN_DEST="${user}@${ip}"
+}
+
+# Test SSH connectivity to a LAN host.  Exits with helpful message on failure.
+_lan_test_ssh() {
+    local ip="$1" user="$2" port="$3"
+
+    print_info "Testing SSH connection to ${user}@${ip}:${port}…"
+    if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes \
+           -p "$port" "${user}@${ip}" "echo ok" &>/dev/null; then
+        print_ok "SSH connection successful"
+        return 0
+    fi
+
+    echo ""
+    print_err "SSH connection to ${user}@${ip}:${port} failed."
+    echo ""
+    echo "  ${BOLD}Troubleshooting steps:${RESET}"
+    echo ""
+    echo "  1. Verify the machine is reachable:"
+    echo "     ${DIM}ping ${ip}${RESET}"
+    echo ""
+    echo "  2. Ensure SSH server is running on the remote machine:"
+    echo "     ${DIM}# Linux:   sudo systemctl status sshd${RESET}"
+    echo "     ${DIM}# Windows: Get-Service sshd${RESET}"
+    echo "     ${DIM}# macOS:   System Settings → General → Sharing → Remote Login${RESET}"
+    echo ""
+    echo "  3. Copy your SSH key to the remote machine:"
+    echo "     ${DIM}ssh-copy-id -p ${port} ${user}@${ip}${RESET}"
+    echo ""
+    echo "  4. If using a non-standard port, ensure the firewall allows it:"
+    echo "     ${DIM}# Linux:   sudo ufw allow ${port}/tcp${RESET}"
+    echo "     ${DIM}# Windows: New-NetFirewallRule -Name sshd -DisplayName 'OpenSSH' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort ${port}${RESET}"
+    echo ""
+    echo "  5. If the remote is Windows, enable OpenSSH Server:"
+    echo "     ${DIM}Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0${RESET}"
+    echo "     ${DIM}Start-Service sshd; Set-Service -Name sshd -StartupType Automatic${RESET}"
+    echo ""
+    echo "  6. Test manually:"
+    echo "     ${DIM}ssh -v -p ${port} ${user}@${ip}${RESET}"
+    echo ""
+    return 1
+}
+
+# Detect remote OS via SSH.  Sets the appropriate LAN_*_OS variable.
+# $1 = role ("tester"|"endpoint")
+_lan_detect_os() {
+    local role="$1"
+    _lan_ssh_vars "$role"
+
+    local remote_os
+    remote_os="$(ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" "uname -s" 2>/dev/null || echo "unknown")"
+
+    local detected="linux"
+    case "$remote_os" in
+        Linux*)          detected="linux" ;;
+        Darwin*)         detected="linux" ;;   # macOS treated as unix/linux path
+        CYGWIN*|MINGW*|MSYS*) detected="windows" ;;
+        *_NT*)           detected="windows" ;;  # Windows via OpenSSH returns MSYS_NT or similar
+        unknown)
+            # Fallback: try PowerShell command
+            if ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" \
+                   "powershell -Command 'Write-Output windows'" 2>/dev/null | grep -q windows; then
+                detected="windows"
+            fi
+            ;;
+    esac
+
+    if [[ "$role" == "tester" ]]; then
+        LAN_TESTER_OS="$detected"
+    else
+        LAN_ENDPOINT_OS="$detected"
+    fi
+    print_ok "Detected remote OS: $detected"
+}
+
+# Prompt for LAN connection details.
+# $1 = "tester" | "endpoint"
+ask_lan_options() {
+    local role="$1"
+    local ip_var="LAN_${role^^}_IP"
+    local user_var="LAN_${role^^}_USER"
+    local port_var="LAN_${role^^}_PORT"
+
+    echo ""
+    print_section "LAN deployment — networker-${role}"
+
+    # IP address
+    if [[ -z "${!ip_var}" ]]; then
+        printf "  IP address or hostname: "
+        local ip_ans
+        read -r ip_ans </dev/tty || true
+        if [[ -z "$ip_ans" ]]; then
+            print_err "IP address is required for LAN deployment."
+            exit 1
+        fi
+        printf -v "$ip_var" "%s" "$ip_ans"
+    fi
+
+    # SSH user
+    if [[ -z "${!user_var}" ]]; then
+        local default_user
+        default_user="$(whoami)"
+        printf "  SSH user [%s]: " "$default_user"
+        local user_ans
+        read -r user_ans </dev/tty || true
+        printf -v "$user_var" "%s" "${user_ans:-$default_user}"
+    fi
+
+    # SSH port
+    if [[ "${!port_var}" == "22" ]]; then
+        printf "  SSH port [22]: "
+        local port_ans
+        read -r port_ans </dev/tty || true
+        printf -v "$port_var" "%s" "${port_ans:-22}"
+    fi
+
+    # Test connection
+    if ! _lan_test_ssh "${!ip_var}" "${!user_var}" "${!port_var}"; then
+        exit 1
+    fi
+
+    # Detect OS
+    _lan_detect_os "$role"
+}
+
+# Install binary on a LAN Linux host via SSH.
+# $1 = binary ("networker-tester" or "networker-endpoint")
+# $2 = role ("tester"|"endpoint")
+_lan_install_binary_linux() {
+    local binary="$1" role="$2"
+    _lan_ssh_vars "$role"
+
+    # Reuse the existing _remote_install_binary which does the heavy lifting.
+    # It expects: $1=binary, $2=ip, $3=user
+    # However it uses default port 22.  For non-standard ports we need to set
+    # SSH_OPTS_EXTRA so the function uses our port.  Since _remote_install_binary
+    # hardcodes ssh/scp calls, we'll call it directly for port 22 or wrap for
+    # non-standard ports.
+    if [[ "$_LAN_PORT" == "22" ]]; then
+        _remote_install_binary "$binary" "$_LAN_IP" "$_LAN_USER"
+    else
+        # For non-standard ports, use the bootstrap approach which runs the
+        # installer on the remote host.
+        _lan_bootstrap_install "$binary" "$role"
+    fi
+}
+
+# Run the installer on a remote LAN host (builds from source if no release).
+# $1 = binary, $2 = role
+_lan_bootstrap_install() {
+    local binary="$1" role="$2"
+    _lan_ssh_vars "$role"
+
+    local comp_arg
+    case "$binary" in
+        networker-tester)   comp_arg="tester" ;;
+        networker-endpoint) comp_arg="endpoint" ;;
+        *)                  comp_arg="both" ;;
+    esac
+
+    echo ""
+    print_info "Installing ${binary} on ${_LAN_DEST} via SSH (port ${_LAN_PORT})…"
+
+    local script_path="${BASH_SOURCE[0]:-}"
+    local installer_url="https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh"
+    if [[ -f "$script_path" ]]; then
+        print_info "Uploading installer to remote host…"
+        scp "${_LAN_SCP_OPTS[@]}" "$script_path" "${_LAN_DEST}:/tmp/networker-install.sh"
+    else
+        print_info "Downloading installer on remote host from Gist…"
+        ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" \
+            "curl -fsSL '${installer_url}' -o /tmp/networker-install.sh"
+    fi
+
+    print_info "Running installer on remote host…"
+    echo ""
+    ssh -t "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" \
+        "bash /tmp/networker-install.sh ${comp_arg} -y"
+}
+
+# Install binary on a LAN Windows host via SSH + PowerShell.
+# $1 = binary, $2 = role
+_lan_install_binary_windows() {
+    local binary="$1" role="$2"
+    _lan_ssh_vars "$role"
+
+    local installer_url="https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.ps1"
+
+    print_info "Installing ${binary} on Windows host ${_LAN_DEST}…"
+
+    # Download and run the PowerShell installer
+    local comp_arg
+    case "$binary" in
+        networker-tester)   comp_arg="tester" ;;
+        networker-endpoint) comp_arg="endpoint" ;;
+        *)                  comp_arg="both" ;;
+    esac
+
+    ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" \
+        "powershell -ExecutionPolicy Bypass -Command \"& { \
+            Invoke-WebRequest -Uri '${installer_url}' -OutFile C:\\networker-install.ps1; \
+            & C:\\networker-install.ps1 -Component ${comp_arg} -AutoYes \
+        }\""
+
+    local remote_ver
+    remote_ver="$(ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" \
+        "${binary} --version 2>/dev/null || echo unknown" 2>/dev/null || echo "unknown")"
+    print_ok "${binary} installed on remote host (${remote_ver})"
+}
+
+# Create endpoint service on a LAN Linux host.
+# $1 = role (always "endpoint")
+_lan_create_endpoint_service() {
+    local role="$1"
+    _lan_ssh_vars "$role"
+
+    if [[ "$_LAN_PORT" == "22" ]]; then
+        _remote_create_endpoint_service "$_LAN_IP" "$_LAN_USER"
+    else
+        # Pipe the service creation script via SSH with custom port
+        ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" bash <<'REMOTE'
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin networker 2>/dev/null || true
+
+sudo tee /etc/systemd/system/networker-endpoint.service > /dev/null <<'UNIT'
+[Unit]
+Description=Networker Endpoint
+After=network.target
+
+[Service]
+User=networker
+ExecStart=/usr/local/bin/networker-endpoint
+Restart=always
+RestartSec=5
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+sudo systemctl daemon-reload
+sudo systemctl enable networker-endpoint
+sudo systemctl start networker-endpoint
+
+if command -v iptables &>/dev/null; then
+    sudo iptables -t nat -C PREROUTING -p tcp --dport 80  -j REDIRECT --to-port 8080 2>/dev/null || \
+        sudo iptables -t nat -A PREROUTING -p tcp --dport 80  -j REDIRECT --to-port 8080
+    sudo iptables -t nat -C PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null || \
+        sudo iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443
+    sudo iptables -t nat -C OUTPUT -p tcp --dport 80  -j REDIRECT --to-port 8080 2>/dev/null || \
+        sudo iptables -t nat -A OUTPUT -p tcp --dport 80  -j REDIRECT --to-port 8080
+    sudo iptables -t nat -C OUTPUT -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null || \
+        sudo iptables -t nat -A OUTPUT -p tcp --dport 443 -j REDIRECT --to-port 8443
+    if command -v netfilter-persistent &>/dev/null; then
+        sudo netfilter-persistent save 2>/dev/null || true
+    elif command -v iptables-save &>/dev/null; then
+        sudo mkdir -p /etc/iptables 2>/dev/null || true
+        sudo sh -c 'iptables-save > /etc/iptables/rules.v4' 2>/dev/null || \
+            sudo sh -c 'iptables-save > /etc/iptables.rules' 2>/dev/null || true
+    fi
+fi
+REMOTE
+        sleep 2
+        print_ok "networker-endpoint service enabled and started"
+    fi
+}
+
+# Create endpoint service on a LAN Windows host via SSH.
+# $1 = role (always "endpoint")
+_lan_create_endpoint_service_windows() {
+    local role="$1"
+    _lan_ssh_vars "$role"
+
+    print_info "Creating networker-endpoint Windows service on ${_LAN_DEST}…"
+    ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" "powershell -ExecutionPolicy Bypass -Command \"& {
+        # Create service if not already registered
+        if (-not (Get-Service networker-endpoint -ErrorAction SilentlyContinue)) {
+            sc.exe create networker-endpoint binPath= 'C:\\networker\\networker-endpoint.exe' start= auto
+        }
+        sc.exe start networker-endpoint 2>\$null
+
+        # Firewall rules
+        New-NetFirewallRule -Name 'NetworkerEndpoint-TCP' -DisplayName 'Networker Endpoint TCP' \
+            -Enabled True -Direction Inbound -Protocol TCP -Action Allow \
+            -LocalPort 8080,8443 -ErrorAction SilentlyContinue
+        New-NetFirewallRule -Name 'NetworkerEndpoint-UDP' -DisplayName 'Networker Endpoint UDP' \
+            -Enabled True -Direction Inbound -Protocol UDP -Action Allow \
+            -LocalPort 8443,9998,9999 -ErrorAction SilentlyContinue
+    }\""
+    print_ok "networker-endpoint Windows service created and started"
+}
+
+# Deploy tester to a LAN host.
+step_lan_deploy_tester() {
+    print_section "Deploy networker-tester to LAN host"
+
+    local os="$LAN_TESTER_OS"
+    if [[ "$os" == "windows" ]]; then
+        _lan_install_binary_windows "networker-tester" "tester"
+    else
+        _lan_install_binary_linux "networker-tester" "tester"
+    fi
+}
+
+# Deploy endpoint to a LAN host.
+step_lan_deploy_endpoint() {
+    print_section "Deploy networker-endpoint to LAN host"
+
+    local os="$LAN_ENDPOINT_OS"
+    if [[ "$os" == "windows" ]]; then
+        _lan_install_binary_windows "networker-endpoint" "endpoint"
+        _lan_create_endpoint_service_windows "endpoint"
+    else
+        _lan_install_binary_linux "networker-endpoint" "endpoint"
+        _lan_create_endpoint_service "endpoint"
+    fi
+
+    step_generate_config "$LAN_ENDPOINT_IP"
 }
 
 # ── Azure naming helpers ──────────────────────────────────────────────────────
@@ -1856,22 +2241,25 @@ ask_deployment_locations() {
             echo ""
             echo "  ${BOLD}Where to install networker-tester?${RESET}"
             echo "    1) Locally on this machine  [default]"
-            echo "    2) Remote: Azure VM"
-            echo "    3) Remote: AWS EC2"
-            echo "    4) Remote: Google Cloud GCE"
+            echo "    2) Remote: LAN / existing machine (SSH)"
+            echo "    3) Remote: Azure VM"
+            echo "    4) Remote: AWS EC2"
+            echo "    5) Remote: Google Cloud GCE"
             echo ""
             printf "  Choice [1]: "
             local ans
             read -r ans </dev/tty || true
             ans="${ans:-1}"
             case "$ans" in
-                2) TESTER_LOCATION="azure"; DO_REMOTE_TESTER=1 ;;
-                3) TESTER_LOCATION="aws";   DO_REMOTE_TESTER=1 ;;
-                4) TESTER_LOCATION="gcp";   DO_REMOTE_TESTER=1 ;;
+                2) TESTER_LOCATION="lan";   DO_REMOTE_TESTER=1 ;;
+                3) TESTER_LOCATION="azure"; DO_REMOTE_TESTER=1 ;;
+                4) TESTER_LOCATION="aws";   DO_REMOTE_TESTER=1 ;;
+                5) TESTER_LOCATION="gcp";   DO_REMOTE_TESTER=1 ;;
             esac
         fi
         if [[ $DO_REMOTE_TESTER -eq 1 ]]; then
             case "$TESTER_LOCATION" in
+                lan)   ask_lan_options "tester" ;;
                 azure) ensure_azure_cli; ask_azure_options "tester" ;;
                 aws)   ensure_aws_cli;   ask_aws_options   "tester" ;;
                 gcp)   ensure_gcp_cli;   ask_gcp_options   "tester" ;;
@@ -1885,22 +2273,25 @@ ask_deployment_locations() {
             echo ""
             echo "  ${BOLD}Where to install networker-endpoint?${RESET}"
             echo "    1) Locally on this machine  [default]"
-            echo "    2) Remote: Azure VM"
-            echo "    3) Remote: AWS EC2"
-            echo "    4) Remote: Google Cloud GCE"
+            echo "    2) Remote: LAN / existing machine (SSH)"
+            echo "    3) Remote: Azure VM"
+            echo "    4) Remote: AWS EC2"
+            echo "    5) Remote: Google Cloud GCE"
             echo ""
             printf "  Choice [1]: "
             local ans
             read -r ans </dev/tty || true
             ans="${ans:-1}"
             case "$ans" in
-                2) ENDPOINT_LOCATION="azure"; DO_REMOTE_ENDPOINT=1 ;;
-                3) ENDPOINT_LOCATION="aws";   DO_REMOTE_ENDPOINT=1 ;;
-                4) ENDPOINT_LOCATION="gcp";   DO_REMOTE_ENDPOINT=1 ;;
+                2) ENDPOINT_LOCATION="lan";   DO_REMOTE_ENDPOINT=1 ;;
+                3) ENDPOINT_LOCATION="azure"; DO_REMOTE_ENDPOINT=1 ;;
+                4) ENDPOINT_LOCATION="aws";   DO_REMOTE_ENDPOINT=1 ;;
+                5) ENDPOINT_LOCATION="gcp";   DO_REMOTE_ENDPOINT=1 ;;
             esac
         fi
         if [[ $DO_REMOTE_ENDPOINT -eq 1 ]]; then
             case "$ENDPOINT_LOCATION" in
+                lan)   ask_lan_options "endpoint" ;;
                 azure) ensure_azure_cli; ask_azure_options "endpoint" ;;
                 aws)   ensure_aws_cli;   ask_aws_options   "endpoint" ;;
                 gcp)   ensure_gcp_cli;   ask_gcp_options   "endpoint" ;;
@@ -2885,18 +3276,20 @@ EOF
     fi
 
     # If the tester is also remote, upload the config there too
-    local tester_ip="" tester_user=""
+    local tester_ip="" tester_user="" tester_scp_opts=(-o StrictHostKeyChecking=no -q)
     case "$TESTER_LOCATION" in
+        lan)   tester_ip="$LAN_TESTER_IP"; tester_user="$LAN_TESTER_USER"
+               tester_scp_opts=(-o StrictHostKeyChecking=no -P "$LAN_TESTER_PORT" -q) ;;
         azure) tester_ip="$AZURE_TESTER_IP"; tester_user="azureuser" ;;
         aws)   tester_ip="$AWS_TESTER_IP";   tester_user="ubuntu" ;;
         gcp)   tester_ip="$GCP_TESTER_IP";   tester_user="$(whoami)" ;;
     esac
     if [[ -n "$tester_ip" ]]; then
-        print_info "Uploading config to tester VM ($tester_ip)…"
-        scp -o StrictHostKeyChecking=no -q \
+        print_info "Uploading config to tester ($tester_ip)…"
+        scp "${tester_scp_opts[@]}" \
             "$CONFIG_FILE_PATH" \
             "${tester_user}@${tester_ip}:~/networker-cloud.json"
-        print_ok "Config uploaded to ~/networker-cloud.json on tester VM"
+        print_ok "Config uploaded to ~/networker-cloud.json on tester"
     fi
 }
 
@@ -4368,6 +4761,12 @@ display_completion() {
     if [[ $DO_REMOTE_TESTER -eq 1 ]]; then
         local t_ip="" t_user="" t_provider="" t_ssh_cmd=""
         case "$TESTER_LOCATION" in
+            lan)   t_ip="$LAN_TESTER_IP"; t_user="$LAN_TESTER_USER"; t_provider="LAN";
+                   if [[ "$LAN_TESTER_PORT" != "22" ]]; then
+                       t_ssh_cmd="ssh -p ${LAN_TESTER_PORT} ${LAN_TESTER_USER}@${LAN_TESTER_IP}"
+                   else
+                       t_ssh_cmd="ssh ${LAN_TESTER_USER}@${LAN_TESTER_IP}"
+                   fi ;;
             azure) t_ip="$AZURE_TESTER_IP"; t_user="azureuser"; t_provider="Azure";
                    t_ssh_cmd="ssh azureuser@${AZURE_TESTER_IP}" ;;
             aws)   t_ip="$AWS_TESTER_IP";   t_user="ubuntu";    t_provider="AWS";
@@ -4399,6 +4798,12 @@ display_completion() {
     if [[ $DO_REMOTE_ENDPOINT -eq 1 ]]; then
         local e_ip="" e_user="" e_provider="" e_ssh_cmd=""
         case "$ENDPOINT_LOCATION" in
+            lan)   e_ip="$LAN_ENDPOINT_IP"; e_user="$LAN_ENDPOINT_USER"; e_provider="LAN";
+                   if [[ "$LAN_ENDPOINT_PORT" != "22" ]]; then
+                       e_ssh_cmd="ssh -p ${LAN_ENDPOINT_PORT} ${LAN_ENDPOINT_USER}@${LAN_ENDPOINT_IP}"
+                   else
+                       e_ssh_cmd="ssh ${LAN_ENDPOINT_USER}@${LAN_ENDPOINT_IP}"
+                   fi ;;
             azure) e_ip="$AZURE_ENDPOINT_IP"; e_user="azureuser"; e_provider="Azure";
                    e_ssh_cmd="ssh azureuser@${AZURE_ENDPOINT_IP}" ;;
             aws)   e_ip="$AWS_ENDPOINT_IP";   e_user="ubuntu";    e_provider="AWS";
@@ -4510,6 +4915,7 @@ _offer_quick_test() {
     # Determine endpoint IP
     local e_ip=""
     case "$ENDPOINT_LOCATION" in
+        lan)   e_ip="$LAN_ENDPOINT_IP"   ;;
         azure) e_ip="$AZURE_ENDPOINT_IP" ;;
         aws)   e_ip="$AWS_ENDPOINT_IP"   ;;
         gcp)   e_ip="$GCP_ENDPOINT_IP"   ;;
@@ -4846,6 +5252,7 @@ main() {
     # ── Remote: tester ────────────────────────────────────────────────────────
     if [[ $DO_REMOTE_TESTER -eq 1 ]]; then
         case "$TESTER_LOCATION" in
+            lan)   step_lan_deploy_tester   ;;
             azure) step_azure_deploy_tester ;;
             aws)   step_aws_deploy_tester   ;;
             gcp)   step_gcp_deploy_tester   ;;
@@ -4855,6 +5262,7 @@ main() {
     # ── Remote: endpoint ──────────────────────────────────────────────────────
     if [[ $DO_REMOTE_ENDPOINT -eq 1 ]]; then
         case "$ENDPOINT_LOCATION" in
+            lan)   step_lan_deploy_endpoint   ;;
             azure) step_azure_deploy_endpoint ;;
             aws)   step_aws_deploy_endpoint   ;;
             gcp)   step_gcp_deploy_endpoint   ;;

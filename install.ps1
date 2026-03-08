@@ -141,10 +141,21 @@ $script:SysArch           = ""
 $script:StepNum           = 0
 
 # ── Remote deployment state ───────────────────────────────────────────────────
-$script:TesterLocation    = "local"    # "local" | "azure" | "aws" | "gcp"
-$script:EndpointLocation  = "local"    # "local" | "azure" | "aws" | "gcp"
+$script:TesterLocation    = "local"    # "local" | "azure" | "aws" | "gcp" | "lan"
+$script:EndpointLocation  = "local"    # "local" | "azure" | "aws" | "gcp" | "lan"
 $script:DoRemoteTester    = $false
 $script:DoRemoteEndpoint  = $false
+
+# ── LAN state ────────────────────────────────────────────────────────────────
+$script:LanTesterIp       = ""
+$script:LanTesterUser     = ""
+$script:LanTesterPort     = "22"
+$script:LanTesterOs       = ""
+
+$script:LanEndpointIp     = ""
+$script:LanEndpointUser   = ""
+$script:LanEndpointPort   = "22"
+$script:LanEndpointOs     = ""
 
 # ── Azure state ──────────────────────────────────────────────────────────────
 $script:AzureCliAvailable = $false
@@ -523,18 +534,21 @@ function Invoke-DeploymentLocationPrompt {
         Write-Host ""
         Write-Host "  Where to install networker-tester?" -ForegroundColor White
         Write-Host "    1) Locally on this machine  [default]"
-        Write-Host "    2) Remote: Azure VM"
-        Write-Host "    3) Remote: AWS EC2"
-        Write-Host "    4) Remote: Google Cloud GCE"
+        Write-Host "    2) Remote: LAN / existing machine (SSH)"
+        Write-Host "    3) Remote: Azure VM"
+        Write-Host "    4) Remote: AWS EC2"
+        Write-Host "    5) Remote: Google Cloud GCE"
         Write-Host ""
         $ans = Read-HostDefault "  Choice [1]" "1"
         switch ($ans) {
-            "2" { $script:TesterLocation = "azure"; $script:DoRemoteTester = $true }
-            "3" { $script:TesterLocation = "aws";   $script:DoRemoteTester = $true }
-            "4" { $script:TesterLocation = "gcp";   $script:DoRemoteTester = $true }
+            "2" { $script:TesterLocation = "lan";   $script:DoRemoteTester = $true }
+            "3" { $script:TesterLocation = "azure"; $script:DoRemoteTester = $true }
+            "4" { $script:TesterLocation = "aws";   $script:DoRemoteTester = $true }
+            "5" { $script:TesterLocation = "gcp";   $script:DoRemoteTester = $true }
         }
         if ($script:DoRemoteTester) {
             switch ($script:TesterLocation) {
+                "lan"   { Invoke-LanOptions "tester" }
                 "azure" { Invoke-EnsureAzureCli; Invoke-AzureOptions "tester" }
                 "aws"   { Invoke-EnsureAwsCli;   Invoke-AwsOptions   "tester" }
                 "gcp"   { Invoke-EnsureGcpCli;   Invoke-GcpOptions   "tester" }
@@ -547,18 +561,21 @@ function Invoke-DeploymentLocationPrompt {
         Write-Host ""
         Write-Host "  Where to install networker-endpoint?" -ForegroundColor White
         Write-Host "    1) Locally on this machine  [default]"
-        Write-Host "    2) Remote: Azure VM"
-        Write-Host "    3) Remote: AWS EC2"
-        Write-Host "    4) Remote: Google Cloud GCE"
+        Write-Host "    2) Remote: LAN / existing machine (SSH)"
+        Write-Host "    3) Remote: Azure VM"
+        Write-Host "    4) Remote: AWS EC2"
+        Write-Host "    5) Remote: Google Cloud GCE"
         Write-Host ""
         $ans = Read-HostDefault "  Choice [1]" "1"
         switch ($ans) {
-            "2" { $script:EndpointLocation = "azure"; $script:DoRemoteEndpoint = $true }
-            "3" { $script:EndpointLocation = "aws";   $script:DoRemoteEndpoint = $true }
-            "4" { $script:EndpointLocation = "gcp";   $script:DoRemoteEndpoint = $true }
+            "2" { $script:EndpointLocation = "lan";   $script:DoRemoteEndpoint = $true }
+            "3" { $script:EndpointLocation = "azure"; $script:DoRemoteEndpoint = $true }
+            "4" { $script:EndpointLocation = "aws";   $script:DoRemoteEndpoint = $true }
+            "5" { $script:EndpointLocation = "gcp";   $script:DoRemoteEndpoint = $true }
         }
         if ($script:DoRemoteEndpoint) {
             switch ($script:EndpointLocation) {
+                "lan"   { Invoke-LanOptions "endpoint" }
                 "azure" { Invoke-EnsureAzureCli; Invoke-AzureOptions "endpoint" }
                 "aws"   { Invoke-EnsureAwsCli;   Invoke-AwsOptions   "endpoint" }
                 "gcp"   { Invoke-EnsureGcpCli;   Invoke-GcpOptions   "endpoint" }
@@ -677,6 +694,259 @@ function Invoke-NextStep ($title) {
 # ══════════════════════════════════════════════════════════════════════════════
 #  CLOUD CLI HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
+
+# ── LAN deployment ────────────────────────────────────────────────────────────
+
+function Test-LanSsh ($ip, $user, $port) {
+    Write-Info "Testing SSH connection to ${user}@${ip}:${port}..."
+    $prevErr = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $null = & ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes `
+        -p $port "${user}@${ip}" "echo ok" 2>$null
+    $ok = ($LASTEXITCODE -eq 0)
+    $ErrorActionPreference = $prevErr
+
+    if ($ok) {
+        Write-Ok "SSH connection successful"
+        return $true
+    }
+
+    Write-Host ""
+    Write-Err "SSH connection to ${user}@${ip}:${port} failed."
+    Write-Host ""
+    Write-Host "  Troubleshooting steps:" -ForegroundColor White
+    Write-Host ""
+    Write-Host "  1. Verify the machine is reachable:"
+    Write-Host "     ping $ip" -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "  2. Ensure SSH server is running on the remote machine:"
+    Write-Host "     # Linux:   sudo systemctl status sshd" -ForegroundColor DarkGray
+    Write-Host "     # Windows: Get-Service sshd" -ForegroundColor DarkGray
+    Write-Host "     # macOS:   System Settings > General > Sharing > Remote Login" -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "  3. Copy your SSH key to the remote machine:"
+    Write-Host "     ssh-copy-id -p $port ${user}@${ip}" -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "  4. If using a non-standard port, ensure the firewall allows it:"
+    Write-Host "     # Linux:   sudo ufw allow ${port}/tcp" -ForegroundColor DarkGray
+    Write-Host "     # Windows: New-NetFirewallRule -Name sshd -DisplayName 'OpenSSH' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort $port" -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "  5. If the remote is Windows, enable OpenSSH Server:"
+    Write-Host "     Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0" -ForegroundColor DarkGray
+    Write-Host "     Start-Service sshd; Set-Service -Name sshd -StartupType Automatic" -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "  6. Test manually:"
+    Write-Host "     ssh -v -p $port ${user}@${ip}" -ForegroundColor DarkGray
+    Write-Host ""
+    return $false
+}
+
+function Get-LanRemoteOs ($ip, $user, $port) {
+    $prevErr = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $remoteOs = (& ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 `
+        -p $port "${user}@${ip}" "uname -s" 2>$null) -join ""
+    $ErrorActionPreference = $prevErr
+
+    $detected = "linux"
+    switch -Wildcard ($remoteOs) {
+        "Linux*"   { $detected = "linux" }
+        "Darwin*"  { $detected = "linux" }
+        "CYGWIN*"  { $detected = "windows" }
+        "MINGW*"   { $detected = "windows" }
+        "MSYS*"    { $detected = "windows" }
+        "*_NT*"    { $detected = "windows" }
+        default {
+            # Fallback: try PowerShell
+            $prevErr2 = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            $psTest = (& ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 `
+                -p $port "${user}@${ip}" "powershell -Command 'Write-Output windows'" 2>$null) -join ""
+            $ErrorActionPreference = $prevErr2
+            if ($psTest -match "windows") { $detected = "windows" }
+        }
+    }
+    Write-Ok "Detected remote OS: $detected"
+    return $detected
+}
+
+function Invoke-LanOptions ($role) {
+    Write-Host ""
+    Write-Section "LAN deployment -- networker-${role}"
+
+    $ipVar   = "Lan${role}Ip"
+    $userVar = "Lan${role}User"
+    $portVar = "Lan${role}Port"
+    $osVar   = "Lan${role}Os"
+
+    # Capitalize role for variable names
+    $roleUpper = (Get-Culture).TextInfo.ToTitleCase($role)
+    $ipVar   = "Lan${roleUpper}Ip"
+    $userVar = "Lan${roleUpper}User"
+    $portVar = "Lan${roleUpper}Port"
+    $osVar   = "Lan${roleUpper}Os"
+
+    # IP address
+    if (-not (Get-Variable -Name $ipVar -Scope Script -ValueOnly)) {
+        $ipAns = Read-Host "  IP address or hostname"
+        if ([string]::IsNullOrWhiteSpace($ipAns)) {
+            Write-Err "IP address is required for LAN deployment."
+            exit 1
+        }
+        Set-Variable -Name $ipVar -Scope Script -Value $ipAns
+    }
+
+    # SSH user
+    if (-not (Get-Variable -Name $userVar -Scope Script -ValueOnly)) {
+        $defaultUser = $env:USERNAME
+        $userAns = Read-HostDefault "  SSH user [$defaultUser]" $defaultUser
+        Set-Variable -Name $userVar -Scope Script -Value $userAns
+    }
+
+    # SSH port
+    if ((Get-Variable -Name $portVar -Scope Script -ValueOnly) -eq "22") {
+        $portAns = Read-HostDefault "  SSH port [22]" "22"
+        Set-Variable -Name $portVar -Scope Script -Value $portAns
+    }
+
+    $ip   = Get-Variable -Name $ipVar   -Scope Script -ValueOnly
+    $user = Get-Variable -Name $userVar -Scope Script -ValueOnly
+    $port = Get-Variable -Name $portVar -Scope Script -ValueOnly
+
+    # Test connection
+    if (-not (Test-LanSsh $ip $user $port)) {
+        exit 1
+    }
+
+    # Detect OS
+    $os = Get-LanRemoteOs $ip $user $port
+    Set-Variable -Name $osVar -Scope Script -Value $os
+}
+
+function Invoke-LanInstallBinaryLinux ($binary, $role) {
+    $roleUpper = (Get-Culture).TextInfo.ToTitleCase($role)
+    $ip   = Get-Variable -Name "Lan${roleUpper}Ip"   -Scope Script -ValueOnly
+    $user = Get-Variable -Name "Lan${roleUpper}User" -Scope Script -ValueOnly
+    $port = Get-Variable -Name "Lan${roleUpper}Port" -Scope Script -ValueOnly
+
+    if ($port -eq "22") {
+        Invoke-RemoteInstallBinary $binary $ip $user
+    } else {
+        # Use bootstrap approach for non-standard ports
+        $component = if ($binary -eq "networker-tester") { "tester" } else { "endpoint" }
+        $installerUrl = "https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh"
+
+        Write-Info "Installing $binary on ${user}@${ip} via SSH (port $port)..."
+        $prevErr = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        & ssh -o StrictHostKeyChecking=no -p $port "${user}@${ip}" `
+            "curl -fsSL '${installerUrl}' -o /tmp/networker-install.sh && bash /tmp/networker-install.sh ${component} -y"
+        $ErrorActionPreference = $prevErr
+    }
+}
+
+function Invoke-LanInstallBinaryWindows ($binary, $role) {
+    $roleUpper = (Get-Culture).TextInfo.ToTitleCase($role)
+    $ip   = Get-Variable -Name "Lan${roleUpper}Ip"   -Scope Script -ValueOnly
+    $user = Get-Variable -Name "Lan${roleUpper}User" -Scope Script -ValueOnly
+    $port = Get-Variable -Name "Lan${roleUpper}Port" -Scope Script -ValueOnly
+
+    $component = if ($binary -eq "networker-tester") { "tester" } else { "endpoint" }
+    $installerUrl = "https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.ps1"
+
+    Write-Info "Installing $binary on Windows host ${user}@${ip}..."
+    $prevErr = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    & ssh -o StrictHostKeyChecking=no -p $port "${user}@${ip}" `
+        "powershell -ExecutionPolicy Bypass -Command `"& { Invoke-WebRequest -Uri '${installerUrl}' -OutFile C:\networker-install.ps1; & C:\networker-install.ps1 -Component ${component} -AutoYes }`""
+    $ErrorActionPreference = $prevErr
+
+    $prevErr = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $ver = (& ssh -o StrictHostKeyChecking=no -p $port "${user}@${ip}" `
+        "${binary} --version 2>`$null" 2>$null) -join ""
+    $ErrorActionPreference = $prevErr
+    if ($ver) { Write-Ok "$binary installed on remote host ($ver)" }
+    else { Write-Warn "$binary install may have failed -- check host manually" }
+}
+
+function Invoke-LanCreateEndpointService ($role) {
+    $roleUpper = (Get-Culture).TextInfo.ToTitleCase($role)
+    $ip   = Get-Variable -Name "Lan${roleUpper}Ip"   -Scope Script -ValueOnly
+    $user = Get-Variable -Name "Lan${roleUpper}User" -Scope Script -ValueOnly
+    $port = Get-Variable -Name "Lan${roleUpper}Port" -Scope Script -ValueOnly
+
+    if ($port -eq "22") {
+        Invoke-RemoteCreateEndpointService $ip $user
+    } else {
+        $svcScript = @"
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin networker 2>/dev/null || true
+sudo tee /etc/systemd/system/networker-endpoint.service > /dev/null <<'UNIT'
+[Unit]
+Description=Networker Endpoint
+After=network.target
+[Service]
+User=networker
+ExecStart=/usr/local/bin/networker-endpoint
+Restart=always
+RestartSec=5
+Environment=RUST_LOG=info
+[Install]
+WantedBy=multi-user.target
+UNIT
+sudo systemctl daemon-reload
+sudo systemctl enable networker-endpoint
+sudo systemctl start networker-endpoint
+if command -v iptables &>/dev/null; then
+    sudo iptables -t nat -C PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080 2>/dev/null || sudo iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080
+    sudo iptables -t nat -C PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null || sudo iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443
+fi
+"@
+        $svcScript = $svcScript -replace "`r`n", "`n"
+        $prevErr = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $svcScript | & ssh -o StrictHostKeyChecking=no -p $port "${user}@${ip}" "bash -s"
+        $ErrorActionPreference = $prevErr
+        Start-Sleep -Seconds 2
+        Write-Ok "networker-endpoint service enabled and started"
+    }
+}
+
+function Invoke-LanCreateEndpointServiceWindows ($role) {
+    $roleUpper = (Get-Culture).TextInfo.ToTitleCase($role)
+    $ip   = Get-Variable -Name "Lan${roleUpper}Ip"   -Scope Script -ValueOnly
+    $user = Get-Variable -Name "Lan${roleUpper}User" -Scope Script -ValueOnly
+    $port = Get-Variable -Name "Lan${roleUpper}Port" -Scope Script -ValueOnly
+
+    Write-Info "Creating networker-endpoint Windows service on ${user}@${ip}..."
+    $prevErr = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    & ssh -o StrictHostKeyChecking=no -p $port "${user}@${ip}" `
+        "powershell -ExecutionPolicy Bypass -Command `"& { if (-not (Get-Service networker-endpoint -EA SilentlyContinue)) { sc.exe create networker-endpoint binPath= 'C:\networker\networker-endpoint.exe' start= auto }; sc.exe start networker-endpoint 2>`$null; New-NetFirewallRule -Name 'NetworkerEndpoint-TCP' -DisplayName 'Networker Endpoint TCP' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 8080,8443 -EA SilentlyContinue; New-NetFirewallRule -Name 'NetworkerEndpoint-UDP' -DisplayName 'Networker Endpoint UDP' -Enabled True -Direction Inbound -Protocol UDP -Action Allow -LocalPort 8443,9998,9999 -EA SilentlyContinue }`""
+    $ErrorActionPreference = $prevErr
+    Write-Ok "networker-endpoint Windows service created and started"
+}
+
+function Invoke-LanDeployTester {
+    Invoke-NextStep "Deploy networker-tester to LAN host"
+    if ($script:LanTesterOs -eq "windows") {
+        Invoke-LanInstallBinaryWindows "networker-tester" "tester"
+    } else {
+        Invoke-LanInstallBinaryLinux "networker-tester" "tester"
+    }
+}
+
+function Invoke-LanDeployEndpoint {
+    Invoke-NextStep "Deploy networker-endpoint to LAN host"
+    if ($script:LanEndpointOs -eq "windows") {
+        Invoke-LanInstallBinaryWindows "networker-endpoint" "endpoint"
+        Invoke-LanCreateEndpointServiceWindows "endpoint"
+    } else {
+        Invoke-LanInstallBinaryLinux "networker-endpoint" "endpoint"
+        Invoke-LanCreateEndpointService "endpoint"
+    }
+    Invoke-GenerateConfig $script:LanEndpointIp
+}
 
 # ── Ensure Azure CLI ──────────────────────────────────────────────────────────
 function Invoke-EnsureAzureCli {
@@ -2590,6 +2860,9 @@ function Show-Completion {
     if ($script:DoRemoteTester) {
         $tIp = ""; $tSsh = ""
         switch ($script:TesterLocation) {
+            "lan"   { $tIp = $script:LanTesterIp
+                      if ($script:LanTesterPort -ne "22") { $tSsh = "ssh -p $($script:LanTesterPort) $($script:LanTesterUser)@$tIp" }
+                      else { $tSsh = "ssh $($script:LanTesterUser)@$tIp" } }
             "azure" { $tIp = $script:AzureTesterIp; $tSsh = "ssh azureuser@$tIp" }
             "aws"   { $tIp = $script:AwsTesterIp;   $tSsh = "ssh ubuntu@$tIp" }
             "gcp"   { $tIp = $script:GcpTesterIp;   $tSsh = "gcloud compute ssh $($script:GcpTesterName) --zone $($script:GcpZone)" }
@@ -2606,6 +2879,9 @@ function Show-Completion {
     if ($script:DoRemoteEndpoint) {
         $eIp = ""; $eSsh = ""
         switch ($script:EndpointLocation) {
+            "lan"   { $eIp = $script:LanEndpointIp
+                      if ($script:LanEndpointPort -ne "22") { $eSsh = "ssh -p $($script:LanEndpointPort) $($script:LanEndpointUser)@$eIp" }
+                      else { $eSsh = "ssh $($script:LanEndpointUser)@$eIp" } }
             "azure" { $eIp = $script:AzureEndpointIp; $eSsh = "ssh azureuser@$eIp" }
             "aws"   { $eIp = $script:AwsEndpointIp;   $eSsh = "ssh ubuntu@$eIp" }
             "gcp"   { $eIp = $script:GcpEndpointIp;   $eSsh = "gcloud compute ssh $($script:GcpEndpointName) --zone $($script:GcpZone)" }
@@ -2740,6 +3016,7 @@ if ($script:DoRemoteEndpoint) {
 # ── Execute remote deployments ───────────────────────────────────────────────
 if ($script:DoRemoteTester) {
     switch ($script:TesterLocation) {
+        "lan"   { Invoke-LanDeployTester }
         "azure" { Invoke-AzureDeployTester }
         "aws"   { Invoke-AwsDeployTester }
         "gcp"   { Invoke-GcpDeployTester }
@@ -2748,6 +3025,7 @@ if ($script:DoRemoteTester) {
 
 if ($script:DoRemoteEndpoint) {
     switch ($script:EndpointLocation) {
+        "lan"   { Invoke-LanDeployEndpoint }
         "azure" { Invoke-AzureDeployEndpoint }
         "aws"   { Invoke-AwsDeployEndpoint }
         "gcp"   { Invoke-GcpDeployEndpoint }
