@@ -1092,19 +1092,82 @@ _lan_install_binary_linux() {
     local binary="$1" role="$2"
     _lan_ssh_vars "$role"
 
-    # Reuse the existing _remote_install_binary which does the heavy lifting.
-    # It expects: $1=binary, $2=ip, $3=user
-    # However it uses default port 22.  For non-standard ports we need to set
-    # SSH_OPTS_EXTRA so the function uses our port.  Since _remote_install_binary
-    # hardcodes ssh/scp calls, we'll call it directly for port 22 or wrap for
-    # non-standard ports.
-    if [[ "$_LAN_PORT" == "22" ]]; then
-        _remote_install_binary "$binary" "$_LAN_IP" "$_LAN_USER"
-    else
-        # For non-standard ports, use the bootstrap approach which runs the
-        # installer on the remote host.
-        _lan_bootstrap_install "$binary" "$role"
+    # Determine release version
+    local ver="${NETWORKER_VERSION:-}"
+    if [[ -z "$ver" ]]; then
+        ver="$(gh release list --repo "$REPO_GH" --limit 1 --json tagName \
+               -q '.[0].tagName' 2>/dev/null || echo "")"
     fi
+
+    # Detect remote architecture
+    local remote_arch
+    remote_arch="$(ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" "uname -m" 2>/dev/null || echo "x86_64")"
+    local remote_target
+    case "$remote_arch" in
+        x86_64)        remote_target="x86_64-unknown-linux-musl" ;;
+        aarch64|arm64) remote_target="aarch64-unknown-linux-musl" ;;
+        *)             remote_target="x86_64-unknown-linux-musl" ;;
+    esac
+
+    local archive="${binary}-${remote_target}.tar.gz"
+
+    # Check if sudo is available (passwordless)
+    local has_sudo=0
+    if ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" "sudo -n true" &>/dev/null; then
+        has_sudo=1
+    fi
+
+    if [[ $has_sudo -eq 0 ]]; then
+        print_info "No passwordless sudo — installing to ~/.local/bin/"
+    fi
+
+    # Download and install on remote host
+    print_info "Installing ${binary} on ${_LAN_DEST} (${ver:-source})…"
+    if [[ -n "$ver" ]]; then
+        local dl_url="https://github.com/${REPO_GH}/releases/download/${ver}/${archive}"
+        if [[ $has_sudo -eq 1 ]]; then
+            ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" bash <<REMOTE
+set -e
+curl -fsSL '${dl_url}' -o /tmp/${archive}
+tar xzf /tmp/${archive} -C /tmp
+sudo mv /tmp/${binary} /usr/local/bin/${binary}
+sudo chmod +x /usr/local/bin/${binary}
+rm -f /tmp/${archive}
+REMOTE
+        else
+            ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" bash <<REMOTE
+set -e
+mkdir -p "\$HOME/.local/bin"
+curl -fsSL '${dl_url}' -o /tmp/${archive}
+tar xzf /tmp/${archive} -C /tmp
+mv /tmp/${binary} "\$HOME/.local/bin/${binary}"
+chmod +x "\$HOME/.local/bin/${binary}"
+rm -f /tmp/${archive}
+# Ensure ~/.local/bin is in PATH for future sessions
+if ! grep -q '.local/bin' "\$HOME/.bashrc" 2>/dev/null; then
+    echo 'export PATH="\$HOME/.local/bin:\$PATH"' >> "\$HOME/.bashrc"
+fi
+if ! grep -q '.local/bin' "\$HOME/.profile" 2>/dev/null; then
+    echo 'export PATH="\$HOME/.local/bin:\$PATH"' >> "\$HOME/.profile"
+fi
+REMOTE
+        fi
+    else
+        # No release — fallback to bootstrap (builds from source)
+        _lan_bootstrap_install "$binary" "$role"
+        return
+    fi
+
+    # Verify
+    local remote_ver
+    if [[ $has_sudo -eq 1 ]]; then
+        remote_ver="$(ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" \
+            "/usr/local/bin/${binary} --version 2>/dev/null" || echo "unknown")"
+    else
+        remote_ver="$(ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" \
+            "\$HOME/.local/bin/${binary} --version 2>/dev/null" || echo "unknown")"
+    fi
+    print_ok "${binary} installed on ${_LAN_DEST} (${remote_ver})"
 }
 
 # Run the installer on a remote LAN host (builds from source if no release).
@@ -1176,21 +1239,31 @@ _lan_create_endpoint_service() {
     local role="$1"
     _lan_ssh_vars "$role"
 
-    if [[ "$_LAN_PORT" == "22" ]]; then
-        _remote_create_endpoint_service "$_LAN_IP" "$_LAN_USER"
-    else
-        # Pipe the service creation script via SSH with custom port
+    # Check if sudo is available (passwordless)
+    local has_sudo=0
+    if ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" "sudo -n true" &>/dev/null; then
+        has_sudo=1
+    fi
+
+    if [[ $has_sudo -eq 1 ]]; then
+        # Full systemd service setup with iptables redirects
         ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" bash <<'REMOTE'
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin networker 2>/dev/null || true
 
-sudo tee /etc/systemd/system/networker-endpoint.service > /dev/null <<'UNIT'
+# Find the binary
+BIN_PATH="/usr/local/bin/networker-endpoint"
+if [ ! -f "$BIN_PATH" ]; then
+    BIN_PATH="$HOME/.local/bin/networker-endpoint"
+fi
+
+sudo tee /etc/systemd/system/networker-endpoint.service > /dev/null <<UNIT
 [Unit]
 Description=Networker Endpoint
 After=network.target
 
 [Service]
 User=networker
-ExecStart=/usr/local/bin/networker-endpoint
+ExecStart=${BIN_PATH}
 Restart=always
 RestartSec=5
 Environment=RUST_LOG=info
@@ -1208,21 +1281,39 @@ if command -v iptables &>/dev/null; then
         sudo iptables -t nat -A PREROUTING -p tcp --dport 80  -j REDIRECT --to-port 8080
     sudo iptables -t nat -C PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null || \
         sudo iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443
-    sudo iptables -t nat -C OUTPUT -p tcp --dport 80  -j REDIRECT --to-port 8080 2>/dev/null || \
-        sudo iptables -t nat -A OUTPUT -p tcp --dport 80  -j REDIRECT --to-port 8080
-    sudo iptables -t nat -C OUTPUT -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null || \
-        sudo iptables -t nat -A OUTPUT -p tcp --dport 443 -j REDIRECT --to-port 8443
     if command -v netfilter-persistent &>/dev/null; then
         sudo netfilter-persistent save 2>/dev/null || true
     elif command -v iptables-save &>/dev/null; then
         sudo mkdir -p /etc/iptables 2>/dev/null || true
-        sudo sh -c 'iptables-save > /etc/iptables/rules.v4' 2>/dev/null || \
-            sudo sh -c 'iptables-save > /etc/iptables.rules' 2>/dev/null || true
+        sudo sh -c 'iptables-save > /etc/iptables/rules.v4' 2>/dev/null || true
     fi
 fi
 REMOTE
         sleep 2
-        print_ok "networker-endpoint service enabled and started"
+        print_ok "networker-endpoint systemd service enabled and started"
+    else
+        # No sudo — start as a background process
+        print_info "No passwordless sudo — starting endpoint as background process"
+        ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" bash <<'REMOTE'
+# Find the binary
+BIN_PATH="$HOME/.local/bin/networker-endpoint"
+if [ ! -f "$BIN_PATH" ]; then
+    BIN_PATH="/usr/local/bin/networker-endpoint"
+fi
+
+# Kill any existing instance
+pkill -f networker-endpoint 2>/dev/null || true
+sleep 1
+
+# Start in background with nohup
+mkdir -p "$HOME/.local/log"
+RUST_LOG=info nohup "$BIN_PATH" > "$HOME/.local/log/networker-endpoint.log" 2>&1 &
+echo $! > "$HOME/.local/networker-endpoint.pid"
+echo "PID: $!"
+REMOTE
+        sleep 2
+        print_ok "networker-endpoint started as background process (logs: ~/.local/log/networker-endpoint.log)"
+        print_info "To stop: ssh ${_LAN_DEST} 'kill \$(cat ~/.local/networker-endpoint.pid)'"
     fi
 }
 
