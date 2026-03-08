@@ -130,7 +130,7 @@ All fields are optional. If `tests` is omitted entirely, defaults are used.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `run_tests` | boolean | `true` | Set `false` for deploy-only (no test execution) |
-| `modes` | string[] | see below | Test modes to run |
+| `modes` | string[] | see above | Test modes to run |
 | `runs` | number | `5` | Number of test iterations per mode |
 | `concurrency` | number | `1` | Concurrent connections |
 | `timeout` | number | `30` | Timeout per probe in seconds |
@@ -164,9 +164,9 @@ All fields are optional. If `tests` is omitted entirely, defaults are used.
 
 ## Examples
 
-- [`deploy.example.json`](../deploy.example.json) -- Minimal LAN endpoint with local tester
-- [`examples/deploy-lan.json`](../examples/deploy-lan.json) -- Multi-endpoint LAN deployment with remote tester
-- [`examples/deploy-multi-cloud.json`](../examples/deploy-multi-cloud.json) -- Compare Azure vs AWS vs GCP endpoints
+- [`deploy.example.json`](../deploy.example.json) — Minimal LAN endpoint with local tester
+- [`examples/deploy-lan.json`](../examples/deploy-lan.json) — Multi-endpoint LAN deployment with remote tester
+- [`examples/deploy-multi-cloud.json`](../examples/deploy-multi-cloud.json) — Compare Azure vs AWS vs GCP endpoints
 
 ## Non-interactive mode
 
@@ -176,7 +176,7 @@ without user input. This is required for CI/CD pipelines and scripted automation
 
 ## Requirements
 
-- **jq** -- required for JSON parsing (`brew install jq` / `apt install jq`)
-- **SSH key auth** -- required for LAN provider (password prompts not supported in non-interactive mode)
-- **Cloud CLIs** -- required for their respective providers (`az`, `aws`, `gcloud`)
-- **Bash 3.2+** -- compatible with macOS default bash
+- **jq** — required for JSON parsing (`brew install jq` / `apt install jq`)
+- **SSH key auth** — required for LAN provider (password prompts not supported in non-interactive mode)
+- **Cloud CLIs** — required for their respective providers (`az`, `aws`, `gcloud`)
+- **Bash 3.2+** — compatible with macOS default bash

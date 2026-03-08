@@ -206,7 +206,7 @@ $env:GOOGLE_APPLICATION_CREDENTIALS = "C:\path\to\service-account-key.json"
 
 The `--deploy` flag enables non-interactive, repeatable deployment and testing from a
 single JSON config file. Define where to install the tester, where to deploy endpoint(s),
-and what tests to run -- then execute the whole pipeline in one command.
+and what tests to run — then execute the whole pipeline in one command.
 
 ```bash
 bash install.sh --deploy deploy.json
@@ -292,9 +292,9 @@ running any tests. Useful for provisioning machines that you will test manually 
 
 ### Requirements
 
-- **jq** -- required for JSON parsing (`brew install jq` / `apt install jq`)
-- **SSH key auth** -- required for LAN provider (no password prompts in non-interactive mode)
-- **Cloud CLIs** -- required for their respective providers (`az`, `aws`, `gcloud`)
+- **jq** — required for JSON parsing (`brew install jq` / `apt install jq`)
+- **SSH key auth** — required for LAN provider (no password prompts in non-interactive mode)
+- **Cloud CLIs** — required for their respective providers (`az`, `aws`, `gcloud`)
 
 > See [`docs/deploy-config.md`](docs/deploy-config.md) for the full JSON schema reference,
 > all provider-specific fields, test configuration options, and additional examples.
@@ -1105,7 +1105,7 @@ All TCP fields are collected from a single `getsockopt` call per connection — 
 
 | Layer | Command | Requires |
 |-------|---------|----------|
-| **Unit** | `cargo test --workspace --lib` | Nothing -- fully offline |
+| **Unit** | `cargo test --workspace --lib` | Nothing — fully offline |
 | **Integration** | `cargo test --test integration -p networker-tester -- --test-threads=1` | Nothing (endpoint is in-process) |
 | **SQL integration** | see below | SQL Server + `NETWORKER_SQL_CONN` |
 | **Installer (bats)** | `bats tests/installer.bats` | [bats-core](https://github.com/bats-core/bats-core) |
