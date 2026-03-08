@@ -42,10 +42,6 @@ in the kernel or scattered across multiple tools.
 
 ## Installation
 
-> **Requirement:** SSH key configured for GitHub
-> (`ssh -T git@github.com` → *"Hi \<user\>! You've successfully authenticated…"*).
-> The source repository is private; the installer compiles from it using your existing key.
-
 ### macOS and Linux
 
 ```bash
@@ -83,8 +79,8 @@ numbered plan, and a `1) Proceed / 2) Customize / 3) Cancel` prompt before doing
 - **Release mode** (fast, ~10 s) — if `gh` CLI is installed and authenticated
   (`gh auth login`), downloads the pre-built binary for your platform from the latest
   GitHub release.
-- **Source mode** (slower, ~5–10 min) — compiles from the private Git repo via
-  `cargo install`; requires an SSH key for GitHub.
+- **Source mode** (slower, ~5–10 min) — compiles from the public Git repo via
+  `cargo install`; requires Rust and Git.
 
 **In source mode, the installer also auto-detects and offers to install missing dependencies:**
 - Git (via `brew` / `apt-get` / `dnf` / `pacman` / `zypper` / `apk` / `winget`)
