@@ -4468,7 +4468,7 @@ _gcp_create_instance() {
 # Wait for SSH access on a GCE instance via gcloud compute ssh (OS Login or metadata keys).
 _gcp_wait_for_ssh() {
     local name="$1" label="${2:-instance}"
-    print_info "Waiting for SSH access to $label…"
+    print_info "Waiting for SSH access to ${label}…"
     local attempt=0
     while [[ $attempt -lt 30 ]]; do
         if gcloud compute ssh "$name" \
@@ -4637,7 +4637,7 @@ _gcp_wait_for_windows_vm() {
 # Retrieve Windows credentials via gcloud compute reset-windows-password.
 _gcp_reset_windows_password() {
     local name="$1" label="${2:-VM}"
-    print_info "Setting Windows password for $label…"
+    print_info "Setting Windows password for ${label}…"
     local creds
     creds="$(gcloud compute reset-windows-password "$name" \
         --project "$GCP_PROJECT" \
