@@ -196,6 +196,8 @@ $script:GcpTesterIp       = ""
 $script:GcpEndpointName   = "networker-endpoint"
 $script:GcpEndpointMachineType = "e2-small"
 $script:GcpEndpointIp     = ""
+$script:GcpTesterOs       = "linux"
+$script:GcpEndpointOs     = "linux"
 $script:GcpAutoShutdown   = "yes"
 $script:GcpShutdownAsked  = $false
 
@@ -1341,6 +1343,15 @@ function Invoke-GcpOptions ($component) {
     }
     Write-Host ""
 
+    # OS choice
+    Write-Host "  Operating System:"
+    Write-Host "    1) Ubuntu 22.04 LTS  (Linux)    [default]"
+    Write-Host "    2) Windows Server 2022"
+    Write-Host ""
+    $osAns = Read-HostDefault "  Choice [1]" "1"
+    $chosenOs = if ($osAns -eq "2") { "windows" } else { "linux" }
+    Write-Host ""
+
     # Auto-shutdown
     if (-not $script:GcpShutdownAsked) {
         $script:GcpShutdownAsked = $true
@@ -1360,12 +1371,12 @@ function Invoke-GcpOptions ($component) {
 
     if ($component -eq "tester") {
         $script:GcpTesterName = $name; $script:GcpTesterMachineType = $chosenType
-        $script:GcpTesterOptionsAsked = $true
+        $script:GcpTesterOs = $chosenOs; $script:GcpTesterOptionsAsked = $true
     } else {
         $script:GcpEndpointName = $name; $script:GcpEndpointMachineType = $chosenType
-        $script:GcpEndpointOptionsAsked = $true
+        $script:GcpEndpointOs = $chosenOs; $script:GcpEndpointOptionsAsked = $true
     }
-    Write-Ok "Type: $chosenType  |  Name: $name  |  Zone: $($script:GcpZone)"
+    Write-Ok "OS: $chosenOs  |  Type: $chosenType  |  Name: $name  |  Zone: $($script:GcpZone)"
     Write-Host ""
 }
 
@@ -2147,7 +2158,7 @@ function Invoke-GcpCreateFirewallRule {
         --project $script:GcpProject `
         --direction INGRESS `
         --action ALLOW `
-        --rules "tcp:22,tcp:80,tcp:443,tcp:8080,tcp:8443,udp:8443,udp:9998,udp:9999" `
+        --rules "tcp:22,tcp:80,tcp:443,tcp:3389,tcp:8080,tcp:8443,udp:8443,udp:9998,udp:9999" `
         --source-ranges "0.0.0.0/0" `
         --target-tags networker-endpoint `
         --quiet
@@ -2165,7 +2176,15 @@ function Invoke-GcpCreateInstance {
     $tagsOpt = @()
     if ($label -eq "endpoint") { $tagsOpt = @("--tags=networker-endpoint") }
 
-    Write-Info "Creating Ubuntu 22.04 VM '$name' ($machineType)..."
+    # Determine OS image
+    $osType = if ($label -eq "tester") { $script:GcpTesterOs } else { $script:GcpEndpointOs }
+    if ($osType -eq "windows") {
+        $imageFamily = "windows-2022"; $imageProject = "windows-cloud"; $osLabel = "Windows Server 2022"
+    } else {
+        $imageFamily = "ubuntu-2204-lts"; $imageProject = "ubuntu-os-cloud"; $osLabel = "Ubuntu 22.04"
+    }
+
+    Write-Info "Creating $osLabel VM '$name' ($machineType)..."
     Write-Dim "This typically takes 1-2 minutes..."
     Write-Host ""
 
@@ -2173,8 +2192,8 @@ function Invoke-GcpCreateInstance {
         --project $script:GcpProject `
         --zone $script:GcpZone `
         --machine-type $machineType `
-        --image-family ubuntu-2204-lts `
-        --image-project ubuntu-os-cloud `
+        --image-family $imageFamily `
+        --image-project $imageProject `
         @tagsOpt `
         --quiet
 
@@ -2230,33 +2249,142 @@ function Invoke-GcpSshRun ($name, $command) {
         --command $command
 }
 
+# ── GCP Windows VM helpers ────────────────────────────────────────────────────
+
+function Invoke-GcpWaitForWindowsVm ($name, $label) {
+    Write-Info "Waiting for $label Windows VM to be ready (3-5 minutes)..."
+    for ($i = 0; $i -lt 40; $i++) {
+        $null = & gcloud compute ssh $name `
+            --project $script:GcpProject `
+            --zone $script:GcpZone `
+            --command "echo ready" `
+            --quiet `
+            --ssh-flag="-o ConnectTimeout=10" `
+            --ssh-flag="-o StrictHostKeyChecking=no" 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host ""
+            Write-Ok "Windows VM ready (SSH available)"
+            return
+        }
+        Write-Host -NoNewline "."
+        Start-Sleep -Seconds 10
+    }
+    Write-Host ""
+    Write-Warn "Windows VM not responding via SSH after ~7 minutes."
+    Write-Info "Try: gcloud compute reset-windows-password $name --zone $($script:GcpZone)"
+}
+
+function Invoke-GcpResetWindowsPassword ($name, $label) {
+    Write-Info "Setting Windows password for $label..."
+    $creds = & gcloud compute reset-windows-password $name `
+        --project $script:GcpProject `
+        --zone $script:GcpZone `
+        --user networker `
+        --quiet 2>&1
+    $ip   = ($creds | Where-Object { $_ -match '^ip_address:' }) -replace '^ip_address:\s*',''
+    $user = ($creds | Where-Object { $_ -match '^username:' })   -replace '^username:\s*',''
+    $pass = ($creds | Where-Object { $_ -match '^password:' })   -replace '^password:\s*',''
+    if ($pass) {
+        Write-Host ""
+        Write-Info "Windows credentials for ${label}:"
+        Write-Host "    User:     $user"
+        Write-Host "    Password: $pass"
+        Write-Host "    RDP:      mstsc /v:$ip"
+        Write-Host ""
+    } else {
+        Write-Warn "Could not retrieve Windows password automatically."
+        Write-Info "Run: gcloud compute reset-windows-password $name --zone $($script:GcpZone)"
+    }
+}
+
+function Invoke-GcpWinInstallBinary ($binary, $name) {
+    $archive = "${binary}-x86_64-pc-windows-msvc.zip"
+    $ver = $script:NetworkerVersion
+    if (-not $ver) { $ver = "latest" }
+    $url = "$($script:RepoHttps)/releases/download/${ver}/${archive}"
+
+    Invoke-NextStep "Install ${binary}.exe on GCE Windows VM"
+    Write-Info "Installing ${binary}.exe on Windows VM..."
+    & gcloud compute ssh $name `
+        --project $script:GcpProject `
+        --zone $script:GcpZone `
+        --quiet `
+        --ssh-flag="-o StrictHostKeyChecking=no" `
+        --command "powershell -Command `"`$ErrorActionPreference='Stop'; New-Item -ItemType Directory -Force -Path C:\networker-tmp | Out-Null; New-Item -ItemType Directory -Force -Path C:\networker | Out-Null; Invoke-WebRequest -Uri '$url' -OutFile 'C:\networker-tmp\$archive' -UseBasicParsing; Expand-Archive -Path 'C:\networker-tmp\$archive' -DestinationPath 'C:\networker' -Force; Remove-Item -Recurse -Force C:\networker-tmp; `$mp=[System.Environment]::GetEnvironmentVariable('Path','Machine'); if(`$mp -notlike '*C:\networker*'){[System.Environment]::SetEnvironmentVariable('Path',`"`$mp;C:\networker`",'Machine')}; & 'C:\networker\${binary}.exe' --version`""
+    if ($LASTEXITCODE -eq 0) { Write-Ok "${binary}.exe installed on GCE Windows VM" }
+    else { Write-Warn "${binary}.exe may not have installed correctly -- check the VM" }
+}
+
+function Invoke-GcpWinCreateEndpointService ($name) {
+    Invoke-NextStep "Create networker-endpoint Windows service (GCP)"
+    Write-Info "Creating Windows Service and opening firewall ports..."
+    & gcloud compute ssh $name `
+        --project $script:GcpProject `
+        --zone $script:GcpZone `
+        --quiet `
+        --ssh-flag="-o StrictHostKeyChecking=no" `
+        --command "powershell -Command `"`$ErrorActionPreference='Continue'; sc.exe create networker-endpoint binPath='C:\networker\networker-endpoint.exe' start=auto; sc.exe description networker-endpoint 'Networker Endpoint diagnostics server'; sc.exe start networker-endpoint; netsh advfirewall firewall add rule name='Networker-HTTP' protocol=TCP dir=in action=allow localport=8080; netsh advfirewall firewall add rule name='Networker-HTTPS' protocol=TCP dir=in action=allow localport=8443; netsh advfirewall firewall add rule name='Networker-UDP' protocol=UDP dir=in action=allow localport='8443,9998,9999'`""
+    Write-Ok "networker-endpoint service created on GCE Windows VM"
+}
+
+function Invoke-GcpWinSetAutoShutdown ($name, $label) {
+    if ($script:GcpAutoShutdown -ne "yes") { return }
+    Invoke-NextStep "Set auto-shutdown for $label (04:00 UTC)"
+    & gcloud compute ssh $name `
+        --project $script:GcpProject `
+        --zone $script:GcpZone `
+        --quiet `
+        --ssh-flag="-o StrictHostKeyChecking=no" `
+        --command "powershell -Command `"`$action = New-ScheduledTaskAction -Execute 'shutdown.exe' -Argument '/s /t 60 /f'; `$trigger = New-ScheduledTaskTrigger -Daily -At '04:00'; Register-ScheduledTask -TaskName 'NetworkerAutoShutdown' -Action `$action -Trigger `$trigger -User 'SYSTEM' -RunLevel Highest -Force`""
+    if ($LASTEXITCODE -eq 0) { Write-Ok "Auto-shutdown task installed: 04:00 UTC daily" }
+    else { Write-Warn "Could not install auto-shutdown task (non-critical)" }
+}
+
+# ── GCP deploy orchestration ─────────────────────────────────────────────────
+
 function Invoke-GcpDeployTester {
     Invoke-GcpCheckPrereqs
     Invoke-GcpCreateInstance -label "tester" -name $script:GcpTesterName -machineType $script:GcpTesterMachineType
-    Invoke-GcpWaitForSsh $script:GcpTesterName "tester instance"
-    if ($script:GcpAutoShutdown -eq "yes") {
-        Invoke-NextStep "Set auto-shutdown cron for tester"
-        Invoke-GcpSshRun $script:GcpTesterName "(crontab -l 2>/dev/null; echo '0 4 * * * /sbin/shutdown -h now') | crontab -"
-        Write-Ok "Auto-shutdown cron installed"
+
+    if ($script:GcpTesterOs -eq "windows") {
+        Invoke-GcpWaitForWindowsVm $script:GcpTesterName "tester instance"
+        Invoke-GcpResetWindowsPassword $script:GcpTesterName "tester"
+        Invoke-GcpWinSetAutoShutdown $script:GcpTesterName "tester instance"
+        Invoke-GcpWinInstallBinary "networker-tester" $script:GcpTesterName
+    } else {
+        Invoke-GcpWaitForSsh $script:GcpTesterName "tester instance"
+        if ($script:GcpAutoShutdown -eq "yes") {
+            Invoke-NextStep "Set auto-shutdown cron for tester"
+            Invoke-GcpSshRun $script:GcpTesterName "(crontab -l 2>/dev/null; echo '0 4 * * * /sbin/shutdown -h now') | crontab -"
+            Write-Ok "Auto-shutdown cron installed"
+        }
+        Invoke-NextStep "Install networker-tester on GCE instance"
+        Invoke-GcpInstallBinary "networker-tester" $script:GcpTesterName
     }
-    Invoke-NextStep "Install networker-tester on GCE instance"
-    Invoke-GcpInstallBinary "networker-tester" $script:GcpTesterName
 }
 
 function Invoke-GcpDeployEndpoint {
     Invoke-GcpCheckPrereqs
     Invoke-GcpCreateFirewallRule
     Invoke-GcpCreateInstance -label "endpoint" -name $script:GcpEndpointName -machineType $script:GcpEndpointMachineType
-    Invoke-GcpWaitForSsh $script:GcpEndpointName "endpoint instance"
-    if ($script:GcpAutoShutdown -eq "yes") {
-        Invoke-NextStep "Set auto-shutdown cron for endpoint"
-        Invoke-GcpSshRun $script:GcpEndpointName "(crontab -l 2>/dev/null; echo '0 4 * * * /sbin/shutdown -h now') | crontab -"
-        Write-Ok "Auto-shutdown cron installed"
-    }
-    Invoke-NextStep "Install networker-endpoint on GCE instance"
-    Invoke-GcpInstallBinary "networker-endpoint" $script:GcpEndpointName
-    Invoke-NextStep "Create networker-endpoint service (GCP)"
-    Invoke-GcpSshRun $script:GcpEndpointName @"
+
+    if ($script:GcpEndpointOs -eq "windows") {
+        Invoke-GcpWaitForWindowsVm $script:GcpEndpointName "endpoint instance"
+        Invoke-GcpResetWindowsPassword $script:GcpEndpointName "endpoint"
+        Invoke-GcpWinSetAutoShutdown $script:GcpEndpointName "endpoint instance"
+        Invoke-GcpWinInstallBinary "networker-endpoint" $script:GcpEndpointName
+        Invoke-GcpWinCreateEndpointService $script:GcpEndpointName
+    } else {
+        Invoke-GcpWaitForSsh $script:GcpEndpointName "endpoint instance"
+        if ($script:GcpAutoShutdown -eq "yes") {
+            Invoke-NextStep "Set auto-shutdown cron for endpoint"
+            Invoke-GcpSshRun $script:GcpEndpointName "(crontab -l 2>/dev/null; echo '0 4 * * * /sbin/shutdown -h now') | crontab -"
+            Write-Ok "Auto-shutdown cron installed"
+        }
+        Invoke-NextStep "Install networker-endpoint on GCE instance"
+        Invoke-GcpInstallBinary "networker-endpoint" $script:GcpEndpointName
+        Invoke-NextStep "Create networker-endpoint service (GCP)"
+        Invoke-GcpSshRun $script:GcpEndpointName @"
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin networker 2>/dev/null || true
 sudo tee /etc/systemd/system/networker-endpoint.service > /dev/null <<'UNIT'
 [Unit]
@@ -2279,7 +2407,8 @@ if command -v iptables &>/dev/null; then
     sudo iptables -t nat -C PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null || sudo iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443
 fi
 "@
-    Write-Ok "Endpoint service enabled and started"
+        Write-Ok "Endpoint service enabled and started"
+    }
 
     Invoke-NextStep "Verify endpoint health (GCP)"
     Start-Sleep -Seconds 3
