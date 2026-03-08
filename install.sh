@@ -1126,31 +1126,11 @@ _lan_install_binary_linux() {
     if [[ -n "$ver" ]]; then
         local dl_url="https://github.com/${REPO_GH}/releases/download/${ver}/${archive}"
         if [[ $has_sudo -eq 1 ]]; then
-            ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" bash <<REMOTE
-set -e
-curl -fsSL '${dl_url}' -o /tmp/${archive}
-tar xzf /tmp/${archive} -C /tmp
-sudo mv /tmp/${binary} /usr/local/bin/${binary}
-sudo chmod +x /usr/local/bin/${binary}
-rm -f /tmp/${archive}
-REMOTE
+            ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" \
+                "set -e; curl -fsSL '${dl_url}' -o /tmp/${archive} && tar xzf /tmp/${archive} -C /tmp && sudo mv /tmp/${binary} /usr/local/bin/${binary} && sudo chmod +x /usr/local/bin/${binary} && rm -f /tmp/${archive}"
         else
-            ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" bash <<REMOTE
-set -e
-mkdir -p "\$HOME/.local/bin"
-curl -fsSL '${dl_url}' -o /tmp/${archive}
-tar xzf /tmp/${archive} -C /tmp
-mv /tmp/${binary} "\$HOME/.local/bin/${binary}"
-chmod +x "\$HOME/.local/bin/${binary}"
-rm -f /tmp/${archive}
-# Ensure ~/.local/bin is in PATH for future sessions
-if ! grep -q '.local/bin' "\$HOME/.bashrc" 2>/dev/null; then
-    echo 'export PATH="\$HOME/.local/bin:\$PATH"' >> "\$HOME/.bashrc"
-fi
-if ! grep -q '.local/bin' "\$HOME/.profile" 2>/dev/null; then
-    echo 'export PATH="\$HOME/.local/bin:\$PATH"' >> "\$HOME/.profile"
-fi
-REMOTE
+            ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" \
+                "set -e; mkdir -p \"\$HOME/.local/bin\" && curl -fsSL '${dl_url}' -o /tmp/${archive} && tar xzf /tmp/${archive} -C /tmp && mv /tmp/${binary} \"\$HOME/.local/bin/${binary}\" && chmod +x \"\$HOME/.local/bin/${binary}\" && rm -f /tmp/${archive} && (grep -q '.local/bin' \"\$HOME/.bashrc\" 2>/dev/null || echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> \"\$HOME/.bashrc\") && (grep -q '.local/bin' \"\$HOME/.profile\" 2>/dev/null || echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> \"\$HOME/.profile\")"
         fi
     else
         # No release — fallback to bootstrap (builds from source)
