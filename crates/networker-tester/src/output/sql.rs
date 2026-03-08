@@ -530,6 +530,25 @@ mod tests {
         }
     }
 
+    /// Helper: connect, execute a SELECT, return the first row's column values.
+    async fn query_one(
+        client: &mut SqlClient,
+        sql: &str,
+    ) -> Option<tiberius::Row> {
+        let stream = client.query(sql, &[]).await.ok()?;
+        let row = stream.into_row().await.ok()?;
+        row
+    }
+
+    /// Helper: connect, execute a SELECT, return all rows.
+    async fn query_all(
+        client: &mut SqlClient,
+        sql: &str,
+    ) -> Vec<tiberius::Row> {
+        let stream = client.query(sql, &[]).await.unwrap();
+        stream.into_first_result().await.unwrap()
+    }
+
     /// Basic round-trip: TestRun + bare RequestAttempt (no sub-results).
     #[tokio::test]
     #[ignore = "requires SQL Server – set NETWORKER_SQL_CONN to enable"]
@@ -557,5 +576,418 @@ mod tests {
         save(&run, &conn)
             .await
             .expect("SQL full save should succeed");
+    }
+
+    // ── INSERT → SELECT verification tests ─────────────────────────────────
+
+    /// Insert a TestRun then SELECT it back and verify every column.
+    #[tokio::test]
+    #[ignore = "requires SQL Server – set NETWORKER_SQL_CONN to enable"]
+    async fn sql_verify_test_run_fields() {
+        let conn_str = match sql_conn() {
+            Some(c) => c,
+            None => return,
+        };
+        let run_id = Uuid::new_v4();
+        let attempt = bare_attempt(run_id);
+        let run = make_run(run_id, vec![attempt]);
+        save(&run, &conn_str).await.unwrap();
+
+        let mut client = connect(&conn_str).await.unwrap();
+        let sql = format!(
+            "SELECT RunId, TargetUrl, TargetHost, Modes, TotalRuns, \
+             Concurrency, TimeoutMs, ClientOs, ClientVersion, \
+             SuccessCount, FailureCount \
+             FROM dbo.TestRun WHERE RunId = '{}'",
+            run_id
+        );
+        let row = query_one(&mut client, &sql).await.expect("TestRun row must exist");
+
+        let db_run_id: &str = row.get(0).unwrap();
+        assert_eq!(db_run_id, run_id.to_string());
+        let db_url: &str = row.get(1).unwrap();
+        assert_eq!(db_url, "http://localhost/health");
+        let db_host: &str = row.get(2).unwrap();
+        assert_eq!(db_host, "localhost");
+        let db_modes: &str = row.get(3).unwrap();
+        assert_eq!(db_modes, "http1");
+        let db_total: i32 = row.get(4).unwrap();
+        assert_eq!(db_total, 1);
+        let db_conc: i32 = row.get(5).unwrap();
+        assert_eq!(db_conc, 1);
+        let db_timeout: i64 = row.get(6).unwrap();
+        assert_eq!(db_timeout, 5000);
+        let db_os: &str = row.get(7).unwrap();
+        assert_eq!(db_os, std::env::consts::OS);
+        let db_version: &str = row.get(8).unwrap();
+        assert_eq!(db_version, env!("CARGO_PKG_VERSION"));
+        let db_success: i32 = row.get(9).unwrap();
+        assert_eq!(db_success, 1); // one successful bare attempt
+        let db_fail: i32 = row.get(10).unwrap();
+        assert_eq!(db_fail, 0);
+    }
+
+    /// Insert a full attempt then SELECT back each sub-result table row.
+    #[tokio::test]
+    #[ignore = "requires SQL Server – set NETWORKER_SQL_CONN to enable"]
+    async fn sql_verify_all_sub_results() {
+        let conn_str = match sql_conn() {
+            Some(c) => c,
+            None => return,
+        };
+        let run_id = Uuid::new_v4();
+        let attempt = full_attempt(run_id);
+        let attempt_id = attempt.attempt_id;
+        let run = make_run(run_id, vec![attempt]);
+        save(&run, &conn_str).await.unwrap();
+
+        let mut c = connect(&conn_str).await.unwrap();
+        let aid = attempt_id.to_string();
+
+        // ── RequestAttempt ──────────────────────────────────────────────────
+        let row = query_one(
+            &mut c,
+            &format!(
+                "SELECT Protocol, SequenceNum, Success, RetryCount \
+                 FROM dbo.RequestAttempt WHERE AttemptId = '{aid}'"
+            ),
+        )
+        .await
+        .expect("RequestAttempt row");
+        let proto: &str = row.get(0).unwrap();
+        assert_eq!(proto, "http1");
+        let seq: i32 = row.get(1).unwrap();
+        assert_eq!(seq, 1);
+        let success: bool = row.get(2).unwrap();
+        assert!(!success); // full_attempt has success=false
+        let retry: i32 = row.get(3).unwrap();
+        assert_eq!(retry, 2);
+
+        // ── DnsResult ───────────────────────────────────────────────────────
+        let row = query_one(
+            &mut c,
+            &format!(
+                "SELECT QueryName, ResolvedIPs, DurationMs, Success \
+                 FROM dbo.DnsResult WHERE AttemptId = '{aid}'"
+            ),
+        )
+        .await
+        .expect("DnsResult row");
+        let qname: &str = row.get(0).unwrap();
+        assert_eq!(qname, "localhost");
+        let ips: &str = row.get(1).unwrap();
+        assert_eq!(ips, "127.0.0.1");
+        let dur: f64 = row.get(2).unwrap();
+        assert!((dur - 1.5).abs() < 0.01);
+        let dns_ok: bool = row.get(3).unwrap();
+        assert!(dns_ok);
+
+        // ── TcpResult ───────────────────────────────────────────────────────
+        let row = query_one(
+            &mut c,
+            &format!(
+                "SELECT RemoteAddr, ConnectDurationMs, MssBytesEstimate, \
+                 RttEstimateMs, CongestionAlgorithm, DeliveryRateBps, MinRttMs \
+                 FROM dbo.TcpResult WHERE AttemptId = '{aid}'"
+            ),
+        )
+        .await
+        .expect("TcpResult row");
+        let remote: &str = row.get(0).unwrap();
+        assert_eq!(remote, "127.0.0.1:8080");
+        let connect_ms: f64 = row.get(1).unwrap();
+        assert!((connect_ms - 0.5).abs() < 0.01);
+        let mss: Option<i32> = row.get(2);
+        assert_eq!(mss, Some(1460));
+        let rtt: Option<f64> = row.get(3);
+        assert!((rtt.unwrap() - 0.3).abs() < 0.01);
+        let algo: Option<&str> = row.get(4);
+        assert_eq!(algo, Some("cubic"));
+        let delivery: Option<i64> = row.get(5);
+        assert_eq!(delivery, Some(1_000_000));
+        let min_rtt: Option<f64> = row.get(6);
+        assert!((min_rtt.unwrap() - 0.2).abs() < 0.01);
+
+        // ── TlsResult ───────────────────────────────────────────────────────
+        let row = query_one(
+            &mut c,
+            &format!(
+                "SELECT ProtocolVersion, CipherSuite, AlpnNegotiated, \
+                 CertSubject, HandshakeDurationMs \
+                 FROM dbo.TlsResult WHERE AttemptId = '{aid}'"
+            ),
+        )
+        .await
+        .expect("TlsResult row");
+        let ver: &str = row.get(0).unwrap();
+        assert_eq!(ver, "TLSv1.3");
+        let cipher: &str = row.get(1).unwrap();
+        assert_eq!(cipher, "TLS_AES_256_GCM_SHA384");
+        let alpn: Option<&str> = row.get(2);
+        assert_eq!(alpn, Some("http/1.1"));
+        let subj: Option<&str> = row.get(3);
+        assert_eq!(subj, Some("CN=localhost"));
+        let hs_ms: f64 = row.get(4).unwrap();
+        assert!((hs_ms - 5.0).abs() < 0.01);
+
+        // ── HttpResult ──────────────────────────────────────────────────────
+        let row = query_one(
+            &mut c,
+            &format!(
+                "SELECT NegotiatedVersion, StatusCode, TtfbMs, TotalDurationMs, \
+                 PayloadBytes, ThroughputMbps \
+                 FROM dbo.HttpResult WHERE AttemptId = '{aid}'"
+            ),
+        )
+        .await
+        .expect("HttpResult row");
+        let http_ver: &str = row.get(0).unwrap();
+        assert_eq!(http_ver, "HTTP/1.1");
+        let status: i32 = row.get(1).unwrap();
+        assert_eq!(status, 200);
+        let ttfb: f64 = row.get(2).unwrap();
+        assert!((ttfb - 8.0).abs() < 0.01);
+        let total: f64 = row.get(3).unwrap();
+        assert!((total - 12.0).abs() < 0.01);
+        let payload: Option<i64> = row.get(4);
+        assert_eq!(payload, Some(65536));
+        let tput: Option<f64> = row.get(5);
+        assert!((tput.unwrap() - 105.0).abs() < 0.01);
+
+        // ── UdpResult ───────────────────────────────────────────────────────
+        let row = query_one(
+            &mut c,
+            &format!(
+                "SELECT ProbeCount, SuccessCount, LossPercent, \
+                 RttMinMs, RttAvgMs, RttP95Ms, JitterMs \
+                 FROM dbo.UdpResult WHERE AttemptId = '{aid}'"
+            ),
+        )
+        .await
+        .expect("UdpResult row");
+        let probes: i32 = row.get(0).unwrap();
+        assert_eq!(probes, 5);
+        let successes: i32 = row.get(1).unwrap();
+        assert_eq!(successes, 4);
+        let loss: f64 = row.get(2).unwrap();
+        assert!((loss - 20.0).abs() < 0.01);
+        let rtt_min: f64 = row.get(3).unwrap();
+        assert!((rtt_min - 0.1).abs() < 0.01);
+        let rtt_avg: f64 = row.get(4).unwrap();
+        assert!((rtt_avg - 0.25).abs() < 0.01);
+        let rtt_p95: f64 = row.get(5).unwrap();
+        assert!((rtt_p95 - 0.4).abs() < 0.01);
+        let jitter: f64 = row.get(6).unwrap();
+        assert!((jitter - 0.05).abs() < 0.01);
+
+        // ── ErrorRecord ─────────────────────────────────────────────────────
+        let row = query_one(
+            &mut c,
+            &format!(
+                "SELECT ErrorCategory, ErrorMessage, ErrorDetail \
+                 FROM dbo.ErrorRecord WHERE AttemptId = '{aid}'"
+            ),
+        )
+        .await
+        .expect("ErrorRecord row");
+        let cat: &str = row.get(0).unwrap();
+        assert_eq!(cat, "http");
+        let msg: &str = row.get(1).unwrap();
+        assert_eq!(msg, "simulated error");
+        let detail: Option<&str> = row.get(2);
+        assert_eq!(detail, Some("detail text"));
+
+        // ── ServerTimingResult ──────────────────────────────────────────────
+        let row = query_one(
+            &mut c,
+            &format!(
+                "SELECT RequestId, ClockSkewMs, ProcessingMs, TotalServerMs \
+                 FROM dbo.ServerTimingResult WHERE AttemptId = '{aid}'"
+            ),
+        )
+        .await
+        .expect("ServerTimingResult row");
+        let req_id: Option<&str> = row.get(0);
+        assert_eq!(req_id, Some("req-abc-123"));
+        let skew: Option<f64> = row.get(1);
+        assert!((skew.unwrap() - 0.5).abs() < 0.01);
+        let proc_ms: Option<f64> = row.get(2);
+        assert!((proc_ms.unwrap() - 3.0).abs() < 0.01);
+        let total_srv: Option<f64> = row.get(3);
+        assert!((total_srv.unwrap() - 4.0).abs() < 0.01);
+    }
+
+    /// Verify CASCADE DELETE: deleting a TestRun removes all child rows.
+    #[tokio::test]
+    #[ignore = "requires SQL Server – set NETWORKER_SQL_CONN to enable"]
+    async fn sql_cascade_delete() {
+        let conn_str = match sql_conn() {
+            Some(c) => c,
+            None => return,
+        };
+        let run_id = Uuid::new_v4();
+        let attempt = full_attempt(run_id);
+        let attempt_id = attempt.attempt_id;
+        let run = make_run(run_id, vec![attempt]);
+        save(&run, &conn_str).await.unwrap();
+
+        let mut c = connect(&conn_str).await.unwrap();
+        let rid = run_id.to_string();
+        let aid = attempt_id.to_string();
+
+        // Verify rows exist before delete.
+        let rows = query_all(
+            &mut c,
+            &format!("SELECT 1 FROM dbo.RequestAttempt WHERE RunId = '{rid}'"),
+        )
+        .await;
+        assert!(!rows.is_empty(), "attempt should exist before delete");
+
+        // ErrorRecord has FK to TestRun with ON DELETE NO ACTION, so delete
+        // error rows first to avoid FK violation.
+        c.execute(
+            &format!("DELETE FROM dbo.ErrorRecord WHERE AttemptId = '{aid}'") as &str,
+            &[],
+        )
+        .await
+        .unwrap();
+
+        // Delete TestRun — should CASCADE to RequestAttempt → DnsResult, TcpResult, etc.
+        c.execute(
+            &format!("DELETE FROM dbo.TestRun WHERE RunId = '{rid}'") as &str,
+            &[],
+        )
+        .await
+        .unwrap();
+
+        // Verify all child rows are gone.
+        let rows = query_all(
+            &mut c,
+            &format!("SELECT 1 FROM dbo.RequestAttempt WHERE RunId = '{rid}'"),
+        )
+        .await;
+        assert!(rows.is_empty(), "attempts should be cascade-deleted");
+
+        let rows = query_all(
+            &mut c,
+            &format!("SELECT 1 FROM dbo.DnsResult WHERE AttemptId = '{aid}'"),
+        )
+        .await;
+        assert!(rows.is_empty(), "DNS results should be cascade-deleted");
+
+        let rows = query_all(
+            &mut c,
+            &format!("SELECT 1 FROM dbo.HttpResult WHERE AttemptId = '{aid}'"),
+        )
+        .await;
+        assert!(rows.is_empty(), "HTTP results should be cascade-deleted");
+    }
+
+    /// Verify duplicate RunId insertion fails (PK constraint).
+    #[tokio::test]
+    #[ignore = "requires SQL Server – set NETWORKER_SQL_CONN to enable"]
+    async fn sql_duplicate_run_id_fails() {
+        let conn_str = match sql_conn() {
+            Some(c) => c,
+            None => return,
+        };
+        let run_id = Uuid::new_v4();
+        let run = make_run(run_id, vec![bare_attempt(run_id)]);
+        save(&run, &conn_str).await.unwrap();
+
+        // Second insert with same RunId should fail on PK.
+        let run2 = make_run(run_id, vec![bare_attempt(run_id)]);
+        let err = save(&run2, &conn_str).await;
+        assert!(err.is_err(), "duplicate RunId should fail");
+    }
+
+    /// Insert multiple attempts in one run, verify correct count.
+    #[tokio::test]
+    #[ignore = "requires SQL Server – set NETWORKER_SQL_CONN to enable"]
+    async fn sql_multiple_attempts_count() {
+        let conn_str = match sql_conn() {
+            Some(c) => c,
+            None => return,
+        };
+        let run_id = Uuid::new_v4();
+        let attempts = vec![
+            bare_attempt(run_id),
+            bare_attempt(run_id),
+            full_attempt(run_id),
+        ];
+        let mut run = make_run(run_id, attempts);
+        run.total_runs = 3;
+        save(&run, &conn_str).await.unwrap();
+
+        let mut c = connect(&conn_str).await.unwrap();
+        let rid = run_id.to_string();
+
+        // 3 RequestAttempt rows
+        let rows = query_all(
+            &mut c,
+            &format!("SELECT 1 FROM dbo.RequestAttempt WHERE RunId = '{rid}'"),
+        )
+        .await;
+        assert_eq!(rows.len(), 3);
+
+        // Only the full_attempt has sub-results — 1 DNS, 1 TCP, 1 TLS, 1 HTTP, 1 UDP
+        let dns_rows = query_all(
+            &mut c,
+            &format!(
+                "SELECT 1 FROM dbo.DnsResult d \
+                 JOIN dbo.RequestAttempt a ON d.AttemptId = a.AttemptId \
+                 WHERE a.RunId = '{rid}'"
+            ),
+        )
+        .await;
+        assert_eq!(dns_rows.len(), 1);
+
+        let http_rows = query_all(
+            &mut c,
+            &format!(
+                "SELECT 1 FROM dbo.HttpResult h \
+                 JOIN dbo.RequestAttempt a ON h.AttemptId = a.AttemptId \
+                 WHERE a.RunId = '{rid}'"
+            ),
+        )
+        .await;
+        assert_eq!(http_rows.len(), 1);
+    }
+
+    /// Verify NULL-heavy attempt (bare with no sub-results) doesn't leave
+    /// orphan rows in child tables.
+    #[tokio::test]
+    #[ignore = "requires SQL Server – set NETWORKER_SQL_CONN to enable"]
+    async fn sql_bare_attempt_no_child_rows() {
+        let conn_str = match sql_conn() {
+            Some(c) => c,
+            None => return,
+        };
+        let run_id = Uuid::new_v4();
+        let attempt = bare_attempt(run_id);
+        let aid = attempt.attempt_id.to_string();
+        let run = make_run(run_id, vec![attempt]);
+        save(&run, &conn_str).await.unwrap();
+
+        let mut c = connect(&conn_str).await.unwrap();
+        for table in &[
+            "DnsResult",
+            "TcpResult",
+            "TlsResult",
+            "HttpResult",
+            "UdpResult",
+            "ErrorRecord",
+            "ServerTimingResult",
+        ] {
+            let rows = query_all(
+                &mut c,
+                &format!("SELECT 1 FROM dbo.{table} WHERE AttemptId = '{aid}'"),
+            )
+            .await;
+            assert!(
+                rows.is_empty(),
+                "bare attempt should have no {table} rows"
+            );
+        }
     }
 }

@@ -2705,6 +2705,648 @@ async fn fetch_h3_pageload(
 mod tests {
     use super::*;
 
+    // ── Endpoint test helpers ────────────────────────────────────────────────
+
+    #[cfg(test)]
+    fn free_port() -> u16 {
+        std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
+    }
+
+    #[cfg(test)]
+    fn free_udp_port() -> u16 {
+        std::net::UdpSocket::bind("0.0.0.0:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
+    }
+
+    #[cfg(test)]
+    fn init_crypto() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+
+    #[cfg(test)]
+    struct TestEndpoint {
+        http_port: u16,
+        https_port: u16,
+        _shutdown: tokio::sync::oneshot::Sender<()>,
+    }
+
+    #[cfg(test)]
+    impl TestEndpoint {
+        async fn start() -> Self {
+            init_crypto();
+            let http_port = free_port();
+            let https_port = free_port();
+            let udp_port = free_udp_port();
+            let udp_throughput_port = free_udp_port();
+            let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+            let cfg = networker_endpoint::ServerConfig {
+                http_port,
+                https_port,
+                udp_port,
+                udp_throughput_port,
+            };
+            tokio::spawn(async move {
+                networker_endpoint::run_with_shutdown(cfg, rx).await.ok();
+            });
+            // Wait for HTTP + HTTPS
+            for port in [http_port, https_port] {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                loop {
+                    if tokio::net::TcpStream::connect(format!("127.0.0.1:{port}"))
+                        .await
+                        .is_ok()
+                    {
+                        break;
+                    }
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "Endpoint port {port} did not start"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+            }
+            Self {
+                http_port,
+                https_port,
+                _shutdown: tx,
+            }
+        }
+
+        fn http_url(&self, path: &str) -> url::Url {
+            format!("http://127.0.0.1:{}{path}", self.http_port)
+                .parse()
+                .unwrap()
+        }
+
+        fn https_url(&self, path: &str) -> url::Url {
+            format!("https://127.0.0.1:{}{path}", self.https_port)
+                .parse()
+                .unwrap()
+        }
+
+        #[cfg(feature = "http3")]
+        async fn wait_for_quic(&self) {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                let sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+                sock.connect(format!("127.0.0.1:{}", self.https_port))
+                    .await
+                    .unwrap();
+                let _ = sock.send(&[0u8]).await;
+                let mut buf = [0u8; 64];
+                match tokio::time::timeout(
+                    std::time::Duration::from_millis(100),
+                    sock.recv(&mut buf),
+                )
+                .await
+                {
+                    Err(_timeout) => break, // no ICMP unreachable → Quinn is listening
+                    Ok(Ok(_)) => break,     // Quinn sent data back → ready
+                    Ok(Err(e)) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
+                        // UDP port not bound yet — retry
+                    }
+                    Ok(Err(_)) => break, // unexpected; let probe handle it
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "QUIC server did not start"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        }
+    }
+
+    fn default_run_cfg() -> RunConfig {
+        RunConfig {
+            dns_enabled: false,
+            timeout_ms: 10_000,
+            insecure: true,
+            ..Default::default()
+        }
+    }
+
+    // ── Integration: run_pageload_probe (H1) ────────────────────────────────
+
+    #[tokio::test]
+    async fn pageload_h1_success() {
+        let ep = TestEndpoint::start().await;
+        let cfg = PageLoadConfig {
+            run_cfg: RunConfig {
+                insecure: false,
+                ..default_run_cfg()
+            },
+            base_url: ep.http_url("/health"),
+            asset_sizes: vec![1024; 5],
+            preset_name: None,
+        };
+        let a = run_pageload_probe(Uuid::new_v4(), 1, &cfg).await;
+        assert!(a.success, "H1 failed: {:?}", a.error);
+        assert_eq!(a.protocol, Protocol::PageLoad);
+        let pl = a.page_load.unwrap();
+        assert_eq!(pl.asset_count, 5);
+        assert_eq!(pl.assets_fetched, 5);
+        assert!(pl.total_bytes > 0);
+        assert!(pl.total_ms > 0.0);
+        assert!(pl.connections_opened >= 1);
+        assert!(!pl.connection_reused);
+    }
+
+    #[tokio::test]
+    async fn pageload_h1_https_success() {
+        let ep = TestEndpoint::start().await;
+        let cfg = PageLoadConfig {
+            run_cfg: default_run_cfg(),
+            base_url: ep.https_url("/health"),
+            asset_sizes: vec![512; 3],
+            preset_name: None,
+        };
+        let a = run_pageload_probe(Uuid::new_v4(), 0, &cfg).await;
+        assert!(a.success, "H1 TLS failed: {:?}", a.error);
+        assert!(a.tls.is_some());
+        assert!(a.tcp.is_some());
+        let pl = a.page_load.unwrap();
+        assert!(pl.tls_setup_ms > 0.0);
+        assert!(pl.per_connection_tls_ms.len() >= 1);
+    }
+
+    #[tokio::test]
+    async fn pageload_h1_no_host_url() {
+        let cfg = PageLoadConfig {
+            run_cfg: default_run_cfg(),
+            base_url: "data:text/html,hello".parse().unwrap(),
+            asset_sizes: vec![1024],
+            preset_name: None,
+        };
+        let a = run_pageload_probe(Uuid::new_v4(), 0, &cfg).await;
+        assert!(!a.success);
+        assert_eq!(a.protocol, Protocol::PageLoad);
+        let err = a.error.unwrap();
+        assert_eq!(err.category, ErrorCategory::Config);
+        assert!(err.message.contains("no host"));
+    }
+
+    #[tokio::test]
+    async fn pageload_h1_dns_disabled_hostname_fails() {
+        let cfg = PageLoadConfig {
+            run_cfg: RunConfig {
+                dns_enabled: false,
+                ..default_run_cfg()
+            },
+            base_url: "http://example.com:9999/health".parse().unwrap(),
+            asset_sizes: vec![1024],
+            preset_name: None,
+        };
+        let a = run_pageload_probe(Uuid::new_v4(), 0, &cfg).await;
+        assert!(!a.success);
+        let err = a.error.unwrap();
+        assert_eq!(err.category, ErrorCategory::Config);
+        assert!(err.message.contains("dns_enabled=false"));
+    }
+
+    #[tokio::test]
+    async fn pageload_h1_connection_refused() {
+        let cfg = PageLoadConfig {
+            run_cfg: RunConfig {
+                timeout_ms: 1000,
+                ..default_run_cfg()
+            },
+            base_url: "http://127.0.0.1:1/health".parse().unwrap(),
+            asset_sizes: vec![1024],
+            preset_name: None,
+        };
+        let a = run_pageload_probe(Uuid::new_v4(), 0, &cfg).await;
+        assert!(!a.success);
+        assert_eq!(a.protocol, Protocol::PageLoad);
+    }
+
+    #[tokio::test]
+    async fn pageload_h1_empty_assets() {
+        let ep = TestEndpoint::start().await;
+        let cfg = PageLoadConfig {
+            run_cfg: RunConfig {
+                insecure: false,
+                ..default_run_cfg()
+            },
+            base_url: ep.http_url("/health"),
+            asset_sizes: vec![],
+            preset_name: None,
+        };
+        let a = run_pageload_probe(Uuid::new_v4(), 0, &cfg).await;
+        // 0 assets → success = (0 == 0) → depends on manifest fetch
+        assert_eq!(a.protocol, Protocol::PageLoad);
+        let pl = a.page_load.unwrap();
+        assert_eq!(pl.asset_count, 0);
+    }
+
+    #[tokio::test]
+    async fn pageload_h1_many_assets_uses_multiple_conns() {
+        let ep = TestEndpoint::start().await;
+        let cfg = PageLoadConfig {
+            run_cfg: RunConfig {
+                insecure: false,
+                ..default_run_cfg()
+            },
+            base_url: ep.http_url("/health"),
+            asset_sizes: vec![512; 12], // 12 assets → should use up to 6 connections
+            preset_name: None,
+        };
+        let a = run_pageload_probe(Uuid::new_v4(), 0, &cfg).await;
+        assert!(a.success, "H1 12 assets failed: {:?}", a.error);
+        let pl = a.page_load.unwrap();
+        assert_eq!(pl.connections_opened, 6);
+        assert_eq!(pl.assets_fetched, 12);
+    }
+
+    // ── Integration: run_pageload2_probe (H2) ───────────────────────────────
+
+    #[tokio::test]
+    async fn pageload_h2_success() {
+        let ep = TestEndpoint::start().await;
+        let cfg = PageLoadConfig {
+            run_cfg: default_run_cfg(),
+            base_url: ep.https_url("/health"),
+            asset_sizes: vec![1024; 5],
+            preset_name: None,
+        };
+        let a = run_pageload2_probe(Uuid::new_v4(), 0, &cfg).await;
+        assert!(a.success, "H2 failed: {:?}", a.error);
+        assert_eq!(a.protocol, Protocol::PageLoad2);
+        assert!(a.dns.is_none()); // dns_enabled=false
+        assert!(a.tcp.is_some());
+        assert!(a.tls.is_some());
+        assert!(a.http.is_some());
+        let pl = a.page_load.unwrap();
+        assert_eq!(pl.asset_count, 5);
+        assert_eq!(pl.assets_fetched, 5);
+        assert_eq!(pl.connections_opened, 1);
+        assert!(pl.tls_setup_ms > 0.0);
+        assert!(pl.tls_overhead_ratio > 0.0);
+        assert!(!pl.connection_reused);
+    }
+
+    #[tokio::test]
+    async fn pageload_h2_requires_https() {
+        let ep = TestEndpoint::start().await;
+        let cfg = PageLoadConfig {
+            run_cfg: default_run_cfg(),
+            base_url: ep.http_url("/health"), // HTTP, not HTTPS
+            asset_sizes: vec![1024],
+            preset_name: None,
+        };
+        let a = run_pageload2_probe(Uuid::new_v4(), 0, &cfg).await;
+        assert!(!a.success);
+        assert_eq!(a.protocol, Protocol::PageLoad2);
+        let err = a.error.unwrap();
+        assert_eq!(err.category, ErrorCategory::Config);
+        assert!(err.message.contains("HTTPS"));
+    }
+
+    #[tokio::test]
+    async fn pageload_h2_no_host_url() {
+        let cfg = PageLoadConfig {
+            run_cfg: default_run_cfg(),
+            base_url: "data:text/html,hello".parse().unwrap(),
+            asset_sizes: vec![1024],
+            preset_name: None,
+        };
+        let a = run_pageload2_probe(Uuid::new_v4(), 0, &cfg).await;
+        assert!(!a.success);
+        let err = a.error.unwrap();
+        assert_eq!(err.category, ErrorCategory::Config);
+    }
+
+    #[tokio::test]
+    async fn pageload_h2_dns_disabled_hostname_fails() {
+        let cfg = PageLoadConfig {
+            run_cfg: RunConfig {
+                dns_enabled: false,
+                ..default_run_cfg()
+            },
+            base_url: "https://example.com:9999/health".parse().unwrap(),
+            asset_sizes: vec![1024],
+            preset_name: None,
+        };
+        let a = run_pageload2_probe(Uuid::new_v4(), 0, &cfg).await;
+        assert!(!a.success);
+        let err = a.error.unwrap();
+        assert!(err.message.contains("dns_enabled=false"));
+    }
+
+    #[tokio::test]
+    async fn pageload_h2_connection_refused() {
+        let cfg = PageLoadConfig {
+            run_cfg: RunConfig {
+                timeout_ms: 1000,
+                ..default_run_cfg()
+            },
+            base_url: "https://127.0.0.1:1/health".parse().unwrap(),
+            asset_sizes: vec![1024],
+            preset_name: None,
+        };
+        let a = run_pageload2_probe(Uuid::new_v4(), 0, &cfg).await;
+        assert!(!a.success);
+        assert_eq!(a.protocol, Protocol::PageLoad2);
+    }
+
+    #[tokio::test]
+    async fn pageload_h2_empty_assets() {
+        let ep = TestEndpoint::start().await;
+        let cfg = PageLoadConfig {
+            run_cfg: default_run_cfg(),
+            base_url: ep.https_url("/health"),
+            asset_sizes: vec![],
+            preset_name: None,
+        };
+        let a = run_pageload2_probe(Uuid::new_v4(), 0, &cfg).await;
+        assert_eq!(a.protocol, Protocol::PageLoad2);
+        let pl = a.page_load.unwrap();
+        assert_eq!(pl.asset_count, 0);
+        assert_eq!(pl.assets_fetched, 0);
+    }
+
+    // ── Integration: run_pageload3_probe (H3) ───────────────────────────────
+
+    #[cfg(feature = "http3")]
+    #[tokio::test]
+    async fn pageload_h3_success() {
+        let ep = TestEndpoint::start().await;
+        ep.wait_for_quic().await;
+        let cfg = PageLoadConfig {
+            run_cfg: default_run_cfg(),
+            base_url: ep.https_url("/health"),
+            asset_sizes: vec![1024; 5],
+            preset_name: None,
+        };
+        let a = run_pageload3_probe(Uuid::new_v4(), 0, &cfg).await;
+        assert!(a.success, "H3 failed: {:?}", a.error);
+        assert_eq!(a.protocol, Protocol::PageLoad3);
+        let pl = a.page_load.unwrap();
+        assert_eq!(pl.asset_count, 5);
+        assert_eq!(pl.assets_fetched, 5);
+        assert_eq!(pl.connections_opened, 1);
+        assert!(!pl.connection_reused);
+    }
+
+    #[cfg(feature = "http3")]
+    #[tokio::test]
+    async fn pageload_h3_requires_https() {
+        let ep = TestEndpoint::start().await;
+        let cfg = PageLoadConfig {
+            run_cfg: default_run_cfg(),
+            base_url: ep.http_url("/health"),
+            asset_sizes: vec![1024],
+            preset_name: None,
+        };
+        let a = run_pageload3_probe(Uuid::new_v4(), 0, &cfg).await;
+        assert!(!a.success);
+        assert_eq!(a.protocol, Protocol::PageLoad3);
+        let err = a.error.unwrap();
+        assert!(err.message.contains("HTTPS"));
+    }
+
+    #[cfg(feature = "http3")]
+    #[tokio::test]
+    async fn pageload_h3_no_host_url() {
+        let cfg = PageLoadConfig {
+            run_cfg: default_run_cfg(),
+            base_url: "data:text/html,hello".parse().unwrap(),
+            asset_sizes: vec![1024],
+            preset_name: None,
+        };
+        let a = run_pageload3_probe(Uuid::new_v4(), 0, &cfg).await;
+        assert!(!a.success);
+        assert_eq!(a.protocol, Protocol::PageLoad3);
+    }
+
+    // ── Integration: warmup_pageload2 + run_pageload2_warm ──────────────────
+
+    #[tokio::test]
+    async fn warmup_and_warm_h2() {
+        let ep = TestEndpoint::start().await;
+        let cfg = PageLoadConfig {
+            run_cfg: default_run_cfg(),
+            base_url: ep.https_url("/health"),
+            asset_sizes: vec![512; 3],
+            preset_name: None,
+        };
+        let (warmup, shared) = warmup_pageload2(Uuid::new_v4(), 0, &cfg).await;
+        assert!(warmup.success, "warmup failed: {:?}", warmup.error);
+        assert_eq!(warmup.protocol, Protocol::PageLoad2);
+        let wpl = warmup.page_load.unwrap();
+        assert!(!wpl.connection_reused); // warmup is cold
+        assert!(wpl.tls_setup_ms > 0.0);
+
+        let shared = shared.expect("shared conn should be Some");
+        let warm = run_pageload2_warm(Uuid::new_v4(), 1, &cfg, &shared).await;
+        assert!(warm.success, "warm failed: {:?}", warm.error);
+        assert_eq!(warm.protocol, Protocol::PageLoad2);
+        let pl = warm.page_load.unwrap();
+        assert!(pl.connection_reused);
+        assert_eq!(pl.assets_fetched, 3);
+        // Warm probe should skip DNS/TCP/TLS
+        assert!(warm.dns.is_none());
+        assert!(warm.tcp.is_none());
+        assert!(warm.tls.is_none());
+    }
+
+    // ── Integration: warmup_pageload3 + run_pageload3_warm ──────────────────
+
+    #[cfg(feature = "http3")]
+    #[tokio::test]
+    async fn warmup_and_warm_h3() {
+        let ep = TestEndpoint::start().await;
+        ep.wait_for_quic().await;
+        let cfg = PageLoadConfig {
+            run_cfg: default_run_cfg(),
+            base_url: ep.https_url("/health"),
+            asset_sizes: vec![512; 3],
+            preset_name: None,
+        };
+        let (warmup, shared) = warmup_pageload3(Uuid::new_v4(), 0, &cfg).await;
+        assert!(warmup.success, "H3 warmup failed: {:?}", warmup.error);
+        assert_eq!(warmup.protocol, Protocol::PageLoad3);
+        let wpl = warmup.page_load.unwrap();
+        assert!(!wpl.connection_reused);
+
+        let shared = shared.expect("shared H3 conn should be Some");
+        let shared_mutex = std::sync::Arc::new(tokio::sync::Mutex::new(shared));
+        let warm = run_pageload3_warm(Uuid::new_v4(), 1, &cfg, &shared_mutex).await;
+        assert!(warm.success, "H3 warm failed: {:?}", warm.error);
+        let pl = warm.page_load.unwrap();
+        assert!(pl.connection_reused);
+        assert_eq!(pl.assets_fetched, 3);
+    }
+
+    // ── Integration: DNS-enabled paths ─────────────────────────────────────
+
+    #[tokio::test]
+    async fn pageload_h1_with_dns_enabled() {
+        let ep = TestEndpoint::start().await;
+        let cfg = PageLoadConfig {
+            run_cfg: RunConfig {
+                dns_enabled: true,
+                insecure: false,
+                timeout_ms: 10_000,
+                ..Default::default()
+            },
+            base_url: format!("http://localhost:{}/health", ep.http_port)
+                .parse()
+                .unwrap(),
+            asset_sizes: vec![512; 2],
+            preset_name: None,
+        };
+        let a = run_pageload_probe(Uuid::new_v4(), 0, &cfg).await;
+        assert!(a.success, "H1+DNS failed: {:?}", a.error);
+        assert!(a.dns.is_some());
+    }
+
+    #[tokio::test]
+    async fn pageload_h1_dns_resolution_failure() {
+        let cfg = PageLoadConfig {
+            run_cfg: RunConfig {
+                dns_enabled: true,
+                timeout_ms: 5_000,
+                ..Default::default()
+            },
+            base_url: "http://this-host-does-not-exist-xyz.invalid:9999/health"
+                .parse()
+                .unwrap(),
+            asset_sizes: vec![512],
+            preset_name: None,
+        };
+        let a = run_pageload_probe(Uuid::new_v4(), 0, &cfg).await;
+        assert!(!a.success);
+        assert_eq!(a.protocol, Protocol::PageLoad);
+        let err = a.error.unwrap();
+        assert_eq!(err.category, ErrorCategory::Dns);
+    }
+
+    #[tokio::test]
+    async fn pageload_h2_with_dns_enabled() {
+        let ep = TestEndpoint::start().await;
+        let cfg = PageLoadConfig {
+            run_cfg: RunConfig {
+                dns_enabled: true,
+                insecure: true,
+                timeout_ms: 10_000,
+                ..Default::default()
+            },
+            base_url: format!("https://localhost:{}/health", ep.https_port)
+                .parse()
+                .unwrap(),
+            asset_sizes: vec![512; 2],
+            preset_name: None,
+        };
+        let a = run_pageload2_probe(Uuid::new_v4(), 0, &cfg).await;
+        assert!(a.success, "H2+DNS failed: {:?}", a.error);
+        assert!(a.dns.is_some());
+    }
+
+    #[tokio::test]
+    async fn pageload_h2_dns_resolution_failure() {
+        let cfg = PageLoadConfig {
+            run_cfg: RunConfig {
+                dns_enabled: true,
+                timeout_ms: 5_000,
+                insecure: true,
+                ..Default::default()
+            },
+            base_url: "https://this-host-does-not-exist-xyz.invalid:9999/health"
+                .parse()
+                .unwrap(),
+            asset_sizes: vec![512],
+            preset_name: None,
+        };
+        let a = run_pageload2_probe(Uuid::new_v4(), 0, &cfg).await;
+        assert!(!a.success);
+        assert_eq!(a.protocol, Protocol::PageLoad2);
+        let err = a.error.unwrap();
+        assert_eq!(err.category, ErrorCategory::Dns);
+    }
+
+    #[cfg(feature = "http3")]
+    #[tokio::test]
+    async fn pageload_h3_dns_resolution_failure() {
+        let cfg = PageLoadConfig {
+            run_cfg: RunConfig {
+                dns_enabled: true,
+                timeout_ms: 5_000,
+                insecure: true,
+                ..Default::default()
+            },
+            base_url: "https://this-host-does-not-exist-xyz.invalid:9999/health"
+                .parse()
+                .unwrap(),
+            asset_sizes: vec![512],
+            preset_name: None,
+        };
+        let a = run_pageload3_probe(Uuid::new_v4(), 0, &cfg).await;
+        assert!(!a.success);
+        assert_eq!(a.protocol, Protocol::PageLoad3);
+    }
+
+    #[cfg(feature = "http3")]
+    #[tokio::test]
+    async fn pageload_h3_unresolvable_host() {
+        let cfg = PageLoadConfig {
+            run_cfg: RunConfig {
+                timeout_ms: 5_000,
+                ..default_run_cfg()
+            },
+            base_url: "https://this-host-does-not-exist-xyz.invalid:9999/health"
+                .parse()
+                .unwrap(),
+            asset_sizes: vec![1024],
+            preset_name: None,
+        };
+        let a = run_pageload3_probe(Uuid::new_v4(), 0, &cfg).await;
+        assert!(!a.success);
+        assert_eq!(a.protocol, Protocol::PageLoad3);
+    }
+
+    #[cfg(feature = "http3")]
+    #[tokio::test]
+    async fn pageload_h3_connection_refused() {
+        let cfg = PageLoadConfig {
+            run_cfg: RunConfig {
+                timeout_ms: 2000,
+                ..default_run_cfg()
+            },
+            base_url: "https://127.0.0.1:1/health".parse().unwrap(),
+            asset_sizes: vec![1024],
+            preset_name: None,
+        };
+        let a = run_pageload3_probe(Uuid::new_v4(), 0, &cfg).await;
+        assert!(!a.success);
+        assert_eq!(a.protocol, Protocol::PageLoad3);
+    }
+
+    #[cfg(feature = "http3")]
+    #[tokio::test]
+    async fn pageload_h3_empty_assets() {
+        let ep = TestEndpoint::start().await;
+        ep.wait_for_quic().await;
+        let cfg = PageLoadConfig {
+            run_cfg: default_run_cfg(),
+            base_url: ep.https_url("/health"),
+            asset_sizes: vec![],
+            preset_name: None,
+        };
+        let a = run_pageload3_probe(Uuid::new_v4(), 0, &cfg).await;
+        assert_eq!(a.protocol, Protocol::PageLoad3);
+        let pl = a.page_load.unwrap();
+        assert_eq!(pl.asset_count, 0);
+    }
+
+    // ── Preset tests ────────────────────────────────────────────────────────
+
     #[test]
     fn resolve_preset_default_matches_legacy() {
         let sizes = resolve_preset("default").unwrap();
