@@ -294,10 +294,17 @@ Start a local endpoint:
 Deploy a remote endpoint via the installer:
 
 ```bash
-bash install.sh --azure endpoint   # or --aws endpoint
+bash install.sh --azure endpoint   # or --aws endpoint, --gcp endpoint, --lan endpoint
 ```
 
 The installer writes `networker-cloud.json` pointing at the remote VM's IP.
+
+**Alternative:** Use `--deploy` with a JSON config for non-interactive, repeatable
+multi-endpoint deployment. See the [deploy-config reference](deploy-config.md).
+
+```bash
+bash install.sh --deploy deploy.json
+```
 
 ### Run — local vs cloud
 

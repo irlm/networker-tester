@@ -124,10 +124,13 @@ Each endpoint has the same structure as `tester`, plus:
 
 All fields are optional. If `tests` is omitted entirely, defaults are used.
 
+**Default modes** (when `modes` is not specified): `tcp`, `http1`, `http2`, `http3`,
+`udp`, `download`, `upload`, `pageload`, `pageload2`, `pageload3`.
+
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `run_tests` | boolean | `true` | Set `false` for deploy-only (no test execution) |
-| `modes` | string[] | all 10 modes | Test modes to run |
+| `modes` | string[] | see above | Test modes to run |
 | `runs` | number | `5` | Number of test iterations per mode |
 | `concurrency` | number | `1` | Concurrent connections |
 | `timeout` | number | `30` | Timeout per probe in seconds |
@@ -155,15 +158,25 @@ All fields are optional. If `tests` is omitted entirely, defaults are used.
 `webdownload`, `webupload`, `udpdownload`, `udpupload`,
 `pageload`, `pageload2`, `pageload3`
 
+> **Note:** `dns`, `tls`, `native`, `curl`, and `browser` probe modes are supported by the
+> tester binary but are not available in deploy-config mode. Use the tester CLI directly
+> for those modes.
+
 ## Examples
 
-See the `examples/` directory:
+- [`deploy.example.json`](../deploy.example.json) — Minimal LAN endpoint with local tester
+- [`examples/deploy-lan.json`](../examples/deploy-lan.json) — Multi-endpoint LAN deployment with remote tester
+- [`examples/deploy-multi-cloud.json`](../examples/deploy-multi-cloud.json) — Compare Azure vs AWS vs GCP endpoints
 
-- `deploy-lan.json` — Multi-endpoint LAN deployment with remote tester
-- `deploy-multi-cloud.json` — Compare Azure vs AWS vs GCP endpoints
+## Non-interactive mode
+
+The `--deploy` flag automatically sets `AUTO_YES=1`, so all confirmation prompts
+(e.g., VM existence check: reuse/rename/delete) proceed with the default choice
+without user input. This is required for CI/CD pipelines and scripted automation.
 
 ## Requirements
 
 - **jq** — required for JSON parsing (`brew install jq` / `apt install jq`)
 - **SSH key auth** — required for LAN provider (password prompts not supported in non-interactive mode)
 - **Cloud CLIs** — required for their respective providers (`az`, `aws`, `gcloud`)
+- **Bash 3.2+** — compatible with macOS default bash

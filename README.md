@@ -22,6 +22,7 @@ in the kernel or scattered across multiple tools.
 
 - [Installation](#installation)
 - [Cloud Deployment Authentication](#cloud-deployment-authentication)
+- [Config-Driven Deployment](#config-driven-deployment)
 - [Quick Start](#quick-start)
 - [Probe Modes](#probe-modes)
 - [CLI Reference](#cli-reference)
@@ -198,6 +199,109 @@ $env:GOOGLE_APPLICATION_CREDENTIALS = "C:\path\to\service-account-key.json"
 > **Security note:** Prefer short-lived credentials (AWS STS, Azure federated tokens,
 > GCP Workload Identity) over long-lived secrets in production. The environment variable
 > approach is best suited for local development, CI runners, and controlled automation.
+
+---
+
+## Config-Driven Deployment
+
+The `--deploy` flag enables non-interactive, repeatable deployment and testing from a
+single JSON config file. Define where to install the tester, where to deploy endpoint(s),
+and what tests to run — then execute the whole pipeline in one command.
+
+```bash
+bash install.sh --deploy deploy.json
+```
+
+### What it does
+
+1. **Validates** the config (JSON syntax, required fields, valid modes)
+2. **Pre-flight checks** tool availability, cloud credentials, SSH connectivity
+3. **Displays the deploy plan** showing full topology before starting
+4. **Deploys tester** (local install or remote via SSH/cloud)
+5. **Deploys endpoint(s)** to one or more machines (LAN, Azure, AWS, GCP)
+6. **Generates tester config** (`networker-cloud.json`) from deployed endpoint IPs
+7. **Runs tests** via the tester and downloads HTML/Excel reports
+8. **Shows summary** of deployed infrastructure and report locations
+
+### Minimal example — LAN endpoint
+
+```json
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [
+    {
+      "provider": "lan",
+      "lan": { "ip": "192.168.1.100", "user": "admin" }
+    }
+  ],
+  "tests": {
+    "modes": ["http1", "http2", "http3"],
+    "runs": 5,
+    "insecure": true
+  }
+}
+```
+
+### Multi-cloud example — Azure vs AWS vs GCP
+
+```json
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [
+    {
+      "label": "azure-east",
+      "provider": "azure",
+      "azure": { "region": "eastus", "vm_size": "Standard_B2s", "os": "linux" }
+    },
+    {
+      "label": "aws-east",
+      "provider": "aws",
+      "aws": { "region": "us-east-1", "instance_type": "t3.small", "os": "linux" }
+    },
+    {
+      "label": "gcp-central",
+      "provider": "gcp",
+      "gcp": { "zone": "us-central1-a", "machine_type": "e2-small", "os": "linux" }
+    }
+  ],
+  "tests": {
+    "modes": ["http1", "http2", "http3", "download", "pageload"],
+    "runs": 10,
+    "insecure": true,
+    "payload_sizes": ["1m", "10m"]
+  }
+}
+```
+
+### Provider types
+
+| Provider | Tester | Endpoint | Description |
+|----------|--------|----------|-------------|
+| `local` | yes | yes | Current machine (no SSH) |
+| `lan` | yes | yes | Existing machine reachable via SSH |
+| `azure` | yes | yes | Azure VM (auto-provisioned) |
+| `aws` | yes | yes | AWS EC2 instance (auto-provisioned) |
+| `gcp` | yes | yes | GCP Compute Engine instance (auto-provisioned) |
+
+### Deploy-only mode
+
+Set `"run_tests": false` in the `tests` section to deploy infrastructure without
+running any tests. Useful for provisioning machines that you will test manually later.
+
+### Requirements
+
+- **jq** — required for JSON parsing (`brew install jq` / `apt install jq`)
+- **SSH key auth** — required for LAN provider (no password prompts in non-interactive mode)
+- **Cloud CLIs** — required for their respective providers (`az`, `aws`, `gcloud`)
+
+> See [`docs/deploy-config.md`](docs/deploy-config.md) for the full JSON schema reference,
+> all provider-specific fields, test configuration options, and additional examples.
+>
+> Example configs: [`deploy.example.json`](deploy.example.json),
+> [`examples/deploy-lan.json`](examples/deploy-lan.json),
+> [`examples/deploy-multi-cloud.json`](examples/deploy-multi-cloud.json)
 
 ---
 
@@ -1004,6 +1108,7 @@ All TCP fields are collected from a single `getsockopt` call per connection — 
 | **Unit** | `cargo test --workspace --lib` | Nothing — fully offline |
 | **Integration** | `cargo test --test integration -p networker-tester -- --test-threads=1` | Nothing (endpoint is in-process) |
 | **SQL integration** | see below | SQL Server + `NETWORKER_SQL_CONN` |
+| **Installer (bats)** | `bats tests/installer.bats` | [bats-core](https://github.com/bats-core/bats-core) |
 
 ### Unit tests
 
@@ -1046,6 +1151,16 @@ cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings
 cargo test --workspace --lib
 cargo test --test integration -p networker-tester -- --test-threads=1
+```
+
+### Installer tests (bats)
+
+The installer shell scripts (`install.sh`) are tested with [bats-core](https://github.com/bats-core/bats-core).
+77 tests cover argument parsing, deploy-config validation, endpoint loading, config
+generation, and installer behavior.
+
+```bash
+bats tests/installer.bats
 ```
 
 ### HTTP/3 feature build
