@@ -1781,30 +1781,31 @@ function Invoke-VmExistsCheck {
 
 # ── Azure deployment ──────────────────────────────────────────────────────────
 function Invoke-AzureDeployTester {
-    Invoke-AzureCreateVm "tester" $script:AzureTesterRg $script:AzureTesterVm `
-        $script:AzureTesterSize $script:AzureTesterOs
+    Invoke-AzureCreateVm -label "tester" -rg $script:AzureTesterRg -vm $script:AzureTesterVm `
+        -size $script:AzureTesterSize -osType $script:AzureTesterOs
     if ($script:AzureAutoShutdown -eq "yes") {
         Invoke-AzureAutoShutdown $script:AzureTesterVm $script:AzureTesterRg
     }
-    Invoke-WaitForSsh $script:AzureTesterIp "azureuser" "tester instance"
-    Invoke-RemoteInstallBinary "networker-tester" $script:AzureTesterIp "azureuser"
+    Invoke-WaitForSsh -ip $script:AzureTesterIp -user "azureuser" -label "tester instance"
+    Invoke-RemoteInstallBinary -binary "networker-tester" -ip $script:AzureTesterIp -user "azureuser"
 }
 
 function Invoke-AzureDeployEndpoint {
-    Invoke-AzureCreateVm "endpoint" $script:AzureEndpointRg $script:AzureEndpointVm `
-        $script:AzureEndpointSize $script:AzureEndpointOs
+    Invoke-AzureCreateVm -label "endpoint" -rg $script:AzureEndpointRg -vm $script:AzureEndpointVm `
+        -size $script:AzureEndpointSize -osType $script:AzureEndpointOs
     Invoke-AzureOpenPorts $script:AzureEndpointRg $script:AzureEndpointVm
     if ($script:AzureAutoShutdown -eq "yes") {
         Invoke-AzureAutoShutdown $script:AzureEndpointVm $script:AzureEndpointRg
     }
-    Invoke-WaitForSsh $script:AzureEndpointIp "azureuser" "endpoint instance"
-    Invoke-RemoteInstallBinary "networker-endpoint" $script:AzureEndpointIp "azureuser"
+    Invoke-WaitForSsh -ip $script:AzureEndpointIp -user "azureuser" -label "endpoint instance"
+    Invoke-RemoteInstallBinary -binary "networker-endpoint" -ip $script:AzureEndpointIp -user "azureuser"
     Invoke-RemoteCreateEndpointService $script:AzureEndpointIp "azureuser"
     Invoke-RemoteVerifyHealth $script:AzureEndpointIp
     Invoke-GenerateConfig $script:AzureEndpointIp
 }
 
-function Invoke-AzureCreateVm ($label, $rg, $vm, $size, $osType) {
+function Invoke-AzureCreateVm {
+    param($label, $rg, $vm, $size, $osType)
     Invoke-NextStep "Create Azure VM for $label ($vm in $($script:AzureRegion))"
 
     # Check existence
@@ -1972,7 +1973,8 @@ function Invoke-AwsEnsureKeypair {
     Write-Ok "SSH keypair imported"
 }
 
-function Invoke-AwsLaunchInstance ($label, $instanceType, $nameTag, $sgId) {
+function Invoke-AwsLaunchInstance {
+    param($label, $instanceType, $nameTag, $sgId)
     Invoke-NextStep "Create AWS EC2 instance for $label ($nameTag, $($script:AwsRegion))"
 
     # Check existence
@@ -2028,12 +2030,12 @@ function Invoke-AwsDeployTester {
     Invoke-AwsEnsureKeypair
     Invoke-AwsFindUbuntuAmi
     $sgId = Invoke-AwsCreateSecurityGroup "tester"
-    Invoke-AwsLaunchInstance "tester" $script:AwsTesterType $script:AwsTesterName $sgId
-    Invoke-WaitForSsh $script:AwsTesterIp "ubuntu" "tester instance"
+    Invoke-AwsLaunchInstance -label "tester" -instanceType $script:AwsTesterType -nameTag $script:AwsTesterName -sgId $sgId
+    Invoke-WaitForSsh -ip $script:AwsTesterIp -user "ubuntu" -label "tester instance"
     if ($script:AwsAutoShutdown -eq "yes") {
         Invoke-RemoteAutoShutdownCron $script:AwsTesterIp "ubuntu"
     }
-    Invoke-RemoteInstallBinary "networker-tester" $script:AwsTesterIp "ubuntu"
+    Invoke-RemoteInstallBinary -binary "networker-tester" -ip $script:AwsTesterIp -user "ubuntu"
 }
 
 function Invoke-AwsDeployEndpoint {
@@ -2042,12 +2044,12 @@ function Invoke-AwsDeployEndpoint {
         Invoke-AwsFindUbuntuAmi
     }
     $sgId = Invoke-AwsCreateSecurityGroup "endpoint"
-    Invoke-AwsLaunchInstance "endpoint" $script:AwsEndpointType $script:AwsEndpointName $sgId
-    Invoke-WaitForSsh $script:AwsEndpointIp "ubuntu" "endpoint instance"
+    Invoke-AwsLaunchInstance -label "endpoint" -instanceType $script:AwsEndpointType -nameTag $script:AwsEndpointName -sgId $sgId
+    Invoke-WaitForSsh -ip $script:AwsEndpointIp -user "ubuntu" -label "endpoint instance"
     if ($script:AwsAutoShutdown -eq "yes") {
         Invoke-RemoteAutoShutdownCron $script:AwsEndpointIp "ubuntu"
     }
-    Invoke-RemoteInstallBinary "networker-endpoint" $script:AwsEndpointIp "ubuntu"
+    Invoke-RemoteInstallBinary -binary "networker-endpoint" -ip $script:AwsEndpointIp -user "ubuntu"
     Invoke-RemoteCreateEndpointService $script:AwsEndpointIp "ubuntu"
     Invoke-RemoteVerifyHealth $script:AwsEndpointIp
     Invoke-GenerateConfig $script:AwsEndpointIp
@@ -2152,7 +2154,8 @@ function Invoke-GcpCreateFirewallRule {
     Write-Ok "Firewall rule created"
 }
 
-function Invoke-GcpCreateInstance ($label, $name, $machineType) {
+function Invoke-GcpCreateInstance {
+    param($label, $name, $machineType)
     Invoke-NextStep "Create GCE instance for $label ($name in $($script:GcpZone))"
 
     $reused = Invoke-VmExistsCheck -Provider "gcp" -Label $label -Name $name
@@ -2229,7 +2232,7 @@ function Invoke-GcpSshRun ($name, $command) {
 
 function Invoke-GcpDeployTester {
     Invoke-GcpCheckPrereqs
-    Invoke-GcpCreateInstance "tester" $script:GcpTesterName $script:GcpTesterMachineType
+    Invoke-GcpCreateInstance -label "tester" -name $script:GcpTesterName -machineType $script:GcpTesterMachineType
     Invoke-GcpWaitForSsh $script:GcpTesterName "tester instance"
     if ($script:GcpAutoShutdown -eq "yes") {
         Invoke-NextStep "Set auto-shutdown cron for tester"
@@ -2243,7 +2246,7 @@ function Invoke-GcpDeployTester {
 function Invoke-GcpDeployEndpoint {
     Invoke-GcpCheckPrereqs
     Invoke-GcpCreateFirewallRule
-    Invoke-GcpCreateInstance "endpoint" $script:GcpEndpointName $script:GcpEndpointMachineType
+    Invoke-GcpCreateInstance -label "endpoint" -name $script:GcpEndpointName -machineType $script:GcpEndpointMachineType
     Invoke-GcpWaitForSsh $script:GcpEndpointName "endpoint instance"
     if ($script:GcpAutoShutdown -eq "yes") {
         Invoke-NextStep "Set auto-shutdown cron for endpoint"
@@ -2305,7 +2308,8 @@ function Invoke-GcpInstallBinary ($binary, $name) {
 #  REMOTE HELPERS (SSH-based — for Azure and AWS Linux VMs)
 # ══════════════════════════════════════════════════════════════════════════════
 
-function Invoke-WaitForSsh ($ip, $user, $label) {
+function Invoke-WaitForSsh {
+    param($ip, $user, $label)
     Invoke-NextStep "Wait for SSH on $label"
     Write-Info "Waiting for SSH access to $label..."
     $attempt = 0
@@ -2326,7 +2330,8 @@ function Invoke-WaitForSsh ($ip, $user, $label) {
     Write-Warn "SSH not available after 150s -- continuing anyway"
 }
 
-function Invoke-RemoteInstallBinary ($binary, $ip, $user) {
+function Invoke-RemoteInstallBinary {
+    param($binary, $ip, $user)
     Invoke-NextStep "Install $binary on remote VM"
 
     $component = if ($binary -eq "networker-tester") { "tester" } else { "endpoint" }
