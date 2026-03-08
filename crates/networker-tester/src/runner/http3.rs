@@ -467,9 +467,7 @@ mod real {
                     {
                         Err(_timeout) => break,
                         Ok(Ok(_)) => break,
-                        Ok(Err(e))
-                            if e.kind() == std::io::ErrorKind::ConnectionRefused =>
-                        {
+                        Ok(Err(e)) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
                             // not bound yet
                         }
                         Ok(Err(_)) => break,
@@ -515,8 +513,7 @@ mod real {
         async fn build_quic_endpoint_bad_ca_bundle() {
             init_crypto();
             let url: url::Url = "https://127.0.0.1:8443/health".parse().unwrap();
-            let err =
-                build_quic_endpoint(&url, false, Some("/nonexistent/ca.pem")).unwrap_err();
+            let err = build_quic_endpoint(&url, false, Some("/nonexistent/ca.pem")).unwrap_err();
             assert!(err.contains("TLS config error"), "got: {err}");
         }
 

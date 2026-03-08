@@ -531,20 +531,14 @@ mod tests {
     }
 
     /// Helper: connect, execute a SELECT, return the first row's column values.
-    async fn query_one(
-        client: &mut SqlClient,
-        sql: &str,
-    ) -> Option<tiberius::Row> {
+    async fn query_one(client: &mut SqlClient, sql: &str) -> Option<tiberius::Row> {
         let stream = client.query(sql, &[]).await.ok()?;
         let row = stream.into_row().await.ok()?;
         row
     }
 
     /// Helper: connect, execute a SELECT, return all rows.
-    async fn query_all(
-        client: &mut SqlClient,
-        sql: &str,
-    ) -> Vec<tiberius::Row> {
+    async fn query_all(client: &mut SqlClient, sql: &str) -> Vec<tiberius::Row> {
         let stream = client.query(sql, &[]).await.unwrap();
         stream.into_first_result().await.unwrap()
     }
@@ -601,7 +595,9 @@ mod tests {
              FROM dbo.TestRun WHERE RunId = '{}'",
             run_id
         );
-        let row = query_one(&mut client, &sql).await.expect("TestRun row must exist");
+        let row = query_one(&mut client, &sql)
+            .await
+            .expect("TestRun row must exist");
 
         let db_run_id: &str = row.get(0).unwrap();
         assert_eq!(db_run_id, run_id.to_string());
@@ -984,10 +980,7 @@ mod tests {
                 &format!("SELECT 1 FROM dbo.{table} WHERE AttemptId = '{aid}'"),
             )
             .await;
-            assert!(
-                rows.is_empty(),
-                "bare attempt should have no {table} rows"
-            );
+            assert!(rows.is_empty(), "bare attempt should have no {table} rows");
         }
     }
 }
