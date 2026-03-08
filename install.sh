@@ -2163,10 +2163,14 @@ _aws_do_login_sso() {
             done <<< "$sso_profiles"
             echo "    $i) Configure a new SSO profile"
             echo ""
-            printf "  Select profile [1]: "
             local choice
-            read -r choice </dev/tty || true
-            choice="${choice:-1}"
+            if [[ $AUTO_YES -eq 1 ]]; then
+                choice="1"
+            else
+                printf "  Select profile [1]: "
+                read -r choice </dev/tty || true
+                choice="${choice:-1}"
+            fi
 
             if [[ "$choice" -eq "$i" ]]; then
                 aws configure sso </dev/tty
@@ -3516,9 +3520,15 @@ step_azure_create_vm() {
         echo "    2) Pick a different name"
         echo "    3) Delete and recreate"
         echo ""
-        printf "  Choice [1]: "
-        local choice; read -r choice </dev/tty || true
-        choice="${choice:-1}"
+        local choice
+        if [[ $AUTO_YES -eq 1 ]]; then
+            choice="1"
+            print_info "Auto-selecting: Reuse existing VM"
+        else
+            printf "  Choice [1]: "
+            read -r choice </dev/tty || true
+            choice="${choice:-1}"
+        fi
 
         case "$choice" in
             1)
@@ -4061,9 +4071,15 @@ _aws_launch_instance() {
         echo "    2) Pick a different name"
         echo "    3) Terminate and recreate"
         echo ""
-        printf "  Choice [1]: "
-        local choice; read -r choice </dev/tty || true
-        choice="${choice:-1}"
+        local choice
+        if [[ $AUTO_YES -eq 1 ]]; then
+            choice="1"
+            print_info "Auto-selecting: Reuse existing instance"
+        else
+            printf "  Choice [1]: "
+            read -r choice </dev/tty || true
+            choice="${choice:-1}"
+        fi
 
         case "$choice" in
             1)
@@ -4371,9 +4387,15 @@ _gcp_create_instance() {
         echo "    2) Pick a different name"
         echo "    3) Delete and recreate"
         echo ""
-        printf "  Choice [1]: "
-        local choice; read -r choice </dev/tty || true
-        choice="${choice:-1}"
+        local choice
+        if [[ $AUTO_YES -eq 1 ]]; then
+            choice="1"
+            print_info "Auto-selecting: Reuse existing instance"
+        else
+            printf "  Choice [1]: "
+            read -r choice </dev/tty || true
+            choice="${choice:-1}"
+        fi
 
         case "$choice" in
             1)
