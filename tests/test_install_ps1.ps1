@@ -346,7 +346,7 @@ $env:PROCESSOR_ARCHITECTURE = "AMD64"
 
 # Override Get-Command by creating mock functions for the tools
 # Mock: cargo exists
-function global:cargo { param([Parameter(ValueFromRemainingArguments)]$a) }
+function global:cargo { }
 # Mock: rustc exists
 function global:rustc {
     Record-MockCall "rustc" $args
@@ -988,7 +988,6 @@ if (Test-Path Function:\global:gcloud) { Remove-Item Function:\global:gcloud }
 # Since gcloud truly doesn't exist (or our mock is gone), we simulate via az
 # Actually test the try/catch structure: if az show fails with non-zero exit
 function global:az {
-    $argStr = ($args -join " ")
     Record-MockCall "az" $args
     $global:LASTEXITCODE = 1
     return ""
