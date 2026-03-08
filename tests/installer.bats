@@ -487,3 +487,335 @@ teardown() {
     result="$(bash -c "source '${SCRIPT}'; echo STEP_NUM=\${STEP_NUM}" 2>/dev/null)"
     [[ "$result" == *"STEP_NUM=0"* ]]
 }
+
+
+# ===========================================================================
+# 8. Deploy config: parse_args --deploy
+# ===========================================================================
+
+@test "parse_args: --deploy sets DEPLOY_CONFIG_PATH and AUTO_YES" {
+    parse_args --deploy "/tmp/test-deploy.json"
+    [ "$DEPLOY_CONFIG_PATH" = "/tmp/test-deploy.json" ]
+    [ "$AUTO_YES" -eq 1 ]
+}
+
+# ===========================================================================
+# 9. Deploy config: _deploy_validate_config
+# ===========================================================================
+
+@test "_deploy_validate_config: rejects invalid JSON" {
+    local cfg="$TEST_TMPDIR/bad.json"
+    echo "not json" > "$cfg"
+    run _deploy_validate_config "$cfg"
+    [ "$DEPLOY_VALIDATE_ERRORS" -gt 0 ] || [ "$status" -ne 0 ]
+}
+
+@test "_deploy_validate_config: rejects missing version" {
+    local cfg="$TEST_TMPDIR/no-version.json"
+    cat > "$cfg" <<'JSON'
+{
+  "tester": { "provider": "local" },
+  "endpoints": [{ "provider": "local" }]
+}
+JSON
+    _deploy_validate_config "$cfg"
+    [ "$DEPLOY_VALIDATE_ERRORS" -gt 0 ]
+}
+
+@test "_deploy_validate_config: rejects missing tester.provider" {
+    local cfg="$TEST_TMPDIR/no-tester.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": {},
+  "endpoints": [{ "provider": "local" }]
+}
+JSON
+    _deploy_validate_config "$cfg"
+    [ "$DEPLOY_VALIDATE_ERRORS" -gt 0 ]
+}
+
+@test "_deploy_validate_config: rejects empty endpoints array" {
+    local cfg="$TEST_TMPDIR/no-ep.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": []
+}
+JSON
+    _deploy_validate_config "$cfg"
+    [ "$DEPLOY_VALIDATE_ERRORS" -gt 0 ]
+}
+
+@test "_deploy_validate_config: rejects unknown provider" {
+    local cfg="$TEST_TMPDIR/bad-prov.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "docker" },
+  "endpoints": [{ "provider": "local" }]
+}
+JSON
+    _deploy_validate_config "$cfg"
+    [ "$DEPLOY_VALIDATE_ERRORS" -gt 0 ]
+}
+
+@test "_deploy_validate_config: rejects LAN without ip" {
+    local cfg="$TEST_TMPDIR/lan-no-ip.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "lan", "lan": { "user": "admin" } },
+  "endpoints": [{ "provider": "local" }]
+}
+JSON
+    _deploy_validate_config "$cfg"
+    [ "$DEPLOY_VALIDATE_ERRORS" -gt 0 ]
+}
+
+@test "_deploy_validate_config: rejects unknown test mode" {
+    local cfg="$TEST_TMPDIR/bad-mode.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{ "provider": "local" }],
+  "tests": { "modes": ["http1", "bogus"] }
+}
+JSON
+    _deploy_validate_config "$cfg"
+    [ "$DEPLOY_VALIDATE_ERRORS" -gt 0 ]
+}
+
+@test "_deploy_validate_config: accepts valid minimal config" {
+    local cfg="$TEST_TMPDIR/valid.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{ "provider": "local" }]
+}
+JSON
+    _deploy_validate_config "$cfg"
+    [ "$DEPLOY_VALIDATE_ERRORS" -eq 0 ]
+}
+
+@test "_deploy_validate_config: accepts valid LAN config with all fields" {
+    local cfg="$TEST_TMPDIR/valid-lan.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "lan", "lan": { "ip": "10.0.0.1", "user": "admin", "port": 2222 } },
+  "endpoints": [
+    { "label": "srv", "provider": "lan", "lan": { "ip": "10.0.0.2", "user": "root" } }
+  ],
+  "tests": {
+    "modes": ["tcp", "http1", "http2"],
+    "runs": 3,
+    "insecure": true,
+    "html_report": "test.html"
+  }
+}
+JSON
+    _deploy_validate_config "$cfg"
+    [ "$DEPLOY_VALIDATE_ERRORS" -eq 0 ]
+}
+
+# ===========================================================================
+# 10. Deploy config: _deploy_parse_config
+# ===========================================================================
+
+@test "_deploy_parse_config: local tester sets correct globals" {
+    local cfg="$TEST_TMPDIR/parse-local.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{ "provider": "local" }]
+}
+JSON
+    _deploy_parse_config "$cfg"
+    [ "$TESTER_LOCATION" = "local" ]
+    [ "$DO_REMOTE_TESTER" -eq 0 ]
+    [ "$DEPLOY_ENDPOINT_COUNT" -eq 1 ]
+    [ "${DEPLOY_EP_PROVIDERS[0]}" = "local" ]
+}
+
+@test "_deploy_parse_config: LAN tester populates IP/user/port" {
+    local cfg="$TEST_TMPDIR/parse-lan.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "lan", "lan": { "ip": "10.0.0.5", "user": "bob", "port": 2222 } },
+  "endpoints": [{ "provider": "local" }]
+}
+JSON
+    _deploy_parse_config "$cfg"
+    [ "$TESTER_LOCATION" = "lan" ]
+    [ "$DO_REMOTE_TESTER" -eq 1 ]
+    [ "$LAN_TESTER_IP" = "10.0.0.5" ]
+    [ "$LAN_TESTER_USER" = "bob" ]
+    [ "$LAN_TESTER_PORT" = "2222" ]
+}
+
+@test "_deploy_parse_config: Azure tester populates all Azure globals" {
+    local cfg="$TEST_TMPDIR/parse-azure.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": {
+    "provider": "azure",
+    "azure": { "region": "westeurope", "resource_group": "my-rg", "vm_name": "my-vm", "vm_size": "Standard_D2s_v3" }
+  },
+  "endpoints": [{ "provider": "local" }]
+}
+JSON
+    _deploy_parse_config "$cfg"
+    [ "$TESTER_LOCATION" = "azure" ]
+    [ "$AZURE_REGION" = "westeurope" ]
+    [ "$AZURE_TESTER_RG" = "my-rg" ]
+    [ "$AZURE_TESTER_VM" = "my-vm" ]
+    [ "$AZURE_TESTER_SIZE" = "Standard_D2s_v3" ]
+}
+
+@test "_deploy_parse_config: multiple endpoints parsed into arrays" {
+    local cfg="$TEST_TMPDIR/parse-multi.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [
+    { "label": "ep-a", "provider": "lan", "lan": { "ip": "10.0.0.1" } },
+    { "label": "ep-b", "provider": "azure", "azure": { "region": "eastus" } },
+    { "provider": "aws", "aws": { "region": "us-west-2" } }
+  ]
+}
+JSON
+    _deploy_parse_config "$cfg"
+    [ "$DEPLOY_ENDPOINT_COUNT" -eq 3 ]
+    [ "${DEPLOY_EP_PROVIDERS[0]}" = "lan" ]
+    [ "${DEPLOY_EP_PROVIDERS[1]}" = "azure" ]
+    [ "${DEPLOY_EP_PROVIDERS[2]}" = "aws" ]
+    [ "${DEPLOY_EP_LABELS[0]}" = "ep-a" ]
+    [ "${DEPLOY_EP_LABELS[1]}" = "ep-b" ]
+    [ "${DEPLOY_EP_LABELS[2]}" = "endpoint-3" ]
+}
+
+@test "_deploy_parse_config: test params populated from config" {
+    local cfg="$TEST_TMPDIR/parse-tests.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{ "provider": "local" }],
+  "tests": {
+    "modes": ["http1", "http2"],
+    "runs": 10,
+    "insecure": true,
+    "connection_reuse": true,
+    "html_report": "my-report.html",
+    "run_tests": false
+  }
+}
+JSON
+    _deploy_parse_config "$cfg"
+    [ "$DEPLOY_RUN_TESTS" -eq 0 ]
+    [ "$DEPLOY_TEST_RUNS" = "10" ]
+    [ "$DEPLOY_TEST_INSECURE" = "true" ]
+    [ "$DEPLOY_TEST_CONNECTION_REUSE" = "true" ]
+    [ "$DEPLOY_TEST_HTML_REPORT" = "my-report.html" ]
+    [[ "$DEPLOY_TEST_MODES" == *"http1"* ]]
+    [[ "$DEPLOY_TEST_MODES" == *"http2"* ]]
+}
+
+@test "_deploy_parse_config: install_method=source sets FROM_SOURCE" {
+    local cfg="$TEST_TMPDIR/parse-source.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local", "install_method": "source" },
+  "endpoints": [{ "provider": "local" }]
+}
+JSON
+    _deploy_parse_config "$cfg"
+    [ "$FROM_SOURCE" -eq 1 ]
+}
+
+# ===========================================================================
+# 11. Deploy config: _deploy_load_endpoint
+# ===========================================================================
+
+@test "_deploy_load_endpoint: loads LAN endpoint globals" {
+    local cfg="$TEST_TMPDIR/load-ep.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [
+    { "provider": "lan", "lan": { "ip": "10.0.0.99", "user": "deploy", "port": 3333 } }
+  ]
+}
+JSON
+    DEPLOY_CONFIG_PATH="$cfg"
+    _deploy_parse_config "$cfg"
+    _deploy_load_endpoint 0
+    [ "$ENDPOINT_LOCATION" = "lan" ]
+    [ "$DO_REMOTE_ENDPOINT" -eq 1 ]
+    [ "$LAN_ENDPOINT_IP" = "10.0.0.99" ]
+    [ "$LAN_ENDPOINT_USER" = "deploy" ]
+    [ "$LAN_ENDPOINT_PORT" = "3333" ]
+}
+
+@test "_deploy_load_endpoint: loads Azure endpoint globals" {
+    local cfg="$TEST_TMPDIR/load-ep-az.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [
+    { "provider": "azure", "azure": { "region": "westus", "vm_size": "Standard_B1s" } }
+  ]
+}
+JSON
+    DEPLOY_CONFIG_PATH="$cfg"
+    _deploy_parse_config "$cfg"
+    _deploy_load_endpoint 0
+    [ "$ENDPOINT_LOCATION" = "azure" ]
+    [ "$AZURE_REGION" = "westus" ]
+    [ "$AZURE_ENDPOINT_SIZE" = "Standard_B1s" ]
+}
+
+# ===========================================================================
+# 12. Deploy config: _deploy_generate_tester_config
+# ===========================================================================
+
+@test "_deploy_generate_tester_config: generates valid JSON with endpoints" {
+    DEPLOY_CONFIG_PATH="$TEST_TMPDIR/gen.json"
+    cat > "$DEPLOY_CONFIG_PATH" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{ "provider": "local" }],
+  "tests": { "modes": ["http1"], "runs": 3, "insecure": true }
+}
+JSON
+    _deploy_parse_config "$DEPLOY_CONFIG_PATH"
+    DEPLOY_ENDPOINT_COUNT=2
+    DEPLOY_EP_IPS=("1.2.3.4" "5.6.7.8")
+    TESTER_LOCATION="local"
+
+    _deploy_generate_tester_config
+
+    # Verify output is valid JSON
+    jq empty "$CONFIG_FILE_PATH"
+    # Verify targets
+    local targets; targets="$(jq -r '.targets | length' "$CONFIG_FILE_PATH")"
+    [ "$targets" -eq 2 ]
+    jq -r '.targets[0]' "$CONFIG_FILE_PATH" | grep -q "1.2.3.4"
+    jq -r '.targets[1]' "$CONFIG_FILE_PATH" | grep -q "5.6.7.8"
+    # Verify test params
+    [ "$(jq -r '.runs' "$CONFIG_FILE_PATH")" = "3" ]
+    [ "$(jq -r '.insecure' "$CONFIG_FILE_PATH")" = "true" ]
+    [ "$(jq -r '.modes[0]' "$CONFIG_FILE_PATH")" = "http1" ]
+}

@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.0] – 2026-03-08 — Config-driven deploy & test
+
+### Added
+- **install.sh**: `--deploy deploy.json` flag for non-interactive, config-driven deployment and testing
+- JSON config schema (version 1): define tester + endpoint(s) + test parameters in one file
+- Multi-endpoint support: deploy to multiple machines/clouds and test against all of them
+- Pre-flight validation: checks tools, cloud credentials, SSH connectivity before any deployment
+- Auto-generated tester config from deployed endpoint IPs and test parameters
+- Remote test execution: runs tester via SSH and downloads HTML/Excel reports
+- Deploy plan display: shows full deployment topology before starting
+- Completion summary: lists all deployed infrastructure and report locations
+- Example configs: `deploy.example.json`, `examples/deploy-lan.json`, `examples/deploy-multi-cloud.json`
+- Documentation: `docs/deploy-config.md` with full schema reference
+- 19 new bats tests for config validation, parsing, endpoint loading, and config generation
+
+---
+
 ## [0.12.99] – 2026-03-08 — LAN deployment via SSH
 
 ### Added

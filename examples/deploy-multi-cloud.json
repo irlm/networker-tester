@@ -1,0 +1,52 @@
+{
+  "version": 1,
+
+  "tester": {
+    "provider": "local"
+  },
+
+  "endpoints": [
+    {
+      "label": "azure-east",
+      "provider": "azure",
+      "azure": {
+        "region": "eastus",
+        "resource_group": "networker-rg-azure-east",
+        "vm_name": "networker-ep-azure-east",
+        "vm_size": "Standard_B2s",
+        "os": "linux",
+        "auto_shutdown": true
+      }
+    },
+    {
+      "label": "aws-east",
+      "provider": "aws",
+      "aws": {
+        "region": "us-east-1",
+        "instance_name": "networker-ep-aws-east",
+        "instance_type": "t3.small",
+        "os": "linux",
+        "auto_shutdown": true
+      }
+    },
+    {
+      "label": "gcp-central",
+      "provider": "gcp",
+      "gcp": {
+        "zone": "us-central1-a",
+        "instance_name": "networker-ep-gcp-central",
+        "machine_type": "e2-small",
+        "os": "linux",
+        "auto_shutdown": true
+      }
+    }
+  ],
+
+  "tests": {
+    "modes": ["http1", "http2", "http3", "download", "pageload"],
+    "runs": 10,
+    "insecure": true,
+    "payload_sizes": ["1m", "10m"],
+    "html_report": "multi-cloud-report.html"
+  }
+}

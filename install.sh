@@ -283,6 +283,11 @@ GCP options:
   --gcp-machine-type TYPE  GCE machine type (default: e2-small)
   --gcp-project PROJECT    GCP project ID (default: auto-detected from gcloud config)
 
+Config-driven deploy:
+  --deploy FILE            Read a JSON config file and deploy/test non-interactively.
+                           Validates prereqs, deploys tester + endpoint(s), runs tests.
+                           Requires: jq. See docs/deploy-config.md for schema.
+
   -h, --help               Show this help message
 
 Examples:
@@ -296,6 +301,7 @@ Examples:
   bash install.sh --tester-aws --aws both          # both on separate AWS instances
   bash install.sh --tester-azure --aws both        # tester on Azure, endpoint on AWS
   bash install.sh --tester-gcp --gcp both          # both on separate GCP instances
+  bash install.sh --deploy deploy.json             # config-driven deploy + test
 EOF
 }
 
@@ -416,6 +422,37 @@ GCP_SHUTDOWN_ASKED=0
 
 CONFIG_FILE_PATH=""
 
+# ── Deploy-config state ──────────────────────────────────────────────────
+DEPLOY_CONFIG_PATH=""           # path to deploy.json (--deploy flag)
+DEPLOY_ENDPOINT_COUNT=0         # number of endpoints in config
+DEPLOY_RUN_TESTS=1              # 1 = run tests after deploy
+DEPLOY_TEST_MODES=""            # JSON array string of test modes
+DEPLOY_TEST_RUNS=""             # number of test runs
+DEPLOY_TEST_PAYLOAD_SIZES=""    # JSON array string of payload sizes
+DEPLOY_TEST_INSECURE=""         # "true" or "false"
+DEPLOY_TEST_CONNECTION_REUSE="" # "true" or "false"
+DEPLOY_TEST_UDP_PORT=""
+DEPLOY_TEST_UDP_THROUGHPUT_PORT=""
+DEPLOY_TEST_PAGE_ASSETS=""
+DEPLOY_TEST_PAGE_ASSET_SIZE=""
+DEPLOY_TEST_PAGE_PRESET=""
+DEPLOY_TEST_TIMEOUT=""
+DEPLOY_TEST_RETRIES=""
+DEPLOY_TEST_HTML_REPORT=""
+DEPLOY_TEST_OUTPUT_DIR=""
+DEPLOY_TEST_EXCEL=""
+DEPLOY_TEST_CONCURRENCY=""
+DEPLOY_TEST_DNS_ENABLED=""
+DEPLOY_TEST_IPV4_ONLY=""
+DEPLOY_TEST_IPV6_ONLY=""
+DEPLOY_TEST_VERBOSE=""
+DEPLOY_TEST_LOG_LEVEL=""
+
+# Arrays for multi-endpoint support (parallel arrays indexed 0..N-1)
+DEPLOY_EP_PROVIDERS=()
+DEPLOY_EP_LABELS=()
+DEPLOY_EP_IPS=()               # populated after deploy (result IPs)
+
 # ── Argument parsing ──────────────────────────────────────────────────────────
 parse_args() {
     while [[ $# -gt 0 ]]; do
@@ -502,6 +539,10 @@ parse_args() {
                 shift; LAN_ENDPOINT_IP="${1:-}" ;;
             --lan-endpoint-user)
                 shift; LAN_ENDPOINT_USER="${1:-}" ;;
+            # Deploy config
+            --deploy)
+                shift; DEPLOY_CONFIG_PATH="${1:-}"
+                AUTO_YES=1 ;;
             -h|--help)
                 show_help; exit 0 ;;
             *)
@@ -5245,10 +5286,877 @@ _offer_ssh_connect() {
     fi
 }
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Deploy-config mode: read a JSON config and deploy/test non-interactively
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Validate JSON config structure and required fields.
+# Sets DEPLOY_VALIDATE_ERRORS (count) and prints each issue.
+_deploy_validate_config() {
+    local cfg="$1"
+    local errors=0
+
+    # JSON syntax
+    if ! jq empty "$cfg" 2>/dev/null; then
+        print_err "Invalid JSON in $cfg"
+        DEPLOY_VALIDATE_ERRORS=1
+        return 1
+    fi
+
+    # version field
+    local ver
+    ver="$(jq -r '.version // empty' "$cfg")"
+    if [[ -z "$ver" ]]; then
+        print_err "Config missing 'version' field (expected 1)"
+        errors=$((errors + 1))
+    elif [[ "$ver" != "1" ]]; then
+        print_err "Unsupported config version: $ver (expected 1)"
+        errors=$((errors + 1))
+    fi
+
+    # tester section
+    local t_provider
+    t_provider="$(jq -r '.tester.provider // empty' "$cfg")"
+    if [[ -z "$t_provider" ]]; then
+        print_err "Config missing 'tester.provider'"
+        errors=$((errors + 1))
+    else
+        case "$t_provider" in
+            local|lan|azure|aws|gcp) ;;
+            *) print_err "Unknown tester provider: $t_provider"; errors=$((errors + 1)) ;;
+        esac
+        if [[ "$t_provider" == "lan" ]]; then
+            local t_ip; t_ip="$(jq -r '.tester.lan.ip // empty' "$cfg")"
+            [[ -z "$t_ip" ]] && { print_err "tester.lan.ip is required"; errors=$((errors + 1)); }
+        fi
+    fi
+
+    # endpoints array
+    local ep_count
+    ep_count="$(jq '.endpoints | length // 0' "$cfg" 2>/dev/null)"
+    if [[ "${ep_count:-0}" -eq 0 ]]; then
+        print_err "Config must have at least one entry in 'endpoints' array"
+        errors=$((errors + 1))
+    else
+        local i
+        for i in $(seq 0 $((ep_count - 1))); do
+            local ep_prov
+            ep_prov="$(jq -r ".endpoints[$i].provider // empty" "$cfg")"
+            if [[ -z "$ep_prov" ]]; then
+                print_err "endpoints[$i] missing 'provider'"
+                errors=$((errors + 1))
+            else
+                case "$ep_prov" in
+                    local|lan|azure|aws|gcp) ;;
+                    *) print_err "endpoints[$i]: unknown provider '$ep_prov'"; errors=$((errors + 1)) ;;
+                esac
+                if [[ "$ep_prov" == "lan" ]]; then
+                    local eip; eip="$(jq -r ".endpoints[$i].lan.ip // empty" "$cfg")"
+                    [[ -z "$eip" ]] && { print_err "endpoints[$i].lan.ip is required"; errors=$((errors + 1)); }
+                fi
+            fi
+        done
+    fi
+
+    # Test modes validation (if specified)
+    local modes_count
+    modes_count="$(jq '.tests.modes | length // 0' "$cfg" 2>/dev/null)"
+    if [[ "${modes_count:-0}" -gt 0 ]]; then
+        local valid_modes="tcp http1 http2 http3 udp download upload webdownload webupload udpdownload udpupload pageload pageload2 pageload3"
+        for i in $(seq 0 $((modes_count - 1))); do
+            local m; m="$(jq -r ".tests.modes[$i]" "$cfg")"
+            if ! echo "$valid_modes" | grep -qw "$m"; then
+                print_err "tests.modes[$i]: unknown mode '$m'"
+                errors=$((errors + 1))
+            fi
+        done
+    fi
+
+    DEPLOY_VALIDATE_ERRORS=$errors
+}
+
+# Parse the deploy config and populate shell variables.
+# Maps JSON fields into the same globals used by the interactive flow.
+_deploy_parse_config() {
+    local cfg="$1"
+
+    # ── Tester ────────────────────────────────────────────────────────────
+    local t_provider
+    t_provider="$(jq -r '.tester.provider' "$cfg")"
+
+    local t_install_method
+    t_install_method="$(jq -r '.tester.install_method // "release"' "$cfg")"
+    [[ "$t_install_method" == "source" ]] && FROM_SOURCE=1
+
+    case "$t_provider" in
+        local)
+            TESTER_LOCATION="local"; DO_REMOTE_TESTER=0
+            ;;
+        lan)
+            TESTER_LOCATION="lan"; DO_REMOTE_TESTER=1
+            LAN_TESTER_IP="$(jq -r '.tester.lan.ip' "$cfg")"
+            LAN_TESTER_USER="$(jq -r '.tester.lan.user // ""' "$cfg")"
+            LAN_TESTER_PORT="$(jq -r '.tester.lan.port // 22' "$cfg")"
+            ;;
+        azure)
+            TESTER_LOCATION="azure"; DO_REMOTE_TESTER=1
+            AZURE_REGION="$(jq -r '.tester.azure.region // "eastus"' "$cfg")"
+            AZURE_TESTER_RG="$(jq -r '.tester.azure.resource_group // "networker-rg-tester"' "$cfg")"
+            AZURE_TESTER_VM="$(jq -r '.tester.azure.vm_name // "networker-tester-vm"' "$cfg")"
+            AZURE_TESTER_SIZE="$(jq -r '.tester.azure.vm_size // "Standard_B2s"' "$cfg")"
+            AZURE_TESTER_OS="$(jq -r '.tester.azure.os // "linux"' "$cfg")"
+            local t_shutdown; t_shutdown="$(jq -r '.tester.azure.auto_shutdown // true' "$cfg")"
+            [[ "$t_shutdown" == "true" ]] && AZURE_AUTO_SHUTDOWN="yes" || AZURE_AUTO_SHUTDOWN="no"
+            ;;
+        aws)
+            TESTER_LOCATION="aws"; DO_REMOTE_TESTER=1
+            AWS_REGION="$(jq -r '.tester.aws.region // "us-east-1"' "$cfg")"
+            AWS_TESTER_NAME="$(jq -r '.tester.aws.instance_name // "networker-tester"' "$cfg")"
+            AWS_TESTER_INSTANCE_TYPE="$(jq -r '.tester.aws.instance_type // "t3.small"' "$cfg")"
+            AWS_TESTER_OS="$(jq -r '.tester.aws.os // "linux"' "$cfg")"
+            local t_aws_shutdown; t_aws_shutdown="$(jq -r '.tester.aws.auto_shutdown // true' "$cfg")"
+            [[ "$t_aws_shutdown" == "true" ]] && AWS_AUTO_SHUTDOWN="yes" || AWS_AUTO_SHUTDOWN="no"
+            ;;
+        gcp)
+            TESTER_LOCATION="gcp"; DO_REMOTE_TESTER=1
+            GCP_REGION="$(jq -r '.tester.gcp.region // "us-central1"' "$cfg")"
+            GCP_ZONE="$(jq -r '.tester.gcp.zone // "us-central1-a"' "$cfg")"
+            GCP_TESTER_NAME="$(jq -r '.tester.gcp.instance_name // "networker-tester"' "$cfg")"
+            GCP_TESTER_MACHINE_TYPE="$(jq -r '.tester.gcp.machine_type // "e2-small"' "$cfg")"
+            GCP_TESTER_OS="$(jq -r '.tester.gcp.os // "linux"' "$cfg")"
+            GCP_PROJECT="$(jq -r '.tester.gcp.project // ""' "$cfg")"
+            local t_gcp_shutdown; t_gcp_shutdown="$(jq -r '.tester.gcp.auto_shutdown // true' "$cfg")"
+            [[ "$t_gcp_shutdown" == "true" ]] && GCP_AUTO_SHUTDOWN="yes" || GCP_AUTO_SHUTDOWN="no"
+            ;;
+    esac
+
+    DO_INSTALL_TESTER=1
+
+    # ── Endpoints ─────────────────────────────────────────────────────────
+    DEPLOY_ENDPOINT_COUNT="$(jq '.endpoints | length' "$cfg")"
+
+    local i
+    for i in $(seq 0 $((DEPLOY_ENDPOINT_COUNT - 1))); do
+        local ep_prov; ep_prov="$(jq -r ".endpoints[$i].provider" "$cfg")"
+        local ep_label; ep_label="$(jq -r ".endpoints[$i].label // \"endpoint-$((i+1))\"" "$cfg")"
+        DEPLOY_EP_PROVIDERS+=("$ep_prov")
+        DEPLOY_EP_LABELS+=("$ep_label")
+        DEPLOY_EP_IPS+=("")  # placeholder, filled after deploy
+    done
+
+    DO_INSTALL_ENDPOINT=1
+
+    # ── Tests ─────────────────────────────────────────────────────────────
+    local run_tests; run_tests="$(jq -r '.tests.run_tests // true' "$cfg")"
+    [[ "$run_tests" == "true" ]] && DEPLOY_RUN_TESTS=1 || DEPLOY_RUN_TESTS=0
+
+    DEPLOY_TEST_MODES="$(jq -c '.tests.modes // null' "$cfg")"
+    DEPLOY_TEST_RUNS="$(jq -r '.tests.runs // ""' "$cfg")"
+    DEPLOY_TEST_PAYLOAD_SIZES="$(jq -c '.tests.payload_sizes // null' "$cfg")"
+    DEPLOY_TEST_INSECURE="$(jq -r '.tests.insecure // ""' "$cfg")"
+    DEPLOY_TEST_CONNECTION_REUSE="$(jq -r '.tests.connection_reuse // ""' "$cfg")"
+    DEPLOY_TEST_UDP_PORT="$(jq -r '.tests.udp_port // ""' "$cfg")"
+    DEPLOY_TEST_UDP_THROUGHPUT_PORT="$(jq -r '.tests.udp_throughput_port // ""' "$cfg")"
+    DEPLOY_TEST_PAGE_ASSETS="$(jq -r '.tests.page_assets // ""' "$cfg")"
+    DEPLOY_TEST_PAGE_ASSET_SIZE="$(jq -r '.tests.page_asset_size // ""' "$cfg")"
+    DEPLOY_TEST_PAGE_PRESET="$(jq -r '.tests.page_preset // ""' "$cfg")"
+    DEPLOY_TEST_TIMEOUT="$(jq -r '.tests.timeout // ""' "$cfg")"
+    DEPLOY_TEST_RETRIES="$(jq -r '.tests.retries // ""' "$cfg")"
+    DEPLOY_TEST_HTML_REPORT="$(jq -r '.tests.html_report // ""' "$cfg")"
+    DEPLOY_TEST_OUTPUT_DIR="$(jq -r '.tests.output_dir // ""' "$cfg")"
+    DEPLOY_TEST_EXCEL="$(jq -r '.tests.excel // ""' "$cfg")"
+    DEPLOY_TEST_CONCURRENCY="$(jq -r '.tests.concurrency // ""' "$cfg")"
+    DEPLOY_TEST_DNS_ENABLED="$(jq -r '.tests.dns_enabled // ""' "$cfg")"
+    DEPLOY_TEST_IPV4_ONLY="$(jq -r '.tests.ipv4_only // ""' "$cfg")"
+    DEPLOY_TEST_IPV6_ONLY="$(jq -r '.tests.ipv6_only // ""' "$cfg")"
+    DEPLOY_TEST_VERBOSE="$(jq -r '.tests.verbose // ""' "$cfg")"
+    DEPLOY_TEST_LOG_LEVEL="$(jq -r '.tests.log_level // ""' "$cfg")"
+}
+
+# Load endpoint config at index $1 into the provider-specific globals.
+# This lets us reuse existing step_*_deploy_endpoint functions per endpoint.
+_deploy_load_endpoint() {
+    local idx="$1"
+    local cfg="$DEPLOY_CONFIG_PATH"
+    local ep_prov="${DEPLOY_EP_PROVIDERS[$idx]}"
+
+    case "$ep_prov" in
+        local)
+            ENDPOINT_LOCATION="local"; DO_REMOTE_ENDPOINT=0
+            ;;
+        lan)
+            ENDPOINT_LOCATION="lan"; DO_REMOTE_ENDPOINT=1
+            LAN_ENDPOINT_IP="$(jq -r ".endpoints[$idx].lan.ip" "$cfg")"
+            LAN_ENDPOINT_USER="$(jq -r ".endpoints[$idx].lan.user // \"\"" "$cfg")"
+            LAN_ENDPOINT_PORT="$(jq -r ".endpoints[$idx].lan.port // 22" "$cfg")"
+            ;;
+        azure)
+            ENDPOINT_LOCATION="azure"; DO_REMOTE_ENDPOINT=1
+            # Use endpoint-specific region if set, else fallback to tester's
+            local ep_region; ep_region="$(jq -r ".endpoints[$idx].azure.region // \"$AZURE_REGION\"" "$cfg")"
+            AZURE_REGION="$ep_region"
+            AZURE_ENDPOINT_RG="$(jq -r ".endpoints[$idx].azure.resource_group // \"networker-rg-endpoint\"" "$cfg")"
+            AZURE_ENDPOINT_VM="$(jq -r ".endpoints[$idx].azure.vm_name // \"networker-endpoint-vm\"" "$cfg")"
+            AZURE_ENDPOINT_SIZE="$(jq -r ".endpoints[$idx].azure.vm_size // \"Standard_B2s\"" "$cfg")"
+            AZURE_ENDPOINT_OS="$(jq -r ".endpoints[$idx].azure.os // \"linux\"" "$cfg")"
+            local ep_shutdown; ep_shutdown="$(jq -r ".endpoints[$idx].azure.auto_shutdown // true" "$cfg")"
+            [[ "$ep_shutdown" == "true" ]] && AZURE_AUTO_SHUTDOWN="yes" || AZURE_AUTO_SHUTDOWN="no"
+            ;;
+        aws)
+            ENDPOINT_LOCATION="aws"; DO_REMOTE_ENDPOINT=1
+            local ep_aws_region; ep_aws_region="$(jq -r ".endpoints[$idx].aws.region // \"$AWS_REGION\"" "$cfg")"
+            AWS_REGION="$ep_aws_region"
+            AWS_ENDPOINT_NAME="$(jq -r ".endpoints[$idx].aws.instance_name // \"networker-endpoint\"" "$cfg")"
+            AWS_ENDPOINT_INSTANCE_TYPE="$(jq -r ".endpoints[$idx].aws.instance_type // \"t3.small\"" "$cfg")"
+            AWS_ENDPOINT_OS="$(jq -r ".endpoints[$idx].aws.os // \"linux\"" "$cfg")"
+            local ep_aws_shutdown; ep_aws_shutdown="$(jq -r ".endpoints[$idx].aws.auto_shutdown // true" "$cfg")"
+            [[ "$ep_aws_shutdown" == "true" ]] && AWS_AUTO_SHUTDOWN="yes" || AWS_AUTO_SHUTDOWN="no"
+            ;;
+        gcp)
+            ENDPOINT_LOCATION="gcp"; DO_REMOTE_ENDPOINT=1
+            local ep_gcp_region; ep_gcp_region="$(jq -r ".endpoints[$idx].gcp.region // \"$GCP_REGION\"" "$cfg")"
+            GCP_REGION="$ep_gcp_region"
+            local ep_gcp_zone; ep_gcp_zone="$(jq -r ".endpoints[$idx].gcp.zone // \"$GCP_ZONE\"" "$cfg")"
+            GCP_ZONE="$ep_gcp_zone"
+            GCP_ENDPOINT_NAME="$(jq -r ".endpoints[$idx].gcp.instance_name // \"networker-endpoint\"" "$cfg")"
+            GCP_ENDPOINT_MACHINE_TYPE="$(jq -r ".endpoints[$idx].gcp.machine_type // \"e2-small\"" "$cfg")"
+            GCP_ENDPOINT_OS="$(jq -r ".endpoints[$idx].gcp.os // \"linux\"" "$cfg")"
+            GCP_PROJECT="$(jq -r ".endpoints[$idx].gcp.project // \"$GCP_PROJECT\"" "$cfg")"
+            local ep_gcp_shutdown; ep_gcp_shutdown="$(jq -r ".endpoints[$idx].gcp.auto_shutdown // true" "$cfg")"
+            [[ "$ep_gcp_shutdown" == "true" ]] && GCP_AUTO_SHUTDOWN="yes" || GCP_AUTO_SHUTDOWN="no"
+            ;;
+    esac
+}
+
+# Run pre-flight checks: tools, credentials, connectivity.
+# Accumulates all errors and prints them, then exits if any found.
+_deploy_preflight() {
+    local cfg="$1"
+    local errors=0
+
+    print_section "Pre-flight checks"
+
+    # 1. jq (already used to get here, but verify for completeness)
+    if command -v jq &>/dev/null; then
+        print_ok "jq available"
+    else
+        print_err "jq is required (brew install jq / apt install jq)"
+        errors=$((errors + 1))
+    fi
+
+    # 2. Collect all providers used
+    local providers_used=()
+    local t_prov; t_prov="$(jq -r '.tester.provider' "$cfg")"
+    providers_used+=("$t_prov")
+    local i
+    for i in $(seq 0 $((DEPLOY_ENDPOINT_COUNT - 1))); do
+        providers_used+=("${DEPLOY_EP_PROVIDERS[$i]}")
+    done
+
+    # Deduplicate
+    local unique_providers
+    unique_providers="$(printf '%s\n' "${providers_used[@]}" | sort -u)"
+
+    # 3. Check each provider's prereqs
+    local prov
+    for prov in $unique_providers; do
+        case "$prov" in
+            local)
+                print_ok "local provider: no external prereqs"
+                ;;
+            lan)
+                # Test SSH for each LAN target
+                if [[ "$t_prov" == "lan" ]]; then
+                    if ssh -o BatchMode=yes -o ConnectTimeout=5 \
+                           -o StrictHostKeyChecking=no \
+                           -p "$LAN_TESTER_PORT" \
+                           "${LAN_TESTER_USER}@${LAN_TESTER_IP}" true &>/dev/null; then
+                        print_ok "SSH to tester ${LAN_TESTER_USER}@${LAN_TESTER_IP} OK"
+                    else
+                        print_err "SSH to tester ${LAN_TESTER_USER}@${LAN_TESTER_IP}:${LAN_TESTER_PORT} failed"
+                        errors=$((errors + 1))
+                    fi
+                fi
+                for i in $(seq 0 $((DEPLOY_ENDPOINT_COUNT - 1))); do
+                    [[ "${DEPLOY_EP_PROVIDERS[$i]}" != "lan" ]] && continue
+                    local eip euser eport
+                    eip="$(jq -r ".endpoints[$i].lan.ip" "$cfg")"
+                    euser="$(jq -r ".endpoints[$i].lan.user // \"\"" "$cfg")"
+                    eport="$(jq -r ".endpoints[$i].lan.port // 22" "$cfg")"
+                    if ssh -o BatchMode=yes -o ConnectTimeout=5 \
+                           -o StrictHostKeyChecking=no \
+                           -p "$eport" \
+                           "${euser}@${eip}" true &>/dev/null; then
+                        print_ok "SSH to endpoint ${euser}@${eip} OK"
+                    else
+                        print_err "SSH to endpoint ${euser}@${eip}:${eport} failed"
+                        print_info "  Ensure: ssh-copy-id -p ${eport} ${euser}@${eip}"
+                        errors=$((errors + 1))
+                    fi
+                done
+                ;;
+            azure)
+                if [[ $AZURE_CLI_AVAILABLE -eq 1 ]]; then
+                    print_ok "Azure CLI (az) found"
+                else
+                    print_err "Azure CLI (az) not found — install from https://aka.ms/InstallAzureCLIDeb"
+                    errors=$((errors + 1))
+                fi
+                if [[ $AZURE_LOGGED_IN -eq 1 ]]; then
+                    print_ok "Azure credentials found"
+                else
+                    print_err "Not logged into Azure (run: az login)"
+                    errors=$((errors + 1))
+                fi
+                ;;
+            aws)
+                if [[ $AWS_CLI_AVAILABLE -eq 1 ]]; then
+                    print_ok "AWS CLI found"
+                else
+                    print_err "AWS CLI not found — install from https://aws.amazon.com/cli/"
+                    errors=$((errors + 1))
+                fi
+                if [[ $AWS_LOGGED_IN -eq 1 ]]; then
+                    print_ok "AWS credentials found"
+                else
+                    print_err "Not authenticated to AWS (run: aws configure)"
+                    errors=$((errors + 1))
+                fi
+                ;;
+            gcp)
+                if [[ $GCP_CLI_AVAILABLE -eq 1 ]]; then
+                    print_ok "gcloud CLI found"
+                else
+                    print_err "gcloud CLI not found — install from https://cloud.google.com/sdk/docs/install"
+                    errors=$((errors + 1))
+                fi
+                if [[ $GCP_LOGGED_IN -eq 1 ]]; then
+                    print_ok "GCP credentials found"
+                else
+                    print_err "Not authenticated to GCP (run: gcloud auth login)"
+                    errors=$((errors + 1))
+                fi
+                ;;
+        esac
+    done
+
+    # 4. Install method prereqs
+    if [[ $FROM_SOURCE -eq 1 ]]; then
+        if [[ $RUST_EXISTS -eq 1 ]]; then
+            print_ok "Rust/cargo available (source build)"
+        else
+            print_err "Rust/cargo required for source build (install from https://rustup.rs)"
+            errors=$((errors + 1))
+        fi
+    fi
+
+    # 5. Internet connectivity (for release downloads)
+    if [[ $FROM_SOURCE -eq 0 ]]; then
+        if curl -sf --max-time 5 "https://api.github.com" &>/dev/null; then
+            print_ok "GitHub API reachable (for binary downloads)"
+        else
+            print_info "GitHub API unreachable — will fall back to source build if needed"
+        fi
+    fi
+
+    echo ""
+    if [[ $errors -gt 0 ]]; then
+        print_err "Pre-flight failed: $errors issue(s) found. Fix the above and retry."
+        exit 1
+    fi
+    print_ok "All pre-flight checks passed"
+}
+
+# Display the deploy plan from config.
+_deploy_display_plan() {
+    local cfg="$1"
+    echo ""
+    echo "${BOLD}═══════════════════════════════════════════════════════════${RESET}"
+    echo "${BOLD}  Deploy Plan${RESET}"
+    echo "${BOLD}═══════════════════════════════════════════════════════════${RESET}"
+
+    # Tester
+    local t_prov; t_prov="$(jq -r '.tester.provider' "$cfg")"
+    printf "\n  ${BOLD}Tester:${RESET}\n"
+    printf "    %-22s %s\n" "Provider:" "$t_prov"
+    case "$t_prov" in
+        lan)   printf "    %-22s %s\n" "Host:" "$LAN_TESTER_IP"
+               printf "    %-22s %s\n" "User:" "$LAN_TESTER_USER" ;;
+        azure) printf "    %-22s %s\n" "Region:" "$AZURE_REGION"
+               printf "    %-22s %s\n" "VM:" "$AZURE_TESTER_VM"
+               printf "    %-22s %s\n" "Size:" "$AZURE_TESTER_SIZE" ;;
+        aws)   printf "    %-22s %s\n" "Region:" "$AWS_REGION"
+               printf "    %-22s %s\n" "Instance:" "$AWS_TESTER_NAME"
+               printf "    %-22s %s\n" "Type:" "$AWS_TESTER_INSTANCE_TYPE" ;;
+        gcp)   printf "    %-22s %s\n" "Zone:" "$GCP_ZONE"
+               printf "    %-22s %s\n" "Instance:" "$GCP_TESTER_NAME"
+               printf "    %-22s %s\n" "Type:" "$GCP_TESTER_MACHINE_TYPE" ;;
+    esac
+
+    # Endpoints
+    local i
+    for i in $(seq 0 $((DEPLOY_ENDPOINT_COUNT - 1))); do
+        local label="${DEPLOY_EP_LABELS[$i]}"
+        local ep_prov="${DEPLOY_EP_PROVIDERS[$i]}"
+        printf "\n  ${BOLD}Endpoint: %s${RESET}\n" "$label"
+        printf "    %-22s %s\n" "Provider:" "$ep_prov"
+        case "$ep_prov" in
+            lan)
+                local eip; eip="$(jq -r ".endpoints[$i].lan.ip" "$cfg")"
+                local euser; euser="$(jq -r ".endpoints[$i].lan.user // \"\"" "$cfg")"
+                printf "    %-22s %s\n" "Host:" "$eip"
+                printf "    %-22s %s\n" "User:" "$euser" ;;
+            azure)
+                local er; er="$(jq -r ".endpoints[$i].azure.region // \"$AZURE_REGION\"" "$cfg")"
+                local evm; evm="$(jq -r ".endpoints[$i].azure.vm_name // \"networker-endpoint-vm\"" "$cfg")"
+                local esz; esz="$(jq -r ".endpoints[$i].azure.vm_size // \"Standard_B2s\"" "$cfg")"
+                printf "    %-22s %s\n" "Region:" "$er"
+                printf "    %-22s %s\n" "VM:" "$evm"
+                printf "    %-22s %s\n" "Size:" "$esz" ;;
+            aws)
+                local er; er="$(jq -r ".endpoints[$i].aws.region // \"$AWS_REGION\"" "$cfg")"
+                local en; en="$(jq -r ".endpoints[$i].aws.instance_name // \"networker-endpoint\"" "$cfg")"
+                local et; et="$(jq -r ".endpoints[$i].aws.instance_type // \"t3.small\"" "$cfg")"
+                printf "    %-22s %s\n" "Region:" "$er"
+                printf "    %-22s %s\n" "Instance:" "$en"
+                printf "    %-22s %s\n" "Type:" "$et" ;;
+            gcp)
+                local ez; ez="$(jq -r ".endpoints[$i].gcp.zone // \"$GCP_ZONE\"" "$cfg")"
+                local en; en="$(jq -r ".endpoints[$i].gcp.instance_name // \"networker-endpoint\"" "$cfg")"
+                local et; et="$(jq -r ".endpoints[$i].gcp.machine_type // \"e2-small\"" "$cfg")"
+                printf "    %-22s %s\n" "Zone:" "$ez"
+                printf "    %-22s %s\n" "Instance:" "$en"
+                printf "    %-22s %s\n" "Type:" "$et" ;;
+        esac
+    done
+
+    # Tests
+    if [[ $DEPLOY_RUN_TESTS -eq 1 ]]; then
+        printf "\n  ${BOLD}Tests:${RESET}\n"
+        [[ "$DEPLOY_TEST_MODES" != "null" && -n "$DEPLOY_TEST_MODES" ]] && \
+            printf "    %-22s %s\n" "Modes:" "$(echo "$DEPLOY_TEST_MODES" | jq -r 'join(", ")')"
+        [[ -n "$DEPLOY_TEST_RUNS" ]] && \
+            printf "    %-22s %s\n" "Runs:" "$DEPLOY_TEST_RUNS"
+        [[ "$DEPLOY_TEST_PAYLOAD_SIZES" != "null" && -n "$DEPLOY_TEST_PAYLOAD_SIZES" ]] && \
+            printf "    %-22s %s\n" "Payload sizes:" "$(echo "$DEPLOY_TEST_PAYLOAD_SIZES" | jq -r 'join(", ")')"
+        [[ -n "$DEPLOY_TEST_HTML_REPORT" ]] && \
+            printf "    %-22s %s\n" "HTML report:" "$DEPLOY_TEST_HTML_REPORT"
+    else
+        printf "\n  ${BOLD}Tests:${RESET} deploy only (run_tests: false)\n"
+    fi
+
+    echo ""
+    echo "${BOLD}═══════════════════════════════════════════════════════════${RESET}"
+    echo ""
+}
+
+# Generate the tester config JSON from deployed endpoint IPs + test params.
+_deploy_generate_tester_config() {
+    local cfg="$DEPLOY_CONFIG_PATH"
+
+    next_step "Generate tester config from deploy results"
+
+    # Build targets array from deployed endpoint IPs
+    local targets_json=""
+    local i
+    for i in $(seq 0 $((DEPLOY_ENDPOINT_COUNT - 1))); do
+        local ip="${DEPLOY_EP_IPS[$i]}"
+        [[ -z "$ip" ]] && continue
+        [[ -n "$targets_json" ]] && targets_json="${targets_json}, "
+        targets_json="${targets_json}\"https://${ip}:8443/health\""
+    done
+
+    if [[ -z "$targets_json" ]]; then
+        print_err "No endpoint IPs available — cannot generate tester config"
+        return 1
+    fi
+
+    CONFIG_FILE_PATH="${PWD}/networker-cloud.json"
+
+    # Start building JSON
+    local json="{\n  \"targets\": [${targets_json}]"
+
+    # Modes
+    if [[ "$DEPLOY_TEST_MODES" != "null" && -n "$DEPLOY_TEST_MODES" ]]; then
+        local modes_str; modes_str="$(echo "$DEPLOY_TEST_MODES" | jq -c '.')"
+        json="${json},\n  \"modes\": ${modes_str}"
+    else
+        json="${json},\n  \"modes\": [\"tcp\", \"http1\", \"http2\", \"http3\", \"udp\", \"download\", \"upload\", \"pageload\", \"pageload2\", \"pageload3\"]"
+    fi
+
+    # Simple fields
+    [[ -n "$DEPLOY_TEST_RUNS" ]]                  && json="${json},\n  \"runs\": ${DEPLOY_TEST_RUNS}"
+    [[ -n "$DEPLOY_TEST_CONCURRENCY" ]]           && json="${json},\n  \"concurrency\": ${DEPLOY_TEST_CONCURRENCY}"
+    [[ -n "$DEPLOY_TEST_TIMEOUT" ]]               && json="${json},\n  \"timeout\": ${DEPLOY_TEST_TIMEOUT}"
+
+    # Payload sizes
+    if [[ "$DEPLOY_TEST_PAYLOAD_SIZES" != "null" && -n "$DEPLOY_TEST_PAYLOAD_SIZES" ]]; then
+        local ps_str; ps_str="$(echo "$DEPLOY_TEST_PAYLOAD_SIZES" | jq -c '.')"
+        json="${json},\n  \"payload_sizes\": ${ps_str}"
+    fi
+
+    # Boolean / string fields
+    [[ "$DEPLOY_TEST_INSECURE" == "true" ]]          && json="${json},\n  \"insecure\": true"
+    [[ "$DEPLOY_TEST_CONNECTION_REUSE" == "true" ]]  && json="${json},\n  \"connection_reuse\": true"
+    [[ "$DEPLOY_TEST_DNS_ENABLED" == "false" ]]      && json="${json},\n  \"dns_enabled\": false"
+    [[ "$DEPLOY_TEST_IPV4_ONLY" == "true" ]]         && json="${json},\n  \"ipv4_only\": true"
+    [[ "$DEPLOY_TEST_IPV6_ONLY" == "true" ]]         && json="${json},\n  \"ipv6_only\": true"
+    [[ "$DEPLOY_TEST_EXCEL" == "true" ]]             && json="${json},\n  \"excel\": true"
+    [[ "$DEPLOY_TEST_VERBOSE" == "true" ]]           && json="${json},\n  \"verbose\": true"
+
+    [[ -n "$DEPLOY_TEST_UDP_PORT" ]]                 && json="${json},\n  \"udp_port\": ${DEPLOY_TEST_UDP_PORT}"
+    [[ -n "$DEPLOY_TEST_UDP_THROUGHPUT_PORT" ]]      && json="${json},\n  \"udp_throughput_port\": ${DEPLOY_TEST_UDP_THROUGHPUT_PORT}"
+    [[ -n "$DEPLOY_TEST_PAGE_ASSETS" ]]              && json="${json},\n  \"page_assets\": ${DEPLOY_TEST_PAGE_ASSETS}"
+    [[ -n "$DEPLOY_TEST_PAGE_ASSET_SIZE" ]]          && json="${json},\n  \"page_asset_size\": \"${DEPLOY_TEST_PAGE_ASSET_SIZE}\""
+    [[ -n "$DEPLOY_TEST_PAGE_PRESET" ]]              && json="${json},\n  \"page_preset\": \"${DEPLOY_TEST_PAGE_PRESET}\""
+    [[ -n "$DEPLOY_TEST_RETRIES" ]]                  && json="${json},\n  \"retries\": ${DEPLOY_TEST_RETRIES}"
+    [[ -n "$DEPLOY_TEST_HTML_REPORT" ]]              && json="${json},\n  \"html_report\": \"${DEPLOY_TEST_HTML_REPORT}\""
+    [[ -n "$DEPLOY_TEST_OUTPUT_DIR" ]]               && json="${json},\n  \"output_dir\": \"${DEPLOY_TEST_OUTPUT_DIR}\""
+    [[ -n "$DEPLOY_TEST_LOG_LEVEL" ]]                && json="${json},\n  \"log_level\": \"${DEPLOY_TEST_LOG_LEVEL}\""
+
+    json="${json}\n}"
+
+    printf "%b" "$json" > "$CONFIG_FILE_PATH"
+    print_ok "Config written to ${CONFIG_FILE_PATH}"
+    print_info "Targets: $(echo "$targets_json" | tr ',' '\n' | wc -l | tr -d ' ') endpoint(s)"
+
+    # Upload config to remote tester if applicable
+    local tester_ip="" tester_user="" tester_scp_opts=(-o StrictHostKeyChecking=no -q)
+    case "$TESTER_LOCATION" in
+        lan)   tester_ip="$LAN_TESTER_IP"; tester_user="$LAN_TESTER_USER"
+               tester_scp_opts=(-o StrictHostKeyChecking=no -P "$LAN_TESTER_PORT" -q) ;;
+        azure) tester_ip="$AZURE_TESTER_IP"; tester_user="azureuser" ;;
+        aws)   tester_ip="$AWS_TESTER_IP";   tester_user="ubuntu" ;;
+        gcp)   tester_ip="$GCP_TESTER_IP";   tester_user="$(whoami)" ;;
+    esac
+    if [[ -n "$tester_ip" ]]; then
+        print_info "Uploading config to tester ($tester_ip)…"
+        scp "${tester_scp_opts[@]}" \
+            "$CONFIG_FILE_PATH" \
+            "${tester_user}@${tester_ip}:~/networker-cloud.json"
+        print_ok "Config uploaded to ~/networker-cloud.json on tester"
+    fi
+}
+
+# Execute tests: run networker-tester locally or on the remote tester.
+_deploy_execute_tests() {
+    print_section "Running tests"
+
+    if [[ "$TESTER_LOCATION" == "local" ]]; then
+        # Find local binary
+        local tester_bin=""
+        if command -v networker-tester &>/dev/null; then
+            tester_bin="networker-tester"
+        elif [[ -x "${INSTALL_DIR:-/usr/local/bin}/networker-tester" ]]; then
+            tester_bin="${INSTALL_DIR:-/usr/local/bin}/networker-tester"
+        fi
+        if [[ -z "$tester_bin" ]]; then
+            print_err "networker-tester not found locally — cannot run tests"
+            return 1
+        fi
+        print_info "Running: $tester_bin --config $CONFIG_FILE_PATH"
+        echo ""
+        "$tester_bin" --config "$CONFIG_FILE_PATH"
+        local rc=$?
+        echo ""
+        if [[ $rc -eq 0 ]]; then
+            print_ok "Tests completed successfully"
+        else
+            print_err "Tests exited with code $rc"
+        fi
+        return $rc
+    fi
+
+    # Remote tester: run via SSH
+    local ssh_opts=(-o StrictHostKeyChecking=no)
+    local tester_dest="" tester_user=""
+
+    case "$TESTER_LOCATION" in
+        lan)
+            ssh_opts+=(-p "$LAN_TESTER_PORT")
+            tester_user="$LAN_TESTER_USER"
+            tester_dest="${LAN_TESTER_USER}@${LAN_TESTER_IP}"
+            ;;
+        azure)
+            tester_user="azureuser"
+            tester_dest="azureuser@${AZURE_TESTER_IP}"
+            ;;
+        aws)
+            tester_user="ubuntu"
+            tester_dest="ubuntu@${AWS_TESTER_IP}"
+            ;;
+        gcp)
+            # Use gcloud compute ssh for GCP
+            print_info "Running tests on GCP tester ($GCP_TESTER_NAME)…"
+            gcloud compute ssh "$GCP_TESTER_NAME" \
+                --project "$GCP_PROJECT" \
+                --zone "$GCP_ZONE" \
+                --command "networker-tester --config ~/networker-cloud.json"
+            local rc=$?
+            if [[ $rc -eq 0 ]]; then
+                print_ok "Tests completed successfully on GCP tester"
+                # Download results
+                _deploy_download_results_gcp
+            else
+                print_err "Tests exited with code $rc"
+            fi
+            return $rc
+            ;;
+    esac
+
+    print_info "Running tests on remote tester ($tester_dest)…"
+    echo ""
+    ssh "${ssh_opts[@]}" "$tester_dest" "networker-tester --config ~/networker-cloud.json"
+    local rc=$?
+    echo ""
+
+    if [[ $rc -eq 0 ]]; then
+        print_ok "Tests completed successfully on remote tester"
+    else
+        print_err "Tests exited with code $rc"
+    fi
+
+    # Download results back
+    _deploy_download_results "$tester_dest" "$tester_user" "${ssh_opts[@]}"
+
+    return $rc
+}
+
+# Download test results from remote tester via SCP.
+_deploy_download_results() {
+    local dest="$1" user="$2"
+    shift 2
+    local ssh_opts=("$@")
+
+    local report_name="${DEPLOY_TEST_HTML_REPORT:-report.html}"
+    local output_dir="${DEPLOY_TEST_OUTPUT_DIR:-.}"
+    mkdir -p "$output_dir"
+
+    print_info "Downloading results from remote tester…"
+
+    # Try to download HTML report
+    local scp_opts=(-o StrictHostKeyChecking=no -q)
+    # Extract port from ssh_opts if present
+    local p
+    for p in "${ssh_opts[@]}"; do
+        if [[ "$p" == "-p" ]]; then
+            continue
+        fi
+        if [[ "$p" =~ ^[0-9]+$ && ${#p} -le 5 ]]; then
+            scp_opts+=(-P "$p")
+        fi
+    done
+
+    if scp "${scp_opts[@]}" "${dest}:~/${report_name}" "${output_dir}/${report_name}" 2>/dev/null; then
+        print_ok "HTML report downloaded: ${output_dir}/${report_name}"
+    else
+        print_info "No HTML report found on remote tester"
+    fi
+
+    # Try to download Excel report if enabled
+    if [[ "$DEPLOY_TEST_EXCEL" == "true" ]]; then
+        if scp "${scp_opts[@]}" "${dest}:~/report.xlsx" "${output_dir}/report.xlsx" 2>/dev/null; then
+            print_ok "Excel report downloaded: ${output_dir}/report.xlsx"
+        fi
+    fi
+}
+
+# Download results from GCP tester via gcloud compute scp.
+_deploy_download_results_gcp() {
+    local report_name="${DEPLOY_TEST_HTML_REPORT:-report.html}"
+    local output_dir="${DEPLOY_TEST_OUTPUT_DIR:-.}"
+    mkdir -p "$output_dir"
+
+    print_info "Downloading results from GCP tester…"
+    if gcloud compute scp "${GCP_TESTER_NAME}:~/${report_name}" \
+           "${output_dir}/${report_name}" \
+           --project "$GCP_PROJECT" \
+           --zone "$GCP_ZONE" \
+           --quiet 2>/dev/null; then
+        print_ok "HTML report downloaded: ${output_dir}/${report_name}"
+    else
+        print_info "No HTML report found on GCP tester"
+    fi
+}
+
+# Display deploy completion summary.
+_deploy_display_completion() {
+    echo ""
+    echo "${BOLD}═══════════════════════════════════════════════════════════${RESET}"
+    echo "${BOLD}  Deploy Complete${RESET}"
+    echo "${BOLD}═══════════════════════════════════════════════════════════${RESET}"
+    echo ""
+
+    # Tester info
+    printf "  ${BOLD}Tester:${RESET} %s" "$TESTER_LOCATION"
+    case "$TESTER_LOCATION" in
+        lan)   printf " (%s@%s)" "$LAN_TESTER_USER" "$LAN_TESTER_IP" ;;
+        azure) printf " (%s)" "${AZURE_TESTER_IP:-pending}" ;;
+        aws)   printf " (%s)" "${AWS_TESTER_IP:-pending}" ;;
+        gcp)   printf " (%s)" "${GCP_TESTER_IP:-pending}" ;;
+    esac
+    echo ""
+
+    # Endpoint info
+    local i
+    for i in $(seq 0 $((DEPLOY_ENDPOINT_COUNT - 1))); do
+        local label="${DEPLOY_EP_LABELS[$i]}"
+        local prov="${DEPLOY_EP_PROVIDERS[$i]}"
+        local ip="${DEPLOY_EP_IPS[$i]}"
+        printf "  ${BOLD}Endpoint %s:${RESET} %s (%s)\n" "$label" "$prov" "${ip:-local}"
+    done
+
+    # Results
+    if [[ $DEPLOY_RUN_TESTS -eq 1 ]]; then
+        local report_name="${DEPLOY_TEST_HTML_REPORT:-report.html}"
+        local output_dir="${DEPLOY_TEST_OUTPUT_DIR:-.}"
+        if [[ -f "${output_dir}/${report_name}" ]]; then
+            echo ""
+            printf "  ${BOLD}Report:${RESET} %s/%s\n" "$output_dir" "$report_name"
+        fi
+    fi
+
+    echo ""
+    echo "${BOLD}═══════════════════════════════════════════════════════════${RESET}"
+}
+
+# Main orchestration for deploy-config mode.
+deploy_from_config() {
+    local cfg="$1"
+
+    if ! command -v jq &>/dev/null; then
+        print_err "jq is required for --deploy mode (brew install jq / apt install jq)"
+        exit 1
+    fi
+
+    if [[ ! -f "$cfg" ]]; then
+        print_err "Deploy config not found: $cfg"
+        exit 1
+    fi
+
+    # Phase 1: Validate config structure
+    print_section "Validating deploy config"
+    _deploy_validate_config "$cfg"
+    if [[ ${DEPLOY_VALIDATE_ERRORS:-0} -gt 0 ]]; then
+        exit 1
+    fi
+    print_ok "Config is valid"
+
+    # Phase 2: Parse config into shell variables
+    _deploy_parse_config "$cfg"
+
+    # Phase 3: Pre-flight checks (tools, credentials, connectivity)
+    _deploy_preflight "$cfg"
+
+    # Phase 4: Display plan
+    _deploy_display_plan "$cfg"
+
+    # Phase 5: Deploy tester
+    if [[ "$TESTER_LOCATION" == "local" ]]; then
+        print_section "Local tester setup"
+        if [[ "$INSTALL_METHOD" == "release" ]]; then
+            mkdir -p "$INSTALL_DIR"
+            if ! step_download_release "networker-tester"; then
+                print_info "Falling back to source compile…"
+                step_ensure_cargo_env
+                step_cargo_install "networker-tester"
+            fi
+        else
+            step_ensure_cargo_env
+            step_cargo_install "networker-tester"
+        fi
+    else
+        case "$TESTER_LOCATION" in
+            lan)   step_lan_deploy_tester   ;;
+            azure) step_azure_deploy_tester ;;
+            aws)   step_aws_deploy_tester   ;;
+            gcp)   step_gcp_deploy_tester   ;;
+        esac
+    fi
+
+    # Phase 6: Deploy endpoint(s)
+    local i
+    for i in $(seq 0 $((DEPLOY_ENDPOINT_COUNT - 1))); do
+        local label="${DEPLOY_EP_LABELS[$i]}"
+        print_section "Deploy endpoint: $label"
+
+        _deploy_load_endpoint "$i"
+
+        case "${DEPLOY_EP_PROVIDERS[$i]}" in
+            local)
+                # Local endpoint: install binary + service
+                if [[ "$INSTALL_METHOD" == "release" ]]; then
+                    mkdir -p "$INSTALL_DIR"
+                    if ! step_download_release "networker-endpoint"; then
+                        step_ensure_cargo_env
+                        step_cargo_install "networker-endpoint"
+                    fi
+                else
+                    step_ensure_cargo_env
+                    step_cargo_install "networker-endpoint"
+                fi
+                if [[ "$SYS_OS" == "Linux" ]] && command -v systemctl &>/dev/null; then
+                    step_setup_endpoint_service
+                fi
+                DEPLOY_EP_IPS[$i]="127.0.0.1"
+                ;;
+            lan)
+                local os; os="$LAN_ENDPOINT_OS"
+                # Auto-detect OS if not already set
+                if [[ -z "$os" ]]; then
+                    _lan_detect_os "endpoint"
+                    os="$LAN_ENDPOINT_OS"
+                fi
+                if [[ "$os" == "windows" ]]; then
+                    _lan_install_binary_windows "networker-endpoint" "endpoint"
+                    _lan_create_endpoint_service_windows "endpoint"
+                else
+                    _lan_install_binary_linux "networker-endpoint" "endpoint"
+                    _lan_create_endpoint_service "endpoint"
+                fi
+                DEPLOY_EP_IPS[$i]="$LAN_ENDPOINT_IP"
+                ;;
+            azure)
+                step_check_azure_prereqs
+                step_azure_deploy_endpoint
+                DEPLOY_EP_IPS[$i]="$AZURE_ENDPOINT_IP"
+                ;;
+            aws)
+                step_aws_deploy_endpoint
+                DEPLOY_EP_IPS[$i]="$AWS_ENDPOINT_IP"
+                ;;
+            gcp)
+                step_gcp_deploy_endpoint
+                DEPLOY_EP_IPS[$i]="$GCP_ENDPOINT_IP"
+                ;;
+        esac
+
+        print_ok "Endpoint $label deployed: ${DEPLOY_EP_IPS[$i]}"
+    done
+
+    # Phase 7: Generate tester config from deployed IPs
+    _deploy_generate_tester_config
+
+    # Phase 8: Run tests
+    if [[ $DEPLOY_RUN_TESTS -eq 1 ]]; then
+        _deploy_execute_tests
+    fi
+
+    # Phase 9: Summary
+    _deploy_display_completion
+}
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 main() {
     parse_args "$@"
     discover_system
+
+    # Config-driven deploy mode: skip all interactive flow
+    if [[ -n "$DEPLOY_CONFIG_PATH" ]]; then
+        print_banner
+        deploy_from_config "$DEPLOY_CONFIG_PATH"
+        return $?
+    fi
 
     print_banner
     display_system_info

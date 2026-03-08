@@ -1,0 +1,38 @@
+{
+  "version": 1,
+
+  "tester": {
+    "provider": "lan",
+    "lan": {
+      "ip": "192.168.1.10",
+      "user": "testuser"
+    }
+  },
+
+  "endpoints": [
+    {
+      "label": "server-a",
+      "provider": "lan",
+      "lan": {
+        "ip": "192.168.1.20",
+        "user": "admin"
+      }
+    },
+    {
+      "label": "server-b",
+      "provider": "lan",
+      "lan": {
+        "ip": "192.168.1.30",
+        "user": "admin",
+        "port": 2222
+      }
+    }
+  ],
+
+  "tests": {
+    "modes": ["tcp", "http1", "http2"],
+    "runs": 3,
+    "insecure": true,
+    "html_report": "lan-report.html"
+  }
+}
