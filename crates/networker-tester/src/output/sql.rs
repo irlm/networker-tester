@@ -839,14 +839,16 @@ mod tests {
         .await;
         assert!(!rows.is_empty(), "attempt should exist before delete");
 
-        // ErrorRecord has FK to TestRun with ON DELETE NO ACTION, so delete
-        // error rows first to avoid FK violation.
-        c.execute(
-            &format!("DELETE FROM dbo.ErrorRecord WHERE AttemptId = '{aid}'") as &str,
-            &[],
-        )
-        .await
-        .unwrap();
+        // ErrorRecord and ServerTimingResult have FKs with ON DELETE NO ACTION,
+        // so delete them first to avoid FK violations on CASCADE.
+        for table in &["ErrorRecord", "ServerTimingResult"] {
+            c.execute(
+                &format!("DELETE FROM dbo.{table} WHERE AttemptId = '{aid}'") as &str,
+                &[],
+            )
+            .await
+            .unwrap();
+        }
 
         // Delete TestRun — should CASCADE to RequestAttempt → DnsResult, TcpResult, etc.
         c.execute(
