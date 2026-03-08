@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.98] – 2026-03-08 — GCP Windows OS choice
+
+### Added
+- **install.sh / install.ps1**: GCP deployment now prompts for OS (Ubuntu 22.04 or Windows Server 2022), matching Azure and AWS
+- GCP Windows helpers: VM wait, password reset, binary install, service creation, auto-shutdown scheduled task
+- RDP port 3389 added to GCP firewall rule in both installers
+
+---
+
 ## [0.12.97] – 2026-03-07 — Comprehensive test coverage
 
 ### Added
