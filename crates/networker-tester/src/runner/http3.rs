@@ -649,6 +649,7 @@ mod real {
             assert!(a.http.is_none());
         }
 
+        #[cfg(unix)]
         #[test]
         fn get_rusage_csw_returns_non_negative() {
             let (v, i) = get_rusage_csw();
