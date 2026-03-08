@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.97] – 2026-03-07 — Comprehensive test coverage
+
+### Added
+- **pageload.rs**: 51 integration tests covering H1/H2/H3 success, error paths, DNS, warmup+warm sequences
+- **http3.rs**: refactored `build_quic_endpoint()` and `resolve_addr()` for testability; 16 new tests
+- **sql.rs**: 6 INSERT→SELECT round-trip tests — verify all columns in every table, CASCADE DELETE, PK constraint, multi-attempt counts (run in CI via Docker SQL Server)
+- Total: 73 new tests (294 total), all passing on Ubuntu + Windows CI
+
+---
+
 ## [0.12.96] – 2026-03-07 — Cloud env credential checks (Azure, AWS, GCP)
 
 ### Added
