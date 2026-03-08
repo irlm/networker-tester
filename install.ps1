@@ -2254,7 +2254,7 @@ function Invoke-GcpSshRun ($name, $command) {
 function Invoke-GcpWaitForWindowsVm ($name, $label) {
     Write-Info "Waiting for $label Windows VM to be ready (3-5 minutes)..."
     for ($i = 0; $i -lt 40; $i++) {
-        $result = & gcloud compute ssh $name `
+        $null = & gcloud compute ssh $name `
             --project $script:GcpProject `
             --zone $script:GcpZone `
             --command "echo ready" `
