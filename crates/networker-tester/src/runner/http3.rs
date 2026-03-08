@@ -87,6 +87,52 @@ mod real {
         (u.ru_nvcsw, u.ru_nivcsw)
     }
 
+    /// Build a QUIC endpoint configured for HTTP/3 with the given TLS settings.
+    ///
+    /// Returns `(Endpoint, host, port)` on success, or an error message on failure.
+    pub fn build_quic_endpoint(
+        target: &url::Url,
+        insecure: bool,
+        ca_bundle: Option<&str>,
+    ) -> Result<(Endpoint, String, u16), String> {
+        let host = target
+            .host_str()
+            .ok_or_else(|| "No host in URL".to_string())?
+            .to_string();
+        let port = target.port().unwrap_or(443);
+
+        let mut tls_config = crate::runner::http::build_tls_config(
+            &crate::metrics::Protocol::Http1,
+            insecure,
+            ca_bundle,
+        )
+        .map_err(|e| format!("TLS config error: {e}"))?;
+        tls_config.alpn_protocols = vec![b"h3".to_vec()];
+
+        let quinn_tls = quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
+            .map_err(|e| format!("QUIC TLS config error: {e}"))?;
+
+        let mut endpoint = Endpoint::client("0.0.0.0:0".parse().unwrap())
+            .map_err(|e| format!("QUIC endpoint creation failed: {e}"))?;
+        endpoint.set_default_client_config(QuinnClientConfig::new(Arc::new(quinn_tls)));
+
+        Ok((endpoint, host, port))
+    }
+
+    /// Resolve the target address, trying direct parse first then DNS lookup.
+    async fn resolve_addr(host: &str, port: u16) -> Result<std::net::SocketAddr, String> {
+        let addr_str = format!("{host}:{port}");
+        match addr_str.parse() {
+            Ok(a) => Ok(a),
+            Err(_) => match tokio::net::lookup_host(&addr_str).await {
+                Ok(mut a) => a
+                    .next()
+                    .ok_or_else(|| format!("No addresses resolved for {host}")),
+                Err(e) => Err(format!("DNS error: {e}")),
+            },
+        }
+    }
+
     pub async fn run_http3_probe(
         run_id: Uuid,
         sequence_num: u32,
@@ -102,95 +148,17 @@ mod real {
         #[cfg(unix)]
         let (csw_v0, csw_i0) = get_rusage_csw();
 
-        let host = match target.host_str() {
-            Some(h) => h.to_string(),
-            None => {
-                return h3_failed(
-                    run_id,
-                    attempt_id,
-                    sequence_num,
-                    started_at,
-                    "No host in URL",
-                );
-            }
-        };
-        let port = target.port().unwrap_or(443);
-
-        // Build QUIC/TLS config — reuse the same build_tls_config() as HTTP/1.1 and HTTP/2
-        // so --insecure and --ca-bundle work identically across all protocols.
-        let mut tls_config = match crate::runner::http::build_tls_config(
-            &crate::metrics::Protocol::Http1,
-            insecure,
-            ca_bundle,
-        ) {
-            Ok(c) => c,
-            Err(e) => {
-                return h3_failed(
-                    run_id,
-                    attempt_id,
-                    sequence_num,
-                    started_at,
-                    &format!("TLS config error: {e}"),
-                );
-            }
-        };
-        tls_config.alpn_protocols = vec![b"h3".to_vec()];
-
-        let quinn_tls = match quinn::crypto::rustls::QuicClientConfig::try_from(tls_config) {
-            Ok(c) => QuinnClientConfig::new(Arc::new(c)),
-            Err(e) => {
-                return h3_failed(
-                    run_id,
-                    attempt_id,
-                    sequence_num,
-                    started_at,
-                    &format!("QUIC TLS config error: {e}"),
-                );
+        let (endpoint, host, port) = match build_quic_endpoint(target, insecure, ca_bundle) {
+            Ok(v) => v,
+            Err(msg) => {
+                return h3_failed(run_id, attempt_id, sequence_num, started_at, &msg);
             }
         };
 
-        let mut endpoint = match Endpoint::client("0.0.0.0:0".parse().unwrap()) {
-            Ok(e) => e,
-            Err(e) => {
-                return h3_failed(
-                    run_id,
-                    attempt_id,
-                    sequence_num,
-                    started_at,
-                    &format!("QUIC endpoint creation failed: {e}"),
-                );
-            }
-        };
-        endpoint.set_default_client_config(quinn_tls);
-
-        let addr = format!("{host}:{port}");
-        let server_addr: std::net::SocketAddr = match addr.parse() {
+        let server_addr = match resolve_addr(&host, port).await {
             Ok(a) => a,
-            Err(_) => {
-                // DNS lookup
-                match tokio::net::lookup_host(&addr).await {
-                    Ok(mut a) => match a.next() {
-                        Some(sa) => sa,
-                        None => {
-                            return h3_failed(
-                                run_id,
-                                attempt_id,
-                                sequence_num,
-                                started_at,
-                                "No address resolved",
-                            )
-                        }
-                    },
-                    Err(e) => {
-                        return h3_failed(
-                            run_id,
-                            attempt_id,
-                            sequence_num,
-                            started_at,
-                            &format!("DNS error: {e}"),
-                        )
-                    }
-                }
+            Err(msg) => {
+                return h3_failed(run_id, attempt_id, sequence_num, started_at, &msg);
             }
         };
 
@@ -406,6 +374,287 @@ mod real {
             udp_throughput: None,
             page_load: None,
             browser: None,
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn init_crypto() {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+        }
+
+        fn free_port() -> u16 {
+            std::net::TcpListener::bind("127.0.0.1:0")
+                .unwrap()
+                .local_addr()
+                .unwrap()
+                .port()
+        }
+
+        fn free_udp_port() -> u16 {
+            std::net::UdpSocket::bind("0.0.0.0:0")
+                .unwrap()
+                .local_addr()
+                .unwrap()
+                .port()
+        }
+
+        struct TestEndpoint {
+            https_port: u16,
+            _shutdown: tokio::sync::oneshot::Sender<()>,
+        }
+
+        impl TestEndpoint {
+            async fn start() -> Self {
+                init_crypto();
+                let http_port = free_port();
+                let https_port = free_port();
+                let udp_port = free_udp_port();
+                let udp_throughput_port = free_udp_port();
+                let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+                let cfg = networker_endpoint::ServerConfig {
+                    http_port,
+                    https_port,
+                    udp_port,
+                    udp_throughput_port,
+                };
+                tokio::spawn(async move {
+                    networker_endpoint::run_with_shutdown(cfg, rx).await.ok();
+                });
+                // Wait for HTTPS TCP
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                loop {
+                    if tokio::net::TcpStream::connect(format!("127.0.0.1:{https_port}"))
+                        .await
+                        .is_ok()
+                    {
+                        break;
+                    }
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "Endpoint did not start"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+                Self {
+                    https_port,
+                    _shutdown: tx,
+                }
+            }
+
+            fn https_url(&self, path: &str) -> url::Url {
+                format!("https://127.0.0.1:{}{path}", self.https_port)
+                    .parse()
+                    .unwrap()
+            }
+
+            async fn wait_for_quic(&self) {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                loop {
+                    let sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+                    sock.connect(format!("127.0.0.1:{}", self.https_port))
+                        .await
+                        .unwrap();
+                    let _ = sock.send(&[0u8]).await;
+                    let mut buf = [0u8; 64];
+                    match tokio::time::timeout(
+                        std::time::Duration::from_millis(100),
+                        sock.recv(&mut buf),
+                    )
+                    .await
+                    {
+                        Err(_timeout) => break,
+                        Ok(Ok(_)) => break,
+                        Ok(Err(e)) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
+                            // not bound yet
+                        }
+                        Ok(Err(_)) => break,
+                    }
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "QUIC server did not start"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+            }
+        }
+
+        // ── build_quic_endpoint tests ────────────────────────────────────────
+
+        #[tokio::test]
+        async fn build_quic_endpoint_success() {
+            init_crypto();
+            let url: url::Url = "https://127.0.0.1:8443/health".parse().unwrap();
+            let (ep, host, port) = build_quic_endpoint(&url, true, None).unwrap();
+            assert_eq!(host, "127.0.0.1");
+            assert_eq!(port, 8443);
+            drop(ep);
+        }
+
+        #[tokio::test]
+        async fn build_quic_endpoint_default_port() {
+            init_crypto();
+            let url: url::Url = "https://example.com/path".parse().unwrap();
+            let (_, host, port) = build_quic_endpoint(&url, true, None).unwrap();
+            assert_eq!(host, "example.com");
+            assert_eq!(port, 443);
+        }
+
+        #[test]
+        fn build_quic_endpoint_no_host() {
+            let url: url::Url = "data:text/html,x".parse().unwrap();
+            let err = build_quic_endpoint(&url, true, None).unwrap_err();
+            assert!(err.contains("No host"), "got: {err}");
+        }
+
+        #[tokio::test]
+        async fn build_quic_endpoint_bad_ca_bundle() {
+            init_crypto();
+            let url: url::Url = "https://127.0.0.1:8443/health".parse().unwrap();
+            let err = build_quic_endpoint(&url, false, Some("/nonexistent/ca.pem")).unwrap_err();
+            assert!(err.contains("TLS config error"), "got: {err}");
+        }
+
+        #[tokio::test]
+        async fn build_quic_endpoint_insecure_vs_secure() {
+            init_crypto();
+            let url: url::Url = "https://127.0.0.1:8443/".parse().unwrap();
+            assert!(build_quic_endpoint(&url, true, None).is_ok());
+            assert!(build_quic_endpoint(&url, false, None).is_ok());
+        }
+
+        // ── resolve_addr tests ───────────────────────────────────────────────
+
+        #[tokio::test]
+        async fn resolve_addr_ip_literal() {
+            let addr = resolve_addr("127.0.0.1", 8443).await.unwrap();
+            assert_eq!(addr, "127.0.0.1:8443".parse().unwrap());
+        }
+
+        #[tokio::test]
+        async fn resolve_addr_ipv6_literal() {
+            let addr = resolve_addr("::1", 443).await.unwrap();
+            assert_eq!(addr, "[::1]:443".parse().unwrap());
+        }
+
+        #[tokio::test]
+        async fn resolve_addr_hostname_localhost() {
+            let addr = resolve_addr("localhost", 9999).await.unwrap();
+            assert_eq!(addr.port(), 9999);
+            assert!(addr.ip().is_loopback());
+        }
+
+        #[tokio::test]
+        async fn resolve_addr_unresolvable() {
+            let err = resolve_addr("this-does-not-exist-xyz.invalid", 443)
+                .await
+                .unwrap_err();
+            assert!(
+                err.contains("DNS") || err.contains("resolve") || err.contains("No address"),
+                "got: {err}"
+            );
+        }
+
+        // ── Integration: full probe ──────────────────────────────────────────
+
+        #[tokio::test]
+        async fn h3_probe_success() {
+            let ep = TestEndpoint::start().await;
+            ep.wait_for_quic().await;
+            let target = ep.https_url("/health");
+            let a = run_http3_probe(Uuid::new_v4(), 0, &target, 10_000, true, None).await;
+            assert!(a.success, "H3 probe failed: {:?}", a.error);
+            assert_eq!(a.protocol, Protocol::Http3);
+            assert!(a.tls.is_some());
+            let tls = a.tls.unwrap();
+            assert_eq!(tls.alpn_negotiated.as_deref(), Some("h3"));
+            assert!(tls.handshake_duration_ms > 0.0);
+            assert!(a.http.is_some());
+            let http = a.http.unwrap();
+            assert_eq!(http.negotiated_version, "HTTP/3");
+            assert_eq!(http.status_code, 200);
+            assert!(http.ttfb_ms > 0.0);
+            assert!(http.total_duration_ms > 0.0);
+            assert!(http.body_size_bytes > 0);
+            assert!(http.cpu_time_ms.is_some());
+            #[cfg(unix)]
+            {
+                assert!(http.csw_voluntary.is_some());
+                assert!(http.csw_involuntary.is_some());
+            }
+        }
+
+        #[tokio::test]
+        async fn h3_probe_no_host() {
+            let target: url::Url = "data:text/html,hello".parse().unwrap();
+            let a = run_http3_probe(Uuid::new_v4(), 1, &target, 5_000, true, None).await;
+            assert!(!a.success);
+            assert_eq!(a.protocol, Protocol::Http3);
+            let err = a.error.unwrap();
+            assert!(err.message.contains("No host"));
+        }
+
+        #[tokio::test]
+        async fn h3_probe_unresolvable_host() {
+            init_crypto();
+            let target: url::Url = "https://this-does-not-exist-xyz.invalid:9999/health"
+                .parse()
+                .unwrap();
+            let a = run_http3_probe(Uuid::new_v4(), 2, &target, 5_000, true, None).await;
+            assert!(!a.success);
+            assert_eq!(a.protocol, Protocol::Http3);
+            let err = a.error.unwrap();
+            assert!(
+                err.message.contains("DNS") || err.message.contains("resolve"),
+                "got: {}",
+                err.message
+            );
+        }
+
+        #[tokio::test]
+        async fn h3_probe_connection_refused() {
+            init_crypto();
+            let target: url::Url = "https://127.0.0.1:1/health".parse().unwrap();
+            let a = run_http3_probe(Uuid::new_v4(), 3, &target, 3_000, true, None).await;
+            assert!(!a.success);
+            assert_eq!(a.protocol, Protocol::Http3);
+        }
+
+        #[tokio::test]
+        async fn h3_probe_records_sequence_num() {
+            init_crypto();
+            let target: url::Url = "data:text/html,x".parse().unwrap();
+            let a = run_http3_probe(Uuid::new_v4(), 42, &target, 5_000, true, None).await;
+            assert_eq!(a.sequence_num, 42);
+        }
+
+        #[tokio::test]
+        async fn h3_failed_helper_sets_fields() {
+            let run_id = Uuid::new_v4();
+            let attempt_id = Uuid::new_v4();
+            let a = h3_failed(run_id, attempt_id, 7, Utc::now(), "test error");
+            assert!(!a.success);
+            assert_eq!(a.protocol, Protocol::Http3);
+            assert_eq!(a.run_id, run_id);
+            assert_eq!(a.attempt_id, attempt_id);
+            assert_eq!(a.sequence_num, 7);
+            let err = a.error.unwrap();
+            assert_eq!(err.category, ErrorCategory::Http);
+            assert_eq!(err.message, "test error");
+            assert!(a.dns.is_none());
+            assert!(a.tcp.is_none());
+            assert!(a.tls.is_none());
+            assert!(a.http.is_none());
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn get_rusage_csw_returns_non_negative() {
+            let (v, i) = get_rusage_csw();
+            assert!(v >= 0);
+            assert!(i >= 0);
         }
     }
 }
