@@ -819,3 +819,297 @@ JSON
     [ "$(jq -r '.insecure' "$CONFIG_FILE_PATH")" = "true" ]
     [ "$(jq -r '.modes[0]' "$CONFIG_FILE_PATH")" = "http1" ]
 }
+
+@test "_deploy_generate_tester_config: uses default modes when not specified" {
+    DEPLOY_CONFIG_PATH="$TEST_TMPDIR/gen-defaults.json"
+    cat > "$DEPLOY_CONFIG_PATH" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{ "provider": "local" }]
+}
+JSON
+    _deploy_parse_config "$DEPLOY_CONFIG_PATH"
+    DEPLOY_ENDPOINT_COUNT=1
+    DEPLOY_EP_IPS=("10.0.0.1")
+    TESTER_LOCATION="local"
+
+    _deploy_generate_tester_config
+
+    jq empty "$CONFIG_FILE_PATH"
+    # Should include all 10 default modes
+    local mode_count; mode_count="$(jq '.modes | length' "$CONFIG_FILE_PATH")"
+    [ "$mode_count" -eq 10 ]
+    jq -r '.modes[]' "$CONFIG_FILE_PATH" | grep -q "tcp"
+    jq -r '.modes[]' "$CONFIG_FILE_PATH" | grep -q "pageload3"
+}
+
+@test "_deploy_generate_tester_config: includes optional fields when set" {
+    DEPLOY_CONFIG_PATH="$TEST_TMPDIR/gen-opts.json"
+    cat > "$DEPLOY_CONFIG_PATH" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{ "provider": "local" }],
+  "tests": {
+    "modes": ["http1"],
+    "runs": 3,
+    "connection_reuse": true,
+    "udp_port": 5555,
+    "page_assets": 10,
+    "page_asset_size": "50k",
+    "excel": true,
+    "output_dir": "./results",
+    "log_level": "debug",
+    "timeout": 60,
+    "retries": 2,
+    "concurrency": 4,
+    "payload_sizes": ["1m", "10m"]
+  }
+}
+JSON
+    _deploy_parse_config "$DEPLOY_CONFIG_PATH"
+    DEPLOY_ENDPOINT_COUNT=1
+    DEPLOY_EP_IPS=("10.0.0.1")
+    TESTER_LOCATION="local"
+
+    _deploy_generate_tester_config
+
+    jq empty "$CONFIG_FILE_PATH"
+    [ "$(jq -r '.connection_reuse' "$CONFIG_FILE_PATH")" = "true" ]
+    [ "$(jq -r '.udp_port' "$CONFIG_FILE_PATH")" = "5555" ]
+    [ "$(jq -r '.page_assets' "$CONFIG_FILE_PATH")" = "10" ]
+    [ "$(jq -r '.page_asset_size' "$CONFIG_FILE_PATH")" = "50k" ]
+    [ "$(jq -r '.excel' "$CONFIG_FILE_PATH")" = "true" ]
+    [ "$(jq -r '.output_dir' "$CONFIG_FILE_PATH")" = "./results" ]
+    [ "$(jq -r '.log_level' "$CONFIG_FILE_PATH")" = "debug" ]
+    [ "$(jq -r '.timeout' "$CONFIG_FILE_PATH")" = "60" ]
+    [ "$(jq -r '.retries' "$CONFIG_FILE_PATH")" = "2" ]
+    [ "$(jq -r '.concurrency' "$CONFIG_FILE_PATH")" = "4" ]
+    [ "$(jq '.payload_sizes | length' "$CONFIG_FILE_PATH")" = "2" ]
+}
+
+@test "_deploy_generate_tester_config: fails with no endpoint IPs" {
+    DEPLOY_CONFIG_PATH="$TEST_TMPDIR/gen-empty.json"
+    cat > "$DEPLOY_CONFIG_PATH" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{ "provider": "local" }]
+}
+JSON
+    _deploy_parse_config "$DEPLOY_CONFIG_PATH"
+    DEPLOY_ENDPOINT_COUNT=1
+    DEPLOY_EP_IPS=("")
+    TESTER_LOCATION="local"
+
+    run _deploy_generate_tester_config
+    [ "$status" -ne 0 ]
+}
+
+# ===========================================================================
+# 13. ask_yn: AUTO_YES behavior
+# ===========================================================================
+
+@test "ask_yn: returns 0 (yes) when AUTO_YES=1 and default=y" {
+    AUTO_YES=1
+    ask_yn "Proceed?" "y"
+    # If we get here, it returned 0 (yes)
+}
+
+@test "ask_yn: returns 1 (no) when AUTO_YES=1 and default=n" {
+    AUTO_YES=1
+    run ask_yn "Deploy another?" "n"
+    [ "$status" -eq 1 ]
+}
+
+# ===========================================================================
+# 14. step_generate_config: skips in deploy mode
+# ===========================================================================
+
+@test "step_generate_config: skips when DEPLOY_CONFIG_PATH is set" {
+    DEPLOY_CONFIG_PATH="/tmp/something.json"
+    CONFIG_FILE_PATH=""
+    step_generate_config "1.2.3.4"
+    # CONFIG_FILE_PATH should remain empty (function returned early)
+    [ -z "$CONFIG_FILE_PATH" ]
+}
+
+@test "step_generate_config: runs normally when DEPLOY_CONFIG_PATH is empty" {
+    DEPLOY_CONFIG_PATH=""
+    AZURE_EXTRA_ENDPOINT_IPS=()
+    step_generate_config "1.2.3.4"
+    # CONFIG_FILE_PATH should now be set
+    [ -n "$CONFIG_FILE_PATH" ]
+    [ -f "$CONFIG_FILE_PATH" ]
+    jq -r '.targets[0]' "$CONFIG_FILE_PATH" | grep -q "1.2.3.4"
+}
+
+# ===========================================================================
+# 15. _deploy_parse_config: AWS and GCP tester providers
+# ===========================================================================
+
+@test "_deploy_parse_config: AWS tester populates all AWS globals" {
+    local cfg="$TEST_TMPDIR/parse-aws.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": {
+    "provider": "aws",
+    "aws": { "region": "eu-west-1", "instance_name": "my-tester", "instance_type": "t3.medium" }
+  },
+  "endpoints": [{ "provider": "local" }]
+}
+JSON
+    _deploy_parse_config "$cfg"
+    [ "$TESTER_LOCATION" = "aws" ]
+    [ "$DO_REMOTE_TESTER" -eq 1 ]
+    [ "$AWS_REGION" = "eu-west-1" ]
+    [ "$AWS_TESTER_NAME" = "my-tester" ]
+    [ "$AWS_TESTER_INSTANCE_TYPE" = "t3.medium" ]
+}
+
+@test "_deploy_parse_config: GCP tester populates all GCP globals" {
+    local cfg="$TEST_TMPDIR/parse-gcp.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": {
+    "provider": "gcp",
+    "gcp": { "zone": "europe-west1-b", "project": "my-proj", "instance_name": "gcp-tester", "machine_type": "e2-medium" }
+  },
+  "endpoints": [{ "provider": "local" }]
+}
+JSON
+    _deploy_parse_config "$cfg"
+    [ "$TESTER_LOCATION" = "gcp" ]
+    [ "$DO_REMOTE_TESTER" -eq 1 ]
+    [ "$GCP_ZONE" = "europe-west1-b" ]
+    [ "$GCP_PROJECT" = "my-proj" ]
+    [ "$GCP_TESTER_NAME" = "gcp-tester" ]
+    [ "$GCP_TESTER_MACHINE_TYPE" = "e2-medium" ]
+}
+
+@test "_deploy_parse_config: auto_shutdown=false sets shutdown to no" {
+    local cfg="$TEST_TMPDIR/parse-no-shutdown.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": {
+    "provider": "azure",
+    "azure": { "auto_shutdown": false }
+  },
+  "endpoints": [{ "provider": "local" }]
+}
+JSON
+    _deploy_parse_config "$cfg"
+    [ "$AZURE_AUTO_SHUTDOWN" = "no" ]
+}
+
+# ===========================================================================
+# 16. _deploy_load_endpoint: AWS and GCP
+# ===========================================================================
+
+@test "_deploy_load_endpoint: loads AWS endpoint globals" {
+    local cfg="$TEST_TMPDIR/load-ep-aws.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [
+    { "provider": "aws", "aws": { "region": "ap-southeast-1", "instance_type": "t3.micro", "instance_name": "ep-sg" } }
+  ]
+}
+JSON
+    DEPLOY_CONFIG_PATH="$cfg"
+    _deploy_parse_config "$cfg"
+    _deploy_load_endpoint 0
+    [ "$ENDPOINT_LOCATION" = "aws" ]
+    [ "$AWS_REGION" = "ap-southeast-1" ]
+    [ "$AWS_ENDPOINT_INSTANCE_TYPE" = "t3.micro" ]
+    [ "$AWS_ENDPOINT_NAME" = "ep-sg" ]
+}
+
+@test "_deploy_load_endpoint: loads GCP endpoint globals" {
+    local cfg="$TEST_TMPDIR/load-ep-gcp.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [
+    { "provider": "gcp", "gcp": { "zone": "asia-east1-a", "machine_type": "e2-micro", "project": "proj-x" } }
+  ]
+}
+JSON
+    DEPLOY_CONFIG_PATH="$cfg"
+    _deploy_parse_config "$cfg"
+    _deploy_load_endpoint 0
+    [ "$ENDPOINT_LOCATION" = "gcp" ]
+    [ "$GCP_ZONE" = "asia-east1-a" ]
+    [ "$GCP_ENDPOINT_MACHINE_TYPE" = "e2-micro" ]
+    [ "$GCP_PROJECT" = "proj-x" ]
+}
+
+@test "_deploy_load_endpoint: local endpoint sets DO_REMOTE_ENDPOINT=0" {
+    local cfg="$TEST_TMPDIR/load-ep-local.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{ "provider": "local" }]
+}
+JSON
+    DEPLOY_CONFIG_PATH="$cfg"
+    _deploy_parse_config "$cfg"
+    _deploy_load_endpoint 0
+    [ "$ENDPOINT_LOCATION" = "local" ]
+    [ "$DO_REMOTE_ENDPOINT" -eq 0 ]
+}
+
+# ===========================================================================
+# 17. _deploy_validate_config: endpoint-level LAN ip check
+# ===========================================================================
+
+@test "_deploy_validate_config: rejects endpoint LAN without ip" {
+    local cfg="$TEST_TMPDIR/ep-lan-no-ip.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{ "provider": "lan", "lan": { "user": "admin" } }]
+}
+JSON
+    _deploy_validate_config "$cfg"
+    [ "$DEPLOY_VALIDATE_ERRORS" -gt 0 ]
+}
+
+@test "_deploy_validate_config: rejects unsupported version" {
+    local cfg="$TEST_TMPDIR/bad-ver.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 99,
+  "tester": { "provider": "local" },
+  "endpoints": [{ "provider": "local" }]
+}
+JSON
+    _deploy_validate_config "$cfg"
+    [ "$DEPLOY_VALIDATE_ERRORS" -gt 0 ]
+}
+
+@test "_deploy_validate_config: accepts all valid test modes" {
+    local cfg="$TEST_TMPDIR/all-modes.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{ "provider": "local" }],
+  "tests": {
+    "modes": ["tcp", "http1", "http2", "http3", "udp", "download", "upload",
+              "webdownload", "webupload", "udpdownload", "udpupload",
+              "pageload", "pageload2", "pageload3"]
+  }
+}
+JSON
+    _deploy_validate_config "$cfg"
+    [ "$DEPLOY_VALIDATE_ERRORS" -eq 0 ]
+}
