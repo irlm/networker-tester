@@ -2873,7 +2873,7 @@ mod tests {
         assert!(a.tcp.is_some());
         let pl = a.page_load.unwrap();
         assert!(pl.tls_setup_ms > 0.0);
-        assert!(pl.per_connection_tls_ms.len() >= 1);
+        assert!(!pl.per_connection_tls_ms.is_empty());
     }
 
     #[tokio::test]
