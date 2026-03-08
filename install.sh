@@ -1329,6 +1329,18 @@ ask_gcp_options() {
     esac
     echo ""
 
+    # OS choice
+    echo "  Operating System:"
+    echo "    1) Ubuntu 22.04 LTS  (Linux)    [default]"
+    echo "    2) Windows Server 2022"
+    echo ""
+    printf "  Choice [1]: "
+    local os_ans; read -r os_ans </dev/tty || true
+    os_ans="${os_ans:-1}"
+    local chosen_os="linux"
+    [[ "$os_ans" == "2" ]] && chosen_os="windows"
+    echo ""
+
     # Auto-shutdown policy (ask once across all GCP instances)
     if [[ $GCP_SHUTDOWN_ASKED -eq 0 ]]; then
         GCP_SHUTDOWN_ASKED=1
@@ -1358,14 +1370,16 @@ ask_gcp_options() {
         local name_ans; read -r name_ans </dev/tty || true
         GCP_TESTER_NAME="${name_ans:-$suggested}"
         GCP_TESTER_MACHINE_TYPE="$chosen_type"
-        print_ok "Type: $GCP_TESTER_MACHINE_TYPE  |  Name: $GCP_TESTER_NAME  |  Zone: $GCP_ZONE"
+        GCP_TESTER_OS="$chosen_os"
+        print_ok "OS: $chosen_os  |  Type: $GCP_TESTER_MACHINE_TYPE  |  Name: $GCP_TESTER_NAME  |  Zone: $GCP_ZONE"
     else
         local suggested="networker-endpoint-${region_tag}"
         printf "  Instance name [%s]: " "$suggested"
         local name_ans; read -r name_ans </dev/tty || true
         GCP_ENDPOINT_NAME="${name_ans:-$suggested}"
         GCP_ENDPOINT_MACHINE_TYPE="$chosen_type"
-        print_ok "Type: $GCP_ENDPOINT_MACHINE_TYPE  |  Name: $GCP_ENDPOINT_NAME  |  Zone: $GCP_ZONE"
+        GCP_ENDPOINT_OS="$chosen_os"
+        print_ok "OS: $chosen_os  |  Type: $GCP_ENDPOINT_MACHINE_TYPE  |  Name: $GCP_ENDPOINT_NAME  |  Zone: $GCP_ZONE"
     fi
     echo ""
 }
@@ -3810,11 +3824,11 @@ _gcp_create_firewall_rule() {
         --priority=1000 \
         --network=default \
         --action=ALLOW \
-        --rules=tcp:22,tcp:80,tcp:443,tcp:8080,tcp:8443,udp:8443,udp:9998,udp:9999 \
+        --rules=tcp:22,tcp:80,tcp:443,tcp:3389,tcp:8080,tcp:8443,udp:8443,udp:9998,udp:9999 \
         --source-ranges=0.0.0.0/0 \
         --target-tags=networker-endpoint \
         --quiet
-    print_ok "Firewall rule created: TCP 22/80/443/8080/8443, UDP 8443/9998/9999"
+    print_ok "Firewall rule created: TCP 22/80/443/3389/8080/8443, UDP 8443/9998/9999"
 }
 
 # Create a GCE instance.
@@ -3884,7 +3898,23 @@ _gcp_create_instance() {
     local tags_opt=""
     [[ "$label" == "endpoint" ]] && tags_opt="--tags=networker-endpoint"
 
-    print_info "Creating Ubuntu 22.04 VM '$name' ($machine_type)…"
+    # Determine OS image
+    local os_type="linux"
+    [[ "$label" == "tester" ]]   && os_type="$GCP_TESTER_OS"
+    [[ "$label" == "endpoint" ]] && os_type="$GCP_ENDPOINT_OS"
+
+    local image_family image_project os_label
+    if [[ "$os_type" == "windows" ]]; then
+        image_family="windows-2022"
+        image_project="windows-cloud"
+        os_label="Windows Server 2022"
+    else
+        image_family="ubuntu-2204-lts"
+        image_project="ubuntu-os-cloud"
+        os_label="Ubuntu 22.04"
+    fi
+
+    print_info "Creating $os_label VM '$name' ($machine_type)…"
     print_dim "This typically takes 1–2 minutes…"
     echo ""
 
@@ -3892,8 +3922,8 @@ _gcp_create_instance() {
         --project "$GCP_PROJECT" \
         --zone "$GCP_ZONE" \
         --machine-type "$machine_type" \
-        --image-family ubuntu-2204-lts \
-        --image-project ubuntu-os-cloud \
+        --image-family "$image_family" \
+        --image-project "$image_project" \
         $tags_opt \
         --quiet
 
@@ -4050,6 +4080,173 @@ UNIT
     print_ok "iptables port redirects configured (80→8080, 443→8443)"
 }
 
+# ── GCP Windows VM helpers ────────────────────────────────────────────────────
+
+# Wait for a Windows GCE VM to become responsive via gcloud compute ssh.
+# GCE Windows Server 2022 images include OpenSSH; it takes 3–5 min after boot.
+_gcp_wait_for_windows_vm() {
+    local name="$1" label="${2:-VM}"
+    print_info "Waiting for $label Windows VM to be ready (this may take 3–5 minutes)…"
+    local attempt=0
+    while true; do
+        if gcloud compute ssh "$name" \
+                --project "$GCP_PROJECT" \
+                --zone "$GCP_ZONE" \
+                --command "echo ready" \
+                --quiet \
+                --ssh-flag="-o ConnectTimeout=10" \
+                --ssh-flag="-o StrictHostKeyChecking=no" \
+                &>/dev/null 2>&1; then
+            echo ""
+            print_ok "Windows VM ready (SSH available)"
+            return 0
+        fi
+        attempt=$((attempt + 1))
+        if [[ $attempt -gt 40 ]]; then
+            echo ""
+            print_warn "Windows VM not responding via SSH after ~7 minutes."
+            print_info "Try: gcloud compute reset-windows-password $name --zone $GCP_ZONE"
+            return 1
+        fi
+        printf "."
+        sleep 10
+    done
+}
+
+# Retrieve Windows credentials via gcloud compute reset-windows-password.
+_gcp_reset_windows_password() {
+    local name="$1" label="${2:-VM}"
+    print_info "Setting Windows password for $label…"
+    local creds
+    creds="$(gcloud compute reset-windows-password "$name" \
+        --project "$GCP_PROJECT" \
+        --zone "$GCP_ZONE" \
+        --user networker \
+        --quiet 2>&1)" || true
+
+    local win_ip win_user win_pass
+    win_ip="$(echo "$creds" | grep '^ip_address:' | awk '{print $2}')"
+    win_user="$(echo "$creds" | grep '^username:' | awk '{print $2}')"
+    win_pass="$(echo "$creds" | grep '^password:' | awk '{print $2}')"
+
+    if [[ -z "$win_pass" ]]; then
+        print_warn "Could not retrieve Windows password automatically."
+        print_info "Run manually: gcloud compute reset-windows-password $name --zone $GCP_ZONE"
+        return 0
+    fi
+
+    echo ""
+    print_info "Windows credentials for $label:"
+    echo "    User:     $win_user"
+    echo "    Password: $win_pass"
+    echo "    RDP:      mstsc /v:${win_ip}"
+    echo ""
+}
+
+# Install a binary on a Windows GCE VM via gcloud compute ssh (PowerShell).
+_gcp_win_install_binary() {
+    local binary="$1" name="$2"
+    local archive="${binary}-x86_64-pc-windows-msvc.zip"
+    local ver="${NETWORKER_VERSION:-latest}"
+    local url="${REPO_HTTPS}/releases/download/${ver}/${archive}"
+
+    next_step "Install ${binary}.exe on GCE Windows VM"
+
+    # Check release has Windows binary
+    local has_assets
+    has_assets="$(gh release view --repo "$REPO_GH" "$ver" --json assets \
+                  -q '[.assets[].name] | join(" ")' 2>/dev/null || echo "")"
+    if ! printf '%s' "$has_assets" | grep -q "${binary}-.*windows"; then
+        print_warn "Release ${ver} has no Windows binary for ${binary}."
+        print_info "Falling back to source build on the VM…"
+        _gcp_win_source_build "$binary" "$name"
+        return $?
+    fi
+
+    print_info "Installing ${binary}.exe on Windows VM via PowerShell…"
+    gcloud compute ssh "$name" \
+        --project "$GCP_PROJECT" \
+        --zone "$GCP_ZONE" \
+        --quiet \
+        --ssh-flag="-o StrictHostKeyChecking=no" \
+        --command "powershell -Command \"\$ErrorActionPreference='Stop'; \
+            New-Item -ItemType Directory -Force -Path C:\\networker-tmp | Out-Null; \
+            New-Item -ItemType Directory -Force -Path C:\\networker | Out-Null; \
+            Invoke-WebRequest -Uri '${url}' -OutFile 'C:\\networker-tmp\\${archive}' -UseBasicParsing; \
+            Expand-Archive -Path 'C:\\networker-tmp\\${archive}' -DestinationPath 'C:\\networker' -Force; \
+            Remove-Item -Recurse -Force C:\\networker-tmp; \
+            \\\$mp=[System.Environment]::GetEnvironmentVariable('Path','Machine'); \
+            if(\\\$mp -notlike '*C:\\networker*'){[System.Environment]::SetEnvironmentVariable('Path',\\\"\\\$mp;C:\\networker\\\",'Machine')}; \
+            & 'C:\\networker\\${binary}.exe' --version\"" < /dev/null
+
+    print_ok "${binary}.exe installed on GCE Windows VM"
+}
+
+# Fallback: build from source on Windows GCE VM (when no pre-built binary available).
+_gcp_win_source_build() {
+    local binary="$1" name="$2"
+    print_info "Building $binary from source on Windows VM (this may take several minutes)…"
+    gcloud compute ssh "$name" \
+        --project "$GCP_PROJECT" \
+        --zone "$GCP_ZONE" \
+        --quiet \
+        --ssh-flag="-o StrictHostKeyChecking=no" \
+        --command "powershell -Command \"\$ErrorActionPreference='Stop'; \
+            Invoke-WebRequest -Uri 'https://win.rustup.rs/x86_64' -OutFile C:\\rustup-init.exe -UseBasicParsing; \
+            & C:\\rustup-init.exe -y --default-toolchain stable 2>&1 | Select-Object -Last 3; \
+            \\\$env:Path = [System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User'); \
+            cargo install --git ${REPO_HTTPS} ${binary} 2>&1 | Select-Object -Last 5; \
+            New-Item -ItemType Directory -Force -Path C:\\networker | Out-Null; \
+            Copy-Item \\\"\\\$env:USERPROFILE\\.cargo\\bin\\${binary}.exe\\\" C:\\networker\\${binary}.exe -Force; \
+            & 'C:\\networker\\${binary}.exe' --version\"" < /dev/null || {
+        print_warn "Source build may have failed — check the VM manually"
+        return 1
+    }
+    print_ok "${binary}.exe built and installed on GCE Windows VM"
+}
+
+# Create a Windows Service for networker-endpoint on a GCE Windows VM.
+_gcp_win_create_endpoint_service() {
+    local name="$1"
+    next_step "Create networker-endpoint Windows service (GCP)"
+    print_info "Creating Windows Service and opening firewall ports…"
+    gcloud compute ssh "$name" \
+        --project "$GCP_PROJECT" \
+        --zone "$GCP_ZONE" \
+        --quiet \
+        --ssh-flag="-o StrictHostKeyChecking=no" \
+        --command "powershell -Command \"\$ErrorActionPreference='Continue'; \
+            sc.exe create networker-endpoint binPath='C:\\networker\\networker-endpoint.exe' start=auto; \
+            sc.exe description networker-endpoint 'Networker Endpoint diagnostics server'; \
+            sc.exe start networker-endpoint; \
+            netsh advfirewall firewall add rule name='Networker-HTTP'  protocol=TCP dir=in action=allow localport=8080; \
+            netsh advfirewall firewall add rule name='Networker-HTTPS' protocol=TCP dir=in action=allow localport=8443; \
+            netsh advfirewall firewall add rule name='Networker-UDP'   protocol=UDP dir=in action=allow localport='8443,9998,9999'\"" < /dev/null
+
+    print_ok "networker-endpoint service created on GCE Windows VM"
+}
+
+# Set auto-shutdown via Windows scheduled task on a GCE instance.
+_gcp_win_set_auto_shutdown() {
+    local name="$1" label="${2:-instance}"
+    [[ "$GCP_AUTO_SHUTDOWN" != "yes" ]] && return 0
+
+    next_step "Set auto-shutdown for $label (04:00 UTC)"
+    gcloud compute ssh "$name" \
+        --project "$GCP_PROJECT" \
+        --zone "$GCP_ZONE" \
+        --quiet \
+        --ssh-flag="-o StrictHostKeyChecking=no" \
+        --command "powershell -Command \"\
+            \\\$action = New-ScheduledTaskAction -Execute 'shutdown.exe' -Argument '/s /t 60 /f'; \
+            \\\$trigger = New-ScheduledTaskTrigger -Daily -At '04:00'; \
+            Register-ScheduledTask -TaskName 'NetworkerAutoShutdown' -Action \\\$action -Trigger \\\$trigger -User 'SYSTEM' -RunLevel Highest -Force\"" < /dev/null || {
+        print_warn "Could not install auto-shutdown task (non-critical)"
+        return 0
+    }
+    print_ok "Auto-shutdown task installed: 04:00 UTC daily"
+}
+
 # Verify endpoint health on a GCE instance.
 _gcp_verify_health() {
     local name="$1" ip="$2"
@@ -4083,11 +4280,22 @@ _gcp_set_auto_shutdown() {
 step_gcp_deploy_tester() {
     step_check_gcp_prereqs
     _gcp_create_instance "tester" "$GCP_TESTER_NAME" "$GCP_TESTER_MACHINE_TYPE" "GCP_TESTER_IP"
-    _gcp_wait_for_ssh "$GCP_TESTER_NAME" "tester instance"
-    _gcp_set_auto_shutdown "$GCP_TESTER_NAME" "tester instance"
-    _gcp_install_binary "networker-tester" "$GCP_TESTER_NAME"
-    echo ""
-    print_info "To connect:  gcloud compute ssh $GCP_TESTER_NAME --zone $GCP_ZONE"
+
+    if [[ "$GCP_TESTER_OS" == "windows" ]]; then
+        _gcp_wait_for_windows_vm "$GCP_TESTER_NAME" "tester instance"
+        _gcp_reset_windows_password "$GCP_TESTER_NAME" "tester"
+        _gcp_win_set_auto_shutdown "$GCP_TESTER_NAME" "tester instance"
+        _gcp_win_install_binary "networker-tester" "$GCP_TESTER_NAME"
+        echo ""
+        print_info "To connect via RDP:  mstsc /v:${GCP_TESTER_IP}"
+        print_info "Or SSH:  gcloud compute ssh $GCP_TESTER_NAME --zone $GCP_ZONE"
+    else
+        _gcp_wait_for_ssh "$GCP_TESTER_NAME" "tester instance"
+        _gcp_set_auto_shutdown "$GCP_TESTER_NAME" "tester instance"
+        _gcp_install_binary "networker-tester" "$GCP_TESTER_NAME"
+        echo ""
+        print_info "To connect:  gcloud compute ssh $GCP_TESTER_NAME --zone $GCP_ZONE"
+    fi
 }
 
 step_gcp_deploy_endpoint() {
@@ -4098,11 +4306,21 @@ step_gcp_deploy_endpoint() {
 
     _gcp_create_firewall_rule
     _gcp_create_instance "endpoint" "$GCP_ENDPOINT_NAME" "$GCP_ENDPOINT_MACHINE_TYPE" "GCP_ENDPOINT_IP"
-    _gcp_wait_for_ssh "$GCP_ENDPOINT_NAME" "endpoint instance"
-    _gcp_set_auto_shutdown "$GCP_ENDPOINT_NAME" "endpoint instance"
-    _gcp_install_binary "networker-endpoint" "$GCP_ENDPOINT_NAME"
-    _gcp_create_endpoint_service "$GCP_ENDPOINT_NAME"
-    _gcp_verify_health "$GCP_ENDPOINT_NAME" "$GCP_ENDPOINT_IP"
+
+    if [[ "$GCP_ENDPOINT_OS" == "windows" ]]; then
+        _gcp_wait_for_windows_vm "$GCP_ENDPOINT_NAME" "endpoint instance"
+        _gcp_reset_windows_password "$GCP_ENDPOINT_NAME" "endpoint"
+        _gcp_win_set_auto_shutdown "$GCP_ENDPOINT_NAME" "endpoint instance"
+        _gcp_win_install_binary "networker-endpoint" "$GCP_ENDPOINT_NAME"
+        _gcp_win_create_endpoint_service "$GCP_ENDPOINT_NAME"
+        _gcp_verify_health "$GCP_ENDPOINT_NAME" "$GCP_ENDPOINT_IP"
+    else
+        _gcp_wait_for_ssh "$GCP_ENDPOINT_NAME" "endpoint instance"
+        _gcp_set_auto_shutdown "$GCP_ENDPOINT_NAME" "endpoint instance"
+        _gcp_install_binary "networker-endpoint" "$GCP_ENDPOINT_NAME"
+        _gcp_create_endpoint_service "$GCP_ENDPOINT_NAME"
+        _gcp_verify_health "$GCP_ENDPOINT_NAME" "$GCP_ENDPOINT_IP"
+    fi
     step_generate_config "$GCP_ENDPOINT_IP"
 }
 
