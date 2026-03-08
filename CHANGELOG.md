@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.99] – 2026-03-08 — LAN deployment via SSH
+
+### Added
+- **install.sh / install.ps1**: New "LAN / existing machine (SSH)" deployment option alongside Azure/AWS/GCP
+- SSH pre-flight test with detailed troubleshooting help on failure
+- Auto-detect remote OS (Linux/macOS/Windows) via SSH
+- Install to `~/.local/bin/` when passwordless sudo is unavailable
+- Endpoint runs as nohup background process when systemd requires sudo
+- Non-standard SSH port support (`--lan-port`)
+- CLI flags: `--lan`, `--tester-lan`, `--lan-ip`, `--lan-user`, `--lan-port`, etc.
+
+---
+
 ## [0.12.98] – 2026-03-08 — GCP Windows OS choice
 
 ### Added
