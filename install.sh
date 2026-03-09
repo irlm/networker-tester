@@ -3213,6 +3213,10 @@ step_setup_endpoint_service() {
     # The cargo install dir (~/.cargo/bin) may not be traversable by system users
     # whose home dir is restricted (Ubuntu 22.04 default: drwx------).
     if [[ "$binary_path" != "/usr/local/bin/networker-endpoint" && -x "$binary_path" ]]; then
+        # Stop the service first if running — can't overwrite a running binary ("Text file busy")
+        if systemctl is-active networker-endpoint &>/dev/null; then
+            sudo systemctl stop networker-endpoint
+        fi
         sudo cp "$binary_path" /usr/local/bin/networker-endpoint
         sudo chmod 755 /usr/local/bin/networker-endpoint
         binary_path="/usr/local/bin/networker-endpoint"
