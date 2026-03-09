@@ -93,6 +93,19 @@ pub fn find_chrome() -> Option<PathBuf> {
 // URL rewriting helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Compute per-asset byte size for browser probes.
+///
+/// Browser probes use `/browser-page?assets=N&bytes=B` where all N assets are
+/// the same size B. When presets provide varied sizes, we use the average so
+/// that the total page weight matches the preset target.
+fn browser_asset_bytes(asset_sizes: &[usize]) -> usize {
+    if asset_sizes.is_empty() {
+        return 0;
+    }
+    let total: usize = asset_sizes.iter().sum();
+    total / asset_sizes.len()
+}
+
 /// Rewrite the base URL to the `/browser-page` endpoint.
 ///
 /// `/browser-page` returns an actual HTML page with `<img>` tags so that Chrome
@@ -101,14 +114,15 @@ pub fn find_chrome() -> Option<PathBuf> {
 /// synthetic pageload probes — a real browser would just display it as text.)
 ///
 /// Adds `assets=N&bytes=S` query params derived from the provided asset sizes.
-/// If `asset_sizes` is empty the endpoint uses its own defaults (20 assets, 10 KiB).
+/// Uses average asset size so total page weight matches the preset target.
+/// If `asset_sizes` is empty the endpoint uses its own server-side defaults.
 pub fn build_page_url(base: &url::Url, asset_sizes: &[usize]) -> String {
     let mut target = base.clone();
     target.set_path("/browser-page");
 
     if !asset_sizes.is_empty() {
         let n = asset_sizes.len();
-        let bytes = asset_sizes[0];
+        let bytes = browser_asset_bytes(asset_sizes);
         target.set_query(Some(&format!("assets={n}&bytes={bytes}")));
     }
 
@@ -122,7 +136,7 @@ pub fn build_page_url(base: &url::Url, asset_sizes: &[usize]) -> String {
 ///
 /// Port derivation: 8443 → 8080 (endpoint convention); 443 / no port → 80
 /// (HTTP default, omitted from the URL).  Any other explicit port is kept as-is.
-pub fn build_browser1_url(base: &url::Url, asset_sizes: &[usize]) -> String {
+pub fn build_browser_http1_url(base: &url::Url, asset_sizes: &[usize]) -> String {
     let mut target = base.clone();
     let _ = target.set_scheme("http");
     // Derive plain HTTP port from the HTTPS port.
@@ -135,7 +149,7 @@ pub fn build_browser1_url(base: &url::Url, asset_sizes: &[usize]) -> String {
     target.set_path("/browser-page");
     if !asset_sizes.is_empty() {
         let n = asset_sizes.len();
-        let bytes = asset_sizes[0];
+        let bytes = browser_asset_bytes(asset_sizes);
         target.set_query(Some(&format!("assets={n}&bytes={bytes}")));
     }
     target.to_string()
@@ -152,14 +166,14 @@ pub fn build_browser1_url(base: &url::Url, asset_sizes: &[usize]) -> String {
 /// This avoids the hostname-mismatch that would block QUIC even when the cert
 /// is trusted via SPKI pin: Chrome's QUIC TLS path is stricter about SAN
 /// matching than the regular TCP/TLS path.
-pub fn build_browser3_url(base: &url::Url, asset_sizes: &[usize]) -> String {
+pub fn build_browser_http3_url(base: &url::Url, asset_sizes: &[usize]) -> String {
     let mut target = base.clone();
     // Keep https:// scheme and port; just swap the host to localhost.
     let _ = target.set_host(Some("localhost"));
     target.set_path("/browser-page");
     if !asset_sizes.is_empty() {
         let n = asset_sizes.len();
-        let bytes = asset_sizes[0];
+        let bytes = browser_asset_bytes(asset_sizes);
         target.set_query(Some(&format!("assets={n}&bytes={bytes}")));
     }
     target.to_string()
@@ -171,7 +185,7 @@ pub fn build_browser3_url(base: &url::Url, asset_sizes: &[usize]) -> String {
 
 #[cfg(feature = "browser")]
 mod real {
-    use super::{build_browser1_url, build_page_url, find_chrome};
+    use super::{build_browser_http1_url, build_page_url, find_chrome};
     use crate::metrics::{BrowserResult, ErrorCategory, ErrorRecord, Protocol, RequestAttempt};
     use chromiumoxide::browser::{Browser, BrowserConfig};
     use chromiumoxide::cdp::browser_protocol::network::EventResponseReceived;
@@ -242,7 +256,7 @@ mod real {
         // browser1 uses plain HTTP so Chrome has no ALPN to negotiate H2/H3.
         // browser2/3 use the same HTTPS URL; protocol is forced via Chrome flags.
         let page_url = if matches!(protocol, Protocol::Browser1) {
-            build_browser1_url(base_url, asset_sizes)
+            build_browser_http1_url(base_url, asset_sizes)
         } else {
             build_page_url(base_url, asset_sizes)
         };
@@ -1183,12 +1197,12 @@ mod tests {
         assert_eq!(attempt.protocol, crate::metrics::Protocol::Browser);
     }
 
-    // ── build_browser3_url tests ──────────────────────────────────────────────
+    // ── build_browser_http3_url tests ──────────────────────────────────────────────
 
     #[test]
-    fn build_browser3_url_rewrites_host_to_localhost() {
+    fn build_browser_http3_url_rewrites_host_to_localhost() {
         let base = url::Url::parse("https://172.16.32.106:8443/health").unwrap();
-        let url = build_browser3_url(&base, &[]);
+        let url = build_browser_http3_url(&base, &[]);
         assert!(
             url.starts_with("https://localhost:8443/browser-page"),
             "url={url}"
@@ -1196,9 +1210,9 @@ mod tests {
     }
 
     #[test]
-    fn build_browser3_url_keeps_https_and_port() {
+    fn build_browser_http3_url_keeps_https_and_port() {
         let base = url::Url::parse("https://192.168.1.1:9443/some/path").unwrap();
-        let url = build_browser3_url(&base, &[]);
+        let url = build_browser_http3_url(&base, &[]);
         assert!(
             url.starts_with("https://localhost:9443/browser-page"),
             "url={url}"
@@ -1206,27 +1220,27 @@ mod tests {
     }
 
     #[test]
-    fn build_browser3_url_includes_asset_params() {
+    fn build_browser_http3_url_includes_asset_params() {
         let base = url::Url::parse("https://10.0.0.1:8443/health").unwrap();
-        let url = build_browser3_url(&base, &[8192, 8192]);
+        let url = build_browser_http3_url(&base, &[8192, 8192]);
         assert!(url.contains("assets=2"), "url={url}");
         assert!(url.contains("bytes=8192"), "url={url}");
     }
 
     #[test]
-    fn build_browser3_url_no_query_when_no_assets() {
+    fn build_browser_http3_url_no_query_when_no_assets() {
         let base = url::Url::parse("https://10.0.0.1:8443/health").unwrap();
-        let url = build_browser3_url(&base, &[]);
+        let url = build_browser_http3_url(&base, &[]);
         assert!(!url.contains("assets="), "url={url}");
         assert!(!url.contains("bytes="), "url={url}");
     }
 
-    // ── build_browser1_url tests ──────────────────────────────────────────────
+    // ── build_browser_http1_url tests ──────────────────────────────────────────────
 
     #[test]
-    fn build_browser1_url_switches_to_http_and_maps_8443() {
+    fn build_browser_http1_url_switches_to_http_and_maps_8443() {
         let base = url::Url::parse("https://host:8443/health").unwrap();
-        let url = build_browser1_url(&base, &[]);
+        let url = build_browser_http1_url(&base, &[]);
         assert!(
             url.starts_with("http://host:8080/browser-page"),
             "url={url}"
@@ -1234,9 +1248,9 @@ mod tests {
     }
 
     #[test]
-    fn build_browser1_url_standard_https_port_omits_port() {
+    fn build_browser_http1_url_standard_https_port_omits_port() {
         let base = url::Url::parse("https://example.com/health").unwrap();
-        let url = build_browser1_url(&base, &[]);
+        let url = build_browser_http1_url(&base, &[]);
         // Port 80 is default for http — url::Url omits it.
         assert!(
             url.starts_with("http://example.com/browser-page"),
@@ -1249,9 +1263,9 @@ mod tests {
     }
 
     #[test]
-    fn build_browser1_url_non_standard_port_preserved() {
+    fn build_browser_http1_url_non_standard_port_preserved() {
         let base = url::Url::parse("https://host:9443/health").unwrap();
-        let url = build_browser1_url(&base, &[]);
+        let url = build_browser_http1_url(&base, &[]);
         assert!(
             url.starts_with("http://host:9443/browser-page"),
             "url={url}"
@@ -1259,10 +1273,53 @@ mod tests {
     }
 
     #[test]
-    fn build_browser1_url_includes_asset_params() {
+    fn build_browser_http1_url_includes_asset_params() {
         let base = url::Url::parse("https://host:8443/health").unwrap();
-        let url = build_browser1_url(&base, &[4096, 4096, 4096]);
+        let url = build_browser_http1_url(&base, &[4096, 4096, 4096]);
         assert!(url.contains("assets=3"), "url={url}");
         assert!(url.contains("bytes=4096"), "url={url}");
+    }
+
+    // ── browser_asset_bytes tests ────────────────────────────────────────────
+
+    #[test]
+    fn browser_asset_bytes_uniform() {
+        assert_eq!(
+            super::browser_asset_bytes(&[10_240, 10_240, 10_240]),
+            10_240
+        );
+    }
+
+    #[test]
+    fn browser_asset_bytes_varied_uses_average() {
+        // Simulates a preset with varied sizes — average preserves total weight.
+        let sizes = vec![1_024, 5_120, 51_200, 153_600];
+        let avg = super::browser_asset_bytes(&sizes);
+        let total_original: usize = sizes.iter().sum();
+        let total_avg = avg * sizes.len();
+        // Average-based total should be close to original (integer division rounding)
+        assert!(
+            (total_original as i64 - total_avg as i64).unsigned_abs() < sizes.len() as u64,
+            "avg={avg}, total_original={total_original}, total_avg={total_avg}"
+        );
+    }
+
+    #[test]
+    fn browser_asset_bytes_empty() {
+        assert_eq!(super::browser_asset_bytes(&[]), 0);
+    }
+
+    #[test]
+    fn build_page_url_varied_sizes_uses_average() {
+        let base = url::Url::parse("https://host:8443/health").unwrap();
+        // 4 assets: 1KB, 5KB, 50KB, 150KB → avg = ~51.5KB
+        let sizes = vec![1_024, 5_120, 51_200, 153_600];
+        let url = build_page_url(&base, &sizes);
+        assert!(url.contains("assets=4"), "url={url}");
+        let avg = (1_024 + 5_120 + 51_200 + 153_600) / 4;
+        assert!(
+            url.contains(&format!("bytes={avg}")),
+            "expected bytes={avg}, url={url}"
+        );
     }
 }

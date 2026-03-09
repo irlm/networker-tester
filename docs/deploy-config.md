@@ -139,9 +139,9 @@ All fields are optional. If `tests` is omitted entirely, defaults are used.
 | `connection_reuse` | boolean | `false` | Reuse connections (warm probes) |
 | `udp_port` | number | `9999` | UDP echo port |
 | `udp_throughput_port` | number | `9998` | UDP throughput port |
-| `page_assets` | number | `20` | Number of assets for pageload |
-| `page_asset_size` | string | `"10k"` | Size of each page asset |
-| `page_preset` | string | — | Page preset name |
+| `page_assets` | number | `50` | Number of assets for pageload |
+| `page_asset_size` | string | `"50k"` | Size of each page asset |
+| `page_preset` | string | — | Page preset name (see below) |
 | `retries` | number | `0` | Retry failed probes |
 | `html_report` | string | `"report.html"` | HTML report filename |
 | `output_dir` | string | `"."` | Output directory for reports |
@@ -154,13 +154,50 @@ All fields are optional. If `tests` is omitted entirely, defaults are used.
 
 ### Valid test modes
 
+**Network probes:**
 `tcp`, `http1`, `http2`, `http3`, `udp`, `download`, `upload`,
-`webdownload`, `webupload`, `udpdownload`, `udpupload`,
-`pageload`, `pageload2`, `pageload3`
+`webdownload`, `webupload`, `udpdownload`, `udpupload`
 
-> **Note:** `dns`, `tls`, `native`, `curl`, and `browser` probe modes are supported by the
-> tester binary but are not available in deploy-config mode. Use the tester CLI directly
-> for those modes.
+**Pageload probes** (HTTP client, no real browser — fetches `/page` manifest + assets):
+
+| Mode | Protocol | Description |
+|------|----------|-------------|
+| `pageload` | shorthand | Runs all three: pageload1 + pageload2 + pageload3 |
+| `pageload1` | HTTP/1.1 | 6 parallel connections (browser-like) |
+| `pageload2` | HTTP/2 | Single multiplexed TLS connection |
+| `pageload3` | HTTP/3 | Single QUIC connection |
+
+**Browser probes** (real headless Chrome via CDP — requires Chrome/Chromium):
+
+| Mode | Protocol | Description |
+|------|----------|-------------|
+| `browser` | shorthand | Runs all three: browser1 + browser2 + browser3 |
+| `browser1` | HTTP/1.1 | Chrome forced to plain `http://` (no ALPN) |
+| `browser2` | HTTP/2 | Chrome with `--disable-quic` |
+| `browser3` | HTTP/3 | Chrome with `--origin-to-force-quic-on` + SPKI cert pinning |
+
+> **Note:** All `browser*` and `pageload*` modes require Chrome/Chromium on the tester
+> machine. The installer will auto-detect and install it if missing.
+>
+> `dns`, `tls`, `native`, and `curl` probe modes are supported by the tester binary but
+> are not available in deploy-config mode. Use the tester CLI directly for those modes.
+
+### Page presets
+
+Presets model real-world page profiles (based on HTTP Archive data and sites like microsoft.com).
+Use `page_preset` to override `page_assets` and `page_asset_size` with a realistic asset mix.
+
+| Preset | Assets | Total size | Model |
+|--------|-------:|-----------:|-------|
+| `tiny` | 10 | ~100 KB | Simple landing / API docs |
+| `small` | 25 | ~900 KB | Blog / article page |
+| `default` | 50 | ~6 MB | Corporate homepage (first-party content) |
+| `medium` | 100 | ~10 MB | Full enterprise page (microsoft.com transferred) |
+| `large` | 200 | ~31 MB | Media-rich portal (uncompressed resources) |
+| `mixed` | 50 | ~7 MB | Varied-size distribution (realistic mix) |
+
+Each preset includes a realistic distribution of asset sizes — small tracking pixels, medium
+CSS/JS/fonts, and large images/bundles — rather than uniform-size assets.
 
 ## Examples
 

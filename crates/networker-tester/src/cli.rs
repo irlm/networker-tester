@@ -159,19 +159,20 @@ pub struct Cli {
 
     // ── Misc ──────────────────────────────────────────────────────────────────
     // ── Page-load ─────────────────────────────────────────────────────────────
-    /// Number of assets per page-load probe cycle (default: 20, max: 500).
+    /// Number of assets per page-load probe cycle (default: 50, max: 500).
     /// Overridden by --page-preset.
     #[arg(long)]
     pub page_assets: Option<usize>,
 
-    /// Asset size for page-load probes, accepts k/m suffixes (default: 10k).
+    /// Asset size for page-load probes, accepts k/m suffixes (default: 50k).
     /// Overridden by --page-preset.
     #[arg(long)]
     pub page_asset_size: Option<String>,
 
     /// Named page-load preset (overrides --page-assets and --page-asset-size).
-    /// Valid: tiny (100×1KB), small (50×5KB), default (20×10KB),
-    ///        medium (10×100KB), large (5×1MB), mixed (30 assets, ~820KB).
+    /// Valid: tiny (10 assets, ~100KB), small (25 assets, ~800KB),
+    ///        default (50 assets, ~4MB), medium (100 assets, ~8MB),
+    ///        large (200 assets, ~16MB), mixed (50 assets, ~4MB).
     #[arg(long)]
     pub page_preset: Option<String>,
 
@@ -278,13 +279,13 @@ impl Cli {
 
         // Pre-compute page-load fields before the struct literal partially moves self/f.
         let page_preset_raw = self.page_preset.or(f.page_preset);
-        let page_assets_count = self.page_assets.or(f.page_assets).unwrap_or(20);
+        let page_assets_count = self.page_assets.or(f.page_assets).unwrap_or(50);
         let page_asset_size_bytes = {
             let s = self
                 .page_asset_size
                 .or(f.page_asset_size)
-                .unwrap_or_else(|| "10k".into());
-            parse_size(&s).unwrap_or(10_240)
+                .unwrap_or_else(|| "50k".into());
+            parse_size(&s).unwrap_or(51_200)
         };
         let (page_asset_sizes, page_preset_name) = match page_preset_raw.as_deref() {
             Some(p) => match crate::runner::pageload::resolve_preset(p) {
@@ -625,11 +626,10 @@ mod tests {
     }
 
     #[test]
-    fn page_preset_tiny_resolves_to_100_assets() {
+    fn page_preset_tiny_resolves_to_10_assets() {
         let cli = Cli::parse_from(["networker-tester", "--page-preset", "tiny"]);
         let cfg = cli.resolve(None);
-        assert_eq!(cfg.page_asset_sizes.len(), 100);
-        assert!(cfg.page_asset_sizes.iter().all(|&s| s == 1024));
+        assert_eq!(cfg.page_asset_sizes.len(), 10);
         assert_eq!(cfg.page_preset_name.as_deref(), Some("tiny"));
     }
 
