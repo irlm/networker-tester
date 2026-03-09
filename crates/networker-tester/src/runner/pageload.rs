@@ -3418,7 +3418,10 @@ mod tests {
         assert_eq!(sizes.len(), 50);
         let total: usize = sizes.iter().sum();
         // ~6 MB total
-        assert!(total > 5_000_000 && total < 7_000_000, "default total={total}");
+        assert!(
+            total > 5_000_000 && total < 7_000_000,
+            "default total={total}"
+        );
     }
 
     #[test]
@@ -3445,7 +3448,10 @@ mod tests {
         assert_eq!(sizes.len(), 100);
         let total: usize = sizes.iter().sum();
         // ~10 MB total
-        assert!(total > 9_000_000 && total < 12_000_000, "medium total={total}");
+        assert!(
+            total > 9_000_000 && total < 12_000_000,
+            "medium total={total}"
+        );
     }
 
     #[test]
@@ -3454,7 +3460,10 @@ mod tests {
         assert_eq!(sizes.len(), 200);
         let total: usize = sizes.iter().sum();
         // ~31 MB total
-        assert!(total > 28_000_000 && total < 35_000_000, "large total={total}");
+        assert!(
+            total > 28_000_000 && total < 35_000_000,
+            "large total={total}"
+        );
     }
 
     #[test]
@@ -3468,7 +3477,10 @@ mod tests {
         let sizes = resolve_preset("mixed").unwrap();
         let total: usize = sizes.iter().sum();
         // ~7 MB total
-        assert!(total > 5_500_000 && total < 8_000_000, "mixed total={total}");
+        assert!(
+            total > 5_500_000 && total < 8_000_000,
+            "mixed total={total}"
+        );
     }
 
     #[test]

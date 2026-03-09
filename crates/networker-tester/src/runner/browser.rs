@@ -1284,7 +1284,10 @@ mod tests {
 
     #[test]
     fn browser_asset_bytes_uniform() {
-        assert_eq!(super::browser_asset_bytes(&[10_240, 10_240, 10_240]), 10_240);
+        assert_eq!(
+            super::browser_asset_bytes(&[10_240, 10_240, 10_240]),
+            10_240
+        );
     }
 
     #[test]
