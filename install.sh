@@ -5367,6 +5367,20 @@ _deploy_validate_config() {
             local t_ip; t_ip="$(jq -r '.tester.lan.ip // empty' "$cfg")"
             [[ -z "$t_ip" ]] && { print_err "tester.lan.ip is required"; errors=$((errors + 1)); }
         fi
+        # Windows computer name limit for tester too
+        local t_os; t_os="$(jq -r ".tester.${t_provider}.os // empty" "$cfg")"
+        if [[ "$t_os" == "windows" ]]; then
+            local t_vm=""
+            case "$t_provider" in
+                azure) t_vm="$(jq -r '.tester.azure.vm_name // empty' "$cfg")" ;;
+                aws)   t_vm="$(jq -r '.tester.aws.instance_name // empty' "$cfg")" ;;
+                gcp)   t_vm="$(jq -r '.tester.gcp.instance_name // empty' "$cfg")" ;;
+            esac
+            if [[ -n "$t_vm" && ${#t_vm} -gt 15 ]]; then
+                print_err "tester: Windows VM name '$t_vm' is ${#t_vm} chars (max 15)"
+                errors=$((errors + 1))
+            fi
+        fi
     fi
 
     # endpoints array
@@ -5391,6 +5405,20 @@ _deploy_validate_config() {
                 if [[ "$ep_prov" == "lan" ]]; then
                     local eip; eip="$(jq -r ".endpoints[$i].lan.ip // empty" "$cfg")"
                     [[ -z "$eip" ]] && { print_err "endpoints[$i].lan.ip is required"; errors=$((errors + 1)); }
+                fi
+                # Windows computer name limit (15 chars) — applies to Azure, AWS, GCP
+                local ep_os; ep_os="$(jq -r ".endpoints[$i].${ep_prov}.os // empty" "$cfg")"
+                if [[ "$ep_os" == "windows" ]]; then
+                    local vm_name=""
+                    case "$ep_prov" in
+                        azure) vm_name="$(jq -r ".endpoints[$i].azure.vm_name // empty" "$cfg")" ;;
+                        aws)   vm_name="$(jq -r ".endpoints[$i].aws.instance_name // empty" "$cfg")" ;;
+                        gcp)   vm_name="$(jq -r ".endpoints[$i].gcp.instance_name // empty" "$cfg")" ;;
+                    esac
+                    if [[ -n "$vm_name" && ${#vm_name} -gt 15 ]]; then
+                        print_err "endpoints[$i]: Windows VM name '$vm_name' is ${#vm_name} chars (max 15)"
+                        errors=$((errors + 1))
+                    fi
                 fi
             fi
         done
