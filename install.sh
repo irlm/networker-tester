@@ -3030,11 +3030,12 @@ _remote_bootstrap_install() {
         fi
     fi
 
-    # Ensure CA certificates are up to date (Azure VMs can have stale/broken bundles)
-    print_info "Updating CA certificates on VM…"
+    # Remove OUTPUT iptables REDIRECT rules from prior installs — they break all outbound HTTPS
+    # by redirecting the VM's own port 80/443 traffic to the local endpoint.
     ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
-        "sudo apt-get update -qq && sudo apt-get install -y --only-upgrade ca-certificates >/dev/null 2>&1 || true" \
-        < /dev/null 2>/dev/null
+        "sudo iptables -t nat -D OUTPUT -p tcp --dport 80  -j REDIRECT --to-port 8080 2>/dev/null; \
+         sudo iptables -t nat -D OUTPUT -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null; \
+         true" < /dev/null 2>/dev/null
 
     print_info "Running installer on VM (the terminal will show the VM's install progress)…"
     echo ""
@@ -3165,11 +3166,9 @@ if command -v iptables &>/dev/null; then
         sudo iptables -t nat -A PREROUTING -p tcp --dport 80  -j REDIRECT --to-port 8080
     sudo iptables -t nat -C PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null || \
         sudo iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443
-    # Also redirect loopback (OUTPUT chain) so curl from the VM itself works on port 80/443.
-    sudo iptables -t nat -C OUTPUT -p tcp --dport 80  -j REDIRECT --to-port 8080 2>/dev/null || \
-        sudo iptables -t nat -A OUTPUT -p tcp --dport 80  -j REDIRECT --to-port 8080
-    sudo iptables -t nat -C OUTPUT -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null || \
-        sudo iptables -t nat -A OUTPUT -p tcp --dport 443 -j REDIRECT --to-port 8443
+    # Remove any OUTPUT REDIRECT rules from prior installs — they break outbound HTTPS.
+    sudo iptables -t nat -D OUTPUT -p tcp --dport 80  -j REDIRECT --to-port 8080 2>/dev/null || true
+    sudo iptables -t nat -D OUTPUT -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null || true
     # Persist rules across reboots if iptables-persistent is available.
     if command -v netfilter-persistent &>/dev/null; then
         sudo netfilter-persistent save 2>/dev/null || true
@@ -3247,10 +3246,9 @@ UNIT
             sudo iptables -t nat -A PREROUTING -p tcp --dport 80  -j REDIRECT --to-port 8080
         sudo iptables -t nat -C PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null || \
             sudo iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443
-        sudo iptables -t nat -C OUTPUT -p tcp --dport 80  -j REDIRECT --to-port 8080 2>/dev/null || \
-            sudo iptables -t nat -A OUTPUT -p tcp --dport 80  -j REDIRECT --to-port 8080
-        sudo iptables -t nat -C OUTPUT -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null || \
-            sudo iptables -t nat -A OUTPUT -p tcp --dport 443 -j REDIRECT --to-port 8443
+        # Remove any OUTPUT REDIRECT rules from prior installs — they break outbound HTTPS.
+        sudo iptables -t nat -D OUTPUT -p tcp --dport 80  -j REDIRECT --to-port 8080 2>/dev/null || true
+        sudo iptables -t nat -D OUTPUT -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null || true
         if command -v netfilter-persistent &>/dev/null; then
             sudo netfilter-persistent save 2>/dev/null || true
         elif command -v iptables-save &>/dev/null; then
