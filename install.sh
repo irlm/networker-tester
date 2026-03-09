@@ -310,6 +310,7 @@ COMPONENT=""   # "" = not set via CLI; "tester" | "endpoint" | "both" = explicit
 AUTO_YES=0
 FROM_SOURCE=0
 SKIP_RUST=0
+SKIP_SERVICE=0
 
 INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
@@ -465,6 +466,8 @@ parse_args() {
                 FROM_SOURCE=1 ;;
             --skip-rust)
                 SKIP_RUST=1 ;;
+            --no-service)
+                SKIP_SERVICE=1 ;;
             # Azure
             --azure)
                 ENDPOINT_LOCATION="azure"; DO_REMOTE_ENDPOINT=1 ;;
@@ -613,7 +616,7 @@ detect_chrome() {
 _remote_chrome_available() {
     local ip="$1" user="$2"
     ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "${user}@${ip}" \
-        'command -v google-chrome google-chrome-stable chromium-browser chromium chromium-browser-stable 2>/dev/null | head -1 | grep -q .' 2>/dev/null
+        'command -v google-chrome google-chrome-stable chromium-browser chromium chromium-browser-stable 2>/dev/null | head -1 | grep -q . || test -x "$HOME/.local/bin/google-chrome"' 2>/dev/null
 }
 
 # ── Target triple detection ───────────────────────────────────────────────────
@@ -1170,17 +1173,26 @@ _lan_install_binary_linux() {
 
     # Download and install on remote host
     print_info "Installing ${binary} on ${_LAN_DEST} (${ver:-source})…"
+    local dl_ok=0
     if [[ -n "$ver" ]]; then
         local dl_url="https://github.com/${REPO_GH}/releases/download/${ver}/${archive}"
         if [[ $has_sudo -eq 1 ]]; then
-            ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" \
-                "set -e; curl -fsSL '${dl_url}' -o /tmp/${archive} && tar xzf /tmp/${archive} -C /tmp && sudo mv /tmp/${binary} /usr/local/bin/${binary} && sudo chmod +x /usr/local/bin/${binary} && rm -f /tmp/${archive}"
+            if ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" \
+                "set -e; curl -fsSL '${dl_url}' -o /tmp/${archive} && tar xzf /tmp/${archive} -C /tmp && sudo mv /tmp/${binary} /usr/local/bin/${binary} && sudo chmod +x /usr/local/bin/${binary} && rm -f /tmp/${archive}" 2>/dev/null; then
+                dl_ok=1
+            fi
         else
-            ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" \
-                "set -e; mkdir -p \"\$HOME/.local/bin\" && curl -fsSL '${dl_url}' -o /tmp/${archive} && tar xzf /tmp/${archive} -C /tmp && mv /tmp/${binary} \"\$HOME/.local/bin/${binary}\" && chmod +x \"\$HOME/.local/bin/${binary}\" && rm -f /tmp/${archive} && (grep -q '.local/bin' \"\$HOME/.bashrc\" 2>/dev/null || echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> \"\$HOME/.bashrc\") && (grep -q '.local/bin' \"\$HOME/.profile\" 2>/dev/null || echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> \"\$HOME/.profile\")"
+            if ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" \
+                "set -e; mkdir -p \"\$HOME/.local/bin\" && curl -fsSL '${dl_url}' -o /tmp/${archive} && tar xzf /tmp/${archive} -C /tmp && mv /tmp/${binary} \"\$HOME/.local/bin/${binary}\" && chmod +x \"\$HOME/.local/bin/${binary}\" && rm -f /tmp/${archive} && (grep -q '.local/bin' \"\$HOME/.bashrc\" 2>/dev/null || echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> \"\$HOME/.bashrc\") && (grep -q '.local/bin' \"\$HOME/.profile\" 2>/dev/null || echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> \"\$HOME/.profile\")" 2>/dev/null; then
+                dl_ok=1
+            fi
         fi
-    else
-        # No release — fallback to bootstrap (builds from source)
+    fi
+    if [[ $dl_ok -eq 0 ]]; then
+        # No release assets or download failed — build from source
+        if [[ -n "$ver" ]]; then
+            print_info "No pre-built binary for ${ver} — building from source…"
+        fi
         _lan_bootstrap_install "$binary" "$role"
         return
     fi
@@ -1227,7 +1239,7 @@ _lan_bootstrap_install() {
     print_info "Running installer on remote host…"
     echo ""
     ssh -t "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" \
-        "bash /tmp/networker-install.sh ${comp_arg} -y"
+        "bash /tmp/networker-install.sh ${comp_arg} -y --no-service"
 }
 
 # Install binary on a LAN Windows host via SSH + PowerShell.
@@ -3148,6 +3160,10 @@ REMOTE
 step_setup_endpoint_service() {
     next_step "Set up networker-endpoint systemd service"
 
+    if [[ $SKIP_SERVICE -eq 1 ]]; then
+        print_info "Service setup skipped (--no-service)"
+        return 0
+    fi
     if [[ "$SYS_OS" != "Linux" ]]; then
         print_info "Systemd service setup is Linux-only — skipping."
         print_dim  "  On macOS: run networker-endpoint manually in a terminal."
@@ -5482,32 +5498,75 @@ _deploy_install_chrome_remote() {
     fi
 
     print_info "Installing Chrome/Chromium on remote tester ($dest)…"
-    # Detect package manager and install Chromium
+    # Detect package manager and install Chromium (handles no-sudo case)
     ssh "${ssh_opts[@]}" "$dest" bash -s <<'REMOTE_CHROME'
-set -e
-if command -v apt-get &>/dev/null; then
-    sudo apt-get update -qq
-    sudo apt-get install -y chromium-browser 2>/dev/null || sudo apt-get install -y chromium
-    sudo apt-get install -y libnss3-tools 2>/dev/null || true
-elif command -v dnf &>/dev/null; then
-    sudo dnf install -y chromium
-    sudo dnf install -y nss-tools 2>/dev/null || true
-elif command -v yum &>/dev/null; then
-    sudo yum install -y chromium
-elif command -v pacman &>/dev/null; then
-    sudo pacman -S --noconfirm chromium
-elif command -v apk &>/dev/null; then
-    sudo apk add chromium
-else
-    echo "ERROR: no supported package manager found"
-    exit 1
+# Check if Chrome is already installed
+for cmd in google-chrome chromium-browser chromium; do
+    if command -v "$cmd" &>/dev/null; then
+        echo "Chrome/Chromium already available: $(command -v "$cmd")"
+        exit 0
+    fi
+done
+
+# Check for passwordless sudo
+HAS_SUDO=0
+if sudo -n true 2>/dev/null; then
+    HAS_SUDO=1
 fi
+
+if [[ $HAS_SUDO -eq 1 ]]; then
+    if command -v apt-get &>/dev/null; then
+        sudo apt-get update -qq
+        sudo apt-get install -y chromium-browser 2>/dev/null || sudo apt-get install -y chromium
+        sudo apt-get install -y libnss3-tools 2>/dev/null || true
+    elif command -v dnf &>/dev/null; then
+        sudo dnf install -y chromium
+        sudo dnf install -y nss-tools 2>/dev/null || true
+    elif command -v yum &>/dev/null; then
+        sudo yum install -y chromium
+    elif command -v pacman &>/dev/null; then
+        sudo pacman -S --noconfirm chromium
+    elif command -v apk &>/dev/null; then
+        sudo apk add chromium
+    fi
+else
+    # No sudo — try user-local Chrome install via direct download
+    echo "No passwordless sudo — attempting user-local Chrome install…"
+    mkdir -p "$HOME/.local/bin"
+    CHROME_URL="https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"
+    TMPDIR="$(mktemp -d)"
+    if curl -fsSL "$CHROME_URL" -o "$TMPDIR/chrome.deb" 2>/dev/null; then
+        # Extract Chrome from .deb without dpkg (user-local)
+        cd "$TMPDIR"
+        ar x chrome.deb data.tar.xz 2>/dev/null && tar xf data.tar.xz 2>/dev/null
+        if [[ -f opt/google/chrome/google-chrome ]]; then
+            cp -r opt/google/chrome "$HOME/.local/google-chrome"
+            ln -sf "$HOME/.local/google-chrome/google-chrome" "$HOME/.local/bin/google-chrome"
+            echo "Chrome installed to $HOME/.local/bin/google-chrome"
+        else
+            echo "WARNING: Could not extract Chrome from .deb"
+        fi
+        cd - >/dev/null
+    else
+        echo "WARNING: Could not download Chrome"
+    fi
+    rm -rf "$TMPDIR"
+fi
+
 # Verify
-if command -v google-chrome chromium-browser chromium 2>/dev/null | head -1 | grep -q .; then
-    echo "Chrome/Chromium installed successfully"
-else
-    echo "WARNING: Chrome/Chromium may not be in PATH yet"
+for cmd in google-chrome chromium-browser chromium; do
+    if command -v "$cmd" &>/dev/null; then
+        echo "Chrome/Chromium installed successfully: $(command -v "$cmd")"
+        exit 0
+    fi
+done
+# Also check user-local path
+if [[ -x "$HOME/.local/bin/google-chrome" ]]; then
+    echo "Chrome installed at $HOME/.local/bin/google-chrome"
+    exit 0
 fi
+echo "WARNING: Chrome/Chromium not found after install attempt"
+exit 1
 REMOTE_CHROME
     local rc=$?
     if [[ $rc -eq 0 ]]; then
@@ -5758,6 +5817,12 @@ _deploy_preflight() {
                 else
                     print_err "AWS CLI not found — install from https://aws.amazon.com/cli/"
                     errors=$((errors + 1))
+                fi
+                # Live check: discover_system may have missed env vars or SSO token
+                if [[ $AWS_LOGGED_IN -eq 0 && $AWS_CLI_AVAILABLE -eq 1 ]]; then
+                    if aws sts get-caller-identity &>/dev/null 2>&1 </dev/null; then
+                        AWS_LOGGED_IN=1
+                    fi
                 fi
                 if [[ $AWS_LOGGED_IN -eq 1 ]]; then
                     print_ok "AWS credentials found"

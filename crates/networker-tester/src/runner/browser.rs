@@ -58,7 +58,7 @@ pub fn find_chrome() -> Option<PathBuf> {
         }
     }
 
-    // 3. Linux paths
+    // 3. Linux paths (system + user-local)
     let linux_paths = [
         "/usr/bin/google-chrome",
         "/usr/bin/chromium-browser",
@@ -70,6 +70,20 @@ pub fn find_chrome() -> Option<PathBuf> {
         let p = PathBuf::from(path);
         if std::fs::metadata(&p).is_ok() {
             return Some(p);
+        }
+    }
+    // User-local install (no-sudo fallback from installer)
+    if let Ok(home) = std::env::var("HOME") {
+        let local_paths = [
+            format!("{home}/.local/bin/google-chrome"),
+            format!("{home}/.local/bin/chromium"),
+            format!("{home}/.local/google-chrome/google-chrome"),
+        ];
+        for path in &local_paths {
+            let p = PathBuf::from(path);
+            if std::fs::metadata(&p).is_ok() {
+                return Some(p);
+            }
         }
     }
 
