@@ -1226,17 +1226,22 @@ _lan_bootstrap_install() {
     print_info "Installing ${binary} on ${_LAN_DEST} via SSH (port ${_LAN_PORT})…"
 
     local script_path="${BASH_SOURCE[0]:-}"
-    local installer_url="https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh"
+    local gist_url="https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh"
+    local repo_url="https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh"
     if [[ -f "$script_path" ]]; then
         print_info "Uploading installer to remote host…"
         scp "${_LAN_SCP_OPTS[@]}" "$script_path" "${_LAN_DEST}:/tmp/networker-install.sh"
     else
-        print_info "Downloading installer on remote host from Gist…"
+        print_info "Downloading installer on remote host…"
         if ! ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" \
-            "curl -fsSL '${installer_url}' -o /tmp/networker-install.sh" 2>/dev/null; then
-            print_warn "TLS failed — retrying with --insecure…"
-            ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" \
-                "curl -fsSLk '${installer_url}' -o /tmp/networker-install.sh"
+            "curl -fsSL '${gist_url}' -o /tmp/networker-install.sh" 2>/dev/null; then
+            print_warn "Gist download failed — trying repo raw URL…"
+            if ! ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" \
+                "curl -fsSL '${repo_url}' -o /tmp/networker-install.sh" 2>/dev/null; then
+                print_warn "TLS failed — retrying with --insecure…"
+                ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" \
+                    "curl -fsSLk '${repo_url}' -o /tmp/networker-install.sh"
+            fi
         fi
     fi
 
@@ -3001,17 +3006,22 @@ _remote_bootstrap_install() {
     # Upload this installer to the VM.
     # Prefer local file → SCP; fallback: remote curl from Gist (with -k if TLS fails).
     local script_path="${BASH_SOURCE[0]:-}"
-    local installer_url="https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh"
+    local gist_url="https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh"
+    local repo_url="https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh"
     if [[ -f "$script_path" ]]; then
         print_info "Uploading installer to VM…"
         scp -o StrictHostKeyChecking=no -q "$script_path" "${user}@${ip}:/tmp/networker-install.sh"
     else
-        print_info "Downloading installer on VM from Gist…"
+        print_info "Downloading installer on VM…"
         if ! ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
-            "curl -fsSL '${installer_url}' -o /tmp/networker-install.sh" 2>/dev/null; then
-            print_warn "TLS failed — retrying with --insecure…"
-            ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
-                "curl -fsSLk '${installer_url}' -o /tmp/networker-install.sh"
+            "curl -fsSL '${gist_url}' -o /tmp/networker-install.sh" 2>/dev/null; then
+            print_warn "Gist download failed — trying repo raw URL…"
+            if ! ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
+                "curl -fsSL '${repo_url}' -o /tmp/networker-install.sh" 2>/dev/null; then
+                print_warn "TLS failed — retrying with --insecure…"
+                ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
+                    "curl -fsSLk '${repo_url}' -o /tmp/networker-install.sh"
+            fi
         fi
     fi
 
@@ -4589,11 +4599,17 @@ _gcp_install_binary() {
             --quiet 2>/dev/null || true
     fi
 
-    # If SCP failed (e.g. curl|bash — no local file), download from Gist on the VM
+    # If SCP failed (e.g. curl|bash — no local file), download from Gist or repo on the VM
     if ! _gcp_ssh_run "$name" "test -f /tmp/networker-install.sh" 2>/dev/null; then
         print_dim "Downloading installer on the instance…"
         _gcp_ssh_run "$name" \
             "curl -fsSL 'https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh' \
+             -o /tmp/networker-install.sh" 2>/dev/null || \
+        _gcp_ssh_run "$name" \
+            "curl -fsSL 'https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh' \
+             -o /tmp/networker-install.sh" 2>/dev/null || \
+        _gcp_ssh_run "$name" \
+            "curl -fsSLk 'https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh' \
              -o /tmp/networker-install.sh" 2>/dev/null || true
     fi
 
