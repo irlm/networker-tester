@@ -154,12 +154,30 @@ All fields are optional. If `tests` is omitted entirely, defaults are used.
 
 ### Valid test modes
 
+**Network probes:**
 `tcp`, `http1`, `http2`, `http3`, `udp`, `download`, `upload`,
-`webdownload`, `webupload`, `udpdownload`, `udpupload`,
-`pageload`, `pageload2`, `pageload3`, `browser`
+`webdownload`, `webupload`, `udpdownload`, `udpupload`
 
-> **Note:** `browser`, `pageload`, `pageload2`, and `pageload3` modes require Chrome/Chromium
-> on the tester machine. The installer will auto-detect and install it if missing.
+**Pageload probes** (HTTP client, no real browser — fetches `/page` manifest + assets):
+
+| Mode | Protocol | Description |
+|------|----------|-------------|
+| `pageload` | shorthand | Runs all three: pageload1 + pageload2 + pageload3 |
+| `pageload1` | HTTP/1.1 | 6 parallel connections (browser-like) |
+| `pageload2` | HTTP/2 | Single multiplexed TLS connection |
+| `pageload3` | HTTP/3 | Single QUIC connection |
+
+**Browser probes** (real headless Chrome via CDP — requires Chrome/Chromium):
+
+| Mode | Protocol | Description |
+|------|----------|-------------|
+| `browser` | shorthand | Runs all three: browser1 + browser2 + browser3 |
+| `browser1` | HTTP/1.1 | Chrome forced to plain `http://` (no ALPN) |
+| `browser2` | HTTP/2 | Chrome with `--disable-quic` |
+| `browser3` | HTTP/3 | Chrome with `--origin-to-force-quic-on` + SPKI cert pinning |
+
+> **Note:** All `browser*` and `pageload*` modes require Chrome/Chromium on the tester
+> machine. The installer will auto-detect and install it if missing.
 >
 > `dns`, `tls`, `native`, and `curl` probe modes are supported by the tester binary but
 > are not available in deploy-config mode. Use the tester CLI directly for those modes.

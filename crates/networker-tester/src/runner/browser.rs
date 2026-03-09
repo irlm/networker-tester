@@ -122,7 +122,7 @@ pub fn build_page_url(base: &url::Url, asset_sizes: &[usize]) -> String {
 ///
 /// Port derivation: 8443 → 8080 (endpoint convention); 443 / no port → 80
 /// (HTTP default, omitted from the URL).  Any other explicit port is kept as-is.
-pub fn build_browser1_url(base: &url::Url, asset_sizes: &[usize]) -> String {
+pub fn build_browser_http1_url(base: &url::Url, asset_sizes: &[usize]) -> String {
     let mut target = base.clone();
     let _ = target.set_scheme("http");
     // Derive plain HTTP port from the HTTPS port.
@@ -152,7 +152,7 @@ pub fn build_browser1_url(base: &url::Url, asset_sizes: &[usize]) -> String {
 /// This avoids the hostname-mismatch that would block QUIC even when the cert
 /// is trusted via SPKI pin: Chrome's QUIC TLS path is stricter about SAN
 /// matching than the regular TCP/TLS path.
-pub fn build_browser3_url(base: &url::Url, asset_sizes: &[usize]) -> String {
+pub fn build_browser_http3_url(base: &url::Url, asset_sizes: &[usize]) -> String {
     let mut target = base.clone();
     // Keep https:// scheme and port; just swap the host to localhost.
     let _ = target.set_host(Some("localhost"));
@@ -171,7 +171,7 @@ pub fn build_browser3_url(base: &url::Url, asset_sizes: &[usize]) -> String {
 
 #[cfg(feature = "browser")]
 mod real {
-    use super::{build_browser1_url, build_page_url, find_chrome};
+    use super::{build_browser_http1_url, build_page_url, find_chrome};
     use crate::metrics::{BrowserResult, ErrorCategory, ErrorRecord, Protocol, RequestAttempt};
     use chromiumoxide::browser::{Browser, BrowserConfig};
     use chromiumoxide::cdp::browser_protocol::network::EventResponseReceived;
@@ -242,7 +242,7 @@ mod real {
         // browser1 uses plain HTTP so Chrome has no ALPN to negotiate H2/H3.
         // browser2/3 use the same HTTPS URL; protocol is forced via Chrome flags.
         let page_url = if matches!(protocol, Protocol::Browser1) {
-            build_browser1_url(base_url, asset_sizes)
+            build_browser_http1_url(base_url, asset_sizes)
         } else {
             build_page_url(base_url, asset_sizes)
         };
@@ -1183,12 +1183,12 @@ mod tests {
         assert_eq!(attempt.protocol, crate::metrics::Protocol::Browser);
     }
 
-    // ── build_browser3_url tests ──────────────────────────────────────────────
+    // ── build_browser_http3_url tests ──────────────────────────────────────────────
 
     #[test]
-    fn build_browser3_url_rewrites_host_to_localhost() {
+    fn build_browser_http3_url_rewrites_host_to_localhost() {
         let base = url::Url::parse("https://172.16.32.106:8443/health").unwrap();
-        let url = build_browser3_url(&base, &[]);
+        let url = build_browser_http3_url(&base, &[]);
         assert!(
             url.starts_with("https://localhost:8443/browser-page"),
             "url={url}"
@@ -1196,9 +1196,9 @@ mod tests {
     }
 
     #[test]
-    fn build_browser3_url_keeps_https_and_port() {
+    fn build_browser_http3_url_keeps_https_and_port() {
         let base = url::Url::parse("https://192.168.1.1:9443/some/path").unwrap();
-        let url = build_browser3_url(&base, &[]);
+        let url = build_browser_http3_url(&base, &[]);
         assert!(
             url.starts_with("https://localhost:9443/browser-page"),
             "url={url}"
@@ -1206,27 +1206,27 @@ mod tests {
     }
 
     #[test]
-    fn build_browser3_url_includes_asset_params() {
+    fn build_browser_http3_url_includes_asset_params() {
         let base = url::Url::parse("https://10.0.0.1:8443/health").unwrap();
-        let url = build_browser3_url(&base, &[8192, 8192]);
+        let url = build_browser_http3_url(&base, &[8192, 8192]);
         assert!(url.contains("assets=2"), "url={url}");
         assert!(url.contains("bytes=8192"), "url={url}");
     }
 
     #[test]
-    fn build_browser3_url_no_query_when_no_assets() {
+    fn build_browser_http3_url_no_query_when_no_assets() {
         let base = url::Url::parse("https://10.0.0.1:8443/health").unwrap();
-        let url = build_browser3_url(&base, &[]);
+        let url = build_browser_http3_url(&base, &[]);
         assert!(!url.contains("assets="), "url={url}");
         assert!(!url.contains("bytes="), "url={url}");
     }
 
-    // ── build_browser1_url tests ──────────────────────────────────────────────
+    // ── build_browser_http1_url tests ──────────────────────────────────────────────
 
     #[test]
-    fn build_browser1_url_switches_to_http_and_maps_8443() {
+    fn build_browser_http1_url_switches_to_http_and_maps_8443() {
         let base = url::Url::parse("https://host:8443/health").unwrap();
-        let url = build_browser1_url(&base, &[]);
+        let url = build_browser_http1_url(&base, &[]);
         assert!(
             url.starts_with("http://host:8080/browser-page"),
             "url={url}"
@@ -1234,9 +1234,9 @@ mod tests {
     }
 
     #[test]
-    fn build_browser1_url_standard_https_port_omits_port() {
+    fn build_browser_http1_url_standard_https_port_omits_port() {
         let base = url::Url::parse("https://example.com/health").unwrap();
-        let url = build_browser1_url(&base, &[]);
+        let url = build_browser_http1_url(&base, &[]);
         // Port 80 is default for http — url::Url omits it.
         assert!(
             url.starts_with("http://example.com/browser-page"),
@@ -1249,9 +1249,9 @@ mod tests {
     }
 
     #[test]
-    fn build_browser1_url_non_standard_port_preserved() {
+    fn build_browser_http1_url_non_standard_port_preserved() {
         let base = url::Url::parse("https://host:9443/health").unwrap();
-        let url = build_browser1_url(&base, &[]);
+        let url = build_browser_http1_url(&base, &[]);
         assert!(
             url.starts_with("http://host:9443/browser-page"),
             "url={url}"
@@ -1259,9 +1259,9 @@ mod tests {
     }
 
     #[test]
-    fn build_browser1_url_includes_asset_params() {
+    fn build_browser_http1_url_includes_asset_params() {
         let base = url::Url::parse("https://host:8443/health").unwrap();
-        let url = build_browser1_url(&base, &[4096, 4096, 4096]);
+        let url = build_browser_http1_url(&base, &[4096, 4096, 4096]);
         assert!(url.contains("assets=3"), "url={url}");
         assert!(url.contains("bytes=4096"), "url={url}");
     }

@@ -5428,7 +5428,7 @@ _deploy_validate_config() {
     local modes_count
     modes_count="$(jq '.tests.modes | length // 0' "$cfg" 2>/dev/null)"
     if [[ "${modes_count:-0}" -gt 0 ]]; then
-        local valid_modes="tcp http1 http2 http3 udp download upload webdownload webupload udpdownload udpupload pageload pageload2 pageload3 browser"
+        local valid_modes="tcp http1 http2 http3 udp download upload webdownload webupload udpdownload udpupload pageload pageload1 pageload2 pageload3 browser browser1 browser2 browser3"
         for i in $(seq 0 $((modes_count - 1))); do
             local m; m="$(jq -r ".tests.modes[$i]" "$cfg")"
             if ! echo "$valid_modes" | grep -qw "$m"; then
@@ -5446,7 +5446,7 @@ _deploy_validate_config() {
 _deploy_needs_browser() {
     local cfg="$1"
     local modes; modes="$(jq -c '.tests.modes // []' "$cfg" 2>/dev/null)"
-    echo "$modes" | jq -e '[.[] | select(. == "browser" or . == "pageload" or . == "pageload2" or . == "pageload3")] | length > 0' &>/dev/null
+    echo "$modes" | jq -e '[.[] | select(test("^(browser|pageload)"))] | length > 0' &>/dev/null
 }
 
 # Install Chrome/Chromium on the remote tester machine via SSH.
