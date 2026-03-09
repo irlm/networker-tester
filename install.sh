@@ -5428,7 +5428,7 @@ _deploy_validate_config() {
     local modes_count
     modes_count="$(jq '.tests.modes | length // 0' "$cfg" 2>/dev/null)"
     if [[ "${modes_count:-0}" -gt 0 ]]; then
-        local valid_modes="tcp http1 http2 http3 udp download upload webdownload webupload udpdownload udpupload pageload pageload2 pageload3"
+        local valid_modes="tcp http1 http2 http3 udp download upload webdownload webupload udpdownload udpupload pageload pageload2 pageload3 browser"
         for i in $(seq 0 $((modes_count - 1))); do
             local m; m="$(jq -r ".tests.modes[$i]" "$cfg")"
             if ! echo "$valid_modes" | grep -qw "$m"; then
@@ -5439,6 +5439,83 @@ _deploy_validate_config() {
     fi
 
     DEPLOY_VALIDATE_ERRORS=$errors
+}
+
+# Check if any browser-dependent mode is requested in the deploy config.
+# Returns 0 (true) if browser/pageload/pageload2/pageload3 is in modes.
+_deploy_needs_browser() {
+    local cfg="$1"
+    local modes; modes="$(jq -c '.tests.modes // []' "$cfg" 2>/dev/null)"
+    echo "$modes" | jq -e '[.[] | select(. == "browser" or . == "pageload" or . == "pageload2" or . == "pageload3")] | length > 0' &>/dev/null
+}
+
+# Install Chrome/Chromium on the remote tester machine via SSH.
+_deploy_install_chrome_remote() {
+    local ssh_opts=(-o StrictHostKeyChecking=no)
+    local dest=""
+    case "$TESTER_LOCATION" in
+        lan)
+            ssh_opts+=(-p "$LAN_TESTER_PORT")
+            dest="${LAN_TESTER_USER}@${LAN_TESTER_IP}"
+            ;;
+        azure) dest="azureuser@${AZURE_TESTER_IP}" ;;
+        aws)   dest="ubuntu@${AWS_TESTER_IP}" ;;
+        gcp)
+            print_info "Installing Chrome on GCP tester ($GCP_TESTER_NAME)…"
+            gcloud compute ssh "$GCP_TESTER_NAME" \
+                --project "$GCP_PROJECT" --zone "$GCP_ZONE" \
+                --command 'sudo apt-get update -qq && (sudo apt-get install -y chromium-browser 2>/dev/null || sudo apt-get install -y chromium) && sudo apt-get install -y libnss3-tools 2>/dev/null; true' \
+                </dev/null 2>&1
+            local rc=$?
+            if [[ $rc -eq 0 ]]; then
+                print_ok "Chrome/Chromium installed on GCP tester"
+            else
+                print_warn "Chrome install on GCP tester may have failed (exit $rc)"
+            fi
+            return $rc
+            ;;
+    esac
+
+    if [[ -z "$dest" ]]; then
+        print_warn "Cannot determine remote tester destination for Chrome install"
+        return 1
+    fi
+
+    print_info "Installing Chrome/Chromium on remote tester ($dest)…"
+    # Detect package manager and install Chromium
+    ssh "${ssh_opts[@]}" "$dest" bash -s </dev/null <<'REMOTE_CHROME'
+set -e
+if command -v apt-get &>/dev/null; then
+    sudo apt-get update -qq
+    sudo apt-get install -y chromium-browser 2>/dev/null || sudo apt-get install -y chromium
+    sudo apt-get install -y libnss3-tools 2>/dev/null || true
+elif command -v dnf &>/dev/null; then
+    sudo dnf install -y chromium
+    sudo dnf install -y nss-tools 2>/dev/null || true
+elif command -v yum &>/dev/null; then
+    sudo yum install -y chromium
+elif command -v pacman &>/dev/null; then
+    sudo pacman -S --noconfirm chromium
+elif command -v apk &>/dev/null; then
+    sudo apk add chromium
+else
+    echo "ERROR: no supported package manager found"
+    exit 1
+fi
+# Verify
+if command -v google-chrome chromium-browser chromium 2>/dev/null | head -1 | grep -q .; then
+    echo "Chrome/Chromium installed successfully"
+else
+    echo "WARNING: Chrome/Chromium may not be in PATH yet"
+fi
+REMOTE_CHROME
+    local rc=$?
+    if [[ $rc -eq 0 ]]; then
+        print_ok "Chrome/Chromium installed on remote tester"
+    else
+        print_warn "Chrome install on remote tester may have failed (exit $rc)"
+    fi
+    return 0
 }
 
 # Parse the deploy config and populate shell variables.
@@ -5733,6 +5810,38 @@ _deploy_preflight() {
             print_ok "GitHub API reachable (for binary downloads)"
         else
             print_info "GitHub API unreachable — will fall back to source build if needed"
+        fi
+    fi
+
+    # 6. Chrome/Chromium check if browser-dependent modes are requested
+    if _deploy_needs_browser "$cfg"; then
+        if [[ "$t_prov" == "local" ]]; then
+            CHROME_PATH="$(detect_chrome)"
+            if [[ -n "$CHROME_PATH" ]]; then
+                CHROME_AVAILABLE=1
+                print_ok "Chrome/Chromium found: $CHROME_PATH (required for browser/pageload modes)"
+            else
+                CHROME_AVAILABLE=0
+                DO_CHROME_INSTALL=1
+                if [[ -n "$PKG_MGR" ]]; then
+                    print_info "Chrome/Chromium not found — will install via $PKG_MGR (required for browser/pageload modes)"
+                else
+                    print_err "Chrome/Chromium not found and no package manager detected"
+                    print_err "  Install Chrome manually: https://www.google.com/chrome/"
+                    errors=$((errors + 1))
+                fi
+            fi
+        elif [[ "$t_prov" == "lan" ]]; then
+            if _remote_chrome_available "$LAN_TESTER_IP" "$LAN_TESTER_USER"; then
+                print_ok "Chrome/Chromium found on tester $LAN_TESTER_IP (required for browser/pageload modes)"
+            else
+                DO_CHROME_INSTALL=1
+                print_info "Chrome/Chromium not found on tester $LAN_TESTER_IP — will install remotely"
+            fi
+        else
+            # Cloud-provisioned tester: Chrome will be installed during deploy
+            DO_CHROME_INSTALL=1
+            print_info "Chrome/Chromium will be installed on $t_prov tester (required for browser/pageload modes)"
         fi
     fi
 
@@ -6131,6 +6240,10 @@ deploy_from_config() {
     # Phase 5: Deploy tester
     if [[ "$TESTER_LOCATION" == "local" ]]; then
         print_section "Local tester setup"
+        # Install Chrome if needed for browser/pageload modes
+        if [[ $DO_CHROME_INSTALL -eq 1 && $CHROME_AVAILABLE -eq 0 ]]; then
+            step_install_chrome
+        fi
         if [[ "$INSTALL_METHOD" == "release" ]]; then
             mkdir -p "$INSTALL_DIR"
             if ! step_download_release "networker-tester"; then
@@ -6149,6 +6262,10 @@ deploy_from_config() {
             aws)   step_aws_deploy_tester   ;;
             gcp)   step_gcp_deploy_tester   ;;
         esac
+        # Install Chrome on remote tester if needed
+        if [[ $DO_CHROME_INSTALL -eq 1 ]]; then
+            _deploy_install_chrome_remote
+        fi
     fi
 
     # Phase 6: Deploy endpoint(s)

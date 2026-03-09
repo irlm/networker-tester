@@ -1,0 +1,91 @@
+{
+  "version": 1,
+
+  "tester": {
+    "provider": "lan",
+    "lan": { "ip": "turing", "user": "irlm" }
+  },
+
+  "endpoints": [
+    {
+      "label": "azure-ubuntu-east",
+      "provider": "azure",
+      "azure": {
+        "region": "eastus",
+        "resource_group": "nwk-bch-az-linux",
+        "vm_name": "nwk-bch-az-ubu",
+        "vm_size": "Standard_B2s",
+        "os": "linux",
+        "auto_shutdown": true
+      }
+    },
+    {
+      "label": "azure-windows-east",
+      "provider": "azure",
+      "azure": {
+        "region": "eastus",
+        "resource_group": "nwk-bch-az-win",
+        "vm_name": "nwk-bch-az-win",
+        "vm_size": "Standard_B2s",
+        "os": "windows",
+        "auto_shutdown": true
+      }
+    },
+    {
+      "label": "aws-ubuntu-east",
+      "provider": "aws",
+      "aws": {
+        "region": "us-east-1",
+        "instance_name": "nwk-bch-aws-ubu",
+        "instance_type": "t3.small",
+        "os": "linux",
+        "auto_shutdown": true
+      }
+    },
+    {
+      "label": "aws-windows-east",
+      "provider": "aws",
+      "aws": {
+        "region": "us-east-1",
+        "instance_name": "nwk-bch-aws-win",
+        "instance_type": "t3.small",
+        "os": "windows",
+        "auto_shutdown": true
+      }
+    },
+    {
+      "label": "gcp-ubuntu-east",
+      "provider": "gcp",
+      "gcp": {
+        "zone": "us-east1-b",
+        "project": "kepler-408121",
+        "instance_name": "nwk-bch-gcp-ubu",
+        "machine_type": "e2-small",
+        "os": "linux",
+        "auto_shutdown": true
+      }
+    },
+    {
+      "label": "gcp-windows-east",
+      "provider": "gcp",
+      "gcp": {
+        "zone": "us-east1-b",
+        "project": "kepler-408121",
+        "instance_name": "nwk-bch-gcp-win",
+        "machine_type": "e2-small",
+        "os": "windows",
+        "auto_shutdown": true
+      }
+    }
+  ],
+
+  "tests": {
+    "modes": ["pageload", "pageload2", "pageload3", "browser", "download", "upload"],
+    "runs": 50,
+    "insecure": true,
+    "payload_sizes": ["1m", "4m", "8m"],
+    "html_report": "bench-6ep-report.html",
+    "excel": true,
+    "timeout": 60
+  }
+}

@@ -156,11 +156,13 @@ All fields are optional. If `tests` is omitted entirely, defaults are used.
 
 `tcp`, `http1`, `http2`, `http3`, `udp`, `download`, `upload`,
 `webdownload`, `webupload`, `udpdownload`, `udpupload`,
-`pageload`, `pageload2`, `pageload3`
+`pageload`, `pageload2`, `pageload3`, `browser`
 
-> **Note:** `dns`, `tls`, `native`, `curl`, and `browser` probe modes are supported by the
-> tester binary but are not available in deploy-config mode. Use the tester CLI directly
-> for those modes.
+> **Note:** `browser`, `pageload`, `pageload2`, and `pageload3` modes require Chrome/Chromium
+> on the tester machine. The installer will auto-detect and install it if missing.
+>
+> `dns`, `tls`, `native`, and `curl` probe modes are supported by the tester binary but
+> are not available in deploy-config mode. Use the tester CLI directly for those modes.
 
 ## Examples
 
