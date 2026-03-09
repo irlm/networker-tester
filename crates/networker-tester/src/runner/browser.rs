@@ -93,6 +93,19 @@ pub fn find_chrome() -> Option<PathBuf> {
 // URL rewriting helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Compute per-asset byte size for browser probes.
+///
+/// Browser probes use `/browser-page?assets=N&bytes=B` where all N assets are
+/// the same size B. When presets provide varied sizes, we use the average so
+/// that the total page weight matches the preset target.
+fn browser_asset_bytes(asset_sizes: &[usize]) -> usize {
+    if asset_sizes.is_empty() {
+        return 0;
+    }
+    let total: usize = asset_sizes.iter().sum();
+    total / asset_sizes.len()
+}
+
 /// Rewrite the base URL to the `/browser-page` endpoint.
 ///
 /// `/browser-page` returns an actual HTML page with `<img>` tags so that Chrome
@@ -101,14 +114,15 @@ pub fn find_chrome() -> Option<PathBuf> {
 /// synthetic pageload probes — a real browser would just display it as text.)
 ///
 /// Adds `assets=N&bytes=S` query params derived from the provided asset sizes.
-/// If `asset_sizes` is empty the endpoint uses its own defaults (20 assets, 10 KiB).
+/// Uses average asset size so total page weight matches the preset target.
+/// If `asset_sizes` is empty the endpoint uses its own server-side defaults.
 pub fn build_page_url(base: &url::Url, asset_sizes: &[usize]) -> String {
     let mut target = base.clone();
     target.set_path("/browser-page");
 
     if !asset_sizes.is_empty() {
         let n = asset_sizes.len();
-        let bytes = asset_sizes[0];
+        let bytes = browser_asset_bytes(asset_sizes);
         target.set_query(Some(&format!("assets={n}&bytes={bytes}")));
     }
 
@@ -135,7 +149,7 @@ pub fn build_browser_http1_url(base: &url::Url, asset_sizes: &[usize]) -> String
     target.set_path("/browser-page");
     if !asset_sizes.is_empty() {
         let n = asset_sizes.len();
-        let bytes = asset_sizes[0];
+        let bytes = browser_asset_bytes(asset_sizes);
         target.set_query(Some(&format!("assets={n}&bytes={bytes}")));
     }
     target.to_string()
@@ -159,7 +173,7 @@ pub fn build_browser_http3_url(base: &url::Url, asset_sizes: &[usize]) -> String
     target.set_path("/browser-page");
     if !asset_sizes.is_empty() {
         let n = asset_sizes.len();
-        let bytes = asset_sizes[0];
+        let bytes = browser_asset_bytes(asset_sizes);
         target.set_query(Some(&format!("assets={n}&bytes={bytes}")));
     }
     target.to_string()
@@ -1264,5 +1278,45 @@ mod tests {
         let url = build_browser_http1_url(&base, &[4096, 4096, 4096]);
         assert!(url.contains("assets=3"), "url={url}");
         assert!(url.contains("bytes=4096"), "url={url}");
+    }
+
+    // ── browser_asset_bytes tests ────────────────────────────────────────────
+
+    #[test]
+    fn browser_asset_bytes_uniform() {
+        assert_eq!(super::browser_asset_bytes(&[10_240, 10_240, 10_240]), 10_240);
+    }
+
+    #[test]
+    fn browser_asset_bytes_varied_uses_average() {
+        // Simulates a preset with varied sizes — average preserves total weight.
+        let sizes = vec![1_024, 5_120, 51_200, 153_600];
+        let avg = super::browser_asset_bytes(&sizes);
+        let total_original: usize = sizes.iter().sum();
+        let total_avg = avg * sizes.len();
+        // Average-based total should be close to original (integer division rounding)
+        assert!(
+            (total_original as i64 - total_avg as i64).unsigned_abs() < sizes.len() as u64,
+            "avg={avg}, total_original={total_original}, total_avg={total_avg}"
+        );
+    }
+
+    #[test]
+    fn browser_asset_bytes_empty() {
+        assert_eq!(super::browser_asset_bytes(&[]), 0);
+    }
+
+    #[test]
+    fn build_page_url_varied_sizes_uses_average() {
+        let base = url::Url::parse("https://host:8443/health").unwrap();
+        // 4 assets: 1KB, 5KB, 50KB, 150KB → avg = ~51.5KB
+        let sizes = vec![1_024, 5_120, 51_200, 153_600];
+        let url = build_page_url(&base, &sizes);
+        assert!(url.contains("assets=4"), "url={url}");
+        let avg = (1_024 + 5_120 + 51_200 + 153_600) / 4;
+        assert!(
+            url.contains(&format!("bytes={avg}")),
+            "expected bytes={avg}, url={url}"
+        );
     }
 }
