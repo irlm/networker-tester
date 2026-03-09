@@ -5483,7 +5483,7 @@ _deploy_install_chrome_remote() {
 
     print_info "Installing Chrome/Chromium on remote tester ($dest)…"
     # Detect package manager and install Chromium
-    ssh "${ssh_opts[@]}" "$dest" bash -s </dev/null <<'REMOTE_CHROME'
+    ssh "${ssh_opts[@]}" "$dest" bash -s <<'REMOTE_CHROME'
 set -e
 if command -v apt-get &>/dev/null; then
     sudo apt-get update -qq
