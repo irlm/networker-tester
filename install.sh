@@ -1232,16 +1232,18 @@ _lan_bootstrap_install() {
         print_info "Uploading installer to remote host…"
         scp "${_LAN_SCP_OPTS[@]}" "$script_path" "${_LAN_DEST}:/tmp/networker-install.sh"
     else
-        print_info "Downloading installer on remote host…"
-        if ! ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" \
-            "curl -fsSL '${gist_url}' -o /tmp/networker-install.sh" 2>/dev/null; then
-            print_warn "Gist download failed — trying repo raw URL…"
-            if ! ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" \
-                "curl -fsSL '${repo_url}' -o /tmp/networker-install.sh" 2>/dev/null; then
-                print_warn "TLS failed — retrying with --insecure…"
-                ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" \
-                    "curl -fsSLk '${repo_url}' -o /tmp/networker-install.sh"
-            fi
+        # Running as curl|bash — download locally first, then SCP
+        print_info "Downloading installer locally, then uploading to remote host…"
+        local tmp_installer="/tmp/networker-install-$$.sh"
+        if curl -fsSL "${gist_url}" -o "$tmp_installer" 2>/dev/null || \
+           curl -fsSL "${repo_url}" -o "$tmp_installer" 2>/dev/null; then
+            scp "${_LAN_SCP_OPTS[@]}" "$tmp_installer" "${_LAN_DEST}:/tmp/networker-install.sh"
+            rm -f "$tmp_installer"
+        else
+            rm -f "$tmp_installer"
+            print_warn "Local download failed — trying directly on remote host…"
+            ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" \
+                "curl -fsSLk '${repo_url}' -o /tmp/networker-install.sh"
         fi
     fi
 
@@ -3004,7 +3006,7 @@ _remote_bootstrap_install() {
     echo ""
 
     # Upload this installer to the VM.
-    # Prefer local file → SCP; fallback: remote curl from Gist (with -k if TLS fails).
+    # Prefer: local file SCP → download locally then SCP → remote curl (last resort).
     local script_path="${BASH_SOURCE[0]:-}"
     local gist_url="https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh"
     local repo_url="https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh"
@@ -3012,16 +3014,19 @@ _remote_bootstrap_install() {
         print_info "Uploading installer to VM…"
         scp -o StrictHostKeyChecking=no -q "$script_path" "${user}@${ip}:/tmp/networker-install.sh"
     else
-        print_info "Downloading installer on VM…"
-        if ! ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
-            "curl -fsSL '${gist_url}' -o /tmp/networker-install.sh" 2>/dev/null; then
-            print_warn "Gist download failed — trying repo raw URL…"
-            if ! ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
-                "curl -fsSL '${repo_url}' -o /tmp/networker-install.sh" 2>/dev/null; then
-                print_warn "TLS failed — retrying with --insecure…"
-                ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
-                    "curl -fsSLk '${repo_url}' -o /tmp/networker-install.sh"
-            fi
+        # Running as curl|bash — no local file. Download locally first, then SCP.
+        print_info "Downloading installer locally, then uploading to VM…"
+        local tmp_installer="/tmp/networker-install-$$.sh"
+        if curl -fsSL "${gist_url}" -o "$tmp_installer" 2>/dev/null || \
+           curl -fsSL "${repo_url}" -o "$tmp_installer" 2>/dev/null; then
+            scp -o StrictHostKeyChecking=no -q "$tmp_installer" "${user}@${ip}:/tmp/networker-install.sh"
+            rm -f "$tmp_installer"
+        else
+            # Local download also failed — try on VM directly as last resort
+            rm -f "$tmp_installer"
+            print_warn "Local download failed — trying directly on VM…"
+            ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
+                "curl -fsSLk '${repo_url}' -o /tmp/networker-install.sh"
         fi
     fi
 
@@ -4599,18 +4604,25 @@ _gcp_install_binary() {
             --quiet 2>/dev/null || true
     fi
 
-    # If SCP failed (e.g. curl|bash — no local file), download from Gist or repo on the VM
+    # If SCP failed (e.g. curl|bash — no local file), download locally then SCP via gcloud
     if ! _gcp_ssh_run "$name" "test -f /tmp/networker-install.sh" 2>/dev/null; then
-        print_dim "Downloading installer on the instance…"
-        _gcp_ssh_run "$name" \
-            "curl -fsSL 'https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh' \
-             -o /tmp/networker-install.sh" 2>/dev/null || \
-        _gcp_ssh_run "$name" \
-            "curl -fsSL 'https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh' \
-             -o /tmp/networker-install.sh" 2>/dev/null || \
-        _gcp_ssh_run "$name" \
-            "curl -fsSLk 'https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh' \
-             -o /tmp/networker-install.sh" 2>/dev/null || true
+        print_dim "Downloading installer locally, then uploading to instance…"
+        local tmp_installer="/tmp/networker-install-$$.sh"
+        local gist_url="https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh"
+        local repo_url="https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh"
+        if curl -fsSL "${gist_url}" -o "$tmp_installer" 2>/dev/null || \
+           curl -fsSL "${repo_url}" -o "$tmp_installer" 2>/dev/null; then
+            gcloud compute scp "$tmp_installer" "${name}:/tmp/networker-install.sh" \
+                --project "$GCP_PROJECT" \
+                --zone "$GCP_ZONE" \
+                --quiet 2>/dev/null || true
+            rm -f "$tmp_installer"
+        else
+            rm -f "$tmp_installer"
+            # Last resort: try on the VM directly
+            _gcp_ssh_run "$name" \
+                "curl -fsSLk '${repo_url}' -o /tmp/networker-install.sh" 2>/dev/null || true
+        fi
     fi
 
     # Run the installer on the VM (handles Rust, build tools, binary install)
