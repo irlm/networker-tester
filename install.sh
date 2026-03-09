@@ -1232,8 +1232,12 @@ _lan_bootstrap_install() {
         scp "${_LAN_SCP_OPTS[@]}" "$script_path" "${_LAN_DEST}:/tmp/networker-install.sh"
     else
         print_info "Downloading installer on remote host from Gist…"
-        ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" \
-            "curl -fsSL '${installer_url}' -o /tmp/networker-install.sh"
+        if ! ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" \
+            "curl -fsSL '${installer_url}' -o /tmp/networker-install.sh" 2>/dev/null; then
+            print_warn "TLS failed — retrying with --insecure…"
+            ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" \
+                "curl -fsSLk '${installer_url}' -o /tmp/networker-install.sh"
+        fi
     fi
 
     print_info "Running installer on remote host…"
@@ -2994,7 +2998,8 @@ _remote_bootstrap_install() {
     print_dim  "This may take 5–10 minutes (Rust install + compile)."
     echo ""
 
-    # Upload this installer to the VM, or download from Gist if running as a pipe
+    # Upload this installer to the VM.
+    # Prefer local file → SCP; fallback: remote curl from Gist (with -k if TLS fails).
     local script_path="${BASH_SOURCE[0]:-}"
     local installer_url="https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh"
     if [[ -f "$script_path" ]]; then
@@ -3002,8 +3007,12 @@ _remote_bootstrap_install() {
         scp -o StrictHostKeyChecking=no -q "$script_path" "${user}@${ip}:/tmp/networker-install.sh"
     else
         print_info "Downloading installer on VM from Gist…"
-        ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
-            "curl -fsSL '${installer_url}' -o /tmp/networker-install.sh"
+        if ! ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
+            "curl -fsSL '${installer_url}' -o /tmp/networker-install.sh" 2>/dev/null; then
+            print_warn "TLS failed — retrying with --insecure…"
+            ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
+                "curl -fsSLk '${installer_url}' -o /tmp/networker-install.sh"
+        fi
     fi
 
     print_info "Running installer on VM (the terminal will show the VM's install progress)…"
