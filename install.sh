@@ -3341,14 +3341,14 @@ _azure_win_install_binary() {
     local url="https://github.com/${REPO_GH}/releases/download/${ver}/${archive}"
     local dest='C:\networker'
 
-    # Pre-check release assets
+    # Pre-check release assets — fall back to source build if no pre-built binary
     local has_assets
     has_assets="$(gh release view --repo "$REPO_GH" "$ver" --json assets \
                   -q '[.assets[].name] | join(" ")' 2>/dev/null || echo "")"
     if ! printf '%s' "$has_assets" | grep -q "${binary}-.*windows"; then
-        print_err "Release ${ver} has no Windows binary for ${binary}."
-        echo "  Fix GitHub Actions billing then re-run."
-        exit 1
+        print_warn "Release ${ver} has no Windows binary for ${binary}."
+        _azure_win_source_build "$binary" "$rg" "$vm"
+        return $?
     fi
 
     print_info "Installing ${binary}.exe on Windows VM via PowerShell…"
@@ -3381,6 +3381,56 @@ PSEOF
         --output table 2>/dev/null || print_warn "Install command returned non-zero; check VM logs"
     rm -f "$ps_tmp"
     print_ok "${binary}.exe installed on Windows VM"
+}
+
+# Build a binary from source on an Azure Windows VM via run-command (PowerShell).
+# Installs Rust if needed, then cargo install from the repo.
+# $1 = binary name, $2 = resource group, $3 = VM name
+_azure_win_source_build() {
+    local binary="$1" rg="$2" vm="$3"
+    print_info "Building ${binary} from source on Windows VM (this may take several minutes)…"
+
+    local ps_tmp
+    ps_tmp="$(mktemp /tmp/networker-ps-XXXXX.ps1)"
+    cat > "$ps_tmp" <<PSEOF
+\$ErrorActionPreference = 'Stop'
+\$dest = 'C:\\networker'
+
+# Install Rust if not present
+if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+    Write-Host "Installing Rust…"
+    Invoke-WebRequest -Uri 'https://win.rustup.rs/x86_64' -OutFile C:\\rustup-init.exe -UseBasicParsing
+    & C:\\rustup-init.exe -y --default-toolchain stable 2>&1 | Select-Object -Last 3
+    \$env:Path = [System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User')
+}
+
+Write-Host "Building ${binary} from source…"
+cargo install --git ${REPO_HTTPS} ${binary} 2>&1 | Select-Object -Last 5
+
+New-Item -ItemType Directory -Force -Path \$dest | Out-Null
+Copy-Item "\$env:USERPROFILE\\.cargo\\bin\\${binary}.exe" "\$dest\\${binary}.exe" -Force
+
+\$machinePath = [System.Environment]::GetEnvironmentVariable('Path','Machine')
+if (\$machinePath -notlike "*\$dest*") {
+    [System.Environment]::SetEnvironmentVariable('Path',"\$machinePath;\$dest",'Machine')
+    Write-Host "Added \$dest to system PATH"
+}
+
+\$ver = & "\$dest\\${binary}.exe" --version 2>&1
+Write-Host "Installed: \$ver"
+PSEOF
+
+    az vm run-command invoke \
+        --resource-group "$rg" --name "$vm" \
+        --command-id RunPowerShellScript \
+        --scripts "@${ps_tmp}" \
+        --output table 2>/dev/null || {
+        print_warn "Source build may have failed — check VM logs"
+        rm -f "$ps_tmp"
+        return 1
+    }
+    rm -f "$ps_tmp"
+    print_ok "${binary}.exe built and installed on Azure Windows VM"
 }
 
 # Create a Windows Service for networker-endpoint on an Azure Windows VM.
