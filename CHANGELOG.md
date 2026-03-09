@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.1] – 2026-03-09 — Windows VM name validation & docs cleanup
+
+### Fixed
+- **install.sh**: Validate Windows VM names are <=15 characters in deploy-config mode (Azure rejects longer `osProfile.computerName`)
+- **README.md**: Removed outdated "private repo" SSH key prerequisite; repo is public
+
+### Changed
+- **install.sh / install.ps1**: Bumped `INSTALLER_VERSION` fallback to `v0.13.1`
+
+---
+
 ## [0.13.0] – 2026-03-08 — Config-driven deploy & test
 
 ### Added
