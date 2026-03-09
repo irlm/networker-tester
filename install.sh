@@ -3557,6 +3557,16 @@ step_azure_create_vm() {
 
         case "$choice" in
             1)
+                # Check power state — start if deallocated/stopped
+                local power_state
+                power_state="$(az vm get-instance-view --resource-group "$rg" --name "$vm" \
+                    --query "instanceView.statuses[?starts_with(code,'PowerState/')].displayStatus" \
+                    -o tsv 2>/dev/null || echo "")"
+                if [[ "$power_state" == *"deallocated"* || "$power_state" == *"stopped"* ]]; then
+                    print_info "VM is ${power_state} — starting…"
+                    az vm start --resource-group "$rg" --name "$vm" --output none
+                    print_ok "VM started"
+                fi
                 local ip
                 ip="$(az vm show --resource-group "$rg" --name "$vm" \
                     --show-details --query publicIps -o tsv 2>/dev/null || echo "")"
@@ -4424,6 +4434,19 @@ _gcp_create_instance() {
 
         case "$choice" in
             1)
+                # Check status — start if TERMINATED/STOPPED
+                local inst_status
+                inst_status="$(gcloud compute instances describe "$name" \
+                    --project "$GCP_PROJECT" \
+                    --zone "$GCP_ZONE" \
+                    --format='get(status)' 2>/dev/null || echo "")"
+                if [[ "$inst_status" == "TERMINATED" || "$inst_status" == "STOPPED" || "$inst_status" == "SUSPENDED" ]]; then
+                    print_info "Instance is ${inst_status} — starting…"
+                    gcloud compute instances start "$name" \
+                        --project "$GCP_PROJECT" \
+                        --zone "$GCP_ZONE" --quiet
+                    print_ok "Instance started"
+                fi
                 local ip
                 ip="$(gcloud compute instances describe "$name" \
                     --project "$GCP_PROJECT" \
