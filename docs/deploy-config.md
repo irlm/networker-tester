@@ -139,9 +139,9 @@ All fields are optional. If `tests` is omitted entirely, defaults are used.
 | `connection_reuse` | boolean | `false` | Reuse connections (warm probes) |
 | `udp_port` | number | `9999` | UDP echo port |
 | `udp_throughput_port` | number | `9998` | UDP throughput port |
-| `page_assets` | number | `20` | Number of assets for pageload |
-| `page_asset_size` | string | `"10k"` | Size of each page asset |
-| `page_preset` | string | — | Page preset name |
+| `page_assets` | number | `50` | Number of assets for pageload |
+| `page_asset_size` | string | `"50k"` | Size of each page asset |
+| `page_preset` | string | — | Page preset name (see below) |
 | `retries` | number | `0` | Retry failed probes |
 | `html_report` | string | `"report.html"` | HTML report filename |
 | `output_dir` | string | `"."` | Output directory for reports |
@@ -181,6 +181,23 @@ All fields are optional. If `tests` is omitted entirely, defaults are used.
 >
 > `dns`, `tls`, `native`, and `curl` probe modes are supported by the tester binary but
 > are not available in deploy-config mode. Use the tester CLI directly for those modes.
+
+### Page presets
+
+Presets model real-world page profiles (based on HTTP Archive data and sites like microsoft.com).
+Use `page_preset` to override `page_assets` and `page_asset_size` with a realistic asset mix.
+
+| Preset | Assets | Total size | Model |
+|--------|-------:|-----------:|-------|
+| `tiny` | 10 | ~100 KB | Simple landing / API docs |
+| `small` | 25 | ~900 KB | Blog / article page |
+| `default` | 50 | ~6 MB | Corporate homepage (first-party content) |
+| `medium` | 100 | ~10 MB | Full enterprise page (microsoft.com transferred) |
+| `large` | 200 | ~31 MB | Media-rich portal (uncompressed resources) |
+| `mixed` | 50 | ~7 MB | Varied-size distribution (realistic mix) |
+
+Each preset includes a realistic distribution of asset sizes — small tracking pixels, medium
+CSS/JS/fonts, and large images/bundles — rather than uniform-size assets.
 
 ## Examples
 

@@ -81,17 +81,82 @@ pub struct SharedH3Conn {
 /// Resolve a named preset to a vector of per-asset byte counts.
 pub fn resolve_preset(name: &str) -> anyhow::Result<Vec<usize>> {
     match name.to_lowercase().as_str() {
-        "tiny" => Ok(vec![1_024; 100]),    // 100 × 1 KB
-        "small" => Ok(vec![5_120; 50]),    //  50 × 5 KB
-        "default" => Ok(vec![10_240; 20]), //  20 × 10 KB  (unchanged default)
-        "medium" => Ok(vec![102_400; 10]), //  10 × 100 KB
-        "large" => Ok(vec![1_048_576; 5]), //   5 × 1 MB
+        // Modeled after real-world page profiles.
+        // Reference: microsoft.com ≈ 333 requests, 8 MB transferred, 19 MB resources.
+        //
+        // tiny   — simple landing / API docs page         (10 assets, ~100 KB)
+        // small  — blog article or lightweight SPA        (25 assets, ~900 KB)
+        // default — corporate homepage (first-party)      (50 assets, ~6 MB)
+        // medium — heavy SPA / full enterprise page       (100 assets, ~10 MB)
+        // large  — media-rich portal                      (200 assets, ~31 MB)
+        // mixed  — realistic varied-size distribution     (50 assets, ~7 MB)
+        "tiny" => {
+            // 10 assets, ~100 KB total — simple landing page
+            let mut v = vec![2_048; 4]; //   4 × 2 KB   (icons, tiny scripts)
+            v.extend(vec![10_240; 3]); //   3 × 10 KB  (CSS, small JS)
+            v.extend(vec![20_480; 3]); //   3 × 20 KB  (images, fonts)
+            Ok(v)
+        }
+        "small" => {
+            // 25 assets, ~900 KB total — blog / article page
+            let mut v = vec![1_024; 5]; //   5 × 1 KB   (tracking, tiny scripts)
+            v.extend(vec![5_120; 5]); //   5 × 5 KB   (icons, small CSS)
+            v.extend(vec![20_480; 5]); //   5 × 20 KB  (fonts, images)
+            v.extend(vec![51_200; 5]); //   5 × 50 KB  (JS bundles)
+            v.extend(vec![102_400; 5]); //   5 × 100 KB (hero images)
+            Ok(v)
+        }
+        "default" => {
+            // 50 assets, ~6 MB total — corporate homepage (microsoft.com first-party)
+            let mut v = vec![1_024; 10]; //  10 × 1 KB   (tracking pixels, beacons)
+            v.extend(vec![5_120; 8]); //   8 × 5 KB   (icons, small CSS)
+            v.extend(vec![20_480; 8]); //   8 × 20 KB  (fonts, stylesheets)
+            v.extend(vec![51_200; 8]); //   8 × 50 KB  (JS modules, images)
+            v.extend(vec![153_600; 6]); //   6 × 150 KB (hero images, large CSS)
+            v.extend(vec![307_200; 5]); //   5 × 300 KB (large JS bundles)
+            v.extend(vec![512_000; 3]); //   3 × 500 KB (main JS bundle, hi-res img)
+            v.extend(vec![819_200; 2]); //   2 × 800 KB (large media)
+            Ok(v)
+        }
+        "medium" => {
+            // 100 assets, ~10 MB total — microsoft.com full page (transferred)
+            let mut v = vec![1_024; 25]; //  25 × 1 KB   (tracking, analytics, pixels)
+            v.extend(vec![5_120; 15]); //  15 × 5 KB   (icons, small scripts)
+            v.extend(vec![20_480; 15]); //  15 × 20 KB  (CSS, fonts)
+            v.extend(vec![51_200; 15]); //  15 × 50 KB  (JS modules, thumbnails)
+            v.extend(vec![102_400; 10]); //  10 × 100 KB (images)
+            v.extend(vec![204_800; 8]); //   8 × 200 KB (hero images)
+            v.extend(vec![409_600; 6]); //   6 × 400 KB (large JS bundles)
+            v.extend(vec![614_400; 4]); //   4 × 600 KB (main bundles)
+            v.extend(vec![1_048_576; 2]); //  2 × 1 MB   (large media)
+            Ok(v)
+        }
+        "large" => {
+            // 200 assets, ~31 MB total — microsoft.com uncompressed resources
+            let mut v = vec![1_024; 50]; //  50 × 1 KB   (tracking, analytics)
+            v.extend(vec![5_120; 30]); //  30 × 5 KB   (icons, small scripts)
+            v.extend(vec![20_480; 30]); //  30 × 20 KB  (CSS, fonts)
+            v.extend(vec![51_200; 25]); //  25 × 50 KB  (JS modules, thumbnails)
+            v.extend(vec![102_400; 20]); //  20 × 100 KB (product images)
+            v.extend(vec![204_800; 15]); //  15 × 200 KB (hero images)
+            v.extend(vec![409_600; 12]); //  12 × 400 KB (large JS bundles)
+            v.extend(vec![614_400; 8]); //   8 × 600 KB (main bundles)
+            v.extend(vec![1_048_576; 5]); //   5 × 1 MB   (large media)
+            v.extend(vec![2_097_152; 5]); //   5 × 2 MB   (video, hi-res images)
+            Ok(v)
+        }
         "mixed" => {
-            // 30 assets, ~820 KB total
-            let mut v = vec![204_800usize; 1]; //   1 × 200 KB
-            v.extend(vec![51_200; 4]); //   4 × 50 KB
-            v.extend(vec![20_480; 10]); //  10 × 20 KB
-            v.extend(vec![5_120; 15]); //  15 × 5 KB
+            // 50 assets, ~7 MB total — realistic varied-size distribution
+            let mut v = vec![512; 5]; //   5 × 0.5 KB (tracking pixels)
+            v.extend(vec![2_048; 8]); //   8 × 2 KB   (small icons, beacons)
+            v.extend(vec![8_192; 7]); //   7 × 8 KB   (CSS, small scripts)
+            v.extend(vec![25_600; 7]); //   7 × 25 KB  (fonts, medium images)
+            v.extend(vec![51_200; 6]); //   6 × 50 KB  (JS modules)
+            v.extend(vec![102_400; 5]); //   5 × 100 KB (images)
+            v.extend(vec![204_800; 4]); //   4 × 200 KB (large images)
+            v.extend(vec![409_600; 4]); //   4 × 400 KB (JS bundles)
+            v.extend(vec![614_400; 2]); //   2 × 600 KB (main bundle)
+            v.extend(vec![1_048_576; 2]); //   2 × 1 MB   (large media)
             Ok(v)
         }
         other => Err(anyhow::anyhow!(
@@ -3348,57 +3413,62 @@ mod tests {
     // ── Preset tests ────────────────────────────────────────────────────────
 
     #[test]
-    fn resolve_preset_default_matches_legacy() {
+    fn resolve_preset_default() {
         let sizes = resolve_preset("default").unwrap();
-        assert_eq!(sizes.len(), 20);
-        assert!(sizes.iter().all(|&s| s == 10_240));
+        assert_eq!(sizes.len(), 50);
+        let total: usize = sizes.iter().sum();
+        // ~6 MB total
+        assert!(total > 5_000_000 && total < 7_000_000, "default total={total}");
     }
 
     #[test]
     fn resolve_preset_tiny() {
         let sizes = resolve_preset("tiny").unwrap();
-        assert_eq!(sizes.len(), 100);
-        assert!(sizes.iter().all(|&s| s == 1_024));
+        assert_eq!(sizes.len(), 10);
+        let total: usize = sizes.iter().sum();
+        // ~100 KB total
+        assert!(total > 80_000 && total < 120_000, "tiny total={total}");
     }
 
     #[test]
     fn resolve_preset_small() {
         let sizes = resolve_preset("small").unwrap();
-        assert_eq!(sizes.len(), 50);
-        assert!(sizes.iter().all(|&s| s == 5_120));
+        assert_eq!(sizes.len(), 25);
+        let total: usize = sizes.iter().sum();
+        // ~900 KB total
+        assert!(total > 800_000 && total < 1_000_000, "small total={total}");
     }
 
     #[test]
     fn resolve_preset_medium() {
         let sizes = resolve_preset("medium").unwrap();
-        assert_eq!(sizes.len(), 10);
-        assert!(sizes.iter().all(|&s| s == 102_400));
+        assert_eq!(sizes.len(), 100);
+        let total: usize = sizes.iter().sum();
+        // ~10 MB total
+        assert!(total > 9_000_000 && total < 12_000_000, "medium total={total}");
     }
 
     #[test]
     fn resolve_preset_large() {
         let sizes = resolve_preset("large").unwrap();
-        assert_eq!(sizes.len(), 5);
-        assert!(sizes.iter().all(|&s| s == 1_048_576));
+        assert_eq!(sizes.len(), 200);
+        let total: usize = sizes.iter().sum();
+        // ~31 MB total
+        assert!(total > 28_000_000 && total < 35_000_000, "large total={total}");
     }
 
     #[test]
-    fn resolve_preset_mixed_has_30_assets() {
+    fn resolve_preset_mixed_has_50_assets() {
         let sizes = resolve_preset("mixed").unwrap();
-        assert_eq!(sizes.len(), 30);
+        assert_eq!(sizes.len(), 50);
     }
 
     #[test]
-    fn resolve_preset_mixed_asset_composition() {
+    fn resolve_preset_mixed_total_size() {
         let sizes = resolve_preset("mixed").unwrap();
-        let large = sizes.iter().filter(|&&s| s == 204_800).count();
-        let medium = sizes.iter().filter(|&&s| s == 51_200).count();
-        let small = sizes.iter().filter(|&&s| s == 20_480).count();
-        let tiny = sizes.iter().filter(|&&s| s == 5_120).count();
-        assert_eq!(large, 1);
-        assert_eq!(medium, 4);
-        assert_eq!(small, 10);
-        assert_eq!(tiny, 15);
+        let total: usize = sizes.iter().sum();
+        // ~7 MB total
+        assert!(total > 5_500_000 && total < 8_000_000, "mixed total={total}");
     }
 
     #[test]
