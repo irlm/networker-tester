@@ -4529,6 +4529,16 @@ _gcp_create_instance() {
                     print_err "Failed to retrieve instance public IP."
                     exit 1
                 fi
+                # Ensure SSH is enabled on Windows VMs
+                local os_type="linux"
+                [[ "$label" == "tester" ]]   && os_type="$GCP_TESTER_OS"
+                [[ "$label" == "endpoint" ]] && os_type="$GCP_ENDPOINT_OS"
+                if [[ "$os_type" == "windows" ]]; then
+                    gcloud compute instances add-metadata "$name" \
+                        --project "$GCP_PROJECT" \
+                        --zone "$GCP_ZONE" \
+                        --metadata=enable-windows-ssh=TRUE --quiet 2>/dev/null || true
+                fi
                 printf -v "$ip_var" "%s" "$ip"
                 print_ok "Reusing instance '$name' — Public IP: ${BOLD}${ip}${RESET}"
                 return 0
@@ -4582,6 +4592,12 @@ _gcp_create_instance() {
     print_dim "This typically takes 1–2 minutes…"
     echo ""
 
+    local metadata_opt=""
+    if [[ "$os_type" == "windows" ]]; then
+        # Enable SSH on Windows VMs so gcloud compute ssh works
+        metadata_opt="--metadata=enable-windows-ssh=TRUE"
+    fi
+
     gcloud compute instances create "$name" \
         --project "$GCP_PROJECT" \
         --zone "$GCP_ZONE" \
@@ -4589,6 +4605,7 @@ _gcp_create_instance() {
         --image-family "$image_family" \
         --image-project "$image_project" \
         $tags_opt \
+        $metadata_opt \
         --quiet
 
     # Retrieve the external IP
