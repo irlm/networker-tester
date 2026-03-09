@@ -5759,6 +5759,12 @@ _deploy_preflight() {
                     print_err "AWS CLI not found — install from https://aws.amazon.com/cli/"
                     errors=$((errors + 1))
                 fi
+                # Live check: discover_system may have missed env vars or SSO token
+                if [[ $AWS_LOGGED_IN -eq 0 && $AWS_CLI_AVAILABLE -eq 1 ]]; then
+                    if aws sts get-caller-identity &>/dev/null 2>&1 </dev/null; then
+                        AWS_LOGGED_IN=1
+                    fi
+                fi
                 if [[ $AWS_LOGGED_IN -eq 1 ]]; then
                     print_ok "AWS credentials found"
                 else
