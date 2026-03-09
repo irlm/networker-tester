@@ -3030,6 +3030,12 @@ _remote_bootstrap_install() {
         fi
     fi
 
+    # Ensure CA certificates are up to date (Azure VMs can have stale/broken bundles)
+    print_info "Updating CA certificates on VM…"
+    ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
+        "sudo apt-get update -qq && sudo apt-get install -y --only-upgrade ca-certificates >/dev/null 2>&1 || true" \
+        < /dev/null 2>/dev/null
+
     print_info "Running installer on VM (the terminal will show the VM's install progress)…"
     echo ""
     # -t allocates a pseudo-TTY so the VM's spinner + colors work
@@ -4624,6 +4630,11 @@ _gcp_install_binary() {
                 "curl -fsSLk '${repo_url}' -o /tmp/networker-install.sh" 2>/dev/null || true
         fi
     fi
+
+    # Ensure CA certificates are up to date (cloud VMs can have stale bundles)
+    _gcp_ssh_run "$name" \
+        "sudo apt-get update -qq && sudo apt-get install -y --only-upgrade ca-certificates >/dev/null 2>&1 || true" \
+        2>/dev/null
 
     # Run the installer on the VM (handles Rust, build tools, binary install)
     if _gcp_ssh_run "$name" "test -f /tmp/networker-install.sh" 2>/dev/null; then
