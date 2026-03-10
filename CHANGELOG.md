@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.4] – 2026-03-10 — Pageload3 concurrent multiplexing & report improvements
+
+### Fixed
+- **pageload3 (HTTP/3)**: Send all QUIC asset requests concurrently via `join_all()` instead of sequentially awaiting each `send_request()` — matches real Chrome H3 multiplexing behavior, ~40-75% faster on high-latency connections
+- **HTML report**: LAN/Loopback targets shown as dimmed reference values (no diff percentages); first Internet target used as diff baseline; cross-target observations only compare Internet targets
+
+---
+
 ## [0.13.3] – 2026-03-10 — Windows endpoint VC++ runtime fix
 
 ### Fixed
