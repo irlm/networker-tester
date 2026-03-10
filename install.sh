@@ -310,6 +310,7 @@ COMPONENT=""   # "" = not set via CLI; "tester" | "endpoint" | "both" = explicit
 AUTO_YES=0
 FROM_SOURCE=0
 SKIP_RUST=0
+SKIP_SERVICE=0
 
 INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
@@ -465,6 +466,8 @@ parse_args() {
                 FROM_SOURCE=1 ;;
             --skip-rust)
                 SKIP_RUST=1 ;;
+            --no-service)
+                SKIP_SERVICE=1 ;;
             # Azure
             --azure)
                 ENDPOINT_LOCATION="azure"; DO_REMOTE_ENDPOINT=1 ;;
@@ -613,7 +616,7 @@ detect_chrome() {
 _remote_chrome_available() {
     local ip="$1" user="$2"
     ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "${user}@${ip}" \
-        'command -v google-chrome google-chrome-stable chromium-browser chromium chromium-browser-stable 2>/dev/null | head -1 | grep -q .' 2>/dev/null
+        'command -v google-chrome google-chrome-stable chromium-browser chromium chromium-browser-stable 2>/dev/null | head -1 | grep -q . || test -x "$HOME/.local/bin/google-chrome"' 2>/dev/null
 }
 
 # ── Target triple detection ───────────────────────────────────────────────────
@@ -1170,17 +1173,26 @@ _lan_install_binary_linux() {
 
     # Download and install on remote host
     print_info "Installing ${binary} on ${_LAN_DEST} (${ver:-source})…"
+    local dl_ok=0
     if [[ -n "$ver" ]]; then
         local dl_url="https://github.com/${REPO_GH}/releases/download/${ver}/${archive}"
         if [[ $has_sudo -eq 1 ]]; then
-            ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" \
-                "set -e; curl -fsSL '${dl_url}' -o /tmp/${archive} && tar xzf /tmp/${archive} -C /tmp && sudo mv /tmp/${binary} /usr/local/bin/${binary} && sudo chmod +x /usr/local/bin/${binary} && rm -f /tmp/${archive}"
+            if ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" \
+                "set -e; curl -fsSL '${dl_url}' -o /tmp/${archive} && tar xzf /tmp/${archive} -C /tmp && sudo mv /tmp/${binary} /usr/local/bin/${binary} && sudo chmod +x /usr/local/bin/${binary} && rm -f /tmp/${archive}" 2>/dev/null; then
+                dl_ok=1
+            fi
         else
-            ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" \
-                "set -e; mkdir -p \"\$HOME/.local/bin\" && curl -fsSL '${dl_url}' -o /tmp/${archive} && tar xzf /tmp/${archive} -C /tmp && mv /tmp/${binary} \"\$HOME/.local/bin/${binary}\" && chmod +x \"\$HOME/.local/bin/${binary}\" && rm -f /tmp/${archive} && (grep -q '.local/bin' \"\$HOME/.bashrc\" 2>/dev/null || echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> \"\$HOME/.bashrc\") && (grep -q '.local/bin' \"\$HOME/.profile\" 2>/dev/null || echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> \"\$HOME/.profile\")"
+            if ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" \
+                "set -e; mkdir -p \"\$HOME/.local/bin\" && curl -fsSL '${dl_url}' -o /tmp/${archive} && tar xzf /tmp/${archive} -C /tmp && mv /tmp/${binary} \"\$HOME/.local/bin/${binary}\" && chmod +x \"\$HOME/.local/bin/${binary}\" && rm -f /tmp/${archive} && (grep -q '.local/bin' \"\$HOME/.bashrc\" 2>/dev/null || echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> \"\$HOME/.bashrc\") && (grep -q '.local/bin' \"\$HOME/.profile\" 2>/dev/null || echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> \"\$HOME/.profile\")" 2>/dev/null; then
+                dl_ok=1
+            fi
         fi
-    else
-        # No release — fallback to bootstrap (builds from source)
+    fi
+    if [[ $dl_ok -eq 0 ]]; then
+        # No release assets or download failed — build from source
+        if [[ -n "$ver" ]]; then
+            print_info "No pre-built binary for ${ver} — building from source…"
+        fi
         _lan_bootstrap_install "$binary" "$role"
         return
     fi
@@ -1214,20 +1226,31 @@ _lan_bootstrap_install() {
     print_info "Installing ${binary} on ${_LAN_DEST} via SSH (port ${_LAN_PORT})…"
 
     local script_path="${BASH_SOURCE[0]:-}"
-    local installer_url="https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh"
+    local gist_url="https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh"
+    local repo_url="https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh"
     if [[ -f "$script_path" ]]; then
         print_info "Uploading installer to remote host…"
         scp "${_LAN_SCP_OPTS[@]}" "$script_path" "${_LAN_DEST}:/tmp/networker-install.sh"
     else
-        print_info "Downloading installer on remote host from Gist…"
-        ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" \
-            "curl -fsSL '${installer_url}' -o /tmp/networker-install.sh"
+        # Running as curl|bash — download locally first, then SCP
+        print_info "Downloading installer locally, then uploading to remote host…"
+        local tmp_installer="/tmp/networker-install-$$.sh"
+        if curl -fsSL "${gist_url}" -o "$tmp_installer" 2>/dev/null || \
+           curl -fsSL "${repo_url}" -o "$tmp_installer" 2>/dev/null; then
+            scp "${_LAN_SCP_OPTS[@]}" "$tmp_installer" "${_LAN_DEST}:/tmp/networker-install.sh"
+            rm -f "$tmp_installer"
+        else
+            rm -f "$tmp_installer"
+            print_warn "Local download failed — trying directly on remote host…"
+            ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" \
+                "curl -fsSLk '${repo_url}' -o /tmp/networker-install.sh"
+        fi
     fi
 
     print_info "Running installer on remote host…"
     echo ""
     ssh -t "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" \
-        "bash /tmp/networker-install.sh ${comp_arg} -y"
+        "bash /tmp/networker-install.sh ${comp_arg} -y --no-service"
 }
 
 # Install binary on a LAN Windows host via SSH + PowerShell.
@@ -2982,17 +3005,37 @@ _remote_bootstrap_install() {
     print_dim  "This may take 5–10 minutes (Rust install + compile)."
     echo ""
 
-    # Upload this installer to the VM, or download from Gist if running as a pipe
+    # Upload this installer to the VM.
+    # Prefer: local file SCP → download locally then SCP → remote curl (last resort).
     local script_path="${BASH_SOURCE[0]:-}"
-    local installer_url="https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh"
+    local gist_url="https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh"
+    local repo_url="https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh"
     if [[ -f "$script_path" ]]; then
         print_info "Uploading installer to VM…"
         scp -o StrictHostKeyChecking=no -q "$script_path" "${user}@${ip}:/tmp/networker-install.sh"
     else
-        print_info "Downloading installer on VM from Gist…"
-        ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
-            "curl -fsSL '${installer_url}' -o /tmp/networker-install.sh"
+        # Running as curl|bash — no local file. Download locally first, then SCP.
+        print_info "Downloading installer locally, then uploading to VM…"
+        local tmp_installer="/tmp/networker-install-$$.sh"
+        if curl -fsSL "${gist_url}" -o "$tmp_installer" 2>/dev/null || \
+           curl -fsSL "${repo_url}" -o "$tmp_installer" 2>/dev/null; then
+            scp -o StrictHostKeyChecking=no -q "$tmp_installer" "${user}@${ip}:/tmp/networker-install.sh"
+            rm -f "$tmp_installer"
+        else
+            # Local download also failed — try on VM directly as last resort
+            rm -f "$tmp_installer"
+            print_warn "Local download failed — trying directly on VM…"
+            ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
+                "curl -fsSLk '${repo_url}' -o /tmp/networker-install.sh"
+        fi
     fi
+
+    # Remove OUTPUT iptables REDIRECT rules from prior installs — they break all outbound HTTPS
+    # by redirecting the VM's own port 80/443 traffic to the local endpoint.
+    ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
+        "sudo iptables -t nat -D OUTPUT -p tcp --dport 80  -j REDIRECT --to-port 8080 2>/dev/null; \
+         sudo iptables -t nat -D OUTPUT -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null; \
+         true" < /dev/null 2>/dev/null
 
     print_info "Running installer on VM (the terminal will show the VM's install progress)…"
     echo ""
@@ -3123,11 +3166,9 @@ if command -v iptables &>/dev/null; then
         sudo iptables -t nat -A PREROUTING -p tcp --dport 80  -j REDIRECT --to-port 8080
     sudo iptables -t nat -C PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null || \
         sudo iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443
-    # Also redirect loopback (OUTPUT chain) so curl from the VM itself works on port 80/443.
-    sudo iptables -t nat -C OUTPUT -p tcp --dport 80  -j REDIRECT --to-port 8080 2>/dev/null || \
-        sudo iptables -t nat -A OUTPUT -p tcp --dport 80  -j REDIRECT --to-port 8080
-    sudo iptables -t nat -C OUTPUT -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null || \
-        sudo iptables -t nat -A OUTPUT -p tcp --dport 443 -j REDIRECT --to-port 8443
+    # Remove any OUTPUT REDIRECT rules from prior installs — they break outbound HTTPS.
+    sudo iptables -t nat -D OUTPUT -p tcp --dport 80  -j REDIRECT --to-port 8080 2>/dev/null || true
+    sudo iptables -t nat -D OUTPUT -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null || true
     # Persist rules across reboots if iptables-persistent is available.
     if command -v netfilter-persistent &>/dev/null; then
         sudo netfilter-persistent save 2>/dev/null || true
@@ -3148,6 +3189,10 @@ REMOTE
 step_setup_endpoint_service() {
     next_step "Set up networker-endpoint systemd service"
 
+    if [[ $SKIP_SERVICE -eq 1 ]]; then
+        print_info "Service setup skipped (--no-service)"
+        return 0
+    fi
     if [[ "$SYS_OS" != "Linux" ]]; then
         print_info "Systemd service setup is Linux-only — skipping."
         print_dim  "  On macOS: run networker-endpoint manually in a terminal."
@@ -3168,6 +3213,10 @@ step_setup_endpoint_service() {
     # The cargo install dir (~/.cargo/bin) may not be traversable by system users
     # whose home dir is restricted (Ubuntu 22.04 default: drwx------).
     if [[ "$binary_path" != "/usr/local/bin/networker-endpoint" && -x "$binary_path" ]]; then
+        # Stop the service first if running — can't overwrite a running binary ("Text file busy")
+        if systemctl is-active networker-endpoint &>/dev/null; then
+            sudo systemctl stop networker-endpoint
+        fi
         sudo cp "$binary_path" /usr/local/bin/networker-endpoint
         sudo chmod 755 /usr/local/bin/networker-endpoint
         binary_path="/usr/local/bin/networker-endpoint"
@@ -3201,10 +3250,9 @@ UNIT
             sudo iptables -t nat -A PREROUTING -p tcp --dport 80  -j REDIRECT --to-port 8080
         sudo iptables -t nat -C PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null || \
             sudo iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443
-        sudo iptables -t nat -C OUTPUT -p tcp --dport 80  -j REDIRECT --to-port 8080 2>/dev/null || \
-            sudo iptables -t nat -A OUTPUT -p tcp --dport 80  -j REDIRECT --to-port 8080
-        sudo iptables -t nat -C OUTPUT -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null || \
-            sudo iptables -t nat -A OUTPUT -p tcp --dport 443 -j REDIRECT --to-port 8443
+        # Remove any OUTPUT REDIRECT rules from prior installs — they break outbound HTTPS.
+        sudo iptables -t nat -D OUTPUT -p tcp --dport 80  -j REDIRECT --to-port 8080 2>/dev/null || true
+        sudo iptables -t nat -D OUTPUT -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null || true
         if command -v netfilter-persistent &>/dev/null; then
             sudo netfilter-persistent save 2>/dev/null || true
         elif command -v iptables-save &>/dev/null; then
@@ -3293,14 +3341,14 @@ _azure_win_install_binary() {
     local url="https://github.com/${REPO_GH}/releases/download/${ver}/${archive}"
     local dest='C:\networker'
 
-    # Pre-check release assets
+    # Pre-check release assets — fall back to source build if no pre-built binary
     local has_assets
     has_assets="$(gh release view --repo "$REPO_GH" "$ver" --json assets \
                   -q '[.assets[].name] | join(" ")' 2>/dev/null || echo "")"
     if ! printf '%s' "$has_assets" | grep -q "${binary}-.*windows"; then
-        print_err "Release ${ver} has no Windows binary for ${binary}."
-        echo "  Fix GitHub Actions billing then re-run."
-        exit 1
+        print_warn "Release ${ver} has no Windows binary for ${binary}."
+        _azure_win_source_build "$binary" "$rg" "$vm"
+        return $?
     fi
 
     print_info "Installing ${binary}.exe on Windows VM via PowerShell…"
@@ -3333,6 +3381,77 @@ PSEOF
         --output table 2>/dev/null || print_warn "Install command returned non-zero; check VM logs"
     rm -f "$ps_tmp"
     print_ok "${binary}.exe installed on Windows VM"
+}
+
+# Build a binary from source on an Azure Windows VM via run-command (PowerShell).
+# Installs Rust if needed, then cargo install from the repo.
+# $1 = binary name, $2 = resource group, $3 = VM name
+_azure_win_source_build() {
+    local binary="$1" rg="$2" vm="$3"
+    print_info "Building ${binary} from source on Windows VM…"
+    print_dim "This may take 25–40 min (VS Build Tools + Rust + compile)."
+
+    local ps_tmp
+    ps_tmp="$(mktemp /tmp/networker-ps-XXXXX.ps1)"
+    cat > "$ps_tmp" <<PSEOF
+\$ErrorActionPreference = 'Continue'
+\$dest = 'C:\\networker'
+
+# Set known paths (runs as SYSTEM via run-command)
+\$env:CARGO_HOME = 'C:\\cargo'
+\$env:RUSTUP_HOME = 'C:\\rustup'
+New-Item -ItemType Directory -Force -Path \$env:CARGO_HOME | Out-Null
+New-Item -ItemType Directory -Force -Path \$env:RUSTUP_HOME | Out-Null
+
+# Install Visual C++ Build Tools if not present
+if (-not (Test-Path 'C:\\BuildTools\\VC\\Tools\\MSVC')) {
+    Write-Host 'Installing Visual C++ Build Tools...'
+    Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vs_buildtools.exe' -OutFile C:\\vs_buildtools.exe -UseBasicParsing
+    & C:\\vs_buildtools.exe --quiet --wait --norestart --nocache --installPath C:\\BuildTools --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended 2>&1 | Out-Null
+    Write-Host 'Build Tools installed'
+}
+
+# Install Rust if not present
+if (-not (Test-Path 'C:\\cargo\\bin\\cargo.exe')) {
+    Write-Host 'Installing Rust...'
+    Invoke-WebRequest -Uri 'https://win.rustup.rs/x86_64' -OutFile C:\\rustup-init.exe -UseBasicParsing
+    & C:\\rustup-init.exe -y --default-toolchain stable 2>&1 | Select-Object -Last 3
+}
+\$env:Path = 'C:\\cargo\\bin;' + \$env:Path
+
+Write-Host "Building ${binary} from source..."
+cargo install --git ${REPO_HTTPS} ${binary} 2>&1 | Select-Object -Last 5
+
+New-Item -ItemType Directory -Force -Path \$dest | Out-Null
+\$srcExe = "C:\\cargo\\bin\\${binary}.exe"
+\$dstExe = Join-Path \$dest "${binary}.exe"
+if (Test-Path \$srcExe) {
+    Copy-Item \$srcExe \$dstExe -Force
+    Write-Host ("Installed: " + (& \$dstExe --version 2>&1))
+} else {
+    Write-Host "ERROR: Binary not found at \$srcExe"
+    exit 1
+}
+
+\$mp = [System.Environment]::GetEnvironmentVariable('Path','Machine')
+if (\$mp -notlike ('*' + \$dest + '*')) {
+    \$newPath = \$mp + ';' + \$dest
+    [System.Environment]::SetEnvironmentVariable('Path', \$newPath, 'Machine')
+}
+PSEOF
+
+    az vm run-command invoke \
+        --resource-group "$rg" --name "$vm" \
+        --command-id RunPowerShellScript \
+        --scripts "@${ps_tmp}" \
+        --timeout 2400 \
+        --output table 2>/dev/null || {
+        print_warn "Source build may have failed — check VM logs"
+        rm -f "$ps_tmp"
+        return 1
+    }
+    rm -f "$ps_tmp"
+    print_ok "${binary}.exe built and installed on Azure Windows VM"
 }
 
 # Create a Windows Service for networker-endpoint on an Azure Windows VM.
@@ -3532,6 +3651,16 @@ step_azure_create_vm() {
 
         case "$choice" in
             1)
+                # Check power state — start if deallocated/stopped
+                local power_state
+                power_state="$(az vm get-instance-view --resource-group "$rg" --name "$vm" \
+                    --query "instanceView.statuses[?starts_with(code,'PowerState/')].displayStatus" \
+                    -o tsv 2>/dev/null || echo "")"
+                if [[ "$power_state" == *"deallocated"* || "$power_state" == *"stopped"* ]]; then
+                    print_info "VM is ${power_state} — starting…"
+                    az vm start --resource-group "$rg" --name "$vm" --output none
+                    print_ok "VM started"
+                fi
                 local ip
                 ip="$(az vm show --resource-group "$rg" --name "$vm" \
                     --show-details --query publicIps -o tsv 2>/dev/null || echo "")"
@@ -4399,6 +4528,19 @@ _gcp_create_instance() {
 
         case "$choice" in
             1)
+                # Check status — start if TERMINATED/STOPPED
+                local inst_status
+                inst_status="$(gcloud compute instances describe "$name" \
+                    --project "$GCP_PROJECT" \
+                    --zone "$GCP_ZONE" \
+                    --format='get(status)' 2>/dev/null || echo "")"
+                if [[ "$inst_status" == "TERMINATED" || "$inst_status" == "STOPPED" || "$inst_status" == "SUSPENDED" ]]; then
+                    print_info "Instance is ${inst_status} — starting…"
+                    gcloud compute instances start "$name" \
+                        --project "$GCP_PROJECT" \
+                        --zone "$GCP_ZONE" --quiet
+                    print_ok "Instance started"
+                fi
                 local ip
                 ip="$(gcloud compute instances describe "$name" \
                     --project "$GCP_PROJECT" \
@@ -4407,6 +4549,16 @@ _gcp_create_instance() {
                 if [[ -z "$ip" ]]; then
                     print_err "Failed to retrieve instance public IP."
                     exit 1
+                fi
+                # Ensure SSH is enabled on Windows VMs
+                local os_type="linux"
+                [[ "$label" == "tester" ]]   && os_type="$GCP_TESTER_OS"
+                [[ "$label" == "endpoint" ]] && os_type="$GCP_ENDPOINT_OS"
+                if [[ "$os_type" == "windows" ]]; then
+                    gcloud compute instances add-metadata "$name" \
+                        --project "$GCP_PROJECT" \
+                        --zone "$GCP_ZONE" \
+                        --metadata=enable-windows-ssh=TRUE --quiet 2>/dev/null || true
                 fi
                 printf -v "$ip_var" "%s" "$ip"
                 print_ok "Reusing instance '$name' — Public IP: ${BOLD}${ip}${RESET}"
@@ -4461,6 +4613,12 @@ _gcp_create_instance() {
     print_dim "This typically takes 1–2 minutes…"
     echo ""
 
+    local metadata_opt=""
+    if [[ "$os_type" == "windows" ]]; then
+        # Enable SSH on Windows VMs so gcloud compute ssh works
+        metadata_opt="--metadata=enable-windows-ssh=TRUE"
+    fi
+
     gcloud compute instances create "$name" \
         --project "$GCP_PROJECT" \
         --zone "$GCP_ZONE" \
@@ -4468,6 +4626,7 @@ _gcp_create_instance() {
         --image-family "$image_family" \
         --image-project "$image_project" \
         $tags_opt \
+        $metadata_opt \
         --quiet
 
     # Retrieve the external IP
@@ -4541,13 +4700,31 @@ _gcp_install_binary() {
             --quiet 2>/dev/null || true
     fi
 
-    # If SCP failed (e.g. curl|bash — no local file), download from Gist on the VM
+    # If SCP failed (e.g. curl|bash — no local file), download locally then SCP via gcloud
     if ! _gcp_ssh_run "$name" "test -f /tmp/networker-install.sh" 2>/dev/null; then
-        print_dim "Downloading installer on the instance…"
-        _gcp_ssh_run "$name" \
-            "curl -fsSL 'https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh' \
-             -o /tmp/networker-install.sh" 2>/dev/null || true
+        print_dim "Downloading installer locally, then uploading to instance…"
+        local tmp_installer="/tmp/networker-install-$$.sh"
+        local gist_url="https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh"
+        local repo_url="https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh"
+        if curl -fsSL "${gist_url}" -o "$tmp_installer" 2>/dev/null || \
+           curl -fsSL "${repo_url}" -o "$tmp_installer" 2>/dev/null; then
+            gcloud compute scp "$tmp_installer" "${name}:/tmp/networker-install.sh" \
+                --project "$GCP_PROJECT" \
+                --zone "$GCP_ZONE" \
+                --quiet 2>/dev/null || true
+            rm -f "$tmp_installer"
+        else
+            rm -f "$tmp_installer"
+            # Last resort: try on the VM directly
+            _gcp_ssh_run "$name" \
+                "curl -fsSLk '${repo_url}' -o /tmp/networker-install.sh" 2>/dev/null || true
+        fi
     fi
+
+    # Ensure CA certificates are up to date (cloud VMs can have stale bundles)
+    _gcp_ssh_run "$name" \
+        "sudo apt-get update -qq && sudo apt-get install -y --only-upgrade ca-certificates >/dev/null 2>&1 || true" \
+        2>/dev/null
 
     # Run the installer on the VM (handles Rust, build tools, binary install)
     if _gcp_ssh_run "$name" "test -f /tmp/networker-install.sh" 2>/dev/null; then
@@ -4748,6 +4925,173 @@ _gcp_win_source_build() {
     print_ok "${binary}.exe built and installed on GCE Windows VM"
 }
 
+# Deploy endpoint on GCP Windows VM using startup script (no SSH required).
+# Sets a startup script that installs Rust, builds the binary, creates the service,
+# and opens firewall ports. Then polls health check until the endpoint is ready.
+_gcp_win_deploy_endpoint_via_startup() {
+    local name="$1" ip="$2"
+
+    next_step "Install networker-endpoint on GCE Windows VM (via startup script)"
+    print_info "Setting startup script to build and install endpoint…"
+    print_dim "This will install VS Build Tools + Rust + compile from source on the VM."
+    print_dim "Expected time: 25–40 minutes (first build on e2-small)."
+    echo ""
+
+    # Write the PowerShell install worker script (runs as scheduled task — no GCE timeout)
+    local ps_tmp
+    ps_tmp="$(mktemp /tmp/networker-gcp-win-XXXXX.ps1)"
+
+    # The startup script is a trampoline: it writes the worker to disk and schedules it,
+    # then exits immediately so GCE's script runner doesn't kill it.
+    cat > "$ps_tmp" <<'PSEOF'
+$ErrorActionPreference = 'Continue'
+
+# --- Trampoline: write worker script and schedule it, then exit ---
+$workerPath = 'C:\networker-install-worker.ps1'
+$workerContent = @'
+$ErrorActionPreference = 'Continue'
+$dest = 'C:\networker'
+$binary = 'networker-endpoint'
+$repo = 'https://github.com/irlm/networker-tester'
+$logFile = 'C:\networker-install.log'
+
+function Log($msg) {
+    $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    $line = "$ts  $msg"
+    Add-Content -Path $logFile -Value $line
+}
+
+# Skip if already installed and running
+if (Get-Service -Name $binary -ErrorAction SilentlyContinue) {
+    $svc = Get-Service -Name $binary
+    if ($svc.Status -eq 'Running') {
+        Log 'Service already running - skipping install'
+        exit 0
+    }
+}
+
+# Set CARGO_HOME and RUSTUP_HOME to known paths (runs as SYSTEM)
+$env:CARGO_HOME = 'C:\cargo'
+$env:RUSTUP_HOME = 'C:\rustup'
+New-Item -ItemType Directory -Force -Path $env:CARGO_HOME -ErrorAction SilentlyContinue | Out-Null
+New-Item -ItemType Directory -Force -Path $env:RUSTUP_HOME -ErrorAction SilentlyContinue | Out-Null
+
+# Install Visual C++ Build Tools (required for Rust MSVC target)
+if (-not (Test-Path 'C:\BuildTools\VC\Tools\MSVC')) {
+    Log 'Installing Visual C++ Build Tools (10-15 min)...'
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vs_buildtools.exe' -OutFile C:\vs_buildtools.exe -UseBasicParsing
+    $p = Start-Process -FilePath 'C:\vs_buildtools.exe' -ArgumentList '--quiet','--wait','--norestart','--nocache','--installPath','C:\BuildTools','--add','Microsoft.VisualStudio.Workload.VCTools','--includeRecommended' -Wait -PassThru
+    Log ('VS Build Tools exit code: ' + $p.ExitCode)
+    if (Test-Path 'C:\BuildTools\VC\Tools\MSVC') {
+        Log 'Visual C++ Build Tools installed successfully'
+    } else {
+        Log 'WARNING: MSVC directory not found after install — build may fail'
+    }
+} else {
+    Log 'Visual C++ Build Tools already present'
+}
+
+# Install Rust if not present
+if (-not (Test-Path 'C:\cargo\bin\cargo.exe')) {
+    Log 'Installing Rust...'
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest -Uri 'https://win.rustup.rs/x86_64' -OutFile C:\rustup-init.exe -UseBasicParsing
+    & C:\rustup-init.exe -y --default-toolchain stable 2>&1 | Out-Null
+}
+$env:Path = 'C:\cargo\bin;C:\BuildTools\VC\Tools\MSVC\*\bin\Hostx64\x64;' + $env:Path
+Log ('Rust: ' + (& C:\cargo\bin\rustc.exe --version 2>&1))
+
+# Build endpoint from source
+Log ('Building ' + $binary + ' from source (15-25 min on small VM)...')
+& C:\cargo\bin\cargo.exe install --git $repo $binary 2>&1 | Out-Null
+$srcExe = "C:\cargo\bin\${binary}.exe"
+
+# Copy binary to destination
+New-Item -ItemType Directory -Force -Path $dest -ErrorAction SilentlyContinue | Out-Null
+$dstExe = Join-Path $dest "${binary}.exe"
+if (Test-Path $srcExe) {
+    Copy-Item $srcExe $dstExe -Force
+    Log ('Built: ' + (& $dstExe --version 2>&1))
+} else {
+    Log ('ERROR: Binary not found at ' + $srcExe)
+    exit 1
+}
+
+# Add to PATH
+$mp = [System.Environment]::GetEnvironmentVariable('Path','Machine')
+if ($mp -notlike ('*' + $dest + '*')) {
+    $newPath = $mp + ';' + $dest
+    [System.Environment]::SetEnvironmentVariable('Path', $newPath, 'Machine')
+}
+
+# Create Windows service
+sc.exe create $binary binPath=$dstExe start=auto | Out-Null
+sc.exe description $binary 'Networker Endpoint diagnostics server' | Out-Null
+sc.exe start $binary | Out-Null
+Log 'Service created and started'
+
+# Open firewall ports
+netsh advfirewall firewall add rule name='Networker-HTTP'  protocol=TCP dir=in action=allow localport=8080 | Out-Null
+netsh advfirewall firewall add rule name='Networker-HTTPS' protocol=TCP dir=in action=allow localport=8443 | Out-Null
+netsh advfirewall firewall add rule name='Networker-UDP'   protocol=UDP dir=in action=allow localport='8443,9998,9999' | Out-Null
+Log 'Firewall rules added'
+
+# Auto-shutdown task (04:00 UTC)
+schtasks /Create /TN 'NetworkerAutoShutdown' /TR 'shutdown /s /t 0' /SC DAILY /ST 04:00 /RU SYSTEM /F | Out-Null
+Log 'Auto-shutdown scheduled at 04:00 UTC'
+
+Log '=== INSTALL COMPLETE ==='
+'@
+
+# Write the worker script to disk
+Set-Content -Path $workerPath -Value $workerContent -Force
+
+# Schedule it to run immediately as SYSTEM (survives GCE script runner timeout)
+# Use /SC ONSTART so the task definition is valid; /Run triggers it now.
+schtasks /Create /TN 'NetworkerInstallWorker' /TR "powershell.exe -ExecutionPolicy Bypass -File $workerPath" /SC ONSTART /RU SYSTEM /F | Out-Null
+schtasks /Run /TN 'NetworkerInstallWorker' | Out-Null
+
+Write-Host 'Install worker scheduled — exiting startup script'
+exit 0
+PSEOF
+
+    gcloud compute instances add-metadata "$name" \
+        --project "$GCP_PROJECT" \
+        --zone "$GCP_ZONE" \
+        --metadata-from-file=windows-startup-script-ps1="$ps_tmp" \
+        --quiet 2>/dev/null
+    rm -f "$ps_tmp"
+
+    # Reset VM to trigger the startup script
+    print_info "Resetting VM to trigger install…"
+    gcloud compute instances reset "$name" \
+        --project "$GCP_PROJECT" \
+        --zone "$GCP_ZONE" \
+        --quiet 2>/dev/null
+
+    # Poll health check instead of SSH
+    print_info "Waiting for endpoint to come online (compiling from source — may take 30+ min)…"
+    local attempt=0 max_attempts=180  # 180 × 15s = 45 min max
+    while [[ $attempt -lt $max_attempts ]]; do
+        if curl -sf --max-time 5 "http://${ip}:8080/health" &>/dev/null; then
+            echo ""
+            print_ok "Endpoint is healthy at http://${ip}:8080/health"
+            return 0
+        fi
+        attempt=$((attempt + 1))
+        if (( attempt % 4 == 0 )); then
+            local mins=$(( attempt * 15 / 60 ))
+            printf "\r  … waiting (%d min elapsed)" "$mins"
+        fi
+        sleep 15
+    done
+    echo ""
+    print_warn "Endpoint not responding after 30 minutes."
+    print_info "Check VM serial log: gcloud compute instances get-serial-port-output $name --zone $GCP_ZONE"
+    print_info "Check install log via RDP: type C:\\networker-install.log"
+}
+
 # Create a Windows Service for networker-endpoint on a GCE Windows VM.
 _gcp_win_create_endpoint_service() {
     local name="$1"
@@ -4851,12 +5195,7 @@ step_gcp_deploy_endpoint() {
     _gcp_create_instance "endpoint" "$GCP_ENDPOINT_NAME" "$GCP_ENDPOINT_MACHINE_TYPE" "GCP_ENDPOINT_IP"
 
     if [[ "$GCP_ENDPOINT_OS" == "windows" ]]; then
-        _gcp_wait_for_windows_vm "$GCP_ENDPOINT_NAME" "endpoint instance"
-        _gcp_reset_windows_password "$GCP_ENDPOINT_NAME" "endpoint"
-        _gcp_win_set_auto_shutdown "$GCP_ENDPOINT_NAME" "endpoint instance"
-        _gcp_win_install_binary "networker-endpoint" "$GCP_ENDPOINT_NAME"
-        _gcp_win_create_endpoint_service "$GCP_ENDPOINT_NAME"
-        _gcp_verify_health "$GCP_ENDPOINT_NAME" "$GCP_ENDPOINT_IP"
+        _gcp_win_deploy_endpoint_via_startup "$GCP_ENDPOINT_NAME" "$GCP_ENDPOINT_IP"
     else
         _gcp_wait_for_ssh "$GCP_ENDPOINT_NAME" "endpoint instance"
         _gcp_set_auto_shutdown "$GCP_ENDPOINT_NAME" "endpoint instance"
@@ -5482,32 +5821,75 @@ _deploy_install_chrome_remote() {
     fi
 
     print_info "Installing Chrome/Chromium on remote tester ($dest)…"
-    # Detect package manager and install Chromium
+    # Detect package manager and install Chromium (handles no-sudo case)
     ssh "${ssh_opts[@]}" "$dest" bash -s <<'REMOTE_CHROME'
-set -e
-if command -v apt-get &>/dev/null; then
-    sudo apt-get update -qq
-    sudo apt-get install -y chromium-browser 2>/dev/null || sudo apt-get install -y chromium
-    sudo apt-get install -y libnss3-tools 2>/dev/null || true
-elif command -v dnf &>/dev/null; then
-    sudo dnf install -y chromium
-    sudo dnf install -y nss-tools 2>/dev/null || true
-elif command -v yum &>/dev/null; then
-    sudo yum install -y chromium
-elif command -v pacman &>/dev/null; then
-    sudo pacman -S --noconfirm chromium
-elif command -v apk &>/dev/null; then
-    sudo apk add chromium
-else
-    echo "ERROR: no supported package manager found"
-    exit 1
+# Check if Chrome is already installed
+for cmd in google-chrome chromium-browser chromium; do
+    if command -v "$cmd" &>/dev/null; then
+        echo "Chrome/Chromium already available: $(command -v "$cmd")"
+        exit 0
+    fi
+done
+
+# Check for passwordless sudo
+HAS_SUDO=0
+if sudo -n true 2>/dev/null; then
+    HAS_SUDO=1
 fi
+
+if [[ $HAS_SUDO -eq 1 ]]; then
+    if command -v apt-get &>/dev/null; then
+        sudo apt-get update -qq
+        sudo apt-get install -y chromium-browser 2>/dev/null || sudo apt-get install -y chromium
+        sudo apt-get install -y libnss3-tools 2>/dev/null || true
+    elif command -v dnf &>/dev/null; then
+        sudo dnf install -y chromium
+        sudo dnf install -y nss-tools 2>/dev/null || true
+    elif command -v yum &>/dev/null; then
+        sudo yum install -y chromium
+    elif command -v pacman &>/dev/null; then
+        sudo pacman -S --noconfirm chromium
+    elif command -v apk &>/dev/null; then
+        sudo apk add chromium
+    fi
+else
+    # No sudo — try user-local Chrome install via direct download
+    echo "No passwordless sudo — attempting user-local Chrome install…"
+    mkdir -p "$HOME/.local/bin"
+    CHROME_URL="https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"
+    TMPDIR="$(mktemp -d)"
+    if curl -fsSL "$CHROME_URL" -o "$TMPDIR/chrome.deb" 2>/dev/null; then
+        # Extract Chrome from .deb without dpkg (user-local)
+        cd "$TMPDIR"
+        ar x chrome.deb data.tar.xz 2>/dev/null && tar xf data.tar.xz 2>/dev/null
+        if [[ -f opt/google/chrome/google-chrome ]]; then
+            cp -r opt/google/chrome "$HOME/.local/google-chrome"
+            ln -sf "$HOME/.local/google-chrome/google-chrome" "$HOME/.local/bin/google-chrome"
+            echo "Chrome installed to $HOME/.local/bin/google-chrome"
+        else
+            echo "WARNING: Could not extract Chrome from .deb"
+        fi
+        cd - >/dev/null
+    else
+        echo "WARNING: Could not download Chrome"
+    fi
+    rm -rf "$TMPDIR"
+fi
+
 # Verify
-if command -v google-chrome chromium-browser chromium 2>/dev/null | head -1 | grep -q .; then
-    echo "Chrome/Chromium installed successfully"
-else
-    echo "WARNING: Chrome/Chromium may not be in PATH yet"
+for cmd in google-chrome chromium-browser chromium; do
+    if command -v "$cmd" &>/dev/null; then
+        echo "Chrome/Chromium installed successfully: $(command -v "$cmd")"
+        exit 0
+    fi
+done
+# Also check user-local path
+if [[ -x "$HOME/.local/bin/google-chrome" ]]; then
+    echo "Chrome installed at $HOME/.local/bin/google-chrome"
+    exit 0
 fi
+echo "WARNING: Chrome/Chromium not found after install attempt"
+exit 1
 REMOTE_CHROME
     local rc=$?
     if [[ $rc -eq 0 ]]; then
