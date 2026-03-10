@@ -1,3 +1,4 @@
+pub mod db;
 pub mod excel;
 pub mod html;
 pub mod json;

@@ -147,14 +147,26 @@ pub struct Cli {
     #[arg(long)]
     pub excel: bool,
 
-    // ── SQL Server ────────────────────────────────────────────────────────────
-    /// Insert results into SQL Server
+    // ── Database ──────────────────────────────────────────────────────────────
+    /// Insert results into a database (auto-detects backend from URL scheme)
     #[arg(long)]
+    pub save_to_db: bool,
+
+    /// Database URL (postgres://..., or ADO.NET-style for SQL Server)
+    #[arg(long, env = "NETWORKER_DB_URL")]
+    pub db_url: Option<String>,
+
+    /// Run database migrations before inserting
+    #[arg(long)]
+    pub db_migrate: bool,
+
+    // ── SQL Server (legacy aliases, hidden) ──────────────────────────────────
+    /// Insert results into SQL Server (legacy alias for --save-to-db)
+    #[arg(long, hide = true)]
     pub save_to_sql: bool,
 
-    /// ADO.NET-style connection string
-    /// e.g. "Server=localhost;Database=NetworkDiagnostics;User Id=sa;Password=Pass!;TrustServerCertificate=true"
-    #[arg(long, env = "NETWORKER_SQL_CONN")]
+    /// ADO.NET-style connection string (legacy alias for --db-url)
+    #[arg(long, env = "NETWORKER_SQL_CONN", hide = true)]
     pub connection_string: Option<String>,
 
     // ── Misc ──────────────────────────────────────────────────────────────────
@@ -214,6 +226,9 @@ pub struct ConfigFile {
     pub html_report: Option<String>,
     pub css: Option<String>,
     pub excel: Option<bool>,
+    pub save_to_db: Option<bool>,
+    pub db_url: Option<String>,
+    pub db_migrate: Option<bool>,
     pub save_to_sql: Option<bool>,
     pub connection_string: Option<String>,
     pub log_level: Option<String>,
@@ -250,6 +265,9 @@ pub struct ResolvedConfig {
     pub html_report: String,
     pub css: Option<String>,
     pub excel: bool,
+    pub save_to_db: bool,
+    pub db_url: Option<String>,
+    pub db_migrate: bool,
     pub save_to_sql: bool,
     pub connection_string: Option<String>,
     pub log_level: Option<String>,
@@ -339,6 +357,16 @@ impl Cli {
             html_report: pick!(html_report, "report.html".into()),
             css: self.css.or(f.css),
             excel: flag!(excel),
+            save_to_db: self.save_to_db
+                || f.save_to_db.unwrap_or(false)
+                || self.save_to_sql
+                || f.save_to_sql.unwrap_or(false),
+            db_url: self.db_url.or(f.db_url).or_else(|| {
+                self.connection_string
+                    .clone()
+                    .or_else(|| f.connection_string.clone())
+            }),
+            db_migrate: self.db_migrate || f.db_migrate.unwrap_or(false),
             save_to_sql: flag!(save_to_sql),
             connection_string: self.connection_string.or(f.connection_string),
             log_level: self
@@ -354,7 +382,10 @@ impl Cli {
 impl ResolvedConfig {
     /// Validate combinations of flags; return user-friendly errors.
     pub fn validate(&self) -> anyhow::Result<()> {
-        if self.save_to_sql && self.connection_string.is_none() {
+        if self.save_to_db && self.db_url.is_none() && !self.save_to_sql {
+            anyhow::bail!("--save-to-db requires --db-url (or NETWORKER_DB_URL env var)");
+        }
+        if self.save_to_sql && self.connection_string.is_none() && self.db_url.is_none() {
             anyhow::bail!(
                 "--save-to-sql requires --connection-string (or NETWORKER_SQL_CONN env var)"
             );

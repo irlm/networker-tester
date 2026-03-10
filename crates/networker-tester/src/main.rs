@@ -6,7 +6,8 @@ use networker_tester::metrics::{
     attempt_payload_bytes, compute_stats, primary_metric_label, primary_metric_value, HostInfo,
     NetworkBaseline, NetworkType, PageLoadResult, Protocol, RequestAttempt, TestRun,
 };
-use networker_tester::output::{excel, html, json, sql};
+use networker_tester::output;
+use networker_tester::output::{excel, html, json};
 use networker_tester::runner::{
     browser::run_browser_probe,
     curl::run_curl_probe,
@@ -158,15 +159,26 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // ── SQL insert (one per target) ───────────────────────────────────────────
-    if cfg.save_to_sql {
-        if let Some(conn_str) = &cfg.connection_string {
-            for run in &all_runs {
-                info!(target = %run.target_url, "Inserting into SQL Server…");
-                match sql::save(run, conn_str).await {
-                    Ok(()) => info!("SQL insert complete"),
-                    Err(e) => error!("SQL insert failed: {e:#}"),
+    // ── Database insert (one per target) ─────────────────────────────────────
+    let do_db = cfg.save_to_db || cfg.save_to_sql;
+    if do_db {
+        if let Some(db_url) = cfg.db_url.as_deref().or(cfg.connection_string.as_deref()) {
+            match output::db::connect(db_url).await {
+                Ok(backend) => {
+                    if cfg.db_migrate {
+                        if let Err(e) = backend.migrate().await {
+                            error!("Database migration failed: {e:#}");
+                        }
+                    }
+                    for run in &all_runs {
+                        info!(target = %run.target_url, "Inserting into database…");
+                        match backend.save(run).await {
+                            Ok(()) => info!("Database insert complete"),
+                            Err(e) => error!("Database insert failed: {e:#}"),
+                        }
+                    }
                 }
+                Err(e) => error!("Database connection failed: {e:#}"),
             }
         }
     }

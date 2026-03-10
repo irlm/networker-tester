@@ -288,10 +288,8 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
         let best_internet_idx = if internet_indices.len() <= 1 {
             internet_indices.first().copied()
         } else {
-            let mut rank_sums: Vec<(usize, f64)> = internet_indices
-                .iter()
-                .map(|&i| (i, 0.0))
-                .collect();
+            let mut rank_sums: Vec<(usize, f64)> =
+                internet_indices.iter().map(|&i| (i, 0.0)).collect();
 
             for proto in &active_protos {
                 let is_throughput = matches!(
