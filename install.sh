@@ -6528,6 +6528,32 @@ _deploy_execute_tests() {
             print_err "networker-tester not found locally — cannot run tests"
             return 1
         fi
+
+        # ── Version check: ensure local tester matches deployed endpoint version ──
+        local installed_ver=""
+        installed_ver="$("$tester_bin" --version 2>/dev/null | awk '{print $NF}')"
+        local want_ver="${NETWORKER_VERSION:-}"
+        want_ver="${want_ver#v}"  # strip leading 'v'
+        if [[ -n "$installed_ver" && -n "$want_ver" && "$installed_ver" != "$want_ver" ]]; then
+            print_warn "Version mismatch: local tester is v${installed_ver} but endpoints are v${want_ver}"
+            print_info "Updating local networker-tester to v${want_ver}…"
+            if step_download_release "networker-tester"; then
+                # Re-locate the binary after update
+                if command -v networker-tester &>/dev/null; then
+                    tester_bin="networker-tester"
+                elif [[ -x "${INSTALL_DIR:-/usr/local/bin}/networker-tester" ]]; then
+                    tester_bin="${INSTALL_DIR:-/usr/local/bin}/networker-tester"
+                fi
+                local new_ver
+                new_ver="$("$tester_bin" --version 2>/dev/null | awk '{print $NF}')"
+                print_ok "Updated local tester: v${installed_ver} → v${new_ver}"
+            else
+                print_warn "Auto-update failed — running tests with v${installed_ver} (results may differ from v${want_ver})"
+            fi
+        elif [[ -n "$installed_ver" ]]; then
+            print_ok "Local tester version: v${installed_ver}"
+        fi
+
         print_info "Running: $tester_bin --config $CONFIG_FILE_PATH"
         echo ""
         "$tester_bin" --config "$CONFIG_FILE_PATH"
