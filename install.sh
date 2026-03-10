@@ -1373,23 +1373,26 @@ _lan_create_endpoint_service_windows() {
     local role="$1"
     _lan_ssh_vars "$role"
 
-    print_info "Creating networker-endpoint Windows service on ${_LAN_DEST}…"
+    print_info "Creating networker-endpoint service on ${_LAN_DEST}…"
     ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" "powershell -ExecutionPolicy Bypass -Command \"& {
-        # Create service if not already registered
-        if (-not (Get-Service networker-endpoint -ErrorAction SilentlyContinue)) {
-            sc.exe create networker-endpoint binPath= 'C:\\networker\\networker-endpoint.exe' start= auto
-        }
-        sc.exe start networker-endpoint 2>\$null
-
+        \\\$exe = 'C:\\networker\\networker-endpoint.exe'
+        # Stop any existing instance
+        Stop-Process -Name 'networker-endpoint' -Force -ErrorAction SilentlyContinue
         # Firewall rules
-        New-NetFirewallRule -Name 'NetworkerEndpoint-TCP' -DisplayName 'Networker Endpoint TCP' \
-            -Enabled True -Direction Inbound -Protocol TCP -Action Allow \
+        New-NetFirewallRule -Name 'NetworkerEndpoint-TCP' -DisplayName 'Networker Endpoint TCP' \`
+            -Enabled True -Direction Inbound -Protocol TCP -Action Allow \`
             -LocalPort 8080,8443 -ErrorAction SilentlyContinue
-        New-NetFirewallRule -Name 'NetworkerEndpoint-UDP' -DisplayName 'Networker Endpoint UDP' \
-            -Enabled True -Direction Inbound -Protocol UDP -Action Allow \
+        New-NetFirewallRule -Name 'NetworkerEndpoint-UDP' -DisplayName 'Networker Endpoint UDP' \`
+            -Enabled True -Direction Inbound -Protocol UDP -Action Allow \`
             -LocalPort 8443,9998,9999 -ErrorAction SilentlyContinue
+        # Start endpoint directly (binary is NOT a native Windows service)
+        Start-Process -FilePath \\\$exe -NoNewWindow \`
+            -RedirectStandardOutput 'C:\\networker\\endpoint-stdout.log' \`
+            -RedirectStandardError 'C:\\networker\\endpoint-stderr.log'
+        # Scheduled task for reboot persistence
+        schtasks /Create /TN 'NetworkerEndpoint' /TR \\\$exe /SC ONSTART /RU SYSTEM /F 2>\\\$null
     }\""
-    print_ok "networker-endpoint Windows service created and started"
+    print_ok "networker-endpoint service created and started"
 }
 
 # Deploy tester to a LAN host.
@@ -3375,6 +3378,14 @@ _azure_win_install_binary() {
 \$dest = '${dest}'
 New-Item -ItemType Directory -Force -Path C:\\networker-tmp | Out-Null
 New-Item -ItemType Directory -Force -Path \$dest | Out-Null
+# Install VC++ Redistributable if missing (MSVC-built binaries need vcruntime140.dll)
+if (-not (Test-Path 'C:\\Windows\\System32\\vcruntime140.dll')) {
+    Write-Host 'Installing VC++ Redistributable...'
+    Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vc_redist.x64.exe' -OutFile C:\\vc_redist.x64.exe -UseBasicParsing
+    Start-Process -FilePath 'C:\\vc_redist.x64.exe' -ArgumentList '/install','/quiet','/norestart' -Wait
+    Remove-Item 'C:\\vc_redist.x64.exe' -Force -ErrorAction SilentlyContinue
+    Write-Host 'VC++ Redistributable installed'
+}
 Write-Host "Downloading \$url ..."
 Invoke-WebRequest -Uri \$url -OutFile \$zip -UseBasicParsing
 Expand-Archive -Path \$zip -DestinationPath \$dest -Force
@@ -3478,19 +3489,30 @@ _azure_win_create_endpoint_service() {
     cat > "$ps_tmp" <<'PSEOF'
 $ErrorActionPreference = 'Continue'
 $exe = 'C:\networker\networker-endpoint.exe'
+$stdoutLog = 'C:\networker\endpoint-stdout.log'
+$stderrLog = 'C:\networker\endpoint-stderr.log'
 # Stop any existing instance
 Stop-Process -Name 'networker-endpoint' -Force -ErrorAction SilentlyContinue
-# Run via scheduled task (binary is not a native Windows service)
-schtasks /Create /TN 'NetworkerEndpoint' /TR "$exe" /SC ONSTART /RU SYSTEM /F 2>$null | Out-Host
-schtasks /Run /TN 'NetworkerEndpoint' 2>$null | Out-Host
-# Windows Firewall rules
+# Windows Firewall rules (before starting the binary)
 netsh advfirewall firewall add rule name='Networker-HTTP'  protocol=TCP dir=in action=allow localport=8080  | Out-Null
 netsh advfirewall firewall add rule name='Networker-HTTPS' protocol=TCP dir=in action=allow localport=8443  | Out-Null
 netsh advfirewall firewall add rule name='Networker-UDP'   protocol=UDP dir=in action=allow localport='8443,9998,9999' | Out-Null
-Start-Sleep 3
-$listening = netstat -an 2>$null | Select-String ':8080.*LISTEN'
-if ($listening) { Write-Host 'Endpoint listening on 8080' } else { Write-Host 'WARNING: Not listening yet' }
 Write-Host 'Firewall rules added'
+# Start endpoint directly (independent process persists after script)
+# Note: -RedirectStandard* requires -NoNewWindow (not -WindowStyle Hidden)
+Start-Process -FilePath $exe -NoNewWindow `
+    -RedirectStandardOutput $stdoutLog `
+    -RedirectStandardError $stderrLog
+# Scheduled task for reboot persistence
+schtasks /Create /TN 'NetworkerEndpoint' /TR "$exe" /SC ONSTART /RU SYSTEM /F 2>$null | Out-Host
+Start-Sleep 5
+$listening = netstat -an 2>$null | Select-String ':8080.*LISTEN'
+if ($listening) { Write-Host 'Endpoint listening on 8080' } else {
+    Write-Host 'WARNING: Not listening on 8080 after 5s'
+    $proc = Get-Process -Name 'networker-endpoint' -ErrorAction SilentlyContinue
+    if ($proc) { Write-Host ('Process running: PID ' + $proc.Id) } else { Write-Host 'ERROR: Process not running' }
+    if (Test-Path $stderrLog) { $err = Get-Content $stderrLog -ErrorAction SilentlyContinue; if ($err) { Write-Host ('stderr: ' + ($err -join '; ')) } }
+}
 PSEOF
 
     az vm run-command invoke \
@@ -4987,7 +5009,20 @@ if ($listening) { Log 'Endpoint already listening on port 8080'; exit 0 }
 Log 'Installing endpoint...'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 New-Item -ItemType Directory -Force -Path $dest | Out-Null
+
+# Install VC++ Redistributable if missing (required for MSVC-built binaries)
+if (-not (Test-Path 'C:\Windows\System32\vcruntime140.dll')) {
+    Log 'Installing VC++ Redistributable...'
+    $vcUrl = 'https://aka.ms/vs/17/release/vc_redist.x64.exe'
+    Invoke-WebRequest -Uri $vcUrl -OutFile 'C:\vc_redist.x64.exe' -UseBasicParsing
+    Start-Process -FilePath 'C:\vc_redist.x64.exe' -ArgumentList '/install','/quiet','/norestart' -Wait
+    Remove-Item 'C:\vc_redist.x64.exe' -Force -ErrorAction SilentlyContinue
+    if (Test-Path 'C:\Windows\System32\vcruntime140.dll') { Log 'VC++ Redistributable installed' }
+    else { Log 'WARNING: VC++ Redistributable install may have failed' }
+}
 $dstExe = "$dest\${binary}.exe"
+$stdoutLog = "$dest\endpoint-stdout.log"
+$stderrLog = "$dest\endpoint-stderr.log"
 
 # --- Try downloading pre-built binary from GitHub Releases ---
 $downloaded = $false
@@ -4998,10 +5033,24 @@ try {
         $zipPath = "C:\${binary}-win.zip"
         Log ('Downloading ' + $asset.name)
         Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath -UseBasicParsing
+        Log ('ZIP size: ' + (Get-Item $zipPath).Length + ' bytes')
         Expand-Archive -Path $zipPath -DestinationPath $dest -Force
         Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
-        if (Test-Path $dstExe) { $downloaded = $true; Log ('Downloaded: ' + (& $dstExe --version 2>&1)) }
-    }
+        # Log what was extracted
+        $extracted = Get-ChildItem $dest -Recurse | ForEach-Object { $_.FullName }
+        Log ('Extracted files: ' + ($extracted -join ', '))
+        if (Test-Path $dstExe) {
+            $sz = (Get-Item $dstExe).Length
+            Log ('Binary size: ' + $sz + ' bytes')
+            $verOut = (& $dstExe --version 2>&1) | Out-String
+            $verOut = $verOut.Trim()
+            if ($verOut) { Log ('Version: ' + $verOut) } else { Log 'WARNING: --version returned empty' }
+            if ($sz -gt 1000000) { $downloaded = $true } else { Log 'WARNING: Binary too small — likely corrupt download' }
+        } else {
+            Log ('ERROR: Expected binary not found at ' + $dstExe)
+            Log ('Directory contents: ' + ($extracted -join ', '))
+        }
+    } else { Log 'No matching asset found in latest release' }
 } catch { Log ('Release download failed: ' + $_.Exception.Message) }
 
 # --- Fallback: build from source (slow — 30+ min) ---
@@ -5020,22 +5069,52 @@ if (-not $downloaded) {
     }
     $env:Path = 'C:\cargo\bin;' + $env:Path
     Log 'Building from source...'; & C:\cargo\bin\cargo.exe install --git "https://github.com/$repo" $binary 2>&1 | Out-Null
-    if (Test-Path "C:\cargo\bin\${binary}.exe") { Copy-Item "C:\cargo\bin\${binary}.exe" $dstExe -Force; Log ('Built: ' + (& $dstExe --version 2>&1)) }
-    else { Log 'ERROR: Build failed'; exit 1 }
+    if (Test-Path "C:\cargo\bin\${binary}.exe") {
+        Copy-Item "C:\cargo\bin\${binary}.exe" $dstExe -Force
+        $verOut = (& $dstExe --version 2>&1) | Out-String
+        Log ('Built: ' + $verOut.Trim())
+    } else { Log 'ERROR: Build failed'; exit 1 }
 }
 
-# Firewall
+# Firewall — add rules before starting the binary
 netsh advfirewall firewall add rule name='Networker-HTTP'  protocol=TCP dir=in action=allow localport=8080 2>$null
 netsh advfirewall firewall add rule name='Networker-HTTPS' protocol=TCP dir=in action=allow localport=8443 2>$null
 netsh advfirewall firewall add rule name='Networker-UDP'   protocol=UDP dir=in action=allow localport='8443,9998,9999' 2>$null
 Log 'Firewall rules added'
 
-# Run via scheduled task (not sc.exe — binary is not a native Windows service)
+# Start the endpoint process directly (Start-Process creates an independent process
+# that persists after this script ends). Redirect output for debugging.
+# Note: -RedirectStandard* requires -NoNewWindow (not -WindowStyle Hidden)
+Log ('Starting endpoint: ' + $dstExe)
+Start-Process -FilePath $dstExe -NoNewWindow `
+    -RedirectStandardOutput $stdoutLog `
+    -RedirectStandardError $stderrLog
+
+# Also create scheduled task for persistence across reboots
 schtasks /Create /TN 'NetworkerEndpoint' /TR "$dstExe" /SC ONSTART /RU SYSTEM /F 2>$null
-schtasks /Run /TN 'NetworkerEndpoint' 2>$null
-Start-Sleep 3
+Log 'Scheduled task created for reboot persistence'
+
+# Wait for endpoint to start listening
+Start-Sleep 5
 $listening = netstat -an 2>$null | Select-String ':8080.*LISTEN'
-if ($listening) { Log 'Endpoint listening on 8080' } else { Log 'WARNING: Not listening yet' }
+if ($listening) {
+    Log 'Endpoint listening on 8080'
+} else {
+    Log 'WARNING: Not listening on 8080 after 5s'
+    # Check if process is running
+    $proc = Get-Process -Name $binary -ErrorAction SilentlyContinue
+    if ($proc) { Log ('Process running: PID ' + $proc.Id) } else { Log 'ERROR: Process not running' }
+    # Log any stderr output for debugging
+    if (Test-Path $stderrLog) {
+        $err = Get-Content $stderrLog -ErrorAction SilentlyContinue
+        if ($err) { Log ('stderr: ' + ($err -join '; ')) }
+    }
+    # Retry: wait 10 more seconds
+    Start-Sleep 10
+    $listening = netstat -an 2>$null | Select-String ':8080.*LISTEN'
+    if ($listening) { Log 'Endpoint listening on 8080 (delayed start)' }
+    else { Log 'WARNING: Still not listening — check logs at C:\networker\' }
+}
 
 # Auto-shutdown
 schtasks /Create /TN 'NetworkerAutoShutdown' /TR 'shutdown /s /t 0' /SC DAILY /ST 04:00 /RU SYSTEM /F 2>$null
@@ -5079,23 +5158,25 @@ PSEOF
     print_info "Check install log via RDP: type C:\\networker-install.log"
 }
 
-# Create a Windows Service for networker-endpoint on a GCE Windows VM.
+# Create endpoint service on a GCE Windows VM (via SSH).
 _gcp_win_create_endpoint_service() {
     local name="$1"
-    next_step "Create networker-endpoint Windows service (GCP)"
-    print_info "Creating Windows Service and opening firewall ports…"
+    next_step "Create networker-endpoint service (GCP)"
+    print_info "Creating endpoint service and opening firewall ports…"
     gcloud compute ssh "$name" \
         --project "$GCP_PROJECT" \
         --zone "$GCP_ZONE" \
         --quiet \
         --ssh-flag="-o StrictHostKeyChecking=no" \
         --command "powershell -Command \"\$ErrorActionPreference='Continue'; \
-            sc.exe create networker-endpoint binPath='C:\\networker\\networker-endpoint.exe' start=auto; \
-            sc.exe description networker-endpoint 'Networker Endpoint diagnostics server'; \
-            sc.exe start networker-endpoint; \
+            Stop-Process -Name 'networker-endpoint' -Force -ErrorAction SilentlyContinue; \
             netsh advfirewall firewall add rule name='Networker-HTTP'  protocol=TCP dir=in action=allow localport=8080; \
             netsh advfirewall firewall add rule name='Networker-HTTPS' protocol=TCP dir=in action=allow localport=8443; \
-            netsh advfirewall firewall add rule name='Networker-UDP'   protocol=UDP dir=in action=allow localport='8443,9998,9999'\"" < /dev/null
+            netsh advfirewall firewall add rule name='Networker-UDP'   protocol=UDP dir=in action=allow localport='8443,9998,9999'; \
+            Start-Process -FilePath 'C:\\networker\\networker-endpoint.exe' -NoNewWindow \`
+                -RedirectStandardOutput 'C:\\networker\\endpoint-stdout.log' \`
+                -RedirectStandardError 'C:\\networker\\endpoint-stderr.log'; \
+            schtasks /Create /TN 'NetworkerEndpoint' /TR 'C:\\networker\\networker-endpoint.exe' /SC ONSTART /RU SYSTEM /F 2>\\\$null\"" < /dev/null
 
     print_ok "networker-endpoint service created on GCE Windows VM"
 }
