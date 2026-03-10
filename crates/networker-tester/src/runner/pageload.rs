@@ -1538,45 +1538,43 @@ pub async fn run_pageload3_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
         csw_involuntary: None,
     };
 
-    // ── Asset requests: open all N streams sequentially, then receive concurrently ──
+    // ── Asset requests: send + receive all concurrently (like a real browser) ──
     let asset_urls = build_asset_urls(&cfg.base_url, &cfg.asset_sizes);
     let n = asset_urls.len();
     let dur = std::time::Duration::from_millis(run_cfg.timeout_ms);
 
-    // Phase 1: open N streams (fast — just sends HEADERS frame per stream)
-    let mut streams = Vec::with_capacity(n);
-    for (i, _) in asset_urls.iter().enumerate() {
-        let bytes = cfg.asset_sizes.get(i).copied().unwrap_or(10_240);
-        let path = format!("/asset?id={i}&bytes={bytes}");
-        let req = http::Request::builder()
-            .method("GET")
-            .uri(format!("https://{host}:{port}{path}"))
-            .header("user-agent", "networker-tester/0.1 (h3-pageload)")
-            .body(())
-            .expect("valid asset request");
-        match tokio::time::timeout(dur, send_req.send_request(req)).await {
-            Ok(Ok(mut s)) => {
-                s.finish().await.ok();
-                streams.push(Some(s));
+    // Build concurrent futures: each opens a QUIC stream, sends the request,
+    // and receives the response — all in parallel on the multiplexed connection.
+    let asset_futures: Vec<_> = asset_urls
+        .iter()
+        .enumerate()
+        .map(|(i, _)| {
+            let mut sr = send_req.clone();
+            let host = host.clone();
+            async move {
+                let bytes = cfg.asset_sizes.get(i).copied().unwrap_or(10_240);
+                let path = format!("/asset?id={i}&bytes={bytes}");
+                let req = http::Request::builder()
+                    .method("GET")
+                    .uri(format!("https://{host}:{port}{path}"))
+                    .header("user-agent", "networker-tester/0.1 (h3-pageload)")
+                    .body(())
+                    .expect("valid asset request");
+                let t0 = Instant::now();
+                let mut stream = match tokio::time::timeout(dur, sr.send_request(req)).await {
+                    Ok(Ok(s)) => s,
+                    _ => return None,
+                };
+                stream.finish().await.ok();
+                let resp = stream.recv_response().await.ok()?;
+                let status = resp.status().as_u16();
+                let mut body_bytes = 0usize;
+                while let Some(chunk) = stream.recv_data().await.ok().flatten() {
+                    body_bytes += chunk.remaining();
+                }
+                let elapsed = t0.elapsed().as_secs_f64() * 1000.0;
+                Some((status, body_bytes, elapsed))
             }
-            _ => streams.push(None),
-        }
-    }
-
-    // Phase 2: receive all responses concurrently
-    let asset_futures: Vec<_> = streams
-        .into_iter()
-        .map(|maybe_stream| async move {
-            let mut stream = maybe_stream?;
-            let t0 = Instant::now();
-            let resp = stream.recv_response().await.ok()?;
-            let status = resp.status().as_u16();
-            let mut body_bytes = 0usize;
-            while let Some(chunk) = stream.recv_data().await.ok().flatten() {
-                body_bytes += chunk.remaining();
-            }
-            let elapsed = t0.elapsed().as_secs_f64() * 1000.0;
-            Some((status, body_bytes, elapsed))
         })
         .collect();
 
