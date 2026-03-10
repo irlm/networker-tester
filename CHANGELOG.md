@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **pageload3 (HTTP/3)**: Send all QUIC asset requests concurrently via `join_all()` instead of sequentially awaiting each `send_request()` — matches real Chrome H3 multiplexing behavior, ~40-75% faster on high-latency connections
 - **HTML report**: LAN/Loopback targets shown as dimmed reference values (no diff percentages); best overall Internet target (by composite rank-sum score across all protocols) used as diff baseline; cross-target observations only compare Internet targets
+- **install.sh**: Use `-WindowStyle Hidden` instead of `-NoNewWindow` for Windows endpoint process start — `az vm run-command` and SSH wait for all child processes sharing the console, causing indefinite hang
+- **install.sh**: Skip install when reusing VMs if endpoint already healthy with correct version — saves 3-5 min on Windows cold boot, ~30s on Linux
 
 ---
 

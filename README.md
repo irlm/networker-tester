@@ -673,7 +673,10 @@ The HTML report (`output/report.html`) opens with:
 
 1. **Multi-Target Summary** — one row per target, totals at a glance
 2. **Cross-Target Protocol Comparison** — the primary metric for each protocol side-by-side,
-   with % delta vs the first target (green = faster, red = slower)
+   with % delta vs the best overall Internet target (green = faster, red = slower).
+   LAN/Loopback targets are shown as dimmed reference values — they are not used as the
+   baseline since comparing cloud endpoints against LAN latency is misleading.
+   The baseline is chosen by composite rank-sum scoring across all protocols.
 3. **Per-target details** — each target's full report in a collapsible card
 
 JSON files are named `run-{ts}-1.json` (local) and `run-{ts}-2.json` (cloud).
@@ -715,8 +718,8 @@ transport and connection model change.
 | Mode | Connection model | What makes it realistic |
 |------|-----------------|------------------------|
 | `pageload` | Up to 6 parallel TCP connections | Matches H1.1 browser behavior (connection pool) |
-| `pageload2` | Single TLS connection, all assets multiplexed | H2 stream multiplexing |
-| `pageload3` | Single QUIC connection, all assets multiplexed | H3 / QUIC — no TCP head-of-line blocking |
+| `pageload2` | Single TLS connection, concurrent stream sends | H2 multiplexing — all assets sent+received in parallel |
+| `pageload3` | Single QUIC connection, concurrent stream sends | H3 / QUIC — all assets multiplexed concurrently, no TCP head-of-line blocking |
 | `browser` | Real headless Chromium via CDP | Actual browser events: Load, DOMContentLoaded, sub-resource negotiation |
 
 ### Minimum example — H1.1 vs H2 vs H3
