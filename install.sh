@@ -3057,6 +3057,11 @@ _remote_install_binary() {
     if [[ -z "$ver" ]]; then
         ver="$(gh release list --repo "$REPO_GH" --limit 1 --json tagName \
                -q '.[0].tagName' 2>/dev/null || echo "")"
+        # Fallback: use GitHub API directly if gh CLI is not available
+        if [[ -z "$ver" ]]; then
+            ver="$(curl -fsSL "https://api.github.com/repos/${REPO_GH}/releases/latest" 2>/dev/null \
+                   | grep '"tag_name"' | head -1 | sed 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/')"
+        fi
     fi
 
     # Detect remote architecture (needed for both download path and source fallback)
@@ -3068,6 +3073,11 @@ _remote_install_binary() {
     if [[ -n "$ver" ]]; then
         has_assets="$(gh release view --repo "$REPO_GH" "$ver" --json assets \
                       -q '[.assets[].name] | join(" ")' 2>/dev/null || echo "")"
+        # Fallback: use GitHub API directly if gh CLI is not available
+        if [[ -z "$has_assets" ]]; then
+            has_assets="$(curl -fsSL "https://api.github.com/repos/${REPO_GH}/releases/tags/${ver}" 2>/dev/null \
+                          | grep '"name"' | sed 's/.*"name":[[:space:]]*"\([^"]*\)".*/\1/' | tr '\n' ' ')"
+        fi
     fi
     if [[ -z "$ver" ]] || ! printf '%s' "$has_assets" | grep -q "${binary}-"; then
         print_warn "Release ${ver:-unknown} has no pre-built binaries for ${binary}."
@@ -3345,6 +3355,10 @@ _azure_win_install_binary() {
     local has_assets
     has_assets="$(gh release view --repo "$REPO_GH" "$ver" --json assets \
                   -q '[.assets[].name] | join(" ")' 2>/dev/null || echo "")"
+    if [[ -z "$has_assets" ]]; then
+        has_assets="$(curl -fsSL "https://api.github.com/repos/${REPO_GH}/releases/tags/${ver}" 2>/dev/null \
+                      | grep '"name"' | sed 's/.*"name":[[:space:]]*"\([^"]*\)".*/\1/' | tr '\n' ' ')"
+    fi
     if ! printf '%s' "$has_assets" | grep -q "${binary}-.*windows"; then
         print_warn "Release ${ver} has no Windows binary for ${binary}."
         _azure_win_source_build "$binary" "$rg" "$vm"
@@ -3464,15 +3478,18 @@ _azure_win_create_endpoint_service() {
     cat > "$ps_tmp" <<'PSEOF'
 $ErrorActionPreference = 'Continue'
 $exe = 'C:\networker\networker-endpoint.exe'
-# Create service (ignore error if already exists)
-sc.exe create networker-endpoint binPath=$exe start=auto | Out-Host
-sc.exe description networker-endpoint 'Networker Endpoint diagnostics server' | Out-Host
-sc.exe start networker-endpoint | Out-Host
+# Stop any existing instance
+Stop-Process -Name 'networker-endpoint' -Force -ErrorAction SilentlyContinue
+# Run via scheduled task (binary is not a native Windows service)
+schtasks /Create /TN 'NetworkerEndpoint' /TR "$exe" /SC ONSTART /RU SYSTEM /F 2>$null | Out-Host
+schtasks /Run /TN 'NetworkerEndpoint' 2>$null | Out-Host
 # Windows Firewall rules
 netsh advfirewall firewall add rule name='Networker-HTTP'  protocol=TCP dir=in action=allow localport=8080  | Out-Null
 netsh advfirewall firewall add rule name='Networker-HTTPS' protocol=TCP dir=in action=allow localport=8443  | Out-Null
 netsh advfirewall firewall add rule name='Networker-UDP'   protocol=UDP dir=in action=allow localport='8443,9998,9999' | Out-Null
-sc.exe query networker-endpoint | Select-String 'STATE'
+Start-Sleep 3
+$listening = netstat -an 2>$null | Select-String ':8080.*LISTEN'
+if ($listening) { Write-Host 'Endpoint listening on 8080' } else { Write-Host 'WARNING: Not listening yet' }
 Write-Host 'Firewall rules added'
 PSEOF
 
@@ -4876,6 +4893,10 @@ _gcp_win_install_binary() {
     local has_assets
     has_assets="$(gh release view --repo "$REPO_GH" "$ver" --json assets \
                   -q '[.assets[].name] | join(" ")' 2>/dev/null || echo "")"
+    if [[ -z "$has_assets" ]]; then
+        has_assets="$(curl -fsSL "https://api.github.com/repos/${REPO_GH}/releases/tags/${ver}" 2>/dev/null \
+                      | grep '"name"' | sed 's/.*"name":[[:space:]]*"\([^"]*\)".*/\1/' | tr '\n' ' ')"
+    fi
     if ! printf '%s' "$has_assets" | grep -q "${binary}-.*windows"; then
         print_warn "Release ${ver} has no Windows binary for ${binary}."
         print_info "Falling back to source build on the VM…"
