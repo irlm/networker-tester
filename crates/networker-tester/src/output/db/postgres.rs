@@ -596,6 +596,149 @@ mod tests {
     use crate::output::db::test_fixtures::{bare_attempt, full_attempt, make_run};
     use uuid::Uuid;
 
+    // ── Migration SQL content tests (no database required) ────────────────────
+
+    /// The migration SQL must declare all 9 tables with CREATE TABLE IF NOT EXISTS.
+    #[test]
+    fn v001_migration_contains_all_table_definitions() {
+        let expected_tables = [
+            "TestRun",
+            "RequestAttempt",
+            "DnsResult",
+            "TcpResult",
+            "TlsResult",
+            "HttpResult",
+            "UdpResult",
+            "ErrorRecord",
+            "ServerTimingResult",
+        ];
+        for table in &expected_tables {
+            assert!(
+                V001_MIGRATION.contains(&format!("CREATE TABLE IF NOT EXISTS {table}")),
+                "V001 migration missing CREATE TABLE IF NOT EXISTS {table}"
+            );
+        }
+    }
+
+    /// Every table must have a PRIMARY KEY constraint.
+    #[test]
+    fn v001_migration_contains_primary_keys_for_all_tables() {
+        let expected_pks = [
+            "PK_TestRun",
+            "PK_RequestAttempt",
+            "PK_DnsResult",
+            "PK_TcpResult",
+            "PK_TlsResult",
+            "PK_HttpResult",
+            "PK_UdpResult",
+            "PK_ErrorRecord",
+            "PK_ServerTimingResult",
+        ];
+        for pk in &expected_pks {
+            assert!(
+                V001_MIGRATION.contains(pk),
+                "V001 migration missing PRIMARY KEY constraint: {pk}"
+            );
+        }
+    }
+
+    /// Every child table must have a FOREIGN KEY back to its parent.
+    #[test]
+    fn v001_migration_contains_foreign_keys() {
+        let expected_fks = [
+            "FK_Attempt_Run",
+            "FK_Dns_Attempt",
+            "FK_Tcp_Attempt",
+            "FK_Tls_Attempt",
+            "FK_Http_Attempt",
+            "FK_Udp_Attempt",
+            "FK_Error_Attempt",
+            "FK_Error_Run",
+            "FK_ServerTimingResult_Attempt",
+        ];
+        for fk in &expected_fks {
+            assert!(
+                V001_MIGRATION.contains(fk),
+                "V001 migration missing FOREIGN KEY constraint: {fk}"
+            );
+        }
+    }
+
+    /// ON DELETE CASCADE must be present so child rows are swept when a run is deleted.
+    #[test]
+    fn v001_migration_contains_cascade_deletes() {
+        assert!(
+            V001_MIGRATION.contains("ON DELETE CASCADE"),
+            "V001 migration should contain ON DELETE CASCADE"
+        );
+    }
+
+    /// All expected indexes must be declared with CREATE INDEX IF NOT EXISTS.
+    #[test]
+    fn v001_migration_contains_expected_indexes() {
+        let expected_indexes = [
+            "IX_TestRun_StartedAt",
+            "IX_TestRun_TargetHost",
+            "IX_Attempt_Protocol",
+            "IX_Attempt_RunId",
+            "IX_HttpResult_Version",
+            "IX_HttpResult_Throughput",
+            "IX_Error_Category",
+            "IX_ServerTimingResult_AttemptId",
+        ];
+        for idx in &expected_indexes {
+            assert!(
+                V001_MIGRATION.contains(idx),
+                "V001 migration missing index: {idx}"
+            );
+        }
+    }
+
+    /// The migration should use UUID primary keys throughout (not integers).
+    #[test]
+    fn v001_migration_uses_uuid_primary_keys() {
+        // All ID columns are defined as UUID NOT NULL
+        assert!(
+            V001_MIGRATION.contains("RunId          UUID            NOT NULL"),
+            "RunId should be UUID NOT NULL"
+        );
+        assert!(
+            V001_MIGRATION.contains("AttemptId     UUID            NOT NULL"),
+            "AttemptId should be UUID NOT NULL"
+        );
+    }
+
+    /// Timestamps must use TIMESTAMPTZ (timezone-aware) for all date/time columns.
+    #[test]
+    fn v001_migration_uses_timestamptz_for_dates() {
+        // Count occurrences — every table has at least a StartedAt column
+        let count = V001_MIGRATION.matches("TIMESTAMPTZ").count();
+        assert!(
+            count >= 9,
+            "expected at least 9 TIMESTAMPTZ columns, found {count}"
+        );
+    }
+
+    /// The migration text must not be empty and must start with the version comment.
+    #[test]
+    fn v001_migration_starts_with_version_comment() {
+        let trimmed = V001_MIGRATION.trim();
+        assert!(
+            trimmed.starts_with("-- V001:"),
+            "migration should start with -- V001: comment"
+        );
+    }
+
+    /// Sanity-check: the SQL string is non-trivially long (guards against accidental truncation).
+    #[test]
+    fn v001_migration_is_substantial() {
+        assert!(
+            V001_MIGRATION.len() > 2000,
+            "V001 migration SQL seems too short ({}B) — possible truncation",
+            V001_MIGRATION.len()
+        );
+    }
+
     /// Returns `NETWORKER_DB_URL` (postgres://...) or None if unset.
     fn pg_url() -> Option<String> {
         std::env::var("NETWORKER_DB_URL").ok()
