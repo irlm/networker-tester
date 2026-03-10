@@ -3957,6 +3957,20 @@ _azure_deploy_one_endpoint() {
 
     local ip="${!ip_var}"
 
+    # Fast-path: if endpoint is already healthy with correct version, skip install
+    if curl -sf --max-time 5 "http://${ip}:8080/health" &>/dev/null; then
+        local running_ver
+        running_ver="$(curl -sf --max-time 5 "http://${ip}:8080/health" 2>/dev/null \
+                       | grep -o '"version":"[^"]*"' | head -1 | sed 's/"version":"//;s/"//')"
+        local want_ver="${NETWORKER_VERSION:-}"
+        want_ver="${want_ver#v}"  # strip leading v
+        if [[ -n "$running_ver" && ( -z "$want_ver" || "$running_ver" == "$want_ver" ) ]]; then
+            print_ok "Endpoint already healthy (v${running_ver}) at http://${ip}:8080 — skipping install"
+            return 0
+        fi
+        print_info "Endpoint running v${running_ver} but want v${want_ver} — reinstalling…"
+    fi
+
     step_azure_open_endpoint_ports "$rg" "$vm"
 
     next_step "Install networker-endpoint on Azure VM ($label)"
@@ -4382,6 +4396,21 @@ step_aws_deploy_endpoint() {
     _aws_launch_instance "endpoint" \
         "$AWS_ENDPOINT_INSTANCE_TYPE" "$AWS_ENDPOINT_NAME" \
         "$sg_id" "AWS_ENDPOINT_INSTANCE_ID" "AWS_ENDPOINT_IP"
+
+    # Fast-path: if endpoint is already healthy with correct version, skip install
+    if curl -sf --max-time 5 "http://${AWS_ENDPOINT_IP}:8080/health" &>/dev/null; then
+        local running_ver
+        running_ver="$(curl -sf --max-time 5 "http://${AWS_ENDPOINT_IP}:8080/health" 2>/dev/null \
+                       | grep -o '"version":"[^"]*"' | head -1 | sed 's/"version":"//;s/"//')"
+        local want_ver="${NETWORKER_VERSION:-}"
+        want_ver="${want_ver#v}"  # strip leading v
+        if [[ -n "$running_ver" && ( -z "$want_ver" || "$running_ver" == "$want_ver" ) ]]; then
+            print_ok "Endpoint already healthy (v${running_ver}) at http://${AWS_ENDPOINT_IP}:8080 — skipping install"
+            step_generate_config "$AWS_ENDPOINT_IP"
+            return 0
+        fi
+        print_info "Endpoint running v${running_ver} but want v${want_ver} — reinstalling…"
+    fi
 
     _wait_for_ssh "$AWS_ENDPOINT_IP" "ubuntu" "endpoint instance"
     step_aws_set_auto_shutdown "$AWS_ENDPOINT_IP" "ubuntu" "endpoint instance"
@@ -5249,6 +5278,21 @@ step_gcp_deploy_endpoint() {
 
     _gcp_create_firewall_rule
     _gcp_create_instance "endpoint" "$GCP_ENDPOINT_NAME" "$GCP_ENDPOINT_MACHINE_TYPE" "GCP_ENDPOINT_IP"
+
+    # Fast-path: if endpoint is already healthy with correct version, skip install
+    if curl -sf --max-time 5 "http://${GCP_ENDPOINT_IP}:8080/health" &>/dev/null; then
+        local running_ver
+        running_ver="$(curl -sf --max-time 5 "http://${GCP_ENDPOINT_IP}:8080/health" 2>/dev/null \
+                       | grep -o '"version":"[^"]*"' | head -1 | sed 's/"version":"//;s/"//')"
+        local want_ver="${NETWORKER_VERSION:-}"
+        want_ver="${want_ver#v}"  # strip leading v
+        if [[ -n "$running_ver" && ( -z "$want_ver" || "$running_ver" == "$want_ver" ) ]]; then
+            print_ok "Endpoint already healthy (v${running_ver}) at http://${GCP_ENDPOINT_IP}:8080 — skipping install"
+            step_generate_config "$GCP_ENDPOINT_IP"
+            return 0
+        fi
+        print_info "Endpoint running v${running_ver} but want v${want_ver} — reinstalling…"
+    fi
 
     if [[ "$GCP_ENDPOINT_OS" == "windows" ]]; then
         _gcp_win_deploy_endpoint_via_startup "$GCP_ENDPOINT_NAME" "$GCP_ENDPOINT_IP"
