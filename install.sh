@@ -3388,42 +3388,63 @@ PSEOF
 # $1 = binary name, $2 = resource group, $3 = VM name
 _azure_win_source_build() {
     local binary="$1" rg="$2" vm="$3"
-    print_info "Building ${binary} from source on Windows VM (this may take several minutes)…"
+    print_info "Building ${binary} from source on Windows VM…"
+    print_dim "This may take 25–40 min (VS Build Tools + Rust + compile)."
 
     local ps_tmp
     ps_tmp="$(mktemp /tmp/networker-ps-XXXXX.ps1)"
     cat > "$ps_tmp" <<PSEOF
-\$ErrorActionPreference = 'Stop'
+\$ErrorActionPreference = 'Continue'
 \$dest = 'C:\\networker'
 
-# Install Rust if not present
-if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
-    Write-Host "Installing Rust…"
-    Invoke-WebRequest -Uri 'https://win.rustup.rs/x86_64' -OutFile C:\\rustup-init.exe -UseBasicParsing
-    & C:\\rustup-init.exe -y --default-toolchain stable 2>&1 | Select-Object -Last 3
-    \$env:Path = [System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User')
+# Set known paths (runs as SYSTEM via run-command)
+\$env:CARGO_HOME = 'C:\\cargo'
+\$env:RUSTUP_HOME = 'C:\\rustup'
+New-Item -ItemType Directory -Force -Path \$env:CARGO_HOME | Out-Null
+New-Item -ItemType Directory -Force -Path \$env:RUSTUP_HOME | Out-Null
+
+# Install Visual C++ Build Tools if not present
+if (-not (Test-Path 'C:\\BuildTools\\VC\\Tools\\MSVC')) {
+    Write-Host 'Installing Visual C++ Build Tools...'
+    Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vs_buildtools.exe' -OutFile C:\\vs_buildtools.exe -UseBasicParsing
+    & C:\\vs_buildtools.exe --quiet --wait --norestart --nocache --installPath C:\\BuildTools --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended 2>&1 | Out-Null
+    Write-Host 'Build Tools installed'
 }
 
-Write-Host "Building ${binary} from source…"
+# Install Rust if not present
+if (-not (Test-Path 'C:\\cargo\\bin\\cargo.exe')) {
+    Write-Host 'Installing Rust...'
+    Invoke-WebRequest -Uri 'https://win.rustup.rs/x86_64' -OutFile C:\\rustup-init.exe -UseBasicParsing
+    & C:\\rustup-init.exe -y --default-toolchain stable 2>&1 | Select-Object -Last 3
+}
+\$env:Path = 'C:\\cargo\\bin;' + \$env:Path
+
+Write-Host "Building ${binary} from source..."
 cargo install --git ${REPO_HTTPS} ${binary} 2>&1 | Select-Object -Last 5
 
 New-Item -ItemType Directory -Force -Path \$dest | Out-Null
-Copy-Item "\$env:USERPROFILE\\.cargo\\bin\\${binary}.exe" "\$dest\\${binary}.exe" -Force
-
-\$machinePath = [System.Environment]::GetEnvironmentVariable('Path','Machine')
-if (\$machinePath -notlike "*\$dest*") {
-    [System.Environment]::SetEnvironmentVariable('Path',"\$machinePath;\$dest",'Machine')
-    Write-Host "Added \$dest to system PATH"
+\$srcExe = "C:\\cargo\\bin\\${binary}.exe"
+\$dstExe = Join-Path \$dest "${binary}.exe"
+if (Test-Path \$srcExe) {
+    Copy-Item \$srcExe \$dstExe -Force
+    Write-Host ("Installed: " + (& \$dstExe --version 2>&1))
+} else {
+    Write-Host "ERROR: Binary not found at \$srcExe"
+    exit 1
 }
 
-\$ver = & "\$dest\\${binary}.exe" --version 2>&1
-Write-Host "Installed: \$ver"
+\$mp = [System.Environment]::GetEnvironmentVariable('Path','Machine')
+if (\$mp -notlike ('*' + \$dest + '*')) {
+    \$newPath = \$mp + ';' + \$dest
+    [System.Environment]::SetEnvironmentVariable('Path', \$newPath, 'Machine')
+}
 PSEOF
 
     az vm run-command invoke \
         --resource-group "$rg" --name "$vm" \
         --command-id RunPowerShellScript \
         --scripts "@${ps_tmp}" \
+        --timeout 2400 \
         --output table 2>/dev/null || {
         print_warn "Source build may have failed — check VM logs"
         rm -f "$ps_tmp"
@@ -4904,6 +4925,173 @@ _gcp_win_source_build() {
     print_ok "${binary}.exe built and installed on GCE Windows VM"
 }
 
+# Deploy endpoint on GCP Windows VM using startup script (no SSH required).
+# Sets a startup script that installs Rust, builds the binary, creates the service,
+# and opens firewall ports. Then polls health check until the endpoint is ready.
+_gcp_win_deploy_endpoint_via_startup() {
+    local name="$1" ip="$2"
+
+    next_step "Install networker-endpoint on GCE Windows VM (via startup script)"
+    print_info "Setting startup script to build and install endpoint…"
+    print_dim "This will install VS Build Tools + Rust + compile from source on the VM."
+    print_dim "Expected time: 25–40 minutes (first build on e2-small)."
+    echo ""
+
+    # Write the PowerShell install worker script (runs as scheduled task — no GCE timeout)
+    local ps_tmp
+    ps_tmp="$(mktemp /tmp/networker-gcp-win-XXXXX.ps1)"
+
+    # The startup script is a trampoline: it writes the worker to disk and schedules it,
+    # then exits immediately so GCE's script runner doesn't kill it.
+    cat > "$ps_tmp" <<'PSEOF'
+$ErrorActionPreference = 'Continue'
+
+# --- Trampoline: write worker script and schedule it, then exit ---
+$workerPath = 'C:\networker-install-worker.ps1'
+$workerContent = @'
+$ErrorActionPreference = 'Continue'
+$dest = 'C:\networker'
+$binary = 'networker-endpoint'
+$repo = 'https://github.com/irlm/networker-tester'
+$logFile = 'C:\networker-install.log'
+
+function Log($msg) {
+    $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    $line = "$ts  $msg"
+    Add-Content -Path $logFile -Value $line
+}
+
+# Skip if already installed and running
+if (Get-Service -Name $binary -ErrorAction SilentlyContinue) {
+    $svc = Get-Service -Name $binary
+    if ($svc.Status -eq 'Running') {
+        Log 'Service already running - skipping install'
+        exit 0
+    }
+}
+
+# Set CARGO_HOME and RUSTUP_HOME to known paths (runs as SYSTEM)
+$env:CARGO_HOME = 'C:\cargo'
+$env:RUSTUP_HOME = 'C:\rustup'
+New-Item -ItemType Directory -Force -Path $env:CARGO_HOME -ErrorAction SilentlyContinue | Out-Null
+New-Item -ItemType Directory -Force -Path $env:RUSTUP_HOME -ErrorAction SilentlyContinue | Out-Null
+
+# Install Visual C++ Build Tools (required for Rust MSVC target)
+if (-not (Test-Path 'C:\BuildTools\VC\Tools\MSVC')) {
+    Log 'Installing Visual C++ Build Tools (10-15 min)...'
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vs_buildtools.exe' -OutFile C:\vs_buildtools.exe -UseBasicParsing
+    $p = Start-Process -FilePath 'C:\vs_buildtools.exe' -ArgumentList '--quiet','--wait','--norestart','--nocache','--installPath','C:\BuildTools','--add','Microsoft.VisualStudio.Workload.VCTools','--includeRecommended' -Wait -PassThru
+    Log ('VS Build Tools exit code: ' + $p.ExitCode)
+    if (Test-Path 'C:\BuildTools\VC\Tools\MSVC') {
+        Log 'Visual C++ Build Tools installed successfully'
+    } else {
+        Log 'WARNING: MSVC directory not found after install — build may fail'
+    }
+} else {
+    Log 'Visual C++ Build Tools already present'
+}
+
+# Install Rust if not present
+if (-not (Test-Path 'C:\cargo\bin\cargo.exe')) {
+    Log 'Installing Rust...'
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest -Uri 'https://win.rustup.rs/x86_64' -OutFile C:\rustup-init.exe -UseBasicParsing
+    & C:\rustup-init.exe -y --default-toolchain stable 2>&1 | Out-Null
+}
+$env:Path = 'C:\cargo\bin;C:\BuildTools\VC\Tools\MSVC\*\bin\Hostx64\x64;' + $env:Path
+Log ('Rust: ' + (& C:\cargo\bin\rustc.exe --version 2>&1))
+
+# Build endpoint from source
+Log ('Building ' + $binary + ' from source (15-25 min on small VM)...')
+& C:\cargo\bin\cargo.exe install --git $repo $binary 2>&1 | Out-Null
+$srcExe = "C:\cargo\bin\${binary}.exe"
+
+# Copy binary to destination
+New-Item -ItemType Directory -Force -Path $dest -ErrorAction SilentlyContinue | Out-Null
+$dstExe = Join-Path $dest "${binary}.exe"
+if (Test-Path $srcExe) {
+    Copy-Item $srcExe $dstExe -Force
+    Log ('Built: ' + (& $dstExe --version 2>&1))
+} else {
+    Log ('ERROR: Binary not found at ' + $srcExe)
+    exit 1
+}
+
+# Add to PATH
+$mp = [System.Environment]::GetEnvironmentVariable('Path','Machine')
+if ($mp -notlike ('*' + $dest + '*')) {
+    $newPath = $mp + ';' + $dest
+    [System.Environment]::SetEnvironmentVariable('Path', $newPath, 'Machine')
+}
+
+# Create Windows service
+sc.exe create $binary binPath=$dstExe start=auto | Out-Null
+sc.exe description $binary 'Networker Endpoint diagnostics server' | Out-Null
+sc.exe start $binary | Out-Null
+Log 'Service created and started'
+
+# Open firewall ports
+netsh advfirewall firewall add rule name='Networker-HTTP'  protocol=TCP dir=in action=allow localport=8080 | Out-Null
+netsh advfirewall firewall add rule name='Networker-HTTPS' protocol=TCP dir=in action=allow localport=8443 | Out-Null
+netsh advfirewall firewall add rule name='Networker-UDP'   protocol=UDP dir=in action=allow localport='8443,9998,9999' | Out-Null
+Log 'Firewall rules added'
+
+# Auto-shutdown task (04:00 UTC)
+schtasks /Create /TN 'NetworkerAutoShutdown' /TR 'shutdown /s /t 0' /SC DAILY /ST 04:00 /RU SYSTEM /F | Out-Null
+Log 'Auto-shutdown scheduled at 04:00 UTC'
+
+Log '=== INSTALL COMPLETE ==='
+'@
+
+# Write the worker script to disk
+Set-Content -Path $workerPath -Value $workerContent -Force
+
+# Schedule it to run immediately as SYSTEM (survives GCE script runner timeout)
+# Use /SC ONSTART so the task definition is valid; /Run triggers it now.
+schtasks /Create /TN 'NetworkerInstallWorker' /TR "powershell.exe -ExecutionPolicy Bypass -File $workerPath" /SC ONSTART /RU SYSTEM /F | Out-Null
+schtasks /Run /TN 'NetworkerInstallWorker' | Out-Null
+
+Write-Host 'Install worker scheduled — exiting startup script'
+exit 0
+PSEOF
+
+    gcloud compute instances add-metadata "$name" \
+        --project "$GCP_PROJECT" \
+        --zone "$GCP_ZONE" \
+        --metadata-from-file=windows-startup-script-ps1="$ps_tmp" \
+        --quiet 2>/dev/null
+    rm -f "$ps_tmp"
+
+    # Reset VM to trigger the startup script
+    print_info "Resetting VM to trigger install…"
+    gcloud compute instances reset "$name" \
+        --project "$GCP_PROJECT" \
+        --zone "$GCP_ZONE" \
+        --quiet 2>/dev/null
+
+    # Poll health check instead of SSH
+    print_info "Waiting for endpoint to come online (compiling from source — may take 30+ min)…"
+    local attempt=0 max_attempts=180  # 180 × 15s = 45 min max
+    while [[ $attempt -lt $max_attempts ]]; do
+        if curl -sf --max-time 5 "http://${ip}:8080/health" &>/dev/null; then
+            echo ""
+            print_ok "Endpoint is healthy at http://${ip}:8080/health"
+            return 0
+        fi
+        attempt=$((attempt + 1))
+        if (( attempt % 4 == 0 )); then
+            local mins=$(( attempt * 15 / 60 ))
+            printf "\r  … waiting (%d min elapsed)" "$mins"
+        fi
+        sleep 15
+    done
+    echo ""
+    print_warn "Endpoint not responding after 30 minutes."
+    print_info "Check VM serial log: gcloud compute instances get-serial-port-output $name --zone $GCP_ZONE"
+    print_info "Check install log via RDP: type C:\\networker-install.log"
+}
+
 # Create a Windows Service for networker-endpoint on a GCE Windows VM.
 _gcp_win_create_endpoint_service() {
     local name="$1"
@@ -5007,12 +5195,7 @@ step_gcp_deploy_endpoint() {
     _gcp_create_instance "endpoint" "$GCP_ENDPOINT_NAME" "$GCP_ENDPOINT_MACHINE_TYPE" "GCP_ENDPOINT_IP"
 
     if [[ "$GCP_ENDPOINT_OS" == "windows" ]]; then
-        _gcp_wait_for_windows_vm "$GCP_ENDPOINT_NAME" "endpoint instance"
-        _gcp_reset_windows_password "$GCP_ENDPOINT_NAME" "endpoint"
-        _gcp_win_set_auto_shutdown "$GCP_ENDPOINT_NAME" "endpoint instance"
-        _gcp_win_install_binary "networker-endpoint" "$GCP_ENDPOINT_NAME"
-        _gcp_win_create_endpoint_service "$GCP_ENDPOINT_NAME"
-        _gcp_verify_health "$GCP_ENDPOINT_NAME" "$GCP_ENDPOINT_IP"
+        _gcp_win_deploy_endpoint_via_startup "$GCP_ENDPOINT_NAME" "$GCP_ENDPOINT_IP"
     else
         _gcp_wait_for_ssh "$GCP_ENDPOINT_NAME" "endpoint instance"
         _gcp_set_auto_shutdown "$GCP_ENDPOINT_NAME" "endpoint instance"
