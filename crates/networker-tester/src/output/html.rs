@@ -238,8 +238,17 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
         }
         let _ = writeln!(out, "      </tr>\n    </thead>\n    <tbody>");
 
+        // Use the first Internet target as the diff baseline (not LAN).
+        // LAN/Loopback targets show raw values only (as reference).
+        let is_lan = |run: &TestRun| -> bool {
+            run.baseline.as_ref().map_or(false, |b| {
+                matches!(b.network_type, NetworkType::LAN | NetworkType::Loopback)
+            })
+        };
+        let first_internet_idx = runs.iter().position(|r| !is_lan(r));
+
         for proto in &active_protos {
-            let baseline = avg_primary(&runs[0], proto);
+            let baseline = first_internet_idx.and_then(|idx| avg_primary(&runs[idx], proto));
             let _ = write!(
                 out,
                 "      <tr>\n        <td><strong>{proto}</strong></td>\n        <td>{metric}</td>\n",
@@ -251,8 +260,17 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
                         let _ = writeln!(out, "        <td>—</td>");
                     }
                     Some(v) => {
-                        if i == 0 || baseline.is_none() {
-                            let _ = writeln!(out, "        <td>{v:.2}</td>");
+                        // LAN/Loopback targets and the baseline target: show raw value only
+                        if is_lan(run) || Some(i) == first_internet_idx || baseline.is_none() {
+                            if is_lan(run) {
+                                // Dim LAN reference values
+                                let _ = writeln!(
+                                    out,
+                                    "        <td style=\"opacity:.55\">{v:.2} <small>(ref)</small></td>",
+                                );
+                            } else {
+                                let _ = writeln!(out, "        <td>{v:.2}</td>");
+                            }
                         } else if let Some(base) = baseline {
                             // For latency metrics (lower = better): negative diff = faster.
                             // For throughput metrics (higher = better): positive diff = faster.
@@ -294,11 +312,12 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
         {
             let mut observations: Vec<String> = Vec::new();
 
-            // For each active protocol, find fastest/slowest target
+            // For each active protocol, find fastest/slowest among Internet targets only
             for proto in &active_protos {
                 let avgs: Vec<(usize, f64)> = runs
                     .iter()
                     .enumerate()
+                    .filter(|(_, r)| !is_lan(r))
                     .filter_map(|(i, r)| avg_primary(r, proto).map(|v| (i, v)))
                     .collect();
                 if avgs.len() >= 2 {
