@@ -75,6 +75,10 @@ jobs:
           --target ${{ matrix.target }}
           --features browser
           -p networker-tester -p networker-endpoint
+        env:
+          # Static-link the VC++ runtime on Windows so binaries work on clean
+          # Windows Server images (e.g. GCP) without installing vcredist.
+          RUSTFLAGS: ${{ contains(matrix.target, 'windows') && '-C target-feature=+crt-static' || '' }}
 
       # ── Package (Unix: .tar.gz) ──────────────────────────────────────────
       - name: Package (tar.gz)
