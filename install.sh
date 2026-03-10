@@ -4932,128 +4932,94 @@ _gcp_win_deploy_endpoint_via_startup() {
     local name="$1" ip="$2"
 
     next_step "Install networker-endpoint on GCE Windows VM (via startup script)"
-    print_info "Setting startup script to build and install endpoint…"
-    print_dim "This will install VS Build Tools + Rust + compile from source on the VM."
-    print_dim "Expected time: 25–40 minutes (first build on e2-small)."
+    print_info "Setting startup script to install endpoint on Windows VM…"
+    print_dim "Downloads pre-built binary from GitHub Releases (fast), or builds from source (slow fallback)."
     echo ""
 
-    # Write the PowerShell install worker script (runs as scheduled task — no GCE timeout)
+    # Write the PowerShell startup script — downloads pre-built binary from GitHub Releases,
+    # falls back to source build if no release assets exist.
     local ps_tmp
     ps_tmp="$(mktemp /tmp/networker-gcp-win-XXXXX.ps1)"
 
-    # The startup script is a trampoline: it writes the worker to disk and schedules it,
-    # then exits immediately so GCE's script runner doesn't kill it.
     cat > "$ps_tmp" <<'PSEOF'
-$ErrorActionPreference = 'Continue'
-
-# --- Trampoline: write worker script and schedule it, then exit ---
-$workerPath = 'C:\networker-install-worker.ps1'
-$workerContent = @'
 $ErrorActionPreference = 'Continue'
 $dest = 'C:\networker'
 $binary = 'networker-endpoint'
-$repo = 'https://github.com/irlm/networker-tester'
+$repo = 'irlm/networker-tester'
 $logFile = 'C:\networker-install.log'
 
 function Log($msg) {
     $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-    $line = "$ts  $msg"
-    Add-Content -Path $logFile -Value $line
+    Add-Content -Path $logFile -Value "$ts  $msg"
+    Write-Host "$ts  $msg"
 }
 
-# Skip if already installed and running
-if (Get-Service -Name $binary -ErrorAction SilentlyContinue) {
-    $svc = Get-Service -Name $binary
-    if ($svc.Status -eq 'Running') {
-        Log 'Service already running - skipping install'
-        exit 0
+# Clean up stale workers from prior runs
+schtasks /End /TN 'NetworkerInstallWorker' 2>$null
+schtasks /Delete /TN 'NetworkerInstallWorker' /F 2>$null
+Stop-Process -Name $binary -Force -ErrorAction SilentlyContinue
+
+# Skip if already listening
+$listening = netstat -an 2>$null | Select-String ':8080.*LISTEN'
+if ($listening) { Log 'Endpoint already listening on port 8080'; exit 0 }
+
+Log 'Installing endpoint...'
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+New-Item -ItemType Directory -Force -Path $dest | Out-Null
+$dstExe = "$dest\${binary}.exe"
+
+# --- Try downloading pre-built binary from GitHub Releases ---
+$downloaded = $false
+try {
+    $releases = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest" -UseBasicParsing
+    $asset = $releases.assets | Where-Object { $_.name -like '*endpoint*windows*' } | Select-Object -First 1
+    if ($asset) {
+        $zipPath = "C:\${binary}-win.zip"
+        Log ('Downloading ' + $asset.name)
+        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath -UseBasicParsing
+        Expand-Archive -Path $zipPath -DestinationPath $dest -Force
+        Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+        if (Test-Path $dstExe) { $downloaded = $true; Log ('Downloaded: ' + (& $dstExe --version 2>&1)) }
     }
-}
+} catch { Log ('Release download failed: ' + $_.Exception.Message) }
 
-# Set CARGO_HOME and RUSTUP_HOME to known paths (runs as SYSTEM)
-$env:CARGO_HOME = 'C:\cargo'
-$env:RUSTUP_HOME = 'C:\rustup'
-New-Item -ItemType Directory -Force -Path $env:CARGO_HOME -ErrorAction SilentlyContinue | Out-Null
-New-Item -ItemType Directory -Force -Path $env:RUSTUP_HOME -ErrorAction SilentlyContinue | Out-Null
-
-# Install Visual C++ Build Tools (required for Rust MSVC target)
-if (-not (Test-Path 'C:\BuildTools\VC\Tools\MSVC')) {
-    Log 'Installing Visual C++ Build Tools (10-15 min)...'
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vs_buildtools.exe' -OutFile C:\vs_buildtools.exe -UseBasicParsing
-    $p = Start-Process -FilePath 'C:\vs_buildtools.exe' -ArgumentList '--quiet','--wait','--norestart','--nocache','--installPath','C:\BuildTools','--add','Microsoft.VisualStudio.Workload.VCTools','--includeRecommended' -Wait -PassThru
-    Log ('VS Build Tools exit code: ' + $p.ExitCode)
-    if (Test-Path 'C:\BuildTools\VC\Tools\MSVC') {
-        Log 'Visual C++ Build Tools installed successfully'
-    } else {
-        Log 'WARNING: MSVC directory not found after install — build may fail'
+# --- Fallback: build from source (slow — 30+ min) ---
+if (-not $downloaded) {
+    Log 'No pre-built binary — building from source...'
+    $env:CARGO_HOME = 'C:\cargo'; $env:RUSTUP_HOME = 'C:\rustup'
+    New-Item -ItemType Directory -Force -Path $env:CARGO_HOME -ErrorAction SilentlyContinue | Out-Null
+    New-Item -ItemType Directory -Force -Path $env:RUSTUP_HOME -ErrorAction SilentlyContinue | Out-Null
+    if (-not (Test-Path 'C:\BuildTools\VC\Tools\MSVC')) {
+        Log 'Installing VS Build Tools...'; Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vs_buildtools.exe' -OutFile C:\vs_buildtools.exe -UseBasicParsing
+        Start-Process -FilePath 'C:\vs_buildtools.exe' -ArgumentList '--quiet','--wait','--norestart','--nocache','--installPath','C:\BuildTools','--add','Microsoft.VisualStudio.Workload.VCTools','--includeRecommended' -Wait
     }
-} else {
-    Log 'Visual C++ Build Tools already present'
+    if (-not (Test-Path 'C:\cargo\bin\cargo.exe')) {
+        Log 'Installing Rust...'; Invoke-WebRequest -Uri 'https://win.rustup.rs/x86_64' -OutFile C:\rustup-init.exe -UseBasicParsing
+        & C:\rustup-init.exe -y --default-toolchain stable 2>&1 | Out-Null
+    }
+    $env:Path = 'C:\cargo\bin;' + $env:Path
+    Log 'Building from source...'; & C:\cargo\bin\cargo.exe install --git "https://github.com/$repo" $binary 2>&1 | Out-Null
+    if (Test-Path "C:\cargo\bin\${binary}.exe") { Copy-Item "C:\cargo\bin\${binary}.exe" $dstExe -Force; Log ('Built: ' + (& $dstExe --version 2>&1)) }
+    else { Log 'ERROR: Build failed'; exit 1 }
 }
 
-# Install Rust if not present
-if (-not (Test-Path 'C:\cargo\bin\cargo.exe')) {
-    Log 'Installing Rust...'
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    Invoke-WebRequest -Uri 'https://win.rustup.rs/x86_64' -OutFile C:\rustup-init.exe -UseBasicParsing
-    & C:\rustup-init.exe -y --default-toolchain stable 2>&1 | Out-Null
-}
-$env:Path = 'C:\cargo\bin;C:\BuildTools\VC\Tools\MSVC\*\bin\Hostx64\x64;' + $env:Path
-Log ('Rust: ' + (& C:\cargo\bin\rustc.exe --version 2>&1))
-
-# Build endpoint from source
-Log ('Building ' + $binary + ' from source (15-25 min on small VM)...')
-& C:\cargo\bin\cargo.exe install --git $repo $binary 2>&1 | Out-Null
-$srcExe = "C:\cargo\bin\${binary}.exe"
-
-# Copy binary to destination
-New-Item -ItemType Directory -Force -Path $dest -ErrorAction SilentlyContinue | Out-Null
-$dstExe = Join-Path $dest "${binary}.exe"
-if (Test-Path $srcExe) {
-    Copy-Item $srcExe $dstExe -Force
-    Log ('Built: ' + (& $dstExe --version 2>&1))
-} else {
-    Log ('ERROR: Binary not found at ' + $srcExe)
-    exit 1
-}
-
-# Add to PATH
-$mp = [System.Environment]::GetEnvironmentVariable('Path','Machine')
-if ($mp -notlike ('*' + $dest + '*')) {
-    $newPath = $mp + ';' + $dest
-    [System.Environment]::SetEnvironmentVariable('Path', $newPath, 'Machine')
-}
-
-# Create Windows service
-sc.exe create $binary binPath=$dstExe start=auto | Out-Null
-sc.exe description $binary 'Networker Endpoint diagnostics server' | Out-Null
-sc.exe start $binary | Out-Null
-Log 'Service created and started'
-
-# Open firewall ports
-netsh advfirewall firewall add rule name='Networker-HTTP'  protocol=TCP dir=in action=allow localport=8080 | Out-Null
-netsh advfirewall firewall add rule name='Networker-HTTPS' protocol=TCP dir=in action=allow localport=8443 | Out-Null
-netsh advfirewall firewall add rule name='Networker-UDP'   protocol=UDP dir=in action=allow localport='8443,9998,9999' | Out-Null
+# Firewall
+netsh advfirewall firewall add rule name='Networker-HTTP'  protocol=TCP dir=in action=allow localport=8080 2>$null
+netsh advfirewall firewall add rule name='Networker-HTTPS' protocol=TCP dir=in action=allow localport=8443 2>$null
+netsh advfirewall firewall add rule name='Networker-UDP'   protocol=UDP dir=in action=allow localport='8443,9998,9999' 2>$null
 Log 'Firewall rules added'
 
-# Auto-shutdown task (04:00 UTC)
-schtasks /Create /TN 'NetworkerAutoShutdown' /TR 'shutdown /s /t 0' /SC DAILY /ST 04:00 /RU SYSTEM /F | Out-Null
-Log 'Auto-shutdown scheduled at 04:00 UTC'
+# Run via scheduled task (not sc.exe — binary is not a native Windows service)
+schtasks /Create /TN 'NetworkerEndpoint' /TR "$dstExe" /SC ONSTART /RU SYSTEM /F 2>$null
+schtasks /Run /TN 'NetworkerEndpoint' 2>$null
+Start-Sleep 3
+$listening = netstat -an 2>$null | Select-String ':8080.*LISTEN'
+if ($listening) { Log 'Endpoint listening on 8080' } else { Log 'WARNING: Not listening yet' }
+
+# Auto-shutdown
+schtasks /Create /TN 'NetworkerAutoShutdown' /TR 'shutdown /s /t 0' /SC DAILY /ST 04:00 /RU SYSTEM /F 2>$null
 
 Log '=== INSTALL COMPLETE ==='
-'@
-
-# Write the worker script to disk
-Set-Content -Path $workerPath -Value $workerContent -Force
-
-# Schedule it to run immediately as SYSTEM (survives GCE script runner timeout)
-# Use /SC ONSTART so the task definition is valid; /Run triggers it now.
-schtasks /Create /TN 'NetworkerInstallWorker' /TR "powershell.exe -ExecutionPolicy Bypass -File $workerPath" /SC ONSTART /RU SYSTEM /F | Out-Null
-schtasks /Run /TN 'NetworkerInstallWorker' | Out-Null
-
-Write-Host 'Install worker scheduled — exiting startup script'
-exit 0
 PSEOF
 
     gcloud compute instances add-metadata "$name" \
@@ -5071,7 +5037,7 @@ PSEOF
         --quiet 2>/dev/null
 
     # Poll health check instead of SSH
-    print_info "Waiting for endpoint to come online (compiling from source — may take 30+ min)…"
+    print_info "Waiting for endpoint to come online…"
     local attempt=0 max_attempts=180  # 180 × 15s = 45 min max
     while [[ $attempt -lt $max_attempts ]]; do
         if curl -sf --max-time 5 "http://${ip}:8080/health" &>/dev/null; then
