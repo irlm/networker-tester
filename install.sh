@@ -1385,10 +1385,8 @@ _lan_create_endpoint_service_windows() {
         New-NetFirewallRule -Name 'NetworkerEndpoint-UDP' -DisplayName 'Networker Endpoint UDP' \`
             -Enabled True -Direction Inbound -Protocol UDP -Action Allow \`
             -LocalPort 8443,9998,9999 -ErrorAction SilentlyContinue
-        # Start endpoint directly (binary is NOT a native Windows service)
-        Start-Process -FilePath \\\$exe -NoNewWindow \`
-            -RedirectStandardOutput 'C:\\networker\\endpoint-stdout.log' \`
-            -RedirectStandardError 'C:\\networker\\endpoint-stderr.log'
+        # Start endpoint as detached process (SSH waits for child processes sharing console)
+        Start-Process -FilePath \\\$exe -WindowStyle Hidden
         # Scheduled task for reboot persistence
         schtasks /Create /TN 'NetworkerEndpoint' /TR \\\$exe /SC ONSTART /RU SYSTEM /F 2>\\\$null
     }\""
@@ -3489,8 +3487,6 @@ _azure_win_create_endpoint_service() {
     cat > "$ps_tmp" <<'PSEOF'
 $ErrorActionPreference = 'Continue'
 $exe = 'C:\networker\networker-endpoint.exe'
-$stdoutLog = 'C:\networker\endpoint-stdout.log'
-$stderrLog = 'C:\networker\endpoint-stderr.log'
 # Stop any existing instance
 Stop-Process -Name 'networker-endpoint' -Force -ErrorAction SilentlyContinue
 # Windows Firewall rules (before starting the binary)
@@ -3498,11 +3494,9 @@ netsh advfirewall firewall add rule name='Networker-HTTP'  protocol=TCP dir=in a
 netsh advfirewall firewall add rule name='Networker-HTTPS' protocol=TCP dir=in action=allow localport=8443  | Out-Null
 netsh advfirewall firewall add rule name='Networker-UDP'   protocol=UDP dir=in action=allow localport='8443,9998,9999' | Out-Null
 Write-Host 'Firewall rules added'
-# Start endpoint directly (independent process persists after script)
-# Note: -RedirectStandard* requires -NoNewWindow (not -WindowStyle Hidden)
-Start-Process -FilePath $exe -NoNewWindow `
-    -RedirectStandardOutput $stdoutLog `
-    -RedirectStandardError $stderrLog
+# Start endpoint as detached process (-WindowStyle Hidden, NOT -NoNewWindow,
+# because az vm run-command waits for all child processes sharing the console)
+Start-Process -FilePath $exe -WindowStyle Hidden
 # Scheduled task for reboot persistence
 schtasks /Create /TN 'NetworkerEndpoint' /TR "$exe" /SC ONSTART /RU SYSTEM /F 2>$null | Out-Host
 Start-Sleep 5
@@ -3511,7 +3505,6 @@ if ($listening) { Write-Host 'Endpoint listening on 8080' } else {
     Write-Host 'WARNING: Not listening on 8080 after 5s'
     $proc = Get-Process -Name 'networker-endpoint' -ErrorAction SilentlyContinue
     if ($proc) { Write-Host ('Process running: PID ' + $proc.Id) } else { Write-Host 'ERROR: Process not running' }
-    if (Test-Path $stderrLog) { $err = Get-Content $stderrLog -ErrorAction SilentlyContinue; if ($err) { Write-Host ('stderr: ' + ($err -join '; ')) } }
 }
 PSEOF
 
@@ -5082,13 +5075,10 @@ netsh advfirewall firewall add rule name='Networker-HTTPS' protocol=TCP dir=in a
 netsh advfirewall firewall add rule name='Networker-UDP'   protocol=UDP dir=in action=allow localport='8443,9998,9999' 2>$null
 Log 'Firewall rules added'
 
-# Start the endpoint process directly (Start-Process creates an independent process
-# that persists after this script ends). Redirect output for debugging.
-# Note: -RedirectStandard* requires -NoNewWindow (not -WindowStyle Hidden)
+# Start the endpoint as a detached process (-WindowStyle Hidden creates a fully
+# independent process that won't block the startup script runner or SSH session)
 Log ('Starting endpoint: ' + $dstExe)
-Start-Process -FilePath $dstExe -NoNewWindow `
-    -RedirectStandardOutput $stdoutLog `
-    -RedirectStandardError $stderrLog
+Start-Process -FilePath $dstExe -WindowStyle Hidden
 
 # Also create scheduled task for persistence across reboots
 schtasks /Create /TN 'NetworkerEndpoint' /TR "$dstExe" /SC ONSTART /RU SYSTEM /F 2>$null
@@ -5173,9 +5163,7 @@ _gcp_win_create_endpoint_service() {
             netsh advfirewall firewall add rule name='Networker-HTTP'  protocol=TCP dir=in action=allow localport=8080; \
             netsh advfirewall firewall add rule name='Networker-HTTPS' protocol=TCP dir=in action=allow localport=8443; \
             netsh advfirewall firewall add rule name='Networker-UDP'   protocol=UDP dir=in action=allow localport='8443,9998,9999'; \
-            Start-Process -FilePath 'C:\\networker\\networker-endpoint.exe' -NoNewWindow \`
-                -RedirectStandardOutput 'C:\\networker\\endpoint-stdout.log' \`
-                -RedirectStandardError 'C:\\networker\\endpoint-stderr.log'; \
+            Start-Process -FilePath 'C:\\networker\\networker-endpoint.exe' -WindowStyle Hidden; \
             schtasks /Create /TN 'NetworkerEndpoint' /TR 'C:\\networker\\networker-endpoint.exe' /SC ONSTART /RU SYSTEM /F 2>\\\$null\"" < /dev/null
 
     print_ok "networker-endpoint service created on GCE Windows VM"
