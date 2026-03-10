@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.2] – 2026-03-10 — GCP Windows deploy fix & release workflow
+
+### Fixed
+- **install.sh**: GCP Windows endpoint deployment via startup-script trampoline (avoids GCE script runner timeout)
+- **install.sh**: VS Build Tools `--installPath C:\BuildTools` for correct MSVC detection (Azure + GCP Windows)
+- **install.sh**: iptables OUTPUT REDIRECT cleanup (prevents outbound HTTPS breaking on endpoint VMs)
+- **install.sh**: Download installer locally then SCP to VM (bypasses CDN/network issues on cloud VMs)
+- **install.sh**: Stop endpoint service before copying binary (fixes "Text file busy")
+- **install.sh**: Start stopped/deallocated VMs on reuse (Azure + GCP)
+- **release.yml**: Use `--notes-file` to prevent shell interpretation of CHANGELOG backticks
+
+---
+
 ## [0.13.1] – 2026-03-09 — Windows VM name validation & docs cleanup
 
 ### Fixed
