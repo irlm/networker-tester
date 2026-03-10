@@ -147,14 +147,26 @@ pub struct Cli {
     #[arg(long)]
     pub excel: bool,
 
-    // ── SQL Server ────────────────────────────────────────────────────────────
-    /// Insert results into SQL Server
+    // ── Database ──────────────────────────────────────────────────────────────
+    /// Insert results into a database (auto-detects backend from URL scheme)
     #[arg(long)]
+    pub save_to_db: bool,
+
+    /// Database URL (postgres://..., or ADO.NET-style for SQL Server)
+    #[arg(long, env = "NETWORKER_DB_URL")]
+    pub db_url: Option<String>,
+
+    /// Run database migrations before inserting
+    #[arg(long)]
+    pub db_migrate: bool,
+
+    // ── SQL Server (legacy aliases, hidden) ──────────────────────────────────
+    /// Insert results into SQL Server (legacy alias for --save-to-db)
+    #[arg(long, hide = true)]
     pub save_to_sql: bool,
 
-    /// ADO.NET-style connection string
-    /// e.g. "Server=localhost;Database=NetworkDiagnostics;User Id=sa;Password=Pass!;TrustServerCertificate=true"
-    #[arg(long, env = "NETWORKER_SQL_CONN")]
+    /// ADO.NET-style connection string (legacy alias for --db-url)
+    #[arg(long, env = "NETWORKER_SQL_CONN", hide = true)]
     pub connection_string: Option<String>,
 
     // ── Misc ──────────────────────────────────────────────────────────────────
@@ -214,6 +226,9 @@ pub struct ConfigFile {
     pub html_report: Option<String>,
     pub css: Option<String>,
     pub excel: Option<bool>,
+    pub save_to_db: Option<bool>,
+    pub db_url: Option<String>,
+    pub db_migrate: Option<bool>,
     pub save_to_sql: Option<bool>,
     pub connection_string: Option<String>,
     pub log_level: Option<String>,
@@ -250,6 +265,9 @@ pub struct ResolvedConfig {
     pub html_report: String,
     pub css: Option<String>,
     pub excel: bool,
+    pub save_to_db: bool,
+    pub db_url: Option<String>,
+    pub db_migrate: bool,
     pub save_to_sql: bool,
     pub connection_string: Option<String>,
     pub log_level: Option<String>,
@@ -339,6 +357,16 @@ impl Cli {
             html_report: pick!(html_report, "report.html".into()),
             css: self.css.or(f.css),
             excel: flag!(excel),
+            save_to_db: self.save_to_db
+                || f.save_to_db.unwrap_or(false)
+                || self.save_to_sql
+                || f.save_to_sql.unwrap_or(false),
+            db_url: self.db_url.or(f.db_url).or_else(|| {
+                self.connection_string
+                    .clone()
+                    .or_else(|| f.connection_string.clone())
+            }),
+            db_migrate: self.db_migrate || f.db_migrate.unwrap_or(false),
             save_to_sql: flag!(save_to_sql),
             connection_string: self.connection_string.or(f.connection_string),
             log_level: self
@@ -354,7 +382,10 @@ impl Cli {
 impl ResolvedConfig {
     /// Validate combinations of flags; return user-friendly errors.
     pub fn validate(&self) -> anyhow::Result<()> {
-        if self.save_to_sql && self.connection_string.is_none() {
+        if self.save_to_db && self.db_url.is_none() && !self.save_to_sql {
+            anyhow::bail!("--save-to-db requires --db-url (or NETWORKER_DB_URL env var)");
+        }
+        if self.save_to_sql && self.connection_string.is_none() && self.db_url.is_none() {
             anyhow::bail!(
                 "--save-to-sql requires --connection-string (or NETWORKER_SQL_CONN env var)"
             );
@@ -652,5 +683,221 @@ mod tests {
     fn load_config_nonexistent_path_returns_error() {
         let result = super::load_config("/this/path/does/not/exist.json");
         assert!(result.is_err());
+    }
+
+    // ── Database flag tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn save_to_db_flag_parsed() {
+        let cli = Cli::parse_from(["networker-tester", "--save-to-db"]);
+        assert!(cli.save_to_db);
+        assert!(!cli.save_to_sql);
+    }
+
+    #[test]
+    fn db_url_flag_parsed() {
+        let cli = Cli::parse_from([
+            "networker-tester",
+            "--db-url",
+            "postgres://localhost/diag",
+        ]);
+        assert_eq!(cli.db_url.as_deref(), Some("postgres://localhost/diag"));
+    }
+
+    #[test]
+    fn db_migrate_flag_parsed() {
+        let cli = Cli::parse_from(["networker-tester", "--db-migrate"]);
+        assert!(cli.db_migrate);
+    }
+
+    #[test]
+    fn validate_save_to_db_without_db_url_fails() {
+        // Skip if NETWORKER_DB_URL is set in the environment — clap picks it up
+        // automatically so validate() would correctly pass.
+        if std::env::var("NETWORKER_DB_URL").is_ok() {
+            return;
+        }
+        let cfg = Cli::parse_from(["networker-tester", "--save-to-db"]).resolve(None);
+        assert!(
+            cfg.validate().is_err(),
+            "--save-to-db without --db-url should fail validation"
+        );
+        let err = cfg.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("--db-url"),
+            "error should mention --db-url"
+        );
+    }
+
+    #[test]
+    fn validate_save_to_db_with_db_url_passes() {
+        let cfg = Cli::parse_from([
+            "networker-tester",
+            "--save-to-db",
+            "--db-url",
+            "postgres://localhost/diag",
+        ])
+        .resolve(None);
+        assert!(
+            cfg.validate().is_ok(),
+            "--save-to-db with --db-url should pass validation"
+        );
+    }
+
+    #[test]
+    fn save_to_sql_hidden_alias_still_parses() {
+        // --save-to-sql is a hidden alias for --save-to-db
+        let cli = Cli::parse_from(["networker-tester", "--save-to-sql"]);
+        assert!(cli.save_to_sql, "save_to_sql field should be set");
+    }
+
+    #[test]
+    fn resolve_save_to_db_true_when_save_to_sql_set() {
+        // save_to_db in ResolvedConfig is true when either --save-to-db or
+        // --save-to-sql is passed on the CLI.
+        let cfg = Cli::parse_from([
+            "networker-tester",
+            "--save-to-sql",
+            "--db-url",
+            "Server=localhost;Database=D;User Id=sa;Password=P",
+        ])
+        .resolve(None);
+        assert!(
+            cfg.save_to_db,
+            "save_to_db should be true when --save-to-sql is used"
+        );
+    }
+
+    #[test]
+    fn resolve_db_url_falls_back_to_connection_string() {
+        // When --db-url is absent, the legacy --connection-string should be used
+        // as the db_url in the resolved config.
+        let cfg = Cli::parse_from([
+            "networker-tester",
+            "--connection-string",
+            "Server=localhost;Database=D;User Id=sa;Password=P",
+        ])
+        .resolve(None);
+        assert_eq!(
+            cfg.db_url.as_deref(),
+            Some("Server=localhost;Database=D;User Id=sa;Password=P"),
+            "db_url should fall back to --connection-string"
+        );
+    }
+
+    #[test]
+    fn resolve_db_url_takes_priority_over_connection_string() {
+        // When both --db-url and --connection-string are present, --db-url wins.
+        let cfg = Cli::parse_from([
+            "networker-tester",
+            "--db-url",
+            "postgres://primary",
+            "--connection-string",
+            "Server=fallback",
+        ])
+        .resolve(None);
+        assert_eq!(
+            cfg.db_url.as_deref(),
+            Some("postgres://primary"),
+            "--db-url should take priority over --connection-string"
+        );
+    }
+
+    #[test]
+    fn resolve_db_migrate_from_config_file() {
+        let file = ConfigFile {
+            db_migrate: Some(true),
+            db_url: Some("postgres://localhost/diag".into()),
+            save_to_db: Some(true),
+            ..Default::default()
+        };
+        let cfg = Cli::parse_from(["networker-tester"]).resolve(Some(file));
+        assert!(cfg.db_migrate, "db_migrate should be true from config file");
+    }
+
+    #[test]
+    fn resolve_save_to_db_from_config_file() {
+        let file = ConfigFile {
+            save_to_db: Some(true),
+            db_url: Some("postgres://localhost/diag".into()),
+            ..Default::default()
+        };
+        let cfg = Cli::parse_from(["networker-tester"]).resolve(Some(file));
+        assert!(cfg.save_to_db, "save_to_db should be true from config file");
+        assert_eq!(cfg.db_url.as_deref(), Some("postgres://localhost/diag"));
+    }
+
+    #[test]
+    fn resolve_save_to_db_or_merge_with_config_save_to_sql() {
+        // Config file sets save_to_sql = true; that should propagate into
+        // save_to_db on the resolved config.
+        let file = ConfigFile {
+            save_to_sql: Some(true),
+            connection_string: Some("Server=localhost;Database=D;User Id=sa;Password=P".into()),
+            ..Default::default()
+        };
+        let cfg = Cli::parse_from(["networker-tester"]).resolve(Some(file));
+        assert!(
+            cfg.save_to_db,
+            "save_to_db should be true when config save_to_sql is set"
+        );
+    }
+
+    #[test]
+    fn config_file_db_url_used_when_cli_absent() {
+        let file = ConfigFile {
+            db_url: Some("postgres://config-host/diag".into()),
+            ..Default::default()
+        };
+        let cfg = Cli::parse_from(["networker-tester"]).resolve(Some(file));
+        assert_eq!(cfg.db_url.as_deref(), Some("postgres://config-host/diag"));
+    }
+
+    #[test]
+    fn cli_db_url_overrides_config_file_db_url() {
+        let file = ConfigFile {
+            db_url: Some("postgres://config-host/diag".into()),
+            ..Default::default()
+        };
+        let cfg = Cli::parse_from([
+            "networker-tester",
+            "--db-url",
+            "postgres://cli-host/diag",
+        ])
+        .resolve(Some(file));
+        assert_eq!(
+            cfg.db_url.as_deref(),
+            Some("postgres://cli-host/diag"),
+            "CLI --db-url should override config file db_url"
+        );
+    }
+
+    #[test]
+    fn db_migrate_false_by_default() {
+        let cfg = Cli::parse_from(["networker-tester"]).resolve(None);
+        assert!(
+            !cfg.db_migrate,
+            "--db-migrate should default to false"
+        );
+    }
+
+    #[test]
+    fn save_to_db_false_by_default() {
+        let cfg = Cli::parse_from(["networker-tester"]).resolve(None);
+        assert!(
+            !cfg.save_to_db,
+            "--save-to-db should default to false"
+        );
+    }
+
+    #[test]
+    fn db_url_none_by_default() {
+        // Skip if NETWORKER_DB_URL is set so the env-var based test doesn't
+        // accidentally fail here.
+        if std::env::var("NETWORKER_DB_URL").is_ok() {
+            return;
+        }
+        let cfg = Cli::parse_from(["networker-tester"]).resolve(None);
+        assert!(cfg.db_url.is_none(), "--db-url should default to None");
     }
 }

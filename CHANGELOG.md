@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.6] – 2026-03-10 — Multi-database abstraction layer
+
+### Added
+- **Database abstraction**: `DatabaseBackend` trait with auto-detect factory (`postgres://` → PostgreSQL, ADO.NET → SQL Server)
+- **PostgreSQL backend** (`--features db-postgres`): `tokio-postgres` driver with embedded idempotent migrations, native UUID/TIMESTAMPTZ types
+- **CLI flags**: `--save-to-db`, `--db-url` (env: `NETWORKER_DB_URL`), `--db-migrate` — generic database insertion replacing the SQL Server-specific `--save-to-sql`
+- **docker-compose.db.yml**: PostgreSQL 16 + SQL Server 2022 for local development
+- **CI**: PostgreSQL integration test job with Docker service container
+- 9 PostgreSQL integration tests (round-trip, field verification, cascade delete, migration idempotency)
+
+### Changed
+- SQL Server driver (`tiberius`, `tokio-util`) now optional behind `db-mssql` feature (included in default features — no breaking change)
+- `--save-to-sql` and `--connection-string` still work as hidden aliases for backward compatibility
+
+---
+
 ## [0.13.5] – 2026-03-10 — HTML report server identification
 
 ### Fixed

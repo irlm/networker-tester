@@ -1,0 +1,17 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: network_diagnostics
+      POSTGRES_USER: networker
+      POSTGRES_PASSWORD: networker
+    ports:
+      - "5432:5432"
+
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      SA_PASSWORD: "NetworkerTest1!"
+    ports:
+      - "1433:1433"

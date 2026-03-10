@@ -46,9 +46,15 @@ chromiumoxide = { version = "0.9", optional = true }
 sha2          = { version = "0.10", optional = true }
 base64        = { version = "0.22", optional = true }
 
-# --- SQL Server ---
-tiberius     = { version = "0.12", default-features = false, features = ["rustls", "chrono", "sql-browser-tokio"] }
-tokio-util   = { version = "0.7",  features = ["compat"] }
+# --- SQL Server (optional) ---
+tiberius     = { version = "0.12", default-features = false, features = ["rustls", "chrono", "sql-browser-tokio"], optional = true }
+tokio-util   = { version = "0.7",  features = ["compat"], optional = true }
+
+# --- PostgreSQL (optional) ---
+tokio-postgres = { version = "0.7", features = ["with-chrono-0_4", "with-uuid-1"], optional = true }
+
+# --- Trait ---
+async-trait = "0.1"
 
 # --- shared workspace ---
 serde.workspace       = true
@@ -78,10 +84,12 @@ libc     = "0.2"
 reqwest  = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 [features]
-default = ["http3"]
+default = ["http3", "db-mssql"]
 http3   = ["quinn", "h3", "h3-quinn"]
 native  = ["dep:native-tls", "dep:tokio-native-tls"]
 browser = ["dep:chromiumoxide", "dep:sha2", "dep:base64"]
+db-mssql    = ["dep:tiberius", "dep:tokio-util"]
+db-postgres = ["dep:tokio-postgres"]
 
 [dev-dependencies]
 tokio-test  = "0.4"

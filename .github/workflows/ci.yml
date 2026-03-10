@@ -87,6 +87,20 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: network_diagnostics
+          POSTGRES_USER: networker
+          POSTGRES_PASSWORD: networker
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v4
 
@@ -126,18 +140,19 @@ jobs:
           $SQLCMD $ARGS -i sql/07_MoreTcpStats.sql
 
       # Run lib tests + in-process integration tests under coverage.
-      # --all-features ensures http3 and native feature-gated paths are included.
+      # --all-features ensures http3, db-mssql, db-postgres feature-gated paths are included.
       # --no-report accumulates raw profiles; the final `report` step merges them.
       # Integration tests are serialized (--test-threads=1) because each spawns
       # its own endpoint on random ports.
       # --include-ignored runs #[ignore] tests that have their own env-var guards
-      # (SQL, DNS, curl) — they self-skip when the service is unavailable.
+      # (SQL, PostgreSQL, DNS, curl) — they self-skip when the service is unavailable.
       - name: Collect coverage (lib tests)
         run: |
           cargo llvm-cov --no-report --workspace --all-features --lib \
             -- --include-ignored
         env:
           NETWORKER_SQL_CONN: "Server=localhost;Database=NetworkDiagnostics;User Id=sa;Password=NetworkerTest1!;TrustServerCertificate=true"
+          NETWORKER_DB_URL: "postgres://networker:networker@localhost/network_diagnostics"
 
       - name: Collect coverage (integration tests)
         run: |
@@ -229,4 +244,43 @@ jobs:
       - name: Run SQL tests
         env:
           NETWORKER_SQL_CONN: "Server=localhost;Database=NetworkDiagnostics;User Id=sa;Password=NetworkerTest1!;TrustServerCertificate=true"
-        run: cargo test --workspace -- sql --include-ignored
+        run: cargo test --workspace --features db-mssql -- db_mssql --include-ignored
+
+  # ──────────────────────────────────────────────────────────────────────────
+  postgres-integration:
+    name: PostgreSQL integration
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: network_diagnostics
+          POSTGRES_USER: networker
+          POSTGRES_PASSWORD: networker
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-pg-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ubuntu-pg-cargo-
+
+      - name: Run PostgreSQL tests
+        env:
+          NETWORKER_DB_URL: "postgres://networker:networker@localhost/network_diagnostics"
+        run: cargo test --workspace --features db-postgres -- db_postgres --include-ignored
