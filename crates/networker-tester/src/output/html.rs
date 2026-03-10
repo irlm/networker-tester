@@ -238,17 +238,72 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
         }
         let _ = writeln!(out, "      </tr>\n    </thead>\n    <tbody>");
 
-        // Use the first Internet target as the diff baseline (not LAN).
+        // Pick the "best overall" Internet target as the diff baseline.
         // LAN/Loopback targets show raw values only (as reference).
         let is_lan = |run: &TestRun| -> bool {
             run.baseline.as_ref().map_or(false, |b| {
                 matches!(b.network_type, NetworkType::LAN | NetworkType::Loopback)
             })
         };
-        let first_internet_idx = runs.iter().position(|r| !is_lan(r));
+
+        // Compute composite score: for each protocol, rank Internet targets
+        // (1 = best). Sum ranks across all protocols. Lowest total = best overall.
+        let internet_indices: Vec<usize> = runs
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| !is_lan(r))
+            .map(|(i, _)| i)
+            .collect();
+
+        let best_internet_idx = if internet_indices.len() <= 1 {
+            internet_indices.first().copied()
+        } else {
+            let mut rank_sums: Vec<(usize, f64)> = internet_indices
+                .iter()
+                .map(|&i| (i, 0.0))
+                .collect();
+
+            for proto in &active_protos {
+                let is_throughput = matches!(
+                    proto,
+                    Protocol::Download
+                        | Protocol::Upload
+                        | Protocol::WebDownload
+                        | Protocol::WebUpload
+                        | Protocol::UdpDownload
+                        | Protocol::UdpUpload
+                );
+                // Collect (index_in_rank_sums, value) for Internet targets with data
+                let mut vals: Vec<(usize, f64)> = rank_sums
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(ri, &(run_i, _))| {
+                        avg_primary(&runs[run_i], proto).map(|v| (ri, v))
+                    })
+                    .collect();
+                if vals.is_empty() {
+                    continue;
+                }
+                // Sort: best first (highest throughput or lowest latency)
+                if is_throughput {
+                    vals.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                } else {
+                    vals.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+                }
+                // Assign ranks (1-based)
+                for (rank, &(ri, _)) in vals.iter().enumerate() {
+                    rank_sums[ri].1 += (rank + 1) as f64;
+                }
+            }
+
+            rank_sums
+                .iter()
+                .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+                .map(|&(i, _)| i)
+        };
 
         for proto in &active_protos {
-            let baseline = first_internet_idx.and_then(|idx| avg_primary(&runs[idx], proto));
+            let baseline = best_internet_idx.and_then(|idx| avg_primary(&runs[idx], proto));
             let _ = write!(
                 out,
                 "      <tr>\n        <td><strong>{proto}</strong></td>\n        <td>{metric}</td>\n",
@@ -261,7 +316,7 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
                     }
                     Some(v) => {
                         // LAN/Loopback targets and the baseline target: show raw value only
-                        if is_lan(run) || Some(i) == first_internet_idx || baseline.is_none() {
+                        if is_lan(run) || Some(i) == best_internet_idx || baseline.is_none() {
                             if is_lan(run) {
                                 // Dim LAN reference values
                                 let _ = writeln!(
