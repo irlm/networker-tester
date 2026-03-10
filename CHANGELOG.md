@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.3] – 2026-03-10 — Windows endpoint VC++ runtime fix
+
+### Fixed
+- **install.sh**: Windows endpoint crash on GCP/Azure — missing `vcruntime140.dll` (exit code `0xC0000135`); install VC++ Redistributable before running binary
+- **install.sh**: Replace `sc.exe create`/`schtasks /Run` with `Start-Process -NoNewWindow` on all Windows paths (GCP startup, Azure run-command, LAN SSH, GCP SSH)
+- **install.sh**: Add detailed diagnostics to GCP Windows startup script (ZIP/binary size, file listing, stderr capture, process checks)
+- **release.yml**: Static-link CRT on Windows (`-C target-feature=+crt-static`) so binaries work on clean Windows Server images
+
+---
+
 ## [0.13.2] – 2026-03-10 — GCP Windows deploy fix & release workflow
 
 ### Fixed
