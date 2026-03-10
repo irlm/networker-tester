@@ -110,19 +110,49 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
                         }
                     })
                     .unwrap_or_default();
+                let version_badge = s
+                    .server_version
+                    .as_ref()
+                    .map(|v| format!(" <code>v{v}</code>"))
+                    .unwrap_or_default();
                 let region = s
                     .region
                     .as_ref()
                     .map(|r| format!("<br><small>Region: {r}</small>"))
                     .unwrap_or_default();
-                if hostname.is_empty() {
-                    format!("{os} | {} cores | {mem}{region}", s.cpu_cores)
+                // Derive provider tag from region (e.g. "azure/eastus" → "Azure")
+                let provider = s.region.as_ref().and_then(|r| {
+                    if r.starts_with("azure/") {
+                        Some("Azure")
+                    } else if r.starts_with("aws/") {
+                        Some("AWS")
+                    } else if r.starts_with("gcp/") {
+                        Some("GCP")
+                    } else {
+                        None
+                    }
+                });
+                // Build display name: prefer hostname, but annotate with provider if available
+                let display_name = if hostname.is_empty() || hostname == "unknown" {
+                    // No useful hostname — use provider + OS type
+                    let os_short = if os.contains("Windows") {
+                        "Windows"
+                    } else if os.contains("Ubuntu") {
+                        "Ubuntu"
+                    } else {
+                        "Linux"
+                    };
+                    match provider {
+                        Some(p) => format!("{p} {os_short}"),
+                        None => os_short.to_string(),
+                    }
                 } else {
-                    format!(
-                        "{hostname}<br><small>{os} | {} cores | {mem}</small>{region}",
-                        s.cpu_cores
-                    )
-                }
+                    hostname.to_string()
+                };
+                format!(
+                    "{display_name}{version_badge}<br><small>{os} | {} cores | {mem}</small>{region}",
+                    s.cpu_cores
+                )
             })
             .unwrap_or_else(|| "—".into());
         let net_type = run
@@ -690,16 +720,47 @@ fn write_multi_target_charts(runs: &[TestRun], out: &mut String) {
                         }
                     })
                     .unwrap_or_default();
+                let ver = s
+                    .server_version
+                    .as_ref()
+                    .map(|v| format!(" (v{v})"))
+                    .unwrap_or_default();
                 let region = s
                     .region
                     .as_ref()
                     .map(|r| format!(" | {r}"))
                     .unwrap_or_default();
-                if hostname.is_empty() {
-                    format!("{os} | {} cores | {mem}{region}", s.cpu_cores)
+                // Derive provider from region
+                let provider = s.region.as_ref().and_then(|r| {
+                    if r.starts_with("azure/") {
+                        Some("Azure")
+                    } else if r.starts_with("aws/") {
+                        Some("AWS")
+                    } else if r.starts_with("gcp/") {
+                        Some("GCP")
+                    } else {
+                        None
+                    }
+                });
+                let display_name = if hostname.is_empty() || hostname == "unknown" {
+                    let os_short = if os.contains("Windows") {
+                        "Windows"
+                    } else if os.contains("Ubuntu") {
+                        "Ubuntu"
+                    } else {
+                        "Linux"
+                    };
+                    match provider {
+                        Some(p) => format!("{p} {os_short}"),
+                        None => os_short.to_string(),
+                    }
                 } else {
-                    format!("{hostname} | {os} | {} cores | {mem}{region}", s.cpu_cores)
-                }
+                    hostname.to_string()
+                };
+                format!(
+                    "{display_name}{ver} | {os} | {} cores | {mem}{region}",
+                    s.cpu_cores
+                )
             })
             .unwrap_or_default();
 

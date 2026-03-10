@@ -339,7 +339,14 @@ fn format_uptime(secs: u64) -> String {
 }
 
 fn get_hostname() -> String {
+    // Unix: HOSTNAME env var
     if let Ok(h) = std::env::var("HOSTNAME") {
+        if !h.is_empty() {
+            return h;
+        }
+    }
+    // Windows: COMPUTERNAME env var
+    if let Ok(h) = std::env::var("COMPUTERNAME") {
         if !h.is_empty() {
             return h;
         }
@@ -349,6 +356,15 @@ fn get_hostname() -> String {
         let h = h.trim().to_string();
         if !h.is_empty() {
             return h;
+        }
+    }
+    // Fallback: run `hostname` command
+    if let Ok(out) = std::process::Command::new("hostname").output() {
+        if out.status.success() {
+            let h = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !h.is_empty() {
+                return h;
+            }
         }
     }
     "unknown".to_string()

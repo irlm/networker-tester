@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.5] – 2026-03-10 — HTML report server identification
+
+### Fixed
+- **HTML report**: Show endpoint version (`v0.13.4`) next to each server name in summary table for quick version verification
+- **HTML report**: Derive provider-aware display names (e.g. "Azure Windows", "GCP Ubuntu") when hostname is "unknown" or missing
+- **networker-endpoint**: Fix hostname detection on Windows — check `COMPUTERNAME` env var and `hostname` command (previously only checked Linux-specific paths, returning "unknown" on Windows)
+
+---
+
 ## [0.13.4] – 2026-03-10 — Pageload3 concurrent multiplexing & report improvements
 
 ### Fixed
