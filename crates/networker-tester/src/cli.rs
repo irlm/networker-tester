@@ -954,4 +954,134 @@ mod tests {
         let cfg = Cli::parse_from(["networker-tester"]).resolve(None);
         assert!(cfg.db_url.is_none(), "--db-url should default to None");
     }
+
+    // ── HttpStack::from_name() tests ──────────────────────────────────────────
+
+    #[test]
+    fn http_stack_nginx_ports() {
+        let stack = HttpStack::from_name("nginx").unwrap();
+        assert_eq!(stack.name, "nginx");
+        assert_eq!(stack.http_port, 8081);
+        assert_eq!(stack.https_port, 8444);
+    }
+
+    #[test]
+    fn http_stack_iis_ports() {
+        let stack = HttpStack::from_name("iis").unwrap();
+        assert_eq!(stack.name, "iis");
+        assert_eq!(stack.http_port, 8082);
+        assert_eq!(stack.https_port, 8445);
+    }
+
+    #[test]
+    fn http_stack_caddy_ports() {
+        let stack = HttpStack::from_name("caddy").unwrap();
+        assert_eq!(stack.name, "caddy");
+        assert_eq!(stack.http_port, 8083);
+        assert_eq!(stack.https_port, 8446);
+    }
+
+    #[test]
+    fn http_stack_apache_ports() {
+        let stack = HttpStack::from_name("apache").unwrap();
+        assert_eq!(stack.name, "apache");
+        assert_eq!(stack.http_port, 8084);
+        assert_eq!(stack.https_port, 8447);
+    }
+
+    #[test]
+    fn http_stack_nginx_case_insensitive_upper() {
+        let stack = HttpStack::from_name("NGINX").unwrap();
+        assert_eq!(stack.name, "nginx");
+        assert_eq!(stack.http_port, 8081);
+        assert_eq!(stack.https_port, 8444);
+    }
+
+    #[test]
+    fn http_stack_iis_case_insensitive_mixed() {
+        let stack = HttpStack::from_name("Iis").unwrap();
+        assert_eq!(stack.name, "iis");
+        assert_eq!(stack.http_port, 8082);
+        assert_eq!(stack.https_port, 8445);
+    }
+
+    #[test]
+    fn http_stack_caddy_case_insensitive_upper() {
+        let stack = HttpStack::from_name("CADDY").unwrap();
+        assert_eq!(stack.name, "caddy");
+        assert_eq!(stack.https_port, 8446);
+    }
+
+    #[test]
+    fn http_stack_apache_case_insensitive_mixed() {
+        let stack = HttpStack::from_name("Apache").unwrap();
+        assert_eq!(stack.name, "apache");
+        assert_eq!(stack.https_port, 8447);
+    }
+
+    #[test]
+    fn http_stack_unknown_name_returns_error() {
+        let result = HttpStack::from_name("haproxy");
+        assert!(result.is_err(), "unknown stack name should return Err");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("haproxy"),
+            "error message should mention the unknown name; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn http_stack_empty_string_returns_error() {
+        let result = HttpStack::from_name("");
+        assert!(result.is_err(), "empty stack name should return Err");
+    }
+
+    #[test]
+    fn http_stack_all_names_produce_distinct_ports() {
+        // Each stack must have a unique HTTP port and a unique HTTPS port —
+        // port collisions would cause endpoint conflicts at runtime.
+        let stacks: Vec<HttpStack> = ["nginx", "iis", "caddy", "apache"]
+            .iter()
+            .map(|n| HttpStack::from_name(n).unwrap())
+            .collect();
+
+        let http_ports: std::collections::HashSet<u16> =
+            stacks.iter().map(|s| s.http_port).collect();
+        let https_ports: std::collections::HashSet<u16> =
+            stacks.iter().map(|s| s.https_port).collect();
+
+        assert_eq!(http_ports.len(), 4, "all HTTP ports must be distinct");
+        assert_eq!(https_ports.len(), 4, "all HTTPS ports must be distinct");
+    }
+
+    #[test]
+    fn http_stacks_from_cli_flag_resolves_correctly() {
+        let cfg = Cli::parse_from(["networker-tester", "--http-stacks", "nginx,iis"]).resolve(None);
+        assert_eq!(cfg.http_stacks.len(), 2);
+        assert_eq!(cfg.http_stacks[0].name, "nginx");
+        assert_eq!(cfg.http_stacks[1].name, "iis");
+    }
+
+    #[test]
+    fn http_stacks_unknown_name_silently_skipped_in_resolve() {
+        // HttpStack::from_name returns Err for unknowns; resolve() uses filter_map
+        // so invalid names are silently dropped rather than aborting.
+        let cfg =
+            Cli::parse_from(["networker-tester", "--http-stacks", "nginx,notastack"]).resolve(None);
+        assert_eq!(
+            cfg.http_stacks.len(),
+            1,
+            "unknown stack name should be silently skipped during resolve"
+        );
+        assert_eq!(cfg.http_stacks[0].name, "nginx");
+    }
+
+    #[test]
+    fn http_stacks_empty_by_default() {
+        let cfg = Cli::parse_from(["networker-tester"]).resolve(None);
+        assert!(
+            cfg.http_stacks.is_empty(),
+            "--http-stacks should default to empty"
+        );
+    }
 }

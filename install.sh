@@ -3295,6 +3295,223 @@ UNIT
     print_ok "networker-endpoint service started — auto-starts on boot"
 }
 
+# ─── HTTP Stack comparison: nginx setup (Ubuntu) ─────────────────────────────
+
+# Install and configure nginx to serve the same static test page on ports 8081 (HTTP) / 8444 (HTTPS).
+# This enables fair HTTP stack comparison: same content, same machine, different server software.
+step_setup_nginx() {
+    next_step "Set up nginx for HTTP stack comparison"
+
+    if [[ "$SYS_OS" != "Linux" ]]; then
+        print_info "nginx setup is Linux-only — skipping."
+        return 0
+    fi
+
+    local pkg_mgr
+    pkg_mgr="$(detect_pkg_manager)"
+    if [[ -z "$pkg_mgr" ]]; then
+        print_warn "No supported package manager found — cannot install nginx."
+        return 1
+    fi
+
+    # Install nginx
+    print_info "Installing nginx…"
+    case "$pkg_mgr" in
+        apt-get)  sudo apt-get update -qq && sudo apt-get install -y nginx ;;
+        dnf)      sudo dnf install -y nginx ;;
+        pacman)   sudo pacman -S --noconfirm nginx ;;
+        zypper)   sudo zypper install -y nginx ;;
+        apk)      sudo apk add nginx ;;
+    esac < /dev/null
+
+    # Generate static test site
+    local site_root="/var/www/networker"
+    sudo mkdir -p "$site_root"
+    local ep_bin="/usr/local/bin/networker-endpoint"
+    if [[ ! -x "$ep_bin" ]]; then
+        ep_bin="${INSTALL_DIR}/networker-endpoint"
+    fi
+    if [[ -x "$ep_bin" ]]; then
+        print_info "Generating static test site in $site_root…"
+        sudo "$ep_bin" generate-site "$site_root" --preset mixed --stack nginx
+    else
+        print_warn "networker-endpoint not found — generating minimal test site."
+        # Fallback: create a simple index.html with a few assets
+        echo '<!DOCTYPE html><html><body><p>Networker static test</p></body></html>' | sudo tee "$site_root/index.html" > /dev/null
+        printf '{"status":"ok","stack":"nginx"}\n' | sudo tee "$site_root/health" > /dev/null
+    fi
+    sudo chown -R www-data:www-data "$site_root" 2>/dev/null || true
+
+    # Generate self-signed certificate
+    sudo mkdir -p /etc/nginx/ssl
+    local ep_ip="${ENDPOINT_IP:-127.0.0.1}"
+    sudo openssl req -x509 -newkey rsa:2048 \
+        -keyout /etc/nginx/ssl/networker.key \
+        -out /etc/nginx/ssl/networker.crt \
+        -days 365 -nodes \
+        -subj "/CN=localhost" \
+        -addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:::1,IP:${ep_ip}" \
+        2>/dev/null < /dev/null
+
+    # Write nginx config
+    sudo tee /etc/nginx/sites-available/networker > /dev/null <<'NGINX_CONF'
+# Networker HTTP stack comparison — nginx
+# Serves static test page for fair comparison with networker-endpoint and IIS.
+
+server {
+    listen 8081;
+    server_name _;
+    root /var/www/networker;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    # MIME types for test assets
+    location ~* \.bin$ {
+        default_type application/octet-stream;
+    }
+}
+
+server {
+    listen 8444 ssl;
+    http2 on;
+    server_name _;
+    root /var/www/networker;
+    index index.html;
+
+    ssl_certificate /etc/nginx/ssl/networker.crt;
+    ssl_certificate_key /etc/nginx/ssl/networker.key;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    location ~* \.bin$ {
+        default_type application/octet-stream;
+    }
+}
+NGINX_CONF
+
+    # Enable site
+    if [[ -d /etc/nginx/sites-enabled ]]; then
+        sudo ln -sf /etc/nginx/sites-available/networker /etc/nginx/sites-enabled/networker
+        # Remove default site to avoid port 80 conflicts
+        sudo rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+    elif [[ -d /etc/nginx/conf.d ]]; then
+        sudo cp /etc/nginx/sites-available/networker /etc/nginx/conf.d/networker.conf
+    fi
+
+    # Test and restart
+    if sudo nginx -t 2>/dev/null; then
+        sudo systemctl enable nginx 2>/dev/null || true
+        sudo systemctl restart nginx
+        print_ok "nginx serving test page on ports 8081 (HTTP) / 8444 (HTTPS)"
+    else
+        print_warn "nginx config test failed — check /etc/nginx/sites-available/networker"
+        return 1
+    fi
+}
+
+# ─── HTTP Stack comparison: IIS setup (Windows via SSH/run-command) ───────────
+
+# Generate a PowerShell script to install and configure IIS on a Windows VM.
+# The output can be piped to az vm run-command / AWS SSM / gcloud SSH.
+_iis_setup_powershell() {
+    local ep_exe="${1:-C:\\networker\\networker-endpoint.exe}"
+    local site_root="C:\\networker-static"
+    cat <<'IIS_PS1'
+# ── IIS setup for HTTP stack comparison ──────────────────────────────────────
+$ErrorActionPreference = 'Stop'
+
+# 1. Install IIS
+Write-Host "Installing IIS…"
+Install-WindowsFeature -Name Web-Server -IncludeManagementTools | Out-Null
+
+# 2. Enable HTTP/3 (Windows Server 2022+)
+Write-Host "Enabling HTTP/3 via registry…"
+$httpParams = "HKLM:\SYSTEM\CurrentControlSet\Services\HTTP\Parameters"
+if (-not (Test-Path $httpParams)) { New-Item -Path $httpParams -Force | Out-Null }
+Set-ItemProperty -Path $httpParams -Name "EnableHttp3" -Value 1 -Type DWord
+
+# Also enable HTTP/2 explicitly
+Set-ItemProperty -Path $httpParams -Name "EnableHttp2Tls" -Value 1 -Type DWord
+Set-ItemProperty -Path $httpParams -Name "EnableHttp2Cleartext" -Value 1 -Type DWord
+
+# 3. Generate static test site
+$siteRoot = "C:\networker-static"
+New-Item -ItemType Directory -Path $siteRoot -Force | Out-Null
+IIS_PS1
+
+    cat <<IIS_PS1_GENSITE
+\$epExe = "${ep_exe}"
+if (Test-Path \$epExe) {
+    Write-Host "Generating static test site…"
+    & \$epExe generate-site \$siteRoot --preset mixed --stack iis
+} else {
+    Write-Host "WARN: endpoint binary not found at \$epExe — creating minimal test page"
+    '<html><body>Networker static test</body></html>' | Out-File "\$siteRoot\index.html" -Encoding UTF8
+    '{"status":"ok","stack":"iis"}' | Out-File "\$siteRoot\health" -Encoding UTF8
+}
+IIS_PS1_GENSITE
+
+    cat <<'IIS_PS1_REST'
+
+# 4. Generate self-signed certificate
+Write-Host "Creating self-signed certificate…"
+$cert = New-SelfSignedCertificate `
+    -DnsName "localhost", $env:COMPUTERNAME `
+    -CertStoreLocation "Cert:\LocalMachine\My" `
+    -NotAfter (Get-Date).AddYears(1) `
+    -FriendlyName "Networker IIS Test"
+$thumbprint = $cert.Thumbprint
+Write-Host "Certificate thumbprint: $thumbprint"
+
+# 5. Remove default IIS site, create networker site
+Import-Module WebAdministration
+if (Get-Website -Name "Default Web Site" -ErrorAction SilentlyContinue) {
+    Remove-Website -Name "Default Web Site"
+}
+if (Get-Website -Name "networker-iis" -ErrorAction SilentlyContinue) {
+    Remove-Website -Name "networker-iis"
+}
+
+# Create site with HTTP binding
+New-Website -Name "networker-iis" `
+    -PhysicalPath $siteRoot `
+    -Port 8082 `
+    -Force | Out-Null
+
+# Add HTTPS binding
+New-WebBinding -Name "networker-iis" -Protocol "https" -Port 8445
+$binding = Get-WebBinding -Name "networker-iis" -Protocol "https" -Port 8445
+$binding.AddSslCertificate($thumbprint, "My")
+
+# Enable static content MIME type for .bin files
+$binMime = Get-WebConfigurationProperty -PSPath "IIS:\Sites\networker-iis" `
+    -Filter "system.webServer/staticContent" -Name "." | Where-Object { $_.fileExtension -eq ".bin" }
+if (-not $binMime) {
+    Add-WebConfigurationProperty -PSPath "IIS:\Sites\networker-iis" `
+        -Filter "system.webServer/staticContent" `
+        -Name "." `
+        -Value @{fileExtension=".bin"; mimeType="application/octet-stream"}
+}
+
+# Start the site
+Start-Website -Name "networker-iis"
+
+# 6. Firewall rules
+New-NetFirewallRule -DisplayName "Networker-IIS-HTTP" -Direction Inbound -Protocol TCP -LocalPort 8082 -Action Allow -ErrorAction SilentlyContinue | Out-Null
+New-NetFirewallRule -DisplayName "Networker-IIS-HTTPS" -Direction Inbound -Protocol TCP -LocalPort 8445 -Action Allow -ErrorAction SilentlyContinue | Out-Null
+# HTTP/3 uses UDP
+New-NetFirewallRule -DisplayName "Networker-IIS-QUIC" -Direction Inbound -Protocol UDP -LocalPort 8445 -Action Allow -ErrorAction SilentlyContinue | Out-Null
+
+Write-Host "IIS configured: HTTP=8082, HTTPS=8445 (HTTP/3 enabled)"
+Write-Host "NOTE: A reboot may be required for HTTP/3 to take effect."
+IIS_PS1_REST
+}
+
 # Poll /health until the endpoint responds.
 # $1 = public IP
 _remote_verify_health() {
