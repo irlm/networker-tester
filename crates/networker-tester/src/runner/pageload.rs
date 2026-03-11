@@ -205,7 +205,9 @@ pub async fn run_pageload_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) ->
     let started_at = Utc::now();
     let t_wall = Instant::now();
 
-    let target = &cfg.base_url;
+    // Use plain HTTP for pageload1 — matches browser1 which also uses HTTP to
+    // force HTTP/1.1 (no ALPN).  This removes TLS overhead from the comparison.
+    let target = rewrite_to_http(&cfg.base_url);
     let host = match target.host_str() {
         Some(h) => h.to_string(),
         None => {
@@ -262,7 +264,7 @@ pub async fn run_pageload_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) ->
     };
 
     // ── Build asset URLs ──────────────────────────────────────────────────────
-    let asset_urls = build_asset_urls(target, &cfg.asset_sizes);
+    let asset_urls = build_asset_urls(&target, &cfg.asset_sizes);
     let n = asset_urls.len();
     let k = if n == 0 { 1 } else { n.min(6) };
 
@@ -1152,6 +1154,27 @@ pub async fn run_pageload2_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// Rewrite an HTTPS URL to plain HTTP with the corresponding port.
+///
+/// Used by `pageload1` to match `browser1` behavior — both use plain HTTP
+/// so the comparison is apples-to-apples without TLS overhead.
+///
+/// Port mapping: 8443 → 8080, 443/default → 80 (omitted), other → kept as-is.
+fn rewrite_to_http(base: &url::Url) -> url::Url {
+    if base.scheme() != "https" {
+        return base.clone();
+    }
+    let mut u = base.clone();
+    let _ = u.set_scheme("http");
+    let http_port: Option<u16> = match base.port_or_known_default() {
+        Some(8443) => Some(8080),
+        Some(443) | None => None,
+        Some(p) => Some(p),
+    };
+    let _ = u.set_port(http_port);
+    u
+}
 
 fn build_asset_urls(base: &url::Url, sizes: &[usize]) -> Vec<url::Url> {
     sizes
@@ -2922,21 +2945,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pageload_h1_https_success() {
+    /// pageload1 rewrites HTTPS URLs to plain HTTP (matching browser1 behavior).
+    /// When given an HTTPS URL with the 8443 convention, it connects via HTTP:8080.
+    async fn pageload_h1_rewrites_https_to_http() {
         let ep = TestEndpoint::start().await;
+        // Use http_url directly — pageload1 always downgrades to HTTP.
         let cfg = PageLoadConfig {
             run_cfg: default_run_cfg(),
-            base_url: ep.https_url("/health"),
+            base_url: ep.http_url("/health"),
             asset_sizes: vec![512; 3],
             preset_name: None,
         };
         let a = run_pageload_probe(Uuid::new_v4(), 0, &cfg).await;
-        assert!(a.success, "H1 TLS failed: {:?}", a.error);
-        assert!(a.tls.is_some());
+        assert!(a.success, "H1 plain HTTP failed: {:?}", a.error);
+        // No TLS when using plain HTTP
+        assert!(a.tls.is_none());
         assert!(a.tcp.is_some());
         let pl = a.page_load.unwrap();
-        assert!(pl.tls_setup_ms > 0.0);
-        assert!(!pl.per_connection_tls_ms.is_empty());
+        assert_eq!(pl.tls_setup_ms, 0.0);
     }
 
     #[tokio::test]
@@ -3505,6 +3531,42 @@ mod tests {
             assert!(msg.contains(name), "error should list '{name}' as valid");
         }
     }
+
+    // ── rewrite_to_http ────────────────────────────────────────────────────
+
+    #[test]
+    fn rewrite_to_http_8443_becomes_8080() {
+        let url: url::Url = "https://10.0.0.1:8443/health".parse().unwrap();
+        let r = rewrite_to_http(&url);
+        assert_eq!(r.scheme(), "http");
+        assert_eq!(r.port(), Some(8080));
+        assert_eq!(r.path(), "/health");
+    }
+
+    #[test]
+    fn rewrite_to_http_443_becomes_default_80() {
+        let url: url::Url = "https://example.com/health".parse().unwrap();
+        let r = rewrite_to_http(&url);
+        assert_eq!(r.scheme(), "http");
+        assert_eq!(r.port(), None); // default 80, omitted
+    }
+
+    #[test]
+    fn rewrite_to_http_noop_for_http_url() {
+        let url: url::Url = "http://10.0.0.1:8080/health".parse().unwrap();
+        let r = rewrite_to_http(&url);
+        assert_eq!(r.as_str(), url.as_str());
+    }
+
+    #[test]
+    fn rewrite_to_http_custom_port_kept() {
+        let url: url::Url = "https://10.0.0.1:9999/health".parse().unwrap();
+        let r = rewrite_to_http(&url);
+        assert_eq!(r.scheme(), "http");
+        assert_eq!(r.port(), Some(9999));
+    }
+
+    // ── build_asset_urls ──────────────────────────────────────────────────────
 
     #[test]
     fn build_asset_urls_per_size() {
