@@ -30,6 +30,7 @@ in the kernel or scattered across multiple tools.
 - [Getting All Low-Level Metrics](#getting-all-low-level-metrics)
 - [Multi-Target Comparison](#multi-target-comparison)
 - [Page-Load Protocol Comparison](#page-load-protocol-comparison-h1--h2--h3--browser)
+- [HTTP Stack Comparison](#http-stack-comparison)
 - [Endpoint Reference](#endpoint-reference)
 - [Output Formats](#output-formats)
 - [SQL Server Setup](#sql-server-setup)
@@ -411,6 +412,7 @@ Size suffixes: `k` = KiB (×1024), `m` = MiB (×1024²), `g` = GiB (×1024³).
 | `--ipv6-only` | — | Restrict to IPv6 addresses (conflicts with `--ipv4-only`) |
 | `--no-proxy` | — | Bypass any system proxy |
 | `--connection-reuse` | — | Reuse a single TCP connection across HTTP requests |
+| `--http-stacks` | — | Comma-separated HTTP stacks to compare (e.g. `nginx,iis`). Probes each stack's ports alongside the default endpoint. See [HTTP Stack Comparison](#http-stack-comparison). |
 
 ### Output
 
@@ -457,7 +459,8 @@ overridden by the corresponding CLI flag.
   "output_dir": "./output",
   "html_report": "report.html",
   "excel": false,
-  "save_to_sql": false
+  "save_to_sql": false,
+  "http_stacks": ["nginx"]
 }
 ```
 
@@ -817,6 +820,45 @@ NETWORKER_CHROME_PATH=/usr/bin/chromium ./networker-tester \
 
 ---
 
+## HTTP Stack Comparison
+
+Compare networker-endpoint's performance against real-world HTTP servers (nginx, IIS)
+serving identical static content on the same machine.
+
+### How it works
+
+1. The installer sets up nginx (Ubuntu) and/or IIS (Windows) alongside the endpoint
+2. `networker-endpoint generate-site` creates identical static files for each stack
+3. Each stack listens on its own port pair (see table below)
+4. The tester probes each stack with pageload/browser modes and tags results
+
+### Port assignments
+
+| Stack | HTTP | HTTPS | OS |
+|-------|------|-------|----|
+| networker-endpoint | 8080 | 8443 | Any |
+| nginx | 8081 | 8444 | Linux |
+| IIS | 8082 | 8445 | Windows |
+
+### Usage
+
+```bash
+# Compare endpoint vs nginx on an Ubuntu server
+networker-tester \
+  --target https://your-server:8443 \
+  --modes pageload1,pageload2 \
+  --runs 5 \
+  --insecure \
+  --http-stacks nginx \
+  --page-preset mixed
+```
+
+The HTML report includes an **HTTP Stack Comparison** table showing avg/p50/min/max
+load times per protocol per stack. Stacks that aren't reachable (e.g. IIS on Linux)
+are automatically skipped.
+
+---
+
 ## Endpoint Reference
 
 ### HTTP routes
@@ -858,6 +900,20 @@ drained.
 | `--udp-port` | `9999` | UDP echo listening port |
 | `--udp-throughput-port` | `9998` | UDP bulk throughput listening port |
 | `--log-level` | — | `tracing` filter string. Overrides `RUST_LOG` |
+
+### Endpoint subcommands
+
+#### `generate-site`
+
+Generate a static test site for an HTTP stack comparison server (nginx, IIS, etc.):
+
+```bash
+networker-endpoint generate-site /var/www/networker --preset mixed --stack nginx
+```
+
+Creates `index.html`, `style.css`, `health`, and `asset-{N}.bin` files matching the
+tester's `--page-preset` asset sizes, so different HTTP stacks serve identical content
+for a fair comparison.
 
 ### Logging
 

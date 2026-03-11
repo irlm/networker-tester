@@ -464,5 +464,40 @@ Server CSW (`sCSW`) is reported by the endpoint via `Server-Timing: csw-v;dur=N,
 | `--output-dir` | `./output` | Directory for JSON, HTML, and Excel output |
 | `--retries N` | `0` | Retry failed probes |
 | `--no-default-features` | off | Exclude HTTP/3 for a minimal build |
+| `--http-stacks LIST` | none | Compare HTTP stacks (e.g. `nginx,iis`). Probes each stack on its assigned ports. |
+| `--connection-reuse` | false | Reuse TCP/QUIC connections for pageload2/3 warm probes |
 
 See `networker-tester --help` for the full list.
+
+---
+
+## Test 8: HTTP Stack Comparison (nginx / IIS vs endpoint)
+
+Compare the performance of different HTTP servers serving identical static content.
+
+```bash
+# 1. Set up the endpoint + nginx on your Ubuntu server (the installer does this automatically)
+# 2. Run comparison:
+./target/release/networker-tester \
+  --target https://your-server:8443 \
+  --modes pageload1,pageload2 \
+  --runs 5 \
+  --insecure \
+  --http-stacks nginx \
+  --page-preset mixed
+
+# On Windows Server (IIS):
+./target/release/networker-tester \
+  --target https://your-server:8443 \
+  --modes pageload1,pageload2 \
+  --runs 5 \
+  --insecure \
+  --http-stacks iis \
+  --page-preset mixed
+```
+
+The tester automatically:
+1. Checks each stack's `/health` endpoint (skips unreachable stacks)
+2. Runs pageload/browser probes against the stack's HTTPS port
+3. Tags results with the stack name
+4. Shows an "HTTP Stack Comparison" table in the HTML report
