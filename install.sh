@@ -3375,8 +3375,7 @@ server {
 }
 
 server {
-    listen 8444 ssl;
-    http2 on;
+    listen 8444 ssl http2;
     server_name _;
     root /var/www/networker;
     index index.html;
@@ -3458,6 +3457,24 @@ IIS_PS1_GENSITE
 
     cat <<'IIS_PS1_REST'
 
+# 3b. Create web.config for extensionless files and .bin MIME type
+# Uses remove+add pattern to avoid duplicate MIME map errors
+$webConfig = @"
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+  <system.webServer>
+    <staticContent>
+      <remove fileExtension="." />
+      <mimeMap fileExtension="." mimeType="application/json" />
+      <remove fileExtension=".bin" />
+      <mimeMap fileExtension=".bin" mimeType="application/octet-stream" />
+    </staticContent>
+  </system.webServer>
+</configuration>
+"@
+$webConfig | Out-File "$siteRoot\web.config" -Encoding UTF8
+Write-Host "web.config created"
+
 # 4. Generate self-signed certificate
 Write-Host "Creating self-signed certificate…"
 $cert = New-SelfSignedCertificate `
@@ -3487,16 +3504,6 @@ New-Website -Name "networker-iis" `
 New-WebBinding -Name "networker-iis" -Protocol "https" -Port 8445
 $binding = Get-WebBinding -Name "networker-iis" -Protocol "https" -Port 8445
 $binding.AddSslCertificate($thumbprint, "My")
-
-# Enable static content MIME type for .bin files
-$binMime = Get-WebConfigurationProperty -PSPath "IIS:\Sites\networker-iis" `
-    -Filter "system.webServer/staticContent" -Name "." | Where-Object { $_.fileExtension -eq ".bin" }
-if (-not $binMime) {
-    Add-WebConfigurationProperty -PSPath "IIS:\Sites\networker-iis" `
-        -Filter "system.webServer/staticContent" `
-        -Name "." `
-        -Value @{fileExtension=".bin"; mimeType="application/octet-stream"}
-}
 
 # Start the site
 Start-Website -Name "networker-iis"
@@ -3566,8 +3573,7 @@ server {
     location ~* \.bin$ { default_type application/octet-stream; }
 }
 server {
-    listen 8444 ssl;
-    http2 on;
+    listen 8444 ssl http2;
     server_name _;
     root /var/www/networker;
     index index.html;
@@ -3660,7 +3666,7 @@ server {
     location ~* \.bin$ { default_type application/octet-stream; }
 }
 server {
-    listen 8444 ssl; http2 on; server_name _;
+    listen 8444 ssl http2; server_name _;
     root /var/www/networker; index index.html;
     ssl_certificate /etc/nginx/ssl/networker.crt;
     ssl_certificate_key /etc/nginx/ssl/networker.key;
