@@ -2717,6 +2717,24 @@ step_download_release() {
         rm -f "${INSTALL_DIR}/${binary}"
         return 1
     fi
+
+    # Replace any stale copies earlier in PATH that would shadow the new binary.
+    local path_bin
+    path_bin="$(command -v "$binary" 2>/dev/null || true)"
+    if [[ -n "$path_bin" && "$path_bin" != "${INSTALL_DIR}/${binary}" ]]; then
+        local path_ver
+        path_ver="$("$path_bin" --version 2>/dev/null | awk '{print $NF}')"
+        local new_ver
+        new_ver="$("${INSTALL_DIR}/${binary}" --version 2>/dev/null | awk '{print $NF}')"
+        if [[ "$path_ver" != "$new_ver" ]]; then
+            print_warn "Stale $binary v${path_ver} found at $path_bin (shadows ${INSTALL_DIR}/${binary})"
+            if cp "${INSTALL_DIR}/${binary}" "$path_bin" 2>/dev/null; then
+                print_ok "Updated $path_bin → v${new_ver}"
+            else
+                print_warn "Cannot update $path_bin — run: sudo cp ${INSTALL_DIR}/${binary} $path_bin"
+            fi
+        fi
+    fi
 }
 
 # ── Source-mode steps ─────────────────────────────────────────────────────────
