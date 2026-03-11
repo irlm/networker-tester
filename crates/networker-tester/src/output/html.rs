@@ -750,26 +750,6 @@ fn write_multi_target_charts(runs: &[TestRun], short_names: &[String], out: &mut
             }
         }
 
-        // pageload1 vs browser1: explain TLS gap
-        let pl1_avg = groups
-            .iter()
-            .find(|(l, _, _)| l == "pageload")
-            .map(|(_, d, _)| d.iter().sum::<f64>() / d.len() as f64);
-        let b1_avg = groups
-            .iter()
-            .find(|(l, _, _)| l == "browser1")
-            .map(|(_, d, _)| d.iter().sum::<f64>() / d.len() as f64);
-        if let (Some(pl1), Some(b1)) = (pl1_avg, b1_avg) {
-            if pl1 > b1 * 1.5 {
-                // More than 50% slower → likely TLS overhead
-                let factor = pl1 / b1;
-                observations.push(format!(
-                    "pageload ({pl1:.0}ms) is {factor:.1}x slower than browser1 ({b1:.0}ms) \u{2014} \
-                     pageload opens 6 HTTPS connections (TLS handshake each), browser1 uses plain HTTP"
-                ));
-            }
-        }
-
         let mut spreads: Vec<(&str, f64)> = Vec::new();
         for (label, data, _) in &groups {
             if data.len() >= 4 {
