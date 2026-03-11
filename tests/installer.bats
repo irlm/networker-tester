@@ -907,6 +907,201 @@ JSON
     [ "$status" -ne 0 ]
 }
 
+# ── http_stacks in deploy config ──────────────────────────────────────────
+
+@test "_deploy_validate_config: rejects IIS on Linux endpoint" {
+    local cfg="$TEST_TMPDIR/val-iis-linux.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{
+    "provider": "azure",
+    "http_stacks": ["iis"],
+    "azure": { "os": "linux", "region": "eastus" }
+  }]
+}
+JSON
+    _deploy_validate_config "$cfg"
+    [ "$DEPLOY_VALIDATE_ERRORS" -gt 0 ]
+}
+
+@test "_deploy_validate_config: rejects nginx on Windows endpoint" {
+    local cfg="$TEST_TMPDIR/val-nginx-win.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{
+    "provider": "azure",
+    "http_stacks": ["nginx"],
+    "azure": { "os": "windows", "region": "eastus" }
+  }]
+}
+JSON
+    _deploy_validate_config "$cfg"
+    [ "$DEPLOY_VALIDATE_ERRORS" -gt 0 ]
+}
+
+@test "_deploy_validate_config: rejects unknown http_stack name" {
+    local cfg="$TEST_TMPDIR/val-bad-stack.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{
+    "provider": "azure",
+    "http_stacks": ["lighttpd"],
+    "azure": { "os": "linux", "region": "eastus" }
+  }]
+}
+JSON
+    _deploy_validate_config "$cfg"
+    [ "$DEPLOY_VALIDATE_ERRORS" -gt 0 ]
+}
+
+@test "_deploy_validate_config: accepts nginx on Linux endpoint" {
+    local cfg="$TEST_TMPDIR/val-nginx-ok.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{
+    "provider": "azure",
+    "http_stacks": ["nginx"],
+    "azure": { "os": "linux", "region": "eastus" }
+  }]
+}
+JSON
+    _deploy_validate_config "$cfg"
+    [ "$DEPLOY_VALIDATE_ERRORS" -eq 0 ]
+}
+
+@test "_deploy_validate_config: accepts IIS on Windows endpoint" {
+    local cfg="$TEST_TMPDIR/val-iis-ok.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{
+    "provider": "azure",
+    "http_stacks": ["iis"],
+    "azure": { "os": "windows", "region": "eastus", "vm_name": "myvm" }
+  }]
+}
+JSON
+    _deploy_validate_config "$cfg"
+    [ "$DEPLOY_VALIDATE_ERRORS" -eq 0 ]
+}
+
+@test "_deploy_validate_config: rejects unknown tests.http_stacks name" {
+    local cfg="$TEST_TMPDIR/val-test-bad-stack.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{ "provider": "local" }],
+  "tests": { "http_stacks": ["nginx", "fakeweb"] }
+}
+JSON
+    _deploy_validate_config "$cfg"
+    [ "$DEPLOY_VALIDATE_ERRORS" -gt 0 ]
+}
+
+@test "_deploy_validate_config: accepts valid tests.http_stacks" {
+    local cfg="$TEST_TMPDIR/val-test-stacks-ok.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{ "provider": "local" }],
+  "tests": { "http_stacks": ["nginx", "iis"] }
+}
+JSON
+    _deploy_validate_config "$cfg"
+    [ "$DEPLOY_VALIDATE_ERRORS" -eq 0 ]
+}
+
+@test "_deploy_parse_config: parses per-endpoint http_stacks" {
+    local cfg="$TEST_TMPDIR/parse-ep-stacks.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [
+    { "provider": "azure", "http_stacks": ["nginx"], "azure": { "os": "linux" } },
+    { "provider": "aws", "http_stacks": ["iis"], "aws": { "os": "windows" } },
+    { "provider": "local" }
+  ]
+}
+JSON
+    _deploy_parse_config "$cfg"
+    [ "${DEPLOY_EP_HTTP_STACKS[0]}" = "nginx" ]
+    [ "${DEPLOY_EP_HTTP_STACKS[1]}" = "iis" ]
+    [ "${DEPLOY_EP_HTTP_STACKS[2]}" = "" ]
+}
+
+@test "_deploy_parse_config: parses tests.http_stacks" {
+    local cfg="$TEST_TMPDIR/parse-test-stacks.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{ "provider": "local" }],
+  "tests": { "http_stacks": ["nginx", "iis"] }
+}
+JSON
+    _deploy_parse_config "$cfg"
+    [ "$DEPLOY_TEST_HTTP_STACKS" = "nginx,iis" ]
+}
+
+@test "_deploy_generate_tester_config: includes http_stacks in JSON" {
+    DEPLOY_CONFIG_PATH="$TEST_TMPDIR/gen-stacks.json"
+    cat > "$DEPLOY_CONFIG_PATH" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{ "provider": "local" }],
+  "tests": {
+    "modes": ["pageload"],
+    "http_stacks": ["nginx", "iis"]
+  }
+}
+JSON
+    _deploy_parse_config "$DEPLOY_CONFIG_PATH"
+    DEPLOY_ENDPOINT_COUNT=1
+    DEPLOY_EP_IPS=("10.0.0.1")
+    TESTER_LOCATION="local"
+
+    _deploy_generate_tester_config
+
+    jq empty "$CONFIG_FILE_PATH"
+    [ "$(jq '.http_stacks | length' "$CONFIG_FILE_PATH")" = "2" ]
+    [ "$(jq -r '.http_stacks[0]' "$CONFIG_FILE_PATH")" = "nginx" ]
+    [ "$(jq -r '.http_stacks[1]' "$CONFIG_FILE_PATH")" = "iis" ]
+}
+
+@test "_deploy_generate_tester_config: omits http_stacks when empty" {
+    DEPLOY_CONFIG_PATH="$TEST_TMPDIR/gen-no-stacks.json"
+    cat > "$DEPLOY_CONFIG_PATH" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{ "provider": "local" }],
+  "tests": { "modes": ["http1"] }
+}
+JSON
+    _deploy_parse_config "$DEPLOY_CONFIG_PATH"
+    DEPLOY_ENDPOINT_COUNT=1
+    DEPLOY_EP_IPS=("10.0.0.1")
+    TESTER_LOCATION="local"
+
+    _deploy_generate_tester_config
+
+    jq empty "$CONFIG_FILE_PATH"
+    [ "$(jq -r '.http_stacks // "absent"' "$CONFIG_FILE_PATH")" = "absent" ]
+}
+
 # ===========================================================================
 # 13. ask_yn: AUTO_YES behavior
 # ===========================================================================

@@ -6286,6 +6286,28 @@ _deploy_validate_config() {
                         errors=$((errors + 1))
                     fi
                 fi
+                # Validate http_stacks per endpoint (OS compatibility)
+                local stacks_count; stacks_count="$(jq ".endpoints[$i].http_stacks | length // 0" "$cfg" 2>/dev/null)"
+                if [[ "${stacks_count:-0}" -gt 0 ]]; then
+                    local valid_stacks="nginx iis caddy apache"
+                    local s
+                    for s in $(seq 0 $((stacks_count - 1))); do
+                        local sname; sname="$(jq -r ".endpoints[$i].http_stacks[$s]" "$cfg")"
+                        if ! echo "$valid_stacks" | grep -qw "$sname"; then
+                            print_err "endpoints[$i].http_stacks[$s]: unknown stack '$sname' (valid: nginx, iis, caddy, apache)"
+                            errors=$((errors + 1))
+                        fi
+                        # OS compatibility: iis requires windows, nginx requires linux
+                        if [[ "$sname" == "iis" && "$ep_os" == "linux" ]]; then
+                            print_err "endpoints[$i]: IIS requires Windows but os is 'linux'"
+                            errors=$((errors + 1))
+                        fi
+                        if [[ "$sname" == "nginx" && "$ep_os" == "windows" ]]; then
+                            print_err "endpoints[$i]: nginx requires Linux but os is 'windows'"
+                            errors=$((errors + 1))
+                        fi
+                    done
+                fi
             fi
         done
     fi
@@ -6299,6 +6321,20 @@ _deploy_validate_config() {
             local m; m="$(jq -r ".tests.modes[$i]" "$cfg")"
             if ! echo "$valid_modes" | grep -qw "$m"; then
                 print_err "tests.modes[$i]: unknown mode '$m'"
+                errors=$((errors + 1))
+            fi
+        done
+    fi
+
+    # Test http_stacks validation (if specified)
+    local test_stacks_count
+    test_stacks_count="$(jq '.tests.http_stacks | length // 0' "$cfg" 2>/dev/null)"
+    if [[ "${test_stacks_count:-0}" -gt 0 ]]; then
+        local valid_stacks="nginx iis caddy apache"
+        for i in $(seq 0 $((test_stacks_count - 1))); do
+            local sn; sn="$(jq -r ".tests.http_stacks[$i]" "$cfg")"
+            if ! echo "$valid_stacks" | grep -qw "$sn"; then
+                print_err "tests.http_stacks[$i]: unknown stack '$sn' (valid: nginx, iis, caddy, apache)"
                 errors=$((errors + 1))
             fi
         done
@@ -6491,8 +6527,10 @@ _deploy_parse_config() {
     for i in $(seq 0 $((DEPLOY_ENDPOINT_COUNT - 1))); do
         local ep_prov; ep_prov="$(jq -r ".endpoints[$i].provider" "$cfg")"
         local ep_label; ep_label="$(jq -r ".endpoints[$i].label // \"endpoint-$((i+1))\"" "$cfg")"
+        local ep_stacks; ep_stacks="$(jq -r '(.endpoints['"$i"'].http_stacks // []) | join(",")' "$cfg")"
         DEPLOY_EP_PROVIDERS+=("$ep_prov")
         DEPLOY_EP_LABELS+=("$ep_label")
+        DEPLOY_EP_HTTP_STACKS+=("$ep_stacks")
         DEPLOY_EP_IPS+=("")  # placeholder, filled after deploy
     done
 
@@ -6523,6 +6561,7 @@ _deploy_parse_config() {
     DEPLOY_TEST_IPV6_ONLY="$(jq -r '.tests.ipv6_only // ""' "$cfg")"
     DEPLOY_TEST_VERBOSE="$(jq -r '.tests.verbose // ""' "$cfg")"
     DEPLOY_TEST_LOG_LEVEL="$(jq -r '.tests.log_level // ""' "$cfg")"
+    DEPLOY_TEST_HTTP_STACKS="$(jq -r '(.tests.http_stacks // []) | join(",")' "$cfg")"
 }
 
 # Load endpoint config at index $1 into the provider-specific globals.
@@ -6915,6 +6954,17 @@ _deploy_generate_tester_config() {
     [[ -n "$DEPLOY_TEST_OUTPUT_DIR" ]]               && json="${json},\n  \"output_dir\": \"${DEPLOY_TEST_OUTPUT_DIR}\""
     [[ -n "$DEPLOY_TEST_LOG_LEVEL" ]]                && json="${json},\n  \"log_level\": \"${DEPLOY_TEST_LOG_LEVEL}\""
 
+    # HTTP stacks for comparison (e.g. "nginx,iis" → ["nginx","iis"])
+    if [[ -n "$DEPLOY_TEST_HTTP_STACKS" ]]; then
+        local stacks_arr=""
+        IFS=',' read -ra _stks <<< "$DEPLOY_TEST_HTTP_STACKS"
+        for _s in "${_stks[@]}"; do
+            [[ -n "$stacks_arr" ]] && stacks_arr="${stacks_arr}, "
+            stacks_arr="${stacks_arr}\"${_s}\""
+        done
+        json="${json},\n  \"http_stacks\": [${stacks_arr}]"
+    fi
+
     json="${json}\n}"
 
     printf "%b" "$json" > "$CONFIG_FILE_PATH"
@@ -7232,7 +7282,25 @@ deploy_from_config() {
                 fi
                 if [[ "$SYS_OS" == "Linux" ]] && command -v systemctl &>/dev/null; then
                     step_setup_endpoint_service
-                    step_setup_nginx
+                fi
+                # Set up http_stacks requested for this local endpoint
+                local ep_stacks="${DEPLOY_EP_HTTP_STACKS[$i]}"
+                if [[ -n "$ep_stacks" ]]; then
+                    IFS=',' read -ra _local_stacks <<< "$ep_stacks"
+                    for _ls in "${_local_stacks[@]}"; do
+                        case "$_ls" in
+                            nginx)
+                                if [[ "$SYS_OS" == "Linux" ]]; then
+                                    step_setup_nginx
+                                else
+                                    print_warn "Skipping nginx setup: only supported on Linux (detected $SYS_OS)"
+                                fi
+                                ;;
+                            iis)
+                                print_warn "Skipping IIS setup: IIS is only available on Windows"
+                                ;;
+                        esac
+                    done
                 fi
                 DEPLOY_EP_IPS[$i]="127.0.0.1"
                 ;;
@@ -7249,6 +7317,31 @@ deploy_from_config() {
                 else
                     _lan_install_binary_linux "networker-endpoint" "endpoint"
                     _lan_create_endpoint_service "endpoint"
+                fi
+                # Set up http_stacks requested for this LAN endpoint
+                local ep_stacks="${DEPLOY_EP_HTTP_STACKS[$i]}"
+                if [[ -n "$ep_stacks" ]]; then
+                    local ssh_user="${LAN_ENDPOINT_USER:-$(whoami)}"
+                    IFS=',' read -ra _lan_stacks <<< "$ep_stacks"
+                    for _ls in "${_lan_stacks[@]}"; do
+                        case "$_ls" in
+                            nginx)
+                                if [[ "$os" != "windows" ]]; then
+                                    next_step "Set up nginx on LAN endpoint ($label)"
+                                    _remote_setup_nginx "$LAN_ENDPOINT_IP" "$ssh_user"
+                                else
+                                    print_warn "Skipping nginx setup on $label: only supported on Linux"
+                                fi
+                                ;;
+                            iis)
+                                if [[ "$os" == "windows" ]]; then
+                                    print_warn "IIS setup on LAN Windows endpoints is not yet supported"
+                                else
+                                    print_warn "Skipping IIS setup on $label: only available on Windows"
+                                fi
+                                ;;
+                        esac
+                    done
                 fi
                 DEPLOY_EP_IPS[$i]="$LAN_ENDPOINT_IP"
                 ;;
