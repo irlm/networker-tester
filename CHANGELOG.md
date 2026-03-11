@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.9] – 2026-03-11 — Stack data isolation + nginx HTTP/3 + deploy-config http_stacks
+
+### Added
+- **Deploy-config `http_stacks` support**: `endpoints[].http_stacks` and `tests.http_stacks` fields in `--deploy` JSON configs — installer provisions nginx/IIS on endpoints and passes `--http-stacks` to the tester automatically
+- **Validation**: OS compatibility checks (nginx→linux, iis→windows) and valid stack name enforcement at config validation time
+- **"Not supported" rows** in HTTP Stack Comparison table when a stack lacks data for a protocol the endpoint tested (e.g. nginx without QUIC shows "not supported" for pageload3)
+- 13 new bats tests for deploy-config http_stacks validation, parsing, and tester config generation
+
+### Fixed
+- **Stack data contamination**: HTTP stack probe attempts (nginx/IIS) were mixed into main report statistics, cross-target comparison, charts, and protocol breakdowns — added `http_stack.is_none()` filters to 8 locations in HTML report generation
+- **nginx HTTP/3**: Install mainline nginx from nginx.org (1.27+) with built-in QUIC support; added `listen 8444 quic reuseport`, `http3 on`, and `Alt-Svc` header to all nginx setup paths (local, SSH, GCP)
+- **Firewall UDP ports**: Open UDP 8443-8445 (was only 8443) for Azure NSG, AWS SG, and GCP firewall rules to allow QUIC on nginx/IIS ports
+
+---
+
 ## [0.13.8] – 2026-03-11 — HTTP stack comparison (nginx & IIS)
 
 ### Added
