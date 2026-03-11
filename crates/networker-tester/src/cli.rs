@@ -188,6 +188,13 @@ pub struct Cli {
     #[arg(long)]
     pub page_preset: Option<String>,
 
+    // ── HTTP Stacks ────────────────────────────────────────────────────────
+    /// Compare HTTP stacks: run browser/pageload probes against additional
+    /// servers installed on the same VM. Comma-separated list.
+    /// Valid: nginx, iis (e.g. --http-stacks nginx,iis)
+    #[arg(long, value_delimiter = ',')]
+    pub http_stacks: Option<Vec<String>>,
+
     // ── Misc ──────────────────────────────────────────────────────────────────
     /// Enable verbose output (equivalent to --log-level debug)
     #[arg(long, short)]
@@ -235,6 +242,7 @@ pub struct ConfigFile {
     pub page_assets: Option<usize>,
     pub page_asset_size: Option<String>,
     pub page_preset: Option<String>,
+    pub http_stacks: Option<Vec<String>>,
 }
 
 /// Fully resolved configuration with all defaults applied.
@@ -275,6 +283,46 @@ pub struct ResolvedConfig {
     pub page_asset_sizes: Vec<usize>,
     /// Display name of the active preset, if any (e.g. "mixed").
     pub page_preset_name: Option<String>,
+    /// HTTP stacks to compare (e.g. ["nginx", "iis"]).
+    pub http_stacks: Vec<HttpStack>,
+}
+
+/// An HTTP stack to probe alongside the default networker-endpoint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpStack {
+    pub name: String,
+    pub http_port: u16,
+    pub https_port: u16,
+}
+
+impl HttpStack {
+    pub fn from_name(name: &str) -> anyhow::Result<Self> {
+        match name.to_lowercase().as_str() {
+            "nginx" => Ok(Self {
+                name: "nginx".into(),
+                http_port: 8081,
+                https_port: 8444,
+            }),
+            "iis" => Ok(Self {
+                name: "iis".into(),
+                http_port: 8082,
+                https_port: 8445,
+            }),
+            "caddy" => Ok(Self {
+                name: "caddy".into(),
+                http_port: 8083,
+                https_port: 8446,
+            }),
+            "apache" => Ok(Self {
+                name: "apache".into(),
+                http_port: 8084,
+                https_port: 8447,
+            }),
+            other => Err(anyhow::anyhow!(
+                "Unknown HTTP stack '{other}'. Valid: nginx, iis, caddy, apache"
+            )),
+        }
+    }
 }
 
 impl Cli {
@@ -375,6 +423,12 @@ impl Cli {
                 .or_else(|| verbose.then(|| "debug".into())),
             page_asset_sizes,
             page_preset_name,
+            http_stacks: {
+                let raw = self.http_stacks.or(f.http_stacks).unwrap_or_default();
+                raw.iter()
+                    .filter_map(|s| HttpStack::from_name(s).ok())
+                    .collect()
+            },
         }
     }
 }

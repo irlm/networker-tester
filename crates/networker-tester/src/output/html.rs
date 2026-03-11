@@ -3632,6 +3632,7 @@ mod tests {
                 udp_throughput: None,
                 page_load: None,
                 browser: None,
+            http_stack: None,
             }],
         }
     }
@@ -3792,6 +3793,7 @@ mod tests {
                 udp_throughput: None,
                 page_load: None,
                 browser: None,
+            http_stack: None,
             }],
         };
         let html = render(&run, None);
@@ -3853,6 +3855,7 @@ mod tests {
                 udp_throughput: None,
                 page_load: None,
                 browser: None,
+            http_stack: None,
             }],
         };
         let html = render(&run, None);
@@ -3913,6 +3916,7 @@ mod tests {
                 udp_throughput: None,
                 page_load: None,
                 browser: None,
+            http_stack: None,
             }],
         };
         let html = render(&run, None);
@@ -3975,6 +3979,7 @@ mod tests {
                     connection_reused: false,
                 }),
                 browser: None,
+            http_stack: None,
             }],
         };
         let html = render(&run, None);
@@ -4025,6 +4030,7 @@ mod tests {
             udp_throughput: None,
             page_load: None,
             browser: None,
+            http_stack: None,
         }
     }
 
@@ -4090,6 +4096,7 @@ mod tests {
             udp_throughput: None,
             page_load: None,
             browser: None,
+            http_stack: None,
         };
         let rows: Vec<&RequestAttempt> = vec![&a];
         let mut out = String::new();
@@ -4172,6 +4179,7 @@ mod tests {
             udp_throughput: None,
             page_load: None,
             browser: None,
+            http_stack: None,
         };
         let mut out = String::new();
         append_attempt_row(&mut out, &a);
@@ -4210,6 +4218,7 @@ mod tests {
             }),
             page_load: None,
             browser: None,
+            http_stack: None,
         };
         let mut out = String::new();
         append_attempt_row(&mut out, &a);
@@ -4238,6 +4247,7 @@ mod tests {
             udp_throughput: None,
             page_load: None,
             browser: None,
+            http_stack: None,
         };
         let mut out = String::new();
         append_attempt_row(&mut out, &a);
@@ -4313,6 +4323,7 @@ mod tests {
                     resource_protocols: vec![("h2".into(), 21)],
                     started_at: now,
                 }),
+                http_stack: None,
             }],
         };
         let html = render(&run, None);
@@ -4393,6 +4404,7 @@ mod tests {
             udp_throughput: None,
             page_load: None,
             browser: None,
+            http_stack: None,
         }
     }
 
@@ -5172,6 +5184,7 @@ mod tests {
                 udp_throughput: None,
                 page_load: None,
                 browser: None,
+            http_stack: None,
             }
         };
         // r1 has 200 MB/s (better), r2 has 100 MB/s (worse)
@@ -5374,6 +5387,7 @@ mod tests {
             udp_throughput: None,
             page_load: None,
             browser: None,
+            http_stack: None,
         });
         let html = render(&run, None);
         assert!(html.contains("UDP Probe Statistics"), "UDP section must appear");
@@ -5416,6 +5430,7 @@ mod tests {
             udp_throughput: None,
             page_load: None,
             browser: None,
+            http_stack: None,
         });
         let html = render(&run, None);
         assert!(html.contains("20.0%"), "loss percent should appear");
@@ -5584,6 +5599,7 @@ mod tests {
                 udp_throughput: None,
                 page_load: None,
                 browser: None,
+            http_stack: None,
             }
         };
         r1.attempts.push(make_tcp(5.0));

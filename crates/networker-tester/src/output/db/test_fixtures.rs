@@ -49,6 +49,7 @@ pub(crate) fn bare_attempt(run_id: Uuid) -> RequestAttempt {
         udp_throughput: None,
         page_load: None,
         browser: None,
+            http_stack: None,
     }
 }
 
@@ -154,6 +155,7 @@ pub(crate) fn full_attempt(run_id: Uuid) -> RequestAttempt {
         udp_throughput: None,
         page_load: None,
         browser: None,
+            http_stack: None,
     }
 }
 

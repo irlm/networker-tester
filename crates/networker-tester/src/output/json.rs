@@ -59,6 +59,7 @@ mod tests {
                 udp_throughput: None,
                 page_load: None,
                 browser: None,
+            http_stack: None,
             }],
         }
     }

@@ -1,7 +1,8 @@
 use anyhow::Context;
-use clap::Parser;
-use networker_endpoint::{run, ServerConfig};
+use clap::{Parser, Subcommand};
+use networker_endpoint::{generate_static_site, run, ServerConfig};
 use serde::Deserialize;
+use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Default, Deserialize)]
@@ -26,6 +27,9 @@ fn load_config(path: &str) -> anyhow::Result<ConfigFile> {
     version
 )]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+
     /// Path to a JSON config file. CLI flags override values from the file.
     #[arg(long, short = 'c')]
     config: Option<String>,
@@ -51,9 +55,44 @@ struct Cli {
     log_level: Option<String>,
 }
 
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// Generate a static test website for nginx/IIS comparison.
+    ///
+    /// Creates index.html + asset files matching a page-load preset.
+    GenerateSite {
+        /// Output directory for the static site.
+        dir: PathBuf,
+
+        /// Page-load preset (small, default, mixed).
+        #[arg(long, default_value = "mixed")]
+        preset: String,
+
+        /// HTTP stack name (e.g. "nginx", "iis") — written to health file.
+        #[arg(long, default_value = "static")]
+        stack: String,
+    },
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+
+    // Handle subcommands first
+    if let Some(Command::GenerateSite {
+        dir,
+        preset,
+        stack,
+    }) = cli.command
+    {
+        // Minimal logging for generate-site
+        tracing_subscriber::fmt()
+            .with_env_filter(EnvFilter::new("info"))
+            .init();
+        return generate_static_site(&dir, &preset, &stack);
+    }
+
+    // Default: run the server
     let f = cli
         .config
         .as_deref()

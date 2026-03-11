@@ -212,3 +212,102 @@ fn generate_self_signed_cert() -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
 
     Ok((cert_pem, key_pem))
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Static site generation (for nginx / IIS comparison)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Preset asset sizes matching the tester's page-load presets.
+pub fn resolve_preset(name: &str) -> anyhow::Result<Vec<usize>> {
+    match name {
+        "mixed" => {
+            let mut v = vec![512; 5];
+            v.extend(vec![2_048; 8]);
+            v.extend(vec![8_192; 7]);
+            v.extend(vec![25_600; 7]);
+            v.extend(vec![51_200; 6]);
+            v.extend(vec![102_400; 5]);
+            v.extend(vec![204_800; 4]);
+            v.extend(vec![409_600; 4]);
+            v.extend(vec![614_400; 2]);
+            v.extend(vec![1_048_576; 2]);
+            Ok(v)
+        }
+        "small" => Ok(vec![1_024; 5]),
+        "default" => {
+            let mut v = vec![1_024; 10];
+            v.extend(vec![5_120; 8]);
+            v.extend(vec![10_240; 5]);
+            v.extend(vec![51_200; 3]);
+            v.extend(vec![102_400; 2]);
+            v.extend(vec![204_800; 2]);
+            Ok(v)
+        }
+        other => Err(anyhow::anyhow!(
+            "Unknown preset '{other}'. Valid: small, default, mixed"
+        )),
+    }
+}
+
+/// Generate a static website in `dir` that nginx/IIS can serve.
+///
+/// Creates:
+/// - `index.html` with `<img>` tags referencing `asset-{i}.bin` files
+/// - `style.css` with minimal styling
+/// - `asset-{i}.bin` files at the sizes defined by the preset
+/// - `health` file for stack detection
+pub fn generate_static_site(
+    dir: &std::path::Path,
+    preset: &str,
+    stack_name: &str,
+) -> anyhow::Result<()> {
+    use std::fmt::Write;
+    use std::fs;
+
+    let sizes = resolve_preset(preset)?;
+    fs::create_dir_all(dir)?;
+
+    // Generate asset files (zero-filled)
+    for (i, &size) in sizes.iter().enumerate() {
+        fs::write(dir.join(format!("asset-{i}.bin")), vec![0u8; size])?;
+    }
+
+    // Generate style.css
+    fs::write(
+        dir.join("style.css"),
+        "body{margin:0;font-family:system-ui,sans-serif;background:#f5f5f5}\n\
+         img{display:block;width:1px;height:1px;position:absolute}\n",
+    )?;
+
+    // Generate index.html
+    let mut html = String::with_capacity(4096);
+    html.push_str(
+        "<!DOCTYPE html>\n\
+         <html><head><title>Networker Page Load Test</title>\n\
+         <link rel=\"stylesheet\" href=\"style.css\">\n\
+         <link rel=\"icon\" href=\"data:,\">\n\
+         </head><body>\n",
+    );
+    for i in 0..sizes.len() {
+        let _ = writeln!(
+            html,
+            "<img src=\"asset-{i}.bin\" width=\"1\" height=\"1\" alt=\"\">"
+        );
+    }
+    html.push_str("</body></html>\n");
+    fs::write(dir.join("index.html"), &html)?;
+
+    // Generate health endpoint (JSON file)
+    let health = format!(
+        "{{\"status\":\"ok\",\"service\":\"networker-static\",\"stack\":\"{stack_name}\"}}\n"
+    );
+    fs::write(dir.join("health"), &health)?;
+
+    let total_bytes: usize = sizes.iter().sum();
+    info!(
+        "Generated static site: {} assets, {:.1} MB total, preset={preset}, stack={stack_name}",
+        sizes.len(),
+        total_bytes as f64 / 1_048_576.0
+    );
+    Ok(())
+}
