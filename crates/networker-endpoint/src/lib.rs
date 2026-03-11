@@ -212,3 +212,345 @@ fn generate_self_signed_cert() -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
 
     Ok((cert_pem, key_pem))
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Static site generation (for nginx / IIS comparison)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Preset asset sizes matching the tester's page-load presets.
+pub fn resolve_preset(name: &str) -> anyhow::Result<Vec<usize>> {
+    match name {
+        "mixed" => {
+            let mut v = vec![512; 5];
+            v.extend(vec![2_048; 8]);
+            v.extend(vec![8_192; 7]);
+            v.extend(vec![25_600; 7]);
+            v.extend(vec![51_200; 6]);
+            v.extend(vec![102_400; 5]);
+            v.extend(vec![204_800; 4]);
+            v.extend(vec![409_600; 4]);
+            v.extend(vec![614_400; 2]);
+            v.extend(vec![1_048_576; 2]);
+            Ok(v)
+        }
+        "small" => Ok(vec![1_024; 5]),
+        "default" => {
+            let mut v = vec![1_024; 10];
+            v.extend(vec![5_120; 8]);
+            v.extend(vec![10_240; 5]);
+            v.extend(vec![51_200; 3]);
+            v.extend(vec![102_400; 2]);
+            v.extend(vec![204_800; 2]);
+            Ok(v)
+        }
+        other => Err(anyhow::anyhow!(
+            "Unknown preset '{other}'. Valid: small, default, mixed"
+        )),
+    }
+}
+
+/// Generate a static website in `dir` that nginx/IIS can serve.
+///
+/// Creates:
+/// - `index.html` with `<img>` tags referencing `asset-{i}.bin` files
+/// - `style.css` with minimal styling
+/// - `asset-{i}.bin` files at the sizes defined by the preset
+/// - `health` file for stack detection
+pub fn generate_static_site(
+    dir: &std::path::Path,
+    preset: &str,
+    stack_name: &str,
+) -> anyhow::Result<()> {
+    use std::fmt::Write;
+    use std::fs;
+
+    let sizes = resolve_preset(preset)?;
+    fs::create_dir_all(dir)?;
+
+    // Generate asset files (zero-filled)
+    for (i, &size) in sizes.iter().enumerate() {
+        fs::write(dir.join(format!("asset-{i}.bin")), vec![0u8; size])?;
+    }
+
+    // Generate style.css
+    fs::write(
+        dir.join("style.css"),
+        "body{margin:0;font-family:system-ui,sans-serif;background:#f5f5f5}\n\
+         img{display:block;width:1px;height:1px;position:absolute}\n",
+    )?;
+
+    // Generate index.html
+    let mut html = String::with_capacity(4096);
+    html.push_str(
+        "<!DOCTYPE html>\n\
+         <html><head><title>Networker Page Load Test</title>\n\
+         <link rel=\"stylesheet\" href=\"style.css\">\n\
+         <link rel=\"icon\" href=\"data:,\">\n\
+         </head><body>\n",
+    );
+    for i in 0..sizes.len() {
+        let _ = writeln!(
+            html,
+            "<img src=\"asset-{i}.bin\" width=\"1\" height=\"1\" alt=\"\">"
+        );
+    }
+    html.push_str("</body></html>\n");
+    fs::write(dir.join("index.html"), &html)?;
+
+    // Generate health endpoint (JSON file)
+    let health = format!(
+        "{{\"status\":\"ok\",\"service\":\"networker-static\",\"stack\":\"{stack_name}\"}}\n"
+    );
+    fs::write(dir.join("health"), &health)?;
+
+    let total_bytes: usize = sizes.iter().sum();
+    info!(
+        "Generated static site: {} assets, {:.1} MB total, preset={preset}, stack={stack_name}",
+        sizes.len(),
+        total_bytes as f64 / 1_048_576.0
+    );
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Unit tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── resolve_preset() ──────────────────────────────────────────────────────
+
+    #[test]
+    fn resolve_preset_mixed_returns_50_assets() {
+        let sizes = resolve_preset("mixed").unwrap();
+        assert_eq!(
+            sizes.len(),
+            50,
+            "mixed preset should produce exactly 50 assets"
+        );
+    }
+
+    #[test]
+    fn resolve_preset_mixed_asset_count_by_tier() {
+        // Verify the distribution across size tiers defined in the function body.
+        // 5×512 + 8×2048 + 7×8192 + 7×25600 + 6×51200 + 5×102400 + 4×204800
+        // + 4×409600 + 2×614400 + 2×1048576 = 50
+        let sizes = resolve_preset("mixed").unwrap();
+        assert_eq!(sizes.iter().filter(|&&s| s == 512).count(), 5);
+        assert_eq!(sizes.iter().filter(|&&s| s == 2_048).count(), 8);
+        assert_eq!(sizes.iter().filter(|&&s| s == 8_192).count(), 7);
+        assert_eq!(sizes.iter().filter(|&&s| s == 25_600).count(), 7);
+        assert_eq!(sizes.iter().filter(|&&s| s == 51_200).count(), 6);
+        assert_eq!(sizes.iter().filter(|&&s| s == 102_400).count(), 5);
+        assert_eq!(sizes.iter().filter(|&&s| s == 204_800).count(), 4);
+        assert_eq!(sizes.iter().filter(|&&s| s == 409_600).count(), 4);
+        assert_eq!(sizes.iter().filter(|&&s| s == 614_400).count(), 2);
+        assert_eq!(sizes.iter().filter(|&&s| s == 1_048_576).count(), 2);
+    }
+
+    #[test]
+    fn resolve_preset_small_returns_5_assets() {
+        let sizes = resolve_preset("small").unwrap();
+        assert_eq!(sizes.len(), 5, "small preset should produce exactly 5 assets");
+    }
+
+    #[test]
+    fn resolve_preset_small_asset_size_is_1024() {
+        let sizes = resolve_preset("small").unwrap();
+        for (i, &size) in sizes.iter().enumerate() {
+            assert_eq!(size, 1_024, "small asset {i} should be 1024 bytes");
+        }
+    }
+
+    #[test]
+    fn resolve_preset_default_returns_30_assets() {
+        // 10×1024 + 8×5120 + 5×10240 + 3×51200 + 2×102400 + 2×204800 = 30
+        let sizes = resolve_preset("default").unwrap();
+        assert_eq!(
+            sizes.len(),
+            30,
+            "default preset should produce exactly 30 assets"
+        );
+    }
+
+    #[test]
+    fn resolve_preset_unknown_returns_error() {
+        let result = resolve_preset("unknown");
+        assert!(result.is_err(), "unknown preset should return Err");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("unknown"),
+            "error message should mention the unknown preset name; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn resolve_preset_empty_string_returns_error() {
+        let result = resolve_preset("");
+        assert!(result.is_err(), "empty preset name should return Err");
+    }
+
+    #[test]
+    fn resolve_preset_case_sensitive_upper_returns_error() {
+        // Preset matching is case-sensitive — "MIXED" is not a valid preset.
+        let result = resolve_preset("MIXED");
+        assert!(result.is_err(), "preset lookup should be case-sensitive");
+    }
+
+    // ── generate_static_site() ────────────────────────────────────────────────
+
+    #[test]
+    fn generate_static_site_creates_expected_files() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        generate_static_site(dir.path(), "small", "nginx").unwrap();
+
+        assert!(dir.path().join("index.html").exists(), "index.html missing");
+        assert!(dir.path().join("style.css").exists(), "style.css missing");
+        assert!(dir.path().join("health").exists(), "health file missing");
+        // small preset → 5 assets
+        for i in 0..5 {
+            assert!(
+                dir.path().join(format!("asset-{i}.bin")).exists(),
+                "asset-{i}.bin missing"
+            );
+        }
+    }
+
+    #[test]
+    fn generate_static_site_no_extra_asset_files() {
+        // Only 5 assets for "small" — asset-5.bin must NOT exist.
+        let dir = tempfile::tempdir().expect("create temp dir");
+        generate_static_site(dir.path(), "small", "nginx").unwrap();
+        assert!(
+            !dir.path().join("asset-5.bin").exists(),
+            "asset-5.bin should not exist for 'small' preset (only 5 assets)"
+        );
+    }
+
+    #[test]
+    fn generate_static_site_asset_sizes_match_preset() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        generate_static_site(dir.path(), "small", "nginx").unwrap();
+
+        // small preset: all 5 assets are 1024 bytes
+        for i in 0..5 {
+            let path = dir.path().join(format!("asset-{i}.bin"));
+            let len = std::fs::metadata(&path)
+                .unwrap_or_else(|_| panic!("asset-{i}.bin missing"))
+                .len();
+            assert_eq!(len, 1_024, "asset-{i}.bin should be 1024 bytes");
+        }
+    }
+
+    #[test]
+    fn generate_static_site_index_html_has_correct_img_count() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        generate_static_site(dir.path(), "small", "nginx").unwrap();
+
+        let html = std::fs::read_to_string(dir.path().join("index.html")).unwrap();
+        let img_count = html.matches("<img ").count();
+        assert_eq!(
+            img_count, 5,
+            "index.html should contain exactly 5 <img> tags for the 'small' preset"
+        );
+    }
+
+    #[test]
+    fn generate_static_site_index_html_references_all_asset_filenames() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        generate_static_site(dir.path(), "small", "nginx").unwrap();
+
+        let html = std::fs::read_to_string(dir.path().join("index.html")).unwrap();
+        for i in 0..5 {
+            assert!(
+                html.contains(&format!("asset-{i}.bin")),
+                "index.html should reference asset-{i}.bin"
+            );
+        }
+    }
+
+    #[test]
+    fn generate_static_site_health_contains_stack_name() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        generate_static_site(dir.path(), "small", "mystack").unwrap();
+
+        let health = std::fs::read_to_string(dir.path().join("health")).unwrap();
+        assert!(
+            health.contains("mystack"),
+            "health file should contain the stack name 'mystack'; got: {health}"
+        );
+    }
+
+    #[test]
+    fn generate_static_site_health_contains_status_ok() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        generate_static_site(dir.path(), "small", "nginx").unwrap();
+
+        let health = std::fs::read_to_string(dir.path().join("health")).unwrap();
+        assert!(
+            health.contains("\"status\":\"ok\""),
+            "health file should report status ok; got: {health}"
+        );
+    }
+
+    #[test]
+    fn generate_static_site_mixed_preset_creates_50_assets() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        generate_static_site(dir.path(), "mixed", "caddy").unwrap();
+
+        for i in 0..50 {
+            assert!(
+                dir.path().join(format!("asset-{i}.bin")).exists(),
+                "asset-{i}.bin missing for 'mixed' preset"
+            );
+        }
+        // asset-50 must not exist
+        assert!(
+            !dir.path().join("asset-50.bin").exists(),
+            "asset-50.bin should not exist for 'mixed' preset (only 50 assets)"
+        );
+    }
+
+    #[test]
+    fn generate_static_site_mixed_preset_index_html_has_50_img_tags() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        generate_static_site(dir.path(), "mixed", "caddy").unwrap();
+
+        let html = std::fs::read_to_string(dir.path().join("index.html")).unwrap();
+        let img_count = html.matches("<img ").count();
+        assert_eq!(
+            img_count, 50,
+            "index.html should contain exactly 50 <img> tags for the 'mixed' preset"
+        );
+    }
+
+    #[test]
+    fn generate_static_site_creates_dir_if_missing() {
+        let base = tempfile::tempdir().expect("create temp dir");
+        let nested = base.path().join("a").join("b").join("site");
+        // The path does not exist yet — generate_static_site must create it.
+        generate_static_site(&nested, "small", "apache").unwrap();
+        assert!(nested.join("index.html").exists(), "index.html missing in nested dir");
+    }
+
+    #[test]
+    fn generate_static_site_unknown_preset_returns_error() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let result = generate_static_site(dir.path(), "nonexistent", "nginx");
+        assert!(
+            result.is_err(),
+            "unknown preset should cause generate_static_site to return Err"
+        );
+    }
+
+    #[test]
+    fn generate_static_site_style_css_is_nonempty() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        generate_static_site(dir.path(), "small", "iis").unwrap();
+
+        let css = std::fs::read_to_string(dir.path().join("style.css")).unwrap();
+        assert!(!css.is_empty(), "style.css should not be empty");
+    }
+}

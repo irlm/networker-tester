@@ -294,6 +294,10 @@ pub struct RequestAttempt {
     /// Real-browser page-load result (browser mode only, requires `--features browser`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub browser: Option<BrowserResult>,
+    /// HTTP stack that served this request (e.g. "nginx", "iis").
+    /// `None` means the default networker-endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_stack: Option<String>,
 }
 
 impl RequestAttempt {
@@ -996,6 +1000,7 @@ mod tests {
             udp_throughput: None,
             page_load: None,
             browser: None,
+            http_stack: None,
         };
         let run = TestRun {
             run_id,
@@ -1089,6 +1094,7 @@ mod tests {
             udp_throughput: None,
             page_load: None,
             browser: None,
+            http_stack: None,
         }
     }
 

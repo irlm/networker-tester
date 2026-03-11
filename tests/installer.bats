@@ -1113,3 +1113,65 @@ JSON
     _deploy_validate_config "$cfg"
     [ "$DEPLOY_VALIDATE_ERRORS" -eq 0 ]
 }
+
+# ---------------------------------------------------------------------------
+# HTTP Stack comparison — nginx / IIS setup
+# ---------------------------------------------------------------------------
+
+@test "step_setup_nginx: skips on non-Linux" {
+    SYS_OS="Darwin"
+    run step_setup_nginx
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Linux-only"* ]]
+}
+
+@test "step_setup_nginx: fails without package manager" {
+    SYS_OS="Linux"
+    # Override detect_pkg_manager to return empty
+    detect_pkg_manager() { echo ""; }
+    export -f detect_pkg_manager
+    run step_setup_nginx
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"No supported package manager"* ]]
+}
+
+@test "_iis_setup_powershell: generates valid PowerShell script" {
+    run _iis_setup_powershell "C:\\networker\\networker-endpoint.exe"
+    [ "$status" -eq 0 ]
+    # Check key sections are present
+    [[ "$output" == *"Install-WindowsFeature"* ]]
+    [[ "$output" == *"EnableHttp3"* ]]
+    [[ "$output" == *"New-SelfSignedCertificate"* ]]
+    [[ "$output" == *"networker-iis"* ]]
+    [[ "$output" == *"8082"* ]]
+    [[ "$output" == *"8445"* ]]
+}
+
+@test "_iis_setup_powershell: includes web.config with MIME types" {
+    run _iis_setup_powershell "C:\\ep.exe"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"web.config"* ]]
+    [[ "$output" == *'remove fileExtension="."'* ]]
+    [[ "$output" == *'mimeMap fileExtension=".bin"'* ]]
+}
+
+@test "_iis_setup_powershell: uses provided exe path" {
+    run _iis_setup_powershell "D:\\custom\\endpoint.exe"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'D:\\custom\\endpoint.exe'* ]]
+}
+
+@test "_iis_setup_powershell: enables HTTP/2 cleartext and TLS" {
+    run _iis_setup_powershell "C:\\ep.exe"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"EnableHttp2Tls"* ]]
+    [[ "$output" == *"EnableHttp2Cleartext"* ]]
+}
+
+@test "_iis_setup_powershell: includes QUIC firewall rule" {
+    run _iis_setup_powershell "C:\\ep.exe"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Networker-IIS-QUIC"* ]]
+    [[ "$output" == *"UDP"* ]]
+    [[ "$output" == *"8445"* ]]
+}

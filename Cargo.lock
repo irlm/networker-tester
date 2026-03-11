@@ -1562,7 +1562,7 @@ dependencies = [
 
 [[package]]
 name = "networker-endpoint"
-version = "0.13.7"
+version = "0.13.8"
 dependencies = [
  "anyhow",
  "axum",
@@ -1582,6 +1582,7 @@ dependencies = [
  "rustls-pemfile 2.2.0",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-rustls 0.26.4",
  "tokio-test",
@@ -1594,7 +1595,7 @@ dependencies = [
 
 [[package]]
 name = "networker-tester"
-version = "0.13.7"
+version = "0.13.8"
 dependencies = [
  "anyhow",
  "async-trait",

@@ -1,0 +1,56 @@
+{
+  "version": 1,
+
+  "tester": {
+    "provider": "local"
+  },
+
+  "endpoints": [
+    {
+      "label": "azure-eastus",
+      "provider": "azure",
+      "azure": {
+        "region": "eastus",
+        "resource_group": "nwk-deploy-test",
+        "vm_name": "nwk-ep-az",
+        "vm_size": "Standard_B2s",
+        "os": "linux",
+        "auto_shutdown": true
+      }
+    },
+    {
+      "label": "aws-east1",
+      "provider": "aws",
+      "aws": {
+        "region": "us-east-1",
+        "instance_name": "nwk-ep-aws",
+        "instance_type": "t3.small",
+        "os": "linux",
+        "auto_shutdown": true
+      }
+    },
+    {
+      "label": "gcp-central1",
+      "provider": "gcp",
+      "gcp": {
+        "zone": "us-central1-a",
+        "project": "kepler-408121",
+        "instance_name": "nwk-ep-gcp",
+        "machine_type": "e2-small",
+        "os": "linux",
+        "auto_shutdown": true
+      }
+    }
+  ],
+
+  "tests": {
+    "modes": ["tcp", "http1", "http2", "http3", "udp", "download", "upload",
+              "pageload", "pageload2", "pageload3"],
+    "runs": 5,
+    "insecure": true,
+    "udp_port": 9999,
+    "udp_throughput_port": 9998,
+    "payload_sizes": ["64k", "1m"],
+    "html_report": "3cloud-report.html"
+  }
+}

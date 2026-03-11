@@ -58,6 +58,7 @@ mod stub {
             udp_throughput: None,
             page_load: None,
             browser: None,
+            http_stack: None,
         }
     }
 }
@@ -340,6 +341,7 @@ mod real {
             udp_throughput: None,
             page_load: None,
             browser: None,
+            http_stack: None,
         }
     }
 
@@ -374,6 +376,7 @@ mod real {
             udp_throughput: None,
             page_load: None,
             browser: None,
+            http_stack: None,
         }
     }
 

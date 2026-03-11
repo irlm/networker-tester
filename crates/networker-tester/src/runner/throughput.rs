@@ -934,6 +934,7 @@ mod tests {
             udp_throughput: None,
             page_load: None,
             browser: None,
+            http_stack: None,
         }
     }
 
@@ -975,6 +976,7 @@ mod tests {
             udp_throughput: None,
             page_load: None,
             browser: None,
+            http_stack: None,
         }
     }
 
@@ -1071,6 +1073,7 @@ mod tests {
             udp_throughput: None,
             page_load: None,
             browser: None,
+            http_stack: None,
         };
         verify_upload(&mut attempt, 100);
         assert!(attempt.success);

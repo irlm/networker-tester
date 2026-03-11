@@ -1,0 +1,16 @@
+{
+  "targets": ["https://10.0.0.1:8443/health"],
+  "modes": ["http1"],
+  "runs": 3,
+  "concurrency": 4,
+  "timeout": 60,
+  "payload_sizes": ["1m","10m"],
+  "connection_reuse": true,
+  "excel": true,
+  "udp_port": 5555,
+  "page_assets": 10,
+  "page_asset_size": "50k",
+  "retries": 2,
+  "output_dir": "./results",
+  "log_level": "debug"
+}

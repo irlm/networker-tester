@@ -11,6 +11,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.8] – 2026-03-11 — HTTP stack comparison (nginx & IIS)
+
+### Added
+- **HTTP stack comparison**: `--http-stacks nginx,iis` probes additional HTTP servers alongside the default networker-endpoint, enabling side-by-side performance comparison of different web servers serving identical static content
+- **`generate-site` subcommand** for networker-endpoint: `networker-endpoint generate-site <dir> --preset mixed --stack nginx` generates a static test site (index.html + 50 assets matching the `mixed` preset) for nginx/IIS/etc. to serve
+- **HTML report "HTTP Stack Comparison" section**: table showing avg/p50/min/max load times per protocol per stack (endpoint vs nginx vs IIS)
+- **`http_stack` field** on `RequestAttempt`: tags each probe result with the stack name (e.g. `"nginx"`, `"iis"`); `None` = default endpoint
+- **Installer nginx setup**: `step_setup_nginx()` for local, `_remote_setup_nginx()` for SSH, `_gcp_setup_nginx()` for GCE — installs nginx, generates static site, configures self-signed cert, HTTP on port 8081, HTTPS/H2 on port 8444
+- **Installer IIS setup**: `_iis_setup_powershell()` + `_azure_win_setup_iis()` — installs IIS, enables HTTP/3 via registry, generates static site with `web.config` (MIME types for extensionless `/health` and `.bin`), HTTP on port 8082, HTTPS on port 8445
+- **Firewall port ranges**: Azure NSG, AWS SG, GCP firewall rules now open 8081-8082 (HTTP) and 8444-8445 (HTTPS) for stack comparison servers
+- **`HttpStack` struct** in CLI: `from_name()` factory for well-known stacks with assigned port pairs
+- 40 new unit tests (endpoint: 20 for `generate_static_site`/`resolve_preset`; tester: 14 CLI + 4 main.rs + 2 HTML)
+
+### Fixed
+- **nginx `http2` directive**: use `listen 8444 ssl http2;` (compatible with nginx 1.18 on Ubuntu 22.04 through nginx 1.25+) instead of the newer `http2 on;` syntax
+- **IIS `web.config`**: use `remove+add` pattern for MIME maps to avoid duplicate entry errors; handle extensionless `/health` file
+
+### Port Convention
+| Stack | HTTP | HTTPS |
+|-------|------|-------|
+| networker-endpoint | 8080 | 8443 |
+| nginx | 8081 | 8444 |
+| IIS | 8082 | 8445 |
+| caddy (future) | 8083 | 8446 |
+| apache (future) | 8084 | 8447 |
+
+---
+
 ## [0.13.7] – 2026-03-11 — HTML report: short target names & pageload1 plain HTTP
 
 ### Added

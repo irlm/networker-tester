@@ -3295,6 +3295,403 @@ UNIT
     print_ok "networker-endpoint service started — auto-starts on boot"
 }
 
+# ─── HTTP Stack comparison: nginx setup (Ubuntu) ─────────────────────────────
+
+# Install and configure nginx to serve the same static test page on ports 8081 (HTTP) / 8444 (HTTPS).
+# This enables fair HTTP stack comparison: same content, same machine, different server software.
+step_setup_nginx() {
+    next_step "Set up nginx for HTTP stack comparison"
+
+    if [[ "$SYS_OS" != "Linux" ]]; then
+        print_info "nginx setup is Linux-only — skipping."
+        return 0
+    fi
+
+    local pkg_mgr
+    pkg_mgr="$(detect_pkg_manager)"
+    if [[ -z "$pkg_mgr" ]]; then
+        print_warn "No supported package manager found — cannot install nginx."
+        return 1
+    fi
+
+    # Install nginx
+    print_info "Installing nginx…"
+    case "$pkg_mgr" in
+        apt-get)  sudo apt-get update -qq && sudo apt-get install -y nginx ;;
+        dnf)      sudo dnf install -y nginx ;;
+        pacman)   sudo pacman -S --noconfirm nginx ;;
+        zypper)   sudo zypper install -y nginx ;;
+        apk)      sudo apk add nginx ;;
+    esac < /dev/null
+
+    # Generate static test site
+    local site_root="/var/www/networker"
+    sudo mkdir -p "$site_root"
+    local ep_bin="/usr/local/bin/networker-endpoint"
+    if [[ ! -x "$ep_bin" ]]; then
+        ep_bin="${INSTALL_DIR}/networker-endpoint"
+    fi
+    if [[ -x "$ep_bin" ]]; then
+        print_info "Generating static test site in $site_root…"
+        sudo "$ep_bin" generate-site "$site_root" --preset mixed --stack nginx
+    else
+        print_warn "networker-endpoint not found — generating minimal test site."
+        # Fallback: create a simple index.html with a few assets
+        echo '<!DOCTYPE html><html><body><p>Networker static test</p></body></html>' | sudo tee "$site_root/index.html" > /dev/null
+        printf '{"status":"ok","stack":"nginx"}\n' | sudo tee "$site_root/health" > /dev/null
+    fi
+    sudo chown -R www-data:www-data "$site_root" 2>/dev/null || true
+
+    # Generate self-signed certificate
+    sudo mkdir -p /etc/nginx/ssl
+    local ep_ip="${ENDPOINT_IP:-127.0.0.1}"
+    sudo openssl req -x509 -newkey rsa:2048 \
+        -keyout /etc/nginx/ssl/networker.key \
+        -out /etc/nginx/ssl/networker.crt \
+        -days 365 -nodes \
+        -subj "/CN=localhost" \
+        -addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:::1,IP:${ep_ip}" \
+        2>/dev/null < /dev/null
+
+    # Write nginx config
+    sudo tee /etc/nginx/sites-available/networker > /dev/null <<'NGINX_CONF'
+# Networker HTTP stack comparison — nginx
+# Serves static test page for fair comparison with networker-endpoint and IIS.
+
+server {
+    listen 8081;
+    server_name _;
+    root /var/www/networker;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    # MIME types for test assets
+    location ~* \.bin$ {
+        default_type application/octet-stream;
+    }
+}
+
+server {
+    listen 8444 ssl http2;
+    server_name _;
+    root /var/www/networker;
+    index index.html;
+
+    ssl_certificate /etc/nginx/ssl/networker.crt;
+    ssl_certificate_key /etc/nginx/ssl/networker.key;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    location ~* \.bin$ {
+        default_type application/octet-stream;
+    }
+}
+NGINX_CONF
+
+    # Enable site
+    if [[ -d /etc/nginx/sites-enabled ]]; then
+        sudo ln -sf /etc/nginx/sites-available/networker /etc/nginx/sites-enabled/networker
+        # Remove default site to avoid port 80 conflicts
+        sudo rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+    elif [[ -d /etc/nginx/conf.d ]]; then
+        sudo cp /etc/nginx/sites-available/networker /etc/nginx/conf.d/networker.conf
+    fi
+
+    # Test and restart
+    if sudo nginx -t 2>/dev/null; then
+        sudo systemctl enable nginx 2>/dev/null || true
+        sudo systemctl restart nginx
+        print_ok "nginx serving test page on ports 8081 (HTTP) / 8444 (HTTPS)"
+    else
+        print_warn "nginx config test failed — check /etc/nginx/sites-available/networker"
+        return 1
+    fi
+}
+
+# ─── HTTP Stack comparison: IIS setup (Windows via SSH/run-command) ───────────
+
+# Generate a PowerShell script to install and configure IIS on a Windows VM.
+# The output can be piped to az vm run-command / AWS SSM / gcloud SSH.
+_iis_setup_powershell() {
+    local ep_exe="${1:-C:\\networker\\networker-endpoint.exe}"
+    local site_root="C:\\networker-static"
+    cat <<'IIS_PS1'
+# ── IIS setup for HTTP stack comparison ──────────────────────────────────────
+$ErrorActionPreference = 'Stop'
+
+# 1. Install IIS
+Write-Host "Installing IIS…"
+Install-WindowsFeature -Name Web-Server -IncludeManagementTools | Out-Null
+
+# 2. Enable HTTP/3 (Windows Server 2022+)
+Write-Host "Enabling HTTP/3 via registry…"
+$httpParams = "HKLM:\SYSTEM\CurrentControlSet\Services\HTTP\Parameters"
+if (-not (Test-Path $httpParams)) { New-Item -Path $httpParams -Force | Out-Null }
+Set-ItemProperty -Path $httpParams -Name "EnableHttp3" -Value 1 -Type DWord
+
+# Also enable HTTP/2 explicitly
+Set-ItemProperty -Path $httpParams -Name "EnableHttp2Tls" -Value 1 -Type DWord
+Set-ItemProperty -Path $httpParams -Name "EnableHttp2Cleartext" -Value 1 -Type DWord
+
+# 3. Generate static test site
+$siteRoot = "C:\networker-static"
+New-Item -ItemType Directory -Path $siteRoot -Force | Out-Null
+IIS_PS1
+
+    cat <<IIS_PS1_GENSITE
+\$epExe = "${ep_exe}"
+if (Test-Path \$epExe) {
+    Write-Host "Generating static test site…"
+    & \$epExe generate-site \$siteRoot --preset mixed --stack iis
+} else {
+    Write-Host "WARN: endpoint binary not found at \$epExe — creating minimal test page"
+    '<html><body>Networker static test</body></html>' | Out-File "\$siteRoot\index.html" -Encoding UTF8
+    '{"status":"ok","stack":"iis"}' | Out-File "\$siteRoot\health" -Encoding UTF8
+}
+IIS_PS1_GENSITE
+
+    cat <<'IIS_PS1_REST'
+
+# 3b. Create web.config for extensionless files and .bin MIME type
+# Uses remove+add pattern to avoid duplicate MIME map errors
+$webConfig = @"
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+  <system.webServer>
+    <staticContent>
+      <remove fileExtension="." />
+      <mimeMap fileExtension="." mimeType="application/json" />
+      <remove fileExtension=".bin" />
+      <mimeMap fileExtension=".bin" mimeType="application/octet-stream" />
+    </staticContent>
+  </system.webServer>
+</configuration>
+"@
+$webConfig | Out-File "$siteRoot\web.config" -Encoding UTF8
+Write-Host "web.config created"
+
+# 4. Generate self-signed certificate
+Write-Host "Creating self-signed certificate…"
+$cert = New-SelfSignedCertificate `
+    -DnsName "localhost", $env:COMPUTERNAME `
+    -CertStoreLocation "Cert:\LocalMachine\My" `
+    -NotAfter (Get-Date).AddYears(1) `
+    -FriendlyName "Networker IIS Test"
+$thumbprint = $cert.Thumbprint
+Write-Host "Certificate thumbprint: $thumbprint"
+
+# 5. Remove default IIS site, create networker site
+Import-Module WebAdministration
+if (Get-Website -Name "Default Web Site" -ErrorAction SilentlyContinue) {
+    Remove-Website -Name "Default Web Site"
+}
+if (Get-Website -Name "networker-iis" -ErrorAction SilentlyContinue) {
+    Remove-Website -Name "networker-iis"
+}
+
+# Create site with HTTP binding
+New-Website -Name "networker-iis" `
+    -PhysicalPath $siteRoot `
+    -Port 8082 `
+    -Force | Out-Null
+
+# Add HTTPS binding
+New-WebBinding -Name "networker-iis" -Protocol "https" -Port 8445
+$binding = Get-WebBinding -Name "networker-iis" -Protocol "https" -Port 8445
+$binding.AddSslCertificate($thumbprint, "My")
+
+# Start the site
+Start-Website -Name "networker-iis"
+
+# 6. Firewall rules
+New-NetFirewallRule -DisplayName "Networker-IIS-HTTP" -Direction Inbound -Protocol TCP -LocalPort 8082 -Action Allow -ErrorAction SilentlyContinue | Out-Null
+New-NetFirewallRule -DisplayName "Networker-IIS-HTTPS" -Direction Inbound -Protocol TCP -LocalPort 8445 -Action Allow -ErrorAction SilentlyContinue | Out-Null
+# HTTP/3 uses UDP
+New-NetFirewallRule -DisplayName "Networker-IIS-QUIC" -Direction Inbound -Protocol UDP -LocalPort 8445 -Action Allow -ErrorAction SilentlyContinue | Out-Null
+
+Write-Host "IIS configured: HTTP=8082, HTTPS=8445 (HTTP/3 enabled)"
+Write-Host "NOTE: A reboot may be required for HTTP/3 to take effect."
+IIS_PS1_REST
+}
+
+# Set up nginx on a remote Linux VM via SSH.
+# $1 = public IP, $2 = SSH user
+_remote_setup_nginx() {
+    local ip="$1" ssh_user="${2:-azureuser}"
+
+    next_step "Set up nginx on remote VM (${ip})"
+
+    # Check if nginx is already serving on 8081
+    if curl -sf --max-time 5 "http://${ip}:8081/health" &>/dev/null; then
+        print_ok "nginx already responding on port 8081 — skipping"
+        return 0
+    fi
+
+    print_info "Installing and configuring nginx via SSH…"
+    # We pipe the step_setup_nginx function body over SSH
+    # But it's cleaner to run the main commands inline
+    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "${ssh_user}@${ip}" bash -s < /dev/null <<'NGINX_SSH'
+set -e
+export DEBIAN_FRONTEND=noninteractive
+
+# Install nginx
+sudo apt-get update -qq && sudo apt-get install -y nginx < /dev/null
+
+# Generate static site
+site_root="/var/www/networker"
+sudo mkdir -p "$site_root"
+ep_bin="/usr/local/bin/networker-endpoint"
+if [ -x "$ep_bin" ]; then
+    sudo "$ep_bin" generate-site "$site_root" --preset mixed --stack nginx
+else
+    echo '<!DOCTYPE html><html><body>Networker static test</body></html>' | sudo tee "$site_root/index.html" > /dev/null
+    printf '{"status":"ok","stack":"nginx"}\n' | sudo tee "$site_root/health" > /dev/null
+fi
+sudo chown -R www-data:www-data "$site_root" 2>/dev/null || true
+
+# Self-signed cert
+sudo mkdir -p /etc/nginx/ssl
+sudo openssl req -x509 -newkey rsa:2048 \
+    -keyout /etc/nginx/ssl/networker.key \
+    -out /etc/nginx/ssl/networker.crt \
+    -days 365 -nodes \
+    -subj "/CN=localhost" 2>/dev/null < /dev/null
+
+# Nginx config
+sudo tee /etc/nginx/sites-available/networker > /dev/null <<'EOF'
+server {
+    listen 8081;
+    server_name _;
+    root /var/www/networker;
+    index index.html;
+    location / { try_files $uri $uri/ =404; }
+    location ~* \.bin$ { default_type application/octet-stream; }
+}
+server {
+    listen 8444 ssl http2;
+    server_name _;
+    root /var/www/networker;
+    index index.html;
+    ssl_certificate /etc/nginx/ssl/networker.crt;
+    ssl_certificate_key /etc/nginx/ssl/networker.key;
+    location / { try_files $uri $uri/ =404; }
+    location ~* \.bin$ { default_type application/octet-stream; }
+}
+EOF
+
+# Enable site
+if [ -d /etc/nginx/sites-enabled ]; then
+    sudo ln -sf /etc/nginx/sites-available/networker /etc/nginx/sites-enabled/networker
+    sudo rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+elif [ -d /etc/nginx/conf.d ]; then
+    sudo cp /etc/nginx/sites-available/networker /etc/nginx/conf.d/networker.conf
+fi
+
+sudo nginx -t 2>/dev/null && sudo systemctl enable nginx && sudo systemctl restart nginx
+echo "nginx configured on ports 8081/8444"
+NGINX_SSH
+
+    # Verify
+    sleep 2
+    if curl -sf --max-time 5 "http://${ip}:8081/health" &>/dev/null; then
+        print_ok "nginx serving on port 8081 (HTTP) / 8444 (HTTPS)"
+    else
+        print_warn "nginx may not be responding yet on port 8081 — check manually"
+    fi
+}
+
+# Set up IIS on an Azure Windows VM via az vm run-command.
+# $1 = resource group, $2 = VM name
+_azure_win_setup_iis() {
+    local rg="$1" vm="$2"
+
+    print_info "Setting up IIS on Windows VM ($vm)…"
+    local ps_script
+    ps_script="$(_iis_setup_powershell "C:\\networker\\networker-endpoint.exe")"
+
+    if az vm run-command invoke \
+        --resource-group "$rg" --name "$vm" \
+        --command-id RunPowerShellScript \
+        --scripts "$ps_script" \
+        --output none 2>&1; then
+        print_ok "IIS configured: HTTP=8082, HTTPS=8445 (HTTP/3 enabled)"
+    else
+        print_warn "IIS setup may have failed — check the VM manually"
+    fi
+}
+
+# Set up nginx on a GCE Linux instance via gcloud ssh.
+# $1 = instance name, $2 = public IP (for verification)
+_gcp_setup_nginx() {
+    local name="$1" ip="${2:-}"
+
+    next_step "Set up nginx on GCE instance ($name)"
+
+    # Check if already running
+    if [[ -n "$ip" ]] && curl -sf --max-time 5 "http://${ip}:8081/health" &>/dev/null; then
+        print_ok "nginx already responding on port 8081 — skipping"
+        return 0
+    fi
+
+    print_info "Installing and configuring nginx via gcloud SSH…"
+    _gcp_ssh_run "$name" "bash -s" < /dev/null <<'NGINX_GCP'
+set -e
+export DEBIAN_FRONTEND=noninteractive
+sudo apt-get update -qq && sudo apt-get install -y nginx < /dev/null
+site_root="/var/www/networker"
+sudo mkdir -p "$site_root"
+ep_bin="/usr/local/bin/networker-endpoint"
+if [ -x "$ep_bin" ]; then
+    sudo "$ep_bin" generate-site "$site_root" --preset mixed --stack nginx
+else
+    echo '<!DOCTYPE html><html><body>Networker static test</body></html>' | sudo tee "$site_root/index.html" > /dev/null
+    printf '{"status":"ok","stack":"nginx"}\n' | sudo tee "$site_root/health" > /dev/null
+fi
+sudo chown -R www-data:www-data "$site_root" 2>/dev/null || true
+sudo mkdir -p /etc/nginx/ssl
+sudo openssl req -x509 -newkey rsa:2048 \
+    -keyout /etc/nginx/ssl/networker.key \
+    -out /etc/nginx/ssl/networker.crt \
+    -days 365 -nodes -subj "/CN=localhost" 2>/dev/null < /dev/null
+sudo tee /etc/nginx/sites-available/networker > /dev/null <<'EOF'
+server {
+    listen 8081; server_name _;
+    root /var/www/networker; index index.html;
+    location / { try_files $uri $uri/ =404; }
+    location ~* \.bin$ { default_type application/octet-stream; }
+}
+server {
+    listen 8444 ssl http2; server_name _;
+    root /var/www/networker; index index.html;
+    ssl_certificate /etc/nginx/ssl/networker.crt;
+    ssl_certificate_key /etc/nginx/ssl/networker.key;
+    location / { try_files $uri $uri/ =404; }
+    location ~* \.bin$ { default_type application/octet-stream; }
+}
+EOF
+if [ -d /etc/nginx/sites-enabled ]; then
+    sudo ln -sf /etc/nginx/sites-available/networker /etc/nginx/sites-enabled/networker
+    sudo rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+elif [ -d /etc/nginx/conf.d ]; then
+    sudo cp /etc/nginx/sites-available/networker /etc/nginx/conf.d/networker.conf
+fi
+sudo nginx -t 2>/dev/null && sudo systemctl enable nginx && sudo systemctl restart nginx
+echo "nginx configured on ports 8081/8444"
+NGINX_GCP
+
+    sleep 2
+    if [[ -n "$ip" ]] && curl -sf --max-time 5 "http://${ip}:8081/health" &>/dev/null; then
+        print_ok "nginx serving on port 8081 (HTTP) / 8444 (HTTPS)"
+    else
+        print_warn "nginx may not be responding yet on port 8081 — check manually"
+    fi
+}
+
 # Poll /health until the endpoint responds.
 # $1 = public IP
 _remote_verify_health() {
@@ -3508,8 +3905,8 @@ $exe = 'C:\networker\networker-endpoint.exe'
 # Stop any existing instance
 Stop-Process -Name 'networker-endpoint' -Force -ErrorAction SilentlyContinue
 # Windows Firewall rules (before starting the binary)
-netsh advfirewall firewall add rule name='Networker-HTTP'  protocol=TCP dir=in action=allow localport=8080  | Out-Null
-netsh advfirewall firewall add rule name='Networker-HTTPS' protocol=TCP dir=in action=allow localport=8443  | Out-Null
+netsh advfirewall firewall add rule name='Networker-HTTP'  protocol=TCP dir=in action=allow localport='8080,8081,8082'  | Out-Null
+netsh advfirewall firewall add rule name='Networker-HTTPS' protocol=TCP dir=in action=allow localport='8443,8444,8445'  | Out-Null
 netsh advfirewall firewall add rule name='Networker-UDP'   protocol=UDP dir=in action=allow localport='8443,9998,9999' | Out-Null
 Write-Host 'Firewall rules added'
 # Start endpoint as detached process (-WindowStyle Hidden, NOT -NoNewWindow,
@@ -3782,7 +4179,7 @@ step_azure_create_vm() {
     fi
 }
 
-# Open TCP 80/443/8080/8443 and UDP 8443/9998/9999 on the NSG for the endpoint VM.
+# Open TCP 80/443/8080-8082/8443-8445 and UDP 8443/9998/9999 on the NSG for the endpoint VM.
 # Uses az network nsg rule create (not az vm open-port) to avoid priority conflicts
 # with the default-allow-ssh rule that Azure always places at priority 1000.
 step_azure_open_endpoint_ports() {
@@ -3808,14 +4205,14 @@ step_azure_open_endpoint_ports() {
         print_warn "Could not detect NSG name — open ports manually:"
         print_warn "  az network nsg rule create --resource-group $rg --nsg-name <nsg> \\"
         print_warn "    --name Networker-TCP --protocol Tcp --direction Inbound \\"
-        print_warn "    --priority 1100 --destination-port-ranges 80 443 8080 8443 --access Allow"
+        print_warn "    --priority 1100 --destination-port-ranges 80 443 8080-8082 8443-8445 --access Allow"
         print_warn "  az network nsg rule create --resource-group $rg --nsg-name <nsg> \\"
         print_warn "    --name Networker-UDP --protocol Udp --direction Inbound \\"
         print_warn "    --priority 1110 --destination-port-ranges 8443 9998 9999 --access Allow"
         return 0
     fi
 
-    print_info "Opening TCP 80, 443, 8080, 8443…"
+    print_info "Opening TCP 80, 443, 8080-8082, 8443-8445…"
     az network nsg rule create \
         --resource-group "$rg" \
         --nsg-name "$nsg_name" \
@@ -3823,10 +4220,10 @@ step_azure_open_endpoint_ports() {
         --protocol Tcp \
         --direction Inbound \
         --priority 1100 \
-        --destination-port-ranges 80 443 8080 8443 \
+        --destination-port-ranges 80 443 8080-8082 8443-8445 \
         --access Allow \
         --output none
-    print_ok "TCP 80, 443, 8080, 8443 open"
+    print_ok "TCP 80, 443, 8080-8082, 8443-8445 open"
 
     print_info "Opening UDP 8443, 9998, 9999…"
     az network nsg rule create \
@@ -3997,11 +4394,16 @@ _azure_deploy_one_endpoint() {
         _azure_win_install_binary "networker-endpoint" "$rg" "$vm" "${NETWORKER_VERSION:-latest}"
         next_step "Create networker-endpoint service ($label)"
         _azure_win_create_endpoint_service "$rg" "$vm"
+        # IIS HTTP stack comparison setup
+        next_step "Set up IIS for HTTP stack comparison ($label)"
+        _azure_win_setup_iis "$rg" "$vm"
     else
         _wait_for_ssh "$ip" "azureuser" "$label"
         _remote_install_binary "networker-endpoint" "$ip" "azureuser"
         next_step "Create networker-endpoint service ($label)"
         _remote_create_endpoint_service "$ip" "azureuser"
+        # nginx HTTP stack comparison setup
+        _remote_setup_nginx "$ip" "azureuser"
         next_step "Verify endpoint health ($label)"
         _remote_verify_health "$ip" "azureuser"
     fi
@@ -4209,7 +4611,8 @@ _aws_create_security_group() {
         --protocol tcp --port 22 --cidr 0.0.0.0/0 --output text >/dev/null
 
     if [[ "$component" == "endpoint" ]]; then
-        # TCP 80, 443, 8080, 8443 (80/443 redirect to 8080/8443 via iptables on VM)
+        # TCP 80, 443, 8080-8082, 8443-8445 (80/443 redirect to 8080/8443 via iptables on VM)
+        # Ports 8081/8444 = nginx, 8082/8445 = IIS (HTTP stack comparison)
         aws ec2 authorize-security-group-ingress \
             --region "$AWS_REGION" --group-id "$_sg_created" \
             --protocol tcp --port 80 --cidr 0.0.0.0/0 --output text >/dev/null
@@ -4218,10 +4621,10 @@ _aws_create_security_group() {
             --protocol tcp --port 443 --cidr 0.0.0.0/0 --output text >/dev/null
         aws ec2 authorize-security-group-ingress \
             --region "$AWS_REGION" --group-id "$_sg_created" \
-            --protocol tcp --port 8080 --cidr 0.0.0.0/0 --output text >/dev/null
+            --protocol tcp --port 8080-8082 --cidr 0.0.0.0/0 --output text >/dev/null
         aws ec2 authorize-security-group-ingress \
             --region "$AWS_REGION" --group-id "$_sg_created" \
-            --protocol tcp --port 8443 --cidr 0.0.0.0/0 --output text >/dev/null
+            --protocol tcp --port 8443-8445 --cidr 0.0.0.0/0 --output text >/dev/null
         # UDP 8443, 9998, 9999
         aws ec2 authorize-security-group-ingress \
             --region "$AWS_REGION" --group-id "$_sg_created" \
@@ -4232,7 +4635,7 @@ _aws_create_security_group() {
         aws ec2 authorize-security-group-ingress \
             --region "$AWS_REGION" --group-id "$_sg_created" \
             --protocol udp --port 9999 --cidr 0.0.0.0/0 --output text >/dev/null
-        print_ok "Security group created: $_sg_created  (TCP 22/80/443/8080/8443, UDP 8443/9998/9999)"
+        print_ok "Security group created: $_sg_created  (TCP 22/80/443/8080-8082/8443-8445, UDP 8443/9998/9999)"
     else
         print_ok "Security group created: $_sg_created  (TCP 22)"
     fi
@@ -4439,6 +4842,9 @@ step_aws_deploy_endpoint() {
     next_step "Create networker-endpoint service (AWS)"
     _remote_create_endpoint_service "$AWS_ENDPOINT_IP" "ubuntu"
 
+    # nginx HTTP stack comparison setup
+    _remote_setup_nginx "$AWS_ENDPOINT_IP" "ubuntu"
+
     next_step "Verify endpoint health (AWS)"
     _remote_verify_health "$AWS_ENDPOINT_IP" "ubuntu"
 
@@ -4569,11 +4975,11 @@ _gcp_create_firewall_rule() {
         --priority=1000 \
         --network=default \
         --action=ALLOW \
-        --rules=tcp:22,tcp:80,tcp:443,tcp:3389,tcp:8080,tcp:8443,udp:8443,udp:9998,udp:9999 \
+        --rules=tcp:22,tcp:80,tcp:443,tcp:3389,tcp:8080-8082,tcp:8443-8445,udp:8443,udp:9998,udp:9999 \
         --source-ranges=0.0.0.0/0 \
         --target-tags=networker-endpoint \
         --quiet
-    print_ok "Firewall rule created: TCP 22/80/443/3389/8080/8443, UDP 8443/9998/9999"
+    print_ok "Firewall rule created: TCP 22/80/443/3389/8080-8082/8443-8445, UDP 8443/9998/9999"
 }
 
 # Create a GCE instance.
@@ -5314,11 +5720,14 @@ step_gcp_deploy_endpoint() {
 
     if [[ "$GCP_ENDPOINT_OS" == "windows" ]]; then
         _gcp_win_deploy_endpoint_via_startup "$GCP_ENDPOINT_NAME" "$GCP_ENDPOINT_IP"
+        # IIS setup for GCP Windows would need gcloud SSH — deferred for now
     else
         _gcp_wait_for_ssh "$GCP_ENDPOINT_NAME" "endpoint instance"
         _gcp_set_auto_shutdown "$GCP_ENDPOINT_NAME" "endpoint instance"
         _gcp_install_binary "networker-endpoint" "$GCP_ENDPOINT_NAME"
         _gcp_create_endpoint_service "$GCP_ENDPOINT_NAME"
+        # nginx HTTP stack comparison setup
+        _gcp_setup_nginx "$GCP_ENDPOINT_NAME" "$GCP_ENDPOINT_IP"
         _gcp_verify_health "$GCP_ENDPOINT_NAME" "$GCP_ENDPOINT_IP"
     fi
     step_generate_config "$GCP_ENDPOINT_IP"
@@ -6823,6 +7232,7 @@ deploy_from_config() {
                 fi
                 if [[ "$SYS_OS" == "Linux" ]] && command -v systemctl &>/dev/null; then
                     step_setup_endpoint_service
+                    step_setup_nginx
                 fi
                 DEPLOY_EP_IPS[$i]="127.0.0.1"
                 ;;
@@ -6951,6 +7361,7 @@ main() {
         echo ""
         if ask_yn "Set up networker-endpoint as a systemd service (auto-starts on boot)?" "y"; then
             step_setup_endpoint_service
+            step_setup_nginx
         fi
     fi
 
