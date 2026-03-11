@@ -773,6 +773,7 @@ mod real {
                 resource_protocols,
                 started_at,
             }),
+            http_stack: None,
         }
     }
 
