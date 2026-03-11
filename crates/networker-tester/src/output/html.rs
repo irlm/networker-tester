@@ -297,7 +297,7 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
         let vals: Vec<f64> = run
             .attempts
             .iter()
-            .filter(|a| &a.protocol == proto)
+            .filter(|a| &a.protocol == proto && a.http_stack.is_none())
             .filter_map(primary_metric_value)
             .collect();
         if vals.is_empty() {
@@ -1230,7 +1230,7 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
         let rows: Vec<&RequestAttempt> = run
             .attempts
             .iter()
-            .filter(|a| &a.protocol == proto)
+            .filter(|a| &a.protocol == proto && a.http_stack.is_none())
             .collect();
         if rows.is_empty() {
             continue;
@@ -1270,7 +1270,7 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
                 let payloads: BTreeSet<Option<usize>> = run
                     .attempts
                     .iter()
-                    .filter(|a| a.protocol == *proto)
+                    .filter(|a| a.protocol == *proto && a.http_stack.is_none())
                     .map(attempt_payload_bytes)
                     .collect();
                 payloads.into_iter().map(move |p| ((*proto).clone(), p))
@@ -1284,7 +1284,7 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
                 let attempts: Vec<&RequestAttempt> = run
                     .attempts
                     .iter()
-                    .filter(|a| &a.protocol == proto && attempt_payload_bytes(a) == *payload)
+                    .filter(|a| &a.protocol == proto && attempt_payload_bytes(a) == *payload && a.http_stack.is_none())
                     .collect();
                 if attempts.is_empty() {
                     return None;
@@ -1372,6 +1372,7 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
                     a.protocol,
                     Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3
                 ) && a.page_load.is_some()
+                  && a.http_stack.is_none()
             })
             .collect();
         if !pl_attempts.is_empty() {
@@ -1517,6 +1518,7 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
                         | Protocol::Browser2
                         | Protocol::Browser3
                 ) && a.browser.is_some()
+                  && a.http_stack.is_none()
             })
             .collect();
         if !br_cmp_attempts.is_empty() {
@@ -1800,6 +1802,37 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
                     };
 
                     if matching.is_empty() {
+                        // For stacks (not default endpoint), check if there were
+                        // failed attempts for this proto — means "not supported".
+                        if stack_filter.is_some() {
+                            let sn = stack_filter.unwrap();
+                            let had_failures = run.attempts.iter().any(|a| {
+                                a.http_stack.as_deref() == Some(sn)
+                                    && &a.protocol == proto
+                                    && !a.success
+                            });
+                            // Also show "not supported" if the endpoint had data
+                            // for this proto but the stack had none at all.
+                            let endpoint_has_proto = match proto {
+                                Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3 => {
+                                    default_pl_attempts.iter().any(|a| &a.protocol == proto)
+                                }
+                                _ => default_br_attempts.iter().any(|a| &a.protocol == proto),
+                            };
+                            if had_failures || endpoint_has_proto {
+                                let _ = write!(
+                                    out,
+                                    r#"      <tr>
+        <td><strong>{stack}</strong></td>
+        <td>{proto}</td>
+        <td colspan="4" style="color:#888;font-style:italic">not supported</td>
+      </tr>
+"#,
+                                    stack = escape_html(stack_label),
+                                    proto = proto,
+                                );
+                            }
+                        }
                         continue;
                     }
 
@@ -1845,6 +1878,7 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
                         | Protocol::Browser2
                         | Protocol::Browser3
                 ) && a.browser.is_some()
+                  && a.http_stack.is_none()
             })
             .collect();
         let chart_pl: Vec<&RequestAttempt> = run
@@ -1855,6 +1889,7 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
                     a.protocol,
                     Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3
                 ) && a.page_load.is_some()
+                  && a.http_stack.is_none()
             })
             .collect();
         let has_throughput = run.attempts.iter().any(|a| {
