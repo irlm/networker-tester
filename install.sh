@@ -3314,10 +3314,24 @@ step_setup_nginx() {
         return 1
     fi
 
-    # Install nginx
-    print_info "Installing nginx…"
+    # Install nginx (mainline from nginx.org for HTTP/3 support)
+    print_info "Installing nginx (mainline with HTTP/3)…"
     case "$pkg_mgr" in
-        apt-get)  sudo apt-get update -qq && sudo apt-get install -y nginx ;;
+        apt-get)
+            # Add official nginx.org repo for mainline (1.27+ with HTTP/3)
+            if ! apt-cache policy nginx 2>/dev/null | grep -q "nginx.org"; then
+                sudo apt-get install -y curl gnupg2 ca-certificates lsb-release ubuntu-keyring < /dev/null
+                curl -fsSL https://nginx.org/keys/nginx_signing.key \
+                    | gpg --dearmor | sudo tee /usr/share/keyrings/nginx-archive-keyring.gpg > /dev/null
+                echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] \
+http://nginx.org/packages/mainline/ubuntu $(lsb_release -cs) nginx" \
+                    | sudo tee /etc/apt/sources.list.d/nginx.list > /dev/null
+                # Pin nginx.org packages over distro ones
+                printf 'Package: *\nPin: origin nginx.org\nPin-Priority: 900\n' \
+                    | sudo tee /etc/apt/preferences.d/99nginx > /dev/null
+            fi
+            sudo apt-get update -qq && sudo apt-get install -y nginx < /dev/null
+            ;;
         dnf)      sudo dnf install -y nginx ;;
         pacman)   sudo pacman -S --noconfirm nginx ;;
         zypper)   sudo zypper install -y nginx ;;
@@ -3375,13 +3389,19 @@ server {
 }
 
 server {
-    listen 8444 ssl http2;
+    listen 8444 ssl;
+    listen 8444 quic reuseport;
+    http2 on;
+    http3 on;
     server_name _;
     root /var/www/networker;
     index index.html;
 
     ssl_certificate /etc/nginx/ssl/networker.crt;
     ssl_certificate_key /etc/nginx/ssl/networker.key;
+
+    # Advertise HTTP/3 support
+    add_header Alt-Svc 'h3=":8444"; ma=86400' always;
 
     location / {
         try_files $uri $uri/ =404;
@@ -3539,7 +3559,17 @@ _remote_setup_nginx() {
 set -e
 export DEBIAN_FRONTEND=noninteractive
 
-# Install nginx
+# Install nginx mainline from nginx.org (1.27+ with HTTP/3 support)
+if ! apt-cache policy nginx 2>/dev/null | grep -q "nginx.org"; then
+    sudo apt-get install -y curl gnupg2 ca-certificates lsb-release ubuntu-keyring < /dev/null
+    curl -fsSL https://nginx.org/keys/nginx_signing.key \
+        | gpg --dearmor | sudo tee /usr/share/keyrings/nginx-archive-keyring.gpg > /dev/null
+    echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] \
+http://nginx.org/packages/mainline/ubuntu $(lsb_release -cs) nginx" \
+        | sudo tee /etc/apt/sources.list.d/nginx.list > /dev/null
+    printf 'Package: *\nPin: origin nginx.org\nPin-Priority: 900\n' \
+        | sudo tee /etc/apt/preferences.d/99nginx > /dev/null
+fi
 sudo apt-get update -qq && sudo apt-get install -y nginx < /dev/null
 
 # Generate static site
@@ -3573,27 +3603,32 @@ server {
     location ~* \.bin$ { default_type application/octet-stream; }
 }
 server {
-    listen 8444 ssl http2;
+    listen 8444 ssl;
+    listen 8444 quic reuseport;
+    http2 on;
+    http3 on;
     server_name _;
     root /var/www/networker;
     index index.html;
     ssl_certificate /etc/nginx/ssl/networker.crt;
     ssl_certificate_key /etc/nginx/ssl/networker.key;
+    add_header Alt-Svc 'h3=":8444"; ma=86400' always;
     location / { try_files $uri $uri/ =404; }
     location ~* \.bin$ { default_type application/octet-stream; }
 }
 EOF
 
-# Enable site
+# nginx.org mainline uses /etc/nginx/conf.d/ by default
 if [ -d /etc/nginx/sites-enabled ]; then
     sudo ln -sf /etc/nginx/sites-available/networker /etc/nginx/sites-enabled/networker
     sudo rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
 elif [ -d /etc/nginx/conf.d ]; then
     sudo cp /etc/nginx/sites-available/networker /etc/nginx/conf.d/networker.conf
+    sudo rm -f /etc/nginx/conf.d/default.conf 2>/dev/null || true
 fi
 
 sudo nginx -t 2>/dev/null && sudo systemctl enable nginx && sudo systemctl restart nginx
-echo "nginx configured on ports 8081/8444"
+echo "nginx configured on ports 8081/8444 (HTTP/3 enabled)"
 NGINX_SSH
 
     # Verify
@@ -3642,6 +3677,17 @@ _gcp_setup_nginx() {
     _gcp_ssh_run "$name" "bash -s" < /dev/null <<'NGINX_GCP'
 set -e
 export DEBIAN_FRONTEND=noninteractive
+# Install nginx mainline from nginx.org (1.27+ with HTTP/3 support)
+if ! apt-cache policy nginx 2>/dev/null | grep -q "nginx.org"; then
+    sudo apt-get install -y curl gnupg2 ca-certificates lsb-release ubuntu-keyring < /dev/null
+    curl -fsSL https://nginx.org/keys/nginx_signing.key \
+        | gpg --dearmor | sudo tee /usr/share/keyrings/nginx-archive-keyring.gpg > /dev/null
+    echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] \
+http://nginx.org/packages/mainline/ubuntu $(lsb_release -cs) nginx" \
+        | sudo tee /etc/apt/sources.list.d/nginx.list > /dev/null
+    printf 'Package: *\nPin: origin nginx.org\nPin-Priority: 900\n' \
+        | sudo tee /etc/apt/preferences.d/99nginx > /dev/null
+fi
 sudo apt-get update -qq && sudo apt-get install -y nginx < /dev/null
 site_root="/var/www/networker"
 sudo mkdir -p "$site_root"
@@ -3666,10 +3712,15 @@ server {
     location ~* \.bin$ { default_type application/octet-stream; }
 }
 server {
-    listen 8444 ssl http2; server_name _;
+    listen 8444 ssl;
+    listen 8444 quic reuseport;
+    http2 on;
+    http3 on;
+    server_name _;
     root /var/www/networker; index index.html;
     ssl_certificate /etc/nginx/ssl/networker.crt;
     ssl_certificate_key /etc/nginx/ssl/networker.key;
+    add_header Alt-Svc 'h3=":8444"; ma=86400' always;
     location / { try_files $uri $uri/ =404; }
     location ~* \.bin$ { default_type application/octet-stream; }
 }
@@ -3679,9 +3730,10 @@ if [ -d /etc/nginx/sites-enabled ]; then
     sudo rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
 elif [ -d /etc/nginx/conf.d ]; then
     sudo cp /etc/nginx/sites-available/networker /etc/nginx/conf.d/networker.conf
+    sudo rm -f /etc/nginx/conf.d/default.conf 2>/dev/null || true
 fi
 sudo nginx -t 2>/dev/null && sudo systemctl enable nginx && sudo systemctl restart nginx
-echo "nginx configured on ports 8081/8444"
+echo "nginx configured on ports 8081/8444 (HTTP/3 enabled)"
 NGINX_GCP
 
     sleep 2
@@ -4233,10 +4285,10 @@ step_azure_open_endpoint_ports() {
         --protocol Udp \
         --direction Inbound \
         --priority 1110 \
-        --destination-port-ranges 8443 9998 9999 \
+        --destination-port-ranges 8443-8445 9998 9999 \
         --access Allow \
         --output none
-    print_ok "UDP 8443, 9998, 9999 open"
+    print_ok "UDP 8443-8445, 9998, 9999 open"
 }
 
 # Set Azure auto-shutdown policy (04:00 UTC = 11 PM EST).
@@ -4625,17 +4677,17 @@ _aws_create_security_group() {
         aws ec2 authorize-security-group-ingress \
             --region "$AWS_REGION" --group-id "$_sg_created" \
             --protocol tcp --port 8443-8445 --cidr 0.0.0.0/0 --output text >/dev/null
-        # UDP 8443, 9998, 9999
+        # UDP 8443-8445 (QUIC for endpoint + nginx + IIS), 9998, 9999
         aws ec2 authorize-security-group-ingress \
             --region "$AWS_REGION" --group-id "$_sg_created" \
-            --protocol udp --port 8443 --cidr 0.0.0.0/0 --output text >/dev/null
+            --protocol udp --port 8443-8445 --cidr 0.0.0.0/0 --output text >/dev/null
         aws ec2 authorize-security-group-ingress \
             --region "$AWS_REGION" --group-id "$_sg_created" \
             --protocol udp --port 9998 --cidr 0.0.0.0/0 --output text >/dev/null
         aws ec2 authorize-security-group-ingress \
             --region "$AWS_REGION" --group-id "$_sg_created" \
             --protocol udp --port 9999 --cidr 0.0.0.0/0 --output text >/dev/null
-        print_ok "Security group created: $_sg_created  (TCP 22/80/443/8080-8082/8443-8445, UDP 8443/9998/9999)"
+        print_ok "Security group created: $_sg_created  (TCP 22/80/443/8080-8082/8443-8445, UDP 8443-8445/9998/9999)"
     else
         print_ok "Security group created: $_sg_created  (TCP 22)"
     fi
@@ -4975,11 +5027,11 @@ _gcp_create_firewall_rule() {
         --priority=1000 \
         --network=default \
         --action=ALLOW \
-        --rules=tcp:22,tcp:80,tcp:443,tcp:3389,tcp:8080-8082,tcp:8443-8445,udp:8443,udp:9998,udp:9999 \
+        --rules=tcp:22,tcp:80,tcp:443,tcp:3389,tcp:8080-8082,tcp:8443-8445,udp:8443-8445,udp:9998,udp:9999 \
         --source-ranges=0.0.0.0/0 \
         --target-tags=networker-endpoint \
         --quiet
-    print_ok "Firewall rule created: TCP 22/80/443/3389/8080-8082/8443-8445, UDP 8443/9998/9999"
+    print_ok "Firewall rule created: TCP 22/80/443/3389/8080-8082/8443-8445, UDP 8443-8445/9998/9999"
 }
 
 # Create a GCE instance.
