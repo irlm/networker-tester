@@ -3546,13 +3546,17 @@ _remote_setup_nginx() {
 
     next_step "Set up nginx on remote VM (${ip})"
 
-    # Check if nginx is already serving on 8081
+    # Check if nginx is already serving with HTTP/3 support
     if curl -sf --max-time 5 "http://${ip}:8081/health" &>/dev/null; then
-        print_ok "nginx already responding on port 8081 — skipping"
-        return 0
+        # Check if QUIC/H3 is available (Alt-Svc header present)
+        if curl -sfk --max-time 5 -I "https://${ip}:8444/health" 2>/dev/null | grep -qi 'alt-svc.*h3'; then
+            print_ok "nginx already responding with HTTP/3 on port 8444 — skipping"
+            return 0
+        fi
+        print_info "nginx responding but without HTTP/3 — upgrading to mainline…"
+    else
+        print_info "Installing and configuring nginx via SSH…"
     fi
-
-    print_info "Installing and configuring nginx via SSH…"
     # We pipe the step_setup_nginx function body over SSH
     # But it's cleaner to run the main commands inline
     ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "${ssh_user}@${ip}" bash -s < /dev/null <<'NGINX_SSH'
@@ -3667,13 +3671,16 @@ _gcp_setup_nginx() {
 
     next_step "Set up nginx on GCE instance ($name)"
 
-    # Check if already running
+    # Check if nginx is already serving with HTTP/3 support
     if [[ -n "$ip" ]] && curl -sf --max-time 5 "http://${ip}:8081/health" &>/dev/null; then
-        print_ok "nginx already responding on port 8081 — skipping"
-        return 0
+        if curl -sfk --max-time 5 -I "https://${ip}:8444/health" 2>/dev/null | grep -qi 'alt-svc.*h3'; then
+            print_ok "nginx already responding with HTTP/3 on port 8444 — skipping"
+            return 0
+        fi
+        print_info "nginx responding but without HTTP/3 — upgrading to mainline…"
+    else
+        print_info "Installing and configuring nginx via gcloud SSH…"
     fi
-
-    print_info "Installing and configuring nginx via gcloud SSH…"
     _gcp_ssh_run "$name" "bash -s" < /dev/null <<'NGINX_GCP'
 set -e
 export DEBIAN_FRONTEND=noninteractive
