@@ -494,6 +494,124 @@ async fn run_for_target(
         all_attempts.extend(results);
     }
 
+    // ── HTTP stack comparison probes ──────────────────────────────────────────
+    // For each configured HTTP stack (nginx, IIS, etc.), run pageload/browser
+    // probes against the stack's ports and tag results with the stack name.
+    let stack_modes: Vec<Protocol> = modes
+        .iter()
+        .filter(|m| {
+            matches!(
+                m,
+                Protocol::PageLoad
+                    | Protocol::PageLoad2
+                    | Protocol::PageLoad3
+                    | Protocol::Browser
+                    | Protocol::Browser1
+                    | Protocol::Browser2
+                    | Protocol::Browser3
+            )
+        })
+        .cloned()
+        .collect();
+
+    if !cfg.http_stacks.is_empty() && !stack_modes.is_empty() {
+        for stack in &cfg.http_stacks {
+            // Probe health endpoint to check if stack is running
+            let stack_http_url = rewrite_url_for_stack(&target, stack.http_port, false);
+            let health_url = {
+                let mut u = stack_http_url.clone();
+                u.set_path("/health");
+                u
+            };
+
+            info!(stack = %stack.name, url = %health_url, "Checking HTTP stack availability");
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(5))
+                .danger_accept_invalid_certs(true)
+                .build()
+                .unwrap();
+            match client.get(health_url.as_str()).send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    info!(stack = %stack.name, "HTTP stack is available");
+                }
+                Ok(resp) => {
+                    warn!(stack = %stack.name, status = %resp.status(), "HTTP stack returned non-OK; skipping");
+                    continue;
+                }
+                Err(e) => {
+                    warn!(stack = %stack.name, err = %e, "HTTP stack not reachable; skipping");
+                    continue;
+                }
+            }
+
+            let stack_https_url = rewrite_url_for_stack(&target, stack.https_port, true);
+
+            // Build stack-specific configs
+            let stack_pageload_cfg = PageLoadConfig {
+                run_cfg: probe_cfg.clone(),
+                base_url: stack_https_url.clone(),
+                asset_sizes: cfg.page_asset_sizes.clone(),
+                preset_name: cfg.page_preset_name.clone(),
+            };
+
+            let stack_mode_tasks: Vec<(Protocol, Option<usize>)> = stack_modes
+                .iter()
+                .map(|p| (p.clone(), None))
+                .collect();
+
+            for run_num in 0..cfg.runs {
+                info!(stack = %stack.name, run = run_num + 1, "Stack probe run");
+
+                for (proto, _) in &stack_mode_tasks {
+                    let mut attempt = dispatch_once(
+                        proto,
+                        None,
+                        run_id,
+                        seq,
+                        &stack_https_url,
+                        &probe_cfg,
+                        &udp_cfg,
+                        &udp_throughput_cfg,
+                        &throughput_cfg,
+                        &stack_pageload_cfg,
+                    )
+                    .await;
+                    seq += 1;
+
+                    // Tag with the HTTP stack name
+                    attempt.http_stack = Some(stack.name.clone());
+
+                    // Retry loop
+                    for retry_num in 1..=retries {
+                        if attempt.success {
+                            break;
+                        }
+                        let mut retry_a = dispatch_once(
+                            proto,
+                            None,
+                            run_id,
+                            seq,
+                            &stack_https_url,
+                            &probe_cfg,
+                            &udp_cfg,
+                            &udp_throughput_cfg,
+                            &throughput_cfg,
+                            &stack_pageload_cfg,
+                        )
+                        .await;
+                        seq += 1;
+                        retry_a.retry_count = retry_num;
+                        retry_a.http_stack = Some(stack.name.clone());
+                        attempt = retry_a;
+                    }
+
+                    log_attempt(&attempt);
+                    all_attempts.push(attempt);
+                }
+            }
+        }
+    }
+
     let finished_at = Utc::now();
 
     let run = TestRun {
@@ -687,6 +805,19 @@ async fn fetch_server_info(target: &url::Url, insecure: bool) -> Option<HostInfo
             .and_then(|v| v.as_str())
             .map(String::from),
     })
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// URL rewriting for HTTP stack comparison
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Rewrite a target URL to use a different port for an HTTP stack.
+/// If `https` is true, keeps the https:// scheme; otherwise uses http://.
+fn rewrite_url_for_stack(base: &url::Url, port: u16, https: bool) -> url::Url {
+    let mut u = base.clone();
+    let _ = u.set_scheme(if https { "https" } else { "http" });
+    let _ = u.set_port(Some(port));
+    u
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1341,5 +1472,79 @@ fn copy_default_css(out_dir: &Path) {
         let _ = std::fs::write(&dest, src);
     } else {
         let _ = std::fs::write(&dest, networker_tester::output::html::FALLBACK_CSS);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rewrite_url_for_stack_http_port() {
+        let base = url::Url::parse("https://example.com:8443/path").unwrap();
+        let result = rewrite_url_for_stack(&base, 8081, false);
+        assert_eq!(result.scheme(), "http");
+        assert_eq!(result.port(), Some(8081));
+        assert_eq!(result.path(), "/path");
+        assert_eq!(result.host_str(), Some("example.com"));
+    }
+
+    #[test]
+    fn rewrite_url_for_stack_https_port() {
+        let base = url::Url::parse("https://10.0.0.5:8443/").unwrap();
+        let result = rewrite_url_for_stack(&base, 8444, true);
+        assert_eq!(result.scheme(), "https");
+        assert_eq!(result.port(), Some(8444));
+    }
+
+    #[test]
+    fn rewrite_url_for_stack_preserves_host_and_path() {
+        let base = url::Url::parse("https://my-server.eastus.cloudapp.azure.com:8443/test").unwrap();
+        let result = rewrite_url_for_stack(&base, 8082, true);
+        assert_eq!(
+            result.host_str(),
+            Some("my-server.eastus.cloudapp.azure.com")
+        );
+        assert_eq!(result.path(), "/test");
+        assert_eq!(result.port(), Some(8082));
+    }
+
+    #[test]
+    fn stack_mode_filter_keeps_only_pageload_and_browser() {
+        let modes = vec![
+            Protocol::Http1,
+            Protocol::Http2,
+            Protocol::Tcp,
+            Protocol::PageLoad,
+            Protocol::PageLoad2,
+            Protocol::PageLoad3,
+            Protocol::Browser,
+            Protocol::Browser1,
+            Protocol::Browser2,
+            Protocol::Browser3,
+            Protocol::Download,
+            Protocol::Dns,
+        ];
+        let stack_modes: Vec<Protocol> = modes
+            .iter()
+            .filter(|m| {
+                matches!(
+                    m,
+                    Protocol::PageLoad
+                        | Protocol::PageLoad2
+                        | Protocol::PageLoad3
+                        | Protocol::Browser
+                        | Protocol::Browser1
+                        | Protocol::Browser2
+                        | Protocol::Browser3
+                )
+            })
+            .cloned()
+            .collect();
+        assert_eq!(stack_modes.len(), 7);
+        assert!(stack_modes.contains(&Protocol::PageLoad));
+        assert!(stack_modes.contains(&Protocol::Browser3));
+        assert!(!stack_modes.contains(&Protocol::Http1));
+        assert!(!stack_modes.contains(&Protocol::Download));
     }
 }

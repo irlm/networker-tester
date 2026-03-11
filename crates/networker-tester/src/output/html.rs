@@ -1688,6 +1688,150 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
         }
     }
 
+    // ── HTTP Stack Comparison ──────────────────────────────────────────────────
+    {
+        // Collect all attempts that have an http_stack tag
+        let stack_attempts: Vec<&RequestAttempt> = run
+            .attempts
+            .iter()
+            .filter(|a| a.http_stack.is_some())
+            .collect();
+
+        if !stack_attempts.is_empty() {
+            // Group by stack name
+            let mut stack_names: Vec<String> = stack_attempts
+                .iter()
+                .filter_map(|a| a.http_stack.clone())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            stack_names.sort();
+
+            // Also include the default endpoint (http_stack == None) for comparison
+            let default_pl_attempts: Vec<&RequestAttempt> = run
+                .attempts
+                .iter()
+                .filter(|a| {
+                    a.http_stack.is_none()
+                        && matches!(
+                            a.protocol,
+                            Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3
+                        )
+                        && a.page_load.is_some()
+                })
+                .collect();
+            let default_br_attempts: Vec<&RequestAttempt> = run
+                .attempts
+                .iter()
+                .filter(|a| {
+                    a.http_stack.is_none()
+                        && matches!(
+                            a.protocol,
+                            Protocol::Browser
+                                | Protocol::Browser1
+                                | Protocol::Browser2
+                                | Protocol::Browser3
+                        )
+                        && a.browser.is_some()
+                })
+                .collect();
+
+            let _ = write!(
+                out,
+                r#"
+<section class="card">
+  <h2>HTTP Stack Comparison</h2>
+  <p>Performance comparison across HTTP stacks serving identical static content.</p>
+  <table>
+    <thead>
+      <tr>
+        <th>Stack</th><th>Protocol</th><th>N</th>
+        <th>Avg Load (ms)</th><th>p50 (ms)</th><th>Min (ms)</th><th>Max (ms)</th>
+      </tr>
+    </thead>
+    <tbody>
+"#
+            );
+
+            // Render default endpoint first
+            let all_stacks = std::iter::once(("endpoint", None))
+                .chain(stack_names.iter().map(|n| (n.as_str(), Some(n.as_str()))));
+
+            for (stack_label, stack_filter) in all_stacks {
+                let protos = [
+                    Protocol::PageLoad,
+                    Protocol::PageLoad2,
+                    Protocol::PageLoad3,
+                    Protocol::Browser1,
+                    Protocol::Browser2,
+                    Protocol::Browser3,
+                ];
+                for proto in &protos {
+                    let matching: Vec<f64> = if stack_filter.is_none() {
+                        // Default endpoint
+                        match proto {
+                            Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3 => {
+                                default_pl_attempts
+                                    .iter()
+                                    .filter(|a| &a.protocol == proto)
+                                    .filter_map(|a| a.page_load.as_ref().map(|p| p.total_ms))
+                                    .collect()
+                            }
+                            _ => default_br_attempts
+                                .iter()
+                                .filter(|a| &a.protocol == proto)
+                                .filter_map(|a| a.browser.as_ref().map(|b| b.load_ms))
+                                .collect(),
+                        }
+                    } else {
+                        let sn = stack_filter.unwrap();
+                        stack_attempts
+                            .iter()
+                            .filter(|a| {
+                                a.http_stack.as_deref() == Some(sn) && &a.protocol == proto
+                            })
+                            .filter_map(|a| {
+                                a.page_load
+                                    .as_ref()
+                                    .map(|p| p.total_ms)
+                                    .or(a.browser.as_ref().map(|b| b.load_ms))
+                            })
+                            .collect()
+                    };
+
+                    if matching.is_empty() {
+                        continue;
+                    }
+
+                    if let Some(s) = compute_stats(&matching) {
+                        let _ = write!(
+                            out,
+                            r#"      <tr>
+        <td><strong>{stack}</strong></td>
+        <td>{proto}</td>
+        <td>{n}</td>
+        <td>{avg:.2}</td>
+        <td>{p50:.2}</td>
+        <td>{min:.2}</td>
+        <td>{max:.2}</td>
+      </tr>
+"#,
+                            stack = escape_html(stack_label),
+                            proto = proto,
+                            n = matching.len(),
+                            avg = s.mean,
+                            p50 = s.p50,
+                            min = s.min,
+                            max = s.max,
+                        );
+                    }
+                }
+            }
+
+            let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
+        }
+    }
+
     // ── Charts + Analysis ─────────────────────────────────────────────────────
     {
         let chart_browser: Vec<&RequestAttempt> = run
@@ -5943,5 +6087,34 @@ mod tests {
         // but the summary/header display names should use the provider+OS form.
         // Check the summary row uses the provider name
         assert!(html.contains("AWS Ubuntu<br>"), "summary display name should be provider+OS");
+    }
+
+    #[test]
+    fn render_http_stack_comparison_section_when_stack_attempts_present() {
+        let mut run = make_run();
+        // Add default endpoint pageload attempts
+        run.attempts.push(make_page_load_attempt(Protocol::PageLoad2, 150.0, false));
+        run.attempts.push(make_page_load_attempt(Protocol::PageLoad2, 160.0, false));
+
+        // Add nginx stack attempts
+        let mut nginx1 = make_page_load_attempt(Protocol::PageLoad2, 120.0, false);
+        nginx1.http_stack = Some("nginx".into());
+        let mut nginx2 = make_page_load_attempt(Protocol::PageLoad2, 130.0, false);
+        nginx2.http_stack = Some("nginx".into());
+        run.attempts.push(nginx1);
+        run.attempts.push(nginx2);
+
+        let html = render_multi(&[run], None);
+        assert!(html.contains("HTTP Stack Comparison"), "should have stack comparison section");
+        assert!(html.contains("<strong>endpoint</strong>"), "should show default endpoint");
+        assert!(html.contains("<strong>nginx</strong>"), "should show nginx stack");
+    }
+
+    #[test]
+    fn render_no_http_stack_section_when_no_stack_attempts() {
+        let mut run = make_run();
+        run.attempts.push(make_page_load_attempt(Protocol::PageLoad2, 150.0, false));
+        let html = render_multi(&[run], None);
+        assert!(!html.contains("HTTP Stack Comparison"), "should not show stack section without stack attempts");
     }
 }
