@@ -12,6 +12,101 @@ use std::fmt::Write as FmtWrite;
 use std::path::Path;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Helpers – cloud hostname detection & short display names
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Returns `true` for hostnames that are cloud-provider internal names and
+/// should NOT be shown to the user (e.g. AWS `ip-172-31-78-2`).
+fn is_cloud_internal_hostname(hostname: &str) -> bool {
+    // AWS default hostnames: ip-10-x-x-x, ip-172-x-x-x
+    if hostname.starts_with("ip-") && hostname.chars().skip(3).all(|c| c.is_ascii_digit() || c == '-')
+    {
+        return true;
+    }
+    false
+}
+
+/// Derive a short OS label from the full OS string.
+fn os_short_label(os: &str) -> &'static str {
+    if os.contains("Windows") {
+        "Windows"
+    } else if os.contains("Ubuntu") {
+        "Ubuntu"
+    } else if os.contains("Debian") {
+        "Debian"
+    } else {
+        "Linux"
+    }
+}
+
+/// Derive a cloud provider tag from the region string.
+fn provider_from_region(region: &str) -> Option<&'static str> {
+    if region.starts_with("azure/") {
+        Some("Azure")
+    } else if region.starts_with("aws/") {
+        Some("AWS")
+    } else if region.starts_with("gcp/") {
+        Some("GCP")
+    } else {
+        None
+    }
+}
+
+/// Build a short display name for a target from its server info.
+///
+/// Returns names like "Azure Ubuntu", "AWS Windows", "GCP Ubuntu", "my-vm",
+/// or falls back to `fallback` when no server info is available.
+fn derive_display_name(info: Option<&HostInfo>, fallback: &str) -> String {
+    let Some(s) = info else {
+        return fallback.to_string();
+    };
+    let hostname = s.hostname.as_deref().unwrap_or("");
+    let os = s.os_version.as_deref().unwrap_or(&s.os);
+    let provider = s.region.as_deref().and_then(provider_from_region);
+
+    if hostname.is_empty() || hostname == "unknown" || is_cloud_internal_hostname(hostname) {
+        let os_short = os_short_label(os);
+        match provider {
+            Some(p) => format!("{p} {os_short}"),
+            None => os_short.to_string(),
+        }
+    } else {
+        hostname.to_string()
+    }
+}
+
+/// Build short names for each target in a multi-target report.
+///
+/// If names collide (e.g. two "AWS Ubuntu"), appends a numeric suffix.
+fn build_target_short_names(runs: &[TestRun]) -> Vec<String> {
+    let raw: Vec<String> = runs
+        .iter()
+        .enumerate()
+        .map(|(i, r)| derive_display_name(r.server_info.as_ref(), &format!("Target {}", i + 1)))
+        .collect();
+
+    // Disambiguate duplicates by appending #2, #3, etc.
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut result: Vec<String> = Vec::with_capacity(raw.len());
+    // First pass: count occurrences
+    for name in &raw {
+        *counts.entry(name.clone()).or_insert(0) += 1;
+    }
+    // Second pass: assign suffixes where needed
+    let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for name in &raw {
+        if counts[name] > 1 {
+            let seq = seen.entry(name.clone()).or_insert(0);
+            *seq += 1;
+            result.push(format!("{name} #{seq}"));
+        } else {
+            result.push(name.clone());
+        }
+    }
+    result
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Public API
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -98,7 +193,6 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
             .server_info
             .as_ref()
             .map(|s| {
-                let hostname = s.hostname.as_deref().unwrap_or("");
                 let os = s.os_version.as_deref().unwrap_or(&s.os);
                 let mem = s
                     .total_memory_mb
@@ -120,35 +214,7 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
                     .as_ref()
                     .map(|r| format!("<br><small>Region: {r}</small>"))
                     .unwrap_or_default();
-                // Derive provider tag from region (e.g. "azure/eastus" → "Azure")
-                let provider = s.region.as_ref().and_then(|r| {
-                    if r.starts_with("azure/") {
-                        Some("Azure")
-                    } else if r.starts_with("aws/") {
-                        Some("AWS")
-                    } else if r.starts_with("gcp/") {
-                        Some("GCP")
-                    } else {
-                        None
-                    }
-                });
-                // Build display name: prefer hostname, but annotate with provider if available
-                let display_name = if hostname.is_empty() || hostname == "unknown" {
-                    // No useful hostname — use provider + OS type
-                    let os_short = if os.contains("Windows") {
-                        "Windows"
-                    } else if os.contains("Ubuntu") {
-                        "Ubuntu"
-                    } else {
-                        "Linux"
-                    };
-                    match provider {
-                        Some(p) => format!("{p} {os_short}"),
-                        None => os_short.to_string(),
-                    }
-                } else {
-                    hostname.to_string()
-                };
+                let display_name = derive_display_name(Some(s), "");
                 format!(
                     "{display_name}{version_badge}<br><small>{os} | {} cores | {mem}</small>{region}",
                     s.cpu_cores
@@ -195,6 +261,9 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
         );
     }
     let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
+
+    // ── Short names for each target (used in headers, charts, observations) ──
+    let short_names = build_target_short_names(runs);
 
     // ── Cross-Target Protocol Comparison table ────────────────────────────────
     // Collect all protocols present in any run (canonical order).
@@ -258,12 +327,11 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
         <th>Metric</th>
 "#
         );
-        for (i, run) in runs.iter().enumerate() {
+        for (i, _run) in runs.iter().enumerate() {
             let _ = writeln!(
                 out,
-                "        <th>Target {} <small>{}</small></th>",
-                i + 1,
-                escape_html(&run.target_url)
+                "        <th>{}</th>",
+                escape_html(&short_names[i])
             );
         }
         let _ = writeln!(out, "      </tr>\n    </thead>\n    <tbody>");
@@ -452,10 +520,10 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
                         let label = primary_metric_label(proto);
                         let word = if is_throughput { "higher" } else { "faster" };
                         observations.push(format!(
-                            "<strong>{proto}</strong> ({label}): Target {} is fastest ({best_v:.2}) \u{2014} \
-                             {diff_pct:.1}% {word} than Target {} ({worst_v:.2})",
-                            best_idx + 1,
-                            worst_idx + 1,
+                            "<strong>{proto}</strong> ({label}): {} is fastest ({best_v:.2}) \u{2014} \
+                             {diff_pct:.1}% {word} than {} ({worst_v:.2})",
+                            short_names[best_idx],
+                            short_names[worst_idx],
                         ));
                     }
                 }
@@ -481,7 +549,7 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
             if net_types.len() >= 2 {
                 let types_summary: Vec<String> = net_types
                     .iter()
-                    .map(|(i, t)| format!("Target {} = {t}", i + 1))
+                    .map(|(i, t)| format!("{} = {t}", short_names[*i]))
                     .collect();
                 let all_same = net_types.iter().all(|(_, t)| *t == net_types[0].1);
                 if all_same {
@@ -515,10 +583,10 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
                     .unwrap();
                 if (worst.1 - best.1) > 0.01 {
                     observations.push(format!(
-                        "Baseline RTT: Target {} lowest ({:.2}ms avg), Target {} highest ({:.2}ms avg) \u{2014} {:.1}ms difference",
-                        best.0 + 1,
+                        "Baseline RTT: {} lowest ({:.2}ms avg), {} highest ({:.2}ms avg) \u{2014} {:.1}ms difference",
+                        short_names[best.0],
                         best.1,
-                        worst.0 + 1,
+                        short_names[worst.0],
                         worst.1,
                         worst.1 - best.1
                     ));
@@ -540,7 +608,7 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
         let _ = writeln!(out, "</section>");
 
         // ── Per-target load time distribution + observations (2-col grid) ────
-        write_multi_target_charts(runs, &mut out);
+        write_multi_target_charts(runs, &short_names, &mut out);
     }
 
     // ── Per-target collapsible sections ───────────────────────────────────────
@@ -548,8 +616,8 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
         let open = if runs.len() <= 2 { " open" } else { "" };
         let _ = write!(
             out,
-            "\n<details class=\"card multi-target-details\"{open}>\n  <summary><strong>Target {}:</strong> {}</summary>\n",
-            i + 1,
+            "\n<details class=\"card multi-target-details\"{open}>\n  <summary><strong>{}:</strong> {}</summary>\n",
+            escape_html(&short_names[i]),
             escape_html(&run.target_url)
         );
         write_run_sections(run, &mut out);
@@ -591,7 +659,7 @@ fn write_html_head(title: &str, css_href: Option<&str>, out: &mut String) {
 
 /// Per-target load time distribution charts + observations in a 2-column grid.
 /// Only rendered when there are multiple targets and at least one has pageload/browser data.
-fn write_multi_target_charts(runs: &[TestRun], out: &mut String) {
+fn write_multi_target_charts(runs: &[TestRun], short_names: &[String], out: &mut String) {
     struct TargetChartData {
         idx: usize,
         url: String,
@@ -682,6 +750,26 @@ fn write_multi_target_charts(runs: &[TestRun], out: &mut String) {
             }
         }
 
+        // pageload1 vs browser1: explain TLS gap
+        let pl1_avg = groups
+            .iter()
+            .find(|(l, _, _)| l == "pageload")
+            .map(|(_, d, _)| d.iter().sum::<f64>() / d.len() as f64);
+        let b1_avg = groups
+            .iter()
+            .find(|(l, _, _)| l == "browser1")
+            .map(|(_, d, _)| d.iter().sum::<f64>() / d.len() as f64);
+        if let (Some(pl1), Some(b1)) = (pl1_avg, b1_avg) {
+            if pl1 > b1 * 1.5 {
+                // More than 50% slower → likely TLS overhead
+                let factor = pl1 / b1;
+                observations.push(format!(
+                    "pageload ({pl1:.0}ms) is {factor:.1}x slower than browser1 ({b1:.0}ms) \u{2014} \
+                     pageload opens 6 HTTPS connections (TLS handshake each), browser1 uses plain HTTP"
+                ));
+            }
+        }
+
         let mut spreads: Vec<(&str, f64)> = Vec::new();
         for (label, data, _) in &groups {
             if data.len() >= 4 {
@@ -706,7 +794,6 @@ fn write_multi_target_charts(runs: &[TestRun], out: &mut String) {
             .server_info
             .as_ref()
             .map(|s| {
-                let hostname = s.hostname.as_deref().unwrap_or("");
                 let os = s.os_version.as_deref().unwrap_or(&s.os);
                 let mem = s
                     .total_memory_mb
@@ -728,33 +815,7 @@ fn write_multi_target_charts(runs: &[TestRun], out: &mut String) {
                     .as_ref()
                     .map(|r| format!(" | {r}"))
                     .unwrap_or_default();
-                // Derive provider from region
-                let provider = s.region.as_ref().and_then(|r| {
-                    if r.starts_with("azure/") {
-                        Some("Azure")
-                    } else if r.starts_with("aws/") {
-                        Some("AWS")
-                    } else if r.starts_with("gcp/") {
-                        Some("GCP")
-                    } else {
-                        None
-                    }
-                });
-                let display_name = if hostname.is_empty() || hostname == "unknown" {
-                    let os_short = if os.contains("Windows") {
-                        "Windows"
-                    } else if os.contains("Ubuntu") {
-                        "Ubuntu"
-                    } else {
-                        "Linux"
-                    };
-                    match provider {
-                        Some(p) => format!("{p} {os_short}"),
-                        None => os_short.to_string(),
-                    }
-                } else {
-                    hostname.to_string()
-                };
+                let display_name = derive_display_name(Some(s), "");
                 format!(
                     "{display_name}{ver} | {os} | {} cores | {mem}{region}",
                     s.cpu_cores
@@ -810,7 +871,7 @@ fn write_multi_target_charts(runs: &[TestRun], out: &mut String) {
                 .iter()
                 .map(|(l, v, c)| (l.as_str(), v.as_slice(), *c))
                 .collect();
-            let title = format!("Target {} \u{2014} {}", t.idx + 1, t.url);
+            let title = format!("{} \u{2014} {}", short_names[t.idx], t.url);
             let svg = svg_boxplot(&title, &group_refs, "ms");
 
             let _ = writeln!(out, "    <div class=\"target-chart-cell\">");
@@ -865,12 +926,12 @@ fn write_multi_target_charts(runs: &[TestRun], out: &mut String) {
                 let _ = writeln!(
                     out,
                     "    <div class=\"target-group-comparison analysis\">\
-                         <strong>Target {} is {:.1}% faster</strong> than Target {} \
+                         <strong>{} is {:.1}% faster</strong> than {} \
                          ({:.1}ms vs {:.1}ms best protocol avg) \u{2014} \
                          RTT difference: {:.1}ms</div>",
-                    best.idx + 1,
+                    short_names[best.idx],
                     pct,
-                    worst.idx + 1,
+                    short_names[worst.idx],
                     best.best_avg_ms,
                     worst.best_avg_ms,
                     (worst.rtt_avg_ms - best.rtt_avg_ms).abs()
@@ -922,17 +983,17 @@ fn write_multi_target_charts(runs: &[TestRun], out: &mut String) {
     <div class="target-group-comparison analysis" style="grid-column:1/-1">
       <h3>LAN Baseline vs Internet Reality</h3>
       <ul>
-        <li>Best LAN: <strong>Target {lan_idx}</strong> &mdash; {lan_ms:.1}ms (RTT {lan_rtt:.2}ms)</li>
-        <li>Best Internet: <strong>Target {inet_idx}</strong> &mdash; {inet_ms:.1}ms (RTT {inet_rtt:.2}ms)</li>
+        <li>Best LAN: <strong>{lan_name}</strong> &mdash; {lan_ms:.1}ms (RTT {lan_rtt:.2}ms)</li>
+        <li>Best Internet: <strong>{inet_name}</strong> &mdash; {inet_ms:.1}ms (RTT {inet_rtt:.2}ms)</li>
         <li>Internet overhead: <strong>+{overhead:.1}ms</strong> ({factor:.1}x slower than LAN baseline)</li>
         <li>The LAN result represents the achievable performance without network latency &mdash;
            the Internet result shows the real-world impact of {rtt_diff:.0}ms RTT + jitter + congestion</li>
       </ul>
     </div>"##,
-            lan_idx = best_lan.idx + 1,
+            lan_name = short_names[best_lan.idx],
             lan_ms = best_lan.best_avg_ms,
             lan_rtt = best_lan.rtt_avg_ms,
-            inet_idx = best_internet.idx + 1,
+            inet_name = short_names[best_internet.idx],
             inet_ms = best_internet.best_avg_ms,
             inet_rtt = best_internet.rtt_avg_ms,
             rtt_diff = best_internet.rtt_avg_ms - best_lan.rtt_avg_ms,
@@ -5769,5 +5830,122 @@ mod tests {
         let html = render_multi(&[r1, r2], None);
         // 0 failures → fail_cls = "ok"
         assert!(html.contains("<td class=\"ok\">0</td>"), "zero failures should use ok class");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Cloud hostname detection & short names
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn is_cloud_internal_hostname_aws_ip_detected() {
+        assert!(super::is_cloud_internal_hostname("ip-172-31-78-2"));
+        assert!(super::is_cloud_internal_hostname("ip-10-0-1-50"));
+    }
+
+    #[test]
+    fn is_cloud_internal_hostname_normal_not_detected() {
+        assert!(!super::is_cloud_internal_hostname("my-vm-01"));
+        assert!(!super::is_cloud_internal_hostname("web-server"));
+        assert!(!super::is_cloud_internal_hostname("turing"));
+    }
+
+    #[test]
+    fn is_cloud_internal_hostname_empty_and_unknown() {
+        assert!(!super::is_cloud_internal_hostname(""));
+        assert!(!super::is_cloud_internal_hostname("unknown"));
+    }
+
+    #[test]
+    fn os_short_label_variants() {
+        assert_eq!(super::os_short_label("Ubuntu 22.04 LTS"), "Ubuntu");
+        assert_eq!(super::os_short_label("Windows Server 2022"), "Windows");
+        assert_eq!(super::os_short_label("Debian GNU/Linux 11"), "Debian");
+        assert_eq!(super::os_short_label("CentOS 8"), "Linux");
+    }
+
+    #[test]
+    fn provider_from_region_detects_clouds() {
+        assert_eq!(super::provider_from_region("azure/eastus"), Some("Azure"));
+        assert_eq!(super::provider_from_region("aws/us-east-1"), Some("AWS"));
+        assert_eq!(super::provider_from_region("gcp/us-central1"), Some("GCP"));
+        assert_eq!(super::provider_from_region("on-prem/dc1"), None);
+    }
+
+    #[test]
+    fn derive_display_name_aws_internal_hostname() {
+        let info = make_host_info(Some("ip-172-31-78-2"), "Ubuntu 22.04 LTS", Some("aws/us-east-1"), None);
+        assert_eq!(super::derive_display_name(Some(&info), "fallback"), "AWS Ubuntu");
+    }
+
+    #[test]
+    fn derive_display_name_normal_hostname_kept() {
+        let info = make_host_info(Some("my-vm"), "Ubuntu 22.04", None, None);
+        assert_eq!(super::derive_display_name(Some(&info), "fallback"), "my-vm");
+    }
+
+    #[test]
+    fn derive_display_name_none_uses_fallback() {
+        assert_eq!(super::derive_display_name(None, "Target 1"), "Target 1");
+    }
+
+    #[test]
+    fn derive_display_name_empty_hostname_with_gcp_windows() {
+        let info = make_host_info(Some(""), "Windows Server 2022", Some("gcp/us-east1"), None);
+        assert_eq!(super::derive_display_name(Some(&info), "fallback"), "GCP Windows");
+    }
+
+    #[test]
+    fn build_target_short_names_deduplicates() {
+        let mut r1 = make_run_with_url("https://a.example.com/");
+        r1.server_info = Some(make_host_info(Some("ip-172-31-1-1"), "Ubuntu 22.04", Some("aws/us-east-1"), None));
+        let mut r2 = make_run_with_url("https://b.example.com/");
+        r2.server_info = Some(make_host_info(Some("ip-172-31-2-2"), "Ubuntu 22.04", Some("aws/us-east-1"), None));
+        let names = super::build_target_short_names(&[r1, r2]);
+        assert_eq!(names[0], "AWS Ubuntu #1");
+        assert_eq!(names[1], "AWS Ubuntu #2");
+    }
+
+    #[test]
+    fn build_target_short_names_unique_no_suffix() {
+        let mut r1 = make_run_with_url("https://a.example.com/");
+        r1.server_info = Some(make_host_info(Some("turing"), "Ubuntu 22.04", None, None));
+        let mut r2 = make_run_with_url("https://b.example.com/");
+        r2.server_info = Some(make_host_info(Some("ip-172-31-1-1"), "Ubuntu 22.04", Some("aws/us-east-1"), None));
+        let names = super::build_target_short_names(&[r1, r2]);
+        assert_eq!(names[0], "turing");
+        assert_eq!(names[1], "AWS Ubuntu");
+    }
+
+    #[test]
+    fn render_multi_uses_short_names_in_cross_target_headers() {
+        let mut r1 = make_run_with_url("https://10.0.0.1:8443/health");
+        r1.server_info = Some(make_host_info(Some("turing"), "Ubuntu 22.04", None, None));
+        r1.attempts.push(make_attempt(Protocol::Http1, true));
+        let mut r2 = make_run_with_url("https://44.211.79.193:8443/health");
+        r2.server_info = Some(make_host_info(Some("ip-172-31-78-2"), "Ubuntu 22.04 LTS", Some("aws/us-east-1"), None));
+        r2.attempts.push(make_attempt(Protocol::Http1, true));
+        let html = render_multi(&[r1, r2], None);
+        // Cross-target headers should use short names, not full URLs
+        assert!(html.contains("<th>turing</th>"), "expected short name 'turing' in header");
+        assert!(html.contains("<th>AWS Ubuntu</th>"), "expected short name 'AWS Ubuntu' in header");
+        // Full URLs should NOT be in the table headers
+        assert!(!html.contains("<th>Target 1 <small>"), "should not have old 'Target N <small>URL' format");
+    }
+
+    #[test]
+    fn render_multi_aws_internal_hostname_shows_provider_name_in_summary() {
+        let mut r1 = make_run_with_url("https://44.211.79.193:8443/health");
+        r1.server_info = Some(make_host_info(Some("ip-172-31-78-2"), "Ubuntu 22.04 LTS", Some("aws/us-east-1"), None));
+        r1.attempts.push(make_attempt(Protocol::Http1, true));
+        let mut r2 = make_run_with_url("https://34.148.238.88:8443/health");
+        r2.server_info = Some(make_host_info(Some(""), "Windows Server 2022", Some("gcp/us-east1"), None));
+        r2.attempts.push(make_attempt(Protocol::Http1, true));
+        let html = render_multi(&[r1, r2], None);
+        // Summary table should show "AWS Ubuntu" not "ip-172-31-78-2" in display name
+        assert!(html.contains("AWS Ubuntu"), "AWS internal hostname should be replaced");
+        // The internal hostname may still appear in the detailed host info card,
+        // but the summary/header display names should use the provider+OS form.
+        // Check the summary row uses the provider name
+        assert!(html.contains("AWS Ubuntu<br>"), "summary display name should be provider+OS");
     }
 }

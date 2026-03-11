@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.7] – 2026-03-11 — HTML report: short target names & cloud hostname detection
+
+### Added
+- **Cloud hostname detection**: AWS internal hostnames (`ip-172-31-*`) now display as "AWS Ubuntu", "AWS Windows", etc.
+- **Short target names**: cross-target comparison headers, SVG chart titles, observations, and collapsible details all use provider+OS names instead of "Target N" with full URLs
+- **Duplicate name disambiguation**: when multiple targets share the same short name (e.g. two AWS Ubuntu), they get `#1`, `#2` suffixes
+- **pageload1 vs browser1 observation**: per-target charts now explain the TLS gap when pageload (HTTPS × 6 connections) is significantly slower than browser1 (plain HTTP)
+- 13 new unit tests for hostname detection, short names, and display name derivation
+
+### Changed
+- Refactored inline display name logic in summary table and chart section into shared helper functions (`derive_display_name`, `is_cloud_internal_hostname`, `os_short_label`, `provider_from_region`)
+
+---
+
 ## [0.13.6] – 2026-03-10 — Multi-database abstraction layer
 
 ### Added
