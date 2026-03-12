@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.12] – 2026-03-12 — HTML report version display + stack data isolation in summaries
+
+### Added
+- **Version display in report header**: Client and server versions shown prominently at the top of both single-target and multi-target HTML reports
+- **Stack probe badge in All Attempts**: Stack probe rows now show `[nginx]` or `[iis]` badge next to the protocol name for visual distinction
+
+### Fixed
+- **Summary counts included stack probes**: Multi-target summary table and per-target Run Summary showed inflated attempt/success/fail counts (e.g. 120 instead of 60) because they included HTTP stack probe attempts — now filtered to show only endpoint data, with a `(+ N stack probes)` note when applicable
+
+---
+
 ## [0.13.11] – 2026-03-12 — Cloud nginx setup in deploy-config + boxplot fix
 
 ### Fixed
