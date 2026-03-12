@@ -3559,7 +3559,7 @@ _remote_setup_nginx() {
     fi
     # We pipe the step_setup_nginx function body over SSH
     # But it's cleaner to run the main commands inline
-    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "${ssh_user}@${ip}" bash -s < /dev/null <<'NGINX_SSH'
+    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "${ssh_user}@${ip}" bash -s <<'NGINX_SSH'
 set -e
 export DEBIAN_FRONTEND=noninteractive
 
@@ -3681,7 +3681,7 @@ _gcp_setup_nginx() {
     else
         print_info "Installing and configuring nginx via gcloud SSH…"
     fi
-    _gcp_ssh_run "$name" "bash -s" < /dev/null <<'NGINX_GCP'
+    _gcp_ssh_run "$name" "bash -s" <<'NGINX_GCP'
 set -e
 export DEBIAN_FRONTEND=noninteractive
 # Install nginx mainline from nginx.org (1.27+ with HTTP/3 support)
