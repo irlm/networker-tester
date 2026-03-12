@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.13] – 2026-03-12 — Stack comparison: filter failed probes
+
+### Fixed
+- **HTTP Stack Comparison false positives**: Stack probes returning HTTP 400/404 (e.g. nginx pageload3 without proper static site) were counted as successful in the comparison table — now only successful attempts (a.success) contribute to stack stats; failed protocols correctly show "not supported"
+
+---
+
 ## [0.13.12] – 2026-03-12 — HTML report version display + stack data isolation in summaries
 
 ### Added
