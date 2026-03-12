@@ -1829,7 +1829,9 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
                         stack_attempts
                             .iter()
                             .filter(|a| {
-                                a.http_stack.as_deref() == Some(sn) && &a.protocol == proto
+                                a.http_stack.as_deref() == Some(sn)
+                                    && &a.protocol == proto
+                                    && a.success
                             })
                             .filter_map(|a| {
                                 a.page_load
