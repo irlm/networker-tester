@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.13.10] – 2026-03-12 — Cloud nginx setup in deploy-config + boxplot fix
+## [0.13.11] – 2026-03-12 — Cloud nginx setup in deploy-config + boxplot fix
 
 ### Fixed
 - **Cloud deploy missing nginx/IIS setup**: `deploy_from_config()` now installs nginx (with HTTP/3) and acknowledges IIS on Azure, AWS, and GCP endpoints when `http_stacks` is specified — previously only local and LAN providers ran the setup
