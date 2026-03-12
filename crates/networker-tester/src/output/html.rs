@@ -151,15 +151,29 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
 
     // ── Multi-target page header ──────────────────────────────────────────────
     let started = runs[0].started_at.format("%Y-%m-%d %H:%M:%S UTC");
+    let client_ver = &runs[0].client_version;
+    let server_ver_first = runs
+        .iter()
+        .find_map(|r| {
+            r.attempts.iter().find_map(|a| {
+                a.server_timing
+                    .as_ref()
+                    .and_then(|st| st.server_version.as_deref())
+            })
+        })
+        .unwrap_or("—");
     let _ = write!(
         out,
         r#"
 <header class="page-header">
   <h1>Networker Tester</h1>
   <p class="subtitle">{n} targets compared &bull; {started}</p>
+  <p class="subtitle"><strong>Client</strong> v{client_ver} &bull; <strong>Server</strong> v{server_ver}</p>
 </header>
 "#,
         n = runs.len(),
+        client_ver = escape_html(client_ver),
+        server_ver = escape_html(server_ver_first),
     );
 
     // ── Multi-Target Summary table ────────────────────────────────────────────
@@ -188,7 +202,6 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
                 )
             })
             .unwrap_or_else(|| "—".into());
-        let fail = run.failure_count();
         let server_summary = run
             .server_info
             .as_ref()
@@ -238,6 +251,9 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
             .as_ref()
             .map(|b| format!("{:.2} ms", b.rtt_avg_ms))
             .unwrap_or_else(|| "—".into());
+        let ep_attempts: Vec<_> = run.attempts.iter().filter(|a| a.http_stack.is_none()).collect();
+        let ep_ok = ep_attempts.iter().filter(|a| a.success).count();
+        let ep_fail = ep_attempts.len() - ep_ok;
         let _ = write!(
             out,
             r#"      <tr>
@@ -255,9 +271,10 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
             idx = i + 1,
             url = escape_html(&run.target_url),
             server = server_summary,
-            attempts = run.attempts.len(),
-            ok = run.success_count(),
-            fail_cls = if fail > 0 { "err" } else { "ok" },
+            attempts = ep_attempts.len(),
+            ok = ep_ok,
+            fail = ep_fail,
+            fail_cls = if ep_fail > 0 { "err" } else { "ok" },
         );
     }
     let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
@@ -1077,16 +1094,28 @@ fn write_host_info_card(label: &str, info: &HostInfo, out: &mut String) {
 
 fn write_run_sections(run: &TestRun, out: &mut String) {
     // ── Header ────────────────────────────────────────────────────────────────
+    let server_ver_header = run
+        .attempts
+        .iter()
+        .find_map(|a| {
+            a.server_timing
+                .as_ref()
+                .and_then(|st| st.server_version.as_deref())
+        })
+        .unwrap_or("—");
     let _ = write!(
         out,
         r#"
 <header class="page-header">
   <h1>Networker Tester</h1>
   <p class="subtitle">Run <code>{run_id}</code> &bull; {started}</p>
+  <p class="subtitle"><strong>Client</strong> v{client_ver} &bull; <strong>Server</strong> v{server_ver}</p>
 </header>
 "#,
         run_id = run.run_id,
         started = run.started_at.format("%Y-%m-%d %H:%M:%S UTC"),
+        client_ver = escape_html(&run.client_version),
+        server_ver = escape_html(server_ver_header),
     );
 
     // ── Summary card ──────────────────────────────────────────────────────────
@@ -1110,6 +1139,15 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
         })
         .unwrap_or("—");
 
+    let ep_attempts: Vec<_> = run.attempts.iter().filter(|a| a.http_stack.is_none()).collect();
+    let ep_ok = ep_attempts.iter().filter(|a| a.success).count();
+    let ep_fail = ep_attempts.len() - ep_ok;
+    let stack_count = run.attempts.len() - ep_attempts.len();
+    let stack_note = if stack_count > 0 {
+        format!(" <small>(+ {stack_count} stack probes)</small>")
+    } else {
+        String::new()
+    };
     let _ = write!(
         out,
         r##"
@@ -1118,7 +1156,7 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
   <dl class="summary-grid">
     <dt>Target</dt>          <dd><a href="{url}">{url}</a></dd>
     <dt>Modes</dt>           <dd>{modes}</dd>
-    <dt>Attempts</dt>        <dd>{total}</dd>
+    <dt>Attempts</dt>        <dd>{total}{stack_note}</dd>
     <dt>Succeeded</dt>       <dd class="ok">{ok}</dd>
     <dt>Failed</dt>          <dd class="{fail_cls}">{fail}</dd>
     <dt>Total Duration</dt>  <dd>{dur}</dd>
@@ -1129,10 +1167,11 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
 "##,
         url = escape_html(&run.target_url),
         modes = run.modes.join(", "),
-        total = run.attempts.len(),
-        ok = run.success_count(),
-        fail = run.failure_count(),
-        fail_cls = if run.failure_count() > 0 { "err" } else { "ok" },
+        total = ep_attempts.len(),
+        stack_note = stack_note,
+        ok = ep_ok,
+        fail = ep_fail,
+        fail_cls = if ep_fail > 0 { "err" } else { "ok" },
         dur = duration_s,
         client_ver = escape_html(&run.client_version),
         server_ver = escape_html(server_ver),
@@ -2885,10 +2924,15 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
     // ── Individual attempts ───────────────────────────────────────────────────
     {
         let total_attempts = run.attempts.len();
-        let succeeded = run.success_count();
-        let failed = run.failure_count();
+        let succeeded = run.attempts.iter().filter(|a| a.success).count();
+        let failed = total_attempts - succeeded;
         let open_attr = if total_attempts <= 20 { " open" } else { "" };
-        let summary_meta = format!("{succeeded} succeeded · {failed} failed");
+        let stack_count = run.attempts.iter().filter(|a| a.http_stack.is_some()).count();
+        let summary_meta = if stack_count > 0 {
+            format!("{succeeded} succeeded · {failed} failed · {stack_count} stack probes")
+        } else {
+            format!("{succeeded} succeeded · {failed} failed")
+        };
         let _ = write!(
             out,
             r#"
@@ -3280,6 +3324,11 @@ fn append_attempt_row(out: &mut String, a: &RequestAttempt) {
         })
         .unwrap_or_else(|| "—".into());
 
+    let proto_label = if let Some(ref stack) = a.http_stack {
+        format!("{} <small style=\"color:#888\">[{}]</small>", a.protocol, escape_html(stack))
+    } else {
+        a.protocol.to_string()
+    };
     let _ = write!(
         out,
         r#"      <tr class="{row_cls}">
@@ -3291,7 +3340,7 @@ fn append_attempt_row(out: &mut String, a: &RequestAttempt) {
 "#,
         row_cls = if a.success { "" } else { "row-err" },
         seq = a.sequence_num,
-        proto = a.protocol,
+        proto = proto_label,
         status = status_cell,
         dns = dns_ms,
         tcp = tcp_ms,
