@@ -3314,29 +3314,51 @@ step_setup_nginx() {
         return 1
     fi
 
-    # Install nginx (mainline from nginx.org for HTTP/3 support)
-    print_info "Installing nginx (mainline with HTTP/3)…"
-    case "$pkg_mgr" in
-        apt-get)
-            # Add official nginx.org repo for mainline (1.27+ with HTTP/3)
-            if ! apt-cache policy nginx 2>/dev/null | grep -q "nginx.org"; then
-                sudo apt-get install -y curl gnupg2 ca-certificates lsb-release ubuntu-keyring < /dev/null
-                curl -fsSL https://nginx.org/keys/nginx_signing.key \
-                    | gpg --dearmor | sudo tee /usr/share/keyrings/nginx-archive-keyring.gpg > /dev/null
-                echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] \
+    # Check if nginx is already installed and its version
+    local nginx_installed=false nginx_ver="" needs_upgrade=false
+    if command -v nginx &>/dev/null; then
+        nginx_installed=true
+        nginx_ver="$(nginx -v 2>&1 | sed 's/.*nginx\///' | cut -d. -f1,2)"
+        local maj="${nginx_ver%%.*}" min="${nginx_ver#*.}"
+        if [[ "$maj" -lt 1 ]] || { [[ "$maj" -eq 1 ]] && [[ "${min%%.*}" -lt 25 ]]; }; then
+            print_info "nginx $nginx_ver lacks HTTP/3 — upgrading to mainline…"
+            needs_upgrade=true
+        else
+            print_ok "nginx $nginx_ver supports HTTP/3 — skipping upgrade"
+        fi
+    else
+        needs_upgrade=true
+    fi
+
+    if $nginx_installed && ! $needs_upgrade; then
+        print_warn "Adding networker config alongside existing nginx sites."
+        print_info "Existing configs are untouched. Networker uses ports 8081/8444 only."
+    fi
+
+    # Install or upgrade nginx only if needed
+    if $needs_upgrade; then
+        print_info "Installing nginx (mainline with HTTP/3)…"
+        case "$pkg_mgr" in
+            apt-get)
+                # Add official nginx.org repo for mainline (1.25+ with HTTP/3)
+                if ! apt-cache policy nginx 2>/dev/null | grep -q "nginx.org"; then
+                    sudo apt-get install -y curl gnupg2 ca-certificates lsb-release ubuntu-keyring < /dev/null
+                    curl -fsSL https://nginx.org/keys/nginx_signing.key \
+                        | gpg --dearmor | sudo tee /usr/share/keyrings/nginx-archive-keyring.gpg > /dev/null
+                    echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] \
 http://nginx.org/packages/mainline/ubuntu $(lsb_release -cs) nginx" \
-                    | sudo tee /etc/apt/sources.list.d/nginx.list > /dev/null
-                # Pin nginx.org packages over distro ones
-                printf 'Package: *\nPin: origin nginx.org\nPin-Priority: 900\n' \
-                    | sudo tee /etc/apt/preferences.d/99nginx > /dev/null
-            fi
-            sudo apt-get update -qq && sudo apt-get install -y nginx < /dev/null
-            ;;
-        dnf)      sudo dnf install -y nginx ;;
-        pacman)   sudo pacman -S --noconfirm nginx ;;
-        zypper)   sudo zypper install -y nginx ;;
-        apk)      sudo apk add nginx ;;
-    esac < /dev/null
+                        | sudo tee /etc/apt/sources.list.d/nginx.list > /dev/null
+                    printf 'Package: *\nPin: origin nginx.org\nPin-Priority: 900\n' \
+                        | sudo tee /etc/apt/preferences.d/99nginx > /dev/null
+                fi
+                sudo apt-get update -qq && sudo apt-get install -y nginx < /dev/null
+                ;;
+            dnf)      sudo dnf install -y nginx ;;
+            pacman)   sudo pacman -S --noconfirm nginx ;;
+            zypper)   sudo zypper install -y nginx ;;
+            apk)      sudo apk add nginx ;;
+        esac < /dev/null
+    fi
 
     # Generate static test site
     local site_root="/var/www/networker"
@@ -3367,10 +3389,15 @@ http://nginx.org/packages/mainline/ubuntu $(lsb_release -cs) nginx" \
         -addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:::1,IP:${ep_ip}" \
         2>/dev/null < /dev/null
 
-    # Write nginx config
-    sudo tee /etc/nginx/sites-available/networker > /dev/null <<'NGINX_CONF'
+    # Write nginx config to conf.d (safe: doesn't touch existing sites)
+    sudo mkdir -p /etc/nginx/conf.d
+    if [[ -f /etc/nginx/conf.d/networker.conf ]]; then
+        sudo cp /etc/nginx/conf.d/networker.conf /etc/nginx/conf.d/networker.conf.bak
+    fi
+    sudo tee /etc/nginx/conf.d/networker.conf > /dev/null <<'NGINX_CONF'
 # Networker HTTP stack comparison — nginx
 # Serves static test page for fair comparison with networker-endpoint and IIS.
+# Uses non-standard ports (8081/8444) to avoid conflicts with existing sites.
 
 server {
     listen 8081;
@@ -3413,22 +3440,22 @@ server {
 }
 NGINX_CONF
 
-    # Enable site
-    if [[ -d /etc/nginx/sites-enabled ]]; then
-        sudo ln -sf /etc/nginx/sites-available/networker /etc/nginx/sites-enabled/networker
-        # Remove default site to avoid port 80 conflicts
-        sudo rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
-    elif [[ -d /etc/nginx/conf.d ]]; then
-        sudo cp /etc/nginx/sites-available/networker /etc/nginx/conf.d/networker.conf
-    fi
-
-    # Test and restart
-    if sudo nginx -t 2>/dev/null; then
+    # Test config, rollback on failure, then restart
+    if sudo nginx -t 2>&1; then
         sudo systemctl enable nginx 2>/dev/null || true
         sudo systemctl restart nginx
         print_ok "nginx serving test page on ports 8081 (HTTP) / 8444 (HTTPS)"
     else
-        print_warn "nginx config test failed — check /etc/nginx/sites-available/networker"
+        print_warn "nginx config test failed — rolling back"
+        if [[ -f /etc/nginx/conf.d/networker.conf.bak ]]; then
+            sudo mv /etc/nginx/conf.d/networker.conf.bak /etc/nginx/conf.d/networker.conf
+            sudo nginx -t 2>/dev/null && sudo systemctl reload nginx
+            print_info "Rolled back to previous networker.conf"
+        else
+            sudo rm -f /etc/nginx/conf.d/networker.conf
+            sudo nginx -t 2>/dev/null && sudo systemctl reload nginx
+            print_info "Removed networker.conf (no previous version)"
+        fi
         return 1
     fi
 }
@@ -3563,18 +3590,34 @@ _remote_setup_nginx() {
 set -e
 export DEBIAN_FRONTEND=noninteractive
 
-# Install nginx mainline from nginx.org (1.27+ with HTTP/3 support)
-if ! apt-cache policy nginx 2>/dev/null | grep -q "nginx.org"; then
-    sudo apt-get install -y curl gnupg2 ca-certificates lsb-release ubuntu-keyring < /dev/null
-    curl -fsSL https://nginx.org/keys/nginx_signing.key \
-        | gpg --dearmor | sudo tee /usr/share/keyrings/nginx-archive-keyring.gpg > /dev/null
-    echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] \
-http://nginx.org/packages/mainline/ubuntu $(lsb_release -cs) nginx" \
-        | sudo tee /etc/apt/sources.list.d/nginx.list > /dev/null
-    printf 'Package: *\nPin: origin nginx.org\nPin-Priority: 900\n' \
-        | sudo tee /etc/apt/preferences.d/99nginx > /dev/null
+# Check existing nginx version — only upgrade if < 1.25 (no HTTP/3)
+needs_upgrade=false
+if command -v nginx >/dev/null 2>&1; then
+    nginx_ver="$(nginx -v 2>&1 | sed 's/.*nginx\///' | cut -d. -f1,2)"
+    maj="${nginx_ver%%.*}"; min="${nginx_ver#*.}"; min="${min%%.*}"
+    if [ "$maj" -lt 1 ] || { [ "$maj" -eq 1 ] && [ "$min" -lt 25 ]; }; then
+        echo ">> nginx $nginx_ver lacks HTTP/3 — upgrading to mainline"
+        needs_upgrade=true
+    else
+        echo ">> nginx $nginx_ver supports HTTP/3 — adding config alongside existing sites"
+    fi
+else
+    needs_upgrade=true
 fi
-sudo apt-get update -qq && sudo apt-get install -y nginx < /dev/null
+
+if $needs_upgrade; then
+    if ! apt-cache policy nginx 2>/dev/null | grep -q "nginx.org"; then
+        sudo apt-get install -y curl gnupg2 ca-certificates lsb-release ubuntu-keyring < /dev/null
+        curl -fsSL https://nginx.org/keys/nginx_signing.key \
+            | gpg --dearmor | sudo tee /usr/share/keyrings/nginx-archive-keyring.gpg > /dev/null
+        echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] \
+http://nginx.org/packages/mainline/ubuntu $(lsb_release -cs) nginx" \
+            | sudo tee /etc/apt/sources.list.d/nginx.list > /dev/null
+        printf 'Package: *\nPin: origin nginx.org\nPin-Priority: 900\n' \
+            | sudo tee /etc/apt/preferences.d/99nginx > /dev/null
+    fi
+    sudo apt-get update -qq && sudo apt-get install -y nginx < /dev/null
+fi
 
 # Generate static site
 site_root="/var/www/networker"
@@ -3596,8 +3639,12 @@ sudo openssl req -x509 -newkey rsa:2048 \
     -days 365 -nodes \
     -subj "/CN=localhost" 2>/dev/null < /dev/null
 
-# Nginx config
-sudo tee /etc/nginx/sites-available/networker > /dev/null <<'EOF'
+# Write config to conf.d (safe: doesn't touch existing sites)
+sudo mkdir -p /etc/nginx/conf.d
+if [ -f /etc/nginx/conf.d/networker.conf ]; then
+    sudo cp /etc/nginx/conf.d/networker.conf /etc/nginx/conf.d/networker.conf.bak
+fi
+sudo tee /etc/nginx/conf.d/networker.conf > /dev/null <<'EOF'
 server {
     listen 8081;
     server_name _;
@@ -3622,17 +3669,24 @@ server {
 }
 EOF
 
-# nginx.org mainline uses /etc/nginx/conf.d/ by default
-if [ -d /etc/nginx/sites-enabled ]; then
-    sudo ln -sf /etc/nginx/sites-available/networker /etc/nginx/sites-enabled/networker
-    sudo rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
-elif [ -d /etc/nginx/conf.d ]; then
-    sudo cp /etc/nginx/sites-available/networker /etc/nginx/conf.d/networker.conf
-    sudo rm -f /etc/nginx/conf.d/default.conf 2>/dev/null || true
+# Test config — rollback on failure
+if sudo nginx -t 2>&1; then
+    sudo systemctl enable nginx 2>/dev/null || true
+    sudo systemctl restart nginx
+    echo "nginx configured on ports 8081/8444 (HTTP/3 enabled)"
+else
+    echo ">> ERROR: nginx -t failed — rolling back"
+    if [ -f /etc/nginx/conf.d/networker.conf.bak ]; then
+        sudo mv /etc/nginx/conf.d/networker.conf.bak /etc/nginx/conf.d/networker.conf
+        sudo nginx -t 2>/dev/null && sudo systemctl reload nginx
+        echo ">> Rolled back to previous networker.conf"
+    else
+        sudo rm -f /etc/nginx/conf.d/networker.conf
+        sudo nginx -t 2>/dev/null && sudo systemctl reload nginx
+        echo ">> Removed networker.conf (no previous version)"
+    fi
+    exit 1
 fi
-
-sudo nginx -t 2>/dev/null && sudo systemctl enable nginx && sudo systemctl restart nginx
-echo "nginx configured on ports 8081/8444 (HTTP/3 enabled)"
 NGINX_SSH
 
     # Verify
@@ -3684,18 +3738,36 @@ _gcp_setup_nginx() {
     _gcp_ssh_run "$name" "bash -s" <<'NGINX_GCP'
 set -e
 export DEBIAN_FRONTEND=noninteractive
-# Install nginx mainline from nginx.org (1.27+ with HTTP/3 support)
-if ! apt-cache policy nginx 2>/dev/null | grep -q "nginx.org"; then
-    sudo apt-get install -y curl gnupg2 ca-certificates lsb-release ubuntu-keyring < /dev/null
-    curl -fsSL https://nginx.org/keys/nginx_signing.key \
-        | gpg --dearmor | sudo tee /usr/share/keyrings/nginx-archive-keyring.gpg > /dev/null
-    echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] \
-http://nginx.org/packages/mainline/ubuntu $(lsb_release -cs) nginx" \
-        | sudo tee /etc/apt/sources.list.d/nginx.list > /dev/null
-    printf 'Package: *\nPin: origin nginx.org\nPin-Priority: 900\n' \
-        | sudo tee /etc/apt/preferences.d/99nginx > /dev/null
+
+# Check existing nginx version — only upgrade if < 1.25 (no HTTP/3)
+needs_upgrade=false
+if command -v nginx >/dev/null 2>&1; then
+    nginx_ver="$(nginx -v 2>&1 | sed 's/.*nginx\///' | cut -d. -f1,2)"
+    maj="${nginx_ver%%.*}"; min="${nginx_ver#*.}"; min="${min%%.*}"
+    if [ "$maj" -lt 1 ] || { [ "$maj" -eq 1 ] && [ "$min" -lt 25 ]; }; then
+        echo ">> nginx $nginx_ver lacks HTTP/3 — upgrading to mainline"
+        needs_upgrade=true
+    else
+        echo ">> nginx $nginx_ver supports HTTP/3 — adding config alongside existing sites"
+    fi
+else
+    needs_upgrade=true
 fi
-sudo apt-get update -qq && sudo apt-get install -y nginx < /dev/null
+
+if $needs_upgrade; then
+    if ! apt-cache policy nginx 2>/dev/null | grep -q "nginx.org"; then
+        sudo apt-get install -y curl gnupg2 ca-certificates lsb-release ubuntu-keyring < /dev/null
+        curl -fsSL https://nginx.org/keys/nginx_signing.key \
+            | gpg --dearmor | sudo tee /usr/share/keyrings/nginx-archive-keyring.gpg > /dev/null
+        echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] \
+http://nginx.org/packages/mainline/ubuntu $(lsb_release -cs) nginx" \
+            | sudo tee /etc/apt/sources.list.d/nginx.list > /dev/null
+        printf 'Package: *\nPin: origin nginx.org\nPin-Priority: 900\n' \
+            | sudo tee /etc/apt/preferences.d/99nginx > /dev/null
+    fi
+    sudo apt-get update -qq && sudo apt-get install -y nginx < /dev/null
+fi
+
 site_root="/var/www/networker"
 sudo mkdir -p "$site_root"
 ep_bin="/usr/local/bin/networker-endpoint"
@@ -3711,7 +3783,13 @@ sudo openssl req -x509 -newkey rsa:2048 \
     -keyout /etc/nginx/ssl/networker.key \
     -out /etc/nginx/ssl/networker.crt \
     -days 365 -nodes -subj "/CN=localhost" 2>/dev/null < /dev/null
-sudo tee /etc/nginx/sites-available/networker > /dev/null <<'EOF'
+
+# Write config to conf.d (safe: doesn't touch existing sites)
+sudo mkdir -p /etc/nginx/conf.d
+if [ -f /etc/nginx/conf.d/networker.conf ]; then
+    sudo cp /etc/nginx/conf.d/networker.conf /etc/nginx/conf.d/networker.conf.bak
+fi
+sudo tee /etc/nginx/conf.d/networker.conf > /dev/null <<'EOF'
 server {
     listen 8081; server_name _;
     root /var/www/networker; index index.html;
@@ -3732,15 +3810,24 @@ server {
     location ~* \.bin$ { default_type application/octet-stream; }
 }
 EOF
-if [ -d /etc/nginx/sites-enabled ]; then
-    sudo ln -sf /etc/nginx/sites-available/networker /etc/nginx/sites-enabled/networker
-    sudo rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
-elif [ -d /etc/nginx/conf.d ]; then
-    sudo cp /etc/nginx/sites-available/networker /etc/nginx/conf.d/networker.conf
-    sudo rm -f /etc/nginx/conf.d/default.conf 2>/dev/null || true
+
+if sudo nginx -t 2>&1; then
+    sudo systemctl enable nginx 2>/dev/null || true
+    sudo systemctl restart nginx
+    echo "nginx configured on ports 8081/8444 (HTTP/3 enabled)"
+else
+    echo ">> ERROR: nginx -t failed — rolling back"
+    if [ -f /etc/nginx/conf.d/networker.conf.bak ]; then
+        sudo mv /etc/nginx/conf.d/networker.conf.bak /etc/nginx/conf.d/networker.conf
+        sudo nginx -t 2>/dev/null && sudo systemctl reload nginx
+        echo ">> Rolled back to previous networker.conf"
+    else
+        sudo rm -f /etc/nginx/conf.d/networker.conf
+        sudo nginx -t 2>/dev/null && sudo systemctl reload nginx
+        echo ">> Removed networker.conf (no previous version)"
+    fi
+    exit 1
 fi
-sudo nginx -t 2>/dev/null && sudo systemctl enable nginx && sudo systemctl restart nginx
-echo "nginx configured on ports 8081/8444 (HTTP/3 enabled)"
 NGINX_GCP
 
     sleep 2
