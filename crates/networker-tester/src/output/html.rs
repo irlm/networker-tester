@@ -3357,7 +3357,7 @@ fn svg_boxplot(title: &str, groups: &[(&str, &[f64], &str)], unit: &str) -> Stri
 
     let rows: Vec<BoxRow> = groups
         .iter()
-        .filter(|(_, v, _)| v.len() >= 4)
+        .filter(|(_, v, _)| v.len() >= 2)
         .map(|(label, vals, color)| {
             let mut sorted = vals.to_vec();
             sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -5799,10 +5799,10 @@ mod tests {
 
     #[test]
     fn svg_boxplot_too_few_values_skipped() {
-        // Groups with < 4 values are skipped per the code
-        let values = vec![1.0f64, 2.0, 3.0]; // only 3 points
+        // Groups with < 2 values are skipped per the code
+        let values = vec![1.0f64]; // only 1 point
         let result = svg_boxplot("title", &[("label", &values, "#red")], "ms");
-        assert!(result.is_empty(), "fewer than 4 values should produce empty svg");
+        assert!(result.is_empty(), "fewer than 2 values should produce empty svg");
     }
 
     #[test]
