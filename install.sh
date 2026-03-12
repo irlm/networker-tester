@@ -7408,14 +7408,83 @@ deploy_from_config() {
                 step_check_azure_prereqs
                 step_azure_deploy_endpoint
                 DEPLOY_EP_IPS[$i]="$AZURE_ENDPOINT_IP"
+                # Set up http_stacks requested for this Azure endpoint
+                local ep_stacks="${DEPLOY_EP_HTTP_STACKS[$i]}"
+                if [[ -n "$ep_stacks" ]]; then
+                    IFS=',' read -ra _az_stacks <<< "$ep_stacks"
+                    for _ls in "${_az_stacks[@]}"; do
+                        case "$_ls" in
+                            nginx)
+                                if [[ "$AZURE_ENDPOINT_OS" != "windows" ]]; then
+                                    _remote_setup_nginx "$AZURE_ENDPOINT_IP" "azureuser"
+                                else
+                                    print_warn "Skipping nginx setup on Azure Windows"
+                                fi
+                                ;;
+                            iis)
+                                if [[ "$AZURE_ENDPOINT_OS" == "windows" ]]; then
+                                    print_info "IIS is set up during Windows endpoint deploy"
+                                else
+                                    print_warn "Skipping IIS setup on Azure Linux"
+                                fi
+                                ;;
+                        esac
+                    done
+                fi
                 ;;
             aws)
                 step_aws_deploy_endpoint
                 DEPLOY_EP_IPS[$i]="$AWS_ENDPOINT_IP"
+                # Set up http_stacks requested for this AWS endpoint
+                local ep_stacks="${DEPLOY_EP_HTTP_STACKS[$i]}"
+                if [[ -n "$ep_stacks" ]]; then
+                    IFS=',' read -ra _aws_stacks <<< "$ep_stacks"
+                    for _ls in "${_aws_stacks[@]}"; do
+                        case "$_ls" in
+                            nginx)
+                                if [[ "${AWS_ENDPOINT_OS:-linux}" != "windows" ]]; then
+                                    _remote_setup_nginx "$AWS_ENDPOINT_IP" "ubuntu"
+                                else
+                                    print_warn "Skipping nginx setup on AWS Windows"
+                                fi
+                                ;;
+                            iis)
+                                if [[ "${AWS_ENDPOINT_OS:-linux}" == "windows" ]]; then
+                                    print_info "IIS is set up during Windows endpoint deploy"
+                                else
+                                    print_warn "Skipping IIS setup on AWS Linux"
+                                fi
+                                ;;
+                        esac
+                    done
+                fi
                 ;;
             gcp)
                 step_gcp_deploy_endpoint
                 DEPLOY_EP_IPS[$i]="$GCP_ENDPOINT_IP"
+                # Set up http_stacks requested for this GCP endpoint
+                local ep_stacks="${DEPLOY_EP_HTTP_STACKS[$i]}"
+                if [[ -n "$ep_stacks" ]]; then
+                    IFS=',' read -ra _gcp_stacks <<< "$ep_stacks"
+                    for _ls in "${_gcp_stacks[@]}"; do
+                        case "$_ls" in
+                            nginx)
+                                if [[ "$GCP_ENDPOINT_OS" != "windows" ]]; then
+                                    _gcp_setup_nginx "$GCP_ENDPOINT_NAME" "$GCP_ENDPOINT_IP"
+                                else
+                                    print_warn "Skipping nginx setup on GCP Windows"
+                                fi
+                                ;;
+                            iis)
+                                if [[ "$GCP_ENDPOINT_OS" == "windows" ]]; then
+                                    print_info "IIS is set up during Windows endpoint deploy"
+                                else
+                                    print_warn "Skipping IIS setup on GCP Linux"
+                                fi
+                                ;;
+                        esac
+                    done
+                fi
                 ;;
         esac
 
