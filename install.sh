@@ -3343,7 +3343,7 @@ step_setup_nginx() {
             apt-get)
                 # Add official nginx.org repo for mainline (1.25+ with HTTP/3)
                 if ! apt-cache policy nginx 2>/dev/null | grep -q "nginx.org"; then
-                    sudo apt-get install -y curl gnupg2 ca-certificates lsb-release ubuntu-keyring < /dev/null
+                    sudo apt-get install -y curl gnupg ca-certificates lsb-release ubuntu-keyring < /dev/null
                     curl -fsSL https://nginx.org/keys/nginx_signing.key \
                         | gpg --dearmor | sudo tee /usr/share/keyrings/nginx-archive-keyring.gpg > /dev/null
                     echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] \
@@ -3721,7 +3721,7 @@ fi
 
 if $needs_upgrade; then
     if ! apt-cache policy nginx 2>/dev/null | grep -q "nginx.org"; then
-        sudo apt-get install -y curl gnupg2 ca-certificates lsb-release ubuntu-keyring < /dev/null
+        sudo apt-get install -y curl gnupg ca-certificates lsb-release ubuntu-keyring < /dev/null
         curl -fsSL https://nginx.org/keys/nginx_signing.key \
             | gpg --dearmor | sudo tee /usr/share/keyrings/nginx-archive-keyring.gpg > /dev/null
         echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] \
@@ -3925,7 +3925,7 @@ fi
 
 if $needs_upgrade; then
     if ! apt-cache policy nginx 2>/dev/null | grep -q "nginx.org"; then
-        sudo apt-get install -y curl gnupg2 ca-certificates lsb-release ubuntu-keyring < /dev/null
+        sudo apt-get install -y curl gnupg ca-certificates lsb-release ubuntu-keyring < /dev/null
         curl -fsSL https://nginx.org/keys/nginx_signing.key \
             | gpg --dearmor | sudo tee /usr/share/keyrings/nginx-archive-keyring.gpg > /dev/null
         echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] \
