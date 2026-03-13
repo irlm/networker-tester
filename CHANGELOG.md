@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.16] – 2026-03-13 — Stack column in All Attempts & TCP Stats, chart label suffixes
+
+### Added
+- **Stack column in All Attempts table** — dedicated column shows "endpoint", "nginx", or "iis" for each attempt row (only when HTTP stacks are present)
+- **Stack column in TCP Stats table** — kernel-level TCP stats are clearly attributed to the correct stack
+- **Chart label suffixes** — SVG chart data labels now include the stack name (e.g. "browser1 endpoint", "pageload3 nginx") for unambiguous identification
+
+### Removed
+- Inline `[nginx]` tag in Protocol column — replaced by the dedicated Stack column
+
+---
+
 ## [0.13.15] – 2026-03-13 — Independent stack report sections, nginx proxy, IIS FQDN, cloud FQDN support
 
 ### Changed
