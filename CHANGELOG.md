@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.15] – 2026-03-13 — Independent stack report sections, nginx proxy, IIS FQDN, cloud FQDN support
+
+### Changed
+- **HTML report: independent stack sections** — each HTTP stack (nginx, IIS) now renders its own full set of sections (timing breakdown, statistics, protocol comparisons, browser results, charts & analysis) instead of a combined comparison table. Stack data is never mixed with endpoint data.
+
+### Added
+- **nginx proxy_pass for dynamic paths** — nginx configs in install.sh now proxy `/page` and `/asset` requests to the endpoint, enabling pageload probes through nginx
+- **IIS setup with URL Rewrite + ARR** — install.sh configures IIS with Application Request Routing proxy rules, self-signed certs, HTTP/3 registry keys, and reboot-wait-verify flow
+- **FQDN support for cloud deployments** — Azure VMs get DNS labels (`.cloudapp.azure.com`), AWS uses `PublicDnsName`; config generation prefers FQDN over IP for target URLs
+- **IIS HTTP/3 via FQDN+SNI binding** — hostname-based SSL binding (`sslFlags=1`) enables QUIC/HTTP3 on IIS (requires SNI per Microsoft spec)
+
+### Fixed
+- **Browser Results filter bug** — browser results section was not filtering by `http_stack`, causing stack browser probes to leak into endpoint browser results
+- **Stack URL rewriting preserves hostname** — `rewrite_url_for_stack()` keeps the FQDN from the target URL when routing to stack ports
+
+---
+
 ## [0.13.14] – 2026-03-12 — Stack comparison rejects HTTP 4xx
 
 ### Fixed

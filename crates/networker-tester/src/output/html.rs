@@ -1092,137 +1092,9 @@ fn write_host_info_card(label: &str, info: &HostInfo, out: &mut String) {
     let _ = write!(out, "  </dl>\n</section>\n");
 }
 
-fn write_run_sections(run: &TestRun, out: &mut String) {
-    // ── Header ────────────────────────────────────────────────────────────────
-    let server_ver_header = run
-        .attempts
-        .iter()
-        .find_map(|a| {
-            a.server_timing
-                .as_ref()
-                .and_then(|st| st.server_version.as_deref())
-        })
-        .unwrap_or("—");
-    let _ = write!(
-        out,
-        r#"
-<header class="page-header">
-  <h1>Networker Tester</h1>
-  <p class="subtitle">Run <code>{run_id}</code> &bull; {started}</p>
-  <p class="subtitle"><strong>Client</strong> v{client_ver} &bull; <strong>Server</strong> v{server_ver}</p>
-</header>
-"#,
-        run_id = run.run_id,
-        started = run.started_at.format("%Y-%m-%d %H:%M:%S UTC"),
-        client_ver = escape_html(&run.client_version),
-        server_ver = escape_html(server_ver_header),
-    );
+fn write_protocol_sections(run: &TestRun, out: &mut String, stack_filter: Option<&str>) {
+    use crate::metrics::compute_stats;
 
-    // ── Summary card ──────────────────────────────────────────────────────────
-    let duration_s = run
-        .finished_at
-        .map(|f| {
-            format!(
-                "{:.2}s",
-                (f - run.started_at).num_milliseconds() as f64 / 1000.0
-            )
-        })
-        .unwrap_or_else(|| "—".into());
-
-    let server_ver = run
-        .attempts
-        .iter()
-        .find_map(|a| {
-            a.server_timing
-                .as_ref()
-                .and_then(|st| st.server_version.as_deref())
-        })
-        .unwrap_or("—");
-
-    let ep_attempts: Vec<_> = run.attempts.iter().filter(|a| a.http_stack.is_none()).collect();
-    let ep_ok = ep_attempts.iter().filter(|a| a.success).count();
-    let ep_fail = ep_attempts.len() - ep_ok;
-    let stack_count = run.attempts.len() - ep_attempts.len();
-    let stack_note = if stack_count > 0 {
-        format!(" <small>(+ {stack_count} stack probes)</small>")
-    } else {
-        String::new()
-    };
-    let _ = write!(
-        out,
-        r##"
-<section class="card">
-  <h2>Run Summary</h2>
-  <dl class="summary-grid">
-    <dt>Target</dt>          <dd><a href="{url}">{url}</a></dd>
-    <dt>Modes</dt>           <dd>{modes}</dd>
-    <dt>Attempts</dt>        <dd>{total}{stack_note}</dd>
-    <dt>Succeeded</dt>       <dd class="ok">{ok}</dd>
-    <dt>Failed</dt>          <dd class="{fail_cls}">{fail}</dd>
-    <dt>Total Duration</dt>  <dd>{dur}</dd>
-    <dt>Client version</dt>  <dd>{client_ver}</dd>
-    <dt>Server version</dt>  <dd>{server_ver}</dd>
-  </dl>
-</section>
-"##,
-        url = escape_html(&run.target_url),
-        modes = run.modes.join(", "),
-        total = ep_attempts.len(),
-        stack_note = stack_note,
-        ok = ep_ok,
-        fail = ep_fail,
-        fail_cls = if ep_fail > 0 { "err" } else { "ok" },
-        dur = duration_s,
-        client_ver = escape_html(&run.client_version),
-        server_ver = escape_html(server_ver),
-    );
-
-    // ── Client & Server Info cards ───────────────────────────────────────────
-    let _ = write!(
-        out,
-        r##"<div style="display:flex;flex-wrap:wrap;gap:1.5rem;margin:0 2rem">"##
-    );
-    if let Some(ref info) = run.client_info {
-        write_host_info_card("Client", info, out);
-    }
-    if let Some(ref info) = run.server_info {
-        write_host_info_card("Server", info, out);
-    }
-    if let Some(ref bl) = run.baseline {
-        let net_cls = match bl.network_type {
-            NetworkType::Loopback => "ok",
-            NetworkType::LAN => "warn",
-            NetworkType::Internet => "err",
-        };
-        let _ = write!(
-            out,
-            r##"
-<section class="card" style="flex:1;min-width:280px;margin:0">
-  <h2>Network Baseline</h2>
-  <dl class="summary-grid">
-    <dt>Network Type</dt>  <dd><span class="{net_cls}">{net_type}</span></dd>
-    <dt>RTT Avg</dt>       <dd>{avg:.2} ms</dd>
-    <dt>RTT Min</dt>       <dd>{min:.2} ms</dd>
-    <dt>RTT Max</dt>       <dd>{max:.2} ms</dd>
-    <dt>RTT p50</dt>       <dd>{p50:.2} ms</dd>
-    <dt>RTT p95</dt>       <dd>{p95:.2} ms</dd>
-    <dt>Samples</dt>       <dd>{samples}</dd>
-  </dl>
-</section>
-"##,
-            net_cls = net_cls,
-            net_type = bl.network_type,
-            avg = bl.rtt_avg_ms,
-            min = bl.rtt_min_ms,
-            max = bl.rtt_max_ms,
-            p50 = bl.rtt_p50_ms,
-            p95 = bl.rtt_p95_ms,
-            samples = bl.samples,
-        );
-    }
-    let _ = writeln!(out, "</div>");
-
-    // ── Per-protocol timing table ─────────────────────────────────────────────
     let _ = write!(
         out,
         r#"
@@ -1269,7 +1141,7 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
         let rows: Vec<&RequestAttempt> = run
             .attempts
             .iter()
-            .filter(|a| &a.protocol == proto && a.http_stack.is_none())
+            .filter(|a| &a.protocol == proto && a.http_stack.as_deref() == stack_filter)
             .collect();
         if rows.is_empty() {
             continue;
@@ -1309,7 +1181,7 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
                 let payloads: BTreeSet<Option<usize>> = run
                     .attempts
                     .iter()
-                    .filter(|a| a.protocol == *proto && a.http_stack.is_none())
+                    .filter(|a| a.protocol == *proto && a.http_stack.as_deref() == stack_filter)
                     .map(attempt_payload_bytes)
                     .collect();
                 payloads.into_iter().map(move |p| ((*proto).clone(), p))
@@ -1323,7 +1195,7 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
                 let attempts: Vec<&RequestAttempt> = run
                     .attempts
                     .iter()
-                    .filter(|a| &a.protocol == proto && attempt_payload_bytes(a) == *payload && a.http_stack.is_none())
+                    .filter(|a| &a.protocol == proto && attempt_payload_bytes(a) == *payload && a.http_stack.as_deref() == stack_filter)
                     .collect();
                 if attempts.is_empty() {
                     return None;
@@ -1411,7 +1283,7 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
                     a.protocol,
                     Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3
                 ) && a.page_load.is_some()
-                  && a.http_stack.is_none()
+                  && a.http_stack.as_deref() == stack_filter
             })
             .collect();
         if !pl_attempts.is_empty() {
@@ -1557,7 +1429,7 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
                         | Protocol::Browser2
                         | Protocol::Browser3
                 ) && a.browser.is_some()
-                  && a.http_stack.is_none()
+                  && a.http_stack.as_deref() == stack_filter
             })
             .collect();
         if !br_cmp_attempts.is_empty() {
@@ -1651,6 +1523,7 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
                         | Protocol::Browser2
                         | Protocol::Browser3
                 ) && a.browser.is_some()
+                  && a.http_stack.as_deref() == stack_filter
             })
             .collect();
         if !browser_rows.is_empty() {
@@ -1729,187 +1602,6 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
         }
     }
 
-    // ── HTTP Stack Comparison ──────────────────────────────────────────────────
-    {
-        // Collect all attempts that have an http_stack tag
-        let stack_attempts: Vec<&RequestAttempt> = run
-            .attempts
-            .iter()
-            .filter(|a| a.http_stack.is_some())
-            .collect();
-
-        if !stack_attempts.is_empty() {
-            // Group by stack name
-            let mut stack_names: Vec<String> = stack_attempts
-                .iter()
-                .filter_map(|a| a.http_stack.clone())
-                .collect::<std::collections::BTreeSet<_>>()
-                .into_iter()
-                .collect();
-            stack_names.sort();
-
-            // Also include the default endpoint (http_stack == None) for comparison
-            let default_pl_attempts: Vec<&RequestAttempt> = run
-                .attempts
-                .iter()
-                .filter(|a| {
-                    a.http_stack.is_none()
-                        && matches!(
-                            a.protocol,
-                            Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3
-                        )
-                        && a.page_load.is_some()
-                })
-                .collect();
-            let default_br_attempts: Vec<&RequestAttempt> = run
-                .attempts
-                .iter()
-                .filter(|a| {
-                    a.http_stack.is_none()
-                        && matches!(
-                            a.protocol,
-                            Protocol::Browser
-                                | Protocol::Browser1
-                                | Protocol::Browser2
-                                | Protocol::Browser3
-                        )
-                        && a.browser.is_some()
-                })
-                .collect();
-
-            let _ = write!(
-                out,
-                r#"
-<section class="card">
-  <h2>HTTP Stack Comparison</h2>
-  <p>Performance comparison across HTTP stacks serving identical static content.</p>
-  <table>
-    <thead>
-      <tr>
-        <th>Stack</th><th>Protocol</th><th>N</th>
-        <th>Avg Load (ms)</th><th>p50 (ms)</th><th>Min (ms)</th><th>Max (ms)</th>
-      </tr>
-    </thead>
-    <tbody>
-"#
-            );
-
-            // Render default endpoint first
-            let all_stacks = std::iter::once(("endpoint", None))
-                .chain(stack_names.iter().map(|n| (n.as_str(), Some(n.as_str()))));
-
-            for (stack_label, stack_filter) in all_stacks {
-                let protos = [
-                    Protocol::PageLoad,
-                    Protocol::PageLoad2,
-                    Protocol::PageLoad3,
-                    Protocol::Browser1,
-                    Protocol::Browser2,
-                    Protocol::Browser3,
-                ];
-                for proto in &protos {
-                    let matching: Vec<f64> = if stack_filter.is_none() {
-                        // Default endpoint
-                        match proto {
-                            Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3 => {
-                                default_pl_attempts
-                                    .iter()
-                                    .filter(|a| &a.protocol == proto)
-                                    .filter_map(|a| a.page_load.as_ref().map(|p| p.total_ms))
-                                    .collect()
-                            }
-                            _ => default_br_attempts
-                                .iter()
-                                .filter(|a| &a.protocol == proto)
-                                .filter_map(|a| a.browser.as_ref().map(|b| b.load_ms))
-                                .collect(),
-                        }
-                    } else {
-                        let sn = stack_filter.unwrap();
-                        stack_attempts
-                            .iter()
-                            .filter(|a| {
-                                a.http_stack.as_deref() == Some(sn)
-                                    && &a.protocol == proto
-                                    && a.success
-                                    // Exclude HTTP 4xx client errors (e.g. 404 from
-                                    // missing static site) — success is status < 500
-                                    // in http.rs, so we also reject status >= 400.
-                                    && a.http.as_ref().map_or(true, |h| h.status_code < 400)
-                            })
-                            .filter_map(|a| {
-                                a.page_load
-                                    .as_ref()
-                                    .map(|p| p.total_ms)
-                                    .or(a.browser.as_ref().map(|b| b.load_ms))
-                            })
-                            .collect()
-                    };
-
-                    if matching.is_empty() {
-                        // For stacks (not default endpoint), check if there were
-                        // failed attempts for this proto — means "not supported".
-                        if stack_filter.is_some() {
-                            let sn = stack_filter.unwrap();
-                            let had_failures = run.attempts.iter().any(|a| {
-                                a.http_stack.as_deref() == Some(sn)
-                                    && &a.protocol == proto
-                                    && !a.success
-                            });
-                            // Also show "not supported" if the endpoint had data
-                            // for this proto but the stack had none at all.
-                            let endpoint_has_proto = match proto {
-                                Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3 => {
-                                    default_pl_attempts.iter().any(|a| &a.protocol == proto)
-                                }
-                                _ => default_br_attempts.iter().any(|a| &a.protocol == proto),
-                            };
-                            if had_failures || endpoint_has_proto {
-                                let _ = write!(
-                                    out,
-                                    r#"      <tr>
-        <td><strong>{stack}</strong></td>
-        <td>{proto}</td>
-        <td colspan="4" style="color:#888;font-style:italic">not supported</td>
-      </tr>
-"#,
-                                    stack = escape_html(stack_label),
-                                    proto = proto,
-                                );
-                            }
-                        }
-                        continue;
-                    }
-
-                    if let Some(s) = compute_stats(&matching) {
-                        let _ = write!(
-                            out,
-                            r#"      <tr>
-        <td><strong>{stack}</strong></td>
-        <td>{proto}</td>
-        <td>{n}</td>
-        <td>{avg:.2}</td>
-        <td>{p50:.2}</td>
-        <td>{min:.2}</td>
-        <td>{max:.2}</td>
-      </tr>
-"#,
-                            stack = escape_html(stack_label),
-                            proto = proto,
-                            n = matching.len(),
-                            avg = s.mean,
-                            p50 = s.p50,
-                            min = s.min,
-                            max = s.max,
-                        );
-                    }
-                }
-            }
-
-            let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
-        }
-    }
-
     // ── Charts + Analysis ─────────────────────────────────────────────────────
     {
         let chart_browser: Vec<&RequestAttempt> = run
@@ -1923,7 +1615,7 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
                         | Protocol::Browser2
                         | Protocol::Browser3
                 ) && a.browser.is_some()
-                  && a.http_stack.is_none()
+                  && a.http_stack.as_deref() == stack_filter
             })
             .collect();
         let chart_pl: Vec<&RequestAttempt> = run
@@ -1934,7 +1626,7 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
                     a.protocol,
                     Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3
                 ) && a.page_load.is_some()
-                  && a.http_stack.is_none()
+                  && a.http_stack.as_deref() == stack_filter
             })
             .collect();
         let has_throughput = run.attempts.iter().any(|a| {
@@ -2541,6 +2233,190 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
             let _ = writeln!(out, "</section>");
         }
     }
+
+}
+
+fn write_run_sections(run: &TestRun, out: &mut String) {
+    // ── Header ────────────────────────────────────────────────────────────────
+    let server_ver_header = run
+        .attempts
+        .iter()
+        .find_map(|a| {
+            a.server_timing
+                .as_ref()
+                .and_then(|st| st.server_version.as_deref())
+        })
+        .unwrap_or("—");
+    let _ = write!(
+        out,
+        r#"
+<header class="page-header">
+  <h1>Networker Tester</h1>
+  <p class="subtitle">Run <code>{run_id}</code> &bull; {started}</p>
+  <p class="subtitle"><strong>Client</strong> v{client_ver} &bull; <strong>Server</strong> v{server_ver}</p>
+</header>
+"#,
+        run_id = run.run_id,
+        started = run.started_at.format("%Y-%m-%d %H:%M:%S UTC"),
+        client_ver = escape_html(&run.client_version),
+        server_ver = escape_html(server_ver_header),
+    );
+
+    // ── Summary card ──────────────────────────────────────────────────────────
+    let duration_s = run
+        .finished_at
+        .map(|f| {
+            format!(
+                "{:.2}s",
+                (f - run.started_at).num_milliseconds() as f64 / 1000.0
+            )
+        })
+        .unwrap_or_else(|| "—".into());
+
+    let server_ver = run
+        .attempts
+        .iter()
+        .find_map(|a| {
+            a.server_timing
+                .as_ref()
+                .and_then(|st| st.server_version.as_deref())
+        })
+        .unwrap_or("—");
+
+    let ep_attempts: Vec<_> = run.attempts.iter().filter(|a| a.http_stack.is_none()).collect();
+    let ep_ok = ep_attempts.iter().filter(|a| a.success).count();
+    let ep_fail = ep_attempts.len() - ep_ok;
+    let stack_count = run.attempts.len() - ep_attempts.len();
+    let stack_note = if stack_count > 0 {
+        format!(" <small>(+ {stack_count} stack probes)</small>")
+    } else {
+        String::new()
+    };
+    let _ = write!(
+        out,
+        r##"
+<section class="card">
+  <h2>Run Summary</h2>
+  <dl class="summary-grid">
+    <dt>Target</dt>          <dd><a href="{url}">{url}</a></dd>
+    <dt>Modes</dt>           <dd>{modes}</dd>
+    <dt>Attempts</dt>        <dd>{total}{stack_note}</dd>
+    <dt>Succeeded</dt>       <dd class="ok">{ok}</dd>
+    <dt>Failed</dt>          <dd class="{fail_cls}">{fail}</dd>
+    <dt>Total Duration</dt>  <dd>{dur}</dd>
+    <dt>Client version</dt>  <dd>{client_ver}</dd>
+    <dt>Server version</dt>  <dd>{server_ver}</dd>
+  </dl>
+</section>
+"##,
+        url = escape_html(&run.target_url),
+        modes = run.modes.join(", "),
+        total = ep_attempts.len(),
+        stack_note = stack_note,
+        ok = ep_ok,
+        fail = ep_fail,
+        fail_cls = if ep_fail > 0 { "err" } else { "ok" },
+        dur = duration_s,
+        client_ver = escape_html(&run.client_version),
+        server_ver = escape_html(server_ver),
+    );
+
+    // ── Client & Server Info cards ───────────────────────────────────────────
+    let _ = write!(
+        out,
+        r##"<div style="display:flex;flex-wrap:wrap;gap:1.5rem;margin:0 2rem">"##
+    );
+    if let Some(ref info) = run.client_info {
+        write_host_info_card("Client", info, out);
+    }
+    if let Some(ref info) = run.server_info {
+        write_host_info_card("Server", info, out);
+    }
+    if let Some(ref bl) = run.baseline {
+        let net_cls = match bl.network_type {
+            NetworkType::Loopback => "ok",
+            NetworkType::LAN => "warn",
+            NetworkType::Internet => "err",
+        };
+        let _ = write!(
+            out,
+            r##"
+<section class="card" style="flex:1;min-width:280px;margin:0">
+  <h2>Network Baseline</h2>
+  <dl class="summary-grid">
+    <dt>Network Type</dt>  <dd><span class="{net_cls}">{net_type}</span></dd>
+    <dt>RTT Avg</dt>       <dd>{avg:.2} ms</dd>
+    <dt>RTT Min</dt>       <dd>{min:.2} ms</dd>
+    <dt>RTT Max</dt>       <dd>{max:.2} ms</dd>
+    <dt>RTT p50</dt>       <dd>{p50:.2} ms</dd>
+    <dt>RTT p95</dt>       <dd>{p95:.2} ms</dd>
+    <dt>Samples</dt>       <dd>{samples}</dd>
+  </dl>
+</section>
+"##,
+            net_cls = net_cls,
+            net_type = bl.network_type,
+            avg = bl.rtt_avg_ms,
+            min = bl.rtt_min_ms,
+            max = bl.rtt_max_ms,
+            p50 = bl.rtt_p50_ms,
+            p95 = bl.rtt_p95_ms,
+            samples = bl.samples,
+        );
+    }
+    let _ = writeln!(out, "</div>");
+
+    // ── Protocol sections for endpoint (default) ─────────────────────────────
+    write_protocol_sections(run, out, None);
+
+    // ── Protocol sections for each HTTP stack ────────────────────────────────
+    {
+        let stack_names: Vec<String> = {
+            let names: std::collections::BTreeSet<String> = run
+                .attempts
+                .iter()
+                .filter_map(|a| a.http_stack.clone())
+                .collect();
+            names.into_iter().collect()
+        };
+        for stack_name in &stack_names {
+            let stack_total = run
+                .attempts
+                .iter()
+                .filter(|a| a.http_stack.as_deref() == Some(stack_name.as_str()))
+                .count();
+            let stack_ok = run
+                .attempts
+                .iter()
+                .filter(|a| {
+                    a.http_stack.as_deref() == Some(stack_name.as_str()) && a.success
+                })
+                .count();
+            let stack_fail = stack_total - stack_ok;
+            let fail_cls = if stack_fail > 0 { "err" } else { "ok" };
+            let _ = write!(
+                out,
+                r#"
+<hr style="border:none;border-top:3px solid #1a1a2e;margin:2.5rem 2rem 0">
+<section class="card" style="border-top:3px solid #4e79a7">
+  <h2 style="font-size:1.3rem">{name} Stack Results</h2>
+  <dl class="summary-grid">
+    <dt>Attempts</dt>   <dd>{total}</dd>
+    <dt>Succeeded</dt>  <dd class="ok">{ok}</dd>
+    <dt>Failed</dt>     <dd class="{fail_cls}">{fail}</dd>
+  </dl>
+</section>
+"#,
+                name = escape_html(&stack_name.to_uppercase()),
+                total = stack_total,
+                ok = stack_ok,
+                fail = stack_fail,
+                fail_cls = fail_cls,
+            );
+            write_protocol_sections(run, out, Some(stack_name.as_str()));
+        }
+    }
+
 
     // ── UDP statistics ────────────────────────────────────────────────────────
     let udp_rows: Vec<&RequestAttempt> = run
@@ -6180,7 +6056,7 @@ mod tests {
     }
 
     #[test]
-    fn render_http_stack_comparison_section_when_stack_attempts_present() {
+    fn render_stack_as_independent_section_when_stack_attempts_present() {
         let mut run = make_run();
         // Add default endpoint pageload attempts
         run.attempts.push(make_page_load_attempt(Protocol::PageLoad2, 150.0, false));
@@ -6195,16 +6071,19 @@ mod tests {
         run.attempts.push(nginx2);
 
         let html = render_multi(&[run], None);
-        assert!(html.contains("HTTP Stack Comparison"), "should have stack comparison section");
-        assert!(html.contains("<strong>endpoint</strong>"), "should show default endpoint");
-        assert!(html.contains("<strong>nginx</strong>"), "should show nginx stack");
+        // Should NOT have the old combined comparison table
+        assert!(!html.contains("HTTP Stack Comparison"), "should not have combined comparison table");
+        // Should have independent stack section
+        assert!(html.contains("NGINX Stack Results"), "should have independent nginx section");
+        // Endpoint data should appear in the main sections
+        assert!(html.contains("Timing Breakdown by Protocol"), "should have endpoint timing section");
     }
 
     #[test]
-    fn render_no_http_stack_section_when_no_stack_attempts() {
+    fn render_no_stack_section_when_no_stack_attempts() {
         let mut run = make_run();
         run.attempts.push(make_page_load_attempt(Protocol::PageLoad2, 150.0, false));
         let html = render_multi(&[run], None);
-        assert!(!html.contains("HTTP Stack Comparison"), "should not show stack section without stack attempts");
+        assert!(!html.contains("Stack Results"), "should not show stack section without stack attempts");
     }
 }

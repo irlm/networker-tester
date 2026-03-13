@@ -453,6 +453,7 @@ DEPLOY_TEST_LOG_LEVEL=""
 DEPLOY_EP_PROVIDERS=()
 DEPLOY_EP_LABELS=()
 DEPLOY_EP_IPS=()               # populated after deploy (result IPs)
+DEPLOY_EP_FQDNS=()             # populated after deploy (cloud DNS hostnames)
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 parse_args() {
@@ -3409,6 +3410,16 @@ server {
         try_files $uri $uri/ =404;
     }
 
+    # Proxy dynamic paths to the endpoint (pageload probes use /page and /asset)
+    location /page {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+    }
+    location /asset {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+    }
+
     # MIME types for test assets
     location ~* \.bin$ {
         default_type application/octet-stream;
@@ -3432,6 +3443,18 @@ server {
 
     location / {
         try_files $uri $uri/ =404;
+    }
+
+    # Proxy dynamic paths to the endpoint (pageload probes use /page and /asset)
+    location /page {
+        proxy_pass https://127.0.0.1:8443;
+        proxy_ssl_verify off;
+        proxy_set_header Host $host;
+    }
+    location /asset {
+        proxy_pass https://127.0.0.1:8443;
+        proxy_ssl_verify off;
+        proxy_set_header Host $host;
     }
 
     location ~* \.bin$ {
@@ -3466,24 +3489,48 @@ NGINX_CONF
 # The output can be piped to az vm run-command / AWS SSM / gcloud SSH.
 _iis_setup_powershell() {
     local ep_exe="${1:-C:\\networker\\networker-endpoint.exe}"
+    local fqdn="${2:-}"  # FQDN for hostname-based binding (enables HTTP/3 via SNI)
     local site_root="C:\\networker-static"
-    cat <<'IIS_PS1'
+    cat <<IIS_PS1_HEADER
 # ── IIS setup for HTTP stack comparison ──────────────────────────────────────
-$ErrorActionPreference = 'Stop'
+\$ErrorActionPreference = 'Stop'
+\$fqdn = "${fqdn}"
 
-# 1. Install IIS
+# 1. Install IIS + URL Rewrite + ARR (for reverse-proxy of /page, /asset)
 Write-Host "Installing IIS…"
 Install-WindowsFeature -Name Web-Server -IncludeManagementTools | Out-Null
+IIS_PS1_HEADER
+    cat <<'IIS_PS1'
 
-# 2. Enable HTTP/3 (Windows Server 2022+)
+Write-Host "Installing URL Rewrite Module…"
+$urlRewriteUrl = "https://download.microsoft.com/download/1/2/8/128E2E22-C1B9-44A4-BE2A-5859ED1D4592/rewrite_amd64_en-US.msi"
+$urlRewriteMsi = "$env:TEMP\urlrewrite.msi"
+Invoke-WebRequest -Uri $urlRewriteUrl -OutFile $urlRewriteMsi -UseBasicParsing
+Start-Process msiexec.exe -ArgumentList "/i $urlRewriteMsi /quiet /norestart" -Wait -NoNewWindow
+
+Write-Host "Installing ARR…"
+$arrUrl = "https://download.microsoft.com/download/E/9/8/E9849D6A-020E-47E4-9FD0-A023E99B54EB/requestRouter_amd64.msi"
+$arrMsi = "$env:TEMP\arr.msi"
+Invoke-WebRequest -Uri $arrUrl -OutFile $arrMsi -UseBasicParsing
+Start-Process msiexec.exe -ArgumentList "/i $arrMsi /quiet /norestart" -Wait -NoNewWindow
+
+# Enable ARR proxy at server level
+Import-Module WebAdministration
+Set-WebConfigurationProperty -pspath "MACHINE/WEBROOT/APPHOST" `
+    -filter "system.webServer/proxy" -name "enabled" -value "True"
+
+# 2. Enable HTTP/3 (Windows Server 2022+) — requires reboot to take effect
 Write-Host "Enabling HTTP/3 via registry…"
 $httpParams = "HKLM:\SYSTEM\CurrentControlSet\Services\HTTP\Parameters"
 if (-not (Test-Path $httpParams)) { New-Item -Path $httpParams -Force | Out-Null }
-Set-ItemProperty -Path $httpParams -Name "EnableHttp3" -Value 1 -Type DWord
-
-# Also enable HTTP/2 explicitly
-Set-ItemProperty -Path $httpParams -Name "EnableHttp2Tls" -Value 1 -Type DWord
-Set-ItemProperty -Path $httpParams -Name "EnableHttp2Cleartext" -Value 1 -Type DWord
+$needsReboot = $false
+foreach ($prop in @("EnableHttp3","EnableHttp2Tls","EnableHttp2Cleartext")) {
+    $cur = (Get-ItemProperty -Path $httpParams -Name $prop -ErrorAction SilentlyContinue).$prop
+    if ($cur -ne 1) {
+        Set-ItemProperty -Path $httpParams -Name $prop -Value 1 -Type DWord
+        $needsReboot = $true
+    }
+}
 
 # 3. Generate static test site
 $siteRoot = "C:\networker-static"
@@ -3493,44 +3540,94 @@ IIS_PS1
     cat <<IIS_PS1_GENSITE
 \$epExe = "${ep_exe}"
 if (Test-Path \$epExe) {
-    Write-Host "Generating static test site…"
-    & \$epExe generate-site \$siteRoot --preset mixed --stack iis
+    \$genSiteHelp = & \$epExe --help 2>&1
+    if (\$genSiteHelp -match 'generate-site') {
+        Write-Host "Generating static test site via endpoint…"
+        & \$epExe generate-site \$siteRoot --preset mixed --stack iis
+    } else {
+        Write-Host "Endpoint does not support generate-site — creating static test page…"
+        \$genSite = \$false
+    }
 } else {
-    Write-Host "WARN: endpoint binary not found at \$epExe — creating minimal test page"
-    '<html><body>Networker static test</body></html>' | Out-File "\$siteRoot\index.html" -Encoding UTF8
-    '{"status":"ok","stack":"iis"}' | Out-File "\$siteRoot\health" -Encoding UTF8
+    Write-Host "Endpoint binary not found at \$epExe — creating static test page…"
+    \$genSite = \$false
+}
+if (\$genSite -eq \$false -or -not (Test-Path "\$siteRoot\index.html")) {
+    # Fallback: create test page with 50 assets of mixed sizes
+    \$html = "<!DOCTYPE html>`n<html><head><title>Networker Page Load Test</title>`n"
+    \$html += "<link rel=`"stylesheet`" href=`"style.css`">`n<link rel=`"icon`" href=`"data:,`">`n</head><body>`n"
+    for (\$i = 0; \$i -lt 50; \$i++) { \$html += "<img src=`"asset-\$i.bin`" width=`"1`" height=`"1`" alt=`"`">`n" }
+    \$html += "</body></html>"
+    [IO.File]::WriteAllText("\$siteRoot\index.html", \$html, [Text.Encoding]::UTF8)
+    [IO.File]::WriteAllText("\$siteRoot\style.css", "body{margin:0}", [Text.Encoding]::UTF8)
+    [IO.File]::WriteAllText("\$siteRoot\health", '{"status":"ok","stack":"iis"}', [Text.Encoding]::UTF8)
+    \$sizes = @(512,512,512,512,512,2048,2048,2048,2048,2048,
+               4096,4096,4096,4096,4096,8192,8192,8192,8192,8192,
+               16384,16384,16384,16384,16384,32768,32768,32768,32768,32768,
+               65536,65536,65536,65536,65536,102400,102400,102400,102400,102400,
+               204800,204800,204800,204800,204800,409600,409600,614400,614400,1048576)
+    \$rng = New-Object Random
+    for (\$i = 0; \$i -lt \$sizes.Count; \$i++) {
+        \$bytes = New-Object byte[] \$sizes[\$i]
+        \$rng.NextBytes(\$bytes)
+        [IO.File]::WriteAllBytes("\$siteRoot\asset-\$i.bin", \$bytes)
+    }
+    Write-Host "Created test page with 50 assets"
 }
 IIS_PS1_GENSITE
 
     cat <<'IIS_PS1_REST'
 
-# 3b. Create web.config for extensionless files and .bin MIME type
-# Uses remove+add pattern to avoid duplicate MIME map errors
+# 3b. Create web.config — default doc, MIME types, and reverse-proxy rules
+# for /page and /asset (pageload probes use dynamic endpoints on the backing server)
 $webConfig = @"
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
   <system.webServer>
+    <defaultDocument>
+      <files>
+        <clear />
+        <add value="index.html" />
+      </files>
+    </defaultDocument>
     <staticContent>
       <remove fileExtension="." />
       <mimeMap fileExtension="." mimeType="application/json" />
       <remove fileExtension=".bin" />
       <mimeMap fileExtension=".bin" mimeType="application/octet-stream" />
     </staticContent>
+    <rewrite>
+      <rules>
+        <rule name="Proxy /page to endpoint" stopProcessing="true">
+          <match url="^page(.*)" />
+          <action type="Rewrite" url="http://127.0.0.1:8080/page{R:1}" />
+        </rule>
+        <rule name="Proxy /asset to endpoint" stopProcessing="true">
+          <match url="^asset$" />
+          <conditions>
+            <add input="{QUERY_STRING}" pattern=".+" />
+          </conditions>
+          <action type="Rewrite" url="http://127.0.0.1:8080/asset?{C:0}" appendQueryString="false" />
+        </rule>
+      </rules>
+    </rewrite>
   </system.webServer>
 </configuration>
 "@
 $webConfig | Out-File "$siteRoot\web.config" -Encoding UTF8
-Write-Host "web.config created"
+Write-Host "web.config created (with reverse-proxy rules for /page, /asset)"
 
-# 4. Generate self-signed certificate
+# 4. Generate self-signed certificate (include FQDN in SAN for SNI/H3)
 Write-Host "Creating self-signed certificate…"
+$dnsNames = @("localhost", $env:COMPUTERNAME)
+if ($fqdn -and $fqdn -ne "") { $dnsNames += $fqdn }
 $cert = New-SelfSignedCertificate `
-    -DnsName "localhost", $env:COMPUTERNAME `
+    -DnsName $dnsNames `
     -CertStoreLocation "Cert:\LocalMachine\My" `
     -NotAfter (Get-Date).AddYears(1) `
     -FriendlyName "Networker IIS Test"
 $thumbprint = $cert.Thumbprint
-Write-Host "Certificate thumbprint: $thumbprint"
+Write-Host "Certificate thumbprint: $thumbprint (SAN: $($dnsNames -join ', '))"
 
 # 5. Remove default IIS site, create networker site
 Import-Module WebAdministration
@@ -3547,10 +3644,23 @@ New-Website -Name "networker-iis" `
     -Port 8082 `
     -Force | Out-Null
 
-# Add HTTPS binding
-New-WebBinding -Name "networker-iis" -Protocol "https" -Port 8445
-$binding = Get-WebBinding -Name "networker-iis" -Protocol "https" -Port 8445
-$binding.AddSslCertificate($thumbprint, "My")
+# Add HTTPS bindings — hostname-based with SNI (required for HTTP/3) + IP fallback
+if ($fqdn -and $fqdn -ne "") {
+    New-WebBinding -Name "networker-iis" -Protocol "https" -Port 8445 -HostHeader $fqdn -SslFlags 1
+    $sniBinding = Get-WebBinding -Name "networker-iis" -Protocol "https" -Port 8445 | Where-Object { $_.sslFlags -eq 1 }
+    $sniBinding.AddSslCertificate($thumbprint, "My")
+    Write-Host "HTTPS binding: hostname=$fqdn, SNI=required (HTTP/3 enabled)"
+}
+# Also add IP-based binding for direct-IP connections (no HTTP/3, but H1.1/H2 work)
+New-WebBinding -Name "networker-iis" -Protocol "https" -Port 8445 -SslFlags 0
+$ipBinding = Get-WebBinding -Name "networker-iis" -Protocol "https" -Port 8445 | Where-Object { $_.sslFlags -eq 0 }
+$ipBinding.AddSslCertificate($thumbprint, "My")
+
+# Add alt-svc header to advertise HTTP/3
+Set-WebConfigurationProperty -pspath "IIS:\Sites\networker-iis" `
+    -filter "system.webServer/httpProtocol/customHeaders" `
+    -name "." `
+    -value @{name="alt-svc"; value="h3="":8445""; ma=86400"}
 
 # Start the site
 Start-Website -Name "networker-iis"
@@ -3561,8 +3671,12 @@ New-NetFirewallRule -DisplayName "Networker-IIS-HTTPS" -Direction Inbound -Proto
 # HTTP/3 uses UDP
 New-NetFirewallRule -DisplayName "Networker-IIS-QUIC" -Direction Inbound -Protocol UDP -LocalPort 8445 -Action Allow -ErrorAction SilentlyContinue | Out-Null
 
-Write-Host "IIS configured: HTTP=8082, HTTPS=8445 (HTTP/3 enabled)"
-Write-Host "NOTE: A reboot may be required for HTTP/3 to take effect."
+Write-Host "IIS configured: HTTP=8082, HTTPS=8445"
+if ($needsReboot) {
+    Write-Host "REBOOT_NEEDED"
+} else {
+    Write-Host "HTTP/3 registry already set — no reboot needed"
+}
 IIS_PS1_REST
 }
 
@@ -3651,6 +3765,8 @@ server {
     root /var/www/networker;
     index index.html;
     location / { try_files $uri $uri/ =404; }
+    location /page { proxy_pass http://127.0.0.1:8080; proxy_set_header Host $host; }
+    location /asset { proxy_pass http://127.0.0.1:8080; proxy_set_header Host $host; }
     location ~* \.bin$ { default_type application/octet-stream; }
 }
 server {
@@ -3665,6 +3781,8 @@ server {
     ssl_certificate_key /etc/nginx/ssl/networker.key;
     add_header Alt-Svc 'h3=":8444"; ma=86400' always;
     location / { try_files $uri $uri/ =404; }
+    location /page { proxy_pass https://127.0.0.1:8443; proxy_ssl_verify off; proxy_set_header Host $host; }
+    location /asset { proxy_pass https://127.0.0.1:8443; proxy_ssl_verify off; proxy_set_header Host $host; }
     location ~* \.bin$ { default_type application/octet-stream; }
 }
 EOF
@@ -3699,22 +3817,73 @@ NGINX_SSH
 }
 
 # Set up IIS on an Azure Windows VM via az vm run-command.
-# $1 = resource group, $2 = VM name
+# Installs IIS + URL Rewrite + ARR, enables HTTP/3, reboots if needed,
+# then waits for the VM to come back and verifies IIS is serving.
+# $1 = resource group, $2 = VM name, $3 = public IP, $4 = FQDN (optional)
 _azure_win_setup_iis() {
-    local rg="$1" vm="$2"
+    local rg="$1" vm="$2" ip="${3:-}" fqdn="${4:-}"
+    local reboot_timeout=300  # 5 minutes max wait for reboot
+
+    # Skip if IIS is already responding on both HTTP and HTTPS
+    if [[ -n "$ip" ]]; then
+        if curl -sf --max-time 5 "http://${ip}:8082/health" &>/dev/null \
+           && curl -sfk --max-time 5 "https://${ip}:8445/" &>/dev/null; then
+            print_ok "IIS already responding on 8082/8445 — skipping"
+            return 0
+        fi
+    fi
 
     print_info "Setting up IIS on Windows VM ($vm)…"
-    local ps_script
-    ps_script="$(_iis_setup_powershell "C:\\networker\\networker-endpoint.exe")"
+    [[ -n "$fqdn" ]] && print_info "Using FQDN for HTTP/3 SNI binding: $fqdn"
+    local ps_script output
+    ps_script="$(_iis_setup_powershell "C:\\networker\\networker-endpoint.exe" "$fqdn")"
 
-    if az vm run-command invoke \
+    output="$(az vm run-command invoke \
         --resource-group "$rg" --name "$vm" \
         --command-id RunPowerShellScript \
-        --scripts "$ps_script" \
-        --output none 2>&1; then
-        print_ok "IIS configured: HTTP=8082, HTTPS=8445 (HTTP/3 enabled)"
+        --scripts "$ps_script" 2>&1)" || true
+
+    if echo "$output" | grep -q "REBOOT_NEEDED"; then
+        print_info "HTTP/3 registry changed — rebooting VM…"
+        az vm restart --resource-group "$rg" --name "$vm" --no-wait 2>/dev/null || true
+
+        # Wait for VM to come back (poll health endpoint)
+        print_info "Waiting for VM to reboot (timeout ${reboot_timeout}s)…"
+        local elapsed=0
+        while (( elapsed < reboot_timeout )); do
+            sleep 10
+            elapsed=$(( elapsed + 10 ))
+            if [[ -n "$ip" ]] && curl -sf --max-time 5 "http://${ip}:8082/health" &>/dev/null; then
+                print_ok "VM rebooted — IIS responding after ${elapsed}s"
+                break
+            fi
+            printf "."
+        done
+        echo
+
+        if (( elapsed >= reboot_timeout )); then
+            print_warn "Timed out waiting for IIS after reboot — check VM manually"
+            return 1
+        fi
     else
-        print_warn "IIS setup may have failed — check the VM manually"
+        print_ok "IIS configured: HTTP=8082, HTTPS=8445"
+    fi
+
+    # Verify all endpoints
+    if [[ -n "$ip" ]]; then
+        local ok=true
+        for url in "http://${ip}:8082/" "http://${ip}:8082/health" "https://${ip}:8445/"; do
+            local scheme="${url%%://*}"
+            local curl_flags="--max-time 5 -sf"
+            [[ "$scheme" == "https" ]] && curl_flags="$curl_flags -k"
+            if curl $curl_flags "$url" -o /dev/null; then
+                print_ok "  $url → OK"
+            else
+                print_warn "  $url → FAILED"
+                ok=false
+            fi
+        done
+        $ok || print_warn "Some IIS endpoints failed — HTTP/3 may need a reboot to activate"
     fi
 }
 
@@ -3794,6 +3963,8 @@ server {
     listen 8081; server_name _;
     root /var/www/networker; index index.html;
     location / { try_files $uri $uri/ =404; }
+    location /page { proxy_pass http://127.0.0.1:8080; proxy_set_header Host $host; }
+    location /asset { proxy_pass http://127.0.0.1:8080; proxy_set_header Host $host; }
     location ~* \.bin$ { default_type application/octet-stream; }
 }
 server {
@@ -3807,6 +3978,8 @@ server {
     ssl_certificate_key /etc/nginx/ssl/networker.key;
     add_header Alt-Svc 'h3=":8444"; ma=86400' always;
     location / { try_files $uri $uri/ =404; }
+    location /page { proxy_pass https://127.0.0.1:8443; proxy_ssl_verify off; proxy_set_header Host $host; }
+    location /asset { proxy_pass https://127.0.0.1:8443; proxy_ssl_verify off; proxy_set_header Host $host; }
     location ~* \.bin$ { default_type application/octet-stream; }
 }
 EOF
@@ -4262,7 +4435,30 @@ step_azure_create_vm() {
                     exit 1
                 fi
                 printf -v "$ip_var" "%s" "$ip"
-                print_ok "Reusing VM '$vm' — Public IP: ${BOLD}${ip}${RESET}"
+
+                # Try to get FQDN (assign DNS label if missing)
+                local pip_name; pip_name="$(az network public-ip list --resource-group "$rg" \
+                    --query "[?ipAddress=='${ip}'].name" -o tsv 2>/dev/null || echo "")"
+                local fqdn=""
+                if [[ -n "$pip_name" ]]; then
+                    fqdn="$(az network public-ip show --resource-group "$rg" --name "$pip_name" \
+                        --query dnsSettings.fqdn -o tsv 2>/dev/null || echo "")"
+                    if [[ -z "$fqdn" ]]; then
+                        local dns_label; dns_label="$(echo "$vm" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-')"
+                        az network public-ip update --resource-group "$rg" --name "$pip_name" \
+                            --dns-name "$dns_label" --output none 2>/dev/null || true
+                        fqdn="$(az network public-ip show --resource-group "$rg" --name "$pip_name" \
+                            --query dnsSettings.fqdn -o tsv 2>/dev/null || echo "")"
+                    fi
+                fi
+                local fqdn_var="${ip_var/IP/FQDN}"
+                [[ "$fqdn_var" != "$ip_var" && -n "$fqdn" ]] && printf -v "$fqdn_var" "%s" "$fqdn"
+
+                if [[ -n "$fqdn" ]]; then
+                    print_ok "Reusing VM '$vm' — ${BOLD}${fqdn}${RESET} (${ip})"
+                else
+                    print_ok "Reusing VM '$vm' — Public IP: ${BOLD}${ip}${RESET}"
+                fi
                 return 0
                 ;;
             2)
@@ -4309,8 +4505,28 @@ step_azure_create_vm() {
         exit 1
     fi
 
+    # Assign DNS label to public IP for FQDN (needed for IIS HTTP/3 SNI binding)
+    local dns_label; dns_label="$(echo "$vm" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-')"
+    local pip_name; pip_name="$(az network public-ip list --resource-group "$rg" \
+        --query "[?ipAddress=='${ip}'].name" -o tsv 2>/dev/null || echo "")"
+    local fqdn=""
+    if [[ -n "$pip_name" ]]; then
+        az network public-ip update --resource-group "$rg" --name "$pip_name" \
+            --dns-name "$dns_label" --output none 2>/dev/null || true
+        fqdn="$(az network public-ip show --resource-group "$rg" --name "$pip_name" \
+            --query dnsSettings.fqdn -o tsv 2>/dev/null || echo "")"
+    fi
+
     printf -v "$ip_var" "%s" "$ip"
-    print_ok "VM created ($os_label) — Public IP: ${BOLD}${ip}${RESET}"
+    # Store FQDN in a matching variable (e.g., AZURE_ENDPOINT_FQDN)
+    local fqdn_var="${ip_var/IP/FQDN}"
+    [[ "$fqdn_var" != "$ip_var" && -n "$fqdn" ]] && printf -v "$fqdn_var" "%s" "$fqdn"
+
+    if [[ -n "$fqdn" ]]; then
+        print_ok "VM created ($os_label) — ${BOLD}${fqdn}${RESET} (${ip})"
+    else
+        print_ok "VM created ($os_label) — Public IP: ${BOLD}${ip}${RESET}"
+    fi
 
     if [[ "$os_type" == "windows" && -n "${win_pass:-}" ]]; then
         # Store credentials for later display in the summary
@@ -4914,11 +5130,16 @@ _aws_launch_instance() {
         --region "$AWS_REGION" \
         --instance-ids "$instance_id"
 
-    local public_ip
+    local public_ip public_dns
     public_ip="$(aws ec2 describe-instances \
         --region "$AWS_REGION" \
         --instance-ids "$instance_id" \
         --query "Reservations[0].Instances[0].PublicIpAddress" \
+        --output text)"
+    public_dns="$(aws ec2 describe-instances \
+        --region "$AWS_REGION" \
+        --instance-ids "$instance_id" \
+        --query "Reservations[0].Instances[0].PublicDnsName" \
         --output text)"
 
     if [[ -z "$public_ip" || "$public_ip" == "None" ]]; then
@@ -4926,7 +5147,15 @@ _aws_launch_instance() {
         exit 1
     fi
     printf -v "$ip_var" "%s" "$public_ip"
-    print_ok "Instance running — Public IP: ${BOLD}${public_ip}${RESET}"
+
+    # Store FQDN from AWS public DNS
+    local fqdn_var="${ip_var/IP/FQDN}"
+    if [[ "$fqdn_var" != "$ip_var" && -n "$public_dns" && "$public_dns" != "None" ]]; then
+        printf -v "$fqdn_var" "%s" "$public_dns"
+        print_ok "Instance running — ${BOLD}${public_dns}${RESET} (${public_ip})"
+    else
+        print_ok "Instance running — Public IP: ${BOLD}${public_ip}${RESET}"
+    fi
 }
 
 step_aws_deploy_tester() {
@@ -7042,14 +7271,16 @@ _deploy_generate_tester_config() {
 
     next_step "Generate tester config from deploy results"
 
-    # Build targets array from deployed endpoint IPs
+    # Build targets array — prefer FQDN over IP (FQDN enables IIS HTTP/3 via SNI)
     local targets_json=""
     local i
     for i in $(seq 0 $((DEPLOY_ENDPOINT_COUNT - 1))); do
         local ip="${DEPLOY_EP_IPS[$i]}"
         [[ -z "$ip" ]] && continue
+        local fqdn="${DEPLOY_EP_FQDNS[$i]:-}"
+        local host="${fqdn:-$ip}"
         [[ -n "$targets_json" ]] && targets_json="${targets_json}, "
-        targets_json="${targets_json}\"https://${ip}:8443/health\""
+        targets_json="${targets_json}\"https://${host}:8443/health\""
     done
 
     if [[ -z "$targets_json" ]]; then
@@ -7495,6 +7726,7 @@ deploy_from_config() {
                 step_check_azure_prereqs
                 step_azure_deploy_endpoint
                 DEPLOY_EP_IPS[$i]="$AZURE_ENDPOINT_IP"
+                DEPLOY_EP_FQDNS[$i]="${AZURE_ENDPOINT_FQDN:-}"
                 # Set up http_stacks requested for this Azure endpoint
                 local ep_stacks="${DEPLOY_EP_HTTP_STACKS[$i]}"
                 if [[ -n "$ep_stacks" ]]; then
@@ -7522,6 +7754,7 @@ deploy_from_config() {
             aws)
                 step_aws_deploy_endpoint
                 DEPLOY_EP_IPS[$i]="$AWS_ENDPOINT_IP"
+                DEPLOY_EP_FQDNS[$i]="${AWS_ENDPOINT_FQDN:-}"
                 # Set up http_stacks requested for this AWS endpoint
                 local ep_stacks="${DEPLOY_EP_HTTP_STACKS[$i]}"
                 if [[ -n "$ep_stacks" ]]; then
@@ -7549,6 +7782,7 @@ deploy_from_config() {
             gcp)
                 step_gcp_deploy_endpoint
                 DEPLOY_EP_IPS[$i]="$GCP_ENDPOINT_IP"
+                DEPLOY_EP_FQDNS[$i]="${GCP_ENDPOINT_FQDN:-}"
                 # Set up http_stacks requested for this GCP endpoint
                 local ep_stacks="${DEPLOY_EP_HTTP_STACKS[$i]}"
                 if [[ -n "$ep_stacks" ]]; then

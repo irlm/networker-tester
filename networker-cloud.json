@@ -1,16 +1,11 @@
 {
-  "targets": ["https://10.0.0.1:8443/health"],
-  "modes": ["http1"],
-  "runs": 3,
-  "concurrency": 4,
-  "timeout": 60,
-  "payload_sizes": ["1m","10m"],
-  "connection_reuse": true,
-  "excel": true,
-  "udp_port": 5555,
-  "page_assets": 10,
-  "page_asset_size": "50k",
-  "retries": 2,
-  "output_dir": "./results",
-  "log_level": "debug"
+  "targets": ["https://1.2.3.4:8443/health"],
+  "modes": ["tcp", "http1", "http2", "http3", "udp", "download", "upload",
+             "pageload", "pageload2", "pageload3"],
+  "runs": 5,
+  "insecure": true,
+  "udp_port": 9999,
+  "udp_throughput_port": 9998,
+  "payload_sizes": ["64k", "1m"],
+  "html_report": "report.html"
 }
