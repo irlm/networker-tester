@@ -544,12 +544,24 @@ async fn run_for_target(
                 }
             }
 
-            let stack_https_url = rewrite_url_for_stack(&target, stack.https_port, true);
+            // Build stack URLs: HTTP for pageload (H1.1), HTTPS for pageload2/3/browser.
+            // Use root path "/" since nginx serves the test page there (not /health).
+            let mut stack_https_url = rewrite_url_for_stack(&target, stack.https_port, true);
+            stack_https_url.set_path("/");
+            let mut stack_http_root = stack_http_url.clone();
+            stack_http_root.set_path("/");
 
-            // Build stack-specific configs
+            // Build stack-specific configs (use HTTPS base for pageload2/3)
             let stack_pageload_cfg = PageLoadConfig {
                 run_cfg: probe_cfg.clone(),
                 base_url: stack_https_url.clone(),
+                asset_sizes: cfg.page_asset_sizes.clone(),
+                preset_name: cfg.page_preset_name.clone(),
+            };
+            // Separate config for pageload H1.1 (plain HTTP)
+            let stack_pageload_h1_cfg = PageLoadConfig {
+                run_cfg: probe_cfg.clone(),
+                base_url: stack_http_root.clone(),
                 asset_sizes: cfg.page_asset_sizes.clone(),
                 preset_name: cfg.page_preset_name.clone(),
             };
@@ -563,17 +575,23 @@ async fn run_for_target(
                 info!(stack = %stack.name, run = run_num + 1, "Stack probe run");
 
                 for (proto, _) in &stack_mode_tasks {
+                    // PageLoad (H1.1) uses plain HTTP; everything else uses HTTPS
+                    let (stack_target, stack_pl_cfg) = if matches!(proto, Protocol::PageLoad) {
+                        (&stack_http_root, &stack_pageload_h1_cfg)
+                    } else {
+                        (&stack_https_url, &stack_pageload_cfg)
+                    };
                     let mut attempt = dispatch_once(
                         proto,
                         None,
                         run_id,
                         seq,
-                        &stack_https_url,
+                        stack_target,
                         &probe_cfg,
                         &udp_cfg,
                         &udp_throughput_cfg,
                         &throughput_cfg,
-                        &stack_pageload_cfg,
+                        stack_pl_cfg,
                     )
                     .await;
                     seq += 1;
@@ -591,12 +609,12 @@ async fn run_for_target(
                             None,
                             run_id,
                             seq,
-                            &stack_https_url,
+                            stack_target,
                             &probe_cfg,
                             &udp_cfg,
                             &udp_throughput_cfg,
                             &throughput_cfg,
-                            &stack_pageload_cfg,
+                            stack_pl_cfg,
                         )
                         .await;
                         seq += 1;
