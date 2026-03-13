@@ -1095,6 +1095,12 @@ fn write_host_info_card(label: &str, info: &HostInfo, out: &mut String) {
 fn write_protocol_sections(run: &TestRun, out: &mut String, stack_filter: Option<&str>) {
     use crate::metrics::compute_stats;
 
+    // Label suffix for chart data points (e.g. " endpoint", " iis", " nginx")
+    let label_suffix = match stack_filter {
+        None => " endpoint".to_string(),
+        Some(s) => format!(" {s}"),
+    };
+
     let _ = write!(
         out,
         r#"
@@ -1662,7 +1668,7 @@ fn write_protocol_sections(run: &TestRun, out: &mut String, stack_filter: Option
                         .collect();
                     if !data.is_empty() {
                         let avg = data.iter().sum::<f64>() / data.len() as f64;
-                        bars.push((proto.to_string(), avg, color));
+                        bars.push((format!("{proto}{}", label_suffix), avg, color));
                     }
                 }
                 for (proto, color) in [
@@ -1677,7 +1683,7 @@ fn write_protocol_sections(run: &TestRun, out: &mut String, stack_filter: Option
                         .collect();
                     if !data.is_empty() {
                         let avg = data.iter().sum::<f64>() / data.len() as f64;
-                        bars.push((proto.to_string(), avg, color));
+                        bars.push((format!("{proto}{}", label_suffix), avg, color));
                     }
                 }
                 if !bars.is_empty() {
@@ -1714,7 +1720,7 @@ fn write_protocol_sections(run: &TestRun, out: &mut String, stack_filter: Option
                     if data.is_empty() {
                         continue;
                     }
-                    let label = proto.to_string();
+                    let label = format!("{proto}{}", label_suffix);
                     let n = data.len() as f64;
                     let avg_ttfb = data.iter().map(|b| b.ttfb_ms).sum::<f64>() / n;
                     let avg_dcl = data.iter().map(|b| b.dom_content_loaded_ms).sum::<f64>() / n;
@@ -1763,7 +1769,7 @@ fn write_protocol_sections(run: &TestRun, out: &mut String, stack_filter: Option
                         .filter_map(|a| a.browser.as_ref().map(|b| b.load_ms))
                         .collect();
                     if data.len() >= 4 {
-                        groups.push((proto.to_string(), data, color));
+                        groups.push((format!("{proto}{}", label_suffix), data, color));
                     }
                 }
                 for (proto, color) in [
@@ -1777,7 +1783,7 @@ fn write_protocol_sections(run: &TestRun, out: &mut String, stack_filter: Option
                         .filter_map(|a| a.page_load.as_ref().map(|p| p.total_ms))
                         .collect();
                     if data.len() >= 4 {
-                        groups.push((proto.to_string(), data, color));
+                        groups.push((format!("{proto}{}", label_suffix), data, color));
                     }
                 }
                 if !groups.is_empty() {
@@ -1810,7 +1816,7 @@ fn write_protocol_sections(run: &TestRun, out: &mut String, stack_filter: Option
                         .filter_map(|a| a.browser.as_ref().map(|b| b.ttfb_ms))
                         .collect();
                     if data.len() >= 4 {
-                        groups.push((proto.to_string(), data, color));
+                        groups.push((format!("{proto}{}", label_suffix), data, color));
                     }
                 }
                 for (proto, color) in [
@@ -1824,7 +1830,7 @@ fn write_protocol_sections(run: &TestRun, out: &mut String, stack_filter: Option
                         .filter_map(|a| a.page_load.as_ref().map(|p| p.ttfb_ms))
                         .collect();
                     if data.len() >= 4 {
-                        groups.push((proto.to_string(), data, color));
+                        groups.push((format!("{proto}{}", label_suffix), data, color));
                     }
                 }
                 if !groups.is_empty() {
@@ -1857,7 +1863,7 @@ fn write_protocol_sections(run: &TestRun, out: &mut String, stack_filter: Option
                         .filter_map(|a| a.browser.as_ref().map(|b| b.dom_content_loaded_ms))
                         .collect();
                     if data.len() >= 4 {
-                        groups.push((proto.to_string(), data, color));
+                        groups.push((format!("{proto}{}", label_suffix), data, color));
                     }
                 }
                 if !groups.is_empty() {
@@ -1891,7 +1897,7 @@ fn write_protocol_sections(run: &TestRun, out: &mut String, stack_filter: Option
                         .filter_map(|a| a.browser.as_ref().map(|b| b.load_ms))
                         .collect();
                     if data.len() >= 2 {
-                        series.push((proto.to_string(), data, color));
+                        series.push((format!("{proto}{}", label_suffix), data, color));
                     }
                 }
                 // Also add pageload series so real-browser vs synthetic comparison is visible.
@@ -1906,7 +1912,7 @@ fn write_protocol_sections(run: &TestRun, out: &mut String, stack_filter: Option
                         .filter_map(|a| a.page_load.as_ref().map(|p| p.total_ms))
                         .collect();
                     if data.len() >= 2 {
-                        series.push((proto.to_string(), data, color));
+                        series.push((format!("{proto}{}", label_suffix), data, color));
                     }
                 }
                 if series.len() >= 2 {
@@ -2815,6 +2821,8 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
         } else {
             format!("{succeeded} succeeded · {failed} failed")
         };
+        let has_stacks = stack_count > 0;
+        let stack_th = if has_stacks { "<th>Stack</th>" } else { "" };
         let _ = write!(
             out,
             r#"
@@ -2828,7 +2836,7 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
     <table>
       <thead>
         <tr>
-          <th>#</th><th>Protocol</th><th>Status</th>
+          <th>#</th><th>Protocol</th>{stack_th}<th>Status</th>
           <th>DNS (ms)</th><th>TCP (ms)</th><th>TLS (ms)</th>
           <th>TTFB (ms)</th><th>Total (ms)</th>
           <th>HTTP ver / UDP stats</th><th>Error</th>
@@ -2839,10 +2847,11 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
             open = open_attr,
             n = total_attempts,
             meta = escape_html(&summary_meta),
+            stack_th = stack_th,
         );
 
         for a in &run.attempts {
-            append_attempt_row(out, a);
+            append_attempt_row(out, a, has_stacks);
         }
         let _ = writeln!(
             out,
@@ -2851,9 +2860,11 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
     }
 
     // ── TCP kernel stats ─────────────────────────────────────────────────────
+    let has_stacks_for_tcp = run.attempts.iter().any(|a| a.http_stack.is_some());
     let tcp_rows: Vec<&RequestAttempt> = run.attempts.iter().filter(|a| a.tcp.is_some()).collect();
     if !tcp_rows.is_empty() {
         let open_attr = if tcp_rows.len() <= 20 { " open" } else { "" };
+        let tcp_stack_th = if has_stacks_for_tcp { "<th>Stack</th>" } else { "" };
         let _ = write!(
             out,
             r#"
@@ -2864,7 +2875,7 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
     <table>
       <thead>
         <tr>
-          <th>#</th><th>Protocol</th><th>Local → Remote</th>
+          <th>#</th><th>Protocol</th>{tcp_stack_th}<th>Local → Remote</th>
           <th>Connect (ms)</th><th>MSS (B)</th>
           <th>RTT (ms)</th><th>RTT Var (ms)</th><th>Min RTT (ms)</th>
           <th>Cwnd (seg)</th><th>Ssthresh</th>
@@ -2877,6 +2888,7 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
 "#,
             open = open_attr,
             n = tcp_rows.len(),
+            tcp_stack_th = tcp_stack_th,
         );
         for a in &tcp_rows {
             let t = a.tcp.as_ref().unwrap();
@@ -2889,11 +2901,20 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
                 .delivery_rate_bps
                 .map(|b| format!("{:.1}", b as f64 / 1_000_000.0))
                 .unwrap_or_else(|| "—".into());
+            let tcp_stack_td = if has_stacks_for_tcp {
+                let label = match a.http_stack.as_deref() {
+                    Some(s) => escape_html(s),
+                    None => "endpoint".into(),
+                };
+                format!("\n          <td>{label}</td>")
+            } else {
+                String::new()
+            };
             let _ = write!(
                 out,
                 r#"        <tr>
           <td>{seq}</td>
-          <td>{proto}</td>
+          <td>{proto}</td>{tcp_stack_td}
           <td><code>{addrs}</code></td>
           <td>{conn:.3}</td>
           <td>{mss}</td>
@@ -2913,6 +2934,7 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
 "#,
                 seq = a.sequence_num,
                 proto = a.protocol,
+                tcp_stack_td = tcp_stack_td,
                 addrs = local_remote,
                 conn = t.connect_duration_ms,
                 mss = t
@@ -3137,7 +3159,7 @@ fn append_proto_row(out: &mut String, proto: &Protocol, rows: &[&RequestAttempt]
     );
 }
 
-fn append_attempt_row(out: &mut String, a: &RequestAttempt) {
+fn append_attempt_row(out: &mut String, a: &RequestAttempt, show_stack: bool) {
     let dns_ms = a
         .dns
         .as_ref()
@@ -3206,15 +3228,19 @@ fn append_attempt_row(out: &mut String, a: &RequestAttempt) {
         })
         .unwrap_or_else(|| "—".into());
 
-    let proto_label = if let Some(ref stack) = a.http_stack {
-        format!("{} <small style=\"color:#888\">[{}]</small>", a.protocol, escape_html(stack))
+    let stack_td = if show_stack {
+        let label = match a.http_stack.as_deref() {
+            Some(s) => escape_html(s),
+            None => "endpoint".into(),
+        };
+        format!("<td>{label}</td>")
     } else {
-        a.protocol.to_string()
+        String::new()
     };
     let _ = write!(
         out,
         r#"      <tr class="{row_cls}">
-        <td>{seq}</td><td>{proto}</td><td>{status}</td>
+        <td>{seq}</td><td>{proto}</td>{stack_td}<td>{status}</td>
         <td>{dns}</td><td>{tcp}</td><td>{tls}</td>
         <td>{ttfb}</td><td>{total}</td>
         <td>{ver}</td><td>{err}</td>
@@ -3222,7 +3248,8 @@ fn append_attempt_row(out: &mut String, a: &RequestAttempt) {
 "#,
         row_cls = if a.success { "" } else { "row-err" },
         seq = a.sequence_num,
-        proto = proto_label,
+        proto = a.protocol,
+        stack_td = stack_td,
         status = status_cell,
         dns = dns_ms,
         tcp = tcp_ms,
@@ -4222,7 +4249,7 @@ mod tests {
     fn append_attempt_row_success_http_shows_status_code() {
         let a = make_http_attempt(true, 5.0, 10.0);
         let mut out = String::new();
-        append_attempt_row(&mut out, &a);
+        append_attempt_row(&mut out, &a, false);
         assert!(out.contains("200"), "should show HTTP status 200");
         assert!(
             out.contains(r#"class="ok""#),
@@ -4242,7 +4269,7 @@ mod tests {
             occurred_at: Utc::now(),
         });
         let mut out = String::new();
-        append_attempt_row(&mut out, &a);
+        append_attempt_row(&mut out, &a, false);
         assert!(
             out.contains("row-err"),
             "failed attempt should have row-err class"
@@ -4292,7 +4319,7 @@ mod tests {
             http_stack: None,
         };
         let mut out = String::new();
-        append_attempt_row(&mut out, &a);
+        append_attempt_row(&mut out, &a, false);
         assert!(out.contains("2.50"), "rtt_avg_ms should appear");
         assert!(out.contains("loss=0.0%"), "loss percent should appear");
     }
@@ -4331,7 +4358,7 @@ mod tests {
             http_stack: None,
         };
         let mut out = String::new();
-        append_attempt_row(&mut out, &a);
+        append_attempt_row(&mut out, &a, false);
         assert!(out.contains("125.00"), "transfer_ms should appear");
         assert!(out.contains("4.50 MB/s"), "throughput should appear");
     }
@@ -4360,7 +4387,7 @@ mod tests {
             http_stack: None,
         };
         let mut out = String::new();
-        append_attempt_row(&mut out, &a);
+        append_attempt_row(&mut out, &a, false);
         let dash_count = out.matches("—").count();
         assert!(
             dash_count >= 4,
@@ -4381,9 +4408,34 @@ mod tests {
             h.payload_bytes = 1_048_576; // 1 MiB
         }
         let mut out = String::new();
-        append_attempt_row(&mut out, &a);
+        append_attempt_row(&mut out, &a, false);
         assert!(out.contains("12.34 MB/s"), "should show throughput");
         assert!(out.contains("1.0 MiB"), "should show payload size");
+    }
+
+    #[test]
+    fn append_attempt_row_with_stack_shows_stack_column() {
+        let mut a = make_http_attempt(true, 5.0, 100.0);
+        a.http_stack = Some("nginx".into());
+        let mut out = String::new();
+        append_attempt_row(&mut out, &a, true);
+        assert!(out.contains("<td>nginx</td>"), "should show stack name");
+    }
+
+    #[test]
+    fn append_attempt_row_endpoint_shows_endpoint_label() {
+        let a = make_http_attempt(true, 5.0, 100.0);
+        let mut out = String::new();
+        append_attempt_row(&mut out, &a, true);
+        assert!(out.contains("<td>endpoint</td>"), "should show 'endpoint' for non-stack");
+    }
+
+    #[test]
+    fn append_attempt_row_no_stack_column_when_disabled() {
+        let a = make_http_attempt(true, 5.0, 100.0);
+        let mut out = String::new();
+        append_attempt_row(&mut out, &a, false);
+        assert!(!out.contains("<td>endpoint</td>"), "should not show stack column");
     }
 
     #[test]
