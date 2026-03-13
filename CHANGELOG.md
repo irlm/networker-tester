@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.14] – 2026-03-12 — Stack comparison rejects HTTP 4xx
+
+### Fixed
+- **Stack comparison still showed 404 probes**: `success` flag treats HTTP 400-499 as success (`status < 500`). Stack comparison now additionally rejects `status_code >= 400`, correctly showing "not supported" for nginx probes returning 404 (missing static site)
+
+---
+
 ## [0.13.13] – 2026-03-12 — Stack comparison: filter failed probes
 
 ### Fixed
