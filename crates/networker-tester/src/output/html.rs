@@ -1832,6 +1832,10 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
                                 a.http_stack.as_deref() == Some(sn)
                                     && &a.protocol == proto
                                     && a.success
+                                    // Exclude HTTP 4xx client errors (e.g. 404 from
+                                    // missing static site) — success is status < 500
+                                    // in http.rs, so we also reject status >= 400.
+                                    && a.http.as_ref().map_or(true, |h| h.status_code < 400)
                             })
                             .filter_map(|a| {
                                 a.page_load
