@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.17] – 2026-03-13 — Fix browser1/pageload1 on HTTP stack ports, installer bash 3.2 compat
+
+### Fixed
+- **browser1/pageload1 stack port mapping** — HTTP/1.1 probes now correctly map HTTPS stack ports to HTTP: 8444→8081 (nginx), 8445→8082 (IIS). Previously, browser1 sent plain HTTP to HTTPS listeners causing `ERR_CONNECTION_RESET`
+- **Installer bash 3.2 compatibility** — replaced `${var^^}` (bash 4+) with `tr` for macOS compatibility in `ask_lan_options()` and Azure password storage
+- **Installer IIS heredoc quoting** — quoted `<<'IIS_PS1_GENSITE'` heredoc prevents bash from interpreting embedded PowerShell/HTML content as shell syntax
+- **Installer `_iis_setup_powershell`** — removed unused `ep_exe` parameter; hardcoded endpoint binary path
+
+---
+
 ## [0.13.16] – 2026-03-13 — Stack column in All Attempts & TCP Stats, chart label suffixes
 
 ### Added
