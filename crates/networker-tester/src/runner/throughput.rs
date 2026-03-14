@@ -266,7 +266,7 @@ fn rewrite_to_http(base: &url::Url) -> url::Url {
         Some(8444) => Some(8081),
         Some(8445) => Some(8082),
         Some(443) | None => None,
-        Some(p) => Some(p),
+        Some(_) => None,
     };
     let _ = u.set_port(http_port);
     u
@@ -397,28 +397,19 @@ async fn run_labeled_download_probe(
     target.set_query(Some(&format!("bytes={payload_bytes}")));
 
     let mut attempt = match transport {
-        TransportStyle::Http1 => run_probe(
-            run_id,
-            sequence_num,
-            protocol,
-            &target,
-            &RunConfig {
-                payload_size: 0,
-                ..cfg.run_cfg.clone()
-            },
-        )
-        .await,
-        TransportStyle::Http2 => run_probe(
-            run_id,
-            sequence_num,
-            protocol,
-            &target,
-            &RunConfig {
-                payload_size: 0,
-                ..cfg.run_cfg.clone()
-            },
-        )
-        .await,
+        TransportStyle::Http1 | TransportStyle::Http2 => {
+            run_probe(
+                run_id,
+                sequence_num,
+                protocol,
+                &target,
+                &RunConfig {
+                    payload_size: 0,
+                    ..cfg.run_cfg.clone()
+                },
+            )
+            .await
+        }
         TransportStyle::Http3 => {
             run_http3_request_probe(run_id, sequence_num, protocol, &target, 0, &cfg.run_cfg).await
         }
@@ -427,7 +418,10 @@ async fn run_labeled_download_probe(
     if let Some(h) = attempt.http.clone() {
         let mut patched = patch_throughput(h, payload_bytes);
         let overhead_ms = compute_overhead_ms(&attempt);
-        patched.goodput_mbps = mbps(patched.payload_bytes, overhead_ms + patched.total_duration_ms);
+        patched.goodput_mbps = mbps(
+            patched.payload_bytes,
+            overhead_ms + patched.total_duration_ms,
+        );
         attempt.http = Some(patched);
     }
     attempt
@@ -450,33 +444,52 @@ async fn run_labeled_upload_probe(
 
     let timeout_ms = upload_timeout_ms(payload_bytes, cfg.run_cfg.timeout_ms);
     let mut attempt = match transport {
-        TransportStyle::Http1 | TransportStyle::Http2 => run_probe(
-            run_id,
-            sequence_num,
-            protocol,
-            &target,
-            &RunConfig {
-                payload_size: payload_bytes,
-                timeout_ms,
-                ..cfg.run_cfg.clone()
-            },
-        )
-        .await,
+        TransportStyle::Http1 | TransportStyle::Http2 => {
+            run_probe(
+                run_id,
+                sequence_num,
+                protocol,
+                &target,
+                &RunConfig {
+                    payload_size: payload_bytes,
+                    timeout_ms,
+                    ..cfg.run_cfg.clone()
+                },
+            )
+            .await
+        }
         TransportStyle::Http3 => {
             let run_cfg = RunConfig {
                 payload_size: payload_bytes,
                 timeout_ms,
                 ..cfg.run_cfg.clone()
             };
-            run_http3_request_probe(run_id, sequence_num, protocol, &target, payload_bytes, &run_cfg).await
+            run_http3_request_probe(
+                run_id,
+                sequence_num,
+                protocol,
+                &target,
+                payload_bytes,
+                &run_cfg,
+            )
+            .await
         }
     };
 
     if let Some(h) = attempt.http.clone() {
-        let server_recv_ms = attempt.server_timing.as_ref().and_then(|st| st.recv_body_ms);
+        // HTTP/3 uploads may not expose endpoint `Server-Timing: recv;dur=...`
+        // on every stack/path, so `patch_upload_throughput` intentionally falls
+        // back to client-side TTFB when `server_recv_ms` is unavailable.
+        let server_recv_ms = attempt
+            .server_timing
+            .as_ref()
+            .and_then(|st| st.recv_body_ms);
         let mut patched = patch_upload_throughput(h, payload_bytes, server_recv_ms);
         let overhead_ms = compute_overhead_ms(&attempt);
-        patched.goodput_mbps = mbps(patched.payload_bytes, overhead_ms + patched.total_duration_ms);
+        patched.goodput_mbps = mbps(
+            patched.payload_bytes,
+            overhead_ms + patched.total_duration_ms,
+        );
         attempt.http = Some(patched);
     }
     verify_upload(&mut attempt, payload_bytes);

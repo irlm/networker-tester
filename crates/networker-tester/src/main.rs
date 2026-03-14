@@ -579,10 +579,8 @@ async fn run_for_target(
                 preset_name: cfg.page_preset_name.clone(),
             };
 
-            let stack_mode_tasks: Vec<(Protocol, Option<usize>)> = stack_modes
-                .iter()
-                .map(|p| (p.clone(), None))
-                .collect();
+            let stack_mode_tasks: Vec<(Protocol, Option<usize>)> =
+                stack_modes.iter().map(|p| (p.clone(), None)).collect();
 
             for run_num in 0..cfg.runs {
                 info!(stack = %stack.name, run = run_num + 1, "Stack probe run");
@@ -870,9 +868,15 @@ async fn dispatch_once(
 ) -> RequestAttempt {
     match (proto, payload_sz) {
         (Protocol::Download, Some(sz)) => run_download_probe(run_id, seq, sz, throughput_cfg).await,
-        (Protocol::Download1, Some(sz)) => run_download1_probe(run_id, seq, sz, throughput_cfg).await,
-        (Protocol::Download2, Some(sz)) => run_download2_probe(run_id, seq, sz, throughput_cfg).await,
-        (Protocol::Download3, Some(sz)) => run_download3_probe(run_id, seq, sz, throughput_cfg).await,
+        (Protocol::Download1, Some(sz)) => {
+            run_download1_probe(run_id, seq, sz, throughput_cfg).await
+        }
+        (Protocol::Download2, Some(sz)) => {
+            run_download2_probe(run_id, seq, sz, throughput_cfg).await
+        }
+        (Protocol::Download3, Some(sz)) => {
+            run_download3_probe(run_id, seq, sz, throughput_cfg).await
+        }
         (Protocol::Upload, Some(sz)) => run_upload_probe(run_id, seq, sz, throughput_cfg).await,
         (Protocol::Upload1, Some(sz)) => run_upload1_probe(run_id, seq, sz, throughput_cfg).await,
         (Protocol::Upload2, Some(sz)) => run_upload2_probe(run_id, seq, sz, throughput_cfg).await,
@@ -1006,7 +1010,8 @@ fn log_attempt(a: &networker_tester::metrics::RequestAttempt) {
                 retry = retry_suffix,
             );
         }
-        Download | Download1 | Download2 | Download3 | Upload | Upload1 | Upload2 | Upload3 | WebDownload | WebUpload => {
+        Download | Download1 | Download2 | Download3 | Upload | Upload1 | Upload2 | Upload3
+        | WebDownload | WebUpload => {
             if let Some(h) = &a.http {
                 let n = h.payload_bytes;
                 let payload_str = if n >= 1 << 20 {
@@ -1542,7 +1547,8 @@ mod tests {
 
     #[test]
     fn rewrite_url_for_stack_preserves_host_and_path() {
-        let base = url::Url::parse("https://my-server.eastus.cloudapp.azure.com:8443/test").unwrap();
+        let base =
+            url::Url::parse("https://my-server.eastus.cloudapp.azure.com:8443/test").unwrap();
         let result = rewrite_url_for_stack(&base, 8082, true);
         assert_eq!(
             result.host_str(),

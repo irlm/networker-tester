@@ -562,7 +562,7 @@ async fn run_http_or_tcp(
                 udp_throughput: None,
                 page_load: None,
                 browser: None,
-            http_stack: None,
+                http_stack: None,
             }
         }
         Err(e) => {
@@ -1135,7 +1135,7 @@ fn failed_attempt(
         udp_throughput: None,
         page_load: None,
         browser: None,
-            http_stack: None,
+        http_stack: None,
     }
 }
 

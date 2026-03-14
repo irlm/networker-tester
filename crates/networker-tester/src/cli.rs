@@ -750,11 +750,7 @@ mod tests {
 
     #[test]
     fn db_url_flag_parsed() {
-        let cli = Cli::parse_from([
-            "networker-tester",
-            "--db-url",
-            "postgres://localhost/diag",
-        ]);
+        let cli = Cli::parse_from(["networker-tester", "--db-url", "postgres://localhost/diag"]);
         assert_eq!(cli.db_url.as_deref(), Some("postgres://localhost/diag"));
     }
 
@@ -913,12 +909,8 @@ mod tests {
             db_url: Some("postgres://config-host/diag".into()),
             ..Default::default()
         };
-        let cfg = Cli::parse_from([
-            "networker-tester",
-            "--db-url",
-            "postgres://cli-host/diag",
-        ])
-        .resolve(Some(file));
+        let cfg = Cli::parse_from(["networker-tester", "--db-url", "postgres://cli-host/diag"])
+            .resolve(Some(file));
         assert_eq!(
             cfg.db_url.as_deref(),
             Some("postgres://cli-host/diag"),
@@ -929,19 +921,13 @@ mod tests {
     #[test]
     fn db_migrate_false_by_default() {
         let cfg = Cli::parse_from(["networker-tester"]).resolve(None);
-        assert!(
-            !cfg.db_migrate,
-            "--db-migrate should default to false"
-        );
+        assert!(!cfg.db_migrate, "--db-migrate should default to false");
     }
 
     #[test]
     fn save_to_db_false_by_default() {
         let cfg = Cli::parse_from(["networker-tester"]).resolve(None);
-        assert!(
-            !cfg.save_to_db,
-            "--save-to-db should default to false"
-        );
+        assert!(!cfg.save_to_db, "--save-to-db should default to false");
     }
 
     #[test]

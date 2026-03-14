@@ -197,17 +197,32 @@ mod real {
         #[cfg(unix)]
         let (csw_v0, csw_i0) = get_rusage_csw();
 
-        let (endpoint, host, port) = match build_quic_endpoint(target, cfg.insecure, cfg.ca_bundle.as_deref()) {
-            Ok(v) => v,
-            Err(msg) => {
-                return h3_failed(run_id, attempt_id, sequence_num, protocol.clone(), started_at, &msg);
-            }
-        };
+        let (endpoint, host, port) =
+            match build_quic_endpoint(target, cfg.insecure, cfg.ca_bundle.as_deref()) {
+                Ok(v) => v,
+                Err(msg) => {
+                    return h3_failed(
+                        run_id,
+                        attempt_id,
+                        sequence_num,
+                        protocol.clone(),
+                        started_at,
+                        &msg,
+                    );
+                }
+            };
 
         let server_addr = match resolve_addr(&host, port).await {
             Ok(a) => a,
             Err(msg) => {
-                return h3_failed(run_id, attempt_id, sequence_num, protocol.clone(), started_at, &msg);
+                return h3_failed(
+                    run_id,
+                    attempt_id,
+                    sequence_num,
+                    protocol.clone(),
+                    started_at,
+                    &msg,
+                );
             }
         };
 
@@ -227,32 +242,34 @@ mod real {
                 );
             }
         };
-        let conn =
-            match tokio::time::timeout(std::time::Duration::from_millis(cfg.timeout_ms), connecting)
-                .await
-            {
-                Ok(Ok(c)) => c,
-                Ok(Err(e)) => {
-                    return h3_failed(
-                        run_id,
-                        attempt_id,
-                        sequence_num,
-                        protocol.clone(),
-                        started_at,
-                        &format!("QUIC connect: {e}"),
-                    );
-                }
-                Err(_) => {
-                    return h3_failed(
-                        run_id,
-                        attempt_id,
-                        sequence_num,
-                        protocol.clone(),
-                        started_at,
-                        "QUIC handshake timeout",
-                    );
-                }
-            };
+        let conn = match tokio::time::timeout(
+            std::time::Duration::from_millis(cfg.timeout_ms),
+            connecting,
+        )
+        .await
+        {
+            Ok(Ok(c)) => c,
+            Ok(Err(e)) => {
+                return h3_failed(
+                    run_id,
+                    attempt_id,
+                    sequence_num,
+                    protocol.clone(),
+                    started_at,
+                    &format!("QUIC connect: {e}"),
+                );
+            }
+            Err(_) => {
+                return h3_failed(
+                    run_id,
+                    attempt_id,
+                    sequence_num,
+                    protocol.clone(),
+                    started_at,
+                    "QUIC handshake timeout",
+                );
+            }
+        };
         let handshake_ms = t_handshake.elapsed().as_secs_f64() * 1000.0;
 
         // Build h3 connection
@@ -312,7 +329,10 @@ mod real {
             let mut remaining = payload_size;
             while remaining > 0 {
                 let n = remaining.min(chunk.len());
-                if let Err(e) = stream.send_data(bytes::Bytes::copy_from_slice(&chunk[..n])).await {
+                if let Err(e) = stream
+                    .send_data(bytes::Bytes::copy_from_slice(&chunk[..n]))
+                    .await
+                {
                     return h3_failed(
                         run_id,
                         attempt_id,
@@ -715,7 +735,14 @@ mod real {
         async fn h3_failed_helper_sets_fields() {
             let run_id = Uuid::new_v4();
             let attempt_id = Uuid::new_v4();
-            let a = h3_failed(run_id, attempt_id, 7, Protocol::Http3, Utc::now(), "test error");
+            let a = h3_failed(
+                run_id,
+                attempt_id,
+                7,
+                Protocol::Http3,
+                Utc::now(),
+                "test error",
+            );
             assert!(!a.success);
             assert_eq!(a.protocol, Protocol::Http3);
             assert_eq!(a.run_id, run_id);
