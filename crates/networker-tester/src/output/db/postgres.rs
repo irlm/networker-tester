@@ -213,7 +213,7 @@ impl DatabaseBackend for PostgresBackend {
             .await
             .context("acquire postgres migration advisory lock")?;
 
-        let migrate_result = async {
+        let migrate_result: anyhow::Result<()> = async {
             // Create the version-tracking table if it doesn't exist.
             self.client
                 .execute(
