@@ -205,40 +205,61 @@ CREATE INDEX IF NOT EXISTS IX_ServerTimingResult_AttemptId ON ServerTimingResult
 #[async_trait]
 impl DatabaseBackend for PostgresBackend {
     async fn migrate(&self) -> anyhow::Result<()> {
-        // Create the version-tracking table if it doesn't exist.
+        // Serialize migrations across concurrently-running tests/processes.
+        // CI runs PostgreSQL tests in parallel, and without a lock multiple
+        // workers can race while creating/checking `_schema_versions`.
         self.client
-            .execute(
-                "CREATE TABLE IF NOT EXISTS _schema_versions (
-                    version  VARCHAR(20) NOT NULL PRIMARY KEY,
-                    applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
-                )",
-                &[],
-            )
+            .execute("SELECT pg_advisory_lock($1)", &[&0x4E54505747524D31_i64])
             .await
-            .context("create _schema_versions")?;
+            .context("acquire postgres migration advisory lock")?;
 
-        // Check if V001 has already been applied.
-        let row = self
-            .client
-            .query_opt("SELECT 1 FROM _schema_versions WHERE version = 'V001'", &[])
-            .await
-            .context("check V001")?;
-
-        if row.is_none() {
-            self.client
-                .batch_execute(V001_MIGRATION)
-                .await
-                .context("apply V001 migration")?;
-
+        let migrate_result = async {
+            // Create the version-tracking table if it doesn't exist.
             self.client
                 .execute(
-                    "INSERT INTO _schema_versions (version) VALUES ('V001')",
+                    "CREATE TABLE IF NOT EXISTS _schema_versions (
+                        version  VARCHAR(20) NOT NULL PRIMARY KEY,
+                        applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                    )",
                     &[],
                 )
                 .await
-                .context("record V001")?;
-        }
+                .context("create _schema_versions")?;
 
+            // Check if V001 has already been applied.
+            let row = self
+                .client
+                .query_opt("SELECT 1 FROM _schema_versions WHERE version = 'V001'", &[])
+                .await
+                .context("check V001")?;
+
+            if row.is_none() {
+                self.client
+                    .batch_execute(V001_MIGRATION)
+                    .await
+                    .context("apply V001 migration")?;
+
+                self.client
+                    .execute(
+                        "INSERT INTO _schema_versions (version) VALUES ('V001')",
+                        &[],
+                    )
+                    .await
+                    .context("record V001")?;
+            }
+
+            Ok(())
+        }
+        .await;
+
+        let unlock_result = self
+            .client
+            .execute("SELECT pg_advisory_unlock($1)", &[&0x4E54505747524D31_i64])
+            .await
+            .context("release postgres migration advisory lock");
+
+        migrate_result?;
+        unlock_result?;
         Ok(())
     }
 
