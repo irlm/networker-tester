@@ -1562,7 +1562,7 @@ dependencies = [
 
 [[package]]
 name = "networker-endpoint"
-version = "0.13.17"
+version = "0.13.18"
 dependencies = [
  "anyhow",
  "axum",
@@ -1595,7 +1595,7 @@ dependencies = [
 
 [[package]]
 name = "networker-tester"
-version = "0.13.17"
+version = "0.13.18"
 dependencies = [
  "anyhow",
  "async-trait",

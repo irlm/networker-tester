@@ -147,7 +147,7 @@ pub async fn run_udpdownload_probe(
         udp_throughput: Some(result),
         page_load: None,
         browser: None,
-            http_stack: None,
+        http_stack: None,
     }
 }
 
@@ -239,7 +239,7 @@ pub async fn run_udpupload_probe(
         udp_throughput: Some(result),
         page_load: None,
         browser: None,
-            http_stack: None,
+        http_stack: None,
     }
 }
 
@@ -472,7 +472,7 @@ fn udp_tp_failed(
         udp_throughput: None,
         page_load: None,
         browser: None,
-            http_stack: None,
+        http_stack: None,
     }
 }
 

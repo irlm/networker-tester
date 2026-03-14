@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.18] – 2026-03-14 — Protocol-specific throughput probes
+
+### Added
+- **Protocol-specific throughput modes** — `download1`, `download2`, `download3`, `upload1`, `upload2`, and `upload3` enable paper-style single-file transfer comparisons across HTTP/1.1, HTTP/2, and HTTP/3 with distinct report labels
+
+### Changed
+- **`upload1` parity with `download1`** — HTTP/1.1 upload throughput probes now downgrade HTTPS endpoint URLs to the plain-HTTP stack port mapping used by `download1`, keeping H1 transfer comparisons consistent across directions
+- **Docs clarified for `webdownload` / `webupload`** — these modes were already targeting the built-in endpoint transfer routes; the documentation now reflects the existing implementation instead of describing them as arbitrary target-URL probes
+
+---
+
 ## [0.13.17] – 2026-03-13 — Fix browser1/pageload1 on HTTP stack ports, installer bash 3.2 compat
 
 ### Fixed

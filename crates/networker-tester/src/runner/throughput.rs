@@ -55,6 +55,7 @@
 ///   transfer_ms = max(server_timing.recv_body_ms, ttfb_ms)
 use crate::metrics::{ErrorCategory, ErrorRecord, HttpResult, Protocol, RequestAttempt};
 use crate::runner::http::{run_probe, RunConfig};
+use crate::runner::http3::run_http3_request_probe;
 use chrono::Utc;
 use uuid::Uuid;
 
@@ -252,6 +253,253 @@ pub async fn run_webupload_probe(
 pub struct ThroughputConfig {
     pub run_cfg: RunConfig,
     pub base_url: url::Url,
+}
+
+fn rewrite_to_http(base: &url::Url) -> url::Url {
+    if base.scheme() != "https" {
+        return base.clone();
+    }
+    let mut u = base.clone();
+    let _ = u.set_scheme("http");
+    let http_port: Option<u16> = match base.port_or_known_default() {
+        Some(8443) => Some(8080),
+        Some(8444) => Some(8081),
+        Some(8445) => Some(8082),
+        Some(443) | None => None,
+        Some(p) => {
+            tracing::warn!(
+                port = p,
+                "rewrite_to_http: no known HTTP port mapping for HTTPS port {p}, falling back to port 80"
+            );
+            None
+        }
+    };
+    let _ = u.set_port(http_port);
+    u
+}
+
+pub async fn run_download1_probe(
+    run_id: Uuid,
+    sequence_num: u32,
+    payload_bytes: usize,
+    cfg: &ThroughputConfig,
+) -> RequestAttempt {
+    run_labeled_download_probe(
+        run_id,
+        sequence_num,
+        payload_bytes,
+        cfg,
+        Protocol::Download1,
+        TransportStyle::Http1,
+    )
+    .await
+}
+
+pub async fn run_download2_probe(
+    run_id: Uuid,
+    sequence_num: u32,
+    payload_bytes: usize,
+    cfg: &ThroughputConfig,
+) -> RequestAttempt {
+    run_labeled_download_probe(
+        run_id,
+        sequence_num,
+        payload_bytes,
+        cfg,
+        Protocol::Download2,
+        TransportStyle::Http2,
+    )
+    .await
+}
+
+pub async fn run_download3_probe(
+    run_id: Uuid,
+    sequence_num: u32,
+    payload_bytes: usize,
+    cfg: &ThroughputConfig,
+) -> RequestAttempt {
+    run_labeled_download_probe(
+        run_id,
+        sequence_num,
+        payload_bytes,
+        cfg,
+        Protocol::Download3,
+        TransportStyle::Http3,
+    )
+    .await
+}
+
+pub async fn run_upload1_probe(
+    run_id: Uuid,
+    sequence_num: u32,
+    payload_bytes: usize,
+    cfg: &ThroughputConfig,
+) -> RequestAttempt {
+    run_labeled_upload_probe(
+        run_id,
+        sequence_num,
+        payload_bytes,
+        cfg,
+        Protocol::Upload1,
+        TransportStyle::Http1,
+    )
+    .await
+}
+
+pub async fn run_upload2_probe(
+    run_id: Uuid,
+    sequence_num: u32,
+    payload_bytes: usize,
+    cfg: &ThroughputConfig,
+) -> RequestAttempt {
+    run_labeled_upload_probe(
+        run_id,
+        sequence_num,
+        payload_bytes,
+        cfg,
+        Protocol::Upload2,
+        TransportStyle::Http2,
+    )
+    .await
+}
+
+pub async fn run_upload3_probe(
+    run_id: Uuid,
+    sequence_num: u32,
+    payload_bytes: usize,
+    cfg: &ThroughputConfig,
+) -> RequestAttempt {
+    run_labeled_upload_probe(
+        run_id,
+        sequence_num,
+        payload_bytes,
+        cfg,
+        Protocol::Upload3,
+        TransportStyle::Http3,
+    )
+    .await
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TransportStyle {
+    Http1,
+    Http2,
+    Http3,
+}
+
+async fn run_labeled_download_probe(
+    run_id: Uuid,
+    sequence_num: u32,
+    payload_bytes: usize,
+    cfg: &ThroughputConfig,
+    protocol: Protocol,
+    transport: TransportStyle,
+) -> RequestAttempt {
+    let mut target = match transport {
+        TransportStyle::Http1 => rewrite_to_http(&cfg.base_url),
+        TransportStyle::Http2 | TransportStyle::Http3 => cfg.base_url.clone(),
+    };
+    target.set_path("/download");
+    target.set_query(Some(&format!("bytes={payload_bytes}")));
+
+    let mut attempt = match transport {
+        TransportStyle::Http1 | TransportStyle::Http2 => {
+            run_probe(
+                run_id,
+                sequence_num,
+                protocol,
+                &target,
+                &RunConfig {
+                    payload_size: 0,
+                    ..cfg.run_cfg.clone()
+                },
+            )
+            .await
+        }
+        TransportStyle::Http3 => {
+            run_http3_request_probe(run_id, sequence_num, protocol, &target, 0, &cfg.run_cfg).await
+        }
+    };
+
+    if let Some(h) = attempt.http.clone() {
+        let mut patched = patch_throughput(h, payload_bytes);
+        let overhead_ms = compute_overhead_ms(&attempt);
+        patched.goodput_mbps = mbps(
+            patched.payload_bytes,
+            overhead_ms + patched.total_duration_ms,
+        );
+        attempt.http = Some(patched);
+    }
+    attempt
+}
+
+async fn run_labeled_upload_probe(
+    run_id: Uuid,
+    sequence_num: u32,
+    payload_bytes: usize,
+    cfg: &ThroughputConfig,
+    protocol: Protocol,
+    transport: TransportStyle,
+) -> RequestAttempt {
+    let mut target = match transport {
+        TransportStyle::Http1 => rewrite_to_http(&cfg.base_url),
+        TransportStyle::Http2 | TransportStyle::Http3 => cfg.base_url.clone(),
+    };
+    target.set_path("/upload");
+    target.set_query(None);
+
+    let timeout_ms = upload_timeout_ms(payload_bytes, cfg.run_cfg.timeout_ms);
+    let mut attempt = match transport {
+        TransportStyle::Http1 | TransportStyle::Http2 => {
+            run_probe(
+                run_id,
+                sequence_num,
+                protocol,
+                &target,
+                &RunConfig {
+                    payload_size: payload_bytes,
+                    timeout_ms,
+                    ..cfg.run_cfg.clone()
+                },
+            )
+            .await
+        }
+        TransportStyle::Http3 => {
+            let run_cfg = RunConfig {
+                payload_size: payload_bytes,
+                timeout_ms,
+                ..cfg.run_cfg.clone()
+            };
+            run_http3_request_probe(
+                run_id,
+                sequence_num,
+                protocol,
+                &target,
+                payload_bytes,
+                &run_cfg,
+            )
+            .await
+        }
+    };
+
+    if let Some(h) = attempt.http.clone() {
+        // HTTP/3 uploads may not expose endpoint `Server-Timing: recv;dur=...`
+        // on every stack/path, so `patch_upload_throughput` intentionally falls
+        // back to client-side TTFB when `server_recv_ms` is unavailable.
+        let server_recv_ms = attempt
+            .server_timing
+            .as_ref()
+            .and_then(|st| st.recv_body_ms);
+        let mut patched = patch_upload_throughput(h, payload_bytes, server_recv_ms);
+        let overhead_ms = compute_overhead_ms(&attempt);
+        patched.goodput_mbps = mbps(
+            patched.payload_bytes,
+            overhead_ms + patched.total_duration_ms,
+        );
+        attempt.http = Some(patched);
+    }
+    verify_upload(&mut attempt, payload_bytes);
+    attempt
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
