@@ -322,9 +322,9 @@ pub enum Protocol {
     Udp,
     Download,
     Upload,
-    /// GET the target URL as-is; measures HTTP timing + response body throughput.
+    /// GET the endpoint download route; same transfer path as `Download`, different report label.
     WebDownload,
-    /// POST to the target URL with a payload; measures HTTP timing + upload throughput.
+    /// POST to the endpoint upload route; same transfer path as `Upload`, different report label.
     WebUpload,
     /// UDP bulk download from the networker-endpoint UDP throughput server (port 9998).
     UdpDownload,

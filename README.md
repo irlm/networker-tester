@@ -348,8 +348,8 @@ Open `output/report.html` in any browser.
 | `udpupload` | UDP bulk | Custom NWKT protocol: bytes_acked / throughput (client→server) | `--payload-sizes` |
 | `download` | TCP → `/download?bytes=N` | Throughput MB/s (server→client) | `--payload-sizes` |
 | `upload` | TCP → `/upload` | Throughput MB/s (client→server) | `--payload-sizes` |
-| `webdownload` | TCP → target URL | HTTP timing + response body throughput (URL unchanged) | — |
-| `webupload` | TCP → target URL | HTTP timing + upload throughput (URL unchanged) | `--payload-sizes` |
+| `webdownload` | TCP → `/download` | HTTP timing + response body throughput, labeled separately from `download` | `--payload-sizes` |
+| `webupload` | TCP → `/upload` | HTTP timing + upload throughput, labeled separately from `upload` | `--payload-sizes` |
 | `pageload` | HTTP/1.1 | Multi-asset page: ≤6 parallel conns, TLS cost, per-asset timings | HTTPS target |
 | `pageload2` | HTTP/2 | Multi-asset page: single TLS conn, all assets multiplexed | HTTPS target |
 | `pageload3` | HTTP/3 | Multi-asset page: single QUIC conn, all assets multiplexed | HTTPS target |
@@ -360,9 +360,9 @@ which serves one HTML document plus N configurable assets.
 Use `--page-assets N` (default 20) and `--page-asset-size <sz>` (default 10k) to tune the load.
 
 **`download` vs `webdownload`** (and `upload` vs `webupload`):
-`download`/`upload` rewrite the URL path to `/download` or `/upload` on the target host.
-`webdownload`/`webupload` fetch the target URL as-is — useful for testing external URLs or
-labeling a named group separately in the report.
+all four throughput probes target the built-in endpoint routes (`/download` or `/upload`).
+`webdownload`/`webupload` currently use the same endpoint paths as `download`/`upload`, but keep
+separate protocol labels in the report so you can compare named groups side-by-side.
 
 ---
 
@@ -509,6 +509,14 @@ networker-tester \
   --target https://host:8443/health \
   --modes http1 \
   --runs 3 \
+  --insecure
+
+# File-transfer sweep (useful for paper-style size comparisons)
+networker-tester \
+  --target https://host:8443/health \
+  --modes download,upload \
+  --payload-sizes 64k,256k,1m,4m,16m \
+  --runs 5 \
   --insecure
 ```
 
