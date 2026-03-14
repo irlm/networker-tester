@@ -106,6 +106,9 @@ fn resolve_capture_interface(requested: &str, targets: &[String]) -> String {
 }
 
 pub fn check_capture_prereqs(plan: &PacketCapturePlan) -> anyhow::Result<()> {
+    #[cfg(not(target_os = "macos"))]
+    let _ = plan;
+
     let tshark_path =
         detect_tshark().context("packet capture requested but tshark was not found")?;
 
