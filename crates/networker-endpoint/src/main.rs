@@ -79,12 +79,7 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     // Handle subcommands first
-    if let Some(Command::GenerateSite {
-        dir,
-        preset,
-        stack,
-    }) = cli.command
-    {
+    if let Some(Command::GenerateSite { dir, preset, stack }) = cli.command {
         // Minimal logging for generate-site
         tracing_subscriber::fmt()
             .with_env_filter(EnvFilter::new("info"))

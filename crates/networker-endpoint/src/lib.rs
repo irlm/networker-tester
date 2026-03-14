@@ -353,7 +353,11 @@ mod tests {
     #[test]
     fn resolve_preset_small_returns_5_assets() {
         let sizes = resolve_preset("small").unwrap();
-        assert_eq!(sizes.len(), 5, "small preset should produce exactly 5 assets");
+        assert_eq!(
+            sizes.len(),
+            5,
+            "small preset should produce exactly 5 assets"
+        );
     }
 
     #[test]
@@ -532,7 +536,10 @@ mod tests {
         let nested = base.path().join("a").join("b").join("site");
         // The path does not exist yet — generate_static_site must create it.
         generate_static_site(&nested, "small", "apache").unwrap();
-        assert!(nested.join("index.html").exists(), "index.html missing in nested dir");
+        assert!(
+            nested.join("index.html").exists(),
+            "index.html missing in nested dir"
+        );
     }
 
     #[test]

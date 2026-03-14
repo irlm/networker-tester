@@ -128,27 +128,30 @@ near-zero readings when the server responds before fully draining the body.
 
 ---
 
-## `webdownload` — Arbitrary URL Download
+## `webdownload` — Labeled Download Probe
 
-Like `download` but uses the target URL **as-is** (no path rewriting). Works against any
-HTTP server, not just `networker-endpoint`. Payload size is the actual response body.
+Uses the built-in `networker-endpoint` route `GET /download?bytes=N`, just like `download`.
+The difference is the **protocol label** in the output/report (`webdownload` vs `download`),
+which is useful when you want side-by-side comparison groups in a report.
 
 ```bash
-networker-tester --target https://example.com/big-file.bin --modes webdownload --runs 3
+networker-tester --target https://host:8443/health \
+  --modes webdownload --payload-sizes 1m --runs 3 --insecure
 ```
 
-**Populated:** same as `download` (server CSW will be absent unless using networker-endpoint)
-**Note:** `--payload-sizes` is ignored — payload = actual response body length.
+**Populated:** same as `download`
+**Note:** currently rewrites to `/download`; it does not fetch an arbitrary URL as-is.
 
 ---
 
-## `webupload` — Arbitrary URL Upload
+## `webupload` — Labeled Upload Probe
 
-Like `upload` but posts to the target URL as-is.
+Uses the built-in `networker-endpoint` route `POST /upload`, just like `upload`.
+The difference is the **protocol label** in the output/report (`webupload` vs `upload`).
 
 ```bash
-networker-tester --target https://example.com/upload \
-  --modes webupload --payload-sizes 1m --runs 3
+networker-tester --target https://host:8443/health \
+  --modes webupload --payload-sizes 1m --runs 3 --insecure
 ```
 
 **Populated:** same as `upload`

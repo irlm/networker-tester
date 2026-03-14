@@ -321,10 +321,16 @@ pub enum Protocol {
     Http3,
     Udp,
     Download,
+    Download1,
+    Download2,
+    Download3,
     Upload,
-    /// GET the target URL as-is; measures HTTP timing + response body throughput.
+    Upload1,
+    Upload2,
+    Upload3,
+    /// GET the endpoint download route; same transfer path as `Download`, different report label.
     WebDownload,
-    /// POST to the target URL with a payload; measures HTTP timing + upload throughput.
+    /// POST to the endpoint upload route; same transfer path as `Upload`, different report label.
     WebUpload,
     /// UDP bulk download from the networker-endpoint UDP throughput server (port 9998).
     UdpDownload,
@@ -370,7 +376,13 @@ impl std::fmt::Display for Protocol {
             Protocol::Http3 => write!(f, "http3"),
             Protocol::Udp => write!(f, "udp"),
             Protocol::Download => write!(f, "download"),
+            Protocol::Download1 => write!(f, "download1"),
+            Protocol::Download2 => write!(f, "download2"),
+            Protocol::Download3 => write!(f, "download3"),
             Protocol::Upload => write!(f, "upload"),
+            Protocol::Upload1 => write!(f, "upload1"),
+            Protocol::Upload2 => write!(f, "upload2"),
+            Protocol::Upload3 => write!(f, "upload3"),
             Protocol::WebDownload => write!(f, "webdownload"),
             Protocol::WebUpload => write!(f, "webupload"),
             Protocol::UdpDownload => write!(f, "udpdownload"),
@@ -401,7 +413,13 @@ impl std::str::FromStr for Protocol {
             "http3" => Ok(Protocol::Http3),
             "udp" => Ok(Protocol::Udp),
             "download" => Ok(Protocol::Download),
+            "download1" => Ok(Protocol::Download1),
+            "download2" => Ok(Protocol::Download2),
+            "download3" => Ok(Protocol::Download3),
             "upload" => Ok(Protocol::Upload),
+            "upload1" => Ok(Protocol::Upload1),
+            "upload2" => Ok(Protocol::Upload2),
+            "upload3" => Ok(Protocol::Upload3),
             "webdownload" => Ok(Protocol::WebDownload),
             "webupload" => Ok(Protocol::WebUpload),
             "udpdownload" => Ok(Protocol::UdpDownload),
@@ -850,7 +868,13 @@ pub fn primary_metric_label(proto: &Protocol) -> &'static str {
         Protocol::Tcp => "Connect ms",
         Protocol::Udp => "RTT avg ms",
         Protocol::Download
+        | Protocol::Download1
+        | Protocol::Download2
+        | Protocol::Download3
         | Protocol::Upload
+        | Protocol::Upload1
+        | Protocol::Upload2
+        | Protocol::Upload3
         | Protocol::WebDownload
         | Protocol::WebUpload
         | Protocol::UdpDownload
@@ -888,9 +912,16 @@ pub fn primary_metric_value(a: &RequestAttempt) -> Option<f64> {
         }
         Protocol::Tcp => a.tcp.as_ref().map(|t| t.connect_duration_ms),
         Protocol::Udp => a.udp.as_ref().map(|u| u.rtt_avg_ms),
-        Protocol::Download | Protocol::Upload | Protocol::WebDownload | Protocol::WebUpload => {
-            a.http.as_ref().and_then(|h| h.throughput_mbps)
-        }
+        Protocol::Download
+        | Protocol::Download1
+        | Protocol::Download2
+        | Protocol::Download3
+        | Protocol::Upload
+        | Protocol::Upload1
+        | Protocol::Upload2
+        | Protocol::Upload3
+        | Protocol::WebDownload
+        | Protocol::WebUpload => a.http.as_ref().and_then(|h| h.throughput_mbps),
         Protocol::UdpDownload | Protocol::UdpUpload => {
             a.udp_throughput.as_ref().and_then(|ut| ut.throughput_mbps)
         }

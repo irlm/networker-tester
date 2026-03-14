@@ -20,8 +20,9 @@ use networker_tester::runner::{
         run_pageload_probe, warmup_pageload2, warmup_pageload3, PageLoadConfig, SharedH2Conn,
     },
     throughput::{
-        run_download_probe, run_upload_probe, run_webdownload_probe, run_webupload_probe,
-        ThroughputConfig,
+        run_download1_probe, run_download2_probe, run_download3_probe, run_download_probe,
+        run_upload1_probe, run_upload2_probe, run_upload3_probe, run_upload_probe,
+        run_webdownload_probe, run_webupload_probe, ThroughputConfig,
     },
     tls::run_tls_probe,
     udp::{run_udp_probe, UdpProbeConfig},
@@ -73,7 +74,7 @@ async fn main() -> anyhow::Result<()> {
     if modes.is_empty() {
         anyhow::bail!(
             "No valid modes specified. Use: tcp,http1,http2,http3,udp,dns,tls,native,curl,\
-             download,upload,webdownload,webupload,udpdownload,udpupload,\
+             download,download1,download2,download3,upload,upload1,upload2,upload3,webdownload,webupload,udpdownload,udpupload,\
              pageload(H1+H2+H3),pageload1,pageload2,pageload3,\
              browser(H1+H2+H3),browser1,browser2,browser3"
         );
@@ -84,7 +85,13 @@ async fn main() -> anyhow::Result<()> {
         matches!(
             m,
             Protocol::Download
+                | Protocol::Download1
+                | Protocol::Download2
+                | Protocol::Download3
                 | Protocol::Upload
+                | Protocol::Upload1
+                | Protocol::Upload2
+                | Protocol::Upload3
                 | Protocol::WebDownload
                 | Protocol::WebUpload
                 | Protocol::UdpDownload
@@ -309,7 +316,13 @@ async fn run_for_target(
         .iter()
         .flat_map(|p| match p {
             Protocol::Download
+            | Protocol::Download1
+            | Protocol::Download2
+            | Protocol::Download3
             | Protocol::Upload
+            | Protocol::Upload1
+            | Protocol::Upload2
+            | Protocol::Upload3
             | Protocol::WebDownload
             | Protocol::WebUpload
             | Protocol::UdpDownload
@@ -566,10 +579,8 @@ async fn run_for_target(
                 preset_name: cfg.page_preset_name.clone(),
             };
 
-            let stack_mode_tasks: Vec<(Protocol, Option<usize>)> = stack_modes
-                .iter()
-                .map(|p| (p.clone(), None))
-                .collect();
+            let stack_mode_tasks: Vec<(Protocol, Option<usize>)> =
+                stack_modes.iter().map(|p| (p.clone(), None)).collect();
 
             for run_num in 0..cfg.runs {
                 info!(stack = %stack.name, run = run_num + 1, "Stack probe run");
@@ -857,7 +868,19 @@ async fn dispatch_once(
 ) -> RequestAttempt {
     match (proto, payload_sz) {
         (Protocol::Download, Some(sz)) => run_download_probe(run_id, seq, sz, throughput_cfg).await,
+        (Protocol::Download1, Some(sz)) => {
+            run_download1_probe(run_id, seq, sz, throughput_cfg).await
+        }
+        (Protocol::Download2, Some(sz)) => {
+            run_download2_probe(run_id, seq, sz, throughput_cfg).await
+        }
+        (Protocol::Download3, Some(sz)) => {
+            run_download3_probe(run_id, seq, sz, throughput_cfg).await
+        }
         (Protocol::Upload, Some(sz)) => run_upload_probe(run_id, seq, sz, throughput_cfg).await,
+        (Protocol::Upload1, Some(sz)) => run_upload1_probe(run_id, seq, sz, throughput_cfg).await,
+        (Protocol::Upload2, Some(sz)) => run_upload2_probe(run_id, seq, sz, throughput_cfg).await,
+        (Protocol::Upload3, Some(sz)) => run_upload3_probe(run_id, seq, sz, throughput_cfg).await,
         (Protocol::WebDownload, Some(sz)) => {
             run_webdownload_probe(run_id, seq, sz, throughput_cfg).await
         }
@@ -987,7 +1010,8 @@ fn log_attempt(a: &networker_tester::metrics::RequestAttempt) {
                 retry = retry_suffix,
             );
         }
-        Download | Upload | WebDownload | WebUpload => {
+        Download | Download1 | Download2 | Download3 | Upload | Upload1 | Upload2 | Upload3
+        | WebDownload | WebUpload => {
             if let Some(h) = &a.http {
                 let n = h.payload_bytes;
                 let payload_str = if n >= 1 << 20 {
@@ -1226,7 +1250,13 @@ fn print_summary(run: &TestRun) {
         Protocol::Dns,
         Protocol::Tls,
         Protocol::Download,
+        Protocol::Download1,
+        Protocol::Download2,
+        Protocol::Download3,
         Protocol::Upload,
+        Protocol::Upload1,
+        Protocol::Upload2,
+        Protocol::Upload3,
         Protocol::WebDownload,
         Protocol::WebUpload,
         Protocol::UdpDownload,
@@ -1517,7 +1547,8 @@ mod tests {
 
     #[test]
     fn rewrite_url_for_stack_preserves_host_and_path() {
-        let base = url::Url::parse("https://my-server.eastus.cloudapp.azure.com:8443/test").unwrap();
+        let base =
+            url::Url::parse("https://my-server.eastus.cloudapp.azure.com:8443/test").unwrap();
         let result = rewrite_url_for_stack(&base, 8082, true);
         assert_eq!(
             result.host_str(),

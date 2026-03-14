@@ -22,7 +22,7 @@ pub struct Cli {
 
     // ── Modes ─────────────────────────────────────────────────────────────────
     /// Comma-separated probe modes:
-    /// tcp,http1,http2,http3,udp,download,upload,webdownload,webupload,udpdownload,udpupload,
+    /// tcp,http1,http2,http3,udp,download,download1,download2,download3,upload,upload1,upload2,upload3,webdownload,webupload,udpdownload,udpupload,
     /// dns,tls,native,curl,pageload,pageload1,pageload2,pageload3,browser,browser1,browser2,browser3.
     /// pageload: shorthand that runs pageload1+pageload2+pageload3 (all three HTTP versions).
     /// pageload1: HTTP/1.1 page-load (same as the original pageload single-version mode).
@@ -739,6 +739,25 @@ mod tests {
         assert!(result.is_err());
     }
 
+    fn with_env_var_cleared<T>(key: &str, f: impl FnOnce() -> T) -> T {
+        use std::sync::{Mutex, OnceLock};
+
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let _guard = ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env lock poisoned");
+
+        let saved = std::env::var(key).ok();
+        std::env::remove_var(key);
+        let result = f();
+        match saved {
+            Some(v) => std::env::set_var(key, v),
+            None => std::env::remove_var(key),
+        }
+        result
+    }
+
     // ── Database flag tests ────────────────────────────────────────────────────
 
     #[test]
@@ -750,11 +769,7 @@ mod tests {
 
     #[test]
     fn db_url_flag_parsed() {
-        let cli = Cli::parse_from([
-            "networker-tester",
-            "--db-url",
-            "postgres://localhost/diag",
-        ]);
+        let cli = Cli::parse_from(["networker-tester", "--db-url", "postgres://localhost/diag"]);
         assert_eq!(cli.db_url.as_deref(), Some("postgres://localhost/diag"));
     }
 
@@ -824,19 +839,21 @@ mod tests {
 
     #[test]
     fn resolve_db_url_falls_back_to_connection_string() {
-        // When --db-url is absent, the legacy --connection-string should be used
-        // as the db_url in the resolved config.
-        let cfg = Cli::parse_from([
-            "networker-tester",
-            "--connection-string",
-            "Server=localhost;Database=D;User Id=sa;Password=P",
-        ])
-        .resolve(None);
-        assert_eq!(
-            cfg.db_url.as_deref(),
-            Some("Server=localhost;Database=D;User Id=sa;Password=P"),
-            "db_url should fall back to --connection-string"
-        );
+        with_env_var_cleared("NETWORKER_DB_URL", || {
+            // When --db-url is absent, the legacy --connection-string should be used
+            // as the db_url in the resolved config.
+            let cfg = Cli::parse_from([
+                "networker-tester",
+                "--connection-string",
+                "Server=localhost;Database=D;User Id=sa;Password=P",
+            ])
+            .resolve(None);
+            assert_eq!(
+                cfg.db_url.as_deref(),
+                Some("Server=localhost;Database=D;User Id=sa;Password=P"),
+                "db_url should fall back to --connection-string"
+            );
+        });
     }
 
     #[test]
@@ -871,14 +888,16 @@ mod tests {
 
     #[test]
     fn resolve_save_to_db_from_config_file() {
-        let file = ConfigFile {
-            save_to_db: Some(true),
-            db_url: Some("postgres://localhost/diag".into()),
-            ..Default::default()
-        };
-        let cfg = Cli::parse_from(["networker-tester"]).resolve(Some(file));
-        assert!(cfg.save_to_db, "save_to_db should be true from config file");
-        assert_eq!(cfg.db_url.as_deref(), Some("postgres://localhost/diag"));
+        with_env_var_cleared("NETWORKER_DB_URL", || {
+            let file = ConfigFile {
+                save_to_db: Some(true),
+                db_url: Some("postgres://localhost/diag".into()),
+                ..Default::default()
+            };
+            let cfg = Cli::parse_from(["networker-tester"]).resolve(Some(file));
+            assert!(cfg.save_to_db, "save_to_db should be true from config file");
+            assert_eq!(cfg.db_url.as_deref(), Some("postgres://localhost/diag"));
+        });
     }
 
     #[test]
@@ -899,12 +918,14 @@ mod tests {
 
     #[test]
     fn config_file_db_url_used_when_cli_absent() {
-        let file = ConfigFile {
-            db_url: Some("postgres://config-host/diag".into()),
-            ..Default::default()
-        };
-        let cfg = Cli::parse_from(["networker-tester"]).resolve(Some(file));
-        assert_eq!(cfg.db_url.as_deref(), Some("postgres://config-host/diag"));
+        with_env_var_cleared("NETWORKER_DB_URL", || {
+            let file = ConfigFile {
+                db_url: Some("postgres://config-host/diag".into()),
+                ..Default::default()
+            };
+            let cfg = Cli::parse_from(["networker-tester"]).resolve(Some(file));
+            assert_eq!(cfg.db_url.as_deref(), Some("postgres://config-host/diag"));
+        });
     }
 
     #[test]
@@ -913,12 +934,8 @@ mod tests {
             db_url: Some("postgres://config-host/diag".into()),
             ..Default::default()
         };
-        let cfg = Cli::parse_from([
-            "networker-tester",
-            "--db-url",
-            "postgres://cli-host/diag",
-        ])
-        .resolve(Some(file));
+        let cfg = Cli::parse_from(["networker-tester", "--db-url", "postgres://cli-host/diag"])
+            .resolve(Some(file));
         assert_eq!(
             cfg.db_url.as_deref(),
             Some("postgres://cli-host/diag"),
@@ -929,19 +946,13 @@ mod tests {
     #[test]
     fn db_migrate_false_by_default() {
         let cfg = Cli::parse_from(["networker-tester"]).resolve(None);
-        assert!(
-            !cfg.db_migrate,
-            "--db-migrate should default to false"
-        );
+        assert!(!cfg.db_migrate, "--db-migrate should default to false");
     }
 
     #[test]
     fn save_to_db_false_by_default() {
         let cfg = Cli::parse_from(["networker-tester"]).resolve(None);
-        assert!(
-            !cfg.save_to_db,
-            "--save-to-db should default to false"
-        );
+        assert!(!cfg.save_to_db, "--save-to-db should default to false");
     }
 
     #[test]
