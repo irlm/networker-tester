@@ -2,6 +2,7 @@ use anyhow::Context;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use tokio::time::{sleep, Duration};
 
 use crate::cli::{PacketCaptureMode, ResolvedConfig};
 
@@ -59,16 +60,13 @@ pub fn build_plan(cfg: &ResolvedConfig, out_dir: &Path) -> Option<PacketCaptureP
 }
 
 pub fn detect_tshark() -> Option<PathBuf> {
-    for candidate in [
+    [
         "tshark",
         "/opt/homebrew/bin/tshark",
         "/usr/local/bin/tshark",
-    ] {
-        if let Some(path) = which(candidate) {
-            return Some(path);
-        }
-    }
-    None
+    ]
+    .into_iter()
+    .find_map(which)
 }
 
 fn resolve_capture_interface(requested: &str, targets: &[String]) -> String {
@@ -105,14 +103,11 @@ fn resolve_capture_interface(requested: &str, targets: &[String]) -> String {
     }
 }
 
-pub fn check_capture_prereqs(plan: &PacketCapturePlan) -> anyhow::Result<()> {
+pub fn check_capture_prereqs(plan: &PacketCapturePlan, tshark_path: &Path) -> anyhow::Result<()> {
     #[cfg(not(target_os = "macos"))]
     let _ = plan;
 
-    let tshark_path =
-        detect_tshark().context("packet capture requested but tshark was not found")?;
-
-    let out = Command::new(&tshark_path)
+    let out = Command::new(tshark_path)
         .arg("-D")
         .output()
         .context("run tshark -D")?;
@@ -122,7 +117,7 @@ pub fn check_capture_prereqs(plan: &PacketCapturePlan) -> anyhow::Result<()> {
 
     #[cfg(target_os = "macos")]
     {
-        let probe = Command::new(&tshark_path)
+        let probe = Command::new(tshark_path)
             .arg("-i")
             .arg(&plan.interface)
             .arg("-a")
@@ -143,10 +138,10 @@ pub fn check_capture_prereqs(plan: &PacketCapturePlan) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn start(plan: PacketCapturePlan) -> anyhow::Result<PacketCaptureSession> {
-    check_capture_prereqs(&plan)?;
+pub async fn start(plan: PacketCapturePlan) -> anyhow::Result<PacketCaptureSession> {
     let tshark_path =
         detect_tshark().context("packet capture requested but tshark was not found")?;
+    check_capture_prereqs(&plan, &tshark_path)?;
     let stderr_path = plan
         .summary_path
         .with_file_name("packet-capture-tshark.stderr.log");
@@ -163,7 +158,7 @@ pub fn start(plan: PacketCapturePlan) -> anyhow::Result<PacketCaptureSession> {
         .stderr(Stdio::from(stderr_file));
 
     let child = cmd.spawn().context("failed to start tshark capture")?;
-    std::thread::sleep(std::time::Duration::from_millis(1000));
+    sleep(Duration::from_millis(1000)).await;
 
     Ok(PacketCaptureSession {
         child,
@@ -174,21 +169,18 @@ pub fn start(plan: PacketCapturePlan) -> anyhow::Result<PacketCaptureSession> {
 }
 
 impl PacketCaptureSession {
-    pub fn finalize(mut self) -> anyhow::Result<Option<PacketCaptureSummary>> {
+    pub async fn finalize(mut self) -> anyhow::Result<Option<PacketCaptureSummary>> {
         let _ = self.child.try_wait();
         #[cfg(unix)]
-        {
-            let _ = Command::new("kill")
-                .arg("-INT")
-                .arg(self.child.id().to_string())
-                .status();
+        unsafe {
+            let _ = libc::kill(self.child.id() as libc::pid_t, libc::SIGINT);
         }
-        std::thread::sleep(std::time::Duration::from_millis(1200));
+        sleep(Duration::from_millis(1200)).await;
         if self.child.try_wait()?.is_none() {
             let _ = self.child.kill();
         }
         let _ = self.child.wait();
-        std::thread::sleep(std::time::Duration::from_millis(400));
+        sleep(Duration::from_millis(400)).await;
 
         if !self.plan.write_summary_json {
             return Ok(None);
@@ -218,6 +210,7 @@ impl PacketCaptureSession {
 }
 
 fn summarize(tshark_path: &Path, plan: &PacketCapturePlan) -> anyhow::Result<PacketCaptureSummary> {
+    // TODO: batch these tshark reads so large pcaps are not re-read once per filter.
     let stats = [
         ("tcp", "tcp_packets"),
         ("udp", "udp_packets"),
