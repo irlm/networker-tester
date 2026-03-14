@@ -1,0 +1,40 @@
+[package]
+name = "networker-dashboard"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Control plane API server for networker dashboard"
+
+[dependencies]
+# Workspace deps
+tokio       = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+chrono      = { workspace = true }
+uuid        = { workspace = true }
+anyhow      = { workspace = true }
+tracing     = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap        = { workspace = true }
+
+# Local deps
+networker-common = { path = "../networker-common" }
+networker-tester = { path = "../networker-tester", default-features = false, features = ["db-postgres"] }
+
+# Web framework
+axum        = { version = "0.7", features = ["macros", "ws"] }
+tower       = "0.5"
+tower-http  = { version = "0.6", features = ["trace", "cors", "fs"] }
+
+# Database
+tokio-postgres = { version = "0.7", features = ["with-chrono-0_4", "with-uuid-1", "with-serde_json-1"] }
+deadpool-postgres = { version = "0.14", features = ["serde"] }
+
+# Auth
+jsonwebtoken = "9"
+bcrypt       = "0.16"
+
+# Utilities
+futures      = "0.3"
+rpassword    = "7"

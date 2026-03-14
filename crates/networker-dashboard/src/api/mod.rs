@@ -1,0 +1,19 @@
+mod agents;
+mod auth;
+mod dashboard;
+mod jobs;
+mod runs;
+
+use axum::Router;
+use std::sync::Arc;
+
+use crate::AppState;
+
+pub fn router(state: Arc<AppState>) -> Router {
+    Router::new()
+        .merge(auth::router(state.clone()))
+        .merge(agents::router(state.clone()))
+        .merge(jobs::router(state.clone()))
+        .merge(runs::router(state.clone()))
+        .merge(dashboard::router(state.clone()))
+}

@@ -14,6 +14,13 @@ in the kernel or scattered across multiple tools.
 │         ▼                                                          │
 │  JSON artifact  ·  HTML report  ·  Excel workbook  ·  SQL Server   │
 └────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│  Browser (React SPA)  ──WebSocket──►  Dashboard (axum)  ──WS──► Agent  │
+│                                           │                   │        │
+│                                       PostgreSQL         probe runs    │
+│                                                     (networker-tester) │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -35,6 +42,7 @@ in the kernel or scattered across multiple tools.
 - [Output Formats](#output-formats)
 - [SQL Server Setup](#sql-server-setup)
 - [Metrics Captured](#metrics-captured)
+- [Live Web Dashboard](#live-web-dashboard)
 - [Running Tests](#running-tests)
 - [Known Limitations](#known-limitations)
 - [Design Decisions](#design-decisions)
@@ -1164,6 +1172,95 @@ All TCP fields are collected from a single `getsockopt` call per connection — 
 
 ---
 
+## Live Web Dashboard
+
+A browser-based control plane for scheduling probe jobs across distributed agents and
+viewing results in real time. The dashboard consists of three new Rust crates and a
+React frontend:
+
+| Component | Crate / Directory | Role |
+|-----------|-------------------|------|
+| **Common** | `crates/networker-common` | Shared WebSocket message types for the dashboard-agent protocol |
+| **Dashboard** | `crates/networker-dashboard` | axum 0.7 control plane -- REST API, WebSocket hubs, JWT auth, PostgreSQL |
+| **Agent** | `crates/networker-agent` | Daemon that connects to the dashboard, receives jobs, executes probes via networker-tester, and streams results live |
+| **Frontend** | `dashboard/` | React + TypeScript + Vite SPA with Tailwind dark theme |
+
+### Architecture
+
+The agent connects to the dashboard over WebSocket. When a job is created (via the REST
+API or the frontend), the dashboard dispatches it to an online agent. The agent executes
+probes using networker-tester library functions and streams each `RequestAttempt` back as
+it completes. The dashboard fans out live updates to any browser clients subscribed via a
+second WebSocket endpoint. All jobs and results are persisted to PostgreSQL.
+
+Correlation ID logging (= `job_id`) is attached to every log line across the dashboard
+and agent for end-to-end tracing.
+
+### Environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DASHBOARD_DB_URL` | `postgres://networker:networker@localhost:5432/networker_dashboard` | PostgreSQL connection string |
+| `DASHBOARD_JWT_SECRET` | `dev-secret-change-in-production` | Secret for signing JWT tokens |
+| `DASHBOARD_ADMIN_PASSWORD` | *(prompted interactively)* | Admin user password -- set this in CI/production |
+| `DASHBOARD_PORT` | `3000` | HTTP listen port for the dashboard API |
+| `AGENT_DASHBOARD_URL` | `ws://localhost:3000/ws/agent` | WebSocket URL of the dashboard control plane |
+| `AGENT_API_KEY` | *(required)* | API key for agent authentication |
+
+### Local development (5 terminals)
+
+```bash
+# 1. PostgreSQL
+docker compose -f docker-compose.dashboard.yml up postgres
+
+# 2. Endpoint (the server your probes will hit)
+cargo run -p networker-endpoint
+
+# 3. Dashboard control plane
+DASHBOARD_ADMIN_PASSWORD=admin cargo run -p networker-dashboard
+
+# 4. Agent daemon
+AGENT_API_KEY=dev-key cargo run -p networker-agent
+
+# 5. React frontend (http://localhost:5173)
+cd dashboard && npm install && npm run dev
+```
+
+The Vite dev server proxies `/api` and `/ws` requests to `localhost:3000` (the dashboard).
+
+### Frontend pages
+
+| Page | Path | Description |
+|------|------|-------------|
+| Login | `/login` | JWT authentication with username/password |
+| Dashboard | `/` | Summary cards -- agents online, jobs running, runs in last 24h |
+| Agents | `/agents` | List of connected agents with status and last heartbeat |
+| Jobs | `/jobs` | Create, list, and cancel probe jobs |
+| Job Detail | `/jobs/:id` | Live-streaming probe results with Recharts charts |
+| Runs | `/runs` | Historical test runs with drill-down to individual attempts |
+
+### REST API endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/auth/login` | Authenticate and receive a JWT |
+| `GET` | `/api/dashboard/summary` | Agents online, jobs running/pending, 24h run count |
+| `GET` | `/api/agents` | List registered agents |
+| `GET` / `POST` | `/api/jobs` | List or create probe jobs |
+| `GET` | `/api/jobs/:id` | Get job details |
+| `POST` | `/api/jobs/:id/cancel` | Cancel a running or pending job |
+| `GET` | `/api/runs` | List completed test runs |
+| `GET` | `/api/runs/:id/attempts` | Get individual probe attempts for a run |
+
+### WebSocket endpoints
+
+| Path | Direction | Description |
+|------|-----------|-------------|
+| `/ws/agent` | Agent to Dashboard | Agent registration, heartbeats, job results streaming |
+| `/ws/browser` | Dashboard to Browser | Live job updates, attempt results, agent status changes |
+
+---
+
 ## Running Tests
 
 | Layer | Command | Requires |
@@ -1176,13 +1273,14 @@ All TCP fields are collected from a single `getsockopt` call per connection — 
 ### Unit tests
 
 ```bash
-cargo test --workspace --lib          # all crates (tester + endpoint)
+cargo test --workspace --lib          # all crates
 cargo test -p networker-tester --lib  # tester only
 cargo test -p networker-endpoint --lib
 ```
 
 Covers: CLI parsing, payload-size suffixes, throughput formula (download/upload time windows),
-RTT aggregation, HTML rendering, JSON round-trip, TLS ALPN config, UDP probe calculations.
+RTT aggregation, HTML rendering, JSON round-trip, TLS ALPN config, UDP probe calculations,
+and dashboard/agent/common unit tests.
 
 ### Integration tests
 
@@ -1219,7 +1317,7 @@ cargo test --test integration -p networker-tester -- --test-threads=1
 ### Installer tests (bats)
 
 The installer shell scripts (`install.sh`) are tested with [bats-core](https://github.com/bats-core/bats-core).
-77 tests cover argument parsing, deploy-config validation, endpoint loading, config
+95 tests cover argument parsing, deploy-config validation, endpoint loading, config
 generation, and installer behavior.
 
 ```bash
