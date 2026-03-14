@@ -8,7 +8,6 @@ use futures::{SinkExt, StreamExt};
 use std::sync::Arc;
 
 use crate::AppState;
-use networker_common::messages::DashboardEvent;
 use networker_common::protocol;
 
 async fn browser_ws_handler(
@@ -26,7 +25,7 @@ async fn handle_browser_socket(socket: ws::WebSocket, state: Arc<AppState>) {
     let forward_task = tokio::spawn(async move {
         while let Ok(event) = rx.recv().await {
             if let Ok(text) = protocol::encode(&event) {
-                if ws_sink.send(ws::Message::Text(text.into())).await.is_err() {
+                if ws_sink.send(ws::Message::Text(text)).await.is_err() {
                     break;
                 }
             }

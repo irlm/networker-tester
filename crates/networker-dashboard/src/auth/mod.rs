@@ -18,6 +18,7 @@ pub struct Claims {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Used in Phase 2 auth middleware
 pub struct AuthUser {
     pub user_id: Uuid,
     pub username: String,
@@ -46,6 +47,7 @@ pub fn create_token(
     Ok(token)
 }
 
+#[allow(dead_code)] // Used in Phase 2 auth middleware
 pub fn validate_token(token: &str, secret: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
     let data = decode::<Claims>(
         token,
@@ -56,6 +58,7 @@ pub fn validate_token(token: &str, secret: &str) -> Result<Claims, jsonwebtoken:
 }
 
 /// Axum middleware that requires a valid JWT and injects AuthUser into extensions.
+#[allow(dead_code)] // Used in Phase 2 for protected routes
 pub async fn require_auth(mut req: Request, next: Next) -> Response {
     let secret = req
         .extensions()

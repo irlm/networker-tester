@@ -26,7 +26,7 @@ pub async fn run(cfg: &AgentConfig) -> anyhow::Result<()> {
     // Forward outbound messages to WebSocket
     let sink_handle = tokio::spawn(async move {
         while let Some(text) = rx.recv().await {
-            if ws_sink.send(Message::Text(text.into())).await.is_err() {
+            if ws_sink.send(Message::Text(text)).await.is_err() {
                 break;
             }
         }

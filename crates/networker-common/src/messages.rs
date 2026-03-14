@@ -74,12 +74,12 @@ pub enum AgentMessage {
     /// A single probe attempt completed (streamed as it happens).
     AttemptResult {
         job_id: Uuid,
-        attempt: networker_tester::metrics::RequestAttempt,
+        attempt: Box<networker_tester::metrics::RequestAttempt>,
     },
     /// Full test run completed.
     JobComplete {
         job_id: Uuid,
-        run: networker_tester::metrics::TestRun,
+        run: Box<networker_tester::metrics::TestRun>,
     },
     /// Job failed with an error.
     JobError { job_id: Uuid, message: String },
@@ -120,7 +120,7 @@ pub enum DashboardEvent {
     /// A probe attempt completed (live streaming).
     AttemptResult {
         job_id: Uuid,
-        attempt: networker_tester::metrics::RequestAttempt,
+        attempt: Box<networker_tester::metrics::RequestAttempt>,
     },
     /// A job completed with the full test run.
     JobComplete {

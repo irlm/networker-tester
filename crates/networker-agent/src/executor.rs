@@ -168,7 +168,7 @@ pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::UnboundedSender
                     tx,
                     &AgentMessage::AttemptResult {
                         job_id,
-                        attempt: attempt.clone(),
+                        attempt: Box::new(attempt.clone()),
                     },
                     &correlation_id,
                 );
@@ -208,7 +208,10 @@ pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::UnboundedSender
     tracing::info!("Sending JobComplete to dashboard");
     send(
         tx,
-        &AgentMessage::JobComplete { job_id, run },
+        &AgentMessage::JobComplete {
+            job_id,
+            run: Box::new(run),
+        },
         &correlation_id,
     );
     tracing::info!("Job finished");

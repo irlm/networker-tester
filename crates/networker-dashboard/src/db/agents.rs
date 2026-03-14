@@ -91,6 +91,7 @@ pub async fn update_heartbeat(client: &Client, agent_id: &Uuid) -> anyhow::Resul
     Ok(())
 }
 
+#[allow(dead_code)] // Used by admin API in Phase 2
 pub async fn create(
     client: &Client,
     name: &str,
