@@ -1,0 +1,159 @@
+use chrono::{DateTime, Utc};
+use serde::Serialize;
+use tokio_postgres::Client;
+use uuid::Uuid;
+
+#[derive(Debug, Serialize)]
+pub struct JobRow {
+    pub job_id: Uuid,
+    pub definition_id: Option<Uuid>,
+    pub agent_id: Option<Uuid>,
+    pub status: String,
+    pub config: serde_json::Value,
+    pub created_by: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub run_id: Option<Uuid>,
+    pub error_message: Option<String>,
+}
+
+pub async fn create(
+    client: &Client,
+    config: &serde_json::Value,
+    agent_id: Option<&Uuid>,
+    created_by: Option<&Uuid>,
+) -> anyhow::Result<Uuid> {
+    let id = Uuid::new_v4();
+    client
+        .execute(
+            "INSERT INTO job (job_id, agent_id, status, config, created_by)
+             VALUES ($1, $2, 'pending', $3, $4)",
+            &[&id, &agent_id, config, &created_by],
+        )
+        .await?;
+    Ok(id)
+}
+
+pub async fn get(client: &Client, job_id: &Uuid) -> anyhow::Result<Option<JobRow>> {
+    let row = client
+        .query_opt(
+            "SELECT job_id, definition_id, agent_id, status, config, created_by,
+                    created_at, started_at, finished_at, run_id, error_message
+             FROM job WHERE job_id = $1",
+            &[job_id],
+        )
+        .await?;
+
+    Ok(row.map(|r| JobRow {
+        job_id: r.get("job_id"),
+        definition_id: r.get("definition_id"),
+        agent_id: r.get("agent_id"),
+        status: r.get("status"),
+        config: r.get("config"),
+        created_by: r.get("created_by"),
+        created_at: r.get("created_at"),
+        started_at: r.get("started_at"),
+        finished_at: r.get("finished_at"),
+        run_id: r.get("run_id"),
+        error_message: r.get("error_message"),
+    }))
+}
+
+pub async fn list(
+    client: &Client,
+    status_filter: Option<&str>,
+    limit: i64,
+    offset: i64,
+) -> anyhow::Result<Vec<JobRow>> {
+    let rows = if let Some(status) = status_filter {
+        client
+            .query(
+                "SELECT job_id, definition_id, agent_id, status, config, created_by,
+                        created_at, started_at, finished_at, run_id, error_message
+                 FROM job WHERE status = $1
+                 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+                &[&status, &limit, &offset],
+            )
+            .await?
+    } else {
+        client
+            .query(
+                "SELECT job_id, definition_id, agent_id, status, config, created_by,
+                        created_at, started_at, finished_at, run_id, error_message
+                 FROM job ORDER BY created_at DESC LIMIT $1 OFFSET $2",
+                &[&limit, &offset],
+            )
+            .await?
+    };
+
+    Ok(rows
+        .iter()
+        .map(|r| JobRow {
+            job_id: r.get("job_id"),
+            definition_id: r.get("definition_id"),
+            agent_id: r.get("agent_id"),
+            status: r.get("status"),
+            config: r.get("config"),
+            created_by: r.get("created_by"),
+            created_at: r.get("created_at"),
+            started_at: r.get("started_at"),
+            finished_at: r.get("finished_at"),
+            run_id: r.get("run_id"),
+            error_message: r.get("error_message"),
+        })
+        .collect())
+}
+
+pub async fn update_status(
+    client: &Client,
+    job_id: &Uuid,
+    status: &str,
+) -> anyhow::Result<()> {
+    let now: Option<DateTime<Utc>> = match status {
+        "running" => Some(Utc::now()),
+        _ => None,
+    };
+    let finished: Option<DateTime<Utc>> = match status {
+        "completed" | "failed" | "cancelled" => Some(Utc::now()),
+        _ => None,
+    };
+    client
+        .execute(
+            "UPDATE job SET status = $1,
+                started_at = COALESCE($2, started_at),
+                finished_at = COALESCE($3, finished_at)
+             WHERE job_id = $4",
+            &[&status, &now, &finished, job_id],
+        )
+        .await?;
+    Ok(())
+}
+
+pub async fn set_run_id(
+    client: &Client,
+    job_id: &Uuid,
+    run_id: &Uuid,
+) -> anyhow::Result<()> {
+    client
+        .execute(
+            "UPDATE job SET run_id = $1 WHERE job_id = $2",
+            &[run_id, job_id],
+        )
+        .await?;
+    Ok(())
+}
+
+pub async fn set_error(
+    client: &Client,
+    job_id: &Uuid,
+    message: &str,
+) -> anyhow::Result<()> {
+    client
+        .execute(
+            "UPDATE job SET status = 'failed', error_message = $1, finished_at = now() WHERE job_id = $2",
+            &[&message, job_id],
+        )
+        .await?;
+    Ok(())
+}

@@ -2,6 +2,9 @@
 members = [
     "crates/networker-tester",
     "crates/networker-endpoint",
+    "crates/networker-common",
+    "crates/networker-dashboard",
+    "crates/networker-agent",
 ]
 resolver = "2"
 
