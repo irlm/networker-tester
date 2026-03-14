@@ -126,7 +126,7 @@ async fn main() -> anyhow::Result<()> {
         );
     }
     let capture_session = match capture_plan {
-        Some(plan) => match capture::start(plan) {
+        Some(plan) => match capture::start(plan).await {
             Ok(session) => {
                 info!("Tester-side packet capture started");
                 Some(session)
@@ -221,7 +221,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     if let Some(session) = capture_session {
-        match session.finalize() {
+        match session.finalize().await {
             Ok(Some(summary)) => info!(
                 tcp_packets = summary.tcp_packets,
                 udp_packets = summary.udp_packets,
