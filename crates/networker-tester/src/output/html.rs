@@ -360,9 +360,9 @@ pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
         // Pick the "best overall" Internet target as the diff baseline.
         // LAN/Loopback targets show raw values only (as reference).
         let is_lan = |run: &TestRun| -> bool {
-            run.baseline.as_ref().map_or(false, |b| {
-                matches!(b.network_type, NetworkType::LAN | NetworkType::Loopback)
-            })
+            run.baseline
+                .as_ref()
+                .is_some_and(|b| matches!(b.network_type, NetworkType::LAN | NetworkType::Loopback))
         };
 
         // Compute composite score: for each protocol, rank Internet targets
@@ -4948,7 +4948,7 @@ mod tests {
     #[test]
     fn render_multi_single_run_delegates_to_render() {
         let run = make_run();
-        let multi = render_multi(&[run.clone()], None);
+        let multi = render_multi(std::slice::from_ref(&run), None);
         let single = render(&run, None);
         // Single-run multi should produce identical output to render()
         assert_eq!(multi, single, "single-run render_multi must equal render");
