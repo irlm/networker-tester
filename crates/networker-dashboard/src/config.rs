@@ -17,8 +17,9 @@ impl DashboardConfig {
         };
 
         Ok(Self {
-            database_url: std::env::var("DASHBOARD_DB_URL")
-                .unwrap_or_else(|_| "postgres://networker:networker@localhost:5432/networker_dashboard".into()),
+            database_url: std::env::var("DASHBOARD_DB_URL").unwrap_or_else(|_| {
+                "postgres://networker:networker@localhost:5432/networker_dashboard".into()
+            }),
             jwt_secret: std::env::var("DASHBOARD_JWT_SECRET")
                 .unwrap_or_else(|_| "dev-secret-change-in-production".into()),
             admin_password,
@@ -36,8 +37,8 @@ fn prompt_password(prompt: &str) -> anyhow::Result<String> {
     eprint!("{prompt}");
     std::io::stderr().flush()?;
 
-    let password = rpassword::read_password()
-        .map_err(|e| anyhow::anyhow!("Failed to read password: {e}"))?;
+    let password =
+        rpassword::read_password().map_err(|e| anyhow::anyhow!("Failed to read password: {e}"))?;
 
     if password.is_empty() {
         anyhow::bail!("Admin password cannot be empty. Set DASHBOARD_ADMIN_PASSWORD or enter it when prompted.");

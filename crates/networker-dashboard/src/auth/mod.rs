@@ -56,10 +56,7 @@ pub fn validate_token(token: &str, secret: &str) -> Result<Claims, jsonwebtoken:
 }
 
 /// Axum middleware that requires a valid JWT and injects AuthUser into extensions.
-pub async fn require_auth(
-    mut req: Request,
-    next: Next,
-) -> Response {
+pub async fn require_auth(mut req: Request, next: Next) -> Response {
     let secret = req
         .extensions()
         .get::<String>()

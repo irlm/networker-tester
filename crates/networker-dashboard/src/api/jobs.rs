@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -6,6 +5,7 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::AppState;
@@ -78,7 +78,10 @@ async fn create_job(
             tracing::warn!(correlation_id, agent_id = %aid, "Failed to send job to agent");
         }
     } else {
-        tracing::warn!(correlation_id, "No online agent available — job queued as pending");
+        tracing::warn!(
+            correlation_id,
+            "No online agent available — job queued as pending"
+        );
     }
 
     Ok(Json(CreateJobResponse {

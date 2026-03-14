@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-use std::sync::Arc;
 use axum::{
     extract::{ws, Query, State, WebSocketUpgrade},
     response::IntoResponse,
@@ -8,6 +6,8 @@ use axum::{
 };
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
+use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use uuid::Uuid;
 
@@ -28,11 +28,7 @@ impl AgentHub {
         }
     }
 
-    pub async fn register(
-        &self,
-        agent_id: Uuid,
-        tx: mpsc::UnboundedSender<String>,
-    ) {
+    pub async fn register(&self, agent_id: Uuid, tx: mpsc::UnboundedSender<String>) {
         self.agents.write().await.insert(agent_id, tx);
     }
 
@@ -77,11 +73,7 @@ async fn agent_ws_handler(
     ws.on_upgrade(move |socket| handle_agent_socket(socket, state, q.key))
 }
 
-async fn handle_agent_socket(
-    socket: ws::WebSocket,
-    state: Arc<AppState>,
-    api_key: String,
-) {
+async fn handle_agent_socket(socket: ws::WebSocket, state: Arc<AppState>, api_key: String) {
     // Authenticate agent by API key
     let agent = {
         let client = match state.db.get().await {
@@ -166,11 +158,7 @@ async fn handle_agent_socket(
     tracing::info!(agent_id = %agent_id, "Agent disconnected");
 }
 
-async fn handle_agent_message(
-    state: &Arc<AppState>,
-    agent_id: Uuid,
-    msg: AgentMessage,
-) {
+async fn handle_agent_message(state: &Arc<AppState>, agent_id: Uuid, msg: AgentMessage) {
     match msg {
         AgentMessage::Heartbeat { .. } => {
             tracing::trace!(agent_id = %agent_id, "Heartbeat received");
@@ -203,10 +191,9 @@ async fn handle_agent_message(
                 success = attempt.success,
                 "Attempt result received — broadcasting to browsers"
             );
-            let _ = state.events_tx.send(DashboardEvent::AttemptResult {
-                job_id,
-                attempt,
-            });
+            let _ = state
+                .events_tx
+                .send(DashboardEvent::AttemptResult { job_id, attempt });
         }
         AgentMessage::JobComplete { job_id, run } => {
             let correlation_id = job_id.to_string();
@@ -225,7 +212,8 @@ async fn handle_agent_message(
 
             // Update job status
             if let Ok(client) = state.db.get().await {
-                if let Err(e) = crate::db::jobs::update_status(&client, &job_id, "completed").await {
+                if let Err(e) = crate::db::jobs::update_status(&client, &job_id, "completed").await
+                {
                     tracing::error!(correlation_id, error = %e, "Failed to update job status to completed");
                 }
                 if let Err(e) = crate::db::jobs::set_run_id(&client, &job_id, &run_id).await {
@@ -236,7 +224,10 @@ async fn handle_agent_message(
             // Persist the TestRun via networker-tester's DB layer
             let db_url = std::env::var("DASHBOARD_DB_URL").unwrap_or_default();
             if !db_url.is_empty() {
-                tracing::info!(correlation_id, "Saving TestRun to database via networker-tester backend");
+                tracing::info!(
+                    correlation_id,
+                    "Saving TestRun to database via networker-tester backend"
+                );
                 match networker_tester::output::db::connect(&db_url).await {
                     Ok(backend) => {
                         // Run migration to ensure TestRun table exists
@@ -249,10 +240,15 @@ async fn handle_agent_message(
                             tracing::info!(correlation_id, run_id = %run_id, "TestRun saved to database");
                         }
                     }
-                    Err(e) => tracing::error!(correlation_id, error = %e, "Failed to connect to DB for run save"),
+                    Err(e) => {
+                        tracing::error!(correlation_id, error = %e, "Failed to connect to DB for run save")
+                    }
                 }
             } else {
-                tracing::warn!(correlation_id, "DASHBOARD_DB_URL not set — skipping TestRun persistence");
+                tracing::warn!(
+                    correlation_id,
+                    "DASHBOARD_DB_URL not set — skipping TestRun persistence"
+                );
             }
 
             let _ = state.events_tx.send(DashboardEvent::JobComplete {

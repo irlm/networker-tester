@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::AppState;
 
@@ -21,16 +21,19 @@ async fn login(
     State(state): State<Arc<AppState>>,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, StatusCode> {
-    let client = state.db.get().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let client = state
+        .db
+        .get()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let result = crate::db::users::authenticate(&client, &req.username, &req.password)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     match result {
         Some((user_id, role)) => {
-            let token =
-                crate::auth::create_token(user_id, &req.username, &role, &state.jwt_secret)
-                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let token = crate::auth::create_token(user_id, &req.username, &role, &state.jwt_secret)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             Ok(Json(LoginResponse {
                 token,
                 role,

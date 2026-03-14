@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
 use serde::Serialize;
+use std::sync::Arc;
 
 use crate::AppState;
 
@@ -12,10 +12,12 @@ pub struct DashboardSummary {
     pub jobs_pending: i64,
 }
 
-async fn summary(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<DashboardSummary>, StatusCode> {
-    let client = state.db.get().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+async fn summary(State(state): State<Arc<AppState>>) -> Result<Json<DashboardSummary>, StatusCode> {
+    let client = state
+        .db
+        .get()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let agents_online: i64 = client
         .query_one("SELECT COUNT(*) FROM agent WHERE status = 'online'", &[])

@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -6,6 +5,7 @@ use axum::{
     Json, Router,
 };
 use serde::Deserialize;
+use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::AppState;
@@ -21,7 +21,11 @@ async fn list_runs(
     State(state): State<Arc<AppState>>,
     Query(q): Query<ListRunsQuery>,
 ) -> Result<Json<Vec<crate::db::runs::RunSummary>>, StatusCode> {
-    let client = state.db.get().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let client = state
+        .db
+        .get()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let runs = crate::db::runs::list(
         &client,
         q.target_host.as_deref(),
@@ -37,7 +41,11 @@ async fn get_run_attempts(
     State(state): State<Arc<AppState>>,
     Path(run_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let client = state.db.get().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let client = state
+        .db
+        .get()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let attempts = crate::db::runs::get_attempts(&client, &run_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;

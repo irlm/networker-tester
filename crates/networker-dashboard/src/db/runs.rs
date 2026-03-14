@@ -59,10 +59,7 @@ pub async fn list(
         .collect())
 }
 
-pub async fn get_attempts(
-    client: &Client,
-    run_id: &Uuid,
-) -> anyhow::Result<serde_json::Value> {
+pub async fn get_attempts(client: &Client, run_id: &Uuid) -> anyhow::Result<serde_json::Value> {
     // Return attempts with their sub-results as JSON
     let rows = client
         .query(

@@ -127,7 +127,8 @@ pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::UnboundedSender
                     "Dispatching probe"
                 );
 
-                let attempt = dispatch_probe(run_id, seq, mode, &target, &run_cfg, sz, &correlation_id).await;
+                let attempt =
+                    dispatch_probe(run_id, seq, mode, &target, &run_cfg, sz, &correlation_id).await;
 
                 if attempt.success {
                     success_count += 1;
@@ -142,8 +143,16 @@ pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::UnboundedSender
                     );
                 } else {
                     failure_count += 1;
-                    let err_msg = attempt.error.as_ref().map(|e| e.message.as_str()).unwrap_or("unknown");
-                    let err_cat = attempt.error.as_ref().map(|e| format!("{:?}", e.category)).unwrap_or_default();
+                    let err_msg = attempt
+                        .error
+                        .as_ref()
+                        .map(|e| e.message.as_str())
+                        .unwrap_or("unknown");
+                    let err_cat = attempt
+                        .error
+                        .as_ref()
+                        .map(|e| format!("{:?}", e.category))
+                        .unwrap_or_default();
                     tracing::warn!(
                         seq = seq,
                         mode = %mode,
@@ -197,7 +206,11 @@ pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::UnboundedSender
     };
 
     tracing::info!("Sending JobComplete to dashboard");
-    send(tx, &AgentMessage::JobComplete { job_id, run }, &correlation_id);
+    send(
+        tx,
+        &AgentMessage::JobComplete { job_id, run },
+        &correlation_id,
+    );
     tracing::info!("Job finished");
 }
 
@@ -279,7 +292,12 @@ async fn dispatch_probe(
     };
 
     let elapsed = start.elapsed();
-    tracing::debug!(correlation_id, seq, elapsed_ms = elapsed.as_millis() as u64, "Probe dispatch complete");
+    tracing::debug!(
+        correlation_id,
+        seq,
+        elapsed_ms = elapsed.as_millis() as u64,
+        "Probe dispatch complete"
+    );
 
     result
 }
@@ -319,9 +337,18 @@ fn send(tx: &mpsc::UnboundedSender<String>, msg: &AgentMessage, correlation_id: 
                 AgentMessage::JobComplete { .. } => "job_complete",
                 AgentMessage::JobError { .. } => "job_error",
             };
-            tracing::debug!(correlation_id, msg_type, bytes = text.len(), "Sending WS message");
+            tracing::debug!(
+                correlation_id,
+                msg_type,
+                bytes = text.len(),
+                "Sending WS message"
+            );
             if tx.send(text).is_err() {
-                tracing::error!(correlation_id, msg_type, "Failed to send message: channel closed");
+                tracing::error!(
+                    correlation_id,
+                    msg_type,
+                    "Failed to send message: channel closed"
+                );
             }
         }
         Err(e) => tracing::error!(correlation_id, error = %e, "Failed to encode message"),

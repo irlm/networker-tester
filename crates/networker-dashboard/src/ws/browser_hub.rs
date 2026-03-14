@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use axum::{
     extract::{ws, State, WebSocketUpgrade},
     response::IntoResponse,
@@ -6,6 +5,7 @@ use axum::{
     Router,
 };
 use futures::{SinkExt, StreamExt};
+use std::sync::Arc;
 
 use crate::AppState;
 use networker_common::messages::DashboardEvent;

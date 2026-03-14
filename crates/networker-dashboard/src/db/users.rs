@@ -42,8 +42,7 @@ pub async fn authenticate(
                 return Ok(None);
             }
             let hash: String = row.get("password_hash");
-            let valid =
-                bcrypt::verify(password, &hash).map_err(|e| anyhow::anyhow!("{e}"))?;
+            let valid = bcrypt::verify(password, &hash).map_err(|e| anyhow::anyhow!("{e}"))?;
             if valid {
                 let user_id: Uuid = row.get("user_id");
                 let role: String = row.get("role");

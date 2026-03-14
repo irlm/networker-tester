@@ -1,12 +1,12 @@
-mod auth;
 mod api;
+mod auth;
 mod config;
 mod db;
 mod ws;
 
-use std::sync::Arc;
 use anyhow::Context;
 use axum::Router;
+use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing_subscriber::EnvFilter;
 
@@ -53,9 +53,7 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api", api::router(state.clone()))
         .merge(ws::router(state.clone()))
         .layer(tower_http::trace::TraceLayer::new_for_http())
-        .layer(
-            tower_http::cors::CorsLayer::permissive(),
-        );
+        .layer(tower_http::cors::CorsLayer::permissive());
 
     let addr = format!("0.0.0.0:{}", cfg.port);
     tracing::info!("Dashboard listening on {addr}");

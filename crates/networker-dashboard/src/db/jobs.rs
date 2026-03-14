@@ -105,11 +105,7 @@ pub async fn list(
         .collect())
 }
 
-pub async fn update_status(
-    client: &Client,
-    job_id: &Uuid,
-    status: &str,
-) -> anyhow::Result<()> {
+pub async fn update_status(client: &Client, job_id: &Uuid, status: &str) -> anyhow::Result<()> {
     let now: Option<DateTime<Utc>> = match status {
         "running" => Some(Utc::now()),
         _ => None,
@@ -130,11 +126,7 @@ pub async fn update_status(
     Ok(())
 }
 
-pub async fn set_run_id(
-    client: &Client,
-    job_id: &Uuid,
-    run_id: &Uuid,
-) -> anyhow::Result<()> {
+pub async fn set_run_id(client: &Client, job_id: &Uuid, run_id: &Uuid) -> anyhow::Result<()> {
     client
         .execute(
             "UPDATE job SET run_id = $1 WHERE job_id = $2",
@@ -144,11 +136,7 @@ pub async fn set_run_id(
     Ok(())
 }
 
-pub async fn set_error(
-    client: &Client,
-    job_id: &Uuid,
-    message: &str,
-) -> anyhow::Result<()> {
+pub async fn set_error(client: &Client, job_id: &Uuid, message: &str) -> anyhow::Result<()> {
     client
         .execute(
             "UPDATE job SET status = 'failed', error_message = $1, finished_at = now() WHERE job_id = $2",

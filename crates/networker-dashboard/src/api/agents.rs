@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
 use serde::Serialize;
+use std::sync::Arc;
 
 use crate::AppState;
 
@@ -12,7 +12,11 @@ struct AgentListResponse {
 async fn list_agents(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<AgentListResponse>, StatusCode> {
-    let client = state.db.get().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let client = state
+        .db
+        .get()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let agents = crate::db::agents::list(&client)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;

@@ -1,11 +1,11 @@
-mod auth;
 mod agents;
+mod auth;
+mod dashboard;
 mod jobs;
 mod runs;
-mod dashboard;
 
-use std::sync::Arc;
 use axum::Router;
+use std::sync::Arc;
 
 use crate::AppState;
 

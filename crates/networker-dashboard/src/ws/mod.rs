@@ -1,8 +1,8 @@
 pub mod agent_hub;
 pub mod browser_hub;
 
-use std::sync::Arc;
 use axum::Router;
+use std::sync::Arc;
 
 use crate::AppState;
 

@@ -71,11 +71,7 @@ pub async fn get_by_api_key(client: &Client, api_key: &str) -> anyhow::Result<Op
     }))
 }
 
-pub async fn update_status(
-    client: &Client,
-    agent_id: &Uuid,
-    status: &str,
-) -> anyhow::Result<()> {
+pub async fn update_status(client: &Client, agent_id: &Uuid, status: &str) -> anyhow::Result<()> {
     client
         .execute(
             "UPDATE agent SET status = $1, last_heartbeat = now() WHERE agent_id = $2",
