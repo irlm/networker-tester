@@ -205,19 +205,14 @@ pub struct Cli {
     pub log_level: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PacketCaptureMode {
+    #[default]
     None,
     Tester,
     Endpoint,
     Both,
-}
-
-impl Default for PacketCaptureMode {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 impl PacketCaptureMode {
