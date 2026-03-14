@@ -448,6 +448,11 @@ DEPLOY_TEST_IPV4_ONLY=""
 DEPLOY_TEST_IPV6_ONLY=""
 DEPLOY_TEST_VERBOSE=""
 DEPLOY_TEST_LOG_LEVEL=""
+DEPLOY_PACKET_CAPTURE_MODE="none"
+DEPLOY_PACKET_CAPTURE_INSTALL_REQS=""
+DEPLOY_PACKET_CAPTURE_INTERFACE=""
+DEPLOY_PACKET_CAPTURE_WRITE_PCAP=""
+DEPLOY_PACKET_CAPTURE_WRITE_SUMMARY_JSON=""
 
 # Arrays for multi-endpoint support (parallel arrays indexed 0..N-1)
 DEPLOY_EP_PROVIDERS=()
@@ -2416,6 +2421,8 @@ ask_deployment_locations() {
         fi
     fi
 
+    ask_packet_capture_options
+
     # Endpoint location
     if [[ $DO_INSTALL_ENDPOINT -eq 1 ]]; then
         if [[ $DO_REMOTE_ENDPOINT -eq 0 ]]; then
@@ -2551,6 +2558,42 @@ ask_yn() {
             *)     print_warn "Please enter y or n." ;;
         esac
     done
+}
+
+ask_packet_capture_options() {
+    [[ $AUTO_YES -eq 1 ]] && return 0
+
+    echo ""
+    echo "  ${BOLD}Packet capture during benchmark runs?${RESET}"
+    echo "    1) none  [default]"
+    echo "    2) tester only"
+    echo "    3) endpoint only"
+    echo "    4) both tester and endpoint"
+    echo ""
+    printf "  Choice [1]: "
+    local ans
+    read -r ans </dev/tty || true
+    ans="${ans:-1}"
+    case "$ans" in
+        2) DEPLOY_PACKET_CAPTURE_MODE="tester" ;;
+        3) DEPLOY_PACKET_CAPTURE_MODE="endpoint" ;;
+        4) DEPLOY_PACKET_CAPTURE_MODE="both" ;;
+        *) DEPLOY_PACKET_CAPTURE_MODE="none" ;;
+    esac
+
+    if [[ "$DEPLOY_PACKET_CAPTURE_MODE" != "none" ]]; then
+        DEPLOY_PACKET_CAPTURE_WRITE_PCAP="true"
+        DEPLOY_PACKET_CAPTURE_WRITE_SUMMARY_JSON="true"
+        if ask_yn "Install packet-capture requirements automatically when needed?" "y"; then
+            DEPLOY_PACKET_CAPTURE_INSTALL_REQS="true"
+        else
+            DEPLOY_PACKET_CAPTURE_INSTALL_REQS="false"
+        fi
+        printf "  Capture interface [auto]: "
+        local iface
+        read -r iface </dev/tty || true
+        DEPLOY_PACKET_CAPTURE_INTERFACE="${iface:-auto}"
+    fi
 }
 
 # ── Customize flow ────────────────────────────────────────────────────────────
@@ -2815,6 +2858,51 @@ step_install_chrome() {
         print_warn "Chrome/Chromium installed but not yet detectable in standard paths."
         print_warn "browser probe will be compiled in; set NETWORKER_CHROME_PATH if needed."
         CHROME_AVAILABLE=1
+    fi
+}
+
+detect_tshark() {
+    command -v tshark 2>/dev/null && return 0
+    [[ -x /opt/homebrew/bin/tshark ]] && { echo "/opt/homebrew/bin/tshark"; return 0; }
+    [[ -x /usr/local/bin/tshark ]] && { echo "/usr/local/bin/tshark"; return 0; }
+    return 1
+}
+
+step_install_packet_capture_tools() {
+    next_step "Install packet capture tools (tshark/dumpcap)"
+    print_info "Installing packet-capture tools via ${PKG_MGR}…"
+    echo ""
+
+    case "$PKG_MGR" in
+        brew)
+            brew install wireshark
+            ;;
+        apt-get)
+            sudo apt-get update -qq && sudo apt-get install -y tshark
+            ;;
+        dnf)
+            sudo dnf install -y wireshark-cli wireshark
+            ;;
+        pacman)
+            sudo pacman -S --noconfirm wireshark-cli
+            ;;
+        zypper)
+            sudo zypper install -y wireshark
+            ;;
+        apk)
+            sudo apk add tshark
+            ;;
+        *)
+            print_warn "Unknown package manager: $PKG_MGR"
+            print_warn "Install tshark manually to enable packet capture."
+            return
+            ;;
+    esac
+
+    if detect_tshark >/dev/null 2>&1; then
+        print_ok "tshark ready: $(detect_tshark)"
+    else
+        print_warn "Packet-capture install finished but tshark is still not detectable."
     fi
 }
 
@@ -6940,6 +7028,12 @@ _deploy_parse_config() {
     DEPLOY_TEST_VERBOSE="$(jq -r '.tests.verbose // ""' "$cfg")"
     DEPLOY_TEST_LOG_LEVEL="$(jq -r '.tests.log_level // ""' "$cfg")"
     DEPLOY_TEST_HTTP_STACKS="$(jq -r '(.tests.http_stacks // []) | join(",")' "$cfg")"
+
+    DEPLOY_PACKET_CAPTURE_MODE="$(jq -r '.packet_capture.mode // "none"' "$cfg")"
+    DEPLOY_PACKET_CAPTURE_INSTALL_REQS="$(jq -r '.packet_capture.install_requirements // ""' "$cfg")"
+    DEPLOY_PACKET_CAPTURE_INTERFACE="$(jq -r '.packet_capture.interface // ""' "$cfg")"
+    DEPLOY_PACKET_CAPTURE_WRITE_PCAP="$(jq -r '.packet_capture.write_pcap // ""' "$cfg")"
+    DEPLOY_PACKET_CAPTURE_WRITE_SUMMARY_JSON="$(jq -r '.packet_capture.write_summary_json // ""' "$cfg")"
 }
 
 # Load endpoint config at index $1 into the provider-specific globals.
@@ -7011,6 +7105,23 @@ _deploy_preflight() {
     else
         print_err "jq is required (brew install jq / apt install jq)"
         errors=$((errors + 1))
+    fi
+
+    # 1b. packet capture prereqs (tester-side for now)
+    if [[ "$DEPLOY_PACKET_CAPTURE_MODE" == "tester" || "$DEPLOY_PACKET_CAPTURE_MODE" == "both" ]]; then
+        if detect_tshark >/dev/null 2>&1; then
+            print_ok "tshark available"
+            if [[ "$OSTYPE" == darwin* ]]; then
+                print_warn "macOS packet capture also needs BPF permissions (ChmodBPF)."
+                print_warn "If capture fails with /dev/bpf permission denied, enable ChmodBPF before running packet capture."
+            fi
+        else
+            if [[ "$DEPLOY_PACKET_CAPTURE_INSTALL_REQS" == "true" ]]; then
+                print_warn "packet capture requested; tshark not currently installed (installer will try to install it)"
+            else
+                print_warn "packet capture requested but tshark is missing"
+            fi
+        fi
     fi
 
     # 2. Collect all providers used
@@ -7259,6 +7370,10 @@ _deploy_display_plan() {
             printf "    %-22s %s\n" "Payload sizes:" "$(echo "$DEPLOY_TEST_PAYLOAD_SIZES" | jq -r 'join(", ")')"
         [[ -n "$DEPLOY_TEST_HTML_REPORT" ]] && \
             printf "    %-22s %s\n" "HTML report:" "$DEPLOY_TEST_HTML_REPORT"
+        [[ "$DEPLOY_PACKET_CAPTURE_MODE" != "none" ]] && \
+            printf "    %-22s %s\n" "Packet capture:" "$DEPLOY_PACKET_CAPTURE_MODE"
+        [[ -n "$DEPLOY_PACKET_CAPTURE_INTERFACE" ]] && \
+            printf "    %-22s %s\n" "Capture iface:" "$DEPLOY_PACKET_CAPTURE_INTERFACE"
     else
         printf "\n  ${BOLD}Tests:${RESET} deploy only (run_tests: false)\n"
     fi
@@ -7333,6 +7448,20 @@ _deploy_generate_tester_config() {
     [[ -n "$DEPLOY_TEST_HTML_REPORT" ]]              && json="${json},\n  \"html_report\": \"${DEPLOY_TEST_HTML_REPORT}\""
     [[ -n "$DEPLOY_TEST_OUTPUT_DIR" ]]               && json="${json},\n  \"output_dir\": \"${DEPLOY_TEST_OUTPUT_DIR}\""
     [[ -n "$DEPLOY_TEST_LOG_LEVEL" ]]                && json="${json},\n  \"log_level\": \"${DEPLOY_TEST_LOG_LEVEL}\""
+
+    # Packet capture
+    if [[ "$DEPLOY_PACKET_CAPTURE_MODE" != "none" ]]; then
+        json="${json},\n  \"packet_capture\": {\n    \"mode\": \"${DEPLOY_PACKET_CAPTURE_MODE}\""
+        [[ -n "$DEPLOY_PACKET_CAPTURE_INSTALL_REQS" ]] && \
+            json="${json},\n    \"install_requirements\": ${DEPLOY_PACKET_CAPTURE_INSTALL_REQS}"
+        [[ -n "$DEPLOY_PACKET_CAPTURE_INTERFACE" ]] && \
+            json="${json},\n    \"interface\": \"${DEPLOY_PACKET_CAPTURE_INTERFACE}\""
+        [[ "$DEPLOY_PACKET_CAPTURE_WRITE_PCAP" == "true" ]] && \
+            json="${json},\n    \"write_pcap\": true"
+        [[ "$DEPLOY_PACKET_CAPTURE_WRITE_SUMMARY_JSON" == "true" ]] && \
+            json="${json},\n    \"write_summary_json\": true"
+        json="${json}\n  }"
+    fi
 
     # HTTP stacks for comparison (e.g. "nginx,iis" → ["nginx","iis"])
     if [[ -n "$DEPLOY_TEST_HTTP_STACKS" ]]; then
@@ -7614,6 +7743,13 @@ deploy_from_config() {
         # Install Chrome if needed for browser/pageload modes
         if [[ $DO_CHROME_INSTALL -eq 1 && $CHROME_AVAILABLE -eq 0 ]]; then
             step_install_chrome
+        fi
+        if [[ "$DEPLOY_PACKET_CAPTURE_MODE" == "tester" || "$DEPLOY_PACKET_CAPTURE_MODE" == "both" ]]; then
+            if ! detect_tshark >/dev/null 2>&1 && [[ "$DEPLOY_PACKET_CAPTURE_INSTALL_REQS" == "true" ]]; then
+                step_install_packet_capture_tools
+            elif ! detect_tshark >/dev/null 2>&1; then
+                print_warn "Packet capture selected but tshark is not installed; tester-side capture will be skipped."
+            fi
         fi
         if [[ "$INSTALL_METHOD" == "release" ]]; then
             mkdir -p "$INSTALL_DIR"
