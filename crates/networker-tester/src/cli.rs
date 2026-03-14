@@ -22,7 +22,7 @@ pub struct Cli {
 
     // ── Modes ─────────────────────────────────────────────────────────────────
     /// Comma-separated probe modes:
-    /// tcp,http1,http2,http3,udp,download,upload,webdownload,webupload,udpdownload,udpupload,
+    /// tcp,http1,http2,http3,udp,download,download1,download2,download3,upload,upload1,upload2,upload3,webdownload,webupload,udpdownload,udpupload,
     /// dns,tls,native,curl,pageload,pageload1,pageload2,pageload3,browser,browser1,browser2,browser3.
     /// pageload: shorthand that runs pageload1+pageload2+pageload3 (all three HTTP versions).
     /// pageload1: HTTP/1.1 page-load (same as the original pageload single-version mode).

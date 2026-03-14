@@ -16,7 +16,7 @@
 /// HTTP/3 support (see `networker-endpoint` docs).  In CI, HTTP/3 tests are
 /// skipped unless the `H3_TEST` environment variable is set.
 #[cfg(not(feature = "http3"))]
-pub use stub::run_http3_probe;
+pub use stub::{run_http3_probe, run_http3_request_probe};
 
 #[cfg(not(feature = "http3"))]
 mod stub {
@@ -27,15 +27,39 @@ mod stub {
     pub async fn run_http3_probe(
         run_id: Uuid,
         sequence_num: u32,
+        target: &url::Url,
+        timeout_ms: u64,
+        insecure: bool,
+        ca_bundle: Option<&str>,
+    ) -> RequestAttempt {
+        run_http3_request_probe(
+            run_id,
+            sequence_num,
+            Protocol::Http3,
+            target,
+            0,
+            &crate::runner::http::RunConfig {
+                timeout_ms,
+                insecure,
+                ca_bundle: ca_bundle.map(str::to_string),
+                ..Default::default()
+            },
+        )
+        .await
+    }
+
+    pub async fn run_http3_request_probe(
+        run_id: Uuid,
+        sequence_num: u32,
+        protocol: Protocol,
         _target: &url::Url,
-        _timeout_ms: u64,
-        _insecure: bool,
-        _ca_bundle: Option<&str>,
+        _payload_size: usize,
+        _cfg: &crate::runner::http::RunConfig,
     ) -> RequestAttempt {
         RequestAttempt {
             attempt_id: Uuid::new_v4(),
             run_id,
-            protocol: Protocol::Http3,
+            protocol,
             sequence_num,
             started_at: Utc::now(),
             finished_at: Some(Utc::now()),
@@ -68,7 +92,7 @@ mod stub {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(feature = "http3")]
-pub use real::run_http3_probe;
+pub use real::{run_http3_probe, run_http3_request_probe};
 
 #[cfg(feature = "http3")]
 mod real {
@@ -142,6 +166,30 @@ mod real {
         insecure: bool,
         ca_bundle: Option<&str>,
     ) -> RequestAttempt {
+        run_http3_request_probe(
+            run_id,
+            sequence_num,
+            Protocol::Http3,
+            target,
+            0,
+            &crate::runner::http::RunConfig {
+                timeout_ms,
+                insecure,
+                ca_bundle: ca_bundle.map(str::to_string),
+                ..Default::default()
+            },
+        )
+        .await
+    }
+
+    pub async fn run_http3_request_probe(
+        run_id: Uuid,
+        sequence_num: u32,
+        protocol: Protocol,
+        target: &url::Url,
+        payload_size: usize,
+        cfg: &crate::runner::http::RunConfig,
+    ) -> RequestAttempt {
         let attempt_id = Uuid::new_v4();
         let started_at = Utc::now();
         let t0 = Instant::now();
@@ -149,17 +197,17 @@ mod real {
         #[cfg(unix)]
         let (csw_v0, csw_i0) = get_rusage_csw();
 
-        let (endpoint, host, port) = match build_quic_endpoint(target, insecure, ca_bundle) {
+        let (endpoint, host, port) = match build_quic_endpoint(target, cfg.insecure, cfg.ca_bundle.as_deref()) {
             Ok(v) => v,
             Err(msg) => {
-                return h3_failed(run_id, attempt_id, sequence_num, started_at, &msg);
+                return h3_failed(run_id, attempt_id, sequence_num, protocol.clone(), started_at, &msg);
             }
         };
 
         let server_addr = match resolve_addr(&host, port).await {
             Ok(a) => a,
             Err(msg) => {
-                return h3_failed(run_id, attempt_id, sequence_num, started_at, &msg);
+                return h3_failed(run_id, attempt_id, sequence_num, protocol.clone(), started_at, &msg);
             }
         };
 
@@ -173,13 +221,14 @@ mod real {
                     run_id,
                     attempt_id,
                     sequence_num,
+                    protocol.clone(),
                     started_at,
                     &format!("QUIC connect error: {e}"),
                 );
             }
         };
         let conn =
-            match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), connecting)
+            match tokio::time::timeout(std::time::Duration::from_millis(cfg.timeout_ms), connecting)
                 .await
             {
                 Ok(Ok(c)) => c,
@@ -188,6 +237,7 @@ mod real {
                         run_id,
                         attempt_id,
                         sequence_num,
+                        protocol.clone(),
                         started_at,
                         &format!("QUIC connect: {e}"),
                     );
@@ -197,6 +247,7 @@ mod real {
                         run_id,
                         attempt_id,
                         sequence_num,
+                        protocol.clone(),
                         started_at,
                         "QUIC handshake timeout",
                     );
@@ -212,6 +263,7 @@ mod real {
                     run_id,
                     attempt_id,
                     sequence_num,
+                    protocol.clone(),
                     started_at,
                     &format!("h3 handshake: {e}"),
                 );
@@ -224,13 +276,18 @@ mod real {
         });
 
         // Send request
-        let path = if target.path().is_empty() {
-            "/"
+        let mut path = if target.path().is_empty() {
+            "/".to_string()
         } else {
-            target.path()
+            target.path().to_string()
         };
+        if let Some(query) = target.query() {
+            path.push('?');
+            path.push_str(query);
+        }
+        let method = if payload_size > 0 { "POST" } else { "GET" };
         let req = http::Request::builder()
-            .method("GET")
+            .method(method)
             .uri(format!("https://{host}:{port}{path}"))
             .header("user-agent", "networker-tester/0.1 (h3)")
             .body(())
@@ -244,11 +301,30 @@ mod real {
                     run_id,
                     attempt_id,
                     sequence_num,
+                    protocol.clone(),
                     started_at,
                     &format!("h3 send_request: {e}"),
                 );
             }
         };
+        if payload_size > 0 {
+            let chunk = vec![0u8; 16 * 1024];
+            let mut remaining = payload_size;
+            while remaining > 0 {
+                let n = remaining.min(chunk.len());
+                if let Err(e) = stream.send_data(bytes::Bytes::copy_from_slice(&chunk[..n])).await {
+                    return h3_failed(
+                        run_id,
+                        attempt_id,
+                        sequence_num,
+                        protocol.clone(),
+                        started_at,
+                        &format!("h3 send_data: {e}"),
+                    );
+                }
+                remaining -= n;
+            }
+        }
         stream.finish().await.ok();
 
         let resp = match stream.recv_response().await {
@@ -258,6 +334,7 @@ mod real {
                     run_id,
                     attempt_id,
                     sequence_num,
+                    protocol.clone(),
                     started_at,
                     &format!("h3 recv_response: {e}"),
                 );
@@ -309,7 +386,7 @@ mod real {
         RequestAttempt {
             attempt_id,
             run_id,
-            protocol: Protocol::Http3,
+            protocol,
             sequence_num,
             started_at,
             finished_at: Some(Utc::now()),
@@ -349,13 +426,14 @@ mod real {
         run_id: Uuid,
         attempt_id: Uuid,
         sequence_num: u32,
+        protocol: Protocol,
         started_at: chrono::DateTime<Utc>,
         message: &str,
     ) -> RequestAttempt {
         RequestAttempt {
             attempt_id,
             run_id,
-            protocol: Protocol::Http3,
+            protocol,
             sequence_num,
             started_at,
             finished_at: Some(Utc::now()),
@@ -637,7 +715,7 @@ mod real {
         async fn h3_failed_helper_sets_fields() {
             let run_id = Uuid::new_v4();
             let attempt_id = Uuid::new_v4();
-            let a = h3_failed(run_id, attempt_id, 7, Utc::now(), "test error");
+            let a = h3_failed(run_id, attempt_id, 7, Protocol::Http3, Utc::now(), "test error");
             assert!(!a.success);
             assert_eq!(a.protocol, Protocol::Http3);
             assert_eq!(a.run_id, run_id);
