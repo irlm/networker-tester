@@ -148,14 +148,17 @@ pub fn build_page_url(base: &url::Url, asset_sizes: &[usize]) -> String {
 /// Uses `http://` so there is no TLS ALPN negotiation — Chrome physically
 /// cannot use HTTP/2 or HTTP/3 over plain HTTP.
 ///
-/// Port derivation: 8443 → 8080 (endpoint convention); 443 / no port → 80
-/// (HTTP default, omitted from the URL).  Any other explicit port is kept as-is.
+/// Port derivation: 8443 → 8080 (endpoint), 8444 → 8081 (nginx),
+/// 8445 → 8082 (IIS); 443 / no port → 80 (HTTP default, omitted from URL).
+/// Any other explicit port is kept as-is.
 pub fn build_browser_http1_url(base: &url::Url, asset_sizes: &[usize]) -> String {
     let mut target = base.clone();
     let _ = target.set_scheme("http");
     // Derive plain HTTP port from the HTTPS port.
     let http_port: Option<u16> = match base.port_or_known_default() {
-        Some(8443) => Some(8080),
+        Some(8443) => Some(8080), // endpoint
+        Some(8444) => Some(8081), // nginx stack
+        Some(8445) => Some(8082), // IIS stack
         Some(443) | None => None, // use HTTP default (80, omit from URL)
         Some(p) => Some(p),       // non-standard port: keep as-is
     };
@@ -1276,6 +1279,26 @@ mod tests {
         assert!(
             !url.contains(":80"),
             "default port should not appear: {url}"
+        );
+    }
+
+    #[test]
+    fn build_browser_http1_url_nginx_8444_maps_to_8081() {
+        let base = url::Url::parse("https://host:8444/health").unwrap();
+        let url = build_browser_http1_url(&base, &[]);
+        assert!(
+            url.starts_with("http://host:8081/browser-page"),
+            "url={url}"
+        );
+    }
+
+    #[test]
+    fn build_browser_http1_url_iis_8445_maps_to_8082() {
+        let base = url::Url::parse("https://host:8445/health").unwrap();
+        let url = build_browser_http1_url(&base, &[]);
+        assert!(
+            url.starts_with("http://host:8082/browser-page"),
+            "url={url}"
         );
     }
 

@@ -316,7 +316,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.13.16"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.13.17"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -1090,9 +1090,11 @@ _lan_detect_os() {
 # $1 = "tester" | "endpoint"
 ask_lan_options() {
     local role="$1"
-    local ip_var="LAN_${role^^}_IP"
-    local user_var="LAN_${role^^}_USER"
-    local port_var="LAN_${role^^}_PORT"
+    local upper_role
+    upper_role="$(echo "$role" | tr '[:lower:]' '[:upper:]')"
+    local ip_var="LAN_${upper_role}_IP"
+    local user_var="LAN_${upper_role}_USER"
+    local port_var="LAN_${upper_role}_PORT"
 
     echo ""
     print_section "LAN deployment — networker-${role}"
@@ -3488,8 +3490,7 @@ NGINX_CONF
 # Generate a PowerShell script to install and configure IIS on a Windows VM.
 # The output can be piped to az vm run-command / AWS SSM / gcloud SSH.
 _iis_setup_powershell() {
-    local ep_exe="${1:-C:\\networker\\networker-endpoint.exe}"
-    local fqdn="${2:-}"  # FQDN for hostname-based binding (enables HTTP/3 via SNI)
+    local fqdn="${1:-}"  # FQDN for hostname-based binding (enables HTTP/3 via SNI)
     local site_root="C:\\networker-static"
     cat <<IIS_PS1_HEADER
 # ── IIS setup for HTTP stack comparison ──────────────────────────────────────
@@ -3537,40 +3538,40 @@ $siteRoot = "C:\networker-static"
 New-Item -ItemType Directory -Path $siteRoot -Force | Out-Null
 IIS_PS1
 
-    cat <<IIS_PS1_GENSITE
-\$epExe = "${ep_exe}"
-if (Test-Path \$epExe) {
-    \$genSiteHelp = & \$epExe --help 2>&1
-    if (\$genSiteHelp -match 'generate-site') {
+    cat <<'IIS_PS1_GENSITE'
+$epExe = "C:\networker\networker-endpoint.exe"
+if (Test-Path $epExe) {
+    $genSiteHelp = & $epExe --help 2>&1
+    if ($genSiteHelp -match 'generate-site') {
         Write-Host "Generating static test site via endpoint…"
-        & \$epExe generate-site \$siteRoot --preset mixed --stack iis
+        & $epExe generate-site $siteRoot --preset mixed --stack iis
     } else {
         Write-Host "Endpoint does not support generate-site — creating static test page…"
-        \$genSite = \$false
+        $genSite = $false
     }
 } else {
-    Write-Host "Endpoint binary not found at \$epExe — creating static test page…"
-    \$genSite = \$false
+    Write-Host "Endpoint binary not found at $epExe — creating static test page…"
+    $genSite = $false
 }
-if (\$genSite -eq \$false -or -not (Test-Path "\$siteRoot\index.html")) {
+if ($genSite -eq $false -or -not (Test-Path "$siteRoot\index.html")) {
     # Fallback: create test page with 50 assets of mixed sizes
-    \$html = "<!DOCTYPE html>`n<html><head><title>Networker Page Load Test</title>`n"
-    \$html += "<link rel=`"stylesheet`" href=`"style.css`">`n<link rel=`"icon`" href=`"data:,`">`n</head><body>`n"
-    for (\$i = 0; \$i -lt 50; \$i++) { \$html += "<img src=`"asset-\$i.bin`" width=`"1`" height=`"1`" alt=`"`">`n" }
-    \$html += "</body></html>"
-    [IO.File]::WriteAllText("\$siteRoot\index.html", \$html, [Text.Encoding]::UTF8)
-    [IO.File]::WriteAllText("\$siteRoot\style.css", "body{margin:0}", [Text.Encoding]::UTF8)
-    [IO.File]::WriteAllText("\$siteRoot\health", '{"status":"ok","stack":"iis"}', [Text.Encoding]::UTF8)
-    \$sizes = @(512,512,512,512,512,2048,2048,2048,2048,2048,
+    $html = "<!DOCTYPE html>`n<html><head><title>Networker Page Load Test</title>`n"
+    $html += "<link rel=`"stylesheet`" href=`"style.css`">`n<link rel=`"icon`" href=`"data:,`">`n</head><body>`n"
+    for ($i = 0; $i -lt 50; $i++) { $html += "<img src=`"asset-$i.bin`" width=`"1`" height=`"1`" alt=`"`">`n" }
+    $html += "</body></html>"
+    [IO.File]::WriteAllText("$siteRoot\index.html", $html, [Text.Encoding]::UTF8)
+    [IO.File]::WriteAllText("$siteRoot\style.css", "body{margin:0}", [Text.Encoding]::UTF8)
+    [IO.File]::WriteAllText("$siteRoot\health", '{"status":"ok","stack":"iis"}', [Text.Encoding]::UTF8)
+    $sizes = @(512,512,512,512,512,2048,2048,2048,2048,2048,
                4096,4096,4096,4096,4096,8192,8192,8192,8192,8192,
                16384,16384,16384,16384,16384,32768,32768,32768,32768,32768,
                65536,65536,65536,65536,65536,102400,102400,102400,102400,102400,
                204800,204800,204800,204800,204800,409600,409600,614400,614400,1048576)
-    \$rng = New-Object Random
-    for (\$i = 0; \$i -lt \$sizes.Count; \$i++) {
-        \$bytes = New-Object byte[] \$sizes[\$i]
-        \$rng.NextBytes(\$bytes)
-        [IO.File]::WriteAllBytes("\$siteRoot\asset-\$i.bin", \$bytes)
+    $rng = New-Object Random
+    for ($i = 0; $i -lt $sizes.Count; $i++) {
+        $bytes = New-Object byte[] $sizes[$i]
+        $rng.NextBytes($bytes)
+        [IO.File]::WriteAllBytes("$siteRoot\asset-$i.bin", $bytes)
     }
     Write-Host "Created test page with 50 assets"
 }
@@ -3836,7 +3837,7 @@ _azure_win_setup_iis() {
     print_info "Setting up IIS on Windows VM ($vm)…"
     [[ -n "$fqdn" ]] && print_info "Using FQDN for HTTP/3 SNI binding: $fqdn"
     local ps_script output
-    ps_script="$(_iis_setup_powershell "C:\\networker\\networker-endpoint.exe" "$fqdn")"
+    ps_script="$(_iis_setup_powershell "$fqdn")"
 
     output="$(az vm run-command invoke \
         --resource-group "$rg" --name "$vm" \
@@ -4530,7 +4531,9 @@ step_azure_create_vm() {
 
     if [[ "$os_type" == "windows" && -n "${win_pass:-}" ]]; then
         # Store credentials for later display in the summary
-        local pass_var="AZURE_${label^^}_WIN_PASS"
+        local safe_label
+        safe_label="$(echo "$label" | tr '[:lower:]-' '[:upper:]_')"
+        local pass_var="AZURE_${safe_label}_WIN_PASS"
         printf -v "$pass_var" "%s" "$win_pass"
         echo ""
         print_info "Windows credentials:"

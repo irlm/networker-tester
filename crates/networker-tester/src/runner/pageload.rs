@@ -1162,7 +1162,8 @@ pub async fn run_pageload2_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
 /// Used by `pageload1` to match `browser1` behavior — both use plain HTTP
 /// so the comparison is apples-to-apples without TLS overhead.
 ///
-/// Port mapping: 8443 → 8080, 443/default → 80 (omitted), other → kept as-is.
+/// Port mapping: 8443 → 8080 (endpoint), 8444 → 8081 (nginx),
+/// 8445 → 8082 (IIS); 443/default → 80 (omitted), other → kept as-is.
 fn rewrite_to_http(base: &url::Url) -> url::Url {
     if base.scheme() != "https" {
         return base.clone();
@@ -1170,7 +1171,9 @@ fn rewrite_to_http(base: &url::Url) -> url::Url {
     let mut u = base.clone();
     let _ = u.set_scheme("http");
     let http_port: Option<u16> = match base.port_or_known_default() {
-        Some(8443) => Some(8080),
+        Some(8443) => Some(8080), // endpoint
+        Some(8444) => Some(8081), // nginx stack
+        Some(8445) => Some(8082), // IIS stack
         Some(443) | None => None,
         Some(p) => Some(p),
     };
@@ -3547,6 +3550,22 @@ mod tests {
         assert_eq!(r.scheme(), "http");
         assert_eq!(r.port(), Some(8080));
         assert_eq!(r.path(), "/health");
+    }
+
+    #[test]
+    fn rewrite_to_http_8444_becomes_8081() {
+        let url: url::Url = "https://10.0.0.1:8444/health".parse().unwrap();
+        let r = rewrite_to_http(&url);
+        assert_eq!(r.scheme(), "http");
+        assert_eq!(r.port(), Some(8081));
+    }
+
+    #[test]
+    fn rewrite_to_http_8445_becomes_8082() {
+        let url: url::Url = "https://10.0.0.1:8445/health".parse().unwrap();
+        let r = rewrite_to_http(&url);
+        assert_eq!(r.scheme(), "http");
+        assert_eq!(r.port(), Some(8082));
     }
 
     #[test]
