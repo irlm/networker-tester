@@ -739,6 +739,25 @@ mod tests {
         assert!(result.is_err());
     }
 
+    fn with_env_var_cleared<T>(key: &str, f: impl FnOnce() -> T) -> T {
+        use std::sync::{Mutex, OnceLock};
+
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let _guard = ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env lock poisoned");
+
+        let saved = std::env::var(key).ok();
+        std::env::remove_var(key);
+        let result = f();
+        match saved {
+            Some(v) => std::env::set_var(key, v),
+            None => std::env::remove_var(key),
+        }
+        result
+    }
+
     // ── Database flag tests ────────────────────────────────────────────────────
 
     #[test]
@@ -820,19 +839,21 @@ mod tests {
 
     #[test]
     fn resolve_db_url_falls_back_to_connection_string() {
-        // When --db-url is absent, the legacy --connection-string should be used
-        // as the db_url in the resolved config.
-        let cfg = Cli::parse_from([
-            "networker-tester",
-            "--connection-string",
-            "Server=localhost;Database=D;User Id=sa;Password=P",
-        ])
-        .resolve(None);
-        assert_eq!(
-            cfg.db_url.as_deref(),
-            Some("Server=localhost;Database=D;User Id=sa;Password=P"),
-            "db_url should fall back to --connection-string"
-        );
+        with_env_var_cleared("NETWORKER_DB_URL", || {
+            // When --db-url is absent, the legacy --connection-string should be used
+            // as the db_url in the resolved config.
+            let cfg = Cli::parse_from([
+                "networker-tester",
+                "--connection-string",
+                "Server=localhost;Database=D;User Id=sa;Password=P",
+            ])
+            .resolve(None);
+            assert_eq!(
+                cfg.db_url.as_deref(),
+                Some("Server=localhost;Database=D;User Id=sa;Password=P"),
+                "db_url should fall back to --connection-string"
+            );
+        });
     }
 
     #[test]
@@ -867,14 +888,16 @@ mod tests {
 
     #[test]
     fn resolve_save_to_db_from_config_file() {
-        let file = ConfigFile {
-            save_to_db: Some(true),
-            db_url: Some("postgres://localhost/diag".into()),
-            ..Default::default()
-        };
-        let cfg = Cli::parse_from(["networker-tester"]).resolve(Some(file));
-        assert!(cfg.save_to_db, "save_to_db should be true from config file");
-        assert_eq!(cfg.db_url.as_deref(), Some("postgres://localhost/diag"));
+        with_env_var_cleared("NETWORKER_DB_URL", || {
+            let file = ConfigFile {
+                save_to_db: Some(true),
+                db_url: Some("postgres://localhost/diag".into()),
+                ..Default::default()
+            };
+            let cfg = Cli::parse_from(["networker-tester"]).resolve(Some(file));
+            assert!(cfg.save_to_db, "save_to_db should be true from config file");
+            assert_eq!(cfg.db_url.as_deref(), Some("postgres://localhost/diag"));
+        });
     }
 
     #[test]
@@ -895,12 +918,14 @@ mod tests {
 
     #[test]
     fn config_file_db_url_used_when_cli_absent() {
-        let file = ConfigFile {
-            db_url: Some("postgres://config-host/diag".into()),
-            ..Default::default()
-        };
-        let cfg = Cli::parse_from(["networker-tester"]).resolve(Some(file));
-        assert_eq!(cfg.db_url.as_deref(), Some("postgres://config-host/diag"));
+        with_env_var_cleared("NETWORKER_DB_URL", || {
+            let file = ConfigFile {
+                db_url: Some("postgres://config-host/diag".into()),
+                ..Default::default()
+            };
+            let cfg = Cli::parse_from(["networker-tester"]).resolve(Some(file));
+            assert_eq!(cfg.db_url.as_deref(), Some("postgres://config-host/diag"));
+        });
     }
 
     #[test]
