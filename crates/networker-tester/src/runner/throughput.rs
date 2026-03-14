@@ -266,7 +266,13 @@ fn rewrite_to_http(base: &url::Url) -> url::Url {
         Some(8444) => Some(8081),
         Some(8445) => Some(8082),
         Some(443) | None => None,
-        Some(_) => None,
+        Some(p) => {
+            tracing::warn!(
+                port = p,
+                "rewrite_to_http: no known HTTP port mapping for HTTPS port {p}, falling back to port 80"
+            );
+            None
+        }
     };
     let _ = u.set_port(http_port);
     u
