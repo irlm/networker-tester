@@ -205,6 +205,25 @@ CSS/JS/fonts, and large images/bundles — rather than uniform-size assets.
 - [`examples/deploy-lan.json`](../examples/deploy-lan.json) — Multi-endpoint LAN deployment with remote tester
 - [`examples/deploy-multi-cloud.json`](../examples/deploy-multi-cloud.json) — Compare Azure vs AWS vs GCP endpoints
 
+## Validation & Limitations
+
+The installer validates your deploy config before any resources are created. Validation
+errors are shown with the endpoint index and a description of the problem:
+
+```
+Validating deploy config ────
+  ✗ endpoints[1]: Windows VM name 'networker-ep-eastus-windows' is 27 chars (max 15)
+```
+
+Known constraints:
+
+| Constraint | Scope | Detail |
+|------------|-------|--------|
+| Windows VM name ≤ 15 characters | Azure, AWS, GCP | Windows computer names (NetBIOS) are limited to 15 characters. Applies to `vm_name` (Azure/GCP) and `instance_name` (AWS) when `os` is `"windows"`. Use short names like `"nw-ep-east"`. |
+| LAN requires `ip` | LAN endpoints | The `lan.ip` field is required for LAN provider endpoints. |
+| Valid provider required | All entries | Each `tester` and `endpoints[]` entry must specify a valid `provider` (`local`, `lan`, `azure`, `aws`, `gcp`). |
+| Schema version must be `1` | Top-level | The `version` field is required and must be `1`. |
+
 ## Non-interactive mode
 
 The `--deploy` flag automatically sets `AUTO_YES=1`, so all confirmation prompts
