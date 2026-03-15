@@ -116,6 +116,20 @@ async fn main() -> anyhow::Result<()> {
         "Starting networker-tester"
     );
 
+    if cfg.impairment.delay_ms > 0 {
+        warn!(
+            delay_ms = cfg.impairment.delay_ms,
+            "impairment delay uses the endpoint /delay route and is intended for controlled benchmark environments, not public exposure"
+        );
+        if cfg.impairment.delay_ms as u128 > cfg.timeout as u128 {
+            warn!(
+                delay_ms = cfg.impairment.delay_ms,
+                timeout_ms = cfg.timeout,
+                "configured impairment delay exceeds request timeout; this scenario may fail by construction"
+            );
+        }
+    }
+
     // ── Ensure output dir exists ──────────────────────────────────────────────
     let out_dir = PathBuf::from(&cfg.output_dir);
     std::fs::create_dir_all(&out_dir).context("Cannot create output directory")?;

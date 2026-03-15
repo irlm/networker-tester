@@ -190,6 +190,11 @@ All fields are optional. If omitted, no impairment is applied.
 Current scoped support in this first version focuses on **delay injection** by routing supported
 HTTP-family probes through the endpoint's built-in `/delay?ms=N` behavior.
 
+Security note:
+- `/delay` is intended for **controlled benchmark environments**.
+- Do not expose it broadly on public/shared endpoints unless you understand and accept the risk.
+- The client-side config clamps `delay_ms` to a maximum of `10000 ms` in this version.
+
 Default profile mapping:
 - `none` → `0 ms`
 - `wan` → `40 ms`

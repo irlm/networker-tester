@@ -270,6 +270,8 @@ pub struct ImpairmentConfig {
     pub delay_ms: Option<u64>,
 }
 
+pub const MAX_IMPAIRMENT_DELAY_MS: u64 = 10_000;
+
 #[derive(Debug, Clone)]
 pub struct ResolvedImpairmentConfig {
     pub profile: ImpairmentProfile,
@@ -449,9 +451,10 @@ impl Cli {
         let impairment = {
             let ic = f.impairment.unwrap_or_default();
             let profile = ic.profile.unwrap_or_default();
+            let requested_delay = ic.delay_ms.unwrap_or_else(|| profile.default_delay_ms());
             ResolvedImpairmentConfig {
                 profile,
-                delay_ms: ic.delay_ms.unwrap_or_else(|| profile.default_delay_ms()),
+                delay_ms: requested_delay.min(MAX_IMPAIRMENT_DELAY_MS),
             }
         };
 
@@ -994,6 +997,19 @@ mod tests {
             assert!(cfg.save_to_db, "save_to_db should be true from config file");
             assert_eq!(cfg.db_url.as_deref(), Some("postgres://localhost/diag"));
         });
+    }
+
+    #[test]
+    fn impairment_delay_is_clamped_to_maximum() {
+        let file = ConfigFile {
+            impairment: Some(ImpairmentConfig {
+                profile: Some(ImpairmentProfile::Satellite),
+                delay_ms: Some(MAX_IMPAIRMENT_DELAY_MS + 1234),
+            }),
+            ..Default::default()
+        };
+        let cfg = Cli::parse_from(["networker-tester"]).resolve(Some(file));
+        assert_eq!(cfg.impairment.delay_ms, MAX_IMPAIRMENT_DELAY_MS);
     }
 
     #[test]
