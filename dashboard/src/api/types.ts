@@ -73,7 +73,9 @@ export interface LiveAttempt {
   dns?: { duration_ms: number; query_name: string; resolved_ips: string[] };
   tcp?: { connect_duration_ms: number; remote_addr: string };
   tls?: { handshake_duration_ms: number; protocol_version: string; cipher_suite: string };
-  http?: { status_code: number; ttfb_ms: number; total_duration_ms: number; negotiated_version: string; throughput_mbps?: number; payload_bytes?: number };
-  udp?: { rtt_avg_ms: number; loss_percent: number; probe_count: number };
+  http?: { status_code: number; ttfb_ms: number; total_duration_ms: number; negotiated_version: string; throughput_mbps?: number; goodput_mbps?: number; payload_bytes?: number; body_size_bytes?: number; headers_size_bytes?: number; redirect_count?: number; cpu_time_ms?: number };
+  udp?: { rtt_avg_ms: number; rtt_min_ms?: number; rtt_p95_ms?: number; jitter_ms?: number; loss_percent: number; probe_count: number; success_count?: number };
   error?: { category: string; message: string; detail?: string };
+  page_load?: { total_ms: number; ttfb_ms?: number; asset_count: number; assets_fetched: number; total_bytes?: number; connections_opened?: number; tls_setup_ms?: number; tls_overhead_ratio?: number; cpu_time_ms?: number; connection_reused?: boolean };
+  browser?: { load_ms: number; dom_content_loaded_ms?: number; ttfb_ms?: number; resource_count?: number; transferred_bytes?: number; protocol?: string };
 }

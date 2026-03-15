@@ -8,6 +8,16 @@ import { usePageTitle } from '../hooks/usePageTitle';
 
 const STATUS_OPTIONS = ['all', 'pending', 'running', 'completed', 'failed', 'cancelled'] as const;
 
+function formatDuration(start: Date, end: Date): string {
+  const ms = end.getTime() - start.getTime();
+  if (ms < 1000) return `${ms}ms`;
+  const secs = Math.floor(ms / 1000);
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.floor(secs / 60);
+  const remainSecs = secs % 60;
+  return `${mins}m ${remainSecs}s`;
+}
+
 export function JobsPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [showCreate, setShowCreate] = useState(false);
@@ -93,36 +103,62 @@ export function JobsPage() {
               <th className="px-4 py-3 text-left">Job ID</th>
               <th className="px-4 py-3 text-left">Target</th>
               <th className="px-4 py-3 text-left">Modes</th>
+              <th className="px-4 py-3 text-left">Runs</th>
               <th className="px-4 py-3 text-left">Status</th>
+              <th className="px-4 py-3 text-left">Duration</th>
               <th className="px-4 py-3 text-left">Created</th>
             </tr>
           </thead>
           <tbody>
-            {jobs.map((job) => (
-              <tr
-                key={job.job_id}
-                className="border-b border-gray-800/50 hover:bg-gray-800/20"
-              >
-                <td className="px-4 py-3">
-                  <Link
-                    to={`/jobs/${job.job_id}`}
-                    className="text-cyan-400 hover:underline font-mono text-xs"
-                  >
-                    {job.job_id.slice(0, 8)}
-                  </Link>
-                </td>
-                <td className="px-4 py-3 text-gray-300">{job.config?.target}</td>
-                <td className="px-4 py-3 text-gray-500 text-xs">
-                  {job.config?.modes?.join(', ')}
-                </td>
-                <td className="px-4 py-3">
-                  <StatusBadge status={job.status} />
-                </td>
-                <td className="px-4 py-3 text-gray-500 text-xs">
-                  {new Date(job.created_at).toLocaleString()}
-                </td>
-              </tr>
-            ))}
+            {jobs.map((job) => {
+              const isActive = job.status === 'running' || job.status === 'assigned';
+              const duration = job.started_at
+                ? formatDuration(
+                    new Date(job.started_at),
+                    job.finished_at ? new Date(job.finished_at) : new Date()
+                  )
+                : '-';
+              return (
+                <tr
+                  key={job.job_id}
+                  className={`border-b border-gray-800/50 hover:bg-gray-800/20 ${
+                    isActive ? 'bg-cyan-500/5' : ''
+                  }`}
+                >
+                  <td className="px-4 py-3">
+                    <Link
+                      to={`/jobs/${job.job_id}`}
+                      className="text-cyan-400 hover:underline font-mono text-xs"
+                    >
+                      {job.job_id.slice(0, 8)}
+                    </Link>
+                  </td>
+                  <td className="px-4 py-3 text-gray-300 text-xs max-w-48 truncate" title={job.config?.target}>
+                    {job.config?.target}
+                  </td>
+                  <td className="px-4 py-3 text-gray-500 text-xs max-w-32 truncate">
+                    {job.config?.modes?.join(', ')}
+                  </td>
+                  <td className="px-4 py-3 text-gray-500 text-xs">
+                    {job.config?.runs ?? '-'}
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <StatusBadge status={job.status} />
+                      {isActive && (
+                        <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 motion-safe:animate-pulse" />
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-gray-500 text-xs font-mono">
+                    {duration}
+                  </td>
+                  <td className="px-4 py-3 text-gray-500 text-xs">
+                    {new Date(job.created_at).toLocaleString()}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
 

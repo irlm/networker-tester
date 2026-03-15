@@ -1,9 +1,22 @@
 import { useState, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
-import { api, type Attempt, type RunSummary } from '../api/client';
+import { api, type RunSummary } from '../api/client';
+import type { LiveAttempt } from '../api/types';
 import { Breadcrumb } from '../components/common/Breadcrumb';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { usePolling } from '../hooks/usePolling';
+import {
+  computeProtocolStats,
+  computeTimingBreakdown,
+  computeStats,
+  primaryMetricValue,
+  formatMs,
+  formatMetricValue,
+  formatBytes,
+  successRateClass,
+  type ProtocolStats,
+  type TimingBreakdown,
+} from '../lib/analysis';
 import {
   BarChart,
   Bar,
@@ -14,18 +27,10 @@ import {
   CartesianGrid,
 } from 'recharts';
 
-interface AttemptDetail extends Attempt {
-  dns?: { duration_ms: number; resolved_ips: string[] };
-  tcp?: { connect_duration_ms: number; remote_addr: string };
-  tls?: { handshake_duration_ms: number; protocol_version: string; cipher_suite: string };
-  http?: { status_code: number; ttfb_ms: number; total_duration_ms: number; negotiated_version: string; throughput_mbps?: number };
-  error?: { category: string; message: string };
-}
-
 export function RunDetailPage() {
   const { runId } = useParams<{ runId: string }>();
   const [run, setRun] = useState<RunSummary | null>(null);
-  const [attempts, setAttempts] = useState<AttemptDetail[]>([]);
+  const [attempts, setAttempts] = useState<LiveAttempt[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expandedProtocols, setExpandedProtocols] = useState<Set<string>>(new Set());
@@ -33,91 +38,73 @@ export function RunDetailPage() {
   const shortId = runId?.slice(0, 8) ?? '';
   usePageTitle(runId ? `Run ${shortId}` : 'Run');
 
-  // Fetch run metadata from the runs list
   usePolling(
     () => {
       if (!runId) return;
-      // Fetch attempts (primary data)
       api
         .getRunAttempts(runId)
         .then((data) => {
-          setAttempts(data as AttemptDetail[]);
+          setAttempts(data as unknown as LiveAttempt[]);
           setError(null);
           setLoading(false);
         })
-        .catch((e) => {
-          setError(String(e));
-          setLoading(false);
-        });
-      // Also fetch run summary for metadata
+        .catch((e) => { setError(String(e)); setLoading(false); });
       api
         .getRuns({ limit: 200 })
         .then((runs) => {
           const found = runs.find((r) => r.run_id === runId);
           if (found) setRun(found);
         })
-        .catch(() => {
-          // Non-critical, ignore
-        });
+        .catch(() => {});
     },
     15000,
     !!runId
   );
 
-  // Group attempts by protocol
-  const groupedByProtocol = useMemo(() => {
-    const groups: Record<string, AttemptDetail[]> = {};
-    for (const a of attempts) {
-      const key = a.protocol || 'unknown';
-      if (!groups[key]) groups[key] = [];
-      groups[key].push(a);
-    }
-    return groups;
-  }, [attempts]);
+  // ── Analysis (shared with HTML report logic) ──
+  const protocolStats = useMemo(() => computeProtocolStats(attempts), [attempts]);
+  const timingBreakdown = useMemo(() => computeTimingBreakdown(attempts), [attempts]);
 
-  // TTFB distribution chart data
-  const ttfbChartData = useMemo(() => {
-    const withTtfb = attempts.filter((a) => a.http?.ttfb_ms != null);
-    if (withTtfb.length === 0) return [];
-
-    // Create histogram buckets
-    const values = withTtfb.map((a) => a.http!.ttfb_ms);
-    const min = Math.floor(Math.min(...values));
-    const max = Math.ceil(Math.max(...values));
+  const ttfbDistribution = useMemo(() => {
+    const values = attempts
+      .filter((a) => a.success && a.http?.ttfb_ms != null)
+      .map((a) => a.http!.ttfb_ms);
+    if (values.length < 3) return [];
+    const sorted = [...values].sort((a, b) => a - b);
+    const min = sorted[0];
+    const max = sorted[sorted.length - 1];
     const range = max - min || 1;
-    const bucketCount = Math.min(20, Math.max(5, Math.ceil(values.length / 3)));
+    const bucketCount = Math.min(15, Math.max(5, Math.ceil(values.length / 3)));
     const bucketSize = range / bucketCount;
-
-    const buckets: { range: string; count: number; from: number }[] = [];
+    const buckets: { range: string; count: number }[] = [];
     for (let i = 0; i < bucketCount; i++) {
       const from = min + i * bucketSize;
       const to = from + bucketSize;
-      buckets.push({
-        range: `${from.toFixed(0)}-${to.toFixed(0)}`,
-        count: 0,
-        from,
-      });
+      buckets.push({ range: `${from.toFixed(1)}-${to.toFixed(1)}`, count: 0 });
     }
-
     for (const v of values) {
-      const idx = Math.min(
-        Math.floor((v - min) / bucketSize),
-        bucketCount - 1
-      );
+      const idx = Math.min(Math.floor((v - min) / bucketSize), bucketCount - 1);
       buckets[idx].count++;
     }
-
     return buckets;
   }, [attempts]);
+
+  // Per-protocol metric chart data
+  const protocolChartData = useMemo(() => {
+    return protocolStats.map((ps) => ({
+      name: ps.payloadBytes
+        ? `${ps.protocol} (${formatBytes(ps.payloadBytes)})`
+        : ps.protocol,
+      p50: Number(ps.stats.p50.toFixed(2)),
+      p95: Number(ps.stats.p95.toFixed(2)),
+      mean: Number(ps.stats.mean.toFixed(2)),
+    }));
+  }, [protocolStats]);
 
   const toggleProtocol = (protocol: string) => {
     setExpandedProtocols((prev) => {
       const next = new Set(prev);
-      if (next.has(protocol)) {
-        next.delete(protocol);
-      } else {
-        next.add(protocol);
-      }
+      next.has(protocol) ? next.delete(protocol) : next.add(protocol);
       return next;
     });
   };
@@ -126,9 +113,7 @@ export function RunDetailPage() {
     return (
       <div className="p-6">
         <Breadcrumb items={[{ label: 'Runs', to: '/runs' }, { label: `Run ${shortId}` }]} />
-        <div className="text-gray-500 motion-safe:animate-pulse">
-          Loading run {shortId}...
-        </div>
+        <div className="text-gray-500 motion-safe:animate-pulse">Loading run {shortId}...</div>
       </div>
     );
   }
@@ -140,221 +125,327 @@ export function RunDetailPage() {
         <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
           <h3 className="text-red-400 font-bold mb-2">Failed to load run</h3>
           <p className="text-red-300 text-sm font-mono">{error}</p>
-          <p className="text-gray-500 text-xs mt-2">Run ID: {runId}</p>
         </div>
       </div>
     );
   }
 
   const successCount = attempts.filter((a) => a.success).length;
-  const failureCount = attempts.filter((a) => !a.success).length;
+  const failureCount = attempts.length - successCount;
 
   return (
     <div className="p-6">
       <Breadcrumb items={[{ label: 'Runs', to: '/runs' }, { label: `Run ${shortId}` }]} />
 
-      {/* Run metadata header */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h2 className="text-xl font-bold text-gray-100 mb-1">
-            Run {shortId}
-          </h2>
-          <p className="text-sm text-gray-500">
-            {run?.target_host && <>Target: {run.target_host} | </>}
-            {run?.modes && <>Modes: {run.modes} | </>}
-            {attempts.length} attempts
-          </p>
-        </div>
+      {/* Header */}
+      <div className="mb-6">
+        <h2 className="text-xl font-bold text-gray-100 mb-1">Run {shortId}</h2>
+        <p className="text-sm text-gray-500">
+          {run?.target_host && <>Target: <span className="text-gray-300">{run.target_host}</span> · </>}
+          {run?.modes && <>Modes: <span className="text-gray-300">{run.modes}</span> · </>}
+          {attempts.length} attempts
+        </p>
       </div>
 
       {/* Summary cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        <div className="bg-[#12131a] border border-gray-800 rounded-lg p-4">
-          <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">Total</p>
-          <p className="text-2xl font-bold text-cyan-400">{attempts.length}</p>
-        </div>
-        <div className="bg-[#12131a] border border-gray-800 rounded-lg p-4">
-          <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">Success</p>
-          <p className="text-2xl font-bold text-green-400">{successCount}</p>
-        </div>
-        <div className="bg-[#12131a] border border-gray-800 rounded-lg p-4">
-          <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">Failed</p>
-          <p className="text-2xl font-bold text-red-400">{failureCount}</p>
-        </div>
-        <div className="bg-[#12131a] border border-gray-800 rounded-lg p-4">
-          <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">Started</p>
-          <p className="text-lg font-bold text-gray-300">
-            {run?.started_at ? new Date(run.started_at).toLocaleTimeString() : '-'}
-          </p>
-        </div>
+        <SummaryCard label="Total Probes" value={attempts.length} accent="text-cyan-400" />
+        <SummaryCard label="Success" value={successCount} accent="text-green-400" />
+        <SummaryCard label="Failed" value={failureCount} accent={failureCount > 0 ? 'text-red-400' : 'text-gray-600'} />
+        <SummaryCard
+          label="Success Rate"
+          value={attempts.length > 0 ? `${((successCount / attempts.length) * 100).toFixed(0)}%` : '-'}
+          accent={successRateClass(attempts.length > 0 ? (successCount / attempts.length) * 100 : 100)}
+        />
       </div>
 
-      {error && (
-        <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 mb-4 text-yellow-400 text-sm">
-          Failed to refresh: {error}
+      {/* ── Timing Breakdown Table (mirrors HTML report) ── */}
+      {timingBreakdown.length > 0 && (
+        <div className="bg-[#12131a] border border-gray-800 rounded-lg mb-6 overflow-hidden">
+          <h3 className="px-4 py-3 text-sm text-gray-400 border-b border-gray-800 font-medium">
+            Timing Breakdown by Protocol
+          </h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-gray-800 text-gray-500">
+                  <th className="px-4 py-2 text-left">Protocol</th>
+                  <th className="px-4 py-2 text-right">N</th>
+                  <th className="px-4 py-2 text-right">Avg DNS</th>
+                  <th className="px-4 py-2 text-right">Avg TCP</th>
+                  <th className="px-4 py-2 text-right">Avg TLS</th>
+                  <th className="px-4 py-2 text-right">Avg TTFB</th>
+                  <th className="px-4 py-2 text-right">Avg Total</th>
+                  <th className="px-4 py-2 text-right">Success</th>
+                </tr>
+              </thead>
+              <tbody>
+                {timingBreakdown.map((row) => (
+                  <TimingRow key={row.protocol} row={row} />
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
-      {/* TTFB Distribution Chart */}
-      {ttfbChartData.length > 0 && (
+      {/* ── Statistics Summary Table (mirrors HTML report) ── */}
+      {protocolStats.length > 0 && (
+        <div className="bg-[#12131a] border border-gray-800 rounded-lg mb-6 overflow-hidden">
+          <h3 className="px-4 py-3 text-sm text-gray-400 border-b border-gray-800 font-medium">
+            Statistics Summary
+          </h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-gray-800 text-gray-500">
+                  <th className="px-4 py-2 text-left">Protocol</th>
+                  <th className="px-4 py-2 text-left">Metric</th>
+                  <th className="px-4 py-2 text-right">N</th>
+                  <th className="px-4 py-2 text-right">Min</th>
+                  <th className="px-4 py-2 text-right">Mean</th>
+                  <th className="px-4 py-2 text-right">p50</th>
+                  <th className="px-4 py-2 text-right">p95</th>
+                  <th className="px-4 py-2 text-right">p99</th>
+                  <th className="px-4 py-2 text-right">Max</th>
+                  <th className="px-4 py-2 text-right">StdDev</th>
+                  <th className="px-4 py-2 text-right">Success</th>
+                </tr>
+              </thead>
+              <tbody>
+                {protocolStats.map((ps) => (
+                  <StatsRow key={`${ps.protocol}:${ps.payloadBytes}`} ps={ps} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ── Protocol Comparison Chart ── */}
+      {protocolChartData.length > 1 && (
         <div className="bg-[#12131a] border border-gray-800 rounded-lg p-4 mb-6">
-          <h3 className="text-sm text-gray-400 mb-3">TTFB Distribution (ms)</h3>
-          <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={ttfbChartData}>
+          <h3 className="text-sm text-gray-400 mb-3">Protocol Comparison — p50 vs p95</h3>
+          <ResponsiveContainer width="100%" height={250}>
+            <BarChart data={protocolChartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2028" />
-              <XAxis dataKey="range" stroke="#4b5563" fontSize={10} angle={-30} textAnchor="end" height={50} />
-              <YAxis stroke="#4b5563" fontSize={10} allowDecimals={false} />
-              <Tooltip
-                contentStyle={{
-                  background: '#12131a',
-                  border: '1px solid #374151',
-                  borderRadius: 6,
-                  fontSize: 12,
-                }}
-              />
-              <Bar dataKey="count" fill="#06b6d4" name="Attempts" />
+              <XAxis dataKey="name" stroke="#4b5563" fontSize={10} />
+              <YAxis stroke="#4b5563" fontSize={10} />
+              <Tooltip contentStyle={{ background: '#12131a', border: '1px solid #374151', borderRadius: 6, fontSize: 12 }} />
+              <Bar dataKey="p50" fill="#06b6d4" name="p50" />
+              <Bar dataKey="p95" fill="#0e7490" name="p95" />
             </BarChart>
           </ResponsiveContainer>
         </div>
       )}
 
-      {/* Attempts grouped by protocol */}
-      {Object.entries(groupedByProtocol).map(([protocol, protocolAttempts]) => {
+      {/* ── TTFB Distribution ── */}
+      {ttfbDistribution.length > 0 && (
+        <div className="bg-[#12131a] border border-gray-800 rounded-lg p-4 mb-6">
+          <h3 className="text-sm text-gray-400 mb-3">TTFB Distribution (ms)</h3>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={ttfbDistribution}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1f2028" />
+              <XAxis dataKey="range" stroke="#4b5563" fontSize={9} angle={-30} textAnchor="end" height={50} />
+              <YAxis stroke="#4b5563" fontSize={10} allowDecimals={false} />
+              <Tooltip contentStyle={{ background: '#12131a', border: '1px solid #374151', borderRadius: 6, fontSize: 12 }} />
+              <Bar dataKey="count" fill="#8b5cf6" name="Attempts" />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* ── Attempts by Protocol (collapsible) ── */}
+      <h3 className="text-sm text-gray-400 mb-3 font-medium">Probe Details</h3>
+      {Object.entries(groupByProtocol(attempts)).map(([protocol, group]) => {
         const isExpanded = expandedProtocols.has(protocol);
-        const protoSuccess = protocolAttempts.filter((a) => a.success).length;
-        const protoFail = protocolAttempts.length - protoSuccess;
+        const protoSuccess = group.filter((a) => a.success).length;
+        const protoFail = group.length - protoSuccess;
+        const values = group.filter((a) => a.success).map(primaryMetricValue).filter((v): v is number => v != null);
+        const stats = computeStats(values);
 
         return (
-          <div
-            key={protocol}
-            className="bg-[#12131a] border border-gray-800 rounded-lg mb-4 overflow-hidden"
-          >
+          <div key={protocol} className="bg-[#12131a] border border-gray-800 rounded-lg mb-3 overflow-hidden">
             <button
               onClick={() => toggleProtocol(protocol)}
               className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-gray-800/20 transition-colors"
               aria-expanded={isExpanded}
             >
               <div className="flex items-center gap-3">
-                <span
-                  className="text-gray-500 text-xs transition-transform"
-                  style={{ transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)' }}
-                  aria-hidden="true"
-                >
-                  {'\u25B6'}
-                </span>
-                <span className="text-gray-200 font-medium text-sm">
-                  {protocol.toUpperCase()}
-                </span>
-                <span className="text-gray-500 text-xs">
-                  {protocolAttempts.length} attempts
-                </span>
+                <span className="text-gray-500 text-xs transition-transform" style={{ transform: isExpanded ? 'rotate(90deg)' : '' }} aria-hidden="true">{'\u25B6'}</span>
+                <span className="text-gray-200 font-medium text-sm">{protocol.toUpperCase()}</span>
+                <span className="text-gray-500 text-xs">{group.length} attempts</span>
+                {stats && (
+                  <span className="text-gray-600 text-xs">
+                    p50: {formatMetricValue(protocol, stats.p50)} · p95: {formatMetricValue(protocol, stats.p95)}
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-3 text-xs">
                 <span className="text-green-400">{protoSuccess} OK</span>
-                {protoFail > 0 && (
-                  <span className="text-red-400">{protoFail} FAIL</span>
-                )}
+                {protoFail > 0 && <span className="text-red-400">{protoFail} FAIL</span>}
               </div>
             </button>
 
             {isExpanded && (
-              <div className="border-t border-gray-800">
-                <div className="max-h-96 overflow-y-auto">
-                  {protocolAttempts.map((a) => (
-                    <div
-                      key={a.attempt_id}
-                      className="px-4 py-3 border-b border-gray-800/30 hover:bg-gray-800/10"
-                    >
-                      {/* Attempt header row */}
-                      <div className="flex items-center gap-4 mb-2">
-                        <span className="text-gray-500 font-mono text-xs w-8">
-                          #{a.sequence_num}
-                        </span>
-                        {a.success ? (
-                          <span className="text-green-400 text-xs font-medium">OK</span>
-                        ) : (
-                          <span className="text-red-400 text-xs font-medium">FAIL</span>
-                        )}
-                        <span className="text-gray-600 text-xs">
-                          {a.retry_count > 0 && `${a.retry_count} retries`}
-                        </span>
-                      </div>
-
-                      {/* Sub-results */}
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 text-xs">
-                        {a.dns && (
-                          <div className="bg-[#0a0b0f] rounded p-2">
-                            <p className="text-gray-500 uppercase tracking-wider mb-1">DNS</p>
-                            <p className="text-gray-300">
-                              {a.dns.duration_ms.toFixed(1)}ms
-                            </p>
-                            {a.dns.resolved_ips.length > 0 && (
-                              <p className="text-gray-500 font-mono truncate">
-                                {a.dns.resolved_ips.join(', ')}
-                              </p>
-                            )}
-                          </div>
-                        )}
-
-                        {a.tcp && (
-                          <div className="bg-[#0a0b0f] rounded p-2">
-                            <p className="text-gray-500 uppercase tracking-wider mb-1">TCP</p>
-                            <p className="text-gray-300">
-                              {a.tcp.connect_duration_ms.toFixed(1)}ms
-                            </p>
-                            <p className="text-gray-500 font-mono truncate">
-                              {a.tcp.remote_addr}
-                            </p>
-                          </div>
-                        )}
-
-                        {a.tls && (
-                          <div className="bg-[#0a0b0f] rounded p-2">
-                            <p className="text-gray-500 uppercase tracking-wider mb-1">TLS</p>
-                            <p className="text-gray-300">
-                              {a.tls.handshake_duration_ms.toFixed(1)}ms
-                            </p>
-                            <p className="text-gray-500 font-mono truncate">
-                              {a.tls.protocol_version} {a.tls.cipher_suite}
-                            </p>
-                          </div>
-                        )}
-
-                        {a.http && (
-                          <div className="bg-[#0a0b0f] rounded p-2">
-                            <p className="text-gray-500 uppercase tracking-wider mb-1">HTTP</p>
-                            <p className="text-gray-300">
-                              {a.http.status_code} | TTFB {a.http.ttfb_ms.toFixed(1)}ms | Total {a.http.total_duration_ms.toFixed(1)}ms
-                            </p>
-                            <p className="text-gray-500 font-mono truncate">
-                              {a.http.negotiated_version}
-                              {a.http.throughput_mbps != null && ` | ${a.http.throughput_mbps.toFixed(2)} Mbps`}
-                            </p>
-                          </div>
-                        )}
-
-                        {a.error && (
-                          <div className="bg-red-500/5 rounded p-2 border border-red-500/20">
-                            <p className="text-red-400 uppercase tracking-wider mb-1">Error</p>
-                            <p className="text-red-300">{a.error.category}</p>
-                            <p className="text-red-400/70 truncate">{a.error.message}</p>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
+              <div className="border-t border-gray-800 max-h-96 overflow-y-auto">
+                {group.map((a) => (
+                  <AttemptRow key={a.attempt_id} a={a} />
+                ))}
               </div>
             )}
           </div>
         );
       })}
-
-      {attempts.length === 0 && (
-        <div className="bg-[#12131a] border border-gray-800 rounded-lg p-6 text-center">
-          <p className="text-gray-600 text-sm">No attempts recorded for this run.</p>
-        </div>
-      )}
     </div>
   );
+}
+
+// ─── Sub-components ──────────────────────────────────────────────────────────
+
+function SummaryCard({ label, value, accent }: { label: string; value: number | string; accent: string }) {
+  return (
+    <div className="bg-[#12131a] border border-gray-800 rounded-lg p-4">
+      <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">{label}</p>
+      <p className={`text-2xl font-bold ${accent}`}>{value}</p>
+    </div>
+  );
+}
+
+function TimingRow({ row }: { row: TimingBreakdown }) {
+  const successPct = row.totalCount > 0 ? (row.successCount / row.totalCount) * 100 : 0;
+  return (
+    <tr className="border-b border-gray-800/30 hover:bg-gray-800/10">
+      <td className="px-4 py-2 text-gray-200 font-medium">{row.protocol}</td>
+      <td className="px-4 py-2 text-gray-400 text-right">{row.count}</td>
+      <td className="px-4 py-2 text-gray-400 text-right font-mono">{formatMs(row.avgDns)}</td>
+      <td className="px-4 py-2 text-gray-400 text-right font-mono">{formatMs(row.avgTcp)}</td>
+      <td className="px-4 py-2 text-gray-400 text-right font-mono">{formatMs(row.avgTls)}</td>
+      <td className="px-4 py-2 text-cyan-400 text-right font-mono">{formatMs(row.avgTtfb)}</td>
+      <td className="px-4 py-2 text-cyan-300 text-right font-mono font-bold">{formatMs(row.avgTotal)}</td>
+      <td className={`px-4 py-2 text-right font-mono ${successRateClass(successPct)}`}>
+        {row.successCount}/{row.totalCount}
+      </td>
+    </tr>
+  );
+}
+
+function StatsRow({ ps }: { ps: ProtocolStats }) {
+  const fmt = (v: number) => formatMetricValue(ps.protocol, v);
+  return (
+    <tr className="border-b border-gray-800/30 hover:bg-gray-800/10">
+      <td className="px-4 py-2 text-gray-200 font-medium">
+        {ps.protocol}
+        {ps.payloadBytes != null && <span className="text-gray-500 ml-1">({formatBytes(ps.payloadBytes)})</span>}
+      </td>
+      <td className="px-4 py-2 text-gray-500">{ps.label}</td>
+      <td className="px-4 py-2 text-gray-400 text-right">{ps.stats.count}</td>
+      <td className="px-4 py-2 text-gray-400 text-right font-mono">{fmt(ps.stats.min)}</td>
+      <td className="px-4 py-2 text-gray-400 text-right font-mono">{fmt(ps.stats.mean)}</td>
+      <td className="px-4 py-2 text-cyan-400 text-right font-mono">{fmt(ps.stats.p50)}</td>
+      <td className="px-4 py-2 text-yellow-400 text-right font-mono">{fmt(ps.stats.p95)}</td>
+      <td className="px-4 py-2 text-orange-400 text-right font-mono">{fmt(ps.stats.p99)}</td>
+      <td className="px-4 py-2 text-gray-400 text-right font-mono">{fmt(ps.stats.max)}</td>
+      <td className="px-4 py-2 text-gray-500 text-right font-mono">{fmt(ps.stats.stddev)}</td>
+      <td className={`px-4 py-2 text-right font-mono ${successRateClass(ps.successRate)}`}>
+        {ps.successRate.toFixed(0)}%
+      </td>
+    </tr>
+  );
+}
+
+function AttemptRow({ a }: { a: LiveAttempt }) {
+  return (
+    <div className="px-4 py-3 border-b border-gray-800/30 hover:bg-gray-800/10">
+      <div className="flex items-center gap-4 mb-2">
+        <span className="text-gray-500 font-mono text-xs w-8">#{a.sequence_num}</span>
+        {a.success
+          ? <span className="text-green-400 text-xs font-medium">OK</span>
+          : <span className="text-red-400 text-xs font-medium">FAIL</span>
+        }
+        {a.retry_count > 0 && <span className="text-gray-600 text-xs">{a.retry_count} retries</span>}
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 text-xs">
+        {a.dns && (
+          <SubResult label="DNS" color="gray">
+            <p className="text-gray-300">{formatMs(a.dns.duration_ms)}</p>
+            {a.dns.resolved_ips?.length > 0 && (
+              <p className="text-gray-500 font-mono truncate">{a.dns.resolved_ips.join(', ')}</p>
+            )}
+          </SubResult>
+        )}
+        {a.tcp && (
+          <SubResult label="TCP" color="gray">
+            <p className="text-gray-300">{formatMs(a.tcp.connect_duration_ms)}</p>
+            <p className="text-gray-500 font-mono truncate">{a.tcp.remote_addr}</p>
+          </SubResult>
+        )}
+        {a.tls && (
+          <SubResult label="TLS" color="gray">
+            <p className="text-gray-300">{formatMs(a.tls.handshake_duration_ms)}</p>
+            <p className="text-gray-500 font-mono truncate">{a.tls.protocol_version} · {a.tls.cipher_suite}</p>
+          </SubResult>
+        )}
+        {a.http && (
+          <SubResult label="HTTP" color="cyan">
+            <p className="text-gray-300">
+              <span className={a.http.status_code >= 400 ? 'text-red-400' : 'text-green-400'}>{a.http.status_code}</span>
+              {' · '}TTFB {formatMs(a.http.ttfb_ms)} · Total {formatMs(a.http.total_duration_ms)}
+            </p>
+            <p className="text-gray-500 font-mono truncate">
+              {a.http.negotiated_version}
+              {a.http.throughput_mbps != null && ` · ${a.http.throughput_mbps.toFixed(1)} MB/s`}
+              {a.http.payload_bytes != null && a.http.payload_bytes > 0 && ` · ${formatBytes(a.http.payload_bytes)}`}
+            </p>
+          </SubResult>
+        )}
+        {a.udp && (
+          <SubResult label="UDP" color="gray">
+            <p className="text-gray-300">RTT avg {formatMs(a.udp.rtt_avg_ms)} · Loss {a.udp.loss_percent.toFixed(1)}%</p>
+            <p className="text-gray-500">{a.udp.probe_count} probes</p>
+          </SubResult>
+        )}
+        {a.page_load && (
+          <SubResult label="Page Load" color="blue">
+            <p className="text-gray-300">Total {formatMs(a.page_load.total_ms)} · {a.page_load.assets_fetched}/{a.page_load.asset_count} assets</p>
+            {a.page_load.tls_setup_ms != null && <p className="text-gray-500">TLS setup: {formatMs(a.page_load.tls_setup_ms)}</p>}
+          </SubResult>
+        )}
+        {a.browser && (
+          <SubResult label="Browser" color="purple">
+            <p className="text-gray-300">Load {formatMs(a.browser.load_ms)}</p>
+            {a.browser.dom_content_loaded_ms != null && <p className="text-gray-500">DCL: {formatMs(a.browser.dom_content_loaded_ms)}</p>}
+          </SubResult>
+        )}
+        {a.error && (
+          <SubResult label="Error" color="red">
+            <p className="text-red-300">{a.error.category}: {a.error.message}</p>
+            {a.error.detail && <p className="text-red-400/60 truncate">{a.error.detail}</p>}
+          </SubResult>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SubResult({ label, color, children }: { label: string; color: string; children: React.ReactNode }) {
+  const borderColor = color === 'red' ? 'border-red-500/20' : color === 'cyan' ? 'border-cyan-500/20' : color === 'blue' ? 'border-blue-500/20' : color === 'purple' ? 'border-purple-500/20' : 'border-gray-800';
+  const bgColor = color === 'red' ? 'bg-red-500/5' : 'bg-[#0a0b0f]';
+  const labelColor = color === 'red' ? 'text-red-400' : color === 'cyan' ? 'text-cyan-500' : color === 'blue' ? 'text-blue-400' : color === 'purple' ? 'text-purple-400' : 'text-gray-500';
+  return (
+    <div className={`${bgColor} border ${borderColor} rounded p-2`}>
+      <p className={`${labelColor} uppercase tracking-wider mb-1 text-[10px] font-medium`}>{label}</p>
+      {children}
+    </div>
+  );
+}
+
+function groupByProtocol(attempts: LiveAttempt[]): Record<string, LiveAttempt[]> {
+  const groups: Record<string, LiveAttempt[]> = {};
+  for (const a of attempts) {
+    const key = a.protocol || 'unknown';
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(a);
+  }
+  return groups;
 }

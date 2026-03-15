@@ -9,6 +9,14 @@ import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useToast } from '../hooks/useToast';
 import {
+  computeProtocolStats,
+  computeTimingBreakdown,
+  formatMs,
+  formatMetricValue,
+  formatBytes,
+  successRateClass,
+} from '../lib/analysis';
+import {
   BarChart,
   Bar,
   XAxis,
@@ -62,6 +70,10 @@ export function JobDetailPage() {
     3000,
     !!jobId && !isTerminal
   );
+
+  // Analysis using shared module (same logic as HTML report)
+  const protocolStats = useMemo(() => computeProtocolStats(liveAttempts), [liveAttempts]);
+  const timingBreakdown = useMemo(() => computeTimingBreakdown(liveAttempts), [liveAttempts]);
 
   // Build chart data from live attempts
   const chartData = useMemo(
@@ -194,6 +206,89 @@ export function JobDetailPage() {
               <Bar dataKey="total_ms" fill="#0e7490" name="Total" />
             </BarChart>
           </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* Timing Breakdown (shared analysis from lib/analysis.ts) */}
+      {timingBreakdown.length > 0 && (
+        <div className="bg-[#12131a] border border-gray-800 rounded-lg mb-6 overflow-hidden">
+          <h3 className="px-4 py-3 text-sm text-gray-400 border-b border-gray-800 font-medium">
+            Timing Breakdown
+          </h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-gray-800 text-gray-500">
+                  <th className="px-3 py-2 text-left">Protocol</th>
+                  <th className="px-3 py-2 text-right">N</th>
+                  <th className="px-3 py-2 text-right">DNS</th>
+                  <th className="px-3 py-2 text-right">TCP</th>
+                  <th className="px-3 py-2 text-right">TLS</th>
+                  <th className="px-3 py-2 text-right">TTFB</th>
+                  <th className="px-3 py-2 text-right">Total</th>
+                  <th className="px-3 py-2 text-right">OK</th>
+                </tr>
+              </thead>
+              <tbody>
+                {timingBreakdown.map((row) => (
+                  <tr key={row.protocol} className="border-b border-gray-800/30">
+                    <td className="px-3 py-2 text-gray-200">{row.protocol}</td>
+                    <td className="px-3 py-2 text-gray-400 text-right">{row.count}</td>
+                    <td className="px-3 py-2 text-gray-400 text-right font-mono">{formatMs(row.avgDns)}</td>
+                    <td className="px-3 py-2 text-gray-400 text-right font-mono">{formatMs(row.avgTcp)}</td>
+                    <td className="px-3 py-2 text-gray-400 text-right font-mono">{formatMs(row.avgTls)}</td>
+                    <td className="px-3 py-2 text-cyan-400 text-right font-mono">{formatMs(row.avgTtfb)}</td>
+                    <td className="px-3 py-2 text-cyan-300 text-right font-mono font-bold">{formatMs(row.avgTotal)}</td>
+                    <td className={`px-3 py-2 text-right font-mono ${successRateClass(row.totalCount > 0 ? (row.successCount / row.totalCount) * 100 : 100)}`}>
+                      {row.successCount}/{row.totalCount}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Statistics Summary (shared analysis — same as HTML report) */}
+      {protocolStats.length > 0 && (
+        <div className="bg-[#12131a] border border-gray-800 rounded-lg mb-6 overflow-hidden">
+          <h3 className="px-4 py-3 text-sm text-gray-400 border-b border-gray-800 font-medium">
+            Statistics
+          </h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-gray-800 text-gray-500">
+                  <th className="px-3 py-2 text-left">Protocol</th>
+                  <th className="px-3 py-2 text-right">N</th>
+                  <th className="px-3 py-2 text-right">Min</th>
+                  <th className="px-3 py-2 text-right">p50</th>
+                  <th className="px-3 py-2 text-right">p95</th>
+                  <th className="px-3 py-2 text-right">Max</th>
+                  <th className="px-3 py-2 text-right">Success</th>
+                </tr>
+              </thead>
+              <tbody>
+                {protocolStats.map((ps) => (
+                  <tr key={`${ps.protocol}:${ps.payloadBytes}`} className="border-b border-gray-800/30">
+                    <td className="px-3 py-2 text-gray-200">
+                      {ps.protocol}
+                      {ps.payloadBytes != null && <span className="text-gray-500 ml-1">({formatBytes(ps.payloadBytes)})</span>}
+                    </td>
+                    <td className="px-3 py-2 text-gray-400 text-right">{ps.stats.count}</td>
+                    <td className="px-3 py-2 text-gray-400 text-right font-mono">{formatMetricValue(ps.protocol, ps.stats.min)}</td>
+                    <td className="px-3 py-2 text-cyan-400 text-right font-mono">{formatMetricValue(ps.protocol, ps.stats.p50)}</td>
+                    <td className="px-3 py-2 text-yellow-400 text-right font-mono">{formatMetricValue(ps.protocol, ps.stats.p95)}</td>
+                    <td className="px-3 py-2 text-gray-400 text-right font-mono">{formatMetricValue(ps.protocol, ps.stats.max)}</td>
+                    <td className={`px-3 py-2 text-right font-mono ${successRateClass(ps.successRate)}`}>
+                      {ps.successRate.toFixed(0)}%
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
