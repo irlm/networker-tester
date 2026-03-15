@@ -391,6 +391,10 @@ mod tests {
                 write_pcap: true,
                 write_summary_json: true,
             },
+            impairment: crate::cli::ResolvedImpairmentConfig {
+                profile: crate::cli::ImpairmentProfile::None,
+                delay_ms: 0,
+            },
         }
     }
 
