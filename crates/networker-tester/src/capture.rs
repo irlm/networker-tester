@@ -420,11 +420,18 @@ mod tests {
             PacketCaptureMode::Tester,
             vec!["https://127.0.0.1:8443/health"],
         );
-        let plan = build_plan(&cfg, Path::new("/tmp")).expect("plan");
-        #[cfg(target_os = "macos")]
-        assert_eq!(plan.interface, "lo0");
-        #[cfg(target_os = "linux")]
-        assert_eq!(plan.interface, "lo");
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        {
+            let plan = build_plan(&cfg, Path::new("/tmp")).expect("plan");
+            #[cfg(target_os = "macos")]
+            assert_eq!(plan.interface, "lo0");
+            #[cfg(target_os = "linux")]
+            assert_eq!(plan.interface, "lo");
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            let _ = cfg;
+        }
     }
 
     #[test]
