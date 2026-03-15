@@ -2,11 +2,14 @@
 members = [
     "crates/networker-tester",
     "crates/networker-endpoint",
+    "crates/networker-common",
+    "crates/networker-dashboard",
+    "crates/networker-agent",
 ]
 resolver = "2"
 
 [workspace.package]
-version     = "0.13.19"
+version     = "0.13.20"
 edition     = "2021"
 authors     = ["NetworkerTester Contributors"]
 license     = "MIT"

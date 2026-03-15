@@ -4,7 +4,17 @@ Project-specific instructions for Claude Code.
 
 ## Project Overview
 
-Rust workspace: two crates (`networker-tester` client, `networker-endpoint` server) plus Bash/PowerShell installers. Measures per-phase network timing across HTTP/1.1, HTTP/2, HTTP/3, UDP, DNS, TLS with optional database persistence and HTML/Excel reporting.
+Rust workspace: five crates plus Bash/PowerShell installers and a React frontend.
+
+| Crate | Role |
+|-------|------|
+| `networker-tester` | CLI client -- per-phase network timing across HTTP/1.1, HTTP/2, HTTP/3, UDP, DNS, TLS with database persistence and HTML/Excel reporting |
+| `networker-endpoint` | Diagnostic server -- serves health, download, upload, page-load endpoints |
+| `networker-common` | Shared WebSocket message types for dashboard-agent protocol |
+| `networker-dashboard` | axum control plane -- REST API, WebSocket hubs, JWT auth, PostgreSQL |
+| `networker-agent` | Daemon -- connects to dashboard, executes probe jobs via networker-tester lib, streams results live |
+
+The `dashboard/` directory contains a React + TypeScript + Vite frontend (Tailwind dark theme).
 
 ## Build Commands
 
@@ -46,7 +56,31 @@ bats tests/installer.bats
 
 # Endpoint tests
 cargo test -p networker-endpoint --lib
+
+# Dashboard frontend
+cd dashboard && npm install && npm run build && npm run lint
 ```
+
+## Dashboard Local Dev
+
+```bash
+# 1. PostgreSQL
+docker compose -f docker-compose.dashboard.yml up postgres
+
+# 2. Endpoint
+cargo run -p networker-endpoint
+
+# 3. Dashboard (port 3000)
+DASHBOARD_ADMIN_PASSWORD=admin cargo run -p networker-dashboard
+
+# 4. Agent
+AGENT_API_KEY=dev-key cargo run -p networker-agent
+
+# 5. Frontend (port 5173, proxies /api and /ws to dashboard)
+cd dashboard && npm install && npm run dev
+```
+
+Key env vars: `DASHBOARD_DB_URL`, `DASHBOARD_ADMIN_PASSWORD`, `DASHBOARD_JWT_SECRET`, `DASHBOARD_PORT`, `AGENT_DASHBOARD_URL`, `AGENT_API_KEY`. See README for defaults.
 
 ## Quality Checks
 

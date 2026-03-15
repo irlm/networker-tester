@@ -1,0 +1,31 @@
+[package]
+name = "networker-agent"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Test execution agent daemon for networker dashboard"
+
+[dependencies]
+# Workspace deps
+tokio       = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+chrono      = { workspace = true }
+uuid        = { workspace = true }
+anyhow      = { workspace = true }
+tracing     = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap        = { workspace = true }
+url         = { workspace = true }
+
+# Local deps
+networker-common = { path = "../networker-common" }
+networker-tester = { path = "../networker-tester", default-features = false }
+
+# TLS
+rustls       = { version = "0.23", features = ["ring"] }
+
+# WebSocket client
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+futures      = "0.3"
