@@ -1,21 +1,57 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { api, type Agent } from '../api/client';
 import { StatusBadge } from '../components/common/StatusBadge';
+import { usePolling } from '../hooks/usePolling';
 
 export function AgentsPage() {
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    api.getAgents().then((r) => setAgents(r.agents)).catch(console.error);
-    const interval = setInterval(() => {
-      api.getAgents().then((r) => setAgents(r.agents)).catch(console.error);
-    }, 10000);
-    return () => clearInterval(interval);
-  }, []);
+  usePolling(() => {
+    api
+      .getAgents()
+      .then((r) => {
+        setAgents(r.agents);
+        setError(null);
+        setLoading(false);
+      })
+      .catch((e) => {
+        setError(String(e));
+        setLoading(false);
+      });
+  }, 10000);
+
+  if (loading && agents.length === 0) {
+    return (
+      <div className="p-6">
+        <h2 className="text-xl font-bold text-gray-100 mb-6">Agents</h2>
+        <div className="text-gray-500 motion-safe:animate-pulse">Loading agents...</div>
+      </div>
+    );
+  }
+
+  if (error && agents.length === 0) {
+    return (
+      <div className="p-6">
+        <h2 className="text-xl font-bold text-gray-100 mb-6">Agents</h2>
+        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
+          <h3 className="text-red-400 font-bold mb-2">Failed to load agents</h3>
+          <p className="text-red-300 text-sm font-mono">{error}</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6">
       <h2 className="text-xl font-bold text-gray-100 mb-6">Agents</h2>
+
+      {error && (
+        <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 mb-4 text-yellow-400 text-sm">
+          Failed to refresh: {error}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {agents.map((agent) => (

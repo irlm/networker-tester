@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { api, type Job } from '../api/client';
+import type { LiveAttempt } from '../api/types';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { useLiveStore } from '../stores/liveStore';
+import { usePolling } from '../hooks/usePolling';
 import {
   BarChart,
   Bar,
@@ -13,48 +15,60 @@ import {
   CartesianGrid,
 } from 'recharts';
 
+const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+
 export function JobDetailPage() {
   const { jobId } = useParams<{ jobId: string }>();
   const [job, setJob] = useState<Job | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const liveAttempts = useLiveStore((s) =>
+  const liveAttempts: LiveAttempt[] = useLiveStore((s) =>
     jobId ? s.liveAttempts[jobId] || [] : []
   );
 
-  useEffect(() => {
-    if (!jobId) return;
-    setLoading(true);
-    setError(null);
-    api
-      .getJob(jobId)
-      .then((j) => {
-        setJob(j);
-        setLoading(false);
-      })
-      .catch((e) => {
-        console.error('Failed to fetch job:', e);
-        setError(String(e));
-        setLoading(false);
-      });
-    const interval = setInterval(() => {
+  const isTerminal = job ? TERMINAL_STATUSES.has(job.status) : false;
+
+  usePolling(
+    () => {
+      if (!jobId) return;
       api
         .getJob(jobId)
-        .then(setJob)
-        .catch((e) => console.error('Poll error:', e));
-    }, 3000);
-    return () => clearInterval(interval);
-  }, [jobId]);
+        .then((j) => {
+          setJob(j);
+          setError(null);
+          setLoading(false);
+        })
+        .catch((e) => {
+          setError(String(e));
+          setLoading(false);
+        });
+    },
+    3000,
+    !!jobId && !isTerminal
+  );
 
-  if (loading) {
+  // Build chart data from live attempts
+  const chartData = useMemo(
+    () =>
+      liveAttempts.map((a, i) => ({
+        seq: i,
+        protocol: a.protocol,
+        success: a.success ? 1 : 0,
+        ttfb_ms: a.http?.ttfb_ms ?? 0,
+        total_ms: a.http?.total_duration_ms ?? 0,
+      })),
+    [liveAttempts]
+  );
+
+  if (loading && !job) {
     return (
       <div className="p-6">
-        <div className="text-gray-500 animate-pulse">Loading job {jobId?.slice(0, 8)}...</div>
+        <div className="text-gray-500 motion-safe:animate-pulse">Loading job {jobId?.slice(0, 8)}...</div>
       </div>
     );
   }
 
-  if (error) {
+  if (error && !job) {
     return (
       <div className="p-6">
         <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
@@ -75,16 +89,7 @@ export function JobDetailPage() {
   }
 
   const isRunning = job.status === 'running' || job.status === 'assigned';
-  const isFinished = job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled';
-
-  // Build chart data from live attempts
-  const chartData = liveAttempts.map((a: Record<string, unknown>, i: number) => ({
-    seq: i,
-    protocol: a.protocol as string,
-    success: a.success ? 1 : 0,
-    ttfb_ms: (a.http as Record<string, unknown>)?.ttfb_ms ?? 0,
-    total_ms: (a.http as Record<string, unknown>)?.total_duration_ms ?? 0,
-  }));
+  const isFinished = TERMINAL_STATUSES.has(job.status);
 
   return (
     <div className="p-6">
@@ -114,7 +119,7 @@ export function JobDetailPage() {
       {/* Progress indicator */}
       {isRunning && (
         <div className="bg-[#12131a] border border-cyan-500/30 rounded-lg p-4 mb-6 flex items-center gap-3">
-          <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+          <span className="w-2 h-2 rounded-full bg-cyan-400 motion-safe:animate-pulse" />
           <span className="text-cyan-400 text-sm">
             Running... {liveAttempts.length} probes completed
           </span>
@@ -180,39 +185,36 @@ export function JobDetailPage() {
                 </tr>
               </thead>
               <tbody>
-                {liveAttempts.map((a: Record<string, unknown>, i: number) => {
-                  const http = a.http as Record<string, unknown> | undefined;
-                  return (
-                    <tr
-                      key={i}
-                      className="border-b border-gray-800/30 hover:bg-gray-800/20"
-                    >
-                      <td className="px-4 py-2 text-gray-500 font-mono text-xs">
-                        {a.sequence_num as number}
-                      </td>
-                      <td className="px-4 py-2 text-gray-300">
-                        {a.protocol as string}
-                      </td>
-                      <td className="px-4 py-2">
-                        {a.success ? (
-                          <span className="text-green-400">OK</span>
-                        ) : (
-                          <span className="text-red-400">FAIL</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-2 text-gray-400 font-mono text-xs">
-                        {http?.ttfb_ms
-                          ? `${(http.ttfb_ms as number).toFixed(1)}ms`
-                          : '-'}
-                      </td>
-                      <td className="px-4 py-2 text-gray-400 font-mono text-xs">
-                        {http?.total_duration_ms
-                          ? `${(http.total_duration_ms as number).toFixed(1)}ms`
-                          : '-'}
-                      </td>
-                    </tr>
-                  );
-                })}
+                {liveAttempts.map((a) => (
+                  <tr
+                    key={a.attempt_id}
+                    className="border-b border-gray-800/30 hover:bg-gray-800/20"
+                  >
+                    <td className="px-4 py-2 text-gray-500 font-mono text-xs">
+                      {a.sequence_num}
+                    </td>
+                    <td className="px-4 py-2 text-gray-300">
+                      {a.protocol}
+                    </td>
+                    <td className="px-4 py-2">
+                      {a.success ? (
+                        <span className="text-green-400">OK</span>
+                      ) : (
+                        <span className="text-red-400">FAIL</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2 text-gray-400 font-mono text-xs">
+                      {a.http?.ttfb_ms != null
+                        ? `${a.http.ttfb_ms.toFixed(1)}ms`
+                        : '-'}
+                    </td>
+                    <td className="px-4 py-2 text-gray-400 font-mono text-xs">
+                      {a.http?.total_duration_ms != null
+                        ? `${a.http.total_duration_ms.toFixed(1)}ms`
+                        : '-'}
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>

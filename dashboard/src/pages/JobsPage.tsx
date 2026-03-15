@@ -1,21 +1,40 @@
-import { useEffect, useState } from 'react';
+import { useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { api, type Job } from '../api/client';
 import { StatusBadge } from '../components/common/StatusBadge';
+import { CreateJobDialog } from '../components/CreateJobDialog';
+import { usePolling } from '../hooks/usePolling';
 
 export function JobsPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [showCreate, setShowCreate] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const loadJobs = () => {
-    api.getJobs({ limit: 50 }).then(setJobs).catch(console.error);
-  };
-
-  useEffect(() => {
-    loadJobs();
-    const interval = setInterval(loadJobs, 5000);
-    return () => clearInterval(interval);
+  const loadJobs = useCallback(() => {
+    api
+      .getJobs({ limit: 50 })
+      .then((data) => {
+        setJobs(data);
+        setError(null);
+        setLoading(false);
+      })
+      .catch((e) => {
+        setError(String(e));
+        setLoading(false);
+      });
   }, []);
+
+  usePolling(loadJobs, 5000);
+
+  if (loading && jobs.length === 0) {
+    return (
+      <div className="p-6">
+        <h2 className="text-xl font-bold text-gray-100 mb-6">Jobs</h2>
+        <div className="text-gray-500 motion-safe:animate-pulse">Loading jobs...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6">
@@ -34,6 +53,12 @@ export function JobsPage() {
           onClose={() => setShowCreate(false)}
           onCreated={loadJobs}
         />
+      )}
+
+      {error && (
+        <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 mb-4 text-yellow-400 text-sm">
+          Failed to refresh: {error}
+        </div>
       )}
 
       <div className="bg-[#12131a] border border-gray-800 rounded-lg overflow-hidden">
@@ -82,111 +107,6 @@ export function JobsPage() {
           </p>
         )}
       </div>
-    </div>
-  );
-}
-
-function CreateJobDialog({
-  onClose,
-  onCreated,
-}: {
-  onClose: () => void;
-  onCreated: () => void;
-}) {
-  const [target, setTarget] = useState('https://localhost:8443/health');
-  const [modes, setModes] = useState('http1,http2');
-  const [runs, setRuns] = useState(3);
-  const [insecure, setInsecure] = useState(true);
-  const [loading, setLoading] = useState(false);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    try {
-      await api.createJob({
-        target,
-        modes: modes.split(',').map((m) => m.trim()),
-        runs,
-        concurrency: 1,
-        timeout_secs: 30,
-        payload_sizes: [],
-        insecure,
-        dns_enabled: true,
-        connection_reuse: false,
-      });
-      onCreated();
-      onClose();
-    } catch (err) {
-      console.error('Failed to create job:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-      <form
-        onSubmit={handleSubmit}
-        className="bg-[#12131a] border border-gray-800 rounded-lg p-6 w-[500px]"
-      >
-        <h3 className="text-lg font-bold text-gray-100 mb-4">New Test Job</h3>
-
-        <label className="block text-xs text-gray-400 mb-1">Target URL</label>
-        <input
-          value={target}
-          onChange={(e) => setTarget(e.target.value)}
-          className="w-full bg-[#0a0b0f] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 mb-3 focus:outline-none focus:border-cyan-500"
-        />
-
-        <label className="block text-xs text-gray-400 mb-1">
-          Modes (comma-separated)
-        </label>
-        <input
-          value={modes}
-          onChange={(e) => setModes(e.target.value)}
-          className="w-full bg-[#0a0b0f] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 mb-3 focus:outline-none focus:border-cyan-500"
-        />
-
-        <div className="flex gap-4 mb-3">
-          <div className="flex-1">
-            <label className="block text-xs text-gray-400 mb-1">Runs</label>
-            <input
-              type="number"
-              value={runs}
-              onChange={(e) => setRuns(Number(e.target.value))}
-              className="w-full bg-[#0a0b0f] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
-            />
-          </div>
-          <div className="flex items-end pb-1">
-            <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={insecure}
-                onChange={(e) => setInsecure(e.target.checked)}
-                className="accent-cyan-500"
-              />
-              Insecure (skip TLS verify)
-            </label>
-          </div>
-        </div>
-
-        <div className="flex justify-end gap-3 mt-4">
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-4 py-1.5 text-sm text-gray-400 hover:text-gray-200"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={loading}
-            className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors disabled:opacity-50"
-          >
-            {loading ? 'Creating...' : 'Create Job'}
-          </button>
-        </div>
-      </form>
     </div>
   );
 }
