@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.21] – 2026-03-15 — First impairment scenario support
+
+### Added
+- **First impairment scenario support** — config-driven delay profiles for reproducible benchmark scenarios using the existing endpoint `/delay?ms=N` capability
+- **Impairment config** — `impairment.profile` and `impairment.delay_ms` are now available in config resolution
+
+### Changed
+- **HTTP-family impairment wiring** — supported HTTP-family probes now consistently route through the delayed target when impairment delay is enabled
+- **Deploy docs/example** — impairment configuration is documented and included in the example config
+
+---
+
 ## [0.13.20] – 2026-03-15 — Tester-side packet capture MVP
 
 ### Added

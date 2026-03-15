@@ -986,9 +986,9 @@ async fn dispatch_once(
             let host = target.host_str().unwrap_or("");
             run_dns_probe(run_id, seq, host, cfg.ipv4_only, cfg.ipv6_only).await
         }
-        (Protocol::Tls, _) => run_tls_probe(run_id, seq, target, cfg).await,
-        (Protocol::Native, _) => run_native_probe(run_id, seq, target, cfg).await,
-        (Protocol::Curl, _) => run_curl_probe(run_id, seq, target, cfg).await,
+        (Protocol::Tls, _) => run_tls_probe(run_id, seq, &impaired_target, cfg).await,
+        (Protocol::Native, _) => run_native_probe(run_id, seq, &impaired_target, cfg).await,
+        (Protocol::Curl, _) => run_curl_probe(run_id, seq, &impaired_target, cfg).await,
         (Protocol::PageLoad, _) => run_pageload_probe(run_id, seq, pageload_cfg).await,
         (Protocol::PageLoad2, _) => run_pageload2_probe(run_id, seq, pageload_cfg).await,
         (Protocol::PageLoad3, _) => run_pageload3_probe(run_id, seq, pageload_cfg).await,
@@ -1726,10 +1726,20 @@ mod tests {
     fn impairment_target_rewrites_supported_http_family_probe() {
         let cfg = sample_resolved_config(150);
         let base = url::Url::parse("https://example.com:8443/health").unwrap();
-        let rewritten = apply_impairment_target(&Protocol::Http3, &base, &cfg);
-        assert_eq!(rewritten.path(), "/delay");
-        assert_eq!(rewritten.query(), Some("ms=150"));
-        assert_eq!(rewritten.host_str(), Some("example.com"));
+        for proto in [
+            Protocol::Http1,
+            Protocol::Http2,
+            Protocol::Http3,
+            Protocol::Tcp,
+            Protocol::Tls,
+            Protocol::Native,
+            Protocol::Curl,
+        ] {
+            let rewritten = apply_impairment_target(&proto, &base, &cfg);
+            assert_eq!(rewritten.path(), "/delay");
+            assert_eq!(rewritten.query(), Some("ms=150"));
+            assert_eq!(rewritten.host_str(), Some("example.com"));
+        }
     }
 
     #[test]
