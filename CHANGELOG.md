@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.19] – 2026-03-15 — Dashboard frontend fixes
+
+### Fixed
+- **Accessibility** — login form label/input linking (`htmlFor`/`id`), sidebar ARIA (`aria-label`, `aria-current="page"`, `aria-hidden` on icons), modal dialog (`role="dialog"`, `aria-modal`, focus trap, escape key), `motion-safe:` prefix on animations
+- **WebSocket reliability** — prevent reconnection after unmount (memory leak), exponential backoff (3s→60s cap), runtime message validation, ref-based callback to avoid HMR reconnect loops
+- **TypeScript safety** — extract `LiveAttempt` interface with typed DNS/TCP/TLS/HTTP/UDP sub-results, remove all `Record<string, unknown>` and `as` casts from JobDetailPage
+- **Performance** — `usePolling` hook with cancellation guard, `useMemo` for chart data and event feed, stable empty array constant for Zustand selector, only spread `liveAttempts` on `attempt_result` events
+- **UX** — loading/error states on all list pages, responsive stat cards grid, mobile sidebar toggle with escape key, error display in CreateJobDialog, per-job attempt cap (2000) with cleanup on terminal state
+
+---
+
 ## [0.13.18] – 2026-03-14 — Protocol-specific throughput probes
 
 ### Added
