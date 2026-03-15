@@ -2,6 +2,7 @@ use anyhow::Context;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use tokio::task::spawn_blocking;
 use tokio::time::{sleep, Duration};
 
 use crate::cli::{PacketCaptureMode, ResolvedConfig};
@@ -97,13 +98,20 @@ fn resolve_capture_interface(requested: &str, targets: &[String]) -> String {
     {
         "any".into()
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    {
+        "en0".into()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         "auto".into()
     }
 }
 
-pub fn check_capture_prereqs(plan: &PacketCapturePlan, tshark_path: &Path) -> anyhow::Result<()> {
+fn check_capture_prereqs_blocking(
+    plan: &PacketCapturePlan,
+    tshark_path: &Path,
+) -> anyhow::Result<()> {
     #[cfg(not(target_os = "macos"))]
     let _ = plan;
 
@@ -138,10 +146,21 @@ pub fn check_capture_prereqs(plan: &PacketCapturePlan, tshark_path: &Path) -> an
     Ok(())
 }
 
+pub async fn check_capture_prereqs(
+    plan: &PacketCapturePlan,
+    tshark_path: &Path,
+) -> anyhow::Result<()> {
+    let plan = plan.clone();
+    let tshark_path = tshark_path.to_path_buf();
+    spawn_blocking(move || check_capture_prereqs_blocking(&plan, &tshark_path))
+        .await
+        .context("join packet capture prereq task")?
+}
+
 pub async fn start(plan: PacketCapturePlan) -> anyhow::Result<PacketCaptureSession> {
     let tshark_path =
         detect_tshark().context("packet capture requested but tshark was not found")?;
-    check_capture_prereqs(&plan, &tshark_path)?;
+    check_capture_prereqs(&plan, &tshark_path).await?;
     let stderr_path = plan
         .summary_path
         .with_file_name("packet-capture-tshark.stderr.log");
@@ -170,16 +189,28 @@ pub async fn start(plan: PacketCapturePlan) -> anyhow::Result<PacketCaptureSessi
 
 impl PacketCaptureSession {
     pub async fn finalize(mut self) -> anyhow::Result<Option<PacketCaptureSummary>> {
-        let _ = self.child.try_wait();
-        #[cfg(unix)]
-        unsafe {
-            let _ = libc::kill(self.child.id() as libc::pid_t, libc::SIGINT);
+        if self.child.try_wait()?.is_none() {
+            #[cfg(unix)]
+            unsafe {
+                // SAFETY: `self.child.id()` comes from a live child process handle we own.
+                // We only send SIGINT after `try_wait()` confirms it has not exited yet.
+                let _ = libc::kill(self.child.id() as libc::pid_t, libc::SIGINT);
+            }
+            #[cfg(windows)]
+            {
+                tracing::warn!(
+                    "graceful tshark shutdown is not implemented on Windows yet; skipping packet capture finalize for this run"
+                );
+                let _ = self.child.kill();
+            }
         }
+        // Give tshark time to flush pcap buffers after the graceful interrupt.
         sleep(Duration::from_millis(1200)).await;
         if self.child.try_wait()?.is_none() {
             let _ = self.child.kill();
         }
         let _ = self.child.wait();
+        // Wait a moment for the capture file to become visible before summarizing it.
         sleep(Duration::from_millis(400)).await;
 
         if !self.plan.write_summary_json {
@@ -194,7 +225,11 @@ impl PacketCaptureSession {
             );
         }
 
-        let summary = summarize(&self.tshark_path, &self.plan)?;
+        let tshark_path = self.tshark_path.clone();
+        let plan = self.plan.clone();
+        let summary = spawn_blocking(move || summarize(&tshark_path, &plan))
+            .await
+            .context("join packet capture summary task")??;
         std::fs::write(
             &self.plan.summary_path,
             serde_json::to_vec_pretty(&summary).context("serialize packet capture summary")?,
@@ -283,6 +318,11 @@ fn count_matches(tshark_path: &Path, pcap_path: &Path, filter: &str) -> anyhow::
         .with_context(|| format!("run tshark filter {filter}"))?;
 
     if !out.status.success() {
+        tracing::warn!(
+            filter,
+            stderr = %String::from_utf8_lossy(&out.stderr),
+            "tshark filter command failed while summarizing capture"
+        );
         return Ok(0);
     }
 
@@ -303,4 +343,112 @@ fn which(name: &str) -> Option<PathBuf> {
             .map(|p| p.join(name))
             .find(|p| p.exists())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::ResolvedPacketCaptureConfig;
+
+    fn sample_cfg(mode: PacketCaptureMode, targets: Vec<&str>) -> ResolvedConfig {
+        ResolvedConfig {
+            targets: targets.into_iter().map(str::to_string).collect(),
+            modes: vec![],
+            runs: 1,
+            concurrency: 1,
+            timeout: 1000,
+            payload_size: 0,
+            payload_sizes: vec![],
+            udp_port: 9999,
+            udp_throughput_port: 9998,
+            udp_probes: 20,
+            connection_reuse: false,
+            dns_enabled: true,
+            ipv4_only: false,
+            ipv6_only: false,
+            no_proxy: false,
+            proxy: None,
+            ca_bundle: None,
+            insecure: true,
+            retries: 0,
+            output_dir: "./out".into(),
+            html_report: "report.html".into(),
+            css: None,
+            excel: false,
+            save_to_db: false,
+            db_url: None,
+            db_migrate: false,
+            save_to_sql: false,
+            connection_string: None,
+            log_level: None,
+            page_asset_sizes: vec![],
+            page_preset_name: None,
+            http_stacks: vec![],
+            packet_capture: ResolvedPacketCaptureConfig {
+                mode,
+                install_requirements: false,
+                interface: "auto".into(),
+                write_pcap: true,
+                write_summary_json: true,
+            },
+        }
+    }
+
+    #[test]
+    fn mode_scope_helpers_are_correct() {
+        assert!(PacketCaptureMode::Tester.captures_tester());
+        assert!(!PacketCaptureMode::Tester.captures_endpoint());
+        assert!(PacketCaptureMode::Endpoint.captures_endpoint());
+        assert!(!PacketCaptureMode::Endpoint.captures_tester());
+        assert!(PacketCaptureMode::Both.captures_tester());
+        assert!(PacketCaptureMode::Both.captures_endpoint());
+        assert!(!PacketCaptureMode::None.captures_tester());
+    }
+
+    #[test]
+    fn build_plan_skips_when_tester_capture_disabled() {
+        let cfg = sample_cfg(
+            PacketCaptureMode::Endpoint,
+            vec!["https://127.0.0.1:8443/health"],
+        );
+        assert!(build_plan(&cfg, Path::new("/tmp")).is_none());
+    }
+
+    #[test]
+    fn build_plan_uses_loopback_interface_for_local_targets() {
+        let cfg = sample_cfg(
+            PacketCaptureMode::Tester,
+            vec!["https://127.0.0.1:8443/health"],
+        );
+        let plan = build_plan(&cfg, Path::new("/tmp")).expect("plan");
+        #[cfg(target_os = "macos")]
+        assert_eq!(plan.interface, "lo0");
+        #[cfg(target_os = "linux")]
+        assert_eq!(plan.interface, "lo");
+    }
+
+    #[test]
+    fn resolve_capture_interface_keeps_explicit_value() {
+        assert_eq!(
+            resolve_capture_interface("en7", &["https://example.com".into()]),
+            "en7"
+        );
+    }
+
+    #[test]
+    fn resolve_capture_interface_remote_macos_defaults_to_en0() {
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            resolve_capture_interface("auto", &["https://example.com".into()]),
+            "en0"
+        );
+    }
+
+    #[test]
+    fn which_returns_absolute_existing_path() {
+        let me = PathBuf::from("/bin/sh");
+        if me.exists() {
+            assert_eq!(which(me.to_str().unwrap()), Some(me));
+        }
+    }
 }

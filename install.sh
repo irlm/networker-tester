@@ -2592,7 +2592,12 @@ ask_packet_capture_options() {
         printf "  Capture interface [auto]: "
         local iface
         read -r iface </dev/tty || true
-        DEPLOY_PACKET_CAPTURE_INTERFACE="${iface:-auto}"
+        iface="${iface:-auto}"
+        if [[ ! "$iface" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+            print_warn "Invalid capture interface '$iface' — falling back to auto"
+            iface="auto"
+        fi
+        DEPLOY_PACKET_CAPTURE_INTERFACE="$iface"
     fi
 }
 
