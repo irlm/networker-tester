@@ -30,5 +30,9 @@
 
   "packet_capture": {
     "mode": "none"
+  },
+
+  "impairment": {
+    "profile": "wan"
   }
 }

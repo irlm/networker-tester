@@ -52,6 +52,7 @@ bash install.sh --deploy deploy.json
 | `endpoints` | array | yes | One or more endpoint deployments. |
 | `tests` | object | no | Test configuration. Defaults to all modes, 5 runs. |
 | `packet_capture` | object | no | Optional packet capture on tester, endpoint, or both. Default is disabled. |
+| `impairment` | object | no | Optional benchmark impairment profile. Initial scoped support focuses on delay injection. |
 
 ### `tester` object
 
@@ -176,6 +177,28 @@ All fields are optional. If omitted, packet capture is disabled.
 > In practice, macOS users may need to **install the full Wireshark app manually** and run its
 > **ChmodBPF** helper once. The CLI/package-manager install path can provide `tshark`, but it may
 > not complete the privileged BPF permission setup non-interactively.
+
+### `impairment` object
+
+All fields are optional. If omitted, no impairment is applied.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `profile` | string | `"none"` | `"none"`, `"wan"`, `"slow"`, or `"satellite"` |
+| `delay_ms` | number | profile default | Explicit delay override in milliseconds |
+
+Current scoped support in this first version focuses on **delay injection** by routing supported
+HTTP-family probes through the endpoint's built-in `/delay?ms=N` behavior.
+
+Default profile mapping:
+- `none` → `0 ms`
+- `wan` → `40 ms`
+- `slow` → `150 ms`
+- `satellite` → `600 ms`
+
+**Current scope:** request-style HTTP-family probes only. This first version is meant to make
+paper-style delay scenarios easy to reproduce without claiming full traffic shaping or netem-style
+loss/jitter control yet.
 
 ### Valid test modes
 
