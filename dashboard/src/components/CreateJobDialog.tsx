@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { api } from '../api/client';
+import { useToast } from '../hooks/useToast';
 
 interface CreateJobDialogProps {
   onClose: () => void;
@@ -15,6 +16,7 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
   const [error, setError] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const firstInputRef = useRef<HTMLInputElement>(null);
+  const addToast = useToast();
 
   // Focus first input on mount
   useEffect(() => {
@@ -67,7 +69,7 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
     setLoading(true);
     setError(null);
     try {
-      await api.createJob({
+      const result = await api.createJob({
         target,
         modes: modes.split(',').map((m) => m.trim()),
         runs,
@@ -78,10 +80,13 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
         dns_enabled: true,
         connection_reuse: false,
       });
+      addToast('success', `Job ${result.job_id.slice(0, 8)} created`);
       onCreated();
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create job');
+      const msg = err instanceof Error ? err.message : 'Failed to create job';
+      setError(msg);
+      addToast('error', msg);
     } finally {
       setLoading(false);
     }

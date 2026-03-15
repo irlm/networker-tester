@@ -4,16 +4,24 @@ import { api, type Job } from '../api/client';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { CreateJobDialog } from '../components/CreateJobDialog';
 import { usePolling } from '../hooks/usePolling';
+import { usePageTitle } from '../hooks/usePageTitle';
+
+const STATUS_OPTIONS = ['all', 'pending', 'running', 'completed', 'failed', 'cancelled'] as const;
 
 export function JobsPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [showCreate, setShowCreate] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+
+  usePageTitle('Jobs');
 
   const loadJobs = useCallback(() => {
+    const params: { status?: string; limit?: number } = { limit: 50 };
+    if (statusFilter !== 'all') params.status = statusFilter;
     api
-      .getJobs({ limit: 50 })
+      .getJobs(params)
       .then((data) => {
         setJobs(data);
         setError(null);
@@ -23,7 +31,7 @@ export function JobsPage() {
         setError(String(e));
         setLoading(false);
       });
-  }, []);
+  }, [statusFilter]);
 
   usePolling(loadJobs, 5000);
 
@@ -40,12 +48,29 @@ export function JobsPage() {
     <div className="p-6">
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-xl font-bold text-gray-100">Jobs</h2>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors"
-        >
-          New Job
-        </button>
+        <div className="flex items-center gap-3">
+          <label htmlFor="jobs-status-filter" className="sr-only">
+            Filter by status
+          </label>
+          <select
+            id="jobs-status-filter"
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="bg-[#0a0b0f] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-300 focus:outline-none focus:border-cyan-500"
+          >
+            {STATUS_OPTIONS.map((s) => (
+              <option key={s} value={s}>
+                {s === 'all' ? 'All statuses' : s.charAt(0).toUpperCase() + s.slice(1)}
+              </option>
+            ))}
+          </select>
+          <button
+            onClick={() => setShowCreate(true)}
+            className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors"
+          >
+            New Job
+          </button>
+        </div>
       </div>
 
       {showCreate && (

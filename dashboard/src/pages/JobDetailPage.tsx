@@ -1,10 +1,13 @@
 import { useState, useMemo, useEffect } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, Link } from 'react-router-dom';
 import { api, type Job } from '../api/client';
 import type { LiveAttempt } from '../api/types';
 import { StatusBadge } from '../components/common/StatusBadge';
+import { Breadcrumb } from '../components/common/Breadcrumb';
 import { useLiveStore } from '../stores/liveStore';
 import { usePolling } from '../hooks/usePolling';
+import { usePageTitle } from '../hooks/usePageTitle';
+import { useToast } from '../hooks/useToast';
 import {
   BarChart,
   Bar,
@@ -27,6 +30,10 @@ export function JobDetailPage() {
     jobId ? s.liveAttempts[jobId] ?? EMPTY_ATTEMPTS : EMPTY_ATTEMPTS
   );
   const cleanupJob = useLiveStore((s) => s.cleanupJob);
+  const addToast = useToast();
+
+  const shortId = jobId?.slice(0, 8) ?? '';
+  usePageTitle(jobId ? `Job ${shortId}` : 'Job');
 
   const isTerminal = job ? TERMINAL_STATUSES.has(job.status) : false;
 
@@ -69,10 +76,21 @@ export function JobDetailPage() {
     [liveAttempts]
   );
 
+  const handleCancel = async () => {
+    if (!jobId) return;
+    try {
+      await api.cancelJob(jobId);
+      addToast('success', `Job ${shortId} cancelled`);
+    } catch (err) {
+      addToast('error', err instanceof Error ? err.message : 'Failed to cancel job');
+    }
+  };
+
   if (loading && !job) {
     return (
       <div className="p-6">
-        <div className="text-gray-500 motion-safe:animate-pulse">Loading job {jobId?.slice(0, 8)}...</div>
+        <Breadcrumb items={[{ label: 'Jobs', to: '/jobs' }, { label: `Job ${shortId}` }]} />
+        <div className="text-gray-500 motion-safe:animate-pulse">Loading job {shortId}...</div>
       </div>
     );
   }
@@ -80,6 +98,7 @@ export function JobDetailPage() {
   if (error && !job) {
     return (
       <div className="p-6">
+        <Breadcrumb items={[{ label: 'Jobs', to: '/jobs' }, { label: `Job ${shortId}` }]} />
         <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
           <h3 className="text-red-400 font-bold mb-2">Failed to load job</h3>
           <p className="text-red-300 text-sm font-mono">{error}</p>
@@ -102,6 +121,8 @@ export function JobDetailPage() {
 
   return (
     <div className="p-6">
+      <Breadcrumb items={[{ label: 'Jobs', to: '/jobs' }, { label: `Job ${shortId}` }]} />
+
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
@@ -117,7 +138,7 @@ export function JobDetailPage() {
         </div>
         {isRunning && (
           <button
-            onClick={() => api.cancelJob(job.job_id)}
+            onClick={handleCancel}
             className="bg-red-600/20 text-red-400 border border-red-500/30 px-4 py-1.5 rounded text-sm hover:bg-red-600/30 transition-colors"
           >
             Cancel
@@ -261,7 +282,11 @@ export function JobDetailPage() {
           {job.run_id && (
             <>
               <div className="text-gray-500">Run ID</div>
-              <div className="text-cyan-400 font-mono">{job.run_id}</div>
+              <div className="font-mono">
+                <Link to={`/runs/${job.run_id}`} className="text-cyan-400 hover:underline">
+                  {job.run_id}
+                </Link>
+              </div>
             </>
           )}
           {job.agent_id && (
