@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.20] – 2026-03-15 — Tester-side packet capture MVP
+
+### Added
+- **Tester-side packet capture MVP** — optional `tshark` capture integrated into `networker-tester`, producing `.pcapng` artifacts and packet summary JSON for local validation and future real-world benchmarking
+- **Packet capture deploy/install config** — new `packet_capture` configuration block with `none|tester|endpoint|both` scope selection, tester-side MVP support, and generated config wiring
+- **macOS packet-capture guidance** — deploy docs and installer messaging now explain manual Wireshark/ChmodBPF requirements when package-manager installs are insufficient
+
+### Changed
+- **Capture summary UX** — summary output now reports capture status and can explain when a trace succeeded but no UDP/QUIC packets were observed
+- **Capture preflight** — packet capture now checks tool availability and macOS BPF permission readiness before attempting a run
+
+---
+
 ## [0.13.19] – 2026-03-15 — Dashboard frontend fixes
 
 ### Fixed

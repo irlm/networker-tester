@@ -1,6 +1,7 @@
 use anyhow::Context;
 use chrono::Utc;
 use clap::Parser;
+use networker_tester::capture;
 use networker_tester::cli;
 use networker_tester::metrics::{
     attempt_payload_bytes, compute_stats, primary_metric_label, primary_metric_value, HostInfo,
@@ -114,6 +115,34 @@ async fn main() -> anyhow::Result<()> {
         "Starting networker-tester"
     );
 
+    // ── Ensure output dir exists ──────────────────────────────────────────────
+    let out_dir = PathBuf::from(&cfg.output_dir);
+    std::fs::create_dir_all(&out_dir).context("Cannot create output directory")?;
+
+    let capture_plan = capture::build_plan(&cfg, &out_dir);
+    if cfg.packet_capture.mode.captures_endpoint() {
+        warn!(
+            "endpoint-side packet capture requested but not implemented yet; continuing with tester-side only"
+        );
+    }
+    let capture_session = match capture_plan {
+        Some(plan) => match capture::start(plan).await {
+            Ok(session) => {
+                info!("Tester-side packet capture started");
+                Some(session)
+            }
+            Err(e) => {
+                if cfg.packet_capture.install_requirements {
+                    warn!("packet capture requested but requirements/setup are incomplete: {e:#}");
+                } else {
+                    warn!("packet capture requested but unavailable: {e:#}");
+                }
+                None
+            }
+        },
+        None => None,
+    };
+
     // ── Run probes for every target ───────────────────────────────────────────
     let mut all_runs: Vec<TestRun> = Vec::new();
     for target_url_str in &cfg.targets {
@@ -121,10 +150,6 @@ async fn main() -> anyhow::Result<()> {
         let run = run_for_target(target_url_str, &cfg, &modes, &payload_sizes).await?;
         all_runs.push(run);
     }
-
-    // ── Ensure output dir exists ──────────────────────────────────────────────
-    let out_dir = PathBuf::from(&cfg.output_dir);
-    std::fs::create_dir_all(&out_dir).context("Cannot create output directory")?;
 
     let ts = all_runs[0].started_at.format("%Y%m%d-%H%M%S");
     let multi = all_runs.len() > 1;
@@ -193,6 +218,21 @@ async fn main() -> anyhow::Result<()> {
     // ── Summary ───────────────────────────────────────────────────────────────
     for run in &all_runs {
         print_summary(run);
+    }
+
+    if let Some(session) = capture_session {
+        match session.finalize().await {
+            Ok(Some(summary)) => info!(
+                tcp_packets = summary.tcp_packets,
+                udp_packets = summary.udp_packets,
+                retransmissions = summary.retransmissions,
+                duplicate_acks = summary.duplicate_acks,
+                resets = summary.resets,
+                "Packet capture summary saved"
+            ),
+            Ok(None) => info!("Packet capture finalized without summary output"),
+            Err(e) => warn!("packet capture finalize failed: {e:#}"),
+        }
     }
 
     Ok(())
