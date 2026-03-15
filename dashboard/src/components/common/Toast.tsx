@@ -20,7 +20,7 @@ export function ToastContainer() {
 
   return (
     <div
-      className="fixed top-4 right-4 z-[100] flex flex-col gap-2 max-w-sm"
+      className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 max-w-sm"
       aria-live="polite"
       aria-label="Notifications"
     >
@@ -39,7 +39,7 @@ export function ToastContainer() {
             className="ml-2 opacity-60 hover:opacity-100 text-current"
             aria-label="Dismiss notification"
           >
-            \u2715
+            {'\u2715'}
           </button>
         </div>
       ))}

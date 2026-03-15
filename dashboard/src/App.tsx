@@ -5,11 +5,13 @@ import { Sidebar } from './components/layout/Sidebar';
 import { ToastContainer } from './components/common/Toast';
 import { LoginPage } from './pages/LoginPage';
 import { DashboardPage } from './pages/DashboardPage';
-import { AgentsPage } from './pages/AgentsPage';
 import { JobsPage } from './pages/JobsPage';
 import { JobDetailPage } from './pages/JobDetailPage';
 import { RunsPage } from './pages/RunsPage';
 import { RunDetailPage } from './pages/RunDetailPage';
+import { DeployPage } from './pages/DeployPage';
+import { DeployDetailPage } from './pages/DeployDetailPage';
+import { SettingsPage } from './pages/SettingsPage';
 
 const statusColors: Record<ConnectionStatus, string> = {
   connected: 'bg-green-400',
@@ -61,9 +63,15 @@ function AuthenticatedApp() {
         <ToastContainer />
         <Routes>
           <Route path="/" element={<DashboardPage />} />
-          <Route path="/agents" element={<AgentsPage />} />
-          <Route path="/jobs" element={<JobsPage />} />
-          <Route path="/jobs/:jobId" element={<JobDetailPage />} />
+          <Route path="/deploy" element={<DeployPage />} />
+          <Route path="/deploy/:deploymentId" element={<DeployDetailPage />} />
+          <Route path="/tests" element={<JobsPage />} />
+          <Route path="/tests/:jobId" element={<JobDetailPage />} />
+          {/* Backward compat redirects */}
+          <Route path="/jobs" element={<Navigate to="/tests" />} />
+          <Route path="/jobs/:jobId" element={<Navigate to="/tests" />} />
+          <Route path="/agents" element={<Navigate to="/tests" />} />
+          <Route path="/settings" element={<SettingsPage />} />
           <Route path="/runs" element={<RunsPage />} />
           <Route path="/runs/:runId" element={<RunDetailPage />} />
           <Route path="*" element={<Navigate to="/" />} />

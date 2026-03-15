@@ -83,6 +83,12 @@ pub enum AgentMessage {
     },
     /// Job failed with an error.
     JobError { job_id: Uuid, message: String },
+    /// Log line from tester execution (streamed to browser for live logs).
+    JobLog {
+        job_id: Uuid,
+        line: String,
+        level: String,
+    },
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -134,6 +140,24 @@ pub enum DashboardEvent {
         agent_id: Uuid,
         status: String,
         last_heartbeat: Option<DateTime<Utc>>,
+    },
+    /// A tester log line (streamed from job execution).
+    JobLog {
+        job_id: Uuid,
+        line: String,
+        level: String,
+    },
+    /// A deployment log line (streamed from install.sh).
+    DeployLog {
+        deployment_id: Uuid,
+        line: String,
+        stream: String,
+    },
+    /// A deployment completed or failed.
+    DeployComplete {
+        deployment_id: Uuid,
+        status: String,
+        endpoint_ips: Vec<String>,
     },
 }
 

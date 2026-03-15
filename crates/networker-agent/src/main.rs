@@ -19,7 +19,7 @@ async fn main() -> anyhow::Result<()> {
     let cfg = config::AgentConfig::from_env()?;
     tracing::info!(
         dashboard_url = %cfg.dashboard_url,
-        "Networker agent starting"
+        "Networker tester starting"
     );
 
     // Main reconnect loop

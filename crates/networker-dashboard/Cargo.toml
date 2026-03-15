@@ -35,6 +35,13 @@ deadpool-postgres = { version = "0.14", features = ["serde"] }
 jsonwebtoken = "9"
 bcrypt       = "0.16"
 
+# HTTP client (for endpoint health checks / info fetches)
+reqwest      = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+
 # Utilities
 futures      = "0.3"
 rpassword    = "7"
+regex        = "1"
+hostname     = "0.4"
+url          = { workspace = true }
+libc         = "0.2"

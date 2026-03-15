@@ -47,10 +47,15 @@ pub struct SystemMeta {
     /// Cloud region (auto-detected from cloud metadata at startup).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub region: Option<String>,
+    /// Public DNS hostname (auto-detected from cloud metadata).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_dns: Option<String>,
 }
 
 impl SystemMeta {
     pub fn collect() -> Self {
+        let region = detect_cloud_region();
+        let public_dns = detect_public_dns(&region);
         Self {
             os: std::env::consts::OS.to_string(),
             arch: std::env::consts::ARCH.to_string(),
@@ -60,9 +65,61 @@ impl SystemMeta {
             total_memory_mb: detect_total_memory_mb(),
             os_version: detect_os_version(),
             hostname: get_hostname(),
-            region: detect_cloud_region(),
+            region,
+            public_dns,
         }
     }
+}
+
+/// Detect public DNS hostname from cloud metadata.
+fn detect_public_dns(region: &Option<String>) -> Option<String> {
+    let region_str = region.as_deref().unwrap_or("");
+
+    if region_str.starts_with("azure/") {
+        // Azure: hostname + region + cloudapp.azure.com
+        let hostname = get_hostname();
+        let azure_region = region_str.strip_prefix("azure/").unwrap_or("eastus");
+        return Some(format!("{hostname}.{azure_region}.cloudapp.azure.com"));
+    }
+
+    if region_str.starts_with("aws/") {
+        // AWS: http://169.254.169.254/latest/meta-data/public-hostname
+        if let Some(dns) = cloud_metadata_get_raw(
+            "169.254.169.254:80",
+            "169.254.169.254",
+            "/latest/meta-data/public-hostname",
+            &[],
+        ) {
+            if !dns.is_empty() {
+                return Some(dns);
+            }
+        }
+        // Fallback: construct from public IP
+        if let Some(ip) = cloud_metadata_get_raw(
+            "169.254.169.254:80",
+            "169.254.169.254",
+            "/latest/meta-data/public-ipv4",
+            &[],
+        ) {
+            let aws_region = region_str.strip_prefix("aws/").unwrap_or("us-east-1");
+            let ip_dashed = ip.replace('.', "-");
+            if aws_region == "us-east-1" {
+                return Some(format!("ec2-{ip_dashed}.compute-1.amazonaws.com"));
+            } else {
+                return Some(format!(
+                    "ec2-{ip_dashed}.{aws_region}.compute.amazonaws.com"
+                ));
+            }
+        }
+    }
+
+    if region_str.starts_with("gcp/") {
+        // GCP: hostname is typically the instance name
+        let hostname = get_hostname();
+        return Some(hostname);
+    }
+
+    None
 }
 
 /// Attempt to detect cloud region from instance metadata APIs.

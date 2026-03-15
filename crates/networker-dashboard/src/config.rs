@@ -20,8 +20,14 @@ impl DashboardConfig {
             database_url: std::env::var("DASHBOARD_DB_URL").unwrap_or_else(|_| {
                 "postgres://networker:networker@localhost:5432/networker_dashboard".into()
             }),
-            jwt_secret: std::env::var("DASHBOARD_JWT_SECRET")
-                .unwrap_or_else(|_| "dev-secret-change-in-production".into()),
+            jwt_secret: std::env::var("DASHBOARD_JWT_SECRET").unwrap_or_else(|_| {
+                let secret = uuid::Uuid::new_v4().to_string();
+                eprintln!(
+                    "[WARN] DASHBOARD_JWT_SECRET not set — using random ephemeral secret. \
+                     Sessions will not survive restarts. Set DASHBOARD_JWT_SECRET for production."
+                );
+                secret
+            }),
             admin_password,
             port: std::env::var("DASHBOARD_PORT")
                 .ok()

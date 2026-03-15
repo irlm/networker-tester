@@ -4,9 +4,10 @@ import { useAuthStore } from '../../stores/authStore';
 
 const navItems = [
   { path: '/', label: 'Dashboard', icon: '\u25C8' },
-  { path: '/agents', label: 'Agents', icon: '\u25C9' },
-  { path: '/jobs', label: 'Jobs', icon: '\u25B6' },
+  { path: '/deploy', label: 'Deploy', icon: '\u25A3' },
+  { path: '/tests', label: 'Tests', icon: '\u25B6' },
   { path: '/runs', label: 'Runs', icon: '\u25F7' },
+  { path: '/settings', label: 'Settings', icon: '\u2699' },
 ];
 
 interface SidebarProps {

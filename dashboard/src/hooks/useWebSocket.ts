@@ -65,6 +65,16 @@ export function useWebSocket() {
 
   useEffect(() => {
     mountedRef.current = true;
+    // Close any stale connection from a previous mount (StrictMode double-mount)
+    if (wsRef.current) {
+      wsRef.current.onclose = null; // prevent reconnect from stale close
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
     connect();
     return () => {
       mountedRef.current = false;
@@ -72,7 +82,11 @@ export function useWebSocket() {
         clearTimeout(reconnectTimeoutRef.current);
         reconnectTimeoutRef.current = null;
       }
-      wsRef.current?.close();
+      if (wsRef.current) {
+        wsRef.current.onclose = null; // prevent reconnect trigger
+        wsRef.current.close();
+        wsRef.current = null;
+      }
     };
   }, [connect]);
 

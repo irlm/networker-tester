@@ -1,45 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { api } from '../api/client';
+import type { ModeGroup, Deployment, Agent } from '../api/types';
 import { useToast } from '../hooks/useToast';
 
 interface CreateJobDialogProps {
   onClose: () => void;
   onCreated: () => void;
 }
-
-const MODE_GROUPS = [
-  {
-    label: 'Network',
-    modes: [
-      { id: 'tcp', name: 'TCP', desc: 'TCP connect' },
-      { id: 'dns', name: 'DNS', desc: 'DNS resolution' },
-      { id: 'tls', name: 'TLS', desc: 'TLS handshake' },
-    ],
-  },
-  {
-    label: 'HTTP',
-    modes: [
-      { id: 'http1', name: 'HTTP/1.1', desc: 'HTTP/1.1 request' },
-      { id: 'http2', name: 'HTTP/2', desc: 'HTTP/2 multiplexed' },
-      { id: 'http3', name: 'HTTP/3', desc: 'QUIC/HTTP3' },
-    ],
-  },
-  {
-    label: 'Throughput',
-    modes: [
-      { id: 'download', name: 'Download', desc: 'Server→client transfer' },
-      { id: 'upload', name: 'Upload', desc: 'Client→server transfer' },
-    ],
-  },
-  {
-    label: 'Page Load',
-    modes: [
-      { id: 'pageload1', name: 'Pageload H1', desc: '6 parallel conns' },
-      { id: 'pageload2', name: 'Pageload H2', desc: 'Multiplexed TLS' },
-      { id: 'pageload3', name: 'Pageload H3', desc: 'QUIC multiplexed' },
-    ],
-  },
-];
 
 const PAYLOAD_PRESETS = [
   { label: 'Small (64KB)', value: '64k' },
@@ -50,7 +17,7 @@ const PAYLOAD_PRESETS = [
 export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
   const [target, setTarget] = useState('https://localhost:8443/health');
   const [selectedModes, setSelectedModes] = useState<Set<string>>(
-    new Set(['http1', 'http2'])
+    new Set<string>()
   );
   const [runs, setRuns] = useState(3);
   const [concurrency, setConcurrency] = useState(1);
@@ -60,14 +27,26 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
   const [payloadSizes, setPayloadSizes] = useState<Set<string>>(new Set(['64k', '1m']));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [modeGroups, setModeGroups] = useState<ModeGroup[]>([]);
+  const [deployments, setDeployments] = useState<Deployment[]>([]);
+  const [testers, setTesters] = useState<Agent[]>([]);
+  const [selectedTester, setSelectedTester] = useState<string>('');
   const dialogRef = useRef<HTMLDivElement>(null);
   const firstInputRef = useRef<HTMLInputElement>(null);
   const addToast = useToast();
 
-  const needsPayload = ['download', 'upload', 'download1', 'download2', 'download3', 'upload1', 'upload2', 'upload3']
-    .some((m) => selectedModes.has(m));
+  const THROUGHPUT_IDS = ['download', 'upload', 'download1', 'download2', 'download3',
+    'upload1', 'upload2', 'upload3', 'webdownload', 'webupload', 'udpdownload', 'udpupload'];
+  const needsPayload = THROUGHPUT_IDS.some((m) => selectedModes.has(m));
 
-  useEffect(() => { firstInputRef.current?.focus(); }, []);
+  useEffect(() => {
+    firstInputRef.current?.focus();
+    api.getModes().then(r => setModeGroups(r.groups)).catch(() => {});
+    api.getDeployments({ limit: 20 }).then(deps => {
+      setDeployments(deps.filter(d => d.status === 'completed' && d.endpoint_ips && d.endpoint_ips.length > 0));
+    }).catch(() => {});
+    api.getAgents().then(r => setTesters(r.agents)).catch(() => {});
+  }, []);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); },
@@ -116,8 +95,12 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
     });
   };
 
-  const selectPreset = (preset: 'quick' | 'standard' | 'full') => {
+  const selectPreset = (preset: 'clear' | 'quick' | 'standard' | 'full') => {
     switch (preset) {
+      case 'clear':
+        setSelectedModes(new Set());
+        setRuns(3);
+        break;
       case 'quick':
         setSelectedModes(new Set(['http1', 'http2']));
         setRuns(1);
@@ -127,7 +110,8 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
         setRuns(3);
         break;
       case 'full':
-        setSelectedModes(new Set(['tcp', 'dns', 'tls', 'http1', 'http2', 'http3', 'download', 'upload', 'pageload1', 'pageload2', 'pageload3']));
+        // Select ALL modes from the API
+        setSelectedModes(new Set(modeGroups.flatMap(g => g.modes.map(m => m.id))));
         setRuns(5);
         setPayloadSizes(new Set(['64k', '1m', '16m']));
         break;
@@ -153,7 +137,7 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
         insecure,
         dns_enabled: true,
         connection_reuse: connectionReuse,
-      });
+      }, selectedTester || undefined);
       addToast('success', `Job ${result.job_id.slice(0, 8)} created`);
       onCreated();
       onClose();
@@ -179,10 +163,10 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
       >
         <form
           onSubmit={handleSubmit}
-          className="bg-[#12131a] border border-gray-800 rounded-lg p-6 w-[600px]"
+          className="bg-[#12131a] border border-gray-800 rounded-lg p-6 w-[700px] min-w-[500px] max-w-[95vw] resize-x overflow-auto"
         >
           <h3 id={titleId} className="text-lg font-bold text-gray-100 mb-4">
-            New Test Job
+            New Test
           </h3>
 
           {error && (
@@ -194,7 +178,7 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
           {/* Presets */}
           <div className="flex gap-2 mb-4">
             <span className="text-xs text-gray-500 self-center mr-1">Preset:</span>
-            {(['quick', 'standard', 'full'] as const).map((p) => (
+            {(['clear', 'quick', 'standard', 'full'] as const).map((p) => (
               <button
                 key={p}
                 type="button"
@@ -208,37 +192,117 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
 
           {/* Target URL */}
           <label htmlFor="create-job-target" className="block text-xs text-gray-400 mb-1">
-            Target URL
+            Target
           </label>
+          <select
+            value={target}
+            onChange={(e) => setTarget(e.target.value)}
+            className="w-full bg-[#0a0b0f] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 mb-2 focus:outline-none focus:border-cyan-500"
+          >
+            <option value="">Select endpoint...</option>
+            <option value="https://localhost:8443/health">Local endpoint (localhost:8443)</option>
+            {deployments.flatMap(d =>
+              (d.endpoint_ips || []).map(ip => (
+                <option key={`${d.deployment_id}-${ip}`} value={`https://${ip}:8443/health`}>
+                  {d.name} — {ip.split('.')[0]}
+                </option>
+              ))
+            )}
+            {target && !['', 'https://localhost:8443/health'].includes(target) &&
+              !deployments.some(d => (d.endpoint_ips || []).some(ip => target.includes(ip))) && (
+              <option value={target}>Custom: {target}</option>
+            )}
+          </select>
           <input
             ref={firstInputRef}
             id="create-job-target"
             value={target}
             onChange={(e) => setTarget(e.target.value)}
-            className="w-full bg-[#0a0b0f] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 mb-4 focus:outline-none focus:border-cyan-500"
+            placeholder="Or type a custom URL..."
+            className="w-full bg-[#0a0b0f] border border-gray-700 rounded px-3 py-1.5 text-xs text-gray-400 mb-4 focus:outline-none focus:border-cyan-500"
           />
+
+          {/* Tester Selection */}
+          {testers.length > 0 && (
+            <div className="mb-4">
+              <label htmlFor="create-job-tester" className="block text-xs text-gray-400 mb-1">
+                Tester
+              </label>
+              <select
+                id="create-job-tester"
+                value={selectedTester}
+                onChange={(e) => setSelectedTester(e.target.value)}
+                className="w-full bg-[#0a0b0f] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+              >
+                <option value="">Auto (any online tester)</option>
+                {testers.map(a => (
+                  <option key={a.agent_id} value={a.agent_id}>
+                    {a.name} ({a.status}){a.region ? ` \u2014 ${a.region}` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {/* Mode Selection */}
           <p className="text-xs text-gray-400 mb-2">Probe Modes</p>
           <div className="grid grid-cols-2 gap-3 mb-4">
-            {MODE_GROUPS.map((group) => (
-              <div key={group.label} className="bg-[#0a0b0f] border border-gray-800 rounded p-3">
-                <p className="text-xs text-gray-500 font-medium mb-2">{group.label}</p>
-                {group.modes.map((mode) => (
-                  <label
-                    key={mode.id}
-                    className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer py-0.5 hover:text-gray-100"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selectedModes.has(mode.id)}
-                      onChange={() => toggleMode(mode.id)}
-                      className="accent-cyan-500"
-                    />
-                    <span>{mode.name}</span>
-                    <span className="text-xs text-gray-600 ml-auto">{mode.desc}</span>
-                  </label>
-                ))}
+            {modeGroups.map((group) => (
+              <div
+                key={group.label}
+                className={`bg-[#0a0b0f] border border-gray-800 rounded p-3 ${
+                  group.label === 'Throughput' ? 'col-span-2' : ''
+                }`}
+              >
+                {(() => {
+                  const ids = group.modes.map(m => m.id);
+                  const selectedCount = ids.filter(id => selectedModes.has(id)).length;
+                  const allSelected = selectedCount === ids.length;
+                  const someSelected = selectedCount > 0 && !allSelected;
+                  return (
+                    <>
+                      <label className="flex items-center gap-2 mb-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={allSelected}
+                          ref={el => { if (el) el.indeterminate = someSelected; }}
+                          onChange={() => {
+                            setSelectedModes(prev => {
+                              const next = new Set(prev);
+                              ids.forEach(id => allSelected ? next.delete(id) : next.add(id));
+                              return next;
+                            });
+                          }}
+                          className="accent-cyan-500"
+                        />
+                        <span className="text-xs text-gray-500 font-medium">{group.label}</span>
+                        {someSelected && (
+                          <span className="text-[10px] text-gray-600">{selectedCount}/{ids.length}</span>
+                        )}
+                        {group.detail && (
+                          <span className="text-gray-600 hover:text-gray-400 cursor-help ml-1 text-xs" title={group.detail}>&#9432;</span>
+                        )}
+                      </label>
+                      <div className={`pl-5 ${group.label === 'Throughput' ? 'grid grid-cols-2 gap-x-4' : ''}`}>
+                        {group.modes.map((mode) => (
+                          <label
+                            key={mode.id}
+                            className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer py-0.5 hover:text-gray-100"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={selectedModes.has(mode.id)}
+                              onChange={() => toggleMode(mode.id)}
+                              className="accent-cyan-500"
+                            />
+                            <span>{mode.name}</span>
+                            <span className="text-xs text-gray-600 ml-auto" title={mode.detail}>{mode.desc}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
             ))}
           </div>

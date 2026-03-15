@@ -147,6 +147,11 @@ pub struct Cli {
     #[arg(long)]
     pub excel: bool,
 
+    /// Write TestRun JSON to stdout (for agent/automation integration).
+    /// Suppresses normal file output when used.
+    #[arg(long)]
+    pub json_stdout: bool,
+
     // ── Database ──────────────────────────────────────────────────────────────
     /// Insert results into a database (auto-detects backend from URL scheme)
     #[arg(long)]
@@ -273,6 +278,7 @@ pub struct ResolvedConfig {
     pub html_report: String,
     pub css: Option<String>,
     pub excel: bool,
+    pub json_stdout: bool,
     pub save_to_db: bool,
     pub db_url: Option<String>,
     pub db_migrate: bool,
@@ -405,6 +411,7 @@ impl Cli {
             html_report: pick!(html_report, "report.html".into()),
             css: self.css.or(f.css),
             excel: flag!(excel),
+            json_stdout: self.json_stdout,
             save_to_db: self.save_to_db
                 || f.save_to_db.unwrap_or(false)
                 || self.save_to_sql
