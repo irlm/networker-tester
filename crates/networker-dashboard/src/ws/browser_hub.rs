@@ -1,20 +1,48 @@
 use axum::{
-    extract::{ws, State, WebSocketUpgrade},
+    extract::{ws, Query, State, WebSocketUpgrade},
+    http::StatusCode,
     response::IntoResponse,
     routing::get,
     Router,
 };
 use futures::{SinkExt, StreamExt};
+use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
 use networker_common::protocol;
 
+#[derive(Deserialize)]
+struct BrowserWsQuery {
+    token: Option<String>,
+}
+
 async fn browser_ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_browser_socket(socket, state))
+    Query(q): Query<BrowserWsQuery>,
+) -> Result<impl IntoResponse, StatusCode> {
+    // Validate JWT token before upgrading the WebSocket connection
+    let token = q.token.as_deref().unwrap_or("");
+    if token.is_empty() {
+        tracing::warn!("Browser WebSocket rejected: no token provided");
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    match crate::auth::validate_token(token, &state.jwt_secret) {
+        Ok(claims) => {
+            tracing::info!(
+                username = %claims.username,
+                role = %claims.role,
+                "Browser WebSocket authenticated"
+            );
+            Ok(ws.on_upgrade(move |socket| handle_browser_socket(socket, state)))
+        }
+        Err(_) => {
+            tracing::warn!("Browser WebSocket rejected: invalid token");
+            Err(StatusCode::UNAUTHORIZED)
+        }
+    }
 }
 
 async fn handle_browser_socket(socket: ws::WebSocket, state: Arc<AppState>) {

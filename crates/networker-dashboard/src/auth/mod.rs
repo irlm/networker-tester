@@ -1,12 +1,15 @@
 use axum::{
-    extract::Request,
+    extract::{Request, State},
     http::StatusCode,
     middleware::Next,
     response::{IntoResponse, Response},
 };
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use uuid::Uuid;
+
+use crate::AppState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
@@ -18,7 +21,7 @@ pub struct Claims {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Used in Phase 2 auth middleware
+#[allow(dead_code)] // Fields read in Phase 2 RBAC checks
 pub struct AuthUser {
     pub user_id: Uuid,
     pub username: String,
@@ -47,7 +50,6 @@ pub fn create_token(
     Ok(token)
 }
 
-#[allow(dead_code)] // Used in Phase 2 auth middleware
 pub fn validate_token(token: &str, secret: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
     let data = decode::<Claims>(
         token,
@@ -57,15 +59,13 @@ pub fn validate_token(token: &str, secret: &str) -> Result<Claims, jsonwebtoken:
     Ok(data.claims)
 }
 
-/// Axum middleware that requires a valid JWT and injects AuthUser into extensions.
-#[allow(dead_code)] // Used in Phase 2 for protected routes
-pub async fn require_auth(mut req: Request, next: Next) -> Response {
-    let secret = req
-        .extensions()
-        .get::<String>()
-        .cloned()
-        .unwrap_or_default();
-
+/// Axum middleware that requires a valid JWT Bearer token.
+/// Reads the JWT secret from AppState and injects AuthUser into request extensions.
+pub async fn require_auth(
+    State(state): State<Arc<AppState>>,
+    mut req: Request,
+    next: Next,
+) -> Response {
     let auth_header = req
         .headers()
         .get("authorization")
@@ -77,7 +77,7 @@ pub async fn require_auth(mut req: Request, next: Next) -> Response {
     }
 
     let token = &auth_header[7..];
-    match validate_token(token, &secret) {
+    match validate_token(token, &state.jwt_secret) {
         Ok(claims) => {
             req.extensions_mut().insert(AuthUser {
                 user_id: claims.sub,
