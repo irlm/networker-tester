@@ -41,8 +41,9 @@ export function LoginPage() {
           </p>
         )}
 
-        <label className="block text-xs text-gray-400 mb-1">Username</label>
+        <label htmlFor="login-username" className="block text-xs text-gray-400 mb-1">Username</label>
         <input
+          id="login-username"
           type="text"
           value={username}
           onChange={(e) => setUsername(e.target.value)}
@@ -50,8 +51,9 @@ export function LoginPage() {
           autoFocus
         />
 
-        <label className="block text-xs text-gray-400 mb-1">Password</label>
+        <label htmlFor="login-password" className="block text-xs text-gray-400 mb-1">Password</label>
         <input
+          id="login-password"
           type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}

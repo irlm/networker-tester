@@ -1,16 +1,56 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { api, type RunSummary } from '../api/client';
+import { usePolling } from '../hooks/usePolling';
 
 export function RunsPage() {
   const [runs, setRuns] = useState<RunSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    api.getRuns({ limit: 50 }).then(setRuns).catch(console.error);
-  }, []);
+  usePolling(() => {
+    api
+      .getRuns({ limit: 50 })
+      .then((data) => {
+        setRuns(data);
+        setError(null);
+        setLoading(false);
+      })
+      .catch((e) => {
+        setError(String(e));
+        setLoading(false);
+      });
+  }, 15000);
+
+  if (loading && runs.length === 0) {
+    return (
+      <div className="p-6">
+        <h2 className="text-xl font-bold text-gray-100 mb-6">Test Runs</h2>
+        <div className="text-gray-500 motion-safe:animate-pulse">Loading runs...</div>
+      </div>
+    );
+  }
+
+  if (error && runs.length === 0) {
+    return (
+      <div className="p-6">
+        <h2 className="text-xl font-bold text-gray-100 mb-6">Test Runs</h2>
+        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
+          <h3 className="text-red-400 font-bold mb-2">Failed to load runs</h3>
+          <p className="text-red-300 text-sm font-mono">{error}</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6">
       <h2 className="text-xl font-bold text-gray-100 mb-6">Test Runs</h2>
+
+      {error && (
+        <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 mb-4 text-yellow-400 text-sm">
+          Failed to refresh: {error}
+        </div>
+      )}
 
       <div className="bg-[#12131a] border border-gray-800 rounded-lg overflow-hidden">
         <table className="w-full text-sm">
