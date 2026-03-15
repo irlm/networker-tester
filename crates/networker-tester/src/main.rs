@@ -1,7 +1,9 @@
 use anyhow::Context;
 use chrono::Utc;
 use clap::Parser;
+use networker_tester::capture;
 use networker_tester::cli;
+use networker_tester::cli::ResolvedConfig;
 use networker_tester::metrics::{
     attempt_payload_bytes, compute_stats, primary_metric_label, primary_metric_value, HostInfo,
     NetworkBaseline, NetworkType, PageLoadResult, Protocol, RequestAttempt, TestRun,
@@ -122,6 +124,48 @@ async fn main() -> anyhow::Result<()> {
         "Starting networker-tester"
     );
 
+    if cfg.impairment.delay_ms > 0 {
+        warn!(
+            delay_ms = cfg.impairment.delay_ms,
+            "impairment delay uses the endpoint /delay route and is intended for controlled benchmark environments, not public exposure"
+        );
+        if cfg.impairment.delay_ms as u128 > cfg.timeout as u128 {
+            warn!(
+                delay_ms = cfg.impairment.delay_ms,
+                timeout_ms = cfg.timeout,
+                "configured impairment delay exceeds request timeout; this scenario may fail by construction"
+            );
+        }
+    }
+
+    // ── Ensure output dir exists ──────────────────────────────────────────────
+    let out_dir = PathBuf::from(&cfg.output_dir);
+    std::fs::create_dir_all(&out_dir).context("Cannot create output directory")?;
+
+    let capture_plan = capture::build_plan(&cfg, &out_dir);
+    if cfg.packet_capture.mode.captures_endpoint() {
+        warn!(
+            "endpoint-side packet capture requested but not implemented yet; continuing with tester-side only"
+        );
+    }
+    let capture_session = match capture_plan {
+        Some(plan) => match capture::start(plan).await {
+            Ok(session) => {
+                info!("Tester-side packet capture started");
+                Some(session)
+            }
+            Err(e) => {
+                if cfg.packet_capture.install_requirements {
+                    warn!("packet capture requested but requirements/setup are incomplete: {e:#}");
+                } else {
+                    warn!("packet capture requested but unavailable: {e:#}");
+                }
+                None
+            }
+        },
+        None => None,
+    };
+
     // ── Run probes for every target ───────────────────────────────────────────
     let mut all_runs: Vec<TestRun> = Vec::new();
     for target_url_str in &cfg.targets {
@@ -143,10 +187,6 @@ async fn main() -> anyhow::Result<()> {
         }
         return Ok(());
     }
-
-    // ── Ensure output dir exists ──────────────────────────────────────────────
-    let out_dir = PathBuf::from(&cfg.output_dir);
-    std::fs::create_dir_all(&out_dir).context("Cannot create output directory")?;
 
     let ts = all_runs[0].started_at.format("%Y%m%d-%H%M%S");
     let multi = all_runs.len() > 1;
@@ -215,6 +255,21 @@ async fn main() -> anyhow::Result<()> {
     // ── Summary ───────────────────────────────────────────────────────────────
     for run in &all_runs {
         print_summary(run);
+    }
+
+    if let Some(session) = capture_session {
+        match session.finalize().await {
+            Ok(Some(summary)) => info!(
+                tcp_packets = summary.tcp_packets,
+                udp_packets = summary.udp_packets,
+                retransmissions = summary.retransmissions,
+                duplicate_acks = summary.duplicate_acks,
+                resets = summary.resets,
+                "Packet capture summary saved"
+            ),
+            Ok(None) => info!("Packet capture finalized without summary output"),
+            Err(e) => warn!("packet capture finalize failed: {e:#}"),
+        }
     }
 
     Ok(())
@@ -445,6 +500,7 @@ async fn run_for_target(
                                         run_id,
                                         current_seq,
                                         &target_clone,
+                                        &cfg,
                                         &probe_cfg_clone,
                                         &udp_cfg_clone,
                                         &udp_throughput_cfg_clone,
@@ -474,6 +530,7 @@ async fn run_for_target(
                                         run_id,
                                         current_seq,
                                         &target_clone,
+                                        &cfg,
                                         &probe_cfg_clone,
                                         &udp_cfg_clone,
                                         &udp_throughput_cfg_clone,
@@ -489,6 +546,7 @@ async fn run_for_target(
                                     run_id,
                                     current_seq,
                                     &target_clone,
+                                    &cfg,
                                     &probe_cfg_clone,
                                     &udp_cfg_clone,
                                     &udp_throughput_cfg_clone,
@@ -620,6 +678,7 @@ async fn run_for_target(
                         run_id,
                         seq,
                         stack_target,
+                        cfg,
                         &probe_cfg,
                         &udp_cfg,
                         &udp_throughput_cfg,
@@ -643,6 +702,7 @@ async fn run_for_target(
                             run_id,
                             seq,
                             stack_target,
+                            cfg,
                             &probe_cfg,
                             &udp_cfg,
                             &udp_throughput_cfg,
@@ -871,6 +931,32 @@ fn rewrite_url_for_stack(base: &url::Url, port: u16, https: bool) -> url::Url {
     u
 }
 
+fn apply_impairment_target(proto: &Protocol, target: &url::Url, cfg: &ResolvedConfig) -> url::Url {
+    if cfg.impairment.delay_ms == 0 {
+        return target.clone();
+    }
+
+    let supported = matches!(
+        proto,
+        Protocol::Http1
+            | Protocol::Http2
+            | Protocol::Http3
+            | Protocol::Tcp
+            | Protocol::Tls
+            | Protocol::Native
+            | Protocol::Curl
+    );
+
+    if !supported {
+        return target.clone();
+    }
+
+    let mut delayed = target.clone();
+    delayed.set_path("/delay");
+    delayed.set_query(Some(&format!("ms={}", cfg.impairment.delay_ms)));
+    delayed
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Single probe dispatch (used for both the initial attempt and retries)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -882,12 +968,14 @@ async fn dispatch_once(
     run_id: Uuid,
     seq: u32,
     target: &url::Url,
+    resolved_cfg: &ResolvedConfig,
     cfg: &RunConfig,
     udp_cfg: &UdpProbeConfig,
     udp_throughput_cfg: &UdpThroughputConfig,
     throughput_cfg: &ThroughputConfig,
     pageload_cfg: &PageLoadConfig,
 ) -> RequestAttempt {
+    let impaired_target = apply_impairment_target(proto, target, resolved_cfg);
     match (proto, payload_sz) {
         (Protocol::Download, Some(sz)) => run_download_probe(run_id, seq, sz, throughput_cfg).await,
         (Protocol::Download1, Some(sz)) => {
@@ -916,13 +1004,13 @@ async fn dispatch_once(
             run_udpupload_probe(run_id, seq, sz, udp_throughput_cfg).await
         }
         (Protocol::Http1, _) | (Protocol::Http2, _) | (Protocol::Tcp, _) => {
-            run_probe(run_id, seq, proto.clone(), target, cfg).await
+            run_probe(run_id, seq, proto.clone(), &impaired_target, cfg).await
         }
         (Protocol::Http3, _) => {
             run_http3_probe(
                 run_id,
                 seq,
-                target,
+                &impaired_target,
                 cfg.timeout_ms,
                 cfg.insecure,
                 cfg.ca_bundle.as_deref(),
@@ -934,9 +1022,9 @@ async fn dispatch_once(
             let host = target.host_str().unwrap_or("");
             run_dns_probe(run_id, seq, host, cfg.ipv4_only, cfg.ipv6_only).await
         }
-        (Protocol::Tls, _) => run_tls_probe(run_id, seq, target, cfg).await,
-        (Protocol::Native, _) => run_native_probe(run_id, seq, target, cfg).await,
-        (Protocol::Curl, _) => run_curl_probe(run_id, seq, target, cfg).await,
+        (Protocol::Tls, _) => run_tls_probe(run_id, seq, &impaired_target, cfg).await,
+        (Protocol::Native, _) => run_native_probe(run_id, seq, &impaired_target, cfg).await,
+        (Protocol::Curl, _) => run_curl_probe(run_id, seq, &impaired_target, cfg).await,
         (Protocol::PageLoad, _) => run_pageload_probe(run_id, seq, pageload_cfg).await,
         (Protocol::PageLoad2, _) => run_pageload2_probe(run_id, seq, pageload_cfg).await,
         (Protocol::PageLoad3, _) => run_pageload3_probe(run_id, seq, pageload_cfg).await,
@@ -1548,6 +1636,9 @@ fn copy_default_css(out_dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use networker_tester::cli::{
+        ImpairmentProfile, ResolvedImpairmentConfig, ResolvedPacketCaptureConfig,
+    };
 
     #[test]
     fn rewrite_url_for_stack_http_port() {
@@ -1617,5 +1708,91 @@ mod tests {
         assert!(stack_modes.contains(&Protocol::Browser3));
         assert!(!stack_modes.contains(&Protocol::Http1));
         assert!(!stack_modes.contains(&Protocol::Download));
+    }
+
+    fn sample_resolved_config(delay_ms: u64) -> ResolvedConfig {
+        ResolvedConfig {
+            targets: vec!["https://127.0.0.1:8443/health".into()],
+            modes: vec![],
+            runs: 1,
+            concurrency: 1,
+            timeout: 1000,
+            payload_size: 0,
+            payload_sizes: vec![],
+            udp_port: 9999,
+            udp_throughput_port: 9998,
+            udp_probes: 20,
+            connection_reuse: false,
+            dns_enabled: true,
+            ipv4_only: false,
+            ipv6_only: false,
+            no_proxy: false,
+            proxy: None,
+            ca_bundle: None,
+            insecure: true,
+            retries: 0,
+            output_dir: ".".into(),
+            html_report: "report.html".into(),
+            css: None,
+            excel: false,
+            save_to_db: false,
+            db_url: None,
+            db_migrate: false,
+            save_to_sql: false,
+            connection_string: None,
+            log_level: None,
+            page_asset_sizes: vec![],
+            page_preset_name: None,
+            http_stacks: vec![],
+            packet_capture: ResolvedPacketCaptureConfig {
+                mode: networker_tester::cli::PacketCaptureMode::None,
+                install_requirements: false,
+                interface: "auto".into(),
+                write_pcap: false,
+                write_summary_json: false,
+            },
+            impairment: ResolvedImpairmentConfig {
+                profile: ImpairmentProfile::None,
+                delay_ms,
+            },
+            json_stdout: false,
+        }
+    }
+
+    #[test]
+    fn impairment_target_rewrites_supported_http_family_probe() {
+        let cfg = sample_resolved_config(150);
+        let base = url::Url::parse("https://example.com:8443/health").unwrap();
+        for proto in [
+            Protocol::Http1,
+            Protocol::Http2,
+            Protocol::Http3,
+            Protocol::Tcp,
+            Protocol::Tls,
+            Protocol::Native,
+            Protocol::Curl,
+        ] {
+            let rewritten = apply_impairment_target(&proto, &base, &cfg);
+            assert_eq!(rewritten.path(), "/delay");
+            assert_eq!(rewritten.query(), Some("ms=150"));
+            assert_eq!(rewritten.host_str(), Some("example.com"));
+        }
+    }
+
+    #[test]
+    fn impairment_target_skips_unsupported_probe_types() {
+        let cfg = sample_resolved_config(150);
+        let base = url::Url::parse("https://example.com:8443/health").unwrap();
+        let rewritten = apply_impairment_target(&Protocol::Udp, &base, &cfg);
+        assert_eq!(rewritten.path(), "/health");
+        assert_eq!(rewritten.query(), None);
+    }
+
+    #[test]
+    fn impairment_target_is_noop_when_delay_is_zero() {
+        let cfg = sample_resolved_config(0);
+        let base = url::Url::parse("https://example.com:8443/health").unwrap();
+        let rewritten = apply_impairment_target(&Protocol::Http2, &base, &cfg);
+        assert_eq!(rewritten, base);
     }
 }

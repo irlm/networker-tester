@@ -26,5 +26,13 @@
     "udp_throughput_port": 9998,
     "payload_sizes": ["64k", "1m"],
     "html_report": "report.html"
+  },
+
+  "packet_capture": {
+    "mode": "none"
+  },
+
+  "impairment": {
+    "profile": "wan"
   }
 }

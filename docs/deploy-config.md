@@ -51,6 +51,8 @@ bash install.sh --deploy deploy.json
 | `tester` | object | yes | Where to install the tester binary. |
 | `endpoints` | array | yes | One or more endpoint deployments. |
 | `tests` | object | no | Test configuration. Defaults to all modes, 5 runs. |
+| `packet_capture` | object | no | Optional packet capture on tester, endpoint, or both. Default is disabled. |
+| `impairment` | object | no | Optional benchmark impairment profile. Initial scoped support focuses on delay injection. |
 
 ### `tester` object
 
@@ -151,6 +153,57 @@ All fields are optional. If `tests` is omitted entirely, defaults are used.
 | `ipv6_only` | boolean | `false` | Force IPv6 |
 | `verbose` | boolean | `false` | Verbose output |
 | `log_level` | string | — | Log level (e.g. `"debug"`, `"info"`) |
+
+### `packet_capture` object
+
+All fields are optional. If omitted, packet capture is disabled.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `mode` | string | `"none"` | `"none"`, `"tester"`, `"endpoint"`, or `"both"` |
+| `install_requirements` | boolean | implementation default | Try to install `tshark`/`dumpcap` when capture is enabled |
+| `interface` | string | `"auto"` | Interface name to capture on (`en0`, `eth0`, etc.) |
+| `write_pcap` | boolean | `true` | Save raw `.pcapng` artifacts |
+| `write_summary_json` | boolean | `true` | Save parsed packet summary JSON |
+
+> Packet capture is intentionally **off by default**. The installer should only enable it when the
+> user explicitly selects it, or when a deploy config requests it.
+>
+> **macOS note:** having `tshark` installed is not sufficient by itself. Capturing on `lo0`/other
+> interfaces also requires Wireshark/TShark BPF permissions (for example via ChmodBPF). If you see
+> `/dev/bpf*: Permission denied`, packet capture is configured correctly but the OS permission layer
+> still needs to be enabled.
+>
+> In practice, macOS users may need to **install the full Wireshark app manually** and run its
+> **ChmodBPF** helper once. The CLI/package-manager install path can provide `tshark`, but it may
+> not complete the privileged BPF permission setup non-interactively.
+
+### `impairment` object
+
+All fields are optional. If omitted, no impairment is applied.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `profile` | string | `"none"` | `"none"`, `"wan"`, `"slow"`, or `"satellite"` |
+| `delay_ms` | number | profile default | Explicit delay override in milliseconds |
+
+Current scoped support in this first version focuses on **delay injection** by routing supported
+HTTP-family probes through the endpoint's built-in `/delay?ms=N` behavior.
+
+Security note:
+- `/delay` is intended for **controlled benchmark environments**.
+- Do not expose it broadly on public/shared endpoints unless you understand and accept the risk.
+- The client-side config clamps `delay_ms` to a maximum of `10000 ms` in this version.
+
+Default profile mapping:
+- `none` → `0 ms`
+- `wan` → `40 ms`
+- `slow` → `150 ms`
+- `satellite` → `600 ms`
+
+**Current scope:** request-style HTTP-family probes only. This first version is meant to make
+paper-style delay scenarios easy to reproduce without claiming full traffic shaping or netem-style
+loss/jitter control yet.
 
 ### Valid test modes
 

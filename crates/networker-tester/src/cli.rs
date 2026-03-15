@@ -1,6 +1,6 @@
 use anyhow::Context;
 use clap::Parser;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Networker Tester – cross-platform network diagnostics client.
 #[derive(Parser, Debug, Clone)]
@@ -210,6 +210,79 @@ pub struct Cli {
     pub log_level: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PacketCaptureMode {
+    #[default]
+    None,
+    Tester,
+    Endpoint,
+    Both,
+}
+
+impl PacketCaptureMode {
+    pub fn captures_tester(self) -> bool {
+        matches!(self, Self::Tester | Self::Both)
+    }
+
+    pub fn captures_endpoint(self) -> bool {
+        matches!(self, Self::Endpoint | Self::Both)
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct PacketCaptureConfig {
+    pub mode: Option<PacketCaptureMode>,
+    pub install_requirements: Option<bool>,
+    pub interface: Option<String>,
+    pub write_pcap: Option<bool>,
+    pub write_summary_json: Option<bool>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedPacketCaptureConfig {
+    pub mode: PacketCaptureMode,
+    pub install_requirements: bool,
+    pub interface: String,
+    pub write_pcap: bool,
+    pub write_summary_json: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ImpairmentProfile {
+    #[default]
+    None,
+    Wan,
+    Slow,
+    Satellite,
+}
+
+impl ImpairmentProfile {
+    pub fn default_delay_ms(self) -> u64 {
+        match self {
+            Self::None => 0,
+            Self::Wan => 40,
+            Self::Slow => 150,
+            Self::Satellite => 600,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct ImpairmentConfig {
+    pub profile: Option<ImpairmentProfile>,
+    pub delay_ms: Option<u64>,
+}
+
+pub const MAX_IMPAIRMENT_DELAY_MS: u64 = 10_000;
+
+#[derive(Debug, Clone)]
+pub struct ResolvedImpairmentConfig {
+    pub profile: ImpairmentProfile,
+    pub delay_ms: u64,
+}
+
 /// Keys that may appear in a JSON config file.
 /// Unknown keys are silently ignored (no `deny_unknown_fields`).
 #[derive(Debug, Default, Deserialize)]
@@ -248,6 +321,8 @@ pub struct ConfigFile {
     pub page_asset_size: Option<String>,
     pub page_preset: Option<String>,
     pub http_stacks: Option<Vec<String>>,
+    pub packet_capture: Option<PacketCaptureConfig>,
+    pub impairment: Option<ImpairmentConfig>,
 }
 
 /// Fully resolved configuration with all defaults applied.
@@ -291,6 +366,8 @@ pub struct ResolvedConfig {
     pub page_preset_name: Option<String>,
     /// HTTP stacks to compare (e.g. ["nginx", "iis"]).
     pub http_stacks: Vec<HttpStack>,
+    pub packet_capture: ResolvedPacketCaptureConfig,
+    pub impairment: ResolvedImpairmentConfig,
 }
 
 /// An HTTP stack to probe alongside the default networker-endpoint.
@@ -367,6 +444,26 @@ impl Cli {
             None => (vec![page_asset_size_bytes; page_assets_count], None),
         };
 
+        let packet_capture = {
+            let pc = f.packet_capture.unwrap_or_default();
+            ResolvedPacketCaptureConfig {
+                mode: pc.mode.unwrap_or_default(),
+                install_requirements: pc.install_requirements.unwrap_or(false),
+                interface: pc.interface.unwrap_or_else(|| "auto".into()),
+                write_pcap: pc.write_pcap.unwrap_or(true),
+                write_summary_json: pc.write_summary_json.unwrap_or(true),
+            }
+        };
+        let impairment = {
+            let ic = f.impairment.unwrap_or_default();
+            let profile = ic.profile.unwrap_or_default();
+            let requested_delay = ic.delay_ms.unwrap_or_else(|| profile.default_delay_ms());
+            ResolvedImpairmentConfig {
+                profile,
+                delay_ms: requested_delay.min(MAX_IMPAIRMENT_DELAY_MS),
+            }
+        };
+
         ResolvedConfig {
             targets: {
                 // CLI --target flags take priority (already a Vec); then config `targets`
@@ -436,6 +533,8 @@ impl Cli {
                     .filter_map(|s| HttpStack::from_name(s).ok())
                     .collect()
             },
+            packet_capture,
+            impairment,
         }
     }
 }
@@ -905,6 +1004,19 @@ mod tests {
             assert!(cfg.save_to_db, "save_to_db should be true from config file");
             assert_eq!(cfg.db_url.as_deref(), Some("postgres://localhost/diag"));
         });
+    }
+
+    #[test]
+    fn impairment_delay_is_clamped_to_maximum() {
+        let file = ConfigFile {
+            impairment: Some(ImpairmentConfig {
+                profile: Some(ImpairmentProfile::Satellite),
+                delay_ms: Some(MAX_IMPAIRMENT_DELAY_MS + 1234),
+            }),
+            ..Default::default()
+        };
+        let cfg = Cli::parse_from(["networker-tester"]).resolve(Some(file));
+        assert_eq!(cfg.impairment.delay_ms, MAX_IMPAIRMENT_DELAY_MS);
     }
 
     #[test]
