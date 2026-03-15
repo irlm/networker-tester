@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { api } from '../api/client';
 import { StatCard } from '../components/cards/StatCard';
 import { StatusBadge } from '../components/common/StatusBadge';
@@ -32,7 +32,7 @@ export function DashboardPage() {
       });
   }, 10000);
 
-  const recentEvents = events.slice(-20).reverse();
+  const recentEvents = useMemo(() => events.slice(-20).reverse(), [events]);
 
   if (loading && !summary) {
     return (

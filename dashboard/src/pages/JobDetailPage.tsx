@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { api, type Job } from '../api/client';
 import type { LiveAttempt } from '../api/types';
@@ -16,17 +16,26 @@ import {
 } from 'recharts';
 
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+const EMPTY_ATTEMPTS: LiveAttempt[] = [];
 
 export function JobDetailPage() {
   const { jobId } = useParams<{ jobId: string }>();
   const [job, setJob] = useState<Job | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const liveAttempts: LiveAttempt[] = useLiveStore((s) =>
-    jobId ? s.liveAttempts[jobId] || [] : []
+  const liveAttempts = useLiveStore((s) =>
+    jobId ? s.liveAttempts[jobId] ?? EMPTY_ATTEMPTS : EMPTY_ATTEMPTS
   );
+  const cleanupJob = useLiveStore((s) => s.cleanupJob);
 
   const isTerminal = job ? TERMINAL_STATUSES.has(job.status) : false;
+
+  // Clean up live attempts when job reaches terminal state
+  useEffect(() => {
+    if (isTerminal && jobId) {
+      cleanupJob(jobId);
+    }
+  }, [isTerminal, jobId, cleanupJob]);
 
   usePolling(
     () => {

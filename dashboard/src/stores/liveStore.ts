@@ -29,17 +29,17 @@ export const useLiveStore = create<LiveState>((set) => ({
   addEvent: (event) =>
     set((state) => {
       const events = [...state.events.slice(-200), event];
-      const liveAttempts = { ...state.liveAttempts };
-
       if (event.type === 'attempt_result' && event.job_id && event.attempt) {
-        const jobAttempts = liveAttempts[event.job_id] || [];
+        const jobAttempts = state.liveAttempts[event.job_id] || [];
         const capped = jobAttempts.length >= MAX_ATTEMPTS_PER_JOB
           ? jobAttempts.slice(-MAX_ATTEMPTS_PER_JOB + 1)
           : jobAttempts;
-        liveAttempts[event.job_id] = [...capped, event.attempt];
+        return {
+          events,
+          liveAttempts: { ...state.liveAttempts, [event.job_id]: [...capped, event.attempt] },
+        };
       }
-
-      return { events, liveAttempts };
+      return { events };
     }),
   cleanupJob: (jobId) =>
     set((state) => {

@@ -6,8 +6,10 @@ export function usePolling(fn: () => void, intervalMs: number, enabled = true) {
 
   useEffect(() => {
     if (!enabled) return;
-    fnRef.current();
-    const id = setInterval(() => fnRef.current(), intervalMs);
-    return () => clearInterval(id);
+    let cancelled = false;
+    const run = () => { if (!cancelled) fnRef.current(); };
+    run();
+    const id = setInterval(run, intervalMs);
+    return () => { cancelled = true; clearInterval(id); };
   }, [intervalMs, enabled]);
 }
