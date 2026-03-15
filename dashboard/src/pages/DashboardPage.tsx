@@ -4,6 +4,7 @@ import { StatCard } from '../components/cards/StatCard';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { useLiveStore } from '../stores/liveStore';
 import { usePolling } from '../hooks/usePolling';
+import { usePageTitle } from '../hooks/usePageTitle';
 
 interface Summary {
   agents_online: number;
@@ -17,6 +18,8 @@ export function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const events = useLiveStore((s) => s.events);
+
+  usePageTitle('Dashboard');
 
   usePolling(() => {
     api
