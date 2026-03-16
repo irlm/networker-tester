@@ -208,9 +208,14 @@ pub struct Cli {
     /// Log level e.g. "debug", "info,tower_http=debug". Overrides --verbose and RUST_LOG.
     #[arg(long)]
     pub log_level: Option<String>,
+
+    // ── Packet Capture ──────────────────────────────────────────────────────
+    /// Packet capture mode: none, tester, endpoint, both
+    #[arg(long)]
+    pub capture_mode: Option<PacketCaptureMode>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum PacketCaptureMode {
     #[default]
@@ -446,8 +451,10 @@ impl Cli {
 
         let packet_capture = {
             let pc = f.packet_capture.unwrap_or_default();
+            // CLI --capture-mode overrides config file when explicitly provided
+            let mode = self.capture_mode.or(pc.mode).unwrap_or_default();
             ResolvedPacketCaptureConfig {
-                mode: pc.mode.unwrap_or_default(),
+                mode,
                 install_requirements: pc.install_requirements.unwrap_or(false),
                 interface: pc.interface.unwrap_or_else(|| "auto".into()),
                 write_pcap: pc.write_pcap.unwrap_or(true),

@@ -36,6 +36,7 @@ export interface JobConfig {
   insecure: boolean;
   dns_enabled: boolean;
   connection_reuse: boolean;
+  capture_mode?: 'none' | 'tester' | 'endpoint' | 'both';
 }
 
 export interface RunSummary {
