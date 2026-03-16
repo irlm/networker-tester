@@ -76,9 +76,7 @@ async fn change_password(
 
     let client = match state.db.get().await {
         Ok(c) => c,
-        Err(_) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response()
-        }
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response(),
     };
 
     match crate::db::users::change_password(

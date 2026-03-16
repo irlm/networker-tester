@@ -3563,7 +3563,7 @@ step_install_nodejs() {
         apt-get)
             # Use NodeSource for a recent LTS version
             if ! command -v node &>/dev/null; then
-                curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash - < /dev/null
+                curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
                 sudo apt-get install -y nodejs < /dev/null
             fi
             ;;

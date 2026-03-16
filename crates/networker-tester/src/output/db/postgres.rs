@@ -346,25 +346,26 @@ async fn insert_request_attempt(a: &RequestAttempt, c: &PgClient) -> anyhow::Res
     let extra_json: Option<serde_json::Value> = serde_json::to_value(a).ok();
 
     // Try with extra_json column first (V004+), fall back to without
-    let result = c.execute(
-        "INSERT INTO RequestAttempt (
+    let result = c
+        .execute(
+            "INSERT INTO RequestAttempt (
             AttemptId, RunId, Protocol, SequenceNum,
             StartedAt, FinishedAt, Success, ErrorMessage, RetryCount, extra_json
          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
-        &[
-            &a.attempt_id,
-            &a.run_id,
-            &protocol,
-            &(a.sequence_num as i32),
-            &a.started_at,
-            &a.finished_at,
-            &a.success,
-            &err_msg,
-            &(a.retry_count as i32),
-            &extra_json,
-        ],
-    )
-    .await;
+            &[
+                &a.attempt_id,
+                &a.run_id,
+                &protocol,
+                &(a.sequence_num as i32),
+                &a.started_at,
+                &a.finished_at,
+                &a.success,
+                &err_msg,
+                &(a.retry_count as i32),
+                &extra_json,
+            ],
+        )
+        .await;
 
     match result {
         Ok(_) => Ok(()),
