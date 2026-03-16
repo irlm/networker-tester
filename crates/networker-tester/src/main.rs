@@ -181,9 +181,21 @@ async fn main() -> anyhow::Result<()> {
             let first = all_runs
                 .first()
                 .context("no targets produced any test runs")?;
-            println!("{}", serde_json::to_string(first).unwrap_or_default());
+            match serde_json::to_string(first) {
+                Ok(json) => println!("{json}"),
+                Err(e) => {
+                    error!(error = %e, "failed to serialize test run");
+                    println!("{\"error\":\"serialization failed\"}");
+                }
+            }
         } else {
-            println!("{}", serde_json::to_string(&all_runs).unwrap_or_default());
+            match serde_json::to_string(&all_runs) {
+                Ok(json) => println!("{json}"),
+                Err(e) => {
+                    error!(error = %e, "failed to serialize test runs");
+                    println!("{\"error\":\"serialization failed\"}");
+                }
+            }
         }
         return Ok(());
     }
