@@ -50,11 +50,8 @@ export function RunDetailPage() {
         })
         .catch((e) => { setError(String(e)); setLoading(false); });
       api
-        .getRuns({ limit: 200 })
-        .then((runs) => {
-          const found = runs.find((r) => r.run_id === runId);
-          if (found) setRun(found);
-        })
+        .getRun(runId!)
+        .then((data) => setRun(data as unknown as RunSummary))
         .catch(() => {});
     },
     15000,

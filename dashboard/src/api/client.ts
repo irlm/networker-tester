@@ -19,6 +19,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
   if (res.status === 401) {
     localStorage.removeItem('token');
+    localStorage.removeItem('username');
+    localStorage.removeItem('role');
+    localStorage.removeItem('mustChangePassword');
     window.location.href = '/login';
     throw new Error('Unauthorized');
   }
@@ -69,7 +72,7 @@ export const api = {
     }),
 
   deleteAgent: (agentId: string) =>
-    request<{ deleted: boolean }>(`/agents/${agentId}`),
+    request<{ deleted: boolean }>(`/agents/${agentId}`, { method: 'DELETE' }),
 
   getJobs: (params?: { status?: string; limit?: number; offset?: number }) => {
     const search = new URLSearchParams();

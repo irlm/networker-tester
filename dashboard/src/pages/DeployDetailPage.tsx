@@ -232,7 +232,7 @@ export function DeployDetailPage() {
       </div>
 
       {/* Info Cards */}
-      <div className="grid grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <div className="bg-[#12131a] border border-gray-800 rounded-lg p-4">
           <p className="text-xs text-gray-500 mb-1">Provider</p>
           <p className="text-sm text-gray-200">{deployment?.provider_summary || '\u2014'}</p>
