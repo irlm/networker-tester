@@ -1,9 +1,10 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from './stores/authStore';
 import { useWebSocket, type ConnectionStatus } from './hooks/useWebSocket';
 import { Sidebar } from './components/layout/Sidebar';
 import { ToastContainer } from './components/common/Toast';
 import { LoginPage } from './pages/LoginPage';
+import { ChangePasswordPage } from './pages/ChangePasswordPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { JobsPage } from './pages/JobsPage';
 import { JobDetailPage } from './pages/JobDetailPage';
@@ -54,6 +55,12 @@ function ConnectionBanner({ status }: { status: ConnectionStatus }) {
 
 function AuthenticatedApp() {
   const status = useWebSocket();
+  const mustChangePassword = useAuthStore((s) => s.mustChangePassword);
+  const location = useLocation();
+
+  if (mustChangePassword && location.pathname !== '/change-password') {
+    return <Navigate to="/change-password" />;
+  }
 
   return (
     <div className="flex min-h-screen bg-[#0a0b0f]">
@@ -63,6 +70,7 @@ function AuthenticatedApp() {
         <ToastContainer />
         <Routes>
           <Route path="/" element={<DashboardPage />} />
+          <Route path="/change-password" element={<ChangePasswordPage />} />
           <Route path="/deploy" element={<DeployPage />} />
           <Route path="/deploy/:deploymentId" element={<DeployDetailPage />} />
           <Route path="/tests" element={<JobsPage />} />

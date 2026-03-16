@@ -53,6 +53,7 @@ bash install.sh --deploy deploy.json
 | `tests` | object | no | Test configuration. Defaults to all modes, 5 runs. |
 | `packet_capture` | object | no | Optional packet capture on tester, endpoint, or both. Default is disabled. |
 | `impairment` | object | no | Optional benchmark impairment profile. Initial scoped support focuses on delay injection. |
+| `dashboard` | object | no | Dashboard control plane setup. Installs PostgreSQL, builds frontend, creates systemd service. |
 
 ### `tester` object
 
@@ -251,6 +252,42 @@ Use `page_preset` to override `page_assets` and `page_asset_size` with a realist
 
 Each preset includes a realistic distribution of asset sizes — small tracking pixels, medium
 CSS/JS/fonts, and large images/bundles — rather than uniform-size assets.
+
+### `dashboard` object
+
+Optional. When present, the installer sets up the dashboard control plane on the local machine.
+This includes PostgreSQL, the dashboard binary, the agent binary, and the React frontend.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `provider` | string | `"local"` | Only `"local"` is currently supported |
+| `admin_password` | string | `"admin"` | Dashboard admin password |
+| `port` | number | `3000` | Dashboard HTTP port |
+
+Example:
+```json
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [
+    { "provider": "lan", "lan": { "ip": "192.168.1.100", "user": "admin" } }
+  ],
+  "dashboard": {
+    "provider": "local",
+    "admin_password": "secret",
+    "port": 3000
+  }
+}
+```
+
+The dashboard setup installs:
+1. **PostgreSQL** — database for storing test results, agents, deployments
+2. **networker-dashboard** — axum HTTP server (REST API + WebSocket + static files)
+3. **networker-agent** — daemon that connects to dashboard and runs probe jobs
+4. **React frontend** — built from source and served by the dashboard at `/`
+5. **systemd service** — `networker-dashboard.service` with auto-restart
+
+After install, access the dashboard at `http://localhost:<port>`.
 
 ## Examples
 

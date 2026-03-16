@@ -1,7 +1,7 @@
 use std::io::Write;
 
 /// Dashboard configuration loaded from environment variables.
-/// DASHBOARD_ADMIN_PASSWORD is required — prompted interactively if not set.
+/// DASHBOARD_ADMIN_PASSWORD is optional — a random temporary password is generated if not set.
 pub struct DashboardConfig {
     pub database_url: String,
     pub jwt_secret: String,
@@ -13,7 +13,22 @@ impl DashboardConfig {
     pub fn from_env() -> anyhow::Result<Self> {
         let admin_password = match std::env::var("DASHBOARD_ADMIN_PASSWORD") {
             Ok(p) if !p.is_empty() => p,
-            _ => prompt_password("Enter admin password for dashboard: ")?,
+            _ => {
+                // Check if stdin is a TTY — if so, prompt interactively
+                if atty_is_tty() {
+                    prompt_password("Enter admin password for dashboard: ")?
+                } else {
+                    // Non-interactive: generate a random temp password
+                    let temp = generate_temp_password();
+                    eprintln!();
+                    eprintln!("╔══════════════════════════════════════════════════════════╗");
+                    eprintln!("║  Temporary admin password (change on first login):       ║");
+                    eprintln!("║  {:<55}║", temp);
+                    eprintln!("╚══════════════════════════════════════════════════════════╝");
+                    eprintln!();
+                    temp
+                }
+            }
         };
 
         Ok(Self {
@@ -35,6 +50,35 @@ impl DashboardConfig {
                 .unwrap_or(3000),
         })
     }
+}
+
+/// Check if stderr is a terminal (for deciding whether to prompt interactively).
+fn atty_is_tty() -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        unsafe { libc::isatty(std::io::stderr().as_raw_fd()) != 0 }
+    }
+    #[cfg(not(unix))]
+    {
+        true // Assume TTY on non-Unix (Windows will prompt)
+    }
+}
+
+/// Generate a random temporary password (16 chars, alphanumeric).
+fn generate_temp_password() -> String {
+    use std::io::Read;
+    let mut bytes = [0u8; 24];
+    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+        let _ = f.read_exact(&mut bytes);
+    }
+    // Base64-like encoding using only URL-safe chars
+    let charset = b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
+    bytes
+        .iter()
+        .take(16)
+        .map(|b| charset[(*b as usize) % charset.len()] as char)
+        .collect()
 }
 
 /// Prompt for a password on stderr (so it works even when stdout is piped).

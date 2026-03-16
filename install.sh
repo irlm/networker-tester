@@ -234,11 +234,12 @@ print_step_header() {
 
 show_help() {
     cat <<'EOF'
-Usage: install.sh [OPTIONS] [tester|endpoint|both]
+Usage: install.sh [OPTIONS] [tester|endpoint|dashboard|both]
 
-  tester    Install networker-tester (the diagnostic CLI client)
-  endpoint  Install networker-endpoint (the target test server)
-  both      Install both binaries  [default]
+  tester      Install networker-tester (the diagnostic CLI client)
+  endpoint    Install networker-endpoint (the target test server)
+  dashboard   Install networker-dashboard (control plane + web UI + agent)
+  both        Install tester + endpoint  [default]
 
 Install location (interactive; can also be set via flags):
   local     Install on this machine  [default]
@@ -301,12 +302,13 @@ Examples:
   bash install.sh --tester-aws --aws both          # both on separate AWS instances
   bash install.sh --tester-azure --aws both        # tester on Azure, endpoint on AWS
   bash install.sh --tester-gcp --gcp both          # both on separate GCP instances
+  bash install.sh dashboard                        # install dashboard + PostgreSQL + frontend
   bash install.sh --deploy deploy.json             # config-driven deploy + test
 EOF
 }
 
 # ── Script-level state ────────────────────────────────────────────────────────
-COMPONENT=""   # "" = not set via CLI; "tester" | "endpoint" | "both" = explicit
+COMPONENT=""   # "" = not set via CLI; "tester" | "endpoint" | "dashboard" | "both" = explicit
 AUTO_YES=0
 FROM_SOURCE=0
 SKIP_RUST=0
@@ -321,6 +323,7 @@ INSTALLER_VERSION="v0.13.21"  # fallback when gh is unavailable
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
 DO_INSTALL_ENDPOINT=1
+DO_INSTALL_DASHBOARD=0
 RUST_VER=""
 RUST_EXISTS=0
 GIT_AVAILABLE=0
@@ -464,7 +467,7 @@ DEPLOY_EP_FQDNS=()             # populated after deploy (cloud DNS hostnames)
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            tester|endpoint|both)
+            tester|endpoint|dashboard|both)
                 COMPONENT="$1" ;;
             -y|--yes)
                 AUTO_YES=1 ;;
@@ -565,9 +568,10 @@ parse_args() {
     done
 
     case "$COMPONENT" in
-        tester)   DO_INSTALL_ENDPOINT=0 ;;
-        endpoint) DO_INSTALL_TESTER=0   ;;
-        both)     ;;
+        tester)    DO_INSTALL_ENDPOINT=0 ;;
+        endpoint)  DO_INSTALL_TESTER=0   ;;
+        dashboard) DO_INSTALL_TESTER=0; DO_INSTALL_ENDPOINT=0; DO_INSTALL_DASHBOARD=1 ;;
+        both)      ;;
     esac
 
 
@@ -905,6 +909,16 @@ display_plan() {
             print_dim "Repository:  $REPO_HTTPS"
             print_dim "Source code is compiled locally — no pre-built binaries are downloaded."
         fi
+    fi
+
+    # ── Dashboard ─────────────────────────────────────────────────────────────
+    if [[ $DO_INSTALL_DASHBOARD -eq 1 ]]; then
+        echo ""
+        printf "    ${BOLD}networker-dashboard:${RESET}  Local install\n"
+        printf "    %-22s %s\n" "PostgreSQL:"  "auto-install + configure"
+        printf "    %-22s %s\n" "Frontend:"    "Node.js build → /opt/networker/dashboard"
+        printf "    %-22s %s\n" "Service:"     "systemd (networker-dashboard.service)"
+        printf "    %-22s %s\n" "Port:"        "${DASHBOARD_PORT:-3000}"
     fi
 
     # ── Remote — tester ───────────────────────────────────────────────────────
@@ -2467,6 +2481,7 @@ prompt_component_selection() {
     echo "  1) Both  — networker-tester (client) + networker-endpoint (server)  [default]"
     echo "  2) tester only   — the diagnostic CLI for measuring HTTP/1.1, H2, H3, QUIC"
     echo "  3) endpoint only — the lightweight HTTP/QUIC test server"
+    echo "  4) dashboard     — control plane + web UI (includes PostgreSQL, agent)"
     echo ""
     printf "  Choice [1]: "
     local comp_ans
@@ -2477,6 +2492,8 @@ prompt_component_selection() {
            print_ok "Installing: networker-tester only" ;;
         3) COMPONENT="endpoint"; DO_INSTALL_TESTER=0; DO_INSTALL_ENDPOINT=1
            print_ok "Installing: networker-endpoint only" ;;
+        4) COMPONENT="dashboard"; DO_INSTALL_TESTER=0; DO_INSTALL_ENDPOINT=0; DO_INSTALL_DASHBOARD=1
+           print_ok "Installing: networker-dashboard (control plane + web UI)" ;;
         *) COMPONENT="both";     DO_INSTALL_TESTER=1; DO_INSTALL_ENDPOINT=1
            print_ok "Installing: networker-tester + networker-endpoint" ;;
     esac
@@ -2684,6 +2701,7 @@ customize_flow() {
     echo "    1) Both  (networker-tester + networker-endpoint)  [default]"
     echo "    2) tester only   – the diagnostic CLI client"
     echo "    3) endpoint only – the target test server"
+    echo "    4) dashboard     – control plane + web UI (PostgreSQL, agent)"
     echo ""
     local comp_ans
     printf "  Choice [1]: "
@@ -2692,6 +2710,7 @@ customize_flow() {
     case "$comp_ans" in
         2) COMPONENT="tester";   DO_INSTALL_TESTER=1; DO_INSTALL_ENDPOINT=0 ;;
         3) COMPONENT="endpoint"; DO_INSTALL_TESTER=0; DO_INSTALL_ENDPOINT=1 ;;
+        4) COMPONENT="dashboard"; DO_INSTALL_TESTER=0; DO_INSTALL_ENDPOINT=0; DO_INSTALL_DASHBOARD=1 ;;
         *) COMPONENT="both";     DO_INSTALL_TESTER=1; DO_INSTALL_ENDPOINT=1 ;;
     esac
 
@@ -3101,6 +3120,91 @@ _binary_version_ok() {
     return 1
 }
 
+# Check installed binaries against latest GitHub release and offer self-update.
+# Called once after discover_system, before the main install flow.
+# Skipped in non-interactive (AUTO_YES) or deploy-config mode.
+check_for_updates() {
+    # Skip in non-interactive or deploy-config mode
+    [[ $AUTO_YES -eq 1 ]] && return 0
+    [[ -n "${DEPLOY_CONFIG_PATH:-}" ]] && return 0
+    [[ -z "$NETWORKER_VERSION" ]] && return 0
+
+    local latest="${NETWORKER_VERSION#v}"
+    local outdated=()
+
+    for binary in networker-tester networker-endpoint networker-dashboard networker-agent; do
+        local bin_path
+        bin_path="$(command -v "$binary" 2>/dev/null || echo "")"
+        [[ -z "$bin_path" || ! -x "$bin_path" ]] && continue
+
+        local installed_ver
+        installed_ver="$("$bin_path" --version 2>/dev/null)" || continue
+        if [[ "$installed_ver" != *"$latest"* ]]; then
+            # Extract just the version number from output like "networker-tester 0.13.19"
+            local cur_ver
+            cur_ver="$(echo "$installed_ver" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+            outdated+=("${binary}:${cur_ver}")
+        fi
+    done
+
+    if [[ ${#outdated[@]} -eq 0 ]]; then
+        return 0
+    fi
+
+    echo ""
+    print_section "Update available"
+    echo ""
+    echo "  Latest version: ${BOLD}${latest}${RESET}"
+    echo ""
+    for entry in "${outdated[@]}"; do
+        local name="${entry%%:*}"
+        local ver="${entry##*:}"
+        printf "    %-24s  %s → %s\n" "$name" "${DIM}${ver}${RESET}" "${GREEN}${latest}${RESET}"
+    done
+    echo ""
+
+    if ask_yn "Update now?" "y"; then
+        for entry in "${outdated[@]}"; do
+            local name="${entry%%:*}"
+            if [[ "$INSTALL_METHOD" == "release" && -n "$RELEASE_TARGET" ]]; then
+                mkdir -p "$INSTALL_DIR"
+                if ! step_download_release "$name"; then
+                    print_info "Falling back to source compile for $name…"
+                    step_ensure_cargo_env
+                    step_cargo_install "$name"
+                fi
+            else
+                step_ensure_cargo_env
+                step_cargo_install "$name"
+            fi
+        done
+
+        # Restart systemd services if they're running
+        if command -v systemctl &>/dev/null; then
+            for entry in "${outdated[@]}"; do
+                local name="${entry%%:*}"
+                if systemctl is-active "$name" &>/dev/null; then
+                    print_info "Restarting $name service…"
+                    # Re-copy binary to /usr/local/bin before restart
+                    local bin_path
+                    bin_path="$(command -v "$name" 2>/dev/null || echo "${INSTALL_DIR}/${name}")"
+                    if [[ -x "$bin_path" && "$bin_path" != "/usr/local/bin/$name" ]]; then
+                        sudo systemctl stop "$name"
+                        sudo cp "$bin_path" "/usr/local/bin/$name"
+                        sudo chmod 755 "/usr/local/bin/$name"
+                    fi
+                    sudo systemctl start "$name"
+                    print_ok "$name service restarted"
+                fi
+            done
+        fi
+
+        echo ""
+        print_ok "All components updated to ${latest}"
+        exit 0
+    fi
+}
+
 # Install a binary on a remote Linux VM when no pre-built release binary exists.
 # Uploads this installer script to the VM and runs it there with --yes, so the VM
 # handles Rust install, cargo install from the public GitHub repo, and service setup.
@@ -3389,6 +3493,235 @@ UNIT
 
     sleep 2
     print_ok "networker-endpoint service started — auto-starts on boot"
+}
+
+# ── Dashboard installation steps ─────────────────────────────────────────────
+
+# Install PostgreSQL (apt/yum/brew), create DB user + database.
+step_install_postgresql() {
+    next_step "Install and configure PostgreSQL"
+
+    if command -v psql &>/dev/null; then
+        print_info "PostgreSQL client already installed"
+    else
+        case "$PKG_MGR" in
+            apt-get)
+                sudo apt-get update -qq < /dev/null
+                sudo apt-get install -y postgresql postgresql-contrib < /dev/null
+                ;;
+            dnf)
+                sudo dnf install -y postgresql-server postgresql < /dev/null
+                sudo postgresql-setup --initdb 2>/dev/null || true
+                ;;
+            brew)
+                brew install postgresql@16 < /dev/null
+                brew services start postgresql@16 < /dev/null
+                ;;
+            *)
+                print_err "No supported package manager found for PostgreSQL install"
+                return 1
+                ;;
+        esac
+    fi
+
+    # Ensure the service is running
+    if [[ "$SYS_OS" == "Linux" ]] && command -v systemctl &>/dev/null; then
+        sudo systemctl enable postgresql 2>/dev/null || true
+        sudo systemctl start postgresql 2>/dev/null || true
+    fi
+
+    # Wait briefly for PostgreSQL to accept connections
+    local retries=0
+    while ! sudo -u postgres psql -c "SELECT 1" &>/dev/null && [[ $retries -lt 10 ]]; do
+        sleep 1
+        retries=$((retries + 1))
+    done
+
+    # Create user and database (idempotent)
+    sudo -u postgres createuser networker 2>/dev/null || true
+    sudo -u postgres createdb networker_dashboard -O networker 2>/dev/null || true
+    # Set password for the networker user
+    sudo -u postgres psql -c "ALTER USER networker WITH PASSWORD 'networker';" 2>/dev/null || true
+
+    print_ok "PostgreSQL configured — database: networker_dashboard, user: networker"
+}
+
+# Install Node.js (for building the React frontend).
+step_install_nodejs() {
+    next_step "Install Node.js"
+
+    if command -v node &>/dev/null; then
+        local node_ver
+        node_ver="$(node --version 2>/dev/null || echo "")"
+        print_info "Node.js already installed: $node_ver"
+        return 0
+    fi
+
+    case "$PKG_MGR" in
+        apt-get)
+            # Use NodeSource for a recent LTS version
+            if ! command -v node &>/dev/null; then
+                curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash - < /dev/null
+                sudo apt-get install -y nodejs < /dev/null
+            fi
+            ;;
+        dnf)
+            sudo dnf install -y nodejs npm < /dev/null
+            ;;
+        brew)
+            brew install node < /dev/null
+            ;;
+        *)
+            print_err "No supported package manager found for Node.js install"
+            return 1
+            ;;
+    esac
+
+    print_ok "Node.js installed: $(node --version 2>/dev/null)"
+}
+
+# Build the React frontend and copy to /opt/networker/dashboard.
+step_build_frontend() {
+    next_step "Build dashboard frontend"
+
+    local dashboard_src=""
+    # Check common locations for the dashboard source
+    if [[ -f "./dashboard/package.json" ]]; then
+        dashboard_src="./dashboard"
+    elif [[ -f "/tmp/networker-dashboard-src/dashboard/package.json" ]]; then
+        dashboard_src="/tmp/networker-dashboard-src/dashboard"
+    else
+        # Clone the repo to get the frontend source
+        local tmp_src="/tmp/networker-dashboard-src"
+        rm -rf "$tmp_src"
+        git clone --depth 1 "${REPO_HTTPS}.git" "$tmp_src" < /dev/null 2>&1 || {
+            print_err "Failed to clone repo for frontend source"
+            return 1
+        }
+        dashboard_src="$tmp_src/dashboard"
+    fi
+
+    (
+        cd "$dashboard_src"
+        npm install < /dev/null 2>&1
+        npm run build < /dev/null 2>&1
+    ) || {
+        print_err "Frontend build failed"
+        return 1
+    }
+
+    sudo mkdir -p /opt/networker/dashboard
+    sudo cp -r "${dashboard_src}/dist/." /opt/networker/dashboard/
+    sudo chown -R networker:networker /opt/networker/dashboard 2>/dev/null || true
+
+    print_ok "Frontend built and installed to /opt/networker/dashboard"
+}
+
+# Write /etc/networker-dashboard.env with DB URL, admin password, JWT secret, port.
+step_write_dashboard_env() {
+    next_step "Write dashboard environment file"
+
+    local admin_pw="${DASHBOARD_ADMIN_PASSWORD:-}"
+    if [[ -z "$admin_pw" ]]; then
+        # Generate a random temporary password — user must change on first login
+        admin_pw="$(head -c 24 /dev/urandom | LC_ALL=C tr -dc 'A-HJ-NP-Za-km-z2-9' | head -c 16)"
+        DASHBOARD_TEMP_PASSWORD="$admin_pw"
+    fi
+
+    local dashboard_port="${DASHBOARD_PORT:-3000}"
+    local jwt_secret
+    jwt_secret="$(head -c 32 /dev/urandom | base64 | tr -d '=/+' | head -c 32)"
+
+    sudo tee /etc/networker-dashboard.env > /dev/null <<ENVFILE
+DASHBOARD_DB_URL=postgres://networker:networker@127.0.0.1:5432/networker_dashboard
+DASHBOARD_ADMIN_PASSWORD=${admin_pw}
+DASHBOARD_JWT_SECRET=${jwt_secret}
+DASHBOARD_PORT=${dashboard_port}
+DASHBOARD_STATIC_DIR=/opt/networker/dashboard
+ENVFILE
+
+    sudo chmod 600 /etc/networker-dashboard.env
+    print_ok "Environment file written to /etc/networker-dashboard.env"
+}
+
+# Set up networker-dashboard as a systemd service.
+step_setup_dashboard_service() {
+    next_step "Set up networker-dashboard systemd service"
+
+    if [[ $SKIP_SERVICE -eq 1 ]]; then
+        print_info "Service setup skipped (--no-service)"
+        return 0
+    fi
+    if [[ "$SYS_OS" != "Linux" ]]; then
+        print_info "Systemd service setup is Linux-only — skipping."
+        print_dim  "  On macOS: run networker-dashboard manually."
+        return 0
+    fi
+    if ! command -v systemctl &>/dev/null; then
+        print_info "systemd not found — skipping service setup."
+        return 0
+    fi
+
+    # Locate the binary
+    local binary_path="${INSTALL_DIR}/networker-dashboard"
+    if [[ ! -x "$binary_path" ]]; then
+        binary_path="/usr/local/bin/networker-dashboard"
+    fi
+
+    # Copy to /usr/local/bin
+    if [[ "$binary_path" != "/usr/local/bin/networker-dashboard" && -x "$binary_path" ]]; then
+        if systemctl is-active networker-dashboard &>/dev/null; then
+            sudo systemctl stop networker-dashboard
+        fi
+        sudo cp "$binary_path" /usr/local/bin/networker-dashboard
+        sudo chmod 755 /usr/local/bin/networker-dashboard
+        binary_path="/usr/local/bin/networker-dashboard"
+    fi
+
+    # Also install the agent binary
+    local agent_path="${INSTALL_DIR}/networker-agent"
+    if [[ -x "$agent_path" && "$agent_path" != "/usr/local/bin/networker-agent" ]]; then
+        sudo cp "$agent_path" /usr/local/bin/networker-agent
+        sudo chmod 755 /usr/local/bin/networker-agent
+    fi
+
+    sudo useradd --system --no-create-home --shell /usr/sbin/nologin networker 2>/dev/null || true
+
+    sudo tee /etc/systemd/system/networker-dashboard.service > /dev/null <<UNIT
+[Unit]
+Description=Networker Dashboard
+After=network.target postgresql.service
+
+[Service]
+User=networker
+EnvironmentFile=/etc/networker-dashboard.env
+ExecStart=${binary_path}
+Restart=always
+RestartSec=5
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable networker-dashboard
+    sudo systemctl start networker-dashboard
+
+    # Open firewall for dashboard port
+    local dashboard_port
+    dashboard_port="$(grep DASHBOARD_PORT /etc/networker-dashboard.env 2>/dev/null | cut -d= -f2)"
+    dashboard_port="${dashboard_port:-3000}"
+
+    if command -v ufw &>/dev/null; then
+        sudo ufw allow "$dashboard_port"/tcp 2>/dev/null || true
+    elif command -v firewall-cmd &>/dev/null; then
+        sudo firewall-cmd --permanent --add-port="${dashboard_port}/tcp" 2>/dev/null || true
+        sudo firewall-cmd --reload 2>/dev/null || true
+    fi
+
+    sleep 2
+    print_ok "networker-dashboard service started on port ${dashboard_port} — auto-starts on boot"
 }
 
 # ─── HTTP Stack comparison: nginx setup (Ubuntu) ─────────────────────────────
@@ -6244,6 +6577,29 @@ display_completion() {
         echo ""
     fi
 
+    if [[ $DO_INSTALL_DASHBOARD -eq 1 ]]; then
+        local dashboard_port
+        dashboard_port="$(grep DASHBOARD_PORT /etc/networker-dashboard.env 2>/dev/null | cut -d= -f2)"
+        dashboard_port="${dashboard_port:-3000}"
+        echo "  ${BOLD}networker-dashboard${RESET}:"
+        echo "    Web UI:   http://localhost:${dashboard_port}"
+        echo "    Service:  sudo systemctl status networker-dashboard"
+        echo "    Logs:     sudo journalctl -u networker-dashboard -f"
+        echo "    Config:   /etc/networker-dashboard.env"
+        echo ""
+        if [[ -n "${DASHBOARD_TEMP_PASSWORD:-}" ]]; then
+            echo "  ╔══════════════════════════════════════════════════════════╗"
+            echo "  ║  ${BOLD}Login credentials${RESET}                                      ║"
+            echo "  ║                                                          ║"
+            printf "  ║  Username:  ${BOLD}admin${RESET}%*s║\n" 37 ""
+            printf "  ║  Password:  ${BOLD}%-16s${RESET}%*s║\n" "$DASHBOARD_TEMP_PASSWORD" 21 ""
+            echo "  ║                                                          ║"
+            echo "  ║  ${DIM}You will be asked to change the password on first login.${RESET} ║"
+            echo "  ╚══════════════════════════════════════════════════════════╝"
+            echo ""
+        fi
+    fi
+
     # ── Remote tester summary ─────────────────────────────────────────────────
     if [[ $DO_REMOTE_TESTER -eq 1 ]]; then
         local t_ip="" t_user="" t_provider="" t_ssh_cmd=""
@@ -6809,6 +7165,20 @@ _deploy_validate_config() {
                 errors=$((errors + 1))
             fi
         done
+    fi
+
+    # Optional dashboard section
+    local has_dashboard
+    has_dashboard="$(jq 'has("dashboard")' "$cfg" 2>/dev/null)"
+    if [[ "$has_dashboard" == "true" ]]; then
+        local dash_provider
+        dash_provider="$(jq -r '.dashboard.provider // empty' "$cfg")"
+        if [[ -n "$dash_provider" ]]; then
+            case "$dash_provider" in
+                local) ;;
+                *) print_err "dashboard.provider: only 'local' is currently supported (got: $dash_provider)"; errors=$((errors + 1)) ;;
+            esac
+        fi
     fi
 
     DEPLOY_VALIDATE_ERRORS=$errors
@@ -7960,6 +8330,42 @@ deploy_from_config() {
     # Phase 7: Generate tester config from deployed IPs
     _deploy_generate_tester_config
 
+    # Phase 7.5: Dashboard (if requested in config)
+    local has_dashboard
+    has_dashboard="$(jq 'has("dashboard")' "$cfg" 2>/dev/null)"
+    if [[ "$has_dashboard" == "true" ]]; then
+        print_section "Dashboard setup"
+        DO_INSTALL_DASHBOARD=1
+
+        # Read dashboard-specific config
+        DASHBOARD_ADMIN_PASSWORD="$(jq -r '.dashboard.admin_password // "admin"' "$cfg")"
+        DASHBOARD_PORT="$(jq -r '.dashboard.port // 3000' "$cfg")"
+        export DASHBOARD_ADMIN_PASSWORD DASHBOARD_PORT
+
+        step_install_postgresql
+        step_install_nodejs
+
+        if [[ "$INSTALL_METHOD" == "release" ]]; then
+            mkdir -p "$INSTALL_DIR"
+            step_download_release "networker-dashboard" || {
+                step_ensure_cargo_env
+                step_cargo_install "networker-dashboard"
+            }
+            step_download_release "networker-agent" || {
+                step_ensure_cargo_env
+                step_cargo_install "networker-agent"
+            }
+        else
+            step_ensure_cargo_env
+            step_cargo_install "networker-dashboard"
+            step_cargo_install "networker-agent"
+        fi
+
+        step_build_frontend
+        step_write_dashboard_env
+        step_setup_dashboard_service
+    fi
+
     # Phase 8: Run tests
     if [[ $DEPLOY_RUN_TESTS -eq 1 ]]; then
         _deploy_execute_tests
@@ -7983,6 +8389,9 @@ main() {
 
     print_banner
     display_system_info
+
+    # Check for updates to installed binaries
+    check_for_updates
     prompt_component_selection  # ask tester / endpoint / both (skipped if set via CLI)
     display_plan
     prompt_main
@@ -8050,6 +8459,37 @@ main() {
             step_setup_endpoint_service
             step_setup_nginx
         fi
+    fi
+
+    # ── Dashboard install ────────────────────────────────────────────────────
+    if [[ $DO_INSTALL_DASHBOARD -eq 1 ]]; then
+        step_install_postgresql
+        step_install_nodejs
+
+        if [[ "$INSTALL_METHOD" == "release" ]]; then
+            mkdir -p "$INSTALL_DIR"
+            local dashboard_dl_ok=1
+            if ! step_download_release "networker-dashboard"; then
+                dashboard_dl_ok=0
+            fi
+            if ! step_download_release "networker-agent"; then
+                dashboard_dl_ok=0
+            fi
+            if [[ $dashboard_dl_ok -eq 0 ]]; then
+                print_info "Falling back to source compile for dashboard…"
+                step_ensure_cargo_env
+                step_cargo_install "networker-dashboard"
+                step_cargo_install "networker-agent"
+            fi
+        else
+            step_ensure_cargo_env
+            step_cargo_install "networker-dashboard"
+            step_cargo_install "networker-agent"
+        fi
+
+        step_build_frontend
+        step_write_dashboard_env
+        step_setup_dashboard_service
     fi
 
     # ── Remote: tester ────────────────────────────────────────────────────────

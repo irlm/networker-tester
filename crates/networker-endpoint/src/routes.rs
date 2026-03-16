@@ -50,12 +50,16 @@ pub struct SystemMeta {
     /// Public DNS hostname (auto-detected from cloud metadata).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub public_dns: Option<String>,
+    /// Public IP address (auto-detected from cloud metadata).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_ip: Option<String>,
 }
 
 impl SystemMeta {
     pub fn collect() -> Self {
         let region = detect_cloud_region();
         let public_dns = detect_public_dns(&region);
+        let public_ip = detect_public_ip(&region);
         Self {
             os: std::env::consts::OS.to_string(),
             arch: std::env::consts::ARCH.to_string(),
@@ -67,6 +71,7 @@ impl SystemMeta {
             hostname: get_hostname(),
             region,
             public_dns,
+            public_ip,
         }
     }
 }
@@ -76,7 +81,18 @@ fn detect_public_dns(region: &Option<String>) -> Option<String> {
     let region_str = region.as_deref().unwrap_or("");
 
     if region_str.starts_with("azure/") {
-        // Azure: hostname + region + cloudapp.azure.com
+        // Azure: first try IMDS fqdnName endpoint
+        if let Some(fqdn) = cloud_metadata_get_raw(
+            "169.254.169.254:80",
+            "169.254.169.254",
+            "/metadata/instance/compute/fqdnName?api-version=2021-02-01&format=text",
+            &[("Metadata", "true")],
+        ) {
+            if !fqdn.is_empty() {
+                return Some(fqdn);
+            }
+        }
+        // Fallback: hostname + region + cloudapp.azure.com
         let hostname = get_hostname();
         let azure_region = region_str.strip_prefix("azure/").unwrap_or("eastus");
         return Some(format!("{hostname}.{azure_region}.cloudapp.azure.com"));
@@ -90,7 +106,7 @@ fn detect_public_dns(region: &Option<String>) -> Option<String> {
             "/latest/meta-data/public-hostname",
             &[],
         ) {
-            if !dns.is_empty() {
+            if !dns.is_empty() && !dns.contains(".internal") {
                 return Some(dns);
             }
         }
@@ -117,6 +133,43 @@ fn detect_public_dns(region: &Option<String>) -> Option<String> {
         // GCP: hostname is typically the instance name
         let hostname = get_hostname();
         return Some(hostname);
+    }
+
+    None
+}
+
+/// Detect public IP address from cloud metadata.
+fn detect_public_ip(region: &Option<String>) -> Option<String> {
+    let region_str = region.as_deref().unwrap_or("");
+
+    if region_str.starts_with("aws/") {
+        // AWS: http://169.254.169.254/latest/meta-data/public-ipv4
+        return cloud_metadata_get_raw(
+            "169.254.169.254:80",
+            "169.254.169.254",
+            "/latest/meta-data/public-ipv4",
+            &[],
+        );
+    }
+
+    if region_str.starts_with("azure/") {
+        // Azure: IMDS public IP
+        return cloud_metadata_get_raw(
+            "169.254.169.254:80",
+            "169.254.169.254",
+            "/metadata/instance/network/interface/0/ipv4/ipAddress/0/publicIpAddress?api-version=2021-02-01&format=text",
+            &[("Metadata", "true")],
+        );
+    }
+
+    if region_str.starts_with("gcp/") {
+        // GCP: external IP from metadata
+        return cloud_metadata_get_raw(
+            "169.254.169.254:80",
+            "metadata.google.internal",
+            "/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip",
+            &[("Metadata-Flavor", "Google")],
+        );
     }
 
     None

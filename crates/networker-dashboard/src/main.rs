@@ -10,6 +10,7 @@ use axum::Router;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
+use tower_http::services::{ServeDir, ServeFile};
 use tracing_subscriber::EnvFilter;
 
 pub struct AppState {
@@ -81,6 +82,20 @@ async fn main() -> anyhow::Result<()> {
                 ]);
             cors
         });
+
+    // Serve static frontend files (React SPA).
+    // In production, DASHBOARD_STATIC_DIR points to the built frontend assets.
+    // Falls back to index.html for SPA client-side routing.
+    let static_dir =
+        std::env::var("DASHBOARD_STATIC_DIR").unwrap_or_else(|_| "./dashboard/dist".into());
+    let app = if std::path::Path::new(&static_dir).exists() {
+        app.fallback_service(
+            ServeDir::new(&static_dir)
+                .not_found_service(ServeFile::new(format!("{static_dir}/index.html"))),
+        )
+    } else {
+        app
+    };
 
     // Resolve bare IPs to FQDNs for existing deployments
     {
@@ -314,6 +329,12 @@ async fn resolve_ip_to_fqdn(ip: &str, config: &serde_json::Value) -> Option<Stri
                 }
             }
 
+            // Use public_ip from /info for more reliable AWS FQDN construction
+            let public_ip = info
+                .get("system")
+                .and_then(|s| s.get("public_ip"))
+                .and_then(|d| d.as_str());
+
             let hostname = info
                 .get("system")
                 .and_then(|s| s.get("hostname"))
@@ -344,7 +365,9 @@ async fn resolve_ip_to_fqdn(ip: &str, config: &serde_json::Value) -> Option<Stri
                                 .and_then(|a| a.get("region"))
                                 .and_then(|r| r.as_str())
                                 .unwrap_or("us-east-1");
-                            let ip_dashed = ip.replace('.', "-");
+                            // Prefer public_ip from /info over the IP passed to us
+                            let resolved_ip = public_ip.unwrap_or(ip);
+                            let ip_dashed = resolved_ip.replace('.', "-");
                             if region == "us-east-1" {
                                 return Some(format!("ec2-{ip_dashed}.compute-1.amazonaws.com"));
                             } else {
