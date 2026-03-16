@@ -402,6 +402,229 @@ impl std::fmt::Display for Protocol {
     }
 }
 
+/// Metadata for a probe mode, used by the dashboard UI.
+#[derive(Debug, Clone, Serialize)]
+pub struct ModeInfo {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub detail: String,
+    pub group: String,
+}
+
+impl Protocol {
+    /// Return metadata for all available probe modes, grouped by category.
+    /// This is the single source of truth for the UI mode pickers.
+    pub fn all_modes() -> Vec<ModeInfo> {
+        vec![
+            // Network
+            m(
+                "tcp",
+                "TCP",
+                "Connect",
+                "TCP 3-way handshake timing to measure raw connection latency",
+                "Network",
+            ),
+            m(
+                "dns",
+                "DNS",
+                "Resolve",
+                "DNS resolution timing for the target hostname",
+                "Network",
+            ),
+            m(
+                "tls",
+                "TLS",
+                "Handshake",
+                "TLS handshake via rustls — reports version, cipher, ALPN, cert chain",
+                "Network",
+            ),
+            m(
+                "native",
+                "Native TLS",
+                "OS TLS stack",
+                "Uses SChannel (Win), SecureTransport (macOS), or OpenSSL (Linux)",
+                "Network",
+            ),
+            m(
+                "udp",
+                "UDP",
+                "Round-trip",
+                "UDP echo probe — measures RTT, jitter, and packet loss",
+                "Network",
+            ),
+            // HTTP
+            m(
+                "http1",
+                "HTTP/1.1",
+                "Single request",
+                "Full HTTP/1.1 request: DNS + TCP + TLS + request/response",
+                "HTTP",
+            ),
+            m(
+                "http2",
+                "HTTP/2",
+                "Multiplexed",
+                "HTTP/2 over TLS with ALPN h2 negotiation",
+                "HTTP",
+            ),
+            m(
+                "http3",
+                "HTTP/3",
+                "QUIC",
+                "HTTP/3 over QUIC (UDP) — 0-RTT capable",
+                "HTTP",
+            ),
+            m(
+                "curl",
+                "Curl",
+                "Via curl CLI",
+                "Spawns curl binary, captures per-phase timing from --write-out",
+                "HTTP",
+            ),
+            // Page Load (Native)
+            m(
+                "pageload",
+                "H1",
+                "6 parallel connections",
+                "Fetches page manifest + assets using 6 parallel HTTP/1.1 connections (browser-like)",
+                "Page Load (Native)",
+            ),
+            m(
+                "pageload2",
+                "H2",
+                "Multiplexed",
+                "Same assets multiplexed over a single TLS/HTTP2 connection",
+                "Page Load (Native)",
+            ),
+            m(
+                "pageload3",
+                "H3",
+                "QUIC",
+                "Same assets multiplexed over a single QUIC connection",
+                "Page Load (Native)",
+            ),
+            // Page Load (Browser)
+            m(
+                "browser1",
+                "H1",
+                "Chrome HTTP/1.1",
+                "Chrome headless with HTTP/2 disabled — forces HTTP/1.1",
+                "Page Load (Browser)",
+            ),
+            m(
+                "browser2",
+                "H2",
+                "Chrome HTTP/2",
+                "Chrome headless with QUIC disabled — forces HTTP/2",
+                "Page Load (Browser)",
+            ),
+            m(
+                "browser3",
+                "H3",
+                "Chrome QUIC",
+                "Chrome headless with QUIC forced via origin flag + SPKI cert pinning",
+                "Page Load (Browser)",
+            ),
+            // Throughput
+            m(
+                "download",
+                "Download",
+                "Server\u{2192}client",
+                "Large payload download via HTTP — measures sustained throughput",
+                "Throughput",
+            ),
+            m(
+                "upload",
+                "Upload",
+                "Client\u{2192}server",
+                "Large payload upload via HTTP POST — measures sustained throughput",
+                "Throughput",
+            ),
+            m(
+                "download1",
+                "Download H1",
+                "H1 download",
+                "Throughput download forced over HTTP/1.1",
+                "Throughput",
+            ),
+            m(
+                "download2",
+                "Download H2",
+                "H2 download",
+                "Throughput download over HTTP/2 multiplexed stream",
+                "Throughput",
+            ),
+            m(
+                "download3",
+                "Download H3",
+                "H3 download",
+                "Throughput download over QUIC/HTTP3",
+                "Throughput",
+            ),
+            m(
+                "upload1",
+                "Upload H1",
+                "H1 upload",
+                "Throughput upload forced over HTTP/1.1",
+                "Throughput",
+            ),
+            m(
+                "upload2",
+                "Upload H2",
+                "H2 upload",
+                "Throughput upload over HTTP/2",
+                "Throughput",
+            ),
+            m(
+                "upload3",
+                "Upload H3",
+                "H3 upload",
+                "Throughput upload over QUIC/HTTP3",
+                "Throughput",
+            ),
+            m(
+                "webdownload",
+                "Web Download",
+                "HTTP GET",
+                "Download via /download endpoint route",
+                "Throughput",
+            ),
+            m(
+                "webupload",
+                "Web Upload",
+                "HTTP POST",
+                "Upload via /upload endpoint route",
+                "Throughput",
+            ),
+            m(
+                "udpdownload",
+                "UDP Download",
+                "UDP bulk DL",
+                "Bulk download via UDP throughput server (port 9998)",
+                "Throughput",
+            ),
+            m(
+                "udpupload",
+                "UDP Upload",
+                "UDP bulk UL",
+                "Bulk upload via UDP throughput server (port 9998)",
+                "Throughput",
+            ),
+        ]
+    }
+}
+
+fn m(id: &str, name: &str, desc: &str, detail: &str, group: &str) -> ModeInfo {
+    ModeInfo {
+        id: id.into(),
+        name: name.into(),
+        description: desc.into(),
+        detail: detail.into(),
+        group: group.into(),
+    }
+}
+
 impl std::str::FromStr for Protocol {
     type Err = String;
 

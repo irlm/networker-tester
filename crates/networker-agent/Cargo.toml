@@ -21,7 +21,7 @@ url         = { workspace = true }
 
 # Local deps
 networker-common = { path = "../networker-common" }
-networker-tester = { path = "../networker-tester", default-features = false }
+networker-tester = { path = "../networker-tester" }
 
 # TLS
 rustls       = { version = "0.23", features = ["ring"] }

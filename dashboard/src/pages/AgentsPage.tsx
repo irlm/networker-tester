@@ -2,11 +2,14 @@ import { useState } from 'react';
 import { api, type Agent } from '../api/client';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { usePolling } from '../hooks/usePolling';
+import { usePageTitle } from '../hooks/usePageTitle';
 
 export function AgentsPage() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  usePageTitle('Agents');
 
   usePolling(() => {
     api

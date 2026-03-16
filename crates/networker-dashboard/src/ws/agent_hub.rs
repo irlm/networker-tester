@@ -93,7 +93,7 @@ async fn handle_agent_socket(
 ) {
     let agent_id = agent.agent_id;
     let agent_name = agent.name.clone();
-    tracing::info!(agent_id = %agent_id, name = %agent_name, "Agent connected");
+    tracing::info!(agent_id = %agent_id, name = %agent_name, "Tester connected");
 
     // Update status to online
     if let Ok(client) = state.db.get().await {
@@ -173,7 +173,7 @@ async fn handle_agent_socket(
         status: "offline".into(),
         last_heartbeat: None,
     });
-    tracing::info!(agent_id = %agent_id, "Agent disconnected");
+    tracing::info!(agent_id = %agent_id, "Tester disconnected");
 }
 
 async fn handle_agent_message(state: &Arc<AppState>, agent_id: Uuid, msg: AgentMessage) {
@@ -240,13 +240,13 @@ async fn handle_agent_message(state: &Arc<AppState>, agent_id: Uuid, msg: AgentM
             }
 
             // Persist the TestRun via networker-tester's DB layer
-            let db_url = std::env::var("DASHBOARD_DB_URL").unwrap_or_default();
+            let db_url = &state.database_url;
             if !db_url.is_empty() {
                 tracing::info!(
                     correlation_id,
                     "Saving TestRun to database via networker-tester backend"
                 );
-                match networker_tester::output::db::connect(&db_url).await {
+                match networker_tester::output::db::connect(db_url).await {
                     Ok(backend) => {
                         // Run migration to ensure TestRun table exists
                         if let Err(e) = backend.migrate().await {
@@ -277,9 +277,21 @@ async fn handle_agent_message(state: &Arc<AppState>, agent_id: Uuid, msg: AgentM
             });
             tracing::info!(correlation_id, "JobComplete event broadcast to browsers");
         }
+        AgentMessage::JobLog {
+            job_id,
+            line,
+            level,
+        } => {
+            // Forward tester log lines to browsers
+            let _ = state.events_tx.send(DashboardEvent::JobLog {
+                job_id,
+                line,
+                level,
+            });
+        }
         AgentMessage::JobError { job_id, message } => {
             let correlation_id = job_id.to_string();
-            tracing::error!(correlation_id, error = %message, "Job error received from agent");
+            tracing::error!(correlation_id, error = %message, "Job error received from tester");
             if let Ok(client) = state.db.get().await {
                 if let Err(e) = crate::db::jobs::set_error(&client, &job_id, &message).await {
                     tracing::error!(correlation_id, error = %e, "Failed to set error on job");

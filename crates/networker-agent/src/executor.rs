@@ -1,73 +1,128 @@
-//! Job execution: orchestrates probe runs using networker-tester library functions.
-//! Mirrors the logic from networker-tester/src/main.rs::run_for_target() but with
-//! streaming callbacks for each completed RequestAttempt.
+//! Job execution: runs networker-tester as a subprocess and streams results.
 //!
-//! Every log line includes a correlation_id (= job_id) and run_id for tracing.
+//! The agent is a thin wrapper around the tester CLI. When it receives a job,
+//! it builds the CLI arguments from JobConfig, spawns `networker-tester`, and
+//! streams stdout/stderr back to the dashboard as log lines. When complete,
+//! it reads the JSON output to build the TestRun.
 
 use chrono::Utc;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::Command;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use networker_common::messages::{AgentMessage, JobConfig};
 use networker_common::protocol;
-use networker_tester::metrics::{Protocol, RequestAttempt, TestRun};
-use networker_tester::runner::http::RunConfig;
+use networker_tester::metrics::TestRun;
 
-/// Execute a job and stream results back via the WebSocket sender channel.
+/// Execute a job by running networker-tester CLI and streaming results.
 pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::Sender<String>) {
-    let run_id = Uuid::new_v4();
     let correlation_id = job_id.to_string();
-    tracing::Span::current().record("run_id", tracing::field::display(&run_id));
 
     tracing::info!(
+        correlation_id,
         target = %config.target,
         modes = ?config.modes,
-        runs = config.runs,
-        insecure = config.insecure,
         "Job received — sending ACK"
     );
 
-    // Acknowledge the job
     send(tx, &AgentMessage::JobAck { job_id }, &correlation_id);
+    log(
+        tx,
+        job_id,
+        "info",
+        &format!(
+            "Starting test: {} modes={}",
+            config.target,
+            config.modes.join(",")
+        ),
+    );
 
-    let started_at = Utc::now();
+    // Build CLI args
+    let mut args = vec![
+        "--target".to_string(),
+        config.target.clone(),
+        "--modes".to_string(),
+        config.modes.join(","),
+        "--runs".to_string(),
+        config.runs.to_string(),
+        "--concurrency".to_string(),
+        config.concurrency.to_string(),
+        "--timeout".to_string(),
+        config.timeout_secs.to_string(),
+        "--json-stdout".to_string(), // Output TestRun as JSON to stdout
+    ];
 
-    // Parse modes
-    let modes: Vec<Protocol> = config
-        .modes
-        .iter()
-        .filter_map(|m| {
-            let parsed = m.parse::<Protocol>();
-            if parsed.is_err() {
-                tracing::warn!(mode = %m, "Skipping unrecognized mode");
-            }
-            parsed.ok()
-        })
-        .collect();
-
-    if modes.is_empty() {
-        tracing::error!("No valid modes — aborting job");
-        send(
-            tx,
-            &AgentMessage::JobError {
-                job_id,
-                message: "No valid modes specified".into(),
-            },
-            &correlation_id,
-        );
-        return;
+    if config.insecure {
+        args.push("--insecure".to_string());
+    }
+    if !config.dns_enabled {
+        // dns_enabled defaults to true, only pass when disabling
+        args.push("--dns-enabled".to_string());
+        args.push("false".to_string());
+    }
+    if config.ipv4_only {
+        args.push("--ipv4-only".to_string());
+    }
+    if config.ipv6_only {
+        args.push("--ipv6-only".to_string());
+    }
+    if config.connection_reuse {
+        args.push("--connection-reuse".to_string());
+    }
+    if !config.payload_sizes.is_empty() {
+        args.push("--payload-sizes".to_string());
+        args.push(config.payload_sizes.join(","));
+    }
+    if let Some(ref preset) = config.page_preset {
+        args.push("--page-preset".to_string());
+        args.push(preset.clone());
+    }
+    if let Some(assets) = config.page_assets {
+        args.push("--page-assets".to_string());
+        args.push(assets.to_string());
+    }
+    if let Some(ref size) = config.page_asset_size {
+        args.push("--page-asset-size".to_string());
+        args.push(size.clone());
+    }
+    if let Some(port) = config.udp_port {
+        args.push("--udp-port".to_string());
+        args.push(port.to_string());
+    }
+    if let Some(port) = config.udp_throughput_port {
+        args.push("--udp-throughput-port".to_string());
+        args.push(port.to_string());
     }
 
-    // Parse target URL
-    let target = match url::Url::parse(&config.target) {
-        Ok(u) => u,
-        Err(e) => {
-            tracing::error!(target = %config.target, error = %e, "Invalid target URL — aborting job");
+    // SSRF protection: block probes targeting private, loopback, link-local,
+    // or cloud metadata IPs/hostnames.
+    if let Ok(parsed) = url::Url::parse(&config.target) {
+        if is_private_or_metadata(&parsed) {
+            tracing::error!(target = %config.target, "SSRF blocked: target resolves to private/metadata address");
             send(
                 tx,
                 &AgentMessage::JobError {
                     job_id,
-                    message: format!("Invalid target URL: {e}"),
+                    message: "Target blocked: private, loopback, or metadata address".into(),
+                },
+                &correlation_id,
+            );
+            return;
+        }
+    }
+
+    // Find tester binary
+    let tester_bin = find_tester_binary().await;
+    let bin_path = match &tester_bin {
+        Some(p) => p.as_str(),
+        None => {
+            log(tx, job_id, "error", "networker-tester binary not found");
+            send(
+                tx,
+                &AgentMessage::JobError {
+                    job_id,
+                    message: "networker-tester binary not found on this machine".into(),
                 },
                 &correlation_id,
             );
@@ -75,273 +130,199 @@ pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::Sender<String>)
         }
     };
 
-    // SSRF protection: block probes targeting private, loopback, link-local,
-    // or cloud metadata IPs/hostnames.
-    if is_private_or_metadata(&target) {
-        tracing::error!(target = %config.target, "SSRF blocked: target resolves to private/metadata address");
-        send(
-            tx,
-            &AgentMessage::JobError {
-                job_id,
-                message: "Target blocked: private, loopback, or metadata address".into(),
-            },
-            &correlation_id,
-        );
-        return;
-    }
-
-    // Parse payload sizes
-    let payload_sizes: Vec<usize> = config
-        .payload_sizes
-        .iter()
-        .filter_map(|s| parse_size(s))
-        .collect();
-
-    tracing::info!(
-        modes = ?modes.iter().map(|m| m.to_string()).collect::<Vec<_>>(),
-        payload_sizes = ?payload_sizes,
-        "Parsed config — starting probe loop"
+    log(
+        tx,
+        job_id,
+        "info",
+        &format!("Running: {bin_path} {}", args.join(" ")),
     );
 
-    // Build RunConfig for HTTP probes
-    let run_cfg = RunConfig {
-        timeout_ms: config.timeout_secs * 1000,
-        dns_enabled: config.dns_enabled,
-        ipv4_only: config.ipv4_only,
-        ipv6_only: config.ipv6_only,
-        insecure: config.insecure,
-        payload_size: 0,
-        path: target.path().to_string(),
-        ca_bundle: None,
-        proxy: None,
-        no_proxy: false,
+    // Spawn tester process
+    let mut child = match Command::new(bin_path)
+        .args(&args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            log(tx, job_id, "error", &format!("Failed to spawn tester: {e}"));
+            send(
+                tx,
+                &AgentMessage::JobError {
+                    job_id,
+                    message: format!("Failed to spawn tester: {e}"),
+                },
+                &correlation_id,
+            );
+            return;
+        }
     };
 
-    let mut attempts: Vec<RequestAttempt> = Vec::new();
-    let mut seq: u32 = 0;
-    let mut success_count: usize = 0;
-    let mut failure_count: usize = 0;
+    let stdout = child.stdout.take().expect("stdout piped");
+    let stderr = child.stderr.take().expect("stderr piped");
 
-    // Main probe loop
-    for run_num in 0..config.runs {
-        for mode in &modes {
-            let sizes = if needs_payload(mode) && !payload_sizes.is_empty() {
-                payload_sizes.clone()
-            } else {
-                vec![0]
-            };
+    let mut stderr_reader = BufReader::new(stderr).lines();
+    let mut stdout_lines = Vec::new();
+    let mut stdout_reader = BufReader::new(stdout).lines();
 
-            for &sz in &sizes {
-                tracing::info!(
-                    run = run_num + 1,
-                    total_runs = config.runs,
-                    mode = %mode,
-                    seq = seq,
-                    payload_bytes = sz,
-                    "Dispatching probe"
-                );
+    let tx_clone = tx.clone();
+    let job_id_clone = job_id;
 
-                let attempt =
-                    dispatch_probe(run_id, seq, mode, &target, &run_cfg, sz, &correlation_id).await;
+    // Read stderr (tester log output) in background and stream to dashboard
+    let stderr_task = tokio::spawn(async move {
+        while let Ok(Some(line)) = stderr_reader.next_line().await {
+            // Stream log lines to dashboard
+            log(&tx_clone, job_id_clone, "info", &line);
+        }
+    });
 
-                if attempt.success {
-                    success_count += 1;
-                    let ttfb = attempt.http.as_ref().map(|h| h.ttfb_ms);
-                    let total = attempt.http.as_ref().map(|h| h.total_duration_ms);
-                    tracing::info!(
-                        seq = seq,
-                        mode = %mode,
-                        ttfb_ms = ?ttfb,
-                        total_ms = ?total,
-                        "Probe OK"
+    // Read stdout (JSON output when --json is used, or regular output)
+    while let Ok(Some(line)) = stdout_reader.next_line().await {
+        stdout_lines.push(line);
+    }
+
+    // Wait for stderr task and process exit
+    stderr_task.await.ok();
+    let exit_status = child.wait().await;
+
+    let stdout_text = stdout_lines.join("\n");
+
+    match exit_status {
+        Ok(status) if status.success() => {
+            // Try to parse JSON TestRun from stdout
+            match serde_json::from_str::<TestRun>(&stdout_text) {
+                Ok(run) => {
+                    let success_count = run.success_count();
+                    let failure_count = run.failure_count();
+                    let run_id = run.run_id;
+
+                    log(
+                        tx,
+                        job_id,
+                        "info",
+                        &format!(
+                            "Complete: {} probes, {} OK, {} failed",
+                            run.attempts.len(),
+                            success_count,
+                            failure_count,
+                        ),
                     );
-                } else {
-                    failure_count += 1;
-                    let err_msg = attempt
-                        .error
-                        .as_ref()
-                        .map(|e| e.message.as_str())
-                        .unwrap_or("unknown");
-                    let err_cat = attempt
-                        .error
-                        .as_ref()
-                        .map(|e| format!("{:?}", e.category))
-                        .unwrap_or_default();
-                    tracing::warn!(
-                        seq = seq,
-                        mode = %mode,
-                        error_category = %err_cat,
-                        error = %err_msg,
-                        "Probe FAILED"
+
+                    // Stream individual attempt results for live UI
+                    for attempt in &run.attempts {
+                        send(
+                            tx,
+                            &AgentMessage::AttemptResult {
+                                job_id,
+                                attempt: Box::new(attempt.clone()),
+                            },
+                            &correlation_id,
+                        );
+                    }
+
+                    send(
+                        tx,
+                        &AgentMessage::JobComplete {
+                            job_id,
+                            run: Box::new(run),
+                        },
+                        &correlation_id,
+                    );
+                    tracing::info!(correlation_id, run_id = %run_id, "Job complete");
+                }
+                Err(e) => {
+                    // JSON parse failed — maybe --json isn't supported or output is different
+                    // Try to build a minimal TestRun from what we have
+                    tracing::warn!(correlation_id, error = %e, "Failed to parse tester JSON output");
+                    log(
+                        tx,
+                        job_id,
+                        "warn",
+                        &format!("Could not parse test results: {e}"),
+                    );
+
+                    // Send as completed with empty run
+                    let run = TestRun {
+                        run_id: Uuid::new_v4(),
+                        started_at: Utc::now(),
+                        finished_at: Some(Utc::now()),
+                        target_url: config.target.clone(),
+                        target_host: url::Url::parse(&config.target)
+                            .map(|u| u.host_str().unwrap_or("unknown").to_string())
+                            .unwrap_or_else(|_| "unknown".to_string()),
+                        modes: config.modes.clone(),
+                        total_runs: config.runs,
+                        concurrency: config.concurrency as u32,
+                        timeout_ms: config.timeout_secs * 1000,
+                        client_os: std::env::consts::OS.to_string(),
+                        client_version: env!("CARGO_PKG_VERSION").to_string(),
+                        server_info: None,
+                        client_info: None,
+                        baseline: None,
+                        attempts: vec![],
+                    };
+                    send(
+                        tx,
+                        &AgentMessage::JobComplete {
+                            job_id,
+                            run: Box::new(run),
+                        },
+                        &correlation_id,
                     );
                 }
-
-                // Stream the result immediately
-                tracing::debug!(seq = seq, "Streaming attempt result to dashboard");
-                send(
-                    tx,
-                    &AgentMessage::AttemptResult {
-                        job_id,
-                        attempt: Box::new(attempt.clone()),
-                    },
-                    &correlation_id,
-                );
-
-                attempts.push(attempt);
-                seq += 1;
             }
         }
+        Ok(status) => {
+            let code = status.code().unwrap_or(-1);
+            // Include stderr output in error message
+            let msg = if !stdout_text.is_empty() {
+                format!("Tester exited with code {code}: {stdout_text}")
+            } else {
+                format!("Tester exited with code {code}")
+            };
+            log(tx, job_id, "error", &msg);
+            send(
+                tx,
+                &AgentMessage::JobError {
+                    job_id,
+                    message: msg,
+                },
+                &correlation_id,
+            );
+        }
+        Err(e) => {
+            log(tx, job_id, "error", &format!("Tester process error: {e}"));
+            send(
+                tx,
+                &AgentMessage::JobError {
+                    job_id,
+                    message: format!("Tester process error: {e}"),
+                },
+                &correlation_id,
+            );
+        }
     }
+}
 
-    tracing::info!(
-        total_probes = seq,
-        success = success_count,
-        failures = failure_count,
-        "Probe loop complete — building TestRun"
-    );
-
-    // Build the complete TestRun
-    let run = TestRun {
-        run_id,
-        started_at,
-        finished_at: Some(Utc::now()),
-        target_url: config.target.clone(),
-        target_host: target.host_str().unwrap_or("unknown").to_string(),
-        modes: config.modes.clone(),
-        total_runs: config.runs,
-        concurrency: config.concurrency as u32,
-        timeout_ms: config.timeout_secs * 1000,
-        client_os: std::env::consts::OS.to_string(),
-        client_version: env!("CARGO_PKG_VERSION").to_string(),
-        server_info: None,
-        client_info: None,
-        baseline: None,
-        attempts,
-    };
-
-    tracing::info!("Sending JobComplete to dashboard");
+/// Send a log line to the dashboard AND to tracing.
+fn log(tx: &mpsc::Sender<String>, job_id: Uuid, level: &str, line: &str) {
+    match level {
+        "error" => tracing::error!(job_id = %job_id, "{}", line),
+        "warn" => tracing::warn!(job_id = %job_id, "{}", line),
+        _ => tracing::info!(job_id = %job_id, "{}", line),
+    }
     send(
         tx,
-        &AgentMessage::JobComplete {
+        &AgentMessage::JobLog {
             job_id,
-            run: Box::new(run),
+            line: line.to_string(),
+            level: level.to_string(),
         },
-        &correlation_id,
+        &job_id.to_string(),
     );
-    tracing::info!("Job finished");
-}
-
-/// Dispatch a single probe based on the protocol mode.
-async fn dispatch_probe(
-    run_id: Uuid,
-    seq: u32,
-    mode: &Protocol,
-    target: &url::Url,
-    cfg: &RunConfig,
-    _payload_size: usize,
-    correlation_id: &str,
-) -> RequestAttempt {
-    use networker_tester::runner;
-
-    let start = std::time::Instant::now();
-
-    let result = match mode {
-        Protocol::Http1 | Protocol::Http2 | Protocol::Tcp => {
-            tracing::debug!(correlation_id, seq, mode = %mode, "Using HTTP runner");
-            runner::http::run_probe(run_id, seq, mode.clone(), target, cfg).await
-        }
-        Protocol::Http3 => {
-            tracing::debug!(correlation_id, seq, "Using HTTP/3 runner");
-            runner::http3::run_http3_probe(
-                run_id,
-                seq,
-                target,
-                cfg.timeout_ms,
-                cfg.insecure,
-                cfg.ca_bundle.as_deref(),
-            )
-            .await
-        }
-        Protocol::Dns => {
-            tracing::debug!(correlation_id, seq, "Using DNS runner");
-            runner::dns::run_dns_probe(
-                run_id,
-                seq,
-                target.host_str().unwrap_or("localhost"),
-                cfg.ipv4_only,
-                cfg.ipv6_only,
-            )
-            .await
-        }
-        Protocol::Tls => {
-            tracing::debug!(correlation_id, seq, "Using TLS runner");
-            runner::tls::run_tls_probe(run_id, seq, target, cfg).await
-        }
-        _ => {
-            tracing::warn!(correlation_id, seq, mode = %mode, "Mode not yet supported by agent");
-            RequestAttempt {
-                attempt_id: Uuid::new_v4(),
-                run_id,
-                protocol: mode.clone(),
-                sequence_num: seq,
-                retry_count: 0,
-                started_at: Utc::now(),
-                finished_at: Some(Utc::now()),
-                success: false,
-                dns: None,
-                tcp: None,
-                tls: None,
-                http: None,
-                udp: None,
-                error: Some(networker_tester::metrics::ErrorRecord {
-                    category: networker_tester::metrics::ErrorCategory::Config,
-                    message: format!("Mode {mode} not yet supported by agent executor"),
-                    detail: None,
-                    occurred_at: Utc::now(),
-                }),
-                server_timing: None,
-                udp_throughput: None,
-                page_load: None,
-                browser: None,
-                http_stack: None,
-            }
-        }
-    };
-
-    let elapsed = start.elapsed();
-    tracing::debug!(
-        correlation_id,
-        seq,
-        elapsed_ms = elapsed.as_millis() as u64,
-        "Probe dispatch complete"
-    );
-
-    result
-}
-
-fn needs_payload(mode: &Protocol) -> bool {
-    matches!(
-        mode,
-        Protocol::Download
-            | Protocol::Upload
-            | Protocol::WebDownload
-            | Protocol::WebUpload
-            | Protocol::UdpDownload
-            | Protocol::UdpUpload
-    )
-}
-
-fn parse_size(s: &str) -> Option<usize> {
-    let s = s.trim().to_lowercase();
-    if let Some(n) = s.strip_suffix('k') {
-        n.parse::<usize>().ok().map(|v| v * 1024)
-    } else if let Some(n) = s.strip_suffix('m') {
-        n.parse::<usize>().ok().map(|v| v * 1024 * 1024)
-    } else if let Some(n) = s.strip_suffix('g') {
-        n.parse::<usize>().ok().map(|v| v * 1024 * 1024 * 1024)
-    } else {
-        s.parse().ok()
-    }
 }
 
 /// Returns `true` if the URL targets a private, loopback, link-local,
@@ -381,27 +362,66 @@ fn is_private_ip(ip: &std::net::IpAddr) -> bool {
 fn send(tx: &mpsc::Sender<String>, msg: &AgentMessage, correlation_id: &str) {
     match protocol::encode(msg) {
         Ok(text) => {
-            let msg_type = match msg {
-                AgentMessage::Heartbeat { .. } => "heartbeat",
-                AgentMessage::JobAck { .. } => "job_ack",
-                AgentMessage::AttemptResult { .. } => "attempt_result",
-                AgentMessage::JobComplete { .. } => "job_complete",
-                AgentMessage::JobError { .. } => "job_error",
-            };
-            tracing::debug!(
-                correlation_id,
-                msg_type,
-                bytes = text.len(),
-                "Sending WS message"
-            );
             if tx.try_send(text).is_err() {
                 tracing::error!(
                     correlation_id,
-                    msg_type,
                     "Failed to send message: channel full or closed"
                 );
             }
         }
         Err(e) => tracing::error!(correlation_id, error = %e, "Failed to encode message"),
     }
+}
+
+/// Find the networker-tester binary.
+async fn find_tester_binary() -> Option<String> {
+    // Try common locations
+    for path in &[
+        "target/debug/networker-tester",
+        "target/release/networker-tester",
+    ] {
+        if tokio::fs::metadata(path).await.is_ok() {
+            return Some(path.to_string());
+        }
+    }
+
+    // Try workspace root (walk up)
+    if let Ok(cwd) = std::env::current_dir() {
+        for sub in &[
+            "target/debug/networker-tester",
+            "target/release/networker-tester",
+        ] {
+            let p = cwd.join(sub);
+            if tokio::fs::metadata(&p).await.is_ok() {
+                return Some(p.to_string_lossy().to_string());
+            }
+        }
+        let mut dir = cwd.as_path();
+        for _ in 0..5 {
+            if let Some(parent) = dir.parent() {
+                for sub in &[
+                    "target/debug/networker-tester",
+                    "target/release/networker-tester",
+                ] {
+                    let p = parent.join(sub);
+                    if tokio::fs::metadata(&p).await.is_ok() {
+                        return Some(p.to_string_lossy().to_string());
+                    }
+                }
+                dir = parent;
+            }
+        }
+    }
+
+    // Try PATH
+    if let Ok(output) = Command::new("which").arg("networker-tester").output().await {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                return Some(path);
+            }
+        }
+    }
+
+    None
 }

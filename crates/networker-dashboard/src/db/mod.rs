@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod deployments;
 pub mod jobs;
 pub mod migrations;
 pub mod runs;
