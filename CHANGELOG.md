@@ -9,12 +9,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [0.13.23] – 2026-03-16 — Dashboard installer, multi-cloud auth, test visualization
+
 ### Added
-- **Richer packet telemetry observability** — packet capture summaries now expose target hints, confidence, dominant trace indicators, and richer HTML/Excel surfacing to better explain benchmark behavior
+- **Dashboard installer** — `bash install.sh dashboard` auto-installs PostgreSQL, Node.js, cloud CLIs (Azure/AWS/GCP), builds React frontend, creates systemd service
+- **Cloud CLI auto-install** — dashboard setup installs Azure CLI, AWS CLI, GCP CLI, jq, and unzip
+- **OIDC federation scripts** — `scripts/setup-aws-federation.sh` and `scripts/setup-gcp-federation.sh` for zero-credential multi-cloud auth via Azure managed identity
+- **Forced password change** — random temp password on first install, `must_change_password` DB flag, change-password page in frontend, server-side enforcement in auth middleware
+- **Self-update check** — installer detects outdated binaries and offers one-command update with service restart
+- **`public_ip` in /info** — endpoint auto-detects public IP from AWS/Azure/GCP metadata
+- **Static file serving** — dashboard serves React SPA via `ServeDir` fallback (`DASHBOARD_STATIC_DIR` env var)
+- **Release pipeline** — `release.yml` now builds + packages `networker-dashboard` and `networker-agent` (4 binaries × 4 platforms)
+- **Deploy-config dashboard section** — optional `"dashboard"` in deploy.json for automated dashboard setup
+- **`extra_json` column** — full attempt data (browser, pageload) saved as JSONB for rich dashboard visualization
+- **Cloud auth documentation** — `docs/cloud-auth.md` with architecture, setup, and troubleshooting
+- **Richer packet telemetry observability** — packet capture summaries now expose target hints, confidence, dominant trace indicators
 
 ### Fixed
-- **JSON output compatibility preserved** — run JSON artifacts remain top-level `TestRun` objects even when packet capture is enabled, avoiding downstream schema breakage
-- **IPv6 target hint parsing** — bracketed and plain IPv6 targets now derive endpoint candidates correctly for packet-summary matching
+- **AWS detect_public_dns** — filter out `.internal` hostnames from public-hostname metadata
+- **Azure detect_public_dns** — try IMDS `fqdnName` endpoint before hostname+region construction
+- **Dashboard FQDN resolver** — prefer `public_ip` from /info for AWS FQDN construction
+- **Deploy-only exit code** — skip tester config generation when `run_tests: false`
+- **`deleteAgent` API** — was missing `method: 'DELETE'` (sending GET instead)
+- **401 handler** — clears `mustChangePassword` from localStorage (prevents redirect loop)
+- **Sidebar active state** — highlights parent nav for child routes (`/deploy/:id`, `/tests/:id`)
+- **DeployDetailPage** — responsive grid on mobile (`grid-cols-2 md:grid-cols-4`)
+- **RunDetailPage** — uses `getRun(id)` instead of fetching 200 runs
+- **JSON output compatibility preserved** — run JSON artifacts remain top-level `TestRun` objects even when packet capture is enabled
+- **IPv6 target hint parsing** — bracketed and plain IPv6 targets now derive endpoint candidates correctly
+
+### Security
+- **Server-side password change enforcement** — `require_auth` middleware returns 403 for all non-change-password routes when `must_change_password` is set
+- **Random PostgreSQL password** — installer generates 24-char random password instead of hardcoded `'networker'`
+- **SSH `StrictHostKeyChecking=accept-new`** — TOFU model instead of `=no` for agent provisioning
 
 ---
 
