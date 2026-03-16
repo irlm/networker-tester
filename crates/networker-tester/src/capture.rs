@@ -51,7 +51,7 @@ pub struct PacketCaptureSummary {
     pub likely_target_endpoints: Vec<String>,
     pub likely_target_packets: u64,
     pub likely_target_pct_of_total: f64,
-    pub dominant_target_port: Option<u16>,
+    pub dominant_trace_port: Option<u16>,
     pub capture_confidence: String,
     pub tcp_packets: u64,
     pub udp_packets: u64,
@@ -314,7 +314,7 @@ fn summarize(
         likely_target_endpoints: vec![],
         likely_target_packets: 0,
         likely_target_pct_of_total: 0.0,
-        dominant_target_port: None,
+        dominant_trace_port: None,
         capture_confidence: "low".into(),
         tcp_packets: 0,
         udp_packets: 0,
@@ -362,8 +362,7 @@ fn summarize(
         likely_target_packet_count(&summary.top_endpoints, &summary.likely_target_endpoints);
     summary.likely_target_pct_of_total =
         pct(summary.likely_target_packets, summary.total_packets as f64);
-    summary.dominant_target_port =
-        dominant_target_port(&summary.top_ports, summary.likely_target_packets);
+    summary.dominant_trace_port = dominant_trace_port(&summary.top_ports);
     apply_interpretation(&mut summary);
     summary.capture_confidence = capture_confidence_label(&summary);
 
@@ -398,15 +397,23 @@ fn endpoint_candidates_from_target(target: &str) -> Vec<String> {
         }
     }
     if !trimmed.contains("//") {
-        let host = trimmed
-            .trim_start_matches('[')
-            .trim_end_matches(']')
-            .split(':')
-            .next()
-            .unwrap_or(trimmed)
-            .to_string();
-        if !host.is_empty() {
-            out.push(host);
+        if trimmed.starts_with('[') {
+            if let Some(end) = trimmed.find(']') {
+                let host = trimmed[1..end].to_string();
+                if !host.is_empty() {
+                    out.push(host);
+                }
+            }
+        } else {
+            let colon_count = trimmed.matches(':').count();
+            let host = if colon_count > 1 {
+                trimmed.to_string()
+            } else {
+                trimmed.split(':').next().unwrap_or(trimmed).to_string()
+            };
+            if !host.is_empty() {
+                out.push(host);
+            }
         }
     }
     out.sort();
@@ -557,10 +564,7 @@ fn likely_target_packet_count(rows: &[EndpointPacketCount], likely_targets: &[St
         .sum()
 }
 
-fn dominant_target_port(top_ports: &[PortPacketCount], likely_target_packets: u64) -> Option<u16> {
-    if likely_target_packets == 0 {
-        return None;
-    }
+fn dominant_trace_port(top_ports: &[PortPacketCount]) -> Option<u16> {
     top_ports.first().map(|p| p.port)
 }
 
@@ -598,6 +602,7 @@ fn apply_interpretation(summary: &mut PacketCaptureSummary) {
         summary.note = Some(msg.clone());
         summary.warnings.push(msg);
     }
+    summary.warnings.push("Protocol share percentages are overlapping signals, not an additive partition: QUIC packets are also counted within UDP.".into());
     if summary.observed_mixed_transport {
         summary.capture_may_be_ambiguous = true;
         summary.warnings.push("Both TCP and UDP/QUIC traffic were observed. This may reflect fallback behavior, mixed page assets, or unrelated background traffic.".into());
@@ -792,7 +797,7 @@ mod tests {
             likely_target_endpoints: vec![],
             likely_target_packets: 0,
             likely_target_pct_of_total: 0.0,
-            dominant_target_port: None,
+            dominant_trace_port: None,
             capture_confidence: "low".into(),
             tcp_packets: 60,
             udp_packets: 40,
@@ -830,7 +835,7 @@ mod tests {
             likely_target_endpoints: vec!["127.0.0.1".into()],
             likely_target_packets: 80,
             likely_target_pct_of_total: 80.0,
-            dominant_target_port: Some(443),
+            dominant_trace_port: Some(443),
             capture_confidence: "low".into(),
             tcp_packets: 10,
             udp_packets: 90,
@@ -887,7 +892,7 @@ mod tests {
             likely_target_endpoints: vec![],
             likely_target_packets: 0,
             likely_target_pct_of_total: 0.0,
-            dominant_target_port: None,
+            dominant_trace_port: None,
             capture_confidence: "low".into(),
             tcp_packets: 20,
             udp_packets: 15,

@@ -116,8 +116,8 @@ fn write_summary(
         ws.write(base + 9, 1, summary.likely_target_pct_of_total)?;
         ws.write(base + 10, 0, "Capture confidence")?;
         ws.write(base + 10, 1, summary.capture_confidence.as_str())?;
-        ws.write(base + 11, 0, "Dominant target port")?;
-        if let Some(port) = summary.dominant_target_port {
+        ws.write(base + 11, 0, "Dominant trace port")?;
+        if let Some(port) = summary.dominant_trace_port {
             ws.write(base + 11, 1, port as f64)?;
         }
 
@@ -1033,7 +1033,7 @@ mod tests {
             likely_target_endpoints: vec!["127.0.0.1".into()],
             likely_target_packets: 20,
             likely_target_pct_of_total: 47.6,
-            dominant_target_port: Some(443),
+            dominant_trace_port: Some(443),
             capture_confidence: "medium".into(),
             tcp_packets: 10,
             udp_packets: 20,
