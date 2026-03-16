@@ -211,8 +211,8 @@ pub struct Cli {
 
     // ── Packet Capture ──────────────────────────────────────────────────────
     /// Packet capture mode: none, tester, endpoint, both
-    #[arg(long, default_value = "none")]
-    pub capture_mode: PacketCaptureMode,
+    #[arg(long)]
+    pub capture_mode: Option<PacketCaptureMode>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, clap::ValueEnum)]
@@ -451,12 +451,8 @@ impl Cli {
 
         let packet_capture = {
             let pc = f.packet_capture.unwrap_or_default();
-            // CLI --capture-mode overrides config file
-            let mode = if self.capture_mode != PacketCaptureMode::None {
-                self.capture_mode
-            } else {
-                pc.mode.unwrap_or_default()
-            };
+            // CLI --capture-mode overrides config file when explicitly provided
+            let mode = self.capture_mode.or(pc.mode).unwrap_or_default();
             ResolvedPacketCaptureConfig {
                 mode,
                 install_requirements: pc.install_requirements.unwrap_or(false),

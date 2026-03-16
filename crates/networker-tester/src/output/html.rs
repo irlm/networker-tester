@@ -275,7 +275,13 @@ pub fn render_multi(
         let rtt_avg = run
             .baseline
             .as_ref()
-            .map(|b| format!("{:.2} ms", b.rtt_avg_ms))
+            .map(|b| {
+                if b.samples == 0 {
+                    "—".into()
+                } else {
+                    format!("{:.2} ms", b.rtt_avg_ms)
+                }
+            })
             .unwrap_or_else(|| "—".into());
         let ep_attempts: Vec<_> = run
             .attempts
@@ -609,11 +615,16 @@ pub fn render_multi(
                 }
             }
 
-            // RTT baseline comparison
+            // RTT baseline comparison (exclude unreachable targets with samples=0)
             let rtts: Vec<(usize, f64)> = runs
                 .iter()
                 .enumerate()
-                .filter_map(|(i, r)| r.baseline.as_ref().map(|b| (i, b.rtt_avg_ms)))
+                .filter_map(|(i, r)| {
+                    r.baseline
+                        .as_ref()
+                        .filter(|b| b.samples > 0)
+                        .map(|b| (i, b.rtt_avg_ms))
+                })
                 .collect();
             if rtts.len() >= 2 {
                 let best = rtts
@@ -851,7 +862,12 @@ fn write_multi_target_charts(runs: &[TestRun], short_names: &[String], out: &mut
             .as_ref()
             .map(|b| b.network_type)
             .unwrap_or(NetworkType::Internet);
-        let rtt = run.baseline.as_ref().map(|b| b.rtt_avg_ms).unwrap_or(0.0);
+        let rtt = run
+            .baseline
+            .as_ref()
+            .filter(|b| b.samples > 0)
+            .map(|b| b.rtt_avg_ms)
+            .unwrap_or(0.0);
 
         targets.push(TargetChartData {
             idx: i,
