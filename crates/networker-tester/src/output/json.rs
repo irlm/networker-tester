@@ -55,6 +55,10 @@ mod tests {
             note: Some("mixed trace".into()),
             warnings: vec!["warning one".into()],
             likely_target_endpoints: vec!["127.0.0.1".into()],
+            likely_target_packets: 20,
+            likely_target_pct_of_total: 47.6,
+            dominant_target_port: Some(443),
+            capture_confidence: "medium".into(),
             tcp_packets: 10,
             udp_packets: 20,
             quic_packets: 15,
@@ -140,6 +144,7 @@ mod tests {
         assert!(json.contains("\"packet_capture_summary\""));
         assert!(json.contains("\"likely_target_endpoints\""));
         assert!(json.contains("\"observed_quic\": true"));
+        assert!(json.contains("\"capture_confidence\": \"medium\""));
     }
 
     #[test]

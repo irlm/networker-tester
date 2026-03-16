@@ -3361,6 +3361,20 @@ fn write_packet_capture_section(packet_capture: Option<&PacketCaptureSummary>, o
             }
             let _ = write!(out, "<code>{}</code>", escape_html(endpoint));
         }
+        let _ = write!(
+            out,
+            " &bull; <strong>Likely target packets:</strong> {} ({:.1}%) &bull; <strong>Confidence:</strong> {}",
+            summary.likely_target_packets,
+            summary.likely_target_pct_of_total,
+            escape_html(&summary.capture_confidence)
+        );
+        if let Some(port) = summary.dominant_target_port {
+            let _ = write!(
+                out,
+                " &bull; <strong>Dominant target port:</strong> <code>{}</code>",
+                port
+            );
+        }
         let _ = write!(out, "</p>");
     }
     if !summary.top_endpoints.is_empty() {
@@ -3990,6 +4004,10 @@ mod tests {
             note: Some("Capture note".into()),
             warnings: vec!["Ambiguous trace".into()],
             likely_target_endpoints: vec!["127.0.0.1".into()],
+            likely_target_packets: 20,
+            likely_target_pct_of_total: 47.6,
+            dominant_target_port: Some(443),
+            capture_confidence: "medium".into(),
             tcp_packets: 10,
             udp_packets: 20,
             quic_packets: 15,
@@ -4025,6 +4043,8 @@ mod tests {
         assert!(html.contains("Packet Capture Summary"));
         assert!(html.contains("Likely target endpoints"));
         assert!(html.contains("127.0.0.1"));
+        assert!(html.contains("Confidence"));
+        assert!(html.contains("Dominant target port"));
         assert!(html.contains("Ambiguous trace"));
     }
 

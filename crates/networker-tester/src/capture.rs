@@ -49,6 +49,10 @@ pub struct PacketCaptureSummary {
     pub note: Option<String>,
     pub warnings: Vec<String>,
     pub likely_target_endpoints: Vec<String>,
+    pub likely_target_packets: u64,
+    pub likely_target_pct_of_total: f64,
+    pub dominant_target_port: Option<u16>,
+    pub capture_confidence: String,
     pub tcp_packets: u64,
     pub udp_packets: u64,
     pub quic_packets: u64,
@@ -308,6 +312,10 @@ fn summarize(
         note: None,
         warnings: vec![],
         likely_target_endpoints: vec![],
+        likely_target_packets: 0,
+        likely_target_pct_of_total: 0.0,
+        dominant_target_port: None,
+        capture_confidence: "low".into(),
         tcp_packets: 0,
         udp_packets: 0,
         quic_packets: 0,
@@ -350,7 +358,14 @@ fn summarize(
         5,
     );
     summary.likely_target_endpoints = likely_target_endpoints(&summary.top_endpoints, targets);
+    summary.likely_target_packets =
+        likely_target_packet_count(&summary.top_endpoints, &summary.likely_target_endpoints);
+    summary.likely_target_pct_of_total =
+        pct(summary.likely_target_packets, summary.total_packets as f64);
+    summary.dominant_target_port =
+        dominant_target_port(&summary.top_ports, summary.likely_target_packets);
     apply_interpretation(&mut summary);
+    summary.capture_confidence = capture_confidence_label(&summary);
 
     Ok(summary)
 }
@@ -535,6 +550,36 @@ fn top_n_ports(counts: BTreeMap<u16, u64>, limit: usize) -> Vec<PortPacketCount>
     rows
 }
 
+fn likely_target_packet_count(rows: &[EndpointPacketCount], likely_targets: &[String]) -> u64 {
+    rows.iter()
+        .filter(|r| likely_targets.iter().any(|t| t == &r.endpoint))
+        .map(|r| r.packets)
+        .sum()
+}
+
+fn dominant_target_port(top_ports: &[PortPacketCount], likely_target_packets: u64) -> Option<u16> {
+    if likely_target_packets == 0 {
+        return None;
+    }
+    top_ports.first().map(|p| p.port)
+}
+
+fn capture_confidence_label(summary: &PacketCaptureSummary) -> String {
+    if summary.total_packets == 0 {
+        return "low".into();
+    }
+    if !summary.capture_may_be_ambiguous
+        && !summary.likely_target_endpoints.is_empty()
+        && summary.likely_target_pct_of_total >= 50.0
+    {
+        return "high".into();
+    }
+    if !summary.likely_target_endpoints.is_empty() && summary.likely_target_pct_of_total >= 20.0 {
+        return "medium".into();
+    }
+    "low".into()
+}
+
 fn apply_interpretation(summary: &mut PacketCaptureSummary) {
     summary.observed_quic = summary.quic_packets > 0;
     summary.observed_tcp_only =
@@ -556,6 +601,9 @@ fn apply_interpretation(summary: &mut PacketCaptureSummary) {
     if summary.observed_mixed_transport {
         summary.capture_may_be_ambiguous = true;
         summary.warnings.push("Both TCP and UDP/QUIC traffic were observed. This may reflect fallback behavior, mixed page assets, or unrelated background traffic.".into());
+        if !summary.observed_quic {
+            summary.warnings.push("Mixed transport was observed without QUIC packets, which may indicate TCP fallback or non-target background traffic.".into());
+        }
     }
     if summary.top_endpoints.len() > 1 && summary.likely_target_endpoints.len() != 1 {
         summary.capture_may_be_ambiguous = true;
@@ -742,6 +790,10 @@ mod tests {
             note: None,
             warnings: vec![],
             likely_target_endpoints: vec![],
+            likely_target_packets: 0,
+            likely_target_pct_of_total: 0.0,
+            dominant_target_port: None,
+            capture_confidence: "low".into(),
             tcp_packets: 60,
             udp_packets: 40,
             quic_packets: 30,
@@ -762,6 +814,47 @@ mod tests {
         assert_eq!(shares[0].protocol, "tcp");
         assert_eq!(shares[0].pct_of_total, 60.0);
         assert_eq!(shares[1].protocol, "udp");
+    }
+
+    #[test]
+    fn capture_confidence_high_when_target_dominates_clean_trace() {
+        let summary = PacketCaptureSummary {
+            mode: "tester".into(),
+            interface: "lo0".into(),
+            capture_path: "x".into(),
+            tshark_path: "tshark".into(),
+            total_packets: 100,
+            capture_status: "captured".into(),
+            note: None,
+            warnings: vec![],
+            likely_target_endpoints: vec!["127.0.0.1".into()],
+            likely_target_packets: 80,
+            likely_target_pct_of_total: 80.0,
+            dominant_target_port: Some(443),
+            capture_confidence: "low".into(),
+            tcp_packets: 10,
+            udp_packets: 90,
+            quic_packets: 80,
+            http_packets: 5,
+            dns_packets: 2,
+            retransmissions: 0,
+            duplicate_acks: 0,
+            resets: 0,
+            transport_shares: vec![],
+            top_endpoints: vec![EndpointPacketCount {
+                endpoint: "127.0.0.1".into(),
+                packets: 80,
+            }],
+            top_ports: vec![PortPacketCount {
+                port: 443,
+                packets: 80,
+            }],
+            observed_quic: true,
+            observed_tcp_only: false,
+            observed_mixed_transport: false,
+            capture_may_be_ambiguous: false,
+        };
+        assert_eq!(capture_confidence_label(&summary), "high");
     }
 
     #[test]
@@ -792,6 +885,10 @@ mod tests {
             note: None,
             warnings: vec![],
             likely_target_endpoints: vec![],
+            likely_target_packets: 0,
+            likely_target_pct_of_total: 0.0,
+            dominant_target_port: None,
+            capture_confidence: "low".into(),
             tcp_packets: 20,
             udp_packets: 15,
             quic_packets: 10,

@@ -110,8 +110,18 @@ fn write_summary(
         ws.write(base + 6, 1, summary.observed_mixed_transport)?;
         ws.write(base + 7, 0, "Capture may be ambiguous")?;
         ws.write(base + 7, 1, summary.capture_may_be_ambiguous)?;
+        ws.write(base + 8, 0, "Likely target packets")?;
+        ws.write(base + 8, 1, summary.likely_target_packets as f64)?;
+        ws.write(base + 9, 0, "Likely target %")?;
+        ws.write(base + 9, 1, summary.likely_target_pct_of_total)?;
+        ws.write(base + 10, 0, "Capture confidence")?;
+        ws.write(base + 10, 1, summary.capture_confidence.as_str())?;
+        ws.write(base + 11, 0, "Dominant target port")?;
+        if let Some(port) = summary.dominant_target_port {
+            ws.write(base + 11, 1, port as f64)?;
+        }
 
-        let mut row = base + 9;
+        let mut row = base + 13;
         ws.write_with_format(row, 0, "Protocol shares", bold)?;
         row += 1;
         ws.write_with_format(row, 0, "Protocol", bold)?;
@@ -1021,6 +1031,10 @@ mod tests {
             note: Some("Capture note".into()),
             warnings: vec!["Ambiguous trace".into()],
             likely_target_endpoints: vec!["127.0.0.1".into()],
+            likely_target_packets: 20,
+            likely_target_pct_of_total: 47.6,
+            dominant_target_port: Some(443),
+            capture_confidence: "medium".into(),
             tcp_packets: 10,
             udp_packets: 20,
             quic_packets: 15,
