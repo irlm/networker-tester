@@ -3353,6 +3353,16 @@ fn write_packet_capture_section(packet_capture: Option<&PacketCaptureSummary>, o
         );
     }
     let _ = write!(out, "</tbody></table>");
+    if !summary.likely_target_endpoints.is_empty() {
+        let _ = write!(out, "<p><strong>Likely target endpoints:</strong> ");
+        for (i, endpoint) in summary.likely_target_endpoints.iter().enumerate() {
+            if i > 0 {
+                let _ = write!(out, ", ");
+            }
+            let _ = write!(out, "<code>{}</code>", escape_html(endpoint));
+        }
+        let _ = write!(out, "</p>");
+    }
     if !summary.top_endpoints.is_empty() {
         let _ = write!(out, "<h3>Top Endpoints</h3><ul>");
         for row in &summary.top_endpoints {
@@ -3967,6 +3977,55 @@ mod tests {
     #[test]
     fn format_bytes_multiple_gibs() {
         assert_eq!(format_bytes(4 * 1024 * 1024 * 1024), "4.0 GiB");
+    }
+
+    fn sample_packet_capture_summary() -> crate::capture::PacketCaptureSummary {
+        crate::capture::PacketCaptureSummary {
+            mode: "tester".into(),
+            interface: "lo0".into(),
+            capture_path: "packet-capture-tester.pcapng".into(),
+            tshark_path: "tshark".into(),
+            total_packets: 42,
+            capture_status: "captured".into(),
+            note: Some("Capture note".into()),
+            warnings: vec!["Ambiguous trace".into()],
+            likely_target_endpoints: vec!["127.0.0.1".into()],
+            tcp_packets: 10,
+            udp_packets: 20,
+            quic_packets: 15,
+            http_packets: 5,
+            dns_packets: 2,
+            retransmissions: 1,
+            duplicate_acks: 0,
+            resets: 0,
+            transport_shares: vec![crate::capture::PacketShare {
+                protocol: "udp".into(),
+                packets: 20,
+                pct_of_total: 47.6,
+            }],
+            top_endpoints: vec![crate::capture::EndpointPacketCount {
+                endpoint: "127.0.0.1".into(),
+                packets: 20,
+            }],
+            top_ports: vec![crate::capture::PortPacketCount {
+                port: 443,
+                packets: 18,
+            }],
+            observed_quic: true,
+            observed_tcp_only: false,
+            observed_mixed_transport: true,
+            capture_may_be_ambiguous: true,
+        }
+    }
+
+    #[test]
+    fn render_includes_packet_capture_section_when_present() {
+        let run = make_run();
+        let html = render(&run, None, Some(&sample_packet_capture_summary()));
+        assert!(html.contains("Packet Capture Summary"));
+        assert!(html.contains("Likely target endpoints"));
+        assert!(html.contains("127.0.0.1"));
+        assert!(html.contains("Ambiguous trace"));
     }
 
     #[test]

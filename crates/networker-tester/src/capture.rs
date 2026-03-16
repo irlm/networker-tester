@@ -349,6 +349,7 @@ fn summarize(
         port_counts(tshark_path, &plan.pcap_path).unwrap_or_default(),
         5,
     );
+    summary.likely_target_endpoints = likely_target_endpoints(&summary.top_endpoints, targets);
     apply_interpretation(&mut summary);
 
     Ok(summary)

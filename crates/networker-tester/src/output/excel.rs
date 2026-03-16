@@ -699,8 +699,12 @@ fn format_bytes(n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metrics::*;
+    use crate::{
+        capture::{EndpointPacketCount, PacketShare, PortPacketCount},
+        metrics::*,
+    };
     use chrono::Utc;
+    use tempfile::NamedTempFile;
     use uuid::Uuid;
 
     #[test]
@@ -1004,6 +1008,54 @@ mod tests {
             attempts: vec![],
         };
         save(&run, tmp.path(), None).unwrap();
+    }
+
+    fn sample_packet_capture_summary() -> PacketCaptureSummary {
+        PacketCaptureSummary {
+            mode: "tester".into(),
+            interface: "lo0".into(),
+            capture_path: "packet-capture-tester.pcapng".into(),
+            tshark_path: "tshark".into(),
+            total_packets: 42,
+            capture_status: "captured".into(),
+            note: Some("Capture note".into()),
+            warnings: vec!["Ambiguous trace".into()],
+            likely_target_endpoints: vec!["127.0.0.1".into()],
+            tcp_packets: 10,
+            udp_packets: 20,
+            quic_packets: 15,
+            http_packets: 5,
+            dns_packets: 2,
+            retransmissions: 1,
+            duplicate_acks: 0,
+            resets: 0,
+            transport_shares: vec![PacketShare {
+                protocol: "udp".into(),
+                packets: 20,
+                pct_of_total: 47.6,
+            }],
+            top_endpoints: vec![EndpointPacketCount {
+                endpoint: "127.0.0.1".into(),
+                packets: 20,
+            }],
+            top_ports: vec![PortPacketCount {
+                port: 443,
+                packets: 18,
+            }],
+            observed_quic: true,
+            observed_tcp_only: false,
+            observed_mixed_transport: true,
+            capture_may_be_ambiguous: true,
+        }
+    }
+
+    #[test]
+    fn save_with_packet_capture_summary_does_not_panic() {
+        let tmp = NamedTempFile::new().unwrap();
+        let run = make_full_run();
+        save(&run, tmp.path(), Some(&sample_packet_capture_summary())).unwrap();
+        let metadata = std::fs::metadata(tmp.path()).unwrap();
+        assert!(metadata.len() > 1000);
     }
 
     #[test]
