@@ -369,7 +369,7 @@ async fn run_for_target(
 
     // ── Measure network baseline RTT ────────────────────────────────────────
     let baseline = match measure_baseline(&target).await {
-        Some(bl) => {
+        Some(bl) if bl.samples > 0 => {
             info!(
                 "Network baseline: {} | RTT avg={:.2}ms min={:.2}ms max={:.2}ms p50={:.2}ms p95={:.2}ms ({} samples)",
                 bl.network_type, bl.rtt_avg_ms, bl.rtt_min_ms, bl.rtt_max_ms,
@@ -377,8 +377,15 @@ async fn run_for_target(
             );
             Some(bl)
         }
+        Some(bl) => {
+            warn!(
+                "Network baseline: {} | RTT probes failed (target may be unreachable) — network type still detected",
+                bl.network_type,
+            );
+            Some(bl)
+        }
         None => {
-            warn!("Could not measure network baseline RTT");
+            warn!("Could not measure network baseline");
             None
         }
     };
@@ -884,6 +891,8 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
 }
 
 /// Run a network baseline measurement: TCP RTT probes + network classification.
+/// Always returns the network type (LAN/Internet/Loopback) even if RTT probes fail,
+/// so that LAN targets are correctly identified as reference-only in the report.
 async fn measure_baseline(target: &url::Url) -> Option<NetworkBaseline> {
     let host = target.host_str()?;
     let port = target.port_or_known_default()?;
@@ -891,7 +900,16 @@ async fn measure_baseline(target: &url::Url) -> Option<NetworkBaseline> {
 
     let rtts = measure_rtt(host, port, 5).await;
     if rtts.is_empty() {
-        return None;
+        // RTT probes failed (target unreachable) but we still know the network type
+        return Some(NetworkBaseline {
+            samples: 0,
+            rtt_min_ms: 0.0,
+            rtt_avg_ms: 0.0,
+            rtt_max_ms: 0.0,
+            rtt_p50_ms: 0.0,
+            rtt_p95_ms: 0.0,
+            network_type,
+        });
     }
 
     let sum: f64 = rtts.iter().sum();
