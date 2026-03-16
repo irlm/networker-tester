@@ -11,22 +11,27 @@
 ///   8.  UDP Throughput – bulk UDP transfer metrics
 ///   9.  Server Timing  – server-side timing from X-Networker-* headers
 ///   10. Errors         – failed attempts
-use crate::metrics::{
-    compute_stats, primary_metric_label, primary_metric_value, Protocol, TestRun,
+use crate::{
+    capture::PacketCaptureSummary,
+    metrics::{compute_stats, primary_metric_label, primary_metric_value, Protocol, TestRun},
 };
 use anyhow::Context;
 use rust_xlsxwriter::{Format, Workbook};
 use std::path::Path;
 
 /// Write the full test run to `path` as an Excel workbook.
-pub fn save(run: &TestRun, path: &Path) -> anyhow::Result<()> {
+pub fn save(
+    run: &TestRun,
+    path: &Path,
+    packet_capture: Option<&PacketCaptureSummary>,
+) -> anyhow::Result<()> {
     let mut wb = Workbook::new();
 
     let bold = Format::new().set_bold();
     let num2 = Format::new().set_num_format("0.00");
     let num0 = Format::new().set_num_format("0");
 
-    write_summary(&mut wb, run, &bold)?;
+    write_summary(&mut wb, run, &bold, packet_capture)?;
     write_statistics(&mut wb, run, &bold, &num2)?;
     write_http_timings(&mut wb, run, &bold, &num2)?;
     write_tcp_stats(&mut wb, run, &bold, &num2, &num0)?;
@@ -45,7 +50,12 @@ pub fn save(run: &TestRun, path: &Path) -> anyhow::Result<()> {
 // Sheet 1 – Summary
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn write_summary(wb: &mut Workbook, run: &TestRun, bold: &Format) -> anyhow::Result<()> {
+fn write_summary(
+    wb: &mut Workbook,
+    run: &TestRun,
+    bold: &Format,
+    packet_capture: Option<&PacketCaptureSummary>,
+) -> anyhow::Result<()> {
     let ws = wb.add_worksheet();
     ws.set_name("Summary")?;
 
@@ -82,6 +92,39 @@ fn write_summary(wb: &mut Workbook, run: &TestRun, bold: &Format) -> anyhow::Res
     ws.write(1, 8, duration_ms as f64)?;
     ws.write(1, 9, run.client_os.as_str())?;
     ws.write(1, 10, run.client_version.as_str())?;
+
+    if let Some(summary) = packet_capture {
+        let base = 4u32;
+        ws.write_with_format(base, 0, "Packet Capture", bold)?;
+        ws.write(base + 1, 0, "Status")?;
+        ws.write(base + 1, 1, summary.capture_status.as_str())?;
+        ws.write(base + 2, 0, "Interface")?;
+        ws.write(base + 2, 1, summary.interface.as_str())?;
+        ws.write(base + 3, 0, "Total packets")?;
+        ws.write(base + 3, 1, summary.total_packets as f64)?;
+        ws.write(base + 4, 0, "Observed QUIC")?;
+        ws.write(base + 4, 1, summary.observed_quic)?;
+        ws.write(base + 5, 0, "Observed TCP only")?;
+        ws.write(base + 5, 1, summary.observed_tcp_only)?;
+        ws.write(base + 6, 0, "Observed mixed transport")?;
+        ws.write(base + 6, 1, summary.observed_mixed_transport)?;
+        ws.write(base + 7, 0, "Capture may be ambiguous")?;
+        ws.write(base + 7, 1, summary.capture_may_be_ambiguous)?;
+
+        let mut row = base + 9;
+        ws.write_with_format(row, 0, "Protocol shares", bold)?;
+        row += 1;
+        ws.write_with_format(row, 0, "Protocol", bold)?;
+        ws.write_with_format(row, 1, "Packets", bold)?;
+        ws.write_with_format(row, 2, "% of total", bold)?;
+        row += 1;
+        for share in &summary.transport_shares {
+            ws.write(row, 0, share.protocol.as_str())?;
+            ws.write(row, 1, share.packets as f64)?;
+            ws.write(row, 2, share.pct_of_total)?;
+            row += 1;
+        }
+    }
 
     Ok(())
 }
@@ -929,7 +972,7 @@ mod tests {
     fn save_writes_xlsx_file() {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let run = make_full_run();
-        save(&run, tmp.path()).unwrap();
+        save(&run, tmp.path(), None).unwrap();
         // File must be non-empty (valid xlsx is at least a few KB)
         let metadata = std::fs::metadata(tmp.path()).unwrap();
         assert!(
@@ -960,7 +1003,7 @@ mod tests {
             baseline: None,
             attempts: vec![],
         };
-        save(&run, tmp.path()).unwrap();
+        save(&run, tmp.path(), None).unwrap();
     }
 
     #[test]
@@ -1063,7 +1106,7 @@ mod tests {
             attempts: vec![download_attempt, upload_attempt],
         };
 
-        save(&run, tmp.path()).unwrap();
+        save(&run, tmp.path(), None).unwrap();
         let metadata = std::fs::metadata(tmp.path()).unwrap();
         assert!(
             metadata.len() > 1000,

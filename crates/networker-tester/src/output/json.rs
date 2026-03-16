@@ -1,18 +1,36 @@
-use crate::metrics::TestRun;
+use crate::{capture::PacketCaptureSummary, metrics::TestRun};
 use std::path::Path;
 
 /// Serialize a `TestRun` to pretty-printed JSON and write to `path`.
-pub fn save(run: &TestRun, path: &Path) -> anyhow::Result<()> {
+pub fn save(
+    run: &TestRun,
+    path: &Path,
+    packet_capture: Option<&PacketCaptureSummary>,
+) -> anyhow::Result<()> {
     let dir = path.parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(dir)?;
-    let json = serde_json::to_string_pretty(run)?;
+    let json = to_string_with_capture(run, packet_capture)?;
     std::fs::write(path, json)?;
     Ok(())
 }
 
 /// Return the JSON string without writing to disk (useful for testing).
 pub fn to_string(run: &TestRun) -> anyhow::Result<String> {
-    Ok(serde_json::to_string_pretty(run)?)
+    to_string_with_capture(run, None)
+}
+
+pub fn to_string_with_capture(
+    run: &TestRun,
+    packet_capture: Option<&PacketCaptureSummary>,
+) -> anyhow::Result<String> {
+    let value = match packet_capture {
+        Some(summary) => serde_json::json!({
+            "run": run,
+            "packet_capture_summary": summary,
+        }),
+        None => serde_json::to_value(run)?,
+    };
+    Ok(serde_json::to_string_pretty(&value)?)
 }
 
 #[cfg(test)]
@@ -77,7 +95,7 @@ mod tests {
     fn save_creates_file() {
         let tmp = NamedTempFile::new().unwrap();
         let run = dummy_run();
-        save(&run, tmp.path()).unwrap();
+        save(&run, tmp.path(), None).unwrap();
         let contents = std::fs::read_to_string(tmp.path()).unwrap();
         assert!(contents.contains("\"target_url\""));
     }
