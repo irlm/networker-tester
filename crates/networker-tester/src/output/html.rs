@@ -3,9 +3,12 @@
 /// The report embeds a minimal inline CSS for offline viewing and optionally
 /// adds a `<link rel="stylesheet">` for the external `report.css` file so
 /// operators can customize the look without editing generated HTML.
-use crate::metrics::{
-    attempt_payload_bytes, compute_stats, primary_metric_label, primary_metric_value, HostInfo,
-    NetworkType, Protocol, RequestAttempt, TestRun,
+use crate::{
+    capture::PacketCaptureSummary,
+    metrics::{
+        attempt_payload_bytes, compute_stats, primary_metric_label, primary_metric_value, HostInfo,
+        NetworkType, Protocol, RequestAttempt, TestRun,
+    },
 };
 use chrono::DateTime;
 use std::fmt::Write as FmtWrite;
@@ -114,10 +117,15 @@ fn build_target_short_names(runs: &[TestRun]) -> Vec<String> {
 // Public API
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub fn save(run: &TestRun, path: &Path, css_href: Option<&str>) -> anyhow::Result<()> {
+pub fn save(
+    run: &TestRun,
+    path: &Path,
+    css_href: Option<&str>,
+    packet_capture: Option<&PacketCaptureSummary>,
+) -> anyhow::Result<()> {
     let dir = path.parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(dir)?;
-    let html = render(run, css_href);
+    let html = render(run, css_href, packet_capture);
     std::fs::write(path, html)?;
     Ok(())
 }
@@ -127,16 +135,26 @@ pub fn save(run: &TestRun, path: &Path, css_href: Option<&str>) -> anyhow::Resul
 /// When `runs.len() == 1` the output is identical to `save()`.
 /// When `runs.len() > 1` the report includes a cross-target summary and
 /// protocol-comparison table followed by per-target collapsible sections.
-pub fn save_multi(runs: &[TestRun], path: &Path, css_href: Option<&str>) -> anyhow::Result<()> {
+pub fn save_multi(
+    runs: &[TestRun],
+    path: &Path,
+    css_href: Option<&str>,
+    packet_capture: Option<&PacketCaptureSummary>,
+) -> anyhow::Result<()> {
     std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")))?;
-    std::fs::write(path, render_multi(runs, css_href))?;
+    std::fs::write(path, render_multi(runs, css_href, packet_capture))?;
     Ok(())
 }
 
-pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
+pub fn render(
+    run: &TestRun,
+    css_href: Option<&str>,
+    packet_capture: Option<&PacketCaptureSummary>,
+) -> String {
     let mut out = String::with_capacity(64 * 1024);
     write_html_head(&run.target_url, css_href, &mut out);
     write_run_sections(run, &mut out);
+    write_packet_capture_section(packet_capture, &mut out);
     write_html_footer(run.finished_at.unwrap_or(run.started_at), &mut out);
     out
 }
@@ -144,9 +162,13 @@ pub fn render(run: &TestRun, css_href: Option<&str>) -> String {
 /// Render a combined report for multiple targets.
 ///
 /// Single-target runs delegate to `render()` for identical output.
-pub fn render_multi(runs: &[TestRun], css_href: Option<&str>) -> String {
+pub fn render_multi(
+    runs: &[TestRun],
+    css_href: Option<&str>,
+    packet_capture: Option<&PacketCaptureSummary>,
+) -> String {
     if runs.len() == 1 {
-        return render(&runs[0], css_href);
+        return render(&runs[0], css_href, packet_capture);
     }
 
     let mut out = String::with_capacity(128 * 1024);
@@ -3297,6 +3319,99 @@ fn format_bytes(n: usize) -> String {
 // HTML escaping
 // ─────────────────────────────────────────────────────────────────────────────
 
+fn write_packet_capture_section(packet_capture: Option<&PacketCaptureSummary>, out: &mut String) {
+    let Some(summary) = packet_capture else {
+        return;
+    };
+    let _ = write!(
+        out,
+        r#"
+<section class="card">
+  <h2>Packet Capture Summary</h2>
+  <p><strong>Status:</strong> {status} &bull; <strong>Interface:</strong> {iface} &bull; <strong>Total packets:</strong> {total}</p>
+  <p><strong>Observed transport:</strong> QUIC={oq} &bull; TCP-only={ot} &bull; Mixed transport={om} &bull; Ambiguous={amb}</p>
+  <table>
+    <thead><tr><th>Protocol</th><th>Packets</th><th>% of total</th></tr></thead>
+    <tbody>
+"#,
+        status = escape_html(&summary.capture_status),
+        iface = escape_html(&summary.interface),
+        total = summary.total_packets,
+        oq = summary.observed_quic,
+        ot = summary.observed_tcp_only,
+        om = summary.observed_mixed_transport,
+        amb = summary.capture_may_be_ambiguous,
+    );
+    for row in &summary.transport_shares {
+        let _ = write!(
+            out,
+            "<tr><td>{}</td><td>{}</td><td>{:.1}%</td></tr>",
+            escape_html(&row.protocol),
+            row.packets,
+            row.pct_of_total
+        );
+    }
+    let _ = write!(out, "</tbody></table>");
+    if !summary.likely_target_endpoints.is_empty() {
+        let _ = write!(out, "<p><strong>Likely target endpoints:</strong> ");
+        for (i, endpoint) in summary.likely_target_endpoints.iter().enumerate() {
+            if i > 0 {
+                let _ = write!(out, ", ");
+            }
+            let _ = write!(out, "<code>{}</code>", escape_html(endpoint));
+        }
+        let _ = write!(
+            out,
+            " &bull; <strong>Likely target packets:</strong> {} ({:.1}%) &bull; <strong>Confidence:</strong> {}",
+            summary.likely_target_packets,
+            summary.likely_target_pct_of_total,
+            escape_html(&summary.capture_confidence)
+        );
+        if let Some(port) = summary.dominant_trace_port {
+            let _ = write!(
+                out,
+                " &bull; <strong>Dominant trace port:</strong> <code>{}</code>",
+                port
+            );
+        }
+        let _ = write!(out, "</p>");
+    }
+    if !summary.top_endpoints.is_empty() {
+        let _ = write!(out, "<h3>Top Endpoints</h3><ul>");
+        for row in &summary.top_endpoints {
+            let _ = write!(
+                out,
+                "<li><code>{}</code> — {} packets</li>",
+                escape_html(&row.endpoint),
+                row.packets
+            );
+        }
+        let _ = write!(out, "</ul>");
+    }
+    if !summary.top_ports.is_empty() {
+        let _ = write!(out, "<h3>Top Ports</h3><ul>");
+        for row in &summary.top_ports {
+            let _ = write!(
+                out,
+                "<li><code>{}</code> — {} packets</li>",
+                row.port, row.packets
+            );
+        }
+        let _ = write!(out, "</ul>");
+    }
+    if let Some(note) = &summary.note {
+        let _ = write!(out, "<p><strong>Note:</strong> {}</p>", escape_html(note));
+    }
+    if !summary.warnings.is_empty() {
+        let _ = write!(out, "<h3>Warnings</h3><ul>");
+        for warning in &summary.warnings {
+            let _ = write!(out, "<li>{}</li>", escape_html(warning));
+        }
+        let _ = write!(out, "</ul>");
+    }
+    let _ = write!(out, "</section>");
+}
+
 fn escape_html(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -3793,14 +3908,14 @@ mod tests {
     #[test]
     fn html_contains_target() {
         let run = make_run();
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(html.contains("localhost/health"));
     }
 
     #[test]
     fn html_contains_http11() {
         let run = make_run();
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(html.contains("HTTP/1.1"));
     }
 
@@ -3877,11 +3992,66 @@ mod tests {
         assert_eq!(format_bytes(4 * 1024 * 1024 * 1024), "4.0 GiB");
     }
 
+    fn sample_packet_capture_summary() -> crate::capture::PacketCaptureSummary {
+        crate::capture::PacketCaptureSummary {
+            mode: "tester".into(),
+            interface: "lo0".into(),
+            capture_path: "packet-capture-tester.pcapng".into(),
+            tshark_path: "tshark".into(),
+            total_packets: 42,
+            capture_status: "captured".into(),
+            note: Some("Capture note".into()),
+            warnings: vec!["Ambiguous trace".into()],
+            likely_target_endpoints: vec!["127.0.0.1".into()],
+            likely_target_packets: 20,
+            likely_target_pct_of_total: 47.6,
+            dominant_trace_port: Some(443),
+            capture_confidence: "medium".into(),
+            tcp_packets: 10,
+            udp_packets: 20,
+            quic_packets: 15,
+            http_packets: 5,
+            dns_packets: 2,
+            retransmissions: 1,
+            duplicate_acks: 0,
+            resets: 0,
+            transport_shares: vec![crate::capture::PacketShare {
+                protocol: "udp".into(),
+                packets: 20,
+                pct_of_total: 47.6,
+            }],
+            top_endpoints: vec![crate::capture::EndpointPacketCount {
+                endpoint: "127.0.0.1".into(),
+                packets: 20,
+            }],
+            top_ports: vec![crate::capture::PortPacketCount {
+                port: 443,
+                packets: 18,
+            }],
+            observed_quic: true,
+            observed_tcp_only: false,
+            observed_mixed_transport: true,
+            capture_may_be_ambiguous: true,
+        }
+    }
+
+    #[test]
+    fn render_includes_packet_capture_section_when_present() {
+        let run = make_run();
+        let html = render(&run, None, Some(&sample_packet_capture_summary()));
+        assert!(html.contains("Packet Capture Summary"));
+        assert!(html.contains("Likely target endpoints"));
+        assert!(html.contains("127.0.0.1"));
+        assert!(html.contains("Confidence"));
+        assert!(html.contains("Dominant trace port"));
+        assert!(html.contains("Ambiguous trace"));
+    }
+
     #[test]
     fn save_writes_html_file() {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let run = make_run();
-        save(&run, tmp.path(), None).unwrap();
+        save(&run, tmp.path(), None, None).unwrap();
         let content = std::fs::read_to_string(tmp.path()).unwrap();
         assert!(content.starts_with("<!DOCTYPE html>"));
     }
@@ -3889,7 +4059,7 @@ mod tests {
     #[test]
     fn html_includes_css_link_when_href_provided() {
         let run = make_run();
-        let html = render(&run, Some("report.css"));
+        let html = render(&run, Some("report.css"), None);
         assert!(html.contains(r#"<link rel="stylesheet""#));
         assert!(html.contains("report.css"));
     }
@@ -3897,7 +4067,7 @@ mod tests {
     #[test]
     fn html_no_css_link_without_href() {
         let run = make_run();
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         // Without an external CSS href, should embed inline styles but no <link>
         assert!(html.contains("<style>"));
     }
@@ -3949,7 +4119,7 @@ mod tests {
                 http_stack: None,
             }],
         };
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(html.contains("Errors"), "should have an Errors section");
         assert!(html.contains("Connection refused"));
     }
@@ -4011,7 +4181,7 @@ mod tests {
                 http_stack: None,
             }],
         };
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(
             html.contains("Throughput Results"),
             "should have a Throughput Results section"
@@ -4072,7 +4242,7 @@ mod tests {
                 http_stack: None,
             }],
         };
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(
             html.contains("TLS Details"),
             "should have TLS Details section"
@@ -4135,7 +4305,7 @@ mod tests {
                 http_stack: None,
             }],
         };
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         // Page load data should appear in the Protocol Comparison section
         assert!(
             html.contains("pageload") || html.contains("PageLoad") || html.contains("Page Load"),
@@ -4510,7 +4680,7 @@ mod tests {
                 http_stack: None,
             }],
         };
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(
             html.contains("Browser Results"),
             "should have Browser Results section"
@@ -4674,7 +4844,7 @@ mod tests {
     #[test]
     fn render_single_target_has_html_structure() {
         let run = make_run();
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(
             html.starts_with("<!DOCTYPE html>"),
             "must start with DOCTYPE"
@@ -4688,7 +4858,7 @@ mod tests {
     #[test]
     fn render_single_target_includes_run_summary() {
         let run = make_run();
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(
             html.contains("Run Summary"),
             "should have Run Summary section"
@@ -4704,7 +4874,7 @@ mod tests {
     fn render_with_no_finished_at_shows_dash_for_duration() {
         let mut run = make_run();
         run.finished_at = None;
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         // The duration cell shows "—" when finished_at is None
         assert!(
             html.contains("—"),
@@ -4715,7 +4885,7 @@ mod tests {
     #[test]
     fn render_css_href_produces_link_element() {
         let run = make_run();
-        let html = render(&run, Some("/static/report.css"));
+        let html = render(&run, Some("/static/report.css"), None);
         assert!(html.contains(r#"<link rel="stylesheet""#));
         assert!(html.contains("/static/report.css"));
     }
@@ -4723,7 +4893,7 @@ mod tests {
     #[test]
     fn render_css_href_escapes_special_chars_in_path() {
         let run = make_run();
-        let html = render(&run, Some("path/with&special<chars>"));
+        let html = render(&run, Some("path/with&special<chars>"), None);
         // The href value is HTML-escaped
         assert!(html.contains("&amp;"), "& must be escaped in href");
     }
@@ -4732,7 +4902,7 @@ mod tests {
     fn render_shows_network_baseline_when_present() {
         let mut run = make_run();
         run.baseline = Some(make_baseline(NetworkType::Internet, 42.5));
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(
             html.contains("Network Baseline"),
             "should have Network Baseline card"
@@ -4745,7 +4915,7 @@ mod tests {
     fn render_network_baseline_loopback_uses_ok_class() {
         let mut run = make_run();
         run.baseline = Some(make_baseline(NetworkType::Loopback, 0.1));
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         // Loopback maps to "ok" CSS class
         assert!(html.contains("Loopback"), "should show Loopback label");
         // The net_cls for Loopback is "ok"
@@ -4759,7 +4929,7 @@ mod tests {
     fn render_network_baseline_lan_uses_warn_class() {
         let mut run = make_run();
         run.baseline = Some(make_baseline(NetworkType::LAN, 2.0));
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(
             html.contains(r#"<span class="warn">LAN</span>"#),
             "LAN should use warn class"
@@ -4770,7 +4940,7 @@ mod tests {
     fn render_network_baseline_internet_uses_err_class() {
         let mut run = make_run();
         run.baseline = Some(make_baseline(NetworkType::Internet, 50.0));
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(
             html.contains(r#"<span class="err">Internet</span>"#),
             "Internet should use err class"
@@ -4786,7 +4956,7 @@ mod tests {
             None,
             None,
         ));
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(html.contains("Client Info"), "should have Client Info card");
         assert!(html.contains("client-host"), "should show client hostname");
     }
@@ -4800,7 +4970,7 @@ mod tests {
             None,
             Some("0.13.2"),
         ));
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(html.contains("Server Info"), "should have Server Info card");
         assert!(html.contains("server-host"), "should show server hostname");
         assert!(
@@ -4819,7 +4989,7 @@ mod tests {
             Some("azure/eastus"),
             None,
         ));
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(html.contains("Region"), "should have Region row");
         assert!(
             html.contains("azure/eastus"),
@@ -4831,7 +5001,7 @@ mod tests {
     fn render_server_info_no_region_row_when_absent() {
         let mut run = make_run();
         run.server_info = Some(make_host_info(Some("vm1"), "Ubuntu 22.04", None, None));
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         // Region row only appears for the server card when region is set
         assert!(
             !html.contains("<dt>Region</dt>"),
@@ -4845,7 +5015,7 @@ mod tests {
         let mut info = make_host_info(Some("srv"), "Linux", None, None);
         info.uptime_secs = Some(3661); // 1h 1m 1s
         run.server_info = Some(info);
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(html.contains("Uptime"), "should show Uptime row");
         assert!(
             html.contains("1h 1m"),
@@ -4859,7 +5029,7 @@ mod tests {
         let mut info = make_host_info(Some("srv"), "Linux", None, None);
         info.uptime_secs = Some(86400 + 7200); // 1d 2h
         run.server_info = Some(info);
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(
             html.contains("1d 2h"),
             "uptime >= 1 day should use day format"
@@ -4872,7 +5042,7 @@ mod tests {
         let mut info = make_host_info(Some("srv"), "Linux", None, None);
         info.uptime_secs = Some(130); // 2m 10s
         run.server_info = Some(info);
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(
             html.contains("2m 10s"),
             "uptime < 1h should use minute format"
@@ -4884,7 +5054,7 @@ mod tests {
         let mut run = make_run();
         run.attempts[0].success = false;
         run.attempts[0].http.as_mut().unwrap().status_code = 500;
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         // Failed count should be > 0
         assert!(
             html.contains("row-err"),
@@ -4895,7 +5065,7 @@ mod tests {
     #[test]
     fn render_zero_failures_shows_ok_class_for_failed_count() {
         let run = make_run();
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         // With 0 failures the fail_cls should be "ok"
         assert!(
             html.contains(r#"class="ok">0<"#) || html.contains("0</dd>"),
@@ -4913,7 +5083,7 @@ mod tests {
         let mut info = make_host_info(Some("srv"), "Linux", None, None);
         info.total_memory_mb = Some(512);
         run.server_info = Some(info);
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(html.contains("512 MB"), "small memory should show in MB");
     }
 
@@ -4923,7 +5093,7 @@ mod tests {
         let mut info = make_host_info(Some("srv"), "Linux", None, None);
         info.total_memory_mb = Some(8192); // 8 GiB
         run.server_info = Some(info);
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(html.contains("8.0 GB"), "large memory should show in GB");
     }
 
@@ -4933,7 +5103,7 @@ mod tests {
         let mut info = make_host_info(Some("srv"), "Linux", None, None);
         info.total_memory_mb = None;
         run.server_info = Some(info);
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         // The memory line shows "—" when total_memory_mb is None
         assert!(
             html.contains("<dd>—</dd>"),
@@ -4948,8 +5118,8 @@ mod tests {
     #[test]
     fn render_multi_single_run_delegates_to_render() {
         let run = make_run();
-        let multi = render_multi(std::slice::from_ref(&run), None);
-        let single = render(&run, None);
+        let multi = render_multi(std::slice::from_ref(&run), None, None);
+        let single = render(&run, None, None);
         // Single-run multi should produce identical output to render()
         assert_eq!(multi, single, "single-run render_multi must equal render");
     }
@@ -4958,7 +5128,7 @@ mod tests {
     fn render_multi_two_targets_shows_summary_table() {
         let r1 = make_run_with_url("https://target1.example.com/");
         let r2 = make_run_with_url("https://target2.example.com/");
-        let html = render_multi(&[r1, r2], None);
+        let html = render_multi(&[r1, r2], None, None);
         assert!(
             html.contains("Multi-Target Summary"),
             "must have summary table"
@@ -4980,7 +5150,7 @@ mod tests {
         // Add HTTP/1 attempts so the protocol comparison table appears
         r1.attempts.push(make_attempt(Protocol::Http1, true));
         r2.attempts.push(make_attempt(Protocol::Http1, true));
-        let html = render_multi(&[r1, r2], None);
+        let html = render_multi(&[r1, r2], None, None);
         assert!(
             html.contains("Cross-Target Protocol Comparison"),
             "must have comparison table"
@@ -4992,7 +5162,7 @@ mod tests {
         let r1 = make_run_with_url("https://a.example.com/");
         let r2 = make_run_with_url("https://b.example.com/");
         let r3 = make_run_with_url("https://c.example.com/");
-        let html = render_multi(&[r1, r2, r3], None);
+        let html = render_multi(&[r1, r2, r3], None, None);
         assert!(html.contains("3 targets compared"), "title must show count");
     }
 
@@ -5000,7 +5170,7 @@ mod tests {
     fn render_multi_per_target_details_have_open_attr_for_two_targets() {
         let r1 = make_run_with_url("https://a.example.com/");
         let r2 = make_run_with_url("https://b.example.com/");
-        let html = render_multi(&[r1, r2], None);
+        let html = render_multi(&[r1, r2], None, None);
         // For <= 2 runs each details element should be open
         assert!(
             html.contains("<details class=\"card multi-target-details\" open>"),
@@ -5013,7 +5183,7 @@ mod tests {
         let r1 = make_run_with_url("https://a.example.com/");
         let r2 = make_run_with_url("https://b.example.com/");
         let r3 = make_run_with_url("https://c.example.com/");
-        let html = render_multi(&[r1, r2, r3], None);
+        let html = render_multi(&[r1, r2, r3], None, None);
         // With 3 targets the details should NOT have the open attribute
         assert!(
             html.contains("<details class=\"card multi-target-details\">"),
@@ -5031,7 +5201,7 @@ mod tests {
         r1.baseline = Some(make_baseline(NetworkType::Internet, 30.5));
         let mut r2 = make_run_with_url("https://b.example.com/");
         r2.baseline = Some(make_baseline(NetworkType::Internet, 80.2));
-        let html = render_multi(&[r1, r2], None);
+        let html = render_multi(&[r1, r2], None, None);
         assert!(html.contains("30.50"), "should show r1 RTT avg");
         assert!(html.contains("80.20"), "should show r2 RTT avg");
     }
@@ -5043,7 +5213,7 @@ mod tests {
         r1.started_at = now;
         r1.finished_at = Some(now + chrono::Duration::milliseconds(2500));
         let r2 = make_run_with_url("https://b.example.com/");
-        let html = render_multi(&[r1, r2], None);
+        let html = render_multi(&[r1, r2], None, None);
         assert!(html.contains("2.50s"), "should show formatted duration");
     }
 
@@ -5055,7 +5225,7 @@ mod tests {
     fn server_name_uses_hostname_when_present() {
         let mut run = make_run_with_url("https://target.example.com/");
         run.server_info = Some(make_host_info(Some("my-vm-01"), "Ubuntu 22.04", None, None));
-        let html = render_multi(&[run, make_run_with_url("https://b.com/")], None);
+        let html = render_multi(&[run, make_run_with_url("https://b.com/")], None, None);
         assert!(
             html.contains("my-vm-01"),
             "hostname should be used as display name"
@@ -5071,7 +5241,7 @@ mod tests {
             Some("azure/eastus"),
             None,
         ));
-        let html = render_multi(&[run, make_run_with_url("https://b.com/")], None);
+        let html = render_multi(&[run, make_run_with_url("https://b.com/")], None, None);
         // Should show "Azure Ubuntu" derived from region prefix and OS
         assert!(
             html.contains("Azure Ubuntu"),
@@ -5088,7 +5258,7 @@ mod tests {
             Some("aws/us-east-1"),
             None,
         ));
-        let html = render_multi(&[run, make_run_with_url("https://b.com/")], None);
+        let html = render_multi(&[run, make_run_with_url("https://b.com/")], None, None);
         assert!(
             html.contains("AWS Windows"),
             "empty hostname should yield provider+OS name"
@@ -5099,7 +5269,7 @@ mod tests {
     fn server_name_no_server_info_shows_dash() {
         let run1 = make_run_with_url("https://target.example.com/");
         let run2 = make_run_with_url("https://b.com/");
-        let html = render_multi(&[run1, run2], None);
+        let html = render_multi(&[run1, run2], None, None);
         // No server_info → "—" in Server column
         assert!(
             html.contains("<td>—</td>"),
@@ -5116,7 +5286,7 @@ mod tests {
             Some("gcp/us-central1"),
             None,
         ));
-        let html = render_multi(&[run, make_run_with_url("https://b.com/")], None);
+        let html = render_multi(&[run, make_run_with_url("https://b.com/")], None, None);
         assert!(
             html.contains("GCP Ubuntu"),
             "gcp/ prefix should map to GCP provider"
@@ -5127,7 +5297,7 @@ mod tests {
     fn server_name_no_provider_region_falls_back_to_os_type() {
         let mut run = make_run_with_url("https://target.example.com/");
         run.server_info = Some(make_host_info(Some(""), "Ubuntu 20.04", None, None));
-        let html = render_multi(&[run, make_run_with_url("https://b.com/")], None);
+        let html = render_multi(&[run, make_run_with_url("https://b.com/")], None, None);
         // No region → no provider → just "Ubuntu"
         assert!(
             html.contains(">Ubuntu<") || html.contains(">Ubuntu "),
@@ -5139,7 +5309,7 @@ mod tests {
     fn server_name_windows_os_type_detected() {
         let mut run = make_run_with_url("https://target.example.com/");
         run.server_info = Some(make_host_info(Some(""), "Windows Server 2022", None, None));
-        let html = render_multi(&[run, make_run_with_url("https://b.com/")], None);
+        let html = render_multi(&[run, make_run_with_url("https://b.com/")], None, None);
         assert!(html.contains("Windows"), "Windows OS should be detected");
     }
 
@@ -5147,7 +5317,7 @@ mod tests {
     fn server_name_generic_linux_os_type() {
         let mut run = make_run_with_url("https://target.example.com/");
         run.server_info = Some(make_host_info(Some(""), "Debian GNU/Linux 11", None, None));
-        let html = render_multi(&[run, make_run_with_url("https://b.com/")], None);
+        let html = render_multi(&[run, make_run_with_url("https://b.com/")], None, None);
         // Not Windows, not Ubuntu → falls back to "Linux"
         assert!(
             html.contains("Linux"),
@@ -5168,7 +5338,7 @@ mod tests {
             None,
             Some("0.13.2"),
         ));
-        let html = render_multi(&[run, make_run_with_url("https://b.com/")], None);
+        let html = render_multi(&[run, make_run_with_url("https://b.com/")], None, None);
         assert!(
             html.contains("<code>v0.13.2</code>"),
             "version badge must appear in summary"
@@ -5179,7 +5349,7 @@ mod tests {
     fn version_badge_absent_when_server_version_none() {
         let mut run = make_run_with_url("https://target.example.com/");
         run.server_info = Some(make_host_info(Some("my-vm"), "Ubuntu 22.04", None, None));
-        let html = render_multi(&[run, make_run_with_url("https://b.com/")], None);
+        let html = render_multi(&[run, make_run_with_url("https://b.com/")], None, None);
         // No server_version → no <code>v...
         assert!(
             !html.contains("<code>v"),
@@ -5191,7 +5361,7 @@ mod tests {
     fn version_badge_in_host_info_card_shows_version() {
         let mut run = make_run();
         run.server_info = Some(make_host_info(Some("srv"), "Linux", None, Some("1.2.3")));
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         // In the Server Info card the version row shows the version string
         assert!(
             html.contains("1.2.3"),
@@ -5203,7 +5373,7 @@ mod tests {
     fn version_badge_dash_when_no_server_version_in_host_card() {
         let mut run = make_run();
         run.server_info = Some(make_host_info(Some("srv"), "Linux", None, None));
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         // The version row shows "—" when server_version is None
         assert!(
             html.contains("—"),
@@ -5224,7 +5394,7 @@ mod tests {
             Some("azure/westeurope"),
             None,
         ));
-        let html = render_multi(&[run, make_run_with_url("https://b.com/")], None);
+        let html = render_multi(&[run, make_run_with_url("https://b.com/")], None, None);
         assert!(
             html.contains("azure/westeurope"),
             "region should appear in summary table"
@@ -5235,7 +5405,7 @@ mod tests {
     fn region_absent_no_region_row_in_summary() {
         let mut run = make_run_with_url("https://target.example.com/");
         run.server_info = Some(make_host_info(Some("vm"), "Ubuntu 22.04", None, None));
-        let html = render_multi(&[run, make_run_with_url("https://b.com/")], None);
+        let html = render_multi(&[run, make_run_with_url("https://b.com/")], None, None);
         // The region small element only appears when region is Some
         assert!(
             !html.contains("Region: "),
@@ -5252,7 +5422,7 @@ mod tests {
         let mut r1 = make_run_with_url("https://a.example.com/");
         r1.baseline = Some(make_baseline(NetworkType::LAN, 1.0));
         let r2 = make_run_with_url("https://b.example.com/");
-        let html = render_multi(&[r1, r2], None);
+        let html = render_multi(&[r1, r2], None, None);
         assert!(
             html.contains(r#"<span class="warn">LAN</span>"#),
             "LAN network type should use warn class in summary"
@@ -5264,7 +5434,7 @@ mod tests {
         let mut r1 = make_run_with_url("http://localhost/");
         r1.baseline = Some(make_baseline(NetworkType::Loopback, 0.05));
         let r2 = make_run_with_url("https://b.example.com/");
-        let html = render_multi(&[r1, r2], None);
+        let html = render_multi(&[r1, r2], None, None);
         assert!(
             html.contains(r#"<span class="ok">Loopback</span>"#),
             "Loopback network type should use ok class in summary"
@@ -5288,7 +5458,7 @@ mod tests {
             a.http.as_mut().unwrap().total_duration_ms = 60.0;
             a
         });
-        let html = render_multi(&[r_lan, r_inet], None);
+        let html = render_multi(&[r_lan, r_inet], None, None);
         // LAN values should appear with opacity:.55 and (ref) label
         assert!(
             html.contains("opacity:.55"),
@@ -5313,7 +5483,7 @@ mod tests {
             a.http.as_mut().unwrap().total_duration_ms = 200.0;
             a
         });
-        let html = render_multi(&[r1, r2], None);
+        let html = render_multi(&[r1, r2], None, None);
         // One target is baseline (no diff), the other gets a <span class="diff-..."> element.
         // Check for span element usage specifically (CSS also defines these classes as plain names).
         let diff_span_count = html.matches(r#"class="diff-fast""#).count()
@@ -5348,7 +5518,7 @@ mod tests {
             a.http.as_mut().unwrap().total_duration_ms = 200.0;
             a
         });
-        let html = render_multi(&[r1, r2], None);
+        let html = render_multi(&[r1, r2], None, None);
         // When two Internet targets exist, actual <span class="diff-..."> elements appear.
         // The CSS defines these classes once each; actual usage in table cells adds more occurrences.
         // Count span elements specifically to distinguish CSS definitions from actual use.
@@ -5377,7 +5547,7 @@ mod tests {
             a.http.as_mut().unwrap().total_duration_ms = 5.0;
             a
         });
-        let html = render_multi(&[r_inet, r_lan], None);
+        let html = render_multi(&[r_inet, r_lan], None, None);
         // With only one Internet target it is its own baseline — no <span class="diff-..."> elements
         // (CSS still defines .diff-fast and .diff-slow as plain class names, so we look for span elements)
         let diff_span_count = html.matches(r#"class="diff-fast""#).count()
@@ -5408,7 +5578,7 @@ mod tests {
             a.http.as_mut().unwrap().total_duration_ms = 95.0;
             a
         });
-        let html = render_multi(&[r1, r2], None);
+        let html = render_multi(&[r1, r2], None, None);
         assert!(
             html.contains("fastest") || html.contains("faster"),
             "cross-target observations should mention fastest target"
@@ -5432,7 +5602,7 @@ mod tests {
             a.http.as_mut().unwrap().total_duration_ms = 200.0;
             a
         });
-        let html = render_multi(&[r1, r2], None);
+        let html = render_multi(&[r1, r2], None, None);
         assert!(
             html.contains("Baseline RTT"),
             "RTT observation should appear when RTTs differ"
@@ -5455,7 +5625,7 @@ mod tests {
             a.http.as_mut().unwrap().total_duration_ms = 10.0;
             a
         });
-        let html = render_multi(&[r1, r2], None);
+        let html = render_multi(&[r1, r2], None, None);
         assert!(
             html.contains("Mixed network types"),
             "should note mixed network types"
@@ -5470,7 +5640,7 @@ mod tests {
     fn summary_table_dash_when_no_baseline() {
         let r1 = make_run_with_url("https://a.example.com/");
         let r2 = make_run_with_url("https://b.example.com/");
-        let html = render_multi(&[r1, r2], None);
+        let html = render_multi(&[r1, r2], None, None);
         // Without a baseline the Network column shows "—"
         assert!(
             html.contains("<td>—</td>"),
@@ -5533,7 +5703,7 @@ mod tests {
         // r1 has 200 MB/s (better), r2 has 100 MB/s (worse)
         r1.attempts.push(make_dl(200.0));
         r2.attempts.push(make_dl(100.0));
-        let html = render_multi(&[r1, r2], None);
+        let html = render_multi(&[r1, r2], None, None);
         assert!(
             html.contains("Throughput MB/s"),
             "Download metric label must appear"
@@ -5561,7 +5731,7 @@ mod tests {
             a.http.as_mut().unwrap().total_duration_ms = 10.0 * (i as f64 + 1.0);
             run.attempts.push(a);
         }
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(
             html.contains("Statistics Summary"),
             "should have Statistics Summary section"
@@ -5578,7 +5748,7 @@ mod tests {
             a.http.as_mut().unwrap().total_duration_ms = 10.0 * (i as f64 + 1.0);
             run.attempts.push(a);
         }
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(html.contains("p50"), "should show p50 column");
         assert!(html.contains("p95"), "should show p95 column");
         assert!(html.contains("p99"), "should show p99 column");
@@ -5594,7 +5764,7 @@ mod tests {
             a.sequence_num = i;
             run.attempts.push(a);
         }
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(html.contains("100%"), "all succeeded → 100% should appear");
     }
 
@@ -5612,7 +5782,7 @@ mod tests {
             run.attempts
                 .push(make_page_load_attempt(Protocol::PageLoad2, 95.0, false));
         }
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(
             html.contains("Protocol Comparison") && html.contains("Page Load"),
             "page load comparison section should appear"
@@ -5630,7 +5800,7 @@ mod tests {
             run.attempts
                 .push(make_page_load_attempt(Protocol::PageLoad2, 90.0, true));
         }
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(
             html.contains("cold"),
             "cold subset should appear in page load table"
@@ -5652,7 +5822,7 @@ mod tests {
             run.attempts
                 .push(make_page_load_attempt(Protocol::PageLoad2, 80.0, true));
         }
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         // The analysis section should mention connection reuse savings
         // Chart sections are only rendered when both chart_browser and chart_pl are non-empty
         // but the comparison table always shows both subsets
@@ -5676,7 +5846,7 @@ mod tests {
             .push(make_browser_attempt(Protocol::Browser2, 250.0, 40.0));
         run.attempts
             .push(make_browser_attempt(Protocol::Browser3, 200.0, 35.0));
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(
             html.contains("Protocol Comparison") && html.contains("Browser"),
             "browser comparison section should appear"
@@ -5701,7 +5871,7 @@ mod tests {
         run.attempts.clear();
         run.attempts
             .push(make_browser_attempt(Protocol::Browser, 355.5, 48.2));
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(
             html.contains("Browser Results"),
             "must have Browser Results section"
@@ -5729,7 +5899,7 @@ mod tests {
             run.attempts
                 .push(make_browser_attempt(Protocol::Browser2, 120.0, 30.0));
         }
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(
             html.contains("Charts"),
             "Charts &amp; Analysis section should appear"
@@ -5777,7 +5947,7 @@ mod tests {
             browser: None,
             http_stack: None,
         });
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(
             html.contains("UDP Probe Statistics"),
             "UDP section must appear"
@@ -5823,7 +5993,7 @@ mod tests {
             browser: None,
             http_stack: None,
         });
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(html.contains("20.0%"), "loss percent should appear");
         // nonzero loss uses "warn" class in the loss cell
         assert!(
@@ -5840,7 +6010,7 @@ mod tests {
     fn tcp_stats_section_appears_when_tcp_attempt_present() {
         let run = make_run();
         // The existing make_run() has a TCP result already
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(
             html.contains("TCP Stats"),
             "TCP Stats section should appear"
@@ -5852,7 +6022,7 @@ mod tests {
     #[test]
     fn tcp_stats_ssthresh_shows_infinity_symbol_when_none() {
         let run = make_run(); // snd_ssthresh = None → "∞"
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         // When snd_ssthresh is None the cell shows ∞
         assert!(html.contains("∞"), "None ssthresh should display ∞");
     }
@@ -5863,7 +6033,7 @@ mod tests {
         if let Some(ref mut tcp) = run.attempts[0].tcp {
             tcp.congestion_algorithm = Some("cubic".into());
         }
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(
             html.contains("cubic"),
             "congestion algorithm should appear in TCP stats"
@@ -5884,7 +6054,7 @@ mod tests {
             detail: Some("certificate expired".into()),
             occurred_at: Utc::now(),
         });
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(
             html.contains("TLS handshake failed"),
             "error message must appear"
@@ -5909,7 +6079,7 @@ mod tests {
             detail: None,
             occurred_at: Utc::now(),
         });
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(html.contains("deadline exceeded"), "message must appear");
         assert!(html.contains("—"), "absent detail should show em dash");
     }
@@ -5924,7 +6094,7 @@ mod tests {
             detail: None,
             occurred_at: Utc::now(),
         });
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(
             html.contains("&lt;script&gt;"),
             "error message must be HTML-escaped"
@@ -5945,7 +6115,7 @@ mod tests {
         run.attempts.clear();
         run.attempts.push(make_attempt(Protocol::Http1, true));
         run.attempts.push(make_attempt(Protocol::Http2, true));
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(
             html.contains("Timing Breakdown by Protocol"),
             "timing table must appear"
@@ -5963,7 +6133,7 @@ mod tests {
     #[test]
     fn timing_table_skips_protocols_with_no_attempts() {
         let run = make_run(); // only http1 attempts
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         // http3 has no attempts — its row should not appear in the table
         assert!(
             !html.contains("<strong>http3</strong>"),
@@ -6025,7 +6195,7 @@ mod tests {
         };
         r1.attempts.push(make_tcp(5.0));
         r2.attempts.push(make_tcp(15.0));
-        let html = render_multi(&[r1, r2], None);
+        let html = render_multi(&[r1, r2], None, None);
         assert!(
             html.contains("Connect ms"),
             "TCP metric label should be 'Connect ms'"
@@ -6127,7 +6297,7 @@ mod tests {
     #[test]
     fn footer_contains_generator_info_and_timestamp() {
         let run = make_run();
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(
             html.contains("networker-tester"),
             "footer should mention generator"
@@ -6140,7 +6310,7 @@ mod tests {
     fn render_multi_footer_uses_last_run_timestamp() {
         let r1 = make_run_with_url("https://a.example.com/");
         let r2 = make_run_with_url("https://b.example.com/");
-        let html = render_multi(&[r1, r2], None);
+        let html = render_multi(&[r1, r2], None, None);
         assert!(
             html.contains("<footer>"),
             "footer must appear in multi-target render"
@@ -6155,7 +6325,7 @@ mod tests {
     fn render_multi_escapes_target_url_in_summary() {
         let r1 = make_run_with_url("https://a.example.com/path?q=1&v=2");
         let r2 = make_run_with_url("https://b.example.com/");
-        let html = render_multi(&[r1, r2], None);
+        let html = render_multi(&[r1, r2], None, None);
         // The URL with & appears escaped in the HTML table
         assert!(
             html.contains("q=1&amp;v=2"),
@@ -6176,7 +6346,7 @@ mod tests {
             a.sequence_num = i;
             run.attempts.push(a);
         }
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         // With <= 20 attempts the details element gets the open attribute
         assert!(
             html.contains("<details open>")
@@ -6195,7 +6365,7 @@ mod tests {
             a.sequence_num = i;
             run.attempts.push(a);
         }
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(
             html.contains("25 attempts"),
             "should show attempt count in summary"
@@ -6212,7 +6382,7 @@ mod tests {
         let mut info = make_host_info(Some("srv"), "Linux", None, None);
         info.total_memory_mb = Some(1024);
         run.server_info = Some(info);
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(
             html.contains("1.0 GB"),
             "exactly 1024 MB should display as 1.0 GB"
@@ -6225,7 +6395,7 @@ mod tests {
         let mut info = make_host_info(Some("srv"), "Linux", None, None);
         info.total_memory_mb = Some(1023);
         run.server_info = Some(info);
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(html.contains("1023 MB"), "1023 MB should display as MB");
     }
 
@@ -6237,7 +6407,7 @@ mod tests {
     fn render_shows_all_modes_in_run_summary() {
         let mut run = make_run();
         run.modes = vec!["http1".into(), "http2".into(), "pageload".into()];
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(
             html.contains("http1, http2, pageload"),
             "all modes should appear comma-separated"
@@ -6255,7 +6425,7 @@ mod tests {
             server_version: Some("0.13.2".into()),
             ..Default::default()
         });
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         assert!(
             html.contains("0.13.2"),
             "server version from server_timing should appear in run summary"
@@ -6265,7 +6435,7 @@ mod tests {
     #[test]
     fn run_summary_shows_dash_when_no_server_version() {
         let run = make_run(); // no server_timing
-        let html = render(&run, None);
+        let html = render(&run, None, None);
         // The server_ver field defaults to "—"
         assert!(
             html.contains("<dd>—</dd>") || html.contains(">—<"),
@@ -6284,7 +6454,7 @@ mod tests {
         r1.attempts.push(make_attempt(Protocol::Http1, true));
         r1.attempts.push(make_attempt(Protocol::Http1, false));
         let r2 = make_run_with_url("https://b.example.com/");
-        let html = render_multi(&[r1, r2], None);
+        let html = render_multi(&[r1, r2], None, None);
         // r1: 3 attempts, 2 succeeded, 1 failed
         assert!(
             html.contains("<td class=\"ok\">2</td>"),
@@ -6301,7 +6471,7 @@ mod tests {
         let mut r1 = make_run_with_url("https://a.example.com/");
         r1.attempts.push(make_attempt(Protocol::Http1, true));
         let r2 = make_run_with_url("https://b.example.com/");
-        let html = render_multi(&[r1, r2], None);
+        let html = render_multi(&[r1, r2], None, None);
         // 0 failures → fail_cls = "ok"
         assert!(
             html.contains("<td class=\"ok\">0</td>"),
@@ -6432,7 +6602,7 @@ mod tests {
             None,
         ));
         r2.attempts.push(make_attempt(Protocol::Http1, true));
-        let html = render_multi(&[r1, r2], None);
+        let html = render_multi(&[r1, r2], None, None);
         // Cross-target headers should use short names, not full URLs
         assert!(
             html.contains("<th>turing</th>"),
@@ -6467,7 +6637,7 @@ mod tests {
             None,
         ));
         r2.attempts.push(make_attempt(Protocol::Http1, true));
-        let html = render_multi(&[r1, r2], None);
+        let html = render_multi(&[r1, r2], None, None);
         // Summary table should show "AWS Ubuntu" not "ip-172-31-78-2" in display name
         assert!(
             html.contains("AWS Ubuntu"),
@@ -6499,7 +6669,7 @@ mod tests {
         run.attempts.push(nginx1);
         run.attempts.push(nginx2);
 
-        let html = render_multi(&[run], None);
+        let html = render_multi(&[run], None, None);
         // Should NOT have the old combined comparison table
         assert!(
             !html.contains("HTTP Stack Comparison"),
@@ -6522,7 +6692,7 @@ mod tests {
         let mut run = make_run();
         run.attempts
             .push(make_page_load_attempt(Protocol::PageLoad2, 150.0, false));
-        let html = render_multi(&[run], None);
+        let html = render_multi(&[run], None, None);
         assert!(
             !html.contains("Stack Results"),
             "should not show stack section without stack attempts"

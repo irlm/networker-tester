@@ -181,9 +181,21 @@ async fn main() -> anyhow::Result<()> {
             let first = all_runs
                 .first()
                 .context("no targets produced any test runs")?;
-            println!("{}", serde_json::to_string(first).unwrap_or_default());
+            match serde_json::to_string(first) {
+                Ok(json) => println!("{json}"),
+                Err(e) => {
+                    error!(error = %e, "failed to serialize test run");
+                    println!("{{\"error\":\"serialization failed\"}}");
+                }
+            }
         } else {
-            println!("{}", serde_json::to_string(&all_runs).unwrap_or_default());
+            match serde_json::to_string(&all_runs) {
+                Ok(json) => println!("{json}"),
+                Err(e) => {
+                    error!(error = %e, "failed to serialize test runs");
+                    println!("{{\"error\":\"serialization failed\"}}");
+                }
+            }
         }
         return Ok(());
     }
@@ -193,6 +205,32 @@ async fn main() -> anyhow::Result<()> {
         .context("no targets produced any test runs")?;
     let ts = first_run.started_at.format("%Y%m%d-%H%M%S");
     let multi = all_runs.len() > 1;
+
+    let packet_capture_summary = if let Some(session) = capture_session {
+        match session.finalize().await {
+            Ok(Some(summary)) => {
+                info!(
+                    tcp_packets = summary.tcp_packets,
+                    udp_packets = summary.udp_packets,
+                    retransmissions = summary.retransmissions,
+                    duplicate_acks = summary.duplicate_acks,
+                    resets = summary.resets,
+                    "Packet capture summary saved"
+                );
+                Some(summary)
+            }
+            Ok(None) => {
+                info!("Packet capture finalized without summary output");
+                None
+            }
+            Err(e) => {
+                warn!("packet capture finalize failed: {e:#}");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     // ── JSON artifact (one per target) ────────────────────────────────────────
     for (i, run) in all_runs.iter().enumerate() {
@@ -209,7 +247,13 @@ async fn main() -> anyhow::Result<()> {
     // ── HTML report (single combined report) ──────────────────────────────────
     let html_path = out_dir.join(&cfg.html_report);
     let css_href = cfg.css.as_deref().or(Some("report.css"));
-    html::save_multi(&all_runs, &html_path, css_href).context("Failed to write HTML report")?;
+    html::save_multi(
+        &all_runs,
+        &html_path,
+        css_href,
+        packet_capture_summary.as_ref(),
+    )
+    .context("Failed to write HTML report")?;
     info!(path = %html_path.display(), "HTML report saved");
 
     // Copy default CSS to output dir if it doesn't exist yet
@@ -224,7 +268,7 @@ async fn main() -> anyhow::Result<()> {
                 format!("run-{ts}-{}.xlsx", run.run_id)
             };
             let xlsx_path = out_dir.join(&name);
-            match excel::save(run, &xlsx_path) {
+            match excel::save(run, &xlsx_path, packet_capture_summary.as_ref()) {
                 Ok(()) => info!(path = %xlsx_path.display(), "Excel report saved"),
                 Err(e) => warn!("Excel report failed: {e:#}"),
             }
@@ -258,21 +302,6 @@ async fn main() -> anyhow::Result<()> {
     // ── Summary ───────────────────────────────────────────────────────────────
     for run in &all_runs {
         print_summary(run);
-    }
-
-    if let Some(session) = capture_session {
-        match session.finalize().await {
-            Ok(Some(summary)) => info!(
-                tcp_packets = summary.tcp_packets,
-                udp_packets = summary.udp_packets,
-                retransmissions = summary.retransmissions,
-                duplicate_acks = summary.duplicate_acks,
-                resets = summary.resets,
-                "Packet capture summary saved"
-            ),
-            Ok(None) => info!("Packet capture finalized without summary output"),
-            Err(e) => warn!("packet capture finalize failed: {e:#}"),
-        }
     }
 
     Ok(())

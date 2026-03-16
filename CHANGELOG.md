@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Richer packet telemetry observability** — packet capture summaries now expose target hints, confidence, dominant trace indicators, and richer HTML/Excel surfacing to better explain benchmark behavior
+
+### Fixed
+- **JSON output compatibility preserved** — run JSON artifacts remain top-level `TestRun` objects even when packet capture is enabled, avoiding downstream schema breakage
+- **IPv6 target hint parsing** — bracketed and plain IPv6 targets now derive endpoint candidates correctly for packet-summary matching
+
 ---
 
 ## [0.13.22] – 2026-03-15 — Security hardening
