@@ -6,8 +6,10 @@ mod ws;
 
 use anyhow::Context;
 use axum::Router;
+use axum::http::{HeaderValue, Method};
 use std::sync::Arc;
 use tokio::sync::broadcast;
+use tower_http::cors::CorsLayer;
 use tracing_subscriber::EnvFilter;
 
 pub struct AppState {
@@ -49,16 +51,39 @@ async fn main() -> anyhow::Result<()> {
         agents: ws::agent_hub::AgentHub::new(),
     });
 
+    let cors = {
+        let origin = cfg
+            .cors_origin
+            .as_deref()
+            .unwrap_or("http://localhost:5173");
+        CorsLayer::new()
+            .allow_origin(
+                origin
+                    .parse::<HeaderValue>()
+                    .context("invalid DASHBOARD_CORS_ORIGIN value")?,
+            )
+            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
+            .allow_headers([
+                axum::http::header::AUTHORIZATION,
+                axum::http::header::CONTENT_TYPE,
+            ])
+    };
+
     let app = Router::new()
         .nest("/api", api::router(state.clone()))
         .merge(ws::router(state.clone()))
         .layer(tower_http::trace::TraceLayer::new_for_http())
-        .layer(tower_http::cors::CorsLayer::permissive());
+        .layer(cors);
 
-    let addr = format!("0.0.0.0:{}", cfg.port);
+    let addr = format!("{}:{}", cfg.bind_addr, cfg.port);
     tracing::info!("Dashboard listening on {addr}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async {
+            tokio::signal::ctrl_c().await.ok();
+            tracing::info!("Shutdown signal received, draining connections...");
+        })
+        .await?;
 
     Ok(())
 }

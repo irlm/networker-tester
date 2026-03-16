@@ -72,11 +72,10 @@ pub async fn require_auth(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    if !auth_header.starts_with("Bearer ") {
-        return (StatusCode::UNAUTHORIZED, "Missing authorization header").into_response();
-    }
-
-    let token = &auth_header[7..];
+    let token = match auth_header.strip_prefix("Bearer ") {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED, "Missing authorization header").into_response(),
+    };
     match validate_token(token, &state.jwt_secret) {
         Ok(claims) => {
             req.extensions_mut().insert(AuthUser {

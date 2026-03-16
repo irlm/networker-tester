@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.22] – 2026-03-15 — Security hardening
+
+### Changed
+- **JWT secret required** — dashboard now refuses to start without `DASHBOARD_JWT_SECRET` set; logs a warning if the secret is shorter than 32 bytes
+- **Agent WS pre-upgrade auth** — API key is validated before WebSocket upgrade, rejecting unauthorized connections at the HTTP layer with 401
+- **CORS restriction** — replaced permissive CORS with configurable `DASHBOARD_CORS_ORIGIN` (defaults to `http://localhost:5173`)
+- **Dashboard bind address** — added `DASHBOARD_BIND_ADDR` env var, defaults to `127.0.0.1` instead of `0.0.0.0`
+- **Upload size limit** — re-enabled body size limit at 2 GiB (matching download cap) to prevent unbounded memory consumption
+- **Download streaming** — replaced single-allocation download body with 64 KiB chunked streaming to avoid multi-GiB heap allocations
+- **Self-signed cert CA constraint** — changed `BasicConstraints::Unconstrained` to `Constrained(0)` preventing the cert from signing other CA certs
+- **SSRF protection** — agent executor now blocks probes targeting private, loopback, link-local, and cloud metadata IP addresses/hostnames
+- **SSH host key checking** — changed `StrictHostKeyChecking=no` to `accept-new` across all SSH/SCP invocations in the installer (TOFU with MITM rejection)
+
+---
+
 ## [0.13.21] – 2026-03-15 — First impairment scenario support
 
 ### Added

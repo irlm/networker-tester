@@ -1,5 +1,6 @@
 use axum::{
     extract::{ws, Query, State, WebSocketUpgrade},
+    http::StatusCode,
     response::IntoResponse,
     routing::get,
     Router,
@@ -15,10 +16,13 @@ use crate::AppState;
 use networker_common::messages::{AgentMessage, ControlMessage, DashboardEvent};
 use networker_common::protocol;
 
+/// Bounded channel capacity for agent WebSocket outbound messages.
+const AGENT_CHANNEL_CAPACITY: usize = 256;
+
 /// Registry of connected agents.
 pub struct AgentHub {
     /// agent_id → channel sender for dispatching messages to the agent.
-    agents: RwLock<HashMap<Uuid, mpsc::UnboundedSender<String>>>,
+    agents: RwLock<HashMap<Uuid, mpsc::Sender<String>>>,
 }
 
 impl AgentHub {
@@ -28,7 +32,7 @@ impl AgentHub {
         }
     }
 
-    pub async fn register(&self, agent_id: Uuid, tx: mpsc::UnboundedSender<String>) {
+    pub async fn register(&self, agent_id: Uuid, tx: mpsc::Sender<String>) {
         self.agents.write().await.insert(agent_id, tx);
     }
 
@@ -36,27 +40,24 @@ impl AgentHub {
         self.agents.write().await.remove(agent_id);
     }
 
-    pub fn send_to_agent(
+    pub async fn send_to_agent(
         &self,
         agent_id: &Uuid,
         msg: &ControlMessage,
     ) -> Result<(), anyhow::Error> {
         let text = protocol::encode(msg)?;
-        // Use try_read to avoid blocking; if locked, retry is acceptable
-        if let Ok(agents) = self.agents.try_read() {
-            if let Some(tx) = agents.get(agent_id) {
-                tx.send(text).map_err(|e| anyhow::anyhow!("{e}"))?;
-            }
+        let agents = self.agents.read().await;
+        match agents.get(agent_id) {
+            Some(tx) => tx
+                .try_send(text)
+                .map_err(|e| anyhow::anyhow!("agent channel error: {e}")),
+            None => Err(anyhow::anyhow!("agent {agent_id} not connected")),
         }
-        Ok(())
     }
 
-    pub fn any_online_agent(&self) -> Option<Uuid> {
-        if let Ok(agents) = self.agents.try_read() {
-            agents.keys().next().copied()
-        } else {
-            None
-        }
+    pub async fn any_online_agent(&self) -> Option<Uuid> {
+        let agents = self.agents.read().await;
+        agents.keys().next().copied()
     }
 }
 
@@ -69,33 +70,27 @@ async fn agent_ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<Arc<AppState>>,
     Query(q): Query<AgentWsQuery>,
-) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_agent_socket(socket, state, q.key))
+) -> Result<impl IntoResponse, StatusCode> {
+    // Validate API key BEFORE WebSocket upgrade to reject unauthorized connections
+    // at the HTTP layer rather than after the upgrade completes.
+    let client = state
+        .db
+        .get()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let agent = crate::db::agents::get_by_api_key(&client, &q.key)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    Ok(ws.on_upgrade(move |socket| handle_agent_socket(socket, state, agent)))
 }
 
-async fn handle_agent_socket(socket: ws::WebSocket, state: Arc<AppState>, api_key: String) {
-    // Authenticate agent by API key
-    let agent = {
-        let client = match state.db.get().await {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!("DB error during agent auth: {e}");
-                return;
-            }
-        };
-        match crate::db::agents::get_by_api_key(&client, &api_key).await {
-            Ok(Some(a)) => a,
-            Ok(None) => {
-                tracing::warn!("Agent connection rejected: invalid API key");
-                return;
-            }
-            Err(e) => {
-                tracing::error!("DB error during agent auth: {e}");
-                return;
-            }
-        }
-    };
-
+async fn handle_agent_socket(
+    socket: ws::WebSocket,
+    state: Arc<AppState>,
+    agent: crate::db::agents::AgentRow,
+) {
     let agent_id = agent.agent_id;
     let agent_name = agent.name.clone();
     tracing::info!(agent_id = %agent_id, name = %agent_name, "Agent connected");
@@ -112,7 +107,7 @@ async fn handle_agent_socket(socket: ws::WebSocket, state: Arc<AppState>, api_ke
 
     // Set up channels
     let (mut ws_sink, mut ws_stream) = socket.split();
-    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+    let (tx, mut rx) = mpsc::channel::<String>(AGENT_CHANNEL_CAPACITY);
 
     state.agents.register(agent_id, tx).await;
 
@@ -149,6 +144,29 @@ async fn handle_agent_socket(socket: ws::WebSocket, state: Arc<AppState>, api_ke
     state.agents.unregister(&agent_id).await;
     if let Ok(client) = state.db.get().await {
         let _ = crate::db::agents::update_status(&client, &agent_id, "offline").await;
+        // Fail any jobs that were running/assigned on this agent (orphan cleanup)
+        match client
+            .execute(
+                "UPDATE job SET status = 'failed',
+                        error_message = 'Agent disconnected during execution',
+                        finished_at = now()
+                 WHERE agent_id = $1 AND status IN ('running', 'assigned')",
+                &[&agent_id],
+            )
+            .await
+        {
+            Ok(count) if count > 0 => {
+                tracing::warn!(
+                    agent_id = %agent_id,
+                    orphaned_jobs = count,
+                    "Failed orphaned jobs due to agent disconnect"
+                );
+            }
+            Err(e) => {
+                tracing::error!(agent_id = %agent_id, error = %e, "Failed to clean up orphaned jobs");
+            }
+            _ => {}
+        }
     }
     let _ = state.events_tx.send(DashboardEvent::AgentStatus {
         agent_id,

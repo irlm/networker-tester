@@ -166,7 +166,8 @@ async fn main() -> anyhow::Result<()> {
         all_runs.push(run);
     }
 
-    let ts = all_runs[0].started_at.format("%Y%m%d-%H%M%S");
+    let first_run = all_runs.first().context("no targets produced any test runs")?;
+    let ts = first_run.started_at.format("%Y%m%d-%H%M%S");
     let multi = all_runs.len() > 1;
 
     // ── JSON artifact (one per target) ────────────────────────────────────────

@@ -5,7 +5,7 @@ use networker_common::protocol;
 
 /// Spawn a heartbeat task that sends a heartbeat message every 30 seconds.
 /// Returns when the sender is dropped (connection closed).
-pub async fn run(tx: mpsc::UnboundedSender<String>) {
+pub async fn run(tx: mpsc::Sender<String>) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
     loop {
         interval.tick().await;
@@ -15,7 +15,7 @@ pub async fn run(tx: mpsc::UnboundedSender<String>) {
         };
         match protocol::encode(&msg) {
             Ok(text) => {
-                if tx.send(text).is_err() {
+                if tx.try_send(text).is_err() {
                     break; // Channel closed
                 }
             }

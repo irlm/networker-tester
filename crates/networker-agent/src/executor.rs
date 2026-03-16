@@ -14,11 +14,10 @@ use networker_tester::metrics::{Protocol, RequestAttempt, TestRun};
 use networker_tester::runner::http::RunConfig;
 
 /// Execute a job and stream results back via the WebSocket sender channel.
-pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::UnboundedSender<String>) {
+pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::Sender<String>) {
     let run_id = Uuid::new_v4();
     let correlation_id = job_id.to_string();
-    let span = tracing::info_span!("job", correlation_id = %correlation_id, run_id = %run_id);
-    let _guard = span.enter();
+    tracing::Span::current().record("run_id", tracing::field::display(&run_id));
 
     tracing::info!(
         target = %config.target,
@@ -75,6 +74,21 @@ pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::UnboundedSender
             return;
         }
     };
+
+    // SSRF protection: block probes targeting private, loopback, link-local,
+    // or cloud metadata IPs/hostnames.
+    if is_private_or_metadata(&target) {
+        tracing::error!(target = %config.target, "SSRF blocked: target resolves to private/metadata address");
+        send(
+            tx,
+            &AgentMessage::JobError {
+                job_id,
+                message: "Target blocked: private, loopback, or metadata address".into(),
+            },
+            &correlation_id,
+        );
+        return;
+    }
 
     // Parse payload sizes
     let payload_sizes: Vec<usize> = config
@@ -330,7 +344,41 @@ fn parse_size(s: &str) -> Option<usize> {
     }
 }
 
-fn send(tx: &mpsc::UnboundedSender<String>, msg: &AgentMessage, correlation_id: &str) {
+/// Returns `true` if the URL targets a private, loopback, link-local,
+/// or cloud metadata IP/hostname — used to prevent SSRF via agent job dispatch.
+fn is_private_or_metadata(url: &url::Url) -> bool {
+    use std::net::IpAddr;
+    if let Some(host) = url.host_str() {
+        if let Ok(ip) = host.parse::<IpAddr>() {
+            return is_private_ip(&ip);
+        }
+        // Block well-known cloud metadata hostnames
+        let h = host.to_lowercase();
+        if h == "metadata.google.internal" || h == "169.254.169.254" {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_private_ip(ip: &std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.octets()[..2] == [169, 254]
+        }
+        std::net::IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.segments()[0] == 0xfe80 // link-local
+        }
+    }
+}
+
+fn send(tx: &mpsc::Sender<String>, msg: &AgentMessage, correlation_id: &str) {
     match protocol::encode(msg) {
         Ok(text) => {
             let msg_type = match msg {
@@ -346,11 +394,11 @@ fn send(tx: &mpsc::UnboundedSender<String>, msg: &AgentMessage, correlation_id: 
                 bytes = text.len(),
                 "Sending WS message"
             );
-            if tx.send(text).is_err() {
+            if tx.try_send(text).is_err() {
                 tracing::error!(
                     correlation_id,
                     msg_type,
-                    "Failed to send message: channel closed"
+                    "Failed to send message: channel full or closed"
                 );
             }
         }

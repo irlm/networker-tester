@@ -316,7 +316,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.13.21"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.13.22"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -621,7 +621,7 @@ detect_chrome() {
 # Returns 0 (found) or 1 (not found).
 _remote_chrome_available() {
     local ip="$1" user="$2"
-    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "${user}@${ip}" \
+    ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 "${user}@${ip}" \
         'command -v google-chrome google-chrome-stable chromium-browser chromium chromium-browser-stable 2>/dev/null | head -1 | grep -q . || test -x "$HOME/.local/bin/google-chrome"' 2>/dev/null
 }
 
@@ -1013,8 +1013,8 @@ _lan_ssh_vars() {
     _LAN_IP="$ip"
     _LAN_USER="$user"
     _LAN_PORT="$port"
-    _LAN_SSH_OPTS=(-o StrictHostKeyChecking=no -o ConnectTimeout=10 -p "$port")
-    _LAN_SCP_OPTS=(-o StrictHostKeyChecking=no -P "$port" -q)
+    _LAN_SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -p "$port")
+    _LAN_SCP_OPTS=(-o StrictHostKeyChecking=accept-new -P "$port" -q)
     _LAN_DEST="${user}@${ip}"
 }
 
@@ -1023,7 +1023,7 @@ _lan_test_ssh() {
     local ip="$1" user="$2" port="$3"
 
     print_info "Testing SSH connection to ${user}@${ip}:${port}…"
-    if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes \
+    if ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o BatchMode=yes \
            -p "$port" "${user}@${ip}" "echo ok" &>/dev/null; then
         print_ok "SSH connection successful"
         return 0
@@ -3064,7 +3064,7 @@ _wait_for_ssh() {
     print_info "Waiting for SSH on $label ($ip)…"
     local attempts=0
     while ! ssh -o ConnectTimeout=5 \
-                -o StrictHostKeyChecking=no \
+                -o StrictHostKeyChecking=accept-new \
                 -o BatchMode=yes \
                 "${user}@${ip}" "echo ready" &>/dev/null; do
         attempts=$((attempts + 1))
@@ -3127,27 +3127,27 @@ _remote_bootstrap_install() {
     local repo_url="https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh"
     if [[ -f "$script_path" ]]; then
         print_info "Uploading installer to VM…"
-        scp -o StrictHostKeyChecking=no -q "$script_path" "${user}@${ip}:/tmp/networker-install.sh"
+        scp -o StrictHostKeyChecking=accept-new -q "$script_path" "${user}@${ip}:/tmp/networker-install.sh"
     else
         # Running as curl|bash — no local file. Download locally first, then SCP.
         print_info "Downloading installer locally, then uploading to VM…"
         local tmp_installer="/tmp/networker-install-$$.sh"
         if curl -fsSL "${gist_url}" -o "$tmp_installer" 2>/dev/null || \
            curl -fsSL "${repo_url}" -o "$tmp_installer" 2>/dev/null; then
-            scp -o StrictHostKeyChecking=no -q "$tmp_installer" "${user}@${ip}:/tmp/networker-install.sh"
+            scp -o StrictHostKeyChecking=accept-new -q "$tmp_installer" "${user}@${ip}:/tmp/networker-install.sh"
             rm -f "$tmp_installer"
         else
             # Local download also failed — try on VM directly as last resort
             rm -f "$tmp_installer"
             print_warn "Local download failed — trying directly on VM…"
-            ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
+            ssh -o StrictHostKeyChecking=accept-new "${user}@${ip}" \
                 "curl -fsSLk '${repo_url}' -o /tmp/networker-install.sh"
         fi
     fi
 
     # Remove OUTPUT iptables REDIRECT rules from prior installs — they break all outbound HTTPS
     # by redirecting the VM's own port 80/443 traffic to the local endpoint.
-    ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
+    ssh -o StrictHostKeyChecking=accept-new "${user}@${ip}" \
         "sudo iptables -t nat -D OUTPUT -p tcp --dport 80  -j REDIRECT --to-port 8080 2>/dev/null; \
          sudo iptables -t nat -D OUTPUT -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null; \
          true" < /dev/null 2>/dev/null
@@ -3155,7 +3155,7 @@ _remote_bootstrap_install() {
     print_info "Running installer on VM (the terminal will show the VM's install progress)…"
     echo ""
     # -t allocates a pseudo-TTY so the VM's spinner + colors work
-    ssh -t -o StrictHostKeyChecking=no "${user}@${ip}" \
+    ssh -t -o StrictHostKeyChecking=accept-new "${user}@${ip}" \
         "bash /tmp/networker-install.sh ${comp_arg} -y"
 }
 
@@ -3181,7 +3181,7 @@ _remote_install_binary() {
 
     # Detect remote architecture (needed for both download path and source fallback)
     local remote_arch
-    remote_arch="$(ssh -o StrictHostKeyChecking=no "${user}@${ip}" "uname -m" 2>/dev/null || echo "x86_64")"
+    remote_arch="$(ssh -o StrictHostKeyChecking=accept-new "${user}@${ip}" "uname -m" 2>/dev/null || echo "x86_64")"
 
     # Check whether release has pre-built assets; compile locally if not.
     local has_assets=""
@@ -3224,19 +3224,19 @@ _remote_install_binary() {
         chmod +x "${tmp_dir}/${binary}"
 
         print_info "Uploading binary to VM…"
-        scp -o StrictHostKeyChecking=no -q \
+        scp -o StrictHostKeyChecking=accept-new -q \
             "${tmp_dir}/${binary}" \
             "${user}@${ip}:/tmp/${binary}"
         rm -rf "${tmp_dir}"
 
-        ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
+        ssh -o StrictHostKeyChecking=accept-new "${user}@${ip}" \
             "sudo mv /tmp/${binary} /usr/local/bin/${binary} && \
              sudo chmod +x /usr/local/bin/${binary}"
     else
         rm -rf "${tmp_dir}"
         # Fallback: download directly on the remote VM
         print_info "Downloading directly on VM (${ver})…"
-        if ! ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
+        if ! ssh -o StrictHostKeyChecking=accept-new "${user}@${ip}" \
             "curl -fsSL https://github.com/${REPO_GH}/releases/download/${ver}/${archive} \
                -o /tmp/${archive} && \
              tar xzf /tmp/${archive} -C /tmp && \
@@ -3251,7 +3251,7 @@ _remote_install_binary() {
     fi
 
     local remote_ver
-    remote_ver="$(ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
+    remote_ver="$(ssh -o StrictHostKeyChecking=accept-new "${user}@${ip}" \
         "/usr/local/bin/${binary} --version 2>/dev/null" || echo "unknown")"
     print_ok "$binary installed on VM  ($remote_ver)"
 }
@@ -3261,7 +3261,7 @@ _remote_install_binary() {
 _remote_create_endpoint_service() {
     local ip="$1" user="$2"
 
-    ssh -o StrictHostKeyChecking=no "${user}@${ip}" bash <<'REMOTE'
+    ssh -o StrictHostKeyChecking=accept-new "${user}@${ip}" bash <<'REMOTE'
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin networker 2>/dev/null || true
 
 sudo tee /etc/systemd/system/networker-endpoint.service > /dev/null <<'UNIT'
@@ -3794,7 +3794,7 @@ _remote_setup_nginx() {
     fi
     # We pipe the step_setup_nginx function body over SSH
     # But it's cleaner to run the main commands inline
-    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "${ssh_user}@${ip}" bash -s <<'NGINX_SSH'
+    ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 "${ssh_user}@${ip}" bash -s <<'NGINX_SSH'
 set -e
 export DEBIAN_FRONTEND=noninteractive
 
@@ -4125,11 +4125,11 @@ _remote_verify_health() {
             print_warn "Endpoint did not respond within 60 seconds."
             echo ""
             print_info "Fetching service status from the VM…"
-            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "${ssh_user}@${ip}" \
+            ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 "${ssh_user}@${ip}" \
                 "sudo systemctl status networker-endpoint --no-pager -l 2>&1 | head -30" 2>/dev/null || true
             echo ""
             print_info "Last 30 log lines:"
-            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "${ssh_user}@${ip}" \
+            ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 "${ssh_user}@${ip}" \
                 "sudo journalctl -u networker-endpoint -n 30 --no-pager 2>&1" 2>/dev/null || true
             echo ""
             print_warn "Manual check:  ssh ${ssh_user}@${ip} 'sudo journalctl -u networker-endpoint -f'"
@@ -4387,10 +4387,10 @@ EOF
     fi
 
     # If the tester is also remote, upload the config there too
-    local tester_ip="" tester_user="" tester_scp_opts=(-o StrictHostKeyChecking=no -q)
+    local tester_ip="" tester_user="" tester_scp_opts=(-o StrictHostKeyChecking=accept-new -q)
     case "$TESTER_LOCATION" in
         lan)   tester_ip="$LAN_TESTER_IP"; tester_user="$LAN_TESTER_USER"
-               tester_scp_opts=(-o StrictHostKeyChecking=no -P "$LAN_TESTER_PORT" -q) ;;
+               tester_scp_opts=(-o StrictHostKeyChecking=accept-new -P "$LAN_TESTER_PORT" -q) ;;
         azure) tester_ip="$AZURE_TESTER_IP"; tester_user="azureuser" ;;
         aws)   tester_ip="$AWS_TESTER_IP";   tester_user="ubuntu" ;;
         gcp)   tester_ip="$GCP_TESTER_IP";   tester_user="$(whoami)" ;;
@@ -4719,7 +4719,7 @@ step_aws_set_auto_shutdown() {
     [[ "$AWS_AUTO_SHUTDOWN" != "yes" ]] && return 0
 
     next_step "Set auto-shutdown cron for $label (04:00 UTC = 11 PM EST)"
-    if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "${user}@${ip}" \
+    if ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 "${user}@${ip}" \
         "echo '0 4 * * * root /sbin/shutdown -h now' | sudo tee /etc/cron.d/networker-autostop > /dev/null && sudo chmod 644 /etc/cron.d/networker-autostop" 2>/dev/null; then
         print_ok "Auto-shutdown cron installed: 04:00 UTC (11 PM EST) daily"
     else
@@ -4781,7 +4781,7 @@ _remote_offer_chrome_install() {
             zypper)  install_cmd="sudo zypper install -y chromium" ;;
             *)       install_cmd="sudo apt-get install -y chromium-browser" ;;
         esac
-        if ssh -o StrictHostKeyChecking=no "${user}@${ip}" "$install_cmd" 2>/dev/null; then
+        if ssh -o StrictHostKeyChecking=accept-new "${user}@${ip}" "$install_cmd" 2>/dev/null; then
             print_ok "Chromium installed on VM — browser probe enabled."
         else
             print_warn "Could not install Chromium (non-critical — browser probe will be skipped)."
@@ -5614,7 +5614,7 @@ _gcp_wait_for_ssh() {
                 --command "echo ok" \
                 --quiet \
                 --ssh-flag="-o ConnectTimeout=5" \
-                --ssh-flag="-o StrictHostKeyChecking=no" \
+                --ssh-flag="-o StrictHostKeyChecking=accept-new" \
                 &>/dev/null 2>&1; then
             print_ok "SSH available on $label"
             return 0
@@ -5633,7 +5633,7 @@ _gcp_ssh_run() {
         --project "$GCP_PROJECT" \
         --zone "$GCP_ZONE" \
         --quiet \
-        --ssh-flag="-o StrictHostKeyChecking=no" \
+        --ssh-flag="-o StrictHostKeyChecking=accept-new" \
         --command "$*" < /dev/null
 }
 
@@ -5771,7 +5771,7 @@ _gcp_wait_for_windows_vm() {
                 --command "echo ready" \
                 --quiet \
                 --ssh-flag="-o ConnectTimeout=10" \
-                --ssh-flag="-o StrictHostKeyChecking=no" \
+                --ssh-flag="-o StrictHostKeyChecking=accept-new" \
                 &>/dev/null 2>&1; then
             echo ""
             print_ok "Windows VM ready (SSH available)"
@@ -5848,7 +5848,7 @@ _gcp_win_install_binary() {
         --project "$GCP_PROJECT" \
         --zone "$GCP_ZONE" \
         --quiet \
-        --ssh-flag="-o StrictHostKeyChecking=no" \
+        --ssh-flag="-o StrictHostKeyChecking=accept-new" \
         --command "powershell -Command \"\$ErrorActionPreference='Stop'; \
             New-Item -ItemType Directory -Force -Path C:\\networker-tmp | Out-Null; \
             New-Item -ItemType Directory -Force -Path C:\\networker | Out-Null; \
@@ -5870,7 +5870,7 @@ _gcp_win_source_build() {
         --project "$GCP_PROJECT" \
         --zone "$GCP_ZONE" \
         --quiet \
-        --ssh-flag="-o StrictHostKeyChecking=no" \
+        --ssh-flag="-o StrictHostKeyChecking=accept-new" \
         --command "powershell -Command \"\$ErrorActionPreference='Stop'; \
             Invoke-WebRequest -Uri 'https://win.rustup.rs/x86_64' -OutFile C:\\rustup-init.exe -UseBasicParsing; \
             & C:\\rustup-init.exe -y --default-toolchain stable 2>&1 | Select-Object -Last 3; \
@@ -6081,7 +6081,7 @@ _gcp_win_create_endpoint_service() {
         --project "$GCP_PROJECT" \
         --zone "$GCP_ZONE" \
         --quiet \
-        --ssh-flag="-o StrictHostKeyChecking=no" \
+        --ssh-flag="-o StrictHostKeyChecking=accept-new" \
         --command "powershell -Command \"\$ErrorActionPreference='Continue'; \
             Stop-Process -Name 'networker-endpoint' -Force -ErrorAction SilentlyContinue; \
             netsh advfirewall firewall add rule name='Networker-HTTP'  protocol=TCP dir=in action=allow localport=8080; \
@@ -6103,7 +6103,7 @@ _gcp_win_set_auto_shutdown() {
         --project "$GCP_PROJECT" \
         --zone "$GCP_ZONE" \
         --quiet \
-        --ssh-flag="-o StrictHostKeyChecking=no" \
+        --ssh-flag="-o StrictHostKeyChecking=accept-new" \
         --command "powershell -Command \"\
             \\\$action = New-ScheduledTaskAction -Execute 'shutdown.exe' -Argument '/s /t 60 /f'; \
             \\\$trigger = New-ScheduledTaskTrigger -Daily -At '04:00'; \
@@ -6612,7 +6612,7 @@ _offer_ssh_connect() {
                 --zone "$GCP_ZONE" \
                 --quiet
         else
-            ssh -o StrictHostKeyChecking=no "$dest"
+            ssh -o StrictHostKeyChecking=accept-new "$dest"
         fi
     }
 
@@ -6824,7 +6824,7 @@ _deploy_needs_browser() {
 
 # Install Chrome/Chromium on the remote tester machine via SSH.
 _deploy_install_chrome_remote() {
-    local ssh_opts=(-o StrictHostKeyChecking=no)
+    local ssh_opts=(-o StrictHostKeyChecking=accept-new)
     local dest=""
     case "$TESTER_LOCATION" in
         lan)
@@ -7153,7 +7153,7 @@ _deploy_preflight() {
                 # Test SSH for each LAN target
                 if [[ "$t_prov" == "lan" ]]; then
                     if ssh -o BatchMode=yes -o ConnectTimeout=5 \
-                           -o StrictHostKeyChecking=no \
+                           -o StrictHostKeyChecking=accept-new \
                            -p "$LAN_TESTER_PORT" \
                            "${LAN_TESTER_USER}@${LAN_TESTER_IP}" true &>/dev/null; then
                         print_ok "SSH to tester ${LAN_TESTER_USER}@${LAN_TESTER_IP} OK"
@@ -7169,7 +7169,7 @@ _deploy_preflight() {
                     euser="$(jq -r ".endpoints[$i].lan.user // \"\"" "$cfg")"
                     eport="$(jq -r ".endpoints[$i].lan.port // 22" "$cfg")"
                     if ssh -o BatchMode=yes -o ConnectTimeout=5 \
-                           -o StrictHostKeyChecking=no \
+                           -o StrictHostKeyChecking=accept-new \
                            -p "$eport" \
                            "${euser}@${eip}" true &>/dev/null; then
                         print_ok "SSH to endpoint ${euser}@${eip} OK"
@@ -7486,10 +7486,10 @@ _deploy_generate_tester_config() {
     print_info "Targets: $(echo "$targets_json" | tr ',' '\n' | wc -l | tr -d ' ') endpoint(s)"
 
     # Upload config to remote tester if applicable
-    local tester_ip="" tester_user="" tester_scp_opts=(-o StrictHostKeyChecking=no -q)
+    local tester_ip="" tester_user="" tester_scp_opts=(-o StrictHostKeyChecking=accept-new -q)
     case "$TESTER_LOCATION" in
         lan)   tester_ip="$LAN_TESTER_IP"; tester_user="$LAN_TESTER_USER"
-               tester_scp_opts=(-o StrictHostKeyChecking=no -P "$LAN_TESTER_PORT" -q) ;;
+               tester_scp_opts=(-o StrictHostKeyChecking=accept-new -P "$LAN_TESTER_PORT" -q) ;;
         azure) tester_ip="$AZURE_TESTER_IP"; tester_user="azureuser" ;;
         aws)   tester_ip="$AWS_TESTER_IP";   tester_user="ubuntu" ;;
         gcp)   tester_ip="$GCP_TESTER_IP";   tester_user="$(whoami)" ;;
@@ -7559,7 +7559,7 @@ _deploy_execute_tests() {
     fi
 
     # Remote tester: run via SSH
-    local ssh_opts=(-o StrictHostKeyChecking=no)
+    local ssh_opts=(-o StrictHostKeyChecking=accept-new)
     local tester_dest="" tester_user=""
 
     case "$TESTER_LOCATION" in
@@ -7626,7 +7626,7 @@ _deploy_download_results() {
     print_info "Downloading results from remote tester…"
 
     # Try to download HTML report
-    local scp_opts=(-o StrictHostKeyChecking=no -q)
+    local scp_opts=(-o StrictHostKeyChecking=accept-new -q)
     # Extract port from ssh_opts if present
     local p
     for p in "${ssh_opts[@]}"; do

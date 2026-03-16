@@ -16,10 +16,16 @@ async fn list_agents(
         .db
         .get()
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|e| {
+            tracing::error!(error = %e, "DB pool error in list_agents");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
     let agents = crate::db::agents::list(&client)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to list agents from DB");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
     Ok(Json(AgentListResponse { agents }))
 }
 

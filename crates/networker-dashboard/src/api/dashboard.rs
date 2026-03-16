@@ -17,7 +17,10 @@ async fn summary(State(state): State<Arc<AppState>>) -> Result<Json<DashboardSum
         .db
         .get()
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|e| {
+            tracing::error!(error = %e, "DB pool error in dashboard summary");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     let agents_online: i64 = client
         .query_one("SELECT COUNT(*) FROM agent WHERE status = 'online'", &[])
