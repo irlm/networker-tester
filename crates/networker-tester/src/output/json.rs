@@ -2,11 +2,7 @@ use crate::metrics::TestRun;
 use std::path::Path;
 
 /// Serialize a `TestRun` to pretty-printed JSON and write to `path`.
-pub fn save(
-    run: &TestRun,
-    path: &Path,
-    _packet_capture: Option<&impl Sized>,
-) -> anyhow::Result<()> {
+pub fn save(run: &TestRun, path: &Path) -> anyhow::Result<()> {
     let dir = path.parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(dir)?;
     let json = to_string(run)?;
@@ -80,7 +76,7 @@ mod tests {
     fn save_creates_file() {
         let tmp = NamedTempFile::new().unwrap();
         let run = dummy_run();
-        save(&run, tmp.path(), None::<&()>).unwrap();
+        save(&run, tmp.path()).unwrap();
         let contents = std::fs::read_to_string(tmp.path()).unwrap();
         assert!(contents.contains("\"target_url\""));
     }

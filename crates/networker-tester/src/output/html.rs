@@ -664,7 +664,6 @@ pub fn render_multi(
             escape_html(&run.target_url)
         );
         write_run_sections(run, &mut out);
-        write_packet_capture_section(packet_capture, &mut out);
         let _ = writeln!(out, "</details>");
     }
 

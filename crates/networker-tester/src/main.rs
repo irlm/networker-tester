@@ -240,8 +240,7 @@ async fn main() -> anyhow::Result<()> {
             format!("run-{ts}.json")
         };
         let json_path = out_dir.join(&name);
-        json::save(run, &json_path, packet_capture_summary.as_ref())
-            .context("Failed to write JSON artifact")?;
+        json::save(run, &json_path).context("Failed to write JSON artifact")?;
         info!(path = %json_path.display(), "JSON artifact saved");
     }
 
