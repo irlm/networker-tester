@@ -66,21 +66,46 @@ pub async fn list(
 /// Return full attempts with all sub-results (DNS, TCP, TLS, HTTP, UDP, errors)
 /// in the same LiveAttempt JSON format used by the WebSocket stream.
 pub async fn get_attempts(client: &Client, run_id: &Uuid) -> anyhow::Result<serde_json::Value> {
-    // Fetch all attempts
+    // Fetch all attempts (include extra_json if the column exists)
     let attempt_rows = client
         .query(
             "SELECT AttemptId, Protocol, SequenceNum, StartedAt, FinishedAt,
-                    Success, ErrorMessage, RetryCount
+                    Success, ErrorMessage, RetryCount,
+                    extra_json
              FROM RequestAttempt WHERE RunId = $1
              ORDER BY SequenceNum",
             &[run_id],
         )
-        .await?;
+        .await
+        .or_else(|_| {
+            // Fallback: query without extra_json (older schema)
+            futures::executor::block_on(client.query(
+                "SELECT AttemptId, Protocol, SequenceNum, StartedAt, FinishedAt,
+                        Success, ErrorMessage, RetryCount
+                 FROM RequestAttempt WHERE RunId = $1
+                 ORDER BY SequenceNum",
+                &[run_id],
+            ))
+        })?;
 
     let mut attempts: Vec<serde_json::Value> = Vec::new();
 
     for r in &attempt_rows {
         let attempt_id: Uuid = r.get("attemptid");
+
+        // If extra_json is available, use it directly (contains full browser/pageload data)
+        if let Ok(Some(extra)) = r.try_get::<_, Option<serde_json::Value>>("extra_json") {
+            if extra.is_object() {
+                let mut attempt = extra;
+                // Ensure attempt_id and run_id are strings (not UUIDs)
+                attempt["attempt_id"] = serde_json::json!(attempt_id.to_string());
+                attempt["run_id"] = serde_json::json!(run_id.to_string());
+                attempts.push(attempt);
+                continue;
+            }
+        }
+
+        // Fallback: build from relational sub-tables
         let mut attempt = serde_json::json!({
             "attempt_id": attempt_id.to_string(),
             "run_id": run_id.to_string(),
