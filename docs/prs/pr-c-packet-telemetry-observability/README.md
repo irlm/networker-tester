@@ -1,8 +1,8 @@
 # PR C — richer packet / telemetry observability
 
-- Status: draft
+- Status: open / in progress
 - Branch: `feat/packet-telemetry-observability`
-- PR: _TBD after creation_
+- PR: `#218` — https://github.com/irlm/networker-tester/pull/218
 
 ## Why this PR exists
 
