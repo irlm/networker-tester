@@ -185,7 +185,7 @@ async fn main() -> anyhow::Result<()> {
                 Ok(json) => println!("{json}"),
                 Err(e) => {
                     error!(error = %e, "failed to serialize test run");
-                    println!("{\"error\":\"serialization failed\"}");
+                    println!("{{\"error\":\"serialization failed\"}}");
                 }
             }
         } else {
@@ -193,7 +193,7 @@ async fn main() -> anyhow::Result<()> {
                 Ok(json) => println!("{json}"),
                 Err(e) => {
                     error!(error = %e, "failed to serialize test runs");
-                    println!("{\"error\":\"serialization failed\"}");
+                    println!("{{\"error\":\"serialization failed\"}}");
                 }
             }
         }
