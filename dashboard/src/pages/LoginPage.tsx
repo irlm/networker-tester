@@ -17,8 +17,12 @@ export function LoginPage() {
     setLoading(true);
     try {
       const res = await api.login(username, password);
-      login(res.token, res.username, res.role);
-      navigate('/');
+      login(res.token, res.username, res.role, res.must_change_password);
+      if (res.must_change_password) {
+        navigate('/change-password');
+      } else {
+        navigate('/');
+      }
     } catch {
       setError('Invalid credentials');
     } finally {

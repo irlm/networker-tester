@@ -105,6 +105,11 @@ CREATE TABLE IF NOT EXISTS deployment (
 CREATE INDEX IF NOT EXISTS ix_deployment_status ON deployment (status, created_at DESC);
 "#;
 
+/// V004 migration: Add must_change_password flag for forced password change on first login.
+const V004_MUST_CHANGE_PASSWORD: &str = r#"
+ALTER TABLE dash_user ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT FALSE;
+"#;
+
 /// Run pending migrations.
 pub async fn run(client: &Client) -> anyhow::Result<()> {
     // Ensure migration tracking table exists
@@ -150,6 +155,23 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
             )
             .await?;
         tracing::info!("V003 migration complete");
+    }
+
+    // V004: must_change_password flag
+    let row = client
+        .query_opt("SELECT version FROM _migrations WHERE version = 4", &[])
+        .await?;
+
+    if row.is_none() {
+        tracing::info!("Applying V004 must_change_password migration...");
+        client.batch_execute(V004_MUST_CHANGE_PASSWORD).await?;
+        client
+            .execute(
+                "INSERT INTO _migrations (version) VALUES (4) ON CONFLICT DO NOTHING",
+                &[],
+            )
+            .await?;
+        tracing::info!("V004 migration complete");
     }
 
     Ok(())

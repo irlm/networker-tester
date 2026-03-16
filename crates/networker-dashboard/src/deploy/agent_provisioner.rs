@@ -100,7 +100,7 @@ pub async fn provision_remote_agent(
 
     let ssh_args = vec![
         "-o".to_string(),
-        "StrictHostKeyChecking=no".to_string(),
+        "StrictHostKeyChecking=accept-new".to_string(),
         "-o".to_string(),
         format!("ConnectTimeout=10"),
         "-p".to_string(),
