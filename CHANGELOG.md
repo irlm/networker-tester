@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.25] – 2026-03-16 — Installer auto-installs tshark
+
+### Added
+- **Auto-install tshark** — installer now offers to install tshark/dumpcap when installing the tester component, enabling `--capture-mode tester` out of the box
+- **Non-root capture permissions** — Ubuntu: pre-answers debconf prompt; Linux: adds user + `networker` service user to `wireshark` group automatically
+
+---
+
 ## [0.13.24] – 2026-03-16 — LAN detection fix, packet capture in dashboard, reliability
 
 ### Added
