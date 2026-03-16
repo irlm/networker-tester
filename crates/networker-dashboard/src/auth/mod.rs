@@ -61,6 +61,7 @@ pub fn validate_token(token: &str, secret: &str) -> Result<Claims, jsonwebtoken:
 
 /// Axum middleware that requires a valid JWT Bearer token.
 /// Reads the JWT secret from AppState and injects AuthUser into request extensions.
+/// Enforces must_change_password: only /auth/change-password is allowed when flag is set.
 pub async fn require_auth(
     State(state): State<Arc<AppState>>,
     mut req: Request,
@@ -79,6 +80,30 @@ pub async fn require_auth(
     let token = &auth_header[7..];
     match validate_token(token, &state.jwt_secret) {
         Ok(claims) => {
+            // Enforce must_change_password server-side
+            let is_change_password = req.uri().path().ends_with("/auth/change-password");
+            if !is_change_password {
+                if let Ok(client) = state.db.get().await {
+                    let must_change = client
+                        .query_opt(
+                            "SELECT must_change_password FROM dash_user WHERE user_id = $1",
+                            &[&claims.sub],
+                        )
+                        .await
+                        .ok()
+                        .flatten()
+                        .and_then(|row| row.get::<_, Option<bool>>("must_change_password"))
+                        .unwrap_or(false);
+                    if must_change {
+                        return (
+                            StatusCode::FORBIDDEN,
+                            "Password change required before accessing this resource",
+                        )
+                            .into_response();
+                    }
+                }
+            }
+
             req.extensions_mut().insert(AuthUser {
                 user_id: claims.sub,
                 username: claims.username,

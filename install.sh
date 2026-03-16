@@ -3540,8 +3540,10 @@ step_install_postgresql() {
     # Create user and database (idempotent)
     sudo -u postgres createuser networker 2>/dev/null || true
     sudo -u postgres createdb networker_dashboard -O networker 2>/dev/null || true
-    # Set password for the networker user
-    sudo -u postgres psql -c "ALTER USER networker WITH PASSWORD 'networker';" 2>/dev/null || true
+
+    # Generate a random password for the PostgreSQL user
+    DASHBOARD_DB_PASSWORD="$(head -c 24 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9' | head -c 24)"
+    sudo -u postgres psql -c "ALTER USER networker WITH PASSWORD '${DASHBOARD_DB_PASSWORD}';" 2>/dev/null || true
 
     print_ok "PostgreSQL configured — database: networker_dashboard, user: networker"
 }
@@ -3735,8 +3737,9 @@ step_write_dashboard_env() {
     local jwt_secret
     jwt_secret="$(head -c 32 /dev/urandom | base64 | tr -d '=/+' | head -c 32)"
 
+    local db_pw="${DASHBOARD_DB_PASSWORD:-networker}"
     sudo tee /etc/networker-dashboard.env > /dev/null <<ENVFILE
-DASHBOARD_DB_URL=postgres://networker:networker@127.0.0.1:5432/networker_dashboard
+DASHBOARD_DB_URL=postgres://networker:${db_pw}@127.0.0.1:5432/networker_dashboard
 DASHBOARD_ADMIN_PASSWORD=${admin_pw}
 DASHBOARD_JWT_SECRET=${jwt_secret}
 DASHBOARD_PORT=${dashboard_port}
