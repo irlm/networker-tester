@@ -45,11 +45,17 @@ async fn create_job(
         return Err(StatusCode::BAD_REQUEST);
     }
     if req.config.timeout_secs > MAX_TIMEOUT_SECS {
-        tracing::warn!(timeout = req.config.timeout_secs, "Rejecting job: timeout exceeds limit");
+        tracing::warn!(
+            timeout = req.config.timeout_secs,
+            "Rejecting job: timeout exceeds limit"
+        );
         return Err(StatusCode::BAD_REQUEST);
     }
     if req.config.concurrency > MAX_CONCURRENCY {
-        tracing::warn!(concurrency = req.config.concurrency, "Rejecting job: concurrency exceeds limit");
+        tracing::warn!(
+            concurrency = req.config.concurrency,
+            "Rejecting job: concurrency exceeds limit"
+        );
         return Err(StatusCode::BAD_REQUEST);
     }
 

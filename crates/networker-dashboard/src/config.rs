@@ -42,8 +42,7 @@ impl DashboardConfig {
                 })?,
                 _ => 3000,
             },
-            bind_addr: std::env::var("DASHBOARD_BIND_ADDR")
-                .unwrap_or_else(|_| "127.0.0.1".into()),
+            bind_addr: std::env::var("DASHBOARD_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1".into()),
             cors_origin: std::env::var("DASHBOARD_CORS_ORIGIN").ok(),
         })
     }

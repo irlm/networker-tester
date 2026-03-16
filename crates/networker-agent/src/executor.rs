@@ -352,9 +352,8 @@ fn is_private_ip(ip: &std::net::IpAddr) -> bool {
                 || v4.octets()[..2] == [169, 254]
         }
         std::net::IpAddr::V6(v6) => {
-            v6.is_loopback()
-                || v6.is_unspecified()
-                || v6.segments()[0] == 0xfe80 // link-local
+            v6.is_loopback() || v6.is_unspecified() || v6.segments()[0] == 0xfe80
+            // link-local
         }
     }
 }

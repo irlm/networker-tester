@@ -51,13 +51,7 @@ pub async fn run(cfg: &AgentConfig) -> anyhow::Result<()> {
         match msg_result {
             Ok(Message::Text(text)) => {
                 if let Ok(ctrl_msg) = protocol::decode::<ControlMessage>(&text) {
-                    handle_control_message(
-                        ctrl_msg,
-                        &tx,
-                        &job_semaphore,
-                        &running_jobs,
-                    )
-                    .await;
+                    handle_control_message(ctrl_msg, &tx, &job_semaphore, &running_jobs).await;
                 }
             }
             Ok(Message::Close(_)) => {

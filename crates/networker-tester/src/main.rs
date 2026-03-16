@@ -178,18 +178,19 @@ async fn main() -> anyhow::Result<()> {
     if cfg.json_stdout {
         // Output all runs as JSON array to stdout, skip file outputs
         if all_runs.len() == 1 {
-            let first = all_runs.first().context("no targets produced any test runs")?;
-            println!(
-                "{}",
-                serde_json::to_string(first).unwrap_or_default()
-            );
+            let first = all_runs
+                .first()
+                .context("no targets produced any test runs")?;
+            println!("{}", serde_json::to_string(first).unwrap_or_default());
         } else {
             println!("{}", serde_json::to_string(&all_runs).unwrap_or_default());
         }
         return Ok(());
     }
 
-    let first_run = all_runs.first().context("no targets produced any test runs")?;
+    let first_run = all_runs
+        .first()
+        .context("no targets produced any test runs")?;
     let ts = first_run.started_at.format("%Y%m%d-%H%M%S");
     let multi = all_runs.len() > 1;
 
