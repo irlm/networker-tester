@@ -74,7 +74,7 @@ jobs:
           cargo build --release --locked
           --target ${{ matrix.target }}
           --features browser
-          -p networker-tester -p networker-endpoint
+          -p networker-tester -p networker-endpoint -p networker-dashboard -p networker-agent
         env:
           # Static-link the VC++ runtime on Windows so binaries work on clean
           # Windows Server images (e.g. GCP) without installing vcredist.
@@ -93,6 +93,10 @@ jobs:
               -C "${SRC}" "networker-tester"
           tar czf "dist/networker-endpoint-${TARGET}.tar.gz" \
               -C "${SRC}" "networker-endpoint"
+          tar czf "dist/networker-dashboard-${TARGET}.tar.gz" \
+              -C "${SRC}" "networker-dashboard"
+          tar czf "dist/networker-agent-${TARGET}.tar.gz" \
+              -C "${SRC}" "networker-agent"
 
       # ── Package (Windows: .zip) ──────────────────────────────────────────
       - name: Package (zip)
@@ -110,6 +114,14 @@ jobs:
           Compress-Archive `
               -Path "$src\networker-endpoint.exe" `
               -DestinationPath "dist\networker-endpoint-$target.zip" `
+              -Force
+          Compress-Archive `
+              -Path "$src\networker-dashboard.exe" `
+              -DestinationPath "dist\networker-dashboard-$target.zip" `
+              -Force
+          Compress-Archive `
+              -Path "$src\networker-agent.exe" `
+              -DestinationPath "dist\networker-agent-$target.zip" `
               -Force
 
       - name: Upload build artifacts

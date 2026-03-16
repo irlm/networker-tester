@@ -21,6 +21,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 
     // Protected routes (require valid JWT)
     let protected = Router::new()
+        .merge(auth::protected_router(state.clone()))
         .merge(agents::router(state.clone()))
         .merge(jobs::router(state.clone()))
         .merge(runs::router(state.clone()))

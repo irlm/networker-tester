@@ -19,6 +19,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
   if (res.status === 401) {
     localStorage.removeItem('token');
+    localStorage.removeItem('username');
+    localStorage.removeItem('role');
+    localStorage.removeItem('mustChangePassword');
     window.location.href = '/login';
     throw new Error('Unauthorized');
   }
@@ -32,9 +35,15 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 export const api = {
   login: (username: string, password: string) =>
-    request<{ token: string; role: string; username: string }>('/auth/login', {
+    request<{ token: string; role: string; username: string; must_change_password: boolean }>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ username, password }),
+    }),
+
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<{ success: boolean }>('/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
     }),
 
   getDashboardSummary: () =>
@@ -63,7 +72,7 @@ export const api = {
     }),
 
   deleteAgent: (agentId: string) =>
-    request<{ deleted: boolean }>(`/agents/${agentId}`),
+    request<{ deleted: boolean }>(`/agents/${agentId}`, { method: 'DELETE' }),
 
   getJobs: (params?: { status?: string; limit?: number; offset?: number }) => {
     const search = new URLSearchParams();

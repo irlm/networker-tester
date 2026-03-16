@@ -57,7 +57,9 @@ export function Sidebar({ connectionDot }: SidebarProps) {
 
         <nav className="flex-1 p-2" aria-label="Main navigation">
           {navItems.map((item) => {
-            const active = location.pathname === item.path;
+            const active = item.path === '/'
+              ? location.pathname === '/'
+              : location.pathname.startsWith(item.path);
             return (
               <Link
                 key={item.path}
