@@ -47,6 +47,7 @@ pub struct PacketCaptureSummary {
     pub capture_status: String,
     pub note: Option<String>,
     pub warnings: Vec<String>,
+    pub likely_target_endpoints: Vec<String>,
     pub tcp_packets: u64,
     pub udp_packets: u64,
     pub quic_packets: u64,
@@ -255,7 +256,8 @@ impl PacketCaptureSession {
 
         let tshark_path = self.tshark_path.clone();
         let plan = self.plan.clone();
-        let summary = spawn_blocking(move || summarize(&tshark_path, &plan))
+        let targets = vec![];
+        let summary = spawn_blocking(move || summarize(&tshark_path, &plan, &targets))
             .await
             .context("join packet capture summary task")??;
         std::fs::write(
@@ -272,7 +274,11 @@ impl PacketCaptureSession {
     }
 }
 
-fn summarize(tshark_path: &Path, plan: &PacketCapturePlan) -> anyhow::Result<PacketCaptureSummary> {
+fn summarize(
+    tshark_path: &Path,
+    plan: &PacketCapturePlan,
+    targets: &[String],
+) -> anyhow::Result<PacketCaptureSummary> {
     // TODO: batch these tshark reads so large pcaps are not re-read once per filter.
     let stats = [
         ("tcp", "tcp_packets"),
@@ -299,6 +305,7 @@ fn summarize(tshark_path: &Path, plan: &PacketCapturePlan) -> anyhow::Result<Pac
         },
         note: None,
         warnings: vec![],
+        likely_target_endpoints: vec![],
         tcp_packets: 0,
         udp_packets: 0,
         quic_packets: 0,
@@ -343,6 +350,50 @@ fn summarize(tshark_path: &Path, plan: &PacketCapturePlan) -> anyhow::Result<Pac
     apply_interpretation(&mut summary);
 
     Ok(summary)
+}
+
+fn likely_target_endpoints(rows: &[EndpointPacketCount], targets: &[String]) -> Vec<String> {
+    if targets.is_empty() {
+        return rows.iter().take(2).map(|r| r.endpoint.clone()).collect();
+    }
+    let mut hints = vec![];
+    for target in targets {
+        for candidate in endpoint_candidates_from_target(target) {
+            if rows.iter().any(|r| r.endpoint == candidate) && !hints.contains(&candidate) {
+                hints.push(candidate);
+            }
+        }
+    }
+    if hints.is_empty() {
+        rows.iter().take(2).map(|r| r.endpoint.clone()).collect()
+    } else {
+        hints
+    }
+}
+
+fn endpoint_candidates_from_target(target: &str) -> Vec<String> {
+    let mut out = vec![];
+    let trimmed = target.trim();
+    if let Ok(url) = url::Url::parse(trimmed) {
+        if let Some(host) = url.host_str() {
+            out.push(host.to_string());
+        }
+    }
+    if !trimmed.contains("//") {
+        let host = trimmed
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .split(':')
+            .next()
+            .unwrap_or(trimmed)
+            .to_string();
+        if !host.is_empty() {
+            out.push(host);
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
 }
 
 fn endpoint_counts(tshark_path: &Path, pcap_path: &Path) -> anyhow::Result<BTreeMap<String, u64>> {
@@ -503,9 +554,13 @@ fn apply_interpretation(summary: &mut PacketCaptureSummary) {
         summary.capture_may_be_ambiguous = true;
         summary.warnings.push("Both TCP and UDP/QUIC traffic were observed. This may reflect fallback behavior, mixed page assets, or unrelated background traffic.".into());
     }
-    if summary.top_endpoints.len() > 1 {
+    if summary.top_endpoints.len() > 1 && summary.likely_target_endpoints.len() != 1 {
         summary.capture_may_be_ambiguous = true;
         summary.warnings.push("Multiple destination endpoints were active in the trace. Interpret protocol comparisons carefully when third-party assets or background traffic are present.".into());
+    }
+    if summary.likely_target_endpoints.is_empty() && !summary.top_endpoints.is_empty() {
+        summary.capture_may_be_ambiguous = true;
+        summary.warnings.push("No clear target-related endpoint could be identified from the dominant trace endpoints.".into());
     }
     if summary.retransmissions > 0 || summary.resets > 0 {
         summary.warnings.push("The trace includes transport-level error signals (retransmissions or resets) that may materially affect timing comparisons.".into());
@@ -683,6 +738,7 @@ mod tests {
             capture_status: "captured".into(),
             note: None,
             warnings: vec![],
+            likely_target_endpoints: vec![],
             tcp_packets: 60,
             udp_packets: 40,
             quic_packets: 30,
@@ -706,6 +762,22 @@ mod tests {
     }
 
     #[test]
+    fn likely_target_endpoints_prefers_matching_target_host() {
+        let rows = vec![
+            EndpointPacketCount {
+                endpoint: "198.51.100.10".into(),
+                packets: 50,
+            },
+            EndpointPacketCount {
+                endpoint: "203.0.113.5".into(),
+                packets: 10,
+            },
+        ];
+        let hints = likely_target_endpoints(&rows, &["https://198.51.100.10:8443/health".into()]);
+        assert_eq!(hints, vec!["198.51.100.10".to_string()]);
+    }
+
+    #[test]
     fn apply_interpretation_marks_mixed_transport_as_ambiguous() {
         let mut summary = PacketCaptureSummary {
             mode: "tester".into(),
@@ -716,6 +788,7 @@ mod tests {
             capture_status: "captured".into(),
             note: None,
             warnings: vec![],
+            likely_target_endpoints: vec![],
             tcp_packets: 20,
             udp_packets: 15,
             quic_packets: 10,
