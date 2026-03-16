@@ -95,15 +95,15 @@ pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::Sender<String>)
         args.push(port.to_string());
     }
     if let Some(mode) = config.capture_mode {
-        if mode.captures_tester() || mode.captures_endpoint() {
-            let mode_str = match mode {
-                networker_tester::cli::PacketCaptureMode::Tester => "tester",
-                networker_tester::cli::PacketCaptureMode::Both => "both",
-                networker_tester::cli::PacketCaptureMode::Endpoint => "endpoint",
-                networker_tester::cli::PacketCaptureMode::None => unreachable!(),
-            };
+        let mode_str = match mode {
+            networker_tester::cli::PacketCaptureMode::Tester => Some("tester"),
+            networker_tester::cli::PacketCaptureMode::Both => Some("both"),
+            networker_tester::cli::PacketCaptureMode::Endpoint => Some("endpoint"),
+            networker_tester::cli::PacketCaptureMode::None => None,
+        };
+        if let Some(s) = mode_str {
             args.push("--capture-mode".to_string());
-            args.push(mode_str.to_string());
+            args.push(s.to_string());
         }
     }
 

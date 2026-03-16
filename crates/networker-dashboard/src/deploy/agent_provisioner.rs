@@ -47,11 +47,16 @@ pub async fn spawn_local_agent(api_key: &str, dashboard_url: &str) -> Option<u32
     };
 
     match result {
-        Ok(child) => {
-            let pid = child.id().unwrap_or(0);
-            tracing::info!(pid, "Local tester process spawned");
-            Some(pid)
-        }
+        Ok(child) => match child.id() {
+            Some(pid) => {
+                tracing::info!(pid, "Local tester process spawned");
+                Some(pid)
+            }
+            None => {
+                tracing::error!("Spawned tester but could not get PID — cannot track process");
+                None
+            }
+        },
         Err(e) => {
             tracing::error!(error = %e, "Failed to spawn local tester");
             None
