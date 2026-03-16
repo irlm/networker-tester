@@ -163,9 +163,7 @@ fn check_capture_prereqs_blocking(
     #[cfg(not(target_os = "macos"))]
     let _ = plan;
 
-    let out = Command::new(tshark_path)
-        .arg("-D")
-        .output()
+    let out = run_tshark_with_timeout(tshark_path, &["-D"], StdDuration::from_secs(10))
         .context("run tshark -D")?;
     if !out.status.success() {
         anyhow::bail!("tshark is installed but interface listing failed")
@@ -173,15 +171,12 @@ fn check_capture_prereqs_blocking(
 
     #[cfg(target_os = "macos")]
     {
-        let probe = Command::new(tshark_path)
-            .arg("-i")
-            .arg(&plan.interface)
-            .arg("-a")
-            .arg("duration:1")
-            .arg("-w")
-            .arg("/dev/null")
-            .output()
-            .context("run macOS packet-capture permission probe")?;
+        let probe = run_tshark_with_timeout(
+            tshark_path,
+            &["-i", &plan.interface, "-a", "duration:1", "-w", "/dev/null"],
+            StdDuration::from_secs(10),
+        )
+        .context("run macOS packet-capture permission probe")?;
         let stderr = String::from_utf8_lossy(&probe.stderr);
         if stderr.contains("Permission denied") || stderr.contains("cannot open BPF device") {
             anyhow::bail!(
@@ -411,21 +406,31 @@ fn endpoint_candidates_from_target(target: &str) -> Vec<String> {
         }
     }
     if !trimmed.contains("//") {
-        let host = trimmed
-            .trim_start_matches('[')
-            .trim_end_matches(']')
-            .split(':')
-            .next()
-            .unwrap_or(trimmed)
-            .to_string();
-        if !host.is_empty() {
-            out.push(host);
+        if trimmed.starts_with('[') {
+            if let Some(end) = trimmed.find(']') {
+                let host = trimmed[1..end].to_string();
+                if !host.is_empty() {
+                    out.push(host);
+                }
+            }
+        } else {
+            let colon_count = trimmed.matches(':').count();
+            let host = if colon_count > 1 {
+                trimmed.to_string()
+            } else {
+                trimmed.split(':').next().unwrap_or(trimmed).to_string()
+            };
+            if !host.is_empty() {
+                out.push(host);
+            }
         }
     }
     out.sort();
     out.dedup();
     out
 }
+
+const MAX_TSHARK_OUTPUT_BYTES: u64 = 256 * 1024 * 1024;
 
 fn run_tshark_with_timeout(
     tshark_path: &Path,
@@ -444,11 +449,11 @@ fn run_tshark_with_timeout(
         if let Some(_status) = child.try_wait()? {
             let mut stdout = Vec::new();
             let mut stderr = Vec::new();
-            if let Some(mut out) = child.stdout.take() {
-                let _ = out.read_to_end(&mut stdout);
+            if let Some(out) = child.stdout.take() {
+                let _ = out.take(MAX_TSHARK_OUTPUT_BYTES).read_to_end(&mut stdout);
             }
-            if let Some(mut err) = child.stderr.take() {
-                let _ = err.read_to_end(&mut stderr);
+            if let Some(err) = child.stderr.take() {
+                let _ = err.take(4 * 1024 * 1024).read_to_end(&mut stderr);
             }
             let status = child.wait()?;
             return Ok(Output {
