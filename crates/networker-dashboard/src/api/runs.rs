@@ -21,11 +21,10 @@ async fn list_runs(
     State(state): State<Arc<AppState>>,
     Query(q): Query<ListRunsQuery>,
 ) -> Result<Json<Vec<crate::db::runs::RunSummary>>, StatusCode> {
-    let client = state
-        .db
-        .get()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let client = state.db.get().await.map_err(|e| {
+        tracing::error!(error = %e, "DB pool error in list_runs");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     let runs = crate::db::runs::list(
         &client,
         q.target_host.as_deref(),
@@ -33,7 +32,10 @@ async fn list_runs(
         q.offset.unwrap_or(0),
     )
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(|e| {
+        tracing::error!(error = %e, "Failed to list runs from DB");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     Ok(Json(runs))
 }
 
@@ -41,11 +43,10 @@ async fn get_run_attempts(
     State(state): State<Arc<AppState>>,
     Path(run_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let client = state
-        .db
-        .get()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let client = state.db.get().await.map_err(|e| {
+        tracing::error!(error = %e, "DB pool error in get_run_attempts");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     let attempts = crate::db::runs::get_attempts(&client, &run_id)
         .await
         .map_err(|e| {

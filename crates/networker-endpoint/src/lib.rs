@@ -104,11 +104,13 @@ pub async fn run_with_shutdown(
     // preventing 40 ms Nagle + delayed-ACK stalls during the HTTP/2 handshake.
     let http_router = router.clone();
     let http_handle = tokio::spawn(async move {
-        axum_server::bind(http_addr)
+        if let Err(e) = axum_server::bind(http_addr)
             .acceptor(NoDelayAcceptor)
             .serve(http_router.into_make_service())
             .await
-            .expect("HTTP server error");
+        {
+            tracing::error!("HTTP server fatal error: {e:#}");
+        }
     });
 
     // HTTPS server – axum-server handles HTTP/1.1 + HTTP/2 ALPN automatically.
@@ -116,11 +118,13 @@ pub async fn run_with_shutdown(
     // the TLS handshake begins.
     let https_handle = tokio::spawn(async move {
         let acceptor = RustlsAcceptor::new(tls_config).acceptor(NoDelayAcceptor);
-        axum_server::Server::bind(https_addr)
+        if let Err(e) = axum_server::Server::bind(https_addr)
             .acceptor(acceptor)
             .serve(router.into_make_service())
             .await
-            .expect("HTTPS server error");
+        {
+            tracing::error!("HTTPS server fatal error: {e:#}");
+        }
     });
 
     // HTTP/3 QUIC server – same UDP port as HTTPS, sharing the self-signed cert
@@ -131,10 +135,17 @@ pub async fn run_with_shutdown(
         }
     });
 
-    // Wait for shutdown signal
-    let _ = shutdown_rx.await;
-    http_handle.abort();
-    https_handle.abort();
+    // Wait for shutdown signal or unexpected server exit
+    tokio::select! {
+        _ = shutdown_rx => {},
+        r = http_handle => {
+            tracing::error!("HTTP server exited unexpectedly: {r:?}");
+        },
+        r = https_handle => {
+            tracing::error!("HTTPS server exited unexpectedly: {r:?}");
+        },
+    }
+    // Abort remaining tasks (some may have already exited)
     udp_handle.abort();
     udp_tp_handle.abort();
     #[cfg(feature = "http3")]
@@ -200,7 +211,7 @@ fn generate_self_signed_cert() -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
     // or Linux NSS db, causing QUIC TLS to fail with CERTIFICATE_VERIFY_FAILED.
     let mut params =
         CertificateParams::new(subject_alt_names).context("rcgen CertificateParams::new")?;
-    params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    params.is_ca = IsCa::Ca(BasicConstraints::Constrained(0));
 
     let key_pair = KeyPair::generate().context("rcgen KeyPair::generate")?;
     let cert = params

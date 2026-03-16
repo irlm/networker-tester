@@ -1,12 +1,22 @@
 //! WebSocket client that connects to the dashboard control plane.
 
 use futures::{SinkExt, StreamExt};
-use tokio::sync::mpsc;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::{mpsc, Mutex, Semaphore};
+use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
+use tracing::Instrument;
+use uuid::Uuid;
 
 use crate::config::AgentConfig;
 use networker_common::messages::ControlMessage;
 use networker_common::protocol;
+
+/// Maximum number of probe jobs that can run concurrently.
+const MAX_CONCURRENT_JOBS: usize = 4;
+/// Bounded channel capacity for outbound WebSocket messages.
+const WS_CHANNEL_CAPACITY: usize = 256;
 
 /// Connect to the dashboard and process messages until disconnected.
 pub async fn run(cfg: &AgentConfig) -> anyhow::Result<()> {
@@ -17,7 +27,11 @@ pub async fn run(cfg: &AgentConfig) -> anyhow::Result<()> {
     tracing::info!("Connected to dashboard");
 
     let (mut ws_sink, mut ws_stream_rx) = ws_stream.split();
-    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+    let (tx, mut rx) = mpsc::channel::<String>(WS_CHANNEL_CAPACITY);
+
+    let job_semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_JOBS));
+    let running_jobs: Arc<Mutex<HashMap<Uuid, JoinHandle<()>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
 
     // Spawn heartbeat
     let heartbeat_tx = tx.clone();
@@ -37,7 +51,7 @@ pub async fn run(cfg: &AgentConfig) -> anyhow::Result<()> {
         match msg_result {
             Ok(Message::Text(text)) => {
                 if let Ok(ctrl_msg) = protocol::decode::<ControlMessage>(&text) {
-                    handle_control_message(ctrl_msg, &tx).await;
+                    handle_control_message(ctrl_msg, &tx, &job_semaphore, &running_jobs).await;
                 }
             }
             Ok(Message::Close(_)) => {
@@ -55,12 +69,26 @@ pub async fn run(cfg: &AgentConfig) -> anyhow::Result<()> {
         }
     }
 
+    // Abort all running jobs on disconnect
+    {
+        let mut jobs = running_jobs.lock().await;
+        for (job_id, handle) in jobs.drain() {
+            tracing::warn!(job_id = %job_id, "Aborting running job due to disconnect");
+            handle.abort();
+        }
+    }
+
     heartbeat_handle.abort();
     sink_handle.abort();
     Ok(())
 }
 
-async fn handle_control_message(msg: ControlMessage, tx: &mpsc::UnboundedSender<String>) {
+async fn handle_control_message(
+    msg: ControlMessage,
+    tx: &mpsc::Sender<String>,
+    semaphore: &Arc<Semaphore>,
+    running_jobs: &Arc<Mutex<HashMap<Uuid, JoinHandle<()>>>>,
+) {
     match msg {
         ControlMessage::Welcome {
             agent_id,
@@ -75,14 +103,27 @@ async fn handle_control_message(msg: ControlMessage, tx: &mpsc::UnboundedSender<
         ControlMessage::JobAssign { job_id, config } => {
             tracing::info!(job_id = %job_id, target = %config.target, "Received job");
             let tx = tx.clone();
-            // Spawn job execution in a separate task
-            tokio::spawn(async move {
-                crate::executor::run_job(job_id, config, &tx).await;
-            });
+            let sem = semaphore.clone();
+            let jobs = running_jobs.clone();
+            let span = tracing::info_span!("job", %job_id);
+            let handle = tokio::spawn(
+                async move {
+                    let _permit = match sem.acquire().await {
+                        Ok(p) => p,
+                        Err(_) => return, // semaphore closed
+                    };
+                    crate::executor::run_job(job_id, config, &tx).await;
+                    jobs.lock().await.remove(&job_id);
+                }
+                .instrument(span),
+            );
+            running_jobs.lock().await.insert(job_id, handle);
         }
         ControlMessage::JobCancel { job_id } => {
-            tracing::warn!(job_id = %job_id, "Job cancellation requested (not yet implemented)");
-            // TODO: implement cancellation via CancellationToken
+            tracing::warn!(job_id = %job_id, "Cancelling job");
+            if let Some(handle) = running_jobs.lock().await.remove(&job_id) {
+                handle.abort();
+            }
         }
     }
 }

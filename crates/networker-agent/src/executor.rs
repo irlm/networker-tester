@@ -16,7 +16,7 @@ use networker_common::protocol;
 use networker_tester::metrics::TestRun;
 
 /// Execute a job by running networker-tester CLI and streaming results.
-pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::UnboundedSender<String>) {
+pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::Sender<String>) {
     let correlation_id = job_id.to_string();
 
     tracing::info!(
@@ -93,6 +93,23 @@ pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::UnboundedSender
     if let Some(port) = config.udp_throughput_port {
         args.push("--udp-throughput-port".to_string());
         args.push(port.to_string());
+    }
+
+    // SSRF protection: block probes targeting private, loopback, link-local,
+    // or cloud metadata IPs/hostnames.
+    if let Ok(parsed) = url::Url::parse(&config.target) {
+        if is_private_or_metadata(&parsed) {
+            tracing::error!(target = %config.target, "SSRF blocked: target resolves to private/metadata address");
+            send(
+                tx,
+                &AgentMessage::JobError {
+                    job_id,
+                    message: "Target blocked: private, loopback, or metadata address".into(),
+                },
+                &correlation_id,
+            );
+            return;
+        }
     }
 
     // Find tester binary
@@ -291,7 +308,7 @@ pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::UnboundedSender
 }
 
 /// Send a log line to the dashboard AND to tracing.
-fn log(tx: &mpsc::UnboundedSender<String>, job_id: Uuid, level: &str, line: &str) {
+fn log(tx: &mpsc::Sender<String>, job_id: Uuid, level: &str, line: &str) {
     match level {
         "error" => tracing::error!(job_id = %job_id, "{}", line),
         "warn" => tracing::warn!(job_id = %job_id, "{}", line),
@@ -308,11 +325,47 @@ fn log(tx: &mpsc::UnboundedSender<String>, job_id: Uuid, level: &str, line: &str
     );
 }
 
-fn send(tx: &mpsc::UnboundedSender<String>, msg: &AgentMessage, correlation_id: &str) {
+/// Returns `true` if the URL targets a private, loopback, link-local,
+/// or cloud metadata IP/hostname — used to prevent SSRF via agent job dispatch.
+fn is_private_or_metadata(url: &url::Url) -> bool {
+    use std::net::IpAddr;
+    if let Some(host) = url.host_str() {
+        if let Ok(ip) = host.parse::<IpAddr>() {
+            return is_private_ip(&ip);
+        }
+        // Block well-known cloud metadata hostnames
+        let h = host.to_lowercase();
+        if h == "metadata.google.internal" || h == "169.254.169.254" {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_private_ip(ip: &std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.octets()[..2] == [169, 254]
+        }
+        std::net::IpAddr::V6(v6) => {
+            v6.is_loopback() || v6.is_unspecified() || v6.segments()[0] == 0xfe80
+            // link-local
+        }
+    }
+}
+
+fn send(tx: &mpsc::Sender<String>, msg: &AgentMessage, correlation_id: &str) {
     match protocol::encode(msg) {
         Ok(text) => {
-            if tx.send(text).is_err() {
-                tracing::error!(correlation_id, "Failed to send message: channel closed");
+            if tx.try_send(text).is_err() {
+                tracing::error!(
+                    correlation_id,
+                    "Failed to send message: channel full or closed"
+                );
             }
         }
         Err(e) => tracing::error!(correlation_id, error = %e, "Failed to encode message"),

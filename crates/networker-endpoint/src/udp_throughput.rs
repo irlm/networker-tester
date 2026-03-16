@@ -59,6 +59,9 @@ pub async fn run_udp_throughput(port: u16) {
     let mut buf = vec![0u8; 65536];
     // Per-client upload state: tracks seq_nums and byte counts until CMD_DONE.
     let mut upload_states: HashMap<SocketAddr, UploadState> = HashMap::new();
+    let mut pkt_counter: u64 = 0;
+    /// TTL for upload states — reap entries older than this to prevent leaks.
+    const UPLOAD_STATE_TTL: std::time::Duration = std::time::Duration::from_secs(60);
 
     loop {
         let (n, src) = match sock.recv_from(&mut buf).await {
@@ -95,6 +98,7 @@ pub async fn run_udp_throughput(port: u16) {
                             expected_bytes: value,
                             received_seqs: HashSet::new(),
                             received_bytes: 0,
+                            created_at: std::time::Instant::now(),
                         },
                     );
                     let ack = make_ctrl(CMD_ACK, 0);
@@ -129,6 +133,19 @@ pub async fn run_udp_throughput(port: u16) {
                     state.received_bytes += data_len;
                 }
             }
+        }
+
+        // Periodically reap stale upload states to prevent memory leaks
+        // from clients that disconnect without sending CMD_DONE.
+        pkt_counter += 1;
+        if pkt_counter.is_multiple_of(100) {
+            upload_states.retain(|addr, state| {
+                let alive = state.created_at.elapsed() < UPLOAD_STATE_TTL;
+                if !alive {
+                    debug!("Reaping stale upload state for {addr}");
+                }
+                alive
+            });
         }
     }
 }
@@ -186,4 +203,5 @@ struct UploadState {
     expected_bytes: usize,
     received_seqs: HashSet<u32>,
     received_bytes: usize,
+    created_at: std::time::Instant,
 }

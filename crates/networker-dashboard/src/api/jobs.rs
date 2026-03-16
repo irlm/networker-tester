@@ -30,10 +30,35 @@ pub struct ListJobsQuery {
     pub offset: Option<i64>,
 }
 
+/// Limits to prevent runaway jobs.
+const MAX_RUNS: u32 = 1000;
+const MAX_TIMEOUT_SECS: u64 = 300;
+const MAX_CONCURRENCY: usize = 16;
+
 async fn create_job(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateJobRequest>,
 ) -> Result<Json<CreateJobResponse>, StatusCode> {
+    // Validate job config limits
+    if req.config.runs > MAX_RUNS {
+        tracing::warn!(runs = req.config.runs, "Rejecting job: runs exceeds limit");
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    if req.config.timeout_secs > MAX_TIMEOUT_SECS {
+        tracing::warn!(
+            timeout = req.config.timeout_secs,
+            "Rejecting job: timeout exceeds limit"
+        );
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    if req.config.concurrency > MAX_CONCURRENCY {
+        tracing::warn!(
+            concurrency = req.config.concurrency,
+            "Rejecting job: concurrency exceeds limit"
+        );
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
     let config_json = serde_json::to_value(&req.config).map_err(|e| {
         tracing::error!(error = %e, "Failed to serialize job config");
         StatusCode::BAD_REQUEST
@@ -54,7 +79,10 @@ async fn create_job(
     tracing::info!(correlation_id, target = %req.config.target, modes = ?req.config.modes, "Job created");
 
     // Try to dispatch to a connected agent
-    let agent_id = req.agent_id.or_else(|| state.agents.any_online_agent());
+    let agent_id = match req.agent_id {
+        Some(id) => Some(id),
+        None => state.agents.any_online_agent().await,
+    };
 
     if let Some(aid) = agent_id {
         tracing::info!(correlation_id, agent_id = %aid, "Dispatching job to agent");
@@ -62,7 +90,7 @@ async fn create_job(
             job_id,
             config: req.config,
         };
-        if state.agents.send_to_agent(&aid, &msg).is_ok() {
+        if state.agents.send_to_agent(&aid, &msg).await.is_ok() {
             crate::db::jobs::update_status(&client, &job_id, "assigned")
                 .await
                 .ok();
@@ -160,7 +188,7 @@ async fn cancel_job(
         if let Some(aid) = &job.agent_id {
             tracing::info!(correlation_id, agent_id = %aid, "Sending cancel to agent");
             let msg = ControlMessage::JobCancel { job_id };
-            let _ = state.agents.send_to_agent(aid, &msg);
+            let _ = state.agents.send_to_agent(aid, &msg).await;
         }
         crate::db::jobs::update_status(&client, &job_id, "cancelled")
             .await
