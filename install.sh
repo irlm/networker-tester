@@ -7533,11 +7533,12 @@ _deploy_parse_config() {
     DEPLOY_TEST_LOG_LEVEL="$(jq -r '.tests.log_level // ""' "$cfg")"
     DEPLOY_TEST_HTTP_STACKS="$(jq -r '(.tests.http_stacks // []) | join(",")' "$cfg")"
 
-    DEPLOY_PACKET_CAPTURE_MODE="$(jq -r '.packet_capture.mode // "none"' "$cfg")"
-    DEPLOY_PACKET_CAPTURE_INSTALL_REQS="$(jq -r '.packet_capture.install_requirements // ""' "$cfg")"
-    DEPLOY_PACKET_CAPTURE_INTERFACE="$(jq -r '.packet_capture.interface // ""' "$cfg")"
-    DEPLOY_PACKET_CAPTURE_WRITE_PCAP="$(jq -r '.packet_capture.write_pcap // ""' "$cfg")"
-    DEPLOY_PACKET_CAPTURE_WRITE_SUMMARY_JSON="$(jq -r '.packet_capture.write_summary_json // ""' "$cfg")"
+    # packet_capture can be at top level OR inside tests (support both)
+    DEPLOY_PACKET_CAPTURE_MODE="$(jq -r '(.packet_capture.mode // .tests.packet_capture.mode // "none")' "$cfg")"
+    DEPLOY_PACKET_CAPTURE_INSTALL_REQS="$(jq -r '(.packet_capture.install_requirements // .tests.packet_capture.install_requirements // "")' "$cfg")"
+    DEPLOY_PACKET_CAPTURE_INTERFACE="$(jq -r '(.packet_capture.interface // .tests.packet_capture.interface // "")' "$cfg")"
+    DEPLOY_PACKET_CAPTURE_WRITE_PCAP="$(jq -r '(.packet_capture.write_pcap // .tests.packet_capture.write_pcap // "")' "$cfg")"
+    DEPLOY_PACKET_CAPTURE_WRITE_SUMMARY_JSON="$(jq -r '(.packet_capture.write_summary_json // .tests.packet_capture.write_summary_json // "")' "$cfg")"
 }
 
 # Load endpoint config at index $1 into the provider-specific globals.
@@ -8249,10 +8250,8 @@ deploy_from_config() {
             step_install_chrome
         fi
         if [[ "$DEPLOY_PACKET_CAPTURE_MODE" == "tester" || "$DEPLOY_PACKET_CAPTURE_MODE" == "both" ]]; then
-            if ! detect_tshark >/dev/null 2>&1 && [[ "$DEPLOY_PACKET_CAPTURE_INSTALL_REQS" == "true" ]]; then
+            if ! detect_tshark >/dev/null 2>&1; then
                 step_install_packet_capture_tools
-            elif ! detect_tshark >/dev/null 2>&1; then
-                print_warn "Packet capture selected but tshark is not installed; tester-side capture will be skipped."
             fi
         fi
         if [[ "$INSTALL_METHOD" == "release" ]]; then
