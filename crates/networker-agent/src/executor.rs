@@ -94,11 +94,16 @@ pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::Sender<String>)
         args.push("--udp-throughput-port".to_string());
         args.push(port.to_string());
     }
-    if let Some(ref mode) = config.capture_mode {
-        // Validate against known values (defense-in-depth — clap also validates)
-        if matches!(mode.as_str(), "tester" | "endpoint" | "both") {
+    if let Some(mode) = config.capture_mode {
+        if mode.captures_tester() || mode.captures_endpoint() {
+            let mode_str = match mode {
+                networker_tester::cli::PacketCaptureMode::Tester => "tester",
+                networker_tester::cli::PacketCaptureMode::Both => "both",
+                networker_tester::cli::PacketCaptureMode::Endpoint => "endpoint",
+                networker_tester::cli::PacketCaptureMode::None => unreachable!(),
+            };
             args.push("--capture-mode".to_string());
-            args.push(mode.clone());
+            args.push(mode_str.to_string());
         }
     }
 

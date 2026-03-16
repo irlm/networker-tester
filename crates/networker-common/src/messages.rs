@@ -43,9 +43,9 @@ pub struct JobConfig {
     pub udp_port: Option<u16>,
     #[serde(default)]
     pub udp_throughput_port: Option<u16>,
-    /// Packet capture mode: "none", "tester", "endpoint", or "both".
+    /// Packet capture mode.
     #[serde(default)]
-    pub capture_mode: Option<String>,
+    pub capture_mode: Option<networker_tester::cli::PacketCaptureMode>,
 }
 
 fn default_runs() -> u32 {
