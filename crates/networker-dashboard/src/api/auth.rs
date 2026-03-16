@@ -21,14 +21,16 @@ async fn login(
     State(state): State<Arc<AppState>>,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, StatusCode> {
-    let client = state
-        .db
-        .get()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let client = state.db.get().await.map_err(|e| {
+        tracing::error!(error = %e, "DB pool error in login");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     let result = crate::db::users::authenticate(&client, &req.username, &req.password)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|e| {
+            tracing::error!(error = %e, "Authentication query failed");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     match result {
         Some((user_id, role)) => {

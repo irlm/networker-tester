@@ -317,9 +317,9 @@ pub fn build_router(state: AppState) -> Router {
         .route("/asset", get(asset_handler))
         // Provide AppState to all handlers (converts Router<AppState> -> Router<()>).
         .with_state(state.clone())
-        // Remove axum's default 2 MiB body limit so upload probes of arbitrary
-        // size are not rejected with 413 before the body is transmitted.
-        .layer(DefaultBodyLimit::disable())
+        // Allow upload probes up to 2 GiB (matching the download cap) while
+        // preventing unbounded memory consumption from malicious payloads.
+        .layer(DefaultBodyLimit::max(2 * 1024 * 1024 * 1024))
         // Add X-Networker-Server-Timestamp (and optionally Alt-Svc) to every response.
         .layer(middleware::from_fn_with_state(state, add_server_timestamp))
         // Log every request (method + URI) and response (status + latency).
@@ -644,15 +644,32 @@ struct DownloadParams {
     bytes: Option<usize>,
 }
 
-/// GET /download?bytes=N – returns N zero bytes (max 2 GiB).
+/// GET /download?bytes=N – streams N zero bytes (max 2 GiB) in 64 KiB chunks.
 /// Adds `Server-Timing: proc;dur=X, csw-v;dur=N, csw-i;dur=N` indicating
-/// body generation time and context switches.
+/// setup time and context switches.
 async fn download(Query(p): Query<DownloadParams>) -> impl IntoResponse {
     let n = p.bytes.unwrap_or(1024).min(2 * 1024 * 1024 * 1024); // cap 2 GiB
     let t0 = Instant::now();
     #[cfg(unix)]
     let (csw_v0, csw_i0) = csw_snapshot();
-    let body = vec![0u8; n];
+
+    // Stream zero bytes in fixed-size chunks to avoid allocating the full
+    // payload in memory at once (critical for multi-GiB downloads).
+    const CHUNK_SIZE: usize = 64 * 1024; // 64 KiB
+    let full_chunks = n / CHUNK_SIZE;
+    let remainder = n % CHUNK_SIZE;
+    let zero_chunk = Bytes::from(vec![0u8; CHUNK_SIZE]);
+
+    let body = Body::from_stream(futures::stream::iter(
+        (0..full_chunks)
+            .map(move |_| Ok::<_, std::io::Error>(zero_chunk.clone()))
+            .chain(if remainder > 0 {
+                vec![Ok(Bytes::from(vec![0u8; remainder]))].into_iter()
+            } else {
+                vec![].into_iter()
+            }),
+    ));
+
     let proc_ms = t0.elapsed().as_secs_f64() * 1000.0;
     #[cfg(unix)]
     let csw_part = {
@@ -673,7 +690,7 @@ async fn download(Query(p): Query<DownloadParams>) -> impl IntoResponse {
         .header("content-length", n.to_string())
         .header("x-download-bytes", n.to_string())
         .header("server-timing", timing.as_str())
-        .body(Body::from(body))
+        .body(body)
         .unwrap()
 }
 

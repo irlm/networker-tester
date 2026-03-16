@@ -6,10 +6,12 @@ mod deploy;
 mod ws;
 
 use anyhow::Context;
+use axum::http::{HeaderValue, Method};
 use axum::Router;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
+use tower_http::cors::CorsLayer;
 use tracing_subscriber::EnvFilter;
 
 pub struct AppState {
@@ -58,29 +60,29 @@ async fn main() -> anyhow::Result<()> {
         tester_processes: RwLock::new(HashMap::new()),
     });
 
+    let cors = {
+        let origin = cfg
+            .cors_origin
+            .as_deref()
+            .unwrap_or("http://localhost:5173");
+        CorsLayer::new()
+            .allow_origin(
+                origin
+                    .parse::<HeaderValue>()
+                    .context("invalid DASHBOARD_CORS_ORIGIN value")?,
+            )
+            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
+            .allow_headers([
+                axum::http::header::AUTHORIZATION,
+                axum::http::header::CONTENT_TYPE,
+            ])
+    };
+
     let app = Router::new()
         .nest("/api", api::router(state.clone()))
         .merge(ws::router(state.clone()))
         .layer(tower_http::trace::TraceLayer::new_for_http())
-        .layer({
-            // In dev, allow the Vite dev server origin. In production, restrict further.
-            let cors = tower_http::cors::CorsLayer::new()
-                .allow_origin([
-                    "http://localhost:5173".parse().unwrap(),
-                    format!("http://localhost:{}", cfg.port).parse().unwrap(),
-                ])
-                .allow_methods([
-                    axum::http::Method::GET,
-                    axum::http::Method::POST,
-                    axum::http::Method::DELETE,
-                    axum::http::Method::OPTIONS,
-                ])
-                .allow_headers([
-                    axum::http::header::AUTHORIZATION,
-                    axum::http::header::CONTENT_TYPE,
-                ]);
-            cors
-        });
+        .layer(cors);
 
     // Resolve bare IPs to FQDNs for existing deployments
     {
@@ -271,10 +273,15 @@ async fn main() -> anyhow::Result<()> {
     };
     let _ = local_tester_api_key; // suppress unused warning
 
-    let addr = format!("0.0.0.0:{}", cfg.port);
+    let addr = format!("{}:{}", cfg.bind_addr, cfg.port);
     tracing::info!("Dashboard listening on {addr}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async {
+            tokio::signal::ctrl_c().await.ok();
+            tracing::info!("Shutdown signal received, draining connections...");
+        })
+        .await?;
 
     // Cleanup: kill managed tester processes on shutdown
     {
