@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.24] – 2026-03-16 — LAN detection fix, packet capture in dashboard, reliability
+
+### Added
+- **`--capture-mode` CLI flag** — new flag for `networker-tester` (`none`/`tester`/`endpoint`/`both`) with `clap::ValueEnum` validation
+- **Packet capture in dashboard** — `capture_mode` wired through `JobConfig` → agent executor → tester CLI; frontend "Packet Capture" dropdown in Create Test dialog
+- **`capture_mode` typed as enum** — `JobConfig.capture_mode` uses `PacketCaptureMode` enum (not String) for serde validation at deserialization boundary
+
+### Fixed
+- **LAN network detection** — `measure_baseline()` always returns network type (LAN/Internet/Loopback) even when TCP RTT probes fail; unreachable LAN targets now correctly identified as reference-only in reports
+- **HTML report zero-RTT display** — unreachable targets show "—" instead of "0.00 ms"; excluded from RTT comparison rankings
+- **Capture-mode config override** — `--capture-mode` is `Option` so omitting inherits from config file; explicit `--capture-mode none` overrides config file value
+- **PID 0 kill-self bug** — `child.id().unwrap_or(0)` replaced with proper `None` handling; PID 0 would send SIGTERM to entire process group (killing the dashboard itself)
+- **`unreachable!()` in executor** — replaced with `Option` match to prevent production agent panic if enum variants change
+- **`deleteAgent` API** — was missing `method: 'DELETE'` (from PR #220 review)
+- **TypeScript capture mode type** — state properly typed as literal union matching `JobConfig`
+
+---
+
 ## [0.13.23] – 2026-03-16 — Dashboard installer, multi-cloud auth, test visualization
 
 ### Added
