@@ -1,5 +1,6 @@
 use anyhow::Context;
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use tokio::task::spawn_blocking;
@@ -17,6 +18,25 @@ pub struct PacketCapturePlan {
     pub summary_path: PathBuf,
 }
 
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub struct PacketShare {
+    pub protocol: String,
+    pub packets: u64,
+    pub pct_of_total: f64,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub struct EndpointPacketCount {
+    pub endpoint: String,
+    pub packets: u64,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub struct PortPacketCount {
+    pub port: u16,
+    pub packets: u64,
+}
+
 #[derive(Debug, Serialize)]
 pub struct PacketCaptureSummary {
     pub mode: String,
@@ -26,6 +46,7 @@ pub struct PacketCaptureSummary {
     pub total_packets: u64,
     pub capture_status: String,
     pub note: Option<String>,
+    pub warnings: Vec<String>,
     pub tcp_packets: u64,
     pub udp_packets: u64,
     pub quic_packets: u64,
@@ -34,6 +55,13 @@ pub struct PacketCaptureSummary {
     pub retransmissions: u64,
     pub duplicate_acks: u64,
     pub resets: u64,
+    pub transport_shares: Vec<PacketShare>,
+    pub top_endpoints: Vec<EndpointPacketCount>,
+    pub top_ports: Vec<PortPacketCount>,
+    pub observed_quic: bool,
+    pub observed_tcp_only: bool,
+    pub observed_mixed_transport: bool,
+    pub capture_may_be_ambiguous: bool,
 }
 
 #[derive(Debug)]
@@ -270,6 +298,7 @@ fn summarize(tshark_path: &Path, plan: &PacketCapturePlan) -> anyhow::Result<Pac
             "empty".into()
         },
         note: None,
+        warnings: vec![],
         tcp_packets: 0,
         udp_packets: 0,
         quic_packets: 0,
@@ -278,6 +307,13 @@ fn summarize(tshark_path: &Path, plan: &PacketCapturePlan) -> anyhow::Result<Pac
         retransmissions: 0,
         duplicate_acks: 0,
         resets: 0,
+        transport_shares: vec![],
+        top_endpoints: vec![],
+        top_ports: vec![],
+        observed_quic: false,
+        observed_tcp_only: false,
+        observed_mixed_transport: false,
+        capture_may_be_ambiguous: false,
     };
 
     for (filter, field) in stats {
@@ -295,13 +331,185 @@ fn summarize(tshark_path: &Path, plan: &PacketCapturePlan) -> anyhow::Result<Pac
         }
     }
 
-    if summary.total_packets > 0 && summary.udp_packets == 0 && summary.quic_packets == 0 {
-        summary.note = Some(
-            "Capture succeeded, but no UDP/QUIC packets were observed in this trace. The workload may have stayed on TCP/TLS or loopback visibility may differ by stack/path.".into(),
-        );
-    }
+    summary.transport_shares = compute_transport_shares(&summary);
+    summary.top_endpoints = top_n_endpoints(
+        endpoint_counts(tshark_path, &plan.pcap_path).unwrap_or_default(),
+        5,
+    );
+    summary.top_ports = top_n_ports(
+        port_counts(tshark_path, &plan.pcap_path).unwrap_or_default(),
+        5,
+    );
+    apply_interpretation(&mut summary);
 
     Ok(summary)
+}
+
+fn endpoint_counts(tshark_path: &Path, pcap_path: &Path) -> anyhow::Result<BTreeMap<String, u64>> {
+    let out = Command::new(tshark_path)
+        .arg("-r")
+        .arg(pcap_path)
+        .arg("-T")
+        .arg("fields")
+        .arg("-e")
+        .arg("ip.dst")
+        .arg("-e")
+        .arg("ipv6.dst")
+        .output()
+        .context("run tshark endpoint summary")?;
+
+    if !out.status.success() {
+        tracing::warn!(stderr = %String::from_utf8_lossy(&out.stderr), "tshark endpoint summary failed");
+        return Ok(BTreeMap::new());
+    }
+
+    let mut counts = BTreeMap::new();
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let endpoint = line
+            .split('\t')
+            .find(|v| !v.trim().is_empty())
+            .unwrap_or("")
+            .trim();
+        if endpoint.is_empty() {
+            continue;
+        }
+        *counts.entry(endpoint.to_string()).or_insert(0) += 1;
+    }
+    Ok(counts)
+}
+
+fn port_counts(tshark_path: &Path, pcap_path: &Path) -> anyhow::Result<BTreeMap<u16, u64>> {
+    let out = Command::new(tshark_path)
+        .arg("-r")
+        .arg(pcap_path)
+        .arg("-T")
+        .arg("fields")
+        .arg("-e")
+        .arg("tcp.dstport")
+        .arg("-e")
+        .arg("udp.dstport")
+        .output()
+        .context("run tshark port summary")?;
+
+    if !out.status.success() {
+        tracing::warn!(stderr = %String::from_utf8_lossy(&out.stderr), "tshark port summary failed");
+        return Ok(BTreeMap::new());
+    }
+
+    let mut counts = BTreeMap::new();
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        for raw in line.split('\t') {
+            let raw = raw.trim();
+            if raw.is_empty() {
+                continue;
+            }
+            if let Ok(port) = raw.parse::<u16>() {
+                *counts.entry(port).or_insert(0) += 1;
+                break;
+            }
+        }
+    }
+    Ok(counts)
+}
+
+fn compute_transport_shares(summary: &PacketCaptureSummary) -> Vec<PacketShare> {
+    let total = summary.total_packets as f64;
+    let mut rows = vec![
+        PacketShare {
+            protocol: "tcp".into(),
+            packets: summary.tcp_packets,
+            pct_of_total: pct(summary.tcp_packets, total),
+        },
+        PacketShare {
+            protocol: "udp".into(),
+            packets: summary.udp_packets,
+            pct_of_total: pct(summary.udp_packets, total),
+        },
+        PacketShare {
+            protocol: "quic".into(),
+            packets: summary.quic_packets,
+            pct_of_total: pct(summary.quic_packets, total),
+        },
+        PacketShare {
+            protocol: "http".into(),
+            packets: summary.http_packets,
+            pct_of_total: pct(summary.http_packets, total),
+        },
+        PacketShare {
+            protocol: "dns".into(),
+            packets: summary.dns_packets,
+            pct_of_total: pct(summary.dns_packets, total),
+        },
+    ];
+    rows.sort_by(|a, b| {
+        b.packets
+            .cmp(&a.packets)
+            .then_with(|| a.protocol.cmp(&b.protocol))
+    });
+    rows
+}
+
+fn pct(packets: u64, total: f64) -> f64 {
+    if total <= 0.0 {
+        0.0
+    } else {
+        ((packets as f64 / total) * 1000.0).round() / 10.0
+    }
+}
+
+fn top_n_endpoints(counts: BTreeMap<String, u64>, limit: usize) -> Vec<EndpointPacketCount> {
+    let mut rows: Vec<_> = counts
+        .into_iter()
+        .map(|(endpoint, packets)| EndpointPacketCount { endpoint, packets })
+        .collect();
+    rows.sort_by(|a, b| {
+        b.packets
+            .cmp(&a.packets)
+            .then_with(|| a.endpoint.cmp(&b.endpoint))
+    });
+    rows.truncate(limit);
+    rows
+}
+
+fn top_n_ports(counts: BTreeMap<u16, u64>, limit: usize) -> Vec<PortPacketCount> {
+    let mut rows: Vec<_> = counts
+        .into_iter()
+        .map(|(port, packets)| PortPacketCount { port, packets })
+        .collect();
+    rows.sort_by(|a, b| b.packets.cmp(&a.packets).then_with(|| a.port.cmp(&b.port)));
+    rows.truncate(limit);
+    rows
+}
+
+fn apply_interpretation(summary: &mut PacketCaptureSummary) {
+    summary.observed_quic = summary.quic_packets > 0;
+    summary.observed_tcp_only =
+        summary.tcp_packets > 0 && summary.udp_packets == 0 && summary.quic_packets == 0;
+    summary.observed_mixed_transport =
+        summary.tcp_packets > 0 && (summary.udp_packets > 0 || summary.quic_packets > 0);
+
+    if summary.total_packets == 0 {
+        summary.capture_may_be_ambiguous = true;
+        summary
+            .warnings
+            .push("Capture completed but no packets were summarized from the trace.".into());
+    }
+    if summary.observed_tcp_only {
+        let msg = "Capture succeeded, but no UDP/QUIC packets were observed in this trace. The workload may have stayed on TCP/TLS or loopback visibility may differ by stack/path.".to_string();
+        summary.note = Some(msg.clone());
+        summary.warnings.push(msg);
+    }
+    if summary.observed_mixed_transport {
+        summary.capture_may_be_ambiguous = true;
+        summary.warnings.push("Both TCP and UDP/QUIC traffic were observed. This may reflect fallback behavior, mixed page assets, or unrelated background traffic.".into());
+    }
+    if summary.top_endpoints.len() > 1 {
+        summary.capture_may_be_ambiguous = true;
+        summary.warnings.push("Multiple destination endpoints were active in the trace. Interpret protocol comparisons carefully when third-party assets or background traffic are present.".into());
+    }
+    if summary.retransmissions > 0 || summary.resets > 0 {
+        summary.warnings.push("The trace includes transport-level error signals (retransmissions or resets) that may materially affect timing comparisons.".into());
+    }
 }
 
 fn count_matches(tshark_path: &Path, pcap_path: &Path, filter: &str) -> anyhow::Result<u64> {
@@ -462,5 +670,81 @@ mod tests {
         if me.exists() {
             assert_eq!(which(me.to_str().unwrap()), Some(me));
         }
+    }
+
+    #[test]
+    fn compute_transport_shares_sorts_by_packets() {
+        let summary = PacketCaptureSummary {
+            mode: "tester".into(),
+            interface: "lo0".into(),
+            capture_path: "x".into(),
+            tshark_path: "tshark".into(),
+            total_packets: 100,
+            capture_status: "captured".into(),
+            note: None,
+            warnings: vec![],
+            tcp_packets: 60,
+            udp_packets: 40,
+            quic_packets: 30,
+            http_packets: 10,
+            dns_packets: 5,
+            retransmissions: 0,
+            duplicate_acks: 0,
+            resets: 0,
+            transport_shares: vec![],
+            top_endpoints: vec![],
+            top_ports: vec![],
+            observed_quic: false,
+            observed_tcp_only: false,
+            observed_mixed_transport: false,
+            capture_may_be_ambiguous: false,
+        };
+        let shares = compute_transport_shares(&summary);
+        assert_eq!(shares[0].protocol, "tcp");
+        assert_eq!(shares[0].pct_of_total, 60.0);
+        assert_eq!(shares[1].protocol, "udp");
+    }
+
+    #[test]
+    fn apply_interpretation_marks_mixed_transport_as_ambiguous() {
+        let mut summary = PacketCaptureSummary {
+            mode: "tester".into(),
+            interface: "lo0".into(),
+            capture_path: "x".into(),
+            tshark_path: "tshark".into(),
+            total_packets: 50,
+            capture_status: "captured".into(),
+            note: None,
+            warnings: vec![],
+            tcp_packets: 20,
+            udp_packets: 15,
+            quic_packets: 10,
+            http_packets: 0,
+            dns_packets: 0,
+            retransmissions: 0,
+            duplicate_acks: 0,
+            resets: 0,
+            transport_shares: vec![],
+            top_endpoints: vec![
+                EndpointPacketCount {
+                    endpoint: "1.1.1.1".into(),
+                    packets: 20,
+                },
+                EndpointPacketCount {
+                    endpoint: "2.2.2.2".into(),
+                    packets: 10,
+                },
+            ],
+            top_ports: vec![],
+            observed_quic: false,
+            observed_tcp_only: false,
+            observed_mixed_transport: false,
+            capture_may_be_ambiguous: false,
+        };
+        apply_interpretation(&mut summary);
+        assert!(summary.observed_quic);
+        assert!(summary.observed_mixed_transport);
+        assert!(summary.capture_may_be_ambiguous);
+        assert!(!summary.warnings.is_empty());
     }
 }
