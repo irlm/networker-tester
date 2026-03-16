@@ -84,7 +84,7 @@ libc     = "0.2"
 reqwest  = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 [features]
-default = ["http3", "db-mssql"]
+default = ["http3", "db-mssql", "browser"]
 http3   = ["quinn", "h3", "h3-quinn"]
 native  = ["dep:native-tls", "dep:tokio-native-tls"]
 browser = ["dep:chromiumoxide", "dep:sha2", "dep:base64"]

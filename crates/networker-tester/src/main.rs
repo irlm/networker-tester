@@ -60,7 +60,15 @@ async fn main() -> anyhow::Result<()> {
         tracing_subscriber::EnvFilter::try_from_default_env()
             .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
     };
-    tracing_subscriber::fmt().with_env_filter(log_filter).init();
+    if cfg.json_stdout {
+        // When outputting JSON to stdout, send logs to stderr so stdout is clean
+        tracing_subscriber::fmt()
+            .with_env_filter(log_filter)
+            .with_writer(std::io::stderr)
+            .init();
+    } else {
+        tracing_subscriber::fmt().with_env_filter(log_filter).init();
+    }
 
     // ── Privilege notice (Linux only) ─────────────────────────────────────────
     #[cfg(target_os = "linux")]
@@ -164,6 +172,20 @@ async fn main() -> anyhow::Result<()> {
         info!(target = %target_url_str, "Running probes for target");
         let run = run_for_target(target_url_str, &cfg, &modes, &payload_sizes).await?;
         all_runs.push(run);
+    }
+
+    // ── JSON stdout mode (for agent integration) ─────────────────────────────
+    if cfg.json_stdout {
+        // Output all runs as JSON array to stdout, skip file outputs
+        if all_runs.len() == 1 {
+            println!(
+                "{}",
+                serde_json::to_string(&all_runs[0]).unwrap_or_default()
+            );
+        } else {
+            println!("{}", serde_json::to_string(&all_runs).unwrap_or_default());
+        }
+        return Ok(());
     }
 
     let ts = all_runs[0].started_at.format("%Y%m%d-%H%M%S");
@@ -1733,6 +1755,7 @@ mod tests {
                 profile: ImpairmentProfile::None,
                 delay_ms,
             },
+            json_stdout: false,
         }
     }
 

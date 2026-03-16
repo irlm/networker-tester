@@ -1,9 +1,11 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from '../api/client';
 import { StatCard } from '../components/cards/StatCard';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { useLiveStore } from '../stores/liveStore';
 import { usePolling } from '../hooks/usePolling';
+import { usePageTitle } from '../hooks/usePageTitle';
 
 interface Summary {
   agents_online: number;
@@ -12,11 +14,26 @@ interface Summary {
   jobs_pending: number;
 }
 
+interface VersionInfo {
+  dashboard_version: string;
+  tester_version: string | null;
+  latest_release: string | null;
+  update_available: boolean;
+  endpoints: { host: string; version: string | null; reachable: boolean }[];
+}
+
 export function DashboardPage() {
   const [summary, setSummary] = useState<Summary | null>(null);
+  const [versionInfo, setVersionInfo] = useState<VersionInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const events = useLiveStore((s) => s.events);
+
+  usePageTitle('Dashboard');
+
+  useEffect(() => {
+    api.getVersionInfo().then(setVersionInfo).catch(() => {});
+  }, []);
 
   usePolling(() => {
     api
@@ -58,6 +75,49 @@ export function DashboardPage() {
   return (
     <div className="p-6">
       <h2 className="text-xl font-bold text-gray-100 mb-6">Dashboard</h2>
+
+      {/* Version Info */}
+      {versionInfo && (
+        <div className={`border rounded-lg p-3 mb-6 flex items-center justify-between text-sm ${
+          versionInfo.update_available
+            ? 'bg-yellow-500/10 border-yellow-500/30'
+            : 'bg-[#12131a] border-gray-800'
+        }`}>
+          <div className="flex items-center gap-4 text-xs">
+            <span className="text-gray-500">
+              Dashboard <span className="text-gray-300 font-mono">v{versionInfo.dashboard_version}</span>
+            </span>
+            {versionInfo.tester_version && (
+              <span className="text-gray-500">
+                Tester <span className="text-gray-300 font-mono">v{versionInfo.tester_version}</span>
+              </span>
+            )}
+            {versionInfo.endpoints.map(ep => {
+              const outdated = ep.reachable && ep.version && versionInfo.latest_release && ep.version !== versionInfo.latest_release;
+              return (
+                <span key={ep.host} className="text-gray-500">
+                  {ep.host.split('.')[0]}{' '}
+                  {ep.reachable ? (
+                    <span className={`font-mono ${outdated ? 'text-yellow-400' : 'text-green-400'}`}>
+                      v{ep.version}
+                    </span>
+                  ) : (
+                    <span className="text-gray-600">offline</span>
+                  )}
+                </span>
+              );
+            })}
+          </div>
+          {versionInfo.update_available && versionInfo.latest_release && (
+            <Link to="/settings" className="text-yellow-400 text-xs hover:text-yellow-300 transition-colors">
+              Update available: v{versionInfo.latest_release} →
+            </Link>
+          )}
+          {!versionInfo.update_available && (
+            <span className="text-green-400/60 text-xs">Up to date</span>
+          )}
+        </div>
+      )}
 
       {/* Stat cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">

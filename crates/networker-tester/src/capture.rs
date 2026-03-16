@@ -395,6 +395,7 @@ mod tests {
                 profile: crate::cli::ImpairmentProfile::None,
                 delay_ms: 0,
             },
+            json_stdout: false,
         }
     }
 

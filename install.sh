@@ -7008,7 +7008,8 @@ _deploy_parse_config() {
     DO_INSTALL_ENDPOINT=1
 
     # ── Tests ─────────────────────────────────────────────────────────────
-    local run_tests; run_tests="$(jq -r '.tests.run_tests // true' "$cfg")"
+    # Note: jq's // operator treats false as falsy, so we use 'if .tests.run_tests == false'
+    local run_tests; run_tests="$(jq -r 'if .tests.run_tests == false then "false" else "true" end' "$cfg")"
     [[ "$run_tests" == "true" ]] && DEPLOY_RUN_TESTS=1 || DEPLOY_RUN_TESTS=0
 
     DEPLOY_TEST_MODES="$(jq -c '.tests.modes // null' "$cfg")"

@@ -1144,6 +1144,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hostname"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "617aaa3557aef3810a6369d0a99fac8a080891b68bd9f9812a1eeda0c0730cbd"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "windows-link",
+]
+
+[[package]]
 name = "http"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1681,7 +1692,7 @@ dependencies = [
 
 [[package]]
 name = "networker-agent"
-version = "0.13.20"
+version = "0.13.21"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1702,7 +1713,7 @@ dependencies = [
 
 [[package]]
 name = "networker-common"
-version = "0.13.20"
+version = "0.13.21"
 dependencies = [
  "chrono",
  "networker-tester",
@@ -1713,7 +1724,7 @@ dependencies = [
 
 [[package]]
 name = "networker-dashboard"
-version = "0.13.20"
+version = "0.13.21"
 dependencies = [
  "anyhow",
  "axum",
@@ -1722,9 +1733,13 @@ dependencies = [
  "clap",
  "deadpool-postgres",
  "futures",
+ "hostname",
  "jsonwebtoken",
+ "libc",
  "networker-common",
  "networker-tester",
+ "regex",
+ "reqwest 0.12.28",
  "rpassword",
  "serde",
  "serde_json",
@@ -1734,12 +1749,13 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
 ]
 
 [[package]]
 name = "networker-endpoint"
-version = "0.13.20"
+version = "0.13.21"
 dependencies = [
  "anyhow",
  "axum",
@@ -1772,7 +1788,7 @@ dependencies = [
 
 [[package]]
 name = "networker-tester"
-version = "0.13.20"
+version = "0.13.21"
 dependencies = [
  "anyhow",
  "async-trait",
