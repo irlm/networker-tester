@@ -95,7 +95,8 @@ pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::Sender<String>)
         args.push(port.to_string());
     }
     if let Some(ref mode) = config.capture_mode {
-        if mode != "none" && !mode.is_empty() {
+        // Validate against known values (defense-in-depth — clap also validates)
+        if matches!(mode.as_str(), "tester" | "endpoint" | "both") {
             args.push("--capture-mode".to_string());
             args.push(mode.clone());
         }

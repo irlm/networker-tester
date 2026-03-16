@@ -406,15 +406,14 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
 
           {/* Packet Capture */}
           <div className="mb-4">
-            <label className="block text-xs text-gray-500 mb-1">Packet Capture</label>
+            <label className="block text-xs text-gray-400 mb-1">Packet Capture</label>
             <select
               value={captureMode}
               onChange={(e) => setCaptureMode(e.target.value)}
-              className="bg-[#0a0b0f] border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-300 focus:outline-none focus:border-cyan-500"
+              className="w-full bg-[#0a0b0f] border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-300 focus:outline-none focus:border-cyan-500"
             >
               <option value="none">Disabled</option>
               <option value="tester">Tester-side (capture on this machine)</option>
-              <option value="both">Both (tester + endpoint)</option>
             </select>
             {captureMode !== 'none' && (
               <p className="text-xs text-yellow-400/70 mt-1">Requires tshark/dumpcap installed on the tester machine</p>
