@@ -12,6 +12,7 @@ use crate::cli::{PacketCaptureMode, ResolvedConfig};
 pub struct PacketCapturePlan {
     pub mode: PacketCaptureMode,
     pub interface: String,
+    pub targets: Vec<String>,
     pub write_pcap: bool,
     pub write_summary_json: bool,
     pub pcap_path: PathBuf,
@@ -82,6 +83,7 @@ pub fn build_plan(cfg: &ResolvedConfig, out_dir: &Path) -> Option<PacketCaptureP
     Some(PacketCapturePlan {
         mode: pc.mode,
         interface: resolve_capture_interface(pc.interface.as_str(), &cfg.targets),
+        targets: cfg.targets.clone(),
         write_pcap: pc.write_pcap,
         write_summary_json: pc.write_summary_json,
         pcap_path: out_dir.join("packet-capture-tester.pcapng"),
@@ -256,7 +258,7 @@ impl PacketCaptureSession {
 
         let tshark_path = self.tshark_path.clone();
         let plan = self.plan.clone();
-        let targets = vec![];
+        let targets = plan.targets.clone();
         let summary = spawn_blocking(move || summarize(&tshark_path, &plan, &targets))
             .await
             .context("join packet capture summary task")??;
