@@ -2894,34 +2894,56 @@ detect_tshark() {
 
 step_install_packet_capture_tools() {
     next_step "Install packet capture tools (tshark/dumpcap)"
-    print_info "Installing packet-capture tools via ${PKG_MGR}…"
-    echo ""
 
-    case "$PKG_MGR" in
-        brew)
-            brew install wireshark
-            ;;
-        apt-get)
-            sudo apt-get update -qq && sudo apt-get install -y tshark
-            ;;
-        dnf)
-            sudo dnf install -y wireshark-cli wireshark
-            ;;
-        pacman)
-            sudo pacman -S --noconfirm wireshark-cli
-            ;;
-        zypper)
-            sudo zypper install -y wireshark
-            ;;
-        apk)
-            sudo apk add tshark
-            ;;
-        *)
-            print_warn "Unknown package manager: $PKG_MGR"
-            print_warn "Install tshark manually to enable packet capture."
-            return
-            ;;
-    esac
+    if detect_tshark >/dev/null 2>&1; then
+        print_ok "tshark already installed: $(detect_tshark)"
+    else
+        print_info "Installing packet-capture tools via ${PKG_MGR}…"
+        echo ""
+
+        case "$PKG_MGR" in
+            brew)
+                brew install wireshark < /dev/null
+                ;;
+            apt-get)
+                # Pre-answer the "should non-superusers be able to capture?" prompt
+                echo "wireshark-common wireshark-common/install-setuid boolean true" \
+                    | sudo debconf-set-selections 2>/dev/null || true
+                sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq < /dev/null
+                sudo DEBIAN_FRONTEND=noninteractive apt-get install -y tshark < /dev/null
+                ;;
+            dnf)
+                sudo dnf install -y wireshark-cli < /dev/null
+                ;;
+            pacman)
+                sudo pacman -S --noconfirm wireshark-cli
+                ;;
+            zypper)
+                sudo zypper install -y wireshark < /dev/null
+                ;;
+            apk)
+                sudo apk add tshark
+                ;;
+            *)
+                print_warn "Unknown package manager: $PKG_MGR"
+                print_warn "Install tshark manually to enable packet capture."
+                return
+                ;;
+        esac
+    fi
+
+    # Grant non-root capture permissions (Linux — add current user to wireshark group)
+    if [[ "$SYS_OS" == "Linux" ]] && getent group wireshark &>/dev/null; then
+        local target_user="${SUDO_USER:-$USER}"
+        if ! id -nG "$target_user" 2>/dev/null | grep -qw wireshark; then
+            sudo usermod -aG wireshark "$target_user" 2>/dev/null || true
+            print_info "Added $target_user to wireshark group (may need re-login for effect)"
+        fi
+        # Also add the networker service user if it exists
+        if id networker &>/dev/null; then
+            sudo usermod -aG wireshark networker 2>/dev/null || true
+        fi
+    fi
 
     if detect_tshark >/dev/null 2>&1; then
         print_ok "tshark ready: $(detect_tshark)"
@@ -8559,6 +8581,16 @@ main() {
 
     if [[ $do_local_tester -eq 1 && ( $CHROME_AVAILABLE -eq 1 || $DO_CHROME_INSTALL -eq 1 ) ]]; then
         step_ensure_certutil
+    fi
+
+    # ── Packet capture tools (tshark) for tester ─────────────────────────────
+    if [[ $do_local_tester -eq 1 && -n "$PKG_MGR" ]]; then
+        if ! detect_tshark >/dev/null 2>&1; then
+            echo ""
+            if [[ $AUTO_YES -eq 1 ]] || ask_yn "Install packet capture tools (tshark) for network analysis?" "y"; then
+                step_install_packet_capture_tools
+            fi
+        fi
     fi
 
     # ── Local endpoint: offer systemd service (Linux only) ────────────────────
