@@ -46,7 +46,7 @@ jobs:
   # Ubuntu tests: full feature set including browser
   # ──────────────────────────────────────────────────────────────────────────
   test-ubuntu:
-    name: Test (ubuntu)
+    name: Test (ubuntu-latest)
     runs-on: ubuntu-latest
     needs: lint  # skip if lint fails
 
@@ -78,7 +78,7 @@ jobs:
   # Windows tests: skip browser feature (no Chrome, saves ~10 min compile)
   # ──────────────────────────────────────────────────────────────────────────
   test-windows:
-    name: Test (windows)
+    name: Test (windows-latest)
     runs-on: windows-latest
     needs: lint  # skip if lint fails
 
@@ -128,7 +128,7 @@ jobs:
           cache: 'npm'
           cache-dependency-path: dashboard/package-lock.json
 
-      - run: npm install
+      - run: npm install --legacy-peer-deps
       - run: npm run build
       - run: npx tsc -b
 
