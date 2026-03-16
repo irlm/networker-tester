@@ -3580,6 +3580,109 @@ step_install_nodejs() {
     print_ok "Node.js installed: $(node --version 2>/dev/null)"
 }
 
+# Install cloud CLIs (Azure, AWS, GCP) for the dashboard to deploy endpoints.
+step_install_cloud_clis() {
+    next_step "Install cloud CLIs"
+
+    # Azure CLI
+    if command -v az &>/dev/null; then
+        print_info "Azure CLI already installed: $(az version --query '"azure-cli"' -o tsv 2>/dev/null)"
+    else
+        print_info "Installing Azure CLI…"
+        case "$PKG_MGR" in
+            apt-get)
+                curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash < /dev/null 2>&1
+                ;;
+            dnf)
+                sudo rpm --import https://packages.microsoft.com/keys/microsoft.asc < /dev/null
+                sudo dnf install -y azure-cli < /dev/null 2>&1
+                ;;
+            brew)
+                brew install azure-cli < /dev/null 2>&1
+                ;;
+        esac
+        if command -v az &>/dev/null; then
+            print_ok "Azure CLI installed"
+        else
+            print_warn "Azure CLI installation failed — install manually"
+        fi
+    fi
+
+    # AWS CLI
+    if command -v aws &>/dev/null; then
+        print_info "AWS CLI already installed: $(aws --version 2>/dev/null | head -1)"
+    else
+        print_info "Installing AWS CLI…"
+        local tmp_aws
+        tmp_aws="$(mktemp -d)"
+        if curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "${tmp_aws}/awscliv2.zip" 2>/dev/null; then
+            (cd "$tmp_aws" && unzip -qo awscliv2.zip && sudo ./aws/install 2>/dev/null) || true
+        fi
+        rm -rf "$tmp_aws"
+        if command -v aws &>/dev/null; then
+            print_ok "AWS CLI installed"
+        else
+            print_warn "AWS CLI installation failed — install manually"
+        fi
+    fi
+
+    # GCP CLI
+    if command -v gcloud &>/dev/null; then
+        print_info "GCP CLI already installed: $(gcloud --version 2>/dev/null | head -1)"
+    else
+        print_info "Installing GCP CLI…"
+        case "$PKG_MGR" in
+            apt-get)
+                if [[ ! -f /usr/share/keyrings/cloud.google.gpg ]]; then
+                    curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+                        | sudo gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg 2>/dev/null || true
+                    echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
+                        | sudo tee /etc/apt/sources.list.d/google-cloud-sdk.list > /dev/null
+                fi
+                sudo apt-get update -qq < /dev/null 2>&1
+                sudo apt-get install -y google-cloud-cli -qq < /dev/null 2>&1
+                ;;
+            dnf)
+                sudo tee /etc/yum.repos.d/google-cloud-sdk.repo > /dev/null << 'GCPREPO'
+[google-cloud-cli]
+name=Google Cloud CLI
+baseurl=https://packages.cloud.google.com/yum/repos/cloud-sdk-el9-x86_64
+enabled=1
+gpgcheck=1
+repo_gpgcheck=0
+gpgkey=https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
+GCPREPO
+                sudo dnf install -y google-cloud-cli < /dev/null 2>&1
+                ;;
+            brew)
+                brew install google-cloud-sdk < /dev/null 2>&1
+                ;;
+        esac
+        if command -v gcloud &>/dev/null; then
+            print_ok "GCP CLI installed"
+        else
+            print_warn "GCP CLI installation failed — install manually"
+        fi
+    fi
+
+    # jq is needed for credential helpers
+    if ! command -v jq &>/dev/null; then
+        case "$PKG_MGR" in
+            apt-get) sudo apt-get install -y jq -qq < /dev/null 2>&1 ;;
+            dnf)     sudo dnf install -y jq < /dev/null 2>&1 ;;
+            brew)    brew install jq < /dev/null 2>&1 ;;
+        esac
+    fi
+
+    # unzip is needed for AWS CLI install
+    if ! command -v unzip &>/dev/null; then
+        case "$PKG_MGR" in
+            apt-get) sudo apt-get install -y unzip -qq < /dev/null 2>&1 ;;
+            dnf)     sudo dnf install -y unzip < /dev/null 2>&1 ;;
+        esac
+    fi
+}
+
 # Build the React frontend and copy to /opt/networker/dashboard.
 step_build_frontend() {
     next_step "Build dashboard frontend"
@@ -8327,8 +8430,10 @@ deploy_from_config() {
         print_ok "Endpoint $label deployed: ${DEPLOY_EP_IPS[$i]}"
     done
 
-    # Phase 7: Generate tester config from deployed IPs
-    _deploy_generate_tester_config
+    # Phase 7: Generate tester config from deployed IPs (skip if deploy-only)
+    if [[ $DEPLOY_RUN_TESTS -eq 1 ]]; then
+        _deploy_generate_tester_config
+    fi
 
     # Phase 7.5: Dashboard (if requested in config)
     local has_dashboard
@@ -8344,6 +8449,7 @@ deploy_from_config() {
 
         step_install_postgresql
         step_install_nodejs
+        step_install_cloud_clis
 
         if [[ "$INSTALL_METHOD" == "release" ]]; then
             mkdir -p "$INSTALL_DIR"
@@ -8465,6 +8571,7 @@ main() {
     if [[ $DO_INSTALL_DASHBOARD -eq 1 ]]; then
         step_install_postgresql
         step_install_nodejs
+        step_install_cloud_clis
 
         if [[ "$INSTALL_METHOD" == "release" ]]; then
             mkdir -p "$INSTALL_DIR"
