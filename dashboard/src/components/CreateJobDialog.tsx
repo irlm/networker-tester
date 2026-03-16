@@ -24,7 +24,7 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
   const [timeout, setTimeout_] = useState(30);
   const [insecure, setInsecure] = useState(true);
   const [connectionReuse, setConnectionReuse] = useState(false);
-  const [captureMode, setCaptureMode] = useState('none');
+  const [captureMode, setCaptureMode] = useState<'none' | 'tester' | 'endpoint' | 'both'>('none');
   const [payloadSizes, setPayloadSizes] = useState<Set<string>>(new Set(['64k', '1m']));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -409,7 +409,7 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
             <label className="block text-xs text-gray-400 mb-1">Packet Capture</label>
             <select
               value={captureMode}
-              onChange={(e) => setCaptureMode(e.target.value)}
+              onChange={(e) => setCaptureMode(e.target.value as 'none' | 'tester')}
               className="w-full bg-[#0a0b0f] border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-300 focus:outline-none focus:border-cyan-500"
             >
               <option value="none">Disabled</option>
