@@ -24,6 +24,7 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
   const [timeout, setTimeout_] = useState(30);
   const [insecure, setInsecure] = useState(true);
   const [connectionReuse, setConnectionReuse] = useState(false);
+  const [captureMode, setCaptureMode] = useState('none');
   const [payloadSizes, setPayloadSizes] = useState<Set<string>>(new Set(['64k', '1m']));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -137,6 +138,7 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
         insecure,
         dns_enabled: true,
         connection_reuse: connectionReuse,
+        ...(captureMode !== 'none' ? { capture_mode: captureMode } : {}),
       }, selectedTester || undefined);
       addToast('success', `Job ${result.job_id.slice(0, 8)} created`);
       onCreated();
@@ -400,6 +402,23 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
               />
               Connection reuse
             </label>
+          </div>
+
+          {/* Packet Capture */}
+          <div className="mb-4">
+            <label className="block text-xs text-gray-500 mb-1">Packet Capture</label>
+            <select
+              value={captureMode}
+              onChange={(e) => setCaptureMode(e.target.value)}
+              className="bg-[#0a0b0f] border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-300 focus:outline-none focus:border-cyan-500"
+            >
+              <option value="none">Disabled</option>
+              <option value="tester">Tester-side (capture on this machine)</option>
+              <option value="both">Both (tester + endpoint)</option>
+            </select>
+            {captureMode !== 'none' && (
+              <p className="text-xs text-yellow-400/70 mt-1">Requires tshark/dumpcap installed on the tester machine</p>
+            )}
           </div>
 
           {/* Summary */}

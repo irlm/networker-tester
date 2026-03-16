@@ -43,6 +43,9 @@ pub struct JobConfig {
     pub udp_port: Option<u16>,
     #[serde(default)]
     pub udp_throughput_port: Option<u16>,
+    /// Packet capture mode: "none", "tester", "endpoint", or "both".
+    #[serde(default)]
+    pub capture_mode: Option<String>,
 }
 
 fn default_runs() -> u32 {

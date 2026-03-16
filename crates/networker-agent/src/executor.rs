@@ -94,6 +94,12 @@ pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::Sender<String>)
         args.push("--udp-throughput-port".to_string());
         args.push(port.to_string());
     }
+    if let Some(ref mode) = config.capture_mode {
+        if mode != "none" && !mode.is_empty() {
+            args.push("--capture-mode".to_string());
+            args.push(mode.clone());
+        }
+    }
 
     // SSRF protection: block probes targeting private, loopback, link-local,
     // or cloud metadata IPs/hostnames.
