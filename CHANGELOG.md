@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.27] – 2026-03-17 — Dashboard installer fixes
+
+### Fixed
+- **Node.js install** — download setup script to file first, avoiding curl|bash pipe stdin issues; use NodeSource 24.x explicitly instead of LTS
+- **Azure CLI install** — add `DEBIAN_FRONTEND=noninteractive` and download-then-run pattern to prevent hanging
+- **Binary validation** — skip `--version` check for dashboard/agent (they need DB/config to start); use `file` type check instead
+- **Frontend build** — clone at release tag (not main) and use `--legacy-peer-deps` for npm
+- **Admin password** — increase urandom read from 24 to 64 bytes (short passwords with restricted charset)
+- **Dashboard service user** — run as installing user (not system `networker` user) so cloud CLI credentials are accessible
+
+### Added
+- **nginx reverse proxy** — auto-installs nginx, configures ports 80/443 with WebSocket support for live dashboard updates
+- **Let's Encrypt** — certbot with FQDN validation, self-signed fallback if DNS doesn't resolve
+- **Tester tools** — dashboard install now includes networker-tester binary, Chrome, and tshark for browser probes and packet capture
+- **Completion guide** — shows SSH command, cloud credentials setup (az/aws/gcloud), and HTTPS URL
+- **GitHub Actions v5** — all workflows bumped from v4 to v5 (Node.js 24)
+
+---
+
 ## [0.13.26] – 2026-03-17 — Dashboard design overhaul
 
 ### Changed
