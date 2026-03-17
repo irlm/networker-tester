@@ -324,6 +324,8 @@ DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
 DO_INSTALL_ENDPOINT=1
 DO_INSTALL_DASHBOARD=0
+DASHBOARD_FQDN=""
+DASHBOARD_NGINX_CONFIGURED=0
 RUST_VER=""
 RUST_EXISTS=0
 GIT_AVAILABLE=0
@@ -3583,11 +3585,11 @@ step_install_nodejs() {
 
     case "$PKG_MGR" in
         apt-get)
-            # Use NodeSource for a recent LTS version
-            if ! command -v node &>/dev/null; then
-                curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
-                sudo apt-get install -y nodejs < /dev/null
-            fi
+            # Remove system nodejs if present (conflicts with NodeSource)
+            sudo apt-get remove -y nodejs npm < /dev/null 2>/dev/null || true
+            curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - < /dev/null 2>&1
+            sudo apt-get update -qq < /dev/null
+            sudo apt-get install -y nodejs < /dev/null
             ;;
         dnf)
             sudo dnf install -y nodejs npm < /dev/null
@@ -3615,7 +3617,7 @@ step_install_cloud_clis() {
         print_info "Installing Azure CLI…"
         case "$PKG_MGR" in
             apt-get)
-                curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash < /dev/null 2>&1
+                curl -sL https://aka.ms/InstallAzureCLIDeb | sudo DEBIAN_FRONTEND=noninteractive bash < /dev/null 2>&1
                 ;;
             dnf)
                 sudo rpm --import https://packages.microsoft.com/keys/microsoft.asc < /dev/null
@@ -3765,6 +3767,7 @@ DASHBOARD_DB_URL=postgres://networker:${db_pw}@127.0.0.1:5432/networker_dashboar
 DASHBOARD_ADMIN_PASSWORD=${admin_pw}
 DASHBOARD_JWT_SECRET=${jwt_secret}
 DASHBOARD_PORT=${dashboard_port}
+DASHBOARD_BIND_ADDR=127.0.0.1
 DASHBOARD_STATIC_DIR=/opt/networker/dashboard
 ENVFILE
 
@@ -3850,6 +3853,182 @@ UNIT
 
     sleep 2
     print_ok "networker-dashboard service started on port ${dashboard_port} — auto-starts on boot"
+}
+
+# Set up nginx as a reverse proxy for the dashboard (ports 80/443 → 3000).
+step_setup_nginx_proxy() {
+    next_step "Set up nginx reverse proxy for dashboard"
+
+    if [[ "$SYS_OS" != "Linux" ]]; then
+        print_info "nginx proxy is Linux-only — skipping."
+        return 0
+    fi
+
+    # Check if port 80 is already in use by something other than nginx
+    if ss -tlnp 2>/dev/null | grep -q ':80 ' && ! command -v nginx &>/dev/null; then
+        print_warn "Port 80 already in use — skipping nginx proxy setup."
+        return 0
+    fi
+
+    # Install nginx if not present (system package is fine for reverse proxy)
+    if ! command -v nginx &>/dev/null; then
+        case "$PKG_MGR" in
+            apt-get) sudo apt-get install -y -qq nginx < /dev/null 2>&1 ;;
+            dnf)     sudo dnf install -y nginx < /dev/null 2>&1 ;;
+        esac
+    fi
+
+    if ! command -v nginx &>/dev/null; then
+        print_warn "nginx installation failed — dashboard available on port 3000 only."
+        return 0
+    fi
+
+    local dashboard_port
+    dashboard_port="$(grep DASHBOARD_PORT /etc/networker-dashboard.env 2>/dev/null | cut -d= -f2)"
+    dashboard_port="${dashboard_port:-3000}"
+    local server_name="${DASHBOARD_FQDN:-_}"
+
+    # Write reverse proxy config
+    sudo tee /etc/nginx/conf.d/networker-dashboard.conf > /dev/null <<NGINXCONF
+server {
+    listen 80;
+    server_name ${server_name};
+
+    location / {
+        proxy_pass http://127.0.0.1:${dashboard_port};
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    location /ws/ {
+        proxy_pass http://127.0.0.1:${dashboard_port};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_read_timeout 86400;
+    }
+}
+NGINXCONF
+
+    # Remove default site if it exists
+    sudo rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+
+    if sudo nginx -t 2>&1; then
+        sudo systemctl enable nginx 2>/dev/null || true
+        sudo systemctl reload nginx 2>/dev/null || sudo systemctl start nginx
+        DASHBOARD_NGINX_CONFIGURED=1
+        print_ok "nginx reverse proxy configured — dashboard on port 80"
+    else
+        print_warn "nginx config test failed — dashboard available on port ${dashboard_port} only."
+        sudo rm -f /etc/nginx/conf.d/networker-dashboard.conf
+        return 0
+    fi
+
+    # Open firewall for ports 80 and 443
+    if command -v ufw &>/dev/null; then
+        sudo ufw allow 80/tcp 2>/dev/null || true
+        sudo ufw allow 443/tcp 2>/dev/null || true
+    elif command -v firewall-cmd &>/dev/null; then
+        sudo firewall-cmd --permanent --add-service=http 2>/dev/null || true
+        sudo firewall-cmd --permanent --add-service=https 2>/dev/null || true
+        sudo firewall-cmd --reload 2>/dev/null || true
+    fi
+}
+
+# Set up HTTPS for the dashboard: Let's Encrypt if FQDN resolves, self-signed otherwise.
+step_setup_letsencrypt() {
+    next_step "Set up HTTPS certificate"
+
+    if [[ $DASHBOARD_NGINX_CONFIGURED -ne 1 ]]; then
+        print_info "nginx not configured — skipping HTTPS."
+        return 0
+    fi
+
+    local use_letsencrypt=0
+    if [[ -n "$DASHBOARD_FQDN" ]]; then
+        # Check if FQDN resolves to this machine
+        local resolved_ip server_ip
+        resolved_ip="$(dig +short "$DASHBOARD_FQDN" 2>/dev/null | tail -1)"
+        server_ip="$(curl -s --max-time 5 ifconfig.me 2>/dev/null)"
+        if [[ -n "$resolved_ip" && "$resolved_ip" == "$server_ip" ]]; then
+            use_letsencrypt=1
+        else
+            print_warn "FQDN $DASHBOARD_FQDN does not resolve to this server ($server_ip vs $resolved_ip)"
+            print_info "Using self-signed certificate instead."
+        fi
+    fi
+
+    if [[ $use_letsencrypt -eq 1 ]]; then
+        # Install certbot
+        case "$PKG_MGR" in
+            apt-get) sudo apt-get install -y -qq certbot python3-certbot-nginx < /dev/null 2>&1 ;;
+            dnf)     sudo dnf install -y certbot python3-certbot-nginx < /dev/null 2>&1 ;;
+        esac
+
+        if sudo certbot --nginx -d "$DASHBOARD_FQDN" \
+                --non-interactive --agree-tos --register-unsafely-without-email \
+                --redirect < /dev/null 2>&1; then
+            print_ok "Let's Encrypt certificate installed for $DASHBOARD_FQDN"
+            return 0
+        else
+            print_warn "Let's Encrypt failed — falling back to self-signed certificate."
+        fi
+    fi
+
+    # Self-signed fallback
+    sudo mkdir -p /etc/nginx/ssl
+    sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+        -keyout /etc/nginx/ssl/dashboard.key \
+        -out /etc/nginx/ssl/dashboard.crt \
+        -subj "/CN=${DASHBOARD_FQDN:-networker-dashboard}" 2>/dev/null
+
+    local server_name="${DASHBOARD_FQDN:-_}"
+    local dashboard_port
+    dashboard_port="$(grep DASHBOARD_PORT /etc/networker-dashboard.env 2>/dev/null | cut -d= -f2)"
+    dashboard_port="${dashboard_port:-3000}"
+
+    # Add SSL server block
+    sudo tee -a /etc/nginx/conf.d/networker-dashboard.conf > /dev/null <<SSLCONF
+
+server {
+    listen 443 ssl;
+    server_name ${server_name};
+
+    ssl_certificate /etc/nginx/ssl/dashboard.crt;
+    ssl_certificate_key /etc/nginx/ssl/dashboard.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    location / {
+        proxy_pass http://127.0.0.1:${dashboard_port};
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    location /ws/ {
+        proxy_pass http://127.0.0.1:${dashboard_port};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_read_timeout 86400;
+    }
+}
+SSLCONF
+
+    if sudo nginx -t 2>&1; then
+        sudo systemctl reload nginx
+        print_ok "Self-signed HTTPS certificate configured"
+        print_dim "  Browser will show a security warning — this is expected."
+    else
+        print_warn "SSL config failed — dashboard available on HTTP only."
+    fi
 }
 
 # ─── HTTP Stack comparison: nginx setup (Ubuntu) ─────────────────────────────
@@ -6710,7 +6889,15 @@ display_completion() {
         dashboard_port="$(grep DASHBOARD_PORT /etc/networker-dashboard.env 2>/dev/null | cut -d= -f2)"
         dashboard_port="${dashboard_port:-3000}"
         echo "  ${BOLD}networker-dashboard${RESET}:"
-        echo "    Web UI:   http://localhost:${dashboard_port}"
+        if [[ -n "${DASHBOARD_FQDN:-}" && ${DASHBOARD_NGINX_CONFIGURED:-0} -eq 1 ]]; then
+            echo "    Web UI:   https://${DASHBOARD_FQDN}"
+        elif [[ ${DASHBOARD_NGINX_CONFIGURED:-0} -eq 1 ]]; then
+            local server_ip
+            server_ip="$(curl -s --max-time 3 ifconfig.me 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}')"
+            echo "    Web UI:   http://${server_ip:-localhost}"
+        else
+            echo "    Web UI:   http://localhost:${dashboard_port}"
+        fi
         echo "    Service:  sudo systemctl status networker-dashboard"
         echo "    Logs:     sudo journalctl -u networker-dashboard -f"
         echo "    Config:   /etc/networker-dashboard.env"
@@ -8500,6 +8687,15 @@ deploy_from_config() {
         step_build_frontend
         step_write_dashboard_env
         step_setup_dashboard_service
+
+        # Nginx proxy + TLS (if fqdn is in config)
+        DASHBOARD_FQDN="$(jq -r '.dashboard.fqdn // ""' "$cfg")"
+        if [[ "$SYS_OS" == "Linux" ]]; then
+            step_setup_nginx_proxy
+            if [[ -n "$DASHBOARD_FQDN" ]]; then
+                step_setup_letsencrypt
+            fi
+        fi
     fi
 
     # Phase 8: Run tests
@@ -8637,6 +8833,17 @@ main() {
         step_build_frontend
         step_write_dashboard_env
         step_setup_dashboard_service
+
+        # Nginx reverse proxy (optional)
+        if [[ "$SYS_OS" == "Linux" ]]; then
+            step_setup_nginx_proxy
+            if [[ $DASHBOARD_NGINX_CONFIGURED -eq 1 ]]; then
+                echo ""
+                printf "  Enter FQDN for HTTPS certificate (or press Enter for self-signed): "
+                read -r DASHBOARD_FQDN </dev/tty 2>/dev/null || DASHBOARD_FQDN=""
+                step_setup_letsencrypt
+            fi
+        fi
     fi
 
     # ── Remote: tester ────────────────────────────────────────────────────────
