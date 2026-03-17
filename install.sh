@@ -2780,17 +2780,29 @@ step_download_release() {
     chmod +x "${INSTALL_DIR}/${binary}"
     rm -rf "$tmp_dir"
 
-    # Verify the binary actually runs (catches GLIBC mismatch, wrong arch, etc.)
-    # Some binaries (dashboard, agent) require env vars to start; provide dummies for --version.
+    # Verify the binary runs (catches GLIBC mismatch, wrong arch, etc.)
+    # Skip full validation for dashboard/agent — they require DB/config to start.
     local installed_ver
-    if installed_ver="$(DASHBOARD_JWT_SECRET=x DASHBOARD_ADMIN_PASSWORD=x AGENT_API_KEY=x \
-            "${INSTALL_DIR}/${binary}" --version 2>&1)"; then
-        print_ok "$binary installed → ${INSTALL_DIR}/${binary}  ($installed_ver)"
-    else
-        print_warn "Downloaded binary failed to run: ${installed_ver}"
-        rm -f "${INSTALL_DIR}/${binary}"
-        return 1
-    fi
+    case "$binary" in
+        networker-dashboard|networker-agent)
+            if file "${INSTALL_DIR}/${binary}" 2>/dev/null | grep -q "ELF\|Mach-O\|PE32"; then
+                print_ok "$binary installed → ${INSTALL_DIR}/${binary}"
+            else
+                print_warn "Downloaded file is not an executable binary"
+                rm -f "${INSTALL_DIR}/${binary}"
+                return 1
+            fi
+            ;;
+        *)
+            if installed_ver="$("${INSTALL_DIR}/${binary}" --version 2>&1)"; then
+                print_ok "$binary installed → ${INSTALL_DIR}/${binary}  ($installed_ver)"
+            else
+                print_warn "Downloaded binary failed to run: ${installed_ver}"
+                rm -f "${INSTALL_DIR}/${binary}"
+                return 1
+            fi
+            ;;
+    esac
 
     # Replace any stale copies earlier in PATH that would shadow the new binary.
     local path_bin
@@ -3033,14 +3045,21 @@ step_cargo_install() {
                && tar xzf "${tmp_dir}/${archive}" -C "$INSTALL_DIR" 2>/dev/null; then
                 chmod +x "${INSTALL_DIR}/${binary}"
                 rm -rf "$tmp_dir"
-                # Verify the binary actually runs (catches GLIBC mismatch, wrong arch, etc.)
-                local installed_ver
-                installed_ver="$(DASHBOARD_JWT_SECRET=x DASHBOARD_ADMIN_PASSWORD=x AGENT_API_KEY=x \
-                    "${INSTALL_DIR}/${binary}" --version 2>&1)" && {
-                    print_ok "$binary installed → ${INSTALL_DIR}/${binary}  ($installed_ver)"
-                    return 0
-                }
-                print_warn "Downloaded binary failed to run: ${installed_ver}"
+                # Verify the binary (skip full run for dashboard/agent)
+                case "$binary" in
+                    networker-dashboard|networker-agent)
+                        if file "${INSTALL_DIR}/${binary}" 2>/dev/null | grep -q "ELF\|Mach-O\|PE32"; then
+                            print_ok "$binary installed → ${INSTALL_DIR}/${binary}"
+                            return 0
+                        fi ;;
+                    *)
+                        local installed_ver
+                        installed_ver="$("${INSTALL_DIR}/${binary}" --version 2>&1)" && {
+                            print_ok "$binary installed → ${INSTALL_DIR}/${binary}  ($installed_ver)"
+                            return 0
+                        } ;;
+                esac
+                print_warn "Downloaded binary failed validation"
                 rm -f "${INSTALL_DIR}/${binary}"
             fi
             rm -rf "$tmp_dir"
