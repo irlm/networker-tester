@@ -65,7 +65,7 @@ export function RunsPage() {
             value={targetSearch}
             onChange={(e) => setTargetSearch(e.target.value)}
             placeholder="Filter by target host..."
-            className="bg-[#0a0b0f] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-300 w-64 focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
+            className="bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-300 w-64 focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
           />
         </div>
       </div>
@@ -76,16 +76,16 @@ export function RunsPage() {
         </div>
       )}
 
-      <div className="bg-[#12131a] border border-gray-800 rounded-lg overflow-hidden">
+      <div className="table-container">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-gray-800 text-gray-500 text-xs">
-              <th className="px-4 py-3 text-left">Run ID</th>
-              <th className="px-4 py-3 text-left">Target</th>
-              <th className="px-4 py-3 text-left">Modes</th>
-              <th className="px-4 py-3 text-left">Success</th>
-              <th className="px-4 py-3 text-left">Failed</th>
-              <th className="px-4 py-3 text-left">Started</th>
+            <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
+              <th className="px-4 py-2.5 text-left font-medium">Run ID</th>
+              <th className="px-4 py-2.5 text-left font-medium">Target</th>
+              <th className="px-4 py-2.5 text-left font-medium">Modes</th>
+              <th className="px-4 py-2.5 text-left font-medium">Success</th>
+              <th className="px-4 py-2.5 text-left font-medium">Failed</th>
+              <th className="px-4 py-2.5 text-left font-medium">Started</th>
             </tr>
           </thead>
           <tbody>
@@ -117,9 +117,10 @@ export function RunsPage() {
         </table>
 
         {runs.length === 0 && (
-          <p className="p-4 text-gray-600 text-sm text-center">
-            No test runs stored yet. Complete a job to see results here.
-          </p>
+          <div className="py-10 text-center">
+            <p className="text-gray-500 text-sm">No test runs stored yet</p>
+            <p className="text-gray-700 text-xs mt-1">Complete a test to see results here</p>
+          </div>
         )}
       </div>
     </div>

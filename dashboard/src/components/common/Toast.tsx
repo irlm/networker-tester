@@ -3,7 +3,7 @@ import { useToastStore, type ToastType } from '../../hooks/useToast';
 const typeStyles: Record<ToastType, string> = {
   success: 'bg-green-500/15 border-green-500/40 text-green-400',
   error: 'bg-red-500/15 border-red-500/40 text-red-400',
-  info: 'bg-cyan-500/15 border-cyan-500/40 text-cyan-400',
+  info: 'bg-blue-500/15 border-blue-500/40 text-blue-400',
 };
 
 const typeIcons: Record<ToastType, string> = {

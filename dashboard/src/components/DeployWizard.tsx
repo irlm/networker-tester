@@ -1,6 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { api } from '../api/client';
 import type { CloudStatus, DeployEndpoint, ModeGroup } from '../api/types';
+import { THROUGHPUT_IDS } from '../lib/chart';
+import { ModeSelector } from './common/ModeSelector';
+import { PayloadSelector } from './common/PayloadSelector';
 import { useToast } from '../hooks/useToast';
 
 interface DeployWizardProps {
@@ -49,8 +52,6 @@ export function DeployWizard({ onClose, onCreated }: DeployWizardProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const addToast = useToast();
 
-  const THROUGHPUT_IDS = ['download', 'upload', 'download1', 'download2', 'download3',
-    'upload1', 'upload2', 'upload3', 'webdownload', 'webupload', 'udpdownload', 'udpupload'];
   const needsPayload = THROUGHPUT_IDS.some((m) => selectedModes.has(m));
 
   useEffect(() => {
@@ -70,6 +71,28 @@ export function DeployWizard({ onClose, onCreated }: DeployWizardProps) {
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [handleKeyDown]);
+
+  // Focus trap — keep Tab within the dialog
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    function trapFocus(e: KeyboardEvent) {
+      if (e.key !== 'Tab') return;
+      const els = dialog!.querySelectorAll<HTMLElement>(
+        'input:not([disabled]), button:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]):not([disabled])'
+      );
+      if (els.length === 0) return;
+      const first = els[0];
+      const last = els[els.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault(); last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault(); first.focus();
+      }
+    }
+    dialog.addEventListener('keydown', trapFocus);
+    return () => dialog.removeEventListener('keydown', trapFocus);
+  }, []);
 
   const updateEndpoint = (idx: number, updates: Partial<DeployEndpoint>) => {
     setEndpoints(prev => prev.map((ep, i) => i === idx ? { ...ep, ...updates } : ep));
@@ -208,27 +231,34 @@ export function DeployWizard({ onClose, onCreated }: DeployWizardProps) {
   const titleId = 'deploy-wizard-title';
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+    <div className="fixed inset-0 z-50 flex justify-end">
+      {/* Backdrop */}
+      <div className="absolute inset-0 bg-black/40 slide-over-backdrop" onClick={onClose} aria-hidden="true" />
+
+      {/* Slide-over panel */}
       <div
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="max-h-[90vh] overflow-y-auto"
+        className="relative w-[520px] max-w-[90vw] bg-[var(--bg-base)] border-l border-gray-800 h-full overflow-y-auto slide-over-panel"
       >
-        <div className="bg-[#12131a] border border-gray-800 rounded-lg p-6 w-[700px] min-w-[500px] max-w-[95vw] resize-x overflow-auto">
-          <div className="flex items-center justify-between mb-4">
-            <h3 id={titleId} className="text-lg font-bold text-gray-100">
-              Deploy & Test
-            </h3>
-            <div className="flex gap-1">
-              {(endpointOnly ? [1, 2, 3] : [1, 2, 3, 4]).map(s => (
-                <div
-                  key={s}
-                  className={`w-8 h-1 rounded-full ${s <= step ? 'bg-cyan-500' : 'bg-gray-700'}`}
-                />
-              ))}
+        <div className="p-6">
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-4">
+              <h3 id={titleId} className="text-lg font-bold text-gray-100">
+                Deploy & Test
+              </h3>
+              <div className="flex gap-1">
+                {(endpointOnly ? [1, 2, 3] : [1, 2, 3, 4]).map(s => (
+                  <div
+                    key={s}
+                    className={`w-6 h-1 rounded-full ${s <= step ? 'bg-green-500' : 'bg-gray-700'}`}
+                  />
+                ))}
+              </div>
             </div>
+            <button type="button" onClick={onClose} className="text-gray-500 hover:text-gray-300 text-sm" aria-label="Close">&#x2715;</button>
           </div>
 
           {error && (
@@ -248,7 +278,7 @@ export function DeployWizard({ onClose, onCreated }: DeployWizardProps) {
                   {(['azure', 'aws', 'gcp', 'ssh'] as const).map(p => {
                     const s = cloudStatus[p];
                     return (
-                      <div key={p} className="bg-[#0a0b0f] border border-gray-800 rounded p-3">
+                      <div key={p} className="bg-[var(--bg-base)] border border-gray-800 rounded p-3">
                         <div className="flex items-center gap-2 mb-1">
                           <span className={`w-2 h-2 rounded-full ${
                             s.authenticated ? 'bg-green-400' : s.available ? 'bg-yellow-400' : 'bg-gray-600'
@@ -277,7 +307,7 @@ export function DeployWizard({ onClose, onCreated }: DeployWizardProps) {
             <div>
               <p className="text-sm text-gray-400 mb-3">Configure endpoints to deploy:</p>
               {endpoints.map((ep, idx) => (
-                <div key={idx} className="bg-[#0a0b0f] border border-gray-800 rounded p-3 mb-3">
+                <div key={idx} className="bg-[var(--bg-base)] border border-gray-800 rounded p-3 mb-3">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs text-gray-500 font-medium">Endpoint {idx + 1}</span>
                     {endpoints.length > 1 && (
@@ -297,7 +327,7 @@ export function DeployWizard({ onClose, onCreated }: DeployWizardProps) {
                       <select
                         value={ep.provider}
                         onChange={e => changeProvider(idx, e.target.value)}
-                        className="w-full bg-[#12131a] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                        className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                       >
                         <option value="azure" disabled={!providerAvailable('azure')}>Azure{!providerAvailable('azure') ? ' (unavailable)' : ''}</option>
                         <option value="aws" disabled={!providerAvailable('aws')}>AWS{!providerAvailable('aws') ? ' (unavailable)' : ''}</option>
@@ -313,7 +343,7 @@ export function DeployWizard({ onClose, onCreated }: DeployWizardProps) {
                           value={ep.ip || ''}
                           onChange={e => updateEndpoint(idx, { ip: e.target.value })}
                           placeholder="192.168.1.100"
-                          className="w-full bg-[#12131a] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                          className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                         />
                       </div>
                     ) : (
@@ -322,7 +352,7 @@ export function DeployWizard({ onClose, onCreated }: DeployWizardProps) {
                         <select
                           value={ep.region || ''}
                           onChange={e => updateEndpoint(idx, { region: e.target.value })}
-                          className="w-full bg-[#12131a] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                          className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                         >
                           {(ep.provider === 'azure' ? AZURE_REGIONS :
                             ep.provider === 'aws' ? AWS_REGIONS : GCP_REGIONS
@@ -339,7 +369,7 @@ export function DeployWizard({ onClose, onCreated }: DeployWizardProps) {
                         <input
                           value={ep.ssh_user || 'root'}
                           onChange={e => updateEndpoint(idx, { ssh_user: e.target.value })}
-                          className="w-full bg-[#12131a] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                          className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                         />
                       </div>
                       <div>
@@ -348,7 +378,7 @@ export function DeployWizard({ onClose, onCreated }: DeployWizardProps) {
                           type="number"
                           value={ep.ssh_port || 22}
                           onChange={e => updateEndpoint(idx, { ssh_port: Number(e.target.value) })}
-                          className="w-full bg-[#12131a] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                          className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                         />
                       </div>
                     </div>
@@ -365,7 +395,7 @@ export function DeployWizard({ onClose, onCreated }: DeployWizardProps) {
                             else if (ep.provider === 'aws') updateEndpoint(idx, { instance_type: e.target.value });
                             else updateEndpoint(idx, { machine_type: e.target.value });
                           }}
-                          className="w-full bg-[#12131a] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                          className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                         >
                           {(ep.provider === 'azure' ? AZURE_SIZES :
                             ep.provider === 'aws' ? AWS_TYPES : GCP_MACHINES
@@ -377,7 +407,7 @@ export function DeployWizard({ onClose, onCreated }: DeployWizardProps) {
                         <select
                           value={ep.os || 'linux'}
                           onChange={e => updateEndpoint(idx, { os: e.target.value })}
-                          className="w-full bg-[#12131a] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                          className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                         >
                           <option value="linux">Linux (Ubuntu)</option>
                           <option value="windows">Windows Server</option>
@@ -473,86 +503,25 @@ export function DeployWizard({ onClose, onCreated }: DeployWizardProps) {
 
               {/* Mode Selection */}
               <p className="text-xs text-gray-400 mb-2">Probe Modes</p>
-              <div className="grid grid-cols-2 gap-3 mb-4">
-                {modeGroups.map(group => (
-                  <div
-                    key={group.label}
-                    className={`bg-[#0a0b0f] border border-gray-800 rounded p-3 ${
-                      group.label === 'Throughput' ? 'col-span-2' : ''
-                    }`}
-                  >
-                    {(() => {
-                      const ids = group.modes.map(m => m.id);
-                      const selectedCount = ids.filter(id => selectedModes.has(id)).length;
-                      const allSelected = selectedCount === ids.length;
-                      const someSelected = selectedCount > 0 && !allSelected;
-                      return (
-                        <>
-                          <label className="flex items-center gap-2 mb-2 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={allSelected}
-                              ref={el => { if (el) el.indeterminate = someSelected; }}
-                              onChange={() => {
-                                setSelectedModes(prev => {
-                                  const next = new Set(prev);
-                                  ids.forEach(id => allSelected ? next.delete(id) : next.add(id));
-                                  return next;
-                                });
-                              }}
-                              className="accent-cyan-500"
-                            />
-                            <span className="text-xs text-gray-500 font-medium">{group.label}</span>
-                            {someSelected && (
-                              <span className="text-[10px] text-gray-600">{selectedCount}/{ids.length}</span>
-                            )}
-                            {group.detail && (
-                              <span className="text-gray-600 hover:text-gray-400 cursor-help ml-1 text-xs" title={group.detail}>&#9432;</span>
-                            )}
-                          </label>
-                          <div className={`pl-5 ${group.label === 'Throughput' ? 'grid grid-cols-2 gap-x-4' : ''}`}>
-                            {group.modes.map(mode => (
-                              <label key={mode.id} className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer py-0.5 hover:text-gray-100">
-                                <input
-                                  type="checkbox"
-                                  checked={selectedModes.has(mode.id)}
-                                  onChange={() => toggleMode(mode.id)}
-                                  className="accent-cyan-500"
-                                />
-                                <span>{mode.name}</span>
-                                <span className="text-xs text-gray-600 ml-auto" title={mode.detail}>{mode.desc}</span>
-                              </label>
-                            ))}
-                          </div>
-                        </>
-                      );
-                    })()}
-                  </div>
-                ))}
+              <div className="mb-4">
+                <ModeSelector
+                  modeGroups={modeGroups}
+                  selectedModes={selectedModes}
+                  onToggle={toggleMode}
+                  onToggleGroup={(ids, allSelected) => {
+                    setSelectedModes(prev => {
+                      const next = new Set(prev);
+                      ids.forEach(id => allSelected ? next.delete(id) : next.add(id));
+                      return next;
+                    });
+                  }}
+                />
               </div>
 
               {needsPayload && (
                 <div className="mb-4">
                   <p className="text-xs text-gray-400 mb-2">Payload Sizes</p>
-                  <div className="flex gap-2">
-                    {[
-                      { label: 'Small (64KB)', value: '64k' },
-                      { label: 'Medium (1MB)', value: '1m' },
-                      { label: 'Large (16MB)', value: '16m' },
-                    ].map(p => (
-                      <label
-                        key={p.value}
-                        className={`flex items-center gap-2 px-3 py-1.5 rounded border cursor-pointer text-sm transition-colors ${
-                          payloadSizes.has(p.value)
-                            ? 'border-cyan-500/50 bg-cyan-500/10 text-cyan-400'
-                            : 'border-gray-700 text-gray-400 hover:border-gray-600'
-                        }`}
-                      >
-                        <input type="checkbox" checked={payloadSizes.has(p.value)} onChange={() => togglePayload(p.value)} className="sr-only" />
-                        {p.label}
-                      </label>
-                    ))}
-                  </div>
+                  <PayloadSelector selected={payloadSizes} onToggle={togglePayload} />
                 </div>
               )}
 
@@ -560,17 +529,17 @@ export function DeployWizard({ onClose, onCreated }: DeployWizardProps) {
                 <div>
                   <label className="block text-xs text-gray-400 mb-1">Runs</label>
                   <input type="number" min={1} max={100} value={runs} onChange={e => setRuns(Number(e.target.value))}
-                    className="w-full bg-[#0a0b0f] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500" />
+                    className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500" />
                 </div>
                 <div>
                   <label className="block text-xs text-gray-400 mb-1">Concurrency</label>
                   <input type="number" min={1} max={50} value={concurrency} onChange={e => setConcurrency(Number(e.target.value))}
-                    className="w-full bg-[#0a0b0f] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500" />
+                    className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500" />
                 </div>
                 <div>
                   <label className="block text-xs text-gray-400 mb-1">Timeout (sec)</label>
                   <input type="number" min={1} max={300} value={timeout} onChange={e => setTimeout_(Number(e.target.value))}
-                    className="w-full bg-[#0a0b0f] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500" />
+                    className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500" />
                 </div>
               </div>
 
@@ -592,11 +561,11 @@ export function DeployWizard({ onClose, onCreated }: DeployWizardProps) {
                   value={name}
                   onChange={e => setName(e.target.value)}
                   placeholder={autoName()}
-                  className="w-full bg-[#0a0b0f] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                  className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 />
               </div>
 
-              <div className="bg-[#0a0b0f] border border-gray-800 rounded p-3 mb-3">
+              <div className="bg-[var(--bg-base)] border border-gray-800 rounded p-3 mb-3">
                 <p className="text-xs text-gray-500 mb-2 font-medium">Endpoints ({endpoints.length})</p>
                 {endpoints.map((ep, i) => (
                   <div key={i} className="text-sm text-gray-300 py-1">
@@ -612,13 +581,13 @@ export function DeployWizard({ onClose, onCreated }: DeployWizardProps) {
               </div>
 
               {endpointOnly ? (
-                <div className="bg-[#0a0b0f] border border-gray-800 rounded p-3 mb-3 text-xs text-gray-500">
+                <div className="bg-[var(--bg-base)] border border-gray-800 rounded p-3 mb-3 text-xs text-gray-500">
                   <span className="text-gray-400">Endpoint only</span>
                   {' \u00b7 '}
                   <span>No tests will be run</span>
                 </div>
               ) : (
-                <div className="bg-[#0a0b0f] border border-gray-800 rounded p-3 mb-3 text-xs text-gray-500">
+                <div className="bg-[var(--bg-base)] border border-gray-800 rounded p-3 mb-3 text-xs text-gray-500">
                   <span className="text-gray-400">{selectedModes.size} modes</span>
                   {' \u00b7 '}
                   <span>{runs} runs</span>
@@ -633,7 +602,7 @@ export function DeployWizard({ onClose, onCreated }: DeployWizardProps) {
           )}
 
           {/* Navigation */}
-          <div className="flex justify-between mt-4">
+          <div className="flex justify-between pt-4 border-t border-gray-800/50 mt-6">
             <div>
               {step > 1 && (
                 <button

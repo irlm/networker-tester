@@ -31,47 +31,71 @@ export function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#0a0b0f]">
-      <form
-        onSubmit={handleSubmit}
-        className="w-96 bg-[#12131a] border border-gray-800 rounded-lg p-8"
-      >
-        <h1 className="text-cyan-400 text-xl font-bold mb-1">Networker</h1>
-        <p className="text-gray-500 text-sm mb-6">Sign in to the dashboard</p>
-
-        {error && (
-          <p className="text-red-400 text-sm bg-red-500/10 border border-red-500/30 rounded p-2 mb-4">
-            {error}
+    <div className="min-h-screen bg-[var(--bg-base)] flex items-center justify-center">
+      <div className="w-72">
+        {/* Brand */}
+        <div className="text-center mb-8">
+          <h1 className="text-[#4ade80] text-2xl font-bold tracking-tight mb-1">
+            Networker
+          </h1>
+          <p className="text-gray-600 text-xs uppercase tracking-widest">
+            diagnostics platform
           </p>
-        )}
+        </div>
 
-        <label htmlFor="login-username" className="block text-xs text-gray-400 mb-1">Username</label>
-        <input
-          id="login-username"
-          type="text"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          className="w-full bg-[#0a0b0f] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 mb-4 focus:outline-none focus:border-cyan-500"
-          autoFocus
-        />
+        {/* Form */}
+        <form onSubmit={handleSubmit}>
+          {error && (
+            <div className="text-red-400 text-xs mb-4 flex items-center gap-2">
+              <span className="text-red-500">err</span>
+              <span>{error}</span>
+            </div>
+          )}
 
-        <label htmlFor="login-password" className="block text-xs text-gray-400 mb-1">Password</label>
-        <input
-          id="login-password"
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          className="w-full bg-[#0a0b0f] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 mb-6 focus:outline-none focus:border-cyan-500"
-        />
+          <div className="mb-4">
+            <label htmlFor="login-username" className="block text-xs text-gray-600 mb-1.5 uppercase tracking-wider">
+              Username
+            </label>
+            <div className="flex items-center border-b border-gray-700 focus-within:border-green-500/50 transition-colors">
+              <span className="text-green-600/60 text-sm mr-2 select-none">&gt;</span>
+              <input
+                id="login-username"
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                className="w-full bg-transparent py-2 text-sm text-gray-200 focus:outline-none placeholder:text-gray-700"
+                placeholder="admin"
+                autoFocus
+              />
+            </div>
+          </div>
 
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full bg-cyan-600 hover:bg-cyan-500 text-white py-2 rounded text-sm font-medium transition-colors disabled:opacity-50"
-        >
-          {loading ? 'Signing in...' : 'Sign in'}
-        </button>
-      </form>
+          <div className="mb-8">
+            <label htmlFor="login-password" className="block text-xs text-gray-600 mb-1.5 uppercase tracking-wider">
+              Password
+            </label>
+            <div className="flex items-center border-b border-gray-700 focus-within:border-green-500/50 transition-colors">
+              <span className="text-green-600/60 text-sm mr-2 select-none">&gt;</span>
+              <input
+                id="login-password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full bg-transparent py-2 text-sm text-gray-200 focus:outline-none placeholder:text-gray-700"
+                placeholder="••••••••"
+              />
+            </div>
+          </div>
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full bg-green-600 hover:bg-green-500 text-white py-2 rounded text-sm font-medium transition-colors disabled:opacity-50"
+          >
+            {loading ? 'Authenticating...' : 'Sign in'}
+          </button>
+        </form>
+      </div>
     </div>
   );
 }
