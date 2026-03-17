@@ -11,6 +11,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.26] – 2026-03-17 — Dashboard design overhaul
+
+### Changed
+- **Terminal-inspired visual identity** — green brand color (favicon, login, sidebar), monospace "N" favicon, terminal-style login with `>` prompt inputs
+- **Layout system** — stat cards replaced with inline metric bars, tables unwrapped from card containers, collapsible sidebar with localStorage persistence
+- **Slide-over panels** — New Test and Deploy wizard now open as right-side panels instead of centered modals, with entrance animation and focus traps
+- **Three-role color system** — green (brand), cyan (interactive), blue (running status); data emphasis uses neutral bright whites instead of cyan
+- **CSS custom properties** — 65 hardcoded hex values migrated to 5 semantic tokens (`--bg-base`, `--bg-surface`, `--bg-sidebar`, `--bg-raised`, `--border-default`)
+
+### Added
+- `ModeSelector` shared component for probe mode selection grid
+- `PayloadSelector` shared component for payload size toggles
+- `formatDuration` shared utility in `lib/format.ts`
+- `TOOLTIP_STYLE` and `THROUGHPUT_IDS` shared constants in `lib/chart.ts`
+- Loading skeletons for Dashboard and Tests pages
+- `prefers-reduced-motion` support for slide-over animations
+- Accessibility: `aria-label` on icon buttons, `aria-hidden` on backdrops, `flex-wrap` for mobile
+
+### Removed
+- `StatCard` component (replaced by inline metric bars)
+- `AgentsPage` (orphaned, unused)
+- 3 duplicate `formatDuration` implementations
+- ~130 lines of duplicated mode selection / payload UI
+
+---
+
 ## [0.13.25] – 2026-03-16 — Installer auto-installs tshark
 
 ### Added
