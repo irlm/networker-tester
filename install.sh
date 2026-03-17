@@ -3857,7 +3857,7 @@ Description=Networker Dashboard
 After=network.target postgresql.service
 
 [Service]
-User=networker
+User=$(whoami)
 EnvironmentFile=/etc/networker-dashboard.env
 ExecStart=${binary_path}
 Restart=always
