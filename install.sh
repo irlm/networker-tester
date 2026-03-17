@@ -2781,8 +2781,10 @@ step_download_release() {
     rm -rf "$tmp_dir"
 
     # Verify the binary actually runs (catches GLIBC mismatch, wrong arch, etc.)
+    # Some binaries (dashboard, agent) require env vars to start; provide dummies for --version.
     local installed_ver
-    if installed_ver="$("${INSTALL_DIR}/${binary}" --version 2>&1)"; then
+    if installed_ver="$(DASHBOARD_JWT_SECRET=x DASHBOARD_ADMIN_PASSWORD=x AGENT_API_KEY=x \
+            "${INSTALL_DIR}/${binary}" --version 2>&1)"; then
         print_ok "$binary installed → ${INSTALL_DIR}/${binary}  ($installed_ver)"
     else
         print_warn "Downloaded binary failed to run: ${installed_ver}"
@@ -3033,7 +3035,8 @@ step_cargo_install() {
                 rm -rf "$tmp_dir"
                 # Verify the binary actually runs (catches GLIBC mismatch, wrong arch, etc.)
                 local installed_ver
-                installed_ver="$("${INSTALL_DIR}/${binary}" --version 2>&1)" && {
+                installed_ver="$(DASHBOARD_JWT_SECRET=x DASHBOARD_ADMIN_PASSWORD=x AGENT_API_KEY=x \
+                    "${INSTALL_DIR}/${binary}" --version 2>&1)" && {
                     print_ok "$binary installed → ${INSTALL_DIR}/${binary}  ($installed_ver)"
                     return 0
                 }
