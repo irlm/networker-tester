@@ -17,6 +17,7 @@ import {
   type ProtocolStats,
   type TimingBreakdown,
 } from '../lib/analysis';
+import { TOOLTIP_STYLE } from '../lib/chart';
 import {
   BarChart,
   Bar,
@@ -144,22 +145,28 @@ export function RunDetailPage() {
         </p>
       </div>
 
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        <SummaryCard label="Total Probes" value={attempts.length} accent="text-cyan-400" />
-        <SummaryCard label="Success" value={successCount} accent="text-green-400" />
-        <SummaryCard label="Failed" value={failureCount} accent={failureCount > 0 ? 'text-red-400' : 'text-gray-600'} />
-        <SummaryCard
-          label="Success Rate"
-          value={attempts.length > 0 ? `${((successCount / attempts.length) * 100).toFixed(0)}%` : '-'}
-          accent={successRateClass(attempts.length > 0 ? (successCount / attempts.length) * 100 : 100)}
-        />
+      {/* Inline metrics */}
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1 py-3 mb-6 text-xs border-b border-gray-800/50">
+        <span className="text-gray-500">
+          Probes <span className="text-gray-200 font-mono font-semibold ml-1">{attempts.length}</span>
+        </span>
+        <span className="text-gray-500">
+          Success <span className="text-green-400 font-mono font-semibold ml-1">{successCount}</span>
+        </span>
+        <span className="text-gray-500">
+          Failed <span className={`font-mono font-semibold ml-1 ${failureCount > 0 ? 'text-red-400' : 'text-gray-600'}`}>{failureCount}</span>
+        </span>
+        <span className="text-gray-500">
+          Rate <span className={`font-mono font-semibold ml-1 ${successRateClass(attempts.length > 0 ? (successCount / attempts.length) * 100 : 100)}`}>
+            {attempts.length > 0 ? `${((successCount / attempts.length) * 100).toFixed(0)}%` : '-'}
+          </span>
+        </span>
       </div>
 
       {/* ── Timing Breakdown Table (mirrors HTML report) ── */}
       {timingBreakdown.length > 0 && (
-        <div className="bg-[#12131a] border border-gray-800 rounded-lg mb-6 overflow-hidden">
-          <h3 className="px-4 py-3 text-sm text-gray-400 border-b border-gray-800 font-medium">
+        <div className="table-container mb-6">
+          <h3 className="px-4 py-2.5 text-xs text-gray-500 uppercase tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
             Timing Breakdown by Protocol
           </h3>
           <div className="overflow-x-auto">
@@ -188,8 +195,8 @@ export function RunDetailPage() {
 
       {/* ── Statistics Summary Table (mirrors HTML report) ── */}
       {protocolStats.length > 0 && (
-        <div className="bg-[#12131a] border border-gray-800 rounded-lg mb-6 overflow-hidden">
-          <h3 className="px-4 py-3 text-sm text-gray-400 border-b border-gray-800 font-medium">
+        <div className="table-container mb-6">
+          <h3 className="px-4 py-2.5 text-xs text-gray-500 uppercase tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
             Statistics Summary
           </h3>
           <div className="overflow-x-auto">
@@ -221,16 +228,16 @@ export function RunDetailPage() {
 
       {/* ── Protocol Comparison Chart ── */}
       {protocolChartData.length > 1 && (
-        <div className="bg-[#12131a] border border-gray-800 rounded-lg p-4 mb-6">
-          <h3 className="text-sm text-gray-400 mb-3">Protocol Comparison — p50 vs p95</h3>
+        <div className="mb-6">
+          <h3 className="text-xs text-gray-500 uppercase tracking-wider mb-3 font-medium">Protocol Comparison — p50 vs p95</h3>
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={protocolChartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2028" />
               <XAxis dataKey="name" stroke="#4b5563" fontSize={10} />
               <YAxis stroke="#4b5563" fontSize={10} />
-              <Tooltip contentStyle={{ background: '#12131a', border: '1px solid #374151', borderRadius: 6, fontSize: 12 }} />
-              <Bar dataKey="p50" fill="#06b6d4" name="p50" />
-              <Bar dataKey="p95" fill="#0e7490" name="p95" />
+              <Tooltip contentStyle={TOOLTIP_STYLE} />
+              <Bar dataKey="p50" fill="#94a3b8" name="p50" />
+              <Bar dataKey="p95" fill="#eab308" name="p95" />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -238,14 +245,14 @@ export function RunDetailPage() {
 
       {/* ── TTFB Distribution ── */}
       {ttfbDistribution.length > 0 && (
-        <div className="bg-[#12131a] border border-gray-800 rounded-lg p-4 mb-6">
-          <h3 className="text-sm text-gray-400 mb-3">TTFB Distribution (ms)</h3>
+        <div className="mb-6">
+          <h3 className="text-xs text-gray-500 uppercase tracking-wider mb-3 font-medium">TTFB Distribution (ms)</h3>
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={ttfbDistribution}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2028" />
               <XAxis dataKey="range" stroke="#4b5563" fontSize={9} angle={-30} textAnchor="end" height={50} />
               <YAxis stroke="#4b5563" fontSize={10} allowDecimals={false} />
-              <Tooltip contentStyle={{ background: '#12131a', border: '1px solid #374151', borderRadius: 6, fontSize: 12 }} />
+              <Tooltip contentStyle={TOOLTIP_STYLE} />
               <Bar dataKey="count" fill="#8b5cf6" name="Attempts" />
             </BarChart>
           </ResponsiveContainer>
@@ -253,7 +260,7 @@ export function RunDetailPage() {
       )}
 
       {/* ── Attempts by Protocol (collapsible) ── */}
-      <h3 className="text-sm text-gray-400 mb-3 font-medium">Probe Details</h3>
+      <h3 className="text-xs text-gray-500 uppercase tracking-wider mb-3 font-medium">Probe Details</h3>
       {Object.entries(groupByProtocol(attempts)).map(([protocol, group]) => {
         const isExpanded = expandedProtocols.has(protocol);
         const protoSuccess = group.filter((a) => a.success).length;
@@ -262,10 +269,10 @@ export function RunDetailPage() {
         const stats = computeStats(values);
 
         return (
-          <div key={protocol} className="bg-[#12131a] border border-gray-800 rounded-lg mb-3 overflow-hidden">
+          <div key={protocol} className="table-container mb-2">
             <button
               onClick={() => toggleProtocol(protocol)}
-              className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-gray-800/20 transition-colors"
+              className="w-full px-4 py-2.5 flex items-center justify-between text-left hover:bg-gray-800/10 transition-colors"
               aria-expanded={isExpanded}
             >
               <div className="flex items-center gap-3">
@@ -300,15 +307,6 @@ export function RunDetailPage() {
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
-function SummaryCard({ label, value, accent }: { label: string; value: number | string; accent: string }) {
-  return (
-    <div className="bg-[#12131a] border border-gray-800 rounded-lg p-4">
-      <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">{label}</p>
-      <p className={`text-2xl font-bold ${accent}`}>{value}</p>
-    </div>
-  );
-}
-
 function TimingRow({ row }: { row: TimingBreakdown }) {
   const successPct = row.totalCount > 0 ? (row.successCount / row.totalCount) * 100 : 0;
   return (
@@ -318,8 +316,8 @@ function TimingRow({ row }: { row: TimingBreakdown }) {
       <td className="px-4 py-2 text-gray-400 text-right font-mono">{formatMs(row.avgDns)}</td>
       <td className="px-4 py-2 text-gray-400 text-right font-mono">{formatMs(row.avgTcp)}</td>
       <td className="px-4 py-2 text-gray-400 text-right font-mono">{formatMs(row.avgTls)}</td>
-      <td className="px-4 py-2 text-cyan-400 text-right font-mono">{formatMs(row.avgTtfb)}</td>
-      <td className="px-4 py-2 text-cyan-300 text-right font-mono font-bold">{formatMs(row.avgTotal)}</td>
+      <td className="px-4 py-2 text-gray-200 text-right font-mono">{formatMs(row.avgTtfb)}</td>
+      <td className="px-4 py-2 text-gray-100 text-right font-mono font-bold">{formatMs(row.avgTotal)}</td>
       <td className={`px-4 py-2 text-right font-mono ${successRateClass(successPct)}`}>
         {row.successCount}/{row.totalCount}
       </td>
@@ -339,7 +337,7 @@ function StatsRow({ ps }: { ps: ProtocolStats }) {
       <td className="px-4 py-2 text-gray-400 text-right">{ps.stats.count}</td>
       <td className="px-4 py-2 text-gray-400 text-right font-mono">{fmt(ps.stats.min)}</td>
       <td className="px-4 py-2 text-gray-400 text-right font-mono">{fmt(ps.stats.mean)}</td>
-      <td className="px-4 py-2 text-cyan-400 text-right font-mono">{fmt(ps.stats.p50)}</td>
+      <td className="px-4 py-2 text-gray-100 text-right font-mono font-semibold">{fmt(ps.stats.p50)}</td>
       <td className="px-4 py-2 text-yellow-400 text-right font-mono">{fmt(ps.stats.p95)}</td>
       <td className="px-4 py-2 text-orange-400 text-right font-mono">{fmt(ps.stats.p99)}</td>
       <td className="px-4 py-2 text-gray-400 text-right font-mono">{fmt(ps.stats.max)}</td>
@@ -426,12 +424,12 @@ function AttemptRow({ a }: { a: LiveAttempt }) {
 }
 
 function SubResult({ label, color, children }: { label: string; color: string; children: React.ReactNode }) {
-  const borderColor = color === 'red' ? 'border-red-500/20' : color === 'cyan' ? 'border-cyan-500/20' : color === 'blue' ? 'border-blue-500/20' : color === 'purple' ? 'border-purple-500/20' : 'border-gray-800';
-  const bgColor = color === 'red' ? 'bg-red-500/5' : 'bg-[#0a0b0f]';
-  const labelColor = color === 'red' ? 'text-red-400' : color === 'cyan' ? 'text-cyan-500' : color === 'blue' ? 'text-blue-400' : color === 'purple' ? 'text-purple-400' : 'text-gray-500';
+  const borderColor = color === 'red' ? 'border-red-500/20' : color === 'cyan' ? 'border-gray-600' : color === 'blue' ? 'border-blue-500/20' : color === 'purple' ? 'border-purple-500/20' : 'border-gray-800';
+  const bgColor = color === 'red' ? 'bg-red-500/5' : 'bg-[var(--bg-base)]';
+  const labelColor = color === 'red' ? 'text-red-400' : color === 'cyan' ? 'text-gray-300' : color === 'blue' ? 'text-blue-400' : color === 'purple' ? 'text-purple-400' : 'text-gray-500';
   return (
     <div className={`${bgColor} border ${borderColor} rounded p-2`}>
-      <p className={`${labelColor} uppercase tracking-wider mb-1 text-[10px] font-medium`}>{label}</p>
+      <p className={`${labelColor} uppercase tracking-wider mb-1 text-[11px] font-medium`}>{label}</p>
       {children}
     </div>
   );

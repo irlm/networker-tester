@@ -1,12 +1,73 @@
 @import "tailwindcss";
 
+/* ── Color tokens ── */
+:root {
+  --bg-base: #0a0b0f;     /* page background, input fields */
+  --bg-surface: #0d0e14;  /* table headers, tooltip background */
+  --bg-sidebar: #0f1015;  /* sidebar background */
+  --bg-raised: #12131a;   /* form inputs in panels, subtle elevation */
+  --border-default: #1a1b25; /* table borders, section dividers */
+}
+
 body {
   margin: 0;
-  background: #0a0b0f;
+  background: var(--bg-base);
   color: #e5e7eb;
   font-family: ui-monospace, 'Cascadia Code', 'JetBrains Mono', Consolas, monospace;
+  scrollbar-color: #2a2b35 transparent;
+  scrollbar-width: thin;
 }
 
 #root {
   min-height: 100vh;
+}
+
+/* ── Scrollbar styling (WebKit) ── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #2a2b35; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #3a3b45; }
+
+/* ── Section divider — lightweight separation without card wrapper ── */
+.section-divider {
+  border-top: 1px solid var(--border-default);
+  padding-top: 1.5rem;
+  margin-top: 1.5rem;
+}
+
+/* ── Table container — bordered, no background card ── */
+.table-container {
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.table-container table {
+  width: 100%;
+}
+
+/* ── Slide-over panel animation ── */
+@keyframes slide-in-right {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.slide-over-panel {
+  animation: slide-in-right 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.slide-over-backdrop {
+  animation: fade-in 150ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slide-over-panel,
+  .slide-over-backdrop {
+    animation: none;
+  }
 }

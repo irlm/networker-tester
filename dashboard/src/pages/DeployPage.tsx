@@ -2,26 +2,10 @@ import { useState, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import type { Deployment } from '../api/types';
+import { StatusBadge } from '../components/common/StatusBadge';
 import { usePolling } from '../hooks/usePolling';
 import { DeployWizard } from '../components/DeployWizard';
-
-const STATUS_COLORS: Record<string, string> = {
-  pending: 'bg-gray-500',
-  running: 'bg-cyan-500 motion-safe:animate-pulse',
-  completed: 'bg-green-500',
-  failed: 'bg-red-500',
-  cancelled: 'bg-yellow-500',
-};
-
-function formatDuration(start: string | null, end: string | null): string {
-  if (!start) return '\u2014';
-  const s = new Date(start).getTime();
-  const e = end ? new Date(end).getTime() : Date.now();
-  const secs = Math.round((e - s) / 1000);
-  if (secs < 60) return `${secs}s`;
-  const mins = Math.floor(secs / 60);
-  return `${mins}m ${secs % 60}s`;
-}
+import { formatDuration } from '../lib/format';
 
 export function DeployPage() {
   const [deployments, setDeployments] = useState<Deployment[]>([]);
@@ -70,34 +54,34 @@ export function DeployPage() {
       {loading && deployments.length === 0 ? (
         <p className="text-gray-500 text-sm">Loading deployments...</p>
       ) : deployments.length === 0 ? (
-        <div className="bg-[#12131a] border border-gray-800 rounded-lg p-8 text-center">
-          <p className="text-gray-400 mb-2">No deployments yet</p>
-          <p className="text-gray-600 text-sm">
-            Create a new deployment to provision endpoints and run tests
+        <div className="py-10 text-center border border-gray-800/50 rounded">
+          <p className="text-gray-500 text-sm">No deployments yet</p>
+          <p className="text-gray-700 text-xs mt-1">
+            Create a deployment to provision endpoints and run tests
           </p>
         </div>
       ) : (
-        <div className="bg-[#12131a] border border-gray-800 rounded-lg overflow-hidden">
+        <div className="table-container">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-gray-800 text-gray-500 text-xs">
-                <th className="text-left p-3 font-medium">Name</th>
-                <th className="text-left p-3 font-medium">Provider</th>
-                <th className="text-left p-3 font-medium">Status</th>
-                <th className="text-left p-3 font-medium">Endpoints</th>
-                <th className="text-left p-3 font-medium">Duration</th>
-                <th className="text-left p-3 font-medium">Created</th>
+              <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
+                <th className="text-left px-4 py-2.5 font-medium">Name</th>
+                <th className="text-left px-4 py-2.5 font-medium">Provider</th>
+                <th className="text-left px-4 py-2.5 font-medium">Status</th>
+                <th className="text-left px-4 py-2.5 font-medium">Endpoints</th>
+                <th className="text-left px-4 py-2.5 font-medium">Duration</th>
+                <th className="text-left px-4 py-2.5 font-medium">Created</th>
               </tr>
             </thead>
             <tbody>
               {deployments.map((d) => (
                 <tr
                   key={d.deployment_id}
-                  className={`border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors ${
-                    d.status === 'running' ? 'bg-cyan-500/5' : ''
+                  className={`border-b border-gray-800/30 hover:bg-gray-800/10 transition-colors ${
+                    d.status === 'running' ? 'bg-blue-500/5' : ''
                   }`}
                 >
-                  <td className="p-3">
+                  <td className="px-4 py-3">
                     <Link
                       to={`/deploy/${d.deployment_id}`}
                       className="text-cyan-400 hover:text-cyan-300"
@@ -105,28 +89,21 @@ export function DeployPage() {
                       {d.name}
                     </Link>
                   </td>
-                  <td className="p-3 text-gray-400">
+                  <td className="px-4 py-3 text-gray-400 text-xs">
                     {d.provider_summary || '\u2014'}
                   </td>
-                  <td className="p-3">
-                    <span className="flex items-center gap-2">
-                      <span
-                        className={`w-2 h-2 rounded-full ${
-                          STATUS_COLORS[d.status] || 'bg-gray-500'
-                        }`}
-                      />
-                      <span className="text-gray-300">{d.status}</span>
-                    </span>
+                  <td className="px-4 py-3">
+                    <StatusBadge status={d.status} />
                   </td>
-                  <td className="p-3 text-gray-400">
+                  <td className="px-4 py-3 text-gray-400 font-mono text-xs">
                     {d.endpoint_ips && Array.isArray(d.endpoint_ips)
                       ? d.endpoint_ips.join(', ')
                       : '\u2014'}
                   </td>
-                  <td className="p-3 text-gray-400">
+                  <td className="px-4 py-3 text-gray-400 font-mono text-xs">
                     {formatDuration(d.started_at, d.finished_at)}
                   </td>
-                  <td className="p-3 text-gray-500 text-xs">
+                  <td className="px-4 py-3 text-gray-500 text-xs">
                     {new Date(d.created_at).toLocaleString()}
                   </td>
                 </tr>

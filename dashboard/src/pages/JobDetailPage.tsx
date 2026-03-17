@@ -17,6 +17,7 @@ import {
   formatBytes,
   successRateClass,
 } from '../lib/analysis';
+import { TOOLTIP_STYLE } from '../lib/chart';
 import {
   BarChart,
   Bar,
@@ -316,9 +317,9 @@ export function JobDetailPage() {
 
       {/* Progress indicator */}
       {isRunning && (
-        <div className="bg-[#12131a] border border-cyan-500/30 rounded-lg p-4 mb-6 flex items-center gap-3">
-          <span className="w-2 h-2 rounded-full bg-cyan-400 motion-safe:animate-pulse" />
-          <span className="text-cyan-400 text-sm">
+        <div className="border border-blue-500/20 rounded p-4 mb-6 flex items-center gap-3">
+          <span className="w-2 h-2 rounded-full bg-blue-400 motion-safe:animate-pulse" />
+          <span className="text-blue-400 text-sm">
             Running... {attempts.length} probes completed
           </span>
         </div>
@@ -326,7 +327,7 @@ export function JobDetailPage() {
 
       {/* Finished summary */}
       {isFinished && attempts.length === 0 && (
-        <div className="bg-[#12131a] border border-gray-800 rounded-lg p-4 mb-6">
+        <div className="border border-gray-800/50 rounded p-4 mb-6">
           <p className="text-gray-400 text-sm">
             Test {job.status}.
             {job.run_id && (
@@ -341,34 +342,30 @@ export function JobDetailPage() {
         </div>
       )}
 
-      {/* Summary Cards */}
+      {/* Inline metrics — compact bar instead of card grid */}
       {attempts.length > 0 && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-          <div className="bg-[#12131a] border border-gray-800 rounded-lg p-4">
-            <p className="text-xs text-gray-500 mb-1">Total Probes</p>
-            <p className="text-2xl font-bold text-cyan-400">{attempts.length}</p>
-          </div>
-          <div className="bg-[#12131a] border border-gray-800 rounded-lg p-4">
-            <p className="text-xs text-gray-500 mb-1">Success</p>
-            <p className="text-2xl font-bold text-green-400">{successCount}</p>
-          </div>
-          <div className="bg-[#12131a] border border-gray-800 rounded-lg p-4">
-            <p className="text-xs text-gray-500 mb-1">Failed</p>
-            <p className={`text-2xl font-bold ${failureCount > 0 ? 'text-red-400' : 'text-gray-600'}`}>{failureCount}</p>
-          </div>
-          <div className="bg-[#12131a] border border-gray-800 rounded-lg p-4">
-            <p className="text-xs text-gray-500 mb-1">Success Rate</p>
-            <p className={`text-2xl font-bold ${successRateClass(attempts.length > 0 ? (successCount / attempts.length) * 100 : 100)}`}>
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-1 py-3 mb-6 text-xs border-b border-gray-800/50">
+          <span className="text-gray-500">
+            Probes <span className="text-gray-200 font-mono font-semibold ml-1">{attempts.length}</span>
+          </span>
+          <span className="text-gray-500">
+            Success <span className="text-green-400 font-mono font-semibold ml-1">{successCount}</span>
+          </span>
+          <span className="text-gray-500">
+            Failed <span className={`font-mono font-semibold ml-1 ${failureCount > 0 ? 'text-red-400' : 'text-gray-600'}`}>{failureCount}</span>
+          </span>
+          <span className="text-gray-500">
+            Rate <span className={`font-mono font-semibold ml-1 ${successRateClass(attempts.length > 0 ? (successCount / attempts.length) * 100 : 100)}`}>
               {attempts.length > 0 ? `${((successCount / attempts.length) * 100).toFixed(0)}%` : '-'}
-            </p>
-          </div>
+            </span>
+          </span>
         </div>
       )}
 
       {/* Probe Timing per attempt */}
       {chartData.length > 0 && (
-        <div className="bg-[#12131a] border border-gray-800 rounded-lg p-4 mb-6">
-          <h3 className="text-sm text-gray-400 mb-3">Probe Timing by Attempt</h3>
+        <div className="mb-6">
+          <h3 className="text-xs text-gray-500 uppercase tracking-wider mb-3 font-medium">Probe Timing by Attempt</h3>
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2028" />
@@ -380,20 +377,15 @@ export function JobDetailPage() {
               />
               <YAxis stroke="#4b5563" fontSize={10} unit="ms" />
               <Tooltip
-                contentStyle={{
-                  background: '#12131a',
-                  border: '1px solid #374151',
-                  borderRadius: 6,
-                  fontSize: 12,
-                }}
+                contentStyle={TOOLTIP_STYLE}
                 formatter={(v) => [`${Number(v).toFixed(1)}ms`]}
                 labelFormatter={(_, payload) => {
                   const p = payload?.[0]?.payload;
                   return p ? `#${p.seq} ${p.protocol}` : '';
                 }}
               />
-              <Bar dataKey="ttfb_ms" fill="#06b6d4" name="TTFB" />
-              <Bar dataKey="total_ms" fill="#0e7490" name="Total" />
+              <Bar dataKey="ttfb_ms" fill="#94a3b8" name="TTFB" />
+              <Bar dataKey="total_ms" fill="#64748b" name="Total" />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -401,8 +393,8 @@ export function JobDetailPage() {
 
       {/* Timing Breakdown (shared analysis from lib/analysis.ts) */}
       {timingBreakdown.length > 0 && (
-        <div className="bg-[#12131a] border border-gray-800 rounded-lg mb-6 overflow-hidden">
-          <h3 className="px-4 py-3 text-sm text-gray-400 border-b border-gray-800 font-medium">
+        <div className="table-container mb-6">
+          <h3 className="px-4 py-2.5 text-xs text-gray-500 uppercase tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
             Timing Breakdown
           </h3>
           <div className="overflow-x-auto">
@@ -427,8 +419,8 @@ export function JobDetailPage() {
                     <td className="px-3 py-2 text-gray-400 text-right font-mono">{formatMs(row.avgDns)}</td>
                     <td className="px-3 py-2 text-gray-400 text-right font-mono">{formatMs(row.avgTcp)}</td>
                     <td className="px-3 py-2 text-gray-400 text-right font-mono">{formatMs(row.avgTls)}</td>
-                    <td className="px-3 py-2 text-cyan-400 text-right font-mono">{formatMs(row.avgTtfb)}</td>
-                    <td className="px-3 py-2 text-cyan-300 text-right font-mono font-bold">{formatMs(row.avgTotal)}</td>
+                    <td className="px-3 py-2 text-gray-200 text-right font-mono">{formatMs(row.avgTtfb)}</td>
+                    <td className="px-3 py-2 text-gray-100 text-right font-mono font-bold">{formatMs(row.avgTotal)}</td>
                     <td className={`px-3 py-2 text-right font-mono ${successRateClass(row.totalCount > 0 ? (row.successCount / row.totalCount) * 100 : 100)}`}>
                       {row.successCount}/{row.totalCount}
                     </td>
@@ -442,8 +434,8 @@ export function JobDetailPage() {
 
       {/* Statistics Summary (shared analysis — same as HTML report) */}
       {protocolStats.length > 0 && (
-        <div className="bg-[#12131a] border border-gray-800 rounded-lg mb-6 overflow-hidden">
-          <h3 className="px-4 py-3 text-sm text-gray-400 border-b border-gray-800 font-medium">
+        <div className="table-container mb-6">
+          <h3 className="px-4 py-2.5 text-xs text-gray-500 uppercase tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
             Statistics Summary
           </h3>
           <div className="overflow-x-auto">
@@ -472,7 +464,7 @@ export function JobDetailPage() {
                     <td className="px-3 py-2 text-gray-400 text-right">{ps.stats.count}</td>
                     <td className="px-3 py-2 text-gray-400 text-right font-mono">{formatMetricValue(ps.protocol, ps.stats.min)}</td>
                     <td className="px-3 py-2 text-gray-400 text-right font-mono">{formatMetricValue(ps.protocol, ps.stats.mean)}</td>
-                    <td className="px-3 py-2 text-cyan-400 text-right font-mono">{formatMetricValue(ps.protocol, ps.stats.p50)}</td>
+                    <td className="px-3 py-2 text-gray-100 text-right font-mono font-semibold">{formatMetricValue(ps.protocol, ps.stats.p50)}</td>
                     <td className="px-3 py-2 text-yellow-400 text-right font-mono">{formatMetricValue(ps.protocol, ps.stats.p95)}</td>
                     <td className="px-3 py-2 text-orange-400 text-right font-mono">{formatMetricValue(ps.protocol, ps.stats.p99)}</td>
                     <td className="px-3 py-2 text-gray-400 text-right font-mono">{formatMetricValue(ps.protocol, ps.stats.max)}</td>
@@ -490,16 +482,16 @@ export function JobDetailPage() {
 
       {/* Protocol Comparison Chart */}
       {protocolChartData.length > 1 && (
-        <div className="bg-[#12131a] border border-gray-800 rounded-lg p-4 mb-6">
-          <h3 className="text-sm text-gray-400 mb-3">Protocol Comparison — p50 vs p95</h3>
+        <div className="mb-6">
+          <h3 className="text-xs text-gray-500 uppercase tracking-wider mb-3 font-medium">Protocol Comparison — p50 vs p95</h3>
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={protocolChartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2028" />
               <XAxis dataKey="name" stroke="#4b5563" fontSize={10} />
               <YAxis stroke="#4b5563" fontSize={10} />
-              <Tooltip contentStyle={{ background: '#12131a', border: '1px solid #374151', borderRadius: 6, fontSize: 12 }} />
-              <Bar dataKey="p50" fill="#06b6d4" name="p50" />
-              <Bar dataKey="p95" fill="#0e7490" name="p95" />
+              <Tooltip contentStyle={TOOLTIP_STYLE} />
+              <Bar dataKey="p50" fill="#94a3b8" name="p50" />
+              <Bar dataKey="p95" fill="#eab308" name="p95" />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -507,15 +499,15 @@ export function JobDetailPage() {
 
       {/* Box Plot: min / p25 / p50 / p75 / max */}
       {boxPlotData.length > 0 && (
-        <div className="bg-[#12131a] border border-gray-800 rounded-lg p-4 mb-6">
-          <h3 className="text-sm text-gray-400 mb-3">Distribution by Protocol (min / p25 / p50 / p75 / max)</h3>
+        <div className="mb-6">
+          <h3 className="text-xs text-gray-500 uppercase tracking-wider mb-3 font-medium">Distribution by Protocol</h3>
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={boxPlotData} layout="vertical">
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2028" horizontal={false} />
               <XAxis type="number" stroke="#4b5563" fontSize={10} unit="ms" />
               <YAxis type="category" dataKey="name" stroke="#4b5563" fontSize={10} width={100} />
               <Tooltip
-                contentStyle={{ background: '#12131a', border: '1px solid #374151', borderRadius: 6, fontSize: 12 }}
+                contentStyle={TOOLTIP_STYLE}
                 formatter={(_v, name, props) => {
                   const d = props?.payload as Record<string, number> | undefined;
                   if (!d) return [_v, name];
@@ -528,8 +520,8 @@ export function JobDetailPage() {
               />
               <Bar dataKey="base" stackId="box" fill="transparent" />
               <Bar dataKey="iqr_low" stackId="box" fill="#374151" name="p25" />
-              <Bar dataKey="iqr_mid" stackId="box" fill="#06b6d4" name="Median" />
-              <Bar dataKey="iqr_high" stackId="box" fill="#0e7490" name="p75" />
+              <Bar dataKey="iqr_mid" stackId="box" fill="#94a3b8" name="Median" />
+              <Bar dataKey="iqr_high" stackId="box" fill="#64748b" name="p75" />
               <Bar dataKey="whisker" stackId="box" fill="#374151" opacity={0.5} name="max" />
             </BarChart>
           </ResponsiveContainer>
@@ -538,14 +530,14 @@ export function JobDetailPage() {
 
       {/* TTFB Distribution */}
       {ttfbDistribution.length > 0 && (
-        <div className="bg-[#12131a] border border-gray-800 rounded-lg p-4 mb-6">
-          <h3 className="text-sm text-gray-400 mb-3">Timing Distribution (ms)</h3>
+        <div className="mb-6">
+          <h3 className="text-xs text-gray-500 uppercase tracking-wider mb-3 font-medium">Timing Distribution (ms)</h3>
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={ttfbDistribution}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2028" />
               <XAxis dataKey="range" stroke="#4b5563" fontSize={9} angle={-30} textAnchor="end" height={50} />
               <YAxis stroke="#4b5563" fontSize={10} allowDecimals={false} />
-              <Tooltip contentStyle={{ background: '#12131a', border: '1px solid #374151', borderRadius: 6, fontSize: 12 }} />
+              <Tooltip contentStyle={TOOLTIP_STYLE} />
               <Bar dataKey="count" fill="#8b5cf6" name="Attempts" />
             </BarChart>
           </ResponsiveContainer>
@@ -554,12 +546,11 @@ export function JobDetailPage() {
 
       {/* Analysis & Observations */}
       {observations.length > 0 && (
-        <div className="bg-[#12131a] border border-gray-800 rounded-lg p-4 mb-6">
-          <h3 className="text-sm text-gray-400 mb-3 font-medium">Analysis</h3>
-          <ul className="space-y-1.5">
+        <div className="mb-6 border-l-2 border-gray-700 pl-4">
+          <h3 className="text-xs text-gray-500 uppercase tracking-wider mb-2 font-medium">Analysis</h3>
+          <ul className="space-y-1">
             {observations.map((obs, i) => (
-              <li key={i} className="text-xs text-gray-300 flex gap-2">
-                <span className="text-cyan-500 mt-0.5">{'\u25B8'}</span>
+              <li key={i} className="text-xs text-gray-400">
                 {obs}
               </li>
             ))}
@@ -569,8 +560,8 @@ export function JobDetailPage() {
 
       {/* Tester Log */}
       {jobLogs.length > 0 && (
-        <div className="bg-[#12131a] border border-gray-800 rounded-lg overflow-hidden mb-6">
-          <h3 className="px-4 py-3 text-sm text-gray-400 border-b border-gray-800">
+        <div className="table-container mb-6">
+          <h3 className="px-4 py-2.5 text-xs text-gray-500 uppercase tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
             Tester Log
           </h3>
           <div className="max-h-48 overflow-y-auto p-3 font-mono text-xs leading-5">
@@ -594,8 +585,8 @@ export function JobDetailPage() {
 
       {/* Browser Results */}
       {attempts.some(a => a.browser) && (
-        <div className="bg-[#12131a] border border-gray-800 rounded-lg mb-6 overflow-hidden">
-          <h3 className="px-4 py-3 text-sm text-gray-400 border-b border-gray-800 font-medium">Browser Results</h3>
+        <div className="table-container mb-6">
+          <h3 className="px-4 py-2.5 text-xs text-gray-500 uppercase tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">Browser Results</h3>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
@@ -615,9 +606,9 @@ export function JobDetailPage() {
                   <tr key={a.attempt_id} className="border-b border-gray-800/30">
                     <td className="px-3 py-2 text-gray-500 font-mono">{a.sequence_num}</td>
                     <td className="px-3 py-2 text-gray-300">{a.protocol}</td>
-                    <td className="px-3 py-2 text-cyan-400 text-right font-mono">{formatMs(a.browser?.ttfb_ms)}</td>
+                    <td className="px-3 py-2 text-gray-200 text-right font-mono">{formatMs(a.browser?.ttfb_ms)}</td>
                     <td className="px-3 py-2 text-gray-400 text-right font-mono">{formatMs(a.browser?.dom_content_loaded_ms)}</td>
-                    <td className="px-3 py-2 text-cyan-300 text-right font-mono font-bold">{formatMs(a.browser?.load_ms)}</td>
+                    <td className="px-3 py-2 text-gray-100 text-right font-mono font-bold">{formatMs(a.browser?.load_ms)}</td>
                     <td className="px-3 py-2 text-gray-400 text-right">{a.browser?.resource_count ?? '-'}</td>
                     <td className="px-3 py-2 text-gray-400 text-right font-mono">{a.browser?.transferred_bytes ? formatBytes(a.browser.transferred_bytes) : '-'}</td>
                     <td className="px-3 py-2 text-gray-400 text-right">{a.browser?.protocol ?? '-'}</td>
@@ -631,8 +622,8 @@ export function JobDetailPage() {
 
       {/* Page Load Results */}
       {attempts.some(a => a.page_load) && (
-        <div className="bg-[#12131a] border border-gray-800 rounded-lg mb-6 overflow-hidden">
-          <h3 className="px-4 py-3 text-sm text-gray-400 border-b border-gray-800 font-medium">Page Load Results</h3>
+        <div className="table-container mb-6">
+          <h3 className="px-4 py-2.5 text-xs text-gray-500 uppercase tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">Page Load Results</h3>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
@@ -652,8 +643,8 @@ export function JobDetailPage() {
                   <tr key={a.attempt_id} className="border-b border-gray-800/30">
                     <td className="px-3 py-2 text-gray-500 font-mono">{a.sequence_num}</td>
                     <td className="px-3 py-2 text-gray-300">{a.protocol}</td>
-                    <td className="px-3 py-2 text-cyan-400 text-right font-mono">{formatMs(a.page_load?.ttfb_ms)}</td>
-                    <td className="px-3 py-2 text-cyan-300 text-right font-mono font-bold">{formatMs(a.page_load?.total_ms)}</td>
+                    <td className="px-3 py-2 text-gray-200 text-right font-mono">{formatMs(a.page_load?.ttfb_ms)}</td>
+                    <td className="px-3 py-2 text-gray-100 text-right font-mono font-bold">{formatMs(a.page_load?.total_ms)}</td>
                     <td className="px-3 py-2 text-gray-400 text-right">{a.page_load?.asset_count ?? '-'}</td>
                     <td className="px-3 py-2 text-gray-400 text-right">{a.page_load?.assets_fetched ?? '-'}</td>
                     <td className="px-3 py-2 text-gray-400 text-right font-mono">{a.page_load?.total_bytes ? formatBytes(a.page_load.total_bytes) : '-'}</td>
@@ -668,8 +659,8 @@ export function JobDetailPage() {
 
       {/* TLS Details */}
       {attempts.some(a => a.tls) && (
-        <div className="bg-[#12131a] border border-gray-800 rounded-lg mb-6 overflow-hidden">
-          <h3 className="px-4 py-3 text-sm text-gray-400 border-b border-gray-800 font-medium">TLS Details</h3>
+        <div className="table-container mb-6">
+          <h3 className="px-4 py-2.5 text-xs text-gray-500 uppercase tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">TLS Details</h3>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
@@ -687,8 +678,8 @@ export function JobDetailPage() {
                     <td className="px-3 py-2 text-gray-500 font-mono">{a.sequence_num}</td>
                     <td className="px-3 py-2 text-gray-300">{a.protocol}</td>
                     <td className="px-3 py-2 text-gray-400">{a.tls?.protocol_version}</td>
-                    <td className="px-3 py-2 text-gray-400 font-mono text-[10px]">{a.tls?.cipher_suite}</td>
-                    <td className="px-3 py-2 text-cyan-400 text-right font-mono">{formatMs(a.tls?.handshake_duration_ms)}</td>
+                    <td className="px-3 py-2 text-gray-400 font-mono text-[11px]">{a.tls?.cipher_suite}</td>
+                    <td className="px-3 py-2 text-gray-200 text-right font-mono">{formatMs(a.tls?.handshake_duration_ms)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -699,8 +690,8 @@ export function JobDetailPage() {
 
       {/* All Probes (compact) */}
       {attempts.length > 0 && (
-        <div className="bg-[#12131a] border border-gray-800 rounded-lg overflow-hidden mb-6">
-          <h3 className="px-4 py-3 text-sm text-gray-400 border-b border-gray-800">
+        <div className="table-container mb-6">
+          <h3 className="px-4 py-2.5 text-xs text-gray-500 uppercase tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
             All Probes ({attempts.length})
           </h3>
           <div className="max-h-72 overflow-y-auto">
@@ -729,10 +720,10 @@ export function JobDetailPage() {
                     <td className="px-3 py-1.5 text-gray-500 text-right font-mono">{formatMs(a.dns?.duration_ms)}</td>
                     <td className="px-3 py-1.5 text-gray-500 text-right font-mono">{formatMs(a.tcp?.connect_duration_ms)}</td>
                     <td className="px-3 py-1.5 text-gray-500 text-right font-mono">{formatMs(a.tls?.handshake_duration_ms)}</td>
-                    <td className="px-3 py-1.5 text-cyan-400 text-right font-mono">
+                    <td className="px-3 py-1.5 text-gray-200 text-right font-mono">
                       {formatMs(a.http?.ttfb_ms ?? a.browser?.ttfb_ms ?? a.page_load?.ttfb_ms)}
                     </td>
-                    <td className="px-3 py-1.5 text-cyan-300 text-right font-mono font-bold">
+                    <td className="px-3 py-1.5 text-gray-100 text-right font-mono font-bold">
                       {formatMs(a.http?.total_duration_ms ?? a.browser?.load_ms ?? a.page_load?.total_ms)}
                     </td>
                     <td className="px-3 py-1.5 text-gray-600 max-w-48 truncate" title={a.error?.message}>
@@ -758,8 +749,8 @@ export function JobDetailPage() {
 
       {/* Errors */}
       {attempts.some(a => a.error) && (
-        <div className="bg-[#12131a] border border-red-500/20 rounded-lg mb-6 overflow-hidden">
-          <h3 className="px-4 py-3 text-sm text-red-400 border-b border-red-500/20 font-medium">
+        <div className="border border-red-500/15 rounded mb-6 overflow-hidden">
+          <h3 className="px-4 py-2.5 text-xs text-red-400 uppercase tracking-wider bg-red-500/5 border-b border-red-500/15 font-medium">
             Errors ({attempts.filter(a => a.error).length})
           </h3>
           <div className="p-3 space-y-2">
@@ -775,8 +766,8 @@ export function JobDetailPage() {
       )}
 
       {/* Job metadata */}
-      <div className="bg-[#12131a] border border-gray-800 rounded-lg p-4">
-        <h3 className="text-sm text-gray-400 mb-3">Test Details</h3>
+      <div className="section-divider">
+        <h3 className="text-xs text-gray-500 uppercase tracking-wider mb-3 font-medium">Test Details</h3>
         <div className="grid grid-cols-2 gap-2 text-xs">
           <div className="text-gray-500">Test ID</div>
           <div className="text-gray-300 font-mono">{job.job_id}</div>

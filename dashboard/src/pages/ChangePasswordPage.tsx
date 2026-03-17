@@ -39,60 +39,91 @@ export function ChangePasswordPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#0a0b0f]">
-      <form
-        onSubmit={handleSubmit}
-        className="w-96 bg-[#12131a] border border-gray-800 rounded-lg p-8"
-      >
-        <h1 className="text-cyan-400 text-xl font-bold mb-1">Networker</h1>
-        <p className="text-gray-500 text-sm mb-6">Change your password</p>
-
-        <div className="text-yellow-400 text-sm bg-yellow-500/10 border border-yellow-500/30 rounded p-2 mb-4">
-          You must change your password before continuing
+    <div className="min-h-screen bg-[var(--bg-base)] flex items-center justify-center">
+      <div className="w-72">
+        {/* Brand */}
+        <div className="text-center mb-8">
+          <h1 className="text-[#4ade80] text-2xl font-bold tracking-tight mb-1">
+            Networker
+          </h1>
+          <p className="text-gray-600 text-xs uppercase tracking-widest">
+            diagnostics platform
+          </p>
         </div>
 
-        {error && (
-          <p className="text-red-400 text-sm bg-red-500/10 border border-red-500/30 rounded p-2 mb-4">
-            {error}
-          </p>
-        )}
+        {/* Form */}
+        <form onSubmit={handleSubmit}>
+          <div className="text-yellow-400 text-xs mb-6 flex items-center gap-2">
+            <span className="text-yellow-500">warn</span>
+            <span>Password change required</span>
+          </div>
 
-        <label htmlFor="current-password" className="block text-xs text-gray-400 mb-1">Current password</label>
-        <input
-          id="current-password"
-          type="password"
-          value={currentPassword}
-          onChange={(e) => setCurrentPassword(e.target.value)}
-          className="w-full bg-[#0a0b0f] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 mb-4 focus:outline-none focus:border-cyan-500"
-          autoFocus
-        />
+          {error && (
+            <div className="text-red-400 text-xs mb-4 flex items-center gap-2">
+              <span className="text-red-500">err</span>
+              <span>{error}</span>
+            </div>
+          )}
 
-        <label htmlFor="new-password" className="block text-xs text-gray-400 mb-1">New password</label>
-        <input
-          id="new-password"
-          type="password"
-          value={newPassword}
-          onChange={(e) => setNewPassword(e.target.value)}
-          className="w-full bg-[#0a0b0f] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 mb-4 focus:outline-none focus:border-cyan-500"
-        />
+          <div className="mb-4">
+            <label htmlFor="current-password" className="block text-xs text-gray-600 mb-1.5 uppercase tracking-wider">
+              Current password
+            </label>
+            <div className="flex items-center border-b border-gray-700 focus-within:border-green-500/50 transition-colors">
+              <span className="text-green-600/60 text-sm mr-2 select-none">&gt;</span>
+              <input
+                id="current-password"
+                type="password"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                className="w-full bg-transparent py-2 text-sm text-gray-200 focus:outline-none placeholder:text-gray-700"
+                autoFocus
+              />
+            </div>
+          </div>
 
-        <label htmlFor="confirm-password" className="block text-xs text-gray-400 mb-1">Confirm new password</label>
-        <input
-          id="confirm-password"
-          type="password"
-          value={confirmPassword}
-          onChange={(e) => setConfirmPassword(e.target.value)}
-          className="w-full bg-[#0a0b0f] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 mb-6 focus:outline-none focus:border-cyan-500"
-        />
+          <div className="mb-4">
+            <label htmlFor="new-password" className="block text-xs text-gray-600 mb-1.5 uppercase tracking-wider">
+              New password
+            </label>
+            <div className="flex items-center border-b border-gray-700 focus-within:border-green-500/50 transition-colors">
+              <span className="text-green-600/60 text-sm mr-2 select-none">&gt;</span>
+              <input
+                id="new-password"
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                className="w-full bg-transparent py-2 text-sm text-gray-200 focus:outline-none placeholder:text-gray-700"
+                placeholder="min 8 characters"
+              />
+            </div>
+          </div>
 
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full bg-cyan-600 hover:bg-cyan-500 text-white py-2 rounded text-sm font-medium transition-colors disabled:opacity-50"
-        >
-          {loading ? 'Changing password...' : 'Change password'}
-        </button>
-      </form>
+          <div className="mb-8">
+            <label htmlFor="confirm-password" className="block text-xs text-gray-600 mb-1.5 uppercase tracking-wider">
+              Confirm password
+            </label>
+            <div className="flex items-center border-b border-gray-700 focus-within:border-green-500/50 transition-colors">
+              <span className="text-green-600/60 text-sm mr-2 select-none">&gt;</span>
+              <input
+                id="confirm-password"
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                className="w-full bg-transparent py-2 text-sm text-gray-200 focus:outline-none placeholder:text-gray-700"
+              />
+            </div>
+          </div>
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full bg-green-600 hover:bg-green-500 text-white py-2 rounded text-sm font-medium transition-colors disabled:opacity-50"
+          >
+            {loading ? 'Updating...' : 'Change password'}
+          </button>
+        </form>
+      </div>
     </div>
   );
 }

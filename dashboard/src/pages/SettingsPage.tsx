@@ -135,19 +135,19 @@ export function SettingsPage() {
       </div>
 
       {/* System Versions */}
-      <div className="bg-[#12131a] border border-gray-800 rounded-lg p-4 mb-6">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-sm text-gray-400 font-medium">System Versions</h3>
+      <div className="mb-8">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-xs text-gray-500 uppercase tracking-wider font-medium">System Versions</h3>
           {latestRelease && (
             <span className="text-xs text-gray-600 font-mono">
-              Latest release: v{latestRelease}
+              latest: v{latestRelease}
             </span>
           )}
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {/* Dashboard */}
-          <div className="bg-[#0a0b0f] border border-gray-800 rounded p-3">
+          <div className="bg-[var(--bg-base)] border border-gray-800 rounded p-3">
             <div className="flex items-center justify-between mb-1">
               <span className="text-sm text-gray-200">Dashboard</span>
               <span className={`text-xs font-mono ${
@@ -163,7 +163,7 @@ export function SettingsPage() {
           {(() => {
             const testerOutdated = versionInfo?.tester_version && latestRelease && versionInfo.tester_version !== latestRelease;
             return (
-              <div className={`bg-[#0a0b0f] border rounded p-3 ${testerOutdated ? 'border-yellow-500/30' : 'border-gray-800'}`}>
+              <div className={`bg-[var(--bg-base)] border rounded p-3 ${testerOutdated ? 'border-yellow-500/30' : 'border-gray-800'}`}>
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-sm text-gray-200">Local Tester</span>
                   <span className={`text-xs font-mono ${
@@ -190,7 +190,7 @@ export function SettingsPage() {
                     disabled={testerUpdating}
                     className={`text-xs px-3 py-1 rounded border transition-colors ${
                       testerUpdating
-                        ? 'border-cyan-500/30 text-cyan-400 motion-safe:animate-pulse'
+                        ? 'border-blue-500/30 text-blue-400 motion-safe:animate-pulse'
                         : 'border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/10'
                     } disabled:opacity-50`}
                   >
@@ -211,7 +211,7 @@ export function SettingsPage() {
             const isUpdating = dep ? updating[dep.deployment_id] : false;
 
             return (
-              <div key={host} className={`bg-[#0a0b0f] border rounded p-3 ${
+              <div key={host} className={`bg-[var(--bg-base)] border rounded p-3 ${
                 outdated ? 'border-yellow-500/30' : 'border-gray-800'
               }`}>
                 <div className="flex items-center justify-between mb-1">
@@ -230,7 +230,7 @@ export function SettingsPage() {
                     disabled={isUpdating || !outdated}
                     className={`text-xs px-3 py-1 rounded border transition-colors ${
                       isUpdating
-                        ? 'border-cyan-500/30 text-cyan-400 motion-safe:animate-pulse'
+                        ? 'border-blue-500/30 text-blue-400 motion-safe:animate-pulse'
                         : outdated
                           ? 'border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/10'
                           : 'border-gray-700 text-gray-600 cursor-default'
@@ -259,10 +259,10 @@ export function SettingsPage() {
 
       {/* Live Update Log */}
       {activeUpdateId && liveLines.length > 0 && (
-        <div className="bg-[#12131a] border border-cyan-500/30 rounded-lg mb-6 overflow-hidden">
+        <div className="border border-blue-500/20 rounded-lg mb-6 overflow-hidden">
           <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
-            <h3 className="text-sm text-cyan-400 font-medium flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-cyan-400 motion-safe:animate-pulse" />
+            <h3 className="text-sm text-blue-400 font-medium flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-blue-400 motion-safe:animate-pulse" />
               Update Progress
             </h3>
             {!Object.values(updating).some(v => v) && (
@@ -276,7 +276,7 @@ export function SettingsPage() {
           </div>
           <div
             ref={logRef}
-            className="bg-[#0a0b0f] p-4 h-[300px] overflow-y-auto font-mono text-xs leading-5"
+            className="bg-[var(--bg-base)] p-4 h-[300px] overflow-y-auto font-mono text-xs leading-5"
           >
             {liveLines.map((line, i) => (
               <div key={i} className="text-gray-300 whitespace-pre-wrap break-all">
@@ -288,21 +288,21 @@ export function SettingsPage() {
       )}
 
       {/* Deployed Endpoints */}
-      <div className="bg-[#12131a] border border-gray-800 rounded-lg p-4">
-        <h3 className="text-sm text-gray-400 font-medium mb-4">Deployed Endpoints</h3>
+      <div className="section-divider">
+        <h3 className="text-xs text-gray-500 uppercase tracking-wider font-medium mb-3">Deployed Endpoints</h3>
         {deployments.length === 0 ? (
           <p className="text-gray-600 text-sm">No endpoints deployed</p>
         ) : (
-          <div className="space-y-3">
-            {deployments.map(d => {
+          <div>
+            {deployments.map((d, i) => {
               const ips: string[] = d.endpoint_ips && Array.isArray(d.endpoint_ips) ? d.endpoint_ips : [];
               const isUpdating = updating[d.deployment_id];
               return (
-                <div key={d.deployment_id} className="bg-[#0a0b0f] border border-gray-800 rounded p-3 flex items-center justify-between">
+                <div key={d.deployment_id} className={`flex items-center justify-between py-3 ${i > 0 ? 'border-t border-gray-800/30' : ''}`}>
                   <div>
                     <span className="text-sm text-gray-200">{d.name}</span>
                     <span className="text-xs text-gray-600 ml-2">{d.provider_summary}</span>
-                    <div className="text-xs text-gray-500 mt-1 font-mono">
+                    <div className="text-xs text-gray-500 mt-0.5 font-mono">
                       {ips.join(', ') || 'No IPs'}
                     </div>
                   </div>
@@ -311,7 +311,7 @@ export function SettingsPage() {
                     disabled={isUpdating}
                     className={`text-xs px-3 py-1 rounded border transition-colors ${
                       isUpdating
-                        ? 'border-cyan-500/30 text-cyan-400 motion-safe:animate-pulse'
+                        ? 'border-blue-500/30 text-blue-400 motion-safe:animate-pulse'
                         : 'border-gray-700 text-gray-400 hover:border-cyan-500 hover:text-cyan-400'
                     } disabled:opacity-50`}
                   >
@@ -325,9 +325,9 @@ export function SettingsPage() {
       </div>
 
       {/* Cloud Inventory */}
-      <div className="bg-[#12131a] border border-gray-800 rounded-lg p-4 mt-6">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-sm text-gray-400 font-medium">Cloud Inventory</h3>
+      <div className="section-divider">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-xs text-gray-500 uppercase tracking-wider font-medium">Cloud Inventory</h3>
           <button
             onClick={async () => {
               setInventoryLoading(true);
@@ -363,10 +363,10 @@ export function SettingsPage() {
         ) : inventoryLoading ? (
           <p className="text-gray-500 text-sm motion-safe:animate-pulse">Scanning cloud providers...</p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
+          <div className="table-container">
+            <table className="text-xs">
               <thead>
-                <tr className="border-b border-gray-800 text-gray-500">
+                <tr className="border-b border-gray-800/50 text-gray-500 bg-[var(--bg-surface)]">
                   <th className="px-3 py-2 text-left">Provider</th>
                   <th className="px-3 py-2 text-left">Name</th>
                   <th className="px-3 py-2 text-left">Region</th>
@@ -407,16 +407,16 @@ export function SettingsPage() {
                         {vm.status}
                       </span>
                     </td>
-                    <td className="px-3 py-2 text-gray-400 font-mono text-[10px] max-w-48 truncate" title={vm.fqdn || vm.public_ip || ''}>
+                    <td className="px-3 py-2 text-gray-400 font-mono text-[11px] max-w-48 truncate" title={vm.fqdn || vm.public_ip || ''}>
                       {vm.fqdn || vm.public_ip || '-'}
                     </td>
                     <td className="px-3 py-2 text-gray-500">{vm.vm_size || '-'}</td>
                     <td className="px-3 py-2 text-gray-500">{vm.os || '-'}</td>
                     <td className="px-3 py-2">
                       {vm.managed ? (
-                        <span className="text-cyan-400 text-[10px]">tracked</span>
+                        <span className="text-gray-300 text-[11px]">tracked</span>
                       ) : (
-                        <span className="text-gray-600 text-[10px]">untracked</span>
+                        <span className="text-gray-600 text-[11px]">untracked</span>
                       )}
                     </td>
                   </tr>

@@ -2,25 +2,11 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import type { Deployment } from '../api/types';
+import { StatusBadge } from '../components/common/StatusBadge';
+import { formatDuration } from '../lib/format';
 import { usePolling } from '../hooks/usePolling';
 import { useLiveStore } from '../stores/liveStore';
 import { useToast } from '../hooks/useToast';
-
-const STATUS_COLORS: Record<string, string> = {
-  pending: 'text-gray-400',
-  running: 'text-cyan-400',
-  completed: 'text-green-400',
-  failed: 'text-red-400',
-  cancelled: 'text-yellow-400',
-};
-
-const STATUS_BG: Record<string, string> = {
-  pending: 'bg-gray-500',
-  running: 'bg-cyan-500 motion-safe:animate-pulse',
-  completed: 'bg-green-500',
-  failed: 'bg-red-500',
-  cancelled: 'bg-yellow-500',
-};
 
 interface EndpointHealth {
   ip: string;
@@ -159,11 +145,8 @@ export function DeployDetailPage() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
-          <span className={`w-3 h-3 rounded-full ${STATUS_BG[deployment?.status || 'pending']}`} />
           <h2 className="text-xl font-bold text-gray-100">{deployment?.name}</h2>
-          <span className={`text-sm ${STATUS_COLORS[deployment?.status || 'pending']}`}>
-            {deployment?.status}
-          </span>
+          <StatusBadge status={deployment?.status || 'pending'} />
         </div>
         <div className="flex gap-2">
           {isActive && (
@@ -180,7 +163,7 @@ export function DeployDetailPage() {
                 <button
                   onClick={handleCheckHealth}
                   disabled={healthLoading}
-                  className="bg-[#12131a] border border-gray-700 hover:border-cyan-500 text-gray-300 hover:text-cyan-400 px-4 py-1.5 rounded text-sm transition-colors disabled:opacity-50"
+                  className="border border-gray-700 hover:border-cyan-500 text-gray-300 hover:text-cyan-400 px-4 py-1.5 rounded text-sm transition-colors disabled:opacity-50"
                 >
                   {healthLoading ? 'Checking...' : 'Check Health'}
                 </button>
@@ -231,70 +214,50 @@ export function DeployDetailPage() {
         </div>
       </div>
 
-      {/* Info Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        <div className="bg-[#12131a] border border-gray-800 rounded-lg p-4">
-          <p className="text-xs text-gray-500 mb-1">Provider</p>
-          <p className="text-sm text-gray-200">{deployment?.provider_summary || '\u2014'}</p>
-        </div>
-        <div className="bg-[#12131a] border border-gray-800 rounded-lg p-4">
-          <p className="text-xs text-gray-500 mb-1">Started</p>
-          <p className="text-sm text-gray-200">
-            {deployment?.started_at
-              ? new Date(deployment.started_at).toLocaleString()
-              : '\u2014'}
-          </p>
-        </div>
-        <div className="bg-[#12131a] border border-gray-800 rounded-lg p-4">
-          <p className="text-xs text-gray-500 mb-1">Endpoint IPs</p>
-          <p className="text-sm text-gray-200">
-            {hasEndpoints
-              ? (deployment?.endpoint_ips || []).join(', ')
-              : '\u2014'}
-          </p>
-        </div>
-        <div className="bg-[#12131a] border border-gray-800 rounded-lg p-4">
-          <p className="text-xs text-gray-500 mb-1">Duration</p>
-          <p className="text-sm text-gray-200">
-            {deployment?.started_at
-              ? formatDuration(deployment.started_at, deployment.finished_at)
-              : '\u2014'}
-          </p>
-        </div>
+      {/* Inline metrics */}
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1 py-3 mb-6 text-xs border-b border-gray-800/50">
+        <span className="text-gray-500">
+          Provider <span className="text-gray-200 ml-1">{deployment?.provider_summary || '\u2014'}</span>
+        </span>
+        <span className="text-gray-500">
+          Endpoints <span className="text-gray-200 font-mono ml-1">
+            {hasEndpoints ? (deployment?.endpoint_ips || []).join(', ') : '\u2014'}
+          </span>
+        </span>
+        <span className="text-gray-500">
+          Duration <span className="text-gray-200 font-mono ml-1">
+            {deployment?.started_at ? formatDuration(deployment.started_at, deployment.finished_at) : '\u2014'}
+          </span>
+        </span>
+        <span className="text-gray-500">
+          Started <span className="text-gray-200 ml-1">
+            {deployment?.started_at ? new Date(deployment.started_at).toLocaleString() : '\u2014'}
+          </span>
+        </span>
       </div>
 
       {/* Endpoint Health */}
       {endpointHealth.length > 0 && (
         <div className="mb-6">
-          <p className="text-sm text-gray-400 font-medium mb-2">Endpoint Health</p>
-          <div className="flex flex-wrap gap-3">
-            {endpointHealth.map(ep => (
+          <p className="text-xs text-gray-500 uppercase tracking-wider font-medium mb-2">Endpoint Health</p>
+          <div>
+            {endpointHealth.map((ep, i) => (
               <div
                 key={ep.ip}
-                className={`bg-[#12131a] border rounded-lg p-3 flex items-center gap-3 ${
-                  ep.alive ? (ep.outdated ? 'border-yellow-500/30' : 'border-green-500/30') : 'border-red-500/30'
-                }`}
+                className={`flex items-center gap-3 py-2 ${i > 0 ? 'border-t border-gray-800/30' : ''}`}
               >
                 <span className={`w-2 h-2 rounded-full ${ep.alive ? (ep.outdated ? 'bg-yellow-400' : 'bg-green-400') : 'bg-red-400'}`} />
-                <div>
-                  <span className="text-sm text-gray-200 font-mono">{ep.ip.split('.')[0]}</span>
-                  <div className="flex items-center gap-2 mt-0.5">
-                    {ep.alive ? (
-                      <>
-                        <span className={`text-xs font-mono ${ep.outdated ? 'text-yellow-400' : 'text-green-400'}`}>
-                          v{ep.version || '?'}
-                        </span>
-                        {ep.outdated && versionInfo?.latest && (
-                          <span className="text-xs text-gray-600">
-                            (latest: v{versionInfo.latest})
-                          </span>
-                        )}
-                      </>
-                    ) : (
-                      <span className="text-xs text-red-400">unreachable</span>
+                <span className="text-sm text-gray-200 font-mono">{ep.ip}</span>
+                {ep.alive ? (
+                  <span className={`text-xs font-mono ${ep.outdated ? 'text-yellow-400' : 'text-green-400'}`}>
+                    v{ep.version || '?'}
+                    {ep.outdated && versionInfo?.latest && (
+                      <span className="text-gray-600 ml-1">(latest: v{versionInfo.latest})</span>
                     )}
-                  </div>
-                </div>
+                  </span>
+                ) : (
+                  <span className="text-xs text-red-400">unreachable</span>
+                )}
               </div>
             ))}
           </div>
@@ -311,7 +274,7 @@ export function DeployDetailPage() {
       {/* Log Output */}
       <div className="mb-6">
         <div className="flex items-center justify-between mb-2">
-          <p className="text-sm text-gray-400 font-medium">Deployment Log</p>
+          <p className="text-xs text-gray-500 uppercase tracking-wider font-medium">Deployment Log</p>
           {!autoScroll && (
             <button
               onClick={() => {
@@ -329,7 +292,7 @@ export function DeployDetailPage() {
         <div
           ref={logContainerRef}
           onScroll={handleLogScroll}
-          className="bg-[#0a0b0f] border border-gray-800 rounded-lg p-4 h-[400px] overflow-y-auto font-mono text-xs leading-5"
+          className="bg-[var(--bg-base)] border border-gray-800 rounded-lg p-4 h-[400px] overflow-y-auto font-mono text-xs leading-5"
         >
           {logLines.length === 0 ? (
             <p className="text-gray-600">
@@ -350,7 +313,7 @@ export function DeployDetailPage() {
         <summary className="text-sm text-gray-400 cursor-pointer hover:text-gray-300 mb-2">
           Deployment Config
         </summary>
-        <pre className="bg-[#0a0b0f] border border-gray-800 rounded-lg p-4 text-xs text-gray-400 overflow-x-auto">
+        <pre className="bg-[var(--bg-base)] border border-gray-800 rounded-lg p-4 text-xs text-gray-400 overflow-x-auto">
           {JSON.stringify(deployment?.config, null, 2)}
         </pre>
       </details>
@@ -358,13 +321,3 @@ export function DeployDetailPage() {
   );
 }
 
-function formatDuration(start: string, end: string | null): string {
-  const s = new Date(start).getTime();
-  const e = end ? new Date(end).getTime() : Date.now();
-  const secs = Math.round((e - s) / 1000);
-  if (secs < 60) return `${secs}s`;
-  const mins = Math.floor(secs / 60);
-  if (mins < 60) return `${mins}m ${secs % 60}s`;
-  const hours = Math.floor(mins / 60);
-  return `${hours}h ${mins % 60}m`;
-}

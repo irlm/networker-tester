@@ -6,18 +6,9 @@ import { CreateJobDialog } from '../components/CreateJobDialog';
 import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useToast } from '../hooks/useToast';
+import { formatDuration } from '../lib/format';
 
 const STATUS_OPTIONS = ['all', 'pending', 'running', 'completed', 'failed', 'cancelled'] as const;
-
-function formatDuration(start: Date, end: Date): string {
-  const ms = end.getTime() - start.getTime();
-  if (ms < 1000) return `${ms}ms`;
-  const secs = Math.floor(ms / 1000);
-  if (secs < 60) return `${secs}s`;
-  const mins = Math.floor(secs / 60);
-  const remainSecs = secs % 60;
-  return `${mins}m ${remainSecs}s`;
-}
 
 export function JobsPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -123,8 +114,27 @@ export function JobsPage() {
   if (loading && jobs.length === 0) {
     return (
       <div className="p-6">
-        <h2 className="text-xl font-bold text-gray-100 mb-6">Tests</h2>
-        <div className="text-gray-500 motion-safe:animate-pulse">Loading...</div>
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-bold text-gray-100">Tests</h2>
+          <div className="h-7 w-20 rounded bg-gray-800 motion-safe:animate-pulse" />
+        </div>
+        {/* Skeleton: table */}
+        <div className="table-container">
+          <div className="bg-[var(--bg-surface)] px-4 py-2.5 border-b border-gray-800/50">
+            <div className="flex gap-8">
+              {[48, 80, 56, 32, 56, 48, 56, 72].map((w, i) => (
+                <div key={i} className="h-3 rounded bg-gray-800/60 motion-safe:animate-pulse" style={{ width: w }} />
+              ))}
+            </div>
+          </div>
+          {[1, 2, 3, 4].map(i => (
+            <div key={i} className="px-4 py-3 border-b border-gray-800/30 flex gap-8">
+              {[48, 96, 64, 24, 56, 48, 40, 80].map((w, j) => (
+                <div key={j} className="h-3 rounded bg-gray-800/40 motion-safe:animate-pulse" style={{ width: w }} />
+              ))}
+            </div>
+          ))}
+        </div>
       </div>
     );
   }
@@ -154,7 +164,7 @@ export function JobsPage() {
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
             aria-label="Filter by status"
-            className="bg-[#0a0b0f] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-300 focus:outline-none focus:border-cyan-500"
+            className="bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-300 focus:outline-none focus:border-cyan-500"
           >
             {STATUS_OPTIONS.map((s) => (
               <option key={s} value={s}>
@@ -175,11 +185,11 @@ export function JobsPage() {
         <CreateJobDialog onClose={() => setShowCreate(false)} onCreated={loadJobs} />
       )}
 
-      {/* Testers Panel */}
+      {/* Testers Panel — flat list, no card wrapper */}
       {showTesters && (
-        <div className="bg-[#12131a] border border-gray-800 rounded-lg p-4 mb-6">
+        <div className="border-b border-gray-800/50 pb-5 mb-6">
           <div className="flex items-center justify-between mb-3">
-            <p className="text-sm text-gray-400 font-medium">Testers</p>
+            <p className="text-xs text-gray-500 uppercase tracking-wider font-medium">Testers</p>
             <button
               onClick={() => setShowAddTester(!showAddTester)}
               className="text-xs text-cyan-400 hover:text-cyan-300"
@@ -188,9 +198,9 @@ export function JobsPage() {
             </button>
           </div>
 
-          {/* Add Tester Form */}
+          {/* Add Tester Form — inline with left accent */}
           {showAddTester && (
-            <div className="bg-[#0a0b0f] border border-gray-800 rounded p-3 mb-3">
+            <div className="border-l-2 border-cyan-500/30 pl-3 mb-4">
               <div className="flex gap-2 mb-3">
                 {([
                   { id: 'local', label: 'Local (this machine)' },
@@ -226,7 +236,7 @@ export function JobsPage() {
                   <select
                     value={selectedEndpoint}
                     onChange={e => setSelectedEndpoint(e.target.value)}
-                    className="w-full bg-[#12131a] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                    className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                   >
                     <option value="">Select endpoint...</option>
                     {deployments.flatMap(d =>
@@ -246,20 +256,20 @@ export function JobsPage() {
                     value={sshHost}
                     onChange={e => setSshHost(e.target.value)}
                     placeholder="Host / IP"
-                    className="bg-[#12131a] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                    className="bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                   />
                   <input
                     value={sshUser}
                     onChange={e => setSshUser(e.target.value)}
                     placeholder="SSH user"
-                    className="bg-[#12131a] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                    className="bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                   />
                   <input
                     type="number"
                     value={sshPort}
                     onChange={e => setSshPort(Number(e.target.value))}
                     placeholder="Port"
-                    className="bg-[#12131a] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                    className="bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                   />
                 </div>
               )}
@@ -269,7 +279,7 @@ export function JobsPage() {
                   value={testerName}
                   onChange={e => setTesterName(e.target.value)}
                   placeholder="Tester name (optional)"
-                  className="flex-1 bg-[#12131a] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                  className="flex-1 bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 />
                 <button
                   onClick={handleAddTester}
@@ -282,34 +292,36 @@ export function JobsPage() {
             </div>
           )}
 
-          {/* Tester List */}
+          {/* Tester List — flat rows with dividers */}
           {testers.length === 0 ? (
             <p className="text-gray-600 text-sm">No testers registered. The dashboard auto-starts a local tester on first run.</p>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {testers.map(t => (
-                <div key={t.agent_id} className="bg-[#0a0b0f] border border-gray-800 rounded p-3">
-                  <div className="flex items-center justify-between mb-1">
+            <div>
+              {testers.map((t, i) => (
+                <div
+                  key={t.agent_id}
+                  className={`flex items-center justify-between py-2.5 ${i > 0 ? 'border-t border-gray-800/30' : ''}`}
+                >
+                  <div className="flex items-center gap-3">
+                    <StatusBadge status={t.status} />
                     <span className="text-sm text-gray-200">{t.name}</span>
-                    <div className="flex items-center gap-2">
-                      <StatusBadge status={t.status} />
-                      <button
-                        onClick={() => handleDeleteTester(t.agent_id, t.name)}
-                        className="text-xs text-gray-600 hover:text-red-400"
-                        title="Remove tester"
-                      >
-                        &#x2715;
-                      </button>
-                    </div>
+                    <span className="text-xs text-gray-600">
+                      {t.provider && <>{t.provider} </>}
+                      {t.region && <>{t.region} </>}
+                      {t.version && <>v{t.version} </>}
+                      {t.last_heartbeat && (
+                        <>seen {new Date(t.last_heartbeat).toLocaleTimeString()}</>
+                      )}
+                    </span>
                   </div>
-                  <div className="text-xs text-gray-500">
-                    {t.provider && <span>{t.provider} </span>}
-                    {t.region && <span>{t.region} </span>}
-                    {t.version && <span>v{t.version} </span>}
-                    {t.last_heartbeat && (
-                      <span>seen {new Date(t.last_heartbeat).toLocaleTimeString()}</span>
-                    )}
-                  </div>
+                  <button
+                    onClick={() => handleDeleteTester(t.agent_id, t.name)}
+                    className="text-xs text-gray-600 hover:text-red-400 transition-colors"
+                    title="Remove tester"
+                    aria-label={`Remove tester ${t.name}`}
+                  >
+                    &#x2715;
+                  </button>
                 </div>
               ))}
             </div>
@@ -323,19 +335,19 @@ export function JobsPage() {
         </div>
       )}
 
-      {/* Tests Table */}
-      <div className="bg-[#12131a] border border-gray-800 rounded-lg overflow-hidden">
+      {/* Tests Table — full-bleed, no card wrapper */}
+      <div className="table-container">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-gray-800 text-gray-500 text-xs">
-              <th className="px-4 py-3 text-left">Test ID</th>
-              <th className="px-4 py-3 text-left">Target</th>
-              <th className="px-4 py-3 text-left">Modes</th>
-              <th className="px-4 py-3 text-left">Runs</th>
-              <th className="px-4 py-3 text-left">Tester</th>
-              <th className="px-4 py-3 text-left">Status</th>
-              <th className="px-4 py-3 text-left">Duration</th>
-              <th className="px-4 py-3 text-left">Created</th>
+            <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
+              <th className="px-4 py-2.5 text-left font-medium">Test ID</th>
+              <th className="px-4 py-2.5 text-left font-medium">Target</th>
+              <th className="px-4 py-2.5 text-left font-medium">Modes</th>
+              <th className="px-4 py-2.5 text-left font-medium">Runs</th>
+              <th className="px-4 py-2.5 text-left font-medium">Tester</th>
+              <th className="px-4 py-2.5 text-left font-medium">Status</th>
+              <th className="px-4 py-2.5 text-left font-medium">Duration</th>
+              <th className="px-4 py-2.5 text-left font-medium">Created</th>
             </tr>
           </thead>
           <tbody>
@@ -353,7 +365,7 @@ export function JobsPage() {
               return (
                 <tr
                   key={job.job_id}
-                  className={`border-b border-gray-800/50 hover:bg-gray-800/20 ${isActive ? 'bg-cyan-500/5' : ''}`}
+                  className={`border-b border-gray-800/50 hover:bg-gray-800/20 ${isActive ? 'bg-blue-500/5' : ''}`}
                 >
                   <td className="px-4 py-3">
                     <Link to={`/tests/${job.job_id}`} className="text-cyan-400 hover:underline font-mono text-xs">
@@ -371,7 +383,7 @@ export function JobsPage() {
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
                       <StatusBadge status={job.status} />
-                      {isActive && <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 motion-safe:animate-pulse" />}
+                      {isActive && <span className="w-1.5 h-1.5 rounded-full bg-blue-400 motion-safe:animate-pulse" />}
                     </div>
                   </td>
                   <td className="px-4 py-3 text-gray-500 text-xs font-mono">{duration}</td>
@@ -383,7 +395,10 @@ export function JobsPage() {
         </table>
 
         {jobs.length === 0 && (
-          <p className="p-4 text-gray-600 text-sm text-center">No tests yet. Create one to get started.</p>
+          <div className="py-10 text-center">
+            <p className="text-gray-500 text-sm">No tests yet</p>
+            <p className="text-gray-700 text-xs mt-1">Create a test to start probing network endpoints</p>
+          </div>
         )}
       </div>
     </div>

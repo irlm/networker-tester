@@ -1,18 +1,15 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { api } from '../api/client';
 import type { ModeGroup, Deployment, Agent } from '../api/types';
+import { THROUGHPUT_IDS } from '../lib/chart';
+import { ModeSelector } from './common/ModeSelector';
+import { PayloadSelector } from './common/PayloadSelector';
 import { useToast } from '../hooks/useToast';
 
 interface CreateJobDialogProps {
   onClose: () => void;
   onCreated: () => void;
 }
-
-const PAYLOAD_PRESETS = [
-  { label: 'Small (64KB)', value: '64k' },
-  { label: 'Medium (1MB)', value: '1m' },
-  { label: 'Large (16MB)', value: '16m' },
-];
 
 export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
   const [target, setTarget] = useState('https://localhost:8443/health');
@@ -36,8 +33,6 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
   const firstInputRef = useRef<HTMLInputElement>(null);
   const addToast = useToast();
 
-  const THROUGHPUT_IDS = ['download', 'upload', 'download1', 'download2', 'download3',
-    'upload1', 'upload2', 'upload3', 'webdownload', 'webupload', 'udpdownload', 'udpupload'];
   const needsPayload = THROUGHPUT_IDS.some((m) => selectedModes.has(m));
 
   useEffect(() => {
@@ -155,21 +150,28 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
   const titleId = 'create-job-dialog-title';
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+    <div className="fixed inset-0 z-50 flex justify-end">
+      {/* Backdrop — semi-transparent, click to close */}
+      <div className="absolute inset-0 bg-black/40 slide-over-backdrop" onClick={onClose} aria-hidden="true" />
+
+      {/* Slide-over panel */}
       <div
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="max-h-[90vh] overflow-y-auto"
+        className="relative w-[520px] max-w-[90vw] bg-[var(--bg-base)] border-l border-gray-800 h-full overflow-y-auto slide-over-panel"
       >
         <form
           onSubmit={handleSubmit}
-          className="bg-[#12131a] border border-gray-800 rounded-lg p-6 w-[700px] min-w-[500px] max-w-[95vw] resize-x overflow-auto"
+          className="p-6"
         >
-          <h3 id={titleId} className="text-lg font-bold text-gray-100 mb-4">
-            New Test
-          </h3>
+          <div className="flex items-center justify-between mb-6">
+            <h3 id={titleId} className="text-lg font-bold text-gray-100">
+              New Test
+            </h3>
+            <button type="button" onClick={onClose} className="text-gray-500 hover:text-gray-300 text-sm" aria-label="Close">&#x2715;</button>
+          </div>
 
           {error && (
             <div className="bg-red-500/10 border border-red-500/30 rounded p-2 mb-4">
@@ -199,7 +201,7 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
           <select
             value={target}
             onChange={(e) => setTarget(e.target.value)}
-            className="w-full bg-[#0a0b0f] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 mb-2 focus:outline-none focus:border-cyan-500"
+            className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 mb-2 focus:outline-none focus:border-cyan-500"
           >
             <option value="">Select endpoint...</option>
             <option value="https://localhost:8443/health">Local endpoint (localhost:8443)</option>
@@ -221,7 +223,7 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
             value={target}
             onChange={(e) => setTarget(e.target.value)}
             placeholder="Or type a custom URL..."
-            className="w-full bg-[#0a0b0f] border border-gray-700 rounded px-3 py-1.5 text-xs text-gray-400 mb-4 focus:outline-none focus:border-cyan-500"
+            className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-xs text-gray-400 mb-4 focus:outline-none focus:border-cyan-500"
           />
 
           {/* Tester Selection */}
@@ -234,7 +236,7 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
                 id="create-job-tester"
                 value={selectedTester}
                 onChange={(e) => setSelectedTester(e.target.value)}
-                className="w-full bg-[#0a0b0f] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
               >
                 <option value="">Auto (any online tester)</option>
                 {testers.map(a => (
@@ -248,91 +250,26 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
 
           {/* Mode Selection */}
           <p className="text-xs text-gray-400 mb-2">Probe Modes</p>
-          <div className="grid grid-cols-2 gap-3 mb-4">
-            {modeGroups.map((group) => (
-              <div
-                key={group.label}
-                className={`bg-[#0a0b0f] border border-gray-800 rounded p-3 ${
-                  group.label === 'Throughput' ? 'col-span-2' : ''
-                }`}
-              >
-                {(() => {
-                  const ids = group.modes.map(m => m.id);
-                  const selectedCount = ids.filter(id => selectedModes.has(id)).length;
-                  const allSelected = selectedCount === ids.length;
-                  const someSelected = selectedCount > 0 && !allSelected;
-                  return (
-                    <>
-                      <label className="flex items-center gap-2 mb-2 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={allSelected}
-                          ref={el => { if (el) el.indeterminate = someSelected; }}
-                          onChange={() => {
-                            setSelectedModes(prev => {
-                              const next = new Set(prev);
-                              ids.forEach(id => allSelected ? next.delete(id) : next.add(id));
-                              return next;
-                            });
-                          }}
-                          className="accent-cyan-500"
-                        />
-                        <span className="text-xs text-gray-500 font-medium">{group.label}</span>
-                        {someSelected && (
-                          <span className="text-[10px] text-gray-600">{selectedCount}/{ids.length}</span>
-                        )}
-                        {group.detail && (
-                          <span className="text-gray-600 hover:text-gray-400 cursor-help ml-1 text-xs" title={group.detail}>&#9432;</span>
-                        )}
-                      </label>
-                      <div className={`pl-5 ${group.label === 'Throughput' ? 'grid grid-cols-2 gap-x-4' : ''}`}>
-                        {group.modes.map((mode) => (
-                          <label
-                            key={mode.id}
-                            className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer py-0.5 hover:text-gray-100"
-                          >
-                            <input
-                              type="checkbox"
-                              checked={selectedModes.has(mode.id)}
-                              onChange={() => toggleMode(mode.id)}
-                              className="accent-cyan-500"
-                            />
-                            <span>{mode.name}</span>
-                            <span className="text-xs text-gray-600 ml-auto" title={mode.detail}>{mode.desc}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </>
-                  );
-                })()}
-              </div>
-            ))}
+          <div className="mb-4">
+            <ModeSelector
+              modeGroups={modeGroups}
+              selectedModes={selectedModes}
+              onToggle={toggleMode}
+              onToggleGroup={(ids, allSelected) => {
+                setSelectedModes(prev => {
+                  const next = new Set(prev);
+                  ids.forEach(id => allSelected ? next.delete(id) : next.add(id));
+                  return next;
+                });
+              }}
+            />
           </div>
 
           {/* Payload Sizes (shown when throughput modes selected) */}
           {needsPayload && (
             <div className="mb-4">
               <p className="text-xs text-gray-400 mb-2">Payload Sizes</p>
-              <div className="flex gap-2">
-                {PAYLOAD_PRESETS.map((p) => (
-                  <label
-                    key={p.value}
-                    className={`flex items-center gap-2 px-3 py-1.5 rounded border cursor-pointer text-sm transition-colors ${
-                      payloadSizes.has(p.value)
-                        ? 'border-cyan-500/50 bg-cyan-500/10 text-cyan-400'
-                        : 'border-gray-700 text-gray-400 hover:border-gray-600'
-                    }`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={payloadSizes.has(p.value)}
-                      onChange={() => togglePayload(p.value)}
-                      className="sr-only"
-                    />
-                    {p.label}
-                  </label>
-                ))}
-              </div>
+              <PayloadSelector selected={payloadSizes} onToggle={togglePayload} />
             </div>
           )}
 
@@ -349,7 +286,7 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
                 max={100}
                 value={runs}
                 onChange={(e) => setRuns(Number(e.target.value))}
-                className="w-full bg-[#0a0b0f] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
               />
             </div>
             <div>
@@ -363,7 +300,7 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
                 max={50}
                 value={concurrency}
                 onChange={(e) => setConcurrency(Number(e.target.value))}
-                className="w-full bg-[#0a0b0f] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
               />
             </div>
             <div>
@@ -377,7 +314,7 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
                 max={300}
                 value={timeout}
                 onChange={(e) => setTimeout_(Number(e.target.value))}
-                className="w-full bg-[#0a0b0f] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
               />
             </div>
           </div>
@@ -410,7 +347,7 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
             <select
               value={captureMode}
               onChange={(e) => setCaptureMode(e.target.value as 'none' | 'tester')}
-              className="w-full bg-[#0a0b0f] border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-300 focus:outline-none focus:border-cyan-500"
+              className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-300 focus:outline-none focus:border-cyan-500"
             >
               <option value="none">Disabled</option>
               <option value="tester">Tester-side (capture on this machine)</option>
@@ -421,7 +358,7 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
           </div>
 
           {/* Summary */}
-          <div className="bg-[#0a0b0f] border border-gray-800 rounded p-3 mb-4 text-xs text-gray-500">
+          <div className="bg-[var(--bg-base)] border border-gray-800 rounded p-3 mb-4 text-xs text-gray-500">
             <span className="text-gray-400">{selectedModes.size} modes</span>
             {' · '}
             <span>{runs} runs</span>
@@ -434,8 +371,8 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
             <span>{timeout}s timeout</span>
           </div>
 
-          {/* Actions */}
-          <div className="flex justify-end gap-3">
+          {/* Actions — sticky bottom */}
+          <div className="flex justify-end gap-3 pt-4 border-t border-gray-800/50 mt-6">
             <button
               type="button"
               onClick={onClose}
