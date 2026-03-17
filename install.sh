@@ -3786,7 +3786,7 @@ step_write_dashboard_env() {
     local admin_pw="${DASHBOARD_ADMIN_PASSWORD:-}"
     if [[ -z "$admin_pw" ]]; then
         # Generate a random temporary password — user must change on first login
-        admin_pw="$(head -c 24 /dev/urandom | LC_ALL=C tr -dc 'A-HJ-NP-Za-km-z2-9' | head -c 16)"
+        admin_pw="$(head -c 64 /dev/urandom | LC_ALL=C tr -dc 'A-HJ-NP-Za-km-z2-9' | head -c 16)"
         DASHBOARD_TEMP_PASSWORD="$admin_pw"
     fi
 
@@ -3906,7 +3906,7 @@ step_setup_nginx_proxy() {
     # Install nginx if not present (system package is fine for reverse proxy)
     if ! command -v nginx &>/dev/null; then
         case "$PKG_MGR" in
-            apt-get) sudo apt-get install -y -qq nginx < /dev/null 2>&1 ;;
+            apt-get) sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nginx < /dev/null 2>&1 ;;
             dnf)     sudo dnf install -y nginx < /dev/null 2>&1 ;;
         esac
     fi
@@ -3998,7 +3998,7 @@ step_setup_letsencrypt() {
     if [[ $use_letsencrypt -eq 1 ]]; then
         # Install certbot
         case "$PKG_MGR" in
-            apt-get) sudo apt-get install -y -qq certbot python3-certbot-nginx < /dev/null 2>&1 ;;
+            apt-get) sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq certbot python3-certbot-nginx < /dev/null 2>&1 ;;
             dnf)     sudo dnf install -y certbot python3-certbot-nginx < /dev/null 2>&1 ;;
         esac
 
