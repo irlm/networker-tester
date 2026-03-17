@@ -6946,6 +6946,24 @@ display_completion() {
             echo "  ╚══════════════════════════════════════════════════════════╝"
             echo ""
         fi
+
+        # SSH access and cloud credentials guide
+        local server_ip
+        server_ip="$(curl -s --max-time 3 ifconfig.me 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}')"
+        if [[ -n "$server_ip" ]]; then
+            echo "  ${BOLD}SSH access${RESET}:"
+            echo "    ssh $(whoami)@${server_ip}"
+            echo ""
+        fi
+        echo "  ${BOLD}Cloud credentials${RESET} (required to deploy endpoints from the dashboard):"
+        echo ""
+        echo "    ${DIM}Azure:${RESET}  az login                    ${DIM}# or: az login --identity (for VMs with managed identity)${RESET}"
+        echo "    ${DIM}AWS:${RESET}    aws configure                ${DIM}# enter access key + secret${RESET}"
+        echo "    ${DIM}GCP:${RESET}    gcloud auth login            ${DIM}# then: gcloud config set project PROJECT_ID${RESET}"
+        echo ""
+        echo "    After authenticating, restart the dashboard:"
+        echo "    sudo systemctl restart networker-dashboard"
+        echo ""
     fi
 
     # ── Remote tester summary ─────────────────────────────────────────────────
