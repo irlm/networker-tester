@@ -3749,19 +3749,23 @@ step_build_frontend() {
     elif [[ -f "/tmp/networker-dashboard-src/dashboard/package.json" ]]; then
         dashboard_src="/tmp/networker-dashboard-src/dashboard"
     else
-        # Clone the repo to get the frontend source
+        # Clone the repo at the release tag to get matching frontend source
         local tmp_src="/tmp/networker-dashboard-src"
         rm -rf "$tmp_src"
-        git clone --depth 1 "${REPO_HTTPS}.git" "$tmp_src" < /dev/null 2>&1 || {
-            print_err "Failed to clone repo for frontend source"
-            return 1
+        local clone_ref="${NETWORKER_VERSION:-main}"
+        git clone --depth 1 --branch "$clone_ref" "${REPO_HTTPS}.git" "$tmp_src" < /dev/null 2>&1 || {
+            # Fallback to main if tag doesn't exist
+            git clone --depth 1 "${REPO_HTTPS}.git" "$tmp_src" < /dev/null 2>&1 || {
+                print_err "Failed to clone repo for frontend source"
+                return 1
+            }
         }
         dashboard_src="$tmp_src/dashboard"
     fi
 
     (
         cd "$dashboard_src"
-        npm install < /dev/null 2>&1
+        npm install --legacy-peer-deps < /dev/null 2>&1
         npm run build < /dev/null 2>&1
     ) || {
         print_err "Frontend build failed"
