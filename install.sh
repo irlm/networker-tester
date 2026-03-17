@@ -3587,9 +3587,13 @@ step_install_nodejs() {
         apt-get)
             # Remove system nodejs if present (conflicts with NodeSource)
             sudo apt-get remove -y nodejs npm < /dev/null 2>/dev/null || true
-            curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - < /dev/null 2>&1
+            # Download setup script first (avoid pipe stdin issues with curl|bash)
+            local ns_setup="/tmp/nodesource_setup.sh"
+            curl -fsSL https://deb.nodesource.com/setup_24.x -o "$ns_setup"
+            sudo -E bash "$ns_setup" < /dev/null 2>&1
+            rm -f "$ns_setup"
             sudo apt-get update -qq < /dev/null
-            sudo apt-get install -y nodejs < /dev/null
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs < /dev/null
             ;;
         dnf)
             sudo dnf install -y nodejs npm < /dev/null
@@ -3617,7 +3621,10 @@ step_install_cloud_clis() {
         print_info "Installing Azure CLI…"
         case "$PKG_MGR" in
             apt-get)
-                curl -sL https://aka.ms/InstallAzureCLIDeb | sudo DEBIAN_FRONTEND=noninteractive bash < /dev/null 2>&1
+                local az_setup="/tmp/azure_cli_setup.sh"
+                curl -sL https://aka.ms/InstallAzureCLIDeb -o "$az_setup"
+                sudo DEBIAN_FRONTEND=noninteractive bash "$az_setup" < /dev/null 2>&1
+                rm -f "$az_setup"
                 ;;
             dnf)
                 sudo rpm --import https://packages.microsoft.com/keys/microsoft.asc < /dev/null
