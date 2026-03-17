@@ -8047,7 +8047,13 @@ _deploy_execute_tests() {
 
         print_info "Running: $tester_bin --config $CONFIG_FILE_PATH"
         echo ""
-        "$tester_bin" --config "$CONFIG_FILE_PATH"
+        # Use 'sg wireshark' if capture is enabled and the group exists,
+        # so tshark has capture permissions even without re-login.
+        if [[ "$DEPLOY_PACKET_CAPTURE_MODE" != "none" ]] && getent group wireshark &>/dev/null; then
+            sg wireshark -c "\"$tester_bin\" --config \"$CONFIG_FILE_PATH\""
+        else
+            "$tester_bin" --config "$CONFIG_FILE_PATH"
+        fi
         local rc=$?
         echo ""
         if [[ $rc -eq 0 ]]; then
