@@ -318,7 +318,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.13.26"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.13.27"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -3802,9 +3802,18 @@ DASHBOARD_JWT_SECRET=${jwt_secret}
 DASHBOARD_PORT=${dashboard_port}
 DASHBOARD_BIND_ADDR=127.0.0.1
 DASHBOARD_STATIC_DIR=/opt/networker/dashboard
+INSTALL_SH_PATH=/opt/networker/install.sh
 ENVFILE
 
     sudo chmod 600 /etc/networker-dashboard.env
+
+    # Copy install.sh to a persistent location for the dashboard to use for deployments
+    local script_path="${BASH_SOURCE[0]:-$0}"
+    if [[ -f "$script_path" ]]; then
+        sudo cp "$script_path" /opt/networker/install.sh
+        sudo chmod +x /opt/networker/install.sh
+    fi
+
     print_ok "Environment file written to /etc/networker-dashboard.env"
 }
 
@@ -8735,13 +8744,18 @@ deploy_from_config() {
             step_cargo_install "networker-agent"
         fi
 
-        # Dashboard also needs tester binary + browser + capture tools
+        # Dashboard also needs tester + endpoint binaries, browser, and capture tools
         if [[ "$INSTALL_METHOD" == "release" ]]; then
             step_download_release "networker-tester" 2>/dev/null || true
+            step_download_release "networker-endpoint" 2>/dev/null || true
         fi
         if [[ "$SYS_OS" == "Linux" ]]; then
             step_install_chrome 2>/dev/null || print_warn "Chrome install skipped — browser probes disabled"
             step_install_tshark 2>/dev/null || print_warn "tshark install skipped — packet capture disabled"
+            # Set up local endpoint service so tests can target localhost
+            if command -v systemctl &>/dev/null; then
+                step_setup_endpoint_service 2>/dev/null || true
+            fi
         fi
 
         step_build_frontend
@@ -8890,13 +8904,18 @@ main() {
             step_cargo_install "networker-agent"
         fi
 
-        # Dashboard also needs tester binary + browser + capture tools
+        # Dashboard also needs tester + endpoint binaries, browser, and capture tools
         if [[ "$INSTALL_METHOD" == "release" ]]; then
             step_download_release "networker-tester" 2>/dev/null || true
+            step_download_release "networker-endpoint" 2>/dev/null || true
         fi
         if [[ "$SYS_OS" == "Linux" ]]; then
             step_install_chrome 2>/dev/null || print_warn "Chrome install skipped — browser probes disabled"
             step_install_tshark 2>/dev/null || print_warn "tshark install skipped — packet capture disabled"
+            # Set up local endpoint service so tests can target localhost
+            if command -v systemctl &>/dev/null; then
+                step_setup_endpoint_service 2>/dev/null || true
+            fi
         fi
 
         step_build_frontend
