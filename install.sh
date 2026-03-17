@@ -3802,9 +3802,18 @@ DASHBOARD_JWT_SECRET=${jwt_secret}
 DASHBOARD_PORT=${dashboard_port}
 DASHBOARD_BIND_ADDR=127.0.0.1
 DASHBOARD_STATIC_DIR=/opt/networker/dashboard
+INSTALL_SH_PATH=/opt/networker/install.sh
 ENVFILE
 
     sudo chmod 600 /etc/networker-dashboard.env
+
+    # Copy install.sh to a persistent location for the dashboard to use for deployments
+    local script_path="${BASH_SOURCE[0]:-$0}"
+    if [[ -f "$script_path" ]]; then
+        sudo cp "$script_path" /opt/networker/install.sh
+        sudo chmod +x /opt/networker/install.sh
+    fi
+
     print_ok "Environment file written to /etc/networker-dashboard.env"
 }
 
