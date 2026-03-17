@@ -8691,6 +8691,15 @@ deploy_from_config() {
             step_cargo_install "networker-agent"
         fi
 
+        # Dashboard also needs tester binary + browser + capture tools
+        if [[ "$INSTALL_METHOD" == "release" ]]; then
+            step_download_release "networker-tester" 2>/dev/null || true
+        fi
+        if [[ "$SYS_OS" == "Linux" ]]; then
+            step_install_chrome 2>/dev/null || print_warn "Chrome install skipped — browser probes disabled"
+            step_install_tshark 2>/dev/null || print_warn "tshark install skipped — packet capture disabled"
+        fi
+
         step_build_frontend
         step_write_dashboard_env
         step_setup_dashboard_service
@@ -8835,6 +8844,15 @@ main() {
             step_ensure_cargo_env
             step_cargo_install "networker-dashboard"
             step_cargo_install "networker-agent"
+        fi
+
+        # Dashboard also needs tester binary + browser + capture tools
+        if [[ "$INSTALL_METHOD" == "release" ]]; then
+            step_download_release "networker-tester" 2>/dev/null || true
+        fi
+        if [[ "$SYS_OS" == "Linux" ]]; then
+            step_install_chrome 2>/dev/null || print_warn "Chrome install skipped — browser probes disabled"
+            step_install_tshark 2>/dev/null || print_warn "tshark install skipped — packet capture disabled"
         fi
 
         step_build_frontend
