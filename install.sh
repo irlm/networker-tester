@@ -3588,8 +3588,58 @@ step_install_postgresql() {
     sudo -u postgres createdb networker_dashboard -O networker 2>/dev/null || true
 
     # Generate a random password for the PostgreSQL user
-    DASHBOARD_DB_PASSWORD="$(head -c 24 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9' | head -c 24)"
+    DASHBOARD_DB_PASSWORD="$(head -c 64 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9' | head -c 24)"
     sudo -u postgres psql -c "ALTER USER networker WITH PASSWORD '${DASHBOARD_DB_PASSWORD}';" 2>/dev/null || true
+
+    # Create tester result tables (normally created by networker-tester on first run,
+    # but the dashboard's Runs page queries them and returns 500 if they don't exist)
+    sudo -u postgres psql -d networker_dashboard 2>/dev/null << 'TESTER_SCHEMA'
+CREATE TABLE IF NOT EXISTS _schema_versions (
+    version INTEGER PRIMARY KEY, applied_at TIMESTAMP WITH TIME ZONE DEFAULT NOW());
+INSERT INTO _schema_versions (version) VALUES (1) ON CONFLICT DO NOTHING;
+CREATE TABLE IF NOT EXISTS TestRun (
+    RunId UUID PRIMARY KEY, TargetHost TEXT NOT NULL, TargetUrl TEXT NOT NULL DEFAULT '',
+    Modes TEXT NOT NULL DEFAULT '', StartedAt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    FinishedAt TIMESTAMP WITH TIME ZONE, ClientVersion TEXT NOT NULL DEFAULT '',
+    ClientOs TEXT NOT NULL DEFAULT '', EndpointVersion TEXT, ServerInfo TEXT,
+    TotalRuns INTEGER NOT NULL DEFAULT 0, SuccessCount INTEGER NOT NULL DEFAULT 0,
+    FailureCount INTEGER NOT NULL DEFAULT 0, extra_json JSONB);
+CREATE TABLE IF NOT EXISTS RequestAttempt (
+    AttemptId UUID PRIMARY KEY, RunId UUID NOT NULL REFERENCES TestRun(RunId),
+    Protocol TEXT NOT NULL, SequenceNum INTEGER NOT NULL,
+    StartedAt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    FinishedAt TIMESTAMP WITH TIME ZONE, Success BOOLEAN NOT NULL DEFAULT false,
+    ErrorMessage TEXT, RetryCount INTEGER NOT NULL DEFAULT 0, extra_json JSONB);
+CREATE TABLE IF NOT EXISTS DnsResult (
+    AttemptId UUID PRIMARY KEY REFERENCES RequestAttempt(AttemptId),
+    QueryName TEXT NOT NULL, ResolvedIps TEXT NOT NULL DEFAULT '',
+    DurationMs DOUBLE PRECISION NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS TcpResult (
+    AttemptId UUID PRIMARY KEY REFERENCES RequestAttempt(AttemptId),
+    RemoteAddr TEXT NOT NULL DEFAULT '', ConnectDurationMs DOUBLE PRECISION NOT NULL DEFAULT 0,
+    MssBytesEstimate INTEGER, RttEstimateMs DOUBLE PRECISION);
+CREATE TABLE IF NOT EXISTS TlsResult (
+    AttemptId UUID PRIMARY KEY REFERENCES RequestAttempt(AttemptId),
+    ProtocolVersion TEXT NOT NULL DEFAULT '', CipherSuite TEXT NOT NULL DEFAULT '',
+    AlpnNegotiated TEXT, HandshakeDurationMs DOUBLE PRECISION NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS HttpResult (
+    AttemptId UUID PRIMARY KEY REFERENCES RequestAttempt(AttemptId),
+    StatusCode INTEGER NOT NULL DEFAULT 0, NegotiatedVersion TEXT NOT NULL DEFAULT '',
+    TtfbMs DOUBLE PRECISION NOT NULL DEFAULT 0, TotalDurationMs DOUBLE PRECISION NOT NULL DEFAULT 0,
+    BodyBytes BIGINT NOT NULL DEFAULT 0, ThroughputMbps DOUBLE PRECISION, PayloadBytes BIGINT);
+CREATE TABLE IF NOT EXISTS UdpResult (
+    AttemptId UUID PRIMARY KEY REFERENCES RequestAttempt(AttemptId),
+    ProbeCount INTEGER NOT NULL DEFAULT 0, RttAvgMs DOUBLE PRECISION NOT NULL DEFAULT 0,
+    RttMinMs DOUBLE PRECISION NOT NULL DEFAULT 0, RttMaxMs DOUBLE PRECISION NOT NULL DEFAULT 0,
+    LossPercent DOUBLE PRECISION NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS ErrorRecord (
+    AttemptId UUID PRIMARY KEY REFERENCES RequestAttempt(AttemptId),
+    Category TEXT NOT NULL DEFAULT '', Message TEXT NOT NULL DEFAULT '', Detail TEXT);
+CREATE TABLE IF NOT EXISTS ServerTimingResult (
+    AttemptId UUID PRIMARY KEY REFERENCES RequestAttempt(AttemptId), TimingJson JSONB);
+GRANT ALL ON ALL TABLES IN SCHEMA public TO networker;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO networker;
+TESTER_SCHEMA
 
     print_ok "PostgreSQL configured — database: networker_dashboard, user: networker"
 }
@@ -3906,6 +3956,14 @@ step_setup_nginx_proxy() {
         return 0
     fi
 
+    # Remove any iptables redirects from the endpoint installer (port 80→8080, 443→8443)
+    # These conflict with nginx binding to ports 80/443
+    if sudo iptables -t nat -L PREROUTING -n 2>/dev/null | grep -q "redir ports 8080"; then
+        sudo iptables -t nat -D PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080 2>/dev/null || true
+        sudo iptables -t nat -D PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null || true
+        print_info "Removed iptables port redirects (80→8080, 443→8443)"
+    fi
+
     # Check if port 80 is already in use by something other than nginx
     if ss -tlnp 2>/dev/null | grep -q ':80 ' && ! command -v nginx &>/dev/null; then
         print_warn "Port 80 already in use — skipping nginx proxy setup."
@@ -3936,6 +3994,12 @@ server {
     listen 80;
     server_name ${server_name};
 
+    # Let's Encrypt challenge path (must not be proxied)
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/html;
+        default_type "text/plain";
+    }
+
     location / {
         proxy_pass http://127.0.0.1:${dashboard_port};
         proxy_set_header Host \$host;
@@ -3958,6 +4022,7 @@ NGINXCONF
 
     # Remove default site if it exists
     sudo rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+    sudo mkdir -p /var/www/html
 
     if sudo nginx -t 2>&1; then
         sudo systemctl enable nginx 2>/dev/null || true
