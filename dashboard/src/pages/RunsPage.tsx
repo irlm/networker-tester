@@ -118,8 +118,8 @@ export function RunsPage() {
 
         {runs.length === 0 && (
           <div className="py-10 text-center">
-            <p className="text-gray-500 text-sm">No test runs stored yet</p>
-            <p className="text-gray-700 text-xs mt-1">Complete a test to see results here</p>
+            <p className="text-gray-500 text-sm">No runs yet</p>
+            <p className="text-gray-700 text-xs mt-1">Runs appear here after a test completes</p>
           </div>
         )}
       </div>

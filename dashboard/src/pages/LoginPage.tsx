@@ -24,7 +24,7 @@ export function LoginPage() {
         navigate('/');
       }
     } catch {
-      setError('Invalid credentials');
+      setError('Wrong username or password');
     } finally {
       setLoading(false);
     }
@@ -92,7 +92,7 @@ export function LoginPage() {
             disabled={loading}
             className="w-full bg-green-600 hover:bg-green-500 text-white py-2 rounded text-sm font-medium transition-colors disabled:opacity-50"
           >
-            {loading ? 'Authenticating...' : 'Sign in'}
+            {loading ? 'Signing in...' : 'Sign in'}
           </button>
         </form>
       </div>

@@ -396,8 +396,8 @@ export function JobsPage() {
 
         {jobs.length === 0 && (
           <div className="py-10 text-center">
-            <p className="text-gray-500 text-sm">No tests yet</p>
-            <p className="text-gray-700 text-xs mt-1">Create a test to start probing network endpoints</p>
+            <p className="text-gray-500 text-sm">No tests yet — click New Test to run your first probe</p>
+            <p className="text-gray-700 text-xs mt-1"></p>
           </div>
         )}
       </div>

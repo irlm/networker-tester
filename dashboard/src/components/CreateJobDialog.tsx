@@ -353,7 +353,7 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
               <option value="tester">Tester-side (capture on this machine)</option>
             </select>
             {captureMode !== 'none' && (
-              <p className="text-xs text-yellow-400/70 mt-1">Requires tshark/dumpcap installed on the tester machine</p>
+              <p className="text-xs text-yellow-400/70 mt-1">Captures network packets during the test (requires tshark on the tester)</p>
             )}
           </div>
 
@@ -385,7 +385,7 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
               disabled={loading || selectedModes.size === 0}
               className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors disabled:opacity-50"
             >
-              {loading ? 'Creating...' : 'Create Job'}
+              {loading ? 'Creating...' : 'Run Test'}
             </button>
           </div>
         </form>

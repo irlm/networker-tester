@@ -173,8 +173,8 @@ export function DashboardPage() {
         <div className="border border-gray-800/50 rounded max-h-[calc(100vh-220px)] overflow-y-auto">
           {recentEvents.length === 0 ? (
             <div className="py-12 text-center">
-              <p className="text-gray-600 text-sm">Waiting for events...</p>
-              <p className="text-gray-700 text-xs mt-1">Events from running tests will appear here</p>
+              <p className="text-gray-600 text-sm">No events yet</p>
+              <p className="text-gray-700 text-xs mt-1">Start a test to see live probe results here</p>
             </div>
           ) : (
             <>

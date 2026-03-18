@@ -55,9 +55,9 @@ export function DeployPage() {
         <p className="text-gray-500 text-sm">Loading deployments...</p>
       ) : deployments.length === 0 ? (
         <div className="py-10 text-center border border-gray-800/50 rounded">
-          <p className="text-gray-500 text-sm">No deployments yet</p>
+          <p className="text-gray-500 text-sm">No deployments yet — click New Deployment to provision an endpoint</p>
           <p className="text-gray-700 text-xs mt-1">
-            Create a deployment to provision endpoints and run tests
+            
           </p>
         </div>
       ) : (
