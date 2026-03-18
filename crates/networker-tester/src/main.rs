@@ -17,22 +17,23 @@ use networker_tester::runner::{
     http::{run_probe, RunConfig},
     http3::run_http3_probe,
     native::run_native_probe,
-    pageload::{
-        run_pageload2_probe, run_pageload2_warm, run_pageload3_probe, run_pageload3_warm,
-        run_pageload_probe, warmup_pageload2, warmup_pageload3, PageLoadConfig, SharedH2Conn,
-    },
+    pageload::{run_pageload2_probe, run_pageload2_warm, run_pageload3_probe, run_pageload_probe,
+        warmup_pageload2, PageLoadConfig, SharedH2Conn},
     throughput::{
         run_download1_probe, run_download2_probe, run_download3_probe, run_download_probe,
         run_upload1_probe, run_upload2_probe, run_upload3_probe, run_upload_probe,
         run_webdownload_probe, run_webupload_probe, ThroughputConfig,
     },
-    tls::run_tls_probe,
+    tls::{run_tls_probe, run_tls_resumption_probe},
     udp::{run_udp_probe, UdpProbeConfig},
     udp_throughput::{run_udpdownload_probe, run_udpupload_probe, UdpThroughputConfig},
 };
 use std::path::{Path, PathBuf};
 use tracing::{error, info, warn};
 use uuid::Uuid;
+
+#[cfg(feature = "http3")]
+use networker_tester::runner::pageload::{run_pageload3_warm, warmup_pageload3};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Main
@@ -83,7 +84,7 @@ async fn main() -> anyhow::Result<()> {
     let modes = cfg.parsed_modes();
     if modes.is_empty() {
         anyhow::bail!(
-            "No valid modes specified. Use: tcp,http1,http2,http3,udp,dns,tls,native,curl,\
+            "No valid modes specified. Use: tcp,http1,http2,http3,udp,dns,tls,tlsresume,native,curl,\
              download,download1,download2,download3,upload,upload1,upload2,upload3,webdownload,webupload,udpdownload,udpupload,\
              pageload(H1+H2+H3),pageload1,pageload2,pageload3,\
              browser(H1+H2+H3),browser1,browser2,browser3"
@@ -466,6 +467,7 @@ async fn run_for_target(
 
     // ── Connection reuse: warmup ──────────────────────────────────────────────
     let has_pageload2 = modes.iter().any(|m| matches!(m, Protocol::PageLoad2));
+    #[cfg(feature = "http3")]
     let has_pageload3 = modes.iter().any(|m| matches!(m, Protocol::PageLoad3));
 
     // Initialized below after warmup when connection_reuse && has_pageload2
@@ -993,6 +995,7 @@ fn apply_impairment_target(proto: &Protocol, target: &url::Url, cfg: &ResolvedCo
             | Protocol::Http3
             | Protocol::Tcp
             | Protocol::Tls
+            | Protocol::TlsResume
             | Protocol::Native
             | Protocol::Curl
     );
@@ -1073,6 +1076,9 @@ async fn dispatch_once(
             run_dns_probe(run_id, seq, host, cfg.ipv4_only, cfg.ipv6_only).await
         }
         (Protocol::Tls, _) => run_tls_probe(run_id, seq, &impaired_target, cfg).await,
+        (Protocol::TlsResume, _) => {
+            run_tls_resumption_probe(run_id, seq, &impaired_target, cfg).await
+        }
         (Protocol::Native, _) => run_native_probe(run_id, seq, &impaired_target, cfg).await,
         (Protocol::Curl, _) => run_curl_probe(run_id, seq, &impaired_target, cfg).await,
         (Protocol::PageLoad, _) => run_pageload_probe(run_id, seq, pageload_cfg).await,
@@ -1290,6 +1296,22 @@ fn log_attempt(a: &networker_tester::metrics::RequestAttempt) {
                     seq = a.sequence_num,
                     tcp = a.tcp.as_ref().map(|t| t.connect_duration_ms).unwrap_or(0.0),
                     hs = t.handshake_duration_ms,
+                    retry = retry_suffix,
+                );
+            }
+        }
+        TlsResume => {
+            if let Some(t) = &a.tls {
+                info!(
+                    "{status} #{seq} [tlsresume] cold={cold_kind}:{cold_hs:.1}ms warm={warm_kind}:{warm_hs:.1}ms resumed={resumed} cold_http={cold_http:?} warm_http={warm_http:?}{retry}",
+                    seq = a.sequence_num,
+                    cold_kind = t.previous_handshake_kind.as_deref().unwrap_or("unknown"),
+                    cold_hs = t.previous_handshake_duration_ms.unwrap_or(0.0),
+                    warm_kind = t.handshake_kind.as_deref().unwrap_or("unknown"),
+                    warm_hs = t.handshake_duration_ms,
+                    resumed = t.resumed.unwrap_or(false),
+                    cold_http = t.previous_http_status_code,
+                    warm_http = t.http_status_code,
                     retry = retry_suffix,
                 );
             }

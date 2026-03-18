@@ -11,6 +11,7 @@ use rustls::pki_types::ServerName;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use tracing::debug;
@@ -264,13 +265,334 @@ pub async fn run_tls_probe(
     }
 }
 
+/// Run a two-connection TLS resumption probe.
+///
+/// The first connection performs a real HTTP/1.1 request so TLS 1.3 session
+/// tickets have a chance to arrive post-handshake. The second connection uses
+/// the same rustls ClientConfig/resumption store and succeeds only if the
+/// handshake is classified as resumed.
+pub async fn run_tls_resumption_probe(
+    run_id: Uuid,
+    sequence_num: u32,
+    target: &url::Url,
+    cfg: &RunConfig,
+) -> RequestAttempt {
+    let attempt_id = Uuid::new_v4();
+    let started_at = Utc::now();
+
+    let host = match target.host_str() {
+        Some(h) => h.to_string(),
+        None => {
+            return make_failed(
+                run_id,
+                attempt_id,
+                sequence_num,
+                started_at,
+                ErrorCategory::Config,
+                "Target URL has no host".into(),
+                None,
+                None,
+                None,
+            );
+        }
+    };
+
+    let default_port = if target.scheme() == "https" { 443u16 } else { 80 };
+    let port = target.port().unwrap_or(default_port);
+    let (addr, dns_result) = if cfg.dns_enabled {
+        match dns_runner::resolve(&host, cfg.ipv4_only, cfg.ipv6_only).await {
+            Ok((ips, r)) => {
+                let ip = ips
+                    .iter()
+                    .find(|ip| {
+                        if cfg.ipv4_only {
+                            ip.is_ipv4()
+                        } else {
+                            ip.is_ipv6() || ip.is_ipv4()
+                        }
+                    })
+                    .copied()
+                    .unwrap_or(ips[0]);
+                (SocketAddr::new(ip, port), Some(r))
+            }
+            Err(e) => {
+                return make_failed(
+                    run_id,
+                    attempt_id,
+                    sequence_num,
+                    started_at,
+                    e.category,
+                    e.message,
+                    e.detail,
+                    None,
+                    None,
+                );
+            }
+        }
+    } else {
+        match host.parse::<std::net::IpAddr>() {
+            Ok(ip) => (SocketAddr::new(ip, port), None),
+            Err(_) => {
+                return make_failed(
+                    run_id,
+                    attempt_id,
+                    sequence_num,
+                    started_at,
+                    ErrorCategory::Config,
+                    format!("dns_enabled=false but '{host}' is not a valid IP"),
+                    None,
+                    None,
+                    None,
+                );
+            }
+        }
+    };
+
+    let tls_config = match build_tls_config_for_http1_probe(cfg.insecure, cfg.ca_bundle.as_deref()) {
+        Ok(c) => Arc::new(c),
+        Err(e) => {
+            return make_failed(
+                run_id,
+                attempt_id,
+                sequence_num,
+                started_at,
+                ErrorCategory::Tls,
+                e.to_string(),
+                None,
+                dns_result,
+                None,
+            );
+        }
+    };
+
+    let first = match run_one_tls_http_request(addr, &host, target, cfg, tls_config.clone()).await {
+        Ok(v) => v,
+        Err((category, message, detail, tcp_result)) => {
+            return make_failed(
+                run_id,
+                attempt_id,
+                sequence_num,
+                started_at,
+                category,
+                message,
+                detail,
+                dns_result,
+                tcp_result,
+            );
+        }
+    };
+
+    let second = match run_one_tls_http_request(addr, &host, target, cfg, tls_config.clone()).await {
+        Ok(v) => v,
+        Err((category, message, detail, tcp_result)) => {
+            return make_failed(
+                run_id,
+                attempt_id,
+                sequence_num,
+                started_at,
+                category,
+                format!("warm/resumption attempt failed: {message}"),
+                detail,
+                dns_result,
+                tcp_result,
+            );
+        }
+    };
+
+    let mut tls_result = second.tls;
+    tls_result.previous_handshake_duration_ms = Some(first.tls.handshake_duration_ms);
+    tls_result.previous_handshake_kind = first.tls.handshake_kind.clone();
+    tls_result.previous_http_status_code = first.http_status_code;
+    tls_result.http_status_code = second.http_status_code;
+
+    let resumed = tls_result.resumed.unwrap_or(false);
+    let success = resumed;
+    let error = if success {
+        None
+    } else {
+        Some(ErrorRecord {
+            category: ErrorCategory::Tls,
+            message: format!(
+                "TLS session was not resumed on the second connection (cold={}, warm={})",
+                first.tls.handshake_kind.as_deref().unwrap_or("unknown"),
+                tls_result.handshake_kind.as_deref().unwrap_or("unknown")
+            ),
+            detail: Some(format!(
+                "cold_status={:?} warm_status={:?} cold_tickets={:?} warm_tickets={:?}",
+                first.http_status_code,
+                second.http_status_code,
+                first.tls.tls13_tickets_received,
+                tls_result.tls13_tickets_received
+            )),
+            occurred_at: Utc::now(),
+        })
+    };
+
+    RequestAttempt {
+        attempt_id,
+        run_id,
+        protocol: Protocol::TlsResume,
+        sequence_num,
+        started_at,
+        finished_at: Some(Utc::now()),
+        success,
+        dns: dns_result,
+        tcp: Some(second.tcp),
+        tls: Some(tls_result),
+        http: None,
+        udp: None,
+        error,
+        retry_count: 0,
+        server_timing: None,
+        udp_throughput: None,
+        page_load: None,
+        browser: None,
+        http_stack: None,
+    }
+}
+
+struct TlsHttpRequestResult {
+    tcp: crate::metrics::TcpResult,
+    tls: TlsResult,
+    http_status_code: Option<u16>,
+}
+
+async fn run_one_tls_http_request(
+    addr: SocketAddr,
+    host: &str,
+    target: &url::Url,
+    cfg: &RunConfig,
+    tls_config: Arc<rustls::ClientConfig>,
+) -> Result<TlsHttpRequestResult, (ErrorCategory, String, Option<String>, Option<crate::metrics::TcpResult>)> {
+    let tcp_started_at = Utc::now();
+    let t_tcp = Instant::now();
+    let tcp_stream = match tokio::time::timeout(
+        std::time::Duration::from_millis(cfg.timeout_ms),
+        TcpStream::connect(addr),
+    ).await {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => return Err((ErrorCategory::Tcp, e.to_string(), Some(format!("connect to {addr}")), None)),
+        Err(_) => return Err((ErrorCategory::Timeout, format!("TCP connect to {addr} timed out after {}ms", cfg.timeout_ms), None, None)),
+    };
+    let tcp_duration_ms = t_tcp.elapsed().as_secs_f64() * 1000.0;
+    let local_addr = tcp_stream.local_addr().ok().map(|a| a.to_string());
+    let sock_info = SocketInfo::from_stream(&tcp_stream);
+    let tcp_result = crate::metrics::TcpResult {
+        local_addr,
+        remote_addr: addr.to_string(),
+        connect_duration_ms: tcp_duration_ms,
+        attempt_count: 1,
+        started_at: tcp_started_at,
+        success: true,
+        mss_bytes: sock_info.mss_bytes,
+        rtt_estimate_ms: sock_info.rtt_estimate_ms,
+        retransmits: sock_info.retransmits,
+        total_retrans: sock_info.total_retrans,
+        snd_cwnd: sock_info.snd_cwnd,
+        snd_ssthresh: sock_info.snd_ssthresh,
+        rtt_variance_ms: sock_info.rtt_variance_ms,
+        rcv_space: sock_info.rcv_space,
+        segs_out: sock_info.segs_out,
+        segs_in: sock_info.segs_in,
+        congestion_algorithm: sock_info.congestion_algorithm,
+        delivery_rate_bps: sock_info.delivery_rate_bps,
+        min_rtt_ms: sock_info.min_rtt_ms,
+    };
+
+    let server_name = ServerName::try_from(host.to_string())
+        .map_err(|e| (ErrorCategory::Tls, format!("Invalid SNI: {e}"), None, Some(tcp_result.clone())))?;
+    let connector = TlsConnector::from(tls_config);
+    let tls_started_at = Utc::now();
+    let t_tls = Instant::now();
+    let mut tls_stream = match tokio::time::timeout(
+        std::time::Duration::from_millis(cfg.timeout_ms),
+        connector.connect(server_name, tcp_stream),
+    ).await {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => return Err((ErrorCategory::Tls, e.to_string(), Some("TLS handshake".into()), Some(tcp_result))),
+        Err(_) => return Err((ErrorCategory::Timeout, format!("TLS handshake timed out after {}ms", cfg.timeout_ms), None, Some(tcp_result))),
+    };
+    let tls_duration_ms = t_tls.elapsed().as_secs_f64() * 1000.0;
+
+    let mut request_path = target.path().to_string();
+    if request_path.is_empty() {
+        request_path = "/".to_string();
+    }
+    if let Some(q) = target.query() {
+        request_path.push('?');
+        request_path.push_str(q);
+    }
+    let request = format!(
+        "GET {request_path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: networker-tester/tlsresume\r\nAccept: */*\r\nConnection: close\r\n\r\n"
+    );
+    tokio::time::timeout(
+        std::time::Duration::from_millis(cfg.timeout_ms),
+        tls_stream.write_all(request.as_bytes()),
+    )
+    .await
+    .map_err(|_| (ErrorCategory::Timeout, format!("HTTP request write timed out after {}ms", cfg.timeout_ms), None, Some(tcp_result.clone())))?
+    .map_err(|e| (ErrorCategory::Http, e.to_string(), Some("write HTTP request over TLS".into()), Some(tcp_result.clone())))?;
+    let _ = tls_stream.flush().await;
+
+    let mut buf = Vec::new();
+    let _ = tokio::time::timeout(std::time::Duration::from_millis(cfg.timeout_ms), tls_stream.read_to_end(&mut buf)).await;
+
+    let http_status_code = parse_http_status_code(&buf);
+    let mut tls_result = extract_tls_probe_info(&tls_stream, tls_started_at, tls_duration_ms);
+    tls_result.tls13_tickets_received = Some(tls_stream.get_ref().1.tls13_tickets_received());
+    tls_result.handshake_kind = tls_stream
+        .get_ref()
+        .1
+        .handshake_kind()
+        .map(|k| handshake_kind_label(k).to_string());
+    tls_result.resumed = Some(matches!(tls_stream.get_ref().1.handshake_kind(), Some(rustls::HandshakeKind::Resumed)));
+    tls_result.http_status_code = http_status_code;
+
+    Ok(TlsHttpRequestResult { tcp: tcp_result, tls: tls_result, http_status_code })
+}
+
+fn parse_http_status_code(buf: &[u8]) -> Option<u16> {
+    let text = std::str::from_utf8(buf).ok()?;
+    let line = text.lines().next()?;
+    let mut parts = line.split_whitespace();
+    let _http = parts.next()?;
+    parts.next()?.parse().ok()
+}
+
+fn handshake_kind_label(kind: rustls::HandshakeKind) -> &'static str {
+    match kind {
+        rustls::HandshakeKind::Full => "full",
+        rustls::HandshakeKind::FullWithHelloRetryRequest => "full-hrr",
+        rustls::HandshakeKind::Resumed => "resumed",
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // TLS config for probe (advertises both h2 + http/1.1)
 // ─────────────────────────────────────────────────────────────────────────────
 
+fn build_tls_config_for_http1_probe(
+    insecure: bool,
+    ca_bundle: Option<&str>,
+) -> anyhow::Result<rustls::ClientConfig> {
+    build_tls_config_for_probe_with_alpn(insecure, ca_bundle, vec![b"http/1.1".to_vec()])
+}
+
 fn build_tls_config_for_probe(
     insecure: bool,
     ca_bundle: Option<&str>,
+) -> anyhow::Result<rustls::ClientConfig> {
+    build_tls_config_for_probe_with_alpn(
+        insecure,
+        ca_bundle,
+        vec![b"h2".to_vec(), b"http/1.1".to_vec()],
+    )
+}
+
+fn build_tls_config_for_probe_with_alpn(
+    insecure: bool,
+    ca_bundle: Option<&str>,
+    alpn_protocols: Vec<Vec<u8>>,
 ) -> anyhow::Result<rustls::ClientConfig> {
     let mut config = if insecure {
         rustls::ClientConfig::builder()
@@ -291,8 +613,7 @@ fn build_tls_config_for_probe(
             .with_root_certificates(root_store)
             .with_no_client_auth()
     };
-    // Advertise both protocols — discover what the server actually supports.
-    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    config.alpn_protocols = alpn_protocols;
     Ok(config)
 }
 
@@ -350,6 +671,8 @@ fn extract_tls_probe_info(
         .map(|c| (Some(c.subject.clone()), Some(c.issuer.clone()), c.expiry))
         .unwrap_or((None, None, None));
 
+    let handshake_kind = conn.handshake_kind().map(|k| handshake_kind_label(k).to_string());
+    let resumed = Some(matches!(conn.handshake_kind(), Some(rustls::HandshakeKind::Resumed)));
     TlsResult {
         protocol_version,
         cipher_suite,
@@ -362,6 +685,13 @@ fn extract_tls_probe_info(
         success: true,
         cert_chain,
         tls_backend: Some("rustls".into()),
+        resumed,
+        handshake_kind,
+        tls13_tickets_received: Some(conn.tls13_tickets_received()),
+        previous_handshake_duration_ms: None,
+        previous_handshake_kind: None,
+        previous_http_status_code: None,
+        http_status_code: None,
     }
 }
 
@@ -673,5 +1003,33 @@ mod tests {
         let der = self_signed_der();
         let entry = parse_cert_entry(&der).unwrap();
         assert!(entry.expiry.is_some(), "expiry should be present");
+    }
+
+    #[test]
+    fn parse_http_status_code_extracts_status() {
+        let resp = b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n";
+        assert_eq!(parse_http_status_code(resp), Some(403));
+    }
+
+    #[test]
+    fn parse_http_status_code_returns_none_for_non_http() {
+        assert_eq!(parse_http_status_code(b"not http"), None);
+    }
+
+    #[test]
+    fn handshake_kind_label_maps_variants() {
+        assert_eq!(handshake_kind_label(rustls::HandshakeKind::Full), "full");
+        assert_eq!(
+            handshake_kind_label(rustls::HandshakeKind::FullWithHelloRetryRequest),
+            "full-hrr"
+        );
+        assert_eq!(handshake_kind_label(rustls::HandshakeKind::Resumed), "resumed");
+    }
+
+    #[test]
+    fn build_tls_config_for_http1_probe_only_advertises_http11() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let cfg = build_tls_config_for_http1_probe(true, None).expect("http1 tls config");
+        assert_eq!(cfg.alpn_protocols, vec![b"http/1.1".to_vec()]);
     }
 }

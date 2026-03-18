@@ -104,6 +104,13 @@ pub(crate) fn full_attempt(run_id: Uuid) -> RequestAttempt {
             success: true,
             cert_chain: vec![],
             tls_backend: Some("rustls".into()),
+        resumed: None,
+        handshake_kind: None,
+        tls13_tickets_received: None,
+        previous_handshake_duration_ms: None,
+        previous_handshake_kind: None,
+        previous_http_status_code: None,
+        http_status_code: None,
         }),
         http: Some(HttpResult {
             negotiated_version: "HTTP/1.1".into(),

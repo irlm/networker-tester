@@ -73,6 +73,26 @@ networker-tester --target https://example.com/health --modes http2 --runs 10
 
 ---
 
+## `tlsresume` — TLS session resumption
+
+Measures: two fresh TLS connections to the same HTTPS origin. The first request seeds
+resumption state (for TLS 1.3 this also allows `NewSessionTicket` to arrive post-handshake),
+and the second request succeeds only if rustls reports a resumed handshake.
+
+```bash
+networker-tester --target https://www.microsoft.com/ --modes tlsresume --runs 3
+```
+
+**Populated:** `dns`, `tcp`, `tls`
+**Terminal:** `cold=full:Xms warm=resumed:Yms resumed=true cold_http=200 warm_http=200`
+**Notes:**
+- Uses a real HTTP/1.1 request on both connections; HTTP status may be non-2xx and the
+  transport result can still be useful.
+- Best for HTTPS targets. The metric is the warm handshake duration, with additional TLS fields
+  showing cold vs warm handshake kind and HTTP status codes.
+
+---
+
 ## `http3` — HTTP/3 over QUIC
 
 Measures: UDP-based QUIC handshake (combines TCP+TLS equivalent) → HTTP/3
