@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.28] – 2026-03-18 — Backend deadlock fix, UX polish
+
+### Fixed
+- **Critical: `block_on` deadlock in `get_attempts`** — `futures::executor::block_on()` inside async tokio runtime deadlocked worker threads when the fallback query path was hit, causing the Run detail page and eventually the entire dashboard to hang on 2-core VMs
+- **DB pool exhaustion** — added 5s wait/create/recycle timeouts (was infinite) and increased max pool size to 16
+- **Linux binary downloads** — update and agent provisioner now use `musl` target (matching release builds) instead of `gnu` which returned 404
+
+### Changed
+- **Settings version list** — replaced card grid with flat rows and dividers (last card-grid pattern removed)
+- **UX copy** — actionable empty states, "Run Test" not "Create Job", "Wrong username or password" not "Invalid credentials"
+- **Micro-interactions** — button press effect, smooth table row hover, toast slide-up animation (all respect `prefers-reduced-motion`)
+
+---
+
 ## [0.13.27] – 2026-03-17 — Dashboard installer fixes
 
 ### Fixed
