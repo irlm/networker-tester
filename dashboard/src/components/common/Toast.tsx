@@ -27,7 +27,7 @@ export function ToastContainer() {
       {toasts.map((toast) => (
         <div
           key={toast.id}
-          className={`flex items-center gap-2 px-4 py-3 rounded-lg border text-sm shadow-lg ${typeStyles[toast.type]}`}
+          className={`flex items-center gap-2 px-4 py-3 rounded-lg border text-sm shadow-lg toast-enter ${typeStyles[toast.type]}`}
           role="alert"
         >
           <span className="font-bold" aria-hidden="true">
