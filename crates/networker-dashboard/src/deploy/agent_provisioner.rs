@@ -127,8 +127,8 @@ pub async fn provision_remote_agent(
 
     // Map platform to release asset name
     let asset_name = match platform.as_str() {
-        "linux-x86_64" => "networker-agent-x86_64-unknown-linux-gnu.tar.gz",
-        "linux-aarch64" => "networker-agent-aarch64-unknown-linux-gnu.tar.gz",
+        "linux-x86_64" => "networker-agent-x86_64-unknown-linux-musl.tar.gz",
+        "linux-aarch64" => "networker-agent-aarch64-unknown-linux-musl.tar.gz",
         "darwin-arm64" => "networker-agent-aarch64-apple-darwin.tar.gz",
         "darwin-x86_64" => "networker-agent-x86_64-apple-darwin.tar.gz",
         _ => {
