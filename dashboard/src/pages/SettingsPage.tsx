@@ -145,58 +145,60 @@ export function SettingsPage() {
           )}
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div>
           {/* Dashboard */}
-          <div className="bg-[var(--bg-base)] border border-gray-800 rounded p-3">
-            <div className="flex items-center justify-between mb-1">
+          <div className="flex items-center justify-between py-2.5">
+            <div>
               <span className="text-sm text-gray-200">Dashboard</span>
-              <span className={`text-xs font-mono ${
-                versionInfo?.dashboard_version === latestRelease ? 'text-green-400' : 'text-gray-400'
-              }`}>
-                v{versionInfo?.dashboard_version}
-              </span>
+              <span className="text-xs text-gray-600 ml-2">Control plane API + UI</span>
             </div>
-            <p className="text-xs text-gray-600">Control plane API + UI</p>
+            <span className={`text-xs font-mono ${
+              versionInfo?.dashboard_version === latestRelease ? 'text-green-400' : 'text-gray-400'
+            }`}>
+              v{versionInfo?.dashboard_version}
+            </span>
           </div>
 
           {/* Local Tester */}
           {(() => {
             const testerOutdated = versionInfo?.tester_version && latestRelease && versionInfo.tester_version !== latestRelease;
             return (
-              <div className={`bg-[var(--bg-base)] border rounded p-3 ${testerOutdated ? 'border-yellow-500/30' : 'border-gray-800'}`}>
-                <div className="flex items-center justify-between mb-1">
+              <div className="flex items-center justify-between py-2.5 border-t border-gray-800/30">
+                <div>
                   <span className="text-sm text-gray-200">Local Tester</span>
+                  <span className="text-xs text-gray-600 ml-2">Probe executor</span>
+                </div>
+                <div className="flex items-center gap-3">
                   <span className={`text-xs font-mono ${
                     versionInfo?.tester_version === latestRelease ? 'text-green-400' :
                     versionInfo?.tester_version ? 'text-yellow-400' : 'text-gray-600'
                   }`}>
                     {versionInfo?.tester_version ? `v${versionInfo.tester_version}` : 'not found'}
                   </span>
+                  {testerOutdated && (
+                    <button
+                      onClick={async () => {
+                        setTesterUpdating(true);
+                        try {
+                          const result = await api.updateLocalTester();
+                          setActiveUpdateId(result.update_id);
+                          addToast('success', 'Tester update started');
+                        } catch {
+                          addToast('error', 'Failed to start tester update');
+                          setTesterUpdating(false);
+                        }
+                      }}
+                      disabled={testerUpdating}
+                      className={`text-xs px-3 py-1 rounded border transition-colors ${
+                        testerUpdating
+                          ? 'border-blue-500/30 text-blue-400 motion-safe:animate-pulse'
+                          : 'border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/10'
+                      } disabled:opacity-50`}
+                    >
+                      {testerUpdating ? 'Updating...' : `Update to v${latestRelease}`}
+                    </button>
+                  )}
                 </div>
-                <p className="text-xs text-gray-600 mb-2">Probe executor on this machine</p>
-                {testerOutdated && (
-                  <button
-                    onClick={async () => {
-                      setTesterUpdating(true);
-                      try {
-                        const result = await api.updateLocalTester();
-                        setActiveUpdateId(result.update_id);
-                        addToast('success', 'Tester update started');
-                      } catch {
-                        addToast('error', 'Failed to start tester update');
-                        setTesterUpdating(false);
-                      }
-                    }}
-                    disabled={testerUpdating}
-                    className={`text-xs px-3 py-1 rounded border transition-colors ${
-                      testerUpdating
-                        ? 'border-blue-500/30 text-blue-400 motion-safe:animate-pulse'
-                        : 'border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/10'
-                    } disabled:opacity-50`}
-                  >
-                    {testerUpdating ? 'Updating...' : `Update to v${latestRelease}`}
-                  </button>
-                )}
               </div>
             );
           })()}
@@ -211,34 +213,32 @@ export function SettingsPage() {
             const isUpdating = dep ? updating[dep.deployment_id] : false;
 
             return (
-              <div key={host} className={`bg-[var(--bg-base)] border rounded p-3 ${
-                outdated ? 'border-yellow-500/30' : 'border-gray-800'
-              }`}>
-                <div className="flex items-center justify-between mb-1">
+              <div key={host} className="flex items-center justify-between py-2.5 border-t border-gray-800/30">
+                <div>
                   <span className="text-sm text-gray-200">{host.split('.')[0]}</span>
+                  <span className="text-xs text-gray-600 ml-2 truncate" title={host}>{host}</span>
+                </div>
+                <div className="flex items-center gap-3">
                   <span className={`text-xs font-mono ${
                     !ep.reachable ? 'text-gray-600' :
                     outdated ? 'text-yellow-400' : 'text-green-400'
                   }`}>
                     {ep.reachable ? `v${ep.version}` : 'offline'}
                   </span>
+                  {ep.reachable && dep && outdated && (
+                    <button
+                      onClick={() => handleUpdateEndpoint(dep.deployment_id, dep.name)}
+                      disabled={isUpdating}
+                      className={`text-xs px-3 py-1 rounded border transition-colors ${
+                        isUpdating
+                          ? 'border-blue-500/30 text-blue-400 motion-safe:animate-pulse'
+                          : 'border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/10'
+                      } disabled:opacity-50`}
+                    >
+                      {isUpdating ? 'Updating...' : 'Update'}
+                    </button>
+                  )}
                 </div>
-                <p className="text-xs text-gray-600 mb-2 truncate" title={host}>{host}</p>
-                {ep.reachable && dep && (
-                  <button
-                    onClick={() => handleUpdateEndpoint(dep.deployment_id, dep.name)}
-                    disabled={isUpdating || !outdated}
-                    className={`text-xs px-3 py-1 rounded border transition-colors ${
-                      isUpdating
-                        ? 'border-blue-500/30 text-blue-400 motion-safe:animate-pulse'
-                        : outdated
-                          ? 'border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/10'
-                          : 'border-gray-700 text-gray-600 cursor-default'
-                    } disabled:opacity-50`}
-                  >
-                    {isUpdating ? 'Updating...' : outdated ? 'Update' : 'Up to date'}
-                  </button>
-                )}
               </div>
             );
           })}
