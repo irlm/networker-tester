@@ -67,7 +67,7 @@ pub async fn list(
 /// in the same LiveAttempt JSON format used by the WebSocket stream.
 pub async fn get_attempts(client: &Client, run_id: &Uuid) -> anyhow::Result<serde_json::Value> {
     // Fetch all attempts (include extra_json if the column exists)
-    let attempt_rows = client
+    let attempt_rows = match client
         .query(
             "SELECT AttemptId, Protocol, SequenceNum, StartedAt, FinishedAt,
                     Success, ErrorMessage, RetryCount,
@@ -77,16 +77,21 @@ pub async fn get_attempts(client: &Client, run_id: &Uuid) -> anyhow::Result<serd
             &[run_id],
         )
         .await
-        .or_else(|_| {
+    {
+        Ok(rows) => rows,
+        Err(_) => {
             // Fallback: query without extra_json (older schema)
-            futures::executor::block_on(client.query(
-                "SELECT AttemptId, Protocol, SequenceNum, StartedAt, FinishedAt,
-                        Success, ErrorMessage, RetryCount
-                 FROM RequestAttempt WHERE RunId = $1
-                 ORDER BY SequenceNum",
-                &[run_id],
-            ))
-        })?;
+            client
+                .query(
+                    "SELECT AttemptId, Protocol, SequenceNum, StartedAt, FinishedAt,
+                            Success, ErrorMessage, RetryCount
+                     FROM RequestAttempt WHERE RunId = $1
+                     ORDER BY SequenceNum",
+                    &[run_id],
+                )
+                .await?
+        }
+    };
 
     let mut attempts: Vec<serde_json::Value> = Vec::new();
 
