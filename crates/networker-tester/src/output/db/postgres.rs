@@ -408,14 +408,36 @@ impl DatabaseBackend for PostgresBackend {
     }
 
     async fn save_url_test(&self, run: &UrlTestRun) -> anyhow::Result<()> {
-        insert_url_test_run(run, &self.client).await?;
-        for resource in &run.resources {
-            insert_url_test_resource(run.id, resource, &self.client).await?;
+        self.client
+            .batch_execute("BEGIN")
+            .await
+            .context("BEGIN UrlTest transaction")?;
+
+        let result = async {
+            insert_url_test_run(run, &self.client).await?;
+            for resource in &run.resources {
+                insert_url_test_resource(run.id, resource, &self.client).await?;
+            }
+            for probe in &run.protocol_runs {
+                insert_url_test_protocol_run(run.id, probe, &self.client).await?;
+            }
+            Ok::<(), anyhow::Error>(())
         }
-        for probe in &run.protocol_runs {
-            insert_url_test_protocol_run(run.id, probe, &self.client).await?;
+        .await;
+
+        match result {
+            Ok(()) => {
+                self.client
+                    .batch_execute("COMMIT")
+                    .await
+                    .context("COMMIT UrlTest transaction")?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = self.client.batch_execute("ROLLBACK").await;
+                Err(e)
+            }
         }
-        Ok(())
     }
 
     async fn ping(&self) -> anyhow::Result<()> {

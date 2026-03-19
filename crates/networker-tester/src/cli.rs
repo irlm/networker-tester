@@ -147,6 +147,10 @@ pub struct Cli {
     #[arg(long)]
     pub excel: bool,
 
+    /// Back-compat packet capture mode override (deprecated; use packet_capture.mode in config).
+    #[arg(long)]
+    pub capture_mode: Option<String>,
+
     /// Write TestRun JSON to stdout (for agent/automation integration).
     /// Suppresses normal file output when used.
     #[arg(long)]
@@ -360,6 +364,7 @@ pub struct ConfigFile {
     pub page_preset: Option<String>,
     pub http_stacks: Option<Vec<String>>,
     pub packet_capture: Option<PacketCaptureConfig>,
+    pub capture_mode: Option<String>,
     pub impairment: Option<ImpairmentConfig>,
 }
 
@@ -493,8 +498,15 @@ impl Cli {
 
         let packet_capture = {
             let pc = f.packet_capture.unwrap_or_default();
+            let mode = self
+                .capture_mode
+                .clone()
+                .or(f.capture_mode)
+                .and_then(|s| PacketCaptureMode::parse_compat(&s))
+                .or(pc.mode)
+                .unwrap_or_default();
             ResolvedPacketCaptureConfig {
-                mode: pc.mode.unwrap_or_default(),
+                mode,
                 install_requirements: pc.install_requirements.unwrap_or(false),
                 interface: pc.interface.unwrap_or_else(|| "auto".into()),
                 write_pcap: pc.write_pcap.unwrap_or(true),

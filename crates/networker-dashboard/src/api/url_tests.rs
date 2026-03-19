@@ -8,6 +8,9 @@ use serde::Deserialize;
 use std::sync::Arc;
 use uuid::Uuid;
 
+const DEFAULT_LIMIT: i64 = 50;
+const MAX_LIMIT: i64 = 200;
+
 use crate::AppState;
 
 #[derive(Deserialize)]
@@ -25,7 +28,9 @@ async fn list_url_tests(
         .get()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let runs = crate::db::url_tests::list(&client, q.limit.unwrap_or(50), q.offset.unwrap_or(0))
+    let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+    let offset = q.offset.unwrap_or(0).max(0);
+    let runs = crate::db::url_tests::list(&client, limit, offset)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(runs))
@@ -69,4 +74,21 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/url-tests/:run_id", get(get_url_test))
         .route("/url-tests/:run_id/sections", get(get_url_test_sections))
         .with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ListUrlTestsQuery, DEFAULT_LIMIT, MAX_LIMIT};
+
+    #[test]
+    fn clamp_limit_and_offset_behave_safely() {
+        let q = ListUrlTestsQuery {
+            limit: Some(9999),
+            offset: Some(-5),
+        };
+        let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+        let offset = q.offset.unwrap_or(0).max(0);
+        assert_eq!(limit, MAX_LIMIT);
+        assert_eq!(offset, 0);
+    }
 }

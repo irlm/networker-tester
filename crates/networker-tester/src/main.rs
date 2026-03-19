@@ -399,6 +399,7 @@ async fn run_url_test_cli(cfg: &ResolvedConfig) -> anyhow::Result<()> {
         user_agent: None,
         browser_engine: None,
         network_idle_timeout_ms: None,
+        artifact_output_dir: Some(cfg.output_dir.clone()),
     };
 
     let capabilities = UrlDiagnosticOrchestrator::detect_capabilities();

@@ -46,6 +46,8 @@ pub struct UrlDiagnosticRequest {
     pub browser_engine: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network_idle_timeout_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_output_dir: Option<String>,
 }
 
 fn default_follow_redirects() -> bool {
@@ -882,7 +884,13 @@ async fn execute_primary_page_diagnostic_impl(
     }
 
     if plan.request.capture_har {
-        match write_har_artifact(&run, Path::new("./output")) {
+        let har_out_dir = plan
+            .request
+            .artifact_output_dir
+            .as_deref()
+            .map(Path::new)
+            .unwrap_or_else(|| Path::new("./output"));
+        match write_har_artifact(&run, har_out_dir) {
             Ok(Some(path)) => run.har_path = Some(path.display().to_string()),
             Ok(None) => run
                 .capture_errors
@@ -957,6 +965,7 @@ mod tests {
             user_agent: None,
             browser_engine: Some("chromium".into()),
             network_idle_timeout_ms: Some(2_000),
+            artifact_output_dir: None,
         }
     }
 

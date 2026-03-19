@@ -82,14 +82,36 @@ impl DatabaseBackend for MssqlBackend {
 
     async fn save_url_test(&self, run: &UrlTestRun) -> anyhow::Result<()> {
         let mut c = self.client.lock().await;
-        insert_url_test_run(run, &mut c).await?;
-        for resource in &run.resources {
-            insert_url_test_resource(run.id, resource, &mut c).await?;
+        Query::new("BEGIN TRAN")
+            .execute(&mut c)
+            .await
+            .context("BEGIN UrlTest transaction")?;
+
+        let result = async {
+            insert_url_test_run(run, &mut c).await?;
+            for resource in &run.resources {
+                insert_url_test_resource(run.id, resource, &mut c).await?;
+            }
+            for probe in &run.protocol_runs {
+                insert_url_test_protocol_run(run.id, probe, &mut c).await?;
+            }
+            Ok::<(), anyhow::Error>(())
         }
-        for probe in &run.protocol_runs {
-            insert_url_test_protocol_run(run.id, probe, &mut c).await?;
+        .await;
+
+        match result {
+            Ok(()) => {
+                Query::new("COMMIT TRAN")
+                    .execute(&mut c)
+                    .await
+                    .context("COMMIT UrlTest transaction")?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = Query::new("ROLLBACK TRAN").execute(&mut c).await;
+                Err(e)
+            }
         }
-        Ok(())
     }
 
     async fn ping(&self) -> anyhow::Result<()> {
