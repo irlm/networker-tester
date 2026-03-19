@@ -16,7 +16,9 @@ use networker_common::protocol;
 /// Maximum number of probe jobs that can run concurrently.
 const MAX_CONCURRENT_JOBS: usize = 4;
 /// Bounded channel capacity for outbound WebSocket messages.
-const WS_CHANNEL_CAPACITY: usize = 256;
+/// Must be large enough for all AttemptResult + JobLog + JobComplete messages
+/// from a full test run (e.g., 27 modes × 5 runs = 135+ attempts + logs).
+const WS_CHANNEL_CAPACITY: usize = 4096;
 
 /// Connect to the dashboard and process messages until disconnected.
 pub async fn run(cfg: &AgentConfig) -> anyhow::Result<()> {
