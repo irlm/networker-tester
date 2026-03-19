@@ -26,9 +26,9 @@ pub async fn run(cfg: &AgentConfig) -> anyhow::Result<()> {
     // Large test runs (many modes × runs) produce multi-MB JSON in JobComplete.
     // Default tungstenite limits (64KB frame, 64KB message) silently drop these.
     let ws_config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig {
-        max_message_size: Some(64 * 1024 * 1024),       // 64 MB receive
-        max_frame_size: Some(64 * 1024 * 1024),         // 64 MB frame
-        max_write_buffer_size: 64 * 1024 * 1024,        // 64 MB write buffer
+        max_message_size: Some(64 * 1024 * 1024), // 64 MB receive
+        max_frame_size: Some(64 * 1024 * 1024),   // 64 MB frame
+        max_write_buffer_size: 64 * 1024 * 1024,  // 64 MB write buffer
         ..Default::default()
     };
     let (ws_stream, _) =
