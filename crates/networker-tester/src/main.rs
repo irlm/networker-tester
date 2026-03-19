@@ -352,6 +352,7 @@ fn make_url_test_capture_config(cfg: &ResolvedConfig) -> ResolvedConfig {
         html_report: cfg.html_report.clone(),
         css: cfg.css.clone(),
         excel: cfg.excel,
+        json_stdout: cfg.json_stdout,
         save_to_db: cfg.save_to_db,
         db_url: cfg.db_url.clone(),
         db_migrate: cfg.db_migrate,
