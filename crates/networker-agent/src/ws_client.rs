@@ -23,7 +23,16 @@ pub async fn run(cfg: &AgentConfig) -> anyhow::Result<()> {
     let url = format!("{}?key={}", cfg.dashboard_url, cfg.api_key);
     tracing::info!("Connecting to {}", cfg.dashboard_url);
 
-    let (ws_stream, _) = tokio_tungstenite::connect_async(&url).await?;
+    // Large test runs (many modes × runs) produce multi-MB JSON in JobComplete.
+    // Default tungstenite limits (64KB frame, 64KB message) silently drop these.
+    let ws_config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig {
+        max_message_size: Some(64 * 1024 * 1024), // 64 MB receive
+        max_frame_size: Some(64 * 1024 * 1024),   // 64 MB frame
+        max_write_buffer_size: 64 * 1024 * 1024,  // 64 MB write buffer
+        ..Default::default()
+    };
+    let (ws_stream, _) =
+        tokio_tungstenite::connect_async_with_config(&url, Some(ws_config), false).await?;
     tracing::info!("Connected to dashboard");
 
     let (mut ws_sink, mut ws_stream_rx) = ws_stream.split();
