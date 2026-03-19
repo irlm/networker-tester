@@ -26,6 +26,11 @@ export function ChangePasswordPage() {
       return;
     }
 
+    if (currentPassword === newPassword) {
+      setError('New password must be different from current password');
+      return;
+    }
+
     setLoading(true);
     try {
       await api.changePassword(currentPassword, newPassword);

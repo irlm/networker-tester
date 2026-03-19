@@ -28,6 +28,7 @@ pub async fn spawn_local_agent(api_key: &str, dashboard_url: &str) -> Option<u32
             Command::new(bin)
                 .env("AGENT_API_KEY", api_key)
                 .env("AGENT_DASHBOARD_URL", dashboard_url)
+                .current_dir(std::env::temp_dir())
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
                 .stderr(stderr_out)

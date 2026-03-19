@@ -2095,7 +2095,7 @@ ensure_aws_cli() {
                         arch_url="https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip"
                     if ! command -v unzip &>/dev/null; then
                         case "$PKG_MGR" in
-                            apt-get) sudo apt-get install -y unzip 2>&1 | tail -1 || true ;;
+                            apt-get) sudo DEBIAN_FRONTEND=noninteractive apt-get install -y unzip 2>&1 | tail -1 || true ;;
                             dnf)     sudo dnf install -y unzip     2>&1 | tail -1 || true ;;
                             yum)     sudo yum install -y unzip     2>&1 | tail -1 || true ;;
                             pacman)  sudo pacman -S --noconfirm unzip 2>&1 | tail -1 || true ;;
@@ -2831,7 +2831,7 @@ step_install_git() {
 
     case "$PKG_MGR" in
         brew)    brew install git ;;
-        apt-get) sudo apt-get update -qq && sudo apt-get install -y git ;;
+        apt-get) sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y git ;;
         dnf)     sudo dnf install -y git ;;
         pacman)  sudo pacman -S --noconfirm git ;;
         zypper)  sudo zypper install -y git ;;
@@ -2862,10 +2862,23 @@ step_install_chrome() {
                 || brew install chromium
             ;;
         apt-get)
-            sudo apt-get update -qq \
-                && (sudo apt-get install -y chromium-browser 2>/dev/null \
-                    || sudo apt-get install -y chromium)
-            sudo apt-get install -y libnss3-tools 2>/dev/null || true
+            # Prefer Google Chrome deb over chromium-browser — on Ubuntu 24.04+
+            # chromium-browser triggers a snap install that downloads ~2GB of
+            # dependencies (snapd, gnome, mesa, cups) and can OOM small VMs.
+            if ! command -v google-chrome &>/dev/null && ! command -v chromium-browser &>/dev/null; then
+                local chrome_deb="/tmp/google-chrome-stable.deb"
+                if curl -fsSL "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb" -o "$chrome_deb" 2>/dev/null; then
+                    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "$chrome_deb" < /dev/null 2>&1 || true
+                    rm -f "$chrome_deb"
+                fi
+            fi
+            # Fallback to chromium-browser if Chrome deb failed
+            if ! command -v google-chrome &>/dev/null && ! command -v chromium-browser &>/dev/null; then
+                sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq \
+                    && (sudo DEBIAN_FRONTEND=noninteractive apt-get install -y chromium-browser 2>/dev/null \
+                        || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y chromium)
+            fi
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libnss3-tools 2>/dev/null || true
             ;;
         dnf)
             sudo dnf install -y chromium
@@ -2980,7 +2993,7 @@ step_ensure_certutil() {
     fi
     print_info "Installing certutil (NSS tools) via ${PKG_MGR}…"
     case "$PKG_MGR" in
-        apt-get) sudo apt-get install -y libnss3-tools 2>/dev/null || true ;;
+        apt-get) sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libnss3-tools 2>/dev/null || true ;;
         dnf)     sudo dnf install -y nss-tools 2>/dev/null || true ;;
         pacman)  sudo pacman -S --noconfirm nss 2>/dev/null || true ;;
         zypper)  sudo zypper install -y mozilla-nss-tools 2>/dev/null || true ;;
@@ -3081,7 +3094,7 @@ step_cargo_install() {
             Linux)
                 print_info "No C linker found — installing build tools automatically…"
                 case "$PKG_MGR" in
-                    apt-get) sudo apt-get update -qq 2>/dev/null; sudo apt-get install -y build-essential 2>&1 | tail -3 || true ;;
+                    apt-get) sudo apt-get update -qq 2>/dev/null; sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential 2>&1 | tail -3 || true ;;
                     dnf)     sudo dnf install -y gcc gcc-c++ make    2>&1 | tail -3 || true ;;
                     pacman)  sudo pacman -S --noconfirm base-devel   2>&1 | tail -3 || true ;;
                     zypper)  sudo zypper install -y gcc make          2>&1 | tail -3 || true ;;
@@ -3519,8 +3532,9 @@ UNIT
     sudo systemctl enable networker-endpoint
     sudo systemctl start networker-endpoint
 
-    # Redirect privileged ports 80/443 → 8080/8443 so browsers can reach the server
-    if command -v iptables &>/dev/null; then
+    # Redirect privileged ports 80/443 → 8080/8443 so browsers can reach the server.
+    # Skip when installing as part of dashboard — nginx handles 80/443 instead.
+    if command -v iptables &>/dev/null && [[ ${DO_INSTALL_DASHBOARD:-0} -eq 0 ]]; then
         sudo iptables -t nat -C PREROUTING -p tcp --dport 80  -j REDIRECT --to-port 8080 2>/dev/null || \
             sudo iptables -t nat -A PREROUTING -p tcp --dport 80  -j REDIRECT --to-port 8080
         sudo iptables -t nat -C PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null || \
@@ -3553,7 +3567,7 @@ step_install_postgresql() {
         case "$PKG_MGR" in
             apt-get)
                 sudo apt-get update -qq < /dev/null
-                sudo apt-get install -y postgresql postgresql-contrib < /dev/null
+                sudo DEBIAN_FRONTEND=noninteractive apt-get install -y postgresql postgresql-contrib < /dev/null
                 ;;
             dnf)
                 sudo dnf install -y postgresql-server postgresql < /dev/null
@@ -3713,6 +3727,14 @@ step_install_cloud_clis() {
         fi
     fi
 
+    # unzip is needed for AWS CLI install — ensure it's present first
+    if ! command -v unzip &>/dev/null; then
+        case "$PKG_MGR" in
+            apt-get) sudo DEBIAN_FRONTEND=noninteractive apt-get install -y unzip -qq < /dev/null 2>&1 ;;
+            dnf)     sudo dnf install -y unzip < /dev/null 2>&1 ;;
+        esac
+    fi
+
     # AWS CLI
     if command -v aws &>/dev/null; then
         print_info "AWS CLI already installed: $(aws --version 2>/dev/null | head -1)"
@@ -3745,7 +3767,7 @@ step_install_cloud_clis() {
                         | sudo tee /etc/apt/sources.list.d/google-cloud-sdk.list > /dev/null
                 fi
                 sudo apt-get update -qq < /dev/null 2>&1
-                sudo apt-get install -y google-cloud-cli -qq < /dev/null 2>&1
+                sudo DEBIAN_FRONTEND=noninteractive apt-get install -y google-cloud-cli -qq < /dev/null 2>&1
                 ;;
             dnf)
                 sudo tee /etc/yum.repos.d/google-cloud-sdk.repo > /dev/null << 'GCPREPO'
@@ -3773,19 +3795,12 @@ GCPREPO
     # jq is needed for credential helpers
     if ! command -v jq &>/dev/null; then
         case "$PKG_MGR" in
-            apt-get) sudo apt-get install -y jq -qq < /dev/null 2>&1 ;;
+            apt-get) sudo DEBIAN_FRONTEND=noninteractive apt-get install -y jq -qq < /dev/null 2>&1 ;;
             dnf)     sudo dnf install -y jq < /dev/null 2>&1 ;;
             brew)    brew install jq < /dev/null 2>&1 ;;
         esac
     fi
 
-    # unzip is needed for AWS CLI install
-    if ! command -v unzip &>/dev/null; then
-        case "$PKG_MGR" in
-            apt-get) sudo apt-get install -y unzip -qq < /dev/null 2>&1 ;;
-            dnf)     sudo dnf install -y unzip < /dev/null 2>&1 ;;
-        esac
-    fi
 }
 
 # Build the React frontend and copy to /opt/networker/dashboard.
@@ -3908,6 +3923,13 @@ step_setup_dashboard_service() {
         sudo chmod 755 /usr/local/bin/networker-agent
     fi
 
+    # Also install the tester binary (agent shells out to it for probe jobs)
+    local tester_path="${INSTALL_DIR}/networker-tester"
+    if [[ -x "$tester_path" && "$tester_path" != "/usr/local/bin/networker-tester" ]]; then
+        sudo cp "$tester_path" /usr/local/bin/networker-tester
+        sudo chmod 755 /usr/local/bin/networker-tester
+    fi
+
     sudo useradd --system --no-create-home --shell /usr/sbin/nologin networker 2>/dev/null || true
 
     sudo tee /etc/systemd/system/networker-dashboard.service > /dev/null <<UNIT
@@ -3917,6 +3939,7 @@ After=network.target postgresql.service
 
 [Service]
 User=$(whoami)
+WorkingDirectory=/tmp
 EnvironmentFile=/etc/networker-dashboard.env
 ExecStart=${binary_path}
 Restart=always
@@ -4185,7 +4208,7 @@ step_setup_nginx() {
             apt-get)
                 # Add official nginx.org repo for mainline (1.25+ with HTTP/3)
                 if ! apt-cache policy nginx 2>/dev/null | grep -q "nginx.org"; then
-                    sudo apt-get install -y curl gnupg ca-certificates lsb-release ubuntu-keyring < /dev/null
+                    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y curl gnupg ca-certificates lsb-release ubuntu-keyring < /dev/null
                     curl -fsSL https://nginx.org/keys/nginx_signing.key \
                         | gpg --dearmor | sudo tee /usr/share/keyrings/nginx-archive-keyring.gpg > /dev/null
                     echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] \
@@ -4194,7 +4217,7 @@ http://nginx.org/packages/mainline/ubuntu $(lsb_release -cs) nginx" \
                     printf 'Package: *\nPin: origin nginx.org\nPin-Priority: 900\n' \
                         | sudo tee /etc/apt/preferences.d/99nginx > /dev/null
                 fi
-                sudo apt-get update -qq && sudo apt-get install -y nginx < /dev/null
+                sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nginx < /dev/null
                 ;;
             dnf)      sudo dnf install -y nginx ;;
             pacman)   sudo pacman -S --noconfirm nginx ;;
@@ -8944,6 +8967,19 @@ main() {
 
     # ── Dashboard install ────────────────────────────────────────────────────
     if [[ $DO_INSTALL_DASHBOARD -eq 1 ]]; then
+        # Ensure swap exists — dashboard install pulls ~4GB of packages
+        # (cloud CLIs, Chrome, Node.js, frontend build) which can OOM small VMs.
+        if [[ "$SYS_OS" == "Linux" ]] && ! swapon --show 2>/dev/null | grep -q .; then
+            print_info "Creating 4GB swap file to prevent OOM during install…"
+            sudo fallocate -l 4G /swapfile 2>/dev/null \
+                && sudo chmod 600 /swapfile \
+                && sudo mkswap /swapfile >/dev/null \
+                && sudo swapon /swapfile \
+                && echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null \
+                && print_ok "Swap enabled (4GB)" \
+                || print_warn "Swap setup failed — continuing without swap"
+        fi
+
         step_install_postgresql
         step_install_nodejs
         step_install_cloud_clis
@@ -8991,9 +9027,11 @@ main() {
         if [[ "$SYS_OS" == "Linux" ]]; then
             step_setup_nginx_proxy
             if [[ $DASHBOARD_NGINX_CONFIGURED -eq 1 ]]; then
-                echo ""
-                printf "  Enter FQDN for HTTPS certificate (or press Enter for self-signed): "
-                read -r DASHBOARD_FQDN </dev/tty 2>/dev/null || DASHBOARD_FQDN=""
+                if [[ -z "${DASHBOARD_FQDN:-}" ]]; then
+                    echo ""
+                    printf "  Enter FQDN for HTTPS certificate (or press Enter for self-signed): "
+                    read -r DASHBOARD_FQDN </dev/tty 2>/dev/null || DASHBOARD_FQDN=""
+                fi
                 step_setup_letsencrypt
             fi
         fi

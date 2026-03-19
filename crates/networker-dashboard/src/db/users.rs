@@ -94,6 +94,10 @@ pub async fn change_password(
         return Ok(Err("New password must be at least 8 characters"));
     }
 
+    if current_password == new_password {
+        return Ok(Err("New password must be different from current password"));
+    }
+
     let new_hash =
         bcrypt::hash(new_password, bcrypt::DEFAULT_COST).map_err(|e| anyhow::anyhow!("{e}"))?;
 
