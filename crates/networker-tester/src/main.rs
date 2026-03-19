@@ -2,7 +2,6 @@ use anyhow::Context;
 use chrono::Utc;
 use clap::Parser;
 use networker_tester::capture;
-use networker_tester::capture;
 use networker_tester::cli;
 use networker_tester::cli::ResolvedConfig;
 use networker_tester::metrics::{
@@ -2065,6 +2064,15 @@ mod tests {
     fn sample_resolved_config(delay_ms: u64) -> ResolvedConfig {
         ResolvedConfig {
             targets: vec!["https://127.0.0.1:8443/health".into()],
+            url_test_url: None,
+            url_test_auth_token: None,
+            url_test_cookie: None,
+            url_test_headers: vec![],
+            url_test_capture_har: false,
+            url_test_capture_pcap: false,
+            url_test_protocol_force: None,
+            url_test_http3_repeat: 10,
+            url_test_json: false,
             modes: vec![],
             runs: 1,
             concurrency: 1,
