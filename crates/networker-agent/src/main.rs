@@ -12,27 +12,34 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     // Install rustls crypto provider before any TLS operations
-    rustls::crypto::ring::default_provider()
-        .install_default()
-        .expect("Failed to install rustls crypto provider");
+    let _ = rustls::crypto::ring::default_provider().install_default();
 
     let cfg = config::AgentConfig::from_env()?;
     tracing::info!(
         dashboard_url = %cfg.dashboard_url,
-        "Networker agent starting"
+        "Networker tester starting"
     );
 
-    // Main reconnect loop
+    // Main reconnect loop with graceful shutdown
+    let shutdown = tokio::signal::ctrl_c();
+    tokio::pin!(shutdown);
+
     loop {
-        match ws_client::run(&cfg).await {
-            Ok(()) => {
-                tracing::info!("WebSocket connection closed normally");
+        tokio::select! {
+            _ = &mut shutdown => {
+                tracing::info!("Shutdown signal received");
+                break;
             }
-            Err(e) => {
-                tracing::error!("WebSocket connection error: {e:#}");
+            result = ws_client::run(&cfg) => {
+                match result {
+                    Ok(()) => tracing::info!("WebSocket connection closed normally"),
+                    Err(e) => tracing::error!("WebSocket connection error: {e:#}"),
+                }
+                tracing::info!("Reconnecting in 5 seconds...");
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             }
         }
-        tracing::info!("Reconnecting in 5 seconds...");
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
     }
+
+    Ok(())
 }

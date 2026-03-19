@@ -134,3 +134,13 @@ When writing documentation for CLI flags or environment variables (e.g., RUST_LO
 - Never commit directly to main — all changes go through a PR.
 - Branch → commit → push → `gh pr create` → merge → tag → push tag → update Gist.
 - Required CI checks: `Test (ubuntu-latest)`, `Test (windows-latest)`, `bats (installer unit tests)`, `shellcheck`.
+
+## Design Context
+
+See `.impeccable.md` for full design context. Key principles:
+
+- **Users**: Network/IT engineers, DevOps/SRE teams — high technical level
+- **Personality**: Technical, precise, reliable
+- **Aesthetic**: Terminal/hacker — monospace-first, dark theme, data-dense. References: Grafana, Datadog, Warp
+- **Brand colors**: Purple `#863bff` (logo), Cyan (primary accent), deep navy backgrounds
+- **Principles**: Data density over decoration | Terminal confidence | Trust through consistency | Progressive disclosure | Zero chrome (no gradients, no shadows, flat surfaces, thin borders)

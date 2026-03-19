@@ -5,7 +5,7 @@ use std::path::Path;
 pub fn save(run: &TestRun, path: &Path) -> anyhow::Result<()> {
     let dir = path.parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(dir)?;
-    let json = serde_json::to_string_pretty(run)?;
+    let json = to_string(run)?;
     std::fs::write(path, json)?;
     Ok(())
 }
@@ -39,7 +39,6 @@ mod tests {
     use chrono::Utc;
     use tempfile::NamedTempFile;
     use uuid::Uuid;
-
     fn dummy_run() -> TestRun {
         let run_id = Uuid::new_v4();
         TestRun {

@@ -1,0 +1,4 @@
+{
+  "targets": ["https://networker-endpoint-vm.eastus.cloudapp.azure.com:8443/health"],
+  "modes": ["tcp", "http1", "http2", "http3", "udp", "download", "upload", "pageload", "pageload2", "pageload3"]
+}

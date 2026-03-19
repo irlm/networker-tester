@@ -180,7 +180,6 @@ pub mod server {
         #[cfg(unix)]
         let (csw_v0, csw_i0) = csw_snapshot();
 
-        let body = vec![0u8; n];
         let proc_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
         #[cfg(unix)]
@@ -213,9 +212,17 @@ pub mod server {
             debug!("download send_response: {e}");
             return;
         }
-        if let Err(e) = stream.send_data(Bytes::from(body)).await {
-            debug!("download send_data: {e}");
-            return;
+
+        // Stream in 64 KiB chunks instead of allocating the full payload
+        const CHUNK_SIZE: usize = 64 * 1024;
+        let mut remaining = n;
+        while remaining > 0 {
+            let chunk_len = remaining.min(CHUNK_SIZE);
+            if let Err(e) = stream.send_data(Bytes::from(vec![0u8; chunk_len])).await {
+                debug!("download send_data chunk: {e}");
+                return;
+            }
+            remaining -= chunk_len;
         }
         let _ = stream.finish().await;
     }
@@ -338,7 +345,6 @@ pub mod server {
         let n = parse_query_usize(query, "bytes")
             .unwrap_or(10_240)
             .min(100 * 1024 * 1024);
-        let body = vec![0u8; n];
         let ts = Utc::now().to_rfc3339();
 
         let resp = Response::builder()
@@ -354,9 +360,17 @@ pub mod server {
             debug!("asset send_response: {e}");
             return;
         }
-        if let Err(e) = stream.send_data(Bytes::from(body)).await {
-            debug!("asset send_data: {e}");
-            return;
+
+        // Stream in 64 KiB chunks to avoid large single allocations
+        const CHUNK_SIZE: usize = 64 * 1024;
+        let mut remaining = n;
+        while remaining > 0 {
+            let chunk_len = remaining.min(CHUNK_SIZE);
+            if let Err(e) = stream.send_data(Bytes::from(vec![0u8; chunk_len])).await {
+                debug!("asset send_data chunk: {e}");
+                return;
+            }
+            remaining -= chunk_len;
         }
         let _ = stream.finish().await;
     }

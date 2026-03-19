@@ -48,7 +48,7 @@ jobs:
             archive: zip
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -56,7 +56,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -74,7 +74,7 @@ jobs:
           cargo build --release --locked
           --target ${{ matrix.target }}
           --features browser
-          -p networker-tester -p networker-endpoint
+          -p networker-tester -p networker-endpoint -p networker-dashboard -p networker-agent
         env:
           # Static-link the VC++ runtime on Windows so binaries work on clean
           # Windows Server images (e.g. GCP) without installing vcredist.
@@ -93,6 +93,10 @@ jobs:
               -C "${SRC}" "networker-tester"
           tar czf "dist/networker-endpoint-${TARGET}.tar.gz" \
               -C "${SRC}" "networker-endpoint"
+          tar czf "dist/networker-dashboard-${TARGET}.tar.gz" \
+              -C "${SRC}" "networker-dashboard"
+          tar czf "dist/networker-agent-${TARGET}.tar.gz" \
+              -C "${SRC}" "networker-agent"
 
       # ── Package (Windows: .zip) ──────────────────────────────────────────
       - name: Package (zip)
@@ -111,9 +115,17 @@ jobs:
               -Path "$src\networker-endpoint.exe" `
               -DestinationPath "dist\networker-endpoint-$target.zip" `
               -Force
+          Compress-Archive `
+              -Path "$src\networker-dashboard.exe" `
+              -DestinationPath "dist\networker-dashboard-$target.zip" `
+              -Force
+          Compress-Archive `
+              -Path "$src\networker-agent.exe" `
+              -DestinationPath "dist\networker-agent-$target.zip" `
+              -Force
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: dist-${{ matrix.target }}
           path: dist/
@@ -125,10 +137,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Download all build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           pattern: dist-*
           merge-multiple: true

@@ -47,10 +47,19 @@ pub struct SystemMeta {
     /// Cloud region (auto-detected from cloud metadata at startup).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub region: Option<String>,
+    /// Public DNS hostname (auto-detected from cloud metadata).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_dns: Option<String>,
+    /// Public IP address (auto-detected from cloud metadata).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_ip: Option<String>,
 }
 
 impl SystemMeta {
     pub fn collect() -> Self {
+        let region = detect_cloud_region();
+        let public_dns = detect_public_dns(&region);
+        let public_ip = detect_public_ip(&region);
         Self {
             os: std::env::consts::OS.to_string(),
             arch: std::env::consts::ARCH.to_string(),
@@ -60,9 +69,110 @@ impl SystemMeta {
             total_memory_mb: detect_total_memory_mb(),
             os_version: detect_os_version(),
             hostname: get_hostname(),
-            region: detect_cloud_region(),
+            region,
+            public_dns,
+            public_ip,
         }
     }
+}
+
+/// Detect public DNS hostname from cloud metadata.
+fn detect_public_dns(region: &Option<String>) -> Option<String> {
+    let region_str = region.as_deref().unwrap_or("");
+
+    if region_str.starts_with("azure/") {
+        // Azure: first try IMDS fqdnName endpoint
+        if let Some(fqdn) = cloud_metadata_get_raw(
+            "169.254.169.254:80",
+            "169.254.169.254",
+            "/metadata/instance/compute/fqdnName?api-version=2021-02-01&format=text",
+            &[("Metadata", "true")],
+        ) {
+            if !fqdn.is_empty() {
+                return Some(fqdn);
+            }
+        }
+        // Fallback: hostname + region + cloudapp.azure.com
+        let hostname = get_hostname();
+        let azure_region = region_str.strip_prefix("azure/").unwrap_or("eastus");
+        return Some(format!("{hostname}.{azure_region}.cloudapp.azure.com"));
+    }
+
+    if region_str.starts_with("aws/") {
+        // AWS: http://169.254.169.254/latest/meta-data/public-hostname
+        if let Some(dns) = cloud_metadata_get_raw(
+            "169.254.169.254:80",
+            "169.254.169.254",
+            "/latest/meta-data/public-hostname",
+            &[],
+        ) {
+            if !dns.is_empty() && !dns.contains(".internal") {
+                return Some(dns);
+            }
+        }
+        // Fallback: construct from public IP
+        if let Some(ip) = cloud_metadata_get_raw(
+            "169.254.169.254:80",
+            "169.254.169.254",
+            "/latest/meta-data/public-ipv4",
+            &[],
+        ) {
+            let aws_region = region_str.strip_prefix("aws/").unwrap_or("us-east-1");
+            let ip_dashed = ip.replace('.', "-");
+            if aws_region == "us-east-1" {
+                return Some(format!("ec2-{ip_dashed}.compute-1.amazonaws.com"));
+            } else {
+                return Some(format!(
+                    "ec2-{ip_dashed}.{aws_region}.compute.amazonaws.com"
+                ));
+            }
+        }
+    }
+
+    if region_str.starts_with("gcp/") {
+        // GCP: hostname is typically the instance name
+        let hostname = get_hostname();
+        return Some(hostname);
+    }
+
+    None
+}
+
+/// Detect public IP address from cloud metadata.
+fn detect_public_ip(region: &Option<String>) -> Option<String> {
+    let region_str = region.as_deref().unwrap_or("");
+
+    if region_str.starts_with("aws/") {
+        // AWS: http://169.254.169.254/latest/meta-data/public-ipv4
+        return cloud_metadata_get_raw(
+            "169.254.169.254:80",
+            "169.254.169.254",
+            "/latest/meta-data/public-ipv4",
+            &[],
+        );
+    }
+
+    if region_str.starts_with("azure/") {
+        // Azure: IMDS public IP
+        return cloud_metadata_get_raw(
+            "169.254.169.254:80",
+            "169.254.169.254",
+            "/metadata/instance/network/interface/0/ipv4/ipAddress/0/publicIpAddress?api-version=2021-02-01&format=text",
+            &[("Metadata", "true")],
+        );
+    }
+
+    if region_str.starts_with("gcp/") {
+        // GCP: external IP from metadata
+        return cloud_metadata_get_raw(
+            "169.254.169.254:80",
+            "metadata.google.internal",
+            "/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip",
+            &[("Metadata-Flavor", "Google")],
+        );
+    }
+
+    None
 }
 
 /// Attempt to detect cloud region from instance metadata APIs.
@@ -260,9 +370,9 @@ pub fn build_router(state: AppState) -> Router {
         .route("/asset", get(asset_handler))
         // Provide AppState to all handlers (converts Router<AppState> -> Router<()>).
         .with_state(state.clone())
-        // Remove axum's default 2 MiB body limit so upload probes of arbitrary
-        // size are not rejected with 413 before the body is transmitted.
-        .layer(DefaultBodyLimit::disable())
+        // Allow upload probes up to 2 GiB (matching the download cap) while
+        // preventing unbounded memory consumption from malicious payloads.
+        .layer(DefaultBodyLimit::max(2 * 1024 * 1024 * 1024))
         // Add X-Networker-Server-Timestamp (and optionally Alt-Svc) to every response.
         .layer(middleware::from_fn_with_state(state, add_server_timestamp))
         // Log every request (method + URI) and response (status + latency).
@@ -587,15 +697,32 @@ struct DownloadParams {
     bytes: Option<usize>,
 }
 
-/// GET /download?bytes=N – returns N zero bytes (max 2 GiB).
+/// GET /download?bytes=N – streams N zero bytes (max 2 GiB) in 64 KiB chunks.
 /// Adds `Server-Timing: proc;dur=X, csw-v;dur=N, csw-i;dur=N` indicating
-/// body generation time and context switches.
+/// setup time and context switches.
 async fn download(Query(p): Query<DownloadParams>) -> impl IntoResponse {
     let n = p.bytes.unwrap_or(1024).min(2 * 1024 * 1024 * 1024); // cap 2 GiB
     let t0 = Instant::now();
     #[cfg(unix)]
     let (csw_v0, csw_i0) = csw_snapshot();
-    let body = vec![0u8; n];
+
+    // Stream zero bytes in fixed-size chunks to avoid allocating the full
+    // payload in memory at once (critical for multi-GiB downloads).
+    const CHUNK_SIZE: usize = 64 * 1024; // 64 KiB
+    let full_chunks = n / CHUNK_SIZE;
+    let remainder = n % CHUNK_SIZE;
+    let zero_chunk = Bytes::from(vec![0u8; CHUNK_SIZE]);
+
+    let body = Body::from_stream(futures::stream::iter(
+        (0..full_chunks)
+            .map(move |_| Ok::<_, std::io::Error>(zero_chunk.clone()))
+            .chain(if remainder > 0 {
+                vec![Ok(Bytes::from(vec![0u8; remainder]))].into_iter()
+            } else {
+                vec![].into_iter()
+            }),
+    ));
+
     let proc_ms = t0.elapsed().as_secs_f64() * 1000.0;
     #[cfg(unix)]
     let csw_part = {
@@ -616,7 +743,7 @@ async fn download(Query(p): Query<DownloadParams>) -> impl IntoResponse {
         .header("content-length", n.to_string())
         .header("x-download-bytes", n.to_string())
         .header("server-timing", timing.as_str())
-        .body(Body::from(body))
+        .body(body)
         .unwrap()
 }
 

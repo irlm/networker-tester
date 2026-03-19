@@ -147,6 +147,11 @@ pub struct Cli {
     #[arg(long)]
     pub excel: bool,
 
+    /// Write TestRun JSON to stdout (for agent/automation integration).
+    /// Suppresses normal file output when used.
+    #[arg(long)]
+    pub json_stdout: bool,
+
     // ── URL diagnostic (PR-04 path) ─────────────────────────────────────────
     /// Run the URL page-load diagnostic workflow against the provided URL.
     #[arg(long)]
@@ -343,6 +348,7 @@ pub struct ConfigFile {
     pub html_report: Option<String>,
     pub css: Option<String>,
     pub excel: Option<bool>,
+    pub json_stdout: Option<bool>,
     pub save_to_db: Option<bool>,
     pub db_url: Option<String>,
     pub db_migrate: Option<bool>,
@@ -394,6 +400,7 @@ pub struct ResolvedConfig {
     pub html_report: String,
     pub css: Option<String>,
     pub excel: bool,
+    pub json_stdout: bool,
     pub save_to_db: bool,
     pub db_url: Option<String>,
     pub db_migrate: bool,
@@ -557,6 +564,7 @@ impl Cli {
             html_report: pick!(html_report, "report.html".into()),
             css: self.css.or(f.css),
             excel: flag!(excel),
+            json_stdout: self.json_stdout || f.json_stdout.unwrap_or(false),
             save_to_db: self.save_to_db
                 || f.save_to_db.unwrap_or(false)
                 || self.save_to_sql

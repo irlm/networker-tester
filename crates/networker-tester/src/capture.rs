@@ -1,8 +1,11 @@
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
+use std::thread::sleep as thread_sleep;
+use std::time::{Duration as StdDuration, Instant};
 use tokio::task::spawn_blocking;
 use tokio::time::{sleep, Duration};
 
@@ -12,6 +15,7 @@ use crate::cli::{PacketCaptureMode, ResolvedConfig};
 pub struct PacketCapturePlan {
     pub mode: PacketCaptureMode,
     pub interface: String,
+    pub targets: Vec<String>,
     pub write_pcap: bool,
     pub write_summary_json: bool,
     pub pcap_path: PathBuf,
@@ -47,6 +51,11 @@ pub struct PacketCaptureSummary {
     pub capture_status: String,
     pub note: Option<String>,
     pub warnings: Vec<String>,
+    pub likely_target_endpoints: Vec<String>,
+    pub likely_target_packets: u64,
+    pub likely_target_pct_of_total: f64,
+    pub dominant_trace_port: Option<u16>,
+    pub capture_confidence: String,
     pub tcp_packets: u64,
     pub udp_packets: u64,
     pub quic_packets: u64,
@@ -72,6 +81,16 @@ pub struct PacketCaptureSession {
     stderr_path: PathBuf,
 }
 
+impl Drop for PacketCaptureSession {
+    fn drop(&mut self) {
+        if let Ok(None) = self.child.try_wait() {
+            tracing::warn!("PacketCaptureSession dropped without finalize(); killing tshark");
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+}
+
 pub fn build_plan(cfg: &ResolvedConfig, out_dir: &Path) -> Option<PacketCapturePlan> {
     let pc = &cfg.packet_capture;
     if !pc.mode.captures_tester() {
@@ -81,6 +100,7 @@ pub fn build_plan(cfg: &ResolvedConfig, out_dir: &Path) -> Option<PacketCaptureP
     Some(PacketCapturePlan {
         mode: pc.mode,
         interface: resolve_capture_interface(pc.interface.as_str(), &cfg.targets),
+        targets: cfg.targets.clone(),
         write_pcap: pc.write_pcap,
         write_summary_json: pc.write_summary_json,
         pcap_path: out_dir.join("packet-capture-tester.pcapng"),
@@ -143,9 +163,7 @@ fn check_capture_prereqs_blocking(
     #[cfg(not(target_os = "macos"))]
     let _ = plan;
 
-    let out = Command::new(tshark_path)
-        .arg("-D")
-        .output()
+    let out = run_tshark_with_timeout(tshark_path, &["-D"], StdDuration::from_secs(10))
         .context("run tshark -D")?;
     if !out.status.success() {
         anyhow::bail!("tshark is installed but interface listing failed")
@@ -153,15 +171,12 @@ fn check_capture_prereqs_blocking(
 
     #[cfg(target_os = "macos")]
     {
-        let probe = Command::new(tshark_path)
-            .arg("-i")
-            .arg(&plan.interface)
-            .arg("-a")
-            .arg("duration:1")
-            .arg("-w")
-            .arg("/dev/null")
-            .output()
-            .context("run macOS packet-capture permission probe")?;
+        let probe = run_tshark_with_timeout(
+            tshark_path,
+            &["-i", &plan.interface, "-a", "duration:1", "-w", "/dev/null"],
+            StdDuration::from_secs(10),
+        )
+        .context("run macOS packet-capture permission probe")?;
         let stderr = String::from_utf8_lossy(&probe.stderr);
         if stderr.contains("Permission denied") || stderr.contains("cannot open BPF device") {
             anyhow::bail!(
@@ -255,7 +270,8 @@ impl PacketCaptureSession {
 
         let tshark_path = self.tshark_path.clone();
         let plan = self.plan.clone();
-        let summary = spawn_blocking(move || summarize(&tshark_path, &plan))
+        let targets = plan.targets.clone();
+        let summary = spawn_blocking(move || summarize(&tshark_path, &plan, &targets))
             .await
             .context("join packet capture summary task")??;
         std::fs::write(
@@ -272,7 +288,11 @@ impl PacketCaptureSession {
     }
 }
 
-fn summarize(tshark_path: &Path, plan: &PacketCapturePlan) -> anyhow::Result<PacketCaptureSummary> {
+fn summarize(
+    tshark_path: &Path,
+    plan: &PacketCapturePlan,
+    targets: &[String],
+) -> anyhow::Result<PacketCaptureSummary> {
     // TODO: batch these tshark reads so large pcaps are not re-read once per filter.
     let stats = [
         ("tcp", "tcp_packets"),
@@ -299,6 +319,11 @@ fn summarize(tshark_path: &Path, plan: &PacketCapturePlan) -> anyhow::Result<Pac
         },
         note: None,
         warnings: vec![],
+        likely_target_endpoints: vec![],
+        likely_target_packets: 0,
+        likely_target_pct_of_total: 0.0,
+        dominant_trace_port: None,
+        capture_confidence: "low".into(),
         tcp_packets: 0,
         udp_packets: 0,
         quic_packets: 0,
@@ -340,23 +365,128 @@ fn summarize(tshark_path: &Path, plan: &PacketCapturePlan) -> anyhow::Result<Pac
         port_counts(tshark_path, &plan.pcap_path).unwrap_or_default(),
         5,
     );
+    summary.likely_target_endpoints = likely_target_endpoints(&summary.top_endpoints, targets);
+    summary.likely_target_packets =
+        likely_target_packet_count(&summary.top_endpoints, &summary.likely_target_endpoints);
+    summary.likely_target_pct_of_total =
+        pct(summary.likely_target_packets, summary.total_packets as f64);
+    summary.dominant_trace_port =
+        dominant_trace_port(&summary.top_ports, summary.likely_target_packets);
     apply_interpretation(&mut summary);
+    summary.capture_confidence = capture_confidence_label(&summary);
 
     Ok(summary)
 }
 
+fn likely_target_endpoints(rows: &[EndpointPacketCount], targets: &[String]) -> Vec<String> {
+    if targets.is_empty() {
+        return rows.iter().take(2).map(|r| r.endpoint.clone()).collect();
+    }
+    let mut hints = vec![];
+    for target in targets {
+        for candidate in endpoint_candidates_from_target(target) {
+            if rows.iter().any(|r| r.endpoint == candidate) && !hints.contains(&candidate) {
+                hints.push(candidate);
+            }
+        }
+    }
+    if hints.is_empty() {
+        rows.iter().take(2).map(|r| r.endpoint.clone()).collect()
+    } else {
+        hints
+    }
+}
+
+fn endpoint_candidates_from_target(target: &str) -> Vec<String> {
+    let mut out = vec![];
+    let trimmed = target.trim();
+    if let Ok(url) = url::Url::parse(trimmed) {
+        if let Some(host) = url.host_str() {
+            out.push(host.to_string());
+        }
+    }
+    if !trimmed.contains("//") {
+        if trimmed.starts_with('[') {
+            if let Some(end) = trimmed.find(']') {
+                let host = trimmed[1..end].to_string();
+                if !host.is_empty() {
+                    out.push(host);
+                }
+            }
+        } else {
+            let colon_count = trimmed.matches(':').count();
+            let host = if colon_count > 1 {
+                trimmed.to_string()
+            } else {
+                trimmed.split(':').next().unwrap_or(trimmed).to_string()
+            };
+            if !host.is_empty() {
+                out.push(host);
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+const MAX_TSHARK_OUTPUT_BYTES: u64 = 256 * 1024 * 1024;
+
+fn run_tshark_with_timeout(
+    tshark_path: &Path,
+    args: &[&str],
+    timeout: StdDuration,
+) -> anyhow::Result<Output> {
+    let mut child = Command::new(tshark_path)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("spawn tshark {:?}", args))?;
+
+    let start = Instant::now();
+    loop {
+        if let Some(_status) = child.try_wait()? {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            if let Some(out) = child.stdout.take() {
+                let _ = out.take(MAX_TSHARK_OUTPUT_BYTES).read_to_end(&mut stdout);
+            }
+            if let Some(err) = child.stderr.take() {
+                let _ = err.take(4 * 1024 * 1024).read_to_end(&mut stderr);
+            }
+            let status = child.wait()?;
+            return Ok(Output {
+                status,
+                stdout,
+                stderr,
+            });
+        }
+        if start.elapsed() > timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            anyhow::bail!("tshark timed out after {:.0}s", timeout.as_secs_f64());
+        }
+        thread_sleep(StdDuration::from_millis(100));
+    }
+}
+
 fn endpoint_counts(tshark_path: &Path, pcap_path: &Path) -> anyhow::Result<BTreeMap<String, u64>> {
-    let out = Command::new(tshark_path)
-        .arg("-r")
-        .arg(pcap_path)
-        .arg("-T")
-        .arg("fields")
-        .arg("-e")
-        .arg("ip.dst")
-        .arg("-e")
-        .arg("ipv6.dst")
-        .output()
-        .context("run tshark endpoint summary")?;
+    let out = run_tshark_with_timeout(
+        tshark_path,
+        &[
+            "-r",
+            pcap_path.to_str().unwrap_or_default(),
+            "-T",
+            "fields",
+            "-e",
+            "ip.dst",
+            "-e",
+            "ipv6.dst",
+        ],
+        StdDuration::from_secs(60),
+    )
+    .context("run tshark endpoint summary")?;
 
     if !out.status.success() {
         tracing::warn!(stderr = %String::from_utf8_lossy(&out.stderr), "tshark endpoint summary failed");
@@ -373,23 +503,31 @@ fn endpoint_counts(tshark_path: &Path, pcap_path: &Path) -> anyhow::Result<BTree
         if endpoint.is_empty() {
             continue;
         }
+        if counts.len() >= 10_000 && !counts.contains_key(endpoint) {
+            tracing::warn!("endpoint count capped at 10,000 unique entries");
+            break;
+        }
         *counts.entry(endpoint.to_string()).or_insert(0) += 1;
     }
     Ok(counts)
 }
 
 fn port_counts(tshark_path: &Path, pcap_path: &Path) -> anyhow::Result<BTreeMap<u16, u64>> {
-    let out = Command::new(tshark_path)
-        .arg("-r")
-        .arg(pcap_path)
-        .arg("-T")
-        .arg("fields")
-        .arg("-e")
-        .arg("tcp.dstport")
-        .arg("-e")
-        .arg("udp.dstport")
-        .output()
-        .context("run tshark port summary")?;
+    let out = run_tshark_with_timeout(
+        tshark_path,
+        &[
+            "-r",
+            pcap_path.to_str().unwrap_or_default(),
+            "-T",
+            "fields",
+            "-e",
+            "tcp.dstport",
+            "-e",
+            "udp.dstport",
+        ],
+        StdDuration::from_secs(60),
+    )
+    .context("run tshark port summary")?;
 
     if !out.status.success() {
         tracing::warn!(stderr = %String::from_utf8_lossy(&out.stderr), "tshark port summary failed");
@@ -481,6 +619,36 @@ fn top_n_ports(counts: BTreeMap<u16, u64>, limit: usize) -> Vec<PortPacketCount>
     rows
 }
 
+fn likely_target_packet_count(rows: &[EndpointPacketCount], likely_targets: &[String]) -> u64 {
+    rows.iter()
+        .filter(|r| likely_targets.iter().any(|t| t == &r.endpoint))
+        .map(|r| r.packets)
+        .sum()
+}
+
+fn dominant_trace_port(top_ports: &[PortPacketCount], likely_target_packets: u64) -> Option<u16> {
+    if likely_target_packets == 0 {
+        return None;
+    }
+    top_ports.first().map(|p| p.port)
+}
+
+fn capture_confidence_label(summary: &PacketCaptureSummary) -> String {
+    if summary.total_packets == 0 {
+        return "low".into();
+    }
+    if !summary.capture_may_be_ambiguous
+        && !summary.likely_target_endpoints.is_empty()
+        && summary.likely_target_pct_of_total >= 50.0
+    {
+        return "high".into();
+    }
+    if !summary.likely_target_endpoints.is_empty() && summary.likely_target_pct_of_total >= 20.0 {
+        return "medium".into();
+    }
+    "low".into()
+}
+
 fn apply_interpretation(summary: &mut PacketCaptureSummary) {
     summary.observed_quic = summary.quic_packets > 0;
     summary.observed_tcp_only =
@@ -502,10 +670,17 @@ fn apply_interpretation(summary: &mut PacketCaptureSummary) {
     if summary.observed_mixed_transport {
         summary.capture_may_be_ambiguous = true;
         summary.warnings.push("Both TCP and UDP/QUIC traffic were observed. This may reflect fallback behavior, mixed page assets, or unrelated background traffic.".into());
+        if !summary.observed_quic {
+            summary.warnings.push("Mixed transport was observed without QUIC packets, which may indicate TCP fallback or non-target background traffic.".into());
+        }
     }
-    if summary.top_endpoints.len() > 1 {
+    if summary.top_endpoints.len() > 1 && summary.likely_target_endpoints.len() != 1 {
         summary.capture_may_be_ambiguous = true;
         summary.warnings.push("Multiple destination endpoints were active in the trace. Interpret protocol comparisons carefully when third-party assets or background traffic are present.".into());
+    }
+    if summary.likely_target_endpoints.is_empty() && !summary.top_endpoints.is_empty() {
+        summary.capture_may_be_ambiguous = true;
+        summary.warnings.push("No clear target-related endpoint could be identified from the dominant trace endpoints.".into());
     }
     if summary.retransmissions > 0 || summary.resets > 0 {
         summary.warnings.push("The trace includes transport-level error signals (retransmissions or resets) that may materially affect timing comparisons.".into());
@@ -513,17 +688,21 @@ fn apply_interpretation(summary: &mut PacketCaptureSummary) {
 }
 
 fn count_matches(tshark_path: &Path, pcap_path: &Path, filter: &str) -> anyhow::Result<u64> {
-    let out = Command::new(tshark_path)
-        .arg("-r")
-        .arg(pcap_path)
-        .arg("-Y")
-        .arg(filter)
-        .arg("-T")
-        .arg("fields")
-        .arg("-e")
-        .arg("frame.number")
-        .output()
-        .with_context(|| format!("run tshark filter {filter}"))?;
+    let out = run_tshark_with_timeout(
+        tshark_path,
+        &[
+            "-r",
+            pcap_path.to_str().unwrap_or_default(),
+            "-Y",
+            filter,
+            "-T",
+            "fields",
+            "-e",
+            "frame.number",
+        ],
+        StdDuration::from_secs(60),
+    )
+    .with_context(|| format!("run tshark filter {filter}"))?;
 
     if !out.status.success() {
         tracing::warn!(
@@ -592,6 +771,7 @@ mod tests {
             html_report: "report.html".into(),
             css: None,
             excel: false,
+            json_stdout: false,
             save_to_db: false,
             db_url: None,
             db_migrate: false,
@@ -691,6 +871,11 @@ mod tests {
             capture_status: "captured".into(),
             note: None,
             warnings: vec![],
+            likely_target_endpoints: vec![],
+            likely_target_packets: 0,
+            likely_target_pct_of_total: 0.0,
+            dominant_trace_port: None,
+            capture_confidence: "low".into(),
             tcp_packets: 60,
             udp_packets: 40,
             quic_packets: 30,
@@ -714,6 +899,63 @@ mod tests {
     }
 
     #[test]
+    fn capture_confidence_high_when_target_dominates_clean_trace() {
+        let summary = PacketCaptureSummary {
+            mode: "tester".into(),
+            interface: "lo0".into(),
+            capture_path: "x".into(),
+            tshark_path: "tshark".into(),
+            total_packets: 100,
+            capture_status: "captured".into(),
+            note: None,
+            warnings: vec![],
+            likely_target_endpoints: vec!["127.0.0.1".into()],
+            likely_target_packets: 80,
+            likely_target_pct_of_total: 80.0,
+            dominant_trace_port: Some(443),
+            capture_confidence: "low".into(),
+            tcp_packets: 10,
+            udp_packets: 90,
+            quic_packets: 80,
+            http_packets: 5,
+            dns_packets: 2,
+            retransmissions: 0,
+            duplicate_acks: 0,
+            resets: 0,
+            transport_shares: vec![],
+            top_endpoints: vec![EndpointPacketCount {
+                endpoint: "127.0.0.1".into(),
+                packets: 80,
+            }],
+            top_ports: vec![PortPacketCount {
+                port: 443,
+                packets: 80,
+            }],
+            observed_quic: true,
+            observed_tcp_only: false,
+            observed_mixed_transport: false,
+            capture_may_be_ambiguous: false,
+        };
+        assert_eq!(capture_confidence_label(&summary), "high");
+    }
+
+    #[test]
+    fn likely_target_endpoints_prefers_matching_target_host() {
+        let rows = vec![
+            EndpointPacketCount {
+                endpoint: "198.51.100.10".into(),
+                packets: 50,
+            },
+            EndpointPacketCount {
+                endpoint: "203.0.113.5".into(),
+                packets: 10,
+            },
+        ];
+        let hints = likely_target_endpoints(&rows, &["https://198.51.100.10:8443/health".into()]);
+        assert_eq!(hints, vec!["198.51.100.10".to_string()]);
+    }
+
+    #[test]
     fn apply_interpretation_marks_mixed_transport_as_ambiguous() {
         let mut summary = PacketCaptureSummary {
             mode: "tester".into(),
@@ -724,6 +966,11 @@ mod tests {
             capture_status: "captured".into(),
             note: None,
             warnings: vec![],
+            likely_target_endpoints: vec![],
+            likely_target_packets: 0,
+            likely_target_pct_of_total: 0.0,
+            dominant_trace_port: None,
+            capture_confidence: "low".into(),
             tcp_packets: 20,
             udp_packets: 15,
             quic_packets: 10,

@@ -1,0 +1,219 @@
+/* =============================================================================
+   Networker Tester – Report Stylesheet
+   Override or extend the inline styles embedded in the generated HTML.
+   Link this file from the HTML via --css report.css (default).
+   ============================================================================= */
+
+/* ── Reset & variables ──────────────────────────────────────────────────────── */
+:root {
+  --color-bg:          #f0f2f5;
+  --color-surface:     #ffffff;
+  --color-primary:     #1a1a2e;
+  --color-accent:      #0f3460;
+  --color-ok:          #2e7d32;
+  --color-warn:        #e65100;
+  --color-err:         #c62828;
+  --color-border:      #e0e3e9;
+  --color-row-hover:   #f7f9fb;
+  --color-row-err:     #fff5f5;
+  --color-th-bg:       #1a1a2e;
+  --color-th-fg:       #e0e3ff;
+  --font-sans:         system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono:         "JetBrains Mono", "Cascadia Code", ui-monospace, monospace;
+  --radius:            8px;
+  --shadow-card:       0 2px 8px rgba(0,0,0,.10), 0 1px 2px rgba(0,0,0,.06);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  font-family: var(--font-sans);
+  background: var(--color-bg);
+  color: var(--color-primary);
+  line-height: 1.6;
+  font-size: 15px;
+}
+
+/* ── Page header ─────────────────────────────────────────────────────────────── */
+.page-header {
+  background: var(--color-primary);
+  color: #fff;
+  padding: 1.75rem 2.5rem;
+  border-bottom: 3px solid var(--color-accent);
+}
+
+.page-header h1 {
+  font-size: 1.75rem;
+  letter-spacing: -.02em;
+  font-weight: 700;
+}
+
+.page-header h1::before {
+  content: "⬡ ";
+  opacity: .6;
+}
+
+.subtitle {
+  margin-top: .4rem;
+  opacity: .65;
+  font-size: .875rem;
+  font-family: var(--font-mono);
+}
+
+/* ── Card ────────────────────────────────────────────────────────────────────── */
+.card {
+  background: var(--color-surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  margin: 1.5rem 2.5rem;
+  padding: 1.75rem;
+  overflow: hidden;
+}
+
+.card h2 {
+  font-size: 1rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--color-accent);
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: .75rem;
+  margin-bottom: 1.25rem;
+}
+
+/* ── Summary grid ────────────────────────────────────────────────────────────── */
+dl.summary-grid {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: .5rem 1rem;
+}
+
+dt {
+  font-weight: 600;
+  color: #555;
+  font-size: .875rem;
+}
+
+dd {
+  word-break: break-all;
+}
+
+/* ── Tables ──────────────────────────────────────────────────────────────────── */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: .85rem;
+  table-layout: auto;
+}
+
+th {
+  background: var(--color-th-bg);
+  color: var(--color-th-fg);
+  padding: .6rem .9rem;
+  text-align: left;
+  font-weight: 600;
+  letter-spacing: .04em;
+  font-size: .8rem;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+td {
+  padding: .5rem .9rem;
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: top;
+}
+
+tr:last-child td { border-bottom: none; }
+
+tr:hover td { background: var(--color-row-hover); }
+
+tr.row-err td { background: var(--color-row-err); }
+
+/* First column zebra */
+tr:nth-child(even) td:first-child { background: #fafbfd; }
+
+/* ── Status classes ──────────────────────────────────────────────────────────── */
+.ok   { color: var(--color-ok);   font-weight: 700; }
+.warn { color: var(--color-warn); font-weight: 700; }
+.err  { color: var(--color-err);  font-weight: 700; }
+
+/* ── Inline code ─────────────────────────────────────────────────────────────── */
+code {
+  font-family: var(--font-mono);
+  font-size: .82em;
+  background: #f0f2f5;
+  padding: .15em .4em;
+  border-radius: 4px;
+  border: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+
+/* ── Links ───────────────────────────────────────────────────────────────────── */
+a {
+  color: var(--color-accent);
+  text-decoration: none;
+}
+
+a:hover { text-decoration: underline; }
+
+/* ── Error section ───────────────────────────────────────────────────────────── */
+.error-section h2 { color: var(--color-err); }
+
+/* ── Responsive ──────────────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .card { margin: 1rem; padding: 1rem; }
+  .page-header { padding: 1rem; }
+  dl.summary-grid { grid-template-columns: 1fr; }
+  table { font-size: .78rem; }
+  th, td { padding: .4rem .5rem; }
+}
+
+/* ── Print ───────────────────────────────────────────────────────────────────── */
+@media print {
+  .page-header { background: #000; -webkit-print-color-adjust: exact; }
+  .card { box-shadow: none; border: 1px solid #ccc; break-inside: avoid; }
+  body { background: #fff; }
+}
+
+/* ── Footer ──────────────────────────────────────────────────────────────────── */
+footer {
+  text-align: center;
+  padding: 2.5rem;
+  font-size: .8rem;
+  color: #888;
+  border-top: 1px solid var(--color-border);
+  margin-top: 1rem;
+}
+
+/* ── Timing bar (visual indicator in table cells) ────────────────────────────── */
+.timing-bar {
+  display: inline-block;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--color-accent);
+  opacity: .5;
+  vertical-align: middle;
+  margin-left: .5em;
+  max-width: 80px;
+}
+
+/* ── Collapsible groups ───────────────────────────── */
+details { margin-bottom: .6rem; }
+details summary {
+  cursor: pointer; list-style: none; user-select: none;
+  padding: .45rem .75rem;
+  background: var(--color-th-bg);
+  color: var(--color-th-fg);
+  border-radius: var(--radius);
+  display: flex; align-items: center; gap: .8rem;
+  font-size: .88rem;
+}
+details summary::-webkit-details-marker { display: none; }
+details summary::before { content: "▶"; font-size: .7rem; flex-shrink: 0; }
+details[open] > summary::before { content: "▼"; }
+.grp-lbl { font-weight: 600; flex: 1; }
+.grp-meta { opacity: .7; font-family: var(--font-mono); font-size: .82rem; }
+details table { margin-top: .5rem; }

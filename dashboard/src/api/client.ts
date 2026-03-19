@@ -1,6 +1,6 @@
-import type { Agent, Job, JobConfig, RunSummary, Attempt } from './types';
+import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup } from './types';
 
-export type { Agent, Job, JobConfig, RunSummary, Attempt };
+export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup };
 export type { LiveAttempt } from './types';
 
 const API_BASE = '/api';
@@ -19,6 +19,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
   if (res.status === 401) {
     localStorage.removeItem('token');
+    localStorage.removeItem('username');
+    localStorage.removeItem('role');
+    localStorage.removeItem('mustChangePassword');
     window.location.href = '/login';
     throw new Error('Unauthorized');
   }
@@ -32,9 +35,15 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 export const api = {
   login: (username: string, password: string) =>
-    request<{ token: string; role: string; username: string }>('/auth/login', {
+    request<{ token: string; role: string; username: string; must_change_password: boolean }>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ username, password }),
+    }),
+
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<{ success: boolean }>('/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
     }),
 
   getDashboardSummary: () =>
@@ -47,6 +56,23 @@ export const api = {
 
   getAgents: () =>
     request<{ agents: Agent[] }>('/agents'),
+
+  createAgent: (params: {
+    name: string;
+    location: 'local' | 'ssh';
+    region?: string;
+    provider?: string;
+    ssh_host?: string;
+    ssh_user?: string;
+    ssh_port?: number;
+  }) =>
+    request<{ agent_id: string; api_key: string; name: string; status: string }>('/agents', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    }),
+
+  deleteAgent: (agentId: string) =>
+    request<{ deleted: boolean }>(`/agents/${agentId}`, { method: 'DELETE' }),
 
   getJobs: (params?: { status?: string; limit?: number; offset?: number }) => {
     const search = new URLSearchParams();
@@ -77,6 +103,86 @@ export const api = {
     return request<RunSummary[]>(`/runs${qs ? `?${qs}` : ''}`);
   },
 
+  getRun: (runId: string) =>
+    request<{
+      run_id: string;
+      target_url: string;
+      target_host: string;
+      modes: string;
+      client_os: string;
+      client_version: string;
+      endpoint_version: string | null;
+      success_count: number;
+      failure_count: number;
+    }>(`/runs/${runId}`),
+
   getRunAttempts: (runId: string) =>
     request<Attempt[]>(`/runs/${runId}/attempts`),
+
+  // Deployments
+  getDeployments: (params?: { limit?: number; offset?: number }) => {
+    const search = new URLSearchParams();
+    if (params?.limit) search.set('limit', String(params.limit));
+    if (params?.offset) search.set('offset', String(params.offset));
+    const qs = search.toString();
+    return request<Deployment[]>(`/deployments${qs ? `?${qs}` : ''}`);
+  },
+
+  getDeployment: (deploymentId: string) =>
+    request<Deployment>(`/deployments/${deploymentId}`),
+
+  createDeployment: (name: string, config: unknown) =>
+    request<{ deployment_id: string; status: string }>('/deployments', {
+      method: 'POST',
+      body: JSON.stringify({ name, config }),
+    }),
+
+  stopDeployment: (deploymentId: string) =>
+    request<{ status: string }>(`/deployments/${deploymentId}/stop`, { method: 'POST' }),
+
+  deleteDeployment: (deploymentId: string) =>
+    request<{ deleted: boolean }>(`/deployments/${deploymentId}`, { method: 'DELETE' }),
+
+  checkDeployment: (deploymentId: string) =>
+    request<{ endpoints: { ip: string; alive: boolean }[] }>(`/deployments/${deploymentId}/check`, { method: 'POST' }),
+
+  updateEndpoint: (deploymentId: string) =>
+    request<{ status: string }>(`/deployments/${deploymentId}/update`, { method: 'POST' }),
+
+  // Cloud status
+  getCloudStatus: () => request<CloudStatus>('/cloud/status'),
+
+  // Modes
+  getModes: () => request<{ groups: ModeGroup[] }>('/modes'),
+
+  // Updates
+  updateLocalTester: () =>
+    request<{ status: string; update_id: string }>('/update/tester', { method: 'POST' }),
+
+  // Inventory
+  getInventory: () =>
+    request<{
+      vms: {
+        provider: string;
+        name: string;
+        region: string;
+        status: string;
+        public_ip: string | null;
+        fqdn: string | null;
+        vm_size: string | null;
+        os: string | null;
+        resource_group: string | null;
+        managed: boolean;
+      }[];
+      errors: string[];
+    }>('/inventory'),
+
+  // Version
+  getVersionInfo: () => request<{
+    dashboard_version: string;
+    tester_version: string | null;
+    latest_release: string | null;
+    update_available: boolean;
+    endpoints: { host: string; version: string | null; reachable: boolean }[];
+  }>('/version'),
 };

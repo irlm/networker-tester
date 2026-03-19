@@ -1,0 +1,118 @@
+{
+  "run_id": "a2c48491-9a0a-45f0-9c0e-7d5ecf2941f4",
+  "started_at": "2026-03-14T21:41:56.615269Z",
+  "finished_at": "2026-03-14T21:41:56.620175Z",
+  "target_url": "https://127.0.0.1:8443/health",
+  "target_host": "127.0.0.1",
+  "modes": [
+    "udp"
+  ],
+  "total_runs": 2,
+  "concurrency": 1,
+  "timeout_ms": 30000,
+  "client_os": "macos",
+  "client_version": "0.13.18",
+  "server_info": {
+    "os": "macos",
+    "arch": "aarch64",
+    "cpu_cores": 10,
+    "os_version": "macOS 26.3.1",
+    "hostname": "MNode01",
+    "server_version": "0.13.17",
+    "uptime_secs": 14707
+  },
+  "client_info": {
+    "os": "macos",
+    "arch": "aarch64",
+    "cpu_cores": 10,
+    "os_version": "macOS 26.3.1",
+    "hostname": "MNode01"
+  },
+  "baseline": {
+    "samples": 5,
+    "rtt_min_ms": 0.210208,
+    "rtt_avg_ms": 0.2526832,
+    "rtt_max_ms": 0.280458,
+    "rtt_p50_ms": 0.253625,
+    "rtt_p95_ms": 0.2798748,
+    "network_type": "Loopback"
+  },
+  "attempts": [
+    {
+      "attempt_id": "f09bcd1b-2e36-418f-9312-4430eb32c6fa",
+      "run_id": "a2c48491-9a0a-45f0-9c0e-7d5ecf2941f4",
+      "protocol": "udp",
+      "sequence_num": 0,
+      "started_at": "2026-03-14T21:41:56.615602Z",
+      "finished_at": "2026-03-14T21:41:56.618079Z",
+      "success": true,
+      "dns": null,
+      "tcp": null,
+      "tls": null,
+      "http": null,
+      "udp": {
+        "remote_addr": "127.0.0.1:9999",
+        "probe_count": 10,
+        "success_count": 10,
+        "loss_percent": 0.0,
+        "rtt_min_ms": 0.138083,
+        "rtt_avg_ms": 0.1669372,
+        "rtt_p95_ms": 0.360541,
+        "jitter_ms": 0.024717555555555555,
+        "started_at": "2026-03-14T21:41:56.615602Z",
+        "probe_rtts_ms": [
+          0.360541,
+          0.149,
+          0.151625,
+          0.153041,
+          0.141291,
+          0.141125,
+          0.139125,
+          0.156791,
+          0.13875,
+          0.138083
+        ]
+      },
+      "error": null,
+      "retry_count": 0
+    },
+    {
+      "attempt_id": "6f3bb8f2-9700-4e65-b157-27bcd41faa18",
+      "run_id": "a2c48491-9a0a-45f0-9c0e-7d5ecf2941f4",
+      "protocol": "udp",
+      "sequence_num": 1,
+      "started_at": "2026-03-14T21:41:56.618340Z",
+      "finished_at": "2026-03-14T21:41:56.620046Z",
+      "success": true,
+      "dns": null,
+      "tcp": null,
+      "tls": null,
+      "http": null,
+      "udp": {
+        "remote_addr": "127.0.0.1:9999",
+        "probe_count": 10,
+        "success_count": 10,
+        "loss_percent": 0.0,
+        "rtt_min_ms": 0.138542,
+        "rtt_avg_ms": 0.14671689999999998,
+        "rtt_p95_ms": 0.15775,
+        "jitter_ms": 0.0021342222222222227,
+        "started_at": "2026-03-14T21:41:56.618340Z",
+        "probe_rtts_ms": [
+          0.15512499999999999,
+          0.13899999999999998,
+          0.145209,
+          0.15775,
+          0.14558400000000002,
+          0.140584,
+          0.140667,
+          0.147958,
+          0.15675,
+          0.138542
+        ]
+      },
+      "error": null,
+      "retry_count": 0
+    }
+  ]
+}

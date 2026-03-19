@@ -1,15 +1,22 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import { api, type RunSummary } from '../api/client';
 import { usePolling } from '../hooks/usePolling';
+import { usePageTitle } from '../hooks/usePageTitle';
 
 export function RunsPage() {
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [targetSearch, setTargetSearch] = useState('');
 
-  usePolling(() => {
+  usePageTitle('Runs');
+
+  const loadRuns = useCallback(() => {
+    const params: { target_host?: string; limit?: number } = { limit: 50 };
+    if (targetSearch.trim()) params.target_host = targetSearch.trim();
     api
-      .getRuns({ limit: 50 })
+      .getRuns(params)
       .then((data) => {
         setRuns(data);
         setError(null);
@@ -19,7 +26,9 @@ export function RunsPage() {
         setError(String(e));
         setLoading(false);
       });
-  }, 15000);
+  }, [targetSearch]);
+
+  usePolling(loadRuns, 15000);
 
   if (loading && runs.length === 0) {
     return (
@@ -44,7 +53,22 @@ export function RunsPage() {
 
   return (
     <div className="p-6">
-      <h2 className="text-xl font-bold text-gray-100 mb-6">Test Runs</h2>
+      <div className="flex items-center justify-between mb-6">
+        <h2 className="text-xl font-bold text-gray-100">Test Runs</h2>
+        <div>
+          <label htmlFor="runs-target-search" className="sr-only">
+            Search by target host
+          </label>
+          <input
+            id="runs-target-search"
+            type="search"
+            value={targetSearch}
+            onChange={(e) => setTargetSearch(e.target.value)}
+            placeholder="Filter by target host..."
+            className="bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-300 w-64 focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
+          />
+        </div>
+      </div>
 
       {error && (
         <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 mb-4 text-yellow-400 text-sm">
@@ -52,16 +76,16 @@ export function RunsPage() {
         </div>
       )}
 
-      <div className="bg-[#12131a] border border-gray-800 rounded-lg overflow-hidden">
+      <div className="table-container">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-gray-800 text-gray-500 text-xs">
-              <th className="px-4 py-3 text-left">Run ID</th>
-              <th className="px-4 py-3 text-left">Target</th>
-              <th className="px-4 py-3 text-left">Modes</th>
-              <th className="px-4 py-3 text-left">Success</th>
-              <th className="px-4 py-3 text-left">Failed</th>
-              <th className="px-4 py-3 text-left">Started</th>
+            <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
+              <th className="px-4 py-2.5 text-left font-medium">Run ID</th>
+              <th className="px-4 py-2.5 text-left font-medium">Target</th>
+              <th className="px-4 py-2.5 text-left font-medium">Modes</th>
+              <th className="px-4 py-2.5 text-left font-medium">Success</th>
+              <th className="px-4 py-2.5 text-left font-medium">Failed</th>
+              <th className="px-4 py-2.5 text-left font-medium">Started</th>
             </tr>
           </thead>
           <tbody>
@@ -70,8 +94,13 @@ export function RunsPage() {
                 key={run.run_id}
                 className="border-b border-gray-800/50 hover:bg-gray-800/20"
               >
-                <td className="px-4 py-3 font-mono text-xs text-cyan-400">
-                  {run.run_id.slice(0, 8)}
+                <td className="px-4 py-3">
+                  <Link
+                    to={`/runs/${run.run_id}`}
+                    className="text-cyan-400 hover:underline font-mono text-xs"
+                  >
+                    {run.run_id.slice(0, 8)}
+                  </Link>
                 </td>
                 <td className="px-4 py-3 text-gray-300">{run.target_host}</td>
                 <td className="px-4 py-3 text-gray-500 text-xs">{run.modes}</td>
@@ -88,9 +117,10 @@ export function RunsPage() {
         </table>
 
         {runs.length === 0 && (
-          <p className="p-4 text-gray-600 text-sm text-center">
-            No test runs stored yet. Complete a job to see results here.
-          </p>
+          <div className="py-10 text-center">
+            <p className="text-gray-500 text-sm">No runs yet</p>
+            <p className="text-gray-700 text-xs mt-1">Runs appear here after a test completes</p>
+          </div>
         )}
       </div>
     </div>

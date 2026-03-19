@@ -669,11 +669,10 @@ async fn execute_primary_page_diagnostic_impl(
     let browser_config = BrowserConfig::builder()
         .chrome_executable(chrome_path)
         .no_sandbox()
-        .disable_gpu()
         .build()
-        .context("build browser config")?;
+        .map_err(|e| anyhow::anyhow!("build browser config: {e}"))?;
 
-    let (browser, mut handler) = Browser::launch(browser_config)
+    let (mut browser, mut handler) = Browser::launch(browser_config)
         .await
         .context("launch browser")?;
     let handler_task = tokio::spawn(async move { while handler.next().await.is_some() {} });
@@ -719,7 +718,7 @@ async fn execute_primary_page_diagnostic_impl(
 
     let final_url_js = r#"window.location.href"#;
     if let Ok(v) = page.evaluate(final_url_js).await {
-        if let Some(final_url) = v.into_value::<String>() {
+        if let Ok(final_url) = v.into_value::<String>() {
             run.final_url = Some(final_url);
         }
     }
@@ -840,11 +839,12 @@ async fn execute_primary_page_diagnostic_impl(
     run.total_requests = snapshot.resource_count as u32;
     run.environment_notes = Some(format!("origins_contacted={}", snapshot.origins.len()));
 
+    let run_id = run.id;
     for resource in snapshot.resources {
         orchestrator.add_resource(
             &mut run,
             UrlTestResource {
-                url_test_run_id: run.id,
+                url_test_run_id: run_id,
                 resource_url: resource.resource_url.clone(),
                 origin: if resource.origin.is_empty() {
                     snapshot.primary_origin.clone()

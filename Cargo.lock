@@ -1144,6 +1144,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hostname"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "617aaa3557aef3810a6369d0a99fac8a080891b68bd9f9812a1eeda0c0730cbd"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "windows-link",
+]
+
+[[package]]
 name = "http"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1722,9 +1733,13 @@ dependencies = [
  "clap",
  "deadpool-postgres",
  "futures",
+ "hostname",
  "jsonwebtoken",
+ "libc",
  "networker-common",
  "networker-tester",
+ "regex",
+ "reqwest 0.12.28",
  "rpassword",
  "serde",
  "serde_json",
@@ -1734,6 +1749,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
 ]
 
@@ -1747,6 +1763,7 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
+ "futures",
  "h3",
  "h3-quinn",
  "http",

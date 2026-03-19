@@ -9,76 +9,141 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # SQL tests are skipped by default; set NETWORKER_SQL_CONN in repo secrets to enable.
-  # NETWORKER_SQL_CONN: "Server=localhost;Database=NetworkDiagnostics;..."
 
 jobs:
   # ──────────────────────────────────────────────────────────────────────────
-  test:
-    name: Test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-
+  # Fast checks: format + clippy (fails early, < 2 min)
+  # ──────────────────────────────────────────────────────────────────────────
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install stable Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
 
-      - name: Cache cargo registry
-        uses: actions/cache@v4
+      - name: Cache cargo
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          key: lint-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: lint-cargo-
 
-      # ── Format check ──────────────────────────────────────────────────────
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      # ── Clippy ────────────────────────────────────────────────────────────
       - name: Clippy (default features)
         run: cargo clippy --all-targets -- -D warnings
 
-      # ── Unit + integration tests (no SQL) ─────────────────────────────────
-      # Do NOT pass --include-ignored: tests marked #[ignore] require live
-      # services (endpoint on :8080/:8443, SQL Server) that are not available
-      # in the standard CI environment.
-      - name: cargo test (unit tests)
+      - name: Build without default features (stub paths)
+        run: cargo build -p networker-tester --no-default-features
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Ubuntu tests: full feature set including browser
+  # ──────────────────────────────────────────────────────────────────────────
+  test-ubuntu:
+    name: Test (ubuntu-latest)
+    runs-on: ubuntu-latest
+    needs: lint  # skip if lint fails
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-test-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ubuntu-test-cargo-
+
+      - name: Unit tests
         run: cargo test --workspace --lib
 
-      - name: cargo test (endpoint unit tests)
+      - name: Endpoint unit tests
         run: cargo test -p networker-endpoint --lib
 
-      # Integration tests that require the endpoint in-process.
-      # Each test spawns its own endpoint on random ports (TOCTOU race if
-      # tests run concurrently), so we serialize them with --test-threads=1.
-      - name: cargo test (integration – no SQL)
+      - name: Integration tests
         run: cargo test --test integration -p networker-tester -- --test-threads=1
 
-      # ── Build release ─────────────────────────────────────────────────────
-      - name: Build (release)
-        run: cargo build --release --workspace
+  # ──────────────────────────────────────────────────────────────────────────
+  # Windows tests: skip browser feature (no Chrome, saves ~10 min compile)
+  # ──────────────────────────────────────────────────────────────────────────
+  test-windows:
+    name: Test (windows-latest)
+    runs-on: windows-latest
+    needs: lint  # skip if lint fails
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~\.cargo\registry
+            ~\.cargo\git
+            target
+          key: windows-test-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: windows-test-cargo-
+
+      # Build without browser feature (chromiumoxide adds ~10 min on Windows,
+      # and there's no Chrome in the CI runner to test with anyway).
+      # All other features (http3, db-mssql) are included via defaults.
+      - name: Unit tests (no browser)
+        run: cargo test --workspace --lib --no-default-features --features http3,db-mssql
+
+      - name: Endpoint unit tests
+        run: cargo test -p networker-endpoint --lib
+
+      - name: Integration tests
+        run: cargo test --test integration -p networker-tester --no-default-features --features http3 -- --test-threads=1
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Dashboard frontend
+  # ──────────────────────────────────────────────────────────────────────────
+  frontend:
+    name: Dashboard frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: dashboard/package-lock.json
+
+      - run: npm install --legacy-peer-deps
+      - run: npm run build
+      - run: npx tsc -b
 
   # ──────────────────────────────────────────────────────────────────────────
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
+    needs: test-ubuntu  # only run if tests pass
 
     services:
       mssql:
         image: mcr.microsoft.com/mssql/server:2022-latest
         env:
           ACCEPT_EULA: "Y"
-          SA_PASSWORD: "NetworkerTest1!"  # ephemeral CI-only container
+          SA_PASSWORD: "NetworkerTest1!"
         ports:
           - 1433:1433
         options: >-
@@ -102,18 +167,16 @@ jobs:
           --health-retries 5
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - name: Install stable Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
 
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: taiki-e/install-action@cargo-llvm-cov
 
-      - name: Cache cargo registry
-        uses: actions/cache@v4
+      - name: Cache cargo
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -139,13 +202,6 @@ jobs:
           $SQLCMD $ARGS -i sql/06_ServerTiming.sql
           $SQLCMD $ARGS -i sql/07_MoreTcpStats.sql
 
-      # Run lib tests + in-process integration tests under coverage.
-      # --all-features ensures http3, db-mssql, db-postgres feature-gated paths are included.
-      # --no-report accumulates raw profiles; the final `report` step merges them.
-      # Integration tests are serialized (--test-threads=1) because each spawns
-      # its own endpoint on random ports.
-      # --include-ignored runs #[ignore] tests that have their own env-var guards
-      # (SQL, PostgreSQL, DNS, curl) — they self-skip when the service is unavailable.
       - name: Collect coverage (lib tests)
         run: |
           cargo llvm-cov --no-report --workspace --all-features --lib \
@@ -175,7 +231,7 @@ jobs:
             --ignore-filename-regex 'main\.rs'
 
       - name: Upload coverage report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: coverage-report
           path: |
@@ -184,23 +240,6 @@ jobs:
           retention-days: 30
 
   # ──────────────────────────────────────────────────────────────────────────
-  test-no-default-features:
-    name: Build without default features (stub paths)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Build with no default features (verifies http3/pageload3 stubs compile)
-        run: cargo build -p networker-tester --no-default-features
-
-  # ──────────────────────────────────────────────────────────────────────────
-  # Optional: SQL Server integration.
-  # To enable, go to Settings → Secrets and variables → Actions and add:
-  #   Variable : NETWORKER_SQL_TESTS = true
-  #   Secret   : NETWORKER_SQL_CONN  = <your ADO.NET connection string>
-  #
-  # Note: the `secrets` context is not allowed in job-level `if` conditions
-  # (GitHub Actions limitation), so we use a repository variable to opt in.
   sql-integration:
     name: SQL Server integration
     runs-on: ubuntu-latest
@@ -211,7 +250,7 @@ jobs:
         image: mcr.microsoft.com/mssql/server:2022-latest
         env:
           ACCEPT_EULA: "Y"
-          SA_PASSWORD: "NetworkerTest1!"  # ephemeral CI-only container
+          SA_PASSWORD: "NetworkerTest1!"
         ports:
           - 1433:1433
         options: >-
@@ -221,7 +260,7 @@ jobs:
           --health-retries 10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Install sqlcmd
@@ -267,11 +306,11 @@ jobs:
           --health-retries 5
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache cargo registry
-        uses: actions/cache@v4
+      - name: Cache cargo
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry

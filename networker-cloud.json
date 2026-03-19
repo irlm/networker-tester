@@ -1,11 +1,4 @@
 {
-  "targets": ["https://1.2.3.4:8443/health"],
-  "modes": ["tcp", "http1", "http2", "http3", "udp", "download", "upload",
-             "pageload", "pageload2", "pageload3"],
-  "runs": 5,
-  "insecure": true,
-  "udp_port": 9999,
-  "udp_throughput_port": 9998,
-  "payload_sizes": ["64k", "1m"],
-  "html_report": "report.html"
+  "targets": ["https://3.235.187.180:8443/health"],
+  "modes": ["tcp", "http1", "http2", "http3", "udp", "download", "upload", "pageload", "pageload2", "pageload3"]
 }

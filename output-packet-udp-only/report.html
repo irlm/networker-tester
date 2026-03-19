@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Networker Tester – https://127.0.0.1:8443/health</title>
+  <style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0 }
+  body { font-family: system-ui, sans-serif; background: #f0f2f5; color: #1a1a2e; line-height: 1.5; }
+  .page-header { background: #1a1a2e; color: #fff; padding: 1.5rem 2rem; }
+  .page-header h1 { font-size: 1.6rem; }
+  .subtitle { opacity: .7; font-size: .9rem; margin-top: .25rem; }
+  .card { background: #fff; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,.1);
+          margin: 1.5rem 2rem; padding: 1.5rem; }
+  .card h2 { font-size: 1.1rem; margin-bottom: 1rem; color: #1a1a2e; border-bottom: 1px solid #eee; padding-bottom: .5rem; }
+  dl.summary-grid { display: grid; grid-template-columns: 160px 1fr; gap: .4rem .75rem; }
+  dt { font-weight: 600; color: #555; }
+  table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+  th { background: #1a1a2e; color: #fff; padding: .5rem .75rem; text-align: left; font-weight: 600; }
+  td { padding: .45rem .75rem; border-bottom: 1px solid #f0f2f5; vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: #f7f9fb; }
+  tr.row-err td { background: #fff5f5; }
+  .ok   { color: #2e7d32; font-weight: 600; }
+  .warn { color: #e65100; font-weight: 600; }
+  .err  { color: #c62828; font-weight: 600; }
+  code  { background: #f0f2f5; padding: .1em .35em; border-radius: 3px; font-size: .85em; }
+  a     { color: #1565c0; }
+  footer { text-align: center; padding: 2rem; font-size: .8rem; color: #888; }
+  .error-section h2 { color: #c62828; }
+  details{margin-bottom:.6rem}
+  details summary{cursor:pointer;padding:.45rem .75rem;background:#f0f0f0;
+    border-radius:4px;display:flex;align-items:center;gap:.8rem;
+    list-style:none;user-select:none;font-size:.88rem}
+  details summary::-webkit-details-marker{display:none}
+  details summary::before{content:"▶";font-size:.7rem;flex-shrink:0}
+  details[open]>summary::before{content:"▼"}
+  .grp-lbl{font-weight:600;flex:1}
+  .note{font-size:.85rem;color:#666;font-style:italic;margin:.6rem 0 0}
+  .grp-meta{opacity:.7;font-family:monospace;font-size:.82rem}
+  details table{margin-top:.5rem}
+  .charts-grid{display:flex;flex-wrap:wrap;gap:1.5rem;align-items:flex-start;margin-top:.5rem}
+  .analysis{background:#f8f9fa;border-left:3px solid #4e79a7;padding:.8rem 1.2rem;
+            border-radius:0 6px 6px 0;margin-top:1rem}
+  .analysis h3{font-size:.95rem;margin-bottom:.5rem;color:#1a1a2e}
+  .analysis ul{list-style:none;padding:0}
+  .analysis li{padding:.2rem 0;font-size:.86rem;line-height:1.45}
+  .analysis li::before{content:"\2022";margin-right:.5rem;color:#4e79a7;font-weight:bold}
+  .multi-target-details{margin:1.5rem 2rem;padding:0}
+  .multi-target-details>summary{cursor:pointer;font-size:1rem;padding:.6rem 1rem;
+    background:#f0f2f5;border-radius:6px 6px 0 0;color:#1a1a2e;list-style:none;
+    font-weight:600;display:flex;align-items:center;gap:.5rem}
+  .multi-target-details>summary::-webkit-details-marker{display:none}
+  .multi-target-details>summary::before{content:"▶ ";font-size:.8em;flex-shrink:0}
+  .multi-target-details[open]>summary::before{content:"▼ "}
+  .multi-target-details>.page-header{border-radius:0;margin:0}
+  .diff-fast{color:#2e7d32;font-size:.8em;margin-left:.3em}
+  .diff-slow{color:#c62828;font-size:.8em;margin-left:.3em}
+  .target-charts-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:1.5rem;margin-top:.5rem}
+  .target-chart-cell{background:#fafbfc;border:1px solid #e8e8e8;border-radius:6px;padding:1rem}
+  .target-chart-cell .analysis{margin-top:.5rem}
+  .target-server-info{font-size:.82rem;color:#555;padding:.4rem .6rem;background:#f0f2f5;
+    border-radius:4px;margin-bottom:.6rem;line-height:1.4}
+  .target-group-header{grid-column:1/-1;font-size:1rem;font-weight:600;color:#1a1a2e;
+    padding:.3rem 0;margin-top:.5rem;border-bottom:2px solid #e8e8e8}
+  .target-group-comparison{grid-column:1/-1;margin:0}
+  @media(max-width:900px){.target-charts-grid{grid-template-columns:1fr}}
+</style>
+  <link rel="stylesheet" href="report.css">
+</head>
+<body>
+
+<header class="page-header">
+  <h1>Networker Tester</h1>
+  <p class="subtitle">Run <code>a2c48491-9a0a-45f0-9c0e-7d5ecf2941f4</code> &bull; 2026-03-14 21:41:56 UTC</p>
+  <p class="subtitle"><strong>Client</strong> v0.13.18 &bull; <strong>Server</strong> v—</p>
+</header>
+
+<section class="card">
+  <h2>Run Summary</h2>
+  <dl class="summary-grid">
+    <dt>Target</dt>          <dd><a href="https://127.0.0.1:8443/health">https://127.0.0.1:8443/health</a></dd>
+    <dt>Modes</dt>           <dd>udp</dd>
+    <dt>Attempts</dt>        <dd>2</dd>
+    <dt>Succeeded</dt>       <dd class="ok">2</dd>
+    <dt>Failed</dt>          <dd class="ok">0</dd>
+    <dt>Total Duration</dt>  <dd>0.00s</dd>
+    <dt>Client version</dt>  <dd>0.13.18</dd>
+    <dt>Server version</dt>  <dd>—</dd>
+  </dl>
+</section>
+<div style="display:flex;flex-wrap:wrap;gap:1.5rem;margin:0 2rem">
+<section class="card" style="flex:1;min-width:280px;margin:0">
+  <h2>Client Info</h2>
+  <dl class="summary-grid">
+    <dt>Hostname</dt>     <dd>MNode01</dd>
+    <dt>OS</dt>           <dd>macOS 26.3.1</dd>
+    <dt>Architecture</dt> <dd>aarch64</dd>
+    <dt>CPU Cores</dt>    <dd>10</dd>
+    <dt>Memory</dt>       <dd>—</dd>
+  </dl>
+</section>
+
+<section class="card" style="flex:1;min-width:280px;margin:0">
+  <h2>Server Info</h2>
+  <dl class="summary-grid">
+    <dt>Hostname</dt>     <dd>MNode01</dd>
+    <dt>OS</dt>           <dd>macOS 26.3.1</dd>
+    <dt>Architecture</dt> <dd>aarch64</dd>
+    <dt>CPU Cores</dt>    <dd>10</dd>
+    <dt>Memory</dt>       <dd>—</dd>
+    <dt>Version</dt>      <dd>0.13.17</dd>
+    <dt>Uptime</dt>       <dd>4h 5m</dd>
+  </dl>
+</section>
+
+<section class="card" style="flex:1;min-width:280px;margin:0">
+  <h2>Network Baseline</h2>
+  <dl class="summary-grid">
+    <dt>Network Type</dt>  <dd><span class="ok">Loopback</span></dd>
+    <dt>RTT Avg</dt>       <dd>0.25 ms</dd>
+    <dt>RTT Min</dt>       <dd>0.21 ms</dd>
+    <dt>RTT Max</dt>       <dd>0.28 ms</dd>
+    <dt>RTT p50</dt>       <dd>0.25 ms</dd>
+    <dt>RTT p95</dt>       <dd>0.28 ms</dd>
+    <dt>Samples</dt>       <dd>5</dd>
+  </dl>
+</section>
+</div>
+
+<section class="card">
+  <h2>Timing Breakdown by Protocol</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Protocol</th>
+        <th>Attempts</th>
+        <th>Avg DNS (ms)</th>
+        <th>Avg TCP (ms)</th>
+        <th>Avg TLS (ms)</th>
+        <th>Avg TTFB (ms)</th>
+        <th>Avg Total (ms)</th>
+        <th>Success</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>udp</strong></td>
+        <td>2</td>
+        <td>—</td>
+        <td>—</td>
+        <td>—</td>
+        <td>—</td>
+        <td>0.16</td>
+        <td class="ok">2/2</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2>Statistics Summary</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Protocol</th><th>Metric</th><th>N</th>
+        <th>Min</th><th>Mean</th><th>p50</th><th>p95</th><th>p99</th>
+        <th>Max</th><th>StdDev</th><th>Success %</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>udp</td>
+        <td>RTT avg ms</td>
+        <td>2</td>
+        <td>0.15</td>
+        <td>0.16</td>
+        <td>0.16</td>
+        <td>0.17</td>
+        <td>0.17</td>
+        <td>0.17</td>
+        <td>0.01</td>
+        <td class="ok">100%</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2>UDP Probe Statistics</h2>
+  <table>
+    <thead>
+      <tr><th>Run #</th><th>Target</th><th>Sent</th><th>Recv</th><th>Loss %</th>
+          <th>Min RTT</th><th>Avg RTT</th><th>P95 RTT</th><th>Jitter</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>0</td>
+        <td>127.0.0.1:9999</td>
+        <td>10</td>
+        <td>10</td>
+        <td class="ok">0.0%</td>
+        <td>0.14ms</td>
+        <td>0.17ms</td>
+        <td>0.36ms</td>
+        <td>0.02ms</td>
+      </tr>
+      <tr>
+        <td>1</td>
+        <td>127.0.0.1:9999</td>
+        <td>10</td>
+        <td>10</td>
+        <td class="ok">0.0%</td>
+        <td>0.14ms</td>
+        <td>0.15ms</td>
+        <td>0.16ms</td>
+        <td>0.00ms</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2>All Attempts</h2>
+  <details open>
+    <summary>
+      <span class="grp-lbl">2 attempts</span>
+      <span class="grp-meta">2 succeeded · 0 failed</span>
+    </summary>
+    <table>
+      <thead>
+        <tr>
+          <th>#</th><th>Protocol</th><th>Status</th>
+          <th>DNS (ms)</th><th>TCP (ms)</th><th>TLS (ms)</th>
+          <th>TTFB (ms)</th><th>Total (ms)</th>
+          <th>HTTP ver / UDP stats</th><th>Error</th>
+        </tr>
+      </thead>
+      <tbody>
+      <tr class="">
+        <td>0</td><td>udp</td><td><span class="ok">OK</span></td>
+        <td>—</td><td>—</td><td>—</td>
+        <td>—</td><td>0.17</td>
+        <td>loss=0.0%</td><td>—</td>
+      </tr>
+      <tr class="">
+        <td>1</td><td>udp</td><td><span class="ok">OK</span></td>
+        <td>—</td><td>—</td><td>—</td>
+        <td>—</td><td>0.15</td>
+        <td>loss=0.0%</td><td>—</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+</section>
+
+<footer>
+  Generated by <strong>networker-tester v0.13.18</strong> &bull; 2026-03-14 21:41:56 UTC
+</footer>
+</body>
+</html>

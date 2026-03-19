@@ -1,0 +1,2567 @@
+{
+  "run_id": "605ef2b0-4d86-46c0-8fa8-b748aa85dafb",
+  "started_at": "2026-03-14T13:56:38.430372Z",
+  "finished_at": "2026-03-14T13:56:38.556209Z",
+  "target_url": "https://127.0.0.1:8443/health",
+  "target_host": "127.0.0.1",
+  "modes": [
+    "http1",
+    "http2",
+    "http3",
+    "udp",
+    "pageload2",
+    "pageload3"
+  ],
+  "total_runs": 5,
+  "concurrency": 1,
+  "timeout_ms": 30000,
+  "client_os": "macos",
+  "client_version": "0.13.17",
+  "server_info": {
+    "os": "macos",
+    "arch": "aarch64",
+    "cpu_cores": 10,
+    "os_version": "macOS 26.3.1",
+    "hostname": "MNode01",
+    "server_version": "0.13.17",
+    "uptime_secs": 1
+  },
+  "client_info": {
+    "os": "macos",
+    "arch": "aarch64",
+    "cpu_cores": 10,
+    "os_version": "macOS 26.3.1",
+    "hostname": "MNode01"
+  },
+  "baseline": {
+    "samples": 5,
+    "rtt_min_ms": 0.176958,
+    "rtt_avg_ms": 0.20124979999999998,
+    "rtt_max_ms": 0.259208,
+    "rtt_p50_ms": 0.19037500000000002,
+    "rtt_p95_ms": 0.246383,
+    "network_type": "Loopback"
+  },
+  "attempts": [
+    {
+      "attempt_id": "ba8bd4f4-b428-4745-92c3-8ae61dac65d3",
+      "run_id": "605ef2b0-4d86-46c0-8fa8-b748aa85dafb",
+      "protocol": "http1",
+      "sequence_num": 0,
+      "started_at": "2026-03-14T13:56:38.430750Z",
+      "finished_at": "2026-03-14T13:56:38.445258Z",
+      "success": true,
+      "dns": {
+        "query_name": "127.0.0.1",
+        "resolved_ips": [
+          "127.0.0.1"
+        ],
+        "duration_ms": 2.623541,
+        "started_at": "2026-03-14T13:56:38.430847Z",
+        "success": true
+      },
+      "tcp": {
+        "local_addr": "127.0.0.1:64271",
+        "remote_addr": "127.0.0.1:8443",
+        "connect_duration_ms": 0.262917,
+        "attempt_count": 1,
+        "started_at": "2026-03-14T13:56:38.433611Z",
+        "success": true,
+        "mss_bytes": 16332,
+        "rtt_estimate_ms": null,
+        "retransmits": null,
+        "total_retrans": null,
+        "snd_cwnd": null,
+        "snd_ssthresh": null,
+        "rtt_variance_ms": null,
+        "rcv_space": null,
+        "segs_out": null,
+        "segs_in": null
+      },
+      "tls": {
+        "protocol_version": "TLSv1_3",
+        "cipher_suite": "TLS13_AES_256_GCM_SHA384",
+        "alpn_negotiated": "http/1.1",
+        "cert_subject": "CN=rcgen self signed cert",
+        "cert_issuer": "CN=rcgen self signed cert",
+        "cert_expiry": "4096-01-01T00:00:00Z",
+        "handshake_duration_ms": 6.858208,
+        "started_at": "2026-03-14T13:56:38.434191Z",
+        "success": true,
+        "tls_backend": "rustls"
+      },
+      "http": {
+        "negotiated_version": "HTTP/1.1",
+        "status_code": 200,
+        "headers_size_bytes": 222,
+        "body_size_bytes": 113,
+        "ttfb_ms": 0.9706250000000001,
+        "total_duration_ms": 2.515958,
+        "redirect_count": 0,
+        "started_at": "2026-03-14T13:56:38.442728Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "x-networker-server-timestamp",
+            "2026-03-14T13:56:38.444695+00:00"
+          ],
+          [
+            "x-networker-server-version",
+            "0.13.17"
+          ],
+          [
+            "alt-svc",
+            "h3=\":8443\"; ma=86400"
+          ],
+          [
+            "content-length",
+            "113"
+          ],
+          [
+            "date",
+            "Sat, 14 Mar 2026 13:56:38 GMT"
+          ]
+        ],
+        "payload_bytes": 0,
+        "cpu_time_ms": 11.594,
+        "csw_voluntary": 0,
+        "csw_involuntary": 30
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0,
+      "server_timing": {
+        "server_timestamp": "2026-03-14T13:56:38.444695Z",
+        "clock_skew_ms": 0.1886875,
+        "server_version": "0.13.17"
+      }
+    },
+    {
+      "attempt_id": "9a4b31d8-481c-4e37-b45d-d13be85094fd",
+      "run_id": "605ef2b0-4d86-46c0-8fa8-b748aa85dafb",
+      "protocol": "http2",
+      "sequence_num": 1,
+      "started_at": "2026-03-14T13:56:38.445474Z",
+      "finished_at": "2026-03-14T13:56:38.453024Z",
+      "success": true,
+      "dns": {
+        "query_name": "127.0.0.1",
+        "resolved_ips": [
+          "127.0.0.1"
+        ],
+        "duration_ms": 0.329542,
+        "started_at": "2026-03-14T13:56:38.445487Z",
+        "success": true
+      },
+      "tcp": {
+        "local_addr": "127.0.0.1:64272",
+        "remote_addr": "127.0.0.1:8443",
+        "connect_duration_ms": 0.161708,
+        "attempt_count": 1,
+        "started_at": "2026-03-14T13:56:38.445846Z",
+        "success": true,
+        "mss_bytes": 16332,
+        "rtt_estimate_ms": null,
+        "retransmits": null,
+        "total_retrans": null,
+        "snd_cwnd": null,
+        "snd_ssthresh": null,
+        "rtt_variance_ms": null,
+        "rcv_space": null,
+        "segs_out": null,
+        "segs_in": null
+      },
+      "tls": {
+        "protocol_version": "TLSv1_3",
+        "cipher_suite": "TLS13_AES_256_GCM_SHA384",
+        "alpn_negotiated": "h2",
+        "cert_subject": "CN=rcgen self signed cert",
+        "cert_issuer": "CN=rcgen self signed cert",
+        "cert_expiry": "4096-01-01T00:00:00Z",
+        "handshake_duration_ms": 4.027791000000001,
+        "started_at": "2026-03-14T13:56:38.446025Z",
+        "success": true,
+        "tls_backend": "rustls"
+      },
+      "http": {
+        "negotiated_version": "HTTP/2",
+        "status_code": 200,
+        "headers_size_bytes": 222,
+        "body_size_bytes": 113,
+        "ttfb_ms": 2.17375,
+        "total_duration_ms": 2.816792,
+        "redirect_count": 0,
+        "started_at": "2026-03-14T13:56:38.450196Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "x-networker-server-timestamp",
+            "2026-03-14T13:56:38.452389+00:00"
+          ],
+          [
+            "x-networker-server-version",
+            "0.13.17"
+          ],
+          [
+            "alt-svc",
+            "h3=\":8443\"; ma=86400"
+          ],
+          [
+            "content-length",
+            "113"
+          ],
+          [
+            "date",
+            "Sat, 14 Mar 2026 13:56:38 GMT"
+          ]
+        ],
+        "payload_bytes": 0,
+        "cpu_time_ms": 5.393,
+        "csw_voluntary": 0,
+        "csw_involuntary": 30
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0,
+      "server_timing": {
+        "server_timestamp": "2026-03-14T13:56:38.452389Z",
+        "clock_skew_ms": 0.5251250000000001,
+        "server_version": "0.13.17"
+      }
+    },
+    {
+      "attempt_id": "7536986d-d9bb-4dbd-a95d-391f91e8ee5d",
+      "run_id": "605ef2b0-4d86-46c0-8fa8-b748aa85dafb",
+      "protocol": "http3",
+      "sequence_num": 2,
+      "started_at": "2026-03-14T13:56:38.453111Z",
+      "finished_at": "2026-03-14T13:56:38.463047Z",
+      "success": true,
+      "dns": null,
+      "tcp": null,
+      "tls": {
+        "protocol_version": "TLSv1.3 (QUIC)",
+        "cipher_suite": "QUIC-embedded",
+        "alpn_negotiated": "h3",
+        "cert_subject": null,
+        "cert_issuer": null,
+        "cert_expiry": null,
+        "handshake_duration_ms": 6.64,
+        "started_at": "2026-03-14T13:56:38.463043Z",
+        "success": true,
+        "tls_backend": "rustls"
+      },
+      "http": {
+        "negotiated_version": "HTTP/3",
+        "status_code": 200,
+        "headers_size_bytes": 133,
+        "body_size_bytes": 113,
+        "ttfb_ms": 2.130125,
+        "total_duration_ms": 9.926917,
+        "redirect_count": 0,
+        "started_at": "2026-03-14T13:56:38.463043Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "x-networker-server-timestamp",
+            "2026-03-14T13:56:38.461975+00:00"
+          ],
+          [
+            "x-networker-server-version",
+            "0.13.17"
+          ]
+        ],
+        "payload_bytes": 0,
+        "cpu_time_ms": 7.364,
+        "csw_voluntary": 0,
+        "csw_involuntary": 39
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0
+    },
+    {
+      "attempt_id": "e665b432-3901-41c7-958b-7fa5bc2c6936",
+      "run_id": "605ef2b0-4d86-46c0-8fa8-b748aa85dafb",
+      "protocol": "udp",
+      "sequence_num": 3,
+      "started_at": "2026-03-14T13:56:38.463146Z",
+      "finished_at": "2026-03-14T13:56:38.464532Z",
+      "success": true,
+      "dns": null,
+      "tcp": null,
+      "tls": null,
+      "http": null,
+      "udp": {
+        "remote_addr": "127.0.0.1:9999",
+        "probe_count": 10,
+        "success_count": 10,
+        "loss_percent": 0.0,
+        "rtt_min_ms": 0.0885,
+        "rtt_avg_ms": 0.11427499999999999,
+        "rtt_p95_ms": 0.216,
+        "jitter_ms": 0.014166666666666668,
+        "started_at": "2026-03-14T13:56:38.463146Z",
+        "probe_rtts_ms": [
+          0.216,
+          0.0885,
+          0.10154099999999999,
+          0.099709,
+          0.09025,
+          0.096166,
+          0.113084,
+          0.112458,
+          0.11916700000000001,
+          0.105875
+        ]
+      },
+      "error": null,
+      "retry_count": 0
+    },
+    {
+      "attempt_id": "2972d925-3c7c-44a9-b807-789df4a119f2",
+      "run_id": "605ef2b0-4d86-46c0-8fa8-b748aa85dafb",
+      "protocol": "pageload2",
+      "sequence_num": 4,
+      "started_at": "2026-03-14T13:56:38.464639Z",
+      "finished_at": "2026-03-14T13:56:38.472839Z",
+      "success": true,
+      "dns": {
+        "query_name": "127.0.0.1",
+        "resolved_ips": [
+          "127.0.0.1"
+        ],
+        "duration_ms": 0.220833,
+        "started_at": "2026-03-14T13:56:38.464641Z",
+        "success": true
+      },
+      "tcp": {
+        "local_addr": "127.0.0.1:64273",
+        "remote_addr": "127.0.0.1:8443",
+        "connect_duration_ms": 0.16612500000000002,
+        "attempt_count": 1,
+        "started_at": "2026-03-14T13:56:38.464906Z",
+        "success": true,
+        "mss_bytes": 16332,
+        "rtt_estimate_ms": null,
+        "retransmits": null,
+        "total_retrans": null,
+        "snd_cwnd": null,
+        "snd_ssthresh": null,
+        "rtt_variance_ms": null,
+        "rcv_space": null,
+        "segs_out": null,
+        "segs_in": null
+      },
+      "tls": {
+        "protocol_version": "TLSv1_3",
+        "cipher_suite": "TLS13_AES_256_GCM_SHA384",
+        "alpn_negotiated": "h2",
+        "cert_subject": null,
+        "cert_issuer": null,
+        "cert_expiry": null,
+        "handshake_duration_ms": 3.056042,
+        "started_at": "2026-03-14T13:56:38.465112Z",
+        "success": true,
+        "tls_backend": "rustls"
+      },
+      "http": {
+        "negotiated_version": "HTTP/2",
+        "status_code": 200,
+        "headers_size_bytes": 222,
+        "body_size_bytes": 579,
+        "ttfb_ms": 0.979917,
+        "total_duration_ms": 1.016375,
+        "redirect_count": 0,
+        "started_at": "2026-03-14T13:56:38.465112Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "x-networker-server-timestamp",
+            "2026-03-14T13:56:38.468868+00:00"
+          ],
+          [
+            "x-networker-server-version",
+            "0.13.17"
+          ],
+          [
+            "alt-svc",
+            "h3=\":8443\"; ma=86400"
+          ],
+          [
+            "content-length",
+            "579"
+          ],
+          [
+            "date",
+            "Sat, 14 Mar 2026 13:56:38 GMT"
+          ]
+        ],
+        "payload_bytes": 0
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0,
+      "server_timing": {
+        "server_timestamp": "2026-03-14T13:56:38.468868Z",
+        "clock_skew_ms": 0.08504149999999994,
+        "server_version": "0.13.17"
+      },
+      "page_load": {
+        "asset_count": 20,
+        "assets_fetched": 20,
+        "total_bytes": 204800,
+        "total_ms": 8.199416,
+        "ttfb_ms": 0.979917,
+        "connections_opened": 1,
+        "asset_timings_ms": [
+          1.779833,
+          1.825958,
+          1.911,
+          1.790792,
+          1.9919999999999998,
+          2.8203329999999998,
+          2.471791,
+          3.055041,
+          3.0845,
+          2.3181249999999998,
+          2.784958,
+          3.064292,
+          2.8188340000000003,
+          3.099917,
+          2.7355,
+          2.6580000000000004,
+          3.149958,
+          3.113,
+          3.204042,
+          3.12975
+        ],
+        "started_at": "2026-03-14T13:56:38.464639Z",
+        "tls_setup_ms": 3.056042,
+        "tls_overhead_ratio": 0.37271459333201296,
+        "per_connection_tls_ms": [
+          3.056042
+        ],
+        "cpu_time_ms": 8.183,
+        "connection_reused": false
+      }
+    },
+    {
+      "attempt_id": "babcdaf8-7613-496c-88cf-b82d96c3d916",
+      "run_id": "605ef2b0-4d86-46c0-8fa8-b748aa85dafb",
+      "protocol": "pageload3",
+      "sequence_num": 5,
+      "started_at": "2026-03-14T13:56:38.472893Z",
+      "finished_at": "2026-03-14T13:56:38.484374Z",
+      "success": true,
+      "dns": null,
+      "tcp": null,
+      "tls": {
+        "protocol_version": "TLSv1.3 (QUIC)",
+        "cipher_suite": "QUIC-embedded",
+        "alpn_negotiated": "h3",
+        "cert_subject": null,
+        "cert_issuer": null,
+        "cert_expiry": null,
+        "handshake_duration_ms": 3.783583,
+        "started_at": "2026-03-14T13:56:38.476842Z",
+        "success": true,
+        "tls_backend": "rustls+quinn"
+      },
+      "http": {
+        "negotiated_version": "HTTP/3",
+        "status_code": 200,
+        "headers_size_bytes": 133,
+        "body_size_bytes": 579,
+        "ttfb_ms": 1.393791,
+        "total_duration_ms": 1.406666,
+        "redirect_count": 0,
+        "started_at": "2026-03-14T13:56:38.476842Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "x-networker-server-timestamp",
+            "2026-03-14T13:56:38.477497+00:00"
+          ],
+          [
+            "x-networker-server-version",
+            "0.13.17"
+          ]
+        ],
+        "payload_bytes": 0
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0,
+      "page_load": {
+        "asset_count": 20,
+        "assets_fetched": 20,
+        "total_bytes": 204800,
+        "total_ms": 11.479875,
+        "ttfb_ms": 1.393791,
+        "connections_opened": 1,
+        "asset_timings_ms": [
+          2.777333,
+          2.7825409999999997,
+          2.6527909999999997,
+          2.625625,
+          2.290541,
+          2.091625,
+          2.0907500000000003,
+          2.114625,
+          2.135458,
+          2.1522910000000004,
+          2.7385420000000003,
+          2.611958,
+          2.557417,
+          2.703541,
+          3.20375,
+          3.066208,
+          3.009125,
+          3.136417,
+          3.462292,
+          3.4671659999999997
+        ],
+        "started_at": "2026-03-14T13:56:38.472893Z",
+        "tls_setup_ms": 3.783583,
+        "tls_overhead_ratio": 0.3295839893727066,
+        "per_connection_tls_ms": [
+          3.783583
+        ],
+        "cpu_time_ms": 13.513,
+        "connection_reused": false
+      }
+    },
+    {
+      "attempt_id": "b0b8fdab-5cd1-4e9d-9912-909bd415b847",
+      "run_id": "605ef2b0-4d86-46c0-8fa8-b748aa85dafb",
+      "protocol": "http1",
+      "sequence_num": 6,
+      "started_at": "2026-03-14T13:56:38.484447Z",
+      "finished_at": "2026-03-14T13:56:38.487191Z",
+      "success": true,
+      "dns": {
+        "query_name": "127.0.0.1",
+        "resolved_ips": [
+          "127.0.0.1"
+        ],
+        "duration_ms": 0.141125,
+        "started_at": "2026-03-14T13:56:38.484453Z",
+        "success": true
+      },
+      "tcp": {
+        "local_addr": "127.0.0.1:64274",
+        "remote_addr": "127.0.0.1:8443",
+        "connect_duration_ms": 0.098416,
+        "attempt_count": 1,
+        "started_at": "2026-03-14T13:56:38.484605Z",
+        "success": true,
+        "mss_bytes": 16332,
+        "rtt_estimate_ms": null,
+        "retransmits": null,
+        "total_retrans": null,
+        "snd_cwnd": null,
+        "snd_ssthresh": null,
+        "rtt_variance_ms": null,
+        "rcv_space": null,
+        "segs_out": null,
+        "segs_in": null
+      },
+      "tls": {
+        "protocol_version": "TLSv1_3",
+        "cipher_suite": "TLS13_AES_256_GCM_SHA384",
+        "alpn_negotiated": "http/1.1",
+        "cert_subject": "CN=rcgen self signed cert",
+        "cert_issuer": "CN=rcgen self signed cert",
+        "cert_expiry": "4096-01-01T00:00:00Z",
+        "handshake_duration_ms": 2.0171669999999997,
+        "started_at": "2026-03-14T13:56:38.484713Z",
+        "success": true,
+        "tls_backend": "rustls"
+      },
+      "http": {
+        "negotiated_version": "HTTP/1.1",
+        "status_code": 200,
+        "headers_size_bytes": 222,
+        "body_size_bytes": 113,
+        "ttfb_ms": 0.302833,
+        "total_duration_ms": 0.36633299999999996,
+        "redirect_count": 0,
+        "started_at": "2026-03-14T13:56:38.486820Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "x-networker-server-timestamp",
+            "2026-03-14T13:56:38.487013+00:00"
+          ],
+          [
+            "x-networker-server-version",
+            "0.13.17"
+          ],
+          [
+            "alt-svc",
+            "h3=\":8443\"; ma=86400"
+          ],
+          [
+            "content-length",
+            "113"
+          ],
+          [
+            "date",
+            "Sat, 14 Mar 2026 13:56:38 GMT"
+          ]
+        ],
+        "payload_bytes": 0,
+        "cpu_time_ms": 1.692,
+        "csw_voluntary": 0,
+        "csw_involuntary": 15
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0,
+      "server_timing": {
+        "server_timestamp": "2026-03-14T13:56:38.487013Z",
+        "clock_skew_ms": 0.013583499999999998,
+        "server_version": "0.13.17"
+      }
+    },
+    {
+      "attempt_id": "fd07f259-41cc-4d98-8ae5-23822a2f024d",
+      "run_id": "605ef2b0-4d86-46c0-8fa8-b748aa85dafb",
+      "protocol": "http2",
+      "sequence_num": 7,
+      "started_at": "2026-03-14T13:56:38.487224Z",
+      "finished_at": "2026-03-14T13:56:38.489983Z",
+      "success": true,
+      "dns": {
+        "query_name": "127.0.0.1",
+        "resolved_ips": [
+          "127.0.0.1"
+        ],
+        "duration_ms": 0.123333,
+        "started_at": "2026-03-14T13:56:38.487229Z",
+        "success": true
+      },
+      "tcp": {
+        "local_addr": "127.0.0.1:64275",
+        "remote_addr": "127.0.0.1:8443",
+        "connect_duration_ms": 0.121125,
+        "attempt_count": 1,
+        "started_at": "2026-03-14T13:56:38.487360Z",
+        "success": true,
+        "mss_bytes": 16332,
+        "rtt_estimate_ms": null,
+        "retransmits": null,
+        "total_retrans": null,
+        "snd_cwnd": null,
+        "snd_ssthresh": null,
+        "rtt_variance_ms": null,
+        "rcv_space": null,
+        "segs_out": null,
+        "segs_in": null
+      },
+      "tls": {
+        "protocol_version": "TLSv1_3",
+        "cipher_suite": "TLS13_AES_256_GCM_SHA384",
+        "alpn_negotiated": "h2",
+        "cert_subject": "CN=rcgen self signed cert",
+        "cert_issuer": "CN=rcgen self signed cert",
+        "cert_expiry": "4096-01-01T00:00:00Z",
+        "handshake_duration_ms": 1.7986250000000001,
+        "started_at": "2026-03-14T13:56:38.487488Z",
+        "success": true,
+        "tls_backend": "rustls"
+      },
+      "http": {
+        "negotiated_version": "HTTP/2",
+        "status_code": 200,
+        "headers_size_bytes": 222,
+        "body_size_bytes": 113,
+        "ttfb_ms": 0.5647920000000001,
+        "total_duration_ms": 0.6391669999999999,
+        "redirect_count": 0,
+        "started_at": "2026-03-14T13:56:38.489340Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "x-networker-server-timestamp",
+            "2026-03-14T13:56:38.489687+00:00"
+          ],
+          [
+            "x-networker-server-version",
+            "0.13.17"
+          ],
+          [
+            "alt-svc",
+            "h3=\":8443\"; ma=86400"
+          ],
+          [
+            "content-length",
+            "113"
+          ],
+          [
+            "date",
+            "Sat, 14 Mar 2026 13:56:38 GMT"
+          ]
+        ],
+        "payload_bytes": 0,
+        "cpu_time_ms": 1.7080000000000002,
+        "csw_voluntary": 0,
+        "csw_involuntary": 19
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0,
+      "server_timing": {
+        "server_timestamp": "2026-03-14T13:56:38.489687Z",
+        "clock_skew_ms": 0.015603999999999951,
+        "server_version": "0.13.17"
+      }
+    },
+    {
+      "attempt_id": "19f32960-d6d7-4587-816d-51dc89e330e8",
+      "run_id": "605ef2b0-4d86-46c0-8fa8-b748aa85dafb",
+      "protocol": "http3",
+      "sequence_num": 8,
+      "started_at": "2026-03-14T13:56:38.490011Z",
+      "finished_at": "2026-03-14T13:56:38.493947Z",
+      "success": true,
+      "dns": null,
+      "tcp": null,
+      "tls": {
+        "protocol_version": "TLSv1.3 (QUIC)",
+        "cipher_suite": "QUIC-embedded",
+        "alpn_negotiated": "h3",
+        "cert_subject": null,
+        "cert_issuer": null,
+        "cert_expiry": null,
+        "handshake_duration_ms": 2.802958,
+        "started_at": "2026-03-14T13:56:38.493946Z",
+        "success": true,
+        "tls_backend": "rustls"
+      },
+      "http": {
+        "negotiated_version": "HTTP/3",
+        "status_code": 200,
+        "headers_size_bytes": 133,
+        "body_size_bytes": 113,
+        "ttfb_ms": 0.947125,
+        "total_duration_ms": 3.93325,
+        "redirect_count": 0,
+        "started_at": "2026-03-14T13:56:38.493946Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "x-networker-server-timestamp",
+            "2026-03-14T13:56:38.493419+00:00"
+          ],
+          [
+            "x-networker-server-version",
+            "0.13.17"
+          ]
+        ],
+        "payload_bytes": 0,
+        "cpu_time_ms": 2.576,
+        "csw_voluntary": 0,
+        "csw_involuntary": 26
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0
+    },
+    {
+      "attempt_id": "8e0dde8e-2e70-4ba4-93e1-f78b3fd54aa8",
+      "run_id": "605ef2b0-4d86-46c0-8fa8-b748aa85dafb",
+      "protocol": "udp",
+      "sequence_num": 9,
+      "started_at": "2026-03-14T13:56:38.493987Z",
+      "finished_at": "2026-03-14T13:56:38.494709Z",
+      "success": true,
+      "dns": null,
+      "tcp": null,
+      "tls": null,
+      "http": null,
+      "udp": {
+        "remote_addr": "127.0.0.1:9999",
+        "probe_count": 10,
+        "success_count": 10,
+        "loss_percent": 0.0,
+        "rtt_min_ms": 0.059040999999999996,
+        "rtt_avg_ms": 0.0650625,
+        "rtt_p95_ms": 0.080292,
+        "jitter_ms": 0.002361222222222223,
+        "started_at": "2026-03-14T13:56:38.493987Z",
+        "probe_rtts_ms": [
+          0.080292,
+          0.059040999999999996,
+          0.059959,
+          0.06241699999999999,
+          0.066708,
+          0.063625,
+          0.065875,
+          0.06483299999999999,
+          0.064416,
+          0.063459
+        ]
+      },
+      "error": null,
+      "retry_count": 0
+    },
+    {
+      "attempt_id": "023b36b6-73fa-45b7-b823-a5dca5fb4e60",
+      "run_id": "605ef2b0-4d86-46c0-8fa8-b748aa85dafb",
+      "protocol": "pageload2",
+      "sequence_num": 10,
+      "started_at": "2026-03-14T13:56:38.494747Z",
+      "finished_at": "2026-03-14T13:56:38.499243Z",
+      "success": true,
+      "dns": {
+        "query_name": "127.0.0.1",
+        "resolved_ips": [
+          "127.0.0.1"
+        ],
+        "duration_ms": 0.089,
+        "started_at": "2026-03-14T13:56:38.494749Z",
+        "success": true
+      },
+      "tcp": {
+        "local_addr": "127.0.0.1:64276",
+        "remote_addr": "127.0.0.1:8443",
+        "connect_duration_ms": 0.073334,
+        "attempt_count": 1,
+        "started_at": "2026-03-14T13:56:38.494846Z",
+        "success": true,
+        "mss_bytes": 16332,
+        "rtt_estimate_ms": null,
+        "retransmits": null,
+        "total_retrans": null,
+        "snd_cwnd": null,
+        "snd_ssthresh": null,
+        "rtt_variance_ms": null,
+        "rcv_space": null,
+        "segs_out": null,
+        "segs_in": null
+      },
+      "tls": {
+        "protocol_version": "TLSv1_3",
+        "cipher_suite": "TLS13_AES_256_GCM_SHA384",
+        "alpn_negotiated": "h2",
+        "cert_subject": null,
+        "cert_issuer": null,
+        "cert_expiry": null,
+        "handshake_duration_ms": 1.6310840000000002,
+        "started_at": "2026-03-14T13:56:38.494925Z",
+        "success": true,
+        "tls_backend": "rustls"
+      },
+      "http": {
+        "negotiated_version": "HTTP/2",
+        "status_code": 200,
+        "headers_size_bytes": 222,
+        "body_size_bytes": 579,
+        "ttfb_ms": 0.488375,
+        "total_duration_ms": 0.5045,
+        "redirect_count": 0,
+        "started_at": "2026-03-14T13:56:38.494925Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "x-networker-server-timestamp",
+            "2026-03-14T13:56:38.496866+00:00"
+          ],
+          [
+            "x-networker-server-version",
+            "0.13.17"
+          ],
+          [
+            "alt-svc",
+            "h3=\":8443\"; ma=86400"
+          ],
+          [
+            "content-length",
+            "579"
+          ],
+          [
+            "date",
+            "Sat, 14 Mar 2026 13:56:38 GMT"
+          ]
+        ],
+        "payload_bytes": 0
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0,
+      "server_timing": {
+        "server_timestamp": "2026-03-14T13:56:38.496866Z",
+        "clock_skew_ms": 0.025812500000000016,
+        "server_version": "0.13.17"
+      },
+      "page_load": {
+        "asset_count": 20,
+        "assets_fetched": 20,
+        "total_bytes": 204800,
+        "total_ms": 4.495166,
+        "ttfb_ms": 0.488375,
+        "connections_opened": 1,
+        "asset_timings_ms": [
+          0.787709,
+          0.8418749999999999,
+          0.790834,
+          1.113584,
+          1.582083,
+          1.147667,
+          1.614167,
+          1.710958,
+          1.294542,
+          1.7225000000000001,
+          1.307667,
+          1.642959,
+          1.57975,
+          1.311625,
+          1.6925,
+          1.7675,
+          1.807,
+          1.835375,
+          1.995709,
+          1.974708
+        ],
+        "started_at": "2026-03-14T13:56:38.494747Z",
+        "tls_setup_ms": 1.6310840000000002,
+        "tls_overhead_ratio": 0.36285289575512897,
+        "per_connection_tls_ms": [
+          1.6310840000000002
+        ],
+        "cpu_time_ms": 4.742999999999999,
+        "connection_reused": false
+      }
+    },
+    {
+      "attempt_id": "cf91cd43-28a9-42ed-9e76-d18952863e5c",
+      "run_id": "605ef2b0-4d86-46c0-8fa8-b748aa85dafb",
+      "protocol": "pageload3",
+      "sequence_num": 11,
+      "started_at": "2026-03-14T13:56:38.499268Z",
+      "finished_at": "2026-03-14T13:56:38.506583Z",
+      "success": true,
+      "dns": null,
+      "tcp": null,
+      "tls": {
+        "protocol_version": "TLSv1.3 (QUIC)",
+        "cipher_suite": "QUIC-embedded",
+        "alpn_negotiated": "h3",
+        "cert_subject": null,
+        "cert_issuer": null,
+        "cert_expiry": null,
+        "handshake_duration_ms": 2.398666,
+        "started_at": "2026-03-14T13:56:38.501785Z",
+        "success": true,
+        "tls_backend": "rustls+quinn"
+      },
+      "http": {
+        "negotiated_version": "HTTP/3",
+        "status_code": 200,
+        "headers_size_bytes": 133,
+        "body_size_bytes": 579,
+        "ttfb_ms": 0.67825,
+        "total_duration_ms": 0.686834,
+        "redirect_count": 0,
+        "started_at": "2026-03-14T13:56:38.501785Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "x-networker-server-timestamp",
+            "2026-03-14T13:56:38.502180+00:00"
+          ],
+          [
+            "x-networker-server-version",
+            "0.13.17"
+          ]
+        ],
+        "payload_bytes": 0
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0,
+      "page_load": {
+        "asset_count": 20,
+        "assets_fetched": 20,
+        "total_bytes": 204800,
+        "total_ms": 7.314125000000001,
+        "ttfb_ms": 0.67825,
+        "connections_opened": 1,
+        "asset_timings_ms": [
+          1.8397080000000001,
+          1.8433329999999999,
+          1.6882080000000002,
+          1.824209,
+          1.8086669999999998,
+          1.838875,
+          1.8612920000000002,
+          1.815667,
+          1.763208,
+          1.784125,
+          1.7442090000000001,
+          1.768208,
+          1.859416,
+          2.235125,
+          2.175,
+          2.0404590000000002,
+          2.076417,
+          2.441,
+          2.217667,
+          2.129542
+        ],
+        "started_at": "2026-03-14T13:56:38.499268Z",
+        "tls_setup_ms": 2.398666,
+        "tls_overhead_ratio": 0.32794982311623055,
+        "per_connection_tls_ms": [
+          2.398666
+        ],
+        "cpu_time_ms": 8.389000000000001,
+        "connection_reused": false
+      }
+    },
+    {
+      "attempt_id": "0a92130c-d93a-44f7-9735-bc652eaa068a",
+      "run_id": "605ef2b0-4d86-46c0-8fa8-b748aa85dafb",
+      "protocol": "http1",
+      "sequence_num": 12,
+      "started_at": "2026-03-14T13:56:38.506633Z",
+      "finished_at": "2026-03-14T13:56:38.508624Z",
+      "success": true,
+      "dns": {
+        "query_name": "127.0.0.1",
+        "resolved_ips": [
+          "127.0.0.1"
+        ],
+        "duration_ms": 0.095917,
+        "started_at": "2026-03-14T13:56:38.506638Z",
+        "success": true
+      },
+      "tcp": {
+        "local_addr": "127.0.0.1:64277",
+        "remote_addr": "127.0.0.1:8443",
+        "connect_duration_ms": 0.079416,
+        "attempt_count": 1,
+        "started_at": "2026-03-14T13:56:38.506741Z",
+        "success": true,
+        "mss_bytes": 16332,
+        "rtt_estimate_ms": null,
+        "retransmits": null,
+        "total_retrans": null,
+        "snd_cwnd": null,
+        "snd_ssthresh": null,
+        "rtt_variance_ms": null,
+        "rcv_space": null,
+        "segs_out": null,
+        "segs_in": null
+      },
+      "tls": {
+        "protocol_version": "TLSv1_3",
+        "cipher_suite": "TLS13_AES_256_GCM_SHA384",
+        "alpn_negotiated": "http/1.1",
+        "cert_subject": "CN=rcgen self signed cert",
+        "cert_issuer": "CN=rcgen self signed cert",
+        "cert_expiry": "4096-01-01T00:00:00Z",
+        "handshake_duration_ms": 1.456125,
+        "started_at": "2026-03-14T13:56:38.506826Z",
+        "success": true,
+        "tls_backend": "rustls"
+      },
+      "http": {
+        "negotiated_version": "HTTP/1.1",
+        "status_code": 200,
+        "headers_size_bytes": 222,
+        "body_size_bytes": 113,
+        "ttfb_ms": 0.24516700000000002,
+        "total_duration_ms": 0.28441700000000003,
+        "redirect_count": 0,
+        "started_at": "2026-03-14T13:56:38.508337Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "x-networker-server-timestamp",
+            "2026-03-14T13:56:38.508496+00:00"
+          ],
+          [
+            "x-networker-server-version",
+            "0.13.17"
+          ],
+          [
+            "alt-svc",
+            "h3=\":8443\"; ma=86400"
+          ],
+          [
+            "content-length",
+            "113"
+          ],
+          [
+            "date",
+            "Sat, 14 Mar 2026 13:56:38 GMT"
+          ]
+        ],
+        "payload_bytes": 0,
+        "cpu_time_ms": 1.159,
+        "csw_voluntary": 0,
+        "csw_involuntary": 13
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0,
+      "server_timing": {
+        "server_timestamp": "2026-03-14T13:56:38.508496Z",
+        "clock_skew_ms": 0.0174165,
+        "server_version": "0.13.17"
+      }
+    },
+    {
+      "attempt_id": "59d5bc71-bb57-4b53-aa57-f6f2dca12fbe",
+      "run_id": "605ef2b0-4d86-46c0-8fa8-b748aa85dafb",
+      "protocol": "http2",
+      "sequence_num": 13,
+      "started_at": "2026-03-14T13:56:38.508647Z",
+      "finished_at": "2026-03-14T13:56:38.510808Z",
+      "success": true,
+      "dns": {
+        "query_name": "127.0.0.1",
+        "resolved_ips": [
+          "127.0.0.1"
+        ],
+        "duration_ms": 0.069959,
+        "started_at": "2026-03-14T13:56:38.508650Z",
+        "success": true
+      },
+      "tcp": {
+        "local_addr": "127.0.0.1:64278",
+        "remote_addr": "127.0.0.1:8443",
+        "connect_duration_ms": 0.102875,
+        "attempt_count": 1,
+        "started_at": "2026-03-14T13:56:38.508726Z",
+        "success": true,
+        "mss_bytes": 16332,
+        "rtt_estimate_ms": null,
+        "retransmits": null,
+        "total_retrans": null,
+        "snd_cwnd": null,
+        "snd_ssthresh": null,
+        "rtt_variance_ms": null,
+        "rcv_space": null,
+        "segs_out": null,
+        "segs_in": null
+      },
+      "tls": {
+        "protocol_version": "TLSv1_3",
+        "cipher_suite": "TLS13_AES_256_GCM_SHA384",
+        "alpn_negotiated": "h2",
+        "cert_subject": "CN=rcgen self signed cert",
+        "cert_issuer": "CN=rcgen self signed cert",
+        "cert_expiry": "4096-01-01T00:00:00Z",
+        "handshake_duration_ms": 1.4314580000000001,
+        "started_at": "2026-03-14T13:56:38.508834Z",
+        "success": true,
+        "tls_backend": "rustls"
+      },
+      "http": {
+        "negotiated_version": "HTTP/2",
+        "status_code": 200,
+        "headers_size_bytes": 222,
+        "body_size_bytes": 113,
+        "ttfb_ms": 0.454833,
+        "total_duration_ms": 0.508166,
+        "redirect_count": 0,
+        "started_at": "2026-03-14T13:56:38.510298Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "x-networker-server-timestamp",
+            "2026-03-14T13:56:38.510586+00:00"
+          ],
+          [
+            "x-networker-server-version",
+            "0.13.17"
+          ],
+          [
+            "alt-svc",
+            "h3=\":8443\"; ma=86400"
+          ],
+          [
+            "content-length",
+            "113"
+          ],
+          [
+            "date",
+            "Sat, 14 Mar 2026 13:56:38 GMT"
+          ]
+        ],
+        "payload_bytes": 0,
+        "cpu_time_ms": 1.2750000000000001,
+        "csw_voluntary": 0,
+        "csw_involuntary": 19
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0,
+      "server_timing": {
+        "server_timestamp": "2026-03-14T13:56:38.510586Z",
+        "clock_skew_ms": 0.024583500000000008,
+        "server_version": "0.13.17"
+      }
+    },
+    {
+      "attempt_id": "8bc3deb6-61c4-4d30-8872-d77a187efd3c",
+      "run_id": "605ef2b0-4d86-46c0-8fa8-b748aa85dafb",
+      "protocol": "http3",
+      "sequence_num": 14,
+      "started_at": "2026-03-14T13:56:38.510829Z",
+      "finished_at": "2026-03-14T13:56:38.513777Z",
+      "success": true,
+      "dns": null,
+      "tcp": null,
+      "tls": {
+        "protocol_version": "TLSv1.3 (QUIC)",
+        "cipher_suite": "QUIC-embedded",
+        "alpn_negotiated": "h3",
+        "cert_subject": null,
+        "cert_issuer": null,
+        "cert_expiry": null,
+        "handshake_duration_ms": 2.077083,
+        "started_at": "2026-03-14T13:56:38.513776Z",
+        "success": true,
+        "tls_backend": "rustls"
+      },
+      "http": {
+        "negotiated_version": "HTTP/3",
+        "status_code": 200,
+        "headers_size_bytes": 133,
+        "body_size_bytes": 113,
+        "ttfb_ms": 0.721125,
+        "total_duration_ms": 2.946084,
+        "redirect_count": 0,
+        "started_at": "2026-03-14T13:56:38.513776Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "x-networker-server-timestamp",
+            "2026-03-14T13:56:38.513356+00:00"
+          ],
+          [
+            "x-networker-server-version",
+            "0.13.17"
+          ]
+        ],
+        "payload_bytes": 0,
+        "cpu_time_ms": 1.899,
+        "csw_voluntary": 0,
+        "csw_involuntary": 23
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0
+    },
+    {
+      "attempt_id": "1bf49782-c630-48ed-98a8-adfb7dbf5220",
+      "run_id": "605ef2b0-4d86-46c0-8fa8-b748aa85dafb",
+      "protocol": "udp",
+      "sequence_num": 15,
+      "started_at": "2026-03-14T13:56:38.513801Z",
+      "finished_at": "2026-03-14T13:56:38.514403Z",
+      "success": true,
+      "dns": null,
+      "tcp": null,
+      "tls": null,
+      "http": null,
+      "udp": {
+        "remote_addr": "127.0.0.1:9999",
+        "probe_count": 10,
+        "success_count": 10,
+        "loss_percent": 0.0,
+        "rtt_min_ms": 0.051208000000000004,
+        "rtt_avg_ms": 0.0550416,
+        "rtt_p95_ms": 0.058667,
+        "jitter_ms": 0.000828777777777777,
+        "started_at": "2026-03-14T13:56:38.513801Z",
+        "probe_rtts_ms": [
+          0.057791999999999996,
+          0.053375000000000006,
+          0.055208,
+          0.058667,
+          0.053666,
+          0.057042,
+          0.052125,
+          0.051208000000000004,
+          0.05575,
+          0.055583
+        ]
+      },
+      "error": null,
+      "retry_count": 0
+    },
+    {
+      "attempt_id": "328553a3-b536-4b8e-90b9-f9552c713a97",
+      "run_id": "605ef2b0-4d86-46c0-8fa8-b748aa85dafb",
+      "protocol": "pageload2",
+      "sequence_num": 16,
+      "started_at": "2026-03-14T13:56:38.514432Z",
+      "finished_at": "2026-03-14T13:56:38.518077Z",
+      "success": true,
+      "dns": {
+        "query_name": "127.0.0.1",
+        "resolved_ips": [
+          "127.0.0.1"
+        ],
+        "duration_ms": 0.090875,
+        "started_at": "2026-03-14T13:56:38.514433Z",
+        "success": true
+      },
+      "tcp": {
+        "local_addr": "127.0.0.1:64279",
+        "remote_addr": "127.0.0.1:8443",
+        "connect_duration_ms": 0.06708399999999999,
+        "attempt_count": 1,
+        "started_at": "2026-03-14T13:56:38.514530Z",
+        "success": true,
+        "mss_bytes": 16332,
+        "rtt_estimate_ms": null,
+        "retransmits": null,
+        "total_retrans": null,
+        "snd_cwnd": null,
+        "snd_ssthresh": null,
+        "rtt_variance_ms": null,
+        "rcv_space": null,
+        "segs_out": null,
+        "segs_in": null
+      },
+      "tls": {
+        "protocol_version": "TLSv1_3",
+        "cipher_suite": "TLS13_AES_256_GCM_SHA384",
+        "alpn_negotiated": "h2",
+        "cert_subject": null,
+        "cert_issuer": null,
+        "cert_expiry": null,
+        "handshake_duration_ms": 1.3171249999999999,
+        "started_at": "2026-03-14T13:56:38.514601Z",
+        "success": true,
+        "tls_backend": "rustls"
+      },
+      "http": {
+        "negotiated_version": "HTTP/2",
+        "status_code": 200,
+        "headers_size_bytes": 222,
+        "body_size_bytes": 579,
+        "ttfb_ms": 0.421875,
+        "total_duration_ms": 0.43479199999999996,
+        "redirect_count": 0,
+        "started_at": "2026-03-14T13:56:38.514601Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "x-networker-server-timestamp",
+            "2026-03-14T13:56:38.516185+00:00"
+          ],
+          [
+            "x-networker-server-version",
+            "0.13.17"
+          ],
+          [
+            "alt-svc",
+            "h3=\":8443\"; ma=86400"
+          ],
+          [
+            "content-length",
+            "579"
+          ],
+          [
+            "date",
+            "Sat, 14 Mar 2026 13:56:38 GMT"
+          ]
+        ],
+        "payload_bytes": 0
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0,
+      "server_timing": {
+        "server_timestamp": "2026-03-14T13:56:38.516185Z",
+        "clock_skew_ms": 0.021062500000000012,
+        "server_version": "0.13.17"
+      },
+      "page_load": {
+        "asset_count": 20,
+        "assets_fetched": 20,
+        "total_bytes": 204800,
+        "total_ms": 3.644625,
+        "ttfb_ms": 0.421875,
+        "connections_opened": 1,
+        "asset_timings_ms": [
+          0.797083,
+          0.797292,
+          0.883167,
+          0.868833,
+          1.085541,
+          1.103667,
+          1.0752920000000001,
+          1.3977499999999998,
+          1.3029579999999998,
+          1.4760419999999999,
+          1.108417,
+          1.349791,
+          1.2201250000000001,
+          1.305791,
+          1.351042,
+          1.3072920000000001,
+          1.5232080000000001,
+          1.393459,
+          1.575625,
+          1.546291
+        ],
+        "started_at": "2026-03-14T13:56:38.514432Z",
+        "tls_setup_ms": 1.3171249999999999,
+        "tls_overhead_ratio": 0.361388345851768,
+        "per_connection_tls_ms": [
+          1.3171249999999999
+        ],
+        "cpu_time_ms": 3.588,
+        "connection_reused": false
+      }
+    },
+    {
+      "attempt_id": "5f4df395-badd-4ef2-b2a5-9110003a87e1",
+      "run_id": "605ef2b0-4d86-46c0-8fa8-b748aa85dafb",
+      "protocol": "pageload3",
+      "sequence_num": 17,
+      "started_at": "2026-03-14T13:56:38.518100Z",
+      "finished_at": "2026-03-14T13:56:38.524226Z",
+      "success": true,
+      "dns": null,
+      "tcp": null,
+      "tls": {
+        "protocol_version": "TLSv1.3 (QUIC)",
+        "cipher_suite": "QUIC-embedded",
+        "alpn_negotiated": "h3",
+        "cert_subject": null,
+        "cert_issuer": null,
+        "cert_expiry": null,
+        "handshake_duration_ms": 1.929042,
+        "started_at": "2026-03-14T13:56:38.520149Z",
+        "success": true,
+        "tls_backend": "rustls+quinn"
+      },
+      "http": {
+        "negotiated_version": "HTTP/3",
+        "status_code": 200,
+        "headers_size_bytes": 133,
+        "body_size_bytes": 579,
+        "ttfb_ms": 0.46583399999999997,
+        "total_duration_ms": 0.471584,
+        "redirect_count": 0,
+        "started_at": "2026-03-14T13:56:38.520149Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "x-networker-server-timestamp",
+            "2026-03-14T13:56:38.520481+00:00"
+          ],
+          [
+            "x-networker-server-version",
+            "0.13.17"
+          ]
+        ],
+        "payload_bytes": 0
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0,
+      "page_load": {
+        "asset_count": 20,
+        "assets_fetched": 20,
+        "total_bytes": 204800,
+        "total_ms": 6.12575,
+        "ttfb_ms": 0.46583399999999997,
+        "connections_opened": 1,
+        "asset_timings_ms": [
+          1.724375,
+          1.599208,
+          1.499333,
+          1.347167,
+          1.369458,
+          1.335125,
+          1.3096670000000001,
+          1.2942500000000001,
+          1.265709,
+          1.424125,
+          1.393583,
+          1.7667920000000001,
+          1.6745,
+          1.631209,
+          1.668875,
+          1.707875,
+          1.825459,
+          1.872417,
+          2.075875,
+          2.028416
+        ],
+        "started_at": "2026-03-14T13:56:38.518100Z",
+        "tls_setup_ms": 1.929042,
+        "tls_overhead_ratio": 0.31490707260335465,
+        "per_connection_tls_ms": [
+          1.929042
+        ],
+        "cpu_time_ms": 6.545,
+        "connection_reused": false
+      }
+    },
+    {
+      "attempt_id": "052df64c-d54e-4227-a9f0-f72493182553",
+      "run_id": "605ef2b0-4d86-46c0-8fa8-b748aa85dafb",
+      "protocol": "http1",
+      "sequence_num": 18,
+      "started_at": "2026-03-14T13:56:38.524268Z",
+      "finished_at": "2026-03-14T13:56:38.525912Z",
+      "success": true,
+      "dns": {
+        "query_name": "127.0.0.1",
+        "resolved_ips": [
+          "127.0.0.1"
+        ],
+        "duration_ms": 0.07466600000000001,
+        "started_at": "2026-03-14T13:56:38.524272Z",
+        "success": true
+      },
+      "tcp": {
+        "local_addr": "127.0.0.1:64280",
+        "remote_addr": "127.0.0.1:8443",
+        "connect_duration_ms": 0.06820799999999999,
+        "attempt_count": 1,
+        "started_at": "2026-03-14T13:56:38.524352Z",
+        "success": true,
+        "mss_bytes": 16332,
+        "rtt_estimate_ms": null,
+        "retransmits": null,
+        "total_retrans": null,
+        "snd_cwnd": null,
+        "snd_ssthresh": null,
+        "rtt_variance_ms": null,
+        "rcv_space": null,
+        "segs_out": null,
+        "segs_in": null
+      },
+      "tls": {
+        "protocol_version": "TLSv1_3",
+        "cipher_suite": "TLS13_AES_256_GCM_SHA384",
+        "alpn_negotiated": "http/1.1",
+        "cert_subject": "CN=rcgen self signed cert",
+        "cert_issuer": "CN=rcgen self signed cert",
+        "cert_expiry": "4096-01-01T00:00:00Z",
+        "handshake_duration_ms": 1.18925,
+        "started_at": "2026-03-14T13:56:38.524426Z",
+        "success": true,
+        "tls_backend": "rustls"
+      },
+      "http": {
+        "negotiated_version": "HTTP/1.1",
+        "status_code": 200,
+        "headers_size_bytes": 222,
+        "body_size_bytes": 113,
+        "ttfb_ms": 0.2145,
+        "total_duration_ms": 0.24575,
+        "redirect_count": 0,
+        "started_at": "2026-03-14T13:56:38.525664Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "x-networker-server-timestamp",
+            "2026-03-14T13:56:38.525800+00:00"
+          ],
+          [
+            "x-networker-server-version",
+            "0.13.17"
+          ],
+          [
+            "alt-svc",
+            "h3=\":8443\"; ma=86400"
+          ],
+          [
+            "content-length",
+            "113"
+          ],
+          [
+            "date",
+            "Sat, 14 Mar 2026 13:56:38 GMT"
+          ]
+        ],
+        "payload_bytes": 0,
+        "cpu_time_ms": 0.962,
+        "csw_voluntary": 0,
+        "csw_involuntary": 13
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0,
+      "server_timing": {
+        "server_timestamp": "2026-03-14T13:56:38.525800Z",
+        "clock_skew_ms": 0.01475,
+        "server_version": "0.13.17"
+      }
+    },
+    {
+      "attempt_id": "fd65e899-1859-4121-8774-a927f72c322d",
+      "run_id": "605ef2b0-4d86-46c0-8fa8-b748aa85dafb",
+      "protocol": "http2",
+      "sequence_num": 19,
+      "started_at": "2026-03-14T13:56:38.525933Z",
+      "finished_at": "2026-03-14T13:56:38.527718Z",
+      "success": true,
+      "dns": {
+        "query_name": "127.0.0.1",
+        "resolved_ips": [
+          "127.0.0.1"
+        ],
+        "duration_ms": 0.056084,
+        "started_at": "2026-03-14T13:56:38.525935Z",
+        "success": true
+      },
+      "tcp": {
+        "local_addr": "127.0.0.1:64281",
+        "remote_addr": "127.0.0.1:8443",
+        "connect_duration_ms": 0.079875,
+        "attempt_count": 1,
+        "started_at": "2026-03-14T13:56:38.525996Z",
+        "success": true,
+        "mss_bytes": 16332,
+        "rtt_estimate_ms": null,
+        "retransmits": null,
+        "total_retrans": null,
+        "snd_cwnd": null,
+        "snd_ssthresh": null,
+        "rtt_variance_ms": null,
+        "rcv_space": null,
+        "segs_out": null,
+        "segs_in": null
+      },
+      "tls": {
+        "protocol_version": "TLSv1_3",
+        "cipher_suite": "TLS13_AES_256_GCM_SHA384",
+        "alpn_negotiated": "h2",
+        "cert_subject": "CN=rcgen self signed cert",
+        "cert_issuer": "CN=rcgen self signed cert",
+        "cert_expiry": "4096-01-01T00:00:00Z",
+        "handshake_duration_ms": 1.175417,
+        "started_at": "2026-03-14T13:56:38.526080Z",
+        "success": true,
+        "tls_backend": "rustls"
+      },
+      "http": {
+        "negotiated_version": "HTTP/2",
+        "status_code": 200,
+        "headers_size_bytes": 222,
+        "body_size_bytes": 113,
+        "ttfb_ms": 0.37708400000000003,
+        "total_duration_ms": 0.431209,
+        "redirect_count": 0,
+        "started_at": "2026-03-14T13:56:38.527284Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "x-networker-server-timestamp",
+            "2026-03-14T13:56:38.527520+00:00"
+          ],
+          [
+            "x-networker-server-version",
+            "0.13.17"
+          ],
+          [
+            "alt-svc",
+            "h3=\":8443\"; ma=86400"
+          ],
+          [
+            "content-length",
+            "113"
+          ],
+          [
+            "date",
+            "Sat, 14 Mar 2026 13:56:38 GMT"
+          ]
+        ],
+        "payload_bytes": 0,
+        "cpu_time_ms": 1.095,
+        "csw_voluntary": 0,
+        "csw_involuntary": 19
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0,
+      "server_timing": {
+        "server_timestamp": "2026-03-14T13:56:38.527520Z",
+        "clock_skew_ms": 0.010457999999999995,
+        "server_version": "0.13.17"
+      }
+    },
+    {
+      "attempt_id": "5e1db174-0fda-4947-92ac-351e75523b9e",
+      "run_id": "605ef2b0-4d86-46c0-8fa8-b748aa85dafb",
+      "protocol": "http3",
+      "sequence_num": 20,
+      "started_at": "2026-03-14T13:56:38.527738Z",
+      "finished_at": "2026-03-14T13:56:38.530133Z",
+      "success": true,
+      "dns": null,
+      "tcp": null,
+      "tls": {
+        "protocol_version": "TLSv1.3 (QUIC)",
+        "cipher_suite": "QUIC-embedded",
+        "alpn_negotiated": "h3",
+        "cert_subject": null,
+        "cert_issuer": null,
+        "cert_expiry": null,
+        "handshake_duration_ms": 1.819416,
+        "started_at": "2026-03-14T13:56:38.530133Z",
+        "success": true,
+        "tls_backend": "rustls"
+      },
+      "http": {
+        "negotiated_version": "HTTP/3",
+        "status_code": 200,
+        "headers_size_bytes": 133,
+        "body_size_bytes": 113,
+        "ttfb_ms": 0.495542,
+        "total_duration_ms": 2.3936669999999998,
+        "redirect_count": 0,
+        "started_at": "2026-03-14T13:56:38.530133Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "x-networker-server-timestamp",
+            "2026-03-14T13:56:38.529946+00:00"
+          ],
+          [
+            "x-networker-server-version",
+            "0.13.17"
+          ]
+        ],
+        "payload_bytes": 0,
+        "cpu_time_ms": 1.4369999999999998,
+        "csw_voluntary": 0,
+        "csw_involuntary": 21
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0
+    },
+    {
+      "attempt_id": "21236fcc-b75c-46a3-83b4-66006efae927",
+      "run_id": "605ef2b0-4d86-46c0-8fa8-b748aa85dafb",
+      "protocol": "udp",
+      "sequence_num": 21,
+      "started_at": "2026-03-14T13:56:38.530320Z",
+      "finished_at": "2026-03-14T13:56:38.530970Z",
+      "success": true,
+      "dns": null,
+      "tcp": null,
+      "tls": null,
+      "http": null,
+      "udp": {
+        "remote_addr": "127.0.0.1:9999",
+        "probe_count": 10,
+        "success_count": 10,
+        "loss_percent": 0.0,
+        "rtt_min_ms": 0.051084,
+        "rtt_avg_ms": 0.0610251,
+        "rtt_p95_ms": 0.137625,
+        "jitter_ms": 0.009615666666666668,
+        "started_at": "2026-03-14T13:56:38.530320Z",
+        "probe_rtts_ms": [
+          0.137625,
+          0.053917,
+          0.052875,
+          0.051625000000000004,
+          0.051208000000000004,
+          0.052959,
+          0.051417,
+          0.051084,
+          0.051458000000000004,
+          0.056083
+        ]
+      },
+      "error": null,
+      "retry_count": 0
+    },
+    {
+      "attempt_id": "b1fff03b-a0c7-4dfa-8b43-7d6fe536dc05",
+      "run_id": "605ef2b0-4d86-46c0-8fa8-b748aa85dafb",
+      "protocol": "pageload2",
+      "sequence_num": 22,
+      "started_at": "2026-03-14T13:56:38.530998Z",
+      "finished_at": "2026-03-14T13:56:38.534332Z",
+      "success": true,
+      "dns": {
+        "query_name": "127.0.0.1",
+        "resolved_ips": [
+          "127.0.0.1"
+        ],
+        "duration_ms": 0.062541,
+        "started_at": "2026-03-14T13:56:38.530999Z",
+        "success": true
+      },
+      "tcp": {
+        "local_addr": "127.0.0.1:64282",
+        "remote_addr": "127.0.0.1:8443",
+        "connect_duration_ms": 0.110166,
+        "attempt_count": 1,
+        "started_at": "2026-03-14T13:56:38.531067Z",
+        "success": true,
+        "mss_bytes": 16332,
+        "rtt_estimate_ms": null,
+        "retransmits": null,
+        "total_retrans": null,
+        "snd_cwnd": null,
+        "snd_ssthresh": null,
+        "rtt_variance_ms": null,
+        "rcv_space": null,
+        "segs_out": null,
+        "segs_in": null
+      },
+      "tls": {
+        "protocol_version": "TLSv1_3",
+        "cipher_suite": "TLS13_AES_256_GCM_SHA384",
+        "alpn_negotiated": "h2",
+        "cert_subject": null,
+        "cert_issuer": null,
+        "cert_expiry": null,
+        "handshake_duration_ms": 1.119042,
+        "started_at": "2026-03-14T13:56:38.531182Z",
+        "success": true,
+        "tls_backend": "rustls"
+      },
+      "http": {
+        "negotiated_version": "HTTP/2",
+        "status_code": 200,
+        "headers_size_bytes": 222,
+        "body_size_bytes": 579,
+        "ttfb_ms": 0.37033299999999997,
+        "total_duration_ms": 0.382792,
+        "redirect_count": 0,
+        "started_at": "2026-03-14T13:56:38.531182Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "x-networker-server-timestamp",
+            "2026-03-14T13:56:38.532542+00:00"
+          ],
+          [
+            "x-networker-server-version",
+            "0.13.17"
+          ],
+          [
+            "alt-svc",
+            "h3=\":8443\"; ma=86400"
+          ],
+          [
+            "content-length",
+            "579"
+          ],
+          [
+            "date",
+            "Sat, 14 Mar 2026 13:56:38 GMT"
+          ]
+        ],
+        "payload_bytes": 0
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0,
+      "server_timing": {
+        "server_timestamp": "2026-03-14T13:56:38.532542Z",
+        "clock_skew_ms": 0.02683350000000001,
+        "server_version": "0.13.17"
+      },
+      "page_load": {
+        "asset_count": 20,
+        "assets_fetched": 20,
+        "total_bytes": 204800,
+        "total_ms": 3.333333,
+        "ttfb_ms": 0.37033299999999997,
+        "connections_opened": 1,
+        "asset_timings_ms": [
+          0.834834,
+          0.7748330000000001,
+          0.8155,
+          0.817209,
+          0.850833,
+          0.818167,
+          1.104708,
+          1.119917,
+          1.213667,
+          1.234375,
+          1.123708,
+          1.108708,
+          1.156792,
+          1.240916,
+          1.2635,
+          1.415458,
+          1.510042,
+          1.4816250000000002,
+          1.4825409999999999,
+          1.431833
+        ],
+        "started_at": "2026-03-14T13:56:38.530998Z",
+        "tls_setup_ms": 1.119042,
+        "tls_overhead_ratio": 0.33571263357126335,
+        "per_connection_tls_ms": [
+          1.119042
+        ],
+        "cpu_time_ms": 3.474,
+        "connection_reused": false
+      }
+    },
+    {
+      "attempt_id": "b202d90a-cbbb-48d2-b9a0-830ba28d20c5",
+      "run_id": "605ef2b0-4d86-46c0-8fa8-b748aa85dafb",
+      "protocol": "pageload3",
+      "sequence_num": 23,
+      "started_at": "2026-03-14T13:56:38.534356Z",
+      "finished_at": "2026-03-14T13:56:38.540471Z",
+      "success": true,
+      "dns": null,
+      "tcp": null,
+      "tls": {
+        "protocol_version": "TLSv1.3 (QUIC)",
+        "cipher_suite": "QUIC-embedded",
+        "alpn_negotiated": "h3",
+        "cert_subject": null,
+        "cert_issuer": null,
+        "cert_expiry": null,
+        "handshake_duration_ms": 1.70325,
+        "started_at": "2026-03-14T13:56:38.536135Z",
+        "success": true,
+        "tls_backend": "rustls+quinn"
+      },
+      "http": {
+        "negotiated_version": "HTTP/3",
+        "status_code": 200,
+        "headers_size_bytes": 133,
+        "body_size_bytes": 579,
+        "ttfb_ms": 0.5396249999999999,
+        "total_duration_ms": 0.547125,
+        "redirect_count": 0,
+        "started_at": "2026-03-14T13:56:38.536135Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "x-networker-server-timestamp",
+            "2026-03-14T13:56:38.536498+00:00"
+          ],
+          [
+            "x-networker-server-version",
+            "0.13.17"
+          ]
+        ],
+        "payload_bytes": 0
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0,
+      "page_load": {
+        "asset_count": 20,
+        "assets_fetched": 20,
+        "total_bytes": 204800,
+        "total_ms": 6.114917,
+        "ttfb_ms": 0.5396249999999999,
+        "connections_opened": 1,
+        "asset_timings_ms": [
+          1.762833,
+          1.64,
+          1.597167,
+          1.632375,
+          1.483417,
+          1.440958,
+          1.40225,
+          1.330709,
+          1.521083,
+          1.436625,
+          1.378625,
+          1.6202079999999999,
+          1.5883749999999999,
+          1.70575,
+          1.588584,
+          1.7316250000000002,
+          1.8041660000000002,
+          1.9117920000000002,
+          2.0461250000000004,
+          2.0167919999999997
+        ],
+        "started_at": "2026-03-14T13:56:38.534356Z",
+        "tls_setup_ms": 1.70325,
+        "tls_overhead_ratio": 0.2785401666122369,
+        "per_connection_tls_ms": [
+          1.70325
+        ],
+        "cpu_time_ms": 6.715,
+        "connection_reused": false
+      }
+    },
+    {
+      "attempt_id": "f59bcb10-af6f-439d-9b2e-e0b2b945af95",
+      "run_id": "605ef2b0-4d86-46c0-8fa8-b748aa85dafb",
+      "protocol": "http1",
+      "sequence_num": 24,
+      "started_at": "2026-03-14T13:56:38.540515Z",
+      "finished_at": "2026-03-14T13:56:38.542045Z",
+      "success": true,
+      "dns": {
+        "query_name": "127.0.0.1",
+        "resolved_ips": [
+          "127.0.0.1"
+        ],
+        "duration_ms": 0.094417,
+        "started_at": "2026-03-14T13:56:38.540518Z",
+        "success": true
+      },
+      "tcp": {
+        "local_addr": "127.0.0.1:64283",
+        "remote_addr": "127.0.0.1:8443",
+        "connect_duration_ms": 0.08366599999999999,
+        "attempt_count": 1,
+        "started_at": "2026-03-14T13:56:38.540617Z",
+        "success": true,
+        "mss_bytes": 16332,
+        "rtt_estimate_ms": null,
+        "retransmits": null,
+        "total_retrans": null,
+        "snd_cwnd": null,
+        "snd_ssthresh": null,
+        "rtt_variance_ms": null,
+        "rcv_space": null,
+        "segs_out": null,
+        "segs_in": null
+      },
+      "tls": {
+        "protocol_version": "TLSv1_3",
+        "cipher_suite": "TLS13_AES_256_GCM_SHA384",
+        "alpn_negotiated": "http/1.1",
+        "cert_subject": "CN=rcgen self signed cert",
+        "cert_issuer": "CN=rcgen self signed cert",
+        "cert_expiry": "4096-01-01T00:00:00Z",
+        "handshake_duration_ms": 1.0510000000000002,
+        "started_at": "2026-03-14T13:56:38.540706Z",
+        "success": true,
+        "tls_backend": "rustls"
+      },
+      "http": {
+        "negotiated_version": "HTTP/1.1",
+        "status_code": 200,
+        "headers_size_bytes": 222,
+        "body_size_bytes": 113,
+        "ttfb_ms": 0.214667,
+        "total_duration_ms": 0.24441699999999997,
+        "redirect_count": 0,
+        "started_at": "2026-03-14T13:56:38.541798Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "x-networker-server-timestamp",
+            "2026-03-14T13:56:38.541938+00:00"
+          ],
+          [
+            "x-networker-server-version",
+            "0.13.17"
+          ],
+          [
+            "alt-svc",
+            "h3=\":8443\"; ma=86400"
+          ],
+          [
+            "content-length",
+            "113"
+          ],
+          [
+            "date",
+            "Sat, 14 Mar 2026 13:56:38 GMT"
+          ]
+        ],
+        "payload_bytes": 0,
+        "cpu_time_ms": 0.929,
+        "csw_voluntary": 0,
+        "csw_involuntary": 14
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0,
+      "server_timing": {
+        "server_timestamp": "2026-03-14T13:56:38.541938Z",
+        "clock_skew_ms": 0.018666500000000003,
+        "server_version": "0.13.17"
+      }
+    },
+    {
+      "attempt_id": "e89f8445-f674-419e-85dd-1ae0e3a93946",
+      "run_id": "605ef2b0-4d86-46c0-8fa8-b748aa85dafb",
+      "protocol": "http2",
+      "sequence_num": 25,
+      "started_at": "2026-03-14T13:56:38.542065Z",
+      "finished_at": "2026-03-14T13:56:38.543733Z",
+      "success": true,
+      "dns": {
+        "query_name": "127.0.0.1",
+        "resolved_ips": [
+          "127.0.0.1"
+        ],
+        "duration_ms": 0.058708,
+        "started_at": "2026-03-14T13:56:38.542068Z",
+        "success": true
+      },
+      "tcp": {
+        "local_addr": "127.0.0.1:64284",
+        "remote_addr": "127.0.0.1:8443",
+        "connect_duration_ms": 0.06979199999999999,
+        "attempt_count": 1,
+        "started_at": "2026-03-14T13:56:38.542131Z",
+        "success": true,
+        "mss_bytes": 16332,
+        "rtt_estimate_ms": null,
+        "retransmits": null,
+        "total_retrans": null,
+        "snd_cwnd": null,
+        "snd_ssthresh": null,
+        "rtt_variance_ms": null,
+        "rcv_space": null,
+        "segs_out": null,
+        "segs_in": null
+      },
+      "tls": {
+        "protocol_version": "TLSv1_3",
+        "cipher_suite": "TLS13_AES_256_GCM_SHA384",
+        "alpn_negotiated": "h2",
+        "cert_subject": "CN=rcgen self signed cert",
+        "cert_issuer": "CN=rcgen self signed cert",
+        "cert_expiry": "4096-01-01T00:00:00Z",
+        "handshake_duration_ms": 1.073167,
+        "started_at": "2026-03-14T13:56:38.542205Z",
+        "success": true,
+        "tls_backend": "rustls"
+      },
+      "http": {
+        "negotiated_version": "HTTP/2",
+        "status_code": 200,
+        "headers_size_bytes": 222,
+        "body_size_bytes": 113,
+        "ttfb_ms": 0.372958,
+        "total_duration_ms": 0.426417,
+        "redirect_count": 0,
+        "started_at": "2026-03-14T13:56:38.543304Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "x-networker-server-timestamp",
+            "2026-03-14T13:56:38.543546+00:00"
+          ],
+          [
+            "x-networker-server-version",
+            "0.13.17"
+          ],
+          [
+            "alt-svc",
+            "h3=\":8443\"; ma=86400"
+          ],
+          [
+            "content-length",
+            "113"
+          ],
+          [
+            "date",
+            "Sat, 14 Mar 2026 13:56:38 GMT"
+          ]
+        ],
+        "payload_bytes": 0,
+        "cpu_time_ms": 1.029,
+        "csw_voluntary": 0,
+        "csw_involuntary": 18
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0,
+      "server_timing": {
+        "server_timestamp": "2026-03-14T13:56:38.543546Z",
+        "clock_skew_ms": 0.020520999999999984,
+        "server_version": "0.13.17"
+      }
+    },
+    {
+      "attempt_id": "00236779-9618-441b-91dd-4283372f418f",
+      "run_id": "605ef2b0-4d86-46c0-8fa8-b748aa85dafb",
+      "protocol": "http3",
+      "sequence_num": 26,
+      "started_at": "2026-03-14T13:56:38.543752Z",
+      "finished_at": "2026-03-14T13:56:38.546048Z",
+      "success": true,
+      "dns": null,
+      "tcp": null,
+      "tls": {
+        "protocol_version": "TLSv1.3 (QUIC)",
+        "cipher_suite": "QUIC-embedded",
+        "alpn_negotiated": "h3",
+        "cert_subject": null,
+        "cert_issuer": null,
+        "cert_expiry": null,
+        "handshake_duration_ms": 1.677041,
+        "started_at": "2026-03-14T13:56:38.546048Z",
+        "success": true,
+        "tls_backend": "rustls"
+      },
+      "http": {
+        "negotiated_version": "HTTP/3",
+        "status_code": 200,
+        "headers_size_bytes": 133,
+        "body_size_bytes": 113,
+        "ttfb_ms": 0.48700000000000004,
+        "total_duration_ms": 2.294791,
+        "redirect_count": 0,
+        "started_at": "2026-03-14T13:56:38.546048Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "x-networker-server-timestamp",
+            "2026-03-14T13:56:38.545854+00:00"
+          ],
+          [
+            "x-networker-server-version",
+            "0.13.17"
+          ]
+        ],
+        "payload_bytes": 0,
+        "cpu_time_ms": 1.424,
+        "csw_voluntary": 0,
+        "csw_involuntary": 21
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0
+    },
+    {
+      "attempt_id": "febb1592-c6bf-412a-b1bb-2daf6d07e74c",
+      "run_id": "605ef2b0-4d86-46c0-8fa8-b748aa85dafb",
+      "protocol": "udp",
+      "sequence_num": 27,
+      "started_at": "2026-03-14T13:56:38.546072Z",
+      "finished_at": "2026-03-14T13:56:38.546649Z",
+      "success": true,
+      "dns": null,
+      "tcp": null,
+      "tls": null,
+      "http": null,
+      "udp": {
+        "remote_addr": "127.0.0.1:9999",
+        "probe_count": 10,
+        "success_count": 10,
+        "loss_percent": 0.0,
+        "rtt_min_ms": 0.045250000000000005,
+        "rtt_avg_ms": 0.053341799999999995,
+        "rtt_p95_ms": 0.063042,
+        "jitter_ms": 0.0019768888888888883,
+        "started_at": "2026-03-14T13:56:38.546072Z",
+        "probe_rtts_ms": [
+          0.063042,
+          0.045250000000000005,
+          0.055917,
+          0.051125000000000004,
+          0.053125,
+          0.054542,
+          0.053583,
+          0.050959,
+          0.053,
+          0.052875
+        ]
+      },
+      "error": null,
+      "retry_count": 0
+    },
+    {
+      "attempt_id": "b3b87cd9-9f8d-40f4-ab4d-4723f10036aa",
+      "run_id": "605ef2b0-4d86-46c0-8fa8-b748aa85dafb",
+      "protocol": "pageload2",
+      "sequence_num": 28,
+      "started_at": "2026-03-14T13:56:38.546675Z",
+      "finished_at": "2026-03-14T13:56:38.549931Z",
+      "success": true,
+      "dns": {
+        "query_name": "127.0.0.1",
+        "resolved_ips": [
+          "127.0.0.1"
+        ],
+        "duration_ms": 0.050832999999999996,
+        "started_at": "2026-03-14T13:56:38.546676Z",
+        "success": true
+      },
+      "tcp": {
+        "local_addr": "127.0.0.1:64285",
+        "remote_addr": "127.0.0.1:8443",
+        "connect_duration_ms": 0.056292,
+        "attempt_count": 1,
+        "started_at": "2026-03-14T13:56:38.546732Z",
+        "success": true,
+        "mss_bytes": 16332,
+        "rtt_estimate_ms": null,
+        "retransmits": null,
+        "total_retrans": null,
+        "snd_cwnd": null,
+        "snd_ssthresh": null,
+        "rtt_variance_ms": null,
+        "rcv_space": null,
+        "segs_out": null,
+        "segs_in": null
+      },
+      "tls": {
+        "protocol_version": "TLSv1_3",
+        "cipher_suite": "TLS13_AES_256_GCM_SHA384",
+        "alpn_negotiated": "h2",
+        "cert_subject": null,
+        "cert_issuer": null,
+        "cert_expiry": null,
+        "handshake_duration_ms": 1.0647090000000001,
+        "started_at": "2026-03-14T13:56:38.546792Z",
+        "success": true,
+        "tls_backend": "rustls"
+      },
+      "http": {
+        "negotiated_version": "HTTP/2",
+        "status_code": 200,
+        "headers_size_bytes": 222,
+        "body_size_bytes": 579,
+        "ttfb_ms": 0.376583,
+        "total_duration_ms": 0.38816700000000004,
+        "redirect_count": 0,
+        "started_at": "2026-03-14T13:56:38.546792Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "x-networker-server-timestamp",
+            "2026-03-14T13:56:38.548097+00:00"
+          ],
+          [
+            "x-networker-server-version",
+            "0.13.17"
+          ],
+          [
+            "alt-svc",
+            "h3=\":8443\"; ma=86400"
+          ],
+          [
+            "content-length",
+            "579"
+          ],
+          [
+            "date",
+            "Sat, 14 Mar 2026 13:56:38 GMT"
+          ]
+        ],
+        "payload_bytes": 0
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0,
+      "server_timing": {
+        "server_timestamp": "2026-03-14T13:56:38.548097Z",
+        "clock_skew_ms": 0.027708499999999997,
+        "server_version": "0.13.17"
+      },
+      "page_load": {
+        "asset_count": 20,
+        "assets_fetched": 20,
+        "total_bytes": 204800,
+        "total_ms": 3.2556249999999998,
+        "ttfb_ms": 0.376583,
+        "connections_opened": 1,
+        "asset_timings_ms": [
+          0.6295419999999999,
+          0.634834,
+          0.6541669999999999,
+          0.48812500000000003,
+          0.902,
+          0.9105829999999999,
+          1.420334,
+          1.001916,
+          1.450792,
+          1.463916,
+          1.425334,
+          1.3908749999999999,
+          1.438,
+          1.000208,
+          1.508541,
+          1.55025,
+          1.435875,
+          0.999458,
+          1.4275,
+          1.549
+        ],
+        "started_at": "2026-03-14T13:56:38.546675Z",
+        "tls_setup_ms": 1.0647090000000001,
+        "tls_overhead_ratio": 0.3270367440967557,
+        "per_connection_tls_ms": [
+          1.0647090000000001
+        ],
+        "cpu_time_ms": 3.323,
+        "connection_reused": false
+      }
+    },
+    {
+      "attempt_id": "539a0ae5-7625-47fe-8d59-2b611817af99",
+      "run_id": "605ef2b0-4d86-46c0-8fa8-b748aa85dafb",
+      "protocol": "pageload3",
+      "sequence_num": 29,
+      "started_at": "2026-03-14T13:56:38.549956Z",
+      "finished_at": "2026-03-14T13:56:38.556184Z",
+      "success": true,
+      "dns": null,
+      "tcp": null,
+      "tls": {
+        "protocol_version": "TLSv1.3 (QUIC)",
+        "cipher_suite": "QUIC-embedded",
+        "alpn_negotiated": "h3",
+        "cert_subject": null,
+        "cert_issuer": null,
+        "cert_expiry": null,
+        "handshake_duration_ms": 1.672625,
+        "started_at": "2026-03-14T13:56:38.551736Z",
+        "success": true,
+        "tls_backend": "rustls+quinn"
+      },
+      "http": {
+        "negotiated_version": "HTTP/3",
+        "status_code": 200,
+        "headers_size_bytes": 133,
+        "body_size_bytes": 579,
+        "ttfb_ms": 0.575083,
+        "total_duration_ms": 0.581708,
+        "redirect_count": 0,
+        "started_at": "2026-03-14T13:56:38.551736Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "x-networker-server-timestamp",
+            "2026-03-14T13:56:38.552073+00:00"
+          ],
+          [
+            "x-networker-server-version",
+            "0.13.17"
+          ]
+        ],
+        "payload_bytes": 0
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0,
+      "page_load": {
+        "asset_count": 20,
+        "assets_fetched": 20,
+        "total_bytes": 204800,
+        "total_ms": 6.2275409999999995,
+        "ttfb_ms": 0.575083,
+        "connections_opened": 1,
+        "asset_timings_ms": [
+          1.681791,
+          1.5534999999999999,
+          1.560541,
+          1.442,
+          1.4301249999999999,
+          1.4114170000000001,
+          1.420334,
+          1.328916,
+          1.397334,
+          1.426625,
+          1.491042,
+          1.6369170000000002,
+          2.035416,
+          1.641708,
+          1.794333,
+          1.934333,
+          2.138666,
+          2.0785,
+          2.22825,
+          2.265792
+        ],
+        "started_at": "2026-03-14T13:56:38.549956Z",
+        "tls_setup_ms": 1.672625,
+        "tls_overhead_ratio": 0.2685851446020187,
+        "per_connection_tls_ms": [
+          1.672625
+        ],
+        "cpu_time_ms": 6.777,
+        "connection_reused": false
+      }
+    }
+  ]
+}
