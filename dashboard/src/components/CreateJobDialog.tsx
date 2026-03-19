@@ -123,8 +123,10 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
     setLoading(true);
     setError(null);
     try {
+      // Ensure target has a scheme — tester requires a full URL
+      const normalizedTarget = target.match(/^https?:\/\//) ? target : `https://${target}`;
       const result = await api.createJob({
-        target,
+        target: normalizedTarget,
         modes: Array.from(selectedModes),
         runs,
         concurrency,

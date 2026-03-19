@@ -281,17 +281,20 @@ TOKEN=\$(curl -s -H "Metadata: true" \
     | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 
 # Exchange for AWS credentials via STS
-CREDS=\$(aws sts assume-role-with-web-identity \
-    --role-arn "\${ROLE_ARN}" \
-    --role-session-name "networker-dashboard" \
-    --web-identity-token "\${TOKEN}" \
-    --duration-seconds 3600 \
-    --output json)
+# AWS_CONFIG_FILE=/dev/null prevents credential_process recursion
+CREDS=\$(AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null \\
+    aws sts assume-role-with-web-identity \\
+    --role-arn "\${ROLE_ARN}" \\
+    --role-session-name "networker-dashboard" \\
+    --web-identity-token "\${TOKEN}" \\
+    --duration-seconds 3600 \\
+    --output json \\
+    --no-sign-request)
 
 # Output in credential_process format
-python3 -c "
-import json, sys
-c = json.loads(''''\${CREDS}''''')['Credentials']
+python3 << PYEOF
+import json
+c = json.loads('''\${CREDS}''')['Credentials']
 print(json.dumps({
     'Version': 1,
     'AccessKeyId': c['AccessKeyId'],
@@ -299,7 +302,7 @@ print(json.dumps({
     'SessionToken': c['SessionToken'],
     'Expiration': c['Expiration']
 }))
-"
+PYEOF
 HELPER
 
 chmod +x "${HELPER_PATH}"
