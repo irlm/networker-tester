@@ -3,6 +3,7 @@ mod auth;
 mod dashboard;
 mod jobs;
 mod runs;
+mod url_tests;
 
 use axum::{middleware, Router};
 use std::sync::Arc;
@@ -18,6 +19,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(agents::router(state.clone()))
         .merge(jobs::router(state.clone()))
         .merge(runs::router(state.clone()))
+        .merge(url_tests::router(state.clone()))
         .merge(dashboard::router(state.clone()))
         .layer(middleware::from_fn_with_state(
             state.clone(),

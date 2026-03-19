@@ -11,6 +11,124 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.34] – 2026-03-18 — URL diagnostic docs and output hardening
+
+### Added
+- Documented the URL page-load diagnostic workflow in the main README and probes reference.
+- Expanded the URL diagnostic JSON fixture coverage to include origin and connection summaries.
+- Clarified the dashboard/API endpoints available for URL diagnostic consumers.
+
+---
+
+## [0.13.33] – 2026-03-18 — URL diagnostic per-origin and connection summaries
+
+### Added
+- Added per-origin and connection summary models for URL diagnostic runs.
+- Added canonical resource aggregation logic in the URL diagnostic module.
+- Exposed grouped origin/connection summaries through the dashboard sectioned detail response.
+
+---
+
+## [0.13.32] – 2026-03-18 — URL diagnostic PCAP summary surfacing
+
+### Added
+- Added structured PCAP summary data to the URL diagnostic result model.
+- Persisted PCAP summary JSON alongside URL diagnostic runs in database backends.
+- Exposed PCAP summary data through the dashboard URL diagnostic detail/sectioned detail responses.
+
+---
+
+## [0.13.31] – 2026-03-18 — URL diagnostic PCAP integration
+
+### Added
+- Integrated the existing packet-capture subsystem into the URL diagnostic CLI flow as a best-effort PCAP artifact path.
+- Added packet-capture capability detection to URL diagnostics and surfaced HAR/PCAP artifact locations in the CLI summary.
+- Added URL diagnostic test coverage for capture capability detection.
+
+---
+
+## [0.13.30] – 2026-03-18 — URL diagnostic HAR export
+
+### Added
+- Added HAR artifact generation for URL diagnostic runs using captured resource timing data.
+- Added CLI artifact handling so generated HAR files are carried into the configured output directory.
+- Added unit tests covering HAR artifact creation and content shape.
+
+---
+
+## [0.13.29] – 2026-03-18 — URL diagnostic protocol validation probes
+
+### Added
+- Added URL diagnostic protocol validation probe execution using existing HTTP/1.1, HTTP/2, and HTTP/3 runner primitives.
+- Added translation from `RequestAttempt` into `UrlTestProtocolRun` for validated protocol results.
+- Added tests covering unavailable probe capability handling and failed-attempt probe translation.
+
+---
+
+## [0.13.28] – 2026-03-18 — URL diagnostic dashboard sectioned detail API
+
+### Added
+- Added sectioned URL diagnostic detail responses for dashboard-friendly overview/timing/protocol/TLS/artifact grouping.
+- Added `GET /api/url-tests/:run_id/sections` for a pre-grouped dashboard detail payload.
+- Added dashboard unit tests covering sectioned URL diagnostic response shaping.
+
+---
+
+## [0.13.27] – 2026-03-17 — URL diagnostic dashboard API foundation
+
+### Added
+- Added dashboard DB read models for URL diagnostic run summaries and details.
+- Added dashboard API endpoints for listing URL diagnostic runs and fetching a single detailed URL diagnostic record.
+- Added unit tests for URL diagnostic dashboard helper parsing.
+
+---
+
+## [0.13.26] – 2026-03-17 — URL diagnostic persistence wiring
+
+### Added
+- Extended the database backend abstraction with `save_url_test(...)` for URL page-load diagnostic runs.
+- Added PostgreSQL and SQL Server insert helpers for `UrlTestRun`, `UrlTestResource`, and `UrlTestProtocolRun`.
+- Wired the URL diagnostic CLI flow to persist URL diagnostic runs when `--save-to-db` is enabled.
+
+---
+
+## [0.13.25] – 2026-03-17 — URL diagnostic CLI entry point
+
+### Added
+- Added dedicated URL diagnostic CLI flags for primary URL, headers, capture options, protocol preference, and JSON output.
+- Added URL diagnostic JSON save/string helpers and CLI summary rendering.
+- Added CLI/config validation tests for URL diagnostic flag parsing and invalid protocol-force handling.
+
+---
+
+## [0.13.24] – 2026-03-17 — URL diagnostic primary page-load scaffold
+
+### Added
+- Added primary URL diagnostic execution entry point with lifecycle-aware browser/stub handling.
+- Added runtime capability detection for browser/HAR/PCAP/probe availability.
+- Added URL diagnostic tests for non-browser execution failure behavior alongside the existing lifecycle tests.
+
+---
+
+## [0.13.23] – 2026-03-17 — URL diagnostic orchestrator foundation
+
+### Added
+- Added `url_diagnostic` orchestration module with request validation, capability flags, and lifecycle helpers for URL diagnostics.
+- Added normalized `UrlDiagnosticRequest`, `UrlDiagnosticCapabilities`, and `UrlDiagnosticPlan` scaffolding for future page-load execution.
+- Added unit tests covering request validation, lifecycle transitions, aggregate counters, and protocol validation bookkeeping.
+
+---
+
+## [0.13.22] – 2026-03-17 — URL diagnostic schema foundation
+
+### Added
+- Added `UrlTestRun`, `UrlTestResource`, and `UrlTestProtocolRun` result contracts for the URL page-load diagnostic feature.
+- Added PostgreSQL V002 migration for URL diagnostic foundation tables.
+- Added SQL Server companion script `sql/08_UrlDiagnostics.sql` for the same schema.
+- Added unit tests covering URL diagnostic contract serialization and PostgreSQL migration content.
+
+---
+
 ## [0.13.21] – 2026-03-15 — First impairment scenario support
 
 ### Added

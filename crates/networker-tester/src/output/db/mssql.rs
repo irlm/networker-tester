@@ -7,7 +7,7 @@
 /// Pass an ADO.NET-style connection string, e.g.:
 ///   "Server=localhost;Database=NetworkDiagnostics;User Id=sa;Password=Pass!;TrustServerCertificate=true"
 use super::DatabaseBackend;
-use crate::metrics::{RequestAttempt, TestRun};
+use crate::metrics::{RequestAttempt, TestRun, UrlTestProtocolRun, UrlTestResource, UrlTestRun};
 use anyhow::Context;
 use async_trait::async_trait;
 use tiberius::{Client, Config, Query};
@@ -80,6 +80,18 @@ impl DatabaseBackend for MssqlBackend {
         Ok(())
     }
 
+    async fn save_url_test(&self, run: &UrlTestRun) -> anyhow::Result<()> {
+        let mut c = self.client.lock().await;
+        insert_url_test_run(run, &mut c).await?;
+        for resource in &run.resources {
+            insert_url_test_resource(run.id, resource, &mut c).await?;
+        }
+        for probe in &run.protocol_runs {
+            insert_url_test_protocol_run(run.id, probe, &mut c).await?;
+        }
+        Ok(())
+    }
+
     async fn ping(&self) -> anyhow::Result<()> {
         let mut c = self.client.lock().await;
         c.simple_query("SELECT 1")
@@ -122,6 +134,151 @@ async fn insert_test_run(run: &TestRun, c: &mut SqlClient) -> anyhow::Result<()>
     q.bind(run.success_count() as i32);
     q.bind(run.failure_count() as i32);
     q.execute(c).await.context("INSERT TestRun")?;
+    Ok(())
+}
+
+async fn insert_url_test_run(run: &UrlTestRun, c: &mut SqlClient) -> anyhow::Result<()> {
+    let validated_http_versions = run.validated_http_versions.join(",");
+    let capture_errors = if run.capture_errors.is_empty() {
+        None
+    } else {
+        Some(run.capture_errors.join("\n"))
+    };
+    let pcap_summary_json = run
+        .pcap_summary
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .context("serialize UrlPacketCaptureSummary")?;
+    let status = serde_json::to_value(&run.status)?
+        .as_str()
+        .unwrap_or("pending")
+        .to_string();
+    let page_load_strategy = serde_json::to_value(&run.page_load_strategy)?
+        .as_str()
+        .unwrap_or("browser")
+        .to_string();
+
+    let mut q = Query::new(
+        "INSERT INTO dbo.UrlTestRun (
+            Id, StartedAt, CompletedAt, RequestedUrl, FinalUrl, Status, PageLoadStrategy,
+            BrowserEngine, BrowserVersion, UserAgent, PrimaryOrigin, ObservedProtocolPrimaryLoad,
+            AdvertisedAltSvc, ValidatedHttpVersions, TlsVersion, CipherSuite, Alpn,
+            DnsMs, ConnectMs, HandshakeMs, TtfbMs, DomContentLoadedMs, LoadEventMs,
+            NetworkIdleMs, CaptureEndMs, TotalRequests, TotalTransferBytes,
+            PeakConcurrentConnections, RedirectCount, FailureCount, HarPath, PcapPath,
+            PcapSummaryJson, CaptureErrors, EnvironmentNotes
+        ) VALUES (
+            @P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9,@P10,@P11,@P12,@P13,@P14,@P15,@P16,@P17,
+            @P18,@P19,@P20,@P21,@P22,@P23,@P24,@P25,@P26,@P27,@P28,@P29,@P30,@P31,@P32,@P33,@P34,@P35
+        )",
+    );
+    q.bind(run.id.to_string());
+    q.bind(run.started_at.naive_utc());
+    q.bind(run.completed_at.map(|t| t.naive_utc()));
+    q.bind(run.requested_url.as_str());
+    q.bind(run.final_url.as_deref());
+    q.bind(status.as_str());
+    q.bind(page_load_strategy.as_str());
+    q.bind(run.browser_engine.as_deref());
+    q.bind(run.browser_version.as_deref());
+    q.bind(run.user_agent.as_deref());
+    q.bind(run.primary_origin.as_deref());
+    q.bind(run.observed_protocol_primary_load.as_deref());
+    q.bind(run.advertised_alt_svc.as_deref());
+    q.bind(validated_http_versions.as_str());
+    q.bind(run.tls_version.as_deref());
+    q.bind(run.cipher_suite.as_deref());
+    q.bind(run.alpn.as_deref());
+    q.bind(run.dns_ms);
+    q.bind(run.connect_ms);
+    q.bind(run.handshake_ms);
+    q.bind(run.ttfb_ms);
+    q.bind(run.dom_content_loaded_ms);
+    q.bind(run.load_event_ms);
+    q.bind(run.network_idle_ms);
+    q.bind(run.capture_end_ms);
+    q.bind(run.total_requests as i32);
+    q.bind(run.total_transfer_bytes as i64);
+    q.bind(run.peak_concurrent_connections.map(|v| v as i32));
+    q.bind(run.redirect_count as i32);
+    q.bind(run.failure_count as i32);
+    q.bind(run.har_path.as_deref());
+    q.bind(run.pcap_path.as_deref());
+    q.bind(pcap_summary_json.as_deref());
+    q.bind(capture_errors.as_deref());
+    q.bind(run.environment_notes.as_deref());
+    q.execute(c).await.context("INSERT UrlTestRun")?;
+    Ok(())
+}
+
+async fn insert_url_test_resource(
+    run_id: uuid::Uuid,
+    r: &UrlTestResource,
+    c: &mut SqlClient,
+) -> anyhow::Result<()> {
+    let mut q = Query::new(
+        "INSERT INTO dbo.UrlTestResource (
+            Id, UrlTestRunId, ResourceUrl, Origin, ResourceType, MimeType, StatusCode,
+            Protocol, TransferSize, EncodedBodySize, DecodedBodySize, DurationMs,
+            ConnectionId, ReusedConnection, InitiatorType, FromCache, Redirected, Failed
+        ) VALUES (
+            @P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9,@P10,@P11,@P12,@P13,@P14,@P15,@P16,@P17,@P18
+        )",
+    );
+    q.bind(uuid::Uuid::new_v4().to_string());
+    q.bind(run_id.to_string());
+    q.bind(r.resource_url.as_str());
+    q.bind(r.origin.as_str());
+    q.bind(r.resource_type.as_str());
+    q.bind(r.mime_type.as_deref());
+    q.bind(r.status_code.map(|v| v as i32));
+    q.bind(r.protocol.as_deref());
+    q.bind(r.transfer_size.map(|v| v as i64));
+    q.bind(r.encoded_body_size.map(|v| v as i64));
+    q.bind(r.decoded_body_size.map(|v| v as i64));
+    q.bind(r.duration_ms);
+    q.bind(r.connection_id.as_deref());
+    q.bind(r.reused_connection);
+    q.bind(r.initiator_type.as_deref());
+    q.bind(r.from_cache);
+    q.bind(r.redirected);
+    q.bind(r.failed);
+    q.execute(c).await.context("INSERT UrlTestResource")?;
+    Ok(())
+}
+
+async fn insert_url_test_protocol_run(
+    run_id: uuid::Uuid,
+    p: &UrlTestProtocolRun,
+    c: &mut SqlClient,
+) -> anyhow::Result<()> {
+    let attempt_type = serde_json::to_value(&p.attempt_type)?
+        .as_str()
+        .unwrap_or("probe")
+        .to_string();
+    let mut q = Query::new(
+        "INSERT INTO dbo.UrlTestProtocolRun (
+            Id, UrlTestRunId, ProtocolMode, RunNumber, AttemptType, ObservedProtocol,
+            FallbackOccurred, Succeeded, StatusCode, TtfbMs, TotalMs, FailureReason, Error
+        ) VALUES (
+            @P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9,@P10,@P11,@P12,@P13
+        )",
+    );
+    q.bind(uuid::Uuid::new_v4().to_string());
+    q.bind(run_id.to_string());
+    q.bind(p.protocol_mode.as_str());
+    q.bind(p.run_number as i32);
+    q.bind(attempt_type.as_str());
+    q.bind(p.observed_protocol.as_deref());
+    q.bind(p.fallback_occurred);
+    q.bind(p.succeeded);
+    q.bind(p.status_code.map(|v| v as i32));
+    q.bind(p.ttfb_ms);
+    q.bind(p.total_ms);
+    q.bind(p.failure_reason.as_deref());
+    q.bind(p.error.as_deref());
+    q.execute(c).await.context("INSERT UrlTestProtocolRun")?;
     Ok(())
 }
 

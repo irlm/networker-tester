@@ -1,5 +1,5 @@
 use anyhow::Context;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -18,20 +18,20 @@ pub struct PacketCapturePlan {
     pub summary_path: PathBuf,
 }
 
-#[derive(Debug, Serialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct PacketShare {
     pub protocol: String,
     pub packets: u64,
     pub pct_of_total: f64,
 }
 
-#[derive(Debug, Serialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct EndpointPacketCount {
     pub endpoint: String,
     pub packets: u64,
 }
 
-#[derive(Debug, Serialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct PortPacketCount {
     pub port: u16,
     pub packets: u64,
@@ -561,6 +561,15 @@ mod tests {
     fn sample_cfg(mode: PacketCaptureMode, targets: Vec<&str>) -> ResolvedConfig {
         ResolvedConfig {
             targets: targets.into_iter().map(str::to_string).collect(),
+            url_test_url: None,
+            url_test_auth_token: None,
+            url_test_cookie: None,
+            url_test_headers: vec![],
+            url_test_capture_har: false,
+            url_test_capture_pcap: false,
+            url_test_protocol_force: None,
+            url_test_http3_repeat: 10,
+            url_test_json: false,
             modes: vec![],
             runs: 1,
             concurrency: 1,

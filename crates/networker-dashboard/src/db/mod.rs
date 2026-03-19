@@ -2,6 +2,7 @@ pub mod agents;
 pub mod jobs;
 pub mod migrations;
 pub mod runs;
+pub mod url_tests;
 pub mod users;
 
 use deadpool_postgres::{Config, Pool, Runtime};

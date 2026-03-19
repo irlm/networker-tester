@@ -147,6 +147,43 @@ pub struct Cli {
     #[arg(long)]
     pub excel: bool,
 
+    // ── URL diagnostic (PR-04 path) ─────────────────────────────────────────
+    /// Run the URL page-load diagnostic workflow against the provided URL.
+    #[arg(long)]
+    pub url_test_url: Option<String>,
+
+    /// Optional bearer token for URL diagnostic requests.
+    #[arg(long)]
+    pub url_test_auth_token: Option<String>,
+
+    /// Optional cookie header value for URL diagnostic requests.
+    #[arg(long)]
+    pub url_test_cookie: Option<String>,
+
+    /// Extra headers for URL diagnostics, repeatable: --url-test-header 'Name: value'
+    #[arg(long = "url-test-header", action = clap::ArgAction::Append, num_args = 1)]
+    pub url_test_headers: Vec<String>,
+
+    /// Enable HAR capture for URL diagnostics when supported.
+    #[arg(long)]
+    pub url_test_capture_har: bool,
+
+    /// Enable packet capture for URL diagnostics when supported.
+    #[arg(long)]
+    pub url_test_capture_pcap: bool,
+
+    /// Preferred protocol mode for URL diagnostics: auto|h1|h2|h3.
+    #[arg(long)]
+    pub url_test_protocol_force: Option<String>,
+
+    /// Repetition count for HTTP/3 validation probes in URL diagnostics.
+    #[arg(long)]
+    pub url_test_http3_repeat: Option<u32>,
+
+    /// Emit the URL diagnostic result as JSON to stdout.
+    #[arg(long)]
+    pub url_test_json: bool,
+
     // ── Database ──────────────────────────────────────────────────────────────
     /// Insert results into a database (auto-detects backend from URL scheme)
     #[arg(long)]
@@ -326,6 +363,15 @@ pub struct ConfigFile {
 pub struct ResolvedConfig {
     /// One or more target URLs to probe. Always non-empty (defaults to localhost).
     pub targets: Vec<String>,
+    pub url_test_url: Option<String>,
+    pub url_test_auth_token: Option<String>,
+    pub url_test_cookie: Option<String>,
+    pub url_test_headers: Vec<String>,
+    pub url_test_capture_har: bool,
+    pub url_test_capture_pcap: bool,
+    pub url_test_protocol_force: Option<String>,
+    pub url_test_http3_repeat: u32,
+    pub url_test_json: bool,
     pub modes: Vec<String>,
     pub runs: u32,
     pub concurrency: usize,
@@ -480,6 +526,15 @@ impl Cli {
                 }
                 ts
             },
+            url_test_url: self.url_test_url,
+            url_test_auth_token: self.url_test_auth_token,
+            url_test_cookie: self.url_test_cookie,
+            url_test_headers: self.url_test_headers,
+            url_test_capture_har: self.url_test_capture_har,
+            url_test_capture_pcap: self.url_test_capture_pcap,
+            url_test_protocol_force: self.url_test_protocol_force,
+            url_test_http3_repeat: self.url_test_http3_repeat.unwrap_or(10),
+            url_test_json: self.url_test_json,
             modes: pick!(modes, vec!["http1".into(), "http2".into(), "udp".into()]),
             runs: pick!(runs, 3),
             concurrency: pick!(concurrency, 1),
@@ -535,6 +590,25 @@ impl Cli {
 impl ResolvedConfig {
     /// Validate combinations of flags; return user-friendly errors.
     pub fn validate(&self) -> anyhow::Result<()> {
+        if let Some(url) = &self.url_test_url {
+            let parsed = url::Url::parse(url)
+                .map_err(|e| anyhow::anyhow!("--url-test-url invalid URL: {e}"))?;
+            match parsed.scheme() {
+                "http" | "https" => {}
+                other => anyhow::bail!("--url-test-url unsupported URL scheme '{other}'"),
+            }
+            if let Some(force) = &self.url_test_protocol_force {
+                match force.as_str() {
+                    "auto" | "h1" | "h2" | "h3" => {}
+                    _ => {
+                        anyhow::bail!("--url-test-protocol-force must be one of: auto, h1, h2, h3")
+                    }
+                }
+            }
+            if self.url_test_http3_repeat == 0 {
+                anyhow::bail!("--url-test-http3-repeat must be at least 1");
+            }
+        }
         if self.save_to_db && self.db_url.is_none() && !self.save_to_sql {
             anyhow::bail!("--save-to-db requires --db-url (or NETWORKER_DB_URL env var)");
         }
@@ -858,6 +932,39 @@ mod tests {
     }
 
     // ── Database flag tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn url_test_flags_parse_and_validate() {
+        let cfg = Cli::parse_from([
+            "networker-tester",
+            "--url-test-url",
+            "https://example.com",
+            "--url-test-protocol-force",
+            "h3",
+            "--url-test-http3-repeat",
+            "3",
+            "--url-test-json",
+        ])
+        .resolve(None);
+        assert_eq!(cfg.url_test_url.as_deref(), Some("https://example.com"));
+        assert_eq!(cfg.url_test_protocol_force.as_deref(), Some("h3"));
+        assert_eq!(cfg.url_test_http3_repeat, 3);
+        assert!(cfg.url_test_json);
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn url_test_invalid_protocol_force_fails_validation() {
+        let cfg = Cli::parse_from([
+            "networker-tester",
+            "--url-test-url",
+            "https://example.com",
+            "--url-test-protocol-force",
+            "h9",
+        ])
+        .resolve(None);
+        assert!(cfg.validate().is_err());
+    }
 
     #[test]
     fn save_to_db_flag_parsed() {
