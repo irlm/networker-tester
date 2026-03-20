@@ -109,7 +109,7 @@ export function RunDetailPage() {
 
   if (loading && attempts.length === 0) {
     return (
-      <div className="p-6">
+      <div className="p-4 md:p-6">
         <Breadcrumb items={[{ label: 'Runs', to: '/runs' }, { label: `Run ${shortId}` }]} />
         <div className="text-gray-500 motion-safe:animate-pulse">Loading run {shortId}...</div>
       </div>
@@ -118,7 +118,7 @@ export function RunDetailPage() {
 
   if (error && attempts.length === 0) {
     return (
-      <div className="p-6">
+      <div className="p-4 md:p-6">
         <Breadcrumb items={[{ label: 'Runs', to: '/runs' }, { label: `Run ${shortId}` }]} />
         <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
           <h3 className="text-red-400 font-bold mb-2">Failed to load run</h3>
@@ -132,7 +132,7 @@ export function RunDetailPage() {
   const failureCount = attempts.length - successCount;
 
   return (
-    <div className="p-6">
+    <div className="p-4 md:p-6">
       <Breadcrumb items={[{ label: 'Runs', to: '/runs' }, { label: `Run ${shortId}` }]} />
 
       {/* Header */}

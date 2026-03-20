@@ -29,7 +29,7 @@ export function DeployPage() {
   usePolling(loadDeployments, 5000);
 
   return (
-    <div className="p-6">
+    <div className="p-4 md:p-6">
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-xl font-bold text-gray-100">Deployments</h2>

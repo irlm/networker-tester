@@ -66,7 +66,7 @@ function AuthenticatedApp() {
   return (
     <div className="flex min-h-screen bg-[var(--bg-base)]">
       <Sidebar connectionDot={<ConnectionDot status={status} />} />
-      <main className="flex-1 overflow-auto">
+      <main className="flex-1 overflow-auto pt-12 md:pt-0">
         <ConnectionBanner status={status} />
         <ToastContainer />
         <Routes>
