@@ -95,8 +95,7 @@ async fn main() -> anyhow::Result<()> {
         std::env::var("DASHBOARD_STATIC_DIR").unwrap_or_else(|_| "./dashboard/dist".into());
     let app = if std::path::Path::new(&static_dir).exists() {
         app.fallback_service(
-            ServeDir::new(&static_dir)
-                .fallback(ServeFile::new(format!("{static_dir}/index.html"))),
+            ServeDir::new(&static_dir).fallback(ServeFile::new(format!("{static_dir}/index.html"))),
         )
     } else {
         app
