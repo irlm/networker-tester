@@ -502,12 +502,15 @@ impl Cli {
                 .capture_mode
                 .clone()
                 .or(f.capture_mode)
-                .and_then(|s| match s.trim().to_ascii_lowercase().as_str() {
-                    "off" | "disabled" | "none" => Some(PacketCaptureMode::Disabled),
-                    "auto" => Some(PacketCaptureMode::Auto),
-                    "tshark" | "t-shark" => Some(PacketCaptureMode::Tshark),
-                    "raw-socket" | "raw_socket" | "rawsocket" => Some(PacketCaptureMode::Rawsocket),
-                    _ => None,
+                .and_then(|s| {
+                    let normalized = match s.trim().to_ascii_lowercase().as_str() {
+                        "off" | "disabled" | "none" => "off",
+                        "auto" => "auto",
+                        "tshark" | "t-shark" => "tshark",
+                        "raw-socket" | "raw_socket" | "rawsocket" => "raw-socket",
+                        other => other,
+                    };
+                    <PacketCaptureMode as clap::ValueEnum>::from_str(normalized, true).ok()
                 })
                 .or(pc.mode)
                 .unwrap_or_default();

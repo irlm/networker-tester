@@ -25,7 +25,6 @@ pub(crate) fn make_run(run_id: Uuid, attempts: Vec<RequestAttempt>) -> TestRun {
         server_info: None,
         client_info: None,
         baseline: None,
-        packet_capture_summary: None,
         attempts,
     }
 }
