@@ -134,7 +134,7 @@ jobs:
       - name: Build dashboard frontend
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: |
-          cd dashboard && npm ci && npm run build
+          cd dashboard && npm install --legacy-peer-deps && npm run build
           tar czf "../dist/dashboard-frontend.tar.gz" -C dist .
 
       - name: Upload build artifacts
