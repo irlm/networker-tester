@@ -274,6 +274,7 @@ pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::Sender<String>)
                         server_info: None,
                         client_info: None,
                         baseline: None,
+                        packet_capture_summary: None,
                         attempts: vec![],
                     };
                     send(
@@ -289,21 +290,61 @@ pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::Sender<String>)
         }
         Ok(status) => {
             let code = status.code().unwrap_or(-1);
-            // Include stderr output in error message
-            let msg = if !stdout_text.is_empty() {
-                format!("Tester exited with code {code}: {stdout_text}")
-            } else {
-                format!("Tester exited with code {code}")
-            };
-            log(tx, job_id, "error", &msg);
-            send(
-                tx,
-                &AgentMessage::JobError {
+            // Non-zero exit can still mean partial success (e.g. some probes failed).
+            // Try to parse JSON output — if valid, treat as completed with failures.
+            if let Ok(run) = serde_json::from_str::<TestRun>(&stdout_text) {
+                let success_count = run.success_count();
+                let failure_count = run.failure_count();
+                let run_id = run.run_id;
+
+                log(
+                    tx,
                     job_id,
-                    message: msg,
-                },
-                &correlation_id,
-            );
+                    "warn",
+                    &format!(
+                        "Tester exited with code {code} — {} probes, {} OK, {} failed",
+                        run.attempts.len(),
+                        success_count,
+                        failure_count,
+                    ),
+                );
+
+                for attempt in &run.attempts {
+                    send(
+                        tx,
+                        &AgentMessage::AttemptResult {
+                            job_id,
+                            attempt: Box::new(attempt.clone()),
+                        },
+                        &correlation_id,
+                    );
+                }
+
+                send(
+                    tx,
+                    &AgentMessage::JobComplete {
+                        job_id,
+                        run: Box::new(run),
+                    },
+                    &correlation_id,
+                );
+                tracing::info!(correlation_id, run_id = %run_id, code, "Job complete (non-zero exit, partial results)");
+            } else {
+                let msg = if !stdout_text.is_empty() {
+                    format!("Tester exited with code {code}: {stdout_text}")
+                } else {
+                    format!("Tester exited with code {code}")
+                };
+                log(tx, job_id, "error", &msg);
+                send(
+                    tx,
+                    &AgentMessage::JobError {
+                        job_id,
+                        message: msg,
+                    },
+                    &correlation_id,
+                );
+            }
         }
         Err(e) => {
             log(tx, job_id, "error", &format!("Tester process error: {e}"));

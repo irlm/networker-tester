@@ -3861,6 +3861,7 @@ mod tests {
             server_info: None,
             client_info: None,
             baseline: None,
+            packet_capture_summary: None,
             attempts: vec![RequestAttempt {
                 attempt_id: Uuid::new_v4(),
                 run_id,
@@ -4108,6 +4109,7 @@ mod tests {
             server_info: None,
             client_info: None,
             baseline: None,
+            packet_capture_summary: None,
             attempts: vec![RequestAttempt {
                 attempt_id: Uuid::new_v4(),
                 run_id,
@@ -4159,6 +4161,7 @@ mod tests {
             server_info: None,
             client_info: None,
             baseline: None,
+            packet_capture_summary: None,
             attempts: vec![RequestAttempt {
                 attempt_id: Uuid::new_v4(),
                 run_id,
@@ -4224,6 +4227,7 @@ mod tests {
             server_info: None,
             client_info: None,
             baseline: None,
+            packet_capture_summary: None,
             attempts: vec![RequestAttempt {
                 attempt_id: Uuid::new_v4(),
                 run_id,
@@ -4285,6 +4289,7 @@ mod tests {
             server_info: None,
             client_info: None,
             baseline: None,
+            packet_capture_summary: None,
             attempts: vec![RequestAttempt {
                 attempt_id: Uuid::new_v4(),
                 run_id,
@@ -4665,6 +4670,7 @@ mod tests {
             server_info: None,
             client_info: None,
             baseline: None,
+            packet_capture_summary: None,
             attempts: vec![RequestAttempt {
                 attempt_id: Uuid::new_v4(),
                 run_id,
@@ -4724,6 +4730,7 @@ mod tests {
             server_info: None,
             client_info: None,
             baseline: None,
+            packet_capture_summary: None,
             attempts: vec![],
         }
     }

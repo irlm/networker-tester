@@ -30,6 +30,9 @@ pub struct AppState {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Install ring as the default TLS crypto provider (required by reqwest/rustls).
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
@@ -92,8 +95,7 @@ async fn main() -> anyhow::Result<()> {
         std::env::var("DASHBOARD_STATIC_DIR").unwrap_or_else(|_| "./dashboard/dist".into());
     let app = if std::path::Path::new(&static_dir).exists() {
         app.fallback_service(
-            ServeDir::new(&static_dir)
-                .not_found_service(ServeFile::new(format!("{static_dir}/index.html"))),
+            ServeDir::new(&static_dir).fallback(ServeFile::new(format!("{static_dir}/index.html"))),
         )
     } else {
         app

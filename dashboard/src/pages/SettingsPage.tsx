@@ -276,7 +276,7 @@ export function SettingsPage() {
           </div>
           <div
             ref={logRef}
-            className="bg-[var(--bg-base)] p-4 h-[300px] overflow-y-auto font-mono text-xs leading-5"
+            className="bg-[var(--bg-base)] p-4 h-[400px] overflow-y-auto font-mono text-xs leading-5"
           >
             {liveLines.map((line, i) => (
               <div key={i} className="text-gray-300 whitespace-pre-wrap break-all">

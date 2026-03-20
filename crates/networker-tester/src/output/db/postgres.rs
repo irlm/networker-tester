@@ -455,32 +455,70 @@ impl DatabaseBackend for PostgresBackend {
 
 async fn insert_test_run(run: &TestRun, c: &PgClient) -> anyhow::Result<()> {
     let modes = run.modes.join(",");
+    let capture_json: Option<serde_json::Value> = run
+        .packet_capture_summary
+        .as_ref()
+        .and_then(|s| serde_json::to_value(s).ok());
 
-    c.execute(
-        "INSERT INTO TestRun (
-            RunId, StartedAt, FinishedAt, TargetUrl, TargetHost,
-            Modes, TotalRuns, Concurrency, TimeoutMs,
-            ClientOs, ClientVersion, SuccessCount, FailureCount
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
-        &[
-            &run.run_id,
-            &run.started_at,
-            &run.finished_at,
-            &run.target_url,
-            &run.target_host,
-            &modes,
-            &(run.total_runs as i32),
-            &(run.concurrency as i32),
-            &(run.timeout_ms as i64),
-            &run.client_os,
-            &run.client_version,
-            &(run.success_count() as i32),
-            &(run.failure_count() as i32),
-        ],
-    )
-    .await
-    .context("INSERT TestRun")?;
-    Ok(())
+    // Try with packet_capture_json column first (V005+), fall back without it
+    let result = c
+        .execute(
+            "INSERT INTO TestRun (
+                RunId, StartedAt, FinishedAt, TargetUrl, TargetHost,
+                Modes, TotalRuns, Concurrency, TimeoutMs,
+                ClientOs, ClientVersion, SuccessCount, FailureCount,
+                packet_capture_json
+             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)",
+            &[
+                &run.run_id,
+                &run.started_at,
+                &run.finished_at,
+                &run.target_url,
+                &run.target_host,
+                &modes,
+                &(run.total_runs as i32),
+                &(run.concurrency as i32),
+                &(run.timeout_ms as i64),
+                &run.client_os,
+                &run.client_version,
+                &(run.success_count() as i32),
+                &(run.failure_count() as i32),
+                &capture_json,
+            ],
+        )
+        .await;
+
+    match result {
+        Ok(_) => Ok(()),
+        Err(_) => {
+            // Fallback: insert without packet_capture_json (older schema)
+            c.execute(
+                "INSERT INTO TestRun (
+                    RunId, StartedAt, FinishedAt, TargetUrl, TargetHost,
+                    Modes, TotalRuns, Concurrency, TimeoutMs,
+                    ClientOs, ClientVersion, SuccessCount, FailureCount
+                 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
+                &[
+                    &run.run_id,
+                    &run.started_at,
+                    &run.finished_at,
+                    &run.target_url,
+                    &run.target_host,
+                    &modes,
+                    &(run.total_runs as i32),
+                    &(run.concurrency as i32),
+                    &(run.timeout_ms as i64),
+                    &run.client_os,
+                    &run.client_version,
+                    &(run.success_count() as i32),
+                    &(run.failure_count() as i32),
+                ],
+            )
+            .await
+            .context("INSERT TestRun")?;
+            Ok(())
+        }
+    }
 }
 
 async fn insert_url_test_run(run: &UrlTestRun, c: &PgClient) -> anyhow::Result<()> {

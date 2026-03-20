@@ -1,7 +1,7 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { api, type Job } from '../api/client';
-import type { LiveAttempt } from '../api/types';
+import type { LiveAttempt, PacketCaptureSummary } from '../api/types';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { Breadcrumb } from '../components/common/Breadcrumb';
 import { useLiveStore } from '../stores/liveStore';
@@ -18,6 +18,7 @@ import {
   successRateClass,
 } from '../lib/analysis';
 import { TOOLTIP_STYLE } from '../lib/chart';
+import { BoxWhiskerChart } from '../components/charts/BoxWhiskerChart';
 import {
   BarChart,
   Bar,
@@ -37,6 +38,7 @@ export function JobDetailPage() {
   const [job, setJob] = useState<Job | null>(null);
   const [dbAttempts, setDbAttempts] = useState<LiveAttempt[]>([]);
   const [runMeta, setRunMeta] = useState<{ client_version: string; client_os: string; endpoint_version: string | null } | null>(null);
+  const [packetCapture, setPacketCapture] = useState<PacketCaptureSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const liveAttempts = useLiveStore((s) =>
@@ -47,38 +49,65 @@ export function JobDetailPage() {
   );
   const cleanupJob = useLiveStore((s) => s.cleanupJob);
   const addToast = useToast();
+  const testerLogRef = useRef<HTMLDivElement>(null);
 
   const shortId = jobId?.slice(0, 8) ?? '';
   usePageTitle(jobId ? `Test ${shortId}` : 'Test');
 
   const isTerminal = job ? TERMINAL_STATUSES.has(job.status) : false;
 
-  // Load attempts and run metadata from DB when job has a run_id (completed)
+  // Load attempts and run metadata from DB when job completes with a run_id.
+  // Retry briefly if run_id appears but DB returns empty (race: DB write in progress).
   useEffect(() => {
-    if (job?.run_id && liveAttempts.length === 0) {
-      api.getRunAttempts(job.run_id).then((data) => {
-        setDbAttempts(data as unknown as LiveAttempt[]);
+    if (!job?.run_id) return;
+    let cancelled = false;
+    const fetchAttempts = (retries: number) => {
+      api.getRunAttempts(job.run_id!).then((data) => {
+        if (cancelled) return;
+        const loaded = data as unknown as LiveAttempt[];
+        if (loaded.length === 0 && retries > 0) {
+          // DB write may still be in progress — retry after a short delay
+          setTimeout(() => fetchAttempts(retries - 1), 1500);
+        } else {
+          setDbAttempts(loaded);
+        }
       }).catch(() => {});
-      api.getRun(job.run_id).then((data) => {
-        setRunMeta({
-          client_version: data.client_version,
-          client_os: data.client_os,
-          endpoint_version: data.endpoint_version,
-        });
-      }).catch(() => {});
-    }
-  }, [job?.run_id, liveAttempts.length]);
+    };
+    fetchAttempts(3);
+    api.getRun(job.run_id).then((data) => {
+      if (cancelled) return;
+      setRunMeta({
+        client_version: data.client_version,
+        client_os: data.client_os,
+        endpoint_version: data.endpoint_version,
+      });
+      if (data.packet_capture) {
+        setPacketCapture(data.packet_capture);
+      }
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [job?.run_id]);
 
-  // Use live attempts while running, DB attempts when completed
-  const attempts: LiveAttempt[] = liveAttempts.length > 0 ? liveAttempts : dbAttempts;
+  // Use live attempts while running; switch to DB attempts once loaded.
+  // Keep live attempts visible until DB attempts are available to avoid blank flash.
+  const attempts: LiveAttempt[] = dbAttempts.length > 0 ? dbAttempts : liveAttempts;
 
-  // Clean up live attempts when job reaches terminal state
+  // Clean up live attempts only after DB attempts are loaded
   useEffect(() => {
-    if (isTerminal && jobId) {
+    if (isTerminal && jobId && dbAttempts.length > 0) {
       cleanupJob(jobId);
     }
-  }, [isTerminal, jobId, cleanupJob]);
+  }, [isTerminal, jobId, dbAttempts.length, cleanupJob]);
 
+  // Auto-scroll tester log to bottom
+  useEffect(() => {
+    if (testerLogRef.current) {
+      testerLogRef.current.scrollTop = testerLogRef.current.scrollHeight;
+    }
+  }, [jobLogs]);
+
+  // Poll job status while running; do one final fetch on completion to get run_id
+  const [finalFetchDone, setFinalFetchDone] = useState(false);
   usePolling(
     () => {
       if (!jobId) return;
@@ -88,6 +117,7 @@ export function JobDetailPage() {
           setJob(j);
           setError(null);
           setLoading(false);
+          if (TERMINAL_STATUSES.has(j.status)) setFinalFetchDone(true);
         })
         .catch((e) => {
           setError(String(e));
@@ -95,7 +125,7 @@ export function JobDetailPage() {
         });
     },
     3000,
-    !!jobId && !isTerminal
+    !!jobId && (!isTerminal || !finalFetchDone || (isTerminal && !job?.run_id))
   );
 
   // Analysis using shared module (same logic as HTML report)
@@ -119,31 +149,15 @@ export function JobDetailPage() {
   const boxPlotData = useMemo(() => {
     return protocolStats
       .filter(ps => ps.stats.count >= 2)
-      .map(ps => {
-        // Approximate p25/p75 from the data
-        const values = attempts
-          .filter(a => a.protocol === ps.protocol && a.success)
-          .map(a => primaryMetricValue(a))
-          .filter((v): v is number => v != null && v > 0)
-          .sort((a, b) => a - b);
-        const p25 = values.length >= 4 ? values[Math.floor(values.length * 0.25)] : ps.stats.min;
-        const p75 = values.length >= 4 ? values[Math.floor(values.length * 0.75)] : ps.stats.max;
-        return {
-          name: ps.protocol + (ps.payloadBytes != null ? ` (${formatBytes(ps.payloadBytes)})` : ''),
-          min: Number(ps.stats.min.toFixed(1)),
-          p25: Number(p25.toFixed(1)),
-          p50: Number(ps.stats.p50.toFixed(1)),
-          p75: Number(p75.toFixed(1)),
-          max: Number(ps.stats.max.toFixed(1)),
-          // For stacked bar rendering: each segment = difference from previous
-          base: Number(ps.stats.min.toFixed(1)),
-          iqr_low: Number((p25 - ps.stats.min).toFixed(1)),
-          iqr_mid: Number((ps.stats.p50 - p25).toFixed(1)),
-          iqr_high: Number((p75 - ps.stats.p50).toFixed(1)),
-          whisker: Number((ps.stats.max - p75).toFixed(1)),
-        };
-      });
-  }, [protocolStats, attempts]);
+      .map(ps => ({
+        label: ps.protocol + (ps.payloadBytes != null ? ` (${formatBytes(ps.payloadBytes)})` : ''),
+        p5: ps.stats.p5,
+        p25: ps.stats.p25,
+        p50: ps.stats.p50,
+        p75: ps.stats.p75,
+        p95: ps.stats.p95,
+      }));
+  }, [protocolStats]);
 
   // Protocol comparison chart data (p50 vs p95)
   const protocolChartData = useMemo(
@@ -497,34 +511,11 @@ export function JobDetailPage() {
         </div>
       )}
 
-      {/* Box Plot: min / p25 / p50 / p75 / max */}
+      {/* Box-and-Whisker: p5 ── [Q1 | median | Q3] ── p95 */}
       {boxPlotData.length > 0 && (
         <div className="mb-6">
           <h3 className="text-xs text-gray-500 uppercase tracking-wider mb-3 font-medium">Distribution by Protocol</h3>
-          <ResponsiveContainer width="100%" height={250}>
-            <BarChart data={boxPlotData} layout="vertical">
-              <CartesianGrid strokeDasharray="3 3" stroke="#1f2028" horizontal={false} />
-              <XAxis type="number" stroke="#4b5563" fontSize={10} unit="ms" />
-              <YAxis type="category" dataKey="name" stroke="#4b5563" fontSize={10} width={100} />
-              <Tooltip
-                contentStyle={TOOLTIP_STYLE}
-                formatter={(_v, name, props) => {
-                  const d = props?.payload as Record<string, number> | undefined;
-                  if (!d) return [_v, name];
-                  if (name === 'iqr_mid') return [`p50: ${d.p50}ms`, 'Median'];
-                  if (name === 'iqr_low') return [`p25: ${d.p25}ms`, 'Q1'];
-                  if (name === 'iqr_high') return [`p75: ${d.p75}ms`, 'Q3'];
-                  if (name === 'whisker') return [`max: ${d.max}ms`, 'Max'];
-                  return null;
-                }}
-              />
-              <Bar dataKey="base" stackId="box" fill="transparent" />
-              <Bar dataKey="iqr_low" stackId="box" fill="#374151" name="p25" />
-              <Bar dataKey="iqr_mid" stackId="box" fill="#94a3b8" name="Median" />
-              <Bar dataKey="iqr_high" stackId="box" fill="#64748b" name="p75" />
-              <Bar dataKey="whisker" stackId="box" fill="#374151" opacity={0.5} name="max" />
-            </BarChart>
-          </ResponsiveContainer>
+          <BoxWhiskerChart groups={boxPlotData} />
         </div>
       )}
 
@@ -558,13 +549,186 @@ export function JobDetailPage() {
         </div>
       )}
 
+      {/* Packet Capture */}
+      {packetCapture && packetCapture.total_packets > 0 && (
+        <div className="table-container mb-6">
+          <h3 className="px-4 py-2.5 text-xs text-gray-500 uppercase tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
+            Packet Capture
+          </h3>
+          <div className="p-4 space-y-4">
+            {/* Summary bar */}
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs">
+              <span className="text-gray-500">
+                Status <span className={`font-mono font-semibold ml-1 ${packetCapture.capture_status === 'captured' ? 'text-green-400' : 'text-yellow-400'}`}>{packetCapture.capture_status}</span>
+              </span>
+              <span className="text-gray-500">
+                Interface <span className="text-gray-300 font-mono ml-1">{packetCapture.interface}</span>
+              </span>
+              <span className="text-gray-500">
+                Total <span className="text-gray-200 font-mono font-semibold ml-1">{packetCapture.total_packets.toLocaleString()}</span> packets
+              </span>
+              <span className="text-gray-500">
+                Confidence <span className={`font-mono font-semibold ml-1 ${
+                  packetCapture.capture_confidence === 'high' ? 'text-green-400' :
+                  packetCapture.capture_confidence === 'medium' ? 'text-yellow-400' : 'text-red-400'
+                }`}>{packetCapture.capture_confidence}</span>
+              </span>
+              <span className="text-gray-500">
+                Mode <span className="text-gray-400 font-mono ml-1">{packetCapture.mode}</span>
+              </span>
+            </div>
+
+            {/* Transport breakdown */}
+            {packetCapture.transport_shares.length > 0 && (
+              <div>
+                <div className="text-xs text-gray-500 uppercase tracking-wider mb-2 font-medium">Transport Breakdown</div>
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-gray-800 text-gray-500">
+                      <th className="px-3 py-1.5 text-left">Protocol</th>
+                      <th className="px-3 py-1.5 text-right">Packets</th>
+                      <th className="px-3 py-1.5 text-right">% of Total</th>
+                      <th className="px-3 py-1.5 text-left w-48">Distribution</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {packetCapture.transport_shares.map(share => (
+                      <tr key={share.protocol} className="border-b border-gray-800/30">
+                        <td className="px-3 py-1.5 text-gray-300 font-mono">{share.protocol}</td>
+                        <td className="px-3 py-1.5 text-gray-200 text-right font-mono">{share.packets.toLocaleString()}</td>
+                        <td className="px-3 py-1.5 text-gray-400 text-right font-mono">{share.pct_of_total.toFixed(1)}%</td>
+                        <td className="px-3 py-1.5">
+                          <div className="h-2 bg-gray-800 rounded overflow-hidden">
+                            <div className="h-full bg-cyan-600 rounded" style={{ width: `${Math.min(share.pct_of_total, 100)}%` }} />
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* TCP Health Indicators */}
+            {(packetCapture.retransmissions > 0 || packetCapture.duplicate_acks > 0 || packetCapture.resets > 0) && (
+              <div>
+                <div className="text-xs text-gray-500 uppercase tracking-wider mb-2 font-medium">TCP Health</div>
+                <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs">
+                  <span className="text-gray-500">
+                    Retransmissions <span className={`font-mono font-semibold ml-1 ${packetCapture.retransmissions > 0 ? 'text-yellow-400' : 'text-gray-600'}`}>{packetCapture.retransmissions.toLocaleString()}</span>
+                  </span>
+                  <span className="text-gray-500">
+                    Duplicate ACKs <span className={`font-mono font-semibold ml-1 ${packetCapture.duplicate_acks > 0 ? 'text-yellow-400' : 'text-gray-600'}`}>{packetCapture.duplicate_acks.toLocaleString()}</span>
+                  </span>
+                  <span className="text-gray-500">
+                    Resets <span className={`font-mono font-semibold ml-1 ${packetCapture.resets > 0 ? 'text-red-400' : 'text-gray-600'}`}>{packetCapture.resets.toLocaleString()}</span>
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Target endpoint info */}
+            {packetCapture.likely_target_endpoints.length > 0 && (
+              <div>
+                <div className="text-xs text-gray-500 uppercase tracking-wider mb-2 font-medium">Target Endpoints</div>
+                <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs">
+                  <span className="text-gray-500">
+                    Endpoints <span className="text-gray-300 font-mono ml-1">{packetCapture.likely_target_endpoints.join(', ')}</span>
+                  </span>
+                  <span className="text-gray-500">
+                    Target packets <span className="text-gray-200 font-mono font-semibold ml-1">{packetCapture.likely_target_packets.toLocaleString()}</span>
+                    <span className="text-gray-600 ml-1">({packetCapture.likely_target_pct_of_total.toFixed(1)}%)</span>
+                  </span>
+                  {packetCapture.dominant_trace_port != null && (
+                    <span className="text-gray-500">
+                      Dominant port <span className="text-gray-300 font-mono ml-1">{packetCapture.dominant_trace_port}</span>
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Top endpoints and ports side by side */}
+            <div className="grid grid-cols-2 gap-4">
+              {packetCapture.top_endpoints.length > 0 && (
+                <div>
+                  <div className="text-xs text-gray-500 uppercase tracking-wider mb-2 font-medium">Top Endpoints</div>
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-gray-800 text-gray-500">
+                        <th className="px-2 py-1 text-left">Endpoint</th>
+                        <th className="px-2 py-1 text-right">Packets</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {packetCapture.top_endpoints.map(ep => (
+                        <tr key={ep.endpoint} className="border-b border-gray-800/30">
+                          <td className="px-2 py-1 text-gray-300 font-mono">{ep.endpoint}</td>
+                          <td className="px-2 py-1 text-gray-400 text-right font-mono">{ep.packets.toLocaleString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {packetCapture.top_ports.length > 0 && (
+                <div>
+                  <div className="text-xs text-gray-500 uppercase tracking-wider mb-2 font-medium">Top Ports</div>
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-gray-800 text-gray-500">
+                        <th className="px-2 py-1 text-left">Port</th>
+                        <th className="px-2 py-1 text-right">Packets</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {packetCapture.top_ports.map(p => (
+                        <tr key={p.port} className="border-b border-gray-800/30">
+                          <td className="px-2 py-1 text-gray-300 font-mono">{p.port}</td>
+                          <td className="px-2 py-1 text-gray-400 text-right font-mono">{p.packets.toLocaleString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* Observation flags */}
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+              {packetCapture.observed_quic && (
+                <span className="text-cyan-400 font-mono">QUIC observed</span>
+              )}
+              {packetCapture.observed_tcp_only && (
+                <span className="text-gray-400 font-mono">TCP only</span>
+              )}
+              {packetCapture.observed_mixed_transport && (
+                <span className="text-yellow-400 font-mono">Mixed transport</span>
+              )}
+              {packetCapture.capture_may_be_ambiguous && (
+                <span className="text-orange-400 font-mono">Ambiguous capture</span>
+              )}
+            </div>
+
+            {/* Warnings */}
+            {packetCapture.warnings.length > 0 && (
+              <div className="border-l-2 border-yellow-600/50 pl-3 space-y-1">
+                {packetCapture.warnings.map((w, i) => (
+                  <div key={i} className="text-xs text-yellow-400/80">{w}</div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Tester Log */}
       {jobLogs.length > 0 && (
         <div className="table-container mb-6">
           <h3 className="px-4 py-2.5 text-xs text-gray-500 uppercase tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
             Tester Log
           </h3>
-          <div className="max-h-48 overflow-y-auto p-3 font-mono text-xs leading-5">
+          <div ref={testerLogRef} className="h-[400px] overflow-y-auto p-3 font-mono text-xs leading-5">
             {jobLogs.map((entry, i) => (
               <div
                 key={i}
