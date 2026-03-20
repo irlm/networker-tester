@@ -112,7 +112,7 @@ export function SettingsPage() {
 
   if (loading) {
     return (
-      <div className="p-6">
+      <div className="p-4 md:p-6">
         <h2 className="text-xl font-bold text-gray-100 mb-6">Settings</h2>
         <p className="text-gray-500">Loading...</p>
       </div>
@@ -123,7 +123,7 @@ export function SettingsPage() {
   const outdatedDeps = getOutdatedDeployments();
 
   return (
-    <div className="p-6">
+    <div className="p-4 md:p-6">
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-xl font-bold text-gray-100">Settings</h2>
         <button

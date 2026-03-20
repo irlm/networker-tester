@@ -135,12 +135,20 @@ export function SchedulesPage() {
 
   if (loading && schedules.length === 0) {
     return (
-      <div className="p-6">
+      <div className="p-4 md:p-6">
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-xl font-bold text-gray-100">Schedules</h2>
           <div className="h-7 w-28 rounded bg-gray-800 motion-safe:animate-pulse" />
         </div>
-        <div className="table-container">
+        <div className="space-y-3 md:hidden">
+          {[1, 2, 3].map(i => (
+            <div key={i} className="border border-gray-800 rounded p-4 space-y-2">
+              <div className="h-4 w-40 rounded bg-gray-800/60 motion-safe:animate-pulse" />
+              <div className="h-3 w-24 rounded bg-gray-800/40 motion-safe:animate-pulse" />
+            </div>
+          ))}
+        </div>
+        <div className="hidden md:block table-container">
           <div className="bg-[var(--bg-surface)] px-4 py-2.5 border-b border-gray-800/50">
             <div className="flex gap-8">
               {[96, 80, 64, 80, 56, 40, 48].map((w, i) => (
@@ -161,12 +169,12 @@ export function SchedulesPage() {
   }
 
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-3">
-          <h2 className="text-xl font-bold text-gray-100">Schedules</h2>
+    <div className="p-4 md:p-6">
+      <div className="flex items-center justify-between mb-4 md:mb-6">
+        <div className="flex items-center gap-3 min-w-0">
+          <h2 className="text-lg md:text-xl font-bold text-gray-100">Schedules</h2>
           {schedules.length > 0 && (
-            <span className="text-xs text-gray-600">
+            <span className="text-xs text-gray-600 hidden sm:inline">
               <span className="text-green-400">{enabledCount}</span> active
               {overdueCount > 0 && (
                 <> · <span className="text-yellow-400">{overdueCount}</span> overdue</>
@@ -179,13 +187,90 @@ export function SchedulesPage() {
         </div>
         <button
           onClick={() => setShowCreate(true)}
-          className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors"
+          className="bg-cyan-600 hover:bg-cyan-500 text-white px-3 md:px-4 py-1.5 rounded text-sm transition-colors flex-shrink-0"
         >
           New Schedule
         </button>
       </div>
 
-      <div className="table-container">
+      {/* ── Mobile card layout (< md) ── */}
+      <div className="md:hidden space-y-2">
+        {schedules.length === 0 ? (
+          <div className="border border-gray-800 rounded p-8 text-center">
+            <p className="text-gray-500 text-sm">No scheduled tests yet</p>
+            <button onClick={() => setShowCreate(true)} className="text-xs text-cyan-400 mt-2">
+              Create a schedule
+            </button>
+          </div>
+        ) : (
+          schedules.map((s) => {
+            const config = s.config;
+            const target = config?.target || '—';
+            const cron = formatCron(s.cron_expr);
+            const status = scheduleStatus(s);
+            const scheduleName = s.name || 'Unnamed schedule';
+            const isPaused = !s.enabled;
+            let targetShort = target;
+            try { targetShort = new URL(target).host; } catch { /* keep */ }
+
+            return (
+              <div
+                key={s.schedule_id}
+                className={`border border-gray-800 rounded p-3 ${isPaused ? 'opacity-60' : ''} ${
+                  status.label === 'overdue' ? 'border-l-2 border-l-yellow-500/50' : ''
+                }`}
+              >
+                <div className="flex items-start justify-between gap-2 mb-2">
+                  <div className="min-w-0">
+                    <p className="text-gray-200 text-sm font-medium truncate">{scheduleName}</p>
+                    <p className="text-gray-500 text-xs font-mono truncate">{targetShort}</p>
+                  </div>
+                  <button
+                    onClick={() => handleToggle(s.schedule_id)}
+                    disabled={toggling === s.schedule_id}
+                    className={`w-9 h-5 rounded-full transition-colors relative flex-shrink-0 ${
+                      toggling === s.schedule_id ? 'opacity-50' : ''
+                    } ${s.enabled ? 'bg-cyan-600' : 'bg-gray-700'}`}
+                  >
+                    <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                      s.enabled ? 'left-[18px]' : 'left-0.5'
+                    }`} />
+                  </button>
+                </div>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <StatusBadge status={status.badge} label={status.label} />
+                  {status.detail && (
+                    <span className={`text-xs ${status.detailColor}`}>{status.detail}</span>
+                  )}
+                  <span className="text-xs text-cyan-400/70">{cron.label}</span>
+                  {s.last_run_at && (
+                    <span className="text-xs text-gray-600">{timeAgo(s.last_run_at)}</span>
+                  )}
+                </div>
+                <div className="flex items-center gap-3 mt-2 pt-2 border-t border-gray-800/50">
+                  <button
+                    onClick={() => handleTrigger(s.schedule_id, scheduleName)}
+                    className="text-xs text-cyan-400 py-1"
+                  >
+                    ▶ Run now
+                  </button>
+                  <button
+                    onClick={() => handleDelete(s.schedule_id)}
+                    className={`text-xs py-1 transition-colors ${
+                      confirmDelete === s.schedule_id ? 'text-red-400' : 'text-gray-600'
+                    }`}
+                  >
+                    {confirmDelete === s.schedule_id ? 'Tap to confirm delete' : '✕ Delete'}
+                  </button>
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {/* ── Desktop/iPad table layout (≥ md) ── */}
+      <div className="hidden md:block table-container">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
@@ -193,7 +278,7 @@ export function SchedulesPage() {
               <th className="px-4 py-2.5 text-left font-medium">Target</th>
               <th className="px-4 py-2.5 text-left font-medium">Frequency</th>
               <th className="px-4 py-2.5 text-left font-medium">Status</th>
-              <th className="px-4 py-2.5 text-left font-medium">Last Run</th>
+              <th className="px-4 py-2.5 text-left font-medium hidden lg:table-cell">Last Run</th>
               <th className="px-4 py-2.5 text-center font-medium w-16">On</th>
               <th className="px-4 py-2.5 text-left font-medium"></th>
             </tr>
@@ -207,9 +292,8 @@ export function SchedulesPage() {
               const scheduleName = s.name || 'Unnamed schedule';
               const isPaused = !s.enabled;
               const isOverdue = status.label === 'overdue';
-              // Strip URL to host for display
               let targetShort = target;
-              try { targetShort = new URL(target).host; } catch { /* keep as-is */ }
+              try { targetShort = new URL(target).host; } catch { /* keep */ }
 
               return (
                 <tr
@@ -233,7 +317,7 @@ export function SchedulesPage() {
                       )}
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-gray-500 text-xs">
+                  <td className="px-4 py-3 text-gray-500 text-xs hidden lg:table-cell">
                     {s.last_run_at ? timeAgo(s.last_run_at) : '—'}
                   </td>
                   <td className="px-4 py-3 text-center">
@@ -245,11 +329,9 @@ export function SchedulesPage() {
                       } ${s.enabled ? 'bg-cyan-600' : 'bg-gray-700'}`}
                       title={s.enabled ? 'Pause' : 'Resume'}
                     >
-                      <span
-                        className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-                          s.enabled ? 'left-[18px]' : 'left-0.5'
-                        }`}
-                      />
+                      <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                        s.enabled ? 'left-[18px]' : 'left-0.5'
+                      }`} />
                     </button>
                   </td>
                   <td className="px-4 py-3">
@@ -264,9 +346,7 @@ export function SchedulesPage() {
                       <button
                         onClick={() => handleDelete(s.schedule_id)}
                         className={`text-xs transition-colors ${
-                          confirmDelete === s.schedule_id
-                            ? 'text-red-400'
-                            : 'text-gray-600 hover:text-red-400'
+                          confirmDelete === s.schedule_id ? 'text-red-400' : 'text-gray-600 hover:text-red-400'
                         }`}
                         title={confirmDelete === s.schedule_id ? 'Click again to confirm' : 'Delete'}
                       >
@@ -284,10 +364,7 @@ export function SchedulesPage() {
           <div className="py-10 text-center">
             <p className="text-gray-500 text-sm">No scheduled tests yet</p>
             <p className="text-gray-700 text-xs mt-1">
-              <button
-                onClick={() => setShowCreate(true)}
-                className="text-cyan-400 hover:text-cyan-300 transition-colors"
-              >
+              <button onClick={() => setShowCreate(true)} className="text-cyan-400 hover:text-cyan-300 transition-colors">
                 Create a schedule
               </button>
               {' '}to run tests automatically

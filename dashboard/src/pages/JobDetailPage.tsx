@@ -255,7 +255,7 @@ export function JobDetailPage() {
 
   if (loading && !job) {
     return (
-      <div className="p-6">
+      <div className="p-4 md:p-6">
         <Breadcrumb items={[{ label: 'Tests', to: '/tests' }, { label: `Test ${shortId}` }]} />
         <div className="text-gray-500 motion-safe:animate-pulse">Loading job {shortId}...</div>
       </div>
@@ -264,7 +264,7 @@ export function JobDetailPage() {
 
   if (error && !job) {
     return (
-      <div className="p-6">
+      <div className="p-4 md:p-6">
         <Breadcrumb items={[{ label: 'Tests', to: '/tests' }, { label: `Test ${shortId}` }]} />
         <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
           <h3 className="text-red-400 font-bold mb-2">Failed to load job</h3>
@@ -277,7 +277,7 @@ export function JobDetailPage() {
 
   if (!job) {
     return (
-      <div className="p-6">
+      <div className="p-4 md:p-6">
         <div className="text-gray-500">Job not found: {jobId}</div>
       </div>
     );
@@ -287,7 +287,7 @@ export function JobDetailPage() {
   const isFinished = TERMINAL_STATUSES.has(job.status);
 
   return (
-    <div className="p-6">
+    <div className="p-4 md:p-6">
       <Breadcrumb items={[{ label: 'Tests', to: '/tests' }, { label: `Test ${shortId}` }]} />
 
       {/* Header */}
