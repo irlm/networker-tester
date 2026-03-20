@@ -1,5 +1,5 @@
 use anyhow::Context;
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
 
 /// Networker Tester – cross-platform network diagnostics client.
@@ -251,7 +251,7 @@ pub struct Cli {
     pub log_level: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum PacketCaptureMode {
     #[default]
@@ -503,7 +503,8 @@ impl Cli {
                 .clone()
                 .or(f.capture_mode)
                 .and_then(|s| {
-                    let normalized = match s.trim().to_ascii_lowercase().as_str() {
+                    let normalized = s.trim().to_ascii_lowercase();
+                    let normalized = match normalized.as_str() {
                         "off" | "disabled" | "none" => "off",
                         "auto" => "auto",
                         "tshark" | "t-shark" => "tshark",
