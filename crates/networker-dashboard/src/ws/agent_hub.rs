@@ -83,7 +83,11 @@ async fn agent_ws_handler(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::UNAUTHORIZED)?;
 
-    Ok(ws.on_upgrade(move |socket| handle_agent_socket(socket, state, agent)))
+    // Large test runs (27 modes × 3 runs = 255 attempts) produce multi-MB JSON.
+    // Default axum WS limit is 64KB which silently drops the JobComplete message.
+    Ok(ws
+        .max_message_size(64 * 1024 * 1024) // 64 MB
+        .on_upgrade(move |socket| handle_agent_socket(socket, state, agent)))
 }
 
 async fn handle_agent_socket(

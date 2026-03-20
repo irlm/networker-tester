@@ -234,11 +234,12 @@ print_step_header() {
 
 show_help() {
     cat <<'EOF'
-Usage: install.sh [OPTIONS] [tester|endpoint|both]
+Usage: install.sh [OPTIONS] [tester|endpoint|dashboard|both]
 
-  tester    Install networker-tester (the diagnostic CLI client)
-  endpoint  Install networker-endpoint (the target test server)
-  both      Install both binaries  [default]
+  tester      Install networker-tester (the diagnostic CLI client)
+  endpoint    Install networker-endpoint (the target test server)
+  dashboard   Install networker-dashboard (control plane + web UI + agent)
+  both        Install tester + endpoint  [default]
 
 Install location (interactive; can also be set via flags):
   local     Install on this machine  [default]
@@ -301,12 +302,13 @@ Examples:
   bash install.sh --tester-aws --aws both          # both on separate AWS instances
   bash install.sh --tester-azure --aws both        # tester on Azure, endpoint on AWS
   bash install.sh --tester-gcp --gcp both          # both on separate GCP instances
+  bash install.sh dashboard                        # install dashboard + PostgreSQL + frontend
   bash install.sh --deploy deploy.json             # config-driven deploy + test
 EOF
 }
 
 # ── Script-level state ────────────────────────────────────────────────────────
-COMPONENT=""   # "" = not set via CLI; "tester" | "endpoint" | "both" = explicit
+COMPONENT=""   # "" = not set via CLI; "tester" | "endpoint" | "dashboard" | "both" = explicit
 AUTO_YES=0
 FROM_SOURCE=0
 SKIP_RUST=0
@@ -316,11 +318,14 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.13.34"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.13.28"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
 DO_INSTALL_ENDPOINT=1
+DO_INSTALL_DASHBOARD=0
+DASHBOARD_FQDN=""
+DASHBOARD_NGINX_CONFIGURED=0
 RUST_VER=""
 RUST_EXISTS=0
 GIT_AVAILABLE=0
@@ -464,7 +469,7 @@ DEPLOY_EP_FQDNS=()             # populated after deploy (cloud DNS hostnames)
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            tester|endpoint|both)
+            tester|endpoint|dashboard|both)
                 COMPONENT="$1" ;;
             -y|--yes)
                 AUTO_YES=1 ;;
@@ -565,9 +570,10 @@ parse_args() {
     done
 
     case "$COMPONENT" in
-        tester)   DO_INSTALL_ENDPOINT=0 ;;
-        endpoint) DO_INSTALL_TESTER=0   ;;
-        both)     ;;
+        tester)    DO_INSTALL_ENDPOINT=0 ;;
+        endpoint)  DO_INSTALL_TESTER=0   ;;
+        dashboard) DO_INSTALL_TESTER=0; DO_INSTALL_ENDPOINT=0; DO_INSTALL_DASHBOARD=1 ;;
+        both)      ;;
     esac
 
 
@@ -621,7 +627,7 @@ detect_chrome() {
 # Returns 0 (found) or 1 (not found).
 _remote_chrome_available() {
     local ip="$1" user="$2"
-    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "${user}@${ip}" \
+    ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 "${user}@${ip}" \
         'command -v google-chrome google-chrome-stable chromium-browser chromium chromium-browser-stable 2>/dev/null | head -1 | grep -q . || test -x "$HOME/.local/bin/google-chrome"' 2>/dev/null
 }
 
@@ -907,6 +913,16 @@ display_plan() {
         fi
     fi
 
+    # ── Dashboard ─────────────────────────────────────────────────────────────
+    if [[ $DO_INSTALL_DASHBOARD -eq 1 ]]; then
+        echo ""
+        printf "    ${BOLD}networker-dashboard:${RESET}  Local install\n"
+        printf "    %-22s %s\n" "PostgreSQL:"  "auto-install + configure"
+        printf "    %-22s %s\n" "Frontend:"    "Node.js build → /opt/networker/dashboard"
+        printf "    %-22s %s\n" "Service:"     "systemd (networker-dashboard.service)"
+        printf "    %-22s %s\n" "Port:"        "${DASHBOARD_PORT:-3000}"
+    fi
+
     # ── Remote — tester ───────────────────────────────────────────────────────
     if [[ $DO_REMOTE_TESTER -eq 1 ]]; then
         echo ""
@@ -1013,8 +1029,8 @@ _lan_ssh_vars() {
     _LAN_IP="$ip"
     _LAN_USER="$user"
     _LAN_PORT="$port"
-    _LAN_SSH_OPTS=(-o StrictHostKeyChecking=no -o ConnectTimeout=10 -p "$port")
-    _LAN_SCP_OPTS=(-o StrictHostKeyChecking=no -P "$port" -q)
+    _LAN_SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -p "$port")
+    _LAN_SCP_OPTS=(-o StrictHostKeyChecking=accept-new -P "$port" -q)
     _LAN_DEST="${user}@${ip}"
 }
 
@@ -1023,7 +1039,7 @@ _lan_test_ssh() {
     local ip="$1" user="$2" port="$3"
 
     print_info "Testing SSH connection to ${user}@${ip}:${port}…"
-    if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes \
+    if ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o BatchMode=yes \
            -p "$port" "${user}@${ip}" "echo ok" &>/dev/null; then
         print_ok "SSH connection successful"
         return 0
@@ -2079,7 +2095,7 @@ ensure_aws_cli() {
                         arch_url="https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip"
                     if ! command -v unzip &>/dev/null; then
                         case "$PKG_MGR" in
-                            apt-get) sudo apt-get install -y unzip 2>&1 | tail -1 || true ;;
+                            apt-get) sudo DEBIAN_FRONTEND=noninteractive apt-get install -y unzip 2>&1 | tail -1 || true ;;
                             dnf)     sudo dnf install -y unzip     2>&1 | tail -1 || true ;;
                             yum)     sudo yum install -y unzip     2>&1 | tail -1 || true ;;
                             pacman)  sudo pacman -S --noconfirm unzip 2>&1 | tail -1 || true ;;
@@ -2467,6 +2483,7 @@ prompt_component_selection() {
     echo "  1) Both  — networker-tester (client) + networker-endpoint (server)  [default]"
     echo "  2) tester only   — the diagnostic CLI for measuring HTTP/1.1, H2, H3, QUIC"
     echo "  3) endpoint only — the lightweight HTTP/QUIC test server"
+    echo "  4) dashboard     — control plane + web UI (includes PostgreSQL, agent)"
     echo ""
     printf "  Choice [1]: "
     local comp_ans
@@ -2477,6 +2494,8 @@ prompt_component_selection() {
            print_ok "Installing: networker-tester only" ;;
         3) COMPONENT="endpoint"; DO_INSTALL_TESTER=0; DO_INSTALL_ENDPOINT=1
            print_ok "Installing: networker-endpoint only" ;;
+        4) COMPONENT="dashboard"; DO_INSTALL_TESTER=0; DO_INSTALL_ENDPOINT=0; DO_INSTALL_DASHBOARD=1
+           print_ok "Installing: networker-dashboard (control plane + web UI)" ;;
         *) COMPONENT="both";     DO_INSTALL_TESTER=1; DO_INSTALL_ENDPOINT=1
            print_ok "Installing: networker-tester + networker-endpoint" ;;
     esac
@@ -2684,6 +2703,7 @@ customize_flow() {
     echo "    1) Both  (networker-tester + networker-endpoint)  [default]"
     echo "    2) tester only   – the diagnostic CLI client"
     echo "    3) endpoint only – the target test server"
+    echo "    4) dashboard     – control plane + web UI (PostgreSQL, agent)"
     echo ""
     local comp_ans
     printf "  Choice [1]: "
@@ -2692,6 +2712,7 @@ customize_flow() {
     case "$comp_ans" in
         2) COMPONENT="tester";   DO_INSTALL_TESTER=1; DO_INSTALL_ENDPOINT=0 ;;
         3) COMPONENT="endpoint"; DO_INSTALL_TESTER=0; DO_INSTALL_ENDPOINT=1 ;;
+        4) COMPONENT="dashboard"; DO_INSTALL_TESTER=0; DO_INSTALL_ENDPOINT=0; DO_INSTALL_DASHBOARD=1 ;;
         *) COMPONENT="both";     DO_INSTALL_TESTER=1; DO_INSTALL_ENDPOINT=1 ;;
     esac
 
@@ -2759,15 +2780,29 @@ step_download_release() {
     chmod +x "${INSTALL_DIR}/${binary}"
     rm -rf "$tmp_dir"
 
-    # Verify the binary actually runs (catches GLIBC mismatch, wrong arch, etc.)
+    # Verify the binary runs (catches GLIBC mismatch, wrong arch, etc.)
+    # Skip full validation for dashboard/agent — they require DB/config to start.
     local installed_ver
-    if installed_ver="$("${INSTALL_DIR}/${binary}" --version 2>&1)"; then
-        print_ok "$binary installed → ${INSTALL_DIR}/${binary}  ($installed_ver)"
-    else
-        print_warn "Downloaded binary failed to run: ${installed_ver}"
-        rm -f "${INSTALL_DIR}/${binary}"
-        return 1
-    fi
+    case "$binary" in
+        networker-dashboard|networker-agent)
+            if file "${INSTALL_DIR}/${binary}" 2>/dev/null | grep -q "ELF\|Mach-O\|PE32"; then
+                print_ok "$binary installed → ${INSTALL_DIR}/${binary}"
+            else
+                print_warn "Downloaded file is not an executable binary"
+                rm -f "${INSTALL_DIR}/${binary}"
+                return 1
+            fi
+            ;;
+        *)
+            if installed_ver="$("${INSTALL_DIR}/${binary}" --version 2>&1)"; then
+                print_ok "$binary installed → ${INSTALL_DIR}/${binary}  ($installed_ver)"
+            else
+                print_warn "Downloaded binary failed to run: ${installed_ver}"
+                rm -f "${INSTALL_DIR}/${binary}"
+                return 1
+            fi
+            ;;
+    esac
 
     # Replace any stale copies earlier in PATH that would shadow the new binary.
     local path_bin
@@ -2796,7 +2831,7 @@ step_install_git() {
 
     case "$PKG_MGR" in
         brew)    brew install git ;;
-        apt-get) sudo apt-get update -qq && sudo apt-get install -y git ;;
+        apt-get) sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y git ;;
         dnf)     sudo dnf install -y git ;;
         pacman)  sudo pacman -S --noconfirm git ;;
         zypper)  sudo zypper install -y git ;;
@@ -2827,10 +2862,23 @@ step_install_chrome() {
                 || brew install chromium
             ;;
         apt-get)
-            sudo apt-get update -qq \
-                && (sudo apt-get install -y chromium-browser 2>/dev/null \
-                    || sudo apt-get install -y chromium)
-            sudo apt-get install -y libnss3-tools 2>/dev/null || true
+            # Prefer Google Chrome deb over chromium-browser — on Ubuntu 24.04+
+            # chromium-browser triggers a snap install that downloads ~2GB of
+            # dependencies (snapd, gnome, mesa, cups) and can OOM small VMs.
+            if ! command -v google-chrome &>/dev/null && ! command -v chromium-browser &>/dev/null; then
+                local chrome_deb="/tmp/google-chrome-stable.deb"
+                if curl -fsSL "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb" -o "$chrome_deb" 2>/dev/null; then
+                    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "$chrome_deb" < /dev/null 2>&1 || true
+                    rm -f "$chrome_deb"
+                fi
+            fi
+            # Fallback to chromium-browser if Chrome deb failed
+            if ! command -v google-chrome &>/dev/null && ! command -v chromium-browser &>/dev/null; then
+                sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq \
+                    && (sudo DEBIAN_FRONTEND=noninteractive apt-get install -y chromium-browser 2>/dev/null \
+                        || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y chromium)
+            fi
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libnss3-tools 2>/dev/null || true
             ;;
         dnf)
             sudo dnf install -y chromium
@@ -2875,34 +2923,56 @@ detect_tshark() {
 
 step_install_packet_capture_tools() {
     next_step "Install packet capture tools (tshark/dumpcap)"
-    print_info "Installing packet-capture tools via ${PKG_MGR}…"
-    echo ""
 
-    case "$PKG_MGR" in
-        brew)
-            brew install wireshark
-            ;;
-        apt-get)
-            sudo apt-get update -qq && sudo apt-get install -y tshark
-            ;;
-        dnf)
-            sudo dnf install -y wireshark-cli wireshark
-            ;;
-        pacman)
-            sudo pacman -S --noconfirm wireshark-cli
-            ;;
-        zypper)
-            sudo zypper install -y wireshark
-            ;;
-        apk)
-            sudo apk add tshark
-            ;;
-        *)
-            print_warn "Unknown package manager: $PKG_MGR"
-            print_warn "Install tshark manually to enable packet capture."
-            return
-            ;;
-    esac
+    if detect_tshark >/dev/null 2>&1; then
+        print_ok "tshark already installed: $(detect_tshark)"
+    else
+        print_info "Installing packet-capture tools via ${PKG_MGR}…"
+        echo ""
+
+        case "$PKG_MGR" in
+            brew)
+                brew install wireshark < /dev/null
+                ;;
+            apt-get)
+                # Pre-answer the "should non-superusers be able to capture?" prompt
+                echo "wireshark-common wireshark-common/install-setuid boolean true" \
+                    | sudo debconf-set-selections 2>/dev/null || true
+                sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq < /dev/null
+                sudo DEBIAN_FRONTEND=noninteractive apt-get install -y tshark < /dev/null
+                ;;
+            dnf)
+                sudo dnf install -y wireshark-cli < /dev/null
+                ;;
+            pacman)
+                sudo pacman -S --noconfirm wireshark-cli
+                ;;
+            zypper)
+                sudo zypper install -y wireshark < /dev/null
+                ;;
+            apk)
+                sudo apk add tshark
+                ;;
+            *)
+                print_warn "Unknown package manager: $PKG_MGR"
+                print_warn "Install tshark manually to enable packet capture."
+                return
+                ;;
+        esac
+    fi
+
+    # Grant non-root capture permissions (Linux — add current user to wireshark group)
+    if [[ "$SYS_OS" == "Linux" ]] && getent group wireshark &>/dev/null; then
+        local target_user="${SUDO_USER:-$USER}"
+        if ! id -nG "$target_user" 2>/dev/null | grep -qw wireshark; then
+            sudo usermod -aG wireshark "$target_user" 2>/dev/null || true
+            print_info "Added $target_user to wireshark group (may need re-login for effect)"
+        fi
+        # Also add the networker service user if it exists
+        if id networker &>/dev/null; then
+            sudo usermod -aG wireshark networker 2>/dev/null || true
+        fi
+    fi
 
     if detect_tshark >/dev/null 2>&1; then
         print_ok "tshark ready: $(detect_tshark)"
@@ -2923,7 +2993,7 @@ step_ensure_certutil() {
     fi
     print_info "Installing certutil (NSS tools) via ${PKG_MGR}…"
     case "$PKG_MGR" in
-        apt-get) sudo apt-get install -y libnss3-tools 2>/dev/null || true ;;
+        apt-get) sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libnss3-tools 2>/dev/null || true ;;
         dnf)     sudo dnf install -y nss-tools 2>/dev/null || true ;;
         pacman)  sudo pacman -S --noconfirm nss 2>/dev/null || true ;;
         zypper)  sudo zypper install -y mozilla-nss-tools 2>/dev/null || true ;;
@@ -2988,13 +3058,21 @@ step_cargo_install() {
                && tar xzf "${tmp_dir}/${archive}" -C "$INSTALL_DIR" 2>/dev/null; then
                 chmod +x "${INSTALL_DIR}/${binary}"
                 rm -rf "$tmp_dir"
-                # Verify the binary actually runs (catches GLIBC mismatch, wrong arch, etc.)
-                local installed_ver
-                installed_ver="$("${INSTALL_DIR}/${binary}" --version 2>&1)" && {
-                    print_ok "$binary installed → ${INSTALL_DIR}/${binary}  ($installed_ver)"
-                    return 0
-                }
-                print_warn "Downloaded binary failed to run: ${installed_ver}"
+                # Verify the binary (skip full run for dashboard/agent)
+                case "$binary" in
+                    networker-dashboard|networker-agent)
+                        if file "${INSTALL_DIR}/${binary}" 2>/dev/null | grep -q "ELF\|Mach-O\|PE32"; then
+                            print_ok "$binary installed → ${INSTALL_DIR}/${binary}"
+                            return 0
+                        fi ;;
+                    *)
+                        local installed_ver
+                        installed_ver="$("${INSTALL_DIR}/${binary}" --version 2>&1)" && {
+                            print_ok "$binary installed → ${INSTALL_DIR}/${binary}  ($installed_ver)"
+                            return 0
+                        } ;;
+                esac
+                print_warn "Downloaded binary failed validation"
                 rm -f "${INSTALL_DIR}/${binary}"
             fi
             rm -rf "$tmp_dir"
@@ -3016,7 +3094,7 @@ step_cargo_install() {
             Linux)
                 print_info "No C linker found — installing build tools automatically…"
                 case "$PKG_MGR" in
-                    apt-get) sudo apt-get update -qq 2>/dev/null; sudo apt-get install -y build-essential 2>&1 | tail -3 || true ;;
+                    apt-get) sudo apt-get update -qq 2>/dev/null; sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential 2>&1 | tail -3 || true ;;
                     dnf)     sudo dnf install -y gcc gcc-c++ make    2>&1 | tail -3 || true ;;
                     pacman)  sudo pacman -S --noconfirm base-devel   2>&1 | tail -3 || true ;;
                     zypper)  sudo zypper install -y gcc make          2>&1 | tail -3 || true ;;
@@ -3064,7 +3142,7 @@ _wait_for_ssh() {
     print_info "Waiting for SSH on $label ($ip)…"
     local attempts=0
     while ! ssh -o ConnectTimeout=5 \
-                -o StrictHostKeyChecking=no \
+                -o StrictHostKeyChecking=accept-new \
                 -o BatchMode=yes \
                 "${user}@${ip}" "echo ready" &>/dev/null; do
         attempts=$((attempts + 1))
@@ -3101,6 +3179,91 @@ _binary_version_ok() {
     return 1
 }
 
+# Check installed binaries against latest GitHub release and offer self-update.
+# Called once after discover_system, before the main install flow.
+# Skipped in non-interactive (AUTO_YES) or deploy-config mode.
+check_for_updates() {
+    # Skip in non-interactive or deploy-config mode
+    [[ $AUTO_YES -eq 1 ]] && return 0
+    [[ -n "${DEPLOY_CONFIG_PATH:-}" ]] && return 0
+    [[ -z "$NETWORKER_VERSION" ]] && return 0
+
+    local latest="${NETWORKER_VERSION#v}"
+    local outdated=()
+
+    for binary in networker-tester networker-endpoint networker-dashboard networker-agent; do
+        local bin_path
+        bin_path="$(command -v "$binary" 2>/dev/null || echo "")"
+        [[ -z "$bin_path" || ! -x "$bin_path" ]] && continue
+
+        local installed_ver
+        installed_ver="$("$bin_path" --version 2>/dev/null)" || continue
+        if [[ "$installed_ver" != *"$latest"* ]]; then
+            # Extract just the version number from output like "networker-tester 0.13.19"
+            local cur_ver
+            cur_ver="$(echo "$installed_ver" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+            outdated+=("${binary}:${cur_ver}")
+        fi
+    done
+
+    if [[ ${#outdated[@]} -eq 0 ]]; then
+        return 0
+    fi
+
+    echo ""
+    print_section "Update available"
+    echo ""
+    echo "  Latest version: ${BOLD}${latest}${RESET}"
+    echo ""
+    for entry in "${outdated[@]}"; do
+        local name="${entry%%:*}"
+        local ver="${entry##*:}"
+        printf "    %-24s  %s → %s\n" "$name" "${DIM}${ver}${RESET}" "${GREEN}${latest}${RESET}"
+    done
+    echo ""
+
+    if ask_yn "Update now?" "y"; then
+        for entry in "${outdated[@]}"; do
+            local name="${entry%%:*}"
+            if [[ "$INSTALL_METHOD" == "release" && -n "$RELEASE_TARGET" ]]; then
+                mkdir -p "$INSTALL_DIR"
+                if ! step_download_release "$name"; then
+                    print_info "Falling back to source compile for $name…"
+                    step_ensure_cargo_env
+                    step_cargo_install "$name"
+                fi
+            else
+                step_ensure_cargo_env
+                step_cargo_install "$name"
+            fi
+        done
+
+        # Restart systemd services if they're running
+        if command -v systemctl &>/dev/null; then
+            for entry in "${outdated[@]}"; do
+                local name="${entry%%:*}"
+                if systemctl is-active "$name" &>/dev/null; then
+                    print_info "Restarting $name service…"
+                    # Re-copy binary to /usr/local/bin before restart
+                    local bin_path
+                    bin_path="$(command -v "$name" 2>/dev/null || echo "${INSTALL_DIR}/${name}")"
+                    if [[ -x "$bin_path" && "$bin_path" != "/usr/local/bin/$name" ]]; then
+                        sudo systemctl stop "$name"
+                        sudo cp "$bin_path" "/usr/local/bin/$name"
+                        sudo chmod 755 "/usr/local/bin/$name"
+                    fi
+                    sudo systemctl start "$name"
+                    print_ok "$name service restarted"
+                fi
+            done
+        fi
+
+        echo ""
+        print_ok "All components updated to ${latest}"
+        exit 0
+    fi
+}
+
 # Install a binary on a remote Linux VM when no pre-built release binary exists.
 # Uploads this installer script to the VM and runs it there with --yes, so the VM
 # handles Rust install, cargo install from the public GitHub repo, and service setup.
@@ -3127,27 +3290,27 @@ _remote_bootstrap_install() {
     local repo_url="https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh"
     if [[ -f "$script_path" ]]; then
         print_info "Uploading installer to VM…"
-        scp -o StrictHostKeyChecking=no -q "$script_path" "${user}@${ip}:/tmp/networker-install.sh"
+        scp -o StrictHostKeyChecking=accept-new -q "$script_path" "${user}@${ip}:/tmp/networker-install.sh"
     else
         # Running as curl|bash — no local file. Download locally first, then SCP.
         print_info "Downloading installer locally, then uploading to VM…"
         local tmp_installer="/tmp/networker-install-$$.sh"
         if curl -fsSL "${gist_url}" -o "$tmp_installer" 2>/dev/null || \
            curl -fsSL "${repo_url}" -o "$tmp_installer" 2>/dev/null; then
-            scp -o StrictHostKeyChecking=no -q "$tmp_installer" "${user}@${ip}:/tmp/networker-install.sh"
+            scp -o StrictHostKeyChecking=accept-new -q "$tmp_installer" "${user}@${ip}:/tmp/networker-install.sh"
             rm -f "$tmp_installer"
         else
             # Local download also failed — try on VM directly as last resort
             rm -f "$tmp_installer"
             print_warn "Local download failed — trying directly on VM…"
-            ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
+            ssh -o StrictHostKeyChecking=accept-new "${user}@${ip}" \
                 "curl -fsSLk '${repo_url}' -o /tmp/networker-install.sh"
         fi
     fi
 
     # Remove OUTPUT iptables REDIRECT rules from prior installs — they break all outbound HTTPS
     # by redirecting the VM's own port 80/443 traffic to the local endpoint.
-    ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
+    ssh -o StrictHostKeyChecking=accept-new "${user}@${ip}" \
         "sudo iptables -t nat -D OUTPUT -p tcp --dport 80  -j REDIRECT --to-port 8080 2>/dev/null; \
          sudo iptables -t nat -D OUTPUT -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null; \
          true" < /dev/null 2>/dev/null
@@ -3155,7 +3318,7 @@ _remote_bootstrap_install() {
     print_info "Running installer on VM (the terminal will show the VM's install progress)…"
     echo ""
     # -t allocates a pseudo-TTY so the VM's spinner + colors work
-    ssh -t -o StrictHostKeyChecking=no "${user}@${ip}" \
+    ssh -t -o StrictHostKeyChecking=accept-new "${user}@${ip}" \
         "bash /tmp/networker-install.sh ${comp_arg} -y"
 }
 
@@ -3181,7 +3344,7 @@ _remote_install_binary() {
 
     # Detect remote architecture (needed for both download path and source fallback)
     local remote_arch
-    remote_arch="$(ssh -o StrictHostKeyChecking=no "${user}@${ip}" "uname -m" 2>/dev/null || echo "x86_64")"
+    remote_arch="$(ssh -o StrictHostKeyChecking=accept-new "${user}@${ip}" "uname -m" 2>/dev/null || echo "x86_64")"
 
     # Check whether release has pre-built assets; compile locally if not.
     local has_assets=""
@@ -3224,19 +3387,19 @@ _remote_install_binary() {
         chmod +x "${tmp_dir}/${binary}"
 
         print_info "Uploading binary to VM…"
-        scp -o StrictHostKeyChecking=no -q \
+        scp -o StrictHostKeyChecking=accept-new -q \
             "${tmp_dir}/${binary}" \
             "${user}@${ip}:/tmp/${binary}"
         rm -rf "${tmp_dir}"
 
-        ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
+        ssh -o StrictHostKeyChecking=accept-new "${user}@${ip}" \
             "sudo mv /tmp/${binary} /usr/local/bin/${binary} && \
              sudo chmod +x /usr/local/bin/${binary}"
     else
         rm -rf "${tmp_dir}"
         # Fallback: download directly on the remote VM
         print_info "Downloading directly on VM (${ver})…"
-        if ! ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
+        if ! ssh -o StrictHostKeyChecking=accept-new "${user}@${ip}" \
             "curl -fsSL https://github.com/${REPO_GH}/releases/download/${ver}/${archive} \
                -o /tmp/${archive} && \
              tar xzf /tmp/${archive} -C /tmp && \
@@ -3251,7 +3414,7 @@ _remote_install_binary() {
     fi
 
     local remote_ver
-    remote_ver="$(ssh -o StrictHostKeyChecking=no "${user}@${ip}" \
+    remote_ver="$(ssh -o StrictHostKeyChecking=accept-new "${user}@${ip}" \
         "/usr/local/bin/${binary} --version 2>/dev/null" || echo "unknown")"
     print_ok "$binary installed on VM  ($remote_ver)"
 }
@@ -3261,7 +3424,7 @@ _remote_install_binary() {
 _remote_create_endpoint_service() {
     local ip="$1" user="$2"
 
-    ssh -o StrictHostKeyChecking=no "${user}@${ip}" bash <<'REMOTE'
+    ssh -o StrictHostKeyChecking=accept-new "${user}@${ip}" bash <<'REMOTE'
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin networker 2>/dev/null || true
 
 sudo tee /etc/systemd/system/networker-endpoint.service > /dev/null <<'UNIT'
@@ -3369,8 +3532,9 @@ UNIT
     sudo systemctl enable networker-endpoint
     sudo systemctl start networker-endpoint
 
-    # Redirect privileged ports 80/443 → 8080/8443 so browsers can reach the server
-    if command -v iptables &>/dev/null; then
+    # Redirect privileged ports 80/443 → 8080/8443 so browsers can reach the server.
+    # Skip when installing as part of dashboard — nginx handles 80/443 instead.
+    if command -v iptables &>/dev/null && [[ ${DO_INSTALL_DASHBOARD:-0} -eq 0 ]]; then
         sudo iptables -t nat -C PREROUTING -p tcp --dport 80  -j REDIRECT --to-port 8080 2>/dev/null || \
             sudo iptables -t nat -A PREROUTING -p tcp --dport 80  -j REDIRECT --to-port 8080
         sudo iptables -t nat -C PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null || \
@@ -3389,6 +3553,701 @@ UNIT
 
     sleep 2
     print_ok "networker-endpoint service started — auto-starts on boot"
+}
+
+# ── Dashboard installation steps ─────────────────────────────────────────────
+
+# Install PostgreSQL (apt/yum/brew), create DB user + database.
+step_install_postgresql() {
+    next_step "Install and configure PostgreSQL"
+
+    if command -v psql &>/dev/null; then
+        print_info "PostgreSQL client already installed"
+    else
+        case "$PKG_MGR" in
+            apt-get)
+                sudo apt-get update -qq < /dev/null
+                sudo DEBIAN_FRONTEND=noninteractive apt-get install -y postgresql postgresql-contrib < /dev/null
+                ;;
+            dnf)
+                sudo dnf install -y postgresql-server postgresql < /dev/null
+                sudo postgresql-setup --initdb 2>/dev/null || true
+                ;;
+            brew)
+                brew install postgresql@16 < /dev/null
+                brew services start postgresql@16 < /dev/null
+                ;;
+            *)
+                print_err "No supported package manager found for PostgreSQL install"
+                return 1
+                ;;
+        esac
+    fi
+
+    # Ensure the service is running
+    if [[ "$SYS_OS" == "Linux" ]] && command -v systemctl &>/dev/null; then
+        sudo systemctl enable postgresql 2>/dev/null || true
+        sudo systemctl start postgresql 2>/dev/null || true
+    fi
+
+    # Wait briefly for PostgreSQL to accept connections
+    local retries=0
+    while ! sudo -u postgres psql -c "SELECT 1" &>/dev/null && [[ $retries -lt 10 ]]; do
+        sleep 1
+        retries=$((retries + 1))
+    done
+
+    # Create user and database (idempotent)
+    sudo -u postgres createuser networker 2>/dev/null || true
+    sudo -u postgres createdb networker_dashboard -O networker 2>/dev/null || true
+
+    # Generate a random password for the PostgreSQL user
+    DASHBOARD_DB_PASSWORD="$(head -c 64 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9' | head -c 24)"
+    sudo -u postgres psql -c "ALTER USER networker WITH PASSWORD '${DASHBOARD_DB_PASSWORD}';" 2>/dev/null || true
+
+    # Create tester result tables (normally created by networker-tester on first run,
+    # but the dashboard's Runs page queries them and returns 500 if they don't exist)
+    sudo -u postgres psql -d networker_dashboard 2>/dev/null << 'TESTER_SCHEMA'
+CREATE TABLE IF NOT EXISTS _schema_versions (
+    version INTEGER PRIMARY KEY, applied_at TIMESTAMP WITH TIME ZONE DEFAULT NOW());
+INSERT INTO _schema_versions (version) VALUES (1) ON CONFLICT DO NOTHING;
+-- Match the tester's V001 schema exactly so backend.save() works
+CREATE TABLE IF NOT EXISTS TestRun (
+    RunId          UUID            NOT NULL,
+    StartedAt      TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    FinishedAt     TIMESTAMPTZ     NULL,
+    TargetUrl      VARCHAR(2048)   NOT NULL DEFAULT '',
+    TargetHost     VARCHAR(255)    NOT NULL,
+    Modes          VARCHAR(200)    NOT NULL DEFAULT '',
+    TotalRuns      INT             NOT NULL DEFAULT 1,
+    Concurrency    INT             NOT NULL DEFAULT 1,
+    TimeoutMs      BIGINT          NOT NULL DEFAULT 30000,
+    ClientOs       VARCHAR(50)     NOT NULL DEFAULT '',
+    ClientVersion  VARCHAR(50)     NOT NULL DEFAULT '',
+    SuccessCount   INT             NOT NULL DEFAULT 0,
+    FailureCount   INT             NOT NULL DEFAULT 0,
+    CONSTRAINT PK_TestRun PRIMARY KEY (RunId)
+);
+CREATE TABLE IF NOT EXISTS RequestAttempt (
+    AttemptId     UUID            NOT NULL,
+    RunId         UUID            NOT NULL,
+    Protocol      VARCHAR(20)     NOT NULL,
+    SequenceNum   INT             NOT NULL,
+    StartedAt     TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    FinishedAt    TIMESTAMPTZ     NULL,
+    Success       BOOLEAN         NOT NULL DEFAULT FALSE,
+    ErrorMessage  TEXT            NULL,
+    RetryCount    INT             NOT NULL DEFAULT 0,
+    extra_json    JSONB           NULL,
+    CONSTRAINT PK_RequestAttempt PRIMARY KEY (AttemptId),
+    CONSTRAINT FK_Attempt_Run    FOREIGN KEY (RunId)
+        REFERENCES TestRun (RunId) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS DnsResult (
+    DnsId         UUID            NOT NULL DEFAULT gen_random_uuid(),
+    AttemptId     UUID            NOT NULL,
+    QueryName     VARCHAR(255)    NOT NULL,
+    ResolvedIPs   VARCHAR(1024)   NOT NULL DEFAULT '',
+    DurationMs    DOUBLE PRECISION NOT NULL DEFAULT 0,
+    StartedAt     TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    Success       BOOLEAN         NOT NULL DEFAULT TRUE,
+    CONSTRAINT PK_DnsResult   PRIMARY KEY (DnsId),
+    CONSTRAINT FK_Dns_Attempt FOREIGN KEY (AttemptId)
+        REFERENCES RequestAttempt (AttemptId) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS TcpResult (
+    TcpId         UUID            NOT NULL DEFAULT gen_random_uuid(),
+    AttemptId     UUID            NOT NULL,
+    LocalAddr     VARCHAR(64)     NULL,
+    RemoteAddr    VARCHAR(64)     NOT NULL DEFAULT '',
+    ConnectDurationMs DOUBLE PRECISION NOT NULL DEFAULT 0,
+    AttemptCount  INT             NOT NULL DEFAULT 1,
+    StartedAt     TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    Success       BOOLEAN         NOT NULL DEFAULT TRUE,
+    MssBytesEstimate INT          NULL,
+    RttEstimateMs DOUBLE PRECISION NULL,
+    CONSTRAINT PK_TcpResult   PRIMARY KEY (TcpId),
+    CONSTRAINT FK_Tcp_Attempt FOREIGN KEY (AttemptId)
+        REFERENCES RequestAttempt (AttemptId) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS TlsResult (
+    TlsId         UUID            NOT NULL DEFAULT gen_random_uuid(),
+    AttemptId     UUID            NOT NULL,
+    ProtocolVersion VARCHAR(20)   NOT NULL DEFAULT '',
+    CipherSuite   VARCHAR(100)    NOT NULL DEFAULT '',
+    AlpnNegotiated VARCHAR(20)    NULL,
+    CertSubject   VARCHAR(512)    NULL,
+    CertIssuer    VARCHAR(512)    NULL,
+    CertExpiry    TIMESTAMPTZ     NULL,
+    HandshakeDurationMs DOUBLE PRECISION NOT NULL DEFAULT 0,
+    StartedAt     TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    Success       BOOLEAN         NOT NULL DEFAULT TRUE,
+    CONSTRAINT PK_TlsResult   PRIMARY KEY (TlsId),
+    CONSTRAINT FK_Tls_Attempt FOREIGN KEY (AttemptId)
+        REFERENCES RequestAttempt (AttemptId) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS HttpResult (
+    HttpId        UUID            NOT NULL DEFAULT gen_random_uuid(),
+    AttemptId     UUID            NOT NULL,
+    NegotiatedVersion VARCHAR(20) NOT NULL DEFAULT '',
+    StatusCode    INT             NOT NULL DEFAULT 0,
+    HeadersSizeBytes INT          NOT NULL DEFAULT 0,
+    BodySizeBytes INT             NOT NULL DEFAULT 0,
+    TtfbMs        DOUBLE PRECISION NOT NULL DEFAULT 0,
+    TotalDurationMs DOUBLE PRECISION NOT NULL DEFAULT 0,
+    ThroughputMbps DOUBLE PRECISION NULL,
+    PayloadBytes  BIGINT          NULL,
+    RedirectCount INT             NOT NULL DEFAULT 0,
+    StartedAt     TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    CONSTRAINT PK_HttpResult   PRIMARY KEY (HttpId),
+    CONSTRAINT FK_Http_Attempt FOREIGN KEY (AttemptId)
+        REFERENCES RequestAttempt (AttemptId) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS UdpResult (
+    UdpId         UUID            NOT NULL DEFAULT gen_random_uuid(),
+    AttemptId     UUID            NOT NULL,
+    ProbeCount    INT             NOT NULL DEFAULT 0,
+    SuccessCount  INT             NOT NULL DEFAULT 0,
+    LossPercent   DOUBLE PRECISION NOT NULL DEFAULT 0,
+    RttMinMs      DOUBLE PRECISION NOT NULL DEFAULT 0,
+    RttAvgMs      DOUBLE PRECISION NOT NULL DEFAULT 0,
+    RttMaxMs      DOUBLE PRECISION NOT NULL DEFAULT 0,
+    RttP95Ms      DOUBLE PRECISION NOT NULL DEFAULT 0,
+    JitterMs      DOUBLE PRECISION NOT NULL DEFAULT 0,
+    StartedAt     TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    CONSTRAINT PK_UdpResult   PRIMARY KEY (UdpId),
+    CONSTRAINT FK_Udp_Attempt FOREIGN KEY (AttemptId)
+        REFERENCES RequestAttempt (AttemptId) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS ErrorRecord (
+    ErrorId       UUID            NOT NULL DEFAULT gen_random_uuid(),
+    AttemptId     UUID            NOT NULL,
+    ErrorCategory VARCHAR(50)     NOT NULL DEFAULT '',
+    ErrorMessage  TEXT            NOT NULL DEFAULT '',
+    ErrorDetail   TEXT            NULL,
+    OccurredAt    TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    CONSTRAINT PK_ErrorRecord  PRIMARY KEY (ErrorId),
+    CONSTRAINT FK_Error_Attempt FOREIGN KEY (AttemptId)
+        REFERENCES RequestAttempt (AttemptId) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS ServerTimingResult (
+    TimingId      UUID            NOT NULL DEFAULT gen_random_uuid(),
+    AttemptId     UUID            NOT NULL,
+    ServerTimestamp TIMESTAMPTZ   NULL,
+    ClockSkewMs   DOUBLE PRECISION NULL,
+    ServerVersion VARCHAR(50)     NULL,
+    CONSTRAINT PK_ServerTiming PRIMARY KEY (TimingId),
+    CONSTRAINT FK_Timing_Attempt FOREIGN KEY (AttemptId)
+        REFERENCES RequestAttempt (AttemptId) ON DELETE CASCADE
+);
+GRANT ALL ON ALL TABLES IN SCHEMA public TO networker;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO networker;
+TESTER_SCHEMA
+
+    print_ok "PostgreSQL configured — database: networker_dashboard, user: networker"
+}
+
+# Install Node.js (for building the React frontend).
+step_install_nodejs() {
+    next_step "Install Node.js"
+
+    if command -v node &>/dev/null; then
+        local node_ver
+        node_ver="$(node --version 2>/dev/null || echo "")"
+        print_info "Node.js already installed: $node_ver"
+        return 0
+    fi
+
+    case "$PKG_MGR" in
+        apt-get)
+            # Remove system nodejs if present (conflicts with NodeSource)
+            sudo apt-get remove -y nodejs npm < /dev/null 2>/dev/null || true
+            # Download setup script first (avoid pipe stdin issues with curl|bash)
+            local ns_setup="/tmp/nodesource_setup.sh"
+            curl -fsSL https://deb.nodesource.com/setup_24.x -o "$ns_setup"
+            sudo -E bash "$ns_setup" < /dev/null 2>&1
+            rm -f "$ns_setup"
+            sudo apt-get update -qq < /dev/null
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs < /dev/null
+            ;;
+        dnf)
+            sudo dnf install -y nodejs npm < /dev/null
+            ;;
+        brew)
+            brew install node < /dev/null
+            ;;
+        *)
+            print_err "No supported package manager found for Node.js install"
+            return 1
+            ;;
+    esac
+
+    print_ok "Node.js installed: $(node --version 2>/dev/null)"
+}
+
+# Install cloud CLIs (Azure, AWS, GCP) for the dashboard to deploy endpoints.
+step_install_cloud_clis() {
+    next_step "Install cloud CLIs"
+
+    # Azure CLI
+    if command -v az &>/dev/null; then
+        print_info "Azure CLI already installed: $(az version --query '"azure-cli"' -o tsv 2>/dev/null)"
+    else
+        print_info "Installing Azure CLI…"
+        case "$PKG_MGR" in
+            apt-get)
+                local az_setup="/tmp/azure_cli_setup.sh"
+                curl -sL https://aka.ms/InstallAzureCLIDeb -o "$az_setup"
+                sudo DEBIAN_FRONTEND=noninteractive bash "$az_setup" < /dev/null 2>&1
+                rm -f "$az_setup"
+                ;;
+            dnf)
+                sudo rpm --import https://packages.microsoft.com/keys/microsoft.asc < /dev/null
+                sudo dnf install -y azure-cli < /dev/null 2>&1
+                ;;
+            brew)
+                brew install azure-cli < /dev/null 2>&1
+                ;;
+        esac
+        if command -v az &>/dev/null; then
+            print_ok "Azure CLI installed"
+        else
+            print_warn "Azure CLI installation failed — install manually"
+        fi
+    fi
+
+    # unzip is needed for AWS CLI install — ensure it's present first
+    if ! command -v unzip &>/dev/null; then
+        case "$PKG_MGR" in
+            apt-get) sudo DEBIAN_FRONTEND=noninteractive apt-get install -y unzip -qq < /dev/null 2>&1 ;;
+            dnf)     sudo dnf install -y unzip < /dev/null 2>&1 ;;
+        esac
+    fi
+
+    # AWS CLI
+    if command -v aws &>/dev/null; then
+        print_info "AWS CLI already installed: $(aws --version 2>/dev/null | head -1)"
+    else
+        print_info "Installing AWS CLI…"
+        local tmp_aws
+        tmp_aws="$(mktemp -d)"
+        if curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "${tmp_aws}/awscliv2.zip" 2>/dev/null; then
+            (cd "$tmp_aws" && unzip -qo awscliv2.zip && sudo ./aws/install 2>/dev/null) || true
+        fi
+        rm -rf "$tmp_aws"
+        if command -v aws &>/dev/null; then
+            print_ok "AWS CLI installed"
+        else
+            print_warn "AWS CLI installation failed — install manually"
+        fi
+    fi
+
+    # GCP CLI
+    if command -v gcloud &>/dev/null; then
+        print_info "GCP CLI already installed: $(gcloud --version 2>/dev/null | head -1)"
+    else
+        print_info "Installing GCP CLI…"
+        case "$PKG_MGR" in
+            apt-get)
+                if [[ ! -f /usr/share/keyrings/cloud.google.gpg ]]; then
+                    curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+                        | sudo gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg 2>/dev/null || true
+                    echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
+                        | sudo tee /etc/apt/sources.list.d/google-cloud-sdk.list > /dev/null
+                fi
+                sudo apt-get update -qq < /dev/null 2>&1
+                sudo DEBIAN_FRONTEND=noninteractive apt-get install -y google-cloud-cli -qq < /dev/null 2>&1
+                ;;
+            dnf)
+                sudo tee /etc/yum.repos.d/google-cloud-sdk.repo > /dev/null << 'GCPREPO'
+[google-cloud-cli]
+name=Google Cloud CLI
+baseurl=https://packages.cloud.google.com/yum/repos/cloud-sdk-el9-x86_64
+enabled=1
+gpgcheck=1
+repo_gpgcheck=0
+gpgkey=https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
+GCPREPO
+                sudo dnf install -y google-cloud-cli < /dev/null 2>&1
+                ;;
+            brew)
+                brew install google-cloud-sdk < /dev/null 2>&1
+                ;;
+        esac
+        if command -v gcloud &>/dev/null; then
+            print_ok "GCP CLI installed"
+        else
+            print_warn "GCP CLI installation failed — install manually"
+        fi
+    fi
+
+    # jq is needed for credential helpers
+    if ! command -v jq &>/dev/null; then
+        case "$PKG_MGR" in
+            apt-get) sudo DEBIAN_FRONTEND=noninteractive apt-get install -y jq -qq < /dev/null 2>&1 ;;
+            dnf)     sudo dnf install -y jq < /dev/null 2>&1 ;;
+            brew)    brew install jq < /dev/null 2>&1 ;;
+        esac
+    fi
+
+}
+
+# Build the React frontend and copy to /opt/networker/dashboard.
+step_build_frontend() {
+    next_step "Build dashboard frontend"
+
+    local dashboard_src=""
+    # Check common locations for the dashboard source
+    if [[ -f "./dashboard/package.json" ]]; then
+        dashboard_src="./dashboard"
+    elif [[ -f "/tmp/networker-dashboard-src/dashboard/package.json" ]]; then
+        dashboard_src="/tmp/networker-dashboard-src/dashboard"
+    else
+        # Clone the repo at the release tag to get matching frontend source
+        local tmp_src="/tmp/networker-dashboard-src"
+        rm -rf "$tmp_src"
+        local clone_ref="${NETWORKER_VERSION:-main}"
+        git clone --depth 1 --branch "$clone_ref" "${REPO_HTTPS}.git" "$tmp_src" < /dev/null 2>&1 || {
+            # Fallback to main if tag doesn't exist
+            git clone --depth 1 "${REPO_HTTPS}.git" "$tmp_src" < /dev/null 2>&1 || {
+                print_err "Failed to clone repo for frontend source"
+                return 1
+            }
+        }
+        dashboard_src="$tmp_src/dashboard"
+    fi
+
+    (
+        cd "$dashboard_src"
+        npm install --legacy-peer-deps < /dev/null 2>&1
+        npm run build < /dev/null 2>&1
+    ) || {
+        print_err "Frontend build failed"
+        return 1
+    }
+
+    sudo mkdir -p /opt/networker/dashboard
+    sudo cp -r "${dashboard_src}/dist/." /opt/networker/dashboard/
+    sudo chown -R networker:networker /opt/networker/dashboard 2>/dev/null || true
+
+    print_ok "Frontend built and installed to /opt/networker/dashboard"
+}
+
+# Write /etc/networker-dashboard.env with DB URL, admin password, JWT secret, port.
+step_write_dashboard_env() {
+    next_step "Write dashboard environment file"
+
+    local admin_pw="${DASHBOARD_ADMIN_PASSWORD:-}"
+    if [[ -z "$admin_pw" ]]; then
+        # Generate a random temporary password — user must change on first login
+        admin_pw="$(head -c 64 /dev/urandom | LC_ALL=C tr -dc 'A-HJ-NP-Za-km-z2-9' | head -c 16)"
+        DASHBOARD_TEMP_PASSWORD="$admin_pw"
+    fi
+
+    local dashboard_port="${DASHBOARD_PORT:-3000}"
+    local jwt_secret
+    jwt_secret="$(head -c 32 /dev/urandom | base64 | tr -d '=/+' | head -c 32)"
+
+    local db_pw="${DASHBOARD_DB_PASSWORD:-networker}"
+    sudo tee /etc/networker-dashboard.env > /dev/null <<ENVFILE
+DASHBOARD_DB_URL=postgres://networker:${db_pw}@127.0.0.1:5432/networker_dashboard
+DASHBOARD_ADMIN_PASSWORD=${admin_pw}
+DASHBOARD_JWT_SECRET=${jwt_secret}
+DASHBOARD_PORT=${dashboard_port}
+DASHBOARD_BIND_ADDR=127.0.0.1
+DASHBOARD_STATIC_DIR=/opt/networker/dashboard
+INSTALL_SH_PATH=/opt/networker/install.sh
+ENVFILE
+
+    sudo chmod 600 /etc/networker-dashboard.env
+
+    # Copy install.sh to a persistent location for the dashboard to use for deployments
+    local script_path="${BASH_SOURCE[0]:-$0}"
+    if [[ -f "$script_path" ]]; then
+        sudo cp "$script_path" /opt/networker/install.sh
+        sudo chmod +x /opt/networker/install.sh
+    fi
+
+    print_ok "Environment file written to /etc/networker-dashboard.env"
+}
+
+# Set up networker-dashboard as a systemd service.
+step_setup_dashboard_service() {
+    next_step "Set up networker-dashboard systemd service"
+
+    if [[ $SKIP_SERVICE -eq 1 ]]; then
+        print_info "Service setup skipped (--no-service)"
+        return 0
+    fi
+    if [[ "$SYS_OS" != "Linux" ]]; then
+        print_info "Systemd service setup is Linux-only — skipping."
+        print_dim  "  On macOS: run networker-dashboard manually."
+        return 0
+    fi
+    if ! command -v systemctl &>/dev/null; then
+        print_info "systemd not found — skipping service setup."
+        return 0
+    fi
+
+    # Locate the binary
+    local binary_path="${INSTALL_DIR}/networker-dashboard"
+    if [[ ! -x "$binary_path" ]]; then
+        binary_path="/usr/local/bin/networker-dashboard"
+    fi
+
+    # Copy to /usr/local/bin
+    if [[ "$binary_path" != "/usr/local/bin/networker-dashboard" && -x "$binary_path" ]]; then
+        if systemctl is-active networker-dashboard &>/dev/null; then
+            sudo systemctl stop networker-dashboard
+        fi
+        sudo cp "$binary_path" /usr/local/bin/networker-dashboard
+        sudo chmod 755 /usr/local/bin/networker-dashboard
+        binary_path="/usr/local/bin/networker-dashboard"
+    fi
+
+    # Also install the agent binary
+    local agent_path="${INSTALL_DIR}/networker-agent"
+    if [[ -x "$agent_path" && "$agent_path" != "/usr/local/bin/networker-agent" ]]; then
+        sudo cp "$agent_path" /usr/local/bin/networker-agent
+        sudo chmod 755 /usr/local/bin/networker-agent
+    fi
+
+    # Also install the tester binary (agent shells out to it for probe jobs)
+    local tester_path="${INSTALL_DIR}/networker-tester"
+    if [[ -x "$tester_path" && "$tester_path" != "/usr/local/bin/networker-tester" ]]; then
+        sudo cp "$tester_path" /usr/local/bin/networker-tester
+        sudo chmod 755 /usr/local/bin/networker-tester
+    fi
+
+    sudo useradd --system --no-create-home --shell /usr/sbin/nologin networker 2>/dev/null || true
+
+    sudo tee /etc/systemd/system/networker-dashboard.service > /dev/null <<UNIT
+[Unit]
+Description=Networker Dashboard
+After=network.target postgresql.service
+
+[Service]
+User=$(whoami)
+WorkingDirectory=/tmp
+EnvironmentFile=/etc/networker-dashboard.env
+ExecStart=${binary_path}
+Restart=always
+RestartSec=5
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable networker-dashboard
+    sudo systemctl start networker-dashboard
+
+    # Open firewall for dashboard port
+    local dashboard_port
+    dashboard_port="$(grep DASHBOARD_PORT /etc/networker-dashboard.env 2>/dev/null | cut -d= -f2)"
+    dashboard_port="${dashboard_port:-3000}"
+
+    if command -v ufw &>/dev/null; then
+        sudo ufw allow "$dashboard_port"/tcp 2>/dev/null || true
+    elif command -v firewall-cmd &>/dev/null; then
+        sudo firewall-cmd --permanent --add-port="${dashboard_port}/tcp" 2>/dev/null || true
+        sudo firewall-cmd --reload 2>/dev/null || true
+    fi
+
+    sleep 2
+    print_ok "networker-dashboard service started on port ${dashboard_port} — auto-starts on boot"
+}
+
+# Set up nginx as a reverse proxy for the dashboard (ports 80/443 → 3000).
+step_setup_nginx_proxy() {
+    next_step "Set up nginx reverse proxy for dashboard"
+
+    if [[ "$SYS_OS" != "Linux" ]]; then
+        print_info "nginx proxy is Linux-only — skipping."
+        return 0
+    fi
+
+    # Remove any iptables redirects from the endpoint installer (port 80→8080, 443→8443)
+    # These conflict with nginx binding to ports 80/443
+    if sudo iptables -t nat -L PREROUTING -n 2>/dev/null | grep -q "redir ports 8080"; then
+        sudo iptables -t nat -D PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080 2>/dev/null || true
+        sudo iptables -t nat -D PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null || true
+        print_info "Removed iptables port redirects (80→8080, 443→8443)"
+    fi
+
+    # Check if port 80 is already in use by something other than nginx
+    if ss -tlnp 2>/dev/null | grep -q ':80 ' && ! command -v nginx &>/dev/null; then
+        print_warn "Port 80 already in use — skipping nginx proxy setup."
+        return 0
+    fi
+
+    # Install nginx if not present (system package is fine for reverse proxy)
+    if ! command -v nginx &>/dev/null; then
+        case "$PKG_MGR" in
+            apt-get) sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nginx < /dev/null 2>&1 ;;
+            dnf)     sudo dnf install -y nginx < /dev/null 2>&1 ;;
+        esac
+    fi
+
+    if ! command -v nginx &>/dev/null; then
+        print_warn "nginx installation failed — dashboard available on port 3000 only."
+        return 0
+    fi
+
+    local dashboard_port
+    dashboard_port="$(grep DASHBOARD_PORT /etc/networker-dashboard.env 2>/dev/null | cut -d= -f2)"
+    dashboard_port="${dashboard_port:-3000}"
+    local server_name="${DASHBOARD_FQDN:-_}"
+
+    # Write reverse proxy config
+    sudo tee /etc/nginx/conf.d/networker-dashboard.conf > /dev/null <<NGINXCONF
+server {
+    listen 80;
+    server_name ${server_name};
+
+    # Let's Encrypt challenge path (must not be proxied)
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/html;
+        default_type "text/plain";
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:${dashboard_port};
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    location /ws/ {
+        proxy_pass http://127.0.0.1:${dashboard_port};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_read_timeout 86400;
+    }
+}
+NGINXCONF
+
+    # Remove default site if it exists
+    sudo rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+    sudo mkdir -p /var/www/html
+
+    if sudo nginx -t 2>&1; then
+        sudo systemctl enable nginx 2>/dev/null || true
+        sudo systemctl reload nginx 2>/dev/null || sudo systemctl start nginx
+        DASHBOARD_NGINX_CONFIGURED=1
+        print_ok "nginx reverse proxy configured — dashboard on port 80"
+    else
+        print_warn "nginx config test failed — dashboard available on port ${dashboard_port} only."
+        sudo rm -f /etc/nginx/conf.d/networker-dashboard.conf
+        return 0
+    fi
+
+    # Open firewall for ports 80 and 443
+    if command -v ufw &>/dev/null; then
+        sudo ufw allow 80/tcp 2>/dev/null || true
+        sudo ufw allow 443/tcp 2>/dev/null || true
+    elif command -v firewall-cmd &>/dev/null; then
+        sudo firewall-cmd --permanent --add-service=http 2>/dev/null || true
+        sudo firewall-cmd --permanent --add-service=https 2>/dev/null || true
+        sudo firewall-cmd --reload 2>/dev/null || true
+    fi
+}
+
+# Set up HTTPS for the dashboard: Let's Encrypt if FQDN resolves, self-signed otherwise.
+step_setup_letsencrypt() {
+    next_step "Set up HTTPS certificate"
+
+    if [[ $DASHBOARD_NGINX_CONFIGURED -ne 1 ]]; then
+        print_info "nginx not configured — skipping HTTPS."
+        return 0
+    fi
+
+    local use_letsencrypt=0
+    if [[ -n "$DASHBOARD_FQDN" ]]; then
+        # Check if FQDN resolves to this machine
+        local resolved_ip server_ip
+        resolved_ip="$(dig +short "$DASHBOARD_FQDN" 2>/dev/null | tail -1)"
+        server_ip="$(curl -s --max-time 5 ifconfig.me 2>/dev/null)"
+        if [[ -n "$resolved_ip" && "$resolved_ip" == "$server_ip" ]]; then
+            use_letsencrypt=1
+        else
+            print_warn "FQDN $DASHBOARD_FQDN does not resolve to this server ($server_ip vs $resolved_ip)"
+            print_info "Using self-signed certificate instead."
+        fi
+    fi
+
+    if [[ $use_letsencrypt -eq 1 ]]; then
+        # Install certbot
+        case "$PKG_MGR" in
+            apt-get) sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq certbot python3-certbot-nginx < /dev/null 2>&1 ;;
+            dnf)     sudo dnf install -y certbot python3-certbot-nginx < /dev/null 2>&1 ;;
+        esac
+
+        if sudo certbot --nginx -d "$DASHBOARD_FQDN" \
+                --non-interactive --agree-tos --register-unsafely-without-email \
+                --redirect < /dev/null 2>&1; then
+            print_ok "Let's Encrypt certificate installed for $DASHBOARD_FQDN"
+            return 0
+        else
+            print_warn "Let's Encrypt failed — falling back to self-signed certificate."
+        fi
+    fi
+
+    # Self-signed fallback
+    sudo mkdir -p /etc/nginx/ssl
+    sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+        -keyout /etc/nginx/ssl/dashboard.key \
+        -out /etc/nginx/ssl/dashboard.crt \
+        -subj "/CN=${DASHBOARD_FQDN:-networker-dashboard}" 2>/dev/null
+
+    local server_name="${DASHBOARD_FQDN:-_}"
+    local dashboard_port
+    dashboard_port="$(grep DASHBOARD_PORT /etc/networker-dashboard.env 2>/dev/null | cut -d= -f2)"
+    dashboard_port="${dashboard_port:-3000}"
+
+    # Add SSL server block
+    sudo tee -a /etc/nginx/conf.d/networker-dashboard.conf > /dev/null <<SSLCONF
+
+server {
+    listen 443 ssl;
+    server_name ${server_name};
+
+    ssl_certificate /etc/nginx/ssl/dashboard.crt;
+    ssl_certificate_key /etc/nginx/ssl/dashboard.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    location / {
+        proxy_pass http://127.0.0.1:${dashboard_port};
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    location /ws/ {
+        proxy_pass http://127.0.0.1:${dashboard_port};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_read_timeout 86400;
+    }
+}
+SSLCONF
+
+    if sudo nginx -t 2>&1; then
+        sudo systemctl reload nginx
+        print_ok "Self-signed HTTPS certificate configured"
+        print_dim "  Browser will show a security warning — this is expected."
+    else
+        print_warn "SSL config failed — dashboard available on HTTP only."
+    fi
 }
 
 # ─── HTTP Stack comparison: nginx setup (Ubuntu) ─────────────────────────────
@@ -3438,7 +4297,7 @@ step_setup_nginx() {
             apt-get)
                 # Add official nginx.org repo for mainline (1.25+ with HTTP/3)
                 if ! apt-cache policy nginx 2>/dev/null | grep -q "nginx.org"; then
-                    sudo apt-get install -y curl gnupg ca-certificates lsb-release ubuntu-keyring < /dev/null
+                    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y curl gnupg ca-certificates lsb-release ubuntu-keyring < /dev/null
                     curl -fsSL https://nginx.org/keys/nginx_signing.key \
                         | gpg --dearmor | sudo tee /usr/share/keyrings/nginx-archive-keyring.gpg > /dev/null
                     echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] \
@@ -3447,7 +4306,7 @@ http://nginx.org/packages/mainline/ubuntu $(lsb_release -cs) nginx" \
                     printf 'Package: *\nPin: origin nginx.org\nPin-Priority: 900\n' \
                         | sudo tee /etc/apt/preferences.d/99nginx > /dev/null
                 fi
-                sudo apt-get update -qq && sudo apt-get install -y nginx < /dev/null
+                sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nginx < /dev/null
                 ;;
             dnf)      sudo dnf install -y nginx ;;
             pacman)   sudo pacman -S --noconfirm nginx ;;
@@ -3794,7 +4653,7 @@ _remote_setup_nginx() {
     fi
     # We pipe the step_setup_nginx function body over SSH
     # But it's cleaner to run the main commands inline
-    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "${ssh_user}@${ip}" bash -s <<'NGINX_SSH'
+    ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 "${ssh_user}@${ip}" bash -s <<'NGINX_SSH'
 set -e
 export DEBIAN_FRONTEND=noninteractive
 
@@ -4125,11 +4984,11 @@ _remote_verify_health() {
             print_warn "Endpoint did not respond within 60 seconds."
             echo ""
             print_info "Fetching service status from the VM…"
-            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "${ssh_user}@${ip}" \
+            ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 "${ssh_user}@${ip}" \
                 "sudo systemctl status networker-endpoint --no-pager -l 2>&1 | head -30" 2>/dev/null || true
             echo ""
             print_info "Last 30 log lines:"
-            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "${ssh_user}@${ip}" \
+            ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 "${ssh_user}@${ip}" \
                 "sudo journalctl -u networker-endpoint -n 30 --no-pager 2>&1" 2>/dev/null || true
             echo ""
             print_warn "Manual check:  ssh ${ssh_user}@${ip} 'sudo journalctl -u networker-endpoint -f'"
@@ -4387,10 +5246,10 @@ EOF
     fi
 
     # If the tester is also remote, upload the config there too
-    local tester_ip="" tester_user="" tester_scp_opts=(-o StrictHostKeyChecking=no -q)
+    local tester_ip="" tester_user="" tester_scp_opts=(-o StrictHostKeyChecking=accept-new -q)
     case "$TESTER_LOCATION" in
         lan)   tester_ip="$LAN_TESTER_IP"; tester_user="$LAN_TESTER_USER"
-               tester_scp_opts=(-o StrictHostKeyChecking=no -P "$LAN_TESTER_PORT" -q) ;;
+               tester_scp_opts=(-o StrictHostKeyChecking=accept-new -P "$LAN_TESTER_PORT" -q) ;;
         azure) tester_ip="$AZURE_TESTER_IP"; tester_user="azureuser" ;;
         aws)   tester_ip="$AWS_TESTER_IP";   tester_user="ubuntu" ;;
         gcp)   tester_ip="$GCP_TESTER_IP";   tester_user="$(whoami)" ;;
@@ -4719,7 +5578,7 @@ step_aws_set_auto_shutdown() {
     [[ "$AWS_AUTO_SHUTDOWN" != "yes" ]] && return 0
 
     next_step "Set auto-shutdown cron for $label (04:00 UTC = 11 PM EST)"
-    if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "${user}@${ip}" \
+    if ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 "${user}@${ip}" \
         "echo '0 4 * * * root /sbin/shutdown -h now' | sudo tee /etc/cron.d/networker-autostop > /dev/null && sudo chmod 644 /etc/cron.d/networker-autostop" 2>/dev/null; then
         print_ok "Auto-shutdown cron installed: 04:00 UTC (11 PM EST) daily"
     else
@@ -4781,7 +5640,7 @@ _remote_offer_chrome_install() {
             zypper)  install_cmd="sudo zypper install -y chromium" ;;
             *)       install_cmd="sudo apt-get install -y chromium-browser" ;;
         esac
-        if ssh -o StrictHostKeyChecking=no "${user}@${ip}" "$install_cmd" 2>/dev/null; then
+        if ssh -o StrictHostKeyChecking=accept-new "${user}@${ip}" "$install_cmd" 2>/dev/null; then
             print_ok "Chromium installed on VM — browser probe enabled."
         else
             print_warn "Could not install Chromium (non-critical — browser probe will be skipped)."
@@ -5614,7 +6473,7 @@ _gcp_wait_for_ssh() {
                 --command "echo ok" \
                 --quiet \
                 --ssh-flag="-o ConnectTimeout=5" \
-                --ssh-flag="-o StrictHostKeyChecking=no" \
+                --ssh-flag="-o StrictHostKeyChecking=accept-new" \
                 &>/dev/null 2>&1; then
             print_ok "SSH available on $label"
             return 0
@@ -5633,7 +6492,7 @@ _gcp_ssh_run() {
         --project "$GCP_PROJECT" \
         --zone "$GCP_ZONE" \
         --quiet \
-        --ssh-flag="-o StrictHostKeyChecking=no" \
+        --ssh-flag="-o StrictHostKeyChecking=accept-new" \
         --command "$*" < /dev/null
 }
 
@@ -5771,7 +6630,7 @@ _gcp_wait_for_windows_vm() {
                 --command "echo ready" \
                 --quiet \
                 --ssh-flag="-o ConnectTimeout=10" \
-                --ssh-flag="-o StrictHostKeyChecking=no" \
+                --ssh-flag="-o StrictHostKeyChecking=accept-new" \
                 &>/dev/null 2>&1; then
             echo ""
             print_ok "Windows VM ready (SSH available)"
@@ -5848,7 +6707,7 @@ _gcp_win_install_binary() {
         --project "$GCP_PROJECT" \
         --zone "$GCP_ZONE" \
         --quiet \
-        --ssh-flag="-o StrictHostKeyChecking=no" \
+        --ssh-flag="-o StrictHostKeyChecking=accept-new" \
         --command "powershell -Command \"\$ErrorActionPreference='Stop'; \
             New-Item -ItemType Directory -Force -Path C:\\networker-tmp | Out-Null; \
             New-Item -ItemType Directory -Force -Path C:\\networker | Out-Null; \
@@ -5870,7 +6729,7 @@ _gcp_win_source_build() {
         --project "$GCP_PROJECT" \
         --zone "$GCP_ZONE" \
         --quiet \
-        --ssh-flag="-o StrictHostKeyChecking=no" \
+        --ssh-flag="-o StrictHostKeyChecking=accept-new" \
         --command "powershell -Command \"\$ErrorActionPreference='Stop'; \
             Invoke-WebRequest -Uri 'https://win.rustup.rs/x86_64' -OutFile C:\\rustup-init.exe -UseBasicParsing; \
             & C:\\rustup-init.exe -y --default-toolchain stable 2>&1 | Select-Object -Last 3; \
@@ -6081,7 +6940,7 @@ _gcp_win_create_endpoint_service() {
         --project "$GCP_PROJECT" \
         --zone "$GCP_ZONE" \
         --quiet \
-        --ssh-flag="-o StrictHostKeyChecking=no" \
+        --ssh-flag="-o StrictHostKeyChecking=accept-new" \
         --command "powershell -Command \"\$ErrorActionPreference='Continue'; \
             Stop-Process -Name 'networker-endpoint' -Force -ErrorAction SilentlyContinue; \
             netsh advfirewall firewall add rule name='Networker-HTTP'  protocol=TCP dir=in action=allow localport=8080; \
@@ -6103,7 +6962,7 @@ _gcp_win_set_auto_shutdown() {
         --project "$GCP_PROJECT" \
         --zone "$GCP_ZONE" \
         --quiet \
-        --ssh-flag="-o StrictHostKeyChecking=no" \
+        --ssh-flag="-o StrictHostKeyChecking=accept-new" \
         --command "powershell -Command \"\
             \\\$action = New-ScheduledTaskAction -Execute 'shutdown.exe' -Argument '/s /t 60 /f'; \
             \\\$trigger = New-ScheduledTaskTrigger -Daily -At '04:00'; \
@@ -6241,6 +7100,55 @@ display_completion() {
         echo "  ${BOLD}networker-endpoint${RESET} quick start:"
         echo "    networker-endpoint"
         echo "    # Listens on :8080 HTTP, :8443 HTTPS/H2/H3, :9998 UDP throughput, :9999 UDP echo"
+        echo ""
+    fi
+
+    if [[ $DO_INSTALL_DASHBOARD -eq 1 ]]; then
+        local dashboard_port
+        dashboard_port="$(grep DASHBOARD_PORT /etc/networker-dashboard.env 2>/dev/null | cut -d= -f2)"
+        dashboard_port="${dashboard_port:-3000}"
+        echo "  ${BOLD}networker-dashboard${RESET}:"
+        if [[ -n "${DASHBOARD_FQDN:-}" && ${DASHBOARD_NGINX_CONFIGURED:-0} -eq 1 ]]; then
+            echo "    Web UI:   https://${DASHBOARD_FQDN}"
+        elif [[ ${DASHBOARD_NGINX_CONFIGURED:-0} -eq 1 ]]; then
+            local server_ip
+            server_ip="$(curl -s --max-time 3 ifconfig.me 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}')"
+            echo "    Web UI:   http://${server_ip:-localhost}"
+        else
+            echo "    Web UI:   http://localhost:${dashboard_port}"
+        fi
+        echo "    Service:  sudo systemctl status networker-dashboard"
+        echo "    Logs:     sudo journalctl -u networker-dashboard -f"
+        echo "    Config:   /etc/networker-dashboard.env"
+        echo ""
+        if [[ -n "${DASHBOARD_TEMP_PASSWORD:-}" ]]; then
+            echo "  ╔══════════════════════════════════════════════════════════╗"
+            echo "  ║  ${BOLD}Login credentials${RESET}                                      ║"
+            echo "  ║                                                          ║"
+            printf "  ║  Username:  ${BOLD}admin${RESET}%*s║\n" 37 ""
+            printf "  ║  Password:  ${BOLD}%-16s${RESET}%*s║\n" "$DASHBOARD_TEMP_PASSWORD" 21 ""
+            echo "  ║                                                          ║"
+            echo "  ║  ${DIM}You will be asked to change the password on first login.${RESET} ║"
+            echo "  ╚══════════════════════════════════════════════════════════╝"
+            echo ""
+        fi
+
+        # SSH access and cloud credentials guide
+        local server_ip
+        server_ip="$(curl -s --max-time 3 ifconfig.me 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}')"
+        if [[ -n "$server_ip" ]]; then
+            echo "  ${BOLD}SSH access${RESET}:"
+            echo "    ssh $(whoami)@${server_ip}"
+            echo ""
+        fi
+        echo "  ${BOLD}Cloud credentials${RESET} (required to deploy endpoints from the dashboard):"
+        echo ""
+        echo "    ${DIM}Azure:${RESET}  az login                    ${DIM}# or: az login --identity (for VMs with managed identity)${RESET}"
+        echo "    ${DIM}AWS:${RESET}    aws configure                ${DIM}# enter access key + secret${RESET}"
+        echo "    ${DIM}GCP:${RESET}    gcloud auth login            ${DIM}# then: gcloud config set project PROJECT_ID${RESET}"
+        echo ""
+        echo "    After authenticating, restart the dashboard:"
+        echo "    sudo systemctl restart networker-dashboard"
         echo ""
     fi
 
@@ -6612,7 +7520,7 @@ _offer_ssh_connect() {
                 --zone "$GCP_ZONE" \
                 --quiet
         else
-            ssh -o StrictHostKeyChecking=no "$dest"
+            ssh -o StrictHostKeyChecking=accept-new "$dest"
         fi
     }
 
@@ -6811,6 +7719,20 @@ _deploy_validate_config() {
         done
     fi
 
+    # Optional dashboard section
+    local has_dashboard
+    has_dashboard="$(jq 'has("dashboard")' "$cfg" 2>/dev/null)"
+    if [[ "$has_dashboard" == "true" ]]; then
+        local dash_provider
+        dash_provider="$(jq -r '.dashboard.provider // empty' "$cfg")"
+        if [[ -n "$dash_provider" ]]; then
+            case "$dash_provider" in
+                local) ;;
+                *) print_err "dashboard.provider: only 'local' is currently supported (got: $dash_provider)"; errors=$((errors + 1)) ;;
+            esac
+        fi
+    fi
+
     DEPLOY_VALIDATE_ERRORS=$errors
 }
 
@@ -6824,7 +7746,7 @@ _deploy_needs_browser() {
 
 # Install Chrome/Chromium on the remote tester machine via SSH.
 _deploy_install_chrome_remote() {
-    local ssh_opts=(-o StrictHostKeyChecking=no)
+    local ssh_opts=(-o StrictHostKeyChecking=accept-new)
     local dest=""
     case "$TESTER_LOCATION" in
         lan)
@@ -7008,7 +7930,8 @@ _deploy_parse_config() {
     DO_INSTALL_ENDPOINT=1
 
     # ── Tests ─────────────────────────────────────────────────────────────
-    local run_tests; run_tests="$(jq -r '.tests.run_tests // true' "$cfg")"
+    # Note: jq's // operator treats false as falsy, so we use 'if .tests.run_tests == false'
+    local run_tests; run_tests="$(jq -r 'if .tests.run_tests == false then "false" else "true" end' "$cfg")"
     [[ "$run_tests" == "true" ]] && DEPLOY_RUN_TESTS=1 || DEPLOY_RUN_TESTS=0
 
     DEPLOY_TEST_MODES="$(jq -c '.tests.modes // null' "$cfg")"
@@ -7034,11 +7957,12 @@ _deploy_parse_config() {
     DEPLOY_TEST_LOG_LEVEL="$(jq -r '.tests.log_level // ""' "$cfg")"
     DEPLOY_TEST_HTTP_STACKS="$(jq -r '(.tests.http_stacks // []) | join(",")' "$cfg")"
 
-    DEPLOY_PACKET_CAPTURE_MODE="$(jq -r '.packet_capture.mode // "none"' "$cfg")"
-    DEPLOY_PACKET_CAPTURE_INSTALL_REQS="$(jq -r '.packet_capture.install_requirements // ""' "$cfg")"
-    DEPLOY_PACKET_CAPTURE_INTERFACE="$(jq -r '.packet_capture.interface // ""' "$cfg")"
-    DEPLOY_PACKET_CAPTURE_WRITE_PCAP="$(jq -r '.packet_capture.write_pcap // ""' "$cfg")"
-    DEPLOY_PACKET_CAPTURE_WRITE_SUMMARY_JSON="$(jq -r '.packet_capture.write_summary_json // ""' "$cfg")"
+    # packet_capture can be at top level OR inside tests (support both)
+    DEPLOY_PACKET_CAPTURE_MODE="$(jq -r '(.packet_capture.mode // .tests.packet_capture.mode // "none")' "$cfg")"
+    DEPLOY_PACKET_CAPTURE_INSTALL_REQS="$(jq -r '(.packet_capture.install_requirements // .tests.packet_capture.install_requirements // "")' "$cfg")"
+    DEPLOY_PACKET_CAPTURE_INTERFACE="$(jq -r '(.packet_capture.interface // .tests.packet_capture.interface // "")' "$cfg")"
+    DEPLOY_PACKET_CAPTURE_WRITE_PCAP="$(jq -r '(.packet_capture.write_pcap // .tests.packet_capture.write_pcap // "")' "$cfg")"
+    DEPLOY_PACKET_CAPTURE_WRITE_SUMMARY_JSON="$(jq -r '(.packet_capture.write_summary_json // .tests.packet_capture.write_summary_json // "")' "$cfg")"
 }
 
 # Load endpoint config at index $1 into the provider-specific globals.
@@ -7153,7 +8077,7 @@ _deploy_preflight() {
                 # Test SSH for each LAN target
                 if [[ "$t_prov" == "lan" ]]; then
                     if ssh -o BatchMode=yes -o ConnectTimeout=5 \
-                           -o StrictHostKeyChecking=no \
+                           -o StrictHostKeyChecking=accept-new \
                            -p "$LAN_TESTER_PORT" \
                            "${LAN_TESTER_USER}@${LAN_TESTER_IP}" true &>/dev/null; then
                         print_ok "SSH to tester ${LAN_TESTER_USER}@${LAN_TESTER_IP} OK"
@@ -7169,7 +8093,7 @@ _deploy_preflight() {
                     euser="$(jq -r ".endpoints[$i].lan.user // \"\"" "$cfg")"
                     eport="$(jq -r ".endpoints[$i].lan.port // 22" "$cfg")"
                     if ssh -o BatchMode=yes -o ConnectTimeout=5 \
-                           -o StrictHostKeyChecking=no \
+                           -o StrictHostKeyChecking=accept-new \
                            -p "$eport" \
                            "${euser}@${eip}" true &>/dev/null; then
                         print_ok "SSH to endpoint ${euser}@${eip} OK"
@@ -7486,10 +8410,10 @@ _deploy_generate_tester_config() {
     print_info "Targets: $(echo "$targets_json" | tr ',' '\n' | wc -l | tr -d ' ') endpoint(s)"
 
     # Upload config to remote tester if applicable
-    local tester_ip="" tester_user="" tester_scp_opts=(-o StrictHostKeyChecking=no -q)
+    local tester_ip="" tester_user="" tester_scp_opts=(-o StrictHostKeyChecking=accept-new -q)
     case "$TESTER_LOCATION" in
         lan)   tester_ip="$LAN_TESTER_IP"; tester_user="$LAN_TESTER_USER"
-               tester_scp_opts=(-o StrictHostKeyChecking=no -P "$LAN_TESTER_PORT" -q) ;;
+               tester_scp_opts=(-o StrictHostKeyChecking=accept-new -P "$LAN_TESTER_PORT" -q) ;;
         azure) tester_ip="$AZURE_TESTER_IP"; tester_user="azureuser" ;;
         aws)   tester_ip="$AWS_TESTER_IP";   tester_user="ubuntu" ;;
         gcp)   tester_ip="$GCP_TESTER_IP";   tester_user="$(whoami)" ;;
@@ -7547,7 +8471,13 @@ _deploy_execute_tests() {
 
         print_info "Running: $tester_bin --config $CONFIG_FILE_PATH"
         echo ""
-        "$tester_bin" --config "$CONFIG_FILE_PATH"
+        # Use 'sg wireshark' if capture is enabled and the group exists,
+        # so tshark has capture permissions even without re-login.
+        if [[ "$DEPLOY_PACKET_CAPTURE_MODE" != "none" ]] && getent group wireshark &>/dev/null; then
+            sg wireshark -c "\"$tester_bin\" --config \"$CONFIG_FILE_PATH\""
+        else
+            "$tester_bin" --config "$CONFIG_FILE_PATH"
+        fi
         local rc=$?
         echo ""
         if [[ $rc -eq 0 ]]; then
@@ -7559,7 +8489,7 @@ _deploy_execute_tests() {
     fi
 
     # Remote tester: run via SSH
-    local ssh_opts=(-o StrictHostKeyChecking=no)
+    local ssh_opts=(-o StrictHostKeyChecking=accept-new)
     local tester_dest="" tester_user=""
 
     case "$TESTER_LOCATION" in
@@ -7626,7 +8556,7 @@ _deploy_download_results() {
     print_info "Downloading results from remote tester…"
 
     # Try to download HTML report
-    local scp_opts=(-o StrictHostKeyChecking=no -q)
+    local scp_opts=(-o StrictHostKeyChecking=accept-new -q)
     # Extract port from ssh_opts if present
     local p
     for p in "${ssh_opts[@]}"; do
@@ -7750,10 +8680,8 @@ deploy_from_config() {
             step_install_chrome
         fi
         if [[ "$DEPLOY_PACKET_CAPTURE_MODE" == "tester" || "$DEPLOY_PACKET_CAPTURE_MODE" == "both" ]]; then
-            if ! detect_tshark >/dev/null 2>&1 && [[ "$DEPLOY_PACKET_CAPTURE_INSTALL_REQS" == "true" ]]; then
+            if ! detect_tshark >/dev/null 2>&1; then
                 step_install_packet_capture_tools
-            elif ! detect_tshark >/dev/null 2>&1; then
-                print_warn "Packet capture selected but tshark is not installed; tester-side capture will be skipped."
             fi
         fi
         if [[ "$INSTALL_METHOD" == "release" ]]; then
@@ -7956,8 +8884,70 @@ deploy_from_config() {
         print_ok "Endpoint $label deployed: ${DEPLOY_EP_IPS[$i]}"
     done
 
-    # Phase 7: Generate tester config from deployed IPs
-    _deploy_generate_tester_config
+    # Phase 7: Generate tester config from deployed IPs (skip if deploy-only)
+    if [[ $DEPLOY_RUN_TESTS -eq 1 ]]; then
+        _deploy_generate_tester_config
+    fi
+
+    # Phase 7.5: Dashboard (if requested in config)
+    local has_dashboard
+    has_dashboard="$(jq 'has("dashboard")' "$cfg" 2>/dev/null)"
+    if [[ "$has_dashboard" == "true" ]]; then
+        print_section "Dashboard setup"
+        DO_INSTALL_DASHBOARD=1
+
+        # Read dashboard-specific config
+        DASHBOARD_ADMIN_PASSWORD="$(jq -r '.dashboard.admin_password // "admin"' "$cfg")"
+        DASHBOARD_PORT="$(jq -r '.dashboard.port // 3000' "$cfg")"
+        export DASHBOARD_ADMIN_PASSWORD DASHBOARD_PORT
+
+        step_install_postgresql
+        step_install_nodejs
+        step_install_cloud_clis
+
+        if [[ "$INSTALL_METHOD" == "release" ]]; then
+            mkdir -p "$INSTALL_DIR"
+            step_download_release "networker-dashboard" || {
+                step_ensure_cargo_env
+                step_cargo_install "networker-dashboard"
+            }
+            step_download_release "networker-agent" || {
+                step_ensure_cargo_env
+                step_cargo_install "networker-agent"
+            }
+        else
+            step_ensure_cargo_env
+            step_cargo_install "networker-dashboard"
+            step_cargo_install "networker-agent"
+        fi
+
+        # Dashboard also needs tester + endpoint binaries, browser, and capture tools
+        if [[ "$INSTALL_METHOD" == "release" ]]; then
+            step_download_release "networker-tester" 2>/dev/null || true
+            step_download_release "networker-endpoint" 2>/dev/null || true
+        fi
+        if [[ "$SYS_OS" == "Linux" ]]; then
+            step_install_chrome 2>/dev/null || print_warn "Chrome install skipped — browser probes disabled"
+            step_install_tshark 2>/dev/null || print_warn "tshark install skipped — packet capture disabled"
+            # Set up local endpoint service so tests can target localhost
+            if command -v systemctl &>/dev/null; then
+                step_setup_endpoint_service 2>/dev/null || true
+            fi
+        fi
+
+        step_build_frontend
+        step_write_dashboard_env
+        step_setup_dashboard_service
+
+        # Nginx proxy + TLS (if fqdn is in config)
+        DASHBOARD_FQDN="$(jq -r '.dashboard.fqdn // ""' "$cfg")"
+        if [[ "$SYS_OS" == "Linux" ]]; then
+            step_setup_nginx_proxy
+            if [[ -n "$DASHBOARD_FQDN" ]]; then
+                step_setup_letsencrypt
+            fi
+        fi
+    fi
 
     # Phase 8: Run tests
     if [[ $DEPLOY_RUN_TESTS -eq 1 ]]; then
@@ -7982,6 +8972,9 @@ main() {
 
     print_banner
     display_system_info
+
+    # Check for updates to installed binaries
+    check_for_updates
     prompt_component_selection  # ask tester / endpoint / both (skipped if set via CLI)
     display_plan
     prompt_main
@@ -8042,12 +9035,94 @@ main() {
         step_ensure_certutil
     fi
 
+    # ── Packet capture tools (tshark) for tester ─────────────────────────────
+    if [[ $do_local_tester -eq 1 && -n "$PKG_MGR" ]]; then
+        if ! detect_tshark >/dev/null 2>&1; then
+            echo ""
+            if [[ $AUTO_YES -eq 1 ]] || ask_yn "Install packet capture tools (tshark) for network analysis?" "y"; then
+                step_install_packet_capture_tools
+            fi
+        fi
+    fi
+
     # ── Local endpoint: offer systemd service (Linux only) ────────────────────
     if [[ $do_local_endpoint -eq 1 && "$SYS_OS" == "Linux" ]] && command -v systemctl &>/dev/null; then
         echo ""
         if ask_yn "Set up networker-endpoint as a systemd service (auto-starts on boot)?" "y"; then
             step_setup_endpoint_service
             step_setup_nginx
+        fi
+    fi
+
+    # ── Dashboard install ────────────────────────────────────────────────────
+    if [[ $DO_INSTALL_DASHBOARD -eq 1 ]]; then
+        # Ensure swap exists — dashboard install pulls ~4GB of packages
+        # (cloud CLIs, Chrome, Node.js, frontend build) which can OOM small VMs.
+        if [[ "$SYS_OS" == "Linux" ]] && ! swapon --show 2>/dev/null | grep -q .; then
+            print_info "Creating 4GB swap file to prevent OOM during install…"
+            sudo fallocate -l 4G /swapfile 2>/dev/null \
+                && sudo chmod 600 /swapfile \
+                && sudo mkswap /swapfile >/dev/null \
+                && sudo swapon /swapfile \
+                && echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null \
+                && print_ok "Swap enabled (4GB)" \
+                || print_warn "Swap setup failed — continuing without swap"
+        fi
+
+        step_install_postgresql
+        step_install_nodejs
+        step_install_cloud_clis
+
+        if [[ "$INSTALL_METHOD" == "release" ]]; then
+            mkdir -p "$INSTALL_DIR"
+            local dashboard_dl_ok=1
+            if ! step_download_release "networker-dashboard"; then
+                dashboard_dl_ok=0
+            fi
+            if ! step_download_release "networker-agent"; then
+                dashboard_dl_ok=0
+            fi
+            if [[ $dashboard_dl_ok -eq 0 ]]; then
+                print_info "Falling back to source compile for dashboard…"
+                step_ensure_cargo_env
+                step_cargo_install "networker-dashboard"
+                step_cargo_install "networker-agent"
+            fi
+        else
+            step_ensure_cargo_env
+            step_cargo_install "networker-dashboard"
+            step_cargo_install "networker-agent"
+        fi
+
+        # Dashboard also needs tester + endpoint binaries, browser, and capture tools
+        if [[ "$INSTALL_METHOD" == "release" ]]; then
+            step_download_release "networker-tester" 2>/dev/null || true
+            step_download_release "networker-endpoint" 2>/dev/null || true
+        fi
+        if [[ "$SYS_OS" == "Linux" ]]; then
+            step_install_chrome 2>/dev/null || print_warn "Chrome install skipped — browser probes disabled"
+            step_install_tshark 2>/dev/null || print_warn "tshark install skipped — packet capture disabled"
+            # Set up local endpoint service so tests can target localhost
+            if command -v systemctl &>/dev/null; then
+                step_setup_endpoint_service 2>/dev/null || true
+            fi
+        fi
+
+        step_build_frontend
+        step_write_dashboard_env
+        step_setup_dashboard_service
+
+        # Nginx reverse proxy (optional)
+        if [[ "$SYS_OS" == "Linux" ]]; then
+            step_setup_nginx_proxy
+            if [[ $DASHBOARD_NGINX_CONFIGURED -eq 1 ]]; then
+                if [[ -z "${DASHBOARD_FQDN:-}" ]]; then
+                    echo ""
+                    printf "  Enter FQDN for HTTPS certificate (or press Enter for self-signed): "
+                    read -r DASHBOARD_FQDN </dev/tty 2>/dev/null || DASHBOARD_FQDN=""
+                fi
+                step_setup_letsencrypt
+            fi
         fi
     fi
 

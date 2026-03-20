@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.13.34] – 2026-03-18 — URL diagnostic docs and output hardening
+## [0.13.35] – 2026-03-20 — URL diagnostic docs and output hardening
 
 ### Added
 - Documented the URL page-load diagnostic workflow in the main README and probes reference.
