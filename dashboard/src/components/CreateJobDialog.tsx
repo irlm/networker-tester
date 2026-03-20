@@ -178,11 +178,11 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="relative w-[520px] max-w-[90vw] bg-[var(--bg-base)] border-l border-gray-800 h-full overflow-y-auto slide-over-panel"
+        className="relative w-full md:w-[520px] md:max-w-[90vw] bg-[var(--bg-base)] md:border-l border-gray-800 h-full overflow-y-auto slide-over-panel"
       >
         <form
           onSubmit={handleSubmit}
-          className="p-6"
+          className="p-4 md:p-6"
         >
           <div className="flex items-center justify-between mb-6">
             <h3 id={titleId} className="text-lg font-bold text-gray-100">
