@@ -502,7 +502,13 @@ impl Cli {
                 .capture_mode
                 .clone()
                 .or(f.capture_mode)
-                .and_then(|s| PacketCaptureMode::parse_compat(&s))
+                .and_then(|s| match s.trim().to_ascii_lowercase().as_str() {
+                    "off" => Some(PacketCaptureMode::Off),
+                    "auto" => Some(PacketCaptureMode::Auto),
+                    "tshark" | "t-shark" => Some(PacketCaptureMode::TShark),
+                    "raw-socket" | "raw_socket" | "rawsocket" => Some(PacketCaptureMode::RawSocket),
+                    _ => None,
+                })
                 .or(pc.mode)
                 .unwrap_or_default();
             ResolvedPacketCaptureConfig {
