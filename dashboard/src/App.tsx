@@ -12,6 +12,7 @@ import { RunsPage } from './pages/RunsPage';
 import { RunDetailPage } from './pages/RunDetailPage';
 import { DeployPage } from './pages/DeployPage';
 import { DeployDetailPage } from './pages/DeployDetailPage';
+import { SchedulesPage } from './pages/SchedulesPage';
 import { SettingsPage } from './pages/SettingsPage';
 
 const statusColors: Record<ConnectionStatus, string> = {
@@ -74,6 +75,7 @@ function AuthenticatedApp() {
           <Route path="/deploy" element={<DeployPage />} />
           <Route path="/deploy/:deploymentId" element={<DeployDetailPage />} />
           <Route path="/tests" element={<JobsPage />} />
+          <Route path="/schedules" element={<SchedulesPage />} />
           <Route path="/tests/:jobId" element={<JobDetailPage />} />
           {/* Backward compat redirects */}
           <Route path="/jobs" element={<Navigate to="/tests" />} />

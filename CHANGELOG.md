@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.30] – 2026-03-20 — Test scheduler: automatic recurring tests
+
+### Added
+- **Test scheduler** — create schedules to run tests automatically on a cadence (cron-based)
+- V006 migration: `auto_start_vm`, `auto_stop_vm`, `deployment_id`, `name`, `config` columns on `schedule` table
+- REST API: `GET/POST /schedules`, `GET/PUT/DELETE /schedules/:id`, `POST /schedules/:id/toggle`, `POST /schedules/:id/trigger`
+- Background scheduler task (30s tick loop) — queries due schedules, creates jobs, dispatches to agents
+- VM auto-start/stop via cloud CLI (az/aws/gcloud) for cost-saving scheduled tests
+- Dashboard Schedules page with StatusBadge integration, frequency presets, 4-step create dialog
+- 43 unit tests across cron parsing, row mapping, toggle logic, and scheduler tick flow
+
+---
+
 ## [0.13.29] – 2026-03-20 — Dashboard UX fixes, packet capture, deploy wizard improvements
 
 ### Added

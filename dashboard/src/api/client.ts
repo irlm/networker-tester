@@ -1,6 +1,6 @@
-import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary } from './types';
+import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule } from './types';
 
-export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary };
+export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule };
 export type { LiveAttempt } from './types';
 
 const API_BASE = '/api';
@@ -177,6 +177,50 @@ export const api = {
       }[];
       errors: string[];
     }>('/inventory'),
+
+  // Schedules
+  getSchedules: () =>
+    request<Schedule[]>('/schedules'),
+
+  getSchedule: (scheduleId: string) =>
+    request<{ schedule: Schedule; recent_jobs: Job[] }>(`/schedules/${scheduleId}`),
+
+  createSchedule: (params: {
+    name: string;
+    cron_expr: string;
+    config: JobConfig;
+    agent_id?: string;
+    deployment_id?: string;
+    auto_start_vm?: boolean;
+    auto_stop_vm?: boolean;
+  }) =>
+    request<{ schedule_id: string; next_run_at: string }>('/schedules', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    }),
+
+  updateSchedule: (scheduleId: string, params: {
+    name: string;
+    cron_expr: string;
+    config: JobConfig;
+    agent_id?: string;
+    deployment_id?: string;
+    auto_start_vm?: boolean;
+    auto_stop_vm?: boolean;
+  }) =>
+    request<{ status: string; next_run_at: string }>(`/schedules/${scheduleId}`, {
+      method: 'PUT',
+      body: JSON.stringify(params),
+    }),
+
+  deleteSchedule: (scheduleId: string) =>
+    request<{ deleted: boolean }>(`/schedules/${scheduleId}`, { method: 'DELETE' }),
+
+  toggleSchedule: (scheduleId: string) =>
+    request<{ enabled: boolean }>(`/schedules/${scheduleId}/toggle`, { method: 'POST' }),
+
+  triggerSchedule: (scheduleId: string) =>
+    request<{ job_id: string; status: string }>(`/schedules/${scheduleId}/trigger`, { method: 'POST' }),
 
   // Version
   getVersionInfo: () => request<{
