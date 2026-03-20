@@ -7,6 +7,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::capture::PacketCaptureSummary;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Host information (shared between client and server)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -103,6 +105,9 @@ pub struct TestRun {
     /// Network baseline RTT measured before probes start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline: Option<NetworkBaseline>,
+    /// Packet capture summary (tshark analysis) when capture was enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub packet_capture_summary: Option<PacketCaptureSummary>,
     pub attempts: Vec<RequestAttempt>,
 }
 
@@ -1271,6 +1276,7 @@ mod tests {
             server_info: None,
             client_info: None,
             baseline: None,
+            packet_capture_summary: None,
             attempts: vec![mk(true), mk(false), mk(true)],
         };
         assert_eq!(run.success_count(), 2);
@@ -1547,6 +1553,7 @@ mod tests {
             server_info: None,
             client_info: None,
             baseline: None,
+            packet_capture_summary: None,
             attempts: vec![
                 mk(Protocol::Http1),
                 mk(Protocol::Http2),

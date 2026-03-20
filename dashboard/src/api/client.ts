@@ -1,6 +1,6 @@
-import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup } from './types';
+import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary } from './types';
 
-export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup };
+export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary };
 export type { LiveAttempt } from './types';
 
 const API_BASE = '/api';
@@ -114,6 +114,7 @@ export const api = {
       endpoint_version: string | null;
       success_count: number;
       failure_count: number;
+      packet_capture: PacketCaptureSummary | null;
     }>(`/runs/${runId}`),
 
   getRunAttempts: (runId: string) =>

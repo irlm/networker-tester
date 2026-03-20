@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.29] – 2026-03-20 — Dashboard UX fixes, packet capture, deploy wizard improvements
+
+### Added
+- **Packet capture pipeline**: full end-to-end capture via tshark, stored as JSONB in DB (V005 migration), displayed in test detail with transport breakdown, TCP health, endpoints, ports, and warnings
+- **Endpoint health in Create Test**: dialog checks endpoint health on open, shows online/offline status per target
+- **OS labels in target dropdown**: Create Test dropdown shows Ubuntu/Win next to each endpoint for easy identification
+- **Deploy wizard OS-aware HTTP stacks**: nginx default for Linux, IIS for Windows; only shows the OS-appropriate option
+- **Unique VM names per deployment**: auto-generated names like `nwk-ep-ubuntu-xxxx` / `nwk-ep-win-xxxx` prevent VM collisions
+- **Auto-naming with OS**: deployment names include OS (e.g. "AZURE eastus Win")
+
+### Fixed
+- **Agent non-zero exit handling**: tester partial failures (non-zero exit) now send `JobComplete` with results instead of silently dropping — fixes tests stuck in "running"
+- **Terminal log behavior**: all terminal components use fixed `h-[400px]` with auto-scroll to bottom (deploy log, tester log, settings update log)
+- **SPA 404 status**: fallback serves index.html with 200 (not 404)
+- **Settings page hang**: added `ring::default_provider().install_default()` for reqwest+rustls
+- **Cloud inventory empty**: fixed `Command::new("which")` and case-insensitive Azure RG filter
+- **WS batching**: liveStore buffers rapid `attempt_result` events (500ms flush), immediate flush on `job_complete`
+- **Deploy detail auto-scroll**: log scrolls to bottom on initial load for completed deployments
+
 ## [0.13.28] – 2026-03-18 — Backend deadlock fix, UX polish
 
 ### Fixed

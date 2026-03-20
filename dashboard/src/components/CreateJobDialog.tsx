@@ -35,11 +35,27 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
 
   const needsPayload = THROUGHPUT_IDS.some((m) => selectedModes.has(m));
 
+  // Track health status per deployment: true=online, false=offline, undefined=checking
+  const [endpointHealth, setEndpointHealth] = useState<Record<string, boolean | undefined>>({});
+
   useEffect(() => {
     firstInputRef.current?.focus();
     api.getModes().then(r => setModeGroups(r.groups)).catch(() => {});
     api.getDeployments({ limit: 20 }).then(deps => {
-      setDeployments(deps.filter(d => d.status === 'completed' && d.endpoint_ips && d.endpoint_ips.length > 0));
+      const completed = deps.filter(d => d.status === 'completed' && d.endpoint_ips && d.endpoint_ips.length > 0);
+      setDeployments(completed);
+      // Check health for each deployment
+      completed.forEach(d => {
+        setEndpointHealth(prev => ({ ...prev, [d.deployment_id]: undefined }));
+        api.checkDeployment(d.deployment_id)
+          .then((result: { endpoints: { ip: string; alive: boolean }[] }) => {
+            const anyAlive = result.endpoints.some(ep => ep.alive);
+            setEndpointHealth(prev => ({ ...prev, [d.deployment_id]: anyAlive }));
+          })
+          .catch(() => {
+            setEndpointHealth(prev => ({ ...prev, [d.deployment_id]: false }));
+          });
+      });
     }).catch(() => {});
     api.getAgents().then(r => setTesters(r.agents)).catch(() => {});
   }, []);
@@ -207,18 +223,48 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
           >
             <option value="">Select endpoint...</option>
             <option value="https://localhost:8443/health">Local endpoint (localhost:8443)</option>
-            {deployments.flatMap(d =>
-              (d.endpoint_ips || []).map(ip => (
+            {deployments.flatMap(d => {
+              const health = endpointHealth[d.deployment_id];
+              const status = health === undefined ? '...' : health ? '\u2714' : '\u2716 offline';
+              // Extract OS from config if available
+              const cfg = d.config as unknown as Record<string, unknown> | undefined;
+              const cfgEndpoints = (cfg?.endpoints as Record<string, unknown>[] | undefined) || [];
+              const osHint = cfgEndpoints.length > 0
+                ? (() => {
+                    const ep = cfgEndpoints[0];
+                    // Config shape: { azure: { os: 'linux' } } or { os: 'linux' }
+                    const nested = (ep.azure || ep.aws || ep.gcp) as Record<string, unknown> | undefined;
+                    const os = (nested?.os || ep.os || '') as string;
+                    return os === 'windows' ? 'Win' : os === 'linux' ? 'Ubuntu' : '';
+                  })()
+                : '';
+              return (d.endpoint_ips || []).map(ip => (
                 <option key={`${d.deployment_id}-${ip}`} value={`https://${ip}:8443/health`}>
-                  {d.name} — {ip.split('.')[0]}
+                  {d.name}{osHint && !d.name.includes(osHint) ? ` ${osHint}` : ''} [{status}]
                 </option>
-              ))
-            )}
+              ));
+            })}
             {target && !['', 'https://localhost:8443/health'].includes(target) &&
               !deployments.some(d => (d.endpoint_ips || []).some(ip => target.includes(ip))) && (
               <option value={target}>Custom: {target}</option>
             )}
           </select>
+          {(() => {
+            const selectedDep = deployments.find(d => (d.endpoint_ips || []).some(ip => target.includes(ip)));
+            if (!selectedDep) return null;
+            const health = endpointHealth[selectedDep.deployment_id];
+            if (health === undefined) return (
+              <p className="text-xs text-gray-500 mt-1 mb-1">Checking endpoint health...</p>
+            );
+            if (health === false) return (
+              <p className="text-xs text-red-400 mt-1 mb-1">
+                Endpoint is offline — start the VM from Settings before running a test
+              </p>
+            );
+            return (
+              <p className="text-xs text-green-400 mt-1 mb-1">Endpoint is online</p>
+            );
+          })()}
           <input
             ref={firstInputRef}
             id="create-job-target"
