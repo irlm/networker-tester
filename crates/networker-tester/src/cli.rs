@@ -503,10 +503,10 @@ impl Cli {
                 .clone()
                 .or(f.capture_mode)
                 .and_then(|s| match s.trim().to_ascii_lowercase().as_str() {
-                    "off" => Some(PacketCaptureMode::Off),
+                    "off" | "disabled" | "none" => Some(PacketCaptureMode::Disabled),
                     "auto" => Some(PacketCaptureMode::Auto),
-                    "tshark" | "t-shark" => Some(PacketCaptureMode::TShark),
-                    "raw-socket" | "raw_socket" | "rawsocket" => Some(PacketCaptureMode::RawSocket),
+                    "tshark" | "t-shark" => Some(PacketCaptureMode::Tshark),
+                    "raw-socket" | "raw_socket" | "rawsocket" => Some(PacketCaptureMode::Rawsocket),
                     _ => None,
                 })
                 .or(pc.mode)
