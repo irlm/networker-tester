@@ -52,7 +52,7 @@ export function DashboardPage() {
 
   if (loading && !summary) {
     return (
-      <div className="p-6">
+      <div className="p-4 md:p-6">
         <h2 className="text-xl font-bold text-gray-100 mb-2">Dashboard</h2>
         {/* Skeleton: metric bar */}
         <div className="flex gap-5 py-3 mb-6 border-b border-gray-800/50">
@@ -77,7 +77,7 @@ export function DashboardPage() {
 
   if (error && !summary) {
     return (
-      <div className="p-6">
+      <div className="p-4 md:p-6">
         <h2 className="text-xl font-bold text-gray-100 mb-6">Dashboard</h2>
         <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
           <h3 className="text-red-400 font-bold mb-2">Failed to load dashboard</h3>
@@ -90,7 +90,7 @@ export function DashboardPage() {
   const hasActiveWork = (summary?.jobs_running ?? 0) > 0 || (summary?.jobs_pending ?? 0) > 0;
 
   return (
-    <div className="p-6">
+    <div className="p-4 md:p-6">
       {/* Page header with inline status */}
       <div className="flex items-baseline justify-between mb-2">
         <h2 className="text-xl font-bold text-gray-100">Dashboard</h2>

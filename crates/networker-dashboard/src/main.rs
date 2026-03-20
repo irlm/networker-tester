@@ -3,6 +3,7 @@ mod auth;
 mod config;
 mod db;
 mod deploy;
+mod scheduler;
 mod ws;
 
 use anyhow::Context;
@@ -100,6 +101,9 @@ async fn main() -> anyhow::Result<()> {
     } else {
         app
     };
+
+    // Start the scheduler background task (checks for due schedules every 30s)
+    scheduler::spawn(state.clone());
 
     // Resolve bare IPs to FQDNs for existing deployments
     {

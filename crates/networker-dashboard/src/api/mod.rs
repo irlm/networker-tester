@@ -7,6 +7,7 @@ mod inventory;
 mod jobs;
 mod modes;
 mod runs;
+mod schedules;
 mod update;
 mod url_tests;
 mod version;
@@ -34,6 +35,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(version::router(state.clone()))
         .merge(update::router(state.clone()))
         .merge(inventory::router(state.clone()))
+        .merge(schedules::router(state.clone()))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::require_auth,

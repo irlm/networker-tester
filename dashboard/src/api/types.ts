@@ -154,6 +154,23 @@ export interface PacketCaptureSummary {
   capture_may_be_ambiguous: boolean;
 }
 
+export interface Schedule {
+  schedule_id: string;
+  name: string | null;
+  definition_id: string | null;
+  agent_id: string | null;
+  deployment_id: string | null;
+  cron_expr: string;
+  enabled: boolean;
+  config: JobConfig | null;
+  auto_start_vm: boolean;
+  auto_stop_vm: boolean;
+  created_by: string | null;
+  created_at: string;
+  next_run_at: string | null;
+  last_run_at: string | null;
+}
+
 export interface LiveAttempt {
   attempt_id: string;
   run_id: string;
