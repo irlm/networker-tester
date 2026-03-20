@@ -37,6 +37,7 @@ bcrypt       = "0.16"
 
 # HTTP client (for endpoint health checks / info fetches)
 reqwest      = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+rustls       = { version = "0.23", default-features = false, features = ["ring"] }
 
 # Utilities
 futures      = "0.3"

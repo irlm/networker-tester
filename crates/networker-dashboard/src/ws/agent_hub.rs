@@ -232,14 +232,14 @@ async fn handle_agent_message(state: &Arc<AppState>, agent_id: Uuid, msg: AgentM
                 "Job complete — persisting results"
             );
 
-            // Update job status
+            // Set run_id BEFORE status so the frontend never sees completed+null run_id
             if let Ok(client) = state.db.get().await {
+                if let Err(e) = crate::db::jobs::set_run_id(&client, &job_id, &run_id).await {
+                    tracing::error!(correlation_id, error = %e, "Failed to set run_id on job");
+                }
                 if let Err(e) = crate::db::jobs::update_status(&client, &job_id, "completed").await
                 {
                     tracing::error!(correlation_id, error = %e, "Failed to update job status to completed");
-                }
-                if let Err(e) = crate::db::jobs::set_run_id(&client, &job_id, &run_id).await {
-                    tracing::error!(correlation_id, error = %e, "Failed to set run_id on job");
                 }
             }
 

@@ -174,6 +174,40 @@ async fn main() -> anyhow::Result<()> {
         all_runs.push(run);
     }
 
+    // ── Finalize packet capture ────────────────────────────────────────────
+    let packet_capture_summary = if let Some(session) = capture_session {
+        match session.finalize().await {
+            Ok(Some(summary)) => {
+                info!(
+                    tcp_packets = summary.tcp_packets,
+                    udp_packets = summary.udp_packets,
+                    retransmissions = summary.retransmissions,
+                    duplicate_acks = summary.duplicate_acks,
+                    resets = summary.resets,
+                    "Packet capture summary saved"
+                );
+                Some(summary)
+            }
+            Ok(None) => {
+                info!("Packet capture finalized without summary output");
+                None
+            }
+            Err(e) => {
+                warn!("packet capture finalize failed: {e:#}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Attach capture summary to runs for JSON/DB output
+    if let Some(ref summary) = packet_capture_summary {
+        for run in &mut all_runs {
+            run.packet_capture_summary = Some(summary.clone());
+        }
+    }
+
     // ── JSON stdout mode (for agent integration) ─────────────────────────────
     if cfg.json_stdout {
         // Output all runs as JSON array to stdout, skip file outputs
@@ -205,32 +239,6 @@ async fn main() -> anyhow::Result<()> {
         .context("no targets produced any test runs")?;
     let ts = first_run.started_at.format("%Y%m%d-%H%M%S");
     let multi = all_runs.len() > 1;
-
-    let packet_capture_summary = if let Some(session) = capture_session {
-        match session.finalize().await {
-            Ok(Some(summary)) => {
-                info!(
-                    tcp_packets = summary.tcp_packets,
-                    udp_packets = summary.udp_packets,
-                    retransmissions = summary.retransmissions,
-                    duplicate_acks = summary.duplicate_acks,
-                    resets = summary.resets,
-                    "Packet capture summary saved"
-                );
-                Some(summary)
-            }
-            Ok(None) => {
-                info!("Packet capture finalized without summary output");
-                None
-            }
-            Err(e) => {
-                warn!("packet capture finalize failed: {e:#}");
-                None
-            }
-        }
-    } else {
-        None
-    };
 
     // ── JSON artifact (one per target) ────────────────────────────────────────
     for (i, run) in all_runs.iter().enumerate() {
@@ -779,6 +787,7 @@ async fn run_for_target(
         server_info,
         client_info,
         baseline,
+        packet_capture_summary: None,
         attempts: all_attempts,
     };
 

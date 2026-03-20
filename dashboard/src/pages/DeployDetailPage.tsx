@@ -49,12 +49,12 @@ export function DeployDetailPage() {
 
   usePolling(loadDeployment, 5000, !!deploymentId);
 
-  // Auto-scroll log container when new lines arrive
+  // Auto-scroll log container when new lines arrive or DB log loads
   useEffect(() => {
     if (autoScroll && logContainerRef.current) {
       logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
     }
-  }, [liveLines, autoScroll]);
+  }, [liveLines, deployment?.log, autoScroll]);
 
   const handleLogScroll = () => {
     if (!logContainerRef.current) return;

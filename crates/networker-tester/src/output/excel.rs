@@ -972,6 +972,7 @@ mod tests {
             server_info: None,
             client_info: None,
             baseline: None,
+            packet_capture_summary: None,
             attempts: vec![
                 http_attempt,
                 udp_attempt,
@@ -1015,6 +1016,7 @@ mod tests {
             server_info: None,
             client_info: None,
             baseline: None,
+            packet_capture_summary: None,
             attempts: vec![],
         };
         save(&run, tmp.path(), None).unwrap();
@@ -1169,6 +1171,7 @@ mod tests {
             server_info: None,
             client_info: None,
             baseline: None,
+            packet_capture_summary: None,
             attempts: vec![download_attempt, upload_attempt],
         };
 

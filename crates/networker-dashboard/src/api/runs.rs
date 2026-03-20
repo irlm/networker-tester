@@ -66,24 +66,45 @@ async fn get_run(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let row = client
+    // Try with packet_capture_json column first (V005+), fall back without it
+    let row = match client
         .query_opt(
             "SELECT RunId, StartedAt, FinishedAt, TargetUrl, TargetHost, Modes,
-                    TotalRuns, SuccessCount, FailureCount, ClientOs, ClientVersion
+                    TotalRuns, SuccessCount, FailureCount, ClientOs, ClientVersion,
+                    packet_capture_json
              FROM TestRun WHERE RunId = $1",
             &[&run_id],
         )
         .await
-        .map_err(|e| {
-            tracing::error!(run_id = %run_id, error = %e, "Failed to load run");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?
-        .ok_or(StatusCode::NOT_FOUND)?;
+    {
+        Ok(r) => r,
+        Err(_) => {
+            // Fallback: query without packet_capture_json (older schema)
+            client
+                .query_opt(
+                    "SELECT RunId, StartedAt, FinishedAt, TargetUrl, TargetHost, Modes,
+                            TotalRuns, SuccessCount, FailureCount, ClientOs, ClientVersion
+                     FROM TestRun WHERE RunId = $1",
+                    &[&run_id],
+                )
+                .await
+                .map_err(|e| {
+                    tracing::error!(run_id = %run_id, error = %e, "Failed to load run");
+                    StatusCode::INTERNAL_SERVER_ERROR
+                })?
+        }
+    }
+    .ok_or(StatusCode::NOT_FOUND)?;
 
     let target_url: String = row.get("targeturl");
 
     // Try to get endpoint version from target
     let endpoint_version = fetch_endpoint_version(&target_url).await;
+
+    // Try to read packet_capture_json (may not exist in older schemas)
+    let packet_capture: Option<serde_json::Value> = row
+        .try_get::<_, Option<serde_json::Value>>("packet_capture_json")
+        .unwrap_or(None);
 
     Ok(Json(serde_json::json!({
         "run_id": row.get::<_, Uuid>("runid").to_string(),
@@ -98,6 +119,7 @@ async fn get_run(
         "client_os": row.get::<_, String>("clientos"),
         "client_version": row.get::<_, String>("clientversion"),
         "endpoint_version": endpoint_version,
+        "packet_capture": packet_capture,
     })))
 }
 

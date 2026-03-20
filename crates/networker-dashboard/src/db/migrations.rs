@@ -110,6 +110,11 @@ const V004_MUST_CHANGE_PASSWORD: &str = r#"
 ALTER TABLE dash_user ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT FALSE;
 "#;
 
+/// V005 migration: Add packet_capture_json column to TestRun for tshark capture summaries.
+const V005_PACKET_CAPTURE: &str = r#"
+ALTER TABLE TestRun ADD COLUMN IF NOT EXISTS packet_capture_json JSONB;
+"#;
+
 /// Run pending migrations.
 pub async fn run(client: &Client) -> anyhow::Result<()> {
     // Ensure migration tracking table exists
@@ -172,6 +177,23 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
             )
             .await?;
         tracing::info!("V004 migration complete");
+    }
+
+    // V005: packet_capture_json column on TestRun
+    let row = client
+        .query_opt("SELECT version FROM _migrations WHERE version = 5", &[])
+        .await?;
+
+    if row.is_none() {
+        tracing::info!("Applying V005 packet_capture migration...");
+        client.batch_execute(V005_PACKET_CAPTURE).await?;
+        client
+            .execute(
+                "INSERT INTO _migrations (version) VALUES (5) ON CONFLICT DO NOTHING",
+                &[],
+            )
+            .await?;
+        tracing::info!("V005 migration complete");
     }
 
     Ok(())
