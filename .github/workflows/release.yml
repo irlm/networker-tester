@@ -124,6 +124,19 @@ jobs:
               -DestinationPath "dist\networker-agent-$target.zip" `
               -Force
 
+      # ── Build frontend (only once, on Linux) ─────────────────────────────
+      - name: Setup Node.js
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build dashboard frontend
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          cd dashboard && npm ci && npm run build
+          tar czf "../dist/dashboard-frontend.tar.gz" -C dist .
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v5
         with:

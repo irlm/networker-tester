@@ -22,6 +22,7 @@ export function SettingsPage() {
   const [updating, setUpdating] = useState<Record<string, boolean>>({});
   const [activeUpdateId, setActiveUpdateId] = useState<string | null>(null);
   const [testerUpdating, setTesterUpdating] = useState(false);
+  const [dashboardUpdating, setDashboardUpdating] = useState(false);
   const [inventory, setInventory] = useState<{ provider: string; name: string; region: string; status: string; public_ip: string | null; fqdn: string | null; vm_size: string | null; os: string | null; resource_group: string | null; managed: boolean }[]>([]);
   const [inventoryErrors, setInventoryErrors] = useState<string[]>([]);
   const [inventoryLoading, setInventoryLoading] = useState(false);
@@ -147,17 +148,48 @@ export function SettingsPage() {
 
         <div>
           {/* Dashboard */}
-          <div className="flex items-center justify-between py-2.5">
-            <div>
-              <span className="text-sm text-gray-200">Dashboard</span>
-              <span className="text-xs text-gray-600 ml-2">Control plane API + UI</span>
-            </div>
-            <span className={`text-xs font-mono ${
-              versionInfo?.dashboard_version === latestRelease ? 'text-green-400' : 'text-gray-400'
-            }`}>
-              v{versionInfo?.dashboard_version}
-            </span>
-          </div>
+          {(() => {
+            const dashOutdated = versionInfo?.dashboard_version && latestRelease && versionInfo.dashboard_version !== latestRelease;
+            return (
+              <div className="flex items-center justify-between py-2.5">
+                <div>
+                  <span className="text-sm text-gray-200">Dashboard</span>
+                  <span className="text-xs text-gray-600 ml-2">Control plane API + UI</span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className={`text-xs font-mono ${
+                    versionInfo?.dashboard_version === latestRelease ? 'text-green-400' :
+                    versionInfo?.dashboard_version ? 'text-yellow-400' : 'text-gray-400'
+                  }`}>
+                    v{versionInfo?.dashboard_version}
+                  </span>
+                  {dashOutdated && (
+                    <button
+                      onClick={async () => {
+                        setDashboardUpdating(true);
+                        try {
+                          const result = await api.updateDashboard();
+                          setActiveUpdateId(result.update_id);
+                          addToast('success', 'Dashboard update started — will restart automatically');
+                        } catch {
+                          addToast('error', 'Failed to start dashboard update');
+                          setDashboardUpdating(false);
+                        }
+                      }}
+                      disabled={dashboardUpdating}
+                      className={`text-xs px-3 py-1 rounded border transition-colors ${
+                        dashboardUpdating
+                          ? 'border-blue-500/30 text-blue-400 motion-safe:animate-pulse'
+                          : 'border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/10'
+                      } disabled:opacity-50`}
+                    >
+                      {dashboardUpdating ? 'Updating...' : `Update to v${latestRelease}`}
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Local Tester */}
           {(() => {

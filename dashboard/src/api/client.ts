@@ -160,6 +160,9 @@ export const api = {
   updateLocalTester: () =>
     request<{ status: string; update_id: string }>('/update/tester', { method: 'POST' }),
 
+  updateDashboard: () =>
+    request<{ status: string; update_id: string }>('/update/dashboard', { method: 'POST' }),
+
   // Inventory
   getInventory: () =>
     request<{
