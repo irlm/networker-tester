@@ -18,6 +18,7 @@ import {
   successRateClass,
 } from '../lib/analysis';
 import { TOOLTIP_STYLE } from '../lib/chart';
+import { BoxWhiskerChart } from '../components/charts/BoxWhiskerChart';
 import {
   BarChart,
   Bar,
@@ -148,31 +149,15 @@ export function JobDetailPage() {
   const boxPlotData = useMemo(() => {
     return protocolStats
       .filter(ps => ps.stats.count >= 2)
-      .map(ps => {
-        // Approximate p25/p75 from the data
-        const values = attempts
-          .filter(a => a.protocol === ps.protocol && a.success)
-          .map(a => primaryMetricValue(a))
-          .filter((v): v is number => v != null && v > 0)
-          .sort((a, b) => a - b);
-        const p25 = values.length >= 4 ? values[Math.floor(values.length * 0.25)] : ps.stats.min;
-        const p75 = values.length >= 4 ? values[Math.floor(values.length * 0.75)] : ps.stats.max;
-        return {
-          name: ps.protocol + (ps.payloadBytes != null ? ` (${formatBytes(ps.payloadBytes)})` : ''),
-          min: Number(ps.stats.min.toFixed(1)),
-          p25: Number(p25.toFixed(1)),
-          p50: Number(ps.stats.p50.toFixed(1)),
-          p75: Number(p75.toFixed(1)),
-          max: Number(ps.stats.max.toFixed(1)),
-          // For stacked bar rendering: each segment = difference from previous
-          base: Number(ps.stats.min.toFixed(1)),
-          iqr_low: Number((p25 - ps.stats.min).toFixed(1)),
-          iqr_mid: Number((ps.stats.p50 - p25).toFixed(1)),
-          iqr_high: Number((p75 - ps.stats.p50).toFixed(1)),
-          whisker: Number((ps.stats.max - p75).toFixed(1)),
-        };
-      });
-  }, [protocolStats, attempts]);
+      .map(ps => ({
+        label: ps.protocol + (ps.payloadBytes != null ? ` (${formatBytes(ps.payloadBytes)})` : ''),
+        p5: ps.stats.p5,
+        p25: ps.stats.p25,
+        p50: ps.stats.p50,
+        p75: ps.stats.p75,
+        p95: ps.stats.p95,
+      }));
+  }, [protocolStats]);
 
   // Protocol comparison chart data (p50 vs p95)
   const protocolChartData = useMemo(
@@ -526,34 +511,11 @@ export function JobDetailPage() {
         </div>
       )}
 
-      {/* Box Plot: min / p25 / p50 / p75 / max */}
+      {/* Box-and-Whisker: p5 ── [Q1 | median | Q3] ── p95 */}
       {boxPlotData.length > 0 && (
         <div className="mb-6">
           <h3 className="text-xs text-gray-500 uppercase tracking-wider mb-3 font-medium">Distribution by Protocol</h3>
-          <ResponsiveContainer width="100%" height={250}>
-            <BarChart data={boxPlotData} layout="vertical">
-              <CartesianGrid strokeDasharray="3 3" stroke="#1f2028" horizontal={false} />
-              <XAxis type="number" stroke="#4b5563" fontSize={10} unit="ms" />
-              <YAxis type="category" dataKey="name" stroke="#4b5563" fontSize={10} width={100} />
-              <Tooltip
-                contentStyle={TOOLTIP_STYLE}
-                formatter={(_v, name, props) => {
-                  const d = props?.payload as Record<string, number> | undefined;
-                  if (!d) return [_v, name];
-                  if (name === 'iqr_mid') return [`p50: ${d.p50}ms`, 'Median'];
-                  if (name === 'iqr_low') return [`p25: ${d.p25}ms`, 'Q1'];
-                  if (name === 'iqr_high') return [`p75: ${d.p75}ms`, 'Q3'];
-                  if (name === 'whisker') return [`max: ${d.max}ms`, 'Max'];
-                  return null;
-                }}
-              />
-              <Bar dataKey="base" stackId="box" fill="transparent" />
-              <Bar dataKey="iqr_low" stackId="box" fill="#374151" name="p25" />
-              <Bar dataKey="iqr_mid" stackId="box" fill="#94a3b8" name="Median" />
-              <Bar dataKey="iqr_high" stackId="box" fill="#64748b" name="p75" />
-              <Bar dataKey="whisker" stackId="box" fill="#374151" opacity={0.5} name="max" />
-            </BarChart>
-          </ResponsiveContainer>
+          <BoxWhiskerChart groups={boxPlotData} />
         </div>
       )}
 
