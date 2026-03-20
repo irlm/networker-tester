@@ -12,16 +12,17 @@ const statusColors: Record<string, string> = {
 
 interface StatusBadgeProps {
   status: string;
+  label?: string;
 }
 
-export function StatusBadge({ status }: StatusBadgeProps) {
+export function StatusBadge({ status, label }: StatusBadgeProps) {
   const color = statusColors[status] || statusColors.offline;
   return (
     <span
       className={`inline-flex items-center px-2 py-0.5 text-xs rounded border ${color}`}
     >
       <span className="w-1.5 h-1.5 rounded-full bg-current mr-1.5" aria-hidden="true" />
-      {status}
+      {label || status}
     </span>
   );
 }

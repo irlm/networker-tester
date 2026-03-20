@@ -115,6 +115,16 @@ const V005_PACKET_CAPTURE: &str = r#"
 ALTER TABLE TestRun ADD COLUMN IF NOT EXISTS packet_capture_json JSONB;
 "#;
 
+/// V006 migration: Extend schedule table for scheduler feature.
+const V006_SCHEDULES: &str = r#"
+ALTER TABLE schedule ADD COLUMN IF NOT EXISTS auto_start_vm BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE schedule ADD COLUMN IF NOT EXISTS auto_stop_vm BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE schedule ADD COLUMN IF NOT EXISTS deployment_id UUID REFERENCES deployment(deployment_id);
+ALTER TABLE schedule ADD COLUMN IF NOT EXISTS name VARCHAR(200);
+ALTER TABLE schedule ADD COLUMN IF NOT EXISTS config JSONB;
+ALTER TABLE schedule ALTER COLUMN definition_id DROP NOT NULL;
+"#;
+
 /// Run pending migrations.
 pub async fn run(client: &Client) -> anyhow::Result<()> {
     // Ensure migration tracking table exists
@@ -194,6 +204,23 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
             )
             .await?;
         tracing::info!("V005 migration complete");
+    }
+
+    // V006: Extend schedule table for scheduler feature
+    let row = client
+        .query_opt("SELECT version FROM _migrations WHERE version = 6", &[])
+        .await?;
+
+    if row.is_none() {
+        tracing::info!("Applying V006 schedules migration...");
+        client.batch_execute(V006_SCHEDULES).await?;
+        client
+            .execute(
+                "INSERT INTO _migrations (version) VALUES (6) ON CONFLICT DO NOTHING",
+                &[],
+            )
+            .await?;
+        tracing::info!("V006 migration complete");
     }
 
     Ok(())
