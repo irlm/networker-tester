@@ -655,7 +655,7 @@ async fn sso_callback(
         "sso_state=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0{secure_flag}"
     );
 
-    let redirect_url = format!("{}/login?sso_code={exchange_code}", state.public_url);
+    let redirect_url = format!("{}/sso-complete?code={exchange_code}", state.public_url);
 
     (
         StatusCode::TEMPORARY_REDIRECT,

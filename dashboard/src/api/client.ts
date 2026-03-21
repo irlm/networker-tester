@@ -27,6 +27,19 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     throw new Error('Unauthorized');
   }
 
+  if (res.status === 403) {
+    const body = await res.text();
+    if (body === 'pending_approval') {
+      // Update stored status and redirect to pending page
+      localStorage.setItem('status', 'pending');
+      if (window.location.pathname !== '/pending') {
+        window.location.href = '/pending';
+      }
+      throw new Error('pending_approval');
+    }
+    throw new Error(`API error: ${res.status} ${body}`);
+  }
+
   if (!res.ok) {
     throw new Error(`API error: ${res.status} ${res.statusText}`);
   }
@@ -48,7 +61,13 @@ export const api = {
     }),
 
   getProfile: () =>
-    request<{ email: string; role: string }>('/auth/profile'),
+    request<{ email: string; role: string; status: string }>('/auth/profile'),
+
+  ssoExchange: (code: string) =>
+    request<{ token: string; role: string; email: string; status: string; must_change_password: boolean }>('/auth/sso/exchange', {
+      method: 'POST',
+      body: JSON.stringify({ code }),
+    }),
 
   forgotPassword: (email: string) =>
     fetch(`${API_BASE}/auth/forgot-password`, {
@@ -270,6 +289,12 @@ export const api = {
 
   disableUser: (userId: string) =>
     request<{ disabled: boolean }>(`/users/${userId}/disable`, { method: 'POST' }),
+
+  inviteUser: (email: string, role: string) =>
+    request<{ user_id: string }>('/users/invite', {
+      method: 'POST',
+      body: JSON.stringify({ email, role }),
+    }),
 
   // Version
   getVersionInfo: () => request<{

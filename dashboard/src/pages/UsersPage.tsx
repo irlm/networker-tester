@@ -40,6 +40,10 @@ export function UsersPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [pendingRoles, setPendingRoles] = useState<Record<string, string>>({});
   const [changeRoles, setChangeRoles] = useState<Record<string, string>>({});
+  const [showInvite, setShowInvite] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteRole, setInviteRole] = useState('viewer');
+  const [inviteLoading, setInviteLoading] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -102,6 +106,24 @@ export function UsersPage() {
     }
   };
 
+  const handleInvite = async () => {
+    if (!inviteEmail.trim()) return;
+    setInviteLoading(true);
+    try {
+      await api.inviteUser(inviteEmail.trim(), inviteRole);
+      toast('success', `Invited ${inviteEmail.trim()}`);
+      setInviteEmail('');
+      setInviteRole('viewer');
+      setShowInvite(false);
+      refresh();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to invite user';
+      toast('error', msg.includes('409') || msg.includes('Conflict') ? 'Email already registered' : msg);
+    } finally {
+      setInviteLoading(false);
+    }
+  };
+
   const activeUsers = allUsers.filter((u) => u.status === 'active');
   const disabledUsers = allUsers.filter((u) => u.status === 'disabled' || u.status === 'denied');
 
@@ -111,13 +133,56 @@ export function UsersPage() {
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-lg md:text-xl font-bold text-gray-100">Users</h1>
         <button
-          disabled
-          className="px-3 py-1.5 text-xs rounded border border-gray-700 text-gray-500 cursor-not-allowed"
-          title="Invite flow coming in a future update"
+          onClick={() => setShowInvite(!showInvite)}
+          className="px-3 py-1.5 text-xs rounded border border-cyan-700 text-cyan-400 hover:bg-cyan-500/10 transition-colors"
         >
           Invite
         </button>
       </div>
+
+      {/* Invite form */}
+      {showInvite && (
+        <div className="mb-4 border border-gray-800 rounded bg-[var(--bg-card)] p-3">
+          <div className="flex items-end gap-2 flex-wrap">
+            <div className="flex-1 min-w-[200px]">
+              <label className="block text-xs text-gray-500 mb-1">Email</label>
+              <input
+                type="email"
+                value={inviteEmail}
+                onChange={(e) => setInviteEmail(e.target.value)}
+                placeholder="user@company.com"
+                className="w-full bg-transparent border-b border-gray-700 focus:border-cyan-500/50 py-1.5 text-sm text-gray-200 focus:outline-none placeholder:text-gray-700 font-mono"
+                autoFocus
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Role</label>
+              <select
+                value={inviteRole}
+                onChange={(e) => setInviteRole(e.target.value)}
+                className="text-xs bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-gray-300"
+              >
+                <option value="viewer">viewer</option>
+                <option value="operator">operator</option>
+                <option value="admin">admin</option>
+              </select>
+            </div>
+            <button
+              onClick={handleInvite}
+              disabled={inviteLoading || !inviteEmail.trim()}
+              className="px-3 py-1.5 text-xs rounded bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              {inviteLoading ? 'Sending...' : 'Send Invite'}
+            </button>
+            <button
+              onClick={() => { setShowInvite(false); setInviteEmail(''); }}
+              className="px-2 py-1.5 text-xs text-gray-500 hover:text-gray-300 transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex gap-1 mb-4 border-b border-gray-800">

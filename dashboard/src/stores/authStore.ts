@@ -8,6 +8,7 @@ interface AuthState {
   isAuthenticated: boolean;
   mustChangePassword: boolean;
   login: (token: string, email: string, role: string, mustChangePassword?: boolean, status?: string) => void;
+  updateStatus: (status: string) => void;
   clearPasswordChange: () => void;
   logout: () => void;
 }
@@ -30,6 +31,10 @@ export const useAuthStore = create<AuthState>((set) => ({
       localStorage.removeItem('mustChangePassword');
     }
     set({ token, email, role, status, isAuthenticated: true, mustChangePassword });
+  },
+  updateStatus: (status) => {
+    localStorage.setItem('status', status);
+    set({ status });
   },
   clearPasswordChange: () => {
     localStorage.removeItem('mustChangePassword');

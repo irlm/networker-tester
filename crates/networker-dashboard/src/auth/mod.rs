@@ -146,13 +146,25 @@ pub async fn require_auth(
                     .get::<_, Option<bool>>("must_change_password")
                     .unwrap_or(false);
 
-                // Block non-active users (except allow change-password when must_change_password)
-                if status != "active" && !(is_change_password && must_change) {
+                let path = req.uri().path().to_string();
+                let is_profile = path.ends_with("/auth/profile");
+                let is_pending_allowed = is_change_password || is_profile;
+
+                // Pending users: allow only /auth/profile and /auth/change-password
+                if status == "pending" && !is_pending_allowed {
+                    return (StatusCode::FORBIDDEN, "pending_approval").into_response();
+                }
+
+                // Block other non-active users (disabled, denied)
+                if status != "active"
+                    && status != "pending"
+                    && !(is_change_password && must_change)
+                {
                     return (StatusCode::FORBIDDEN, "Account is not active").into_response();
                 }
 
                 // Enforce must_change_password
-                if !is_change_password && must_change {
+                if !is_change_password && must_change && status == "active" {
                     return (
                         StatusCode::FORBIDDEN,
                         "Password change required before accessing this resource",
