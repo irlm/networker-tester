@@ -205,7 +205,7 @@ pub async fn change_password(
 ) -> anyhow::Result<Result<(), &'static str>> {
     let row = client
         .query_opt(
-            "SELECT password_hash FROM dash_user WHERE user_id = $1 AND status = 'active'",
+            "SELECT password_hash FROM dash_user WHERE user_id = $1 AND status IN ('active', 'pending')",
             &[user_id],
         )
         .await?;
@@ -335,6 +335,61 @@ pub async fn reset_password_with_token(
         .await?;
 
     Ok(Ok(()))
+}
+
+/// Invite a user by creating a pending account with a setup token.
+/// Returns Ok(Ok(user_id)) on success, Ok(Err(msg)) if email exists or role invalid.
+pub async fn invite_user(
+    client: &Client,
+    email: &str,
+    role: &str,
+) -> anyhow::Result<Result<Uuid, &'static str>> {
+    // Validate role
+    if !["admin", "operator", "viewer"].contains(&role) {
+        return Ok(Err("Invalid role (must be admin, operator, or viewer)"));
+    }
+
+    // Check if email already exists
+    let existing = client
+        .query_opt(
+            "SELECT user_id FROM dash_user WHERE LOWER(email) = LOWER($1)",
+            &[&email],
+        )
+        .await?;
+    if existing.is_some() {
+        return Ok(Err("Email already registered"));
+    }
+
+    let user_id = Uuid::new_v4();
+
+    // Generate setup token (stored hashed, 24h expiry)
+    use rand::Rng;
+    let token: String = rand::thread_rng()
+        .sample_iter(&rand::distributions::Alphanumeric)
+        .take(64)
+        .map(char::from)
+        .collect();
+    let token_hash = hash_token(&token);
+    let expires: DateTime<Utc> = Utc::now() + chrono::Duration::hours(24);
+
+    client
+        .execute(
+            "INSERT INTO dash_user (user_id, email, role, status, auth_provider, must_change_password, \
+             password_reset_token, password_reset_expires) \
+             VALUES ($1, $2, $3, 'pending', 'local', TRUE, $4, $5)",
+            &[&user_id, &email, &role, &token_hash, &expires],
+        )
+        .await?;
+
+    // Log the setup URL (actual email sending is a future PR)
+    tracing::info!(
+        email = %email,
+        role = %role,
+        setup_token = %token,
+        "INVITED USER — setup token (email delivery not yet implemented)"
+    );
+
+    Ok(Ok(user_id))
 }
 
 /// Find a user by email (for SSO account lookup).

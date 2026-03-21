@@ -17,6 +17,8 @@ import { DeployDetailPage } from './pages/DeployDetailPage';
 import { SchedulesPage } from './pages/SchedulesPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { UsersPage } from './pages/UsersPage';
+import { PendingPage } from './pages/PendingPage';
+import { SSOCompletePage } from './pages/SSOCompletePage';
 
 const statusColors: Record<ConnectionStatus, string> = {
   connected: 'bg-green-400',
@@ -60,8 +62,14 @@ function ConnectionBanner({ status }: { status: ConnectionStatus }) {
 function AuthenticatedApp() {
   const status = useWebSocket();
   const mustChangePassword = useAuthStore((s) => s.mustChangePassword);
+  const userStatus = useAuthStore((s) => s.status);
   const role = useAuthStore((s) => s.role);
   const location = useLocation();
+
+  // Pending users can only access /pending and /change-password
+  if (userStatus === 'pending' && location.pathname !== '/pending' && location.pathname !== '/change-password') {
+    return <Navigate to="/pending" />;
+  }
 
   if (mustChangePassword && location.pathname !== '/change-password') {
     return <Navigate to="/change-password" />;
@@ -75,6 +83,7 @@ function AuthenticatedApp() {
         <ToastContainer />
         <Routes>
           <Route path="/" element={<DashboardPage />} />
+          <Route path="/pending" element={<PendingPage />} />
           <Route path="/change-password" element={<ChangePasswordPage />} />
           <Route path="/deploy" element={<DeployPage />} />
           <Route path="/deploy/:deploymentId" element={<DeployDetailPage />} />
@@ -103,6 +112,7 @@ function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/sso-complete" element={<SSOCompletePage />} />
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
         <Route

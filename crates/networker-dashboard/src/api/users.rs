@@ -183,10 +183,50 @@ async fn disable_user(
     Ok(Json(serde_json::json!({ "disabled": true })))
 }
 
+#[derive(Deserialize)]
+pub struct InviteRequest {
+    pub email: String,
+    pub role: String,
+}
+
+async fn invite_user(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Json(req): Json<InviteRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, &'static str)> {
+    require_role(&user, Role::Admin).map_err(|s| (s, "Admin access required"))?;
+
+    let client = state.db.get().await.map_err(|e| {
+        tracing::error!(error = %e, "DB pool error in invite_user");
+        (StatusCode::INTERNAL_SERVER_ERROR, "Database error")
+    })?;
+
+    match crate::db::users::invite_user(&client, &req.email, &req.role).await {
+        Ok(Ok(user_id)) => {
+            tracing::info!(
+                invited_email = %req.email,
+                role = %req.role,
+                invited_by = %user.email,
+                "User invited"
+            );
+            Ok(Json(
+                serde_json::json!({ "user_id": user_id.to_string() }),
+            ))
+        }
+        Ok(Err("Email already registered")) => Err((StatusCode::CONFLICT, "Email already registered")),
+        Ok(Err(msg)) => Err((StatusCode::BAD_REQUEST, msg)),
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to invite user");
+            Err((StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))
+        }
+    }
+}
+
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/users", get(list_users))
         .route("/users/pending", get(list_pending))
+        .route("/users/invite", post(invite_user))
         .route("/users/:user_id/approve", post(approve_user))
         .route("/users/:user_id/deny", post(deny_user))
         .route("/users/:user_id/role", put(set_role))
