@@ -297,7 +297,11 @@ pub async fn run_tls_resumption_probe(
         }
     };
 
-    let default_port = if target.scheme() == "https" { 443u16 } else { 80 };
+    let default_port = if target.scheme() == "https" {
+        443u16
+    } else {
+        80
+    };
     let port = target.port().unwrap_or(default_port);
     let (addr, dns_result) = if cfg.dns_enabled {
         match dns_runner::resolve(&host, cfg.ipv4_only, cfg.ipv6_only).await {
@@ -348,7 +352,8 @@ pub async fn run_tls_resumption_probe(
         }
     };
 
-    let tls_config = match build_tls_config_for_http1_probe(cfg.insecure, cfg.ca_bundle.as_deref()) {
+    let tls_config = match build_tls_config_for_http1_probe(cfg.insecure, cfg.ca_bundle.as_deref())
+    {
         Ok(c) => Arc::new(c),
         Err(e) => {
             return make_failed(
@@ -382,7 +387,8 @@ pub async fn run_tls_resumption_probe(
         }
     };
 
-    let second = match run_one_tls_http_request(addr, &host, target, cfg, tls_config.clone()).await {
+    let second = match run_one_tls_http_request(addr, &host, target, cfg, tls_config.clone()).await
+    {
         Ok(v) => v,
         Err((category, message, detail, tcp_result)) => {
             return make_failed(
@@ -463,16 +469,40 @@ async fn run_one_tls_http_request(
     target: &url::Url,
     cfg: &RunConfig,
     tls_config: Arc<rustls::ClientConfig>,
-) -> Result<TlsHttpRequestResult, (ErrorCategory, String, Option<String>, Option<crate::metrics::TcpResult>)> {
+) -> Result<
+    TlsHttpRequestResult,
+    (
+        ErrorCategory,
+        String,
+        Option<String>,
+        Option<crate::metrics::TcpResult>,
+    ),
+> {
     let tcp_started_at = Utc::now();
     let t_tcp = Instant::now();
     let tcp_stream = match tokio::time::timeout(
         std::time::Duration::from_millis(cfg.timeout_ms),
         TcpStream::connect(addr),
-    ).await {
+    )
+    .await
+    {
         Ok(Ok(s)) => s,
-        Ok(Err(e)) => return Err((ErrorCategory::Tcp, e.to_string(), Some(format!("connect to {addr}")), None)),
-        Err(_) => return Err((ErrorCategory::Timeout, format!("TCP connect to {addr} timed out after {}ms", cfg.timeout_ms), None, None)),
+        Ok(Err(e)) => {
+            return Err((
+                ErrorCategory::Tcp,
+                e.to_string(),
+                Some(format!("connect to {addr}")),
+                None,
+            ))
+        }
+        Err(_) => {
+            return Err((
+                ErrorCategory::Timeout,
+                format!("TCP connect to {addr} timed out after {}ms", cfg.timeout_ms),
+                None,
+                None,
+            ))
+        }
     };
     let tcp_duration_ms = t_tcp.elapsed().as_secs_f64() * 1000.0;
     let local_addr = tcp_stream.local_addr().ok().map(|a| a.to_string());
@@ -499,18 +529,40 @@ async fn run_one_tls_http_request(
         min_rtt_ms: sock_info.min_rtt_ms,
     };
 
-    let server_name = ServerName::try_from(host.to_string())
-        .map_err(|e| (ErrorCategory::Tls, format!("Invalid SNI: {e}"), None, Some(tcp_result.clone())))?;
+    let server_name = ServerName::try_from(host.to_string()).map_err(|e| {
+        (
+            ErrorCategory::Tls,
+            format!("Invalid SNI: {e}"),
+            None,
+            Some(tcp_result.clone()),
+        )
+    })?;
     let connector = TlsConnector::from(tls_config);
     let tls_started_at = Utc::now();
     let t_tls = Instant::now();
     let mut tls_stream = match tokio::time::timeout(
         std::time::Duration::from_millis(cfg.timeout_ms),
         connector.connect(server_name, tcp_stream),
-    ).await {
+    )
+    .await
+    {
         Ok(Ok(s)) => s,
-        Ok(Err(e)) => return Err((ErrorCategory::Tls, e.to_string(), Some("TLS handshake".into()), Some(tcp_result))),
-        Err(_) => return Err((ErrorCategory::Timeout, format!("TLS handshake timed out after {}ms", cfg.timeout_ms), None, Some(tcp_result))),
+        Ok(Err(e)) => {
+            return Err((
+                ErrorCategory::Tls,
+                e.to_string(),
+                Some("TLS handshake".into()),
+                Some(tcp_result),
+            ))
+        }
+        Err(_) => {
+            return Err((
+                ErrorCategory::Timeout,
+                format!("TLS handshake timed out after {}ms", cfg.timeout_ms),
+                None,
+                Some(tcp_result),
+            ))
+        }
     };
     let tls_duration_ms = t_tls.elapsed().as_secs_f64() * 1000.0;
 
@@ -530,12 +582,46 @@ async fn run_one_tls_http_request(
         tls_stream.write_all(request.as_bytes()),
     )
     .await
-    .map_err(|_| (ErrorCategory::Timeout, format!("HTTP request write timed out after {}ms", cfg.timeout_ms), None, Some(tcp_result.clone())))?
-    .map_err(|e| (ErrorCategory::Http, e.to_string(), Some("write HTTP request over TLS".into()), Some(tcp_result.clone())))?;
+    .map_err(|_| {
+        (
+            ErrorCategory::Timeout,
+            format!("HTTP request write timed out after {}ms", cfg.timeout_ms),
+            None,
+            Some(tcp_result.clone()),
+        )
+    })?
+    .map_err(|e| {
+        (
+            ErrorCategory::Http,
+            e.to_string(),
+            Some("write HTTP request over TLS".into()),
+            Some(tcp_result.clone()),
+        )
+    })?;
     let _ = tls_stream.flush().await;
 
-    let mut buf = Vec::new();
-    let _ = tokio::time::timeout(std::time::Duration::from_millis(cfg.timeout_ms), tls_stream.read_to_end(&mut buf)).await;
+    // Read the response up to a cap.  We need to consume enough data for
+    // TLS 1.3 NewSessionTicket messages to be processed by rustls, but we
+    // must not allow an adversarial server to exhaust memory.
+    const MAX_RESPONSE_BYTES: usize = 256 * 1024; // 256 KiB
+    let mut buf = Vec::with_capacity(8 * 1024);
+    let _ = tokio::time::timeout(std::time::Duration::from_millis(cfg.timeout_ms), async {
+        loop {
+            let mut chunk = [0u8; 8192];
+            match tls_stream.read(&mut chunk).await {
+                Ok(0) => break,
+                Ok(n) => {
+                    let remaining = MAX_RESPONSE_BYTES.saturating_sub(buf.len());
+                    buf.extend_from_slice(&chunk[..n.min(remaining)]);
+                    if buf.len() >= MAX_RESPONSE_BYTES {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    })
+    .await;
 
     let http_status_code = parse_http_status_code(&buf);
     let mut tls_result = extract_tls_probe_info(&tls_stream, tls_started_at, tls_duration_ms);
@@ -545,10 +631,17 @@ async fn run_one_tls_http_request(
         .1
         .handshake_kind()
         .map(|k| handshake_kind_label(k).to_string());
-    tls_result.resumed = Some(matches!(tls_stream.get_ref().1.handshake_kind(), Some(rustls::HandshakeKind::Resumed)));
+    tls_result.resumed = Some(matches!(
+        tls_stream.get_ref().1.handshake_kind(),
+        Some(rustls::HandshakeKind::Resumed)
+    ));
     tls_result.http_status_code = http_status_code;
 
-    Ok(TlsHttpRequestResult { tcp: tcp_result, tls: tls_result, http_status_code })
+    Ok(TlsHttpRequestResult {
+        tcp: tcp_result,
+        tls: tls_result,
+        http_status_code,
+    })
 }
 
 fn parse_http_status_code(buf: &[u8]) -> Option<u16> {
@@ -671,8 +764,13 @@ fn extract_tls_probe_info(
         .map(|c| (Some(c.subject.clone()), Some(c.issuer.clone()), c.expiry))
         .unwrap_or((None, None, None));
 
-    let handshake_kind = conn.handshake_kind().map(|k| handshake_kind_label(k).to_string());
-    let resumed = Some(matches!(conn.handshake_kind(), Some(rustls::HandshakeKind::Resumed)));
+    let handshake_kind = conn
+        .handshake_kind()
+        .map(|k| handshake_kind_label(k).to_string());
+    let resumed = Some(matches!(
+        conn.handshake_kind(),
+        Some(rustls::HandshakeKind::Resumed)
+    ));
     TlsResult {
         protocol_version,
         cipher_suite,
@@ -1023,7 +1121,10 @@ mod tests {
             handshake_kind_label(rustls::HandshakeKind::FullWithHelloRetryRequest),
             "full-hrr"
         );
-        assert_eq!(handshake_kind_label(rustls::HandshakeKind::Resumed), "resumed");
+        assert_eq!(
+            handshake_kind_label(rustls::HandshakeKind::Resumed),
+            "resumed"
+        );
     }
 
     #[test]

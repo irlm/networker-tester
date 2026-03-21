@@ -17,8 +17,10 @@ use networker_tester::runner::{
     http::{run_probe, RunConfig},
     http3::run_http3_probe,
     native::run_native_probe,
-    pageload::{run_pageload2_probe, run_pageload2_warm, run_pageload3_probe, run_pageload_probe,
-        warmup_pageload2, PageLoadConfig, SharedH2Conn},
+    pageload::{
+        run_pageload2_probe, run_pageload2_warm, run_pageload3_probe, run_pageload_probe,
+        warmup_pageload2, PageLoadConfig, SharedH2Conn,
+    },
     throughput::{
         run_download1_probe, run_download2_probe, run_download3_probe, run_download_probe,
         run_upload1_probe, run_upload2_probe, run_upload3_probe, run_upload_probe,
@@ -1431,6 +1433,7 @@ fn print_summary(run: &TestRun) {
         Protocol::Udp,
         Protocol::Dns,
         Protocol::Tls,
+        Protocol::TlsResume,
         Protocol::Download,
         Protocol::Download1,
         Protocol::Download2,

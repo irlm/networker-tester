@@ -847,7 +847,11 @@ async fn tls_resumption_probe_resumes_second_handshake() {
     let url = ep.https_url("/health");
     let attempt = run_tls_resumption_probe(Uuid::new_v4(), 0, &url, &cfg).await;
 
-    assert!(attempt.success, "TLS resumption probe failed: {:?}", attempt.error);
+    assert!(
+        attempt.success,
+        "TLS resumption probe failed: {:?}",
+        attempt.error
+    );
     assert_eq!(attempt.protocol, Protocol::TlsResume);
 
     let tls = attempt.tls.expect("tls result missing");

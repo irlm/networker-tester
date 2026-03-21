@@ -401,13 +401,13 @@ mod real {
             success: true,
             cert_chain: vec![],
             tls_backend: Some("rustls".into()),
-        resumed: None,
-        handshake_kind: None,
-        tls13_tickets_received: None,
-        previous_handshake_duration_ms: None,
-        previous_handshake_kind: None,
-        previous_http_status_code: None,
-        http_status_code: None,
+            resumed: None,
+            handshake_kind: None,
+            tls13_tickets_received: None,
+            previous_handshake_duration_ms: None,
+            previous_handshake_kind: None,
+            previous_http_status_code: None,
+            http_status_code: None,
         };
 
         RequestAttempt {
