@@ -40,11 +40,31 @@ export const api = {
       body: JSON.stringify({ username, password }),
     }),
 
-  changePassword: (currentPassword: string, newPassword: string) =>
+  changePassword: (currentPassword: string, newPassword: string, email?: string) =>
     request<{ success: boolean }>('/auth/change-password', {
       method: 'POST',
-      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword, ...(email ? { email } : {}) }),
     }),
+
+  getProfile: () =>
+    request<{ username: string; role: string; email: string | null }>('/auth/profile'),
+
+  forgotPassword: (email: string) =>
+    fetch(`${API_BASE}/auth/forgot-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    }).then(r => r.json()) as Promise<{ sent: boolean }>,
+
+  resetPassword: (token: string, newPassword: string) =>
+    fetch(`${API_BASE}/auth/reset-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, new_password: newPassword }),
+    }).then(async r => {
+      if (!r.ok) throw new Error(await r.text());
+      return r.json();
+    }) as Promise<{ success: boolean }>,
 
   getDashboardSummary: () =>
     request<{
