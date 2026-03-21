@@ -337,6 +337,67 @@ pub async fn reset_password_with_token(
     Ok(Ok(()))
 }
 
+/// Find a user by email (for SSO account lookup).
+pub async fn find_by_email(client: &Client, email: &str) -> anyhow::Result<Option<UserRow>> {
+    let row = client
+        .query_opt(
+            "SELECT user_id, email, role, status, \
+                    COALESCE(auth_provider, 'local') AS auth_provider, \
+                    display_name, last_login_at, created_at \
+             FROM dash_user WHERE LOWER(email) = LOWER($1)",
+            &[&email],
+        )
+        .await?;
+    Ok(row.map(|r| UserRow {
+        user_id: r.get("user_id"),
+        email: r.get("email"),
+        role: r.get("role"),
+        status: r.get("status"),
+        auth_provider: r.get("auth_provider"),
+        display_name: r.get("display_name"),
+        last_login_at: r.get("last_login_at"),
+        created_at: r.get("created_at"),
+    }))
+}
+
+/// Link an existing local account to an SSO provider.
+pub async fn link_sso_to_local(
+    client: &Client,
+    user_id: &Uuid,
+    provider: &str,
+    subject_id: &str,
+    display_name: Option<&str>,
+) -> anyhow::Result<()> {
+    client
+        .execute(
+            "UPDATE dash_user SET auth_provider = $1, sso_subject_id = $2, display_name = COALESCE($3, display_name), last_login_at = now() WHERE user_id = $4",
+            &[&provider, &subject_id, &display_name, user_id],
+        )
+        .await?;
+    Ok(())
+}
+
+/// Create a new SSO-only user (no password).
+pub async fn create_sso_user(
+    client: &Client,
+    email: &str,
+    provider: &str,
+    subject_id: &str,
+    display_name: Option<&str>,
+) -> anyhow::Result<(Uuid, String)> {
+    let user_id = Uuid::new_v4();
+    let role = "viewer";
+    let status = "pending"; // new SSO users require approval
+    client
+        .execute(
+            "INSERT INTO dash_user (user_id, email, role, status, auth_provider, sso_subject_id, sso_only, display_name, must_change_password) \
+             VALUES ($1, $2, $3, $4, $5, $6, TRUE, $7, FALSE)",
+            &[&user_id, &email, &role, &status, &provider, &subject_id, &display_name],
+        )
+        .await?;
+    Ok((user_id, role.to_string()))
+}
+
 /// Get the email and status for a user (for display on profile / change-password page).
 pub async fn get_profile_info(
     client: &Client,
