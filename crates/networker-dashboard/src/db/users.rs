@@ -1,6 +1,14 @@
 use chrono::{DateTime, Utc};
+use sha2::{Digest, Sha256};
 use tokio_postgres::Client;
 use uuid::Uuid;
+
+/// Hash a token with SHA-256 so we never store plaintext reset tokens in the DB.
+fn hash_token(token: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(token.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
 
 /// Seed the admin user if no users exist.
 /// Sets must_change_password = TRUE so the user is forced to set their own password.
@@ -167,14 +175,16 @@ pub async fn create_reset_token(
         .collect();
 
     let expires: DateTime<Utc> = Utc::now() + chrono::Duration::hours(1);
+    let token_hash = hash_token(&token);
 
     client
         .execute(
             "UPDATE dash_user SET password_reset_token = $1, password_reset_expires = $2 WHERE user_id = $3",
-            &[&token, &expires, &user_id],
+            &[&token_hash, &expires, &user_id],
         )
         .await?;
 
+    // Return raw token (for the email link); only the hash is stored in DB
     Ok(Some((user_email, token)))
 }
 
@@ -188,10 +198,11 @@ pub async fn reset_password_with_token(
         return Ok(Err("Password must be at least 8 characters"));
     }
 
+    let token_hash = hash_token(token);
     let row = client
         .query_opt(
             "SELECT user_id, password_reset_expires FROM dash_user WHERE password_reset_token = $1 AND status = 'active'",
-            &[&token],
+            &[&token_hash],
         )
         .await?;
 
@@ -225,13 +236,16 @@ pub async fn reset_password_with_token(
     Ok(Ok(()))
 }
 
-/// Get the email for a user (for display on change-password page).
-pub async fn get_email(client: &Client, user_id: &Uuid) -> anyhow::Result<Option<String>> {
+/// Get the email and status for a user (for display on profile / change-password page).
+pub async fn get_profile_info(
+    client: &Client,
+    user_id: &Uuid,
+) -> anyhow::Result<Option<(String, String)>> {
     let row = client
         .query_opt(
-            "SELECT email FROM dash_user WHERE user_id = $1",
+            "SELECT email, status FROM dash_user WHERE user_id = $1",
             &[user_id],
         )
         .await?;
-    Ok(row.map(|r| r.get::<_, String>("email")))
+    Ok(row.map(|r| (r.get::<_, String>("email"), r.get::<_, String>("status"))))
 }

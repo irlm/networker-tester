@@ -115,13 +115,19 @@ async fn get_profile(
         Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response(),
     };
 
-    let email = crate::db::users::get_email(&client, &auth_user.user_id)
+    let profile = crate::db::users::get_profile_info(&client, &auth_user.user_id)
         .await
         .unwrap_or(None);
 
+    let (email, status) = match profile {
+        Some((e, s)) => (e, s),
+        None => (auth_user.email.clone(), "active".to_string()),
+    };
+
     Json(serde_json::json!({
-        "email": email.unwrap_or_else(|| auth_user.email.clone()),
+        "email": email,
         "role": auth_user.role,
+        "status": status,
     }))
     .into_response()
 }
