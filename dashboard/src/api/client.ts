@@ -193,6 +193,26 @@ export const api = {
   // Cloud status
   getCloudStatus: () => request<CloudStatus>('/cloud/status'),
 
+  // SSO
+  getProviders: () =>
+    request<{ providers: string[] }>('/auth/sso/providers'),
+
+  checkEmail: (email: string) =>
+    request<{ provider: string | null }>('/auth/sso/check-email', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    }),
+
+  exchangeCode: (code: string) =>
+    fetch(`${API_BASE}/auth/sso/exchange`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    }).then(async r => {
+      if (!r.ok) throw new Error(await r.text());
+      return r.json() as Promise<{ token: string; email: string; role: string; status: string }>;
+    }),
+
   // Modes
   getModes: () => request<{ groups: ModeGroup[] }>('/modes'),
 
