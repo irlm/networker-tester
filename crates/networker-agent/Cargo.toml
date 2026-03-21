@@ -9,14 +9,12 @@ description = "Test execution agent daemon for networker dashboard"
 [dependencies]
 # Workspace deps
 tokio       = { workspace = true }
-serde       = { workspace = true }
 serde_json  = { workspace = true }
 chrono      = { workspace = true }
 uuid        = { workspace = true }
 anyhow      = { workspace = true }
 tracing     = { workspace = true }
 tracing-subscriber = { workspace = true }
-clap        = { workspace = true }
 url         = { workspace = true }
 
 # Local deps

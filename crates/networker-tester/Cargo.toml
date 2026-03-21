@@ -26,8 +26,7 @@ rustls               = { version = "0.23", default-features = false, features = 
 tokio-rustls         = "0.26"
 rustls-native-certs  = "0.8"
 rustls-pemfile       = "2"
-webpki-roots         = "0.26"
-rustls-pki-types     = "1"
+webpki-roots         = "1"
 
 # --- DNS ---
 hickory-resolver = { version = "0.24", features = ["tokio-runtime"] }
@@ -61,7 +60,6 @@ serde.workspace       = true
 serde_json.workspace  = true
 clap.workspace        = true
 anyhow.workspace      = true
-thiserror.workspace   = true
 tracing.workspace     = true
 tracing-subscriber.workspace = true
 chrono.workspace      = true
@@ -70,7 +68,7 @@ bytes.workspace       = true
 url.workspace         = true
 
 # --- cert parsing ---
-x509-parser = "0.16"
+x509-parser = "0.18"
 
 # --- Excel output ---
 rust_xlsxwriter.workspace = true
@@ -92,7 +90,6 @@ db-mssql    = ["dep:tiberius", "dep:tokio-util"]
 db-postgres = ["dep:tokio-postgres"]
 
 [dev-dependencies]
-tokio-test  = "0.4"
 tempfile    = "3"
-rcgen       = "0.13"
+rcgen       = "0.14"
 networker-endpoint = { path = "../networker-endpoint" }

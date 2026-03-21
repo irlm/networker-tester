@@ -16,7 +16,6 @@ uuid        = { workspace = true }
 anyhow      = { workspace = true }
 tracing     = { workspace = true }
 tracing-subscriber = { workspace = true }
-clap        = { workspace = true }
 
 # Local deps
 networker-common = { path = "../networker-common" }
@@ -24,7 +23,6 @@ networker-tester = { path = "../networker-tester", default-features = false, fea
 
 # Web framework
 axum        = { version = "0.7", features = ["macros", "ws"] }
-tower       = "0.5"
 tower-http  = { version = "0.6", features = ["trace", "cors", "fs"] }
 
 # Database
@@ -33,7 +31,7 @@ deadpool-postgres = { version = "0.14", features = ["serde"] }
 
 # Auth
 jsonwebtoken = "9"
-bcrypt       = "0.16"
+bcrypt       = "0.19"
 
 # HTTP client (for endpoint health checks / info fetches)
 reqwest      = { version = "0.12", default-features = false, features = ["rustls-tls"] }
