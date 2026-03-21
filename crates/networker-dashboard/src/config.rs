@@ -46,7 +46,9 @@ impl DashboardConfig {
             );
         }
 
-        let admin_email = std::env::var("DASHBOARD_ADMIN_EMAIL").ok().filter(|s| !s.is_empty());
+        let admin_email = std::env::var("DASHBOARD_ADMIN_EMAIL")
+            .ok()
+            .filter(|s| !s.is_empty());
 
         Ok(Self {
             database_url: std::env::var("DASHBOARD_DB_URL").unwrap_or_else(|_| {
