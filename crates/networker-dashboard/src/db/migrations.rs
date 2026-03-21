@@ -125,6 +125,12 @@ ALTER TABLE schedule ADD COLUMN IF NOT EXISTS config JSONB;
 ALTER TABLE schedule ALTER COLUMN definition_id DROP NOT NULL;
 "#;
 
+/// V007 migration: Password reset tokens and email requirement.
+const V007_PASSWORD_RESET: &str = r#"
+ALTER TABLE dash_user ADD COLUMN IF NOT EXISTS password_reset_token VARCHAR(128);
+ALTER TABLE dash_user ADD COLUMN IF NOT EXISTS password_reset_expires TIMESTAMPTZ;
+"#;
+
 /// Run pending migrations.
 pub async fn run(client: &Client) -> anyhow::Result<()> {
     // Ensure migration tracking table exists
@@ -221,6 +227,23 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
             )
             .await?;
         tracing::info!("V006 migration complete");
+    }
+
+    // V007: Password reset tokens
+    let row = client
+        .query_opt("SELECT version FROM _migrations WHERE version = 7", &[])
+        .await?;
+
+    if row.is_none() {
+        tracing::info!("Applying V007 password_reset migration...");
+        client.batch_execute(V007_PASSWORD_RESET).await?;
+        client
+            .execute(
+                "INSERT INTO _migrations (version) VALUES (7) ON CONFLICT DO NOTHING",
+                &[],
+            )
+            .await?;
+        tracing::info!("V007 migration complete");
     }
 
     Ok(())

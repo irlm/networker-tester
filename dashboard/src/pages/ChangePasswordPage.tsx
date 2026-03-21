@@ -7,8 +7,10 @@ export function ChangePasswordPage() {
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [email, setEmail] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const mustChangePassword = useAuthStore((s) => s.mustChangePassword);
   const clearPasswordChange = useAuthStore((s) => s.clearPasswordChange);
   const navigate = useNavigate();
 
@@ -31,9 +33,23 @@ export function ChangePasswordPage() {
       return;
     }
 
+    if (mustChangePassword && !email.trim()) {
+      setError('Email is required for password recovery');
+      return;
+    }
+
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setError('Please enter a valid email address');
+      return;
+    }
+
     setLoading(true);
     try {
-      await api.changePassword(currentPassword, newPassword);
+      await api.changePassword(
+        currentPassword,
+        newPassword,
+        email.trim() || undefined,
+      );
       clearPasswordChange();
       navigate('/');
     } catch {
@@ -44,8 +60,8 @@ export function ChangePasswordPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[var(--bg-base)] flex items-center justify-center">
-      <div className="w-72">
+    <div className="min-h-screen bg-[var(--bg-base)] flex items-center justify-center p-4">
+      <div className="w-full max-w-xs">
         {/* Brand */}
         <div className="text-center mb-8">
           <h1 className="text-[#4ade80] text-2xl font-bold tracking-tight mb-1">
@@ -60,7 +76,7 @@ export function ChangePasswordPage() {
         <form onSubmit={handleSubmit}>
           <div className="text-yellow-400 text-xs mb-6 flex items-center gap-2">
             <span className="text-yellow-500">warn</span>
-            <span>Password change required</span>
+            <span>{mustChangePassword ? 'Set your password and recovery email' : 'Change password'}</span>
           </div>
 
           {error && (
@@ -104,7 +120,7 @@ export function ChangePasswordPage() {
             </div>
           </div>
 
-          <div className="mb-8">
+          <div className="mb-4">
             <label htmlFor="confirm-password" className="block text-xs text-gray-600 mb-1.5 uppercase tracking-wider">
               Confirm password
             </label>
@@ -120,12 +136,33 @@ export function ChangePasswordPage() {
             </div>
           </div>
 
+          {/* Email — required on first login, optional on subsequent changes */}
+          <div className="mb-8">
+            <label htmlFor="recovery-email" className="block text-xs text-gray-600 mb-1.5 uppercase tracking-wider">
+              Recovery email {mustChangePassword ? '' : '(optional)'}
+            </label>
+            <div className="flex items-center border-b border-gray-700 focus-within:border-green-500/50 transition-colors">
+              <span className="text-green-600/60 text-sm mr-2 select-none">&gt;</span>
+              <input
+                id="recovery-email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full bg-transparent py-2 text-sm text-gray-200 focus:outline-none placeholder:text-gray-700"
+                placeholder="you@example.com"
+              />
+            </div>
+            <p className="text-xs text-gray-700 mt-1">
+              Used to send a reset link if you forget your password
+            </p>
+          </div>
+
           <button
             type="submit"
             disabled={loading}
             className="w-full bg-green-600 hover:bg-green-500 text-white py-2 rounded text-sm font-medium transition-colors disabled:opacity-50"
           >
-            {loading ? 'Updating...' : 'Change password'}
+            {loading ? 'Updating...' : 'Set password'}
           </button>
         </form>
       </div>
