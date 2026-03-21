@@ -2,7 +2,7 @@
 ///
 /// Each backend implements `DatabaseBackend` and is gated behind a Cargo feature.
 /// The `connect()` factory auto-detects the backend from the URL scheme.
-use crate::metrics::TestRun;
+use crate::metrics::{TestRun, UrlTestRun};
 use async_trait::async_trait;
 
 #[async_trait]
@@ -12,6 +12,9 @@ pub trait DatabaseBackend: Send + Sync {
 
     /// Insert a complete test run (header + attempts + sub-results).
     async fn save(&self, run: &TestRun) -> anyhow::Result<()>;
+
+    /// Insert a URL page-load diagnostic run and related child records.
+    async fn save_url_test(&self, run: &UrlTestRun) -> anyhow::Result<()>;
 
     /// Lightweight connectivity check (`SELECT 1`).
     async fn ping(&self) -> anyhow::Result<()>;

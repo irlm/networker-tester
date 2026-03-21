@@ -3,7 +3,7 @@
 /// Schema mirrors the SQL Server tables (same column names, equivalent types).
 /// Migration is embedded and tracked via a `_schema_versions` table.
 use super::DatabaseBackend;
-use crate::metrics::{RequestAttempt, TestRun};
+use crate::metrics::{RequestAttempt, TestRun, UrlTestProtocolRun, UrlTestResource, UrlTestRun};
 use anyhow::Context;
 use async_trait::async_trait;
 use tokio_postgres::Client as PgClient;
@@ -202,6 +202,97 @@ CREATE INDEX IF NOT EXISTS IX_Error_Category       ON ErrorRecord (ErrorCategory
 CREATE INDEX IF NOT EXISTS IX_ServerTimingResult_AttemptId ON ServerTimingResult (AttemptId);
 "#;
 
+const V002_MIGRATION: &str = r#"
+-- V002: Add URL page-load diagnostic foundation tables
+
+CREATE TABLE IF NOT EXISTS UrlTestRun (
+    Id                        UUID              NOT NULL,
+    StartedAt                 TIMESTAMPTZ       NOT NULL,
+    CompletedAt               TIMESTAMPTZ       NULL,
+    RequestedUrl              VARCHAR(2048)     NOT NULL,
+    FinalUrl                  VARCHAR(2048)     NULL,
+    Status                    VARCHAR(32)       NOT NULL,
+    PageLoadStrategy          VARCHAR(32)       NOT NULL,
+    BrowserEngine             VARCHAR(64)       NULL,
+    BrowserVersion            VARCHAR(64)       NULL,
+    UserAgent                 TEXT              NULL,
+    PrimaryOrigin             VARCHAR(1024)     NULL,
+    ObservedProtocolPrimaryLoad VARCHAR(32)     NULL,
+    AdvertisedAltSvc          TEXT              NULL,
+    ValidatedHttpVersions     VARCHAR(128)      NOT NULL DEFAULT '',
+    TlsVersion                VARCHAR(32)       NULL,
+    CipherSuite               VARCHAR(128)      NULL,
+    Alpn                      VARCHAR(32)       NULL,
+    DnsMs                     DOUBLE PRECISION  NULL,
+    ConnectMs                 DOUBLE PRECISION  NULL,
+    HandshakeMs               DOUBLE PRECISION  NULL,
+    TtfbMs                    DOUBLE PRECISION  NULL,
+    DomContentLoadedMs        DOUBLE PRECISION  NULL,
+    LoadEventMs               DOUBLE PRECISION  NULL,
+    NetworkIdleMs             DOUBLE PRECISION  NULL,
+    CaptureEndMs              DOUBLE PRECISION  NULL,
+    TotalRequests             INT               NOT NULL DEFAULT 0,
+    TotalTransferBytes        BIGINT            NOT NULL DEFAULT 0,
+    PeakConcurrentConnections INT               NULL,
+    RedirectCount             INT               NOT NULL DEFAULT 0,
+    FailureCount              INT               NOT NULL DEFAULT 0,
+    HarPath                   TEXT              NULL,
+    PcapPath                  TEXT              NULL,
+    PcapSummaryJson           TEXT              NULL,
+    CaptureErrors             TEXT              NULL,
+    EnvironmentNotes          TEXT              NULL,
+    CONSTRAINT PK_UrlTestRun PRIMARY KEY (Id)
+);
+
+CREATE TABLE IF NOT EXISTS UrlTestResource (
+    Id               UUID              NOT NULL,
+    UrlTestRunId     UUID              NOT NULL,
+    ResourceUrl      VARCHAR(2048)     NOT NULL,
+    Origin           VARCHAR(1024)     NOT NULL,
+    ResourceType     VARCHAR(64)       NOT NULL,
+    MimeType         VARCHAR(255)      NULL,
+    StatusCode       INT               NULL,
+    Protocol         VARCHAR(32)       NULL,
+    TransferSize     BIGINT            NULL,
+    EncodedBodySize  BIGINT            NULL,
+    DecodedBodySize  BIGINT            NULL,
+    DurationMs       DOUBLE PRECISION  NULL,
+    ConnectionId     VARCHAR(128)      NULL,
+    ReusedConnection BOOLEAN           NULL,
+    InitiatorType    VARCHAR(64)       NULL,
+    FromCache        BOOLEAN           NULL,
+    Redirected       BOOLEAN           NULL,
+    Failed           BOOLEAN           NOT NULL DEFAULT FALSE,
+    CONSTRAINT PK_UrlTestResource PRIMARY KEY (Id),
+    CONSTRAINT FK_UrlTestResource_Run FOREIGN KEY (UrlTestRunId)
+        REFERENCES UrlTestRun (Id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS UrlTestProtocolRun (
+    Id               UUID              NOT NULL,
+    UrlTestRunId     UUID              NOT NULL,
+    ProtocolMode     VARCHAR(16)       NOT NULL,
+    RunNumber        INT               NOT NULL,
+    AttemptType      VARCHAR(16)       NOT NULL,
+    ObservedProtocol VARCHAR(32)       NULL,
+    FallbackOccurred BOOLEAN           NULL,
+    Succeeded        BOOLEAN           NOT NULL DEFAULT FALSE,
+    StatusCode       INT               NULL,
+    TtfbMs           DOUBLE PRECISION  NULL,
+    TotalMs          DOUBLE PRECISION  NULL,
+    FailureReason    TEXT              NULL,
+    Error            TEXT              NULL,
+    CONSTRAINT PK_UrlTestProtocolRun PRIMARY KEY (Id),
+    CONSTRAINT FK_UrlTestProtocolRun_Run FOREIGN KEY (UrlTestRunId)
+        REFERENCES UrlTestRun (Id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS IX_UrlTestRun_StartedAt ON UrlTestRun (StartedAt DESC);
+CREATE INDEX IF NOT EXISTS IX_UrlTestRun_Status ON UrlTestRun (Status, StartedAt DESC);
+CREATE INDEX IF NOT EXISTS IX_UrlTestResource_RunId ON UrlTestResource (UrlTestRunId);
+CREATE INDEX IF NOT EXISTS IX_UrlTestProtocolRun_RunId ON UrlTestProtocolRun (UrlTestRunId, ProtocolMode, RunNumber);
+"#;
+
 #[async_trait]
 impl DatabaseBackend for PostgresBackend {
     async fn migrate(&self) -> anyhow::Result<()> {
@@ -246,6 +337,27 @@ impl DatabaseBackend for PostgresBackend {
                     )
                     .await
                     .context("record V001")?;
+            }
+
+            let row = self
+                .client
+                .query_opt("SELECT 1 FROM _schema_versions WHERE version = 'V002'", &[])
+                .await
+                .context("check V002")?;
+
+            if row.is_none() {
+                self.client
+                    .batch_execute(V002_MIGRATION)
+                    .await
+                    .context("apply V002 migration")?;
+
+                self.client
+                    .execute(
+                        "INSERT INTO _schema_versions (version) VALUES ('V002')",
+                        &[],
+                    )
+                    .await
+                    .context("record V002")?;
             }
 
             Ok(())
@@ -293,6 +405,39 @@ impl DatabaseBackend for PostgresBackend {
         }
 
         Ok(())
+    }
+
+    async fn save_url_test(&self, run: &UrlTestRun) -> anyhow::Result<()> {
+        self.client
+            .batch_execute("BEGIN")
+            .await
+            .context("BEGIN UrlTest transaction")?;
+
+        let result = async {
+            insert_url_test_run(run, &self.client).await?;
+            for resource in &run.resources {
+                insert_url_test_resource(run.id, resource, &self.client).await?;
+            }
+            for probe in &run.protocol_runs {
+                insert_url_test_protocol_run(run.id, probe, &self.client).await?;
+            }
+            Ok::<(), anyhow::Error>(())
+        }
+        .await;
+
+        match result {
+            Ok(()) => {
+                self.client
+                    .batch_execute("COMMIT")
+                    .await
+                    .context("COMMIT UrlTest transaction")?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = self.client.batch_execute("ROLLBACK").await;
+                Err(e)
+            }
+        }
     }
 
     async fn ping(&self) -> anyhow::Result<()> {
@@ -374,6 +519,159 @@ async fn insert_test_run(run: &TestRun, c: &PgClient) -> anyhow::Result<()> {
             Ok(())
         }
     }
+}
+
+async fn insert_url_test_run(run: &UrlTestRun, c: &PgClient) -> anyhow::Result<()> {
+    let validated_http_versions = run.validated_http_versions.join(",");
+    let capture_errors = if run.capture_errors.is_empty() {
+        None
+    } else {
+        Some(run.capture_errors.join("\n"))
+    };
+    let pcap_summary_json = run
+        .pcap_summary
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .context("serialize UrlPacketCaptureSummary")?;
+    let status = run.status.to_string();
+    let page_load_strategy = serde_json::to_value(&run.page_load_strategy)?
+        .as_str()
+        .unwrap_or("browser")
+        .to_string();
+
+    c.execute(
+        "INSERT INTO UrlTestRun (
+            Id, StartedAt, CompletedAt, RequestedUrl, FinalUrl, Status, PageLoadStrategy,
+            BrowserEngine, BrowserVersion, UserAgent, PrimaryOrigin, ObservedProtocolPrimaryLoad,
+            AdvertisedAltSvc, ValidatedHttpVersions, TlsVersion, CipherSuite, Alpn,
+            DnsMs, ConnectMs, HandshakeMs, TtfbMs, DomContentLoadedMs, LoadEventMs,
+            NetworkIdleMs, CaptureEndMs, TotalRequests, TotalTransferBytes,
+            PeakConcurrentConnections, RedirectCount, FailureCount, HarPath, PcapPath,
+            PcapSummaryJson, CaptureErrors, EnvironmentNotes
+         ) VALUES (
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
+            $18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35
+         )",
+        &[
+            &run.id,
+            &run.started_at,
+            &run.completed_at,
+            &run.requested_url,
+            &run.final_url,
+            &status,
+            &page_load_strategy,
+            &run.browser_engine,
+            &run.browser_version,
+            &run.user_agent,
+            &run.primary_origin,
+            &run.observed_protocol_primary_load,
+            &run.advertised_alt_svc,
+            &validated_http_versions,
+            &run.tls_version,
+            &run.cipher_suite,
+            &run.alpn,
+            &run.dns_ms,
+            &run.connect_ms,
+            &run.handshake_ms,
+            &run.ttfb_ms,
+            &run.dom_content_loaded_ms,
+            &run.load_event_ms,
+            &run.network_idle_ms,
+            &run.capture_end_ms,
+            &(run.total_requests as i32),
+            &(run.total_transfer_bytes as i64),
+            &run.peak_concurrent_connections.map(|v| v as i32),
+            &(run.redirect_count as i32),
+            &(run.failure_count as i32),
+            &run.har_path,
+            &run.pcap_path,
+            &pcap_summary_json,
+            &capture_errors,
+            &run.environment_notes,
+        ],
+    )
+    .await
+    .context("INSERT UrlTestRun")?;
+    Ok(())
+}
+
+async fn insert_url_test_resource(
+    run_id: uuid::Uuid,
+    r: &UrlTestResource,
+    c: &PgClient,
+) -> anyhow::Result<()> {
+    let id = uuid::Uuid::new_v4();
+    c.execute(
+        "INSERT INTO UrlTestResource (
+            Id, UrlTestRunId, ResourceUrl, Origin, ResourceType, MimeType, StatusCode,
+            Protocol, TransferSize, EncodedBodySize, DecodedBodySize, DurationMs,
+            ConnectionId, ReusedConnection, InitiatorType, FromCache, Redirected, Failed
+        ) VALUES (
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18
+        )",
+        &[
+            &id,
+            &run_id,
+            &r.resource_url,
+            &r.origin,
+            &r.resource_type,
+            &r.mime_type,
+            &r.status_code.map(|v| v as i32),
+            &r.protocol,
+            &r.transfer_size.map(|v| v as i64),
+            &r.encoded_body_size.map(|v| v as i64),
+            &r.decoded_body_size.map(|v| v as i64),
+            &r.duration_ms,
+            &r.connection_id,
+            &r.reused_connection,
+            &r.initiator_type,
+            &r.from_cache,
+            &r.redirected,
+            &r.failed,
+        ],
+    )
+    .await
+    .context("INSERT UrlTestResource")?;
+    Ok(())
+}
+
+async fn insert_url_test_protocol_run(
+    run_id: uuid::Uuid,
+    p: &UrlTestProtocolRun,
+    c: &PgClient,
+) -> anyhow::Result<()> {
+    let id = uuid::Uuid::new_v4();
+    let attempt_type = serde_json::to_value(&p.attempt_type)?
+        .as_str()
+        .unwrap_or("probe")
+        .to_string();
+    c.execute(
+        "INSERT INTO UrlTestProtocolRun (
+            Id, UrlTestRunId, ProtocolMode, RunNumber, AttemptType, ObservedProtocol,
+            FallbackOccurred, Succeeded, StatusCode, TtfbMs, TotalMs, FailureReason, Error
+        ) VALUES (
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13
+        )",
+        &[
+            &id,
+            &run_id,
+            &p.protocol_mode,
+            &(p.run_number as i32),
+            &attempt_type,
+            &p.observed_protocol,
+            &p.fallback_occurred,
+            &p.succeeded,
+            &p.status_code.map(|v| v as i32),
+            &p.ttfb_ms,
+            &p.total_ms,
+            &p.failure_reason,
+            &p.error,
+        ],
+    )
+    .await
+    .context("INSERT UrlTestProtocolRun")?;
+    Ok(())
 }
 
 async fn insert_request_attempt(a: &RequestAttempt, c: &PgClient) -> anyhow::Result<()> {
@@ -826,6 +1124,40 @@ mod tests {
             V001_MIGRATION.len() > 2000,
             "V001 migration SQL seems too short ({}B) — possible truncation",
             V001_MIGRATION.len()
+        );
+    }
+
+    #[test]
+    fn v002_migration_contains_url_diagnostic_tables() {
+        for table in ["UrlTestRun", "UrlTestResource", "UrlTestProtocolRun"] {
+            assert!(
+                V002_MIGRATION.contains(&format!("CREATE TABLE IF NOT EXISTS {table}")),
+                "V002 migration missing CREATE TABLE IF NOT EXISTS {table}"
+            );
+        }
+    }
+
+    #[test]
+    fn v002_migration_contains_url_diagnostic_indexes() {
+        for idx in [
+            "IX_UrlTestRun_StartedAt",
+            "IX_UrlTestRun_Status",
+            "IX_UrlTestResource_RunId",
+            "IX_UrlTestProtocolRun_RunId",
+        ] {
+            assert!(
+                V002_MIGRATION.contains(idx),
+                "V002 migration missing index: {idx}"
+            );
+        }
+    }
+
+    #[test]
+    fn v002_migration_starts_with_version_comment() {
+        let trimmed = V002_MIGRATION.trim();
+        assert!(
+            trimmed.starts_with("-- V002:"),
+            "migration should start with -- V002: comment"
         );
     }
 

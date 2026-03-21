@@ -281,9 +281,7 @@ fn restart_self() {
         let binary = std::env::current_exe().unwrap_or_default();
         let args: Vec<String> = std::env::args().collect();
         // exec replaces the process — only returns on error
-        let err = std::process::Command::new(&binary)
-            .args(&args[1..])
-            .exec();
+        let err = std::process::Command::new(&binary).args(&args[1..]).exec();
         tracing::error!(error = %err, "Failed to restart dashboard");
     }
     #[cfg(not(unix))]
@@ -345,9 +343,8 @@ async fn do_update_dashboard(
 
     // 1. Download and install dashboard binary
     let bin_asset = format!("networker-dashboard-{target}.tar.gz");
-    let bin_url = format!(
-        "https://github.com/irlm/networker-tester/releases/download/{tag}/{bin_asset}"
-    );
+    let bin_url =
+        format!("https://github.com/irlm/networker-tester/releases/download/{tag}/{bin_asset}");
     log(&format!("Downloading {bin_asset}..."));
 
     let resp = client.get(&bin_url).send().await?;
@@ -357,7 +354,10 @@ async fn do_update_dashboard(
     let bytes = resp.bytes().await?;
     let tar_path = tmp_dir.join(&bin_asset);
     tokio::fs::write(&tar_path, &bytes).await?;
-    log(&format!("Downloaded dashboard binary ({} bytes)", bytes.len()));
+    log(&format!(
+        "Downloaded dashboard binary ({} bytes)",
+        bytes.len()
+    ));
 
     let extract_dir = tmp_dir.join("bin");
     tokio::fs::create_dir_all(&extract_dir).await?;
@@ -378,7 +378,10 @@ async fn do_update_dashboard(
     if tokio::fs::metadata(&new_bin).await.is_err() {
         anyhow::bail!("networker-dashboard not found in archive");
     }
-    log(&format!("Installing binary to {}...", current_exe.display()));
+    log(&format!(
+        "Installing binary to {}...",
+        current_exe.display()
+    ));
     tokio::fs::copy(&new_bin, &current_exe).await?;
 
     #[cfg(unix)]
@@ -418,9 +421,8 @@ async fn do_update_dashboard(
 
     // 3. Update agent binary if available
     let agent_asset = format!("networker-agent-{target}.tar.gz");
-    let agent_url = format!(
-        "https://github.com/irlm/networker-tester/releases/download/{tag}/{agent_asset}"
-    );
+    let agent_url =
+        format!("https://github.com/irlm/networker-tester/releases/download/{tag}/{agent_asset}");
     let resp = client.get(&agent_url).send().await?;
     if resp.status().is_success() {
         let bytes = resp.bytes().await?;
@@ -440,11 +442,8 @@ async fn do_update_dashboard(
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
-                    std::fs::set_permissions(
-                        &agent_dst,
-                        std::fs::Permissions::from_mode(0o755),
-                    )
-                    .ok();
+                    std::fs::set_permissions(&agent_dst, std::fs::Permissions::from_mode(0o755))
+                        .ok();
                 }
                 log("Agent binary updated");
             }

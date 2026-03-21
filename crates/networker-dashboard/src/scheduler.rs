@@ -70,13 +70,8 @@ async fn tick(state: &Arc<AppState>) -> anyhow::Result<()> {
         }
 
         // Create job from schedule config
-        let job_id = crate::db::jobs::create(
-            &client,
-            &config,
-            schedule.agent_id.as_ref(),
-            None,
-        )
-        .await?;
+        let job_id =
+            crate::db::jobs::create(&client, &config, schedule.agent_id.as_ref(), None).await?;
 
         tracing::info!(
             schedule_id = %schedule_id,
@@ -231,14 +226,7 @@ async fn start_deployment_vm(
                     let vm_name = dep.name.replace(' ', "-").to_lowercase();
                     tracing::info!(provider = "gcp", vm = %vm_name, zone = %zone, "Starting VM");
                     let _ = tokio::process::Command::new("gcloud")
-                        .args([
-                            "compute",
-                            "instances",
-                            "start",
-                            &vm_name,
-                            "--zone",
-                            zone,
-                        ])
+                        .args(["compute", "instances", "start", &vm_name, "--zone", zone])
                         .output()
                         .await;
                 }
@@ -276,7 +264,11 @@ async fn start_deployment_vm(
 }
 
 /// Watch a job until completion, then stop the VM.
-async fn watch_job_and_stop_vm(state: Arc<AppState>, job_id: uuid::Uuid, deployment_id: uuid::Uuid) {
+async fn watch_job_and_stop_vm(
+    state: Arc<AppState>,
+    job_id: uuid::Uuid,
+    deployment_id: uuid::Uuid,
+) {
     // Poll job status every 15s for up to 30 minutes
     for _ in 0..120 {
         tokio::time::sleep(std::time::Duration::from_secs(15)).await;
@@ -318,6 +310,7 @@ async fn watch_job_and_stop_vm(state: Arc<AppState>, job_id: uuid::Uuid, deploym
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::compute_next_run;
 
@@ -393,8 +386,8 @@ mod tests {
             ];
             let now = chrono::Utc::now();
             for expr in &exprs {
-                let next = compute_next_run(expr)
-                    .unwrap_or_else(|| panic!("'{expr}' should be valid"));
+                let next =
+                    compute_next_run(expr).unwrap_or_else(|| panic!("'{expr}' should be valid"));
                 assert!(next > now, "'{expr}' next_run_at must be future");
             }
         }
@@ -475,14 +468,7 @@ async fn stop_deployment_vm(
                     let vm_name = dep.name.replace(' ', "-").to_lowercase();
                     tracing::info!(provider = "gcp", vm = %vm_name, "Stopping VM");
                     let _ = tokio::process::Command::new("gcloud")
-                        .args([
-                            "compute",
-                            "instances",
-                            "stop",
-                            &vm_name,
-                            "--zone",
-                            zone,
-                        ])
+                        .args(["compute", "instances", "stop", &vm_name, "--zone", zone])
                         .output()
                         .await;
                 }

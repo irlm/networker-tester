@@ -298,19 +298,31 @@ mod tests {
 
         #[test]
         fn start_only() {
-            let row = ScheduleRow { auto_start_vm: true, auto_stop_vm: false, ..make_minimal_schedule() };
+            let row = ScheduleRow {
+                auto_start_vm: true,
+                auto_stop_vm: false,
+                ..make_minimal_schedule()
+            };
             assert!(row.auto_start_vm && !row.auto_stop_vm);
         }
 
         #[test]
         fn stop_only() {
-            let row = ScheduleRow { auto_start_vm: false, auto_stop_vm: true, ..make_minimal_schedule() };
+            let row = ScheduleRow {
+                auto_start_vm: false,
+                auto_stop_vm: true,
+                ..make_minimal_schedule()
+            };
             assert!(!row.auto_start_vm && row.auto_stop_vm);
         }
 
         #[test]
         fn both() {
-            let row = ScheduleRow { auto_start_vm: true, auto_stop_vm: true, ..make_minimal_schedule() };
+            let row = ScheduleRow {
+                auto_start_vm: true,
+                auto_stop_vm: true,
+                ..make_minimal_schedule()
+            };
             assert!(row.auto_start_vm && row.auto_stop_vm);
         }
 
@@ -350,7 +362,7 @@ mod tests {
         #[test]
         fn enabled_to_disabled() {
             let row = make_minimal_schedule(); // enabled = true
-            assert!(!(!row.enabled)); // negation of negation, but shows the toggle
+            assert!(row.enabled);
             let new_enabled = !row.enabled;
             assert!(!new_enabled);
         }
