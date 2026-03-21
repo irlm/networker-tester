@@ -1,6 +1,6 @@
-import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule } from './types';
+import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser } from './types';
 
-export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule };
+export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser };
 export type { LiveAttempt } from './types';
 
 const API_BASE = '/api';
@@ -245,6 +245,31 @@ export const api = {
 
   triggerSchedule: (scheduleId: string) =>
     request<{ job_id: string; status: string }>(`/schedules/${scheduleId}/trigger`, { method: 'POST' }),
+
+  // Users (admin-only)
+  getUsers: () =>
+    request<DashUser[]>('/users'),
+
+  getPendingUsers: () =>
+    request<{ users: DashUser[]; count: number }>('/users/pending'),
+
+  approveUser: (userId: string, role: string) =>
+    request<{ approved: boolean }>(`/users/${userId}/approve`, {
+      method: 'POST',
+      body: JSON.stringify({ role }),
+    }),
+
+  denyUser: (userId: string) =>
+    request<{ denied: boolean }>(`/users/${userId}/deny`, { method: 'POST' }),
+
+  setUserRole: (userId: string, role: string) =>
+    request<{ updated: boolean }>(`/users/${userId}/role`, {
+      method: 'PUT',
+      body: JSON.stringify({ role }),
+    }),
+
+  disableUser: (userId: string) =>
+    request<{ disabled: boolean }>(`/users/${userId}/disable`, { method: 'POST' }),
 
   // Version
   getVersionInfo: () => request<{

@@ -12,17 +12,14 @@ use uuid::Uuid;
 use crate::AppState;
 
 /// Role-based access control.
-/// Used in PR 2 for RBAC middleware enforcement.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-#[allow(dead_code)] // Role enum used in PR 2 RBAC middleware
 pub enum Role {
     Admin,
     Operator,
     Viewer,
 }
 
-#[allow(dead_code)] // has_permission used in PR 2 RBAC middleware
 impl Role {
     /// Check if this role has at least the permissions of `required`.
     pub fn has_permission(&self, required: &Role) -> bool {
@@ -32,6 +29,18 @@ impl Role {
                 | (Role::Operator, Role::Operator | Role::Viewer)
                 | (Role::Viewer, Role::Viewer)
         )
+    }
+}
+
+/// Check that the authenticated user's role meets the required level.
+/// Returns `Ok(())` if permitted, `Err(FORBIDDEN)` otherwise.
+pub fn require_role(user: &AuthUser, required: Role) -> Result<(), StatusCode> {
+    let user_role: Role = serde_json::from_value(serde_json::Value::String(user.role.clone()))
+        .unwrap_or(Role::Viewer);
+    if user_role.has_permission(&required) {
+        Ok(())
+    } else {
+        Err(StatusCode::FORBIDDEN)
     }
 }
 
@@ -45,7 +54,6 @@ pub struct Claims {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Fields read in Phase 2 RBAC checks
 pub struct AuthUser {
     pub user_id: Uuid,
     pub email: String,
@@ -103,21 +111,32 @@ pub async fn require_auth(
     };
     match validate_token(token, &state.jwt_secret) {
         Ok(claims) => {
-            // Enforce must_change_password server-side
             let is_change_password = req.uri().path().ends_with("/auth/change-password");
-            if !is_change_password {
-                if let Ok(client) = state.db.get().await {
-                    let must_change = client
-                        .query_opt(
-                            "SELECT must_change_password FROM dash_user WHERE user_id = $1",
-                            &[&claims.sub],
-                        )
-                        .await
-                        .ok()
-                        .flatten()
-                        .and_then(|row| row.get::<_, Option<bool>>("must_change_password"))
+            if let Ok(client) = state.db.get().await {
+                // Check user status and must_change_password in a single query
+                let row = client
+                    .query_opt(
+                        "SELECT status, must_change_password FROM dash_user WHERE user_id = $1",
+                        &[&claims.sub],
+                    )
+                    .await
+                    .ok()
+                    .flatten();
+
+                if let Some(row) = row {
+                    let status: String = row.get("status");
+                    let must_change: bool = row
+                        .get::<_, Option<bool>>("must_change_password")
                         .unwrap_or(false);
-                    if must_change {
+
+                    // Block non-active users (except allow change-password when must_change_password)
+                    if status != "active" && !(is_change_password && must_change) {
+                        return (StatusCode::FORBIDDEN, "Account is not active")
+                            .into_response();
+                    }
+
+                    // Enforce must_change_password
+                    if !is_change_password && must_change {
                         return (
                             StatusCode::FORBIDDEN,
                             "Password change required before accessing this resource",

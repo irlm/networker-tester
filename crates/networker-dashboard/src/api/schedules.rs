@@ -2,12 +2,13 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     routing::{get, post},
-    Json, Router,
+    Extension, Json, Router,
 };
 use serde::Deserialize;
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::auth::{require_role, AuthUser, Role};
 use crate::AppState;
 
 #[derive(Deserialize)]
@@ -40,8 +41,10 @@ fn compute_next_run(cron_expr: &str) -> Option<chrono::DateTime<chrono::Utc>> {
 
 async fn create_schedule(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Json(req): Json<CreateScheduleRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    require_role(&user, Role::Operator)?;
     // Validate cron expression
     let next_run = compute_next_run(&req.cron_expr).ok_or_else(|| {
         tracing::warn!(cron = %req.cron_expr, "Invalid cron expression");
@@ -121,9 +124,11 @@ async fn get_schedule(
 
 async fn update_schedule(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(schedule_id): Path<Uuid>,
     Json(req): Json<UpdateScheduleRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    require_role(&user, Role::Operator)?;
     let next_run = compute_next_run(&req.cron_expr).ok_or_else(|| {
         tracing::warn!(cron = %req.cron_expr, "Invalid cron expression");
         StatusCode::BAD_REQUEST
@@ -164,8 +169,10 @@ async fn update_schedule(
 
 async fn delete_schedule(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(schedule_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    require_role(&user, Role::Operator)?;
     let client = state.db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error");
         StatusCode::INTERNAL_SERVER_ERROR
@@ -188,8 +195,10 @@ async fn delete_schedule(
 
 async fn toggle_schedule(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(schedule_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    require_role(&user, Role::Operator)?;
     let client = state.db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error");
         StatusCode::INTERNAL_SERVER_ERROR
@@ -235,8 +244,10 @@ async fn toggle_schedule(
 
 async fn trigger_schedule(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(schedule_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    require_role(&user, Role::Operator)?;
     let client = state.db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error");
         StatusCode::INTERNAL_SERVER_ERROR

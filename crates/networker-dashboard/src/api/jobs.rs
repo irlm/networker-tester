@@ -2,12 +2,13 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     routing::{get, post},
-    Json, Router,
+    Extension, Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::auth::{require_role, AuthUser, Role};
 use crate::AppState;
 use networker_common::messages::{ControlMessage, DashboardEvent, JobConfig};
 
@@ -37,8 +38,10 @@ const MAX_CONCURRENCY: usize = 16;
 
 async fn create_job(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Json(req): Json<CreateJobRequest>,
 ) -> Result<Json<CreateJobResponse>, StatusCode> {
+    require_role(&user, Role::Operator)?;
     // Validate job config limits
     if req.config.runs > MAX_RUNS {
         tracing::warn!(runs = req.config.runs, "Rejecting job: runs exceeds limit");
@@ -167,8 +170,10 @@ async fn get_job(
 
 async fn cancel_job(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(job_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    require_role(&user, Role::Operator)?;
     let correlation_id = job_id.to_string();
     tracing::info!(correlation_id, "Cancel request received");
 

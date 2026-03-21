@@ -10,6 +10,7 @@ mod runs;
 mod schedules;
 mod update;
 mod url_tests;
+mod users;
 mod version;
 
 use axum::{middleware, Router};
@@ -36,6 +37,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(update::router(state.clone()))
         .merge(inventory::router(state.clone()))
         .merge(schedules::router(state.clone()))
+        .merge(users::router(state.clone()))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::require_auth,

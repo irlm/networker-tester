@@ -2,12 +2,13 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     routing::{get, post},
-    Json, Router,
+    Extension, Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::auth::{require_role, AuthUser, Role};
 use crate::AppState;
 
 #[derive(Deserialize)]
@@ -30,8 +31,10 @@ pub struct ListDeploymentsQuery {
 
 async fn create_deployment(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Json(req): Json<CreateDeploymentRequest>,
 ) -> Result<Json<CreateDeploymentResponse>, StatusCode> {
+    require_role(&user, Role::Operator)?;
     // Build provider summary from config
     let provider_summary = build_provider_summary(&req.config);
 
@@ -132,8 +135,10 @@ async fn get_deployment(
 
 async fn stop_deployment(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(deployment_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    require_role(&user, Role::Operator)?;
     let client = state.db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error in stop_deployment");
         StatusCode::INTERNAL_SERVER_ERROR
@@ -170,8 +175,10 @@ async fn stop_deployment(
 
 async fn delete_deployment(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(deployment_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    require_role(&user, Role::Operator)?;
     let client = state.db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error in delete_deployment");
         StatusCode::INTERNAL_SERVER_ERROR
@@ -193,8 +200,10 @@ async fn delete_deployment(
 
 async fn check_deployment(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(deployment_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    require_role(&user, Role::Operator)?;
     let client = state.db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error in check_deployment");
         StatusCode::INTERNAL_SERVER_ERROR
@@ -286,8 +295,10 @@ async fn check_deployment(
 
 async fn update_endpoint(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(deployment_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    require_role(&user, Role::Operator)?;
     let client = state.db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error in update_endpoint");
         StatusCode::INTERNAL_SERVER_ERROR

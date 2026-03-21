@@ -1,11 +1,14 @@
-use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
+use axum::{extract::State, http::StatusCode, routing::post, Extension, Json, Router};
 use std::sync::Arc;
 
+use crate::auth::{require_role, AuthUser, Role};
 use crate::AppState;
 
 async fn update_local_tester(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    require_role(&user, Role::Admin)?;
     tracing::info!("Starting local tester update");
 
     // Find current tester binary location
@@ -216,7 +219,9 @@ async fn do_update_tester(
 
 async fn update_dashboard(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    require_role(&user, Role::Admin)?;
     tracing::info!("Starting dashboard self-update");
 
     let events_tx = state.events_tx.clone();
