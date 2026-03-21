@@ -19,6 +19,12 @@ pub struct DashboardConfig {
     // SSO: Google
     pub google_client_id: Option<String>,
     pub google_client_secret: Option<String>,
+    // Email: Azure Communication Services (read by email.rs at send time;
+    // stored here for config validation / future use)
+    #[allow(dead_code)]
+    pub acs_connection_string: Option<String>,
+    #[allow(dead_code)]
+    pub acs_sender: Option<String>,
 }
 
 impl DashboardConfig {
@@ -85,6 +91,8 @@ impl DashboardConfig {
                 .unwrap_or_else(|_| "common".into()),
             google_client_id: std::env::var("SSO_GOOGLE_CLIENT_ID").ok().filter(|s| !s.is_empty()),
             google_client_secret: std::env::var("SSO_GOOGLE_CLIENT_SECRET").ok().filter(|s| !s.is_empty()),
+            acs_connection_string: std::env::var("DASHBOARD_ACS_CONNECTION_STRING").ok().filter(|s| !s.is_empty()),
+            acs_sender: std::env::var("DASHBOARD_ACS_SENDER").ok().filter(|s| !s.is_empty()),
         })
     }
 }

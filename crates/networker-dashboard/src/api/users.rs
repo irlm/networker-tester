@@ -202,13 +202,34 @@ async fn invite_user(
     })?;
 
     match crate::db::users::invite_user(&client, &req.email, &req.role).await {
-        Ok(Ok(user_id)) => {
+        Ok(Ok((user_id, token))) => {
             tracing::info!(
                 invited_email = %req.email,
                 role = %req.role,
                 invited_by = %user.email,
                 "User invited"
             );
+
+            // Send invite email (or log in dev mode)
+            let setup_url = format!("{}/reset-password?token={token}", state.public_url);
+            let body = format!(
+                "Hi,\n\n\
+                 You've been invited to the Networker Dashboard as {role}.\n\n\
+                 Click the link below to set your password (valid for 24 hours):\n\n\
+                 {setup_url}\n\n\
+                 — Networker Dashboard",
+                role = req.role,
+            );
+            if let Err(e) = crate::email::send_email(
+                &req.email,
+                "Networker Dashboard — You're Invited",
+                &body,
+            )
+            .await
+            {
+                tracing::warn!(error = %e, email = %req.email, "Failed to send invite email");
+            }
+
             Ok(Json(
                 serde_json::json!({ "user_id": user_id.to_string() }),
             ))

@@ -338,12 +338,12 @@ pub async fn reset_password_with_token(
 }
 
 /// Invite a user by creating a pending account with a setup token.
-/// Returns Ok(Ok(user_id)) on success, Ok(Err(msg)) if email exists or role invalid.
+/// Returns Ok(Ok((user_id, raw_token))) on success, Ok(Err(msg)) if email exists or role invalid.
 pub async fn invite_user(
     client: &Client,
     email: &str,
     role: &str,
-) -> anyhow::Result<Result<Uuid, &'static str>> {
+) -> anyhow::Result<Result<(Uuid, String), &'static str>> {
     // Validate role
     if !["admin", "operator", "viewer"].contains(&role) {
         return Ok(Err("Invalid role (must be admin, operator, or viewer)"));
@@ -381,15 +381,13 @@ pub async fn invite_user(
         )
         .await?;
 
-    // Log the setup URL (actual email sending is a future PR)
     tracing::info!(
         email = %email,
         role = %role,
-        setup_token = %token,
-        "INVITED USER — setup token (email delivery not yet implemented)"
+        "User invited — setup token generated"
     );
 
-    Ok(Ok(user_id))
+    Ok(Ok((user_id, token)))
 }
 
 /// Find a user by email (for SSO account lookup).
