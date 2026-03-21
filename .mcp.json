@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "chrome-devtools": {
+      "command": "/Users/irlm/.nvm/versions/node/v23.3.0/bin/npx",
+      "args": ["chrome-devtools-mcp@latest"],
+      "env": {
+        "PATH": "/Users/irlm/.nvm/versions/node/v23.3.0/bin:/usr/local/bin:/usr/bin:/bin"
+      }
+    }
+  }
+}
