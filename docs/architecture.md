@@ -8,27 +8,29 @@ control-plane path.
 ```mermaid
 flowchart LR
     subgraph ProbePath["Direct probe path"]
-        T["networker-tester CLI<br/>crates/networker-tester"]
-        E["networker-endpoint<br/>crates/networker-endpoint"]
-        O["Artifacts<br/>JSON / HTML / Excel / DB"]
-        T -->|"TCP / HTTP1 / HTTP2 / HTTP3 / UDP"| E
+        T["networker-tester CLI"]
+        E["networker-endpoint"]
+        O["Artifacts: JSON, HTML, Excel, DB"]
+        T -->|"TCP, HTTP1, HTTP2, HTTP3, UDP"| E
         T --> O
     end
 
     subgraph ControlPlane["Dashboard control plane"]
-        B["Browser SPA<br/>dashboard/"]
-        D["networker-dashboard<br/>crates/networker-dashboard"]
-        A["networker-agent<br/>crates/networker-agent"]
+        B["Browser SPA"]
+        D["networker-dashboard"]
+        A["networker-agent"]
         TP["networker-tester subprocess"]
         P["PostgreSQL"]
-        C["networker-common<br/>shared messages"]
+        C["networker-common"]
 
-        B <-->|"HTTP + WebSocket"| D
-        D <-->|"Agent WebSocket"| A
+        B -->|"HTTP and WebSocket"| D
+        D -->|"UI responses and live updates"| B
+        D -->|"Agent WebSocket"| A
+        A -->|"Status and results"| D
         A --> TP
         D --> P
-        D --- C
-        A --- C
+        D -.->|"shared messages"| C
+        A -.->|"shared messages"| C
     end
 ```
 
@@ -55,9 +57,9 @@ sequenceDiagram
     participant Output as Artifacts
 
     User->>Tester: run CLI with target, modes, and output options
-    Tester->>Endpoint: execute probes over TCP / HTTP / HTTP3 / UDP
+    Tester->>Endpoint: execute probes over TCP, HTTP, HTTP3, and UDP
     Endpoint-->>Tester: responses and timing signals
-    Tester->>Output: write JSON / HTML / Excel / DB output
+    Tester->>Output: write JSON, HTML, Excel, and DB output
     Tester-->>User: terminal summary and artifact locations
 ```
 
@@ -76,7 +78,7 @@ sequenceDiagram
     participant Tester as networker-tester
     participant Endpoint as networker-endpoint
 
-    Browser->>Dashboard: create job / view run
+    Browser->>Dashboard: create job or view run
     Dashboard->>DB: persist job metadata
     Dashboard-->>Agent: dispatch job over agent WebSocket
     Agent->>Tester: spawn probe run
@@ -105,11 +107,11 @@ flowchart TD
     Repo --> Samples["examples/configs/"]
     Repo --> Tests["tests/"]
 
-    Crates --> Tester["networker-tester"]
-    Crates --> Endpoint["networker-endpoint"]
-    Crates --> Dashboard["networker-dashboard"]
-    Crates --> Agent["networker-agent"]
-    Crates --> Common["networker-common"]
+    Crates --> Tester["networker-tester crate"]
+    Crates --> Endpoint["networker-endpoint crate"]
+    Crates --> Dashboard["networker-dashboard crate"]
+    Crates --> Agent["networker-agent crate"]
+    Crates --> Common["networker-common crate"]
 ```
 
 ## Reading Order For New Contributors

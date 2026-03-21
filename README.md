@@ -14,22 +14,24 @@ The repository includes:
 ```mermaid
 flowchart LR
     subgraph ProbePath["Direct probe path"]
-        T["networker-tester CLI<br/>crates/networker-tester"]
-        E["networker-endpoint<br/>crates/networker-endpoint"]
-        O["Artifacts<br/>JSON / HTML / Excel / DB"]
-        T -->|"TCP / HTTP1 / HTTP2 / HTTP3 / UDP"| E
+        T["networker-tester CLI"]
+        E["networker-endpoint"]
+        O["Artifacts: JSON, HTML, Excel, DB"]
+        T -->|"TCP, HTTP1, HTTP2, HTTP3, UDP"| E
         T --> O
     end
 
     subgraph ControlPlane["Dashboard control plane"]
-        B["Browser SPA<br/>dashboard/"]
-        D["networker-dashboard<br/>crates/networker-dashboard"]
-        A["networker-agent<br/>crates/networker-agent"]
+        B["Browser SPA"]
+        D["networker-dashboard"]
+        A["networker-agent"]
         TP["networker-tester subprocess"]
         P["PostgreSQL"]
 
-        B <-->|"HTTP + WebSocket"| D
-        D <-->|"Agent WebSocket"| A
+        B -->|"HTTP and WebSocket"| D
+        D -->|"UI responses and live updates"| B
+        D -->|"Agent WebSocket"| A
+        A -->|"Status and results"| D
         A --> TP
         D --> P
     end
