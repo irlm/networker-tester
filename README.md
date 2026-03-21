@@ -39,7 +39,7 @@ flowchart LR
 
 There are two main ways to use the system:
 - Direct mode: run `networker-tester` yourself against `networker-endpoint` or another target and collect artifacts locally.
-- Managed mode: use the browser UI and `networker-dashboard` to dispatch runs to `networker-agent`, which executes `networker-tester` and streams results back live.
+- Managed mode: use the browser UI and `networker-dashboard` to dispatch runs to manually-added `networker-agent` testers, which execute `networker-tester` and stream results back live.
 
 More detail is in [`docs/architecture.md`](docs/architecture.md).
 
@@ -119,6 +119,7 @@ an output artifact, not a checked-in sample.
 Detailed documentation lives under [`docs/`](docs/):
 - [`docs/README.md`](docs/README.md): docs index
 - [`docs/architecture.md`](docs/architecture.md): component relationships and runtime flow
+- [`docs/dashboard.md`](docs/dashboard.md): dashboard setup, auth, tester lifecycle, and UI overview
 - [`docs/installation.md`](docs/installation.md): installation, build, and component startup
 - [`docs/probes.md`](docs/probes.md): probe and metric reference
 - [`docs/testing.md`](docs/testing.md): protocol-comparison and benchmarking workflows

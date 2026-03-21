@@ -144,16 +144,35 @@ Typical local flow:
 ```bash
 docker compose -f docker-compose.db.yml up -d
 cd dashboard && npm install && npm run build && cd ..
-DASHBOARD_STATIC_DIR=./dashboard/dist cargo run -p networker-dashboard
+export DASHBOARD_JWT_SECRET="$(openssl rand -base64 32)"
+export DASHBOARD_ADMIN_EMAIL="admin@example.com"
+export DASHBOARD_ADMIN_PASSWORD="ChangeMe123!"
+export DASHBOARD_STATIC_DIR="./dashboard/dist"
+cargo run -p networker-dashboard
 ```
 
-Current auth seeding expects `DASHBOARD_ADMIN_EMAIL` and `DASHBOARD_ADMIN_PASSWORD` when creating
-the initial admin user.
+If no users exist and you do not want to seed the first admin from environment variables, run:
+
+```bash
+cargo run -p networker-dashboard -- setup
+```
+
+The current dashboard also supports:
+
+- email-based login
+- forgot/reset password flows
+- pending approval for invited or newly-created users
+- admin-managed roles: `admin`, `operator`, `viewer`
+- recurring schedules
+- manual tester creation from the Tests page
+
+For the full dashboard setup and auth model, read [`dashboard.md`](dashboard.md).
 
 ### `networker-agent`
 
 The agent connects back to the dashboard over WebSocket and runs tester jobs on that machine.
-In the current codebase, the dashboard can auto-spawn a local agent for convenience.
+The dashboard does not auto-spawn a local agent on startup anymore; create testers manually from
+the Tests page or via the agents API.
 
 ## Config Files
 
@@ -163,6 +182,7 @@ to choose the right starting point.
 
 ## Next Reading
 
+- [`dashboard.md`](dashboard.md)
 - [`probes.md`](probes.md)
 - [`testing.md`](testing.md)
 - [`deploy-config.md`](deploy-config.md)

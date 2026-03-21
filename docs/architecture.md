@@ -92,9 +92,13 @@ sequenceDiagram
 
 1. A browser connects to the dashboard UI.
 2. The React SPA talks to `networker-dashboard` over HTTP and WebSocket.
-3. The dashboard dispatches work to one or more `networker-agent` workers.
+3. Users add testers manually, and the dashboard dispatches work to one or more `networker-agent` workers.
 4. Each agent runs `networker-tester` jobs locally and streams results back.
 5. The dashboard persists state in PostgreSQL and fans live updates back to browsers.
+
+Note:
+- The dashboard no longer auto-spawns a local tester at startup.
+- Local testers are created explicitly from the Tests page or via the agents API.
 
 ## What Lives Where
 
@@ -118,13 +122,15 @@ flowchart TD
 
 1. Read the root [`README.md`](../README.md) for the product overview and quick start.
 2. Read [`installation.md`](installation.md) to build and run the core binaries.
-3. Read [`probes.md`](probes.md) to understand which modes map to which measurements.
-4. Read [`testing.md`](testing.md) for reproducible workflows and report interpretation.
-5. Read [`deploy-config.md`](deploy-config.md) if you are working on installer-driven deployment.
+3. Read [`dashboard.md`](dashboard.md) if you are using the control-plane features.
+4. Read [`probes.md`](probes.md) to understand which modes map to which measurements.
+5. Read [`testing.md`](testing.md) for reproducible workflows and report interpretation.
+6. Read [`deploy-config.md`](deploy-config.md) if you are working on installer-driven deployment.
 
 ## Where to Read Next
 
 - [`installation.md`](installation.md)
+- [`dashboard.md`](dashboard.md)
 - [`probes.md`](probes.md)
 - [`deploy-config.md`](deploy-config.md)
 - [`testing.md`](testing.md)

@@ -8,6 +8,7 @@ points here for the detailed material.
 
 - [`installation.md`](installation.md): install from scripts, build from source, and start each component
 - [`architecture.md`](architecture.md): component relationships and runtime flow
+- [`dashboard.md`](dashboard.md): dashboard setup, auth, tester lifecycle, and UI overview
 - [`config-examples.md`](config-examples.md): which JSON sample to copy for tester, endpoint, and deploy workflows
 - [`probes.md`](probes.md): probe modes, metrics, and CLI examples
 - [`testing.md`](testing.md): reproducible test plans and report interpretation
@@ -29,6 +30,10 @@ selection.
 ### Use config files instead of long CLI commands
 
 Read [`config-examples.md`](config-examples.md).
+
+### Set up or operate the dashboard
+
+Read [`dashboard.md`](dashboard.md).
 
 ### Run reproducible protocol comparisons
 

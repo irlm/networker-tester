@@ -53,3 +53,5 @@ bash install.sh --deploy examples/configs/deploy.example.json
   working directory or remote tester home directory during deployment flows.
 - The checked-in `networker-cloud.example.json` exists only as a reference format.
 - CLI flags override values loaded from tester and endpoint config files.
+- The dashboard uses environment variables rather than a checked-in JSON config file. See
+  [`dashboard.md`](dashboard.md) for the current dashboard setup variables and first-boot flow.
