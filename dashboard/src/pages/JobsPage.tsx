@@ -301,7 +301,7 @@ export function JobsPage() {
 
           {/* Tester List — flat rows with dividers */}
           {testers.length === 0 ? (
-            <p className="text-gray-600 text-sm">No testers registered. The dashboard auto-starts a local tester on first run.</p>
+            <p className="text-gray-600 text-sm">No testers registered. Click "+ Add Tester" above to get started.</p>
           ) : (
             <div>
               {testers.map((t, i) => (
@@ -345,10 +345,23 @@ export function JobsPage() {
       {/* ── Mobile card layout (< md) ── */}
       <div className="md:hidden space-y-2">
         {jobs.length === 0 ? (
-          <div className="border border-gray-800 rounded p-8 text-center">
-            <p className="text-gray-500 text-sm">No tests yet</p>
-            <button onClick={() => setShowCreate(true)} className="text-xs text-cyan-400 mt-2">Run your first probe</button>
-          </div>
+          testers.length === 0 ? (
+            <div className="border border-cyan-500/20 rounded p-6 text-center">
+              <p className="text-gray-300 text-sm mb-2">No testers connected</p>
+              <p className="text-gray-600 text-xs mb-4">Add a tester to start running network diagnostics</p>
+              <button
+                onClick={() => { setShowTesters(true); setShowAddTester(true); }}
+                className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors"
+              >
+                Add Tester
+              </button>
+            </div>
+          ) : (
+            <div className="border border-gray-800 rounded p-8 text-center">
+              <p className="text-gray-500 text-sm">No tests yet</p>
+              <button onClick={() => setShowCreate(true)} className="text-xs text-cyan-400 mt-2">Run your first probe</button>
+            </div>
+          )
         ) : jobs.map((job) => {
           const isActive = job.status === 'running' || job.status === 'assigned';
           const duration = job.started_at
@@ -435,9 +448,22 @@ export function JobsPage() {
         </table>
 
         {jobs.length === 0 && (
-          <div className="py-10 text-center">
-            <p className="text-gray-500 text-sm">No tests yet — click New Test to run your first probe</p>
-          </div>
+          testers.length === 0 ? (
+            <div className="border border-cyan-500/20 rounded p-6 text-center my-6">
+              <p className="text-gray-300 text-sm mb-2">No testers connected</p>
+              <p className="text-gray-600 text-xs mb-4">Add a tester to start running network diagnostics</p>
+              <button
+                onClick={() => { setShowTesters(true); setShowAddTester(true); }}
+                className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors"
+              >
+                Add Tester
+              </button>
+            </div>
+          ) : (
+            <div className="py-10 text-center">
+              <p className="text-gray-500 text-sm">No tests yet — click New Test to run your first probe</p>
+            </div>
+          )
         )}
       </div>
     </div>
