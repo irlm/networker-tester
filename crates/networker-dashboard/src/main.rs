@@ -51,6 +51,18 @@ async fn main() -> anyhow::Result<()> {
     if let Some(ref email) = cfg.admin_email {
         let client = db_pool.get().await?;
         db::users::seed_admin(&client, email, &cfg.admin_password).await?;
+    } else {
+        let client = db_pool.get().await?;
+        let count: i64 = client
+            .query_one("SELECT COUNT(*) FROM dash_user", &[])
+            .await?
+            .get(0);
+        if count == 0 {
+            tracing::warn!(
+                "DASHBOARD_ADMIN_EMAIL is not set and no users exist. \
+                 Set this env var to create the initial admin account."
+            );
+        }
     }
 
     let (events_tx, _) = broadcast::channel(1024);

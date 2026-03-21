@@ -41,10 +41,10 @@ export const api = {
       body: JSON.stringify({ email, password }),
     }),
 
-  changePassword: (currentPassword: string, newPassword: string, email?: string) =>
+  changePassword: (currentPassword: string, newPassword: string) =>
     request<{ success: boolean }>('/auth/change-password', {
       method: 'POST',
-      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword, ...(email ? { email } : {}) }),
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
     }),
 
   getProfile: () =>

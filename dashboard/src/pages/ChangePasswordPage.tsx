@@ -7,7 +7,6 @@ export function ChangePasswordPage() {
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [email, setEmail] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const mustChangePassword = useAuthStore((s) => s.mustChangePassword);
@@ -33,22 +32,11 @@ export function ChangePasswordPage() {
       return;
     }
 
-    if (mustChangePassword && !email.trim()) {
-      setError('Email is required for password recovery');
-      return;
-    }
-
-    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      setError('Please enter a valid email address');
-      return;
-    }
-
     setLoading(true);
     try {
       await api.changePassword(
         currentPassword,
         newPassword,
-        email.trim() || undefined,
       );
       clearPasswordChange();
       navigate('/');
@@ -76,7 +64,7 @@ export function ChangePasswordPage() {
         <form onSubmit={handleSubmit}>
           <div className="text-yellow-400 text-xs mb-6 flex items-center gap-2">
             <span className="text-yellow-500">warn</span>
-            <span>{mustChangePassword ? 'Set your password and recovery email' : 'Change password'}</span>
+            <span>{mustChangePassword ? 'Set your password' : 'Change password'}</span>
           </div>
 
           {error && (
@@ -120,7 +108,7 @@ export function ChangePasswordPage() {
             </div>
           </div>
 
-          <div className="mb-4">
+          <div className="mb-8">
             <label htmlFor="confirm-password" className="block text-xs text-gray-600 mb-1.5 uppercase tracking-wider">
               Confirm password
             </label>
@@ -134,27 +122,6 @@ export function ChangePasswordPage() {
                 className="w-full bg-transparent py-2 text-sm text-gray-200 focus:outline-none placeholder:text-gray-700"
               />
             </div>
-          </div>
-
-          {/* Email — required on first login, optional on subsequent changes */}
-          <div className="mb-8">
-            <label htmlFor="recovery-email" className="block text-xs text-gray-600 mb-1.5 uppercase tracking-wider">
-              Recovery email {mustChangePassword ? '' : '(optional)'}
-            </label>
-            <div className="flex items-center border-b border-gray-700 focus-within:border-green-500/50 transition-colors">
-              <span className="text-green-600/60 text-sm mr-2 select-none">&gt;</span>
-              <input
-                id="recovery-email"
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full bg-transparent py-2 text-sm text-gray-200 focus:outline-none placeholder:text-gray-700"
-                placeholder="you@example.com"
-              />
-            </div>
-            <p className="text-xs text-gray-700 mt-1">
-              Used to send a reset link if you forget your password
-            </p>
           </div>
 
           <button

@@ -54,7 +54,6 @@ async fn login(
 pub struct ChangePasswordRequest {
     current_password: String,
     new_password: String,
-    email: Option<String>,
 }
 
 async fn change_password(
@@ -85,14 +84,11 @@ async fn change_password(
         &auth_user.user_id,
         &payload.current_password,
         &payload.new_password,
-        payload.email.as_deref(),
     )
     .await
     {
         Ok(Ok(())) => {
-            if let Some(ref email) = payload.email {
-                tracing::info!(user_email = %auth_user.email, new_email = %email, "Password changed, email updated");
-            }
+            tracing::info!(user_email = %auth_user.email, "Password changed");
             Json(serde_json::json!({ "success": true })).into_response()
         }
         Ok(Err(msg)) => (StatusCode::BAD_REQUEST, msg).into_response(),

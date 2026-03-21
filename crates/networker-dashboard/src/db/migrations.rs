@@ -134,6 +134,7 @@ ALTER TABLE dash_user ADD COLUMN IF NOT EXISTS password_reset_expires TIMESTAMPT
 /// V008 migration: Email-based identity — drop username, enforce email NOT NULL + UNIQUE,
 /// add status/auth_provider/sso columns, migrate disabled → status.
 const V008_EMAIL_IDENTITY: &str = r#"
+BEGIN;
 -- Step 1: Backfill email from username (BEFORE dropping username)
 UPDATE dash_user SET email = username WHERE email IS NULL OR email = '';
 -- Step 2: Enforce NOT NULL + UNIQUE on email
@@ -159,6 +160,7 @@ UPDATE dash_user SET password_reset_token = NULL, password_reset_expires = NULL;
 -- Step 8: Indexes
 CREATE INDEX IF NOT EXISTS ix_user_sso ON dash_user (auth_provider, sso_subject_id) WHERE sso_subject_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS ix_user_status ON dash_user (status);
+COMMIT;
 "#;
 
 /// Run pending migrations.

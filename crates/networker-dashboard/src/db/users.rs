@@ -86,12 +86,13 @@ pub async fn authenticate(
 
 /// Change a user's password.
 /// Clears must_change_password flag.
+/// Email changes are NOT allowed here — email is the primary identity
+/// and should only be changed through a separate verified flow.
 pub async fn change_password(
     client: &Client,
     user_id: &Uuid,
     current_password: &str,
     new_password: &str,
-    email: Option<&str>,
 ) -> anyhow::Result<Result<(), &'static str>> {
     let row = client
         .query_opt(
@@ -126,21 +127,12 @@ pub async fn change_password(
     let new_hash =
         bcrypt::hash(new_password, bcrypt::DEFAULT_COST).map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    if let Some(email_val) = email {
-        client
-            .execute(
-                "UPDATE dash_user SET password_hash = $1, must_change_password = FALSE, email = $2 WHERE user_id = $3",
-                &[&new_hash, &email_val, user_id],
-            )
-            .await?;
-    } else {
-        client
-            .execute(
-                "UPDATE dash_user SET password_hash = $1, must_change_password = FALSE WHERE user_id = $2",
-                &[&new_hash, user_id],
-            )
-            .await?;
-    }
+    client
+        .execute(
+            "UPDATE dash_user SET password_hash = $1, must_change_password = FALSE WHERE user_id = $2",
+            &[&new_hash, user_id],
+        )
+        .await?;
 
     Ok(Ok(()))
 }
