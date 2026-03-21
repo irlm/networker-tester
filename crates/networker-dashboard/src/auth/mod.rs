@@ -190,6 +190,8 @@ pub async fn require_auth(
 mod tests {
     use super::*;
 
+    // ── Role::has_permission ─────────────────────────────────────────────
+
     #[test]
     fn admin_has_all_permissions() {
         assert!(Role::Admin.has_permission(&Role::Admin));
@@ -209,5 +211,207 @@ mod tests {
         assert!(!Role::Viewer.has_permission(&Role::Admin));
         assert!(!Role::Viewer.has_permission(&Role::Operator));
         assert!(Role::Viewer.has_permission(&Role::Viewer));
+    }
+
+    // ── Role serde ───────────────────────────────────────────────────────
+
+    #[test]
+    fn role_serializes_to_lowercase() {
+        assert_eq!(serde_json::to_string(&Role::Admin).unwrap(), "\"admin\"");
+        assert_eq!(
+            serde_json::to_string(&Role::Operator).unwrap(),
+            "\"operator\""
+        );
+        assert_eq!(serde_json::to_string(&Role::Viewer).unwrap(), "\"viewer\"");
+    }
+
+    #[test]
+    fn role_deserializes_from_lowercase() {
+        let admin: Role = serde_json::from_str("\"admin\"").unwrap();
+        assert_eq!(admin, Role::Admin);
+        let op: Role = serde_json::from_str("\"operator\"").unwrap();
+        assert_eq!(op, Role::Operator);
+        let v: Role = serde_json::from_str("\"viewer\"").unwrap();
+        assert_eq!(v, Role::Viewer);
+    }
+
+    #[test]
+    fn role_rejects_unknown_string() {
+        let result: Result<Role, _> = serde_json::from_str("\"superadmin\"");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn role_rejects_capitalized() {
+        // rename_all = "lowercase" means "Admin" (capitalized) is invalid JSON input
+        let result: Result<Role, _> = serde_json::from_str("\"Admin\"");
+        assert!(result.is_err());
+    }
+
+    // ── require_role ─────────────────────────────────────────────────────
+
+    fn make_user(role: &str) -> AuthUser {
+        AuthUser {
+            user_id: Uuid::new_v4(),
+            email: "test@example.com".into(),
+            role: role.into(),
+        }
+    }
+
+    #[test]
+    fn require_role_admin_passes_all_checks() {
+        let user = make_user("admin");
+        assert!(require_role(&user, Role::Admin).is_ok());
+        assert!(require_role(&user, Role::Operator).is_ok());
+        assert!(require_role(&user, Role::Viewer).is_ok());
+    }
+
+    #[test]
+    fn require_role_operator_blocked_from_admin() {
+        let user = make_user("operator");
+        assert_eq!(
+            require_role(&user, Role::Admin).unwrap_err(),
+            StatusCode::FORBIDDEN
+        );
+        assert!(require_role(&user, Role::Operator).is_ok());
+    }
+
+    #[test]
+    fn require_role_viewer_blocked_from_operator_and_admin() {
+        let user = make_user("viewer");
+        assert_eq!(
+            require_role(&user, Role::Admin).unwrap_err(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            require_role(&user, Role::Operator).unwrap_err(),
+            StatusCode::FORBIDDEN
+        );
+        assert!(require_role(&user, Role::Viewer).is_ok());
+    }
+
+    #[test]
+    fn require_role_unknown_role_defaults_to_viewer() {
+        // Unknown role should default to Viewer (fail closed)
+        let user = make_user("superadmin");
+        assert_eq!(
+            require_role(&user, Role::Admin).unwrap_err(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            require_role(&user, Role::Operator).unwrap_err(),
+            StatusCode::FORBIDDEN
+        );
+        // Viewer should still pass since unknown defaults to Viewer
+        assert!(require_role(&user, Role::Viewer).is_ok());
+    }
+
+    #[test]
+    fn require_role_empty_role_defaults_to_viewer() {
+        let user = make_user("");
+        assert_eq!(
+            require_role(&user, Role::Admin).unwrap_err(),
+            StatusCode::FORBIDDEN
+        );
+        assert!(require_role(&user, Role::Viewer).is_ok());
+    }
+
+    // ── JWT token create / validate ──────────────────────────────────────
+
+    const TEST_SECRET: &str = "test-secret-at-least-32-bytes-long!!";
+
+    #[test]
+    fn create_token_returns_nonempty_string() {
+        let token = create_token(Uuid::new_v4(), "user@example.com", "admin", TEST_SECRET).unwrap();
+        assert!(!token.is_empty());
+    }
+
+    #[test]
+    fn create_and_validate_roundtrip() {
+        let uid = Uuid::new_v4();
+        let token = create_token(uid, "alice@test.com", "operator", TEST_SECRET).unwrap();
+        let claims = validate_token(&token, TEST_SECRET).unwrap();
+        assert_eq!(claims.sub, uid);
+        assert_eq!(claims.email, "alice@test.com");
+        assert_eq!(claims.role, "operator");
+    }
+
+    #[test]
+    fn validate_token_rejects_wrong_secret() {
+        let token = create_token(Uuid::new_v4(), "a@b.com", "viewer", TEST_SECRET).unwrap();
+        let result = validate_token(&token, "wrong-secret-xxxxxxxxxxxxxxxxxxx");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_token_rejects_garbage() {
+        let result = validate_token("not.a.jwt", TEST_SECRET);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_token_rejects_empty_string() {
+        let result = validate_token("", TEST_SECRET);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn token_expiry_is_24_hours_from_now() {
+        let token = create_token(Uuid::new_v4(), "a@b.com", "admin", TEST_SECRET).unwrap();
+        let claims = validate_token(&token, TEST_SECRET).unwrap();
+        let now = chrono::Utc::now().timestamp() as usize;
+        // exp should be roughly now + 86400 (24h), allow 5s tolerance
+        let diff = claims.exp.abs_diff(now + 86400);
+        assert!(
+            diff < 5,
+            "Token expiry should be ~24h from now, diff={diff}s"
+        );
+    }
+
+    #[test]
+    fn token_iat_is_recent() {
+        let token = create_token(Uuid::new_v4(), "a@b.com", "admin", TEST_SECRET).unwrap();
+        let claims = validate_token(&token, TEST_SECRET).unwrap();
+        let now = chrono::Utc::now().timestamp() as usize;
+        assert!(
+            now.abs_diff(claims.iat) < 5,
+            "iat should be within 5s of now"
+        );
+    }
+
+    #[test]
+    fn validate_token_rejects_expired_token() {
+        // Manually craft an expired token
+        let now = chrono::Utc::now().timestamp() as usize;
+        let claims = Claims {
+            sub: Uuid::new_v4(),
+            email: "expired@test.com".into(),
+            role: "admin".into(),
+            exp: now - 3600, // expired 1 hour ago
+            iat: now - 7200,
+        };
+        let token = encode(
+            &Header::default(),
+            &claims,
+            &EncodingKey::from_secret(TEST_SECRET.as_bytes()),
+        )
+        .unwrap();
+        let result = validate_token(&token, TEST_SECRET);
+        assert!(result.is_err(), "Expired token should be rejected");
+    }
+
+    #[test]
+    fn create_token_preserves_special_chars_in_email() {
+        let email = "user+tag@sub.domain.co.uk";
+        let token = create_token(Uuid::new_v4(), email, "viewer", TEST_SECRET).unwrap();
+        let claims = validate_token(&token, TEST_SECRET).unwrap();
+        assert_eq!(claims.email, email);
+    }
+
+    #[test]
+    fn different_users_get_different_tokens() {
+        let t1 = create_token(Uuid::new_v4(), "a@b.com", "admin", TEST_SECRET).unwrap();
+        let t2 = create_token(Uuid::new_v4(), "c@d.com", "viewer", TEST_SECRET).unwrap();
+        assert_ne!(t1, t2);
     }
 }

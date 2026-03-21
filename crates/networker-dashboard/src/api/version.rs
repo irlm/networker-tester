@@ -159,3 +159,67 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/version", get(check_versions))
         .with_state(state)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::version_newer;
+
+    #[test]
+    fn newer_patch_detected() {
+        assert!(version_newer("0.13.37", "0.13.36"));
+    }
+
+    #[test]
+    fn same_version_not_newer() {
+        assert!(!version_newer("0.13.36", "0.13.36"));
+    }
+
+    #[test]
+    fn older_patch_not_newer() {
+        assert!(!version_newer("0.13.35", "0.13.36"));
+    }
+
+    #[test]
+    fn newer_minor_detected() {
+        assert!(version_newer("0.14.0", "0.13.99"));
+    }
+
+    #[test]
+    fn newer_major_detected() {
+        assert!(version_newer("1.0.0", "0.99.99"));
+    }
+
+    #[test]
+    fn two_part_version_compared_correctly() {
+        assert!(version_newer("1.1", "1.0"));
+        assert!(!version_newer("1.0", "1.1"));
+    }
+
+    #[test]
+    fn missing_patch_treated_as_zero() {
+        // "1.0" vs "1.0.0" should be equal
+        assert!(!version_newer("1.0", "1.0.0"));
+        assert!(!version_newer("1.0.0", "1.0"));
+    }
+
+    #[test]
+    fn empty_string_handled_safely() {
+        assert!(!version_newer("", ""));
+        assert!(!version_newer("", "1.0.0"));
+        // "" parses to no segments, which is less than "1.0.0"
+        assert!(version_newer("1.0.0", ""));
+    }
+
+    #[test]
+    fn non_numeric_segments_ignored() {
+        // parse() on "beta" returns None, filter_map skips it
+        assert!(!version_newer("1.0.beta", "1.0.1"));
+    }
+
+    #[test]
+    fn v_prefix_already_stripped_by_caller() {
+        // version_newer is called after trim_start_matches('v')
+        // But if not stripped, the 'v' prefix makes the parse fail gracefully
+        assert!(!version_newer("v1.0.0", "0.9.0"));
+    }
+}

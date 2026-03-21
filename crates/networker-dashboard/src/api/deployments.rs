@@ -11,6 +11,9 @@ use uuid::Uuid;
 use crate::auth::{require_role, AuthUser, Role};
 use crate::AppState;
 
+const DEFAULT_LIMIT: i64 = 50;
+const MAX_LIMIT: i64 = 200;
+
 #[derive(Deserialize)]
 pub struct CreateDeploymentRequest {
     pub name: String,
@@ -101,13 +104,16 @@ async fn list_deployments(
         tracing::error!(error = %e, "DB pool error in list_deployments");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
-    let deployments =
-        crate::db::deployments::list(&client, q.limit.unwrap_or(50), q.offset.unwrap_or(0))
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "Failed to list deployments from DB");
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?;
+    let deployments = crate::db::deployments::list(
+        &client,
+        q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT),
+        q.offset.unwrap_or(0).max(0),
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, "Failed to list deployments from DB");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     Ok(Json(deployments))
 }
 
@@ -383,4 +389,121 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/deployments/:deployment_id/check", post(check_deployment))
         .route("/deployments/:deployment_id/update", post(update_endpoint))
         .with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_provider_summary;
+
+    #[test]
+    fn single_provider_with_region() {
+        let config = serde_json::json!({
+            "endpoints": [
+                {"provider": "aws", "region": "us-east-1"}
+            ]
+        });
+        assert_eq!(
+            build_provider_summary(&config),
+            Some("aws us-east-1".to_string())
+        );
+    }
+
+    #[test]
+    fn multiple_providers() {
+        let config = serde_json::json!({
+            "endpoints": [
+                {"provider": "aws", "region": "us-east-1"},
+                {"provider": "azure", "region": "eastus"}
+            ]
+        });
+        assert_eq!(
+            build_provider_summary(&config),
+            Some("aws us-east-1 + azure eastus".to_string())
+        );
+    }
+
+    #[test]
+    fn provider_without_region() {
+        let config = serde_json::json!({
+            "endpoints": [
+                {"provider": "ssh"}
+            ]
+        });
+        assert_eq!(build_provider_summary(&config), Some("ssh".to_string()));
+    }
+
+    #[test]
+    fn empty_endpoints_returns_none() {
+        let config = serde_json::json!({ "endpoints": [] });
+        assert_eq!(build_provider_summary(&config), None);
+    }
+
+    #[test]
+    fn missing_endpoints_key_returns_none() {
+        let config = serde_json::json!({ "name": "test" });
+        assert_eq!(build_provider_summary(&config), None);
+    }
+
+    #[test]
+    fn endpoints_not_array_returns_none() {
+        let config = serde_json::json!({ "endpoints": "not-an-array" });
+        assert_eq!(build_provider_summary(&config), None);
+    }
+
+    #[test]
+    fn empty_region_treated_as_no_region() {
+        let config = serde_json::json!({
+            "endpoints": [
+                {"provider": "gcp", "region": ""}
+            ]
+        });
+        assert_eq!(build_provider_summary(&config), Some("gcp".to_string()));
+    }
+
+    mod pagination_clamping {
+        use super::super::{ListDeploymentsQuery, DEFAULT_LIMIT, MAX_LIMIT};
+
+        #[test]
+        fn clamp_limit_caps_at_max() {
+            let q = ListDeploymentsQuery {
+                limit: Some(9999),
+                offset: Some(0),
+            };
+            let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+            assert_eq!(limit, MAX_LIMIT);
+        }
+
+        #[test]
+        fn clamp_negative_limit_becomes_one() {
+            let q = ListDeploymentsQuery {
+                limit: Some(-5),
+                offset: None,
+            };
+            let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+            assert_eq!(limit, 1);
+        }
+
+        #[test]
+        fn clamp_negative_offset_becomes_zero() {
+            let q = ListDeploymentsQuery {
+                limit: None,
+                offset: Some(-10),
+            };
+            let offset = q.offset.unwrap_or(0).max(0);
+            assert_eq!(offset, 0);
+        }
+    }
+
+    #[test]
+    fn missing_provider_defaults_to_unknown() {
+        let config = serde_json::json!({
+            "endpoints": [
+                {"region": "us-west-2"}
+            ]
+        });
+        assert_eq!(
+            build_provider_summary(&config),
+            Some("unknown us-west-2".to_string())
+        );
+    }
 }

@@ -329,3 +329,61 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/inventory", get(scan_inventory))
         .with_state(state)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::is_managed;
+
+    #[test]
+    fn managed_by_fqdn_exact_match() {
+        let managed = vec!["ec2-1-2-3-4.compute-1.amazonaws.com".to_string()];
+        assert!(is_managed(
+            &Some("ec2-1-2-3-4.compute-1.amazonaws.com".to_string()),
+            &None,
+            &managed,
+        ));
+    }
+
+    #[test]
+    fn managed_by_ip_exact_match() {
+        let managed = vec!["10.0.0.5".to_string()];
+        assert!(is_managed(&None, &Some("10.0.0.5".to_string()), &managed));
+    }
+
+    #[test]
+    fn not_managed_when_no_match() {
+        let managed = vec!["10.0.0.1".to_string()];
+        assert!(!is_managed(
+            &Some("other.host.com".to_string()),
+            &Some("10.0.0.99".to_string()),
+            &managed,
+        ));
+    }
+
+    #[test]
+    fn not_managed_when_empty_list() {
+        assert!(!is_managed(
+            &Some("host.com".to_string()),
+            &Some("1.2.3.4".to_string()),
+            &[],
+        ));
+    }
+
+    #[test]
+    fn not_managed_when_both_none() {
+        let managed = vec!["10.0.0.1".to_string()];
+        assert!(!is_managed(&None, &None, &managed));
+    }
+
+    #[test]
+    fn managed_by_partial_ip_in_fqdn() {
+        // The contains() check means an IP appearing inside a managed FQDN matches
+        let managed = vec!["ec2-10-0-0-5.compute.amazonaws.com".to_string()];
+        // This tests the substring match behavior
+        assert!(is_managed(
+            &Some("ec2-10-0-0-5.compute.amazonaws.com".to_string()),
+            &None,
+            &managed,
+        ));
+    }
+}
