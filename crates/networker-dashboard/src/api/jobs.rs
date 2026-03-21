@@ -33,6 +33,9 @@ pub struct ListJobsQuery {
 
 /// Limits to prevent runaway jobs.
 const MAX_RUNS: u32 = 1000;
+
+const DEFAULT_LIMIT: i64 = 50;
+const MAX_LIMIT: i64 = 200;
 const MAX_TIMEOUT_SECS: u64 = 300;
 const MAX_CONCURRENCY: usize = 16;
 
@@ -132,8 +135,8 @@ async fn list_jobs(
     let jobs = crate::db::jobs::list(
         &client,
         q.status.as_deref(),
-        q.limit.unwrap_or(50),
-        q.offset.unwrap_or(0),
+        q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT),
+        q.offset.unwrap_or(0).max(0),
     )
     .await
     .map_err(|e| {
@@ -221,4 +224,85 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/jobs/:job_id", get(get_job))
         .route("/jobs/:job_id/cancel", post(cancel_job))
         .with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_CONCURRENCY, MAX_RUNS, MAX_TIMEOUT_SECS};
+
+    /// Compile-time bounds on safety limits.
+    const _: () = {
+        assert!(MAX_RUNS >= 1 && MAX_RUNS <= 10_000);
+        assert!(MAX_TIMEOUT_SECS >= 1 && MAX_TIMEOUT_SECS <= 600);
+        assert!(MAX_CONCURRENCY >= 1 && MAX_CONCURRENCY <= 64);
+    };
+
+    /// Verify the safety limits are set to expected values.
+    mod limits {
+        use super::*;
+
+        #[test]
+        fn specific_limits() {
+            // Document the current values so changes are intentional
+            assert_eq!(MAX_RUNS, 1000);
+            assert_eq!(MAX_TIMEOUT_SECS, 300);
+            assert_eq!(MAX_CONCURRENCY, 16);
+        }
+    }
+
+    /// ListJobsQuery default handling.
+    mod query_defaults {
+        use super::super::{ListJobsQuery, DEFAULT_LIMIT, MAX_LIMIT};
+
+        #[test]
+        fn defaults_are_none() {
+            let json = "{}";
+            let q: ListJobsQuery = serde_json::from_str(json).unwrap();
+            assert!(q.status.is_none());
+            assert!(q.limit.is_none());
+            assert!(q.offset.is_none());
+        }
+
+        #[test]
+        fn parses_all_fields() {
+            let json = r#"{"status":"running","limit":10,"offset":5}"#;
+            let q: ListJobsQuery = serde_json::from_str(json).unwrap();
+            assert_eq!(q.status.as_deref(), Some("running"));
+            assert_eq!(q.limit, Some(10));
+            assert_eq!(q.offset, Some(5));
+        }
+
+        #[test]
+        fn clamp_limit_caps_at_max() {
+            let q = ListJobsQuery {
+                status: None,
+                limit: Some(9999),
+                offset: Some(0),
+            };
+            let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+            assert_eq!(limit, MAX_LIMIT);
+        }
+
+        #[test]
+        fn clamp_negative_limit_becomes_one() {
+            let q = ListJobsQuery {
+                status: None,
+                limit: Some(-5),
+                offset: None,
+            };
+            let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+            assert_eq!(limit, 1);
+        }
+
+        #[test]
+        fn clamp_negative_offset_becomes_zero() {
+            let q = ListJobsQuery {
+                status: None,
+                limit: None,
+                offset: Some(-10),
+            };
+            let offset = q.offset.unwrap_or(0).max(0);
+            assert_eq!(offset, 0);
+        }
+    }
 }

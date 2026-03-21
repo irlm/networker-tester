@@ -118,11 +118,7 @@ async fn create_agent(
             let ssh_user = req.ssh_user.clone().unwrap_or_else(|| "root".into());
             let ssh_port = req.ssh_port.unwrap_or(22);
             // Validate SSH inputs to prevent command injection
-            let valid_host = |s: &str| {
-                !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || ".-_".contains(c))
-            };
-            let valid_user = |s: &str| s.chars().all(|c| c.is_alphanumeric() || "._-".contains(c));
-            if !valid_host(&ssh_host) || !valid_user(&ssh_user) || ssh_port == 0 {
+            if !is_valid_ssh_host(&ssh_host) || !is_valid_ssh_user(&ssh_user) || ssh_port == 0 {
                 return Err(StatusCode::BAD_REQUEST);
             }
             let api_key_clone = api_key.clone();
@@ -217,9 +213,127 @@ async fn delete_agent(
     Ok(Json(serde_json::json!({"deleted": true})))
 }
 
+/// Validates an SSH hostname: non-empty, alphanumeric plus `.`, `-`, `_`.
+fn is_valid_ssh_host(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || ".-_".contains(c))
+}
+
+/// Validates an SSH username: alphanumeric plus `.`, `_`, `-`.
+fn is_valid_ssh_user(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || "._-".contains(c))
+}
+
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/agents", get(list_agents).post(create_agent))
         .route("/agents/:agent_id", get(delete_agent).delete(delete_agent))
         .with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_valid_ssh_host, is_valid_ssh_user};
+
+    /// Tests for SSH host/user validation (command injection prevention).
+    mod ssh_validation {
+        use super::*;
+
+        #[test]
+        fn valid_hostname_accepted() {
+            assert!(is_valid_ssh_host("my-host.example.com"));
+            assert!(is_valid_ssh_host("10.0.0.1"));
+            assert!(is_valid_ssh_host("host_name"));
+            assert!(is_valid_ssh_host("a"));
+        }
+
+        #[test]
+        fn empty_hostname_rejected() {
+            assert!(!is_valid_ssh_host(""));
+        }
+
+        #[test]
+        fn hostname_with_semicolon_rejected() {
+            assert!(!is_valid_ssh_host("host; rm -rf /"));
+        }
+
+        #[test]
+        fn hostname_with_backtick_rejected() {
+            assert!(!is_valid_ssh_host("host`whoami`"));
+        }
+
+        #[test]
+        fn hostname_with_space_rejected() {
+            assert!(!is_valid_ssh_host("host name"));
+        }
+
+        #[test]
+        fn hostname_with_dollar_rejected() {
+            assert!(!is_valid_ssh_host("$HOME"));
+        }
+
+        #[test]
+        fn hostname_with_newline_rejected() {
+            assert!(!is_valid_ssh_host("host\n-o ProxyCommand=evil"));
+        }
+
+        #[test]
+        fn valid_username_accepted() {
+            assert!(is_valid_ssh_user("root"));
+            assert!(is_valid_ssh_user("deploy-user"));
+            assert!(is_valid_ssh_user("user_name"));
+            assert!(is_valid_ssh_user("user.name"));
+        }
+
+        #[test]
+        fn empty_username_rejected() {
+            assert!(!is_valid_ssh_user(""));
+        }
+
+        #[test]
+        fn username_with_shell_chars_rejected() {
+            assert!(!is_valid_ssh_user("root;id"));
+            assert!(!is_valid_ssh_user("user$(whoami)"));
+            assert!(!is_valid_ssh_user("root && cat /etc/passwd"));
+        }
+    }
+
+    /// Tests for the CreateAgentRequest deserialization defaults.
+    mod request_defaults {
+        use super::super::CreateAgentRequest;
+
+        #[test]
+        fn location_defaults_to_local() {
+            let json = r#"{"name": "test-agent"}"#;
+            let req: CreateAgentRequest = serde_json::from_str(json).unwrap();
+            assert_eq!(req.location, "local");
+        }
+
+        #[test]
+        fn optional_fields_default_to_none() {
+            let json = r#"{"name": "test-agent"}"#;
+            let req: CreateAgentRequest = serde_json::from_str(json).unwrap();
+            assert!(req.region.is_none());
+            assert!(req.provider.is_none());
+            assert!(req.ssh_host.is_none());
+            assert!(req.ssh_user.is_none());
+            assert!(req.ssh_port.is_none());
+        }
+
+        #[test]
+        fn all_fields_populated() {
+            let json = r#"{
+                "name": "remote-1",
+                "region": "us-east-1",
+                "provider": "aws",
+                "location": "ssh",
+                "ssh_host": "10.0.0.5",
+                "ssh_user": "deploy",
+                "ssh_port": 2222
+            }"#;
+            let req: CreateAgentRequest = serde_json::from_str(json).unwrap();
+            assert_eq!(req.name, "remote-1");
+            assert_eq!(req.location, "ssh");
+            assert_eq!(req.ssh_port, Some(2222));
+        }
+    }
 }

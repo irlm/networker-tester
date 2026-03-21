@@ -11,6 +11,8 @@ use uuid::Uuid;
 use crate::auth::{require_role, AuthUser, Role};
 use crate::AppState;
 
+const VALID_ROLES: &[&str] = &["admin", "operator", "viewer"];
+
 async fn list_users(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthUser>,
@@ -61,7 +63,7 @@ async fn approve_user(
     require_role(&user, Role::Admin)?;
 
     // Validate role value
-    if !["admin", "operator", "viewer"].contains(&req.role.as_str()) {
+    if !VALID_ROLES.contains(&req.role.as_str()) {
         return Err(StatusCode::BAD_REQUEST);
     }
 
@@ -122,7 +124,7 @@ async fn set_role(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     require_role(&user, Role::Admin)?;
 
-    if !["admin", "operator", "viewer"].contains(&req.role.as_str()) {
+    if !VALID_ROLES.contains(&req.role.as_str()) {
         return Err(StatusCode::BAD_REQUEST);
     }
 
@@ -248,4 +250,71 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/users/:user_id/role", put(set_role))
         .route("/users/:user_id/disable", post(disable_user))
         .with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Validate the role whitelist used in approve_user and set_role.
+    mod role_validation {
+        use super::super::VALID_ROLES;
+
+        #[test]
+        fn whitelist_contains_expected_roles() {
+            assert!(VALID_ROLES.contains(&"admin"));
+            assert!(VALID_ROLES.contains(&"operator"));
+            assert!(VALID_ROLES.contains(&"viewer"));
+            assert_eq!(VALID_ROLES.len(), 3, "unexpected extra roles in whitelist");
+        }
+
+        #[test]
+        fn invalid_roles_rejected() {
+            let invalid = ["Admin", "ADMIN", "superadmin", "root", "", " ", "moderator"];
+            for role in &invalid {
+                assert!(
+                    !VALID_ROLES.contains(role),
+                    "'{role}' should NOT be in the valid roles list"
+                );
+            }
+        }
+    }
+
+    /// ApproveRequest deserialization.
+    mod approve_request {
+        use super::ApproveRequest;
+
+        #[test]
+        fn deserializes_valid_request() {
+            let json = r#"{"role": "operator"}"#;
+            let req: ApproveRequest = serde_json::from_str(json).unwrap();
+            assert_eq!(req.role, "operator");
+        }
+
+        #[test]
+        fn rejects_missing_role() {
+            let json = "{}";
+            let result: Result<ApproveRequest, _> = serde_json::from_str(json);
+            assert!(result.is_err());
+        }
+    }
+
+    /// SetRoleRequest deserialization.
+    mod set_role_request {
+        use super::SetRoleRequest;
+
+        #[test]
+        fn deserializes_valid_request() {
+            let json = r#"{"role": "admin"}"#;
+            let req: SetRoleRequest = serde_json::from_str(json).unwrap();
+            assert_eq!(req.role, "admin");
+        }
+
+        #[test]
+        fn rejects_missing_role() {
+            let json = "{}";
+            let result: Result<SetRoleRequest, _> = serde_json::from_str(json);
+            assert!(result.is_err());
+        }
+    }
 }

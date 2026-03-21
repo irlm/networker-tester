@@ -10,6 +10,9 @@ use uuid::Uuid;
 
 use crate::AppState;
 
+const DEFAULT_LIMIT: i64 = 50;
+const MAX_LIMIT: i64 = 200;
+
 #[derive(Deserialize)]
 pub struct ListRunsQuery {
     pub target_host: Option<String>,
@@ -28,8 +31,8 @@ async fn list_runs(
     let runs = crate::db::runs::list(
         &client,
         q.target_host.as_deref(),
-        q.limit.unwrap_or(50),
-        q.offset.unwrap_or(0),
+        q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT),
+        q.offset.unwrap_or(0).max(0),
     )
     .await
     .map_err(|e| {
@@ -146,4 +149,66 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/runs/:run_id", get(get_run))
         .route("/runs/:run_id/attempts", get(get_run_attempts))
         .with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clamp_limit_caps_at_max() {
+        let q = ListRunsQuery {
+            target_host: None,
+            limit: Some(9999),
+            offset: Some(0),
+        };
+        let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+        assert_eq!(limit, MAX_LIMIT);
+    }
+
+    #[test]
+    fn clamp_limit_floors_at_one() {
+        let q = ListRunsQuery {
+            target_host: None,
+            limit: Some(-5),
+            offset: None,
+        };
+        let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+        assert_eq!(limit, 1);
+    }
+
+    #[test]
+    fn clamp_limit_zero_becomes_one() {
+        let q = ListRunsQuery {
+            target_host: None,
+            limit: Some(0),
+            offset: None,
+        };
+        let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+        assert_eq!(limit, 1);
+    }
+
+    #[test]
+    fn clamp_offset_negative_becomes_zero() {
+        let q = ListRunsQuery {
+            target_host: None,
+            limit: None,
+            offset: Some(-10),
+        };
+        let offset = q.offset.unwrap_or(0).max(0);
+        assert_eq!(offset, 0);
+    }
+
+    #[test]
+    fn defaults_when_none() {
+        let q = ListRunsQuery {
+            target_host: None,
+            limit: None,
+            offset: None,
+        };
+        let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+        let offset = q.offset.unwrap_or(0).max(0);
+        assert_eq!(limit, DEFAULT_LIMIT);
+        assert_eq!(offset, 0);
+    }
 }
