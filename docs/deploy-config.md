@@ -291,9 +291,9 @@ After install, access the dashboard at `http://localhost:<port>`.
 
 ## Examples
 
-- [`deploy.example.json`](../deploy.example.json) — Minimal LAN endpoint with local tester
-- [`examples/deploy-lan.json`](../examples/deploy-lan.json) — Multi-endpoint LAN deployment with remote tester
-- [`examples/deploy-multi-cloud.json`](../examples/deploy-multi-cloud.json) — Compare Azure vs AWS vs GCP endpoints
+- [`examples/configs/deploy.example.json`](../examples/configs/deploy.example.json) — Minimal LAN endpoint with local tester
+- [`examples/configs/deploy-lan.json`](../examples/configs/deploy-lan.json) — Multi-endpoint LAN deployment with remote tester
+- [`examples/configs/deploy-multi-cloud.json`](../examples/configs/deploy-multi-cloud.json) — Compare Azure vs AWS vs GCP endpoints
 
 ## Validation & Limitations
 

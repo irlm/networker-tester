@@ -6,6 +6,7 @@
 
 # Output directory - generated reports and JSON artifacts
 /output/
+/networker-cloud.json
 
 # Editor / IDE
 .vscode/

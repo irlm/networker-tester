@@ -303,7 +303,7 @@ The installer writes `networker-cloud.json` pointing at the remote VM's IP.
 multi-endpoint deployment. See the [deploy-config reference](deploy-config.md).
 
 ```bash
-bash install.sh --deploy deploy.json
+bash install.sh --deploy examples/configs/deploy.example.json
 ```
 
 ### Run — local vs cloud
