@@ -85,14 +85,26 @@ impl DashboardConfig {
             bind_addr: std::env::var("DASHBOARD_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1".into()),
             cors_origin: std::env::var("DASHBOARD_CORS_ORIGIN").ok(),
             public_url,
-            microsoft_client_id: std::env::var("SSO_MICROSOFT_CLIENT_ID").ok().filter(|s| !s.is_empty()),
-            microsoft_client_secret: std::env::var("SSO_MICROSOFT_CLIENT_SECRET").ok().filter(|s| !s.is_empty()),
+            microsoft_client_id: std::env::var("SSO_MICROSOFT_CLIENT_ID")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            microsoft_client_secret: std::env::var("SSO_MICROSOFT_CLIENT_SECRET")
+                .ok()
+                .filter(|s| !s.is_empty()),
             microsoft_tenant_id: std::env::var("SSO_MICROSOFT_TENANT_ID")
                 .unwrap_or_else(|_| "common".into()),
-            google_client_id: std::env::var("SSO_GOOGLE_CLIENT_ID").ok().filter(|s| !s.is_empty()),
-            google_client_secret: std::env::var("SSO_GOOGLE_CLIENT_SECRET").ok().filter(|s| !s.is_empty()),
-            acs_connection_string: std::env::var("DASHBOARD_ACS_CONNECTION_STRING").ok().filter(|s| !s.is_empty()),
-            acs_sender: std::env::var("DASHBOARD_ACS_SENDER").ok().filter(|s| !s.is_empty()),
+            google_client_id: std::env::var("SSO_GOOGLE_CLIENT_ID")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            google_client_secret: std::env::var("SSO_GOOGLE_CLIENT_SECRET")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            acs_connection_string: std::env::var("DASHBOARD_ACS_CONNECTION_STRING")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            acs_sender: std::env::var("DASHBOARD_ACS_SENDER")
+                .ok()
+                .filter(|s| !s.is_empty()),
         })
     }
 }
