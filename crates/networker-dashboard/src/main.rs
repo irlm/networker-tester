@@ -16,17 +16,34 @@ use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tracing_subscriber::EnvFilter;
 
+/// A short-lived SSO exchange code entry.
+pub struct SsoCodeEntry {
+    pub email: String,
+    pub role: String,
+    pub user_id: uuid::Uuid,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+}
+
 pub struct AppState {
     pub db: deadpool_postgres::Pool,
     pub database_url: String,
     pub jwt_secret: String,
     pub dashboard_port: u16,
+    pub public_url: String,
     /// Broadcast channel for dashboard events (agent → browser fan-out).
     pub events_tx: broadcast::Sender<networker_common::messages::DashboardEvent>,
     /// Connected agents registry.
     pub agents: ws::agent_hub::AgentHub,
     /// Spawned tester processes: agent_id → PID (so we can kill them on delete).
     pub tester_processes: RwLock<HashMap<uuid::Uuid, u32>>,
+    // SSO config
+    pub microsoft_client_id: Option<String>,
+    pub microsoft_client_secret: Option<String>,
+    pub microsoft_tenant_id: String,
+    pub google_client_id: Option<String>,
+    pub google_client_secret: Option<String>,
+    /// Temporary SSO exchange codes: code → SsoCodeEntry
+    pub sso_codes: std::sync::Mutex<HashMap<String, SsoCodeEntry>>,
 }
 
 #[tokio::main]
@@ -72,9 +89,16 @@ async fn main() -> anyhow::Result<()> {
         database_url: cfg.database_url.clone(),
         jwt_secret: cfg.jwt_secret.clone(),
         dashboard_port: cfg.port,
+        public_url: cfg.public_url.clone(),
         events_tx,
         agents: ws::agent_hub::AgentHub::new(),
         tester_processes: RwLock::new(HashMap::new()),
+        microsoft_client_id: cfg.microsoft_client_id.clone(),
+        microsoft_client_secret: cfg.microsoft_client_secret.clone(),
+        microsoft_tenant_id: cfg.microsoft_tenant_id.clone(),
+        google_client_id: cfg.google_client_id.clone(),
+        google_client_secret: cfg.google_client_secret.clone(),
+        sso_codes: std::sync::Mutex::new(HashMap::new()),
     });
 
     let cors = {

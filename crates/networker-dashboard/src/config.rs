@@ -11,6 +11,14 @@ pub struct DashboardConfig {
     pub port: u16,
     pub bind_addr: String,
     pub cors_origin: Option<String>,
+    pub public_url: String,
+    // SSO: Microsoft (Entra ID / Azure AD)
+    pub microsoft_client_id: Option<String>,
+    pub microsoft_client_secret: Option<String>,
+    pub microsoft_tenant_id: String,
+    // SSO: Google
+    pub google_client_id: Option<String>,
+    pub google_client_secret: Option<String>,
 }
 
 impl DashboardConfig {
@@ -50,6 +58,16 @@ impl DashboardConfig {
             .ok()
             .filter(|s| !s.is_empty());
 
+        let port: u16 = match std::env::var("DASHBOARD_PORT") {
+            Ok(p) if !p.is_empty() => p.parse::<u16>().map_err(|e| {
+                anyhow::anyhow!("DASHBOARD_PORT={p:?} is not a valid port number: {e}")
+            })?,
+            _ => 3000,
+        };
+
+        let public_url = std::env::var("DASHBOARD_PUBLIC_URL")
+            .unwrap_or_else(|_| format!("http://localhost:{port}"));
+
         Ok(Self {
             database_url: std::env::var("DASHBOARD_DB_URL").unwrap_or_else(|_| {
                 "postgres://networker:networker@localhost:5432/networker_dashboard".into()
@@ -57,14 +75,16 @@ impl DashboardConfig {
             jwt_secret,
             admin_password,
             admin_email,
-            port: match std::env::var("DASHBOARD_PORT") {
-                Ok(p) if !p.is_empty() => p.parse::<u16>().map_err(|e| {
-                    anyhow::anyhow!("DASHBOARD_PORT={p:?} is not a valid port number: {e}")
-                })?,
-                _ => 3000,
-            },
+            port,
             bind_addr: std::env::var("DASHBOARD_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1".into()),
             cors_origin: std::env::var("DASHBOARD_CORS_ORIGIN").ok(),
+            public_url,
+            microsoft_client_id: std::env::var("SSO_MICROSOFT_CLIENT_ID").ok().filter(|s| !s.is_empty()),
+            microsoft_client_secret: std::env::var("SSO_MICROSOFT_CLIENT_SECRET").ok().filter(|s| !s.is_empty()),
+            microsoft_tenant_id: std::env::var("SSO_MICROSOFT_TENANT_ID")
+                .unwrap_or_else(|_| "common".into()),
+            google_client_id: std::env::var("SSO_GOOGLE_CLIENT_ID").ok().filter(|s| !s.is_empty()),
+            google_client_secret: std::env::var("SSO_GOOGLE_CLIENT_SECRET").ok().filter(|s| !s.is_empty()),
         })
     }
 }
