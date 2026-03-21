@@ -35,8 +35,14 @@ impl Role {
 /// Check that the authenticated user's role meets the required level.
 /// Returns `Ok(())` if permitted, `Err(FORBIDDEN)` otherwise.
 pub fn require_role(user: &AuthUser, required: Role) -> Result<(), StatusCode> {
-    let user_role: Role = serde_json::from_value(serde_json::Value::String(user.role.clone()))
-        .unwrap_or(Role::Viewer);
+    let user_role: Role = match serde_json::from_value(serde_json::Value::String(user.role.clone()))
+    {
+        Ok(r) => r,
+        Err(_) => {
+            tracing::warn!(role = %user.role, user_id = %user.user_id, "Unknown role, defaulting to Viewer");
+            Role::Viewer
+        }
+    };
     if user_role.has_permission(&required) {
         Ok(())
     } else {
@@ -112,47 +118,84 @@ pub async fn require_auth(
     match validate_token(token, &state.jwt_secret) {
         Ok(claims) => {
             let is_change_password = req.uri().path().ends_with("/auth/change-password");
-            if let Ok(client) = state.db.get().await {
-                // Check user status and must_change_password in a single query
-                let row = client
-                    .query_opt(
-                        "SELECT status, must_change_password FROM dash_user WHERE user_id = $1",
-                        &[&claims.sub],
+            let client = match state.db.get().await {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!(error = %e, "DB pool error in auth middleware");
+                    return (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "Service temporarily unavailable",
                     )
-                    .await
-                    .ok()
-                    .flatten();
+                        .into_response();
+                }
+            };
 
-                if let Some(row) = row {
-                    let status: String = row.get("status");
-                    let must_change: bool = row
-                        .get::<_, Option<bool>>("must_change_password")
-                        .unwrap_or(false);
+            // Check user status, role, and must_change_password in a single query
+            let row = client
+                .query_opt(
+                    "SELECT status, role, must_change_password FROM dash_user WHERE user_id = $1",
+                    &[&claims.sub],
+                )
+                .await
+                .ok()
+                .flatten();
 
-                    // Block non-active users (except allow change-password when must_change_password)
-                    if status != "active" && !(is_change_password && must_change) {
-                        return (StatusCode::FORBIDDEN, "Account is not active")
-                            .into_response();
-                    }
+            if let Some(ref row) = row {
+                let status: String = row.get("status");
+                let must_change: bool = row
+                    .get::<_, Option<bool>>("must_change_password")
+                    .unwrap_or(false);
 
-                    // Enforce must_change_password
-                    if !is_change_password && must_change {
-                        return (
-                            StatusCode::FORBIDDEN,
-                            "Password change required before accessing this resource",
-                        )
-                            .into_response();
-                    }
+                // Block non-active users (except allow change-password when must_change_password)
+                if status != "active" && !(is_change_password && must_change) {
+                    return (StatusCode::FORBIDDEN, "Account is not active").into_response();
+                }
+
+                // Enforce must_change_password
+                if !is_change_password && must_change {
+                    return (
+                        StatusCode::FORBIDDEN,
+                        "Password change required before accessing this resource",
+                    )
+                        .into_response();
                 }
             }
 
+            // Use DB role when available, fall back to JWT claim
+            let db_role = row.as_ref().map(|r| r.get::<_, String>("role"));
             req.extensions_mut().insert(AuthUser {
                 user_id: claims.sub,
                 email: claims.email,
-                role: claims.role,
+                role: db_role.unwrap_or(claims.role),
             });
             next.run(req).await
         }
         Err(_) => (StatusCode::UNAUTHORIZED, "Invalid token").into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn admin_has_all_permissions() {
+        assert!(Role::Admin.has_permission(&Role::Admin));
+        assert!(Role::Admin.has_permission(&Role::Operator));
+        assert!(Role::Admin.has_permission(&Role::Viewer));
+    }
+
+    #[test]
+    fn operator_cannot_admin() {
+        assert!(!Role::Operator.has_permission(&Role::Admin));
+        assert!(Role::Operator.has_permission(&Role::Operator));
+        assert!(Role::Operator.has_permission(&Role::Viewer));
+    }
+
+    #[test]
+    fn viewer_is_read_only() {
+        assert!(!Role::Viewer.has_permission(&Role::Admin));
+        assert!(!Role::Viewer.has_permission(&Role::Operator));
+        assert!(Role::Viewer.has_permission(&Role::Viewer));
     }
 }

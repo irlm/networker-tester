@@ -42,12 +42,7 @@ async fn list_pending(
             tracing::error!(error = %e, "Failed to list pending users");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
-    let count = crate::db::users::get_pending_count(&client)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "Failed to get pending count");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let count = users.len();
     Ok(Json(serde_json::json!({
         "users": users,
         "count": count,

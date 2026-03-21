@@ -112,17 +112,6 @@ pub async fn disable_user(client: &Client, user_id: &Uuid) -> anyhow::Result<boo
     Ok(n > 0)
 }
 
-/// Count pending users.
-pub async fn get_pending_count(client: &Client) -> anyhow::Result<i64> {
-    let row = client
-        .query_one(
-            "SELECT COUNT(*) FROM dash_user WHERE status = 'pending'",
-            &[],
-        )
-        .await?;
-    Ok(row.get(0))
-}
-
 /// Hash a token with SHA-256 so we never store plaintext reset tokens in the DB.
 fn hash_token(token: &str) -> String {
     let mut hasher = Sha256::new();
