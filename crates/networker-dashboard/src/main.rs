@@ -27,6 +27,17 @@ pub struct AppState {
     pub agents: ws::agent_hub::AgentHub,
     /// Spawned tester processes: agent_id → PID (so we can kill them on delete).
     pub tester_processes: RwLock<HashMap<uuid::Uuid, u32>>,
+    /// SSO one-time exchange codes: hash -> (user_id, expires_at)
+    #[allow(clippy::type_complexity)]
+    pub sso_codes: Arc<tokio::sync::RwLock<HashMap<String, (uuid::Uuid, chrono::DateTime<chrono::Utc>)>>>,
+    // SSO config
+    pub microsoft_client_id: Option<String>,
+    pub microsoft_client_secret: Option<String>,
+    pub microsoft_tenant_id: String,
+    pub google_client_id: Option<String>,
+    pub google_client_secret: Option<String>,
+    pub public_url: String,
+    pub hide_sso_domains: bool,
 }
 
 #[tokio::main]
@@ -75,6 +86,14 @@ async fn main() -> anyhow::Result<()> {
         events_tx,
         agents: ws::agent_hub::AgentHub::new(),
         tester_processes: RwLock::new(HashMap::new()),
+        sso_codes: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+        microsoft_client_id: cfg.microsoft_client_id.clone(),
+        microsoft_client_secret: cfg.microsoft_client_secret.clone(),
+        microsoft_tenant_id: cfg.microsoft_tenant_id.clone(),
+        google_client_id: cfg.google_client_id.clone(),
+        google_client_secret: cfg.google_client_secret.clone(),
+        public_url: cfg.public_url.clone(),
+        hide_sso_domains: cfg.hide_sso_domains,
     });
 
     let cors = {

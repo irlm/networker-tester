@@ -11,6 +11,13 @@ pub struct DashboardConfig {
     pub port: u16,
     pub bind_addr: String,
     pub cors_origin: Option<String>,
+    pub public_url: String,
+    pub microsoft_client_id: Option<String>,
+    pub microsoft_client_secret: Option<String>,
+    pub microsoft_tenant_id: String,
+    pub google_client_id: Option<String>,
+    pub google_client_secret: Option<String>,
+    pub hide_sso_domains: bool,
 }
 
 impl DashboardConfig {
@@ -65,6 +72,17 @@ impl DashboardConfig {
             },
             bind_addr: std::env::var("DASHBOARD_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1".into()),
             cors_origin: std::env::var("DASHBOARD_CORS_ORIGIN").ok(),
+            public_url: std::env::var("DASHBOARD_PUBLIC_URL")
+                .unwrap_or_else(|_| "http://localhost:5173".into()),
+            microsoft_client_id: std::env::var("DASHBOARD_MICROSOFT_CLIENT_ID").ok().filter(|s| !s.is_empty()),
+            microsoft_client_secret: std::env::var("DASHBOARD_MICROSOFT_CLIENT_SECRET").ok().filter(|s| !s.is_empty()),
+            microsoft_tenant_id: std::env::var("DASHBOARD_MICROSOFT_TENANT_ID")
+                .unwrap_or_else(|_| "common".into()),
+            google_client_id: std::env::var("DASHBOARD_GOOGLE_CLIENT_ID").ok().filter(|s| !s.is_empty()),
+            google_client_secret: std::env::var("DASHBOARD_GOOGLE_CLIENT_SECRET").ok().filter(|s| !s.is_empty()),
+            hide_sso_domains: std::env::var("DASHBOARD_HIDE_SSO_DOMAINS")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false),
         })
     }
 }

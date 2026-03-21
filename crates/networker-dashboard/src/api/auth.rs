@@ -1,11 +1,12 @@
 use axum::{
-    extract::State,
-    http::StatusCode,
-    response::IntoResponse,
+    extract::{Path, Query, State},
+    http::{header, StatusCode},
+    response::{IntoResponse, Redirect, Response},
     routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
 use crate::AppState;
@@ -249,11 +250,599 @@ async fn send_reset_email(to: &str, display_name: &str, reset_url: &str) -> anyh
     Ok(())
 }
 
+// ─── SSO endpoints ────────────────────────────────────────────────────
+
+/// Returns which SSO providers are configured.
+async fn get_providers(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "microsoft": state.microsoft_client_id.is_some(),
+        "google": state.google_client_id.is_some(),
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct CheckEmailRequest {
+    email: String,
+}
+
+/// Check if an email domain should be routed to an SSO provider.
+async fn check_email(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CheckEmailRequest>,
+) -> Json<serde_json::Value> {
+    // If hide_sso_domains is set, never reveal the provider
+    if state.hide_sso_domains {
+        return Json(serde_json::json!({ "provider": null }));
+    }
+
+    // If Microsoft is configured, route all emails to Microsoft SSO.
+    // Domain-specific mapping is a v0.15 feature.
+    if state.microsoft_client_id.is_some() && req.email.contains('@') {
+        return Json(serde_json::json!({ "provider": "microsoft" }));
+    }
+
+    // If Google is configured (but not Microsoft), route to Google
+    if state.google_client_id.is_some() && req.email.contains('@') {
+        return Json(serde_json::json!({ "provider": "google" }));
+    }
+
+    Json(serde_json::json!({ "provider": null }))
+}
+
+/// Initiate SSO flow — redirect to provider authorize URL.
+async fn sso_redirect(
+    State(state): State<Arc<AppState>>,
+    Path(provider): Path<String>,
+) -> Response {
+    let (authorize_url, client_id) = match provider.as_str() {
+        "microsoft" => {
+            let client_id = match &state.microsoft_client_id {
+                Some(id) => id.clone(),
+                None => {
+                    return (StatusCode::BAD_REQUEST, "Microsoft SSO not configured")
+                        .into_response()
+                }
+            };
+            let tenant = &state.microsoft_tenant_id;
+            let redirect_uri =
+                format!("{}/api/auth/callback/microsoft", state.public_url);
+            let redirect_uri_encoded = urlencoded(&redirect_uri);
+            let url = format!(
+                "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize\
+                 ?client_id={client_id}\
+                 &redirect_uri={redirect_uri_encoded}\
+                 &scope=openid%20email%20profile\
+                 &response_type=code"
+            );
+            (url, client_id)
+        }
+        "google" => {
+            let client_id = match &state.google_client_id {
+                Some(id) => id.clone(),
+                None => {
+                    return (StatusCode::BAD_REQUEST, "Google SSO not configured").into_response()
+                }
+            };
+            let redirect_uri =
+                format!("{}/api/auth/callback/google", state.public_url);
+            let redirect_uri_encoded = urlencoded(&redirect_uri);
+            let url = format!(
+                "https://accounts.google.com/o/oauth2/v2/auth\
+                 ?client_id={client_id}\
+                 &redirect_uri={redirect_uri_encoded}\
+                 &scope=openid%20email%20profile\
+                 &response_type=code"
+            );
+            (url, client_id)
+        }
+        _ => return (StatusCode::BAD_REQUEST, "Unknown SSO provider").into_response(),
+    };
+    let _ = client_id; // used above in URL construction
+
+    // Generate random state parameter for CSRF protection
+    let state_value = generate_random_hex(32);
+    let authorize_url = format!("{authorize_url}&state={state_value}");
+
+    // Set sso_state cookie (HttpOnly, SameSite=Lax, 5min max-age)
+    let cookie = format!(
+        "sso_state={state_value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=300"
+    );
+
+    (
+        [(header::SET_COOKIE, cookie)],
+        Redirect::temporary(&authorize_url),
+    )
+        .into_response()
+}
+
+#[derive(Deserialize)]
+pub struct CallbackQuery {
+    code: Option<String>,
+    state: Option<String>,
+    error: Option<String>,
+}
+
+/// OAuth callback — exchange code for tokens, create/link user, redirect with one-time code.
+async fn sso_callback(
+    State(state): State<Arc<AppState>>,
+    Path(provider): Path<String>,
+    Query(query): Query<CallbackQuery>,
+    req: axum::extract::Request,
+) -> Response {
+    // Check for OAuth error
+    if let Some(ref err) = query.error {
+        tracing::warn!(provider = %provider, error = %err, "SSO provider returned error");
+        return Redirect::temporary(&format!(
+            "{}/login?error=sso_denied",
+            state.public_url
+        ))
+        .into_response();
+    }
+
+    let code = match &query.code {
+        Some(c) => c.clone(),
+        None => {
+            return Redirect::temporary(&format!(
+                "{}/login?error=missing_code",
+                state.public_url
+            ))
+            .into_response()
+        }
+    };
+
+    // Verify state matches cookie
+    let query_state = match &query.state {
+        Some(s) => s.clone(),
+        None => {
+            return Redirect::temporary(&format!(
+                "{}/login?error=missing_state",
+                state.public_url
+            ))
+            .into_response()
+        }
+    };
+
+    let cookie_state = extract_cookie_value(&req, "sso_state");
+    if cookie_state.as_deref() != Some(query_state.as_str()) {
+        tracing::warn!(
+            provider = %provider,
+            "SSO state mismatch (CSRF check failed)"
+        );
+        return Redirect::temporary(&format!(
+            "{}/login?error=state_mismatch",
+            state.public_url
+        ))
+        .into_response();
+    }
+
+    // Exchange authorization code for tokens
+    let (token_url, redirect_uri, client_id, client_secret) = match provider.as_str() {
+        "microsoft" => {
+            let tenant = &state.microsoft_tenant_id;
+            (
+                format!("https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"),
+                format!("{}/api/auth/callback/microsoft", state.public_url),
+                state.microsoft_client_id.clone().unwrap_or_default(),
+                state.microsoft_client_secret.clone().unwrap_or_default(),
+            )
+        }
+        "google" => (
+            "https://oauth2.googleapis.com/token".to_string(),
+            format!("{}/api/auth/callback/google", state.public_url),
+            state.google_client_id.clone().unwrap_or_default(),
+            state.google_client_secret.clone().unwrap_or_default(),
+        ),
+        _ => {
+            return (StatusCode::BAD_REQUEST, "Unknown provider").into_response();
+        }
+    };
+
+    let http_client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to build HTTP client for SSO token exchange");
+            return Redirect::temporary(&format!(
+                "{}/login?error=internal",
+                state.public_url
+            ))
+            .into_response();
+        }
+    };
+
+    let token_resp = http_client
+        .post(&token_url)
+        .form(&[
+            ("grant_type", "authorization_code"),
+            ("code", &code),
+            ("redirect_uri", &redirect_uri),
+            ("client_id", &client_id),
+            ("client_secret", &client_secret),
+        ])
+        .send()
+        .await;
+
+    let token_resp = match token_resp {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(error = %e, provider = %provider, "SSO token exchange request failed");
+            return Redirect::temporary(&format!(
+                "{}/login?error=token_exchange_failed",
+                state.public_url
+            ))
+            .into_response();
+        }
+    };
+
+    let token_body: serde_json::Value = match token_resp.json().await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(error = %e, provider = %provider, "Failed to parse SSO token response");
+            return Redirect::temporary(&format!(
+                "{}/login?error=token_parse_failed",
+                state.public_url
+            ))
+            .into_response();
+        }
+    };
+
+    // Extract id_token and decode payload (no signature verification — received over TLS)
+    let id_token = match token_body.get("id_token").and_then(|t| t.as_str()) {
+        Some(t) => t,
+        None => {
+            tracing::error!(provider = %provider, body = %token_body, "No id_token in SSO token response");
+            return Redirect::temporary(&format!(
+                "{}/login?error=no_id_token",
+                state.public_url
+            ))
+            .into_response();
+        }
+    };
+
+    let claims = match decode_jwt_payload(id_token) {
+        Some(c) => c,
+        None => {
+            tracing::error!(provider = %provider, "Failed to decode id_token payload");
+            return Redirect::temporary(&format!(
+                "{}/login?error=id_token_decode",
+                state.public_url
+            ))
+            .into_response();
+        }
+    };
+
+    let email = claims
+        .get("email")
+        .and_then(|e| e.as_str())
+        .or_else(|| {
+            // Microsoft sometimes puts email in "preferred_username"
+            claims
+                .get("preferred_username")
+                .and_then(|e| e.as_str())
+        })
+        .unwrap_or("")
+        .to_lowercase();
+
+    let sub = claims
+        .get("sub")
+        .and_then(|s| s.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let name = claims
+        .get("name")
+        .and_then(|n| n.as_str())
+        .map(|s| s.to_string());
+
+    let picture = claims
+        .get("picture")
+        .and_then(|p| p.as_str())
+        .map(|s| s.to_string());
+
+    if email.is_empty() || sub.is_empty() {
+        tracing::error!(
+            provider = %provider,
+            email = %email,
+            sub = %sub,
+            "SSO id_token missing email or sub"
+        );
+        return Redirect::temporary(&format!(
+            "{}/login?error=missing_claims",
+            state.public_url
+        ))
+        .into_response();
+    }
+
+    tracing::info!(
+        provider = %provider,
+        email = %email,
+        sub = %sub,
+        name = ?name,
+        "SSO callback: processing user"
+    );
+
+    // DB lookup / creation
+    let db_client = match state.db.get().await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(error = %e, "DB pool error in SSO callback");
+            return Redirect::temporary(&format!(
+                "{}/login?error=internal",
+                state.public_url
+            ))
+            .into_response();
+        }
+    };
+
+    // Step 1: Check if returning SSO user
+    let user = match crate::db::sso::find_by_sso(&db_client, &provider, &sub).await {
+        Ok(Some(user)) => {
+            // Update last login
+            crate::db::sso::update_last_login(&db_client, &user.user_id)
+                .await
+                .ok();
+            user
+        }
+        Ok(None) => {
+            // Step 2: Check if email matches a local account
+            match crate::db::sso::find_by_email(&db_client, &email).await {
+                Ok(Some(existing)) => {
+                    if existing.auth_provider == "local" {
+                        // Auto-link with warning
+                        tracing::warn!(
+                            user_id = %existing.user_id,
+                            email = %email,
+                            provider = %provider,
+                            "Auto-linking local account to SSO provider (no password verification)"
+                        );
+                        if let Err(e) = crate::db::sso::link_sso_to_local(
+                            &db_client,
+                            &existing.user_id,
+                            &provider,
+                            &sub,
+                        )
+                        .await
+                        {
+                            tracing::error!(error = %e, "Failed to link SSO to local account");
+                            return Redirect::temporary(&format!(
+                                "{}/login?error=link_failed",
+                                state.public_url
+                            ))
+                            .into_response();
+                        }
+                        crate::db::sso::update_last_login(&db_client, &existing.user_id)
+                            .await
+                            .ok();
+                        existing
+                    } else {
+                        // Already linked to a different SSO provider
+                        crate::db::sso::update_last_login(&db_client, &existing.user_id)
+                            .await
+                            .ok();
+                        existing
+                    }
+                }
+                Ok(None) => {
+                    // Step 3: Create new SSO user
+                    match crate::db::sso::create_sso_user(
+                        &db_client,
+                        &email,
+                        &provider,
+                        &sub,
+                        name.as_deref(),
+                        picture.as_deref(),
+                    )
+                    .await
+                    {
+                        Ok(user_id) => {
+                            // Fetch the created user
+                            match crate::db::sso::find_by_sso(&db_client, &provider, &sub).await {
+                                Ok(Some(u)) => u,
+                                _ => {
+                                    tracing::error!(
+                                        user_id = %user_id,
+                                        "Failed to fetch newly created SSO user"
+                                    );
+                                    return Redirect::temporary(&format!(
+                                        "{}/login?error=internal",
+                                        state.public_url
+                                    ))
+                                    .into_response();
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!(error = %e, "Failed to create SSO user");
+                            return Redirect::temporary(&format!(
+                                "{}/login?error=create_failed",
+                                state.public_url
+                            ))
+                            .into_response();
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "DB error looking up email in SSO callback");
+                    return Redirect::temporary(&format!(
+                        "{}/login?error=internal",
+                        state.public_url
+                    ))
+                    .into_response();
+                }
+            }
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "DB error in SSO callback");
+            return Redirect::temporary(&format!(
+                "{}/login?error=internal",
+                state.public_url
+            ))
+            .into_response();
+        }
+    };
+
+    // Generate one-time exchange code
+    let raw_code = generate_random_hex(32);
+    let code_hash = hash_string(&raw_code);
+
+    // Store in the in-memory map with 30s TTL
+    {
+        let expires = chrono::Utc::now() + chrono::Duration::seconds(30);
+        let mut codes = state.sso_codes.write().await;
+
+        // Prune expired codes while we're here
+        let now = chrono::Utc::now();
+        codes.retain(|_, (_, exp)| *exp > now);
+
+        codes.insert(code_hash, (user.user_id, expires));
+    }
+
+    // Redirect to frontend with the one-time code; clear sso_state cookie
+    let clear_cookie = "sso_state=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0";
+    let redirect_url = format!(
+        "{}/auth/sso-complete?code={raw_code}",
+        state.public_url
+    );
+
+    (
+        [(header::SET_COOKIE, clear_cookie.to_string())],
+        Redirect::temporary(&redirect_url),
+    )
+        .into_response()
+}
+
+#[derive(Deserialize)]
+pub struct ExchangeCodeRequest {
+    code: String,
+}
+
+/// Exchange a one-time SSO code for a JWT token.
+async fn exchange_code(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ExchangeCodeRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let code_hash = hash_string(&req.code);
+    let now = chrono::Utc::now();
+
+    // Look up and remove the code
+    let user_id = {
+        let mut codes = state.sso_codes.write().await;
+        match codes.remove(&code_hash) {
+            Some((uid, expires)) if expires > now => Some(uid),
+            Some(_) => {
+                tracing::warn!("SSO exchange code expired");
+                None
+            }
+            None => None,
+        }
+    };
+
+    let user_id = match user_id {
+        Some(uid) => uid,
+        None => return Err(StatusCode::BAD_REQUEST),
+    };
+
+    // Fetch user info from DB
+    let client = state.db.get().await.map_err(|e| {
+        tracing::error!(error = %e, "DB pool error in exchange_code");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let row = client
+        .query_opt(
+            "SELECT email, role, status FROM dash_user WHERE user_id = $1",
+            &[&user_id],
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "DB query error in exchange_code");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    let row = match row {
+        Some(r) => r,
+        None => return Err(StatusCode::BAD_REQUEST),
+    };
+
+    let email: String = row.get("email");
+    let role: String = row.get("role");
+    let status: String = row.get("status");
+
+    let token = crate::auth::create_token(user_id, &email, &role, &state.jwt_secret)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(serde_json::json!({
+        "token": token,
+        "email": email,
+        "role": role,
+        "status": status,
+    })))
+}
+
+// ─── SSO helpers ──────────────────────────────────────────────────────
+
+/// Decode the payload (middle segment) of a JWT without signature verification.
+fn decode_jwt_payload(jwt: &str) -> Option<serde_json::Value> {
+    use base64::Engine;
+    let parts: Vec<&str> = jwt.split('.').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let payload = parts[1];
+    // JWT uses base64url without padding
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .ok()?;
+    serde_json::from_slice(&decoded).ok()
+}
+
+/// URL-encode a string (percent encoding).
+fn urlencoded(s: &str) -> String {
+    url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
+}
+
+/// Generate a random hex string of the given byte length.
+fn generate_random_hex(bytes: usize) -> String {
+    use rand::Rng;
+    let random_bytes: Vec<u8> = (0..bytes).map(|_| rand::thread_rng().gen()).collect();
+    random_bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Hash a string with SHA-256, returning hex.
+fn hash_string(s: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(s.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+/// Extract a cookie value from the request headers.
+fn extract_cookie_value(req: &axum::extract::Request, name: &str) -> Option<String> {
+    let cookie_header = req
+        .headers()
+        .get(header::COOKIE)?
+        .to_str()
+        .ok()?;
+    for pair in cookie_header.split(';') {
+        let pair = pair.trim();
+        if let Some(value) = pair.strip_prefix(&format!("{name}=")) {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/auth/login", post(login))
         .route("/auth/forgot-password", post(forgot_password))
         .route("/auth/reset-password", post(reset_password))
+        .route("/auth/providers", get(get_providers))
+        .route("/auth/check-email", post(check_email))
+        .route("/auth/sso/:provider", get(sso_redirect))
+        .route("/auth/callback/:provider", get(sso_callback))
+        .route("/auth/exchange-code", post(exchange_code))
         .with_state(state)
 }
 

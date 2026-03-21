@@ -4,6 +4,7 @@ pub mod jobs;
 pub mod migrations;
 pub mod runs;
 pub mod schedules;
+pub mod sso;
 pub mod url_tests;
 pub mod users;
 

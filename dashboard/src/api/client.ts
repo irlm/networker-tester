@@ -271,6 +271,26 @@ export const api = {
   disableUser: (userId: string) =>
     request<{ disabled: boolean }>(`/users/${userId}/disable`, { method: 'POST' }),
 
+  // SSO
+  getProviders: () =>
+    request<{ microsoft: boolean; google: boolean }>('/auth/providers'),
+
+  checkEmail: (email: string) =>
+    request<{ provider: string | null }>('/auth/check-email', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    }),
+
+  exchangeCode: (code: string) =>
+    fetch(`${API_BASE}/auth/exchange-code`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    }).then(async (r) => {
+      if (!r.ok) throw new Error(await r.text());
+      return r.json() as Promise<{ token: string; email: string; role: string; status: string }>;
+    }),
+
   // Version
   getVersionInfo: () => request<{
     dashboard_version: string;

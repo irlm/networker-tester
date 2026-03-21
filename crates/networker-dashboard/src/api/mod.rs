@@ -19,6 +19,8 @@ use std::sync::Arc;
 use crate::AppState;
 
 pub fn router(state: Arc<AppState>) -> Router {
+    // TODO: Add rate limiting on public auth routes once tower-governor resolves
+    // the axum body type mismatch (tower_governor 0.8 + axum 0.7 incompatibility).
     // Public routes (no auth required)
     let public = Router::new().merge(auth::router(state.clone()));
 
