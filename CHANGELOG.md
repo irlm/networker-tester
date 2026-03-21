@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.36] – 2026-03-20 — URL diagnostic workflow, security hardening, and output polish
+
+### Added
+- Added the full URL page-load diagnostic workflow: request/plan lifecycle, browser-driven primary page load, protocol validation probes, HAR export, best-effort PCAP integration, persistence wiring, dashboard APIs, and grouped origin/connection summaries.
+- Added SSRF validation for URL diagnostic targets, credential redaction for request serialization/debug output, and CRLF validation for custom URL-test headers.
+- Documented the URL page-load diagnostic workflow in the main README and probes reference, and expanded JSON fixture/test coverage for artifact/origin/connection summary handling.
+
+### Fixed
+- Fixed URL diagnostic `total_requests` double-counting in the browser path.
+- Fixed SQL Server companion DDL to include `PcapSummaryJson` and proper T-SQL index guards.
+- Fixed browser sandbox handling so `--no-sandbox` is only used when running as root or when `NETWORKER_NO_SANDBOX` is explicitly set.
+- Fixed brittle URL-test capture config construction by switching to clone-and-override.
+- Fixed dashboard URL diagnostic artifact responses to avoid exposing full server-side filesystem paths.
+- Fixed URL diagnostic persistence string conversion to use enum display output directly.
+
+---
+
 ## [0.13.30] – 2026-03-20 — Test scheduler: automatic recurring tests
 
 ### Added

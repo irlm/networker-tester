@@ -214,10 +214,7 @@ pub async fn reset_password_with_token(
 /// Get the email for a user (for display on change-password page).
 pub async fn get_email(client: &Client, user_id: &Uuid) -> anyhow::Result<Option<String>> {
     let row = client
-        .query_opt(
-            "SELECT email FROM dash_user WHERE user_id = $1",
-            &[user_id],
-        )
+        .query_opt("SELECT email FROM dash_user WHERE user_id = $1", &[user_id])
         .await?;
     Ok(row.and_then(|r| r.get::<_, Option<String>>("email")))
 }

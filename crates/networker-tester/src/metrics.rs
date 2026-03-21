@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::capture::PacketCaptureSummary;
+use crate::capture::{EndpointPacketCount, PacketCaptureSummary, PacketShare, PortPacketCount};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Host information (shared between client and server)
@@ -105,7 +105,7 @@ pub struct TestRun {
     /// Network baseline RTT measured before probes start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline: Option<NetworkBaseline>,
-    /// Packet capture summary (tshark analysis) when capture was enabled.
+    /// Optional packet capture summary for runs where capture was enabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub packet_capture_summary: Option<PacketCaptureSummary>,
     pub attempts: Vec<RequestAttempt>,
@@ -934,6 +934,234 @@ pub struct BrowserResult {
     pub started_at: DateTime<Utc>,
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// URL page-load diagnostic contracts (PR-01 foundation only)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UrlDiagnosticStatus {
+    Pending,
+    Running,
+    Completed,
+    Failed,
+    Partial,
+}
+
+impl std::fmt::Display for UrlDiagnosticStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = match self {
+            Self::Pending => "pending",
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Partial => "partial",
+        };
+        f.write_str(value)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UrlPageLoadStrategy {
+    Browser,
+    BrowserProbe,
+    FetchProbe,
+    Hybrid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UrlProbeAttemptType {
+    Browser,
+    Fetch,
+    Probe,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UrlPacketCaptureSummary {
+    pub mode: String,
+    pub interface: String,
+    pub capture_path: String,
+    pub total_packets: u64,
+    pub capture_status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+    pub tcp_packets: u64,
+    pub udp_packets: u64,
+    pub quic_packets: u64,
+    pub http_packets: u64,
+    pub dns_packets: u64,
+    pub retransmissions: u64,
+    pub duplicate_acks: u64,
+    pub resets: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transport_shares: Vec<PacketShare>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub top_endpoints: Vec<EndpointPacketCount>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub top_ports: Vec<PortPacketCount>,
+    pub observed_quic: bool,
+    pub observed_tcp_only: bool,
+    pub observed_mixed_transport: bool,
+    pub capture_may_be_ambiguous: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UrlTestRun {
+    pub id: Uuid,
+    pub started_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub requested_url: String,
+    pub final_url: Option<String>,
+    pub status: UrlDiagnosticStatus,
+    pub page_load_strategy: UrlPageLoadStrategy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_engine: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_origin: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_protocol_primary_load: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub advertised_alt_svc: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub validated_http_versions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cipher_suite: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alpn: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dns_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connect_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handshake_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttfb_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dom_content_loaded_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load_event_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_idle_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_end_ms: Option<f64>,
+    pub total_requests: u32,
+    pub total_transfer_bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peak_concurrent_connections: Option<u32>,
+    pub redirect_count: u32,
+    pub failure_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub har_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pcap_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pcap_summary: Option<UrlPacketCaptureSummary>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capture_errors: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment_notes: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub origin_summaries: Vec<UrlOriginSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_summary: Option<UrlConnectionSummary>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resources: Vec<UrlTestResource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub protocol_runs: Vec<UrlTestProtocolRun>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UrlOriginSummary {
+    pub origin: String,
+    pub request_count: u32,
+    pub failure_count: u32,
+    pub total_transfer_bytes: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub protocols: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dominant_protocol: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub average_duration_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_hit_count: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UrlConnectionSummary {
+    pub total_connection_ids: u32,
+    pub reused_connection_count: u32,
+    pub reused_resource_count: u32,
+    pub resources_with_connection_id: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peak_origin_request_count: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UrlTestResource {
+    pub url_test_run_id: Uuid,
+    pub resource_url: String,
+    pub origin: String,
+    pub resource_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_code: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transfer_size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encoded_body_size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decoded_body_size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reused_connection: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initiator_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_cache: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redirected: Option<bool>,
+    pub failed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UrlTestProtocolRun {
+    pub url_test_run_id: Uuid,
+    pub protocol_mode: String,
+    pub run_number: u32,
+    pub attempt_type: UrlProbeAttemptType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_protocol: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_occurred: Option<bool>,
+    pub succeeded: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_code: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttfb_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorRecord {
     pub category: ErrorCategory,
@@ -1296,6 +1524,92 @@ mod tests {
         let de: DnsResult = serde_json::from_str(&json).unwrap();
         assert_eq!(de.query_name, r.query_name);
         assert!((de.duration_ms - r.duration_ms).abs() < 1e-9);
+    }
+
+    #[test]
+    fn url_test_run_serialization_round_trip() {
+        let run_id = Uuid::new_v4();
+        let run = UrlTestRun {
+            id: run_id,
+            started_at: Utc::now(),
+            completed_at: None,
+            requested_url: "https://example.com".into(),
+            final_url: Some("https://www.example.com/home".into()),
+            status: UrlDiagnosticStatus::Partial,
+            page_load_strategy: UrlPageLoadStrategy::Browser,
+            browser_engine: Some("chromium".into()),
+            browser_version: Some("123.0".into()),
+            user_agent: Some("NetworkerTester/0.13".into()),
+            primary_origin: Some("https://www.example.com".into()),
+            observed_protocol_primary_load: Some("h3".into()),
+            advertised_alt_svc: Some("h3=\":443\"".into()),
+            validated_http_versions: vec!["h1".into(), "h2".into(), "h3".into()],
+            tls_version: Some("TLS 1.3".into()),
+            cipher_suite: Some("TLS_AES_128_GCM_SHA256".into()),
+            alpn: Some("h3".into()),
+            dns_ms: Some(12.0),
+            connect_ms: Some(18.0),
+            handshake_ms: Some(24.0),
+            ttfb_ms: Some(61.0),
+            dom_content_loaded_ms: Some(410.0),
+            load_event_ms: Some(842.0),
+            network_idle_ms: None,
+            capture_end_ms: Some(1100.0),
+            total_requests: 37,
+            total_transfer_bytes: 2_800_000,
+            peak_concurrent_connections: Some(8),
+            redirect_count: 1,
+            failure_count: 1,
+            har_path: Some("/tmp/url-test.har".into()),
+            pcap_path: None,
+            pcap_summary: None,
+            capture_errors: vec!["pcap unavailable".into()],
+            environment_notes: Some("linux runner".into()),
+            origin_summaries: vec![],
+            connection_summary: None,
+            resources: vec![UrlTestResource {
+                url_test_run_id: run_id,
+                resource_url: "https://www.example.com/app.js".into(),
+                origin: "https://www.example.com".into(),
+                resource_type: "script".into(),
+                mime_type: Some("application/javascript".into()),
+                status_code: Some(200),
+                protocol: Some("h3".into()),
+                transfer_size: Some(2048),
+                encoded_body_size: Some(1800),
+                decoded_body_size: Some(4096),
+                duration_ms: Some(32.0),
+                connection_id: Some("conn-1".into()),
+                reused_connection: Some(true),
+                initiator_type: Some("parser".into()),
+                from_cache: Some(false),
+                redirected: Some(false),
+                failed: false,
+            }],
+            protocol_runs: vec![UrlTestProtocolRun {
+                url_test_run_id: run_id,
+                protocol_mode: "h3".into(),
+                run_number: 1,
+                attempt_type: UrlProbeAttemptType::Probe,
+                observed_protocol: Some("h3".into()),
+                fallback_occurred: Some(false),
+                succeeded: true,
+                status_code: Some(200),
+                ttfb_ms: Some(55.0),
+                total_ms: Some(320.0),
+                failure_reason: None,
+                error: None,
+            }],
+        };
+
+        let json = serde_json::to_string(&run).unwrap();
+        let de: UrlTestRun = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.id, run.id);
+        assert_eq!(de.status, UrlDiagnosticStatus::Partial);
+        assert_eq!(de.page_load_strategy, UrlPageLoadStrategy::Browser);
+        assert_eq!(de.resources.len(), 1);
+        assert_eq!(de.protocol_runs.len(), 1);
+        assert_eq!(de.validated_http_versions, vec!["h1", "h2", "h3"]);
     }
 
     #[test]

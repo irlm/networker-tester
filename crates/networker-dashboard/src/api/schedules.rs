@@ -256,13 +256,12 @@ async fn trigger_schedule(
     })?;
 
     // Create a job from the schedule's config
-    let job_id =
-        crate::db::jobs::create(&client, &config, schedule.agent_id.as_ref(), None)
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "Failed to create job from schedule trigger");
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?;
+    let job_id = crate::db::jobs::create(&client, &config, schedule.agent_id.as_ref(), None)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to create job from schedule trigger");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     // Try to dispatch
     let agent_id = match schedule.agent_id {
@@ -271,8 +270,8 @@ async fn trigger_schedule(
     };
 
     if let Some(aid) = agent_id {
-        let job_config: networker_common::messages::JobConfig =
-            serde_json::from_value(config).map_err(|e| {
+        let job_config: networker_common::messages::JobConfig = serde_json::from_value(config)
+            .map_err(|e| {
                 tracing::error!(error = %e, "Invalid schedule config");
                 StatusCode::INTERNAL_SERVER_ERROR
             })?;

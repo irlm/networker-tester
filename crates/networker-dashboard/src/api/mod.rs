@@ -9,6 +9,7 @@ mod modes;
 mod runs;
 mod schedules;
 mod update;
+mod url_tests;
 mod version;
 
 use axum::{middleware, Router};
@@ -26,6 +27,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(agents::router(state.clone()))
         .merge(jobs::router(state.clone()))
         .merge(runs::router(state.clone()))
+        .merge(url_tests::router(state.clone()))
         .merge(dashboard::router(state.clone()))
         .merge(deployments::router(state.clone()))
         .merge(cloud::router(state.clone()))

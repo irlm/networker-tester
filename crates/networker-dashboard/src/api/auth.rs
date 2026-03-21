@@ -1,4 +1,10 @@
-use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::{get, post}, Json, Router};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{get, post},
+    Json, Router,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -184,9 +190,11 @@ async fn reset_password(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ResetPasswordRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, &'static str)> {
-    let client = state.db.get().await.map_err(|_| {
-        (StatusCode::INTERNAL_SERVER_ERROR, "Database error")
-    })?;
+    let client = state
+        .db
+        .get()
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
 
     match crate::db::users::reset_password_with_token(&client, &req.token, &req.new_password).await
     {
@@ -202,16 +210,16 @@ async fn reset_password(
 /// Send a password reset email via SMTP.
 async fn send_reset_email(to: &str, username: &str, reset_url: &str) -> anyhow::Result<()> {
     use lettre::{
-        message::header::ContentType, transport::smtp::authentication::Credentials, AsyncSmtpTransport,
-        AsyncTransport, Message, Tokio1Executor,
+        message::header::ContentType, transport::smtp::authentication::Credentials,
+        AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
     };
 
     let smtp_host = std::env::var("DASHBOARD_SMTP_HOST")
         .map_err(|_| anyhow::anyhow!("DASHBOARD_SMTP_HOST not set"))?;
     let smtp_user = std::env::var("DASHBOARD_SMTP_USER").unwrap_or_default();
     let smtp_pass = std::env::var("DASHBOARD_SMTP_PASS").unwrap_or_default();
-    let smtp_from = std::env::var("DASHBOARD_SMTP_FROM")
-        .unwrap_or_else(|_| format!("noreply@{smtp_host}"));
+    let smtp_from =
+        std::env::var("DASHBOARD_SMTP_FROM").unwrap_or_else(|_| format!("noreply@{smtp_host}"));
 
     let email = Message::builder()
         .from(smtp_from.parse()?)
