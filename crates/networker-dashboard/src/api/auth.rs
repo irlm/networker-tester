@@ -12,7 +12,7 @@ use crate::AppState;
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
-    username: String,
+    email: String,
     password: String,
 }
 
@@ -20,7 +20,8 @@ pub struct LoginRequest {
 pub struct LoginResponse {
     token: String,
     role: String,
-    username: String,
+    email: String,
+    status: String,
     must_change_password: bool,
 }
 
@@ -32,7 +33,7 @@ async fn login(
         tracing::error!(error = %e, "DB pool error in login");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
-    let result = crate::db::users::authenticate(&client, &req.username, &req.password)
+    let result = crate::db::users::authenticate(&client, &req.email, &req.password)
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "Authentication query failed");
@@ -40,13 +41,14 @@ async fn login(
         })?;
 
     match result {
-        Some((user_id, role, must_change_password)) => {
-            let token = crate::auth::create_token(user_id, &req.username, &role, &state.jwt_secret)
+        Some((user_id, email, role, must_change_password, status)) => {
+            let token = crate::auth::create_token(user_id, &email, &role, &state.jwt_secret)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             Ok(Json(LoginResponse {
                 token,
                 role,
-                username: req.username,
+                email,
+                status,
                 must_change_password,
             }))
         }
@@ -58,7 +60,6 @@ async fn login(
 pub struct ChangePasswordRequest {
     current_password: String,
     new_password: String,
-    email: Option<String>,
 }
 
 async fn change_password(
@@ -89,14 +90,11 @@ async fn change_password(
         &auth_user.user_id,
         &payload.current_password,
         &payload.new_password,
-        payload.email.as_deref(),
     )
     .await
     {
         Ok(Ok(())) => {
-            if let Some(ref email) = payload.email {
-                tracing::info!(username = %auth_user.username, email = %email, "Password changed, email set");
-            }
+            tracing::info!(user_email = %auth_user.email, "Password changed");
             Json(serde_json::json!({ "success": true })).into_response()
         }
         Ok(Err(msg)) => (StatusCode::BAD_REQUEST, msg).into_response(),
@@ -119,14 +117,19 @@ async fn get_profile(
         Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response(),
     };
 
-    let email = crate::db::users::get_email(&client, &auth_user.user_id)
+    let profile = crate::db::users::get_profile_info(&client, &auth_user.user_id)
         .await
         .unwrap_or(None);
 
+    let (email, status) = match profile {
+        Some((e, s)) => (e, s),
+        None => (auth_user.email.clone(), "active".to_string()),
+    };
+
     Json(serde_json::json!({
-        "username": auth_user.username,
-        "role": auth_user.role,
         "email": email,
+        "role": auth_user.role,
+        "status": status,
     }))
     .into_response()
 }
@@ -150,22 +153,21 @@ async fn forgot_password(
     };
 
     match crate::db::users::create_reset_token(&client, &req.email).await {
-        Ok(Some((username, token))) => {
+        Ok(Some((user_email, token))) => {
             // Try to send email; if SMTP not configured, log the link
             let dashboard_url = std::env::var("DASHBOARD_PUBLIC_URL")
                 .unwrap_or_else(|_| "http://localhost:5173".into());
             let reset_url = format!("{dashboard_url}/reset-password?token={token}");
 
-            if let Err(e) = send_reset_email(&req.email, &username, &reset_url).await {
+            if let Err(e) = send_reset_email(&req.email, &user_email, &reset_url).await {
                 tracing::warn!(error = %e, "SMTP not configured or send failed — logging reset link");
                 tracing::info!(
-                    username = %username,
-                    email = %req.email,
+                    email = %user_email,
                     reset_url = %reset_url,
                     "PASSWORD RESET LINK (SMTP unavailable)"
                 );
             } else {
-                tracing::info!(username = %username, email = %req.email, "Password reset email sent");
+                tracing::info!(email = %user_email, "Password reset email sent");
             }
         }
         Ok(None) => {
@@ -208,7 +210,7 @@ async fn reset_password(
 }
 
 /// Send a password reset email via SMTP.
-async fn send_reset_email(to: &str, username: &str, reset_url: &str) -> anyhow::Result<()> {
+async fn send_reset_email(to: &str, display_name: &str, reset_url: &str) -> anyhow::Result<()> {
     use lettre::{
         message::header::ContentType, transport::smtp::authentication::Credentials,
         AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
@@ -227,7 +229,7 @@ async fn send_reset_email(to: &str, username: &str, reset_url: &str) -> anyhow::
         .subject("Networker Dashboard — Password Reset")
         .header(ContentType::TEXT_PLAIN)
         .body(format!(
-            "Hi {username},\n\n\
+            "Hi {display_name},\n\n\
              A password reset was requested for your Networker Dashboard account.\n\n\
              Click the link below to set a new password (valid for 1 hour):\n\n\
              {reset_url}\n\n\

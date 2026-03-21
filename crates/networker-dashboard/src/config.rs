@@ -7,6 +7,7 @@ pub struct DashboardConfig {
     pub database_url: String,
     pub jwt_secret: String,
     pub admin_password: String,
+    pub admin_email: Option<String>,
     pub port: u16,
     pub bind_addr: String,
     pub cors_origin: Option<String>,
@@ -45,12 +46,15 @@ impl DashboardConfig {
             );
         }
 
+        let admin_email = std::env::var("DASHBOARD_ADMIN_EMAIL").ok().filter(|s| !s.is_empty());
+
         Ok(Self {
             database_url: std::env::var("DASHBOARD_DB_URL").unwrap_or_else(|_| {
                 "postgres://networker:networker@localhost:5432/networker_dashboard".into()
             }),
             jwt_secret,
             admin_password,
+            admin_email,
             port: match std::env::var("DASHBOARD_PORT") {
                 Ok(p) if !p.is_empty() => p.parse::<u16>().map_err(|e| {
                     anyhow::anyhow!("DASHBOARD_PORT={p:?} is not a valid port number: {e}")

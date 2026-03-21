@@ -4,7 +4,7 @@ import { api } from '../api/client';
 import { useAuthStore } from '../stores/authStore';
 
 export function LoginPage() {
-  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -16,15 +16,15 @@ export function LoginPage() {
     setError('');
     setLoading(true);
     try {
-      const res = await api.login(username, password);
-      login(res.token, res.username, res.role, res.must_change_password);
+      const res = await api.login(email, password);
+      login(res.token, res.email, res.role, res.must_change_password, res.status);
       if (res.must_change_password) {
         navigate('/change-password');
       } else {
         navigate('/');
       }
     } catch {
-      setError('Wrong username or password');
+      setError('Wrong email or password');
     } finally {
       setLoading(false);
     }
@@ -53,18 +53,18 @@ export function LoginPage() {
           )}
 
           <div className="mb-4">
-            <label htmlFor="login-username" className="block text-xs text-gray-600 mb-1.5 uppercase tracking-wider">
-              Username
+            <label htmlFor="login-email" className="block text-xs text-gray-600 mb-1.5 uppercase tracking-wider">
+              Email
             </label>
             <div className="flex items-center border-b border-gray-700 focus-within:border-green-500/50 transition-colors">
               <span className="text-green-600/60 text-sm mr-2 select-none">&gt;</span>
               <input
-                id="login-username"
-                type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
+                id="login-email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
                 className="w-full bg-transparent py-2 text-sm text-gray-200 focus:outline-none placeholder:text-gray-700"
-                placeholder="admin"
+                placeholder="you@company.com"
                 autoFocus
               />
             </div>

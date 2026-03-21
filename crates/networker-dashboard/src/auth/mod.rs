@@ -11,10 +11,34 @@ use uuid::Uuid;
 
 use crate::AppState;
 
+/// Role-based access control.
+/// Used in PR 2 for RBAC middleware enforcement.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[allow(dead_code)] // Role enum used in PR 2 RBAC middleware
+pub enum Role {
+    Admin,
+    Operator,
+    Viewer,
+}
+
+#[allow(dead_code)] // has_permission used in PR 2 RBAC middleware
+impl Role {
+    /// Check if this role has at least the permissions of `required`.
+    pub fn has_permission(&self, required: &Role) -> bool {
+        matches!(
+            (self, required),
+            (Role::Admin, _)
+                | (Role::Operator, Role::Operator | Role::Viewer)
+                | (Role::Viewer, Role::Viewer)
+        )
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
     pub sub: Uuid,
-    pub username: String,
+    pub email: String,
     pub role: String,
     pub exp: usize,
     pub iat: usize,
@@ -24,20 +48,20 @@ pub struct Claims {
 #[allow(dead_code)] // Fields read in Phase 2 RBAC checks
 pub struct AuthUser {
     pub user_id: Uuid,
-    pub username: String,
+    pub email: String,
     pub role: String,
 }
 
 pub fn create_token(
     user_id: Uuid,
-    username: &str,
+    email: &str,
     role: &str,
     secret: &str,
 ) -> anyhow::Result<String> {
     let now = chrono::Utc::now().timestamp() as usize;
     let claims = Claims {
         sub: user_id,
-        username: username.to_string(),
+        email: email.to_string(),
         role: role.to_string(),
         exp: now + 24 * 3600, // 24 hours
         iat: now,
@@ -105,7 +129,7 @@ pub async fn require_auth(
 
             req.extensions_mut().insert(AuthUser {
                 user_id: claims.sub,
-                username: claims.username,
+                email: claims.email,
                 role: claims.role,
             });
             next.run(req).await

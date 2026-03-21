@@ -19,8 +19,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
   if (res.status === 401) {
     localStorage.removeItem('token');
-    localStorage.removeItem('username');
+    localStorage.removeItem('email');
     localStorage.removeItem('role');
+    localStorage.removeItem('status');
     localStorage.removeItem('mustChangePassword');
     window.location.href = '/login';
     throw new Error('Unauthorized');
@@ -34,20 +35,20 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  login: (username: string, password: string) =>
-    request<{ token: string; role: string; username: string; must_change_password: boolean }>('/auth/login', {
+  login: (email: string, password: string) =>
+    request<{ token: string; role: string; email: string; status: string; must_change_password: boolean }>('/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ email, password }),
     }),
 
-  changePassword: (currentPassword: string, newPassword: string, email?: string) =>
+  changePassword: (currentPassword: string, newPassword: string) =>
     request<{ success: boolean }>('/auth/change-password', {
       method: 'POST',
-      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword, ...(email ? { email } : {}) }),
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
     }),
 
   getProfile: () =>
-    request<{ username: string; role: string; email: string | null }>('/auth/profile'),
+    request<{ email: string; role: string }>('/auth/profile'),
 
   forgotPassword: (email: string) =>
     fetch(`${API_BASE}/auth/forgot-password`, {
