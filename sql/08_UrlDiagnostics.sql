@@ -42,6 +42,7 @@ CREATE TABLE dbo.UrlTestRun (
     FailureCount                INT             NOT NULL DEFAULT 0,
     HarPath                     NVARCHAR(MAX)   NULL,
     PcapPath                    NVARCHAR(MAX)   NULL,
+    PcapSummaryJson             NVARCHAR(MAX)   NULL,
     CaptureErrors               NVARCHAR(MAX)   NULL,
     EnvironmentNotes            NVARCHAR(MAX)   NULL,
     CONSTRAINT PK_UrlTestRun PRIMARY KEY (Id)
@@ -97,14 +98,14 @@ CREATE TABLE dbo.UrlTestProtocolRun (
 );
 GO
 
-CREATE INDEX IF NOT EXISTS IX_UrlTestRun_StartedAt
-    ON dbo.UrlTestRun (StartedAt DESC);
-CREATE INDEX IF NOT EXISTS IX_UrlTestRun_Status
-    ON dbo.UrlTestRun (Status, StartedAt DESC);
-CREATE INDEX IF NOT EXISTS IX_UrlTestResource_RunId
-    ON dbo.UrlTestResource (UrlTestRunId);
-CREATE INDEX IF NOT EXISTS IX_UrlTestProtocolRun_RunId
-    ON dbo.UrlTestProtocolRun (UrlTestRunId, ProtocolMode, RunNumber);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_UrlTestRun_StartedAt' AND object_id = OBJECT_ID(N'dbo.UrlTestRun'))
+    CREATE INDEX IX_UrlTestRun_StartedAt ON dbo.UrlTestRun (StartedAt DESC);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_UrlTestRun_Status' AND object_id = OBJECT_ID(N'dbo.UrlTestRun'))
+    CREATE INDEX IX_UrlTestRun_Status ON dbo.UrlTestRun (Status, StartedAt DESC);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_UrlTestResource_RunId' AND object_id = OBJECT_ID(N'dbo.UrlTestResource'))
+    CREATE INDEX IX_UrlTestResource_RunId ON dbo.UrlTestResource (UrlTestRunId);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_UrlTestProtocolRun_RunId' AND object_id = OBJECT_ID(N'dbo.UrlTestProtocolRun'))
+    CREATE INDEX IX_UrlTestProtocolRun_RunId ON dbo.UrlTestProtocolRun (UrlTestRunId, ProtocolMode, RunNumber);
 GO
 
 PRINT 'URL page-load diagnostic foundation schema created / verified successfully.';

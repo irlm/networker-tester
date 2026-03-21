@@ -17,12 +17,12 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 /// Request contract for a URL page-load diagnostic run.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct UrlDiagnosticRequest {
     pub url: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing)]
     pub auth_token: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing)]
     pub cookie: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub headers: Vec<(String, String)>,
@@ -56,6 +56,60 @@ fn default_follow_redirects() -> bool {
 
 fn default_http3_repeat_count() -> u32 {
     10
+}
+
+impl std::fmt::Debug for UrlDiagnosticRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UrlDiagnosticRequest")
+            .field("url", &self.url)
+            .field(
+                "auth_token",
+                &self.auth_token.as_ref().map(|_| "<redacted>"),
+            )
+            .field("cookie", &self.cookie.as_ref().map(|_| "<redacted>"))
+            .field("headers", &self.headers)
+            .field("timeout_ms", &self.timeout_ms)
+            .field("follow_redirects", &self.follow_redirects)
+            .field("capture_pcap", &self.capture_pcap)
+            .field("capture_har", &self.capture_har)
+            .field("protocol_force", &self.protocol_force)
+            .field("http3_repeat_count", &self.http3_repeat_count)
+            .field("ignore_tls_validation", &self.ignore_tls_validation)
+            .field("user_agent", &self.user_agent)
+            .field("browser_engine", &self.browser_engine)
+            .field("network_idle_timeout_ms", &self.network_idle_timeout_ms)
+            .field("artifact_output_dir", &self.artifact_output_dir)
+            .finish()
+    }
+}
+
+fn host_resolves_to_blocked_address(host: &str, port: u16) -> anyhow::Result<bool> {
+    use std::net::ToSocketAddrs;
+
+    let addrs = (host, port)
+        .to_socket_addrs()
+        .with_context(|| format!("resolve URL diagnostic host '{host}'"))?;
+    Ok(addrs
+        .into_iter()
+        .any(|addr| is_blocked_url_test_ip(addr.ip())))
+}
+
+fn is_blocked_url_test_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || (v4.octets()[0] == 100 && (64..=127).contains(&v4.octets()[1]))
+        }
+        std::net::IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_unique_local()
+                || v6.is_unicast_link_local()
+        }
+    }
 }
 
 /// Runtime capability flags for optional subsystems.
@@ -668,9 +722,11 @@ async fn execute_primary_page_diagnostic_impl(
 
     let chrome_path =
         find_chrome_binary().context("browser engine unavailable in current runtime")?;
-    let browser_config = BrowserConfig::builder()
-        .chrome_executable(chrome_path)
-        .no_sandbox()
+    let mut browser_config = BrowserConfig::builder().chrome_executable(chrome_path);
+    if crate::cli::running_as_root() || std::env::var_os("NETWORKER_NO_SANDBOX").is_some() {
+        browser_config = browser_config.no_sandbox();
+    }
+    let browser_config = browser_config
         .build()
         .map_err(|e| anyhow::anyhow!("build browser config: {e}"))?;
 
@@ -820,7 +876,6 @@ async fn execute_primary_page_diagnostic_impl(
         dns_ms: f64,
         connect_ms: f64,
         handshake_ms: f64,
-        resource_count: usize,
         origins: Vec<String>,
         resources: Vec<PerfResource>,
     }
@@ -838,7 +893,6 @@ async fn execute_primary_page_diagnostic_impl(
     run.dns_ms = Some(snapshot.dns_ms);
     run.connect_ms = Some(snapshot.connect_ms);
     run.handshake_ms = Some(snapshot.handshake_ms);
-    run.total_requests = snapshot.resource_count as u32;
     run.environment_notes = Some(format!("origins_contacted={}", snapshot.origins.len()));
 
     let run_id = run.id;
@@ -925,6 +979,27 @@ impl UrlDiagnosticRequest {
             "http" | "https" => {}
             other => anyhow::bail!("unsupported URL scheme '{other}' (expected http or https)"),
         }
+
+        let host = parsed
+            .host_str()
+            .context("URL diagnostic target must include a host")?;
+        let host_lc = host.to_ascii_lowercase();
+        if host_lc == "localhost" || host_lc == "metadata.google.internal" {
+            anyhow::bail!("URL diagnostic target host '{host}' is not allowed");
+        }
+        if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+            if is_blocked_url_test_ip(ip) {
+                anyhow::bail!("URL diagnostic target IP '{host}' is not allowed");
+            }
+        } else {
+            let port = parsed.port_or_known_default().unwrap_or(443);
+            if host_resolves_to_blocked_address(host, port)? {
+                anyhow::bail!(
+                    "URL diagnostic target resolves to a private, loopback, or link-local address"
+                );
+            }
+        }
+
         if self.timeout_ms == Some(0) {
             anyhow::bail!("timeout_ms must be greater than zero when provided");
         }
@@ -991,6 +1066,40 @@ mod tests {
         req.protocol_force = Some("h9".into());
         let err = req.validate().unwrap_err().to_string();
         assert!(err.contains("protocol_force"));
+    }
+
+    #[test]
+    fn request_validation_rejects_loopback_target() {
+        let mut req = valid_request();
+        req.url = "http://127.0.0.1/".into();
+        let err = req.validate().unwrap_err().to_string();
+        assert!(err.contains("not allowed"));
+    }
+
+    #[test]
+    fn request_validation_rejects_metadata_hostname() {
+        let mut req = valid_request();
+        req.url = "http://metadata.google.internal/computeMetadata/v1/".into();
+        let err = req.validate().unwrap_err().to_string();
+        assert!(err.contains("not allowed"));
+    }
+
+    #[test]
+    fn request_serialization_redacts_credentials() {
+        let mut req = valid_request();
+        req.auth_token = Some("secret-token".into());
+        req.cookie = Some("session=secret".into());
+
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(!json.contains("secret-token"));
+        assert!(!json.contains("session=secret"));
+        assert!(!json.contains("auth_token"));
+        assert!(!json.contains("cookie"));
+
+        let debug = format!("{req:?}");
+        assert!(!debug.contains("secret-token"));
+        assert!(!debug.contains("session=secret"));
+        assert!(debug.contains("<redacted>"));
     }
 
     #[test]

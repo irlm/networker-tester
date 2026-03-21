@@ -324,55 +324,12 @@ async fn main() -> anyhow::Result<()> {
 }
 
 fn make_url_test_capture_config(cfg: &ResolvedConfig) -> ResolvedConfig {
-    ResolvedConfig {
-        targets: vec![cfg
-            .url_test_url
-            .clone()
-            .unwrap_or_else(|| "https://example.com".into())],
-        url_test_url: cfg.url_test_url.clone(),
-        url_test_auth_token: cfg.url_test_auth_token.clone(),
-        url_test_cookie: cfg.url_test_cookie.clone(),
-        url_test_headers: cfg.url_test_headers.clone(),
-        url_test_capture_har: cfg.url_test_capture_har,
-        url_test_capture_pcap: cfg.url_test_capture_pcap,
-        url_test_protocol_force: cfg.url_test_protocol_force.clone(),
-        url_test_http3_repeat: cfg.url_test_http3_repeat,
-        url_test_json: cfg.url_test_json,
-        modes: cfg.modes.clone(),
-        runs: cfg.runs,
-        concurrency: cfg.concurrency,
-        timeout: cfg.timeout,
-        payload_size: cfg.payload_size,
-        payload_sizes: cfg.payload_sizes.clone(),
-        udp_port: cfg.udp_port,
-        udp_throughput_port: cfg.udp_throughput_port,
-        udp_probes: cfg.udp_probes,
-        connection_reuse: cfg.connection_reuse,
-        dns_enabled: cfg.dns_enabled,
-        ipv4_only: cfg.ipv4_only,
-        ipv6_only: cfg.ipv6_only,
-        no_proxy: cfg.no_proxy,
-        proxy: cfg.proxy.clone(),
-        ca_bundle: cfg.ca_bundle.clone(),
-        insecure: cfg.insecure,
-        retries: cfg.retries,
-        output_dir: cfg.output_dir.clone(),
-        html_report: cfg.html_report.clone(),
-        css: cfg.css.clone(),
-        excel: cfg.excel,
-        json_stdout: cfg.json_stdout,
-        save_to_db: cfg.save_to_db,
-        db_url: cfg.db_url.clone(),
-        db_migrate: cfg.db_migrate,
-        save_to_sql: cfg.save_to_sql,
-        connection_string: cfg.connection_string.clone(),
-        log_level: cfg.log_level.clone(),
-        page_asset_sizes: cfg.page_asset_sizes.clone(),
-        page_preset_name: cfg.page_preset_name.clone(),
-        http_stacks: cfg.http_stacks.clone(),
-        packet_capture: cfg.packet_capture.clone(),
-        impairment: cfg.impairment.clone(),
-    }
+    let mut resolved = cfg.clone();
+    resolved.targets = vec![cfg
+        .url_test_url
+        .clone()
+        .unwrap_or_else(|| "https://example.com".into())];
+    resolved
 }
 
 async fn run_url_test_cli(cfg: &ResolvedConfig) -> anyhow::Result<()> {
@@ -388,7 +345,15 @@ async fn run_url_test_cli(cfg: &ResolvedConfig) -> anyhow::Result<()> {
             let (name, value) = h.split_once(':').ok_or_else(|| {
                 anyhow::anyhow!("invalid --url-test-header (expected 'Name: value')")
             })?;
-            Ok((name.trim().to_string(), value.trim().to_string()))
+            let name = name.trim();
+            let value = value.trim();
+            if name.is_empty()
+                || name.contains(['\r', '\n'])
+                || value.contains(['\r', '\n'])
+            {
+                anyhow::bail!("invalid --url-test-header (header names/values must not contain CR/LF and name must be non-empty)");
+            }
+            Ok((name.to_string(), value.to_string()))
         })
         .collect::<anyhow::Result<_>>()?;
 
