@@ -2,12 +2,13 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     routing::get,
-    Json, Router,
+    Extension, Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::auth::{require_role, AuthUser, Role};
 use crate::AppState;
 
 #[derive(Serialize)]
@@ -57,8 +58,10 @@ async fn list_agents(
 
 async fn create_agent(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Json(req): Json<CreateAgentRequest>,
 ) -> Result<Json<CreateAgentResponse>, StatusCode> {
+    require_role(&user, Role::Operator)?;
     let api_key = format!("agent-{}", Uuid::new_v4());
 
     let client = state.db.get().await.map_err(|e| {
@@ -156,8 +159,10 @@ async fn create_agent(
 
 async fn delete_agent(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(agent_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    require_role(&user, Role::Operator)?;
     // Kill the tester process if we spawned it
     let pid = state.tester_processes.write().await.remove(&agent_id);
     if let Some(pid) = pid {

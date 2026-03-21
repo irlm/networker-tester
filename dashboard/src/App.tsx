@@ -16,6 +16,7 @@ import { DeployPage } from './pages/DeployPage';
 import { DeployDetailPage } from './pages/DeployDetailPage';
 import { SchedulesPage } from './pages/SchedulesPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { UsersPage } from './pages/UsersPage';
 
 const statusColors: Record<ConnectionStatus, string> = {
   connected: 'bg-green-400',
@@ -59,6 +60,7 @@ function ConnectionBanner({ status }: { status: ConnectionStatus }) {
 function AuthenticatedApp() {
   const status = useWebSocket();
   const mustChangePassword = useAuthStore((s) => s.mustChangePassword);
+  const role = useAuthStore((s) => s.role);
   const location = useLocation();
 
   if (mustChangePassword && location.pathname !== '/change-password') {
@@ -83,6 +85,7 @@ function AuthenticatedApp() {
           <Route path="/jobs" element={<Navigate to="/tests" />} />
           <Route path="/jobs/:jobId" element={<Navigate to="/tests" />} />
           <Route path="/agents" element={<Navigate to="/tests" />} />
+          {role === 'admin' && <Route path="/users" element={<UsersPage />} />}
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/runs" element={<RunsPage />} />
           <Route path="/runs/:runId" element={<RunDetailPage />} />

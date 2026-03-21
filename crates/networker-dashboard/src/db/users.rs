@@ -1,7 +1,127 @@
 use chrono::{DateTime, Utc};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tokio_postgres::Client;
 use uuid::Uuid;
+
+#[derive(Debug, Serialize)]
+pub struct UserRow {
+    pub user_id: Uuid,
+    pub email: String,
+    pub role: String,
+    pub status: String,
+    pub auth_provider: String,
+    pub display_name: Option<String>,
+    pub last_login_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// List all users ordered by creation date.
+pub async fn list_users(client: &Client) -> anyhow::Result<Vec<UserRow>> {
+    let rows = client
+        .query(
+            "SELECT user_id, email, role, status, \
+                    COALESCE(auth_provider, 'local') AS auth_provider, \
+                    display_name, last_login_at, created_at \
+             FROM dash_user ORDER BY created_at",
+            &[],
+        )
+        .await?;
+    Ok(rows
+        .iter()
+        .map(|r| UserRow {
+            user_id: r.get("user_id"),
+            email: r.get("email"),
+            role: r.get("role"),
+            status: r.get("status"),
+            auth_provider: r.get("auth_provider"),
+            display_name: r.get("display_name"),
+            last_login_at: r.get("last_login_at"),
+            created_at: r.get("created_at"),
+        })
+        .collect())
+}
+
+/// List users with status = 'pending'.
+pub async fn list_pending(client: &Client) -> anyhow::Result<Vec<UserRow>> {
+    let rows = client
+        .query(
+            "SELECT user_id, email, role, status, \
+                    COALESCE(auth_provider, 'local') AS auth_provider, \
+                    display_name, last_login_at, created_at \
+             FROM dash_user WHERE status = 'pending' ORDER BY created_at",
+            &[],
+        )
+        .await?;
+    Ok(rows
+        .iter()
+        .map(|r| UserRow {
+            user_id: r.get("user_id"),
+            email: r.get("email"),
+            role: r.get("role"),
+            status: r.get("status"),
+            auth_provider: r.get("auth_provider"),
+            display_name: r.get("display_name"),
+            last_login_at: r.get("last_login_at"),
+            created_at: r.get("created_at"),
+        })
+        .collect())
+}
+
+/// Approve a pending user by setting their status to 'active' and role.
+pub async fn approve_user(client: &Client, user_id: &Uuid, role: &str) -> anyhow::Result<bool> {
+    let n = client
+        .execute(
+            "UPDATE dash_user SET status = 'active', role = $1 WHERE user_id = $2 AND status = 'pending'",
+            &[&role, user_id],
+        )
+        .await?;
+    Ok(n > 0)
+}
+
+/// Deny a pending user by setting their status to 'denied'.
+pub async fn deny_user(client: &Client, user_id: &Uuid) -> anyhow::Result<bool> {
+    let n = client
+        .execute(
+            "UPDATE dash_user SET status = 'denied' WHERE user_id = $1 AND status = 'pending'",
+            &[user_id],
+        )
+        .await?;
+    Ok(n > 0)
+}
+
+/// Change a user's role.
+pub async fn set_role(client: &Client, user_id: &Uuid, role: &str) -> anyhow::Result<bool> {
+    let n = client
+        .execute(
+            "UPDATE dash_user SET role = $1 WHERE user_id = $2 AND status = 'active'",
+            &[&role, user_id],
+        )
+        .await?;
+    Ok(n > 0)
+}
+
+/// Disable an active user.
+pub async fn disable_user(client: &Client, user_id: &Uuid) -> anyhow::Result<bool> {
+    let n = client
+        .execute(
+            "UPDATE dash_user SET status = 'disabled' WHERE user_id = $1 AND status = 'active'",
+            &[user_id],
+        )
+        .await?;
+    Ok(n > 0)
+}
+
+/// Count pending users.
+pub async fn get_pending_count(client: &Client) -> anyhow::Result<i64> {
+    let row = client
+        .query_one(
+            "SELECT COUNT(*) FROM dash_user WHERE status = 'pending'",
+            &[],
+        )
+        .await?;
+    Ok(row.get(0))
+}
 
 /// Hash a token with SHA-256 so we never store plaintext reset tokens in the DB.
 fn hash_token(token: &str) -> String {

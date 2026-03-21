@@ -171,6 +171,17 @@ export interface Schedule {
   last_run_at: string | null;
 }
 
+export interface DashUser {
+  user_id: string;
+  email: string;
+  role: string;
+  status: string;
+  auth_provider: string;
+  display_name: string | null;
+  last_login_at: string | null;
+  created_at: string;
+}
+
 export interface LiveAttempt {
   attempt_id: string;
   run_id: string;

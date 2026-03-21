@@ -1,0 +1,200 @@
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    routing::{get, post, put},
+    Extension, Json, Router,
+};
+use serde::Deserialize;
+use std::sync::Arc;
+use uuid::Uuid;
+
+use crate::auth::{require_role, AuthUser, Role};
+use crate::AppState;
+
+async fn list_users(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<Json<Vec<crate::db::users::UserRow>>, StatusCode> {
+    require_role(&user, Role::Admin)?;
+    let client = state.db.get().await.map_err(|e| {
+        tracing::error!(error = %e, "DB pool error in list_users");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    let users = crate::db::users::list_users(&client).await.map_err(|e| {
+        tracing::error!(error = %e, "Failed to list users");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    Ok(Json(users))
+}
+
+async fn list_pending(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    require_role(&user, Role::Admin)?;
+    let client = state.db.get().await.map_err(|e| {
+        tracing::error!(error = %e, "DB pool error in list_pending");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    let users = crate::db::users::list_pending(&client)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to list pending users");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    let count = crate::db::users::get_pending_count(&client)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to get pending count");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    Ok(Json(serde_json::json!({
+        "users": users,
+        "count": count,
+    })))
+}
+
+#[derive(Deserialize)]
+pub struct ApproveRequest {
+    pub role: String,
+}
+
+async fn approve_user(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(user_id): Path<Uuid>,
+    Json(req): Json<ApproveRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    require_role(&user, Role::Admin)?;
+
+    // Validate role value
+    if !["admin", "operator", "viewer"].contains(&req.role.as_str()) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let client = state.db.get().await.map_err(|e| {
+        tracing::error!(error = %e, "DB pool error in approve_user");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    let approved = crate::db::users::approve_user(&client, &user_id, &req.role)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to approve user");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    if !approved {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    tracing::info!(user_id = %user_id, role = %req.role, approved_by = %user.email, "User approved");
+    Ok(Json(serde_json::json!({ "approved": true })))
+}
+
+async fn deny_user(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(user_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    require_role(&user, Role::Admin)?;
+    let client = state.db.get().await.map_err(|e| {
+        tracing::error!(error = %e, "DB pool error in deny_user");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    let denied = crate::db::users::deny_user(&client, &user_id)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to deny user");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    if !denied {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    tracing::info!(user_id = %user_id, denied_by = %user.email, "User denied");
+    Ok(Json(serde_json::json!({ "denied": true })))
+}
+
+#[derive(Deserialize)]
+pub struct SetRoleRequest {
+    pub role: String,
+}
+
+async fn set_role(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(user_id): Path<Uuid>,
+    Json(req): Json<SetRoleRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    require_role(&user, Role::Admin)?;
+
+    if !["admin", "operator", "viewer"].contains(&req.role.as_str()) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    // Prevent admin from demoting themselves
+    if user.user_id == user_id {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let client = state.db.get().await.map_err(|e| {
+        tracing::error!(error = %e, "DB pool error in set_role");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    let updated = crate::db::users::set_role(&client, &user_id, &req.role)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to set user role");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    if !updated {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    tracing::info!(user_id = %user_id, new_role = %req.role, changed_by = %user.email, "User role updated");
+    Ok(Json(serde_json::json!({ "updated": true })))
+}
+
+async fn disable_user(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(user_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    require_role(&user, Role::Admin)?;
+
+    // Prevent admin from disabling themselves
+    if user.user_id == user_id {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let client = state.db.get().await.map_err(|e| {
+        tracing::error!(error = %e, "DB pool error in disable_user");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    let disabled = crate::db::users::disable_user(&client, &user_id)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to disable user");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    if !disabled {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    tracing::info!(user_id = %user_id, disabled_by = %user.email, "User disabled");
+    Ok(Json(serde_json::json!({ "disabled": true })))
+}
+
+pub fn router(state: Arc<AppState>) -> Router {
+    Router::new()
+        .route("/users", get(list_users))
+        .route("/users/pending", get(list_pending))
+        .route("/users/:user_id/approve", post(approve_user))
+        .route("/users/:user_id/deny", post(deny_user))
+        .route("/users/:user_id/role", put(set_role))
+        .route("/users/:user_id/disable", post(disable_user))
+        .with_state(state)
+}
