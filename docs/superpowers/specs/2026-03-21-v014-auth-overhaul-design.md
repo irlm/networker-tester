@@ -78,6 +78,7 @@ ALTER TABLE dash_user ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(20) NOT NUL
 ALTER TABLE dash_user ADD COLUMN IF NOT EXISTS sso_subject_id VARCHAR(255);
 ALTER TABLE dash_user ADD COLUMN IF NOT EXISTS display_name VARCHAR(200);
 ALTER TABLE dash_user ADD COLUMN IF NOT EXISTS avatar_url TEXT;
+ALTER TABLE dash_user ADD COLUMN IF NOT EXISTS sso_only BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- Allow NULL password_hash for SSO-only accounts
 ALTER TABLE dash_user ALTER COLUMN password_hash DROP NOT NULL;
@@ -145,11 +146,13 @@ struct Claims {
 
 **Invite flow (`POST /api/users/invite`):**
 - Request body: `{ email: string, role: string }`
-- Creates `dash_user` with `status = 'active'`, `auth_provider = 'local'`, `must_change_password = true`
+- Creates `dash_user` with `status = 'pending'`, assigned `role`, `must_change_password = true`
 - Generates a one-time setup token (like password reset, 24h expiry)
-- Sends email via ACS: "You've been invited to Networker Dashboard. Click here to set your password."
+- Sends email via ACS with context-aware message:
+  - If SSO is configured for the email's domain: "You've been invited to Networker Dashboard. Sign in with your {Microsoft/Google} account, or click here to set a local password."
+  - Otherwise: "You've been invited to Networker Dashboard. Click here to set your password."
+- Admin then approves the user from the Users page (or: admin can pre-approve by setting `auto_approve_invited = true` on the invite, which creates with `status = 'active'`)
 - If the email is already registered: returns 409 Conflict
-- If SSO is configured for the email's domain: creates the user but notes they can also sign in via SSO
 
 #### Modified Endpoints
 
@@ -229,11 +232,29 @@ DASHBOARD_ADMIN_PASSWORD=<temp-password>  # optional, generated if absent
 - If the existing account has `auth_provider = 'local'`: the user must verify ownership by entering their local password. On success, `auth_provider` is upgraded to the SSO provider and `sso_subject_id` is set. Password is retained as a fallback.
 - If the existing account already has a different SSO provider: reject with "This email is already linked to another provider. Contact your admin."
 
+**SSO-only enforcement:** Admin can toggle per-user or per-domain to force SSO-only login. When `sso_only = true`, password login is rejected even if `password_hash` is set. Implemented as a column on `dash_user` (per-user) and optionally as a domain-level rule in config. This prevents SSO users from weakening security by setting a weak local password.
+
 **Password reset tokens:** Stored as `SHA-256(token)` in the database, not plaintext. The raw token is sent in the email. On reset, the submitted token is hashed and compared. This follows the same pattern as Django/Laravel.
 
-**Status enforcement:** Every authenticated request checks `dash_user.status = 'active'` via a DB query (consistent with the existing `must_change_password` enforcement pattern). When an admin disables a user, the next request from that user is rejected. The existing `must_change_password` flow is retained for local accounts only — SSO accounts bypass it.
+**Status enforcement:** Every authenticated request checks `dash_user.status = 'active'` via a DB query (consistent with the existing `must_change_password` enforcement pattern). When an admin disables a user, the next request from that user is rejected. The existing `must_change_password` flow is retained for local accounts only — SSO accounts bypass it permanently (they never see the change-password screen since their auth is delegated to the SSO provider).
 
-**Rate limiting:** `POST /auth/login`, `/auth/forgot-password`, and `/auth/check-email` should be rate-limited (10 requests per minute per IP) to prevent brute-force and enumeration attacks. Implementation: in-memory counter with IP key, or a middleware crate like `tower-governor`.
+**Rate limiting:** Rate-limited endpoints (10 requests/min per IP, via `tower-governor`):
+- `POST /auth/login` — brute-force prevention
+- `POST /auth/forgot-password` — abuse prevention
+- `POST /auth/check-email` — enumeration prevention
+- `GET /auth/sso/:provider` — SSO phishing amplification prevention
+- `GET /auth/callback/:provider` — replay/abuse prevention (OAuth providers also limit this)
+
+**Domain SSO disclosure:** The `/auth/check-email` endpoint reveals which domains have SSO configured. This is standard practice (Slack, Notion, Microsoft 365 all do this) but can be toggled off via `DASHBOARD_HIDE_SSO_DOMAINS=true` env var. When hidden, the email "Continue" button always shows the password field, and SSO is only available via the explicit provider buttons.
+
+**`az vm run-command` security posture:**
+- The identity running `az` commands must have `Virtual Machine Contributor` role (or a least-privilege custom role) at the resource group scope.
+- **Use managed identity** (system-assigned on the dashboard VM) instead of user principal with `az login`. This avoids storing credentials and provides automatic rotation.
+- **Command audit**: Every invoked command + output (stdout/stderr) is logged to the dashboard's `deployment.log` column AND to Azure Activity Log (automatic with `az vm run-command`).
+- **Risk**: Anyone who compromises the dashboard backend gets root on target VMs (run-command executes as root by default). Mitigate with least-privilege managed identity scoped to `networker-rg` only.
+- **v0.15 consideration**: Add per-tester approval step for destructive commands (delete, stop).
+
+**Role as Rust enum:** The `role` field in JWT claims and DB should use a Rust enum (`Admin`, `Operator`, `Viewer`) to prevent typos and enable compile-time checking. Serialized as lowercase strings in JSON/DB for backward compatibility.
 
 ### Frontend Changes
 
@@ -244,7 +265,7 @@ DASHBOARD_ADMIN_PASSWORD=<temp-password>  # optional, generated if absent
 | Login (redesigned) | `/login` | Public |
 | Forgot Password | `/forgot-password` | Public |
 | Reset Password | `/reset-password?token=...` | Public |
-| SSO Complete | `/auth/sso-complete` | Public (extracts JWT from fragment) |
+| SSO Complete | `/auth/sso-complete` | Public (exchanges one-time code for JWT) |
 | Pending Approval | `/pending` | Authenticated, status=pending |
 | Users Management | `/users` | admin only |
 
@@ -266,7 +287,7 @@ DASHBOARD_ADMIN_PASSWORD=<temp-password>  # optional, generated if absent
 - "Signed in as user@email.com" in green
 - Status card: "Waiting for admin approval"
 - "Sign out" button
-- Auto-polls `/auth/profile` every 10s — if status becomes 'active', redirects to `/`
+- Auto-polls `/auth/profile` every 10s — if status becomes 'active', redirects to `/`. (v0.15: replace polling with WebSocket/SSE for instant approval notification)
 
 #### Users Management Page (Unified Card List — Option B)
 
@@ -357,21 +378,27 @@ The local tester auto-spawn logic in `main.rs` (lines 142-287) is removed entire
 
 ### Email via Azure Communication Services
 
-Replace the `lettre` SMTP integration with Azure Communication Services HTTP API:
+Replace the `lettre` SMTP integration with Azure Communication Services. Use the `azure_communication_email` community crate (or `azure-communications`) to avoid manually implementing HMAC-SHA256 request signing, which is tedious and error-prone (wrong timestamp/nonce → 401s that are hard to debug).
 
 ```rust
+// Cargo.toml
+azure_communication_email = "0.1"  // or equivalent community crate
+
 async fn send_email(to: &str, subject: &str, body: &str) -> anyhow::Result<()> {
     let conn_str = std::env::var("DASHBOARD_ACS_CONNECTION_STRING")?;
     let sender = std::env::var("DASHBOARD_ACS_SENDER")?;
-
-    // Parse connection string for endpoint + access key
-    // POST https://{endpoint}/emails:send?api-version=2023-03-31
-    // Authorization: HMAC-SHA256 signed request
-    // Body: { senderAddress, recipients, content { subject, plainText } }
+    // Use crate's client, not manual HMAC signing
 }
 ```
 
 Falls back to logging the reset URL if ACS is not configured (same behavior as current SMTP fallback).
+
+**Deployment checklist for ACS email:**
+1. Create Azure Communication Services resource in Azure portal
+2. Configure email domain: either Azure-managed (`*.azurecomm.net`) or custom domain
+3. **For custom domains**: set up SPF, DKIM, and DMARC records in DNS — without these, deliverability collapses quickly (emails go to spam or get rejected)
+4. Set `DASHBOARD_ACS_CONNECTION_STRING` and `DASHBOARD_ACS_SENDER` env vars
+5. Verify sender address in Azure portal before first send
 
 ### Remote Commands via Azure VM Run Command
 
