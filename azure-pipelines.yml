@@ -1,0 +1,93 @@
+# Azure DevOps Pipeline — Deploy AletheDash to Azure VM
+# Triggered after GitHub Actions builds the release.
+# This pipeline downloads the release artifacts and deploys to the VM.
+
+trigger: none  # Not triggered by repo pushes — triggered manually or by GitHub webhook
+
+resources:
+  webhooks:
+    - webhook: GitHubRelease
+      connection: GitHubRelease
+      filters:
+        - path: action
+          value: published
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  resourceGroup: alethedash-rg
+  vmName: alethedash-vm
+  azureSubscription: Azure-AletheDash
+
+stages:
+  - stage: Deploy
+    displayName: Deploy to AletheDash VM
+    jobs:
+      - job: DeployDashboard
+        displayName: Deploy Dashboard
+        steps:
+          - task: AzureCLI@2
+            displayName: Download and deploy release
+            inputs:
+              azureSubscription: $(azureSubscription)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+
+                # Get latest release tag from GitHub
+                LATEST=$(curl -s https://api.github.com/repos/irlm/networker-tester/releases/latest | jq -r .tag_name)
+                echo "Deploying release: $LATEST"
+
+                # Deploy to VM
+                az vm run-command invoke \
+                  --resource-group $(resourceGroup) \
+                  --name $(vmName) \
+                  --command-id RunShellScript \
+                  --scripts "
+                    set -e
+                    TAG=$LATEST
+                    TARGET=x86_64-unknown-linux-musl
+                    cd /tmp
+
+                    # Download dashboard binary
+                    curl -sL https://github.com/irlm/networker-tester/releases/download/\${TAG}/networker-dashboard-\${TARGET}.tar.gz -o dashboard.tar.gz
+                    tar xzf dashboard.tar.gz
+                    sudo cp networker-dashboard /opt/alethedash/networker-dashboard
+                    sudo chmod +x /opt/alethedash/networker-dashboard
+
+                    # Download frontend
+                    curl -sL https://github.com/irlm/networker-tester/releases/download/\${TAG}/dashboard-frontend.tar.gz -o frontend.tar.gz
+                    sudo rm -rf /opt/alethedash/dashboard/dist/*
+                    sudo tar xzf frontend.tar.gz -C /opt/alethedash/dashboard/dist/
+
+                    # Download agent binary (if available)
+                    curl -sL https://github.com/irlm/networker-tester/releases/download/\${TAG}/networker-agent-\${TARGET}.tar.gz -o agent.tar.gz 2>/dev/null && \
+                      tar xzf agent.tar.gz && sudo cp networker-agent /opt/alethedash/ && sudo chmod +x /opt/alethedash/networker-agent || true
+
+                    # Restart
+                    sudo systemctl restart alethedash
+                    sleep 3
+                    systemctl is-active alethedash
+
+                    # Cleanup
+                    rm -f /tmp/dashboard.tar.gz /tmp/frontend.tar.gz /tmp/agent.tar.gz /tmp/networker-*
+
+                    echo \"Deployed \${TAG} successfully\"
+                  "
+
+          - task: AzureCLI@2
+            displayName: Verify deployment
+            inputs:
+              azureSubscription: $(azureSubscription)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                # Health check
+                sleep 5
+                STATUS=$(curl -s -o /dev/null -w '%{http_code}' https://alethedash.com)
+                echo "Health check: HTTP $STATUS"
+                if [ "$STATUS" != "200" ]; then
+                  echo "##vso[task.logissue type=warning]Dashboard returned HTTP $STATUS"
+                fi
