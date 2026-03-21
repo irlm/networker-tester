@@ -154,18 +154,21 @@ async fn forgot_password(
 
     match crate::db::users::create_reset_token(&client, &req.email).await {
         Ok(Some((user_email, token))) => {
-            // Try to send email; if SMTP not configured, log the link
             let reset_url = format!("{}/reset-password?token={token}", state.public_url);
+            let body = format!(
+                "Hi {user_email},\n\n\
+                 A password reset was requested for your Networker Dashboard account.\n\n\
+                 Click the link below to set a new password (valid for 1 hour):\n\n\
+                 {reset_url}\n\n\
+                 If you did not request this, ignore this email.\n\n\
+                 — Networker Dashboard"
+            );
 
-            if let Err(e) = send_reset_email(&req.email, &user_email, &reset_url).await {
-                tracing::warn!(error = %e, "SMTP not configured or send failed — logging reset link");
-                tracing::info!(
-                    email = %user_email,
-                    reset_url = %reset_url,
-                    "PASSWORD RESET LINK (SMTP unavailable)"
-                );
-            } else {
-                tracing::info!(email = %user_email, "Password reset email sent");
+            if let Err(e) =
+                crate::email::send_email(&req.email, "Networker Dashboard — Password Reset", &body)
+                    .await
+            {
+                tracing::warn!(error = %e, "Failed to send password reset email");
             }
         }
         Ok(None) => {
@@ -205,46 +208,6 @@ async fn reset_password(
         Ok(Err(msg)) => Err((StatusCode::BAD_REQUEST, msg)),
         Err(_) => Err((StatusCode::INTERNAL_SERVER_ERROR, "Internal error")),
     }
-}
-
-/// Send a password reset email via SMTP.
-async fn send_reset_email(to: &str, display_name: &str, reset_url: &str) -> anyhow::Result<()> {
-    use lettre::{
-        message::header::ContentType, transport::smtp::authentication::Credentials,
-        AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
-    };
-
-    let smtp_host = std::env::var("DASHBOARD_SMTP_HOST")
-        .map_err(|_| anyhow::anyhow!("DASHBOARD_SMTP_HOST not set"))?;
-    let smtp_user = std::env::var("DASHBOARD_SMTP_USER").unwrap_or_default();
-    let smtp_pass = std::env::var("DASHBOARD_SMTP_PASS").unwrap_or_default();
-    let smtp_from =
-        std::env::var("DASHBOARD_SMTP_FROM").unwrap_or_else(|_| format!("noreply@{smtp_host}"));
-
-    let email = Message::builder()
-        .from(smtp_from.parse()?)
-        .to(to.parse()?)
-        .subject("Networker Dashboard — Password Reset")
-        .header(ContentType::TEXT_PLAIN)
-        .body(format!(
-            "Hi {display_name},\n\n\
-             A password reset was requested for your Networker Dashboard account.\n\n\
-             Click the link below to set a new password (valid for 1 hour):\n\n\
-             {reset_url}\n\n\
-             If you did not request this, ignore this email.\n\n\
-             — Networker Dashboard"
-        ))?;
-
-    let mailer = if smtp_user.is_empty() {
-        AsyncSmtpTransport::<Tokio1Executor>::relay(&smtp_host)?.build()
-    } else {
-        AsyncSmtpTransport::<Tokio1Executor>::relay(&smtp_host)?
-            .credentials(Credentials::new(smtp_user, smtp_pass))
-            .build()
-    };
-
-    mailer.send(email).await?;
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------

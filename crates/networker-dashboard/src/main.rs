@@ -3,6 +3,7 @@ mod auth;
 mod config;
 mod db;
 mod deploy;
+mod email;
 mod scheduler;
 mod ws;
 
