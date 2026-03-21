@@ -49,12 +49,12 @@ export function DeployDetailPage() {
 
   usePolling(loadDeployment, 5000, !!deploymentId);
 
-  // Auto-scroll log container when new lines arrive
+  // Auto-scroll log container when new lines arrive or DB log loads
   useEffect(() => {
     if (autoScroll && logContainerRef.current) {
       logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
     }
-  }, [liveLines, autoScroll]);
+  }, [liveLines, deployment?.log, autoScroll]);
 
   const handleLogScroll = () => {
     if (!logContainerRef.current) return;
@@ -111,7 +111,7 @@ export function DeployDetailPage() {
 
   if (loading && !deployment) {
     return (
-      <div className="p-6">
+      <div className="p-4 md:p-6">
         <p className="text-gray-500">Loading deployment...</p>
       </div>
     );
@@ -119,7 +119,7 @@ export function DeployDetailPage() {
 
   if (error && !deployment) {
     return (
-      <div className="p-6">
+      <div className="p-4 md:p-6">
         <div className="bg-red-500/10 border border-red-500/30 rounded p-3">
           <p className="text-red-400 text-sm">{error}</p>
         </div>
@@ -132,7 +132,7 @@ export function DeployDetailPage() {
   const hasEndpoints = deployment?.endpoint_ips && Array.isArray(deployment.endpoint_ips) && deployment.endpoint_ips.length > 0;
 
   return (
-    <div className="p-6">
+    <div className="p-4 md:p-6">
       {/* Breadcrumb */}
       <div className="flex items-center gap-2 text-sm text-gray-500 mb-4">
         <Link to="/deploy" className="hover:text-gray-300">

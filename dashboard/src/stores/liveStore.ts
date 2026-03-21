@@ -23,6 +23,9 @@ export interface DashboardEvent {
 const MAX_ATTEMPTS_PER_JOB = 2000;
 const MAX_DEPLOY_LINES = 5000;
 const MAX_JOB_LOGS = 2000;
+// Batch rapid attempt_result events to avoid re-rendering on every probe.
+// Attempts are buffered and flushed at most every FLUSH_INTERVAL_MS.
+const FLUSH_INTERVAL_MS = 500;
 
 interface JobLogLine {
   line: string;
@@ -40,24 +43,69 @@ interface LiveState {
   clearEvents: () => void;
 }
 
+// Pending attempt buffers (outside Zustand to avoid triggering renders)
+const pendingAttempts: Record<string, LiveAttempt[]> = {};
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleFlush(set: (fn: (state: LiveState) => Partial<LiveState>) => void) {
+  if (flushTimer) return; // already scheduled
+  flushTimer = setTimeout(() => {
+    flushTimer = null;
+    // Move pending into store in one batch
+    const batch = { ...pendingAttempts };
+    for (const k of Object.keys(batch)) delete pendingAttempts[k];
+    if (Object.keys(batch).length === 0) return;
+    set((state) => {
+      const liveAttempts = { ...state.liveAttempts };
+      for (const [jobId, newAttempts] of Object.entries(batch)) {
+        const existing = liveAttempts[jobId] || [];
+        const merged = [...existing, ...newAttempts];
+        liveAttempts[jobId] = merged.length > MAX_ATTEMPTS_PER_JOB
+          ? merged.slice(-MAX_ATTEMPTS_PER_JOB)
+          : merged;
+      }
+      return { liveAttempts };
+    });
+  }, FLUSH_INTERVAL_MS);
+}
+
 export const useLiveStore = create<LiveState>((set) => ({
   events: [],
   liveAttempts: {},
   deployLogs: {},
   jobLogs: {},
-  addEvent: (event) =>
+  addEvent: (event) => {
+    // Buffer attempt_result events — flush in batches to avoid render thrash
+    if (event.type === 'attempt_result' && event.job_id && event.attempt) {
+      const jobId = event.job_id;
+      if (!pendingAttempts[jobId]) pendingAttempts[jobId] = [];
+      pendingAttempts[jobId].push(event.attempt);
+      scheduleFlush(set);
+      // Still update events array (lightweight, no chart re-render)
+      set((state) => ({ events: [...state.events.slice(-200), event] }));
+      return;
+    }
+    // Job completion: flush any pending attempts immediately so the page sees them
+    if (event.type === 'job_complete' && event.job_id && pendingAttempts[event.job_id]) {
+      if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+      const jobId = event.job_id;
+      const batch = pendingAttempts[jobId] || [];
+      delete pendingAttempts[jobId];
+      set((state) => {
+        const existing = state.liveAttempts[jobId] || [];
+        const merged = [...existing, ...batch];
+        return {
+          events: [...state.events.slice(-200), event],
+          liveAttempts: {
+            ...state.liveAttempts,
+            [jobId]: merged.length > MAX_ATTEMPTS_PER_JOB ? merged.slice(-MAX_ATTEMPTS_PER_JOB) : merged,
+          },
+        };
+      });
+      return;
+    }
     set((state) => {
       const events = [...state.events.slice(-200), event];
-      if (event.type === 'attempt_result' && event.job_id && event.attempt) {
-        const jobAttempts = state.liveAttempts[event.job_id] || [];
-        const capped = jobAttempts.length >= MAX_ATTEMPTS_PER_JOB
-          ? jobAttempts.slice(-MAX_ATTEMPTS_PER_JOB + 1)
-          : jobAttempts;
-        return {
-          events,
-          liveAttempts: { ...state.liveAttempts, [event.job_id]: [...capped, event.attempt] },
-        };
-      }
       if (event.type === 'job_log' && event.job_id && event.line !== undefined) {
         const logs = state.jobLogs[event.job_id] || [];
         const capped = logs.length >= MAX_JOB_LOGS
@@ -79,7 +127,8 @@ export const useLiveStore = create<LiveState>((set) => ({
         };
       }
       return { events };
-    }),
+    });
+  },
   cleanupJob: (jobId) =>
     set((state) => {
       const liveAttempts = { ...state.liveAttempts };

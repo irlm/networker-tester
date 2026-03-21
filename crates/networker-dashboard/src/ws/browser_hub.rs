@@ -32,7 +32,7 @@ async fn browser_ws_handler(
     match crate::auth::validate_token(token, &state.jwt_secret) {
         Ok(claims) => {
             tracing::info!(
-                username = %claims.username,
+                email = %claims.email,
                 role = %claims.role,
                 "Browser WebSocket authenticated"
             );

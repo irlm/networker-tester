@@ -9,6 +9,7 @@ export function ChangePasswordPage() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const mustChangePassword = useAuthStore((s) => s.mustChangePassword);
   const clearPasswordChange = useAuthStore((s) => s.clearPasswordChange);
   const navigate = useNavigate();
 
@@ -26,9 +27,17 @@ export function ChangePasswordPage() {
       return;
     }
 
+    if (currentPassword === newPassword) {
+      setError('New password must be different from current password');
+      return;
+    }
+
     setLoading(true);
     try {
-      await api.changePassword(currentPassword, newPassword);
+      await api.changePassword(
+        currentPassword,
+        newPassword,
+      );
       clearPasswordChange();
       navigate('/');
     } catch {
@@ -39,8 +48,8 @@ export function ChangePasswordPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[var(--bg-base)] flex items-center justify-center">
-      <div className="w-72">
+    <div className="min-h-screen bg-[var(--bg-base)] flex items-center justify-center p-4">
+      <div className="w-full max-w-xs">
         {/* Brand */}
         <div className="text-center mb-8">
           <h1 className="text-[#4ade80] text-2xl font-bold tracking-tight mb-1">
@@ -55,7 +64,7 @@ export function ChangePasswordPage() {
         <form onSubmit={handleSubmit}>
           <div className="text-yellow-400 text-xs mb-6 flex items-center gap-2">
             <span className="text-yellow-500">warn</span>
-            <span>Password change required</span>
+            <span>{mustChangePassword ? 'Set your password' : 'Change password'}</span>
           </div>
 
           {error && (
@@ -120,7 +129,7 @@ export function ChangePasswordPage() {
             disabled={loading}
             className="w-full bg-green-600 hover:bg-green-500 text-white py-2 rounded text-sm font-medium transition-colors disabled:opacity-50"
           >
-            {loading ? 'Updating...' : 'Change password'}
+            {loading ? 'Updating...' : 'Set password'}
           </button>
         </form>
       </div>

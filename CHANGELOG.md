@@ -11,6 +11,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.36] – 2026-03-20 — URL diagnostic workflow, security hardening, and output polish
+
+### Added
+- Added the full URL page-load diagnostic workflow: request/plan lifecycle, browser-driven primary page load, protocol validation probes, HAR export, best-effort PCAP integration, persistence wiring, dashboard APIs, and grouped origin/connection summaries.
+- Added SSRF validation for URL diagnostic targets, credential redaction for request serialization/debug output, and CRLF validation for custom URL-test headers.
+- Documented the URL page-load diagnostic workflow in the main README and probes reference, and expanded JSON fixture/test coverage for artifact/origin/connection summary handling.
+
+### Fixed
+- Fixed URL diagnostic `total_requests` double-counting in the browser path.
+- Fixed SQL Server companion DDL to include `PcapSummaryJson` and proper T-SQL index guards.
+- Fixed browser sandbox handling so `--no-sandbox` is only used when running as root or when `NETWORKER_NO_SANDBOX` is explicitly set.
+- Fixed brittle URL-test capture config construction by switching to clone-and-override.
+- Fixed dashboard URL diagnostic artifact responses to avoid exposing full server-side filesystem paths.
+- Fixed URL diagnostic persistence string conversion to use enum display output directly.
+
+---
+
+## [0.13.30] – 2026-03-20 — Test scheduler: automatic recurring tests
+
+### Added
+- **Test scheduler** — create schedules to run tests automatically on a cadence (cron-based)
+- V006 migration: `auto_start_vm`, `auto_stop_vm`, `deployment_id`, `name`, `config` columns on `schedule` table
+- REST API: `GET/POST /schedules`, `GET/PUT/DELETE /schedules/:id`, `POST /schedules/:id/toggle`, `POST /schedules/:id/trigger`
+- Background scheduler task (30s tick loop) — queries due schedules, creates jobs, dispatches to agents
+- VM auto-start/stop via cloud CLI (az/aws/gcloud) for cost-saving scheduled tests
+- Dashboard Schedules page with StatusBadge integration, frequency presets, 4-step create dialog
+- 43 unit tests across cron parsing, row mapping, toggle logic, and scheduler tick flow
+
+---
+
+## [0.13.29] – 2026-03-20 — Dashboard UX fixes, packet capture, deploy wizard improvements
+
+### Added
+- **Packet capture pipeline**: full end-to-end capture via tshark, stored as JSONB in DB (V005 migration), displayed in test detail with transport breakdown, TCP health, endpoints, ports, and warnings
+- **Endpoint health in Create Test**: dialog checks endpoint health on open, shows online/offline status per target
+- **OS labels in target dropdown**: Create Test dropdown shows Ubuntu/Win next to each endpoint for easy identification
+- **Deploy wizard OS-aware HTTP stacks**: nginx default for Linux, IIS for Windows; only shows the OS-appropriate option
+- **Unique VM names per deployment**: auto-generated names like `nwk-ep-ubuntu-xxxx` / `nwk-ep-win-xxxx` prevent VM collisions
+- **Auto-naming with OS**: deployment names include OS (e.g. "AZURE eastus Win")
+
+### Fixed
+- **Agent non-zero exit handling**: tester partial failures (non-zero exit) now send `JobComplete` with results instead of silently dropping — fixes tests stuck in "running"
+- **Terminal log behavior**: all terminal components use fixed `h-[400px]` with auto-scroll to bottom (deploy log, tester log, settings update log)
+- **SPA 404 status**: fallback serves index.html with 200 (not 404)
+- **Settings page hang**: added `ring::default_provider().install_default()` for reqwest+rustls
+- **Cloud inventory empty**: fixed `Command::new("which")` and case-insensitive Azure RG filter
+- **WS batching**: liveStore buffers rapid `attempt_result` events (500ms flush), immediate flush on `job_complete`
+- **Deploy detail auto-scroll**: log scrolls to bottom on initial load for completed deployments
+
 ## [0.13.28] – 2026-03-18 — Backend deadlock fix, UX polish
 
 ### Fixed

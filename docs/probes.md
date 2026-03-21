@@ -324,3 +324,32 @@ resource counts, e.g. `[("h2", 18), ("h3", 2)]`)
 `NETWORKER_CHROME_PATH` env var → system paths (`/usr/bin/google-chrome`, etc. on Linux;
 `/Applications/Google Chrome.app/…` on macOS). If no Chrome binary is found the probe
 returns a skipped `RequestAttempt` rather than crashing the run.
+
+---
+
+## URL Page-Load Diagnostic (CLI workflow)
+
+This is not a classic `--modes ...` probe. It is a higher-level workflow driven by
+`--url-test-*` flags and intended for real website diagnostics rather than synthetic
+endpoint comparison.
+
+```bash
+networker-tester \
+  --url-test-url https://example.com \
+  --url-test-capture-har \
+  --url-test-capture-pcap \
+  --output-dir ./output
+```
+
+**Captures:**
+- browser-style page timings
+- observed protocol for the primary load
+- per-resource timing snapshot
+- per-origin summary
+- connection summary
+- optional protocol validation probes
+- optional HAR artifact
+- optional PCAP artifact + structured packet summary
+
+**Outputs:** JSON artifact always, plus optional HAR/PCAP artifacts when supported.
+**Dashboard API:** `GET /api/url-tests`, `GET /api/url-tests/:run_id`, `GET /api/url-tests/:run_id/sections`

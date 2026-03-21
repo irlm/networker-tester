@@ -15,7 +15,10 @@ export interface Stats {
   count: number;
   min: number;
   mean: number;
+  p5: number;
+  p25: number;
   p50: number;
+  p75: number;
   p95: number;
   p99: number;
   max: number;
@@ -30,12 +33,15 @@ export function computeStats(values: number[]): Stats | null {
   const min = sorted[0];
   const max = sorted[n - 1];
   const mean = sorted.reduce((a, b) => a + b, 0) / n;
+  const p5 = percentile(sorted, 5);
+  const p25 = percentile(sorted, 25);
   const p50 = percentile(sorted, 50);
+  const p75 = percentile(sorted, 75);
   const p95 = percentile(sorted, 95);
   const p99 = percentile(sorted, 99);
   const variance = sorted.reduce((s, v) => s + (v - mean) ** 2, 0) / n;
   const stddev = Math.sqrt(variance);
-  return { count: n, min, mean, p50, p95, p99, max, stddev };
+  return { count: n, min, mean, p5, p25, p50, p75, p95, p99, max, stddev };
 }
 
 function percentile(sorted: number[], p: number): number {

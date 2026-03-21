@@ -1,4 +1,10 @@
-use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::post, Json, Router};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{get, post},
+    Json, Router,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -6,7 +12,7 @@ use crate::AppState;
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
-    username: String,
+    email: String,
     password: String,
 }
 
@@ -14,7 +20,8 @@ pub struct LoginRequest {
 pub struct LoginResponse {
     token: String,
     role: String,
-    username: String,
+    email: String,
+    status: String,
     must_change_password: bool,
 }
 
@@ -26,7 +33,7 @@ async fn login(
         tracing::error!(error = %e, "DB pool error in login");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
-    let result = crate::db::users::authenticate(&client, &req.username, &req.password)
+    let result = crate::db::users::authenticate(&client, &req.email, &req.password)
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "Authentication query failed");
@@ -34,13 +41,14 @@ async fn login(
         })?;
 
     match result {
-        Some((user_id, role, must_change_password)) => {
-            let token = crate::auth::create_token(user_id, &req.username, &role, &state.jwt_secret)
+        Some((user_id, email, role, must_change_password, status)) => {
+            let token = crate::auth::create_token(user_id, &email, &role, &state.jwt_secret)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             Ok(Json(LoginResponse {
                 token,
                 role,
-                username: req.username,
+                email,
+                status,
                 must_change_password,
             }))
         }
@@ -58,13 +66,11 @@ async fn change_password(
     State(state): State<Arc<AppState>>,
     req: axum::extract::Request,
 ) -> impl IntoResponse {
-    // Extract auth user from extensions (set by require_auth middleware)
     let auth_user = match req.extensions().get::<crate::auth::AuthUser>() {
         Some(u) => u.clone(),
         None => return (StatusCode::UNAUTHORIZED, "Not authenticated").into_response(),
     };
 
-    // Parse body
     let body = match axum::body::to_bytes(req.into_body(), 4096).await {
         Ok(b) => b,
         Err(_) => return (StatusCode::BAD_REQUEST, "Invalid body").into_response(),
@@ -87,21 +93,174 @@ async fn change_password(
     )
     .await
     {
-        Ok(Ok(())) => Json(serde_json::json!({ "success": true })).into_response(),
+        Ok(Ok(())) => {
+            tracing::info!(user_email = %auth_user.email, "Password changed");
+            Json(serde_json::json!({ "success": true })).into_response()
+        }
         Ok(Err(msg)) => (StatusCode::BAD_REQUEST, msg).into_response(),
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response(),
     }
 }
 
+/// Get the current user's email (for pre-filling the change-password form).
+async fn get_profile(
+    State(state): State<Arc<AppState>>,
+    req: axum::extract::Request,
+) -> impl IntoResponse {
+    let auth_user = match req.extensions().get::<crate::auth::AuthUser>() {
+        Some(u) => u.clone(),
+        None => return (StatusCode::UNAUTHORIZED, "Not authenticated").into_response(),
+    };
+
+    let client = match state.db.get().await {
+        Ok(c) => c,
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response(),
+    };
+
+    let profile = crate::db::users::get_profile_info(&client, &auth_user.user_id)
+        .await
+        .unwrap_or(None);
+
+    let (email, status) = match profile {
+        Some((e, s)) => (e, s),
+        None => (auth_user.email.clone(), "active".to_string()),
+    };
+
+    Json(serde_json::json!({
+        "email": email,
+        "role": auth_user.role,
+        "status": status,
+    }))
+    .into_response()
+}
+
+#[derive(Deserialize)]
+pub struct ForgotPasswordRequest {
+    email: String,
+}
+
+/// Request a password reset. Always returns 200 (don't reveal if email exists).
+async fn forgot_password(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ForgotPasswordRequest>,
+) -> Json<serde_json::Value> {
+    let client = match state.db.get().await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(error = %e, "DB pool error in forgot_password");
+            return Json(serde_json::json!({ "sent": true }));
+        }
+    };
+
+    match crate::db::users::create_reset_token(&client, &req.email).await {
+        Ok(Some((user_email, token))) => {
+            // Try to send email; if SMTP not configured, log the link
+            let dashboard_url = std::env::var("DASHBOARD_PUBLIC_URL")
+                .unwrap_or_else(|_| "http://localhost:5173".into());
+            let reset_url = format!("{dashboard_url}/reset-password?token={token}");
+
+            if let Err(e) = send_reset_email(&req.email, &user_email, &reset_url).await {
+                tracing::warn!(error = %e, "SMTP not configured or send failed — logging reset link");
+                tracing::info!(
+                    email = %user_email,
+                    reset_url = %reset_url,
+                    "PASSWORD RESET LINK (SMTP unavailable)"
+                );
+            } else {
+                tracing::info!(email = %user_email, "Password reset email sent");
+            }
+        }
+        Ok(None) => {
+            tracing::info!(email = %req.email, "Password reset requested for unknown email");
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to create reset token");
+        }
+    }
+
+    // Always return success (don't reveal whether email exists)
+    Json(serde_json::json!({ "sent": true }))
+}
+
+#[derive(Deserialize)]
+pub struct ResetPasswordRequest {
+    token: String,
+    new_password: String,
+}
+
+async fn reset_password(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ResetPasswordRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, &'static str)> {
+    let client = state
+        .db
+        .get()
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
+
+    match crate::db::users::reset_password_with_token(&client, &req.token, &req.new_password).await
+    {
+        Ok(Ok(())) => {
+            tracing::info!("Password reset completed via token");
+            Ok(Json(serde_json::json!({ "success": true })))
+        }
+        Ok(Err(msg)) => Err((StatusCode::BAD_REQUEST, msg)),
+        Err(_) => Err((StatusCode::INTERNAL_SERVER_ERROR, "Internal error")),
+    }
+}
+
+/// Send a password reset email via SMTP.
+async fn send_reset_email(to: &str, display_name: &str, reset_url: &str) -> anyhow::Result<()> {
+    use lettre::{
+        message::header::ContentType, transport::smtp::authentication::Credentials,
+        AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
+    };
+
+    let smtp_host = std::env::var("DASHBOARD_SMTP_HOST")
+        .map_err(|_| anyhow::anyhow!("DASHBOARD_SMTP_HOST not set"))?;
+    let smtp_user = std::env::var("DASHBOARD_SMTP_USER").unwrap_or_default();
+    let smtp_pass = std::env::var("DASHBOARD_SMTP_PASS").unwrap_or_default();
+    let smtp_from =
+        std::env::var("DASHBOARD_SMTP_FROM").unwrap_or_else(|_| format!("noreply@{smtp_host}"));
+
+    let email = Message::builder()
+        .from(smtp_from.parse()?)
+        .to(to.parse()?)
+        .subject("Networker Dashboard — Password Reset")
+        .header(ContentType::TEXT_PLAIN)
+        .body(format!(
+            "Hi {display_name},\n\n\
+             A password reset was requested for your Networker Dashboard account.\n\n\
+             Click the link below to set a new password (valid for 1 hour):\n\n\
+             {reset_url}\n\n\
+             If you did not request this, ignore this email.\n\n\
+             — Networker Dashboard"
+        ))?;
+
+    let mailer = if smtp_user.is_empty() {
+        AsyncSmtpTransport::<Tokio1Executor>::relay(&smtp_host)?.build()
+    } else {
+        AsyncSmtpTransport::<Tokio1Executor>::relay(&smtp_host)?
+            .credentials(Credentials::new(smtp_user, smtp_pass))
+            .build()
+    };
+
+    mailer.send(email).await?;
+    Ok(())
+}
+
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/auth/login", post(login))
+        .route("/auth/forgot-password", post(forgot_password))
+        .route("/auth/reset-password", post(reset_password))
         .with_state(state)
 }
 
-/// Change-password route — must be added to the protected (auth-required) routes.
+/// Protected routes (require valid JWT).
 pub fn protected_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/auth/change-password", post(change_password))
+        .route("/auth/profile", get(get_profile))
         .with_state(state)
 }

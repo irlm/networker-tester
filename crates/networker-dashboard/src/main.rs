@@ -3,6 +3,7 @@ mod auth;
 mod config;
 mod db;
 mod deploy;
+mod scheduler;
 mod ws;
 
 use anyhow::Context;
@@ -30,6 +31,9 @@ pub struct AppState {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Install ring as the default TLS crypto provider (required by reqwest/rustls).
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
@@ -43,10 +47,22 @@ async fn main() -> anyhow::Result<()> {
         db::migrations::run(&client).await?;
     }
 
-    // Seed admin user if needed
-    {
+    // Seed admin user if needed (requires DASHBOARD_ADMIN_EMAIL)
+    if let Some(ref email) = cfg.admin_email {
         let client = db_pool.get().await?;
-        db::users::seed_admin(&client, &cfg.admin_password).await?;
+        db::users::seed_admin(&client, email, &cfg.admin_password).await?;
+    } else {
+        let client = db_pool.get().await?;
+        let count: i64 = client
+            .query_one("SELECT COUNT(*) FROM dash_user", &[])
+            .await?
+            .get(0);
+        if count == 0 {
+            tracing::warn!(
+                "DASHBOARD_ADMIN_EMAIL is not set and no users exist. \
+                 Set this env var to create the initial admin account."
+            );
+        }
     }
 
     let (events_tx, _) = broadcast::channel(1024);
@@ -92,12 +108,14 @@ async fn main() -> anyhow::Result<()> {
         std::env::var("DASHBOARD_STATIC_DIR").unwrap_or_else(|_| "./dashboard/dist".into());
     let app = if std::path::Path::new(&static_dir).exists() {
         app.fallback_service(
-            ServeDir::new(&static_dir)
-                .not_found_service(ServeFile::new(format!("{static_dir}/index.html"))),
+            ServeDir::new(&static_dir).fallback(ServeFile::new(format!("{static_dir}/index.html"))),
         )
     } else {
         app
     };
+
+    // Start the scheduler background task (checks for due schedules every 30s)
+    scheduler::spawn(state.clone());
 
     // Resolve bare IPs to FQDNs for existing deployments
     {

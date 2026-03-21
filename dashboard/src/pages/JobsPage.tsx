@@ -113,13 +113,20 @@ export function JobsPage() {
 
   if (loading && jobs.length === 0) {
     return (
-      <div className="p-6">
+      <div className="p-4 md:p-6">
         <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-bold text-gray-100">Tests</h2>
+          <h2 className="text-lg md:text-xl font-bold text-gray-100">Tests</h2>
           <div className="h-7 w-20 rounded bg-gray-800 motion-safe:animate-pulse" />
         </div>
-        {/* Skeleton: table */}
-        <div className="table-container">
+        <div className="space-y-3 md:hidden">
+          {[1, 2, 3, 4].map(i => (
+            <div key={i} className="border border-gray-800 rounded p-4 space-y-2">
+              <div className="h-4 w-32 rounded bg-gray-800/60 motion-safe:animate-pulse" />
+              <div className="h-3 w-48 rounded bg-gray-800/40 motion-safe:animate-pulse" />
+            </div>
+          ))}
+        </div>
+        <div className="hidden md:block table-container">
           <div className="bg-[var(--bg-surface)] px-4 py-2.5 border-b border-gray-800/50">
             <div className="flex gap-8">
               {[48, 80, 56, 32, 56, 48, 56, 72].map((w, i) => (
@@ -142,11 +149,11 @@ export function JobsPage() {
   const onlineTesters = testers.filter(t => t.status === 'online');
 
   return (
-    <div className="p-6">
+    <div className="p-4 md:p-6">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-bold text-gray-100">Tests</h2>
-        <div className="flex items-center gap-3">
+      <div className="flex items-center justify-between mb-4 md:mb-6 gap-2 flex-wrap">
+        <h2 className="text-lg md:text-xl font-bold text-gray-100">Tests</h2>
+        <div className="flex items-center gap-2 md:gap-3 flex-wrap">
           <button
             onClick={() => setShowTesters(!showTesters)}
             className={`flex items-center gap-2 px-3 py-1.5 rounded text-xs border transition-colors ${
@@ -156,7 +163,7 @@ export function JobsPage() {
             }`}
           >
             <span className={`w-2 h-2 rounded-full ${onlineTesters.length > 0 ? 'bg-green-400' : 'bg-gray-500'}`} />
-            {testers.length} tester{testers.length !== 1 ? 's' : ''} ({onlineTesters.length} online)
+            <span className="hidden sm:inline">{testers.length} tester{testers.length !== 1 ? 's' : ''}</span> ({onlineTesters.length} online)
           </button>
 
           <select
@@ -164,17 +171,17 @@ export function JobsPage() {
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
             aria-label="Filter by status"
-            className="bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-300 focus:outline-none focus:border-cyan-500"
+            className="bg-[var(--bg-base)] border border-gray-700 rounded px-2 md:px-3 py-1.5 text-sm text-gray-300 focus:outline-none focus:border-cyan-500"
           >
             {STATUS_OPTIONS.map((s) => (
               <option key={s} value={s}>
-                {s === 'all' ? 'All statuses' : s.charAt(0).toUpperCase() + s.slice(1)}
+                {s === 'all' ? 'All' : s.charAt(0).toUpperCase() + s.slice(1)}
               </option>
             ))}
           </select>
           <button
             onClick={() => setShowCreate(true)}
-            className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors"
+            className="bg-cyan-600 hover:bg-cyan-500 text-white px-3 md:px-4 py-1.5 rounded text-sm transition-colors"
           >
             New Test
           </button>
@@ -335,18 +342,51 @@ export function JobsPage() {
         </div>
       )}
 
-      {/* Tests Table — full-bleed, no card wrapper */}
-      <div className="table-container">
+      {/* ── Mobile card layout (< md) ── */}
+      <div className="md:hidden space-y-2">
+        {jobs.length === 0 ? (
+          <div className="border border-gray-800 rounded p-8 text-center">
+            <p className="text-gray-500 text-sm">No tests yet</p>
+            <button onClick={() => setShowCreate(true)} className="text-xs text-cyan-400 mt-2">Run your first probe</button>
+          </div>
+        ) : jobs.map((job) => {
+          const isActive = job.status === 'running' || job.status === 'assigned';
+          const duration = job.started_at
+            ? formatDuration(new Date(job.started_at), job.finished_at ? new Date(job.finished_at) : new Date())
+            : null;
+          return (
+            <Link
+              key={job.job_id}
+              to={`/tests/${job.job_id}`}
+              className={`block border border-gray-800 rounded p-3 ${isActive ? 'border-l-2 border-l-blue-500/50' : ''}`}
+            >
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-cyan-400 font-mono text-xs">{job.job_id.slice(0, 8)}</span>
+                <StatusBadge status={job.status} />
+              </div>
+              <p className="text-gray-300 text-xs truncate mb-1">{job.config?.target}</p>
+              <div className="flex items-center gap-3 text-xs text-gray-500 flex-wrap">
+                <span>{job.config?.modes?.join(', ')}</span>
+                {duration && <span className="font-mono">{duration}</span>}
+                <span>{new Date(job.created_at).toLocaleTimeString()}</span>
+              </div>
+            </Link>
+          );
+        })}
+      </div>
+
+      {/* ── Desktop/iPad table (≥ md) ── */}
+      <div className="hidden md:block table-container">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
               <th className="px-4 py-2.5 text-left font-medium">Test ID</th>
               <th className="px-4 py-2.5 text-left font-medium">Target</th>
               <th className="px-4 py-2.5 text-left font-medium">Modes</th>
-              <th className="px-4 py-2.5 text-left font-medium">Runs</th>
-              <th className="px-4 py-2.5 text-left font-medium">Tester</th>
+              <th className="px-4 py-2.5 text-left font-medium hidden lg:table-cell">Runs</th>
+              <th className="px-4 py-2.5 text-left font-medium hidden lg:table-cell">Tester</th>
               <th className="px-4 py-2.5 text-left font-medium">Status</th>
-              <th className="px-4 py-2.5 text-left font-medium">Duration</th>
+              <th className="px-4 py-2.5 text-left font-medium hidden lg:table-cell">Duration</th>
               <th className="px-4 py-2.5 text-left font-medium">Created</th>
             </tr>
           </thead>
@@ -378,15 +418,15 @@ export function JobsPage() {
                   <td className="px-4 py-3 text-gray-500 text-xs max-w-32 truncate">
                     {job.config?.modes?.join(', ')}
                   </td>
-                  <td className="px-4 py-3 text-gray-500 text-xs">{job.config?.runs ?? '-'}</td>
-                  <td className="px-4 py-3 text-gray-500 text-xs">{testerName}</td>
+                  <td className="px-4 py-3 text-gray-500 text-xs hidden lg:table-cell">{job.config?.runs ?? '-'}</td>
+                  <td className="px-4 py-3 text-gray-500 text-xs hidden lg:table-cell">{testerName}</td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
                       <StatusBadge status={job.status} />
                       {isActive && <span className="w-1.5 h-1.5 rounded-full bg-blue-400 motion-safe:animate-pulse" />}
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-gray-500 text-xs font-mono">{duration}</td>
+                  <td className="px-4 py-3 text-gray-500 text-xs font-mono hidden lg:table-cell">{duration}</td>
                   <td className="px-4 py-3 text-gray-500 text-xs">{new Date(job.created_at).toLocaleString()}</td>
                 </tr>
               );
@@ -397,7 +437,6 @@ export function JobsPage() {
         {jobs.length === 0 && (
           <div className="py-10 text-center">
             <p className="text-gray-500 text-sm">No tests yet — click New Test to run your first probe</p>
-            <p className="text-gray-700 text-xs mt-1"></p>
           </div>
         )}
       </div>

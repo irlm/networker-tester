@@ -83,7 +83,11 @@ async fn agent_ws_handler(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::UNAUTHORIZED)?;
 
-    Ok(ws.on_upgrade(move |socket| handle_agent_socket(socket, state, agent)))
+    // Large test runs (27 modes × 3 runs = 255 attempts) produce multi-MB JSON.
+    // Default axum WS limit is 64KB which silently drops the JobComplete message.
+    Ok(ws
+        .max_message_size(64 * 1024 * 1024) // 64 MB
+        .on_upgrade(move |socket| handle_agent_socket(socket, state, agent)))
 }
 
 async fn handle_agent_socket(
@@ -228,14 +232,14 @@ async fn handle_agent_message(state: &Arc<AppState>, agent_id: Uuid, msg: AgentM
                 "Job complete — persisting results"
             );
 
-            // Update job status
+            // Set run_id BEFORE status so the frontend never sees completed+null run_id
             if let Ok(client) = state.db.get().await {
+                if let Err(e) = crate::db::jobs::set_run_id(&client, &job_id, &run_id).await {
+                    tracing::error!(correlation_id, error = %e, "Failed to set run_id on job");
+                }
                 if let Err(e) = crate::db::jobs::update_status(&client, &job_id, "completed").await
                 {
                     tracing::error!(correlation_id, error = %e, "Failed to update job status to completed");
-                }
-                if let Err(e) = crate::db::jobs::set_run_id(&client, &job_id, &run_id).await {
-                    tracing::error!(correlation_id, error = %e, "Failed to set run_id on job");
                 }
             }
 

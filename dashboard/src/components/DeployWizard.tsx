@@ -21,11 +21,16 @@ const GCP_MACHINES = ['e2-small', 'e2-medium', 'e2-standard-2'];
 
 // Mode groups are fetched from GET /api/modes (single source of truth: Protocol enum in Rust)
 
+function stackForOs(os: string): string[] {
+  return os === 'windows' ? ['iis'] : ['nginx'];
+}
+
 function emptyEndpoint(provider = 'azure'): DeployEndpoint {
   return {
     provider,
     region: provider === 'azure' ? 'eastus' : provider === 'aws' ? 'us-east-1' : 'us-central1',
     os: 'linux',
+    http_stacks: ['nginx'],
     vm_size: provider === 'azure' ? 'Standard_B2s' : undefined,
     instance_type: provider === 'aws' ? 't3.small' : undefined,
     machine_type: provider === 'gcp' ? 'e2-small' : undefined,
@@ -138,7 +143,8 @@ export function DeployWizard({ onClose, onCreated }: DeployWizardProps) {
   const autoName = () => {
     return endpoints.map(ep => {
       if (ep.provider === 'lan') return `LAN ${ep.ip || ''}`.trim();
-      return `${ep.provider?.toUpperCase()} ${ep.region || ''}`.trim();
+      const os = (ep.os || 'linux') === 'windows' ? 'Win' : 'Ubuntu';
+      return `${ep.provider?.toUpperCase()} ${ep.region || ''} ${os}`.trim();
     }).join(' + ');
   };
 
@@ -166,24 +172,33 @@ export function DeployWizard({ onClose, onCreated }: DeployWizardProps) {
             port: ep.ssh_port || 22,
           };
         } else if (ep.provider === 'azure') {
+          const osSuffix = (ep.os || 'linux') === 'windows' ? 'win' : 'ubuntu';
+          const suffix = Math.random().toString(36).slice(2, 6);
           entry.azure = {
             region: ep.region || 'eastus',
             vm_size: ep.vm_size || 'Standard_B2s',
             os: ep.os || 'linux',
+            vm_name: `nwk-ep-${osSuffix}-${suffix}`,
             ...(ep.resource_group ? { resource_group: ep.resource_group } : {}),
           };
         } else if (ep.provider === 'aws') {
+          const osSuffix = (ep.os || 'linux') === 'windows' ? 'win' : 'ubuntu';
+          const suffix = Math.random().toString(36).slice(2, 6);
           entry.aws = {
             region: ep.region || 'us-east-1',
             instance_type: ep.instance_type || 't3.small',
             os: ep.os || 'linux',
+            instance_name: `nwk-ep-${osSuffix}-${suffix}`,
           };
         } else if (ep.provider === 'gcp') {
+          const osSuffix = (ep.os || 'linux') === 'windows' ? 'win' : 'ubuntu';
+          const suffix = Math.random().toString(36).slice(2, 6);
           entry.gcp = {
             region: ep.region || 'us-central1',
             zone: ep.zone || 'us-central1-a',
             machine_type: ep.machine_type || 'e2-small',
             os: ep.os || 'linux',
+            instance_name: `nwk-ep-${osSuffix}-${suffix}`,
           };
         }
         if (ep.label) entry.label = ep.label;
@@ -241,9 +256,9 @@ export function DeployWizard({ onClose, onCreated }: DeployWizardProps) {
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="relative w-[520px] max-w-[90vw] bg-[var(--bg-base)] border-l border-gray-800 h-full overflow-y-auto slide-over-panel"
+        className="relative w-full md:w-[520px] md:max-w-[90vw] bg-[var(--bg-base)] md:border-l border-gray-800 h-full overflow-y-auto slide-over-panel"
       >
-        <div className="p-6">
+        <div className="p-4 md:p-6">
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-4">
               <h3 id={titleId} className="text-lg font-bold text-gray-100">
@@ -406,7 +421,10 @@ export function DeployWizard({ onClose, onCreated }: DeployWizardProps) {
                         <label className="block text-xs text-gray-400 mb-1">OS</label>
                         <select
                           value={ep.os || 'linux'}
-                          onChange={e => updateEndpoint(idx, { os: e.target.value })}
+                          onChange={e => {
+                            const os = e.target.value;
+                            updateEndpoint(idx, { os, http_stacks: stackForOs(os) });
+                          }}
                           className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                         >
                           <option value="linux">Linux (Ubuntu)</option>
@@ -416,37 +434,33 @@ export function DeployWizard({ onClose, onCreated }: DeployWizardProps) {
                     </div>
                   )}
 
-                  {ep.provider !== 'lan' && (
-                    <div className="mt-2">
-                      <label className="block text-xs text-gray-400 mb-1">HTTP Stacks (optional)</label>
-                      <div className="flex gap-2">
-                        {['nginx', 'iis'].map(stack => (
-                          <label
-                            key={stack}
-                            className={`flex items-center gap-1 px-2 py-1 rounded border cursor-pointer text-xs transition-colors ${
-                              ep.http_stacks?.includes(stack)
-                                ? 'border-cyan-500/50 bg-cyan-500/10 text-cyan-400'
-                                : 'border-gray-700 text-gray-400 hover:border-gray-600'
-                            }`}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={ep.http_stacks?.includes(stack) || false}
-                              onChange={() => {
-                                const stacks = ep.http_stacks || [];
-                                const next = stacks.includes(stack)
-                                  ? stacks.filter(s => s !== stack)
-                                  : [...stacks, stack];
-                                updateEndpoint(idx, { http_stacks: next });
-                              }}
-                              className="sr-only"
-                            />
-                            {stack.toUpperCase()}
-                          </label>
-                        ))}
+                  {ep.provider !== 'lan' && (() => {
+                    const stack = (ep.os || 'linux') === 'windows' ? 'iis' : 'nginx';
+                    const enabled = ep.http_stacks?.includes(stack) || false;
+                    return (
+                      <div className="mt-2">
+                        <label className="block text-xs text-gray-400 mb-1">HTTP Stack</label>
+                        <label
+                          className={`inline-flex items-center gap-1 px-2 py-1 rounded border cursor-pointer text-xs transition-colors ${
+                            enabled
+                              ? 'border-cyan-500/50 bg-cyan-500/10 text-cyan-400'
+                              : 'border-gray-700 text-gray-400 hover:border-gray-600'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={enabled}
+                            onChange={() => updateEndpoint(idx, { http_stacks: enabled ? [] : [stack] })}
+                            className="sr-only"
+                          />
+                          {stack.toUpperCase()}
+                          <span className="text-gray-600 ml-1">
+                            ({(ep.os || 'linux') === 'windows' ? 'Windows' : 'Ubuntu'})
+                          </span>
+                        </label>
                       </div>
-                    </div>
-                  )}
+                    );
+                  })()}
                 </div>
               ))}
 
@@ -573,8 +587,10 @@ export function DeployWizard({ onClose, onCreated }: DeployWizardProps) {
                       ? `LAN: ${ep.ssh_user}@${ep.ip}:${ep.ssh_port}`
                       : `${ep.provider?.toUpperCase()}: ${ep.region} (${ep.os}, ${ep.vm_size || ep.instance_type || ep.machine_type})`
                     }
-                    {ep.http_stacks && ep.http_stacks.length > 0 && (
-                      <span className="text-gray-500 ml-2">+ {ep.http_stacks.join(', ')}</span>
+                    {ep.http_stacks && ep.http_stacks.length > 0 ? (
+                      <span className="text-cyan-400/60 ml-2">+ {ep.http_stacks.map(s => s.toUpperCase()).join(', ')}</span>
+                    ) : (
+                      <span className="text-gray-600 ml-2">(no HTTP stack)</span>
                     )}
                   </div>
                 ))}

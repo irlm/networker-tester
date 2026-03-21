@@ -125,6 +125,52 @@ export interface ModeGroup {
   modes: ModeInfo[];
 }
 
+export interface PacketCaptureSummary {
+  mode: string;
+  interface: string;
+  total_packets: number;
+  capture_status: string;
+  capture_confidence: string;
+  note: string | null;
+  warnings: string[];
+  tcp_packets: number;
+  udp_packets: number;
+  quic_packets: number;
+  http_packets: number;
+  dns_packets: number;
+  retransmissions: number;
+  duplicate_acks: number;
+  resets: number;
+  likely_target_endpoints: string[];
+  likely_target_packets: number;
+  likely_target_pct_of_total: number;
+  dominant_trace_port: number | null;
+  transport_shares: { protocol: string; packets: number; pct_of_total: number }[];
+  top_endpoints: { endpoint: string; packets: number }[];
+  top_ports: { port: number; packets: number }[];
+  observed_quic: boolean;
+  observed_tcp_only: boolean;
+  observed_mixed_transport: boolean;
+  capture_may_be_ambiguous: boolean;
+}
+
+export interface Schedule {
+  schedule_id: string;
+  name: string | null;
+  definition_id: string | null;
+  agent_id: string | null;
+  deployment_id: string | null;
+  cron_expr: string;
+  enabled: boolean;
+  config: JobConfig | null;
+  auto_start_vm: boolean;
+  auto_stop_vm: boolean;
+  created_by: string | null;
+  created_at: string;
+  next_run_at: string | null;
+  last_run_at: string | null;
+}
+
 export interface LiveAttempt {
   attempt_id: string;
   run_id: string;

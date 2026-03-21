@@ -88,8 +88,9 @@ async fn scan_inventory(
 
 async fn scan_azure(managed_hosts: &[String]) -> Result<Vec<CloudVm>, String> {
     // Check if az CLI is available
-    let check = Command::new("command")
-        .args(["-v", "az"])
+    let check = Command::new("which")
+        .arg("az")
+        .stdin(std::process::Stdio::null())
         .output()
         .await
         .map_err(|e| format!("not found: {e}"))?;
@@ -98,14 +99,14 @@ async fn scan_azure(managed_hosts: &[String]) -> Result<Vec<CloudVm>, String> {
     }
 
     // List VMs in networker resource groups (endpoint VMs created by install.sh)
-    // install.sh creates RGs like: networker-rg-endpoint, networker-rg-eastus-windows, etc.
+    // install.sh creates RGs like: networker-rg-endpoint, networker-dashboard-eastus, etc.
     let output = Command::new("az")
         .args([
             "vm",
             "list",
             "--show-details",
             "--query",
-            "[?contains(resourceGroup, 'networker-rg')].{name:name, rg:resourceGroup, location:location, powerState:powerState, publicIps:publicIps, fqdns:fqdns, size:hardwareProfile.vmSize, os:storageProfile.osDisk.osType}",
+            "[?resourceGroup && (contains(resourceGroup, 'networker') || contains(resourceGroup, 'NETWORKER') || contains(resourceGroup, 'nwk') || contains(resourceGroup, 'NWK'))].{name:name, rg:resourceGroup, location:location, powerState:powerState, publicIps:publicIps, fqdns:fqdns, size:hardwareProfile.vmSize, os:storageProfile.osDisk.osType}",
             "-o",
             "json",
         ])
@@ -157,8 +158,9 @@ async fn scan_azure(managed_hosts: &[String]) -> Result<Vec<CloudVm>, String> {
 }
 
 async fn scan_aws(managed_hosts: &[String]) -> Result<Vec<CloudVm>, String> {
-    let check = Command::new("command")
-        .args(["-v", "aws"])
+    let check = Command::new("which")
+        .arg("aws")
+        .stdin(std::process::Stdio::null())
         .output()
         .await
         .map_err(|e| format!("not found: {e}"))?;
@@ -237,8 +239,9 @@ async fn scan_aws(managed_hosts: &[String]) -> Result<Vec<CloudVm>, String> {
 }
 
 async fn scan_gcp(managed_hosts: &[String]) -> Result<Vec<CloudVm>, String> {
-    let check = Command::new("command")
-        .args(["-v", "gcloud"])
+    let check = Command::new("which")
+        .arg("gcloud")
+        .stdin(std::process::Stdio::null())
         .output()
         .await
         .map_err(|e| format!("not found: {e}"))?;

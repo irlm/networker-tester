@@ -4,6 +4,8 @@ import { useWebSocket, type ConnectionStatus } from './hooks/useWebSocket';
 import { Sidebar } from './components/layout/Sidebar';
 import { ToastContainer } from './components/common/Toast';
 import { LoginPage } from './pages/LoginPage';
+import { ForgotPasswordPage } from './pages/ForgotPasswordPage';
+import { ResetPasswordPage } from './pages/ResetPasswordPage';
 import { ChangePasswordPage } from './pages/ChangePasswordPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { JobsPage } from './pages/JobsPage';
@@ -12,6 +14,7 @@ import { RunsPage } from './pages/RunsPage';
 import { RunDetailPage } from './pages/RunDetailPage';
 import { DeployPage } from './pages/DeployPage';
 import { DeployDetailPage } from './pages/DeployDetailPage';
+import { SchedulesPage } from './pages/SchedulesPage';
 import { SettingsPage } from './pages/SettingsPage';
 
 const statusColors: Record<ConnectionStatus, string> = {
@@ -65,7 +68,7 @@ function AuthenticatedApp() {
   return (
     <div className="flex min-h-screen bg-[var(--bg-base)]">
       <Sidebar connectionDot={<ConnectionDot status={status} />} />
-      <main className="flex-1 overflow-auto">
+      <main className="flex-1 overflow-auto pt-12 md:pt-0">
         <ConnectionBanner status={status} />
         <ToastContainer />
         <Routes>
@@ -74,6 +77,7 @@ function AuthenticatedApp() {
           <Route path="/deploy" element={<DeployPage />} />
           <Route path="/deploy/:deploymentId" element={<DeployDetailPage />} />
           <Route path="/tests" element={<JobsPage />} />
+          <Route path="/schedules" element={<SchedulesPage />} />
           <Route path="/tests/:jobId" element={<JobDetailPage />} />
           {/* Backward compat redirects */}
           <Route path="/jobs" element={<Navigate to="/tests" />} />
@@ -96,6 +100,8 @@ function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+        <Route path="/reset-password" element={<ResetPasswordPage />} />
         <Route
           path="/*"
           element={
