@@ -283,7 +283,7 @@ pub async fn run_tls_resumption_probe(
     let host = match target.host_str() {
         Some(h) => h.to_string(),
         None => {
-            return make_failed(
+            return make_failed_resume(
                 run_id,
                 attempt_id,
                 sequence_num,
@@ -297,12 +297,20 @@ pub async fn run_tls_resumption_probe(
         }
     };
 
-    let default_port = if target.scheme() == "https" {
-        443u16
-    } else {
-        80
-    };
-    let port = target.port().unwrap_or(default_port);
+    if target.scheme() != "https" {
+        return make_failed_resume(
+            run_id,
+            attempt_id,
+            sequence_num,
+            started_at,
+            ErrorCategory::Config,
+            "tlsresume requires an https:// target".into(),
+            None,
+            None,
+            None,
+        );
+    }
+    let port = target.port().unwrap_or(443);
     let (addr, dns_result) = if cfg.dns_enabled {
         match dns_runner::resolve(&host, cfg.ipv4_only, cfg.ipv6_only).await {
             Ok((ips, r)) => {
@@ -320,7 +328,7 @@ pub async fn run_tls_resumption_probe(
                 (SocketAddr::new(ip, port), Some(r))
             }
             Err(e) => {
-                return make_failed(
+                return make_failed_resume(
                     run_id,
                     attempt_id,
                     sequence_num,
@@ -337,7 +345,7 @@ pub async fn run_tls_resumption_probe(
         match host.parse::<std::net::IpAddr>() {
             Ok(ip) => (SocketAddr::new(ip, port), None),
             Err(_) => {
-                return make_failed(
+                return make_failed_resume(
                     run_id,
                     attempt_id,
                     sequence_num,
@@ -356,7 +364,7 @@ pub async fn run_tls_resumption_probe(
     {
         Ok(c) => Arc::new(c),
         Err(e) => {
-            return make_failed(
+            return make_failed_resume(
                 run_id,
                 attempt_id,
                 sequence_num,
@@ -373,7 +381,7 @@ pub async fn run_tls_resumption_probe(
     let first = match run_one_tls_http_request(addr, &host, target, cfg, tls_config.clone()).await {
         Ok(v) => v,
         Err((category, message, detail, tcp_result)) => {
-            return make_failed(
+            return make_failed_resume(
                 run_id,
                 attempt_id,
                 sequence_num,
@@ -391,7 +399,7 @@ pub async fn run_tls_resumption_probe(
     {
         Ok(v) => v,
         Err((category, message, detail, tcp_result)) => {
-            return make_failed(
+            return make_failed_resume(
                 run_id,
                 attempt_id,
                 sequence_num,
@@ -573,6 +581,14 @@ async fn run_one_tls_http_request(
     if let Some(q) = target.query() {
         request_path.push('?');
         request_path.push_str(q);
+    }
+    if request_path.contains(['\r', '\n']) || host.contains(['\r', '\n']) {
+        return Err((
+            ErrorCategory::Config,
+            "Target URL contains invalid characters (CR/LF) in path or host".into(),
+            None,
+            Some(tcp_result.clone()),
+        ));
     }
     let request = format!(
         "GET {request_path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: networker-tester/tlsresume\r\nAccept: */*\r\nConnection: close\r\n\r\n"
@@ -907,10 +923,63 @@ fn make_failed(
     dns: Option<crate::metrics::DnsResult>,
     tcp: Option<crate::metrics::TcpResult>,
 ) -> RequestAttempt {
+    make_failed_with_protocol(
+        run_id,
+        attempt_id,
+        sequence_num,
+        started_at,
+        category,
+        message,
+        detail,
+        dns,
+        tcp,
+        Protocol::Tls,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn make_failed_resume(
+    run_id: Uuid,
+    attempt_id: Uuid,
+    sequence_num: u32,
+    started_at: chrono::DateTime<Utc>,
+    category: ErrorCategory,
+    message: String,
+    detail: Option<String>,
+    dns: Option<crate::metrics::DnsResult>,
+    tcp: Option<crate::metrics::TcpResult>,
+) -> RequestAttempt {
+    make_failed_with_protocol(
+        run_id,
+        attempt_id,
+        sequence_num,
+        started_at,
+        category,
+        message,
+        detail,
+        dns,
+        tcp,
+        Protocol::TlsResume,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn make_failed_with_protocol(
+    run_id: Uuid,
+    attempt_id: Uuid,
+    sequence_num: u32,
+    started_at: chrono::DateTime<Utc>,
+    category: ErrorCategory,
+    message: String,
+    detail: Option<String>,
+    dns: Option<crate::metrics::DnsResult>,
+    tcp: Option<crate::metrics::TcpResult>,
+    protocol: Protocol,
+) -> RequestAttempt {
     RequestAttempt {
         attempt_id,
         run_id,
-        protocol: Protocol::Tls,
+        protocol,
         sequence_num,
         started_at,
         finished_at: Some(Utc::now()),
@@ -1078,6 +1147,23 @@ mod tests {
         assert_eq!(err.message, "handshake failed");
         assert_eq!(err.detail.as_deref(), Some("detail text"));
         assert_eq!(err.category, ErrorCategory::Tls);
+    }
+
+    #[test]
+    fn make_failed_resume_sets_tls_resume_protocol() {
+        let a = make_failed_resume(
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+            1,
+            Utc::now(),
+            ErrorCategory::Config,
+            "tlsresume requires an https:// target".to_string(),
+            None,
+            None,
+            None,
+        );
+        assert_eq!(a.protocol, Protocol::TlsResume);
+        assert!(!a.success);
     }
 
     #[test]
