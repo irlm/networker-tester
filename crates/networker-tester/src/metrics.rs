@@ -346,6 +346,9 @@ pub enum Protocol {
     /// Standalone TLS probe — DNS + TCP + TLS handshake only, no HTTP request.
     /// Collects the full certificate chain, cipher suite, and negotiated ALPN.
     Tls,
+    /// TLS resumption probe — two fresh TLS handshakes to the same origin with a real
+    /// HTTP request on each connection; success depends on the second handshake resuming.
+    TlsResume,
     /// Native-TLS probe — DNS + TCP + platform TLS (SChannel / SecureTransport / OpenSSL)
     /// + HTTP/1.1. Reports which backend was used in `TlsResult.tls_backend`.
     Native,
@@ -394,6 +397,7 @@ impl std::fmt::Display for Protocol {
             Protocol::UdpUpload => write!(f, "udpupload"),
             Protocol::Dns => write!(f, "dns"),
             Protocol::Tls => write!(f, "tls"),
+            Protocol::TlsResume => write!(f, "tlsresume"),
             Protocol::Native => write!(f, "native"),
             Protocol::Curl => write!(f, "curl"),
             Protocol::PageLoad => write!(f, "pageload"),
@@ -442,6 +446,13 @@ impl Protocol {
                 "TLS",
                 "Handshake",
                 "TLS handshake via rustls — reports version, cipher, ALPN, cert chain",
+                "Network",
+            ),
+            m(
+                "tlsresume",
+                "TLS Resume",
+                "Warm handshake",
+                "Two fresh TLS handshakes with a real HTTP request; the second should resume",
                 "Network",
             ),
             m(
@@ -654,6 +665,7 @@ impl std::str::FromStr for Protocol {
             "udpupload" => Ok(Protocol::UdpUpload),
             "dns" => Ok(Protocol::Dns),
             "tls" => Ok(Protocol::Tls),
+            "tlsresume" | "tls-resume" => Ok(Protocol::TlsResume),
             "native" => Ok(Protocol::Native),
             "curl" => Ok(Protocol::Curl),
             "pageload" => Ok(Protocol::PageLoad),
@@ -798,6 +810,27 @@ pub struct TlsResult {
     /// or "native/openssl" for the `native` probe mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tls_backend: Option<String>,
+    /// True when the handshake reused prior session state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resumed: Option<bool>,
+    /// rustls handshake classification: full, full-hrr, or resumed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handshake_kind: Option<String>,
+    /// Number of TLS 1.3 tickets observed on this connection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls13_tickets_received: Option<u32>,
+    /// For tlsresume probes: the first/cold handshake duration before the resumed attempt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_handshake_duration_ms: Option<f64>,
+    /// For tlsresume probes: handshake kind from the first/cold connection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_handshake_kind: Option<String>,
+    /// HTTP status from the first/cold request when a real request was used to seed resumption.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_http_status_code: Option<u16>,
+    /// HTTP status from this connection when a real request was sent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_status_code: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1336,7 +1369,7 @@ pub fn primary_metric_label(proto: &Protocol) -> &'static str {
         | Protocol::UdpDownload
         | Protocol::UdpUpload => "Throughput MB/s",
         Protocol::Dns => "Resolve ms",
-        Protocol::Tls => "Handshake ms",
+        Protocol::Tls | Protocol::TlsResume => "Handshake ms",
         Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3 => "Total ms",
         Protocol::Browser | Protocol::Browser1 | Protocol::Browser2 | Protocol::Browser3 => {
             "Load ms"
@@ -1382,7 +1415,7 @@ pub fn primary_metric_value(a: &RequestAttempt) -> Option<f64> {
             a.udp_throughput.as_ref().and_then(|ut| ut.throughput_mbps)
         }
         Protocol::Dns => a.dns.as_ref().map(|d| d.duration_ms),
-        Protocol::Tls => a.tls.as_ref().map(|t| t.handshake_duration_ms),
+        Protocol::Tls | Protocol::TlsResume => a.tls.as_ref().map(|t| t.handshake_duration_ms),
         Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3 => {
             a.page_load.as_ref().map(|p| p.total_ms)
         }
@@ -1739,6 +1772,13 @@ mod tests {
             success: true,
             cert_chain: vec![],
             tls_backend: None,
+            resumed: None,
+            handshake_kind: None,
+            tls13_tickets_received: None,
+            previous_handshake_duration_ms: None,
+            previous_handshake_kind: None,
+            previous_http_status_code: None,
+            http_status_code: None,
         });
         assert!((primary_metric_value(&a).unwrap() - 7.5).abs() < 1e-9);
     }

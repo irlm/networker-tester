@@ -25,7 +25,7 @@ use networker_tester::runner::throughput::{
     run_download_probe, run_upload_probe, run_webdownload_probe, run_webupload_probe,
     ThroughputConfig,
 };
-use networker_tester::runner::tls::run_tls_probe;
+use networker_tester::runner::tls::{run_tls_probe, run_tls_resumption_probe};
 use networker_tester::runner::udp::{run_udp_probe, UdpProbeConfig};
 use networker_tester::runner::udp_throughput::{
     run_udpdownload_probe, run_udpupload_probe, UdpThroughputConfig,
@@ -829,6 +829,40 @@ async fn tls_probe_captures_cert_chain() {
         attempt.http.is_none(),
         "TLS probe should not send an HTTP request"
     );
+}
+
+/// TLS resumption probe against the local HTTPS endpoint.
+/// Verifies the first connection is full, the second is resumed, and a real
+/// HTTP request succeeds on both connections.
+#[tokio::test]
+async fn tls_resumption_probe_resumes_second_handshake() {
+    let ep = Endpoint::start().await;
+    let cfg = RunConfig {
+        dns_enabled: false,
+        timeout_ms: 5_000,
+        insecure: true,
+        ..Default::default()
+    };
+
+    let url = ep.https_url("/health");
+    let attempt = run_tls_resumption_probe(Uuid::new_v4(), 0, &url, &cfg).await;
+
+    assert!(
+        attempt.success,
+        "TLS resumption probe failed: {:?}",
+        attempt.error
+    );
+    assert_eq!(attempt.protocol, Protocol::TlsResume);
+
+    let tls = attempt.tls.expect("tls result missing");
+    assert_eq!(tls.previous_handshake_kind.as_deref(), Some("full"));
+    assert_eq!(tls.handshake_kind.as_deref(), Some("resumed"));
+    assert_eq!(tls.resumed, Some(true));
+    assert_eq!(tls.previous_http_status_code, Some(200));
+    assert_eq!(tls.http_status_code, Some(200));
+    assert!(tls.previous_handshake_duration_ms.unwrap_or_default() >= 0.0);
+    assert!(tls.handshake_duration_ms >= 0.0);
+    assert!(tls.tls13_tickets_received.unwrap_or_default() >= 1);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

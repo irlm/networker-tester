@@ -350,6 +350,7 @@ Open `output/report.html` in any browser.
 | `http3` | QUIC + HTTP/3 | DNS · QUIC handshake · TTFB · Total | default feature |
 | `dns` | DNS | Standalone DNS resolution; resolved IPs + duration | — |
 | `tls` | TCP + TLS | DNS · TCP · TLS; full cert chain, cipher, ALPN | — |
+| `tlsresume` | TCP + TLS + HTTP/1.1 | Cold + warm handshake; second connection must resume | HTTPS target |
 | `native` | TCP + native TLS | Same as `tls` but via OS TLS stack | `--features native` |
 | `curl` | curl binary | HTTP timing via system `curl` (proxy/cert baseline) | `curl` on PATH |
 | `udp` | UDP datagram | RTT min/avg/p95 · jitter · loss% | `--udp-port` |

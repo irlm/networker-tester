@@ -593,6 +593,13 @@ async fn run_h1_keepalive_connection(
                 success: true,
                 cert_chain: vec![],
                 tls_backend: Some("rustls".into()),
+                resumed: None,
+                handshake_kind: None,
+                tls13_tickets_received: None,
+                previous_handshake_duration_ms: None,
+                previous_handshake_kind: None,
+                previous_http_status_code: None,
+                http_status_code: None,
             })
         } else {
             None
@@ -944,6 +951,13 @@ pub async fn run_pageload2_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
             success: true,
             cert_chain: vec![],
             tls_backend: Some("rustls".into()),
+            resumed: None,
+            handshake_kind: None,
+            tls13_tickets_received: None,
+            previous_handshake_duration_ms: None,
+            previous_handshake_kind: None,
+            previous_http_status_code: None,
+            http_status_code: None,
         }
     };
 
@@ -1542,6 +1556,13 @@ pub async fn run_pageload3_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
         success: true,
         cert_chain: vec![],
         tls_backend: Some("rustls+quinn".into()),
+        resumed: None,
+        handshake_kind: None,
+        tls13_tickets_received: None,
+        previous_handshake_duration_ms: None,
+        previous_handshake_kind: None,
+        previous_http_status_code: None,
+        http_status_code: None,
     };
     let manifest_http = crate::metrics::HttpResult {
         negotiated_version: "HTTP/3".into(),
@@ -1956,6 +1977,13 @@ pub async fn warmup_pageload2(
             success: true,
             cert_chain: vec![],
             tls_backend: Some("rustls".into()),
+            resumed: None,
+            handshake_kind: None,
+            tls13_tickets_received: None,
+            previous_handshake_duration_ms: None,
+            previous_handshake_kind: None,
+            previous_http_status_code: None,
+            http_status_code: None,
         }
     };
 
@@ -2655,6 +2683,13 @@ async fn fetch_h3_pageload(
         success: true,
         cert_chain: vec![],
         tls_backend: Some("rustls+quinn".into()),
+        resumed: None,
+        handshake_kind: None,
+        tls13_tickets_received: None,
+        previous_handshake_duration_ms: None,
+        previous_handshake_kind: None,
+        previous_http_status_code: None,
+        http_status_code: None,
     };
     let manifest_http = crate::metrics::HttpResult {
         negotiated_version: "HTTP/3".into(),

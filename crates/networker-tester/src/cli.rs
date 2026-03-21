@@ -23,10 +23,12 @@ pub struct Cli {
     // ── Modes ─────────────────────────────────────────────────────────────────
     /// Comma-separated probe modes:
     /// tcp,http1,http2,http3,udp,download,download1,download2,download3,upload,upload1,upload2,upload3,webdownload,webupload,udpdownload,udpupload,
-    /// dns,tls,native,curl,pageload,pageload1,pageload2,pageload3,browser,browser1,browser2,browser3.
+    /// dns,tls,tlsresume,native,curl,pageload,pageload1,pageload2,pageload3,browser,browser1,browser2,browser3.
     /// pageload: shorthand that runs pageload1+pageload2+pageload3 (all three HTTP versions).
     /// pageload1: HTTP/1.1 page-load (same as the original pageload single-version mode).
     /// browser: shorthand that runs browser1+browser2+browser3 (all three HTTP versions).
+    /// tlsresume: two fresh TLS handshakes to the same origin with a real HTTP request on each;
+    ///   the probe passes when the second handshake resumes.
     /// native: DNS + TCP + platform TLS (SChannel/SecureTransport/OpenSSL) + HTTP/1.1.
     ///   Requires --features native at compile time.
     /// curl: DNS + TCP + TLS + HTTP via the system curl binary.
