@@ -17,7 +17,7 @@ interface SidebarProps {
 
 export function Sidebar({ connectionDot }: SidebarProps) {
   const location = useLocation();
-  const { username, logout } = useAuthStore();
+  const { email, logout } = useAuthStore();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('sidebar-collapsed') === '1');
 
@@ -94,7 +94,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
         <div className="border-t border-gray-800">
           {!collapsed && (
             <div className="px-3 py-2 flex items-center justify-between">
-              <span className="text-xs text-gray-600">{username}</span>
+              <span className="text-xs text-gray-600 truncate" title={email ?? ''}>{email}</span>
               <button
                 onClick={logout}
                 className="text-xs text-gray-600 hover:text-red-400 transition-colors"

@@ -2,31 +2,34 @@ import { create } from 'zustand';
 
 interface AuthState {
   token: string | null;
-  username: string | null;
+  email: string | null;
   role: string | null;
+  status: string | null;
   isAuthenticated: boolean;
   mustChangePassword: boolean;
-  login: (token: string, username: string, role: string, mustChangePassword?: boolean) => void;
+  login: (token: string, email: string, role: string, mustChangePassword?: boolean, status?: string) => void;
   clearPasswordChange: () => void;
   logout: () => void;
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
   token: localStorage.getItem('token'),
-  username: localStorage.getItem('username'),
+  email: localStorage.getItem('email'),
   role: localStorage.getItem('role'),
+  status: localStorage.getItem('status'),
   isAuthenticated: !!localStorage.getItem('token'),
   mustChangePassword: localStorage.getItem('mustChangePassword') === 'true',
-  login: (token, username, role, mustChangePassword = false) => {
+  login: (token, email, role, mustChangePassword = false, status = 'active') => {
     localStorage.setItem('token', token);
-    localStorage.setItem('username', username);
+    localStorage.setItem('email', email);
     localStorage.setItem('role', role);
+    localStorage.setItem('status', status);
     if (mustChangePassword) {
       localStorage.setItem('mustChangePassword', 'true');
     } else {
       localStorage.removeItem('mustChangePassword');
     }
-    set({ token, username, role, isAuthenticated: true, mustChangePassword });
+    set({ token, email, role, status, isAuthenticated: true, mustChangePassword });
   },
   clearPasswordChange: () => {
     localStorage.removeItem('mustChangePassword');
@@ -34,9 +37,10 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
   logout: () => {
     localStorage.removeItem('token');
-    localStorage.removeItem('username');
+    localStorage.removeItem('email');
     localStorage.removeItem('role');
+    localStorage.removeItem('status');
     localStorage.removeItem('mustChangePassword');
-    set({ token: null, username: null, role: null, isAuthenticated: false, mustChangePassword: false });
+    set({ token: null, email: null, role: null, status: null, isAuthenticated: false, mustChangePassword: false });
   },
 }));

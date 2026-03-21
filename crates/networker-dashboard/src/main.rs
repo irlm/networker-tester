@@ -47,10 +47,10 @@ async fn main() -> anyhow::Result<()> {
         db::migrations::run(&client).await?;
     }
 
-    // Seed admin user if needed
-    {
+    // Seed admin user if needed (requires DASHBOARD_ADMIN_EMAIL)
+    if let Some(ref email) = cfg.admin_email {
         let client = db_pool.get().await?;
-        db::users::seed_admin(&client, &cfg.admin_password).await?;
+        db::users::seed_admin(&client, email, &cfg.admin_password).await?;
     }
 
     let (events_tx, _) = broadcast::channel(1024);
