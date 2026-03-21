@@ -220,21 +220,18 @@ async fn invite_user(
                  — Networker Dashboard",
                 role = req.role,
             );
-            if let Err(e) = crate::email::send_email(
-                &req.email,
-                "Networker Dashboard — You're Invited",
-                &body,
-            )
-            .await
+            if let Err(e) =
+                crate::email::send_email(&req.email, "Networker Dashboard — You're Invited", &body)
+                    .await
             {
                 tracing::warn!(error = %e, email = %req.email, "Failed to send invite email");
             }
 
-            Ok(Json(
-                serde_json::json!({ "user_id": user_id.to_string() }),
-            ))
+            Ok(Json(serde_json::json!({ "user_id": user_id.to_string() })))
         }
-        Ok(Err("Email already registered")) => Err((StatusCode::CONFLICT, "Email already registered")),
+        Ok(Err("Email already registered")) => {
+            Err((StatusCode::CONFLICT, "Email already registered"))
+        }
         Ok(Err(msg)) => Err((StatusCode::BAD_REQUEST, msg)),
         Err(e) => {
             tracing::error!(error = %e, "Failed to invite user");

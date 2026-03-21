@@ -156,9 +156,7 @@ pub async fn require_auth(
                 }
 
                 // Block other non-active users (disabled, denied)
-                if status != "active"
-                    && status != "pending"
-                    && !(is_change_password && must_change)
+                if status != "active" && status != "pending" && !(is_change_password && must_change)
                 {
                     return (StatusCode::FORBIDDEN, "Account is not active").into_response();
                 }

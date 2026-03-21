@@ -61,16 +61,10 @@ async fn send_via_acs(
         .format("%a, %d %b %Y %H:%M:%S GMT")
         .to_string();
     let url_parsed: url::Url = url.parse()?;
-    let path_and_query = format!(
-        "{}?{}",
-        url_parsed.path(),
-        url_parsed.query().unwrap_or("")
-    );
+    let path_and_query = format!("{}?{}", url_parsed.path(), url_parsed.query().unwrap_or(""));
     let host = url_parsed.host_str().unwrap_or("");
 
-    let string_to_sign = format!(
-        "POST\n{path_and_query}\n{date};{host};{content_hash}"
-    );
+    let string_to_sign = format!("POST\n{path_and_query}\n{date};{host};{content_hash}");
 
     // HMAC-SHA256 sign
     let key_bytes = STANDARD.decode(&access_key)?;

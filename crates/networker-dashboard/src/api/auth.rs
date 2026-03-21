@@ -243,7 +243,10 @@ async fn sso_init(
         "microsoft" => {
             let cid = match &state.microsoft_client_id {
                 Some(c) => c.clone(),
-                None => return (StatusCode::BAD_REQUEST, "Microsoft SSO not configured").into_response(),
+                None => {
+                    return (StatusCode::BAD_REQUEST, "Microsoft SSO not configured")
+                        .into_response()
+                }
             };
             let url = format!(
                 "https://login.microsoftonline.com/{}/oauth2/v2.0/authorize",
@@ -254,9 +257,14 @@ async fn sso_init(
         "google" => {
             let cid = match &state.google_client_id {
                 Some(c) => c.clone(),
-                None => return (StatusCode::BAD_REQUEST, "Google SSO not configured").into_response(),
+                None => {
+                    return (StatusCode::BAD_REQUEST, "Google SSO not configured").into_response()
+                }
             };
-            ("https://accounts.google.com/o/oauth2/v2/auth".to_string(), cid)
+            (
+                "https://accounts.google.com/o/oauth2/v2/auth".to_string(),
+                cid,
+            )
         }
         _ => return (StatusCode::BAD_REQUEST, "Unknown SSO provider").into_response(),
     };
@@ -292,9 +300,8 @@ async fn sso_init(
     } else {
         ""
     };
-    let cookie = format!(
-        "sso_state={full_state}; HttpOnly; SameSite=Lax; Path=/; Max-Age=300{secure_flag}"
-    );
+    let cookie =
+        format!("sso_state={full_state}; HttpOnly; SameSite=Lax; Path=/; Max-Age=300{secure_flag}");
 
     (
         StatusCode::TEMPORARY_REDIRECT,
@@ -348,11 +355,7 @@ async fn sso_callback(
     }
 
     // Parse provider from state (format: "provider:random")
-    let provider = callback_state
-        .split(':')
-        .next()
-        .unwrap_or("")
-        .to_string();
+    let provider = callback_state.split(':').next().unwrap_or("").to_string();
 
     let (client_id, client_secret, token_url) = match provider.as_str() {
         "microsoft" => {
@@ -614,9 +617,8 @@ async fn sso_callback(
     } else {
         ""
     };
-    let clear_cookie = format!(
-        "sso_state=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0{secure_flag}"
-    );
+    let clear_cookie =
+        format!("sso_state=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0{secure_flag}");
 
     let redirect_url = format!("{}/sso-complete?code={exchange_code}", state.public_url);
 
