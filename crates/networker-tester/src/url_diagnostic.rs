@@ -479,10 +479,7 @@ fn protocol_probe_from_attempt(
             .or_else(|| Some(protocol_mode.to_string())),
         fallback_occurred: Some(false),
         succeeded: attempt.success,
-        status_code: attempt
-            .http
-            .as_ref()
-            .map(|h| i32::from(h.status_code) as u16),
+        status_code: attempt.http.as_ref().map(|h| h.status_code),
         ttfb_ms: attempt.http.as_ref().map(|h| h.ttfb_ms),
         total_ms: attempt
             .http
@@ -748,6 +745,8 @@ async fn execute_primary_page_diagnostic_impl(
         .await
         .context("subscribe to network response events")?;
 
+    let drain_timeout_ms = plan.request.network_idle_timeout_ms.unwrap_or(2_000);
+
     let nav_result = tokio::time::timeout(
         std::time::Duration::from_millis(plan.request.timeout_ms.unwrap_or(30_000)),
         async {
@@ -822,7 +821,7 @@ async fn execute_primary_page_diagnostic_impl(
     let mut first_resource = true;
     let mut resource_protocol_by_url: HashMap<String, String> = HashMap::new();
 
-    let drain_deadline = tokio::time::sleep(std::time::Duration::from_millis(500));
+    let drain_deadline = tokio::time::sleep(std::time::Duration::from_millis(drain_timeout_ms));
     tokio::pin!(drain_deadline);
     loop {
         tokio::select! {

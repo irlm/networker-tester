@@ -11,121 +11,188 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.13.36] – 2026-03-20 — URL diagnostic docs and output hardening
+## [0.13.36] – 2026-03-20 — URL diagnostic workflow, security hardening, and output polish
 
 ### Added
-- Documented the URL page-load diagnostic workflow in the main README and probes reference.
-- Expanded the URL diagnostic JSON fixture coverage to include origin and connection summaries.
-- Clarified the dashboard/API endpoints available for URL diagnostic consumers.
+- Added the full URL page-load diagnostic workflow: request/plan lifecycle, browser-driven primary page load, protocol validation probes, HAR export, best-effort PCAP integration, persistence wiring, dashboard APIs, and grouped origin/connection summaries.
+- Added SSRF validation for URL diagnostic targets, credential redaction for request serialization/debug output, and CRLF validation for custom URL-test headers.
+- Documented the URL page-load diagnostic workflow in the main README and probes reference, and expanded JSON fixture/test coverage for artifact/origin/connection summary handling.
+
+### Fixed
+- Fixed URL diagnostic `total_requests` double-counting in the browser path.
+- Fixed SQL Server companion DDL to include `PcapSummaryJson` and proper T-SQL index guards.
+- Fixed browser sandbox handling so `--no-sandbox` is only used when running as root or when `NETWORKER_NO_SANDBOX` is explicitly set.
+- Fixed brittle URL-test capture config construction by switching to clone-and-override.
+- Fixed dashboard URL diagnostic artifact responses to avoid exposing full server-side filesystem paths.
+- Fixed URL diagnostic persistence string conversion to use enum display output directly.
 
 ---
 
-## [0.13.33] – 2026-03-18 — URL diagnostic per-origin and connection summaries
+## [0.13.30] – 2026-03-20 — Test scheduler: automatic recurring tests
 
 ### Added
-- Added per-origin and connection summary models for URL diagnostic runs.
-- Added canonical resource aggregation logic in the URL diagnostic module.
-- Exposed grouped origin/connection summaries through the dashboard sectioned detail response.
+- **Test scheduler** — create schedules to run tests automatically on a cadence (cron-based)
+- V006 migration: `auto_start_vm`, `auto_stop_vm`, `deployment_id`, `name`, `config` columns on `schedule` table
+- REST API: `GET/POST /schedules`, `GET/PUT/DELETE /schedules/:id`, `POST /schedules/:id/toggle`, `POST /schedules/:id/trigger`
+- Background scheduler task (30s tick loop) — queries due schedules, creates jobs, dispatches to agents
+- VM auto-start/stop via cloud CLI (az/aws/gcloud) for cost-saving scheduled tests
+- Dashboard Schedules page with StatusBadge integration, frequency presets, 4-step create dialog
+- 43 unit tests across cron parsing, row mapping, toggle logic, and scheduler tick flow
 
 ---
 
-## [0.13.32] – 2026-03-18 — URL diagnostic PCAP summary surfacing
+## [0.13.29] – 2026-03-20 — Dashboard UX fixes, packet capture, deploy wizard improvements
 
 ### Added
-- Added structured PCAP summary data to the URL diagnostic result model.
-- Persisted PCAP summary JSON alongside URL diagnostic runs in database backends.
-- Exposed PCAP summary data through the dashboard URL diagnostic detail/sectioned detail responses.
+- **Packet capture pipeline**: full end-to-end capture via tshark, stored as JSONB in DB (V005 migration), displayed in test detail with transport breakdown, TCP health, endpoints, ports, and warnings
+- **Endpoint health in Create Test**: dialog checks endpoint health on open, shows online/offline status per target
+- **OS labels in target dropdown**: Create Test dropdown shows Ubuntu/Win next to each endpoint for easy identification
+- **Deploy wizard OS-aware HTTP stacks**: nginx default for Linux, IIS for Windows; only shows the OS-appropriate option
+- **Unique VM names per deployment**: auto-generated names like `nwk-ep-ubuntu-xxxx` / `nwk-ep-win-xxxx` prevent VM collisions
+- **Auto-naming with OS**: deployment names include OS (e.g. "AZURE eastus Win")
+
+### Fixed
+- **Agent non-zero exit handling**: tester partial failures (non-zero exit) now send `JobComplete` with results instead of silently dropping — fixes tests stuck in "running"
+- **Terminal log behavior**: all terminal components use fixed `h-[400px]` with auto-scroll to bottom (deploy log, tester log, settings update log)
+- **SPA 404 status**: fallback serves index.html with 200 (not 404)
+- **Settings page hang**: added `ring::default_provider().install_default()` for reqwest+rustls
+- **Cloud inventory empty**: fixed `Command::new("which")` and case-insensitive Azure RG filter
+- **WS batching**: liveStore buffers rapid `attempt_result` events (500ms flush), immediate flush on `job_complete`
+- **Deploy detail auto-scroll**: log scrolls to bottom on initial load for completed deployments
+
+## [0.13.28] – 2026-03-18 — Backend deadlock fix, UX polish
+
+### Fixed
+- **Critical: `block_on` deadlock in `get_attempts`** — `futures::executor::block_on()` inside async tokio runtime deadlocked worker threads when the fallback query path was hit, causing the Run detail page and eventually the entire dashboard to hang on 2-core VMs
+- **DB pool exhaustion** — added 5s wait/create/recycle timeouts (was infinite) and increased max pool size to 16
+- **Linux binary downloads** — update and agent provisioner now use `musl` target (matching release builds) instead of `gnu` which returned 404
+
+### Changed
+- **Settings version list** — replaced card grid with flat rows and dividers (last card-grid pattern removed)
+- **UX copy** — actionable empty states, "Run Test" not "Create Job", "Wrong username or password" not "Invalid credentials"
+- **Micro-interactions** — button press effect, smooth table row hover, toast slide-up animation (all respect `prefers-reduced-motion`)
 
 ---
 
-## [0.13.31] – 2026-03-18 — URL diagnostic PCAP integration
+## [0.13.27] – 2026-03-17 — Dashboard installer fixes
+
+### Fixed
+- **Node.js install** — download setup script to file first, avoiding curl|bash pipe stdin issues; use NodeSource 24.x explicitly instead of LTS
+- **Azure CLI install** — add `DEBIAN_FRONTEND=noninteractive` and download-then-run pattern to prevent hanging
+- **Binary validation** — skip `--version` check for dashboard/agent (they need DB/config to start); use `file` type check instead
+- **Frontend build** — clone at release tag (not main) and use `--legacy-peer-deps` for npm
+- **Admin password** — increase urandom read from 24 to 64 bytes (short passwords with restricted charset)
+- **Dashboard service user** — run as installing user (not system `networker` user) so cloud CLI credentials are accessible
 
 ### Added
-- Integrated the existing packet-capture subsystem into the URL diagnostic CLI flow as a best-effort PCAP artifact path.
-- Added packet-capture capability detection to URL diagnostics and surfaced HAR/PCAP artifact locations in the CLI summary.
-- Added URL diagnostic test coverage for capture capability detection.
+- **nginx reverse proxy** — auto-installs nginx, configures ports 80/443 with WebSocket support for live dashboard updates
+- **Let's Encrypt** — certbot with FQDN validation, self-signed fallback if DNS doesn't resolve
+- **Tester tools** — dashboard install now includes networker-tester binary, Chrome, and tshark for browser probes and packet capture
+- **Completion guide** — shows SSH command, cloud credentials setup (az/aws/gcloud), and HTTPS URL
+- **GitHub Actions v5** — all workflows bumped from v4 to v5 (Node.js 24)
 
 ---
 
-## [0.13.30] – 2026-03-18 — URL diagnostic HAR export
+## [0.13.26] – 2026-03-17 — Dashboard design overhaul
+
+### Changed
+- **Terminal-inspired visual identity** — green brand color (favicon, login, sidebar), monospace "N" favicon, terminal-style login with `>` prompt inputs
+- **Layout system** — stat cards replaced with inline metric bars, tables unwrapped from card containers, collapsible sidebar with localStorage persistence
+- **Slide-over panels** — New Test and Deploy wizard now open as right-side panels instead of centered modals, with entrance animation and focus traps
+- **Three-role color system** — green (brand), cyan (interactive), blue (running status); data emphasis uses neutral bright whites instead of cyan
+- **CSS custom properties** — 65 hardcoded hex values migrated to 5 semantic tokens (`--bg-base`, `--bg-surface`, `--bg-sidebar`, `--bg-raised`, `--border-default`)
 
 ### Added
-- Added HAR artifact generation for URL diagnostic runs using captured resource timing data.
-- Added CLI artifact handling so generated HAR files are carried into the configured output directory.
-- Added unit tests covering HAR artifact creation and content shape.
+- `ModeSelector` shared component for probe mode selection grid
+- `PayloadSelector` shared component for payload size toggles
+- `formatDuration` shared utility in `lib/format.ts`
+- `TOOLTIP_STYLE` and `THROUGHPUT_IDS` shared constants in `lib/chart.ts`
+- Loading skeletons for Dashboard and Tests pages
+- `prefers-reduced-motion` support for slide-over animations
+- Accessibility: `aria-label` on icon buttons, `aria-hidden` on backdrops, `flex-wrap` for mobile
+
+### Removed
+- `StatCard` component (replaced by inline metric bars)
+- `AgentsPage` (orphaned, unused)
+- 3 duplicate `formatDuration` implementations
+- ~130 lines of duplicated mode selection / payload UI
 
 ---
 
-## [0.13.29] – 2026-03-18 — URL diagnostic protocol validation probes
+## [0.13.25] – 2026-03-16 — Installer auto-installs tshark
 
 ### Added
-- Added URL diagnostic protocol validation probe execution using existing HTTP/1.1, HTTP/2, and HTTP/3 runner primitives.
-- Added translation from `RequestAttempt` into `UrlTestProtocolRun` for validated protocol results.
-- Added tests covering unavailable probe capability handling and failed-attempt probe translation.
+- **Auto-install tshark** — installer now offers to install tshark/dumpcap when installing the tester component, enabling `--capture-mode tester` out of the box
+- **Non-root capture permissions** — Ubuntu: pre-answers debconf prompt; Linux: adds user + `networker` service user to `wireshark` group automatically
 
 ---
 
-## [0.13.28] – 2026-03-18 — URL diagnostic dashboard sectioned detail API
+## [0.13.24] – 2026-03-16 — LAN detection fix, packet capture in dashboard, reliability
 
 ### Added
-- Added sectioned URL diagnostic detail responses for dashboard-friendly overview/timing/protocol/TLS/artifact grouping.
-- Added `GET /api/url-tests/:run_id/sections` for a pre-grouped dashboard detail payload.
-- Added dashboard unit tests covering sectioned URL diagnostic response shaping.
+- **`--capture-mode` CLI flag** — new flag for `networker-tester` (`none`/`tester`/`endpoint`/`both`) with `clap::ValueEnum` validation
+- **Packet capture in dashboard** — `capture_mode` wired through `JobConfig` → agent executor → tester CLI; frontend "Packet Capture" dropdown in Create Test dialog
+- **`capture_mode` typed as enum** — `JobConfig.capture_mode` uses `PacketCaptureMode` enum (not String) for serde validation at deserialization boundary
+
+### Fixed
+- **LAN network detection** — `measure_baseline()` always returns network type (LAN/Internet/Loopback) even when TCP RTT probes fail; unreachable LAN targets now correctly identified as reference-only in reports
+- **HTML report zero-RTT display** — unreachable targets show "—" instead of "0.00 ms"; excluded from RTT comparison rankings
+- **Capture-mode config override** — `--capture-mode` is `Option` so omitting inherits from config file; explicit `--capture-mode none` overrides config file value
+- **PID 0 kill-self bug** — `child.id().unwrap_or(0)` replaced with proper `None` handling; PID 0 would send SIGTERM to entire process group (killing the dashboard itself)
+- **`unreachable!()` in executor** — replaced with `Option` match to prevent production agent panic if enum variants change
+- **`deleteAgent` API** — was missing `method: 'DELETE'` (from PR #220 review)
+- **TypeScript capture mode type** — state properly typed as literal union matching `JobConfig`
 
 ---
 
-## [0.13.27] – 2026-03-17 — URL diagnostic dashboard API foundation
+## [0.13.23] – 2026-03-16 — Dashboard installer, multi-cloud auth, test visualization
 
 ### Added
-- Added dashboard DB read models for URL diagnostic run summaries and details.
-- Added dashboard API endpoints for listing URL diagnostic runs and fetching a single detailed URL diagnostic record.
-- Added unit tests for URL diagnostic dashboard helper parsing.
+- **Dashboard installer** — `bash install.sh dashboard` auto-installs PostgreSQL, Node.js, cloud CLIs (Azure/AWS/GCP), builds React frontend, creates systemd service
+- **Cloud CLI auto-install** — dashboard setup installs Azure CLI, AWS CLI, GCP CLI, jq, and unzip
+- **OIDC federation scripts** — `scripts/setup-aws-federation.sh` and `scripts/setup-gcp-federation.sh` for zero-credential multi-cloud auth via Azure managed identity
+- **Forced password change** — random temp password on first install, `must_change_password` DB flag, change-password page in frontend, server-side enforcement in auth middleware
+- **Self-update check** — installer detects outdated binaries and offers one-command update with service restart
+- **`public_ip` in /info** — endpoint auto-detects public IP from AWS/Azure/GCP metadata
+- **Static file serving** — dashboard serves React SPA via `ServeDir` fallback (`DASHBOARD_STATIC_DIR` env var)
+- **Release pipeline** — `release.yml` now builds + packages `networker-dashboard` and `networker-agent` (4 binaries × 4 platforms)
+- **Deploy-config dashboard section** — optional `"dashboard"` in deploy.json for automated dashboard setup
+- **`extra_json` column** — full attempt data (browser, pageload) saved as JSONB for rich dashboard visualization
+- **Cloud auth documentation** — `docs/cloud-auth.md` with architecture, setup, and troubleshooting
+- **Richer packet telemetry observability** — packet capture summaries now expose target hints, confidence, dominant trace indicators
+
+### Fixed
+- **AWS detect_public_dns** — filter out `.internal` hostnames from public-hostname metadata
+- **Azure detect_public_dns** — try IMDS `fqdnName` endpoint before hostname+region construction
+- **Dashboard FQDN resolver** — prefer `public_ip` from /info for AWS FQDN construction
+- **Deploy-only exit code** — skip tester config generation when `run_tests: false`
+- **`deleteAgent` API** — was missing `method: 'DELETE'` (sending GET instead)
+- **401 handler** — clears `mustChangePassword` from localStorage (prevents redirect loop)
+- **Sidebar active state** — highlights parent nav for child routes (`/deploy/:id`, `/tests/:id`)
+- **DeployDetailPage** — responsive grid on mobile (`grid-cols-2 md:grid-cols-4`)
+- **RunDetailPage** — uses `getRun(id)` instead of fetching 200 runs
+- **JSON output compatibility preserved** — run JSON artifacts remain top-level `TestRun` objects even when packet capture is enabled
+- **IPv6 target hint parsing** — bracketed and plain IPv6 targets now derive endpoint candidates correctly
+
+### Security
+- **Server-side password change enforcement** — `require_auth` middleware returns 403 for all non-change-password routes when `must_change_password` is set
+- **Random PostgreSQL password** — installer generates 24-char random password instead of hardcoded `'networker'`
+- **SSH `StrictHostKeyChecking=accept-new`** — TOFU model instead of `=no` for agent provisioning
 
 ---
 
-## [0.13.26] – 2026-03-17 — URL diagnostic persistence wiring
+## [0.13.22] – 2026-03-15 — Security hardening
 
-### Added
-- Extended the database backend abstraction with `save_url_test(...)` for URL page-load diagnostic runs.
-- Added PostgreSQL and SQL Server insert helpers for `UrlTestRun`, `UrlTestResource`, and `UrlTestProtocolRun`.
-- Wired the URL diagnostic CLI flow to persist URL diagnostic runs when `--save-to-db` is enabled.
-
----
-
-## [0.13.25] – 2026-03-17 — URL diagnostic CLI entry point
-
-### Added
-- Added dedicated URL diagnostic CLI flags for primary URL, headers, capture options, protocol preference, and JSON output.
-- Added URL diagnostic JSON save/string helpers and CLI summary rendering.
-- Added CLI/config validation tests for URL diagnostic flag parsing and invalid protocol-force handling.
-
----
-
-## [0.13.24] – 2026-03-17 — URL diagnostic primary page-load scaffold
-
-### Added
-- Added primary URL diagnostic execution entry point with lifecycle-aware browser/stub handling.
-- Added runtime capability detection for browser/HAR/PCAP/probe availability.
-- Added URL diagnostic tests for non-browser execution failure behavior alongside the existing lifecycle tests.
-
----
-
-## [0.13.23] – 2026-03-17 — URL diagnostic orchestrator foundation
-
-### Added
-- Added `url_diagnostic` orchestration module with request validation, capability flags, and lifecycle helpers for URL diagnostics.
-- Added normalized `UrlDiagnosticRequest`, `UrlDiagnosticCapabilities`, and `UrlDiagnosticPlan` scaffolding for future page-load execution.
-- Added unit tests covering request validation, lifecycle transitions, aggregate counters, and protocol validation bookkeeping.
-
----
-
-## [0.13.22] – 2026-03-17 — URL diagnostic schema foundation
-
-### Added
-- Added `UrlTestRun`, `UrlTestResource`, and `UrlTestProtocolRun` result contracts for the URL page-load diagnostic feature.
-- Added PostgreSQL V002 migration for URL diagnostic foundation tables.
-- Added SQL Server companion script `sql/08_UrlDiagnostics.sql` for the same schema.
-- Added unit tests covering URL diagnostic contract serialization and PostgreSQL migration content.
+### Changed
+- **JWT secret required** — dashboard now refuses to start without `DASHBOARD_JWT_SECRET` set; logs a warning if the secret is shorter than 32 bytes
+- **Agent WS pre-upgrade auth** — API key is validated before WebSocket upgrade, rejecting unauthorized connections at the HTTP layer with 401
+- **CORS restriction** — replaced permissive CORS with configurable `DASHBOARD_CORS_ORIGIN` (defaults to `http://localhost:5173`)
+- **Dashboard bind address** — added `DASHBOARD_BIND_ADDR` env var, defaults to `127.0.0.1` instead of `0.0.0.0`
+- **Upload size limit** — re-enabled body size limit at 2 GiB (matching download cap) to prevent unbounded memory consumption
+- **Download streaming** — replaced single-allocation download body with 64 KiB chunked streaming to avoid multi-GiB heap allocations
+- **Self-signed cert CA constraint** — changed `BasicConstraints::Unconstrained` to `Constrained(0)` preventing the cert from signing other CA certs
+- **SSRF protection** — agent executor now blocks probes targeting private, loopback, link-local, and cloud metadata IP addresses/hostnames
+- **SSH host key checking** — changed `StrictHostKeyChecking=no` to `accept-new` across all SSH/SCP invocations in the installer (TOFU with MITM rejection)
 
 ---
 

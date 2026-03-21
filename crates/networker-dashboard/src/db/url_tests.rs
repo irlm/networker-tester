@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -253,6 +254,25 @@ fn split_multiline_list(raw: &str) -> Vec<String> {
         .collect()
 }
 
+fn redact_path(path: Option<String>) -> Option<String> {
+    path.and_then(|p| {
+        Path::new(&p)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(ToString::to_string)
+            .or(Some(p))
+    })
+}
+
+fn redact_pcap_summary_capture_path(
+    pcap_summary: Option<UrlPacketCaptureSummaryView>,
+) -> Option<UrlPacketCaptureSummaryView> {
+    pcap_summary.map(|mut summary| {
+        summary.capture_path = redact_path(Some(summary.capture_path)).unwrap_or_default();
+        summary
+    })
+}
+
 fn summarize_origins_and_connections(
     resources: &[UrlTestResourceRow],
 ) -> (Vec<UrlOriginSummaryView>, Option<UrlConnectionSummaryView>) {
@@ -398,9 +418,9 @@ pub fn section_detail(detail: UrlTestDetail) -> UrlTestSectionedDetail {
             alpn: detail.alpn.clone(),
         },
         artifacts: UrlTestArtifactSummary {
-            har_path: detail.har_path.clone(),
-            pcap_path: detail.pcap_path.clone(),
-            pcap_summary: detail.pcap_summary.clone(),
+            har_path: redact_path(detail.har_path.clone()),
+            pcap_path: redact_path(detail.pcap_path.clone()),
+            pcap_summary: redact_pcap_summary_capture_path(detail.pcap_summary.clone()),
             capture_errors: detail.capture_errors.clone(),
             environment_notes: detail.environment_notes.clone(),
         },
@@ -499,9 +519,9 @@ pub async fn get(client: &Client, id: &Uuid) -> anyhow::Result<Option<UrlTestDet
         peak_concurrent_connections: r.get("peakconcurrentconnections"),
         redirect_count: r.get("redirectcount"),
         failure_count: r.get("failurecount"),
-        har_path: r.get("harpath"),
-        pcap_path: r.get("pcappath"),
-        pcap_summary,
+        har_path: redact_path(r.get("harpath")),
+        pcap_path: redact_path(r.get("pcappath")),
+        pcap_summary: redact_pcap_summary_capture_path(pcap_summary),
         capture_errors,
         environment_notes: r.get("environmentnotes"),
         origin_summaries: vec![],

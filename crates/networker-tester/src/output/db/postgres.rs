@@ -534,10 +534,7 @@ async fn insert_url_test_run(run: &UrlTestRun, c: &PgClient) -> anyhow::Result<(
         .map(serde_json::to_string)
         .transpose()
         .context("serialize UrlPacketCaptureSummary")?;
-    let status = serde_json::to_value(&run.status)?
-        .as_str()
-        .unwrap_or("pending")
-        .to_string();
+    let status = run.status.to_string();
     let page_load_strategy = serde_json::to_value(&run.page_load_strategy)?
         .as_str()
         .unwrap_or("browser")

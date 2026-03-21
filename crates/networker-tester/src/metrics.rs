@@ -948,6 +948,19 @@ pub enum UrlDiagnosticStatus {
     Partial,
 }
 
+impl std::fmt::Display for UrlDiagnosticStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = match self {
+            Self::Pending => "pending",
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Partial => "partial",
+        };
+        f.write_str(value)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum UrlPageLoadStrategy {
