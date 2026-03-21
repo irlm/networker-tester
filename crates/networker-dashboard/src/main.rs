@@ -115,9 +115,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     if needs_setup {
-        tracing::error!(
-            "DASHBOARD_ADMIN_EMAIL is not set and no users exist. Cannot start."
-        );
+        tracing::error!("DASHBOARD_ADMIN_EMAIL is not set and no users exist. Cannot start.");
         tracing::error!("Set DASHBOARD_ADMIN_EMAIL env var, or run: networker-dashboard setup");
         // Serve a static error page on all routes
         let app = axum::Router::new()

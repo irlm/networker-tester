@@ -36,12 +36,10 @@ async fn list_pending(
         tracing::error!(error = %e, "DB pool error in list_pending");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
-    let users = crate::db::users::list_pending(&client)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "Failed to list pending users");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let users = crate::db::users::list_pending(&client).await.map_err(|e| {
+        tracing::error!(error = %e, "Failed to list pending users");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     let count = users.len();
     Ok(Json(serde_json::json!({
         "users": users,
@@ -220,21 +218,18 @@ async fn invite_user(
                  — Networker Dashboard",
                 role = req.role,
             );
-            if let Err(e) = crate::email::send_email(
-                &req.email,
-                "Networker Dashboard — You're Invited",
-                &body,
-            )
-            .await
+            if let Err(e) =
+                crate::email::send_email(&req.email, "Networker Dashboard — You're Invited", &body)
+                    .await
             {
                 tracing::warn!(error = %e, email = %req.email, "Failed to send invite email");
             }
 
-            Ok(Json(
-                serde_json::json!({ "user_id": user_id.to_string() }),
-            ))
+            Ok(Json(serde_json::json!({ "user_id": user_id.to_string() })))
         }
-        Ok(Err("Email already registered")) => Err((StatusCode::CONFLICT, "Email already registered")),
+        Ok(Err("Email already registered")) => {
+            Err((StatusCode::CONFLICT, "Email already registered"))
+        }
         Ok(Err(msg)) => Err((StatusCode::BAD_REQUEST, msg)),
         Err(e) => {
             tracing::error!(error = %e, "Failed to invite user");
