@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Networker — Setup Required</title>
+<style>
+  body {
+    background: #0a0b0f;
+    color: #e5e7eb;
+    font-family: ui-monospace, 'Cascadia Code', 'JetBrains Mono', Consolas, monospace;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    margin: 0;
+  }
+  .box {
+    border: 1px solid #2a2b35;
+    border-radius: 8px;
+    padding: 32px;
+    max-width: 480px;
+    width: 90%;
+  }
+  h1 { color: #4ade80; font-size: 20px; margin: 0 0 4px; }
+  .sub { color: #555; font-size: 10px; text-transform: uppercase; letter-spacing: 3px; margin-bottom: 24px; }
+  .warn { color: #f59e0b; font-size: 13px; margin-bottom: 16px; }
+  .step { color: #888; font-size: 12px; margin-bottom: 8px; line-height: 1.6; }
+  code { background: #1a1b25; padding: 2px 6px; border-radius: 3px; color: #4ade80; font-size: 12px; }
+  .or { color: #444; font-size: 11px; margin: 16px 0; text-align: center; }
+</style>
+</head>
+<body>
+<div class="box">
+  <h1>Networker</h1>
+  <div class="sub">Setup Required</div>
+  <div class="warn">Missing required configuration</div>
+  <div class="step">
+    Set the admin email to create the initial account:
+  </div>
+  <div class="step">
+    <code>export DASHBOARD_ADMIN_EMAIL=admin@company.com</code>
+  </div>
+  <div class="step">
+    Then restart the dashboard.
+  </div>
+  <div class="or">— or —</div>
+  <div class="step">
+    Run the interactive setup:
+  </div>
+  <div class="step">
+    <code>networker-dashboard setup</code>
+  </div>
+</div>
+</body>
+</html>

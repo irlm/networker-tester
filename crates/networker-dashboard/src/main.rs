@@ -56,6 +56,45 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
 
+    // CLI setup subcommand: `networker-dashboard setup`
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(|s| s.as_str()) == Some("setup") {
+        let db_url = std::env::var("DASHBOARD_DB_URL").unwrap_or_else(|_| {
+            "postgres://networker:networker@localhost:5432/networker_dashboard".into()
+        });
+
+        let pool = db::create_pool(&db_url).await?;
+        let client = pool.get().await?;
+        db::migrations::run(&client).await?;
+
+        // Prompt for admin email
+        eprint!("Admin email: ");
+        std::io::Write::flush(&mut std::io::stderr())?;
+        let mut email = String::new();
+        std::io::stdin().read_line(&mut email)?;
+        let email = email.trim();
+
+        // Prompt for password
+        let password = rpassword::prompt_password("Admin password: ")?;
+        let confirm = rpassword::prompt_password("Confirm password: ")?;
+        if password != confirm {
+            eprintln!("Passwords do not match");
+            std::process::exit(1);
+        }
+        if password.len() < 8 {
+            eprintln!("Password must be at least 8 characters");
+            std::process::exit(1);
+        }
+
+        db::users::seed_admin(&client, email, &password).await?;
+        eprintln!("Admin user created: {email}");
+        eprintln!("Start the dashboard with:");
+        eprintln!(
+            "  DASHBOARD_JWT_SECRET=<secret> DASHBOARD_ADMIN_EMAIL={email} networker-dashboard"
+        );
+        return Ok(());
+    }
+
     let cfg = config::DashboardConfig::from_env()?;
     let db_pool = db::create_pool(&cfg.database_url).await?;
 
@@ -65,22 +104,35 @@ async fn main() -> anyhow::Result<()> {
         db::migrations::run(&client).await?;
     }
 
-    // Seed admin user if needed (requires DASHBOARD_ADMIN_EMAIL)
-    if let Some(ref email) = cfg.admin_email {
-        let client = db_pool.get().await?;
-        db::users::seed_admin(&client, email, &cfg.admin_password).await?;
-    } else {
+    // Check if setup is needed: no users and no DASHBOARD_ADMIN_EMAIL
+    let needs_setup = {
         let client = db_pool.get().await?;
         let count: i64 = client
             .query_one("SELECT COUNT(*) FROM dash_user", &[])
             .await?
             .get(0);
-        if count == 0 {
-            tracing::warn!(
-                "DASHBOARD_ADMIN_EMAIL is not set and no users exist. \
-                 Set this env var to create the initial admin account."
-            );
-        }
+        count == 0 && cfg.admin_email.is_none()
+    };
+
+    if needs_setup {
+        tracing::error!(
+            "DASHBOARD_ADMIN_EMAIL is not set and no users exist. Cannot start."
+        );
+        tracing::error!("Set DASHBOARD_ADMIN_EMAIL env var, or run: networker-dashboard setup");
+        // Serve a static error page on all routes
+        let app = axum::Router::new()
+            .fallback(|| async { axum::response::Html(include_str!("config_error.html")) });
+        let addr = format!("{}:{}", cfg.bind_addr, cfg.port);
+        tracing::info!("Serving setup-required page on {addr}");
+        let listener = tokio::net::TcpListener::bind(&addr).await?;
+        axum::serve(listener, app).await?;
+        return Ok(());
+    }
+
+    // Seed admin user if needed (requires DASHBOARD_ADMIN_EMAIL)
+    if let Some(ref email) = cfg.admin_email {
+        let client = db_pool.get().await?;
+        db::users::seed_admin(&client, email, &cfg.admin_password).await?;
     }
 
     let (events_tx, _) = broadcast::channel(1024);

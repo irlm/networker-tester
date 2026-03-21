@@ -11,6 +11,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.14.0] – 2026-03-21 — Auth overhaul: SSO, email identity, RBAC
+
+### Added
+- **Email-based identity** — email replaces username as primary login credential
+- **Microsoft + Google SSO** — OAuth 2.0 with Entra ID and Google, one-time code exchange
+- **Three-tier RBAC** — admin/operator/viewer roles with permission hierarchy
+- **User management page** — admin-only, approve/deny pending users, change roles
+- **Pending approval flow** — new users see waiting page until admin approves
+- **Azure Communication Services email** — password reset and invite emails via ACS
+- **Config error page** — clear setup instructions when DASHBOARD_ADMIN_EMAIL missing
+- **CLI setup command** — `networker-dashboard setup` for interactive admin creation
+- **Test scheduler** — cron-based recurring tests with VM auto-start/stop
+- **Responsive layouts** — iPhone card layouts, iPad column priority, full-screen dialogs
+- **Dashboard self-update** — download binary + frontend from GitHub releases
+
+### Changed
+- V008 migration: username dropped, email as NOT NULL UNIQUE, status/auth_provider/sso columns
+- Role enforcement on all mutating endpoints (operator for CRUD, admin for system)
+- Password reset tokens stored as SHA-256 hashes
+- Local tester no longer auto-spawned — users add testers manually
+
+### Security
+- SSO ID tokens validated (issuer + audience)
+- Admin accounts blocked from auto-linking to SSO
+- Auth middleware reads role from DB (not stale JWT), fails closed on DB error
+- Rate limiting TODO for auth endpoints (tower-governor compatibility pending)
+
+---
+
 ## [0.13.36] – 2026-03-20 — URL diagnostic workflow, security hardening, and output polish
 
 ### Added
