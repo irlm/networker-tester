@@ -216,7 +216,7 @@ export function JobsPage() {
               <div className="flex gap-2 mb-3">
                 {([
                   { id: 'cloud', label: 'New Cloud VM' },
-                  { id: 'endpoint', label: 'On deployed endpoint' },
+                  { id: 'endpoint', label: 'Add to existing endpoint' },
                   { id: 'ssh', label: 'Remote (SSH)' },
                 ] as const).map(opt => (
                   <button
@@ -279,7 +279,7 @@ export function JobsPage() {
               {addTesterMode === 'endpoint' && (
                 <div className="mb-2">
                   <p className="text-xs text-gray-500 mb-2">
-                    Install a tester on an existing deployed endpoint. Tests from that network location.
+                    Add the tester agent to a VM you already deployed. No new VM created — just installs the tester software.
                   </p>
                   <select
                     value={selectedEndpoint}
