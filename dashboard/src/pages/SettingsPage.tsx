@@ -203,9 +203,9 @@ export function SettingsPage() {
             );
           })()}
 
-          {/* Local Tester */}
-          {(() => {
-            const testerOutdated = versionInfo?.tester_version && latestRelease && versionInfo.tester_version !== latestRelease;
+          {/* Local Tester — only shown when detected */}
+          {versionInfo?.tester_version && (() => {
+            const testerOutdated = latestRelease && versionInfo.tester_version !== latestRelease;
             return (
               <div className="flex items-center justify-between py-2.5 border-t border-gray-800/30">
                 <div>
@@ -214,10 +214,9 @@ export function SettingsPage() {
                 </div>
                 <div className="flex items-center gap-3">
                   <span className={`text-xs font-mono ${
-                    versionInfo?.tester_version === latestRelease ? 'text-green-400' :
-                    versionInfo?.tester_version ? 'text-yellow-400' : 'text-gray-600'
+                    versionInfo.tester_version === latestRelease ? 'text-green-400' : 'text-yellow-400'
                   }`}>
-                    {versionInfo?.tester_version ? `v${versionInfo.tester_version}` : 'not found'}
+                    v{versionInfo.tester_version}
                   </span>
                   {testerOutdated && (
                     <button

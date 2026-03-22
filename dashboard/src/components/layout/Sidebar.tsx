@@ -169,11 +169,13 @@ export function Sidebar({ connectionDot }: SidebarProps) {
         {/* Collapse toggle + user */}
         <div className="border-t border-gray-800">
           {!collapsed && (
-            <div className="px-3 py-2 flex items-center justify-between">
-              <span className="text-xs text-gray-600 truncate" title={email ?? ''}>{email}</span>
+            <div className="px-3 py-3 flex items-center justify-between">
+              <span className="text-xs text-gray-600 truncate max-w-[100px]" title={email ?? ''}>
+                {email?.split('@')[0] ?? ''}
+              </span>
               <button
                 onClick={logout}
-                className="text-xs text-gray-600 hover:text-red-400 transition-colors"
+                className="text-xs text-gray-500 hover:text-red-400 transition-colors px-2 py-1 rounded hover:bg-gray-800/50"
               >
                 Logout
               </button>
