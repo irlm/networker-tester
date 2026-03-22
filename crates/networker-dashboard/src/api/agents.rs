@@ -410,7 +410,6 @@ async fn run_vm_deployment(
             "--generate-ssh-keys",
             "--public-ip-sku", "Standard",
             "--location", &region,
-            "--no-wait", "false",
             "--output", "none",
         ])
         .stdin(std::process::Stdio::null())
