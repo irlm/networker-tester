@@ -114,6 +114,12 @@ export const api = {
   deleteAgent: (agentId: string) =>
     request<{ deleted: boolean }>(`/agents/${agentId}`, { method: 'DELETE' }),
 
+  deployTesterVm: (params: { name: string; provider: string; region: string; vm_size: string }) =>
+    request<{ agent_id: string; status: string }>('/agents/deploy-vm', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    }),
+
   getJobs: (params?: { status?: string; limit?: number; offset?: number }) => {
     const search = new URLSearchParams();
     if (params?.status) search.set('status', params.status);
