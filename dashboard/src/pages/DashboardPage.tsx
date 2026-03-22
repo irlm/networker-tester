@@ -48,7 +48,10 @@ export function DashboardPage() {
       });
   }, 10000);
 
-  const recentEvents = useMemo(() => events.slice(-20).reverse(), [events]);
+  const recentEvents = useMemo(
+    () => events.filter(e => e.type !== 'deploy_log').slice(-20).reverse(),
+    [events],
+  );
 
   if (loading && !summary) {
     return (
