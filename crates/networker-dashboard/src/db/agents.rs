@@ -71,6 +71,31 @@ pub async fn get_by_api_key(client: &Client, api_key: &str) -> anyhow::Result<Op
     }))
 }
 
+pub async fn get_by_id(client: &Client, agent_id: &Uuid) -> anyhow::Result<Option<AgentRow>> {
+    let row = client
+        .query_opt(
+            "SELECT agent_id, name, region, provider, status, version, os, arch,
+                    last_heartbeat, registered_at, tags
+             FROM agent WHERE agent_id = $1",
+            &[agent_id],
+        )
+        .await?;
+
+    Ok(row.map(|r| AgentRow {
+        agent_id: r.get("agent_id"),
+        name: r.get("name"),
+        region: r.get("region"),
+        provider: r.get("provider"),
+        status: r.get("status"),
+        version: r.get("version"),
+        os: r.get("os"),
+        arch: r.get("arch"),
+        last_heartbeat: r.get("last_heartbeat"),
+        registered_at: r.get("registered_at"),
+        tags: r.get("tags"),
+    }))
+}
+
 pub async fn update_status(client: &Client, agent_id: &Uuid, status: &str) -> anyhow::Result<()> {
     client
         .execute(

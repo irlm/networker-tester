@@ -16,13 +16,15 @@ export function JobsPage() {
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [showCreate, setShowCreate] = useState(false);
   const [showAddTester, setShowAddTester] = useState(false);
-  const [addTesterMode, setAddTesterMode] = useState<'endpoint' | 'ssh'>('endpoint');
+  const [addTesterMode, setAddTesterMode] = useState<'cloud' | 'endpoint' | 'ssh'>('cloud');
   const [sshHost, setSshHost] = useState('');
   const [sshUser, setSshUser] = useState('root');
   const [sshPort, setSshPort] = useState(22);
   const [testerName, setTesterName] = useState('');
   const [selectedEndpoint, setSelectedEndpoint] = useState('');
   const [addingTester, setAddingTester] = useState(false);
+  const [cloudRegion, setCloudRegion] = useState('eastus');
+  const [cloudVmSize, setCloudVmSize] = useState('Standard_B1s');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -57,7 +59,16 @@ export function JobsPage() {
   const handleAddTester = async () => {
     setAddingTester(true);
     try {
-      if (addTesterMode === 'ssh') {
+      if (addTesterMode === 'cloud') {
+        const vmName = testerName.trim() || `tester-${cloudRegion}-${Date.now().toString(36).slice(-4)}`;
+        await api.deployTesterVm({
+          name: vmName,
+          provider: 'azure',
+          region: cloudRegion,
+          vm_size: cloudVmSize,
+        });
+        addToast('success', `Tester VM "${vmName}" deploying... (~3 minutes)`);
+      } else if (addTesterMode === 'ssh') {
         if (!sshHost.trim()) { setAddingTester(false); return; }
         const result = await api.createAgent({
           name: testerName.trim() || `tester-${sshHost}`,
@@ -204,6 +215,7 @@ export function JobsPage() {
             <div className="border-l-2 border-cyan-500/30 pl-3 mb-4">
               <div className="flex gap-2 mb-3">
                 {([
+                  { id: 'cloud', label: 'New Cloud VM' },
                   { id: 'endpoint', label: 'On deployed endpoint' },
                   { id: 'ssh', label: 'Remote (SSH)' },
                 ] as const).map(opt => (
@@ -221,6 +233,48 @@ export function JobsPage() {
                   </button>
                 ))}
               </div>
+
+              {addTesterMode === 'cloud' && (
+                <div className="mb-2">
+                  <p className="text-xs text-gray-500 mb-2">
+                    Create a new Azure VM with the tester agent pre-installed. Takes ~3 minutes.
+                  </p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-xs text-gray-500 mb-1 block">Region</label>
+                      <select
+                        value={cloudRegion}
+                        onChange={e => setCloudRegion(e.target.value)}
+                        className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                      >
+                        <option value="eastus">East US</option>
+                        <option value="eastus2">East US 2</option>
+                        <option value="westus2">West US 2</option>
+                        <option value="westus3">West US 3</option>
+                        <option value="northeurope">North Europe</option>
+                        <option value="westeurope">West Europe</option>
+                        <option value="southeastasia">Southeast Asia</option>
+                        <option value="australiaeast">Australia East</option>
+                        <option value="uksouth">UK South</option>
+                        <option value="centralus">Central US</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-500 mb-1 block">VM Size</label>
+                      <select
+                        value={cloudVmSize}
+                        onChange={e => setCloudVmSize(e.target.value)}
+                        className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                      >
+                        <option value="Standard_B1s">B1s (1 vCPU, 1 GB) — $0.01/hr</option>
+                        <option value="Standard_B2s">B2s (2 vCPU, 4 GB) — $0.04/hr</option>
+                        <option value="Standard_D2s_v3">D2s v3 (2 vCPU, 8 GB) — $0.10/hr</option>
+                        <option value="Standard_D2s_v5">D2s v5 (2 vCPU, 8 GB) — $0.10/hr</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {addTesterMode === 'endpoint' && (
                 <div className="mb-2">
@@ -277,7 +331,7 @@ export function JobsPage() {
                 />
                 <button
                   onClick={handleAddTester}
-                  disabled={addingTester || (addTesterMode === 'ssh' && !sshHost.trim()) || (addTesterMode === 'endpoint' && !selectedEndpoint)}
+                  disabled={addingTester || (addTesterMode === 'ssh' && !sshHost.trim()) || (addTesterMode === 'endpoint' && !selectedEndpoint) || (addTesterMode === 'cloud' && !cloudRegion)}
                   className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors disabled:opacity-50"
                 >
                   {addingTester ? 'Adding...' : 'Deploy'}

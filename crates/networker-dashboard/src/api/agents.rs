@@ -1,7 +1,7 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    routing::get,
+    routing::{get, post},
     Extension, Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -213,6 +213,411 @@ async fn delete_agent(
     Ok(Json(serde_json::json!({"deleted": true})))
 }
 
+#[derive(Deserialize)]
+pub struct DeployVmRequest {
+    pub name: String,
+    pub provider: String,
+    pub region: String,
+    pub vm_size: String,
+}
+
+#[derive(Serialize)]
+pub struct DeployVmResponse {
+    pub agent_id: Uuid,
+    pub status: String,
+}
+
+/// Allowed Azure regions for VM deployment.
+const ALLOWED_REGIONS: &[&str] = &[
+    "eastus",
+    "eastus2",
+    "westus2",
+    "westus3",
+    "northeurope",
+    "westeurope",
+    "southeastasia",
+    "australiaeast",
+    "uksouth",
+    "centralus",
+];
+
+/// Allowed Azure VM sizes.
+const ALLOWED_VM_SIZES: &[&str] = &[
+    "Standard_B1s",
+    "Standard_B2s",
+    "Standard_D2s_v3",
+    "Standard_D2s_v5",
+];
+
+/// Validates a VM name: alphanumeric plus `-`, 1-64 chars.
+fn is_valid_vm_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 64
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+        && !s.starts_with('-')
+        && !s.ends_with('-')
+}
+
+async fn deploy_vm(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Json(req): Json<DeployVmRequest>,
+) -> Result<Json<DeployVmResponse>, StatusCode> {
+    require_role(&user, Role::Operator)?;
+
+    // Validate provider (only Azure for now)
+    if req.provider != "azure" {
+        tracing::warn!(provider = %req.provider, "Unsupported cloud provider for VM deploy");
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    // Validate inputs
+    if !is_valid_vm_name(&req.name) {
+        tracing::warn!(name = %req.name, "Invalid VM name");
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    if !ALLOWED_REGIONS.contains(&req.region.as_str()) {
+        tracing::warn!(region = %req.region, "Invalid region");
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    if !ALLOWED_VM_SIZES.contains(&req.vm_size.as_str()) {
+        tracing::warn!(vm_size = %req.vm_size, "Invalid VM size");
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    // Generate API key and create agent record
+    let api_key = format!("agent-{}", Uuid::new_v4());
+
+    let client = state.db.get().await.map_err(|e| {
+        tracing::error!(error = %e, "DB pool error in deploy_vm");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let agent_id = crate::db::agents::create(
+        &client,
+        &req.name,
+        &api_key,
+        Some(&req.region),
+        Some("azure"),
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, "Failed to create agent for VM deploy");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    // Set status to deploying
+    crate::db::agents::update_status(&client, &agent_id, "deploying")
+        .await
+        .ok();
+
+    tracing::info!(
+        agent_id = %agent_id,
+        name = %req.name,
+        region = %req.region,
+        vm_size = %req.vm_size,
+        "Starting cloud VM deployment"
+    );
+
+    // Spawn background deployment task
+    let state_clone = state.clone();
+    let name = req.name.clone();
+    let region = req.region.clone();
+    let vm_size = req.vm_size.clone();
+    tokio::spawn(async move {
+        run_vm_deployment(state_clone, agent_id, name, region, vm_size, api_key).await;
+    });
+
+    Ok(Json(DeployVmResponse {
+        agent_id,
+        status: "deploying".into(),
+    }))
+}
+
+/// Background task that creates an Azure VM, installs the tester agent, and starts it.
+async fn run_vm_deployment(
+    state: Arc<AppState>,
+    agent_id: Uuid,
+    name: String,
+    region: String,
+    vm_size: String,
+    api_key: String,
+) {
+    let events_tx = state.events_tx.clone();
+    let rg = "networker-testers-rg";
+
+    let send_log = |msg: String| {
+        let _ = events_tx.send(networker_common::messages::DashboardEvent::DeployLog {
+            deployment_id: agent_id, // Re-use deployment_id field for agent deploy logs
+            line: msg,
+            stream: "stdout".into(),
+        });
+    };
+
+    let set_failed = |state: &Arc<AppState>, agent_id: Uuid, msg: &str| {
+        let state = state.clone();
+        let msg = msg.to_string();
+        async move {
+            tracing::error!(agent_id = %agent_id, error = %msg, "VM deployment failed");
+            if let Ok(client) = state.db.get().await {
+                let _ =
+                    crate::db::agents::update_status(&client, &agent_id, "failed").await;
+            }
+        }
+    };
+
+    // Step 1: Ensure resource group exists
+    send_log(format!("Creating resource group '{rg}' in {region}..."));
+    let rg_result = tokio::process::Command::new("az")
+        .args([
+            "group", "create",
+            "--name", rg,
+            "--location", &region,
+            "--output", "none",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await;
+
+    match rg_result {
+        Ok(out) if !out.status.success() => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            send_log(format!("Failed to create resource group: {stderr}"));
+            set_failed(&state, agent_id, &format!("Resource group creation failed: {stderr}")).await;
+            return;
+        }
+        Err(e) => {
+            send_log(format!("Failed to run az CLI: {e}"));
+            set_failed(&state, agent_id, &format!("az CLI error: {e}")).await;
+            return;
+        }
+        _ => {}
+    }
+
+    // Step 2: Create VM
+    send_log(format!("Creating VM '{name}' ({vm_size}) in {region}... (~2 min)"));
+    let vm_result = tokio::process::Command::new("az")
+        .args([
+            "vm", "create",
+            "--resource-group", rg,
+            "--name", &name,
+            "--image", "Ubuntu2404",
+            "--size", &vm_size,
+            "--admin-username", "azureuser",
+            "--generate-ssh-keys",
+            "--public-ip-sku", "Standard",
+            "--location", &region,
+            "--no-wait", "false",
+            "--output", "none",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await;
+
+    match vm_result {
+        Ok(out) if !out.status.success() => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            send_log(format!("VM creation failed: {stderr}"));
+            set_failed(&state, agent_id, &format!("VM creation failed: {stderr}")).await;
+            return;
+        }
+        Err(e) => {
+            send_log(format!("Failed to run az vm create: {e}"));
+            set_failed(&state, agent_id, &format!("az vm create error: {e}")).await;
+            return;
+        }
+        _ => {}
+    }
+    send_log("VM created successfully.".into());
+
+    // Step 3: Get public IP
+    send_log("Retrieving public IP...".into());
+    let ip_result = tokio::process::Command::new("az")
+        .args([
+            "vm", "show",
+            "-g", rg,
+            "-n", &name,
+            "-d",
+            "--query", "publicIps",
+            "-o", "tsv",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await;
+
+    let public_ip = match ip_result {
+        Ok(out) if out.status.success() => {
+            let ip = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if ip.is_empty() {
+                send_log("Could not retrieve public IP.".into());
+                set_failed(&state, agent_id, "No public IP returned").await;
+                return;
+            }
+            send_log(format!("Public IP: {ip}"));
+            ip
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            send_log(format!("Failed to get public IP: {stderr}"));
+            set_failed(&state, agent_id, &format!("IP query failed: {stderr}")).await;
+            return;
+        }
+        Err(e) => {
+            send_log(format!("az vm show error: {e}"));
+            set_failed(&state, agent_id, &format!("az vm show error: {e}")).await;
+            return;
+        }
+    };
+
+    // Step 4: Open NSG port 8443 for endpoint (best-effort)
+    send_log("Opening NSG port 8443...".into());
+    let _ = tokio::process::Command::new("az")
+        .args([
+            "vm", "open-port",
+            "--resource-group", rg,
+            "--name", &name,
+            "--port", "8443",
+            "--priority", "1100",
+            "--output", "none",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .await;
+
+    // Step 5: Build the dashboard URL for the agent
+    let dashboard_url = if state.public_url.starts_with("https://") {
+        let host = state.public_url.trim_start_matches("https://");
+        format!("wss://{host}/ws/agent")
+    } else if state.public_url.starts_with("http://") {
+        let host = state.public_url.trim_start_matches("http://");
+        format!("ws://{host}/ws/agent")
+    } else {
+        format!("wss://{}/ws/agent", state.public_url)
+    };
+
+    // Step 6: Install tester and agent via run-command
+    send_log("Installing tester agent on VM... (~30s)".into());
+    let install_script = format!(
+        r#"
+cd /tmp
+curl -sL https://github.com/irlm/networker-tester/releases/download/v{version}/networker-agent-x86_64-unknown-linux-musl.tar.gz | tar xz
+curl -sL https://github.com/irlm/networker-tester/releases/download/v{version}/networker-tester-x86_64-unknown-linux-musl.tar.gz | tar xz
+mkdir -p /opt/networker
+cp networker-agent networker-tester /opt/networker/
+chmod +x /opt/networker/*
+ln -sf /opt/networker/networker-tester /usr/local/bin/
+
+cat > /etc/systemd/system/networker-agent.service << SVCEOF
+[Unit]
+Description=Networker Tester Agent
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/opt/networker/networker-agent
+Restart=always
+RestartSec=5
+Environment=AGENT_DASHBOARD_URL={dashboard_url}
+Environment=AGENT_API_KEY={api_key}
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+
+systemctl daemon-reload
+systemctl enable networker-agent
+systemctl start networker-agent
+echo "Agent installed and started"
+"#,
+        version = env!("CARGO_PKG_VERSION"),
+        dashboard_url = dashboard_url,
+        api_key = api_key,
+    );
+
+    let install_result = tokio::process::Command::new("az")
+        .args([
+            "vm", "run-command", "invoke",
+            "--resource-group", rg,
+            "--name", &name,
+            "--command-id", "RunShellScript",
+            "--scripts", &install_script,
+            "--output", "none",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await;
+
+    match install_result {
+        Ok(out) if !out.status.success() => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            send_log(format!("Install command failed: {stderr}"));
+            set_failed(&state, agent_id, &format!("Install failed: {stderr}")).await;
+            return;
+        }
+        Err(e) => {
+            send_log(format!("az vm run-command error: {e}"));
+            set_failed(&state, agent_id, &format!("run-command error: {e}")).await;
+            return;
+        }
+        _ => {}
+    }
+
+    send_log(format!(
+        "Tester agent installed on {name} ({public_ip}). Waiting for connection..."
+    ));
+
+    // Step 7: Wait for agent to connect (poll for up to 60 seconds)
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+    let mut connected = false;
+    while tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        if let Ok(client) = state.db.get().await {
+            if let Ok(Some(agent)) =
+                crate::db::agents::get_by_id(&client, &agent_id).await
+            {
+                if agent.status == "online" {
+                    connected = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    if connected {
+        send_log(format!("Tester '{name}' is online at {public_ip}"));
+        let _ = events_tx.send(networker_common::messages::DashboardEvent::AgentStatus {
+            agent_id,
+            status: "online".into(),
+            last_heartbeat: Some(chrono::Utc::now()),
+        });
+    } else {
+        // Agent may still connect later — set status to 'waiting'
+        send_log(format!(
+            "Tester '{name}' deployed but not yet connected. It may take a moment."
+        ));
+        if let Ok(client) = state.db.get().await {
+            // Only update if still deploying (agent may have connected and set itself online)
+            let _ = client
+                .execute(
+                    "UPDATE agent SET status = 'waiting' WHERE agent_id = $1 AND status = 'deploying'",
+                    &[&agent_id],
+                )
+                .await;
+        }
+    }
+}
+
 /// Validates an SSH hostname: non-empty, alphanumeric plus `.`, `-`, `_`.
 fn is_valid_ssh_host(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || ".-_".contains(c))
@@ -226,13 +631,14 @@ fn is_valid_ssh_user(s: &str) -> bool {
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/agents", get(list_agents).post(create_agent))
+        .route("/agents/deploy-vm", post(deploy_vm))
         .route("/agents/:agent_id", get(delete_agent).delete(delete_agent))
         .with_state(state)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{is_valid_ssh_host, is_valid_ssh_user};
+    use super::{is_valid_ssh_host, is_valid_ssh_user, is_valid_vm_name};
 
     /// Tests for SSH host/user validation (command injection prevention).
     mod ssh_validation {
@@ -334,6 +740,92 @@ mod tests {
             assert_eq!(req.name, "remote-1");
             assert_eq!(req.location, "ssh");
             assert_eq!(req.ssh_port, Some(2222));
+        }
+    }
+
+    /// Tests for VM name validation.
+    mod vm_name_validation {
+        use super::*;
+
+        #[test]
+        fn valid_vm_names() {
+            assert!(is_valid_vm_name("tester-eastus-1"));
+            assert!(is_valid_vm_name("my-vm"));
+            assert!(is_valid_vm_name("a"));
+            assert!(is_valid_vm_name("test123"));
+        }
+
+        #[test]
+        fn empty_name_rejected() {
+            assert!(!is_valid_vm_name(""));
+        }
+
+        #[test]
+        fn name_with_special_chars_rejected() {
+            assert!(!is_valid_vm_name("vm;drop table"));
+            assert!(!is_valid_vm_name("vm name"));
+            assert!(!is_valid_vm_name("vm$HOME"));
+            assert!(!is_valid_vm_name("vm`id`"));
+        }
+
+        #[test]
+        fn name_with_leading_trailing_dash_rejected() {
+            assert!(!is_valid_vm_name("-vm"));
+            assert!(!is_valid_vm_name("vm-"));
+        }
+
+        #[test]
+        fn name_too_long_rejected() {
+            let long_name = "a".repeat(65);
+            assert!(!is_valid_vm_name(&long_name));
+            // 64 is ok
+            let ok_name = "a".repeat(64);
+            assert!(is_valid_vm_name(&ok_name));
+        }
+    }
+
+    /// Tests for DeployVmRequest deserialization.
+    mod deploy_vm_request {
+        use super::super::DeployVmRequest;
+
+        #[test]
+        fn valid_request() {
+            let json = r#"{
+                "name": "us-east-tester",
+                "provider": "azure",
+                "region": "eastus",
+                "vm_size": "Standard_B1s"
+            }"#;
+            let req: DeployVmRequest = serde_json::from_str(json).unwrap();
+            assert_eq!(req.name, "us-east-tester");
+            assert_eq!(req.provider, "azure");
+            assert_eq!(req.region, "eastus");
+            assert_eq!(req.vm_size, "Standard_B1s");
+        }
+
+        #[test]
+        fn missing_field_rejected() {
+            let json = r#"{"name": "test", "provider": "azure"}"#;
+            assert!(serde_json::from_str::<DeployVmRequest>(json).is_err());
+        }
+    }
+
+    /// Tests for allowed regions/sizes constants.
+    mod allowed_values {
+        use super::super::{ALLOWED_REGIONS, ALLOWED_VM_SIZES};
+
+        #[test]
+        fn common_regions_present() {
+            assert!(ALLOWED_REGIONS.contains(&"eastus"));
+            assert!(ALLOWED_REGIONS.contains(&"westeurope"));
+            assert!(!ALLOWED_REGIONS.contains(&"invalid-region"));
+        }
+
+        #[test]
+        fn common_sizes_present() {
+            assert!(ALLOWED_VM_SIZES.contains(&"Standard_B1s"));
+            assert!(ALLOWED_VM_SIZES.contains(&"Standard_D2s_v3"));
+            assert!(!ALLOWED_VM_SIZES.contains(&"Standard_E64s_v5"));
         }
     }
 }
