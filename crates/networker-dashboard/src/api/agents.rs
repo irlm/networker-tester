@@ -345,7 +345,7 @@ async fn run_vm_deployment(
     api_key: String,
 ) {
     let events_tx = state.events_tx.clone();
-    let rg = "networker-testers-rg";
+    let rg = format!("networker-testers-{region}-rg");
 
     let send_log = |msg: String| {
         let _ = events_tx.send(networker_common::messages::DashboardEvent::DeployLog {
@@ -372,7 +372,7 @@ async fn run_vm_deployment(
     let rg_result = tokio::process::Command::new("az")
         .args([
             "group", "create",
-            "--name", rg,
+            "--name", &rg,
             "--location", &region,
             "--output", "none",
         ])
@@ -402,7 +402,7 @@ async fn run_vm_deployment(
     let vm_result = tokio::process::Command::new("az")
         .args([
             "vm", "create",
-            "--resource-group", rg,
+            "--resource-group", &rg,
             "--name", &name,
             "--image", "Ubuntu2404",
             "--size", &vm_size,
@@ -439,7 +439,7 @@ async fn run_vm_deployment(
     let ip_result = tokio::process::Command::new("az")
         .args([
             "vm", "show",
-            "-g", rg,
+            "-g", &rg,
             "-n", &name,
             "-d",
             "--query", "publicIps",
@@ -480,7 +480,7 @@ async fn run_vm_deployment(
     let _ = tokio::process::Command::new("az")
         .args([
             "vm", "open-port",
-            "--resource-group", rg,
+            "--resource-group", &rg,
             "--name", &name,
             "--port", "8443",
             "--priority", "1100",
@@ -545,7 +545,7 @@ echo "Agent installed and started"
     let install_result = tokio::process::Command::new("az")
         .args([
             "vm", "run-command", "invoke",
-            "--resource-group", rg,
+            "--resource-group", &rg,
             "--name", &name,
             "--command-id", "RunShellScript",
             "--scripts", &install_script,
