@@ -16,7 +16,7 @@ export function JobsPage() {
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [showCreate, setShowCreate] = useState(false);
   const [showAddTester, setShowAddTester] = useState(false);
-  const [addTesterMode, setAddTesterMode] = useState<'local' | 'endpoint' | 'ssh'>('local');
+  const [addTesterMode, setAddTesterMode] = useState<'endpoint' | 'ssh'>('endpoint');
   const [sshHost, setSshHost] = useState('');
   const [sshUser, setSshUser] = useState('root');
   const [sshPort, setSshPort] = useState(22);
@@ -57,13 +57,7 @@ export function JobsPage() {
   const handleAddTester = async () => {
     setAddingTester(true);
     try {
-      if (addTesterMode === 'local') {
-        const result = await api.createAgent({
-          name: testerName.trim() || 'local-tester',
-          location: 'local',
-        });
-        addToast('success', `Tester "${result.name}" starting...`);
-      } else if (addTesterMode === 'ssh') {
+      if (addTesterMode === 'ssh') {
         if (!sshHost.trim()) { setAddingTester(false); return; }
         const result = await api.createAgent({
           name: testerName.trim() || `tester-${sshHost}`,
@@ -210,7 +204,6 @@ export function JobsPage() {
             <div className="border-l-2 border-cyan-500/30 pl-3 mb-4">
               <div className="flex gap-2 mb-3">
                 {([
-                  { id: 'local', label: 'Local (this machine)' },
                   { id: 'endpoint', label: 'On deployed endpoint' },
                   { id: 'ssh', label: 'Remote (SSH)' },
                 ] as const).map(opt => (
@@ -228,12 +221,6 @@ export function JobsPage() {
                   </button>
                 ))}
               </div>
-
-              {addTesterMode === 'local' && (
-                <p className="text-xs text-gray-500 mb-2">
-                  Starts a tester on this machine. Can probe any reachable target.
-                </p>
-              )}
 
               {addTesterMode === 'endpoint' && (
                 <div className="mb-2">
@@ -293,7 +280,7 @@ export function JobsPage() {
                   disabled={addingTester || (addTesterMode === 'ssh' && !sshHost.trim()) || (addTesterMode === 'endpoint' && !selectedEndpoint)}
                   className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors disabled:opacity-50"
                 >
-                  {addingTester ? 'Adding...' : addTesterMode === 'local' ? 'Start' : 'Deploy'}
+                  {addingTester ? 'Adding...' : 'Deploy'}
                 </button>
               </div>
             </div>
@@ -301,7 +288,7 @@ export function JobsPage() {
 
           {/* Tester List — flat rows with dividers */}
           {testers.length === 0 ? (
-            <p className="text-gray-600 text-sm">No testers registered. Click "+ Add Tester" above to get started.</p>
+            <p className="text-gray-600 text-sm">No testers registered. Deploy a tester on an endpoint or via SSH.</p>
           ) : (
             <div>
               {testers.map((t, i) => (
@@ -348,7 +335,7 @@ export function JobsPage() {
           testers.length === 0 ? (
             <div className="border border-cyan-500/20 rounded p-6 text-center">
               <p className="text-gray-300 text-sm mb-2">No testers connected</p>
-              <p className="text-gray-600 text-xs mb-4">Add a tester to start running network diagnostics</p>
+              <p className="text-gray-600 text-xs mb-4">Deploy a tester on one of your endpoints to start running diagnostics.</p>
               <button
                 onClick={() => { setShowTesters(true); setShowAddTester(true); }}
                 className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors"
@@ -451,7 +438,7 @@ export function JobsPage() {
           testers.length === 0 ? (
             <div className="border border-cyan-500/20 rounded p-6 text-center my-6">
               <p className="text-gray-300 text-sm mb-2">No testers connected</p>
-              <p className="text-gray-600 text-xs mb-4">Add a tester to start running network diagnostics</p>
+              <p className="text-gray-600 text-xs mb-4">Deploy a tester on one of your endpoints to start running diagnostics.</p>
               <button
                 onClick={() => { setShowTesters(true); setShowAddTester(true); }}
                 className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors"
