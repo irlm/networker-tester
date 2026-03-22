@@ -163,6 +163,24 @@ CREATE INDEX IF NOT EXISTS ix_user_status ON dash_user (status);
 COMMIT;
 "#;
 
+/// V009 migration: Cloud connections for identity federation (no stored credentials).
+const V009_CLOUD_CONNECTIONS: &str = r#"
+CREATE TABLE IF NOT EXISTS cloud_connection (
+    connection_id    UUID           NOT NULL PRIMARY KEY,
+    name             VARCHAR(200)   NOT NULL,
+    provider         VARCHAR(20)    NOT NULL,
+    config           JSONB          NOT NULL,
+    status           VARCHAR(20)    NOT NULL DEFAULT 'pending',
+    last_validated   TIMESTAMPTZ,
+    validation_error TEXT,
+    created_by       UUID           REFERENCES dash_user(user_id),
+    created_at       TIMESTAMPTZ    NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMPTZ    NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS ix_cloud_connection_provider ON cloud_connection (provider);
+"#;
+
 /// Run pending migrations.
 pub async fn run(client: &Client) -> anyhow::Result<()> {
     // Ensure migration tracking table exists
@@ -293,6 +311,23 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
             )
             .await?;
         tracing::info!("V008 migration complete");
+    }
+
+    // V009: Cloud connections
+    let row = client
+        .query_opt("SELECT version FROM _migrations WHERE version = 9", &[])
+        .await?;
+
+    if row.is_none() {
+        tracing::info!("Applying V009 cloud_connections migration...");
+        client.batch_execute(V009_CLOUD_CONNECTIONS).await?;
+        client
+            .execute(
+                "INSERT INTO _migrations (version) VALUES (9) ON CONFLICT DO NOTHING",
+                &[],
+            )
+            .await?;
+        tracing::info!("V009 migration complete");
     }
 
     Ok(())

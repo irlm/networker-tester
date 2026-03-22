@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { api } from '../api/client';
-import type { CloudStatus, DeployEndpoint, ModeGroup } from '../api/types';
+import type { CloudStatus, CloudConnection, DeployEndpoint, ModeGroup } from '../api/types';
 import { THROUGHPUT_IDS } from '../lib/chart';
 import { ModeSelector } from './common/ModeSelector';
 import { PayloadSelector } from './common/PayloadSelector';
@@ -41,6 +41,7 @@ function emptyEndpoint(provider = 'azure'): DeployEndpoint {
 export function DeployWizard({ onClose, onCreated }: DeployWizardProps) {
   const [step, setStep] = useState(1);
   const [cloudStatus, setCloudStatus] = useState<CloudStatus | null>(null);
+  const [cloudConnections, setCloudConnections] = useState<CloudConnection[]>([]);
   const [cloudLoading, setCloudLoading] = useState(true);
   const [endpoints, setEndpoints] = useState<DeployEndpoint[]>([emptyEndpoint()]);
   const [name, setName] = useState('');
@@ -65,6 +66,9 @@ export function DeployWizard({ onClose, onCreated }: DeployWizardProps) {
       .catch(() => setCloudStatus(null))
       .finally(() => setCloudLoading(false));
     api.getModes().then(r => setModeGroups(r.groups)).catch(() => {});
+    api.getCloudConnections()
+      .then(conns => setCloudConnections(conns.filter(c => c.status === 'active')))
+      .catch(() => {});
   }, []);
 
   const handleKeyDown = useCallback(
@@ -289,28 +293,47 @@ export function DeployWizard({ onClose, onCreated }: DeployWizardProps) {
               {cloudLoading ? (
                 <p className="text-gray-500 text-sm">Checking cloud CLIs...</p>
               ) : cloudStatus ? (
-                <div className="grid grid-cols-2 gap-3 mb-4">
-                  {(['azure', 'aws', 'gcp', 'ssh'] as const).map(p => {
-                    const s = cloudStatus[p];
-                    return (
-                      <div key={p} className="bg-[var(--bg-base)] border border-gray-800 rounded p-3">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className={`w-2 h-2 rounded-full ${
-                            s.authenticated ? 'bg-green-400' : s.available ? 'bg-yellow-400' : 'bg-gray-600'
-                          }`} />
-                          <span className="text-sm text-gray-200 font-medium">
-                            {p === 'ssh' ? 'SSH/LAN' : p.toUpperCase()}
-                          </span>
+                <>
+                  <div className="grid grid-cols-2 gap-3 mb-4">
+                    {(['azure', 'aws', 'gcp', 'ssh'] as const).map(p => {
+                      const s = cloudStatus[p];
+                      return (
+                        <div key={p} className="bg-[var(--bg-base)] border border-gray-800 rounded p-3">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className={`w-2 h-2 rounded-full ${
+                              s.authenticated ? 'bg-green-400' : s.available ? 'bg-yellow-400' : 'bg-gray-600'
+                            }`} />
+                            <span className="text-sm text-gray-200 font-medium">
+                              {p === 'ssh' ? 'SSH/LAN' : p.toUpperCase()}
+                            </span>
+                          </div>
+                          <p className="text-xs text-gray-500">
+                            {!s.available ? 'CLI not installed' :
+                             !s.authenticated ? 'Not authenticated' :
+                             s.account ? `Account: ${s.account}` : 'Ready'}
+                          </p>
                         </div>
-                        <p className="text-xs text-gray-500">
-                          {!s.available ? 'CLI not installed' :
-                           !s.authenticated ? 'Not authenticated' :
-                           s.account ? `Account: ${s.account}` : 'Ready'}
-                        </p>
+                      );
+                    })}
+                  </div>
+                  {cloudConnections.length > 0 && (
+                    <div className="mb-4">
+                      <p className="text-xs text-gray-500 uppercase tracking-wider font-medium mb-2">Cloud Accounts (Federation)</p>
+                      <div className="space-y-1">
+                        {cloudConnections.map(c => (
+                          <div key={c.connection_id} className="flex items-center gap-2 text-xs">
+                            <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
+                            <span className={
+                              c.provider === 'azure' ? 'text-blue-400' :
+                              c.provider === 'aws' ? 'text-orange-400' : 'text-green-400'
+                            }>{c.provider.toUpperCase()}</span>
+                            <span className="text-gray-300">{c.name}</span>
+                          </div>
+                        ))}
                       </div>
-                    );
-                  })}
-                </div>
+                    </div>
+                  )}
+                </>
               ) : (
                 <p className="text-yellow-400 text-sm mb-4">Could not check cloud status</p>
               )}
@@ -344,9 +367,27 @@ export function DeployWizard({ onClose, onCreated }: DeployWizardProps) {
                         onChange={e => changeProvider(idx, e.target.value)}
                         className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                       >
-                        <option value="azure" disabled={!providerAvailable('azure')}>Azure{!providerAvailable('azure') ? ' (unavailable)' : ''}</option>
-                        <option value="aws" disabled={!providerAvailable('aws')}>AWS{!providerAvailable('aws') ? ' (unavailable)' : ''}</option>
-                        <option value="gcp" disabled={!providerAvailable('gcp')}>GCP{!providerAvailable('gcp') ? ' (unavailable)' : ''}</option>
+                        {cloudConnections.filter(c => c.provider === 'azure').length > 0 ? (
+                          cloudConnections.filter(c => c.provider === 'azure').map(c => (
+                            <option key={c.connection_id} value="azure">{c.name}</option>
+                          ))
+                        ) : (
+                          <option value="azure" disabled={!providerAvailable('azure')}>Azure{!providerAvailable('azure') ? ' (unavailable)' : ''}</option>
+                        )}
+                        {cloudConnections.filter(c => c.provider === 'aws').length > 0 ? (
+                          cloudConnections.filter(c => c.provider === 'aws').map(c => (
+                            <option key={c.connection_id} value="aws">{c.name}</option>
+                          ))
+                        ) : (
+                          <option value="aws" disabled={!providerAvailable('aws')}>AWS{!providerAvailable('aws') ? ' (unavailable)' : ''}</option>
+                        )}
+                        {cloudConnections.filter(c => c.provider === 'gcp').length > 0 ? (
+                          cloudConnections.filter(c => c.provider === 'gcp').map(c => (
+                            <option key={c.connection_id} value="gcp">{c.name}</option>
+                          ))
+                        ) : (
+                          <option value="gcp" disabled={!providerAvailable('gcp')}>GCP{!providerAvailable('gcp') ? ' (unavailable)' : ''}</option>
+                        )}
                         <option value="lan">LAN/SSH</option>
                       </select>
                     </div>
