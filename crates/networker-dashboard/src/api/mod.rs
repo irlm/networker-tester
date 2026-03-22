@@ -1,6 +1,7 @@
 mod agents;
 mod auth;
 mod cloud;
+mod cloud_connections;
 mod dashboard;
 mod deployments;
 mod inventory;
@@ -32,6 +33,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(dashboard::router(state.clone()))
         .merge(deployments::router(state.clone()))
         .merge(cloud::router(state.clone()))
+        .merge(cloud_connections::router(state.clone()))
         .merge(modes::router(state.clone()))
         .merge(version::router(state.clone()))
         .merge(update::router(state.clone()))

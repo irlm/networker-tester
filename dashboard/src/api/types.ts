@@ -182,6 +182,39 @@ export interface DashUser {
   created_at: string;
 }
 
+export interface CloudConnection {
+  connection_id: string;
+  name: string;
+  provider: string;
+  config: AzureConfig | AwsConfig | GcpConfig;
+  status: string;
+  last_validated: string | null;
+  validation_error: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AzureConfig {
+  subscription_id: string;
+  tenant_id?: string;
+  resource_groups?: string[];
+}
+
+export interface AwsConfig {
+  account_id: string;
+  role_arn: string;
+  external_id?: string;
+  regions?: string[];
+}
+
+export interface GcpConfig {
+  project_id: string;
+  workload_identity_pool?: string;
+  provider_id?: string;
+  regions?: string[];
+}
+
 export interface LiveAttempt {
   attempt_id: string;
   run_id: string;

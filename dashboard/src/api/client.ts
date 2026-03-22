@@ -1,6 +1,6 @@
-import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser } from './types';
+import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection } from './types';
 
-export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser };
+export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection };
 export type { LiveAttempt } from './types';
 
 const API_BASE = '/api';
@@ -315,6 +315,28 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ email, role }),
     }),
+
+  // Cloud Connections
+  getCloudConnections: () =>
+    request<CloudConnection[]>('/cloud-connections'),
+
+  createCloudConnection: (params: { name: string; provider: string; config: unknown }) =>
+    request<{ connection_id: string }>('/cloud-connections', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    }),
+
+  updateCloudConnection: (id: string, params: { name: string; config: unknown }) =>
+    request<{ updated: boolean }>(`/cloud-connections/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(params),
+    }),
+
+  deleteCloudConnection: (id: string) =>
+    request<{ deleted: boolean }>(`/cloud-connections/${id}`, { method: 'DELETE' }),
+
+  validateCloudConnection: (id: string) =>
+    request<{ status: string; validation_error: string | null }>(`/cloud-connections/${id}/validate`, { method: 'POST' }),
 
   // Version
   getVersionInfo: () => request<{

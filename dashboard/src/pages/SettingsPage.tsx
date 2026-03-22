@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { api } from '../api/client';
-import type { Deployment } from '../api/types';
+import type { Deployment, CloudConnection } from '../api/types';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useToast } from '../hooks/useToast';
 import { useLiveStore } from '../stores/liveStore';
@@ -26,8 +26,16 @@ export function SettingsPage() {
   const [inventory, setInventory] = useState<{ provider: string; name: string; region: string; status: string; public_ip: string | null; fqdn: string | null; vm_size: string | null; os: string | null; resource_group: string | null; managed: boolean }[]>([]);
   const [inventoryErrors, setInventoryErrors] = useState<string[]>([]);
   const [inventoryLoading, setInventoryLoading] = useState(false);
+  const [cloudConnections, setCloudConnections] = useState<CloudConnection[]>([]);
+  const [showAddAccount, setShowAddAccount] = useState(false);
+  const [newProvider, setNewProvider] = useState<'azure' | 'aws' | 'gcp'>('azure');
+  const [newName, setNewName] = useState('');
+  const [newConfig, setNewConfig] = useState<Record<string, string>>({});
+  const [validating, setValidating] = useState<Record<string, boolean>>({});
+  const [addingAccount, setAddingAccount] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
   const addToast = useToast();
+  const userRole = localStorage.getItem('role');
 
   // Live deploy logs from WebSocket
   const liveLines = useLiveStore(s =>
@@ -37,12 +45,16 @@ export function SettingsPage() {
   usePageTitle('Settings');
 
   const loadData = () => {
-    Promise.all([
+    const promises: Promise<unknown>[] = [
       api.getVersionInfo().then(setVersionInfo),
       api.getDeployments({ limit: 50 }).then(deps => {
         setDeployments(deps.filter(d => d.status === 'completed'));
       }),
-    ]).finally(() => setLoading(false));
+    ];
+    if (userRole === 'admin') {
+      promises.push(api.getCloudConnections().then(setCloudConnections).catch(() => {}));
+    }
+    Promise.all(promises).finally(() => setLoading(false));
   };
 
   useEffect(() => { loadData(); }, []);
@@ -465,6 +477,336 @@ export function SettingsPage() {
           </div>
         )}
       </div>
+
+      {/* Cloud Accounts (admin only) */}
+      {userRole === 'admin' && (
+        <div className="section-divider">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-xs text-gray-500 uppercase tracking-wider font-medium">Cloud Accounts</h3>
+            <button
+              onClick={() => {
+                setShowAddAccount(true);
+                setNewProvider('azure');
+                setNewName('');
+                setNewConfig({});
+              }}
+              className="text-xs px-3 py-1 rounded border border-gray-700 text-gray-400 hover:border-cyan-500 hover:text-cyan-400 transition-colors"
+            >
+              + Add Account
+            </button>
+          </div>
+
+          {/* Add Account Form */}
+          {showAddAccount && (
+            <div className="bg-[var(--bg-surface)] border border-gray-800 rounded-lg p-4 mb-4">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-sm text-gray-200 font-medium">New Cloud Connection</span>
+                <button
+                  onClick={() => setShowAddAccount(false)}
+                  className="text-xs text-gray-500 hover:text-gray-300"
+                >
+                  Cancel
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 mb-3">
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">Provider</label>
+                  <select
+                    value={newProvider}
+                    onChange={e => {
+                      setNewProvider(e.target.value as 'azure' | 'aws' | 'gcp');
+                      setNewConfig({});
+                    }}
+                    className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                  >
+                    <option value="azure">Azure</option>
+                    <option value="aws">AWS</option>
+                    <option value="gcp">GCP</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">Display Name</label>
+                  <input
+                    value={newName}
+                    onChange={e => setNewName(e.target.value)}
+                    placeholder={`${newProvider.toUpperCase()} Production`}
+                    className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                  />
+                </div>
+              </div>
+
+              {/* Provider-specific fields */}
+              {newProvider === 'azure' && (
+                <div className="space-y-2 mb-3">
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1">Subscription ID *</label>
+                    <input
+                      value={newConfig.subscription_id || ''}
+                      onChange={e => setNewConfig(c => ({ ...c, subscription_id: e.target.value }))}
+                      placeholder="00000000-0000-0000-0000-000000000000"
+                      className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 font-mono focus:outline-none focus:border-cyan-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1">Tenant ID (auto-detected if blank)</label>
+                    <input
+                      value={newConfig.tenant_id || ''}
+                      onChange={e => setNewConfig(c => ({ ...c, tenant_id: e.target.value }))}
+                      placeholder="Optional"
+                      className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 font-mono focus:outline-none focus:border-cyan-500"
+                    />
+                  </div>
+                  <p className="text-xs text-gray-600">
+                    The dashboard's managed identity needs Contributor role on this subscription.
+                    Run: <code className="text-gray-400">az role assignment create --assignee 7dc26030-4be5-4866-938e-772cfe965043 --role Contributor --scope /subscriptions/&lt;id&gt;</code>
+                  </p>
+                </div>
+              )}
+
+              {newProvider === 'aws' && (
+                <div className="space-y-2 mb-3">
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1">Account ID *</label>
+                    <input
+                      value={newConfig.account_id || ''}
+                      onChange={e => setNewConfig(c => ({ ...c, account_id: e.target.value }))}
+                      placeholder="123456789012"
+                      className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 font-mono focus:outline-none focus:border-cyan-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1">IAM Role ARN *</label>
+                    <input
+                      value={newConfig.role_arn || ''}
+                      onChange={e => setNewConfig(c => ({ ...c, role_arn: e.target.value }))}
+                      placeholder="arn:aws:iam::123456789012:role/networker-dashboard"
+                      className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 font-mono focus:outline-none focus:border-cyan-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1">External ID (optional)</label>
+                    <input
+                      value={newConfig.external_id || ''}
+                      onChange={e => setNewConfig(c => ({ ...c, external_id: e.target.value }))}
+                      placeholder="Auto-generated if blank"
+                      className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 font-mono focus:outline-none focus:border-cyan-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1">Regions (comma-separated)</label>
+                    <input
+                      value={newConfig.regions || ''}
+                      onChange={e => setNewConfig(c => ({ ...c, regions: e.target.value }))}
+                      placeholder="us-east-1, us-west-2"
+                      className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 font-mono focus:outline-none focus:border-cyan-500"
+                    />
+                  </div>
+                  <p className="text-xs text-gray-600">
+                    Create an IAM role that trusts Azure AD for cross-cloud federation. The role must allow <code className="text-gray-400">sts:AssumeRoleWithWebIdentity</code>.
+                  </p>
+                </div>
+              )}
+
+              {newProvider === 'gcp' && (
+                <div className="space-y-2 mb-3">
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1">Project ID *</label>
+                    <input
+                      value={newConfig.project_id || ''}
+                      onChange={e => setNewConfig(c => ({ ...c, project_id: e.target.value }))}
+                      placeholder="my-project-id"
+                      className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 font-mono focus:outline-none focus:border-cyan-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1">Workload Identity Pool (optional)</label>
+                    <input
+                      value={newConfig.workload_identity_pool || ''}
+                      onChange={e => setNewConfig(c => ({ ...c, workload_identity_pool: e.target.value }))}
+                      placeholder="projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL"
+                      className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 font-mono focus:outline-none focus:border-cyan-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1">Regions (comma-separated)</label>
+                    <input
+                      value={newConfig.regions || ''}
+                      onChange={e => setNewConfig(c => ({ ...c, regions: e.target.value }))}
+                      placeholder="us-central1, europe-west1"
+                      className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 font-mono focus:outline-none focus:border-cyan-500"
+                    />
+                  </div>
+                  <p className="text-xs text-gray-600">
+                    Create a workload identity pool and grant the Azure managed identity access. See GCP documentation for setup.
+                  </p>
+                </div>
+              )}
+
+              <button
+                onClick={async () => {
+                  const configObj: Record<string, unknown> = { ...newConfig };
+                  // Parse comma-separated regions into array
+                  if (newConfig.regions) {
+                    configObj.regions = newConfig.regions.split(',').map(r => r.trim()).filter(Boolean);
+                  }
+                  // Remove empty optional fields
+                  Object.keys(configObj).forEach(k => {
+                    if (configObj[k] === '' || configObj[k] === undefined) delete configObj[k];
+                  });
+
+                  setAddingAccount(true);
+                  try {
+                    const result = await api.createCloudConnection({
+                      name: newName || `${newProvider.toUpperCase()} Account`,
+                      provider: newProvider,
+                      config: configObj,
+                    });
+                    addToast('success', 'Cloud account added');
+                    setShowAddAccount(false);
+                    // Auto-validate
+                    setValidating(v => ({ ...v, [result.connection_id]: true }));
+                    api.validateCloudConnection(result.connection_id)
+                      .then(r => {
+                        addToast(r.status === 'active' ? 'success' : 'error',
+                          r.status === 'active' ? 'Connection validated' : `Validation failed: ${r.validation_error || 'unknown error'}`);
+                      })
+                      .catch(() => addToast('error', 'Validation request failed'))
+                      .finally(() => {
+                        setValidating(v => ({ ...v, [result.connection_id]: false }));
+                        loadData();
+                      });
+                    loadData();
+                  } catch {
+                    addToast('error', 'Failed to add cloud account');
+                  } finally {
+                    setAddingAccount(false);
+                  }
+                }}
+                disabled={addingAccount}
+                className="bg-cyan-600/20 border border-cyan-500/30 hover:bg-cyan-600/30 text-cyan-400 px-4 py-1.5 rounded text-sm transition-colors disabled:opacity-50"
+              >
+                {addingAccount ? 'Adding...' : 'Add Connection'}
+              </button>
+            </div>
+          )}
+
+          {/* Connection List */}
+          {cloudConnections.length === 0 && !showAddAccount ? (
+            <p className="text-gray-600 text-sm">
+              No cloud accounts configured. Add one to enable identity-federated deployments.
+            </p>
+          ) : (
+            <div className="space-y-1">
+              {cloudConnections.map(conn => {
+                const isValidating = validating[conn.connection_id];
+                const statusColor =
+                  conn.status === 'active' ? 'text-green-400' :
+                  conn.status === 'error' ? 'text-red-400' :
+                  conn.status === 'disabled' ? 'text-gray-500' :
+                  'text-yellow-400';
+                const dotColor =
+                  conn.status === 'active' ? 'bg-green-400' :
+                  conn.status === 'error' ? 'bg-red-400' :
+                  conn.status === 'disabled' ? 'bg-gray-500' :
+                  'bg-yellow-400';
+
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const cfg = conn.config as any;
+                const configSummary = conn.provider === 'azure'
+                  ? `subscription: ${(cfg.subscription_id || '').slice(0, 8)}...`
+                  : conn.provider === 'aws'
+                  ? `account: ${cfg.account_id || ''}`
+                  : `project: ${cfg.project_id || ''}`;
+
+                const regions = cfg.regions;
+                const regionStr = Array.isArray(regions) ? regions.join(', ') : '';
+
+                const providerColor =
+                  conn.provider === 'azure' ? 'text-blue-400' :
+                  conn.provider === 'aws' ? 'text-orange-400' :
+                  'text-green-400';
+
+                const validated = conn.last_validated
+                  ? timeAgo(conn.last_validated)
+                  : 'Not validated yet';
+
+                return (
+                  <div key={conn.connection_id} className="bg-[var(--bg-surface)] border border-gray-800 rounded p-3">
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="flex items-center gap-2">
+                        <span className={`w-2 h-2 rounded-full ${dotColor}`} />
+                        <span className="text-sm text-gray-200 font-medium">{conn.name}</span>
+                      </div>
+                      <span className={`text-xs ${statusColor}`}>{conn.status}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <div className="text-xs text-gray-500">
+                        <span className={providerColor}>{conn.provider}</span>
+                        {' · '}{configSummary}
+                        {regionStr && <>{' · '}{regionStr}</>}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={async () => {
+                            setValidating(v => ({ ...v, [conn.connection_id]: true }));
+                            try {
+                              const r = await api.validateCloudConnection(conn.connection_id);
+                              addToast(r.status === 'active' ? 'success' : 'error',
+                                r.status === 'active' ? 'Connection validated' : `Validation failed: ${r.validation_error || 'unknown'}`);
+                            } catch {
+                              addToast('error', 'Validation request failed');
+                            } finally {
+                              setValidating(v => ({ ...v, [conn.connection_id]: false }));
+                              loadData();
+                            }
+                          }}
+                          disabled={isValidating}
+                          className="text-xs text-gray-400 hover:text-cyan-400 transition-colors disabled:opacity-50"
+                        >
+                          {isValidating ? 'Validating...' : 'Validate'}
+                        </button>
+                        <button
+                          onClick={async () => {
+                            try {
+                              await api.deleteCloudConnection(conn.connection_id);
+                              addToast('success', `Removed ${conn.name}`);
+                              loadData();
+                            } catch {
+                              addToast('error', `Failed to remove ${conn.name}`);
+                            }
+                          }}
+                          className="text-xs text-gray-500 hover:text-red-400 transition-colors"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                    <div className="text-xs text-gray-600 mt-1">
+                      {conn.status === 'error' && conn.validation_error ? (
+                        <span className="text-red-400/70">{conn.validation_error}</span>
+                      ) : (
+                        <span>Last validated: {validated}</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
+}
+
+function timeAgo(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
 }
