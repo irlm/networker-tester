@@ -195,7 +195,7 @@ async fn main() -> anyhow::Result<()> {
     // Resolve bare IPs to FQDNs for existing deployments
     {
         let client = state.db.get().await?;
-        let deployments = db::deployments::list(&client, 100, 0).await?;
+        let deployments = db::deployments::list_all(&client, 100, 0).await?;
         for dep in &deployments {
             if let Some(ref ips_val) = dep.endpoint_ips {
                 let ips: Vec<String> = serde_json::from_value(ips_val.clone()).unwrap_or_default();

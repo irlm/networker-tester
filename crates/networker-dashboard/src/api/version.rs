@@ -44,7 +44,7 @@ async fn check_versions(
     // Check deployed endpoint versions
     let mut endpoints = Vec::new();
     if let Ok(client) = state.db.get().await {
-        if let Ok(deployments) = crate::db::deployments::list(&client, 20, 0).await {
+        if let Ok(deployments) = crate::db::deployments::list_all(&client, 20, 0).await {
             for dep in &deployments {
                 if dep.status != "completed" {
                     continue;

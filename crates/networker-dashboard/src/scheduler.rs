@@ -70,8 +70,17 @@ async fn tick(state: &Arc<AppState>) -> anyhow::Result<()> {
         }
 
         // Create job from schedule config
-        let job_id =
-            crate::db::jobs::create(&client, &config, schedule.agent_id.as_ref(), None).await?;
+        let project_id = schedule
+            .project_id
+            .unwrap_or(crate::auth::DEFAULT_PROJECT_ID);
+        let job_id = crate::db::jobs::create(
+            &client,
+            &config,
+            schedule.agent_id.as_ref(),
+            None,
+            &project_id,
+        )
+        .await?;
 
         tracing::info!(
             schedule_id = %schedule_id,

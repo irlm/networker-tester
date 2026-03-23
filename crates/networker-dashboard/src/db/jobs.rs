@@ -23,13 +23,14 @@ pub async fn create(
     config: &serde_json::Value,
     agent_id: Option<&Uuid>,
     created_by: Option<&Uuid>,
+    project_id: &Uuid,
 ) -> anyhow::Result<Uuid> {
     let id = Uuid::new_v4();
     client
         .execute(
-            "INSERT INTO job (job_id, agent_id, status, config, created_by)
-             VALUES ($1, $2, 'pending', $3, $4)",
-            &[&id, &agent_id, config, &created_by],
+            "INSERT INTO job (job_id, agent_id, status, config, created_by, project_id)
+             VALUES ($1, $2, 'pending', $3, $4, $5)",
+            &[&id, &agent_id, config, &created_by, project_id],
         )
         .await?;
     Ok(id)
@@ -62,6 +63,7 @@ pub async fn get(client: &Client, job_id: &Uuid) -> anyhow::Result<Option<JobRow
 
 pub async fn list(
     client: &Client,
+    project_id: &Uuid,
     status_filter: Option<&str>,
     limit: i64,
     offset: i64,
@@ -71,9 +73,9 @@ pub async fn list(
             .query(
                 "SELECT job_id, definition_id, agent_id, status, config, created_by,
                         created_at, started_at, finished_at, run_id, error_message
-                 FROM job WHERE status = $1
-                 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
-                &[&status, &limit, &offset],
+                 FROM job WHERE project_id = $1 AND status = $2
+                 ORDER BY created_at DESC LIMIT $3 OFFSET $4",
+                &[project_id, &status, &limit, &offset],
             )
             .await?
     } else {
@@ -81,8 +83,9 @@ pub async fn list(
             .query(
                 "SELECT job_id, definition_id, agent_id, status, config, created_by,
                         created_at, started_at, finished_at, run_id, error_message
-                 FROM job ORDER BY created_at DESC LIMIT $1 OFFSET $2",
-                &[&limit, &offset],
+                 FROM job WHERE project_id = $1
+                 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+                &[project_id, &limit, &offset],
             )
             .await?
     };

@@ -8,7 +8,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::auth::{require_role, AuthUser, Role};
+use crate::auth::{require_role, AuthUser, ProjectContext, ProjectRole, Role, DEFAULT_PROJECT_ID};
 use crate::AppState;
 
 const VALID_PROVIDERS: &[&str] = &["azure", "aws", "gcp"];
@@ -35,7 +35,7 @@ async fn list_connections(
         tracing::error!(error = %e, "DB pool error in list_connections");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
-    let rows = crate::db::cloud_connections::list(&client)
+    let rows = crate::db::cloud_connections::list(&client, &DEFAULT_PROJECT_ID)
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "Failed to list cloud connections");
@@ -65,6 +65,7 @@ async fn create_connection(
         &req.provider,
         &req.config,
         Some(&user.user_id),
+        &DEFAULT_PROJECT_ID,
     )
     .await
     .map_err(|e| {
@@ -353,6 +354,78 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(
             "/cloud-connections",
             get(list_connections).post(create_connection),
+        )
+        .route(
+            "/cloud-connections/:id",
+            get(get_connection)
+                .put(update_connection)
+                .delete(delete_connection),
+        )
+        .route("/cloud-connections/:id/validate", post(validate_connection))
+        .with_state(state)
+}
+
+// ── Project-scoped handlers ────────────────────────────────────────────
+
+async fn list_connections_scoped(
+    State(state): State<Arc<AppState>>,
+    req: axum::extract::Request,
+) -> Result<Json<Vec<crate::db::cloud_connections::CloudConnectionRow>>, StatusCode> {
+    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
+    crate::auth::require_project_role(&ctx, ProjectRole::Admin)?;
+    let client = state
+        .db
+        .get()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let rows = crate::db::cloud_connections::list(&client, &ctx.project_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(rows))
+}
+
+async fn create_connection_scoped(
+    State(state): State<Arc<AppState>>,
+    req: axum::extract::Request,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
+    let user = req.extensions().get::<AuthUser>().unwrap().clone();
+    crate::auth::require_project_role(&ctx, ProjectRole::Admin)?;
+
+    let body = axum::body::to_bytes(req.into_body(), 1024 * 64)
+        .await
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let create_req: CreateRequest =
+        serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    if !VALID_PROVIDERS.contains(&create_req.provider.as_str()) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let client = state
+        .db
+        .get()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let id = crate::db::cloud_connections::create(
+        &client,
+        &create_req.name,
+        &create_req.provider,
+        &create_req.config,
+        Some(&user.user_id),
+        &ctx.project_id,
+    )
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(serde_json::json!({ "connection_id": id.to_string() })))
+}
+
+pub fn project_router(state: Arc<AppState>) -> Router {
+    Router::new()
+        .route(
+            "/cloud-connections",
+            get(list_connections_scoped).post(create_connection_scoped),
         )
         .route(
             "/cloud-connections/:id",

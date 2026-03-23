@@ -25,13 +25,14 @@ pub fn router(state: Arc<AppState>) -> Router {
     // Public routes (no auth required)
     let public = Router::new().merge(auth::router(state.clone()));
 
-    // Protected routes (require valid JWT)
-    let protected = Router::new()
+    // Protected flat routes (require valid JWT, use DEFAULT_PROJECT_ID)
+    let protected_flat = Router::new()
         .merge(auth::protected_router(state.clone()))
         .merge(agents::router(state.clone()))
         .merge(jobs::router(state.clone()))
         .merge(runs::router(state.clone()))
         .merge(url_tests::router(state.clone()))
+        .merge(schedules::router(state.clone()))
         .merge(dashboard::router(state.clone()))
         .merge(deployments::router(state.clone()))
         .merge(cloud::router(state.clone()))
@@ -40,7 +41,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(version::router(state.clone()))
         .merge(update::router(state.clone()))
         .merge(inventory::router(state.clone()))
-        .merge(schedules::router(state.clone()))
         .merge(users::router(state.clone()))
         .merge(projects::router(state.clone()))
         .layer(middleware::from_fn_with_state(
@@ -50,6 +50,16 @@ pub fn router(state: Arc<AppState>) -> Router {
 
     // Project-scoped routes (require auth + project membership)
     let project_scoped = Router::new()
+        .merge(agents::project_router(state.clone()))
+        .merge(jobs::project_router(state.clone()))
+        .merge(runs::project_router(state.clone()))
+        .merge(schedules::project_router(state.clone()))
+        .merge(dashboard::project_router(state.clone()))
+        .merge(deployments::project_router(state.clone()))
+        .merge(cloud::project_router(state.clone()))
+        .merge(cloud_connections::project_router(state.clone()))
+        .merge(inventory::project_router(state.clone()))
+        .merge(url_tests::project_router(state.clone()))
         .merge(project_members::router(state.clone()))
         .merge(projects::detail_router(state.clone()))
         .layer(middleware::from_fn_with_state(
@@ -63,5 +73,5 @@ pub fn router(state: Arc<AppState>) -> Router {
 
     let project_nested = Router::new().nest("/api/projects/:project_id", project_scoped);
 
-    public.merge(protected).merge(project_nested)
+    public.merge(protected_flat).merge(project_nested)
 }

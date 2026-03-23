@@ -19,6 +19,7 @@ pub struct ScheduleRow {
     pub created_at: DateTime<Utc>,
     pub next_run_at: Option<DateTime<Utc>>,
     pub last_run_at: Option<DateTime<Utc>>,
+    pub project_id: Option<Uuid>,
 }
 
 fn row_to_schedule(r: &tokio_postgres::Row) -> ScheduleRow {
@@ -37,6 +38,7 @@ fn row_to_schedule(r: &tokio_postgres::Row) -> ScheduleRow {
         created_at: r.get("created_at"),
         next_run_at: r.get("next_run_at"),
         last_run_at: r.get("last_run_at"),
+        project_id: r.get("project_id"),
     }
 }
 
@@ -51,13 +53,14 @@ pub async fn create(
     auto_start_vm: bool,
     auto_stop_vm: bool,
     next_run_at: Option<DateTime<Utc>>,
+    project_id: &Uuid,
 ) -> anyhow::Result<Uuid> {
     let id = Uuid::new_v4();
     client
         .execute(
             "INSERT INTO schedule (schedule_id, name, cron_expr, config, agent_id, deployment_id,
-                                   auto_start_vm, auto_stop_vm, enabled, next_run_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, TRUE, $9)",
+                                   auto_start_vm, auto_stop_vm, enabled, next_run_at, project_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, TRUE, $9, $10)",
             &[
                 &id,
                 &name,
@@ -68,6 +71,7 @@ pub async fn create(
                 &auto_start_vm,
                 &auto_stop_vm,
                 &next_run_at,
+                project_id,
             ],
         )
         .await?;
@@ -79,7 +83,7 @@ pub async fn get(client: &Client, schedule_id: &Uuid) -> anyhow::Result<Option<S
         .query_opt(
             "SELECT schedule_id, name, definition_id, agent_id, deployment_id, cron_expr,
                     enabled, config, auto_start_vm, auto_stop_vm, created_by,
-                    created_at, next_run_at, last_run_at
+                    created_at, next_run_at, last_run_at, project_id
              FROM schedule WHERE schedule_id = $1",
             &[schedule_id],
         )
@@ -87,14 +91,14 @@ pub async fn get(client: &Client, schedule_id: &Uuid) -> anyhow::Result<Option<S
     Ok(row.as_ref().map(row_to_schedule))
 }
 
-pub async fn list(client: &Client) -> anyhow::Result<Vec<ScheduleRow>> {
+pub async fn list(client: &Client, project_id: &Uuid) -> anyhow::Result<Vec<ScheduleRow>> {
     let rows = client
         .query(
             "SELECT schedule_id, name, definition_id, agent_id, deployment_id, cron_expr,
                     enabled, config, auto_start_vm, auto_stop_vm, created_by,
-                    created_at, next_run_at, last_run_at
-             FROM schedule ORDER BY created_at DESC",
-            &[],
+                    created_at, next_run_at, last_run_at, project_id
+             FROM schedule WHERE project_id = $1 ORDER BY created_at DESC",
+            &[project_id],
         )
         .await?;
     Ok(rows.iter().map(row_to_schedule).collect())
@@ -163,7 +167,7 @@ pub async fn get_due(client: &Client) -> anyhow::Result<Vec<ScheduleRow>> {
         .query(
             "SELECT schedule_id, name, definition_id, agent_id, deployment_id, cron_expr,
                     enabled, config, auto_start_vm, auto_stop_vm, created_by,
-                    created_at, next_run_at, last_run_at
+                    created_at, next_run_at, last_run_at, project_id
              FROM schedule
              WHERE enabled = TRUE AND next_run_at <= now()
              ORDER BY next_run_at ASC",
@@ -209,6 +213,7 @@ mod tests {
             created_at: Utc::now(),
             next_run_at: None,
             last_run_at: None,
+            project_id: None,
         }
     }
 
@@ -282,6 +287,7 @@ mod tests {
                 created_at: now,
                 next_run_at: Some(now + chrono::Duration::hours(22)),
                 last_run_at: Some(now - chrono::Duration::hours(2)),
+                project_id: Some(Uuid::new_v4()),
             };
 
             assert_eq!(row.name.as_deref(), Some("nightly-probe"));

@@ -209,14 +209,31 @@ pub struct UrlTestDetail {
     pub protocol_runs: Vec<UrlTestProtocolRunRow>,
 }
 
-pub async fn list(client: &Client, limit: i64, offset: i64) -> anyhow::Result<Vec<UrlTestSummary>> {
+pub async fn list(
+    client: &Client,
+    project_id: &Uuid,
+    limit: i64,
+    offset: i64,
+) -> anyhow::Result<Vec<UrlTestSummary>> {
+    // UrlTestRun links to TestRun (via Id = RunId relationship from jobs).
+    // Filter through job table: job.run_id matches a TestRun.RunId,
+    // and UrlTestRun.Id links to TestRun.RunId through the same run concept.
+    // For backward compat, also include url tests not linked to any job.
     let rows = client
         .query(
-            "SELECT Id, StartedAt, CompletedAt, RequestedUrl, FinalUrl, Status, PageLoadStrategy,
-                    ObservedProtocolPrimaryLoad, TotalRequests, TotalTransferBytes, FailureCount
-             FROM UrlTestRun
-             ORDER BY StartedAt DESC LIMIT $1 OFFSET $2",
-            &[&limit, &offset],
+            "SELECT u.Id, u.StartedAt, u.CompletedAt, u.RequestedUrl, u.FinalUrl, u.Status,
+                    u.PageLoadStrategy, u.ObservedProtocolPrimaryLoad, u.TotalRequests,
+                    u.TotalTransferBytes, u.FailureCount
+             FROM UrlTestRun u
+             WHERE EXISTS (
+                 SELECT 1 FROM job j WHERE j.project_id = $1
+                 AND j.run_id IN (SELECT RunId FROM TestRun WHERE RunId = u.Id)
+             )
+             OR NOT EXISTS (
+                 SELECT 1 FROM job j2 WHERE j2.run_id IN (SELECT RunId FROM TestRun WHERE RunId = u.Id)
+             )
+             ORDER BY u.StartedAt DESC LIMIT $2 OFFSET $3",
+            &[project_id, &limit, &offset],
         )
         .await?;
 

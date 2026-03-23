@@ -8,7 +8,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::auth::{require_role, AuthUser, Role};
+use crate::auth::{require_role, AuthUser, ProjectContext, ProjectRole, Role, DEFAULT_PROJECT_ID};
 use crate::AppState;
 
 #[derive(Deserialize)]
@@ -66,6 +66,7 @@ async fn create_schedule(
         req.auto_start_vm.unwrap_or(false),
         req.auto_stop_vm.unwrap_or(false),
         Some(next_run),
+        &DEFAULT_PROJECT_ID,
     )
     .await
     .map_err(|e| {
@@ -87,10 +88,12 @@ async fn list_schedules(
         tracing::error!(error = %e, "DB pool error");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
-    let schedules = crate::db::schedules::list(&client).await.map_err(|e| {
-        tracing::error!(error = %e, "Failed to list schedules");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    let schedules = crate::db::schedules::list(&client, &DEFAULT_PROJECT_ID)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to list schedules");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
     Ok(Json(schedules))
 }
 
@@ -112,7 +115,7 @@ async fn get_schedule(
         .ok_or(StatusCode::NOT_FOUND)?;
 
     // Also fetch recent jobs for this schedule
-    let jobs = crate::db::jobs::list(&client, None, 10, 0)
+    let jobs = crate::db::jobs::list(&client, &DEFAULT_PROJECT_ID, None, 10, 0)
         .await
         .unwrap_or_default();
 
@@ -267,12 +270,19 @@ async fn trigger_schedule(
     })?;
 
     // Create a job from the schedule's config
-    let job_id = crate::db::jobs::create(&client, &config, schedule.agent_id.as_ref(), None)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "Failed to create job from schedule trigger");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let project_id = schedule.project_id.unwrap_or(DEFAULT_PROJECT_ID);
+    let job_id = crate::db::jobs::create(
+        &client,
+        &config,
+        schedule.agent_id.as_ref(),
+        None,
+        &project_id,
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, "Failed to create job from schedule trigger");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     // Try to dispatch
     let agent_id = match schedule.agent_id {
@@ -324,6 +334,288 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .route("/schedules/:schedule_id/toggle", post(toggle_schedule))
         .route("/schedules/:schedule_id/trigger", post(trigger_schedule))
+        .with_state(state)
+}
+
+// ── Project-scoped handlers ────────────────────────────────────────────
+
+async fn list_schedules_scoped(
+    State(state): State<Arc<AppState>>,
+    req: axum::extract::Request,
+) -> Result<Json<Vec<crate::db::schedules::ScheduleRow>>, StatusCode> {
+    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
+    let client = state.db.get().await.map_err(|e| {
+        tracing::error!(error = %e, "DB pool error");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    let schedules = crate::db::schedules::list(&client, &ctx.project_id)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to list schedules");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    Ok(Json(schedules))
+}
+
+async fn create_schedule_scoped(
+    State(state): State<Arc<AppState>>,
+    req: axum::extract::Request,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
+    crate::auth::require_project_role(&ctx, ProjectRole::Operator)?;
+
+    let body = axum::body::to_bytes(req.into_body(), 1024 * 256)
+        .await
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let create_req: CreateScheduleRequest =
+        serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    let next_run = compute_next_run(&create_req.cron_expr).ok_or(StatusCode::BAD_REQUEST)?;
+    let client = state
+        .db
+        .get()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let id = crate::db::schedules::create(
+        &client,
+        &create_req.name,
+        &create_req.cron_expr,
+        &create_req.config,
+        create_req.agent_id.as_ref(),
+        create_req.deployment_id.as_ref(),
+        create_req.auto_start_vm.unwrap_or(false),
+        create_req.auto_stop_vm.unwrap_or(false),
+        Some(next_run),
+        &ctx.project_id,
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, "Failed to create schedule");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    Ok(Json(serde_json::json!({
+        "schedule_id": id,
+        "next_run_at": next_run,
+    })))
+}
+
+async fn get_schedule_scoped(
+    State(state): State<Arc<AppState>>,
+    Path(schedule_id): Path<Uuid>,
+    req: axum::extract::Request,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
+    let client = state
+        .db
+        .get()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let schedule = crate::db::schedules::get(&client, &schedule_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let jobs = crate::db::jobs::list(&client, &ctx.project_id, None, 10, 0)
+        .await
+        .unwrap_or_default();
+
+    Ok(Json(serde_json::json!({
+        "schedule": schedule,
+        "recent_jobs": jobs,
+    })))
+}
+
+async fn update_schedule_scoped(
+    State(state): State<Arc<AppState>>,
+    Path(schedule_id): Path<Uuid>,
+    req: axum::extract::Request,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
+    crate::auth::require_project_role(&ctx, ProjectRole::Operator)?;
+
+    let body = axum::body::to_bytes(req.into_body(), 1024 * 256)
+        .await
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let update_req: UpdateScheduleRequest =
+        serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    let next_run = compute_next_run(&update_req.cron_expr).ok_or(StatusCode::BAD_REQUEST)?;
+    let client = state
+        .db
+        .get()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let updated = crate::db::schedules::update(
+        &client,
+        &schedule_id,
+        &update_req.name,
+        &update_req.cron_expr,
+        &update_req.config,
+        update_req.agent_id.as_ref(),
+        update_req.deployment_id.as_ref(),
+        update_req.auto_start_vm.unwrap_or(false),
+        update_req.auto_stop_vm.unwrap_or(false),
+        Some(next_run),
+    )
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if !updated {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    Ok(Json(
+        serde_json::json!({"status": "updated", "next_run_at": next_run}),
+    ))
+}
+
+async fn delete_schedule_scoped(
+    State(state): State<Arc<AppState>>,
+    Path(schedule_id): Path<Uuid>,
+    req: axum::extract::Request,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
+    crate::auth::require_project_role(&ctx, ProjectRole::Operator)?;
+
+    let client = state
+        .db
+        .get()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let deleted = crate::db::schedules::delete(&client, &schedule_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if !deleted {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    Ok(Json(serde_json::json!({"deleted": true})))
+}
+
+async fn toggle_schedule_scoped(
+    State(state): State<Arc<AppState>>,
+    Path(schedule_id): Path<Uuid>,
+    req: axum::extract::Request,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
+    crate::auth::require_project_role(&ctx, ProjectRole::Operator)?;
+
+    let client = state
+        .db
+        .get()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let schedule = crate::db::schedules::get(&client, &schedule_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let new_enabled = !schedule.enabled;
+    if new_enabled {
+        if let Some(next) = compute_next_run(&schedule.cron_expr) {
+            client
+                .execute(
+                    "UPDATE schedule SET next_run_at = $1 WHERE schedule_id = $2",
+                    &[&next, &schedule_id],
+                )
+                .await
+                .ok();
+        }
+    }
+
+    crate::db::schedules::set_enabled(&client, &schedule_id, new_enabled)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(serde_json::json!({"enabled": new_enabled})))
+}
+
+async fn trigger_schedule_scoped(
+    State(state): State<Arc<AppState>>,
+    Path(schedule_id): Path<Uuid>,
+    req: axum::extract::Request,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
+    crate::auth::require_project_role(&ctx, ProjectRole::Operator)?;
+
+    let client = state
+        .db
+        .get()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let schedule = crate::db::schedules::get(&client, &schedule_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let config = schedule.config.ok_or(StatusCode::BAD_REQUEST)?;
+    let job_id = crate::db::jobs::create(
+        &client,
+        &config,
+        schedule.agent_id.as_ref(),
+        None,
+        &ctx.project_id,
+    )
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let agent_id = match schedule.agent_id {
+        Some(id) => Some(id),
+        None => state.agents.any_online_agent().await,
+    };
+
+    if let Some(aid) = agent_id {
+        if let Ok(job_config) =
+            serde_json::from_value::<networker_common::messages::JobConfig>(config)
+        {
+            let msg = networker_common::messages::ControlMessage::JobAssign {
+                job_id,
+                config: job_config,
+            };
+            if state.agents.send_to_agent(&aid, &msg).await.is_ok() {
+                crate::db::jobs::update_status(&client, &job_id, "assigned")
+                    .await
+                    .ok();
+                let _ =
+                    state
+                        .events_tx
+                        .send(networker_common::messages::DashboardEvent::JobUpdate {
+                            job_id,
+                            status: "assigned".into(),
+                            agent_id: Some(aid),
+                            started_at: None,
+                            finished_at: None,
+                        });
+            }
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "job_id": job_id,
+        "status": "pending",
+    })))
+}
+
+pub fn project_router(state: Arc<AppState>) -> Router {
+    Router::new()
+        .route(
+            "/schedules",
+            get(list_schedules_scoped).post(create_schedule_scoped),
+        )
+        .route(
+            "/schedules/:schedule_id",
+            get(get_schedule_scoped)
+                .put(update_schedule_scoped)
+                .delete(delete_schedule_scoped),
+        )
+        .route(
+            "/schedules/:schedule_id/toggle",
+            post(toggle_schedule_scoped),
+        )
+        .route(
+            "/schedules/:schedule_id/trigger",
+            post(trigger_schedule_scoped),
+        )
         .with_state(state)
 }
 
