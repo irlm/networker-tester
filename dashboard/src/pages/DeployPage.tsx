@@ -1,40 +1,53 @@
 import { useState, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
-import type { Deployment } from '../api/types';
+import type { Agent, Deployment } from '../api/types';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { usePolling } from '../hooks/usePolling';
+import { usePageTitle } from '../hooks/usePageTitle';
 import { DeployWizard } from '../components/DeployWizard';
 import { formatDuration } from '../lib/format';
 
 export function DeployPage() {
   const [deployments, setDeployments] = useState<Deployment[]>([]);
+  const [agents, setAgents] = useState<Agent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showWizard, setShowWizard] = useState(false);
   const navigate = useNavigate();
 
-  const loadDeployments = useCallback(async () => {
+  usePageTitle('Infrastructure');
+
+  const loadData = useCallback(async () => {
     try {
-      const data = await api.getDeployments({ limit: 50 });
-      setDeployments(data);
+      const [deps, ags] = await Promise.all([
+        api.getDeployments({ limit: 50 }),
+        api.getAgents().then(r => r.agents),
+      ]);
+      setDeployments(deps);
+      setAgents(ags);
       setError(null);
     } catch {
-      setError('Failed to load deployments');
+      setError('Failed to load infrastructure');
     } finally {
       setLoading(false);
     }
   }, []);
 
-  usePolling(loadDeployments, 5000);
+  usePolling(loadData, 10000);
+
+  const completedDeps = deployments.filter(d => d.status === 'completed');
+  const activeDeps = deployments.filter(d => d.status === 'running' || d.status === 'pending');
+  const testerVms = agents.filter(a => a.provider && a.provider !== 'local');
 
   return (
     <div className="p-4 md:p-6">
-      <div className="flex items-center justify-between mb-4 md:mb-6 gap-2">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-6 gap-2">
         <div>
-          <h2 className="text-lg md:text-xl font-bold text-gray-100">Deployments</h2>
+          <h2 className="text-lg md:text-xl font-bold text-gray-100">Infrastructure</h2>
           <p className="text-sm text-gray-500 mt-1 hidden md:block">
-            Deploy endpoints and run tests from the dashboard
+            Endpoints and testers deployed across cloud regions
           </p>
         </div>
         <button
@@ -51,92 +64,173 @@ export function DeployPage() {
         </div>
       )}
 
-      {loading && deployments.length === 0 ? (
-        <p className="text-gray-500 text-sm">Loading deployments...</p>
-      ) : deployments.length === 0 ? (
-        <div className="py-10 text-center border border-gray-800/50 rounded">
-          <p className="text-gray-500 text-sm">No deployments yet</p>
-          <button onClick={() => setShowWizard(true)} className="text-xs text-cyan-400 mt-2">
-            Create your first deployment
-          </button>
-        </div>
-      ) : (
-        <>
-          {/* ── Mobile card layout (< md) ── */}
-          <div className="md:hidden space-y-2">
-            {deployments.map((d) => (
+      {/* ── Active Deployments (in progress) ── */}
+      {activeDeps.length > 0 && (
+        <div className="mb-8">
+          <h3 className="text-xs text-gray-500 uppercase tracking-wider font-medium mb-3">In Progress</h3>
+          <div className="space-y-2">
+            {activeDeps.map(d => (
               <Link
                 key={d.deployment_id}
                 to={`/deploy/${d.deployment_id}`}
-                className={`block border border-gray-800 rounded p-3 ${
-                  d.status === 'running' ? 'border-l-2 border-l-blue-500/50' : ''
-                }`}
+                className="block border border-blue-500/20 bg-blue-500/5 rounded p-3"
               >
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-cyan-400 text-sm">{d.name}</span>
                   <StatusBadge status={d.status} />
                 </div>
-                <div className="flex items-center gap-3 text-xs text-gray-500 flex-wrap">
-                  <span>{d.provider_summary || '—'}</span>
-                  {d.endpoint_ips && Array.isArray(d.endpoint_ips) && d.endpoint_ips.length > 0 && (
-                    <span className="font-mono truncate max-w-[200px]">{d.endpoint_ips[0]}</span>
-                  )}
-                  <span>{formatDuration(d.started_at, d.finished_at)}</span>
-                </div>
+                <div className="text-xs text-gray-500">{d.provider_summary || 'Deploying...'}</div>
               </Link>
             ))}
           </div>
-
-          {/* ── Desktop/iPad table (≥ md) ── */}
-          <div className="hidden md:block table-container">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
-                  <th className="text-left px-4 py-2.5 font-medium">Name</th>
-                  <th className="text-left px-4 py-2.5 font-medium">Provider</th>
-                  <th className="text-left px-4 py-2.5 font-medium">Status</th>
-                  <th className="text-left px-4 py-2.5 font-medium">Endpoints</th>
-                  <th className="text-left px-4 py-2.5 font-medium hidden lg:table-cell">Duration</th>
-                  <th className="text-left px-4 py-2.5 font-medium hidden lg:table-cell">Created</th>
-                </tr>
-              </thead>
-              <tbody>
-                {deployments.map((d) => (
-                  <tr
-                    key={d.deployment_id}
-                    className={`border-b border-gray-800/30 hover:bg-gray-800/10 transition-colors ${
-                      d.status === 'running' ? 'bg-blue-500/5' : ''
-                    }`}
-                  >
-                    <td className="px-4 py-3">
-                      <Link to={`/deploy/${d.deployment_id}`} className="text-cyan-400 hover:text-cyan-300">
-                        {d.name}
-                      </Link>
-                    </td>
-                    <td className="px-4 py-3 text-gray-400 text-xs">{d.provider_summary || '—'}</td>
-                    <td className="px-4 py-3"><StatusBadge status={d.status} /></td>
-                    <td className="px-4 py-3 text-gray-400 font-mono text-xs">
-                      {d.endpoint_ips && Array.isArray(d.endpoint_ips) ? d.endpoint_ips.join(', ') : '—'}
-                    </td>
-                    <td className="px-4 py-3 text-gray-400 font-mono text-xs hidden lg:table-cell">
-                      {formatDuration(d.started_at, d.finished_at)}
-                    </td>
-                    <td className="px-4 py-3 text-gray-500 text-xs hidden lg:table-cell">
-                      {new Date(d.created_at).toLocaleString()}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
+        </div>
       )}
+
+      {/* ── Endpoints Section ── */}
+      <div className="mb-8">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-xs text-gray-500 uppercase tracking-wider font-medium">
+            Endpoints
+            {completedDeps.length > 0 && <span className="text-gray-600 ml-2">({completedDeps.length})</span>}
+          </h3>
+        </div>
+
+        {loading && deployments.length === 0 ? (
+          <div className="table-container">
+            <div className="px-4 py-3 flex gap-8">
+              {[80, 48, 56, 120, 48].map((w, i) => (
+                <div key={i} className="h-3 rounded bg-gray-800/50 motion-safe:animate-pulse" style={{ width: w }} />
+              ))}
+            </div>
+          </div>
+        ) : completedDeps.length === 0 ? (
+          <div className="border border-gray-800 rounded p-8 text-center">
+            <p className="text-gray-500 text-sm">No endpoints deployed</p>
+            <button onClick={() => setShowWizard(true)} className="text-xs text-cyan-400 mt-2">
+              Deploy your first endpoint
+            </button>
+          </div>
+        ) : (
+          <>
+            {/* Mobile */}
+            <div className="md:hidden space-y-2">
+              {completedDeps.map(d => (
+                <Link
+                  key={d.deployment_id}
+                  to={`/deploy/${d.deployment_id}`}
+                  className="block border border-gray-800 rounded p-3"
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-cyan-400 text-sm">{d.name}</span>
+                    <StatusBadge status={d.status} />
+                  </div>
+                  <div className="flex items-center gap-3 text-xs text-gray-500 flex-wrap">
+                    <span>{d.provider_summary || '—'}</span>
+                    {d.endpoint_ips?.[0] && (
+                      <span className="font-mono truncate max-w-[200px]">{d.endpoint_ips[0]}</span>
+                    )}
+                  </div>
+                </Link>
+              ))}
+            </div>
+
+            {/* Desktop */}
+            <div className="hidden md:block table-container">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
+                    <th className="text-left px-4 py-2.5 font-medium">Name</th>
+                    <th className="text-left px-4 py-2.5 font-medium">Provider</th>
+                    <th className="text-left px-4 py-2.5 font-medium">Status</th>
+                    <th className="text-left px-4 py-2.5 font-medium">Endpoint</th>
+                    <th className="text-left px-4 py-2.5 font-medium hidden lg:table-cell">Duration</th>
+                    <th className="text-left px-4 py-2.5 font-medium hidden lg:table-cell">Created</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {completedDeps.map(d => (
+                    <tr key={d.deployment_id} className="border-b border-gray-800/30 hover:bg-gray-800/10">
+                      <td className="px-4 py-3">
+                        <Link to={`/deploy/${d.deployment_id}`} className="text-cyan-400 hover:text-cyan-300">
+                          {d.name}
+                        </Link>
+                      </td>
+                      <td className="px-4 py-3 text-gray-400 text-xs">{d.provider_summary || '—'}</td>
+                      <td className="px-4 py-3"><StatusBadge status={d.status} /></td>
+                      <td className="px-4 py-3 text-gray-400 font-mono text-xs truncate max-w-48">
+                        {d.endpoint_ips?.[0] || '—'}
+                      </td>
+                      <td className="px-4 py-3 text-gray-400 font-mono text-xs hidden lg:table-cell">
+                        {formatDuration(d.started_at, d.finished_at)}
+                      </td>
+                      <td className="px-4 py-3 text-gray-500 text-xs hidden lg:table-cell">
+                        {new Date(d.created_at).toLocaleString()}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* ── Tester VMs Section ── */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-xs text-gray-500 uppercase tracking-wider font-medium">
+            Tester VMs
+            {testerVms.length > 0 && <span className="text-gray-600 ml-2">({testerVms.length})</span>}
+          </h3>
+          <Link to="/tests" className="text-xs text-gray-600 hover:text-gray-400 transition-colors">
+            Manage in Tests →
+          </Link>
+        </div>
+
+        {testerVms.length === 0 ? (
+          <div className="border border-gray-800 rounded p-8 text-center">
+            <p className="text-gray-500 text-sm">No tester VMs deployed</p>
+            <Link to="/tests" className="text-xs text-cyan-400 mt-2 inline-block">
+              Deploy a tester from the Tests page
+            </Link>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+            {testerVms.map(a => (
+              <div
+                key={a.agent_id}
+                className={`border rounded p-3 flex items-center gap-3 ${
+                  a.status === 'online'
+                    ? 'border-green-500/20 bg-green-500/5'
+                    : a.status === 'deploying'
+                      ? 'border-blue-500/20 bg-blue-500/5'
+                      : 'border-gray-800 opacity-60'
+                }`}
+              >
+                <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${
+                  a.status === 'online' ? 'bg-green-400' :
+                  a.status === 'deploying' ? 'bg-blue-400 motion-safe:animate-pulse' :
+                  'bg-gray-600'
+                }`} />
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm text-gray-200 truncate">{a.name}</div>
+                  <div className="text-xs text-gray-600">
+                    {a.provider && `${a.provider} `}
+                    {a.region && a.region}
+                  </div>
+                </div>
+                <StatusBadge status={a.status} />
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       {showWizard && (
         <DeployWizard
           onClose={() => setShowWizard(false)}
           onCreated={(id) => {
-            loadDeployments();
+            loadData();
             navigate(`/deploy/${id}`);
           }}
         />
