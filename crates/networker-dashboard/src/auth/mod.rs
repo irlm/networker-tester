@@ -56,6 +56,7 @@ impl ProjectRole {
 #[derive(Debug, Clone)]
 pub struct ProjectContext {
     pub project_id: Uuid,
+    #[allow(dead_code)] // Used in later PRs for slug-based URL routing
     pub project_slug: String,
     pub role: ProjectRole,
 }

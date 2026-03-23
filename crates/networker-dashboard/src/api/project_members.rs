@@ -185,8 +185,9 @@ async fn update_member_role(
     )
     .await
     {
-        Ok(true) => Json(serde_json::json!({ "success": true })).into_response(),
-        Ok(false) => (StatusCode::NOT_FOUND, "Member not found").into_response(),
+        Ok(Ok(true)) => Json(serde_json::json!({ "success": true })).into_response(),
+        Ok(Ok(false)) => (StatusCode::NOT_FOUND, "Member not found").into_response(),
+        Ok(Err(msg)) => (StatusCode::BAD_REQUEST, msg).into_response(),
         Err(e) => {
             tracing::error!(error = %e, "Failed to update member role");
             (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()

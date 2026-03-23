@@ -17,6 +17,17 @@ pub struct ProjectRow {
     pub settings: serde_json::Value,
 }
 
+/// Project with the requesting user's role included (for list endpoint).
+#[derive(Debug, Serialize)]
+pub struct ProjectWithRole {
+    pub project_id: Uuid,
+    pub name: String,
+    pub slug: String,
+    pub description: Option<String>,
+    pub role: String,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ProjectMemberRow {
     pub project_id: Uuid,
@@ -28,25 +39,29 @@ pub struct ProjectMemberRow {
     pub display_name: Option<String>,
 }
 
-/// List projects visible to a user. Platform admins see all projects.
+/// List projects visible to a user, including the user's role in each.
+/// Platform admins see all projects with role = "admin".
 pub async fn list_user_projects(
     client: &Client,
     user_id: &Uuid,
     is_platform_admin: bool,
-) -> anyhow::Result<Vec<ProjectRow>> {
+) -> anyhow::Result<Vec<ProjectWithRole>> {
     let rows = if is_platform_admin {
+        // Platform admins see all projects; LEFT JOIN to get actual role if they're a member
         client
             .query(
-                "SELECT project_id, name, slug, description, created_by, created_at, updated_at, settings \
-                 FROM project ORDER BY created_at",
-                &[],
+                "SELECT p.project_id, p.name, p.slug, p.description, p.created_at, \
+                        COALESCE(pm.role, 'admin') AS role \
+                 FROM project p \
+                 LEFT JOIN project_member pm ON pm.project_id = p.project_id AND pm.user_id = $1 \
+                 ORDER BY p.created_at",
+                &[user_id],
             )
             .await?
     } else {
         client
             .query(
-                "SELECT p.project_id, p.name, p.slug, p.description, p.created_by, \
-                        p.created_at, p.updated_at, p.settings \
+                "SELECT p.project_id, p.name, p.slug, p.description, p.created_at, pm.role \
                  FROM project p \
                  JOIN project_member pm ON pm.project_id = p.project_id \
                  WHERE pm.user_id = $1 \
@@ -58,15 +73,13 @@ pub async fn list_user_projects(
 
     Ok(rows
         .iter()
-        .map(|r| ProjectRow {
+        .map(|r| ProjectWithRole {
             project_id: r.get("project_id"),
             name: r.get("name"),
             slug: r.get("slug"),
             description: r.get("description"),
-            created_by: r.get("created_by"),
+            role: r.get("role"),
             created_at: r.get("created_at"),
-            updated_at: r.get("updated_at"),
-            settings: r.get("settings"),
         })
         .collect())
 }
@@ -268,20 +281,45 @@ pub async fn add_member(
     Ok(())
 }
 
-/// Update a member's role within a project.
+/// Update a member's role within a project. Prevents demoting the last admin.
 pub async fn update_member_role(
     client: &Client,
     project_id: &Uuid,
     user_id: &Uuid,
     role: &str,
-) -> anyhow::Result<bool> {
+) -> anyhow::Result<Result<bool, &'static str>> {
+    // If demoting from admin, check we're not removing the last admin
+    if role != "admin" {
+        let current_role = client
+            .query_opt(
+                "SELECT role FROM project_member WHERE project_id = $1 AND user_id = $2",
+                &[project_id, user_id],
+            )
+            .await?;
+        if let Some(row) = current_role {
+            let current: String = row.get("role");
+            if current == "admin" {
+                let admin_count: i64 = client
+                    .query_one(
+                        "SELECT COUNT(*) FROM project_member WHERE project_id = $1 AND role = 'admin'",
+                        &[project_id],
+                    )
+                    .await?
+                    .get(0);
+                if admin_count <= 1 {
+                    return Ok(Err("Cannot demote the last admin"));
+                }
+            }
+        }
+    }
+
     let n = client
         .execute(
             "UPDATE project_member SET role = $1 WHERE project_id = $2 AND user_id = $3",
             &[&role, project_id, user_id],
         )
         .await?;
-    Ok(n > 0)
+    Ok(Ok(n > 0))
 }
 
 /// Remove a member from a project. Prevents removing the last admin.

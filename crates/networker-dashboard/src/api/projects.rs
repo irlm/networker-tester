@@ -1,10 +1,4 @@
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::IntoResponse,
-    routing::get,
-    Json, Router,
-};
+use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::get, Json, Router};
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -120,7 +114,10 @@ pub fn router(state: Arc<AppState>) -> Router {
 // ── Detail routes (require project context middleware) ────────────────────
 
 /// GET /api/projects/:project_id — get project details.
-async fn get_project_detail(req: axum::extract::Request) -> impl IntoResponse {
+async fn get_project_detail(
+    State(state): State<Arc<AppState>>,
+    req: axum::extract::Request,
+) -> impl IntoResponse {
     let ctx = match req.extensions().get::<ProjectContext>() {
         Some(c) => c.clone(),
         None => {
@@ -128,22 +125,33 @@ async fn get_project_detail(req: axum::extract::Request) -> impl IntoResponse {
         }
     };
 
-    // The project was already fetched by the middleware; re-fetch for full data.
-    // (In practice the middleware already validated it exists.)
-    let auth_user = match req.extensions().get::<AuthUser>() {
-        Some(u) => u.clone(),
-        None => return (StatusCode::UNAUTHORIZED, "Not authenticated").into_response(),
+    let client = match state.db.get().await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(error = %e, "DB pool error in get_project_detail");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response();
+        }
     };
 
-    // Any project member or platform admin can view
-    // (already enforced by require_project middleware)
-    Json(serde_json::json!({
-        "project_id": ctx.project_id,
-        "slug": ctx.project_slug,
-        "role": ctx.role,
-        "user_id": auth_user.user_id,
-    }))
-    .into_response()
+    match crate::db::projects::get_project(&client, &ctx.project_id).await {
+        Ok(Some(project)) => Json(serde_json::json!({
+            "project_id": project.project_id,
+            "name": project.name,
+            "slug": project.slug,
+            "description": project.description,
+            "created_by": project.created_by,
+            "created_at": project.created_at,
+            "updated_at": project.updated_at,
+            "settings": project.settings,
+            "role": ctx.role,
+        }))
+        .into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "Project not found").into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to get project");
+            (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
+        }
+    }
 }
 
 #[derive(Deserialize)]
