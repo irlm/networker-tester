@@ -1,6 +1,7 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client';
+import type { Agent, Job, Deployment, RunSummary } from '../api/types';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { useLiveStore } from '../stores/liveStore';
 import { usePolling } from '../hooks/usePolling';
@@ -24,6 +25,10 @@ interface VersionInfo {
 export function DashboardPage() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [versionInfo, setVersionInfo] = useState<VersionInfo | null>(null);
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [recentJobs, setRecentJobs] = useState<Job[]>([]);
+  const [deployments, setDeployments] = useState<Deployment[]>([]);
+  const [, setRecentRuns] = useState<RunSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const events = useLiveStore((s) => s.events);
@@ -34,43 +39,37 @@ export function DashboardPage() {
     api.getVersionInfo().then(setVersionInfo).catch(() => {});
   }, []);
 
-  usePolling(() => {
-    api
-      .getDashboardSummary()
-      .then((data) => {
-        setSummary(data);
-        setError(null);
-        setLoading(false);
-      })
-      .catch((e) => {
-        setError(String(e));
-        setLoading(false);
-      });
-  }, 10000);
+  const loadData = useCallback(() => {
+    Promise.all([
+      api.getDashboardSummary().then(setSummary),
+      api.getAgents().then(r => setAgents(r.agents)),
+      api.getJobs({ limit: 5 }).then(setRecentJobs),
+      api.getDeployments({ limit: 10 }).then(setDeployments),
+      api.getRuns({ limit: 5 }).then(setRecentRuns),
+    ]).then(() => { setError(null); setLoading(false); })
+     .catch(e => { setError(String(e)); setLoading(false); });
+  }, []);
+
+  usePolling(loadData, 15000);
 
   const recentEvents = useMemo(
-    () => events.filter(e => e.type !== 'deploy_log').slice(-20).reverse(),
+    () => events.filter(e => e.type !== 'deploy_log').slice(-10).reverse(),
     [events],
   );
+
+  const onlineAgents = agents.filter(a => a.status === 'online');
+  const completedDeps = deployments.filter(d => d.status === 'completed' && d.endpoint_ips?.length);
+  const endpoints = versionInfo?.endpoints || [];
 
   if (loading && !summary) {
     return (
       <div className="p-4 md:p-6">
-        <h2 className="text-xl font-bold text-gray-100 mb-2">Dashboard</h2>
-        {/* Skeleton: metric bar */}
-        <div className="flex gap-5 py-3 mb-6 border-b border-gray-800/50">
-          {[80, 72, 68, 88].map((w, i) => (
-            <div key={i} className="h-3 rounded motion-safe:animate-pulse bg-gray-800" style={{ width: w }} />
-          ))}
-        </div>
-        {/* Skeleton: live feed */}
-        <div className="h-3 w-16 rounded bg-gray-800 motion-safe:animate-pulse mb-3" />
-        <div className="border border-gray-800/50 rounded">
-          {[1, 2, 3, 4, 5].map(i => (
-            <div key={i} className="px-3 py-3 border-b border-gray-800/30 flex gap-3">
-              <div className="h-3 w-16 rounded bg-gray-800 motion-safe:animate-pulse" />
-              <div className="h-3 w-12 rounded bg-gray-800/60 motion-safe:animate-pulse" />
-              <div className="h-3 w-20 rounded bg-gray-800/40 motion-safe:animate-pulse" />
+        <h2 className="text-xl font-bold text-gray-100 mb-6">Dashboard</h2>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+          {[1, 2, 3, 4].map(i => (
+            <div key={i} className="border border-gray-800 rounded p-4">
+              <div className="h-6 w-12 bg-gray-800 rounded motion-safe:animate-pulse mb-2" />
+              <div className="h-3 w-20 bg-gray-800/60 rounded motion-safe:animate-pulse" />
             </div>
           ))}
         </div>
@@ -82,124 +81,246 @@ export function DashboardPage() {
     return (
       <div className="p-4 md:p-6">
         <h2 className="text-xl font-bold text-gray-100 mb-6">Dashboard</h2>
-        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
-          <h3 className="text-red-400 font-bold mb-2">Failed to load dashboard</h3>
-          <p className="text-red-300 text-sm font-mono">{error}</p>
+        <div className="bg-red-500/10 border border-red-500/30 rounded p-4">
+          <p className="text-red-400 text-sm">{error}</p>
         </div>
       </div>
     );
   }
 
-  const hasActiveWork = (summary?.jobs_running ?? 0) > 0 || (summary?.jobs_pending ?? 0) > 0;
-
   return (
     <div className="p-4 md:p-6">
-      {/* Page header with inline status */}
-      <div className="flex items-baseline justify-between mb-2">
+      {/* Header */}
+      <div className="flex items-baseline justify-between mb-6">
         <h2 className="text-xl font-bold text-gray-100">Dashboard</h2>
-        {versionInfo && (
-          <div className="flex items-center gap-3 text-xs text-gray-500">
-            <span>v{versionInfo.dashboard_version}</span>
-            {versionInfo.update_available && versionInfo.latest_release && (
-              <Link to="/settings" className="text-yellow-400 hover:text-yellow-300 transition-colors">
-                Update available →
-              </Link>
+        <span className="text-xs text-gray-600">v{versionInfo?.dashboard_version}</span>
+      </div>
+
+      {/* ── KPI Row ── */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+        <div className="border border-gray-800 rounded p-4">
+          <div className={`text-2xl font-bold tabular-nums ${onlineAgents.length > 0 ? 'text-green-400' : 'text-gray-600'}`}>
+            {onlineAgents.length}
+          </div>
+          <div className="text-xs text-gray-500 mt-1">Testers online</div>
+        </div>
+        <div className="border border-gray-800 rounded p-4">
+          <div className={`text-2xl font-bold tabular-nums ${(summary?.jobs_running ?? 0) > 0 ? 'text-blue-400' : 'text-gray-600'}`}>
+            {summary?.jobs_running ?? 0}
+          </div>
+          <div className="text-xs text-gray-500 mt-1">Tests running</div>
+        </div>
+        <div className="border border-gray-800 rounded p-4">
+          <div className="text-2xl font-bold tabular-nums text-gray-200">
+            {summary?.runs_24h ?? 0}
+          </div>
+          <div className="text-xs text-gray-500 mt-1">Runs (24h)</div>
+        </div>
+        <div className="border border-gray-800 rounded p-4">
+          <div className="text-2xl font-bold tabular-nums text-gray-200">
+            {completedDeps.length}
+          </div>
+          <div className="text-xs text-gray-500 mt-1">Endpoints deployed</div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* ── Left column: Endpoints + Testers ── */}
+        <div className="lg:col-span-2 space-y-6">
+          {/* Endpoint Health */}
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-xs text-gray-500 uppercase tracking-wider font-medium">Endpoint Health</h3>
+              <Link to="/deploy" className="text-xs text-gray-600 hover:text-gray-400 transition-colors">View all →</Link>
+            </div>
+            {endpoints.length === 0 ? (
+              <div className="border border-gray-800 rounded p-6 text-center">
+                <p className="text-gray-600 text-sm">No endpoints deployed</p>
+                <Link to="/deploy" className="text-xs text-cyan-400 mt-1 inline-block">Deploy your first endpoint</Link>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                {endpoints.map(ep => {
+                  const host = ep.host.split('.')[0];
+                  return (
+                    <div
+                      key={ep.host}
+                      className={`border rounded p-3 flex items-center gap-3 ${
+                        ep.reachable
+                          ? 'border-green-500/20 bg-green-500/5'
+                          : 'border-gray-800 opacity-60'
+                      }`}
+                    >
+                      <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${
+                        ep.reachable ? 'bg-green-400' : 'bg-gray-600'
+                      }`} />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm text-gray-200 truncate">{host}</div>
+                        <div className="text-xs text-gray-600 truncate" title={ep.host}>{ep.host}</div>
+                      </div>
+                      <span className={`text-xs font-mono ${
+                        ep.reachable ? 'text-green-400/70' : 'text-gray-700'
+                      }`}>
+                        {ep.reachable ? `v${ep.version}` : 'offline'}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </div>
-        )}
-      </div>
 
-      {/* Compact status bar — replaces stat card grid */}
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-1 py-3 mb-6 text-xs border-b border-gray-800/50">
-        <span className="text-gray-500">
-          Testers <span className={`font-mono ml-1 ${(summary?.agents_online ?? 0) > 0 ? 'text-green-400' : 'text-gray-600'}`}>{summary?.agents_online ?? 0}</span>
-        </span>
-        <span className="text-gray-500">
-          Running <span className={`font-mono ml-1 ${(summary?.jobs_running ?? 0) > 0 ? 'text-blue-400' : 'text-gray-600'}`}>{summary?.jobs_running ?? 0}</span>
-        </span>
-        <span className="text-gray-500">
-          Pending <span className={`font-mono ml-1 ${(summary?.jobs_pending ?? 0) > 0 ? 'text-yellow-400' : 'text-gray-600'}`}>{summary?.jobs_pending ?? 0}</span>
-        </span>
-        <span className="text-gray-500">
-          Runs (24h) <span className="text-gray-300 font-mono ml-1">{summary?.runs_24h ?? 0}</span>
-        </span>
-
-        {/* Endpoint versions — inline */}
-        {versionInfo?.endpoints.map(ep => {
-          const outdated = ep.reachable && ep.version && versionInfo.latest_release && ep.version !== versionInfo.latest_release;
-          return (
-            <span key={ep.host} className="text-gray-600 ml-auto first:ml-auto">
-              {ep.host.split('.')[0]}{' '}
-              {ep.reachable ? (
-                <span className={`font-mono ${outdated ? 'text-yellow-400' : 'text-green-400/60'}`}>
-                  v{ep.version}
-                </span>
-              ) : (
-                <span className="text-gray-700">offline</span>
-              )}
-            </span>
-          );
-        })}
-      </div>
-
-      {error && (
-        <div className="text-yellow-400 text-xs mb-4 flex items-center gap-2">
-          <span className="w-1.5 h-1.5 rounded-full bg-yellow-400" />
-          Failed to refresh: {error}
-        </div>
-      )}
-
-      {/* Active work highlight — only shown when tests are running */}
-      {hasActiveWork && (
-        <div className="mb-6 flex items-center gap-3 text-sm">
-          <span className="w-2 h-2 rounded-full bg-blue-400 motion-safe:animate-pulse" />
-          <span className="text-blue-400">
-            {summary?.jobs_running ?? 0} running
-          </span>
-          {(summary?.jobs_pending ?? 0) > 0 && (
-            <span className="text-gray-500">
-              · {summary?.jobs_pending} queued
-            </span>
-          )}
-          <Link to="/tests" className="text-gray-500 hover:text-gray-300 text-xs ml-auto transition-colors">
-            View tests →
-          </Link>
-        </div>
-      )}
-
-      {/* Live event feed — primary content */}
-      <div>
-        <div className="flex items-center gap-2 mb-3">
-          <span className="w-1.5 h-1.5 rounded-full bg-green-400 motion-safe:animate-pulse" />
-          <h3 className="text-xs text-gray-500 uppercase tracking-wider font-medium">Live Feed</h3>
-        </div>
-        <div className="border border-gray-800/50 rounded max-h-[calc(100vh-220px)] overflow-y-auto">
-          {recentEvents.length === 0 ? (
-            <div className="py-12 text-center">
-              <p className="text-gray-600 text-sm">No events yet</p>
-              <p className="text-gray-700 text-xs mt-1">Start a test to see live probe results here</p>
+          {/* Testers */}
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-xs text-gray-500 uppercase tracking-wider font-medium">Testers</h3>
+              <Link to="/tests" className="text-xs text-gray-600 hover:text-gray-400 transition-colors">Manage →</Link>
             </div>
-          ) : (
-            <>
-              {recentEvents.map((event, i) => (
-                <div
-                  key={`${event.type}-${event.job_id ?? event.agent_id ?? ''}-${i}`}
-                  className="px-3 py-2 border-b border-gray-800/30 text-sm flex items-center gap-3 hover:bg-gray-800/10"
-                >
-                  <StatusBadge status={event.status || event.type} />
-                  <span className="text-gray-400 font-mono text-xs">
-                    {event.job_id?.slice(0, 8) || event.agent_id?.slice(0, 8)}
-                  </span>
-                  <span className="text-gray-600 text-xs">
-                    {event.type}
-                  </span>
-                </div>
-              ))}
-              <div className="px-3 py-1.5 text-xs text-gray-700 text-center">
-                last {recentEvents.length} events
+            {agents.length === 0 ? (
+              <div className="border border-gray-800 rounded p-6 text-center">
+                <p className="text-gray-600 text-sm">No testers deployed</p>
+                <Link to="/tests" className="text-xs text-cyan-400 mt-1 inline-block">Add a tester</Link>
               </div>
-            </>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                {agents.map(a => (
+                  <div
+                    key={a.agent_id}
+                    className={`border rounded p-3 flex items-center gap-3 ${
+                      a.status === 'online'
+                        ? 'border-green-500/20 bg-green-500/5'
+                        : 'border-gray-800 opacity-60'
+                    }`}
+                  >
+                    <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${
+                      a.status === 'online' ? 'bg-green-400' : 'bg-gray-600'
+                    }`} />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm text-gray-200 truncate">{a.name}</div>
+                      <div className="text-xs text-gray-600">
+                        {a.provider && `${a.provider} `}
+                        {a.region && a.region}
+                      </div>
+                    </div>
+                    <StatusBadge status={a.status} />
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Recent Tests */}
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-xs text-gray-500 uppercase tracking-wider font-medium">Recent Tests</h3>
+              <Link to="/tests" className="text-xs text-gray-600 hover:text-gray-400 transition-colors">View all →</Link>
+            </div>
+            {recentJobs.length === 0 ? (
+              <div className="border border-gray-800 rounded p-6 text-center">
+                <p className="text-gray-600 text-sm">No tests yet</p>
+                <Link to="/tests" className="text-xs text-cyan-400 mt-1 inline-block">Run your first test</Link>
+              </div>
+            ) : (
+              <div className="table-container">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
+                      <th className="px-3 py-2 text-left font-medium">ID</th>
+                      <th className="px-3 py-2 text-left font-medium">Target</th>
+                      <th className="px-3 py-2 text-left font-medium">Modes</th>
+                      <th className="px-3 py-2 text-left font-medium">Status</th>
+                      <th className="px-3 py-2 text-left font-medium">Duration</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {recentJobs.map(job => (
+                      <tr key={job.job_id} className="border-b border-gray-800/30 hover:bg-gray-800/20">
+                        <td className="px-3 py-2">
+                          <Link to={`/tests/${job.job_id}`} className="text-cyan-400 hover:underline font-mono text-xs">
+                            {job.job_id.slice(0, 8)}
+                          </Link>
+                        </td>
+                        <td className="px-3 py-2 text-gray-400 text-xs truncate max-w-40">
+                          {job.config?.target?.replace('https://', '').split(':')[0]}
+                        </td>
+                        <td className="px-3 py-2 text-gray-500 text-xs truncate max-w-24">
+                          {job.config?.modes?.join(', ')}
+                        </td>
+                        <td className="px-3 py-2"><StatusBadge status={job.status} /></td>
+                        <td className="px-3 py-2 text-gray-500 text-xs font-mono">
+                          {job.started_at && job.finished_at
+                            ? `${((new Date(job.finished_at).getTime() - new Date(job.started_at).getTime()) / 1000).toFixed(1)}s`
+                            : '-'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ── Right column: Live Feed + Quick Actions ── */}
+        <div className="space-y-6">
+          {/* Update banner (admin only) */}
+          {versionInfo?.update_available && (
+            <Link
+              to="/settings"
+              className="block border border-yellow-500/30 bg-yellow-500/5 rounded p-3 hover:bg-yellow-500/10 transition-colors"
+            >
+              <div className="text-yellow-400 text-xs font-medium">Update available</div>
+              <div className="text-gray-500 text-xs mt-0.5">
+                v{versionInfo.dashboard_version} → v{versionInfo.latest_release}
+              </div>
+            </Link>
           )}
+
+          {/* Quick Actions */}
+          <div>
+            <h3 className="text-xs text-gray-500 uppercase tracking-wider font-medium mb-3">Quick Actions</h3>
+            <div className="space-y-2">
+              <Link to="/tests" className="block border border-gray-800 rounded p-3 hover:border-cyan-500/30 hover:bg-cyan-500/5 transition-colors">
+                <div className="text-sm text-gray-200">New Test</div>
+                <div className="text-xs text-gray-600">Run a network diagnostic probe</div>
+              </Link>
+              <Link to="/deploy" className="block border border-gray-800 rounded p-3 hover:border-cyan-500/30 hover:bg-cyan-500/5 transition-colors">
+                <div className="text-sm text-gray-200">Deploy Endpoint</div>
+                <div className="text-xs text-gray-600">Create a new cloud VM</div>
+              </Link>
+              <Link to="/schedules" className="block border border-gray-800 rounded p-3 hover:border-cyan-500/30 hover:bg-cyan-500/5 transition-colors">
+                <div className="text-sm text-gray-200">New Schedule</div>
+                <div className="text-xs text-gray-600">Automate recurring tests</div>
+              </Link>
+            </div>
+          </div>
+
+          {/* Live Feed */}
+          <div>
+            <div className="flex items-center gap-2 mb-3">
+              <span className="w-1.5 h-1.5 rounded-full bg-green-400 motion-safe:animate-pulse" />
+              <h3 className="text-xs text-gray-500 uppercase tracking-wider font-medium">Live Feed</h3>
+            </div>
+            <div className="border border-gray-800/50 rounded max-h-64 overflow-y-auto">
+              {recentEvents.length === 0 ? (
+                <div className="py-8 text-center">
+                  <p className="text-gray-700 text-xs">Waiting for events...</p>
+                </div>
+              ) : (
+                recentEvents.map((event, i) => (
+                  <div
+                    key={`${event.type}-${event.job_id ?? event.agent_id ?? ''}-${i}`}
+                    className="px-3 py-2 border-b border-gray-800/30 text-xs flex items-center gap-2"
+                  >
+                    <StatusBadge status={event.status || event.type} />
+                    <span className="text-gray-500 font-mono">
+                      {event.job_id?.slice(0, 8) || event.agent_id?.slice(0, 8)}
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
         </div>
       </div>
     </div>
