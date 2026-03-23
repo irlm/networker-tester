@@ -4,6 +4,7 @@ import { api, type RunSummary } from '../api/client';
 import type { LiveAttempt } from '../api/types';
 import { useProject } from '../hooks/useProject';
 import { Breadcrumb } from '../components/common/Breadcrumb';
+import { ShareDialog } from '../components/ShareDialog';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { usePolling } from '../hooks/usePolling';
 import {
@@ -30,13 +31,14 @@ import {
 } from 'recharts';
 
 export function RunDetailPage() {
-  const { projectId } = useProject();
+  const { projectId, isProjectAdmin } = useProject();
   const { runId } = useParams<{ runId: string }>();
   const [run, setRun] = useState<RunSummary | null>(null);
   const [attempts, setAttempts] = useState<LiveAttempt[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expandedProtocols, setExpandedProtocols] = useState<Set<string>>(new Set());
+  const [showShareDialog, setShowShareDialog] = useState(false);
 
   const shortId = runId?.slice(0, 8) ?? '';
   usePageTitle(runId ? `Run ${shortId}` : 'Run');
@@ -138,14 +140,33 @@ export function RunDetailPage() {
       <Breadcrumb items={[{ label: 'Runs', to: `/projects/${projectId}/runs` }, { label: `Run ${shortId}` }]} />
 
       {/* Header */}
-      <div className="mb-6">
-        <h2 className="text-xl font-bold text-gray-100 mb-1">Run {shortId}</h2>
-        <p className="text-sm text-gray-500">
-          {run?.target_host && <>Target: <span className="text-gray-300">{run.target_host}</span> · </>}
-          {run?.modes && <>Modes: <span className="text-gray-300">{run.modes}</span> · </>}
-          {attempts.length} attempts
-        </p>
+      <div className="mb-6 flex items-start justify-between">
+        <div>
+          <h2 className="text-xl font-bold text-gray-100 mb-1">Run {shortId}</h2>
+          <p className="text-sm text-gray-500">
+            {run?.target_host && <>Target: <span className="text-gray-300">{run.target_host}</span> · </>}
+            {run?.modes && <>Modes: <span className="text-gray-300">{run.modes}</span> · </>}
+            {attempts.length} attempts
+          </p>
+        </div>
+        {isProjectAdmin && runId && (
+          <button
+            onClick={() => setShowShareDialog(true)}
+            className="px-3 py-1.5 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors border border-gray-700"
+          >
+            Share
+          </button>
+        )}
       </div>
+
+      {showShareDialog && runId && (
+        <ShareDialog
+          projectId={projectId}
+          resourceType="run"
+          resourceId={runId}
+          onClose={() => setShowShareDialog(false)}
+        />
+      )}
 
       {/* Inline metrics */}
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1 py-3 mb-6 text-xs border-b border-gray-800/50">

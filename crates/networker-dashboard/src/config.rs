@@ -80,8 +80,8 @@ impl DashboardConfig {
         let public_url = std::env::var("DASHBOARD_PUBLIC_URL")
             .unwrap_or_else(|_| format!("http://localhost:{port}"));
 
-        let share_base_url = std::env::var("DASHBOARD_SHARE_URL")
-            .unwrap_or_else(|_| public_url.clone());
+        let share_base_url =
+            std::env::var("DASHBOARD_SHARE_URL").unwrap_or_else(|_| public_url.clone());
 
         let share_max_days: u32 = std::env::var("DASHBOARD_SHARE_MAX_DAYS")
             .ok()

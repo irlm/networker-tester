@@ -234,6 +234,20 @@ export interface LiveAttempt {
   browser?: { load_ms: number; dom_content_loaded_ms?: number; ttfb_ms?: number; resource_count?: number; transferred_bytes?: number; protocol?: string };
 }
 
+export interface ShareLink {
+  link_id: string;
+  resource_type: string;
+  resource_id: string | null;
+  label: string | null;
+  expires_at: string;
+  created_by: string;
+  created_by_email: string;
+  created_at: string;
+  revoked: boolean;
+  access_count: number;
+  last_accessed: string | null;
+}
+
 // Project types
 export interface ProjectSummary {
   project_id: string;
