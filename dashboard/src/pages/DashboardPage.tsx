@@ -96,31 +96,31 @@ export function DashboardPage() {
         <span className="text-xs text-gray-600">v{versionInfo?.dashboard_version}</span>
       </div>
 
-      {/* ── KPI Row ── */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-        <div className="border border-gray-800 rounded p-4">
-          <div className={`text-2xl font-bold tabular-nums ${onlineAgents.length > 0 ? 'text-green-400' : 'text-gray-600'}`}>
+      {/* ── KPI Row — no borders, just numbers ── */}
+      <div className="flex flex-wrap gap-x-8 gap-y-3 mb-8 pb-6 border-b border-gray-800/50">
+        <div>
+          <div className={`text-xl font-semibold tabular-nums ${onlineAgents.length > 0 ? 'text-green-400' : 'text-gray-600'}`}>
             {onlineAgents.length}
           </div>
-          <div className="text-xs text-gray-500 mt-1">Testers online</div>
+          <div className="text-xs text-gray-600">testers online</div>
         </div>
-        <div className="border border-gray-800 rounded p-4">
-          <div className={`text-2xl font-bold tabular-nums ${(summary?.jobs_running ?? 0) > 0 ? 'text-blue-400' : 'text-gray-600'}`}>
+        <div>
+          <div className={`text-xl font-semibold tabular-nums ${(summary?.jobs_running ?? 0) > 0 ? 'text-blue-400' : 'text-gray-600'}`}>
             {summary?.jobs_running ?? 0}
           </div>
-          <div className="text-xs text-gray-500 mt-1">Tests running</div>
+          <div className="text-xs text-gray-600">running</div>
         </div>
-        <div className="border border-gray-800 rounded p-4">
-          <div className="text-2xl font-bold tabular-nums text-gray-200">
+        <div>
+          <div className="text-xl font-semibold tabular-nums text-gray-300">
             {summary?.runs_24h ?? 0}
           </div>
-          <div className="text-xs text-gray-500 mt-1">Runs (24h)</div>
+          <div className="text-xs text-gray-600">runs (24h)</div>
         </div>
-        <div className="border border-gray-800 rounded p-4">
-          <div className="text-2xl font-bold tabular-nums text-gray-200">
+        <div>
+          <div className="text-xl font-semibold tabular-nums text-gray-300">
             {completedDeps.length}
           </div>
-          <div className="text-xs text-gray-500 mt-1">Endpoints deployed</div>
+          <div className="text-xs text-gray-600">endpoints</div>
         </div>
       </div>
 
@@ -145,22 +145,18 @@ export function DashboardPage() {
                   return (
                     <div
                       key={ep.host}
-                      className={`border rounded p-3 flex items-center gap-3 ${
-                        ep.reachable
-                          ? 'border-green-500/20 bg-green-500/5'
-                          : 'border-gray-800 opacity-60'
+                      className={`border border-gray-800 rounded p-3 flex items-center gap-3 ${
+                        !ep.reachable ? 'opacity-50' : ''
                       }`}
                     >
-                      <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${
+                      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
                         ep.reachable ? 'bg-green-400' : 'bg-gray-600'
                       }`} />
                       <div className="min-w-0 flex-1">
-                        <div className="text-sm text-gray-200 truncate">{host}</div>
-                        <div className="text-xs text-gray-600 truncate" title={ep.host}>{ep.host}</div>
+                        <div className="text-sm text-gray-300 truncate">{host}</div>
+                        <div className="text-xs text-gray-700 truncate" title={ep.host}>{ep.host}</div>
                       </div>
-                      <span className={`text-xs font-mono ${
-                        ep.reachable ? 'text-green-400/70' : 'text-gray-700'
-                      }`}>
+                      <span className="text-xs font-mono text-gray-600">
                         {ep.reachable ? `v${ep.version}` : 'offline'}
                       </span>
                     </div>
@@ -186,13 +182,11 @@ export function DashboardPage() {
                 {agents.map(a => (
                   <div
                     key={a.agent_id}
-                    className={`border rounded p-3 flex items-center gap-3 ${
-                      a.status === 'online'
-                        ? 'border-green-500/20 bg-green-500/5'
-                        : 'border-gray-800 opacity-60'
+                    className={`border border-gray-800 rounded p-3 flex items-center gap-3 ${
+                      a.status !== 'online' ? 'opacity-50' : ''
                     }`}
                   >
-                    <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${
+                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
                       a.status === 'online' ? 'bg-green-400' : 'bg-gray-600'
                     }`} />
                     <div className="min-w-0 flex-1">
@@ -263,34 +257,31 @@ export function DashboardPage() {
 
         {/* ── Right column: Live Feed + Quick Actions ── */}
         <div className="space-y-6">
-          {/* Update banner (admin only) */}
+          {/* Update notice (admin only) — subtle */}
           {versionInfo?.update_available && (
             <Link
               to="/settings"
-              className="block border border-yellow-500/30 bg-yellow-500/5 rounded p-3 hover:bg-yellow-500/10 transition-colors"
+              className="block border border-gray-800 rounded p-3 hover:border-gray-700 transition-colors"
             >
-              <div className="text-yellow-400 text-xs font-medium">Update available</div>
-              <div className="text-gray-500 text-xs mt-0.5">
-                v{versionInfo.dashboard_version} → v{versionInfo.latest_release}
+              <div className="text-yellow-400/70 text-xs">Update available</div>
+              <div className="text-gray-600 text-xs mt-0.5">
+                {versionInfo.dashboard_version} → {versionInfo.latest_release}
               </div>
             </Link>
           )}
 
-          {/* Quick Actions */}
+          {/* Quick Actions — compact links, no descriptions */}
           <div>
-            <h3 className="text-xs text-gray-500 uppercase tracking-wider font-medium mb-3">Quick Actions</h3>
-            <div className="space-y-2">
-              <Link to="/tests" className="block border border-gray-800 rounded p-3 hover:border-cyan-500/30 hover:bg-cyan-500/5 transition-colors">
-                <div className="text-sm text-gray-200">New Test</div>
-                <div className="text-xs text-gray-600">Run a network diagnostic probe</div>
+            <h3 className="text-xs text-gray-600 mb-3">Quick actions</h3>
+            <div className="space-y-1">
+              <Link to="/tests" className="block px-3 py-2 text-sm text-gray-400 hover:text-gray-200 hover:bg-gray-800/30 rounded transition-colors">
+                New Test
               </Link>
-              <Link to="/deploy" className="block border border-gray-800 rounded p-3 hover:border-cyan-500/30 hover:bg-cyan-500/5 transition-colors">
-                <div className="text-sm text-gray-200">Deploy Endpoint</div>
-                <div className="text-xs text-gray-600">Create a new cloud VM</div>
+              <Link to="/deploy" className="block px-3 py-2 text-sm text-gray-400 hover:text-gray-200 hover:bg-gray-800/30 rounded transition-colors">
+                Deploy Endpoint
               </Link>
-              <Link to="/schedules" className="block border border-gray-800 rounded p-3 hover:border-cyan-500/30 hover:bg-cyan-500/5 transition-colors">
-                <div className="text-sm text-gray-200">New Schedule</div>
-                <div className="text-xs text-gray-600">Automate recurring tests</div>
+              <Link to="/schedules" className="block px-3 py-2 text-sm text-gray-400 hover:text-gray-200 hover:bg-gray-800/30 rounded transition-colors">
+                New Schedule
               </Link>
             </div>
           </div>
