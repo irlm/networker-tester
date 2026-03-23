@@ -508,6 +508,16 @@ async fn run_vm_deployment(
     let install_script = format!(
         r#"
 cd /tmp
+
+# Install Chrome for browser test modes
+apt-get update -qq < /dev/null
+apt-get install -y wget gnupg < /dev/null
+wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list
+apt-get update -qq < /dev/null
+apt-get install -y google-chrome-stable < /dev/null || apt-get install -y chromium-browser < /dev/null || true
+
+# Install tester and agent binaries
 curl -sL https://github.com/irlm/networker-tester/releases/download/v{version}/networker-agent-x86_64-unknown-linux-musl.tar.gz | tar xz
 curl -sL https://github.com/irlm/networker-tester/releases/download/v{version}/networker-tester-x86_64-unknown-linux-musl.tar.gz | tar xz
 mkdir -p /opt/networker
