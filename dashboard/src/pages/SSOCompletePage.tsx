@@ -44,10 +44,10 @@ export function SSOCompletePage() {
         <div className="w-72 text-center">
           <div className="mb-8">
             <h1 className="text-[#4ade80] text-2xl font-bold tracking-tight mb-1">
-              Networker
+              AletheDash
             </h1>
             <p className="text-gray-600 text-xs uppercase tracking-widest">
-              diagnostics platform
+              network diagnostics
             </p>
           </div>
           <div className="text-red-400 text-sm mb-4">
@@ -70,10 +70,10 @@ export function SSOCompletePage() {
       <div className="w-72 text-center">
         <div className="mb-8">
           <h1 className="text-[#4ade80] text-2xl font-bold tracking-tight mb-1">
-            Networker
+            AletheDash
           </h1>
           <p className="text-gray-600 text-xs uppercase tracking-widest">
-            diagnostics platform
+            network diagnostics
           </p>
         </div>
         <p className="text-gray-400 text-sm">Completing sign-in...</p>

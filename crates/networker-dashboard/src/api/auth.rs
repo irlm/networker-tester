@@ -157,15 +157,15 @@ async fn forgot_password(
             let reset_url = format!("{}/reset-password?token={token}", state.public_url);
             let body = format!(
                 "Hi {user_email},\n\n\
-                 A password reset was requested for your Networker Dashboard account.\n\n\
+                 A password reset was requested for your AletheDash account.\n\n\
                  Click the link below to set a new password (valid for 1 hour):\n\n\
                  {reset_url}\n\n\
                  If you did not request this, ignore this email.\n\n\
-                 — Networker Dashboard"
+                 — AletheDash"
             );
 
             if let Err(e) =
-                crate::email::send_email(&req.email, "Networker Dashboard — Password Reset", &body)
+                crate::email::send_email(&req.email, "AletheDash — Password Reset", &body)
                     .await
             {
                 tracing::warn!(error = %e, "Failed to send password reset email");
