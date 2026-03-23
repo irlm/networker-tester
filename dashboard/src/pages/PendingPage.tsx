@@ -38,10 +38,10 @@ export function PendingPage() {
         {/* Brand */}
         <div className="mb-8">
           <h1 className="text-[#4ade80] text-2xl font-bold tracking-tight mb-1">
-            Networker
+            AletheDash
           </h1>
           <p className="text-gray-600 text-xs uppercase tracking-widest">
-            diagnostics platform
+            network diagnostics
           </p>
         </div>
 

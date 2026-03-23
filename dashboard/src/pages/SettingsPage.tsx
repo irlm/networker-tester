@@ -401,7 +401,7 @@ export function SettingsPage() {
 
         {inventory.length === 0 && !inventoryLoading ? (
           <p className="text-gray-600 text-sm">
-            Click "Scan All Providers" to discover networker VMs across Azure, AWS, and GCP.
+            Click "Scan All Providers" to discover VMs across Azure, AWS, and GCP.
           </p>
         ) : inventoryLoading ? (
           <p className="text-gray-500 text-sm motion-safe:animate-pulse">Scanning cloud providers...</p>

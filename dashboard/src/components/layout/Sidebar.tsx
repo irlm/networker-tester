@@ -72,13 +72,13 @@ export function Sidebar({ connectionDot }: SidebarProps) {
         <div className={`${collapsed ? 'px-2 py-3' : 'p-4'} border-b border-gray-800`}>
           {collapsed ? (
             <div className="flex justify-center">
-              <span className="text-green-400 text-lg font-bold">N</span>
+              <span className="text-green-400 text-lg font-bold">A</span>
             </div>
           ) : (
             <>
               <div className="flex items-center gap-2">
                 <h1 className="text-green-400 text-lg font-bold tracking-tight">
-                  Networker
+                  AletheDash
                 </h1>
                 {connectionDot}
               </div>
