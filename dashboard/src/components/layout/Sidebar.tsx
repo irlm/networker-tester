@@ -1,15 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
+import { useProject } from '../../hooks/useProject';
+import { ProjectSwitcher } from '../ProjectSwitcher';
 import { api } from '../../api/client';
-
-const navItems = [
-  { path: '/', label: 'Dashboard', icon: '\u25C8' },
-  { path: '/deploy', label: 'Infra', icon: '\u25A3' },
-  { path: '/tests', label: 'Tests', icon: '\u25B6' },
-  { path: '/schedules', label: 'Schedules', icon: '\u21BB' },
-  { path: '/runs', label: 'Runs', icon: '\u25F7' },
-];
 
 interface SidebarProps {
   connectionDot?: React.ReactNode;
@@ -18,19 +12,33 @@ interface SidebarProps {
 export function Sidebar({ connectionDot }: SidebarProps) {
   const location = useLocation();
   const { email, role, logout } = useAuthStore();
+  const isPlatformAdmin = useAuthStore(s => s.isPlatformAdmin);
+  const { projectId, isProjectAdmin } = useProject();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('sidebar-collapsed') === '1');
   const [pendingCount, setPendingCount] = useState(0);
 
+  const pid = projectId;
+
+  const navItems = [
+    { path: `/projects/${pid}`, label: 'Dashboard', icon: '\u25C8', exact: true },
+    { path: `/projects/${pid}/deploy`, label: 'Infra', icon: '\u25A3' },
+    { path: `/projects/${pid}/tests`, label: 'Tests', icon: '\u25B6' },
+    { path: `/projects/${pid}/schedules`, label: 'Schedules', icon: '\u21BB' },
+    { path: `/projects/${pid}/runs`, label: 'Runs', icon: '\u25F7' },
+  ];
+
+  const isAdmin = role === 'admin' || isPlatformAdmin;
+
   const fetchPending = useCallback(async () => {
-    if (role !== 'admin') return;
+    if (!isAdmin) return;
     try {
       const data = await api.getPendingUsers();
       setPendingCount(data.count);
     } catch {
       // ignore
     }
-  }, [role]);
+  }, [isAdmin]);
 
   useEffect(() => {
     let cancelled = false;
@@ -50,8 +58,6 @@ export function Sidebar({ connectionDot }: SidebarProps) {
     return () => document.removeEventListener('keydown', handler);
   }, [mobileOpen]);
 
-  const isAdmin = role === 'admin';
-
   return (
     <>
       {/* Mobile toggle button */}
@@ -70,27 +76,13 @@ export function Sidebar({ connectionDot }: SidebarProps) {
         } md:flex ${collapsed ? 'w-14' : 'w-48'} bg-[var(--bg-sidebar)] border-r border-gray-800 flex-col min-h-screen fixed md:static z-40 transition-[width] duration-200`}
       >
         <div className={`${collapsed ? 'px-2 py-3' : 'p-4'} border-b border-gray-800`}>
-          {collapsed ? (
-            <div className="flex justify-center">
-              <span className="text-green-400 text-lg font-bold">A</span>
-            </div>
-          ) : (
-            <>
-              <div className="flex items-center gap-2">
-                <h1 className="text-green-400 text-lg font-bold tracking-tight">
-                  AletheDash
-                </h1>
-                {connectionDot}
-              </div>
-              <p className="text-gray-600 text-xs mt-0.5">diagnostics</p>
-            </>
-          )}
+          <ProjectSwitcher collapsed={collapsed} connectionDot={connectionDot} />
         </div>
 
         <nav className="flex-1 p-1.5" aria-label="Main navigation">
-          {navItems.map((item) => {
-            const active = item.path === '/'
-              ? location.pathname === '/'
+          {pid && navItems.map((item) => {
+            const active = item.exact
+              ? location.pathname === item.path
               : location.pathname.startsWith(item.path);
             return (
               <Link
@@ -110,6 +102,26 @@ export function Sidebar({ connectionDot }: SidebarProps) {
               </Link>
             );
           })}
+          {pid && isProjectAdmin && (() => {
+            const membersPath = `/projects/${pid}/members`;
+            const active = location.pathname.startsWith(membersPath);
+            return (
+              <Link
+                to={membersPath}
+                onClick={() => setMobileOpen(false)}
+                aria-current={active ? 'page' : undefined}
+                title={collapsed ? 'Members' : undefined}
+                className={`flex items-center overflow-hidden whitespace-nowrap ${collapsed ? 'justify-center' : 'gap-3 px-3'} py-2 rounded text-sm mb-0.5 transition-all duration-200 ${
+                  active
+                    ? 'bg-gray-800/40 text-gray-100'
+                    : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/30'
+                }`}
+              >
+                <span className="text-base" aria-hidden="true">{'\u2302'}</span>
+                {!collapsed && 'Members'}
+              </Link>
+            );
+          })()}
           {isAdmin && (() => {
             const active = location.pathname.startsWith('/users');
             return (
@@ -145,11 +157,12 @@ export function Sidebar({ connectionDot }: SidebarProps) {
               </Link>
             );
           })()}
-          {(() => {
-            const active = location.pathname.startsWith('/settings');
+          {pid && (() => {
+            const settingsPath = `/projects/${pid}/settings`;
+            const active = location.pathname.startsWith(settingsPath);
             return (
               <Link
-                to="/settings"
+                to={settingsPath}
                 onClick={() => setMobileOpen(false)}
                 aria-current={active ? 'page' : undefined}
                 title={collapsed ? 'Settings' : undefined}

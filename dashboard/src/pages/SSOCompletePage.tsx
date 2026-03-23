@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { useAuthStore } from '../stores/authStore';
+import { useProjectStore } from '../stores/projectStore';
 
 export function SSOCompletePage() {
   const [searchParams] = useSearchParams();
@@ -18,16 +19,28 @@ export function SSOCompletePage() {
     let cancelled = false;
 
     api.ssoExchange(code)
-      .then((res) => {
+      .then(async (res) => {
         if (cancelled) return;
-        login(res.token, res.email, res.role, res.must_change_password, res.status);
+        const isPlatformAdmin = res.is_platform_admin ?? res.role === 'admin';
+        login(res.token, res.email, res.role, res.must_change_password, res.status, isPlatformAdmin);
 
         if (res.must_change_password) {
           navigate('/change-password', { replace: true });
         } else if (res.status === 'pending') {
           navigate('/pending', { replace: true });
         } else {
-          navigate('/', { replace: true });
+          try {
+            const projects = await api.getProjects();
+            useProjectStore.getState().setProjects(projects);
+            if (projects.length === 1) {
+              useProjectStore.getState().setActiveProject(projects[0]);
+              navigate(`/projects/${projects[0].project_id}`, { replace: true });
+            } else {
+              navigate('/projects', { replace: true });
+            }
+          } catch {
+            navigate('/', { replace: true });
+          }
         }
       })
       .catch((err) => {

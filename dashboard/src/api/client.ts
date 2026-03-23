@@ -1,6 +1,6 @@
-import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection } from './types';
+import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, ProjectSummary, ProjectDetail, ProjectMember } from './types';
 
-export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection };
+export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, ProjectSummary, ProjectDetail, ProjectMember };
 export type { LiveAttempt } from './types';
 
 const API_BASE = '/api';
@@ -23,6 +23,10 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     localStorage.removeItem('role');
     localStorage.removeItem('status');
     localStorage.removeItem('mustChangePassword');
+    localStorage.removeItem('isPlatformAdmin');
+    localStorage.removeItem('activeProjectId');
+    localStorage.removeItem('activeProjectSlug');
+    localStorage.removeItem('activeProjectRole');
     window.location.href = '/login';
     throw new Error('Unauthorized');
   }
@@ -47,9 +51,14 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
+function projectUrl(projectId: string, path: string): string {
+  return `/projects/${projectId}/${path}`;
+}
+
 export const api = {
+  // ── Auth (NOT project-scoped) ─────────────────────────────────────────
   login: (email: string, password: string) =>
-    request<{ token: string; role: string; email: string; status: string; must_change_password: boolean }>('/auth/login', {
+    request<{ token: string; role: string; email: string; status: string; must_change_password: boolean; is_platform_admin?: boolean }>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     }),
@@ -64,7 +73,7 @@ export const api = {
     request<{ email: string; role: string; status: string }>('/auth/profile'),
 
   ssoExchange: (code: string) =>
-    request<{ token: string; role: string; email: string; status: string; must_change_password: boolean }>('/auth/sso/exchange', {
+    request<{ token: string; role: string; email: string; status: string; must_change_password: boolean; is_platform_admin?: boolean }>('/auth/sso/exchange', {
       method: 'POST',
       body: JSON.stringify({ code }),
     }),
@@ -86,119 +95,6 @@ export const api = {
       return r.json();
     }) as Promise<{ success: boolean }>,
 
-  getDashboardSummary: () =>
-    request<{
-      agents_online: number;
-      jobs_running: number;
-      runs_24h: number;
-      jobs_pending: number;
-    }>('/dashboard/summary'),
-
-  getAgents: () =>
-    request<{ agents: Agent[] }>('/agents'),
-
-  createAgent: (params: {
-    name: string;
-    location: 'local' | 'ssh';
-    region?: string;
-    provider?: string;
-    ssh_host?: string;
-    ssh_user?: string;
-    ssh_port?: number;
-  }) =>
-    request<{ agent_id: string; api_key: string; name: string; status: string }>('/agents', {
-      method: 'POST',
-      body: JSON.stringify(params),
-    }),
-
-  deleteAgent: (agentId: string) =>
-    request<{ deleted: boolean }>(`/agents/${agentId}`, { method: 'DELETE' }),
-
-  deployTesterVm: (params: { name: string; provider: string; region: string; vm_size: string }) =>
-    request<{ agent_id: string; status: string }>('/agents/deploy-vm', {
-      method: 'POST',
-      body: JSON.stringify(params),
-    }),
-
-  getJobs: (params?: { status?: string; limit?: number; offset?: number }) => {
-    const search = new URLSearchParams();
-    if (params?.status) search.set('status', params.status);
-    if (params?.limit) search.set('limit', String(params.limit));
-    if (params?.offset) search.set('offset', String(params.offset));
-    const qs = search.toString();
-    return request<Job[]>(`/jobs${qs ? `?${qs}` : ''}`);
-  },
-
-  getJob: (jobId: string) => request<Job>(`/jobs/${jobId}`),
-
-  createJob: (config: JobConfig, agentId?: string) =>
-    request<{ job_id: string; status: string }>('/jobs', {
-      method: 'POST',
-      body: JSON.stringify({ config, agent_id: agentId }),
-    }),
-
-  cancelJob: (jobId: string) =>
-    request<{ status: string }>(`/jobs/${jobId}/cancel`, { method: 'POST' }),
-
-  getRuns: (params?: { target_host?: string; limit?: number; offset?: number }) => {
-    const search = new URLSearchParams();
-    if (params?.target_host) search.set('target_host', params.target_host);
-    if (params?.limit) search.set('limit', String(params.limit));
-    if (params?.offset) search.set('offset', String(params.offset));
-    const qs = search.toString();
-    return request<RunSummary[]>(`/runs${qs ? `?${qs}` : ''}`);
-  },
-
-  getRun: (runId: string) =>
-    request<{
-      run_id: string;
-      target_url: string;
-      target_host: string;
-      modes: string;
-      client_os: string;
-      client_version: string;
-      endpoint_version: string | null;
-      success_count: number;
-      failure_count: number;
-      packet_capture: PacketCaptureSummary | null;
-    }>(`/runs/${runId}`),
-
-  getRunAttempts: (runId: string) =>
-    request<Attempt[]>(`/runs/${runId}/attempts`),
-
-  // Deployments
-  getDeployments: (params?: { limit?: number; offset?: number }) => {
-    const search = new URLSearchParams();
-    if (params?.limit) search.set('limit', String(params.limit));
-    if (params?.offset) search.set('offset', String(params.offset));
-    const qs = search.toString();
-    return request<Deployment[]>(`/deployments${qs ? `?${qs}` : ''}`);
-  },
-
-  getDeployment: (deploymentId: string) =>
-    request<Deployment>(`/deployments/${deploymentId}`),
-
-  createDeployment: (name: string, config: unknown) =>
-    request<{ deployment_id: string; status: string }>('/deployments', {
-      method: 'POST',
-      body: JSON.stringify({ name, config }),
-    }),
-
-  stopDeployment: (deploymentId: string) =>
-    request<{ status: string }>(`/deployments/${deploymentId}/stop`, { method: 'POST' }),
-
-  deleteDeployment: (deploymentId: string) =>
-    request<{ deleted: boolean }>(`/deployments/${deploymentId}`, { method: 'DELETE' }),
-
-  checkDeployment: (deploymentId: string) =>
-    request<{ endpoints: { ip: string; alive: boolean }[] }>(`/deployments/${deploymentId}/check`, { method: 'POST' }),
-
-  updateEndpoint: (deploymentId: string) =>
-    request<{ status: string }>(`/deployments/${deploymentId}/update`, { method: 'POST' }),
-
-  // Cloud status
-  getCloudStatus: () => request<CloudStatus>('/cloud/status'),
-
   // SSO
   getProviders: () =>
     request<{ providers: string[] }>('/auth/sso/providers'),
@@ -219,10 +115,165 @@ export const api = {
       return r.json() as Promise<{ token: string; email: string; role: string; status: string }>;
     }),
 
-  // Modes
+  // ── Projects ──────────────────────────────────────────────────────────
+  getProjects: () =>
+    request<{ projects: ProjectSummary[] }>('/projects').then(d => d.projects),
+
+  createProject: (name: string, description?: string) =>
+    request<{ project_id: string; slug: string }>('/projects', {
+      method: 'POST',
+      body: JSON.stringify({ name, description }),
+    }),
+
+  getProject: (projectId: string) =>
+    request<ProjectDetail>(`/projects/${projectId}`),
+
+  updateProject: (projectId: string, params: { name?: string; description?: string; settings?: Record<string, unknown> }) =>
+    request<{ updated: boolean }>(`/projects/${projectId}`, {
+      method: 'PUT',
+      body: JSON.stringify(params),
+    }),
+
+  deleteProject: (projectId: string) =>
+    request<{ deleted: boolean }>(`/projects/${projectId}`, { method: 'DELETE' }),
+
+  getProjectMembers: (projectId: string) =>
+    request<{ members: ProjectMember[] }>(`/projects/${projectId}/members`).then(d => d.members),
+
+  addProjectMember: (projectId: string, email: string, role: string) =>
+    request<{ user_id: string }>(`/projects/${projectId}/members`, {
+      method: 'POST',
+      body: JSON.stringify({ email, role }),
+    }),
+
+  updateMemberRole: (projectId: string, userId: string, role: string) =>
+    request<{ updated: boolean }>(`/projects/${projectId}/members/${userId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ role }),
+    }),
+
+  removeProjectMember: (projectId: string, userId: string) =>
+    request<{ removed: boolean }>(`/projects/${projectId}/members/${userId}`, { method: 'DELETE' }),
+
+  // ── Project-scoped resources ──────────────────────────────────────────
+
+  getDashboardSummary: (projectId: string) =>
+    request<{
+      agents_online: number;
+      jobs_running: number;
+      runs_24h: number;
+      jobs_pending: number;
+    }>(projectUrl(projectId, 'dashboard/summary')),
+
+  getAgents: (projectId: string) =>
+    request<{ agents: Agent[] }>(projectUrl(projectId, 'agents')),
+
+  createAgent: (projectId: string, params: {
+    name: string;
+    location: 'local' | 'ssh';
+    region?: string;
+    provider?: string;
+    ssh_host?: string;
+    ssh_user?: string;
+    ssh_port?: number;
+  }) =>
+    request<{ agent_id: string; api_key: string; name: string; status: string }>(projectUrl(projectId, 'agents'), {
+      method: 'POST',
+      body: JSON.stringify(params),
+    }),
+
+  deleteAgent: (projectId: string, agentId: string) =>
+    request<{ deleted: boolean }>(projectUrl(projectId, `agents/${agentId}`), { method: 'DELETE' }),
+
+  deployTesterVm: (projectId: string, params: { name: string; provider: string; region: string; vm_size: string }) =>
+    request<{ agent_id: string; status: string }>(projectUrl(projectId, 'agents/deploy-vm'), {
+      method: 'POST',
+      body: JSON.stringify(params),
+    }),
+
+  getJobs: (projectId: string, params?: { status?: string; limit?: number; offset?: number }) => {
+    const search = new URLSearchParams();
+    if (params?.status) search.set('status', params.status);
+    if (params?.limit) search.set('limit', String(params.limit));
+    if (params?.offset) search.set('offset', String(params.offset));
+    const qs = search.toString();
+    return request<Job[]>(projectUrl(projectId, `jobs${qs ? `?${qs}` : ''}`));
+  },
+
+  getJob: (projectId: string, jobId: string) => request<Job>(projectUrl(projectId, `jobs/${jobId}`)),
+
+  createJob: (projectId: string, config: JobConfig, agentId?: string) =>
+    request<{ job_id: string; status: string }>(projectUrl(projectId, 'jobs'), {
+      method: 'POST',
+      body: JSON.stringify({ config, agent_id: agentId }),
+    }),
+
+  cancelJob: (projectId: string, jobId: string) =>
+    request<{ status: string }>(projectUrl(projectId, `jobs/${jobId}/cancel`), { method: 'POST' }),
+
+  getRuns: (projectId: string, params?: { target_host?: string; limit?: number; offset?: number }) => {
+    const search = new URLSearchParams();
+    if (params?.target_host) search.set('target_host', params.target_host);
+    if (params?.limit) search.set('limit', String(params.limit));
+    if (params?.offset) search.set('offset', String(params.offset));
+    const qs = search.toString();
+    return request<RunSummary[]>(projectUrl(projectId, `runs${qs ? `?${qs}` : ''}`));
+  },
+
+  getRun: (projectId: string, runId: string) =>
+    request<{
+      run_id: string;
+      target_url: string;
+      target_host: string;
+      modes: string;
+      client_os: string;
+      client_version: string;
+      endpoint_version: string | null;
+      success_count: number;
+      failure_count: number;
+      packet_capture: PacketCaptureSummary | null;
+    }>(projectUrl(projectId, `runs/${runId}`)),
+
+  getRunAttempts: (projectId: string, runId: string) =>
+    request<Attempt[]>(projectUrl(projectId, `runs/${runId}/attempts`)),
+
+  // Deployments
+  getDeployments: (projectId: string, params?: { limit?: number; offset?: number }) => {
+    const search = new URLSearchParams();
+    if (params?.limit) search.set('limit', String(params.limit));
+    if (params?.offset) search.set('offset', String(params.offset));
+    const qs = search.toString();
+    return request<Deployment[]>(projectUrl(projectId, `deployments${qs ? `?${qs}` : ''}`));
+  },
+
+  getDeployment: (projectId: string, deploymentId: string) =>
+    request<Deployment>(projectUrl(projectId, `deployments/${deploymentId}`)),
+
+  createDeployment: (projectId: string, name: string, config: unknown) =>
+    request<{ deployment_id: string; status: string }>(projectUrl(projectId, 'deployments'), {
+      method: 'POST',
+      body: JSON.stringify({ name, config }),
+    }),
+
+  stopDeployment: (projectId: string, deploymentId: string) =>
+    request<{ status: string }>(projectUrl(projectId, `deployments/${deploymentId}/stop`), { method: 'POST' }),
+
+  deleteDeployment: (projectId: string, deploymentId: string) =>
+    request<{ deleted: boolean }>(projectUrl(projectId, `deployments/${deploymentId}`), { method: 'DELETE' }),
+
+  checkDeployment: (projectId: string, deploymentId: string) =>
+    request<{ endpoints: { ip: string; alive: boolean }[] }>(projectUrl(projectId, `deployments/${deploymentId}/check`), { method: 'POST' }),
+
+  updateEndpoint: (projectId: string, deploymentId: string) =>
+    request<{ status: string }>(projectUrl(projectId, `deployments/${deploymentId}/update`), { method: 'POST' }),
+
+  // Cloud status
+  getCloudStatus: (projectId: string) => request<CloudStatus>(projectUrl(projectId, 'cloud/status')),
+
+  // Modes (NOT project-scoped)
   getModes: () => request<{ groups: ModeGroup[] }>('/modes'),
 
-  // Updates
+  // Updates (NOT project-scoped)
   updateLocalTester: () =>
     request<{ status: string; update_id: string }>('/update/tester', { method: 'POST' }),
 
@@ -230,7 +281,7 @@ export const api = {
     request<{ status: string; update_id: string }>('/update/dashboard', { method: 'POST' }),
 
   // Inventory
-  getInventory: () =>
+  getInventory: (projectId: string) =>
     request<{
       vms: {
         provider: string;
@@ -245,16 +296,16 @@ export const api = {
         managed: boolean;
       }[];
       errors: string[];
-    }>('/inventory'),
+    }>(projectUrl(projectId, 'inventory')),
 
   // Schedules
-  getSchedules: () =>
-    request<Schedule[]>('/schedules'),
+  getSchedules: (projectId: string) =>
+    request<Schedule[]>(projectUrl(projectId, 'schedules')),
 
-  getSchedule: (scheduleId: string) =>
-    request<{ schedule: Schedule; recent_jobs: Job[] }>(`/schedules/${scheduleId}`),
+  getSchedule: (projectId: string, scheduleId: string) =>
+    request<{ schedule: Schedule; recent_jobs: Job[] }>(projectUrl(projectId, `schedules/${scheduleId}`)),
 
-  createSchedule: (params: {
+  createSchedule: (projectId: string, params: {
     name: string;
     cron_expr: string;
     config: JobConfig;
@@ -263,12 +314,12 @@ export const api = {
     auto_start_vm?: boolean;
     auto_stop_vm?: boolean;
   }) =>
-    request<{ schedule_id: string; next_run_at: string }>('/schedules', {
+    request<{ schedule_id: string; next_run_at: string }>(projectUrl(projectId, 'schedules'), {
       method: 'POST',
       body: JSON.stringify(params),
     }),
 
-  updateSchedule: (scheduleId: string, params: {
+  updateSchedule: (projectId: string, scheduleId: string, params: {
     name: string;
     cron_expr: string;
     config: JobConfig;
@@ -277,21 +328,21 @@ export const api = {
     auto_start_vm?: boolean;
     auto_stop_vm?: boolean;
   }) =>
-    request<{ status: string; next_run_at: string }>(`/schedules/${scheduleId}`, {
+    request<{ status: string; next_run_at: string }>(projectUrl(projectId, `schedules/${scheduleId}`), {
       method: 'PUT',
       body: JSON.stringify(params),
     }),
 
-  deleteSchedule: (scheduleId: string) =>
-    request<{ deleted: boolean }>(`/schedules/${scheduleId}`, { method: 'DELETE' }),
+  deleteSchedule: (projectId: string, scheduleId: string) =>
+    request<{ deleted: boolean }>(projectUrl(projectId, `schedules/${scheduleId}`), { method: 'DELETE' }),
 
-  toggleSchedule: (scheduleId: string) =>
-    request<{ enabled: boolean }>(`/schedules/${scheduleId}/toggle`, { method: 'POST' }),
+  toggleSchedule: (projectId: string, scheduleId: string) =>
+    request<{ enabled: boolean }>(projectUrl(projectId, `schedules/${scheduleId}/toggle`), { method: 'POST' }),
 
-  triggerSchedule: (scheduleId: string) =>
-    request<{ job_id: string; status: string }>(`/schedules/${scheduleId}/trigger`, { method: 'POST' }),
+  triggerSchedule: (projectId: string, scheduleId: string) =>
+    request<{ job_id: string; status: string }>(projectUrl(projectId, `schedules/${scheduleId}/trigger`), { method: 'POST' }),
 
-  // Users (admin-only)
+  // Users (admin-only, NOT project-scoped)
   getUsers: () =>
     request<DashUser[]>('/users'),
 
@@ -323,28 +374,28 @@ export const api = {
     }),
 
   // Cloud Connections
-  getCloudConnections: () =>
-    request<CloudConnection[]>('/cloud-connections'),
+  getCloudConnections: (projectId: string) =>
+    request<CloudConnection[]>(projectUrl(projectId, 'cloud-connections')),
 
-  createCloudConnection: (params: { name: string; provider: string; config: unknown }) =>
-    request<{ connection_id: string }>('/cloud-connections', {
+  createCloudConnection: (projectId: string, params: { name: string; provider: string; config: unknown }) =>
+    request<{ connection_id: string }>(projectUrl(projectId, 'cloud-connections'), {
       method: 'POST',
       body: JSON.stringify(params),
     }),
 
-  updateCloudConnection: (id: string, params: { name: string; config: unknown }) =>
-    request<{ updated: boolean }>(`/cloud-connections/${id}`, {
+  updateCloudConnection: (projectId: string, id: string, params: { name: string; config: unknown }) =>
+    request<{ updated: boolean }>(projectUrl(projectId, `cloud-connections/${id}`), {
       method: 'PUT',
       body: JSON.stringify(params),
     }),
 
-  deleteCloudConnection: (id: string) =>
-    request<{ deleted: boolean }>(`/cloud-connections/${id}`, { method: 'DELETE' }),
+  deleteCloudConnection: (projectId: string, id: string) =>
+    request<{ deleted: boolean }>(projectUrl(projectId, `cloud-connections/${id}`), { method: 'DELETE' }),
 
-  validateCloudConnection: (id: string) =>
-    request<{ status: string; validation_error: string | null }>(`/cloud-connections/${id}/validate`, { method: 'POST' }),
+  validateCloudConnection: (projectId: string, id: string) =>
+    request<{ status: string; validation_error: string | null }>(projectUrl(projectId, `cloud-connections/${id}/validate`), { method: 'POST' }),
 
-  // Version
+  // Version (NOT project-scoped)
   getVersionInfo: () => request<{
     dashboard_version: string;
     tester_version: string | null;

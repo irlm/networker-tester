@@ -3,8 +3,10 @@ import { Link } from 'react-router-dom';
 import { api, type RunSummary } from '../api/client';
 import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
+import { useProject } from '../hooks/useProject';
 
 export function RunsPage() {
+  const { projectId } = useProject();
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -13,10 +15,11 @@ export function RunsPage() {
   usePageTitle('Runs');
 
   const loadRuns = useCallback(() => {
+    if (!projectId) return;
     const params: { target_host?: string; limit?: number } = { limit: 50 };
     if (targetSearch.trim()) params.target_host = targetSearch.trim();
     api
-      .getRuns(params)
+      .getRuns(projectId, params)
       .then((data) => {
         setRuns(data);
         setError(null);
@@ -26,7 +29,7 @@ export function RunsPage() {
         setError(String(e));
         setLoading(false);
       });
-  }, [targetSearch]);
+  }, [targetSearch, projectId]);
 
   usePolling(loadRuns, 15000);
 
@@ -86,7 +89,7 @@ export function RunsPage() {
         ) : runs.map((run) => (
           <Link
             key={run.run_id}
-            to={`/runs/${run.run_id}`}
+            to={`/projects/${projectId}/runs/${run.run_id}`}
             className="block border border-gray-800 rounded p-3"
           >
             <div className="flex items-center justify-between mb-1">
@@ -128,7 +131,7 @@ export function RunsPage() {
               >
                 <td className="px-4 py-3">
                   <Link
-                    to={`/runs/${run.run_id}`}
+                    to={`/projects/${projectId}/runs/${run.run_id}`}
                     className="text-cyan-400 hover:underline font-mono text-xs"
                   >
                     {run.run_id.slice(0, 8)}

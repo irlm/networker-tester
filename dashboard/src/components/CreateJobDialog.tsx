@@ -7,11 +7,12 @@ import { PayloadSelector } from './common/PayloadSelector';
 import { useToast } from '../hooks/useToast';
 
 interface CreateJobDialogProps {
+  projectId: string;
   onClose: () => void;
   onCreated: () => void;
 }
 
-export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
+export function CreateJobDialog({ projectId, onClose, onCreated }: CreateJobDialogProps) {
   const [target, setTarget] = useState('https://localhost:8443/health');
   const [selectedModes, setSelectedModes] = useState<Set<string>>(
     new Set<string>()
@@ -41,13 +42,13 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
   useEffect(() => {
     firstInputRef.current?.focus();
     api.getModes().then(r => setModeGroups(r.groups)).catch(() => {});
-    api.getDeployments({ limit: 20 }).then(deps => {
+    api.getDeployments(projectId, { limit: 20 }).then(deps => {
       const completed = deps.filter(d => d.status === 'completed' && d.endpoint_ips && d.endpoint_ips.length > 0);
       setDeployments(completed);
       // Check health for each deployment
       completed.forEach(d => {
         setEndpointHealth(prev => ({ ...prev, [d.deployment_id]: undefined }));
-        api.checkDeployment(d.deployment_id)
+        api.checkDeployment(projectId, d.deployment_id)
           .then((result: { endpoints: { ip: string; alive: boolean }[] }) => {
             const anyAlive = result.endpoints.some(ep => ep.alive);
             setEndpointHealth(prev => ({ ...prev, [d.deployment_id]: anyAlive }));
@@ -57,8 +58,8 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
           });
       });
     }).catch(() => {});
-    api.getAgents().then(r => setTesters(r.agents)).catch(() => {});
-  }, []);
+    api.getAgents(projectId).then(r => setTesters(r.agents)).catch(() => {});
+  }, [projectId]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); },
@@ -141,7 +142,7 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
     try {
       // Ensure target has a scheme — tester requires a full URL
       const normalizedTarget = target.match(/^https?:\/\//) ? target : `https://${target}`;
-      const result = await api.createJob({
+      const result = await api.createJob(projectId, {
         target: normalizedTarget,
         modes: Array.from(selectedModes),
         runs,

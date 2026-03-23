@@ -1,5 +1,6 @@
-import { useEffect, useRef, useCallback, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLiveStore } from '../stores/liveStore';
+import { useProjectStore } from '../stores/projectStore';
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected';
 
@@ -11,63 +12,70 @@ export function useWebSocket() {
   const [status, setStatus] = useState<ConnectionStatus>('disconnected');
   const addEvent = useLiveStore((s) => s.addEvent);
   const addEventRef = useRef(addEvent);
-  addEventRef.current = addEvent;
+  const activeProjectId = useProjectStore((s) => s.activeProjectId);
+  const activeProjectIdRef = useRef(activeProjectId);
+  const connectRef = useRef<() => void>(() => {});
 
-  const connect = useCallback(() => {
-    if (!mountedRef.current) return;
+  // Sync refs in effects instead of during render
+  useEffect(() => { addEventRef.current = addEvent; }, [addEvent]);
+  useEffect(() => { activeProjectIdRef.current = activeProjectId; }, [activeProjectId]);
 
-    setStatus('connecting');
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const token = localStorage.getItem('token') || '';
-    // The browser WebSocket API does not support custom headers, so the JWT
-    // must be sent as a query parameter. Server-side mitigations required:
-    //   1. Short-lived tokens (rotate on each WS connect)
-    //   2. Strip the token from access logs
-    //   3. Validate token server-side on upgrade and reject expired tokens
-    const ws = new WebSocket(
-      `${protocol}//${window.location.host}/ws/dashboard?token=${encodeURIComponent(token)}`
-    );
-
-    ws.onopen = () => {
-      if (!mountedRef.current) {
-        ws.close();
-        return;
-      }
-      setStatus('connected');
-      backoffRef.current = 3000; // reset on successful connect
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (typeof data === 'object' && data !== null && typeof data.type === 'string') {
-          addEventRef.current(data);
-        }
-      } catch {
-        // ignore malformed messages
-      }
-    };
-
-    ws.onclose = () => {
-      setStatus('disconnected');
+  useEffect(() => {
+    connectRef.current = () => {
       if (!mountedRef.current) return;
-      const delay = backoffRef.current;
-      backoffRef.current = Math.min(backoffRef.current * 2, 60000);
-      reconnectTimeoutRef.current = setTimeout(connect, delay);
-    };
 
-    ws.onerror = () => {
-      ws.close();
-    };
+      setStatus('connecting');
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const token = localStorage.getItem('token') || '';
+      const params = new URLSearchParams();
+      params.set('token', token);
+      const projectId = activeProjectIdRef.current;
+      if (projectId) params.set('project_id', projectId);
+      const ws = new WebSocket(
+        `${protocol}//${window.location.host}/ws/dashboard?${params.toString()}`
+      );
 
-    wsRef.current = ws;
-  }, []);
+      ws.onopen = () => {
+        if (!mountedRef.current) {
+          ws.close();
+          return;
+        }
+        setStatus('connected');
+        backoffRef.current = 3000;
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (typeof data === 'object' && data !== null && typeof data.type === 'string') {
+            addEventRef.current(data);
+          }
+        } catch {
+          // ignore malformed messages
+        }
+      };
+
+      ws.onclose = () => {
+        setStatus('disconnected');
+        if (!mountedRef.current) return;
+        const delay = backoffRef.current;
+        backoffRef.current = Math.min(backoffRef.current * 2, 60000);
+        reconnectTimeoutRef.current = setTimeout(() => connectRef.current(), delay);
+      };
+
+      ws.onerror = () => {
+        ws.close();
+      };
+
+      wsRef.current = ws;
+    };
+  });
 
   useEffect(() => {
     mountedRef.current = true;
     // Close any stale connection from a previous mount (StrictMode double-mount)
     if (wsRef.current) {
-      wsRef.current.onclose = null; // prevent reconnect from stale close
+      wsRef.current.onclose = null;
       wsRef.current.close();
       wsRef.current = null;
     }
@@ -75,7 +83,7 @@ export function useWebSocket() {
       clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = null;
     }
-    connect();
+    connectRef.current();
     return () => {
       mountedRef.current = false;
       if (reconnectTimeoutRef.current) {
@@ -83,12 +91,29 @@ export function useWebSocket() {
         reconnectTimeoutRef.current = null;
       }
       if (wsRef.current) {
-        wsRef.current.onclose = null; // prevent reconnect trigger
+        wsRef.current.onclose = null;
         wsRef.current.close();
         wsRef.current = null;
       }
     };
-  }, [connect]);
+  }, []);
+
+  // Reconnect when project changes
+  useEffect(() => {
+    // Skip initial mount — the effect above handles that
+    if (!wsRef.current) return;
+    if (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING) {
+      wsRef.current.onclose = null;
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+    backoffRef.current = 3000;
+    connectRef.current();
+  }, [activeProjectId]);
 
   return status;
 }

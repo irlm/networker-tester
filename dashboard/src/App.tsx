@@ -1,5 +1,8 @@
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { useEffect } from 'react';
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useParams } from 'react-router-dom';
 import { useAuthStore } from './stores/authStore';
+import { useProjectStore } from './stores/projectStore';
+import { api } from './api/client';
 import { useWebSocket, type ConnectionStatus } from './hooks/useWebSocket';
 import { Sidebar } from './components/layout/Sidebar';
 import { ToastContainer } from './components/common/Toast';
@@ -19,6 +22,8 @@ import { SettingsPage } from './pages/SettingsPage';
 import { UsersPage } from './pages/UsersPage';
 import { PendingPage } from './pages/PendingPage';
 import { SSOCompletePage } from './pages/SSOCompletePage';
+import { ProjectsPage } from './pages/ProjectsPage';
+import { ProjectMembersPage } from './pages/ProjectMembersPage';
 
 const statusColors: Record<ConnectionStatus, string> = {
   connected: 'bg-green-400',
@@ -59,12 +64,45 @@ function ConnectionBanner({ status }: { status: ConnectionStatus }) {
   );
 }
 
+function ProjectRedirect() {
+  const activeProjectId = useProjectStore(s => s.activeProjectId);
+  if (activeProjectId) return <Navigate to={`/projects/${activeProjectId}`} replace />;
+  return <Navigate to="/projects" replace />;
+}
+
+function LegacyRedirect({ to }: { to: string }) {
+  const activeProjectId = useProjectStore(s => s.activeProjectId);
+  if (activeProjectId) return <Navigate to={`/projects/${activeProjectId}/${to}`} replace />;
+  return <Navigate to="/projects" replace />;
+}
+
+function LegacyRedirectWithParam({ to }: { to: string }) {
+  const activeProjectId = useProjectStore(s => s.activeProjectId);
+  const params = useParams();
+  const paramValue = Object.values(params).filter(Boolean)[0];
+  if (activeProjectId && paramValue) return <Navigate to={`/projects/${activeProjectId}/${to}/${paramValue}`} replace />;
+  if (activeProjectId) return <Navigate to={`/projects/${activeProjectId}/${to}`} replace />;
+  return <Navigate to="/projects" replace />;
+}
+
 function AuthenticatedApp() {
   const status = useWebSocket();
   const mustChangePassword = useAuthStore((s) => s.mustChangePassword);
   const userStatus = useAuthStore((s) => s.status);
   const role = useAuthStore((s) => s.role);
+  const isPlatformAdmin = useAuthStore((s) => s.isPlatformAdmin);
   const location = useLocation();
+
+  // Fetch projects on mount
+  useEffect(() => {
+    api.getProjects().then(projects => {
+      useProjectStore.getState().setProjects(projects);
+      // Auto-select if only one project and no active
+      if (!useProjectStore.getState().activeProjectId && projects.length === 1) {
+        useProjectStore.getState().setActiveProject(projects[0]);
+      }
+    }).catch(() => {});
+  }, []);
 
   // Pending users can only access /pending and /change-password
   if (userStatus === 'pending' && location.pathname !== '/pending' && location.pathname !== '/change-password') {
@@ -75,6 +113,8 @@ function AuthenticatedApp() {
     return <Navigate to="/change-password" />;
   }
 
+  const isAdmin = role === 'admin' || isPlatformAdmin;
+
   return (
     <div className="flex min-h-screen bg-[var(--bg-base)]">
       <Sidebar connectionDot={<ConnectionDot status={status} />} />
@@ -82,22 +122,42 @@ function AuthenticatedApp() {
         <ConnectionBanner status={status} />
         <ToastContainer />
         <Routes>
-          <Route path="/" element={<DashboardPage />} />
-          <Route path="/pending" element={<PendingPage />} />
+          {/* Project list */}
+          <Route path="/projects" element={<ProjectsPage />} />
+
+          {/* Project-scoped routes */}
+          <Route path="/projects/:projectId" element={<DashboardPage />} />
+          <Route path="/projects/:projectId/tests" element={<JobsPage />} />
+          <Route path="/projects/:projectId/tests/:jobId" element={<JobDetailPage />} />
+          <Route path="/projects/:projectId/runs" element={<RunsPage />} />
+          <Route path="/projects/:projectId/runs/:runId" element={<RunDetailPage />} />
+          <Route path="/projects/:projectId/deploy" element={<DeployPage />} />
+          <Route path="/projects/:projectId/deploy/:deploymentId" element={<DeployDetailPage />} />
+          <Route path="/projects/:projectId/schedules" element={<SchedulesPage />} />
+          <Route path="/projects/:projectId/settings" element={<SettingsPage />} />
+          <Route path="/projects/:projectId/members" element={<ProjectMembersPage />} />
+
+          {/* Platform routes */}
+          {isAdmin && <Route path="/users" element={<UsersPage />} />}
           <Route path="/change-password" element={<ChangePasswordPage />} />
-          <Route path="/deploy" element={<DeployPage />} />
-          <Route path="/deploy/:deploymentId" element={<DeployDetailPage />} />
-          <Route path="/tests" element={<JobsPage />} />
-          <Route path="/schedules" element={<SchedulesPage />} />
-          <Route path="/tests/:jobId" element={<JobDetailPage />} />
+          <Route path="/pending" element={<PendingPage />} />
+
+          {/* Root redirect */}
+          <Route path="/" element={<ProjectRedirect />} />
+
+          {/* Legacy flat route redirects */}
+          <Route path="/tests" element={<LegacyRedirect to="tests" />} />
+          <Route path="/tests/:jobId" element={<LegacyRedirectWithParam to="tests" />} />
+          <Route path="/runs" element={<LegacyRedirect to="runs" />} />
+          <Route path="/runs/:runId" element={<LegacyRedirectWithParam to="runs" />} />
+          <Route path="/deploy" element={<LegacyRedirect to="deploy" />} />
+          <Route path="/deploy/:deploymentId" element={<LegacyRedirectWithParam to="deploy" />} />
+          <Route path="/schedules" element={<LegacyRedirect to="schedules" />} />
+          <Route path="/settings" element={<LegacyRedirect to="settings" />} />
           {/* Backward compat redirects */}
-          <Route path="/jobs" element={<Navigate to="/tests" />} />
-          <Route path="/jobs/:jobId" element={<Navigate to="/tests" />} />
-          <Route path="/agents" element={<Navigate to="/tests" />} />
-          {role === 'admin' && <Route path="/users" element={<UsersPage />} />}
-          <Route path="/settings" element={<SettingsPage />} />
-          <Route path="/runs" element={<RunsPage />} />
-          <Route path="/runs/:runId" element={<RunDetailPage />} />
+          <Route path="/jobs" element={<LegacyRedirect to="tests" />} />
+          <Route path="/jobs/:jobId" element={<LegacyRedirectWithParam to="tests" />} />
+          <Route path="/agents" element={<LegacyRedirect to="tests" />} />
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>
       </main>

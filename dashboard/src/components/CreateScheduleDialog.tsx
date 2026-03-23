@@ -7,6 +7,7 @@ import { PayloadSelector } from './common/PayloadSelector';
 import { useToast } from '../hooks/useToast';
 
 interface CreateScheduleDialogProps {
+  projectId: string;
   onClose: () => void;
   onCreated: () => void;
 }
@@ -20,7 +21,7 @@ const FREQUENCY_PRESETS = [
   { label: 'Weekly (Monday)', cron: '0 0 0 * * 1' },
 ];
 
-export function CreateScheduleDialog({ onClose, onCreated }: CreateScheduleDialogProps) {
+export function CreateScheduleDialog({ projectId, onClose, onCreated }: CreateScheduleDialogProps) {
   // Step tracking
   const [step, setStep] = useState(1);
 
@@ -64,12 +65,12 @@ export function CreateScheduleDialog({ onClose, onCreated }: CreateScheduleDialo
 
   useEffect(() => {
     api.getModes().then(r => setModeGroups(r.groups)).catch(() => {});
-    api.getDeployments({ limit: 20 }).then(deps => {
+    api.getDeployments(projectId, { limit: 20 }).then(deps => {
       const completed = deps.filter(d => d.status === 'completed' && d.endpoint_ips && d.endpoint_ips.length > 0);
       setDeployments(completed);
       completed.forEach(d => {
         setEndpointHealth(prev => ({ ...prev, [d.deployment_id]: undefined }));
-        api.checkDeployment(d.deployment_id)
+        api.checkDeployment(projectId, d.deployment_id)
           .then((result: { endpoints: { ip: string; alive: boolean }[] }) => {
             const anyAlive = result.endpoints.some(ep => ep.alive);
             setEndpointHealth(prev => ({ ...prev, [d.deployment_id]: anyAlive }));
@@ -79,8 +80,8 @@ export function CreateScheduleDialog({ onClose, onCreated }: CreateScheduleDialo
           });
       });
     }).catch(() => {});
-    api.getAgents().then(r => setTesters(r.agents)).catch(() => {});
-  }, []);
+    api.getAgents(projectId).then(r => setTesters(r.agents)).catch(() => {});
+  }, [projectId]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); },
@@ -118,7 +119,7 @@ export function CreateScheduleDialog({ onClose, onCreated }: CreateScheduleDialo
     setError(null);
     try {
       const normalizedTarget = target.match(/^https?:\/\//) ? target : `https://${target}`;
-      const result = await api.createSchedule({
+      const result = await api.createSchedule(projectId, {
         name: name.trim(),
         cron_expr: finalCron,
         config: {
