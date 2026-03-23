@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Introduce projects as the top-level organizational unit. All resources (deployments, tests, schedules, agents, runs) become project-scoped. Users belong to multiple projects with per-project roles. Cloud provider credentials are encrypted and stored per-project. Test results can be shared via expiring public links. Destructive VM commands require admin approval with SSE real-time notifications.
+**Goal:** Introduce projects as the top-level organizational unit. All dashboard-visible resources (deployments, tests, schedules, agents, runs, URL tests) become project-scoped. Users belong to multiple projects with per-project roles. Cloud provider credentials are encrypted and stored per-project. Test results can be shared via expiring public links. Destructive VM commands require admin approval with SSE real-time notifications.
 
 **Architecture:** Ten PRs in dependency order. PRs 1-4 are the critical path (project infrastructure). PRs 5-9 can be parallelized after PR 3-4 land. PR 10 ships after one release cycle of soak time. Each PR is independently deployable and rollback-safe.
 
@@ -57,7 +57,7 @@
 
 **PR 2:** `api/mod.rs`, `api/projects.rs` (create), `api/project_members.rs` (create), `db/mod.rs`, `db/projects.rs` (create), `auth/mod.rs`
 
-**PR 3:** `auth/mod.rs`, `api/mod.rs`, `api/agents.rs`, `api/jobs.rs`, `api/runs.rs`, `api/schedules.rs`, `api/deployments.rs`, `api/dashboard.rs`, `api/cloud.rs`, `api/inventory.rs`, `api/cloud_connections.rs`, `db/agents.rs`, `db/jobs.rs`, `db/runs.rs`, `db/schedules.rs`, `db/deployments.rs`, `db/cloud_connections.rs`, `ws/agent_hub.rs`, `ws/browser_hub.rs`
+**PR 3:** `auth/mod.rs`, `api/mod.rs`, `api/agents.rs`, `api/jobs.rs`, `api/runs.rs`, `api/url_tests.rs`, `api/schedules.rs`, `api/deployments.rs`, `api/dashboard.rs`, `api/cloud.rs`, `api/inventory.rs`, `api/cloud_connections.rs`, `db/agents.rs`, `db/jobs.rs`, `db/runs.rs`, `db/url_tests.rs`, `db/schedules.rs`, `db/deployments.rs`, `db/cloud_connections.rs`, `ws/agent_hub.rs`, `ws/browser_hub.rs`
 
 **PR 4:** `App.tsx`, `stores/authStore.ts`, `components/layout/Sidebar.tsx`, `hooks/useWebSocket.ts`, `api/client.ts`, `api/types.ts`, all existing page components (add `useProject()` hook)
 
@@ -191,6 +191,8 @@ CREATE TABLE IF NOT EXISTS command_approval (
     agent_id     UUID           NOT NULL REFERENCES agent(agent_id) ON DELETE CASCADE,
     command_type VARCHAR(50)    NOT NULL,
     command_detail JSONB        NOT NULL,
+    -- immutable execution payload: { cloud_account_id, deployment_id, provider,
+    --   vm_identifier, region, resource_group, script_preview, command_args, ... }
     status       VARCHAR(20)    NOT NULL DEFAULT 'pending',
     requested_by UUID           NOT NULL REFERENCES dash_user(user_id),
     decided_by   UUID           REFERENCES dash_user(user_id),
@@ -245,9 +247,16 @@ UPDATE job SET project_id = '00000000-0000-0000-0000-000000000001' WHERE project
 UPDATE schedule SET project_id = '00000000-0000-0000-0000-000000000001' WHERE project_id IS NULL;
 UPDATE deployment SET project_id = '00000000-0000-0000-0000-000000000001' WHERE project_id IS NULL;
 
--- 13. Add all existing active users as admin of Default project
+-- 13. Add all existing active users to Default project preserving current role
 INSERT INTO project_member (project_id, user_id, role)
-SELECT '00000000-0000-0000-0000-000000000001', user_id, 'admin'
+SELECT
+    '00000000-0000-0000-0000-000000000001',
+    user_id,
+    CASE role
+        WHEN 'admin' THEN 'admin'
+        WHEN 'operator' THEN 'operator'
+        ELSE 'viewer'
+    END
 FROM dash_user
 WHERE status = 'active'
 ON CONFLICT DO NOTHING;
@@ -307,7 +316,7 @@ git commit -m "feat(v0.15): V010 multi-project schema + Default project data mig
 - Nullable project_id FK added to agent, test_definition, job, schedule, deployment
 - is_platform_admin flag on dash_user (migrates existing role='admin' users)
 - Default project (UUID 000...001) created, all existing resources moved into it
-- All existing active users added as admin of Default project
+- Existing active users added to Default project with their current role preserved
 - Idempotent: safe to run multiple times"
 ```
 
@@ -638,6 +647,7 @@ git commit -m "feat(v0.15): project CRUD + membership API + require_project midd
 - Modify: `crates/networker-dashboard/src/api/agents.rs`
 - Modify: `crates/networker-dashboard/src/api/jobs.rs`
 - Modify: `crates/networker-dashboard/src/api/runs.rs`
+- Modify: `crates/networker-dashboard/src/api/url_tests.rs`
 - Modify: `crates/networker-dashboard/src/api/schedules.rs`
 - Modify: `crates/networker-dashboard/src/api/deployments.rs`
 - Modify: `crates/networker-dashboard/src/api/dashboard.rs`
@@ -647,6 +657,7 @@ git commit -m "feat(v0.15): project CRUD + membership API + require_project midd
 - Modify: `crates/networker-dashboard/src/db/agents.rs`
 - Modify: `crates/networker-dashboard/src/db/jobs.rs`
 - Modify: `crates/networker-dashboard/src/db/runs.rs`
+- Modify: `crates/networker-dashboard/src/db/url_tests.rs`
 - Modify: `crates/networker-dashboard/src/db/schedules.rs`
 - Modify: `crates/networker-dashboard/src/db/deployments.rs`
 - Modify: `crates/networker-dashboard/src/db/cloud_connections.rs`
@@ -657,12 +668,13 @@ This is the largest PR. The core pattern is the same for every resource: add `pr
 
 - [ ] **Step 1: Update all DB query functions to accept `project_id`**
 
-For each DB module (`agents.rs`, `jobs.rs`, `runs.rs`, `schedules.rs`, `deployments.rs`, `cloud_connections.rs`):
+For each DB module (`agents.rs`, `jobs.rs`, `runs.rs`, `url_tests.rs`, `schedules.rs`, `deployments.rs`, `cloud_connections.rs`):
 
 1. Add `project_id: Uuid` parameter to all list/create/get functions
 2. Add `WHERE project_id = $N` to all SELECT queries
 3. Add `project_id` to INSERT statements
 4. For `runs.rs`: runs belong to jobs which belong to projects. Add a join or subquery: `WHERE j.project_id = $1` when listing runs.
+5. For `url_tests.rs`: add project scoping before exposing the routes. Either add `project_id` to the URL-test tables in the same migration family, or create a durable mapping table keyed by `UrlTestRun.Id` and filter every URL-test query through it.
 
 Example pattern for `db/agents.rs`:
 
@@ -687,6 +699,7 @@ Apply this pattern to:
 - `db/agents.rs`: `list_agents`, `get_agent`, `register_agent`, `delete_agent`
 - `db/jobs.rs`: `list_jobs`, `create_job`, `get_job`, `cancel_job`
 - `db/runs.rs`: `list_runs`, `get_run` (join through job.project_id)
+- `db/url_tests.rs`: `list`, `get`, `section_detail` backing queries
 - `db/schedules.rs`: `list_schedules`, `create_schedule`, `update_schedule`, `delete_schedule`
 - `db/deployments.rs`: `list_deployments`, `create_deployment`, `get_deployment`
 - `db/cloud_connections.rs`: `list_connections`, `create_connection`, `get_connection`, `update_connection`, `delete_connection`
@@ -734,9 +747,22 @@ Restructure `api/mod.rs` to have both the old flat routes AND new project-scoped
 pub fn router(state: Arc<AppState>) -> Router {
     let public = Router::new().merge(auth::router(state.clone()));
 
-    // Flat protected routes (require_auth only — kept for backward compat)
+    // Flat protected routes (require_auth only — kept as temporary aliases so
+    // the current frontend can continue to call flat detail/action endpoints
+    // until PR 4 lands)
     let protected_flat = Router::new()
         .merge(auth::protected_router(state.clone()))
+        .merge(agents::router(state.clone()))
+        .merge(jobs::router(state.clone()))
+        .merge(runs::router(state.clone()))
+        .merge(url_tests::router(state.clone()))
+        .merge(schedules::router(state.clone()))
+        .merge(dashboard::router(state.clone()))
+        .merge(deployments::router(state.clone()))
+        .merge(cloud::router(state.clone()))
+        .merge(cloud_connections::router(state.clone()))
+        .merge(inventory::router(state.clone()))
+        .merge(update::router(state.clone()))
         .merge(modes::router(state.clone()))
         .merge(version::router(state.clone()))
         .merge(users::router(state.clone()))
@@ -757,7 +783,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(cloud::project_router(state.clone()))
         .merge(cloud_connections::project_router(state.clone()))
         .merge(inventory::project_router(state.clone()))
-        .merge(update::project_router(state.clone()))
+        .merge(url_tests::project_router(state.clone()))
         .merge(project_members::router(state.clone()))
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -771,46 +797,36 @@ pub fn router(state: Arc<AppState>) -> Router {
     let project_nested = Router::new()
         .nest("/api/projects/:project_id", project_scoped);
 
-    // Backward-compat redirects: old flat routes → Default project
-    let compat_redirects = backward_compat_router(state.clone());
-
     public
         .merge(protected_flat)
         .merge(project_nested)
-        .merge(compat_redirects)
 }
 ```
 
-- [ ] **Step 4: Implement backward-compat redirects**
+- [ ] **Step 4: Keep flat API aliases targeting the Default project**
 
-Add a `backward_compat_router` function that redirects old flat API routes to the Default project:
+Do not use HTTP redirects for API compatibility. Keep the existing flat routers mounted temporarily and make their handlers call the same shared implementation as the project-scoped routes, with the Default project ID injected explicitly. This preserves existing collection, detail, and action endpoints used by the current UI while PR 4 is still outstanding.
 
 ```rust
-fn backward_compat_router(state: Arc<AppState>) -> Router {
-    // For each old route, redirect to /api/projects/00000000-0000-0000-0000-000000000001/{path}
-    // This is a temporary measure removed in PR 10.
-    async fn compat_redirect(
-        Extension(auth): Extension<AuthUser>,
-        original_uri: axum::http::Uri,
-    ) -> impl IntoResponse {
-        let default_pid = "00000000-0000-0000-0000-000000000001";
-        let new_path = original_uri.path().replacen("/api/", &format!("/api/projects/{default_pid}/"), 1);
-        axum::response::Redirect::temporary(&new_path)
-    }
+const DEFAULT_PROJECT_ID: Uuid = uuid::uuid!("00000000-0000-0000-0000-000000000001");
 
-    Router::new()
-        .route("/api/agents", axum::routing::get(compat_redirect))
-        .route("/api/jobs", axum::routing::get(compat_redirect).post(compat_redirect))
-        .route("/api/runs", axum::routing::get(compat_redirect))
-        .route("/api/schedules", axum::routing::get(compat_redirect).post(compat_redirect))
-        .route("/api/deployments", axum::routing::get(compat_redirect).post(compat_redirect))
-        .route("/api/dashboard/summary", axum::routing::get(compat_redirect))
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            crate::auth::require_auth,
-        ))
+async fn list_jobs_flat(
+    Extension(auth): Extension<AuthUser>,
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<ListJobsQuery>,
+) -> impl IntoResponse {
+    list_jobs_impl(auth, ProjectScope::DefaultProject(DEFAULT_PROJECT_ID), state, q).await
 }
 ```
+
+Cover all currently-used flat routes, not just list endpoints:
+- `/api/agents`, `/api/agents/:agent_id`
+- `/api/jobs`, `/api/jobs/:job_id`, `/api/jobs/:job_id/cancel`
+- `/api/runs`, `/api/runs/:run_id`, `/api/runs/:run_id/attempts`
+- `/api/url-tests`, `/api/url-tests/:run_id`, `/api/url-tests/:run_id/sections`
+- `/api/deployments`, `/api/deployments/:deployment_id`, `/api/deployments/:deployment_id/stop`, `/api/deployments/:deployment_id/check`, `/api/deployments/:deployment_id/update`
+- `/api/schedules`, `/api/schedules/:schedule_id`, plus existing schedule action routes
+- `/api/dashboard/summary`
 
 - [ ] **Step 5: Update each resource API module to expose `project_router`**
 
@@ -826,7 +842,7 @@ pub fn project_router(state: Arc<AppState>) -> Router {
 }
 ```
 
-Keep the old `router()` function temporarily for the backward-compat redirect targets. Remove in PR 10.
+Keep the old `router()` function temporarily as the flat compatibility layer. Do not reduce it to collection-only redirects. Remove it in PR 10 after the frontend and bookmarks have soaked on project-scoped URLs.
 
 - [ ] **Step 6: Update WebSocket hubs for project scoping**
 
@@ -852,19 +868,20 @@ cargo clippy -p networker-dashboard -- -D warnings
 cargo test -p networker-dashboard --lib
 ```
 
-Test: old flat routes redirect correctly. Test: project-scoped routes return only project resources. Test: WebSocket events are project-scoped.
+Test: old flat routes still succeed against the Default project, including detail/action endpoints. Test: project-scoped routes return only project resources, including URL tests. Test: WebSocket events are project-scoped.
 
 - [ ] **Step 9: Commit PR 3**
 
 ```bash
 git checkout -b feat/v015-scoped-resources
 git add -A
-git commit -m "feat(v0.15): project-scoped resource APIs + backward-compat redirects
+git commit -m "feat(v0.15): project-scoped resource APIs + flat compatibility aliases
 
 - All resource APIs now live under /api/projects/:pid/
 - DB queries filter by project_id
 - Role checks: Viewer for reads, Operator for mutations
-- Backward-compat redirects from old flat routes to Default project
+- Flat compatibility aliases keep existing UI/API clients working against Default project
+- URL-test APIs are brought under project scoping
 - WebSocket hubs filter events by project_id
 - Agent registration includes project_id"
 ```
@@ -1069,7 +1086,7 @@ Add new nav items after the divider:
 ```typescript
 const projectNavItems = [
   { path: `/projects/${pid}/cloud-accounts`, label: 'Cloud Accounts', icon: '☁', minRole: 'operator' },
-  { path: `/projects/${pid}/share-links`, label: 'Share Links', icon: '🔗', minRole: 'operator' },
+  { path: `/projects/${pid}/share-links`, label: 'Share Links', icon: '🔗', minRole: 'admin' },
 ];
 
 const projectAdminItems = [
@@ -1132,10 +1149,14 @@ function AuthenticatedApp() {
           <Route path="/" element={<ProjectRedirect />} />
 
           {/* Backward compat redirects (old flat routes) */}
+          {/* LegacyRedirect must preserve any route params so detail bookmarks
+              land on the corresponding project-scoped detail page. */}
           <Route path="/tests" element={<LegacyRedirect to="tests" />} />
-          <Route path="/tests/:jobId" element={<LegacyRedirect to="tests" />} />
+          <Route path="/tests/:jobId" element={<LegacyRedirect to="tests" preserveParam="jobId" />} />
           <Route path="/runs" element={<LegacyRedirect to="runs" />} />
+          <Route path="/runs/:runId" element={<LegacyRedirect to="runs" preserveParam="runId" />} />
           <Route path="/deploy" element={<LegacyRedirect to="deploy" />} />
+          <Route path="/deploy/:deploymentId" element={<LegacyRedirect to="deploy" preserveParam="deploymentId" />} />
           <Route path="/schedules" element={<LegacyRedirect to="schedules" />} />
           <Route path="/settings" element={<LegacyRedirect to="settings" />} />
           <Route path="*" element={<Navigate to="/" />} />
@@ -1249,7 +1270,7 @@ Also fetch projects on app mount (in `AuthenticatedApp` useEffect) to handle pag
 cd dashboard && npm run build && npm run lint
 ```
 
-Test: login redirects to single project. Project switcher shows all projects. Switching projects updates URL and API calls. Old URLs redirect. Members page works.
+Test: login redirects to single project. Project switcher shows all projects. Switching projects updates URL and API calls. Old URLs redirect while preserving detail IDs. Members page works.
 
 - [ ] **Step 15: Commit PR 4**
 
@@ -1708,7 +1729,7 @@ Add `mod share_links;` to `api/mod.rs`.
 Project-scoped endpoints:
 ```
 GET    /share-links       — list share links (admin)
-POST   /share-links       — create share link (operator+)
+POST   /share-links       — create share link (admin)
 PUT    /share-links/:lid  — extend/revoke (admin)
 DELETE /share-links/:lid  — delete (admin)
 ```
@@ -1737,14 +1758,15 @@ GET    /share/:token      — resolve share link and return resource
 7. Fetch the resource data based on `resource_type`:
    - `"run"`: fetch run detail (same as GET /api/projects/:pid/runs/:rid)
    - `"job"`: fetch job detail
-   - `"dashboard"`: fetch dashboard summary snapshot
 8. Return resource JSON + share metadata (created_by email, expires_at)
+
+Defer `"dashboard"` share links until a real snapshot storage model exists. This v0.15 plan supports run/job shares only.
 
 Register the public `/share/:token` route in the `public` section of `api/mod.rs` (no auth middleware).
 
 - [ ] **Step 3: Create `ShareDialog.tsx`**
 
-Modal dialog triggered from RunDetailPage or JobDetailPage "Share" button:
+Modal dialog triggered from RunDetailPage or JobDetailPage "Share" button for project admins only:
 
 ```
 ┌──────────────────────────────────────┐
@@ -1768,8 +1790,8 @@ Table of share links:
 │  Share Links                                                       │
 ├────────────────────────────────────────────────────────────────────┤
 │  Q1 latency report  run   ●active   30 views  Expires Apr 20  [...]│
-│  Team dashboard      dash  ●active    5 views  Expires May 15  [...]│
-│  Old report          run   ●revoked   0 views  Expired         [...]│
+│  Smoke test result  job   ●active    5 views  Expires May 15  [...]│
+│  Old report         run   ●revoked   0 views  Expired         [...]│
 └────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1816,7 +1838,7 @@ cargo test -p networker-dashboard --lib
 cd dashboard && npm run build && npm run lint
 ```
 
-Test: create share link, copy URL, open in incognito (no auth). Test expiration. Test revocation.
+Test: admin creates share link, copy URL, open in incognito (no auth). Test expiration. Test revocation. Test non-admin cannot access share controls.
 
 - [ ] **Step 8: Commit PR 7**
 
@@ -1902,6 +1924,9 @@ pub async fn create_approval(
     requested_by: Uuid,
     expires_at: DateTime<Utc>,
 ) -> Result<Uuid>
+// command_detail must be replayable without the original request still being alive.
+// Include at minimum: cloud_account_id, provider, deployment_id (if any),
+// target VM identifier, region/resource_group, and the exact command payload.
 
 pub async fn list_pending(client: &Client, project_id: Uuid) -> Result<Vec<ApprovalRow>>
 // WHERE project_id = $1 AND status = 'pending' AND expires_at > now()
@@ -1966,6 +1991,8 @@ Register SSE endpoints in the protected routes section of `api/mod.rs`:
 .route("/api/events/user-status", get(events::user_status_events))
 ```
 
+Keep these endpoints behind `require_auth` and use standard Authorization headers. Do not add `?token=` fallback handling to the handlers.
+
 - [ ] **Step 4: Create `api/command_approvals.rs`**
 
 Project-scoped endpoints:
@@ -1978,13 +2005,15 @@ POST /command-approvals/:aid      — approve/deny (admin)
 The approve handler:
 1. Extract `ProjectContext`, require Admin role
 2. Call `db::command_approvals::decide()`
-3. Broadcast SSE event: `approval_tx.send(json!({"approval_id": ..., "status": "approved/denied", ...}))`
-4. If approved: trigger the actual command execution (call deploy runner)
+3. Load the updated approval row (including replayable `command_detail`)
+4. Broadcast SSE event: `approval_tx.send(json!({"approval_id": ..., "status": "approved/denied", ...}))`
+5. If approved: trigger the actual command execution using the stored approval payload
 
 - [ ] **Step 5: Update `deploy/runner.rs` for approval flow**
 
 Before executing destructive commands (`vm_run_command`, `vm_delete`, `vm_stop`):
 1. Create a `command_approval` record (status='pending', expires_at=now+1h)
+   - Persist a fully replayable execution payload in `command_detail`
 2. Broadcast SSE event to project admins
 3. Return the approval_id to the caller
 4. The actual execution is deferred until the admin approves via the API
@@ -1993,10 +2022,11 @@ Add a function `execute_approved_command` that is called after approval:
 ```rust
 pub async fn execute_approved_command(
     state: &AppState,
+    client: &Client,
     approval: &ApprovalRow,
-    cloud_credentials: Option<serde_json::Value>,
 ) -> anyhow::Result<()> {
-    // Decrypt cloud credentials if needed
+    // Load cloud_account_id from approval.command_detail
+    // Decrypt credentials on demand from cloud_account
     // Execute the command (az vm run-command, aws ssm, etc.)
 }
 ```
@@ -2015,7 +2045,7 @@ if expired > 0 {
 - [ ] **Step 7: Create `useSSE.ts` hook**
 
 ```typescript
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect } from 'react';
 import { useAuthStore } from '../stores/authStore';
 
 interface SSEOptions {
@@ -2023,41 +2053,48 @@ interface SSEOptions {
   onStatusChange?: (data: any) => void;
 }
 
+async function connectSse(
+  path: string,
+  token: string,
+  handlers: Record<string, (data: any) => void>,
+  signal: AbortSignal,
+) {
+  const res = await fetch(path, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'text/event-stream',
+    },
+    signal,
+  });
+  // Parse SSE frames (event:/data:) from res.body and dispatch to handlers
+}
+
 export function useSSE(options: SSEOptions) {
   const token = useAuthStore(s => s.token);
-  const sourceRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
     if (!token) return;
 
-    // EventSource doesn't support custom headers, so pass token as query param
-    const url = `/api/events/approval?token=${token}`;
-    const source = new EventSource(url);
+    const approvalAbort = new AbortController();
+    const statusAbort = new AbortController();
 
-    source.addEventListener('approval', (e) => {
-      options.onApproval?.(JSON.parse(e.data));
-    });
+    void connectSse('/api/events/approval', token, {
+      approval: (data) => options.onApproval?.(data),
+    }, approvalAbort.signal);
 
-    source.addEventListener('status_changed', (e) => {
-      options.onStatusChange?.(JSON.parse(e.data));
-    });
+    void connectSse('/api/events/user-status', token, {
+      status_changed: (data) => options.onStatusChange?.(data),
+    }, statusAbort.signal);
 
-    sourceRef.current = source;
-    return () => source.close();
+    return () => {
+      approvalAbort.abort();
+      statusAbort.abort();
+    };
   }, [token]);
 }
 ```
 
-Note: SSE via EventSource does not support Authorization headers. Two options:
-1. Pass JWT as query parameter (simpler, less secure — token in server logs)
-2. Use fetch-based SSE (more complex but keeps token in header)
-
-Recommend option 2 using `fetch` with `ReadableStream` for production. For the initial implementation, option 1 is acceptable if the SSE endpoint validates query param tokens.
-
-Update the SSE endpoints in `api/events.rs` to accept token from query parameter as fallback:
-```rust
-// Accept token from either Authorization header or ?token= query param
-```
+Use fetch-based SSE so Authorization headers continue to work with the existing `require_auth` middleware. Do not rely on query-parameter JWTs.
 
 - [ ] **Step 8: Create `NotificationBell.tsx`**
 
@@ -2383,9 +2420,9 @@ ALTER TABLE deployment ALTER COLUMN project_id SET NOT NULL;
 
 Register in `run()` as V011.
 
-- [ ] **Step 2: Remove backward-compat redirect routes**
+- [ ] **Step 2: Remove backward-compat flat alias routes**
 
-In `api/mod.rs`, remove the `backward_compat_router` function and its merge into the main router. The old flat routes (`/api/agents`, `/api/jobs`, etc.) are now gone.
+In `api/mod.rs`, remove the temporary flat alias routes (`/api/agents`, `/api/jobs`, etc.) after the frontend and bookmarks have soaked on project-scoped URLs.
 
 - [ ] **Step 3: Remove NULL coalescing in DB queries**
 
@@ -2397,7 +2434,7 @@ If any API modules still expose the old `router()` function (kept during transit
 
 - [ ] **Step 5: Clean up frontend legacy redirects**
 
-In `App.tsx`, remove the `<LegacyRedirect>` routes for `/tests`, `/runs`, `/deploy`, `/schedules`, `/settings`. Replace with a catch-all redirect to `/projects`.
+In `App.tsx`, remove the `<LegacyRedirect>` routes for `/tests`, `/tests/:jobId`, `/runs`, `/runs/:runId`, `/deploy`, `/deploy/:deploymentId`, `/schedules`, `/settings`. Replace with a catch-all redirect to `/projects`.
 
 - [ ] **Step 6: Version bump to v0.15.0**
 
@@ -2424,10 +2461,10 @@ cd dashboard && npm run build && npm run lint
 ```bash
 git checkout -b feat/v015-hardening
 git add -A
-git commit -m "feat(v0.15.0): NOT NULL enforcement + remove compat redirects + version bump
+git commit -m "feat(v0.15.0): NOT NULL enforcement + remove flat compat + version bump
 
 - V011 migration: enforce NOT NULL on project_id columns (with safety checks)
-- Remove backward-compat redirect routes (old flat /api/*)
+- Remove temporary flat compatibility routes (old flat /api/*)
 - Remove NULL coalescing in DB queries
 - Remove legacy frontend route redirects
 - Version bump: 0.14.x → 0.15.0 (Cargo.toml, CHANGELOG, installers)"
@@ -2447,11 +2484,13 @@ PRs 1-9 are merged as v0.14.x point releases (e.g., v0.14.7 through v0.14.15). E
 
 - [ ] All 10 PRs merged to main
 - [ ] Existing v0.14 deployments migrate cleanly (V010 creates Default project, moves resources)
+- [ ] Existing v0.14 roles are preserved when seeding Default project membership
 - [ ] Tag `v0.15.0` and push (triggers release build)
 - [ ] Verify release includes all 5 crate binaries
 - [ ] Deploy to Azure VM via Settings → Update
 - [ ] Test: existing single-project deployment works unchanged after migration
 - [ ] Test: create second project, add members, verify isolation
+- [ ] Test: URL-test endpoints are project-scoped and do not leak cross-project data
 - [ ] Test: cloud account CRUD (Azure SP, AWS keys, GCP service account)
 - [ ] Test: cloud account validation calls succeed
 - [ ] Test: deploy VM using stored cloud credentials (not ambient CLI login)
@@ -2460,7 +2499,7 @@ PRs 1-9 are merged as v0.14.x point releases (e.g., v0.14.7 through v0.14.15). E
 - [ ] Test: visibility rules (explicit mode, viewer sees only allowed tests)
 - [ ] Test: project switcher in sidebar with multiple projects
 - [ ] Test: platform admin can access all projects
-- [ ] Test: old flat URL bookmarks redirect correctly (before PR 10 removes them)
+- [ ] Test: old flat URL bookmarks and API calls still resolve correctly during the compatibility window (before PR 10 removes them)
 - [ ] Update CLAUDE.md with new env vars (`DASHBOARD_CREDENTIAL_KEY`, `DASHBOARD_SHARE_URL`, `DASHBOARD_SHARE_MAX_DAYS`)
 - [ ] Update Gist with new installer versions
 - [ ] Run `shellcheck install.sh` and `bats tests/installer.bats`
