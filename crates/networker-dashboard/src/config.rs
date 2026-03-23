@@ -25,6 +25,12 @@ pub struct DashboardConfig {
     pub acs_connection_string: Option<String>,
     #[allow(dead_code)]
     pub acs_sender: Option<String>,
+    // Cloud account credential encryption
+    pub credential_key: Option<[u8; 32]>,
+    pub credential_key_old: Option<[u8; 32]>,
+    // Shared report links
+    pub share_base_url: String,
+    pub share_max_days: u32,
 }
 
 impl DashboardConfig {
@@ -74,6 +80,26 @@ impl DashboardConfig {
         let public_url = std::env::var("DASHBOARD_PUBLIC_URL")
             .unwrap_or_else(|_| format!("http://localhost:{port}"));
 
+        let share_base_url = std::env::var("DASHBOARD_SHARE_URL")
+            .unwrap_or_else(|_| public_url.clone());
+
+        let share_max_days: u32 = std::env::var("DASHBOARD_SHARE_MAX_DAYS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(365);
+
+        let credential_key = std::env::var("DASHBOARD_CREDENTIAL_KEY")
+            .ok()
+            .filter(|s| s.len() == 64)
+            .and_then(|s| hex::decode(&s).ok())
+            .and_then(|v| <[u8; 32]>::try_from(v).ok());
+
+        let credential_key_old = std::env::var("DASHBOARD_CREDENTIAL_KEY_OLD")
+            .ok()
+            .filter(|s| s.len() == 64)
+            .and_then(|s| hex::decode(&s).ok())
+            .and_then(|v| <[u8; 32]>::try_from(v).ok());
+
         Ok(Self {
             database_url: std::env::var("DASHBOARD_DB_URL").unwrap_or_else(|_| {
                 "postgres://networker:networker@localhost:5432/networker_dashboard".into()
@@ -105,6 +131,10 @@ impl DashboardConfig {
             acs_sender: std::env::var("DASHBOARD_ACS_SENDER")
                 .ok()
                 .filter(|s| !s.is_empty()),
+            credential_key,
+            credential_key_old,
+            share_base_url,
+            share_max_days,
         })
     }
 }

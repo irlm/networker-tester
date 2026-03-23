@@ -1,6 +1,7 @@
 mod api;
 mod auth;
 mod config;
+mod crypto;
 mod db;
 mod deploy;
 mod email;
@@ -45,6 +46,12 @@ pub struct AppState {
     pub google_client_secret: Option<String>,
     /// Temporary SSO exchange codes: code → SsoCodeEntry
     pub sso_codes: std::sync::Mutex<HashMap<String, SsoCodeEntry>>,
+    // Cloud account credential encryption
+    pub credential_key: Option<[u8; 32]>,
+    pub credential_key_old: Option<[u8; 32]>,
+    // Shared report links
+    pub share_base_url: String,
+    pub share_max_days: u32,
 }
 
 #[tokio::main]
@@ -150,6 +157,10 @@ async fn main() -> anyhow::Result<()> {
         google_client_id: cfg.google_client_id.clone(),
         google_client_secret: cfg.google_client_secret.clone(),
         sso_codes: std::sync::Mutex::new(HashMap::new()),
+        credential_key: cfg.credential_key,
+        credential_key_old: cfg.credential_key_old,
+        share_base_url: cfg.share_base_url.clone(),
+        share_max_days: cfg.share_max_days,
     });
 
     let cors = {
