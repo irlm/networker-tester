@@ -260,7 +260,7 @@ export function SchedulesPage() {
                       confirmDelete === s.schedule_id ? 'text-red-400' : 'text-gray-600'
                     }`}
                   >
-                    {confirmDelete === s.schedule_id ? 'Tap to confirm delete' : '✕ Delete'}
+                    {confirmDelete === s.schedule_id ? 'Click to confirm delete' : '✕ Delete'}
                   </button>
                 </div>
               </div>

@@ -239,7 +239,7 @@ export function DeployDetailPage() {
       {/* Endpoint Health */}
       {endpointHealth.length > 0 && (
         <div className="mb-6">
-          <p className="text-xs text-gray-500 uppercase tracking-wider font-medium mb-2">Endpoint Health</p>
+          <p className="text-xs text-gray-500 tracking-wider font-medium mb-2">endpoint health</p>
           <div>
             {endpointHealth.map((ep, i) => (
               <div
@@ -274,7 +274,7 @@ export function DeployDetailPage() {
       {/* Log Output */}
       <div className="mb-6">
         <div className="flex items-center justify-between mb-2">
-          <p className="text-xs text-gray-500 uppercase tracking-wider font-medium">Deployment Log</p>
+          <p className="text-xs text-gray-500 tracking-wider font-medium">deploy log</p>
           {!autoScroll && (
             <button
               onClick={() => {

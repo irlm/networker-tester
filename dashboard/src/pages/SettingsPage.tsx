@@ -127,7 +127,7 @@ export function SettingsPage() {
     return (
       <div className="p-4 md:p-6">
         <h2 className="text-xl font-bold text-gray-100 mb-6">Settings</h2>
-        <p className="text-gray-500">Loading...</p>
+        <p className="text-gray-500">Loading settings...</p>
       </div>
     );
   }
@@ -150,7 +150,7 @@ export function SettingsPage() {
       {/* System Versions */}
       <div className="mb-8">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-xs text-gray-500 uppercase tracking-wider font-medium">System Versions</h3>
+          <h3 className="text-xs text-gray-500 tracking-wider font-medium">system versions</h3>
           {latestRelease && (
             <span className="text-xs text-gray-600 font-mono">
               latest: v{latestRelease}
@@ -332,9 +332,9 @@ export function SettingsPage() {
 
       {/* Deployed Endpoints */}
       <div className="section-divider">
-        <h3 className="text-xs text-gray-500 uppercase tracking-wider font-medium mb-3">Deployed Endpoints</h3>
+        <h3 className="text-xs text-gray-500 tracking-wider font-medium mb-3">deployed endpoints</h3>
         {deployments.length === 0 ? (
-          <p className="text-gray-600 text-sm">No endpoints deployed</p>
+          <p className="text-gray-600 text-sm">No endpoints deployed yet. Deploy one from the Infrastructure page.</p>
         ) : (
           <div>
             {deployments.map((d, i) => {
@@ -370,7 +370,7 @@ export function SettingsPage() {
       {/* Cloud Inventory */}
       <div className="section-divider">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-xs text-gray-500 uppercase tracking-wider font-medium">Cloud Inventory</h3>
+          <h3 className="text-xs text-gray-500 tracking-wider font-medium">cloud inventory</h3>
           <button
             onClick={async () => {
               setInventoryLoading(true);
@@ -481,7 +481,7 @@ export function SettingsPage() {
       {userRole === 'admin' && (
         <div className="section-divider">
           <div className="flex items-center justify-between mb-3">
-            <h3 className="text-xs text-gray-500 uppercase tracking-wider font-medium">Cloud Accounts</h3>
+            <h3 className="text-xs text-gray-500 tracking-wider font-medium">cloud accounts</h3>
             <button
               onClick={() => {
                 setShowAddAccount(true);

@@ -397,7 +397,7 @@ export function CreateScheduleDialog({ onClose, onCreated }: CreateScheduleDialo
 
               {/* Review summary */}
               <div className="border border-gray-800 rounded p-4 text-sm">
-                <p className="text-gray-400 text-xs uppercase tracking-wider mb-3">Review</p>
+                <p className="text-gray-400 text-xs tracking-wider mb-3">review</p>
                 <div className="space-y-2">
                   <div className="flex justify-between">
                     <span className="text-gray-500">Name</span>

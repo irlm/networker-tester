@@ -82,7 +82,7 @@ export function DashboardPage() {
       <div className="p-4 md:p-6">
         <h2 className="text-xl font-bold text-gray-100 mb-6">Dashboard</h2>
         <div className="bg-red-500/10 border border-red-500/30 rounded p-4">
-          <p className="text-red-400 text-sm">{error}</p>
+          <p className="text-red-400 text-sm">Failed to load dashboard data. Check your connection and try refreshing.</p>
         </div>
       </div>
     );
@@ -130,7 +130,7 @@ export function DashboardPage() {
           {/* Endpoint Health */}
           <div>
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-xs text-gray-500 uppercase tracking-wider font-medium">Endpoint Health</h3>
+              <h3 className="text-xs text-gray-500 tracking-wider font-medium">endpoint health</h3>
               <Link to="/deploy" className="text-xs text-gray-600 hover:text-gray-400 transition-colors">View all →</Link>
             </div>
             {endpoints.length === 0 ? (
@@ -169,7 +169,7 @@ export function DashboardPage() {
           {/* Testers */}
           <div>
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-xs text-gray-500 uppercase tracking-wider font-medium">Testers</h3>
+              <h3 className="text-xs text-gray-500 tracking-wider font-medium">testers</h3>
               <Link to="/tests" className="text-xs text-gray-600 hover:text-gray-400 transition-colors">Manage →</Link>
             </div>
             {agents.length === 0 ? (
@@ -206,7 +206,7 @@ export function DashboardPage() {
           {/* Recent Tests */}
           <div>
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-xs text-gray-500 uppercase tracking-wider font-medium">Recent Tests</h3>
+              <h3 className="text-xs text-gray-500 tracking-wider font-medium">recent tests</h3>
               <Link to="/tests" className="text-xs text-gray-600 hover:text-gray-400 transition-colors">View all →</Link>
             </div>
             {recentJobs.length === 0 ? (
@@ -272,7 +272,7 @@ export function DashboardPage() {
 
           {/* Quick Actions — compact links, no descriptions */}
           <div>
-            <h3 className="text-xs text-gray-600 mb-3">Quick actions</h3>
+            <h3 className="text-xs text-gray-600 mb-3">quick actions</h3>
             <div className="space-y-1">
               <Link to="/tests" className="block px-3 py-2 text-sm text-gray-400 hover:text-gray-200 hover:bg-gray-800/30 rounded transition-colors">
                 New Test
@@ -290,7 +290,7 @@ export function DashboardPage() {
           <div>
             <div className="flex items-center gap-2 mb-3">
               <span className="w-1.5 h-1.5 rounded-full bg-green-400 motion-safe:animate-pulse" />
-              <h3 className="text-xs text-gray-500 uppercase tracking-wider font-medium">Live Feed</h3>
+              <h3 className="text-xs text-gray-500 tracking-wider font-medium">live feed</h3>
             </div>
             <div className="border border-gray-800/50 rounded max-h-64 overflow-y-auto">
               {recentEvents.length === 0 ? (
