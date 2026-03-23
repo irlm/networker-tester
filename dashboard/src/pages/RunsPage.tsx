@@ -34,7 +34,7 @@ export function RunsPage() {
     return (
       <div className="p-4 md:p-6">
         <h2 className="text-lg md:text-xl font-bold text-gray-100 mb-6">Test Runs</h2>
-        <div className="text-gray-500 motion-safe:animate-pulse">Loading runs...</div>
+        <div className="text-gray-500 motion-safe:animate-pulse">Loading test runs...</div>
       </div>
     );
   }
@@ -45,7 +45,7 @@ export function RunsPage() {
         <h2 className="text-lg md:text-xl font-bold text-gray-100 mb-6">Test Runs</h2>
         <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
           <h3 className="text-red-400 font-bold mb-2">Failed to load runs</h3>
-          <p className="text-red-300 text-sm font-mono">{error}</p>
+          <p className="text-red-300 text-sm">Could not fetch test runs. Check your connection and try refreshing.</p>
         </div>
       </div>
     );
@@ -72,7 +72,7 @@ export function RunsPage() {
 
       {error && (
         <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 mb-4 text-yellow-400 text-sm">
-          Failed to refresh: {error}
+          Failed to refresh runs. Retrying automatically.
         </div>
       )}
 
@@ -80,8 +80,8 @@ export function RunsPage() {
       <div className="md:hidden space-y-2">
         {runs.length === 0 ? (
           <div className="border border-gray-800 rounded p-8 text-center">
-            <p className="text-gray-500 text-sm">No runs yet</p>
-            <p className="text-gray-700 text-xs mt-1">Runs appear here after a test completes</p>
+            <p className="text-gray-500 text-sm">No test runs yet</p>
+            <p className="text-gray-700 text-xs mt-1">Runs appear here after a test completes. Start one from the Tests page.</p>
           </div>
         ) : runs.map((run) => (
           <Link
@@ -150,8 +150,8 @@ export function RunsPage() {
 
         {runs.length === 0 && (
           <div className="py-10 text-center">
-            <p className="text-gray-500 text-sm">No runs yet</p>
-            <p className="text-gray-700 text-xs mt-1">Runs appear here after a test completes</p>
+            <p className="text-gray-500 text-sm">No test runs yet</p>
+            <p className="text-gray-700 text-xs mt-1">Runs appear here after a test completes. Start one from the Tests page.</p>
           </div>
         )}
       </div>

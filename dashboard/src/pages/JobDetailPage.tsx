@@ -379,7 +379,7 @@ export function JobDetailPage() {
       {/* Probe Timing per attempt */}
       {chartData.length > 0 && (
         <div className="mb-6">
-          <h3 className="text-xs text-gray-500 uppercase tracking-wider mb-3 font-medium">Probe Timing by Attempt</h3>
+          <h3 className="text-xs text-gray-500 tracking-wider mb-3 font-medium">probe timing by attempt</h3>
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2028" />
@@ -408,8 +408,8 @@ export function JobDetailPage() {
       {/* Timing Breakdown (shared analysis from lib/analysis.ts) */}
       {timingBreakdown.length > 0 && (
         <div className="table-container mb-6">
-          <h3 className="px-4 py-2.5 text-xs text-gray-500 uppercase tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
-            Timing Breakdown
+          <h3 className="px-4 py-2.5 text-xs text-gray-500 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
+            timing breakdown
           </h3>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
@@ -449,8 +449,8 @@ export function JobDetailPage() {
       {/* Statistics Summary (shared analysis — same as HTML report) */}
       {protocolStats.length > 0 && (
         <div className="table-container mb-6">
-          <h3 className="px-4 py-2.5 text-xs text-gray-500 uppercase tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
-            Statistics Summary
+          <h3 className="px-4 py-2.5 text-xs text-gray-500 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
+            statistics summary
           </h3>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
@@ -497,7 +497,7 @@ export function JobDetailPage() {
       {/* Protocol Comparison Chart */}
       {protocolChartData.length > 1 && (
         <div className="mb-6">
-          <h3 className="text-xs text-gray-500 uppercase tracking-wider mb-3 font-medium">Protocol Comparison — p50 vs p95</h3>
+          <h3 className="text-xs text-gray-500 tracking-wider mb-3 font-medium">protocol comparison — p50 vs p95</h3>
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={protocolChartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2028" />
@@ -514,7 +514,7 @@ export function JobDetailPage() {
       {/* Box-and-Whisker: p5 ── [Q1 | median | Q3] ── p95 */}
       {boxPlotData.length > 0 && (
         <div className="mb-6">
-          <h3 className="text-xs text-gray-500 uppercase tracking-wider mb-3 font-medium">Distribution by Protocol</h3>
+          <h3 className="text-xs text-gray-500 tracking-wider mb-3 font-medium">distribution by protocol</h3>
           <BoxWhiskerChart groups={boxPlotData} />
         </div>
       )}
@@ -522,7 +522,7 @@ export function JobDetailPage() {
       {/* TTFB Distribution */}
       {ttfbDistribution.length > 0 && (
         <div className="mb-6">
-          <h3 className="text-xs text-gray-500 uppercase tracking-wider mb-3 font-medium">Timing Distribution (ms)</h3>
+          <h3 className="text-xs text-gray-500 tracking-wider mb-3 font-medium">timing distribution (ms)</h3>
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={ttfbDistribution}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2028" />
@@ -538,7 +538,7 @@ export function JobDetailPage() {
       {/* Analysis & Observations */}
       {observations.length > 0 && (
         <div className="mb-6 border-l-2 border-gray-700 pl-4">
-          <h3 className="text-xs text-gray-500 uppercase tracking-wider mb-2 font-medium">Analysis</h3>
+          <h3 className="text-xs text-gray-500 tracking-wider mb-2 font-medium">analysis</h3>
           <ul className="space-y-1">
             {observations.map((obs, i) => (
               <li key={i} className="text-xs text-gray-400">
@@ -552,8 +552,8 @@ export function JobDetailPage() {
       {/* Packet Capture */}
       {packetCapture && packetCapture.total_packets > 0 && (
         <div className="table-container mb-6">
-          <h3 className="px-4 py-2.5 text-xs text-gray-500 uppercase tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
-            Packet Capture
+          <h3 className="px-4 py-2.5 text-xs text-gray-500 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
+            packet capture
           </h3>
           <div className="p-4 space-y-4">
             {/* Summary bar */}
@@ -581,7 +581,7 @@ export function JobDetailPage() {
             {/* Transport breakdown */}
             {packetCapture.transport_shares.length > 0 && (
               <div>
-                <div className="text-xs text-gray-500 uppercase tracking-wider mb-2 font-medium">Transport Breakdown</div>
+                <div className="text-xs text-gray-500 tracking-wider mb-2 font-medium">transport breakdown</div>
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="border-b border-gray-800 text-gray-500">
@@ -612,7 +612,7 @@ export function JobDetailPage() {
             {/* TCP Health Indicators */}
             {(packetCapture.retransmissions > 0 || packetCapture.duplicate_acks > 0 || packetCapture.resets > 0) && (
               <div>
-                <div className="text-xs text-gray-500 uppercase tracking-wider mb-2 font-medium">TCP Health</div>
+                <div className="text-xs text-gray-500 tracking-wider mb-2 font-medium">TCP health</div>
                 <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs">
                   <span className="text-gray-500">
                     Retransmissions <span className={`font-mono font-semibold ml-1 ${packetCapture.retransmissions > 0 ? 'text-yellow-400' : 'text-gray-600'}`}>{packetCapture.retransmissions.toLocaleString()}</span>
@@ -630,7 +630,7 @@ export function JobDetailPage() {
             {/* Target endpoint info */}
             {packetCapture.likely_target_endpoints.length > 0 && (
               <div>
-                <div className="text-xs text-gray-500 uppercase tracking-wider mb-2 font-medium">Target Endpoints</div>
+                <div className="text-xs text-gray-500 tracking-wider mb-2 font-medium">target endpoints</div>
                 <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs">
                   <span className="text-gray-500">
                     Endpoints <span className="text-gray-300 font-mono ml-1">{packetCapture.likely_target_endpoints.join(', ')}</span>
@@ -652,7 +652,7 @@ export function JobDetailPage() {
             <div className="grid grid-cols-2 gap-4">
               {packetCapture.top_endpoints.length > 0 && (
                 <div>
-                  <div className="text-xs text-gray-500 uppercase tracking-wider mb-2 font-medium">Top Endpoints</div>
+                  <div className="text-xs text-gray-500 tracking-wider mb-2 font-medium">top endpoints</div>
                   <table className="w-full text-xs">
                     <thead>
                       <tr className="border-b border-gray-800 text-gray-500">
@@ -673,7 +673,7 @@ export function JobDetailPage() {
               )}
               {packetCapture.top_ports.length > 0 && (
                 <div>
-                  <div className="text-xs text-gray-500 uppercase tracking-wider mb-2 font-medium">Top Ports</div>
+                  <div className="text-xs text-gray-500 tracking-wider mb-2 font-medium">top ports</div>
                   <table className="w-full text-xs">
                     <thead>
                       <tr className="border-b border-gray-800 text-gray-500">
@@ -725,8 +725,8 @@ export function JobDetailPage() {
       {/* Tester Log */}
       {jobLogs.length > 0 && (
         <div className="table-container mb-6">
-          <h3 className="px-4 py-2.5 text-xs text-gray-500 uppercase tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
-            Tester Log
+          <h3 className="px-4 py-2.5 text-xs text-gray-500 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
+            tester log
           </h3>
           <div ref={testerLogRef} className="h-[400px] overflow-y-auto p-3 font-mono text-xs leading-5">
             {jobLogs.map((entry, i) => (
@@ -750,7 +750,7 @@ export function JobDetailPage() {
       {/* Browser Results */}
       {attempts.some(a => a.browser) && (
         <div className="table-container mb-6">
-          <h3 className="px-4 py-2.5 text-xs text-gray-500 uppercase tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">Browser Results</h3>
+          <h3 className="px-4 py-2.5 text-xs text-gray-500 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">browser results</h3>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
@@ -787,7 +787,7 @@ export function JobDetailPage() {
       {/* Page Load Results */}
       {attempts.some(a => a.page_load) && (
         <div className="table-container mb-6">
-          <h3 className="px-4 py-2.5 text-xs text-gray-500 uppercase tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">Page Load Results</h3>
+          <h3 className="px-4 py-2.5 text-xs text-gray-500 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">page load results</h3>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
@@ -824,7 +824,7 @@ export function JobDetailPage() {
       {/* TLS Details */}
       {attempts.some(a => a.tls) && (
         <div className="table-container mb-6">
-          <h3 className="px-4 py-2.5 text-xs text-gray-500 uppercase tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">TLS Details</h3>
+          <h3 className="px-4 py-2.5 text-xs text-gray-500 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">TLS details</h3>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
@@ -855,8 +855,8 @@ export function JobDetailPage() {
       {/* All Probes (compact) */}
       {attempts.length > 0 && (
         <div className="table-container mb-6">
-          <h3 className="px-4 py-2.5 text-xs text-gray-500 uppercase tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
-            All Probes ({attempts.length})
+          <h3 className="px-4 py-2.5 text-xs text-gray-500 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
+            all probes ({attempts.length})
           </h3>
           <div className="max-h-72 overflow-y-auto">
             <table className="w-full text-xs">
@@ -914,8 +914,8 @@ export function JobDetailPage() {
       {/* Errors */}
       {attempts.some(a => a.error) && (
         <div className="border border-red-500/15 rounded mb-6 overflow-hidden">
-          <h3 className="px-4 py-2.5 text-xs text-red-400 uppercase tracking-wider bg-red-500/5 border-b border-red-500/15 font-medium">
-            Errors ({attempts.filter(a => a.error).length})
+          <h3 className="px-4 py-2.5 text-xs text-red-400 tracking-wider bg-red-500/5 border-b border-red-500/15 font-medium">
+            errors ({attempts.filter(a => a.error).length})
           </h3>
           <div className="p-3 space-y-2">
             {attempts.filter(a => a.error).map(a => (
@@ -931,7 +931,7 @@ export function JobDetailPage() {
 
       {/* Job metadata */}
       <div className="section-divider">
-        <h3 className="text-xs text-gray-500 uppercase tracking-wider mb-3 font-medium">Test Details</h3>
+        <h3 className="text-xs text-gray-500 tracking-wider mb-3 font-medium">test details</h3>
         <div className="grid grid-cols-2 gap-2 text-xs">
           <div className="text-gray-500">Test ID</div>
           <div className="text-gray-300 font-mono">{job.job_id}</div>

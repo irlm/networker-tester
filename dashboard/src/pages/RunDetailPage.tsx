@@ -166,8 +166,8 @@ export function RunDetailPage() {
       {/* ── Timing Breakdown Table (mirrors HTML report) ── */}
       {timingBreakdown.length > 0 && (
         <div className="table-container mb-6">
-          <h3 className="px-4 py-2.5 text-xs text-gray-500 uppercase tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
-            Timing Breakdown by Protocol
+          <h3 className="px-4 py-2.5 text-xs text-gray-500 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
+            timing breakdown by protocol
           </h3>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
@@ -196,8 +196,8 @@ export function RunDetailPage() {
       {/* ── Statistics Summary Table (mirrors HTML report) ── */}
       {protocolStats.length > 0 && (
         <div className="table-container mb-6">
-          <h3 className="px-4 py-2.5 text-xs text-gray-500 uppercase tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
-            Statistics Summary
+          <h3 className="px-4 py-2.5 text-xs text-gray-500 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
+            statistics summary
           </h3>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
@@ -229,7 +229,7 @@ export function RunDetailPage() {
       {/* ── Protocol Comparison Chart ── */}
       {protocolChartData.length > 1 && (
         <div className="mb-6">
-          <h3 className="text-xs text-gray-500 uppercase tracking-wider mb-3 font-medium">Protocol Comparison — p50 vs p95</h3>
+          <h3 className="text-xs text-gray-500 tracking-wider mb-3 font-medium">protocol comparison — p50 vs p95</h3>
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={protocolChartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2028" />
@@ -246,7 +246,7 @@ export function RunDetailPage() {
       {/* ── TTFB Distribution ── */}
       {ttfbDistribution.length > 0 && (
         <div className="mb-6">
-          <h3 className="text-xs text-gray-500 uppercase tracking-wider mb-3 font-medium">TTFB Distribution (ms)</h3>
+          <h3 className="text-xs text-gray-500 tracking-wider mb-3 font-medium">TTFB distribution (ms)</h3>
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={ttfbDistribution}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2028" />
@@ -260,7 +260,7 @@ export function RunDetailPage() {
       )}
 
       {/* ── Attempts by Protocol (collapsible) ── */}
-      <h3 className="text-xs text-gray-500 uppercase tracking-wider mb-3 font-medium">Probe Details</h3>
+      <h3 className="text-xs text-gray-500 tracking-wider mb-3 font-medium">probe details</h3>
       {Object.entries(groupByProtocol(attempts)).map(([protocol, group]) => {
         const isExpanded = expandedProtocols.has(protocol);
         const protoSuccess = group.filter((a) => a.success).length;
@@ -429,7 +429,7 @@ function SubResult({ label, color, children }: { label: string; color: string; c
   const labelColor = color === 'red' ? 'text-red-400' : color === 'cyan' ? 'text-gray-300' : color === 'blue' ? 'text-blue-400' : color === 'purple' ? 'text-purple-400' : 'text-gray-500';
   return (
     <div className={`${bgColor} border ${borderColor} rounded p-2`}>
-      <p className={`${labelColor} uppercase tracking-wider mb-1 text-[11px] font-medium`}>{label}</p>
+      <p className={`${labelColor} tracking-wider mb-1 text-[11px] font-medium`}>{label}</p>
       {children}
     </div>
   );

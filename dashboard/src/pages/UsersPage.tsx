@@ -212,7 +212,7 @@ export function UsersPage() {
       {tab === 'pending' && (
         <div className="space-y-2">
           {pendingUsers.length === 0 && (
-            <p className="text-gray-500 text-sm py-8 text-center">No pending users</p>
+            <p className="text-gray-500 text-sm py-8 text-center">No pending approval requests. New users appear here after signing up.</p>
           )}
           {pendingUsers.map((u) => (
             <div
@@ -322,7 +322,7 @@ export function UsersPage() {
           {/* Disabled / denied users */}
           {disabledUsers.length > 0 && (
             <>
-              <div className="text-xs text-gray-600 mt-4 mb-1 uppercase tracking-wide">Inactive</div>
+              <div className="text-xs text-gray-600 mt-4 mb-1 tracking-wide">inactive</div>
               {disabledUsers.map((u) => (
                 <div
                   key={u.user_id}

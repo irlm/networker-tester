@@ -153,7 +153,7 @@ export function CreateJobDialog({ onClose, onCreated }: CreateJobDialogProps) {
         connection_reuse: connectionReuse,
         ...(captureMode !== 'none' ? { capture_mode: captureMode } : {}),
       }, selectedTester || undefined);
-      addToast('success', `Job ${result.job_id.slice(0, 8)} created`);
+      addToast('success', `Test ${result.job_id.slice(0, 8)} created`);
       onCreated();
       onClose();
     } catch (err) {

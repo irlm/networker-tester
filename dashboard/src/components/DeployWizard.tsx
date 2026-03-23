@@ -229,7 +229,7 @@ export function DeployWizard({ onClose, onCreated }: DeployWizardProps) {
 
     try {
       const result = await api.createDeployment(deployName, config);
-      addToast('success', `Deployment ${result.deployment_id.slice(0, 8)} started`);
+      addToast('success', `Deploy ${result.deployment_id.slice(0, 8)} started`);
       onCreated(result.deployment_id);
       onClose();
     } catch (err) {
@@ -318,7 +318,7 @@ export function DeployWizard({ onClose, onCreated }: DeployWizardProps) {
                   </div>
                   {cloudConnections.length > 0 && (
                     <div className="mb-4">
-                      <p className="text-xs text-gray-500 uppercase tracking-wider font-medium mb-2">Cloud Accounts (Federation)</p>
+                      <p className="text-xs text-gray-500 tracking-wider font-medium mb-2">cloud accounts (federation)</p>
                       <div className="space-y-1">
                         {cloudConnections.map(c => (
                           <div key={c.connection_id} className="flex items-center gap-2 text-xs">
@@ -335,7 +335,7 @@ export function DeployWizard({ onClose, onCreated }: DeployWizardProps) {
                   )}
                 </>
               ) : (
-                <p className="text-yellow-400 text-sm mb-4">Could not check cloud status</p>
+                <p className="text-yellow-400 text-sm mb-4">Could not detect cloud CLIs. Ensure az, aws, or gcloud is installed and authenticated.</p>
               )}
             </div>
           )}
@@ -526,7 +526,7 @@ export function DeployWizard({ onClose, onCreated }: DeployWizardProps) {
                   Deploy endpoint only (skip tests)
                 </label>
                 <p className="text-xs text-gray-600 mt-1 ml-5">
-                  You can create a test job later from the Jobs page
+                  You can run a test later from the Tests page
                 </p>
               </div>
             </div>

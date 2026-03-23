@@ -201,7 +201,7 @@ export function JobsPage() {
       {showTesters && (
         <div className="border-b border-gray-800/50 pb-5 mb-6">
           <div className="flex items-center justify-between mb-3">
-            <p className="text-xs text-gray-500 uppercase tracking-wider font-medium">Testers</p>
+            <p className="text-xs text-gray-500 tracking-wider font-medium">testers</p>
             <button
               onClick={() => setShowAddTester(!showAddTester)}
               className="text-xs text-cyan-400 hover:text-cyan-300"
@@ -342,7 +342,7 @@ export function JobsPage() {
 
           {/* Tester List — flat rows with dividers */}
           {testers.length === 0 ? (
-            <p className="text-gray-600 text-sm">No testers registered. Deploy a tester on an endpoint or via SSH.</p>
+            <p className="text-gray-600 text-sm">No testers registered. Click "+ Add Tester" to deploy one on an endpoint or via SSH.</p>
           ) : (
             <div>
               {testers.map((t, i) => (
@@ -379,7 +379,7 @@ export function JobsPage() {
 
       {error && (
         <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 mb-4 text-yellow-400 text-sm">
-          Failed to refresh: {error}
+          Failed to refresh test list. Retrying automatically.
         </div>
       )}
 
@@ -400,7 +400,7 @@ export function JobsPage() {
           ) : (
             <div className="border border-gray-800 rounded p-8 text-center">
               <p className="text-gray-500 text-sm">No tests yet</p>
-              <button onClick={() => setShowCreate(true)} className="text-xs text-cyan-400 mt-2">Run your first probe</button>
+              <button onClick={() => setShowCreate(true)} className="text-xs text-cyan-400 mt-2">Run your first test</button>
             </div>
           )
         ) : jobs.map((job) => {
@@ -502,7 +502,7 @@ export function JobsPage() {
             </div>
           ) : (
             <div className="py-10 text-center">
-              <p className="text-gray-500 text-sm">No tests yet — click New Test to run your first probe</p>
+              <p className="text-gray-500 text-sm">No tests yet — click New Test to run your first diagnostic</p>
             </div>
           )
         )}

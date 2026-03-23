@@ -54,7 +54,7 @@ export function DeployPage() {
           onClick={() => setShowWizard(true)}
           className="bg-cyan-600 hover:bg-cyan-500 text-white px-3 md:px-4 py-2 rounded text-sm transition-colors flex-shrink-0"
         >
-          New Deployment
+          New Endpoint
         </button>
       </div>
 
@@ -67,7 +67,7 @@ export function DeployPage() {
       {/* ── Active Deployments (in progress) ── */}
       {activeDeps.length > 0 && (
         <div className="mb-8">
-          <h3 className="text-xs text-gray-500 uppercase tracking-wider font-medium mb-3">In Progress</h3>
+          <h3 className="text-xs text-gray-500 tracking-wider font-medium mb-3">in progress</h3>
           <div className="space-y-2">
             {activeDeps.map(d => (
               <Link
@@ -89,8 +89,8 @@ export function DeployPage() {
       {/* ── Endpoints Section ── */}
       <div className="mb-8">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-xs text-gray-500 uppercase tracking-wider font-medium">
-            Endpoints
+          <h3 className="text-xs text-gray-500 tracking-wider font-medium">
+            endpoints
             {completedDeps.length > 0 && <span className="text-gray-600 ml-2">({completedDeps.length})</span>}
           </h3>
         </div>
@@ -178,8 +178,8 @@ export function DeployPage() {
       {/* ── Tester VMs Section ── */}
       <div>
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-xs text-gray-500 uppercase tracking-wider font-medium">
-            Tester VMs
+          <h3 className="text-xs text-gray-500 tracking-wider font-medium">
+            tester VMs
             {testerVms.length > 0 && <span className="text-gray-600 ml-2">({testerVms.length})</span>}
           </h3>
           <Link to="/tests" className="text-xs text-gray-600 hover:text-gray-400 transition-colors">
