@@ -221,8 +221,7 @@ async fn invite_user(
                 role = req.role,
             );
             if let Err(e) =
-                crate::email::send_email(&req.email, "AletheDash — You're Invited", &body)
-                    .await
+                crate::email::send_email(&req.email, "AletheDash — You're Invited", &body).await
             {
                 tracing::warn!(error = %e, email = %req.email, "Failed to send invite email");
             }

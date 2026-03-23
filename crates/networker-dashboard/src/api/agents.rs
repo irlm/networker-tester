@@ -253,8 +253,7 @@ const ALLOWED_VM_SIZES: &[&str] = &[
 fn is_valid_vm_name(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 64
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
         && !s.starts_with('-')
         && !s.ends_with('-')
 }
@@ -361,8 +360,7 @@ async fn run_vm_deployment(
         async move {
             tracing::error!(agent_id = %agent_id, error = %msg, "VM deployment failed");
             if let Ok(client) = state.db.get().await {
-                let _ =
-                    crate::db::agents::update_status(&client, &agent_id, "failed").await;
+                let _ = crate::db::agents::update_status(&client, &agent_id, "failed").await;
             }
         }
     };
@@ -371,10 +369,14 @@ async fn run_vm_deployment(
     send_log(format!("Creating resource group '{rg}' in {region}..."));
     let rg_result = tokio::process::Command::new("az")
         .args([
-            "group", "create",
-            "--name", &rg,
-            "--location", &region,
-            "--output", "none",
+            "group",
+            "create",
+            "--name",
+            &rg,
+            "--location",
+            &region,
+            "--output",
+            "none",
         ])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -386,7 +388,12 @@ async fn run_vm_deployment(
         Ok(out) if !out.status.success() => {
             let stderr = String::from_utf8_lossy(&out.stderr);
             send_log(format!("Failed to create resource group: {stderr}"));
-            set_failed(&state, agent_id, &format!("Resource group creation failed: {stderr}")).await;
+            set_failed(
+                &state,
+                agent_id,
+                &format!("Resource group creation failed: {stderr}"),
+            )
+            .await;
             return;
         }
         Err(e) => {
@@ -398,19 +405,30 @@ async fn run_vm_deployment(
     }
 
     // Step 2: Create VM
-    send_log(format!("Creating VM '{name}' ({vm_size}) in {region}... (~2 min)"));
+    send_log(format!(
+        "Creating VM '{name}' ({vm_size}) in {region}... (~2 min)"
+    ));
     let vm_result = tokio::process::Command::new("az")
         .args([
-            "vm", "create",
-            "--resource-group", &rg,
-            "--name", &name,
-            "--image", "Ubuntu2404",
-            "--size", &vm_size,
-            "--admin-username", "azureuser",
+            "vm",
+            "create",
+            "--resource-group",
+            &rg,
+            "--name",
+            &name,
+            "--image",
+            "Ubuntu2404",
+            "--size",
+            &vm_size,
+            "--admin-username",
+            "azureuser",
             "--generate-ssh-keys",
-            "--public-ip-sku", "Standard",
-            "--location", &region,
-            "--output", "none",
+            "--public-ip-sku",
+            "Standard",
+            "--location",
+            &region,
+            "--output",
+            "none",
         ])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -438,12 +456,17 @@ async fn run_vm_deployment(
     send_log("Retrieving public IP...".into());
     let ip_result = tokio::process::Command::new("az")
         .args([
-            "vm", "show",
-            "-g", &rg,
-            "-n", &name,
+            "vm",
+            "show",
+            "-g",
+            &rg,
+            "-n",
+            &name,
             "-d",
-            "--query", "publicIps",
-            "-o", "tsv",
+            "--query",
+            "publicIps",
+            "-o",
+            "tsv",
         ])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -479,12 +502,18 @@ async fn run_vm_deployment(
     send_log("Opening NSG port 8443...".into());
     let _ = tokio::process::Command::new("az")
         .args([
-            "vm", "open-port",
-            "--resource-group", &rg,
-            "--name", &name,
-            "--port", "8443",
-            "--priority", "1100",
-            "--output", "none",
+            "vm",
+            "open-port",
+            "--resource-group",
+            &rg,
+            "--name",
+            &name,
+            "--port",
+            "8443",
+            "--priority",
+            "1100",
+            "--output",
+            "none",
         ])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -554,12 +583,19 @@ echo "Agent installed and started"
 
     let install_result = tokio::process::Command::new("az")
         .args([
-            "vm", "run-command", "invoke",
-            "--resource-group", &rg,
-            "--name", &name,
-            "--command-id", "RunShellScript",
-            "--scripts", &install_script,
-            "--output", "none",
+            "vm",
+            "run-command",
+            "invoke",
+            "--resource-group",
+            &rg,
+            "--name",
+            &name,
+            "--command-id",
+            "RunShellScript",
+            "--scripts",
+            &install_script,
+            "--output",
+            "none",
         ])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -592,9 +628,7 @@ echo "Agent installed and started"
     while tokio::time::Instant::now() < deadline {
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         if let Ok(client) = state.db.get().await {
-            if let Ok(Some(agent)) =
-                crate::db::agents::get_by_id(&client, &agent_id).await
-            {
+            if let Ok(Some(agent)) = crate::db::agents::get_by_id(&client, &agent_id).await {
                 if agent.status == "online" {
                     connected = true;
                     break;

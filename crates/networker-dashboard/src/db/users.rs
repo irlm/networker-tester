@@ -143,15 +143,15 @@ pub async fn seed_admin(client: &Client, email: &str, password: &str) -> anyhow:
 }
 
 /// Authenticate a user by email and password.
-/// Returns (user_id, email, role, must_change_password, status) on success.
+/// Returns (user_id, email, role, must_change_password, status, is_platform_admin) on success.
 pub async fn authenticate(
     client: &Client,
     email: &str,
     password: &str,
-) -> anyhow::Result<Option<(Uuid, String, String, bool, String)>> {
+) -> anyhow::Result<Option<(Uuid, String, String, bool, String, bool)>> {
     let row = client
         .query_opt(
-            "SELECT user_id, email, password_hash, role, status, must_change_password, sso_only FROM dash_user WHERE email = $1",
+            "SELECT user_id, email, password_hash, role, status, must_change_password, sso_only, is_platform_admin FROM dash_user WHERE email = $1",
             &[&email],
         )
         .await?;
@@ -177,6 +177,9 @@ pub async fn authenticate(
                 let user_email: String = row.get("email");
                 let role: String = row.get("role");
                 let must_change: bool = row.get("must_change_password");
+                let is_platform_admin: bool = row
+                    .get::<_, Option<bool>>("is_platform_admin")
+                    .unwrap_or(false);
                 // Update last login
                 client
                     .execute(
@@ -184,7 +187,14 @@ pub async fn authenticate(
                         &[&user_id],
                     )
                     .await?;
-                Ok(Some((user_id, user_email, role, must_change, status)))
+                Ok(Some((
+                    user_id,
+                    user_email,
+                    role,
+                    must_change,
+                    status,
+                    is_platform_admin,
+                )))
             } else {
                 Ok(None)
             }

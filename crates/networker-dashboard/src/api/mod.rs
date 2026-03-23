@@ -7,6 +7,8 @@ mod deployments;
 mod inventory;
 mod jobs;
 mod modes;
+mod project_members;
+mod projects;
 mod runs;
 mod schedules;
 mod update;
@@ -40,10 +42,26 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(inventory::router(state.clone()))
         .merge(schedules::router(state.clone()))
         .merge(users::router(state.clone()))
+        .merge(projects::router(state.clone()))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::require_auth,
         ));
 
-    public.merge(protected)
+    // Project-scoped routes (require auth + project membership)
+    let project_scoped = Router::new()
+        .merge(project_members::router(state.clone()))
+        .merge(projects::detail_router(state.clone()))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::require_project,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::require_auth,
+        ));
+
+    let project_nested = Router::new().nest("/api/projects/:project_id", project_scoped);
+
+    public.merge(protected).merge(project_nested)
 }

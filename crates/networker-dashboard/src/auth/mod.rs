@@ -11,6 +11,11 @@ use uuid::Uuid;
 
 use crate::AppState;
 
+/// The Default project UUID (created by V010 migration).
+pub const DEFAULT_PROJECT_ID: Uuid = Uuid::from_bytes([
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+]);
+
 /// Role-based access control.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -30,6 +35,29 @@ impl Role {
                 | (Role::Viewer, Role::Viewer)
         )
     }
+}
+
+/// Project-scoped role (separate from the global `Role` enum).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProjectRole {
+    Viewer,
+    Operator,
+    Admin,
+}
+
+impl ProjectRole {
+    pub fn has_permission(&self, required: &ProjectRole) -> bool {
+        self >= required
+    }
+}
+
+/// Context injected by `require_project` middleware.
+#[derive(Debug, Clone)]
+pub struct ProjectContext {
+    pub project_id: Uuid,
+    pub project_slug: String,
+    pub role: ProjectRole,
 }
 
 /// Check that the authenticated user's role meets the required level.
@@ -55,6 +83,8 @@ pub struct Claims {
     pub sub: Uuid,
     pub email: String,
     pub role: String,
+    #[serde(default)]
+    pub is_platform_admin: bool,
     pub exp: usize,
     pub iat: usize,
 }
@@ -64,12 +94,14 @@ pub struct AuthUser {
     pub user_id: Uuid,
     pub email: String,
     pub role: String,
+    pub is_platform_admin: bool,
 }
 
 pub fn create_token(
     user_id: Uuid,
     email: &str,
     role: &str,
+    is_platform_admin: bool,
     secret: &str,
 ) -> anyhow::Result<String> {
     let now = chrono::Utc::now().timestamp() as usize;
@@ -77,6 +109,7 @@ pub fn create_token(
         sub: user_id,
         email: email.to_string(),
         role: role.to_string(),
+        is_platform_admin,
         exp: now + 24 * 3600, // 24 hours
         iat: now,
     };
@@ -130,10 +163,10 @@ pub async fn require_auth(
                 }
             };
 
-            // Check user status, role, and must_change_password in a single query
+            // Check user status, role, must_change_password, and is_platform_admin in a single query
             let row = client
                 .query_opt(
-                    "SELECT status, role, must_change_password FROM dash_user WHERE user_id = $1",
+                    "SELECT status, role, must_change_password, is_platform_admin FROM dash_user WHERE user_id = $1",
                     &[&claims.sub],
                 )
                 .await
@@ -173,15 +206,119 @@ pub async fn require_auth(
 
             // Use DB role when available, fall back to JWT claim
             let db_role = row.as_ref().map(|r| r.get::<_, String>("role"));
+            let db_is_platform_admin = row
+                .as_ref()
+                .and_then(|r| r.get::<_, Option<bool>>("is_platform_admin"))
+                .unwrap_or(claims.is_platform_admin);
             req.extensions_mut().insert(AuthUser {
                 user_id: claims.sub,
                 email: claims.email,
                 role: db_role.unwrap_or(claims.role),
+                is_platform_admin: db_is_platform_admin,
             });
             next.run(req).await
         }
         Err(_) => (StatusCode::UNAUTHORIZED, "Invalid token").into_response(),
     }
+}
+
+/// Check that the `ProjectContext` role meets the required level.
+pub fn require_project_role(ctx: &ProjectContext, required: ProjectRole) -> Result<(), StatusCode> {
+    if ctx.role.has_permission(&required) {
+        Ok(())
+    } else {
+        Err(StatusCode::FORBIDDEN)
+    }
+}
+
+/// Axum middleware that resolves a project from the `:project_id` path segment
+/// and checks that the authenticated user has access. Inserts `ProjectContext`
+/// into request extensions.
+pub async fn require_project(
+    State(state): State<Arc<AppState>>,
+    mut req: Request,
+    next: Next,
+) -> Response {
+    // 1. Extract AuthUser (require_auth must run first)
+    let auth_user = match req.extensions().get::<AuthUser>() {
+        Some(u) => u.clone(),
+        None => return (StatusCode::UNAUTHORIZED, "Not authenticated").into_response(),
+    };
+
+    // 2. Extract :project_id from the path.
+    //    The URI path looks like /api/projects/<uuid>/... — find the segment after "projects/".
+    let path = req.uri().path().to_string();
+    let project_id = match extract_project_id_from_path(&path) {
+        Some(id) => id,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "Missing or invalid project_id in path",
+            )
+                .into_response()
+        }
+    };
+
+    // 3. Fetch project from DB
+    let client = match state.db.get().await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(error = %e, "DB pool error in require_project");
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Service temporarily unavailable",
+            )
+                .into_response();
+        }
+    };
+
+    let project_row = match crate::db::projects::get_project(&client, &project_id).await {
+        Ok(Some(p)) => p,
+        Ok(None) => return (StatusCode::NOT_FOUND, "Project not found").into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to fetch project");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
+        }
+    };
+
+    // 4. Platform admins get implicit Admin access
+    let role = if auth_user.is_platform_admin {
+        ProjectRole::Admin
+    } else {
+        // 5. Check project_member table
+        match crate::db::projects::get_member_role(&client, &project_id, &auth_user.user_id).await {
+            Ok(Some(r)) => r,
+            Ok(None) => {
+                return (StatusCode::FORBIDDEN, "Not a member of this project").into_response()
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to check project membership");
+                return (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
+            }
+        }
+    };
+
+    // 6. Insert ProjectContext
+    req.extensions_mut().insert(ProjectContext {
+        project_id,
+        project_slug: project_row.slug,
+        role,
+    });
+
+    next.run(req).await
+}
+
+/// Extract the UUID segment that follows "projects/" in the request path.
+fn extract_project_id_from_path(path: &str) -> Option<Uuid> {
+    let segments: Vec<&str> = path.split('/').collect();
+    for (i, seg) in segments.iter().enumerate() {
+        if *seg == "projects" {
+            if let Some(next) = segments.get(i + 1) {
+                return next.parse::<Uuid>().ok();
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -253,6 +390,7 @@ mod tests {
             user_id: Uuid::new_v4(),
             email: "test@example.com".into(),
             role: role.into(),
+            is_platform_admin: false,
         }
     }
 
@@ -320,14 +458,21 @@ mod tests {
 
     #[test]
     fn create_token_returns_nonempty_string() {
-        let token = create_token(Uuid::new_v4(), "user@example.com", "admin", TEST_SECRET).unwrap();
+        let token = create_token(
+            Uuid::new_v4(),
+            "user@example.com",
+            "admin",
+            false,
+            TEST_SECRET,
+        )
+        .unwrap();
         assert!(!token.is_empty());
     }
 
     #[test]
     fn create_and_validate_roundtrip() {
         let uid = Uuid::new_v4();
-        let token = create_token(uid, "alice@test.com", "operator", TEST_SECRET).unwrap();
+        let token = create_token(uid, "alice@test.com", "operator", false, TEST_SECRET).unwrap();
         let claims = validate_token(&token, TEST_SECRET).unwrap();
         assert_eq!(claims.sub, uid);
         assert_eq!(claims.email, "alice@test.com");
@@ -336,7 +481,7 @@ mod tests {
 
     #[test]
     fn validate_token_rejects_wrong_secret() {
-        let token = create_token(Uuid::new_v4(), "a@b.com", "viewer", TEST_SECRET).unwrap();
+        let token = create_token(Uuid::new_v4(), "a@b.com", "viewer", false, TEST_SECRET).unwrap();
         let result = validate_token(&token, "wrong-secret-xxxxxxxxxxxxxxxxxxx");
         assert!(result.is_err());
     }
@@ -355,7 +500,7 @@ mod tests {
 
     #[test]
     fn token_expiry_is_24_hours_from_now() {
-        let token = create_token(Uuid::new_v4(), "a@b.com", "admin", TEST_SECRET).unwrap();
+        let token = create_token(Uuid::new_v4(), "a@b.com", "admin", false, TEST_SECRET).unwrap();
         let claims = validate_token(&token, TEST_SECRET).unwrap();
         let now = chrono::Utc::now().timestamp() as usize;
         // exp should be roughly now + 86400 (24h), allow 5s tolerance
@@ -368,7 +513,7 @@ mod tests {
 
     #[test]
     fn token_iat_is_recent() {
-        let token = create_token(Uuid::new_v4(), "a@b.com", "admin", TEST_SECRET).unwrap();
+        let token = create_token(Uuid::new_v4(), "a@b.com", "admin", false, TEST_SECRET).unwrap();
         let claims = validate_token(&token, TEST_SECRET).unwrap();
         let now = chrono::Utc::now().timestamp() as usize;
         assert!(
@@ -385,6 +530,7 @@ mod tests {
             sub: Uuid::new_v4(),
             email: "expired@test.com".into(),
             role: "admin".into(),
+            is_platform_admin: false,
             exp: now - 3600, // expired 1 hour ago
             iat: now - 7200,
         };
@@ -401,15 +547,90 @@ mod tests {
     #[test]
     fn create_token_preserves_special_chars_in_email() {
         let email = "user+tag@sub.domain.co.uk";
-        let token = create_token(Uuid::new_v4(), email, "viewer", TEST_SECRET).unwrap();
+        let token = create_token(Uuid::new_v4(), email, "viewer", false, TEST_SECRET).unwrap();
         let claims = validate_token(&token, TEST_SECRET).unwrap();
         assert_eq!(claims.email, email);
     }
 
     #[test]
     fn different_users_get_different_tokens() {
-        let t1 = create_token(Uuid::new_v4(), "a@b.com", "admin", TEST_SECRET).unwrap();
-        let t2 = create_token(Uuid::new_v4(), "c@d.com", "viewer", TEST_SECRET).unwrap();
+        let t1 = create_token(Uuid::new_v4(), "a@b.com", "admin", false, TEST_SECRET).unwrap();
+        let t2 = create_token(Uuid::new_v4(), "c@d.com", "viewer", false, TEST_SECRET).unwrap();
         assert_ne!(t1, t2);
+    }
+
+    // ── ProjectRole ordering / has_permission ────────────────────────────
+
+    #[test]
+    fn project_role_admin_has_all_permissions() {
+        assert!(ProjectRole::Admin.has_permission(&ProjectRole::Admin));
+        assert!(ProjectRole::Admin.has_permission(&ProjectRole::Operator));
+        assert!(ProjectRole::Admin.has_permission(&ProjectRole::Viewer));
+    }
+
+    #[test]
+    fn project_role_operator_cannot_admin() {
+        assert!(!ProjectRole::Operator.has_permission(&ProjectRole::Admin));
+        assert!(ProjectRole::Operator.has_permission(&ProjectRole::Operator));
+        assert!(ProjectRole::Operator.has_permission(&ProjectRole::Viewer));
+    }
+
+    #[test]
+    fn project_role_viewer_is_read_only() {
+        assert!(!ProjectRole::Viewer.has_permission(&ProjectRole::Admin));
+        assert!(!ProjectRole::Viewer.has_permission(&ProjectRole::Operator));
+        assert!(ProjectRole::Viewer.has_permission(&ProjectRole::Viewer));
+    }
+
+    #[test]
+    fn require_project_role_respects_hierarchy() {
+        let ctx = ProjectContext {
+            project_id: Uuid::new_v4(),
+            project_slug: "test".into(),
+            role: ProjectRole::Operator,
+        };
+        assert!(require_project_role(&ctx, ProjectRole::Viewer).is_ok());
+        assert!(require_project_role(&ctx, ProjectRole::Operator).is_ok());
+        assert!(require_project_role(&ctx, ProjectRole::Admin).is_err());
+    }
+
+    // ── extract_project_id_from_path ─────────────────────────────────────
+
+    #[test]
+    fn extract_project_id_valid_path() {
+        let id = Uuid::new_v4();
+        let path = format!("/api/projects/{id}/members");
+        assert_eq!(extract_project_id_from_path(&path), Some(id));
+    }
+
+    #[test]
+    fn extract_project_id_no_projects_segment() {
+        assert_eq!(extract_project_id_from_path("/api/jobs/123"), None);
+    }
+
+    #[test]
+    fn extract_project_id_invalid_uuid() {
+        assert_eq!(
+            extract_project_id_from_path("/api/projects/not-a-uuid/members"),
+            None
+        );
+    }
+
+    // ── is_platform_admin in JWT roundtrip ───────────────────────────────
+
+    #[test]
+    fn create_token_with_platform_admin_roundtrips() {
+        let uid = Uuid::new_v4();
+        let token = create_token(uid, "admin@test.com", "admin", true, TEST_SECRET).unwrap();
+        let claims = validate_token(&token, TEST_SECRET).unwrap();
+        assert!(claims.is_platform_admin);
+    }
+
+    #[test]
+    fn create_token_without_platform_admin_roundtrips() {
+        let uid = Uuid::new_v4();
+        let token = create_token(uid, "user@test.com", "viewer", false, TEST_SECRET).unwrap();
+        let claims = validate_token(&token, TEST_SECRET).unwrap();
+        assert!(!claims.is_platform_admin);
     }
 }
