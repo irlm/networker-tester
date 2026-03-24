@@ -24,6 +24,7 @@ import { PendingPage } from './pages/PendingPage';
 import { SSOCompletePage } from './pages/SSOCompletePage';
 import { ProjectsPage } from './pages/ProjectsPage';
 import { ProjectMembersPage } from './pages/ProjectMembersPage';
+import { CloudAccountsPage } from './pages/CloudAccountsPage';
 
 const statusColors: Record<ConnectionStatus, string> = {
   connected: 'bg-green-400',
@@ -136,6 +137,7 @@ function AuthenticatedApp() {
           <Route path="/projects/:projectId/schedules" element={<SchedulesPage />} />
           <Route path="/projects/:projectId/settings" element={<SettingsPage />} />
           <Route path="/projects/:projectId/members" element={<ProjectMembersPage />} />
+          <Route path="/projects/:projectId/cloud-accounts" element={<CloudAccountsPage />} />
 
           {/* Platform routes */}
           {isAdmin && <Route path="/users" element={<UsersPage />} />}

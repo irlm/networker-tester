@@ -234,6 +234,17 @@ export interface LiveAttempt {
   browser?: { load_ms: number; dom_content_loaded_ms?: number; ttfb_ms?: number; resource_count?: number; transferred_bytes?: number; protocol?: string };
 }
 
+// Cloud account types
+export interface CloudAccountSummary {
+  account_id: string;
+  name: string;
+  provider: string;
+  region_default: string | null;
+  personal: boolean;
+  status: string;
+  last_validated: string | null;
+}
+
 // Project types
 export interface ProjectSummary {
   project_id: string;

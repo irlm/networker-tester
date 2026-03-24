@@ -13,7 +13,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
   const location = useLocation();
   const { email, role, logout } = useAuthStore();
   const isPlatformAdmin = useAuthStore(s => s.isPlatformAdmin);
-  const { projectId, isProjectAdmin } = useProject();
+  const { projectId, isProjectAdmin, isOperator } = useProject();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('sidebar-collapsed') === '1');
   const [pendingCount, setPendingCount] = useState(0);
@@ -119,6 +119,26 @@ export function Sidebar({ connectionDot }: SidebarProps) {
               >
                 <span className="text-base" aria-hidden="true">{'\u2302'}</span>
                 {!collapsed && 'Members'}
+              </Link>
+            );
+          })()}
+          {pid && isOperator && (() => {
+            const cloudPath = `/projects/${pid}/cloud-accounts`;
+            const active = location.pathname.startsWith(cloudPath);
+            return (
+              <Link
+                to={cloudPath}
+                onClick={() => setMobileOpen(false)}
+                aria-current={active ? 'page' : undefined}
+                title={collapsed ? 'Cloud' : undefined}
+                className={`flex items-center overflow-hidden whitespace-nowrap ${collapsed ? 'justify-center' : 'gap-3 px-3'} py-2 rounded text-sm mb-0.5 transition-all duration-200 ${
+                  active
+                    ? 'bg-gray-800/40 text-gray-100'
+                    : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/30'
+                }`}
+              >
+                <span className="text-base" aria-hidden="true">{'\u2601'}</span>
+                {!collapsed && 'Cloud'}
               </Link>
             );
           })()}
