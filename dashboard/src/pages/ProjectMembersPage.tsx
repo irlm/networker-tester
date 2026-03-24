@@ -6,6 +6,8 @@ import { useAuthStore } from '../stores/authStore';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useToast } from '../hooks/useToast';
 import { RoleBadge } from '../components/common/RoleBadge';
+import { PageHeader } from '../components/common/PageHeader';
+import { EmptyState } from '../components/common/EmptyState';
 
 const ROLES = ['admin', 'operator', 'viewer'] as const;
 
@@ -78,7 +80,7 @@ export function ProjectMembersPage() {
   if (loading) {
     return (
       <div className="p-4 md:p-6">
-        <h2 className="text-xl font-bold text-gray-100 mb-6">Workspace Members</h2>
+        <PageHeader title="Workspace Members" />
         <p className="text-gray-500 motion-safe:animate-pulse">Loading members...</p>
       </div>
     );
@@ -86,15 +88,14 @@ export function ProjectMembersPage() {
 
   return (
     <div className="p-4 md:p-6">
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-bold text-gray-100">Workspace Members</h2>
-        <button
-          onClick={() => setShowAdd(true)}
-          className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-2 rounded text-sm transition-colors"
-        >
-          Add Member
-        </button>
-      </div>
+      <PageHeader
+        title="Workspace Members"
+        action={
+          <button onClick={() => setShowAdd(true)} className="btn-primary">
+            Add Member
+          </button>
+        }
+      />
 
       {showAdd && (
         <div className="border border-gray-800 rounded p-4 mb-6">
@@ -106,27 +107,19 @@ export function ProjectMembersPage() {
                 value={newEmail}
                 onChange={e => setNewEmail(e.target.value)}
                 placeholder="user@company.com"
-                className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                className="input"
                 autoFocus
               />
             </div>
             <div>
               <label className="block text-xs text-gray-400 mb-1">Role</label>
-              <select
-                value={newRole}
-                onChange={e => setNewRole(e.target.value)}
-                className="bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
-              >
+              <select value={newRole} onChange={e => setNewRole(e.target.value)} className="input">
                 {ROLES.map(r => (
                   <option key={r} value={r}>{r.charAt(0).toUpperCase() + r.slice(1)}</option>
                 ))}
               </select>
             </div>
-            <button
-              onClick={handleAdd}
-              disabled={adding || !newEmail.trim()}
-              className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors disabled:opacity-50"
-            >
+            <button onClick={handleAdd} disabled={adding || !newEmail.trim()} className="btn-primary">
               {adding ? 'Adding...' : 'Add'}
             </button>
             <button
@@ -140,9 +133,7 @@ export function ProjectMembersPage() {
       )}
 
       {members.length === 0 ? (
-        <div className="border border-gray-800 rounded p-8 text-center">
-          <p className="text-gray-500 text-sm">No members yet</p>
-        </div>
+        <EmptyState message="No members yet" />
       ) : (
         <div className="table-container">
           <table className="w-full text-sm">
@@ -169,7 +160,7 @@ export function ProjectMembersPage() {
                         <select
                           value={member.role}
                           onChange={e => handleRoleChange(member.user_id, e.target.value)}
-                          className="bg-[var(--bg-base)] border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-cyan-500"
+                          className="input !w-auto !px-2 !py-1 !text-xs"
                         >
                           {ROLES.map(r => (
                             <option key={r} value={r}>{r.charAt(0).toUpperCase() + r.slice(1)}</option>

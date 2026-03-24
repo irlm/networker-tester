@@ -6,6 +6,8 @@ import { useAuthStore } from '../stores/authStore';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useToast } from '../hooks/useToast';
 import { RoleBadge } from '../components/common/RoleBadge';
+import { PageHeader } from '../components/common/PageHeader';
+import { EmptyState } from '../components/common/EmptyState';
 
 export function ProjectsPage() {
   const [loading, setLoading] = useState(true);
@@ -35,7 +37,6 @@ export function ProjectsPage() {
       setShowCreate(false);
       setNewName('');
       setNewDescription('');
-      // Refresh and navigate
       const updated = await api.getProjects();
       setProjects(updated);
       const created = updated.find(p => p.project_id === result.project_id);
@@ -58,7 +59,7 @@ export function ProjectsPage() {
   if (loading) {
     return (
       <div className="p-4 md:p-6">
-        <h2 className="text-xl font-bold text-gray-100 mb-6">Workspaces</h2>
+        <PageHeader title="Workspaces" />
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {[1, 2, 3].map(i => (
             <div key={i} className="border border-gray-800 rounded p-4">
@@ -73,17 +74,14 @@ export function ProjectsPage() {
 
   return (
     <div className="p-4 md:p-6">
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-bold text-gray-100">Workspaces</h2>
-        {isPlatformAdmin && (
-          <button
-            onClick={() => setShowCreate(true)}
-            className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-2 rounded text-sm transition-colors"
-          >
+      <PageHeader
+        title="Workspaces"
+        action={isPlatformAdmin ? (
+          <button onClick={() => setShowCreate(true)} className="btn-primary">
             Create Workspace
           </button>
-        )}
-      </div>
+        ) : undefined}
+      />
 
       {showCreate && (
         <div className="border border-gray-800 rounded p-4 mb-6">
@@ -95,7 +93,7 @@ export function ProjectsPage() {
                 value={newName}
                 onChange={e => setNewName(e.target.value)}
                 placeholder="My Workspace"
-                className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                className="input"
                 autoFocus
               />
             </div>
@@ -105,14 +103,14 @@ export function ProjectsPage() {
                 value={newDescription}
                 onChange={e => setNewDescription(e.target.value)}
                 placeholder="Production network diagnostics"
-                className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                className="input"
               />
             </div>
             <div className="flex gap-2">
               <button
                 onClick={handleCreate}
                 disabled={creating || !newName.trim()}
-                className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors disabled:opacity-50"
+                className="btn-primary"
               >
                 {creating ? 'Creating...' : 'Create'}
               </button>
@@ -128,17 +126,14 @@ export function ProjectsPage() {
       )}
 
       {projects.length === 0 ? (
-        <div className="border border-gray-800 rounded p-8 text-center">
-          <p className="text-gray-500 text-sm mb-2">No workspaces yet</p>
-          {isPlatformAdmin && (
-            <button
-              onClick={() => setShowCreate(true)}
-              className="text-xs text-cyan-400"
-            >
+        <EmptyState
+          message="No workspaces yet"
+          action={isPlatformAdmin ? (
+            <button onClick={() => setShowCreate(true)} className="text-xs text-cyan-400">
               Create your first workspace
             </button>
-          )}
-        </div>
+          ) : undefined}
+        />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {projects.map(project => (
@@ -154,9 +149,7 @@ export function ProjectsPage() {
               {project.description && (
                 <p className="text-xs text-gray-500 truncate mb-2">{project.description}</p>
               )}
-              <p className="text-xs text-gray-600">
-                {project.slug}
-              </p>
+              <p className="text-xs text-gray-600">{project.slug}</p>
             </button>
           ))}
         </div>
