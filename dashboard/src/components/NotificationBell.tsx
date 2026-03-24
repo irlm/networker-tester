@@ -19,8 +19,12 @@ export function NotificationBell({ projectId }: Props) {
   }, [projectId]);
 
   useEffect(() => {
-    fetchCount();
-  }, [fetchCount]);
+    let cancelled = false;
+    api.getPendingApprovalCount(projectId).then(c => {
+      if (!cancelled) setCount(c);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [projectId]);
 
   // Refetch count on any SSE approval event
   useApprovalSSE(() => {

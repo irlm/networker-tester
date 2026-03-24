@@ -11,6 +11,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.16.0] - 2026-03-24
+
+### Added
+- Workspace invite links: email-based onboarding with 7-day expiry tokens
+- Accept invite page: standalone public page for new and existing users
+- System admin dashboard: CPU/memory/disk metrics, DB stats, workspace usage, live logs
+- Workspace lifecycle management: suspend, restore, protect, hard-delete
+- Automated inactivity cleanup: 90-day warning, 120-day auto-suspend, 365-day hard-delete
+- Log buffer: in-memory ring buffer capturing tracing events for live viewing
+- Workspace warning tracking for inactivity emails
+
+### Changed
+- Members page: "Invite" replaces "Add Member" as primary action
+- Scheduler: daily inactivity checks alongside existing 30s schedule loop
+- Tracing: layered subscriber with fmt + LogBufferLayer
+
+### Migration
+- V012: workspace_invite, workspace_warning tables, soft-delete columns on project
+
+---
+
 ## [0.15.0] - 2026-03-23
 
 ### Added
