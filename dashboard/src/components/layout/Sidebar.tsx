@@ -103,6 +103,26 @@ export function Sidebar({ connectionDot }: SidebarProps) {
             );
           })}
           {pid && isProjectAdmin && (() => {
+            const shareLinksPath = `/projects/${pid}/share-links`;
+            const shareActive = location.pathname.startsWith(shareLinksPath);
+            return (
+              <Link
+                to={shareLinksPath}
+                onClick={() => setMobileOpen(false)}
+                aria-current={shareActive ? 'page' : undefined}
+                title={collapsed ? 'Share Links' : undefined}
+                className={`flex items-center overflow-hidden whitespace-nowrap ${collapsed ? 'justify-center' : 'gap-3 px-3'} py-2 rounded text-sm mb-0.5 transition-all duration-200 ${
+                  shareActive
+                    ? 'bg-gray-800/40 text-gray-100'
+                    : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/30'
+                }`}
+              >
+                <span className="text-base" aria-hidden="true">{'\u{1F517}'}</span>
+                {!collapsed && 'Share Links'}
+              </Link>
+            );
+          })()}
+          {pid && isProjectAdmin && (() => {
             const membersPath = `/projects/${pid}/members`;
             const active = location.pathname.startsWith(membersPath);
             return (

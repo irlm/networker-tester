@@ -245,6 +245,20 @@ export interface CloudAccountSummary {
   last_validated: string | null;
 }
 
+export interface ShareLink {
+  link_id: string;
+  resource_type: string;
+  resource_id: string | null;
+  label: string | null;
+  expires_at: string;
+  created_by: string;
+  created_by_email: string;
+  created_at: string;
+  revoked: boolean;
+  access_count: number;
+  last_accessed: string | null;
+}
+
 // Project types
 export interface ProjectSummary {
   project_id: string;

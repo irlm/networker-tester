@@ -4,6 +4,7 @@ import { api, type Job } from '../api/client';
 import type { LiveAttempt, PacketCaptureSummary } from '../api/types';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { Breadcrumb } from '../components/common/Breadcrumb';
+import { ShareDialog } from '../components/ShareDialog';
 import { useLiveStore } from '../stores/liveStore';
 import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
@@ -35,7 +36,7 @@ const EMPTY_ATTEMPTS: LiveAttempt[] = [];
 const EMPTY_LOGS: { line: string; level: string }[] = [];
 
 export function JobDetailPage() {
-  const { projectId } = useProject();
+  const { projectId, isProjectAdmin } = useProject();
   const { jobId } = useParams<{ jobId: string }>();
   const [job, setJob] = useState<Job | null>(null);
   const [dbAttempts, setDbAttempts] = useState<LiveAttempt[]>([]);
@@ -43,6 +44,7 @@ export function JobDetailPage() {
   const [packetCapture, setPacketCapture] = useState<PacketCaptureSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [showShareDialog, setShowShareDialog] = useState(false);
   const liveAttempts = useLiveStore((s) =>
     jobId ? s.liveAttempts[jobId] ?? EMPTY_ATTEMPTS : EMPTY_ATTEMPTS
   );
@@ -321,15 +323,34 @@ export function JobDetailPage() {
             </div>
           )}
         </div>
-        {isRunning && (
-          <button
-            onClick={handleCancel}
-            className="bg-red-600/20 text-red-400 border border-red-500/30 px-4 py-1.5 rounded text-sm hover:bg-red-600/30 transition-colors"
-          >
-            Cancel
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {isProjectAdmin && jobId && (
+            <button
+              onClick={() => setShowShareDialog(true)}
+              className="px-3 py-1.5 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors border border-gray-700"
+            >
+              Share
+            </button>
+          )}
+          {isRunning && (
+            <button
+              onClick={handleCancel}
+              className="bg-red-600/20 text-red-400 border border-red-500/30 px-4 py-1.5 rounded text-sm hover:bg-red-600/30 transition-colors"
+            >
+              Cancel
+            </button>
+          )}
+        </div>
       </div>
+
+      {showShareDialog && jobId && (
+        <ShareDialog
+          projectId={projectId}
+          resourceType="job"
+          resourceId={jobId}
+          onClose={() => setShowShareDialog(false)}
+        />
+      )}
 
       {/* Progress indicator */}
       {isRunning && (

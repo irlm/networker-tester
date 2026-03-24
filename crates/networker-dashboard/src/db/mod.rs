@@ -7,6 +7,7 @@ pub mod migrations;
 pub mod projects;
 pub mod runs;
 pub mod schedules;
+pub mod share_links;
 pub mod url_tests;
 pub mod users;
 

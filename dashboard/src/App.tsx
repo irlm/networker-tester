@@ -25,6 +25,8 @@ import { SSOCompletePage } from './pages/SSOCompletePage';
 import { ProjectsPage } from './pages/ProjectsPage';
 import { ProjectMembersPage } from './pages/ProjectMembersPage';
 import { CloudAccountsPage } from './pages/CloudAccountsPage';
+import { ShareLinksPage } from './pages/ShareLinksPage';
+import { ShareViewPage } from './pages/ShareViewPage';
 
 const statusColors: Record<ConnectionStatus, string> = {
   connected: 'bg-green-400',
@@ -138,6 +140,7 @@ function AuthenticatedApp() {
           <Route path="/projects/:projectId/settings" element={<SettingsPage />} />
           <Route path="/projects/:projectId/members" element={<ProjectMembersPage />} />
           <Route path="/projects/:projectId/cloud-accounts" element={<CloudAccountsPage />} />
+          <Route path="/projects/:projectId/share-links" element={<ShareLinksPage />} />
 
           {/* Platform routes */}
           {isAdmin && <Route path="/users" element={<UsersPage />} />}
@@ -177,6 +180,7 @@ function App() {
         <Route path="/sso-complete" element={<SSOCompletePage />} />
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
+        <Route path="/share/:token" element={<ShareViewPage />} />
         <Route
           path="/*"
           element={

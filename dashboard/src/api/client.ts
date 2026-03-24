@@ -1,6 +1,6 @@
-import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember } from './types';
+import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink } from './types';
 
-export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember };
+export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink };
 export type { LiveAttempt } from './types';
 
 const API_BASE = '/api';
@@ -405,6 +405,16 @@ export const api = {
       body: JSON.stringify(params),
     }),
 
+  // Share Links (project-scoped, admin only)
+  getShareLinks: (projectId: string) =>
+    request<ShareLink[]>(projectUrl(projectId, 'share-links')),
+
+  createShareLink: (projectId: string, params: { resource_type: string; resource_id: string; label?: string; expires_in_days: number }) =>
+    request<{ link_id: string; url: string; expires_at: string }>(projectUrl(projectId, 'share-links'), {
+      method: 'POST',
+      body: JSON.stringify(params),
+    }),
+
   updateCloudAccount: (projectId: string, accountId: string, params: { name: string; region_default?: string }) =>
     request<void>(projectUrl(projectId, `cloud-accounts/${accountId}`), {
       method: 'PUT',
@@ -416,6 +426,27 @@ export const api = {
 
   validateCloudAccount: (projectId: string, accountId: string) =>
     request<{ status: string; validation_error?: string }>(projectUrl(projectId, `cloud-accounts/${accountId}/validate`), { method: 'POST' }),
+
+  extendShareLink: (projectId: string, linkId: string, days: number) =>
+    request<void>(projectUrl(projectId, `share-links/${linkId}`), {
+      method: 'PUT',
+      body: JSON.stringify({ action: 'extend', expires_in_days: days }),
+    }),
+
+  revokeShareLink: (projectId: string, linkId: string) =>
+    request<void>(projectUrl(projectId, `share-links/${linkId}`), {
+      method: 'PUT',
+      body: JSON.stringify({ action: 'revoke' }),
+    }),
+
+  deleteShareLink: (projectId: string, linkId: string) =>
+    request<void>(projectUrl(projectId, `share-links/${linkId}`), { method: 'DELETE' }),
+
+  resolveShareLink: (token: string) =>
+    fetch(`${API_BASE}/share/${token}`).then(async r => {
+      if (!r.ok) throw new Error(await r.text());
+      return r.json();
+    }),
 
   // Version (NOT project-scoped)
   getVersionInfo: () => request<{

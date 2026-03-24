@@ -12,6 +12,7 @@ mod project_members;
 mod projects;
 mod runs;
 mod schedules;
+mod share_links;
 mod update;
 mod url_tests;
 mod users;
@@ -24,7 +25,9 @@ use crate::AppState;
 
 pub fn router(state: Arc<AppState>) -> Router {
     // Public routes (no auth required)
-    let public = Router::new().merge(auth::router(state.clone()));
+    let public = Router::new()
+        .merge(auth::router(state.clone()))
+        .merge(share_links::public_router(state.clone()));
 
     // Protected flat routes (require valid JWT, use DEFAULT_PROJECT_ID)
     let protected_flat = Router::new()
@@ -63,6 +66,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(inventory::project_router(state.clone()))
         .merge(url_tests::project_router(state.clone()))
         .merge(project_members::router(state.clone()))
+        .merge(share_links::project_router(state.clone()))
         .merge(projects::detail_router(state.clone()))
         .layer(middleware::from_fn_with_state(
             state.clone(),
