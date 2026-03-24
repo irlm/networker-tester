@@ -325,3 +325,40 @@ export interface ProjectMember {
   email: string;
   display_name: string | null;
 }
+
+export interface SystemMetrics {
+  cpu_usage_percent: number;
+  memory_used_bytes: number;
+  memory_total_bytes: number;
+  disk_used_bytes: number;
+  disk_total_bytes: number;
+  uptime_seconds: number;
+}
+
+export interface DbMetrics {
+  active_connections: number;
+  max_connections: number;
+  database_size_bytes: number;
+  oldest_transaction_age_seconds: number | null;
+  cache_hit_ratio: number;
+}
+
+export interface WorkspaceUsage {
+  project_id: string;
+  name: string;
+  slug: string;
+  member_count: number;
+  tester_count: number;
+  jobs_30d: number;
+  runs_30d: number;
+  last_activity: string | null;
+  deleted_at: string | null;
+  delete_protection: boolean;
+}
+
+export interface LogEntry {
+  timestamp: string;
+  level: string;
+  target: string;
+  message: string;
+}

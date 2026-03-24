@@ -56,6 +56,9 @@ export function Sidebar({ connectionDot }: SidebarProps) {
   }
 
   const platformItems: NavItem[] = [];
+  if (isPlatformAdmin) {
+    platformItems.push({ path: '/admin/system', label: 'System', icon: '\u2318' });
+  }
   if (isAdmin) {
     platformItems.push({ path: '/users', label: 'Users', icon: '\u265F' });
   }
