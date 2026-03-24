@@ -91,6 +91,7 @@ pub async fn get(client: &Client, schedule_id: &Uuid) -> anyhow::Result<Option<S
     Ok(row.as_ref().map(row_to_schedule))
 }
 
+#[allow(dead_code)]
 pub async fn list(client: &Client, project_id: &Uuid) -> anyhow::Result<Vec<ScheduleRow>> {
     list_filtered(client, project_id, None).await
 }

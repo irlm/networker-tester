@@ -330,6 +330,30 @@ CREATE INDEX IF NOT EXISTS ix_schedule_project ON schedule (project_id) WHERE en
 CREATE INDEX IF NOT EXISTS ix_deployment_project ON deployment (project_id, status, created_at DESC);
 "#;
 
+/// V011 migration: Enforce NOT NULL on project_id columns (after soak period).
+const V011_NOT_NULL_PROJECT_ID: &str = r#"
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM agent WHERE project_id IS NULL) THEN
+        RAISE EXCEPTION 'Found agent rows with NULL project_id — run backfill first';
+    END IF;
+    IF EXISTS (SELECT 1 FROM job WHERE project_id IS NULL) THEN
+        RAISE EXCEPTION 'Found job rows with NULL project_id — run backfill first';
+    END IF;
+    IF EXISTS (SELECT 1 FROM schedule WHERE project_id IS NULL) THEN
+        RAISE EXCEPTION 'Found schedule rows with NULL project_id — run backfill first';
+    END IF;
+    IF EXISTS (SELECT 1 FROM deployment WHERE project_id IS NULL) THEN
+        RAISE EXCEPTION 'Found deployment rows with NULL project_id — run backfill first';
+    END IF;
+END $$;
+
+ALTER TABLE agent ALTER COLUMN project_id SET NOT NULL;
+ALTER TABLE job ALTER COLUMN project_id SET NOT NULL;
+ALTER TABLE schedule ALTER COLUMN project_id SET NOT NULL;
+ALTER TABLE deployment ALTER COLUMN project_id SET NOT NULL;
+"#;
+
 /// Run pending migrations.
 pub async fn run(client: &Client) -> anyhow::Result<()> {
     // Ensure migration tracking table exists
@@ -494,6 +518,23 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
             )
             .await?;
         tracing::info!("V010 migration complete");
+    }
+
+    // V011: Enforce NOT NULL on project_id columns
+    let row = client
+        .query_opt("SELECT version FROM _migrations WHERE version = 11", &[])
+        .await?;
+
+    if row.is_none() {
+        tracing::info!("Applying V011 NOT NULL project_id migration...");
+        client.batch_execute(V011_NOT_NULL_PROJECT_ID).await?;
+        client
+            .execute(
+                "INSERT INTO _migrations (version) VALUES (11) ON CONFLICT DO NOTHING",
+                &[],
+            )
+            .await?;
+        tracing::info!("V011 migration complete");
     }
 
     Ok(())

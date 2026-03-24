@@ -8,7 +8,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::auth::{require_role, AuthUser, ProjectContext, ProjectRole, Role, DEFAULT_PROJECT_ID};
+use crate::auth::{require_role, AuthUser, ProjectContext, ProjectRole, Role};
 use crate::AppState;
 
 const VALID_PROVIDERS: &[&str] = &["azure", "aws", "gcp"];
@@ -24,62 +24,6 @@ pub struct CreateRequest {
 pub struct UpdateRequest {
     pub name: String,
     pub config: serde_json::Value,
-}
-
-async fn list_connections(
-    State(state): State<Arc<AppState>>,
-    Extension(user): Extension<AuthUser>,
-) -> Result<Json<Vec<crate::db::cloud_connections::CloudConnectionRow>>, StatusCode> {
-    require_role(&user, Role::Admin)?;
-    let client = state.db.get().await.map_err(|e| {
-        tracing::error!(error = %e, "DB pool error in list_connections");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-    let rows = crate::db::cloud_connections::list(&client, &DEFAULT_PROJECT_ID)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "Failed to list cloud connections");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-    Ok(Json(rows))
-}
-
-async fn create_connection(
-    State(state): State<Arc<AppState>>,
-    Extension(user): Extension<AuthUser>,
-    Json(req): Json<CreateRequest>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    require_role(&user, Role::Admin)?;
-
-    if !VALID_PROVIDERS.contains(&req.provider.as_str()) {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-
-    let client = state.db.get().await.map_err(|e| {
-        tracing::error!(error = %e, "DB pool error in create_connection");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-    let id = crate::db::cloud_connections::create(
-        &client,
-        &req.name,
-        &req.provider,
-        &req.config,
-        Some(&user.user_id),
-        &DEFAULT_PROJECT_ID,
-    )
-    .await
-    .map_err(|e| {
-        tracing::error!(error = %e, "Failed to create cloud connection");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    tracing::info!(
-        connection_id = %id,
-        provider = %req.provider,
-        created_by = %user.email,
-        "Cloud connection created"
-    );
-    Ok(Json(serde_json::json!({ "connection_id": id.to_string() })))
 }
 
 async fn get_connection(
@@ -347,22 +291,6 @@ async fn validate_gcp(config: &serde_json::Value) -> (String, Option<String>) {
             Some("gcloud CLI not available. Install Google Cloud SDK and configure workload identity.".to_string()),
         ),
     }
-}
-
-pub fn router(state: Arc<AppState>) -> Router {
-    Router::new()
-        .route(
-            "/cloud-connections",
-            get(list_connections).post(create_connection),
-        )
-        .route(
-            "/cloud-connections/:id",
-            get(get_connection)
-                .put(update_connection)
-                .delete(delete_connection),
-        )
-        .route("/cloud-connections/:id/validate", post(validate_connection))
-        .with_state(state)
 }
 
 // ── Project-scoped handlers ────────────────────────────────────────────

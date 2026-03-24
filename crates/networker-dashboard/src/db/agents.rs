@@ -71,6 +71,7 @@ pub async fn get_by_api_key(client: &Client, api_key: &str) -> anyhow::Result<Op
     }))
 }
 
+#[allow(dead_code)]
 pub async fn get_by_id(client: &Client, agent_id: &Uuid) -> anyhow::Result<Option<AgentRow>> {
     let row = client
         .query_opt(
