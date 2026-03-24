@@ -15,6 +15,8 @@ pub struct ProjectRow {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub settings: serde_json::Value,
+    pub deleted_at: Option<DateTime<Utc>>,
+    pub delete_protection: bool,
 }
 
 /// Project with the requesting user's role included (for list endpoint).
@@ -54,6 +56,7 @@ pub async fn list_user_projects(
                         COALESCE(pm.role, 'admin') AS role \
                  FROM project p \
                  LEFT JOIN project_member pm ON pm.project_id = p.project_id AND pm.user_id = $1 \
+                 WHERE p.deleted_at IS NULL \
                  ORDER BY p.created_at",
                 &[user_id],
             )
@@ -64,7 +67,7 @@ pub async fn list_user_projects(
                 "SELECT p.project_id, p.name, p.slug, p.description, p.created_at, pm.role \
                  FROM project p \
                  JOIN project_member pm ON pm.project_id = p.project_id \
-                 WHERE pm.user_id = $1 \
+                 WHERE pm.user_id = $1 AND p.deleted_at IS NULL \
                  ORDER BY p.created_at",
                 &[user_id],
             )
@@ -88,7 +91,8 @@ pub async fn list_user_projects(
 pub async fn get_project(client: &Client, project_id: &Uuid) -> anyhow::Result<Option<ProjectRow>> {
     let row = client
         .query_opt(
-            "SELECT project_id, name, slug, description, created_by, created_at, updated_at, settings \
+            "SELECT project_id, name, slug, description, created_by, created_at, updated_at, settings, \
+                    deleted_at, COALESCE(delete_protection, FALSE) AS delete_protection \
              FROM project WHERE project_id = $1",
             &[project_id],
         )
@@ -103,6 +107,8 @@ pub async fn get_project(client: &Client, project_id: &Uuid) -> anyhow::Result<O
         created_at: r.get("created_at"),
         updated_at: r.get("updated_at"),
         settings: r.get("settings"),
+        deleted_at: r.get("deleted_at"),
+        delete_protection: r.get("delete_protection"),
     }))
 }
 
@@ -144,6 +150,8 @@ pub async fn create_project(
         created_at: now,
         updated_at: now,
         settings,
+        deleted_at: None,
+        delete_protection: false,
     })
 }
 
