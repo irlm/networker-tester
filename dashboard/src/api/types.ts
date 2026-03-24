@@ -259,6 +259,29 @@ export interface ShareLink {
   last_accessed: string | null;
 }
 
+// Workspace Invites
+export interface WorkspaceInvite {
+  invite_id: string;
+  project_id: string;
+  email: string;
+  role: string;
+  status: string;
+  invited_by: string;
+  invited_by_email: string;
+  created_at: string;
+  expires_at: string;
+}
+
+export interface ResolvedInvite {
+  invite_id: string;
+  project_id: string;
+  project_name: string;
+  email: string;
+  role: string;
+  has_account: boolean;
+  expires_at: string;
+}
+
 // Command Approvals
 export interface CommandApproval {
   approval_id: string;
