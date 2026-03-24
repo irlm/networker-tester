@@ -248,6 +248,24 @@ export interface ShareLink {
   last_accessed: string | null;
 }
 
+// Command Approvals
+export interface CommandApproval {
+  approval_id: string;
+  project_id: string;
+  agent_id: string;
+  command_type: string;
+  command_detail: Record<string, unknown>;
+  status: string;
+  requested_by: string;
+  requested_by_email: string;
+  decided_by: string | null;
+  decided_by_email: string | null;
+  requested_at: string;
+  decided_at: string | null;
+  expires_at: string;
+  reason: string | null;
+}
+
 // Project types
 export interface ProjectSummary {
   project_id: string;

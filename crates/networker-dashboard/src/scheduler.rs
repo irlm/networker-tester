@@ -15,11 +15,32 @@ pub fn spawn(state: Arc<AppState>) {
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         tracing::info!("Scheduler background task started");
 
+        let mut last_approval_cleanup = std::time::Instant::now();
+
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
 
             if let Err(e) = tick(&state).await {
                 tracing::error!(error = %e, "Scheduler tick failed");
+            }
+
+            // Expire stale command approvals hourly
+            if last_approval_cleanup.elapsed() > std::time::Duration::from_secs(3600) {
+                last_approval_cleanup = std::time::Instant::now();
+                match state.db.get().await {
+                    Ok(client) => match crate::db::command_approvals::expire_stale(&client).await {
+                        Ok(count) if count > 0 => {
+                            tracing::info!(count, "Expired stale command approvals");
+                        }
+                        Err(e) => {
+                            tracing::error!(error = %e, "Failed to expire stale approvals");
+                        }
+                        _ => {}
+                    },
+                    Err(e) => {
+                        tracing::error!(error = %e, "DB pool error in approval cleanup");
+                    }
+                }
             }
         }
     });

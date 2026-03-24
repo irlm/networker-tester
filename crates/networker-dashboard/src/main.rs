@@ -52,6 +52,8 @@ pub struct AppState {
     // Shared report links
     pub share_base_url: String,
     pub share_max_days: u32,
+    // SSE broadcast for command approval events
+    pub approval_tx: broadcast::Sender<String>,
 }
 
 #[tokio::main]
@@ -141,6 +143,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let (events_tx, _) = broadcast::channel(1024);
+    let (approval_tx, _) = broadcast::channel(100);
 
     let state = Arc::new(AppState {
         db: db_pool,
@@ -161,6 +164,7 @@ async fn main() -> anyhow::Result<()> {
         credential_key_old: cfg.credential_key_old,
         share_base_url: cfg.share_base_url.clone(),
         share_max_days: cfg.share_max_days,
+        approval_tx,
     });
 
     let cors = {

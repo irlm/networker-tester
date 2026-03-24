@@ -26,6 +26,7 @@ import { ProjectsPage } from './pages/ProjectsPage';
 import { ProjectMembersPage } from './pages/ProjectMembersPage';
 import { ShareLinksPage } from './pages/ShareLinksPage';
 import { ShareViewPage } from './pages/ShareViewPage';
+import { CommandApprovalsPage } from './pages/CommandApprovalsPage';
 
 const statusColors: Record<ConnectionStatus, string> = {
   connected: 'bg-green-400',
@@ -139,6 +140,7 @@ function AuthenticatedApp() {
           <Route path="/projects/:projectId/settings" element={<SettingsPage />} />
           <Route path="/projects/:projectId/members" element={<ProjectMembersPage />} />
           <Route path="/projects/:projectId/share-links" element={<ShareLinksPage />} />
+          <Route path="/projects/:projectId/approvals" element={<CommandApprovalsPage />} />
 
           {/* Platform routes */}
           {isAdmin && <Route path="/users" element={<UsersPage />} />}

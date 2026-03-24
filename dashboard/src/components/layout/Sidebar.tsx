@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 import { useProject } from '../../hooks/useProject';
 import { ProjectSwitcher } from '../ProjectSwitcher';
+import { NotificationBell } from '../NotificationBell';
 import { api } from '../../api/client';
 
 interface SidebarProps {
@@ -139,6 +140,34 @@ export function Sidebar({ connectionDot }: SidebarProps) {
               >
                 <span className="text-base" aria-hidden="true">{'\u2302'}</span>
                 {!collapsed && 'Members'}
+              </Link>
+            );
+          })()}
+          {pid && isProjectAdmin && (() => {
+            const approvalsPath = `/projects/${pid}/approvals`;
+            const active = location.pathname.startsWith(approvalsPath);
+            return (
+              <Link
+                to={approvalsPath}
+                onClick={() => setMobileOpen(false)}
+                aria-current={active ? 'page' : undefined}
+                title={collapsed ? 'Approvals' : undefined}
+                className={`flex items-center overflow-hidden whitespace-nowrap ${collapsed ? 'justify-center' : 'gap-3 px-3'} py-2 rounded text-sm mb-0.5 transition-all duration-200 ${
+                  active
+                    ? 'bg-gray-800/40 text-gray-100'
+                    : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/30'
+                }`}
+              >
+                <span className="text-base relative" aria-hidden="true">
+                  {'\u2713'}
+                  {!collapsed && <NotificationBell projectId={pid} />}
+                </span>
+                {!collapsed && (
+                  <span className="flex items-center gap-2">
+                    Approvals
+                    {collapsed && <NotificationBell projectId={pid} />}
+                  </span>
+                )}
               </Link>
             );
           })()}

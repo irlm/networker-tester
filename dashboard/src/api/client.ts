@@ -1,6 +1,6 @@
-import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, ProjectSummary, ProjectDetail, ProjectMember, ShareLink } from './types';
+import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval } from './types';
 
-export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, ProjectSummary, ProjectDetail, ProjectMember, ShareLink };
+export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval };
 export type { LiveAttempt } from './types';
 
 const API_BASE = '/api';
@@ -438,6 +438,19 @@ export const api = {
 
   removeVisibilityRule: (projectId: string, ruleId: string) =>
     request<void>(projectUrl(projectId, `visibility-rules/${ruleId}`), { method: 'DELETE' }),
+
+  // Command Approvals (project-scoped, admin only)
+  getPendingApprovals: (projectId: string) =>
+    request<{ approvals: CommandApproval[] }>(projectUrl(projectId, 'command-approvals')).then(d => d.approvals),
+
+  getPendingApprovalCount: (projectId: string) =>
+    request<{ count: number }>(projectUrl(projectId, 'command-approvals/count')).then(d => d.count),
+
+  decideApproval: (projectId: string, approvalId: string, approved: boolean, reason?: string) =>
+    request<{ status: string }>(projectUrl(projectId, `command-approvals/${approvalId}`), {
+      method: 'POST',
+      body: JSON.stringify({ approved, reason }),
+    }).then(() => {}),
 
   // Version (NOT project-scoped)
   getVersionInfo: () => request<{
