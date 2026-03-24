@@ -5,7 +5,9 @@ mod crypto;
 mod db;
 mod deploy;
 mod email;
+mod log_buffer;
 mod scheduler;
+mod system_metrics;
 mod ws;
 
 use anyhow::Context;
@@ -16,6 +18,8 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
 /// A short-lived SSO exchange code entry.
@@ -56,6 +60,8 @@ pub struct AppState {
     pub approval_tx: broadcast::Sender<String>,
     // Workspace invite expiry
     pub invite_expiry_days: u32,
+    // In-memory log buffer for admin log viewer
+    pub log_buffer: std::sync::Arc<log_buffer::LogBuffer>,
 }
 
 #[tokio::main]
@@ -63,8 +69,12 @@ async fn main() -> anyhow::Result<()> {
     // Install ring as the default TLS crypto provider (required by reqwest/rustls).
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+    let log_buf = log_buffer::LogBuffer::new(1000);
+
+    tracing_subscriber::registry()
+        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+        .with(tracing_subscriber::fmt::layer())
+        .with(log_buffer::LogBufferLayer::new(log_buf.clone()))
         .init();
 
     // CLI setup subcommand: `networker-dashboard setup`
@@ -168,6 +178,7 @@ async fn main() -> anyhow::Result<()> {
         share_max_days: cfg.share_max_days,
         approval_tx,
         invite_expiry_days: cfg.invite_expiry_days,
+        log_buffer: log_buf,
     });
 
     let cors = {
