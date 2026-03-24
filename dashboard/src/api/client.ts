@@ -1,6 +1,6 @@
-import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval } from './types';
+import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite } from './types';
 
-export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval };
+export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite };
 export type { LiveAttempt } from './types';
 
 const API_BASE = '/api';
@@ -154,6 +154,39 @@ export const api = {
 
   removeProjectMember: (projectId: string, userId: string) =>
     request<{ removed: boolean }>(`/projects/${projectId}/members/${userId}`, { method: 'DELETE' }),
+
+  // ── Project Invites (project-scoped, admin only) ────────────────────
+  getInvites: (projectId: string) =>
+    request<WorkspaceInvite[]>(projectUrl(projectId, 'invites')),
+
+  createInvite: (projectId: string, email: string, role: string) =>
+    request<{ invite_id: string; url: string; expires_at: string }>(projectUrl(projectId, 'invites'), {
+      method: 'POST',
+      body: JSON.stringify({ email, role }),
+    }),
+
+  revokeInvite: (projectId: string, inviteId: string) =>
+    request<{ revoked: boolean }>(projectUrl(projectId, `invites/${inviteId}`), { method: 'DELETE' }).then(() => {}),
+
+  // ── Public invite endpoints (no auth) ───────────────────────────────
+  resolveInvite: (token: string) =>
+    fetch(`${API_BASE}/invite/${token}`).then(async r => {
+      if (!r.ok) throw new Error(await r.text());
+      return r.json() as Promise<ResolvedInvite>;
+    }),
+
+  acceptInvite: (token: string, password?: string, currentPassword?: string) =>
+    fetch(`${API_BASE}/invite/${token}/accept`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...(password ? { password } : {}),
+        ...(currentPassword ? { current_password: currentPassword } : {}),
+      }),
+    }).then(async r => {
+      if (!r.ok) throw new Error(await r.text());
+      return r.json() as Promise<{ token: string; email: string; role: string; project_id: string }>;
+    }),
 
   // ── Project-scoped resources ──────────────────────────────────────────
 

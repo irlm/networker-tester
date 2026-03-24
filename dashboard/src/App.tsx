@@ -27,6 +27,7 @@ import { ProjectMembersPage } from './pages/ProjectMembersPage';
 import { CloudAccountsPage } from './pages/CloudAccountsPage';
 import { ShareLinksPage } from './pages/ShareLinksPage';
 import { ShareViewPage } from './pages/ShareViewPage';
+import { AcceptInvitePage } from './pages/AcceptInvitePage';
 import { CommandApprovalsPage } from './pages/CommandApprovalsPage';
 
 const statusColors: Record<ConnectionStatus, string> = {
@@ -156,6 +157,7 @@ function App() {
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
         <Route path="/share/:token" element={<ShareViewPage />} />
+        <Route path="/invite/:token" element={<AcceptInvitePage />} />
         <Route
           path="/*"
           element={
