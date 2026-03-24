@@ -24,6 +24,24 @@ pub fn spawn(state: Arc<AppState>) {
                 tracing::error!(error = %e, "Scheduler tick failed");
             }
 
+            // Expire stale workspace invites hourly
+            if last_approval_cleanup.elapsed() > std::time::Duration::from_secs(3600) {
+                match state.db.get().await {
+                    Ok(client) => match crate::db::invites::expire_stale_invites(&client).await {
+                        Ok(count) if count > 0 => {
+                            tracing::info!(count, "Expired stale workspace invites");
+                        }
+                        Err(e) => {
+                            tracing::error!(error = %e, "Failed to expire stale invites");
+                        }
+                        _ => {}
+                    },
+                    Err(e) => {
+                        tracing::error!(error = %e, "DB pool error in invite cleanup");
+                    }
+                }
+            }
+
             // Expire stale command approvals hourly
             if last_approval_cleanup.elapsed() > std::time::Duration::from_secs(3600) {
                 last_approval_cleanup = std::time::Instant::now();

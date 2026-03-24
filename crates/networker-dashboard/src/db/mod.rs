@@ -3,6 +3,7 @@ pub mod cloud_accounts;
 pub mod cloud_connections;
 pub mod command_approvals;
 pub mod deployments;
+pub mod invites;
 pub mod jobs;
 pub mod migrations;
 pub mod projects;

@@ -286,11 +286,16 @@ pub async fn require_project(
         }
     };
 
-    // 4. Platform admins get implicit Admin access
+    // 4. Check soft-delete (platform admins bypass for admin operations)
+    if project_row.deleted_at.is_some() && !auth_user.is_platform_admin {
+        return (StatusCode::FORBIDDEN, "Workspace suspended").into_response();
+    }
+
+    // 5. Platform admins get implicit Admin access
     let role = if auth_user.is_platform_admin {
         ProjectRole::Admin
     } else {
-        // 5. Check project_member table
+        // 6. Check project_member table
         match crate::db::projects::get_member_role(&client, &project_id, &auth_user.user_id).await {
             Ok(Some(r)) => r,
             Ok(None) => {
@@ -303,7 +308,7 @@ pub async fn require_project(
         }
     };
 
-    // 6. Insert ProjectContext
+    // 7. Insert ProjectContext
     req.extensions_mut().insert(ProjectContext {
         project_id,
         project_slug: project_row.slug,

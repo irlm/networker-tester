@@ -400,6 +400,24 @@ pub async fn invite_user(
     Ok(Ok((user_id, token)))
 }
 
+/// Create a local user with email and password (used by invite acceptance).
+pub async fn create_local_user(
+    client: &Client,
+    email: &str,
+    password: &str,
+) -> anyhow::Result<Uuid> {
+    let user_id = Uuid::new_v4();
+    let hash = bcrypt::hash(password, bcrypt::DEFAULT_COST).map_err(|e| anyhow::anyhow!("{e}"))?;
+    client
+        .execute(
+            "INSERT INTO dash_user (user_id, email, password_hash, role, status, auth_provider, must_change_password, is_platform_admin) \
+             VALUES ($1, $2, $3, 'viewer', 'active', 'local', FALSE, FALSE)",
+            &[&user_id, &email, &hash],
+        )
+        .await?;
+    Ok(user_id)
+}
+
 /// Find a user by email (for SSO account lookup).
 pub async fn find_by_email(client: &Client, email: &str) -> anyhow::Result<Option<UserRow>> {
     let row = client

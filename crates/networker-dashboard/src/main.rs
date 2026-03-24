@@ -54,6 +54,8 @@ pub struct AppState {
     pub share_max_days: u32,
     // SSE broadcast for command approval events
     pub approval_tx: broadcast::Sender<String>,
+    // Workspace invite expiry
+    pub invite_expiry_days: u32,
 }
 
 #[tokio::main]
@@ -165,6 +167,7 @@ async fn main() -> anyhow::Result<()> {
         share_base_url: cfg.share_base_url.clone(),
         share_max_days: cfg.share_max_days,
         approval_tx,
+        invite_expiry_days: cfg.invite_expiry_days,
     });
 
     let cors = {

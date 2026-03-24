@@ -31,6 +31,8 @@ pub struct DashboardConfig {
     // Shared report links
     pub share_base_url: String,
     pub share_max_days: u32,
+    // Workspace invite expiry
+    pub invite_expiry_days: u32,
 }
 
 impl DashboardConfig {
@@ -88,6 +90,11 @@ impl DashboardConfig {
             .and_then(|s| s.parse().ok())
             .unwrap_or(365);
 
+        let invite_expiry_days: u32 = std::env::var("DASHBOARD_INVITE_EXPIRY_DAYS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(7);
+
         let credential_key = std::env::var("DASHBOARD_CREDENTIAL_KEY")
             .ok()
             .filter(|s| s.len() == 64)
@@ -135,6 +142,7 @@ impl DashboardConfig {
             credential_key_old,
             share_base_url,
             share_max_days,
+            invite_expiry_days,
         })
     }
 }
