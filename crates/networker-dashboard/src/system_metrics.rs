@@ -72,7 +72,7 @@ pub async fn collect_db_metrics(client: &Client) -> anyhow::Result<DbMetrics> {
         .get(0);
     let oldest: Option<f64> = client
         .query_opt(
-            "SELECT EXTRACT(EPOCH FROM (now() - xact_start)) FROM pg_stat_activity \
+            "SELECT EXTRACT(EPOCH FROM (now() - xact_start))::float8 FROM pg_stat_activity \
              WHERE state != 'idle' AND xact_start IS NOT NULL ORDER BY xact_start ASC LIMIT 1",
             &[],
         )
@@ -80,7 +80,7 @@ pub async fn collect_db_metrics(client: &Client) -> anyhow::Result<DbMetrics> {
         .map(|r| r.get(0));
     let ratio: f64 = client
         .query_one(
-            "SELECT COALESCE(sum(blks_hit)::float / NULLIF(sum(blks_hit) + sum(blks_read), 0), 0) \
+            "SELECT COALESCE(sum(blks_hit)::float8 / NULLIF(sum(blks_hit) + sum(blks_read), 0), 0)::float8 \
              FROM pg_stat_database WHERE datname = current_database()",
             &[],
         )
