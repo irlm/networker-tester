@@ -1,6 +1,6 @@
-import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite } from './types';
+import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry } from './types';
 
-export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite };
+export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry };
 export type { LiveAttempt } from './types';
 
 const API_BASE = '/api';
@@ -515,4 +515,32 @@ export const api = {
     update_available: boolean;
     endpoints: { host: string; version: string | null; reachable: boolean }[];
   }>('/version'),
+
+  // ── System Admin (platform admin only, NOT project-scoped) ──────────
+  getSystemMetrics: () =>
+    request<{ system: SystemMetrics; db: DbMetrics }>('/admin/metrics'),
+
+  getWorkspaceUsage: () =>
+    request<WorkspaceUsage[]>('/admin/workspaces'),
+
+  getSystemLogs: (params?: { level?: string; search?: string; limit?: number }) => {
+    const search = new URLSearchParams();
+    if (params?.level) search.set('level', params.level);
+    if (params?.search) search.set('search', params.search);
+    if (params?.limit) search.set('limit', String(params.limit));
+    const qs = search.toString();
+    return request<LogEntry[]>(`/admin/logs${qs ? `?${qs}` : ''}`);
+  },
+
+  suspendWorkspace: (projectId: string) =>
+    request<void>(`/admin/workspaces/${projectId}/suspend`, { method: 'POST' }),
+
+  restoreWorkspace: (projectId: string) =>
+    request<void>(`/admin/workspaces/${projectId}/restore`, { method: 'POST' }),
+
+  protectWorkspace: (projectId: string) =>
+    request<{ delete_protection: boolean }>(`/admin/workspaces/${projectId}/protect`, { method: 'POST' }),
+
+  hardDeleteWorkspace: (projectId: string) =>
+    request<void>(`/admin/workspaces/${projectId}`, { method: 'DELETE' }),
 };
