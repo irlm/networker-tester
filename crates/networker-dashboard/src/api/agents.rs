@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::auth::{require_role, AuthUser, Role};
+use crate::auth::{require_role, AuthUser, ProjectContext, ProjectRole, Role, DEFAULT_PROJECT_ID};
 use crate::AppState;
 
 #[derive(Serialize)]
@@ -49,10 +49,12 @@ async fn list_agents(
         tracing::error!(error = %e, "DB pool error in list_agents");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
-    let agents = crate::db::agents::list(&client).await.map_err(|e| {
-        tracing::error!(error = %e, "Failed to list agents from DB");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    let agents = crate::db::agents::list(&client, &DEFAULT_PROJECT_ID)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to list agents from DB");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
     Ok(Json(AgentListResponse { agents }))
 }
 
@@ -82,6 +84,7 @@ async fn create_agent(
         &api_key,
         req.region.as_deref(),
         provider,
+        &DEFAULT_PROJECT_ID,
     )
     .await
     .map_err(|e| {
@@ -299,6 +302,7 @@ async fn deploy_vm(
         &api_key,
         Some(&req.region),
         Some("azure"),
+        &DEFAULT_PROJECT_ID,
     )
     .await
     .map_err(|e| {
@@ -676,6 +680,203 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/agents", get(list_agents).post(create_agent))
         .route("/agents/deploy-vm", post(deploy_vm))
         .route("/agents/:agent_id", get(delete_agent).delete(delete_agent))
+        .with_state(state)
+}
+
+// ── Project-scoped handlers ────────────────────────────────────────────
+
+async fn list_agents_scoped(
+    State(state): State<Arc<AppState>>,
+    req: axum::extract::Request,
+) -> Result<Json<AgentListResponse>, StatusCode> {
+    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
+    let client = state.db.get().await.map_err(|e| {
+        tracing::error!(error = %e, "DB pool error in list_agents_scoped");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    let agents = crate::db::agents::list(&client, &ctx.project_id)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to list agents from DB");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    Ok(Json(AgentListResponse { agents }))
+}
+
+async fn create_agent_scoped(
+    State(state): State<Arc<AppState>>,
+    req: axum::extract::Request,
+) -> Result<Json<CreateAgentResponse>, StatusCode> {
+    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
+    let user = req.extensions().get::<AuthUser>().unwrap().clone();
+    crate::auth::require_project_role(&ctx, ProjectRole::Operator)?;
+
+    let body = axum::body::to_bytes(req.into_body(), 1024 * 64)
+        .await
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let create_req: CreateAgentRequest =
+        serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    let api_key = format!("agent-{}", Uuid::new_v4());
+    let client = state.db.get().await.map_err(|e| {
+        tracing::error!(error = %e, "DB pool error in create_agent_scoped");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let provider = if create_req.location == "local" {
+        Some("local")
+    } else {
+        create_req.provider.as_deref()
+    };
+
+    let agent_id = crate::db::agents::create(
+        &client,
+        &create_req.name,
+        &api_key,
+        create_req.region.as_deref(),
+        provider,
+        &ctx.project_id,
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, "Failed to create tester");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    tracing::info!(
+        agent_id = %agent_id,
+        name = %create_req.name,
+        location = %create_req.location,
+        project_id = %ctx.project_id,
+        created_by = %user.email,
+        "Tester created (project-scoped)"
+    );
+
+    let dashboard_port = state.dashboard_port;
+
+    match create_req.location.as_str() {
+        "local" => {
+            let api_key_clone = api_key.clone();
+            let dashboard_url = format!("ws://127.0.0.1:{dashboard_port}/ws/agent");
+            let state_clone = state.clone();
+            tokio::spawn(async move {
+                if let Some(pid) = crate::deploy::agent_provisioner::spawn_local_agent(
+                    &api_key_clone,
+                    &dashboard_url,
+                )
+                .await
+                {
+                    state_clone
+                        .tester_processes
+                        .write()
+                        .await
+                        .insert(agent_id, pid);
+                }
+            });
+        }
+        "ssh" => {
+            let ssh_host = create_req.ssh_host.clone().unwrap_or_default();
+            let ssh_user = create_req.ssh_user.clone().unwrap_or_else(|| "root".into());
+            let ssh_port = create_req.ssh_port.unwrap_or(22);
+            if !is_valid_ssh_host(&ssh_host) || !is_valid_ssh_user(&ssh_user) || ssh_port == 0 {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+            let api_key_clone = api_key.clone();
+            let name_clone = create_req.name.clone();
+            let dashboard_url = format!("ws://{{DASHBOARD_HOST}}:{dashboard_port}/ws/agent");
+            let events_tx = state.events_tx.clone();
+            tokio::spawn(async move {
+                crate::deploy::agent_provisioner::provision_remote_agent(
+                    &name_clone,
+                    &api_key_clone,
+                    &dashboard_url,
+                    &ssh_host,
+                    &ssh_user,
+                    ssh_port,
+                    events_tx,
+                )
+                .await;
+            });
+        }
+        _ => {}
+    }
+
+    Ok(Json(CreateAgentResponse {
+        agent_id,
+        api_key: api_key.clone(),
+        name: create_req.name,
+        status: if create_req.location == "local" {
+            "starting".into()
+        } else {
+            "provisioning".into()
+        },
+    }))
+}
+
+async fn delete_agent_scoped(
+    State(state): State<Arc<AppState>>,
+    Path(agent_id): Path<Uuid>,
+    req: axum::extract::Request,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
+    crate::auth::require_project_role(&ctx, ProjectRole::Operator)?;
+
+    let pid = state.tester_processes.write().await.remove(&agent_id);
+    if let Some(pid) = pid {
+        tracing::info!(agent_id = %agent_id, pid, "Killing tester process");
+        #[cfg(unix)]
+        {
+            unsafe {
+                libc::kill(pid as i32, libc::SIGTERM);
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = tokio::process::Command::new("taskkill")
+                .args(["/PID", &pid.to_string(), "/F"])
+                .output()
+                .await;
+        }
+    }
+
+    let client = state.db.get().await.map_err(|e| {
+        tracing::error!(error = %e, "DB pool error in delete_agent_scoped");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    client
+        .execute(
+            "UPDATE job SET agent_id = NULL WHERE agent_id = $1",
+            &[&agent_id],
+        )
+        .await
+        .ok();
+    client
+        .execute(
+            "UPDATE deployment SET agent_id = NULL WHERE agent_id = $1",
+            &[&agent_id],
+        )
+        .await
+        .ok();
+    client
+        .execute("DELETE FROM agent WHERE agent_id = $1", &[&agent_id])
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to delete tester");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    tracing::info!(agent_id = %agent_id, "Tester deleted (project-scoped)");
+    Ok(Json(serde_json::json!({"deleted": true})))
+}
+
+pub fn project_router(state: Arc<AppState>) -> Router {
+    Router::new()
+        .route("/agents", get(list_agents_scoped).post(create_agent_scoped))
+        .route(
+            "/agents/:agent_id",
+            get(delete_agent_scoped).delete(delete_agent_scoped),
+        )
         .with_state(state)
 }
 

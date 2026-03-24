@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::auth::{require_role, AuthUser, Role};
+use crate::auth::{require_role, AuthUser, ProjectContext, ProjectRole, Role, DEFAULT_PROJECT_ID};
 use crate::AppState;
 
 const DEFAULT_LIMIT: i64 = 50;
@@ -52,6 +52,7 @@ async fn create_deployment(
         &req.config,
         provider_summary.as_deref(),
         None,
+        &DEFAULT_PROJECT_ID,
     )
     .await
     .map_err(|e| {
@@ -106,6 +107,7 @@ async fn list_deployments(
     })?;
     let deployments = crate::db::deployments::list(
         &client,
+        &DEFAULT_PROJECT_ID,
         q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT),
         q.offset.unwrap_or(0).max(0),
     )
@@ -386,6 +388,158 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(get_deployment).delete(delete_deployment),
         )
         .route("/deployments/:deployment_id/stop", post(stop_deployment))
+        .route("/deployments/:deployment_id/check", post(check_deployment))
+        .route("/deployments/:deployment_id/update", post(update_endpoint))
+        .with_state(state)
+}
+
+// ── Project-scoped handlers ────────────────────────────────────────────
+
+async fn list_deployments_scoped(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<ListDeploymentsQuery>,
+    req: axum::extract::Request,
+) -> Result<Json<Vec<crate::db::deployments::DeploymentRow>>, StatusCode> {
+    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
+    let client = state
+        .db
+        .get()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let deployments = crate::db::deployments::list(
+        &client,
+        &ctx.project_id,
+        q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT),
+        q.offset.unwrap_or(0).max(0),
+    )
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(deployments))
+}
+
+async fn create_deployment_scoped(
+    State(state): State<Arc<AppState>>,
+    req: axum::extract::Request,
+) -> Result<Json<CreateDeploymentResponse>, StatusCode> {
+    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
+    crate::auth::require_project_role(&ctx, ProjectRole::Operator)?;
+
+    let body = axum::body::to_bytes(req.into_body(), 1024 * 1024)
+        .await
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let create_req: CreateDeploymentRequest =
+        serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    let provider_summary = build_provider_summary(&create_req.config);
+    let client = state
+        .db
+        .get()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let deployment_id = crate::db::deployments::create(
+        &client,
+        &create_req.name,
+        &create_req.config,
+        provider_summary.as_deref(),
+        None,
+        &ctx.project_id,
+    )
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let events_tx = state.events_tx.clone();
+    let db_pool = Arc::new(state.db.clone());
+    let config = create_req.config.clone();
+    tokio::spawn(async move {
+        match crate::deploy::runner::run_deployment(deployment_id, &config, events_tx, db_pool)
+            .await
+        {
+            Ok(ips) => {
+                tracing::info!(deployment_id = %deployment_id, endpoint_ips = ?ips, "Deployment completed");
+            }
+            Err(e) => {
+                tracing::error!(deployment_id = %deployment_id, error = %e, "Deployment failed");
+            }
+        }
+    });
+
+    Ok(Json(CreateDeploymentResponse {
+        deployment_id,
+        status: "pending".into(),
+    }))
+}
+
+async fn delete_deployment_scoped(
+    State(state): State<Arc<AppState>>,
+    Path(deployment_id): Path<Uuid>,
+    req: axum::extract::Request,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
+    crate::auth::require_project_role(&ctx, ProjectRole::Operator)?;
+
+    let client = state
+        .db
+        .get()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let deleted = crate::db::deployments::delete(&client, &deployment_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if deleted {
+        Ok(Json(serde_json::json!({"deleted": true})))
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
+}
+
+async fn stop_deployment_scoped(
+    State(state): State<Arc<AppState>>,
+    Path(deployment_id): Path<Uuid>,
+    req: axum::extract::Request,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
+    crate::auth::require_project_role(&ctx, ProjectRole::Operator)?;
+
+    let client = state
+        .db
+        .get()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let deployment = crate::db::deployments::get(&client, &deployment_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    if deployment.status == "running" || deployment.status == "pending" {
+        crate::db::deployments::update_status(&client, &deployment_id, "cancelled")
+            .await
+            .ok();
+        let _ = state
+            .events_tx
+            .send(networker_common::messages::DashboardEvent::DeployComplete {
+                deployment_id,
+                status: "cancelled".into(),
+                endpoint_ips: vec![],
+            });
+    }
+    Ok(Json(serde_json::json!({"status": "cancelled"})))
+}
+
+pub fn project_router(state: Arc<AppState>) -> Router {
+    Router::new()
+        .route(
+            "/deployments",
+            get(list_deployments_scoped).post(create_deployment_scoped),
+        )
+        .route(
+            "/deployments/:deployment_id",
+            get(get_deployment).delete(delete_deployment_scoped),
+        )
+        .route(
+            "/deployments/:deployment_id/stop",
+            post(stop_deployment_scoped),
+        )
         .route("/deployments/:deployment_id/check", post(check_deployment))
         .route("/deployments/:deployment_id/update", post(update_endpoint))
         .with_state(state)

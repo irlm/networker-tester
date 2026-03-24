@@ -8,6 +8,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::auth::{ProjectContext, DEFAULT_PROJECT_ID};
 use crate::AppState;
 
 const DEFAULT_LIMIT: i64 = 50;
@@ -30,6 +31,7 @@ async fn list_runs(
     })?;
     let runs = crate::db::runs::list(
         &client,
+        &DEFAULT_PROJECT_ID,
         q.target_host.as_deref(),
         q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT),
         q.offset.unwrap_or(0).max(0),
@@ -146,6 +148,41 @@ async fn fetch_endpoint_version(target_url: &str) -> Option<String> {
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/runs", get(list_runs))
+        .route("/runs/:run_id", get(get_run))
+        .route("/runs/:run_id/attempts", get(get_run_attempts))
+        .with_state(state)
+}
+
+// ── Project-scoped handlers ────────────────────────────────────────────
+
+async fn list_runs_scoped(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<ListRunsQuery>,
+    req: axum::extract::Request,
+) -> Result<Json<Vec<crate::db::runs::RunSummary>>, StatusCode> {
+    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
+    let client = state.db.get().await.map_err(|e| {
+        tracing::error!(error = %e, "DB pool error in list_runs_scoped");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    let runs = crate::db::runs::list(
+        &client,
+        &ctx.project_id,
+        q.target_host.as_deref(),
+        q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT),
+        q.offset.unwrap_or(0).max(0),
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, "Failed to list runs from DB");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    Ok(Json(runs))
+}
+
+pub fn project_router(state: Arc<AppState>) -> Router {
+    Router::new()
+        .route("/runs", get(list_runs_scoped))
         .route("/runs/:run_id", get(get_run))
         .route("/runs/:run_id/attempts", get(get_run_attempts))
         .with_state(state)

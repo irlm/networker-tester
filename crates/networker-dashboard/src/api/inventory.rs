@@ -34,7 +34,7 @@ async fn scan_inventory(
 
     // Get managed deployment IPs for cross-referencing
     let managed_hosts: Vec<String> = if let Ok(client) = state.db.get().await {
-        if let Ok(deployments) = crate::db::deployments::list(&client, 100, 0).await {
+        if let Ok(deployments) = crate::db::deployments::list_all(&client, 100, 0).await {
             deployments
                 .iter()
                 .filter_map(|d| d.endpoint_ips.as_ref())
@@ -325,6 +325,13 @@ fn is_managed(fqdn: &Option<String>, public_ip: &Option<String>, managed_hosts: 
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
+    Router::new()
+        .route("/inventory", get(scan_inventory))
+        .with_state(state)
+}
+
+/// Project-scoped inventory (pass-through — inventory scan is global).
+pub fn project_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/inventory", get(scan_inventory))
         .with_state(state)

@@ -150,3 +150,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/cloud/status", get(cloud_status))
         .with_state(state)
 }
+
+/// Project-scoped cloud status (pass-through — cloud status is global).
+pub fn project_router(state: Arc<AppState>) -> Router {
+    Router::new()
+        .route("/cloud/status", get(cloud_status))
+        .with_state(state)
+}

@@ -20,6 +20,7 @@ pub struct RunSummary {
 
 pub async fn list(
     client: &Client,
+    project_id: &Uuid,
     target_host: Option<&str>,
     limit: i64,
     offset: i64,
@@ -27,20 +28,25 @@ pub async fn list(
     let rows = if let Some(host) = target_host {
         client
             .query(
-                "SELECT RunId, StartedAt, FinishedAt, TargetUrl, TargetHost, Modes,
-                        TotalRuns, SuccessCount, FailureCount, ClientOs, ClientVersion
-                 FROM TestRun WHERE TargetHost = $1
-                 ORDER BY StartedAt DESC LIMIT $2 OFFSET $3",
-                &[&host, &limit, &offset],
+                "SELECT r.RunId, r.StartedAt, r.FinishedAt, r.TargetUrl, r.TargetHost, r.Modes,
+                        r.TotalRuns, r.SuccessCount, r.FailureCount, r.ClientOs, r.ClientVersion
+                 FROM TestRun r
+                 JOIN job j ON j.run_id = r.RunId
+                 WHERE j.project_id = $1 AND r.TargetHost = $2
+                 ORDER BY r.StartedAt DESC LIMIT $3 OFFSET $4",
+                &[project_id, &host, &limit, &offset],
             )
             .await?
     } else {
         client
             .query(
-                "SELECT RunId, StartedAt, FinishedAt, TargetUrl, TargetHost, Modes,
-                        TotalRuns, SuccessCount, FailureCount, ClientOs, ClientVersion
-                 FROM TestRun ORDER BY StartedAt DESC LIMIT $1 OFFSET $2",
-                &[&limit, &offset],
+                "SELECT r.RunId, r.StartedAt, r.FinishedAt, r.TargetUrl, r.TargetHost, r.Modes,
+                        r.TotalRuns, r.SuccessCount, r.FailureCount, r.ClientOs, r.ClientVersion
+                 FROM TestRun r
+                 JOIN job j ON j.run_id = r.RunId
+                 WHERE j.project_id = $1
+                 ORDER BY r.StartedAt DESC LIMIT $2 OFFSET $3",
+                &[project_id, &limit, &offset],
             )
             .await?
     };
