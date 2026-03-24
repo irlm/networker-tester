@@ -41,9 +41,15 @@ async fn login(
         })?;
 
     match result {
-        Some((user_id, email, role, must_change_password, status)) => {
-            let token = crate::auth::create_token(user_id, &email, &role, &state.jwt_secret)
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        Some((user_id, email, role, must_change_password, status, is_platform_admin)) => {
+            let token = crate::auth::create_token(
+                user_id,
+                &email,
+                &role,
+                is_platform_admin,
+                &state.jwt_secret,
+            )
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             Ok(Json(LoginResponse {
                 token,
                 role,
@@ -165,8 +171,7 @@ async fn forgot_password(
             );
 
             if let Err(e) =
-                crate::email::send_email(&req.email, "AletheDash — Password Reset", &body)
-                    .await
+                crate::email::send_email(&req.email, "AletheDash — Password Reset", &body).await
             {
                 tracing::warn!(error = %e, "Failed to send password reset email");
             }
@@ -661,25 +666,32 @@ async fn sso_exchange(
         return Err(StatusCode::UNAUTHORIZED);
     }
 
-    let token = crate::auth::create_token(user_id, &email, &role, &state.jwt_secret)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    // Determine status for the response
+    // Determine status and is_platform_admin for the response
     let client = state
         .db
         .get()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let status = client
+    let user_row = client
         .query_opt(
-            "SELECT status FROM dash_user WHERE user_id = $1",
+            "SELECT status, is_platform_admin FROM dash_user WHERE user_id = $1",
             &[&user_id],
         )
         .await
         .ok()
-        .flatten()
+        .flatten();
+    let status = user_row
+        .as_ref()
         .map(|r| r.get::<_, String>("status"))
         .unwrap_or_else(|| "active".to_string());
+    let is_platform_admin = user_row
+        .as_ref()
+        .and_then(|r| r.get::<_, Option<bool>>("is_platform_admin"))
+        .unwrap_or(false);
+
+    let token =
+        crate::auth::create_token(user_id, &email, &role, is_platform_admin, &state.jwt_secret)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(LoginResponse {
         token,

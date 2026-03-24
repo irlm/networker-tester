@@ -3,6 +3,7 @@ pub mod cloud_connections;
 pub mod deployments;
 pub mod jobs;
 pub mod migrations;
+pub mod projects;
 pub mod runs;
 pub mod schedules;
 pub mod url_tests;
