@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod cloud_accounts;
 pub mod cloud_connections;
 pub mod deployments;
 pub mod jobs;

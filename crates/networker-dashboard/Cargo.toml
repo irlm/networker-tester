@@ -40,10 +40,12 @@ rustls       = { version = "0.23", default-features = false, features = ["ring"]
 # Cron scheduling
 cron         = "0.13"
 
-# Crypto (ACS HMAC-SHA256 auth + token hashing)
+# Crypto (ACS HMAC-SHA256 auth + token hashing + credential encryption)
 sha2         = "0.10"
 hmac         = "0.12"
 base64       = "0.22"
+aes-gcm      = "0.10"
+hex          = "0.4"
 
 # Utilities
 rand         = "0.8"
