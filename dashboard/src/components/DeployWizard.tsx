@@ -7,6 +7,7 @@ import { PayloadSelector } from './common/PayloadSelector';
 import { useToast } from '../hooks/useToast';
 
 interface DeployWizardProps {
+  projectId: string;
   onClose: () => void;
   onCreated: (deploymentId: string) => void;
 }
@@ -38,7 +39,7 @@ function emptyEndpoint(provider = 'azure'): DeployEndpoint {
   };
 }
 
-export function DeployWizard({ onClose, onCreated }: DeployWizardProps) {
+export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProps) {
   const [step, setStep] = useState(1);
   const [cloudStatus, setCloudStatus] = useState<CloudStatus | null>(null);
   const [cloudConnections, setCloudConnections] = useState<CloudConnection[]>([]);
@@ -61,15 +62,15 @@ export function DeployWizard({ onClose, onCreated }: DeployWizardProps) {
   const needsPayload = THROUGHPUT_IDS.some((m) => selectedModes.has(m));
 
   useEffect(() => {
-    api.getCloudStatus()
+    api.getCloudStatus(projectId)
       .then(setCloudStatus)
       .catch(() => setCloudStatus(null))
       .finally(() => setCloudLoading(false));
     api.getModes().then(r => setModeGroups(r.groups)).catch(() => {});
-    api.getCloudConnections()
+    api.getCloudConnections(projectId)
       .then(conns => setCloudConnections(conns.filter(c => c.status === 'active')))
       .catch(() => {});
-  }, []);
+  }, [projectId]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); },
@@ -228,7 +229,7 @@ export function DeployWizard({ onClose, onCreated }: DeployWizardProps) {
     }
 
     try {
-      const result = await api.createDeployment(deployName, config);
+      const result = await api.createDeployment(projectId, deployName, config);
       addToast('success', `Deploy ${result.deployment_id.slice(0, 8)} started`);
       onCreated(result.deployment_id);
       onClose();

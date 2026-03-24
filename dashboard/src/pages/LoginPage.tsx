@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { useAuthStore } from '../stores/authStore';
+import { useProjectStore } from '../stores/projectStore';
 
 const SSO_ERRORS: Record<string, string> = {
   sso_misconfigured: 'SSO is not properly configured. Contact your admin.',
@@ -66,13 +67,26 @@ export function LoginPage() {
     setLoading(true);
     try {
       const res = await api.login(email, password);
-      login(res.token, res.email, res.role, res.must_change_password, res.status);
+      const isPlatformAdmin = res.is_platform_admin ?? res.role === 'admin';
+      login(res.token, res.email, res.role, res.must_change_password, res.status, isPlatformAdmin);
       if (res.status === 'pending') {
         navigate('/pending');
       } else if (res.must_change_password) {
         navigate('/change-password');
       } else {
-        navigate('/');
+        // Fetch projects and navigate appropriately
+        try {
+          const projects = await api.getProjects();
+          useProjectStore.getState().setProjects(projects);
+          if (projects.length === 1) {
+            useProjectStore.getState().setActiveProject(projects[0]);
+            navigate(`/projects/${projects[0].project_id}`);
+          } else {
+            navigate('/projects');
+          }
+        } catch {
+          navigate('/');
+        }
       }
     } catch {
       setError('Wrong email or password');

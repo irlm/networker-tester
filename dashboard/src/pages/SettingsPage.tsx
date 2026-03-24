@@ -4,6 +4,7 @@ import type { Deployment, CloudConnection } from '../api/types';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useToast } from '../hooks/useToast';
 import { useLiveStore } from '../stores/liveStore';
+import { useProject } from '../hooks/useProject';
 
 interface VersionInfo {
   dashboard_version: string;
@@ -16,6 +17,7 @@ interface VersionInfo {
 const EMPTY_LINES: string[] = [];
 
 export function SettingsPage() {
+  const { projectId } = useProject();
   const [versionInfo, setVersionInfo] = useState<VersionInfo | null>(null);
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [loading, setLoading] = useState(true);
@@ -45,14 +47,15 @@ export function SettingsPage() {
   usePageTitle('Settings');
 
   const loadData = () => {
+    if (!projectId) return;
     const promises: Promise<unknown>[] = [
       api.getVersionInfo().then(setVersionInfo),
-      api.getDeployments({ limit: 50 }).then(deps => {
+      api.getDeployments(projectId, { limit: 50 }).then(deps => {
         setDeployments(deps.filter(d => d.status === 'completed'));
       }),
     ];
     if (userRole === 'admin') {
-      promises.push(api.getCloudConnections().then(setCloudConnections).catch(() => {}));
+      promises.push(api.getCloudConnections(projectId).then(setCloudConnections).catch(() => {}));
     }
     Promise.all(promises).finally(() => setLoading(false));
   };
@@ -70,7 +73,7 @@ export function SettingsPage() {
     setUpdating(prev => ({ ...prev, [deploymentId]: true }));
     setActiveUpdateId(deploymentId);
     try {
-      await api.updateEndpoint(deploymentId);
+      await api.updateEndpoint(projectId, deploymentId);
       addToast('success', `Update started for ${name}`);
     } catch {
       addToast('error', `Failed to update ${name}`);
@@ -375,7 +378,7 @@ export function SettingsPage() {
             onClick={async () => {
               setInventoryLoading(true);
               try {
-                const result = await api.getInventory();
+                const result = await api.getInventory(projectId);
                 setInventory(result.vms);
                 setInventoryErrors(result.errors);
               } catch {
@@ -656,7 +659,7 @@ export function SettingsPage() {
 
                   setAddingAccount(true);
                   try {
-                    const result = await api.createCloudConnection({
+                    const result = await api.createCloudConnection(projectId, {
                       name: newName || `${newProvider.toUpperCase()} Account`,
                       provider: newProvider,
                       config: configObj,
@@ -665,7 +668,7 @@ export function SettingsPage() {
                     setShowAddAccount(false);
                     // Auto-validate
                     setValidating(v => ({ ...v, [result.connection_id]: true }));
-                    api.validateCloudConnection(result.connection_id)
+                    api.validateCloudConnection(projectId, result.connection_id)
                       .then(r => {
                         addToast(r.status === 'active' ? 'success' : 'error',
                           r.status === 'active' ? 'Connection validated' : `Validation failed: ${r.validation_error || 'unknown error'}`);
@@ -750,7 +753,7 @@ export function SettingsPage() {
                           onClick={async () => {
                             setValidating(v => ({ ...v, [conn.connection_id]: true }));
                             try {
-                              const r = await api.validateCloudConnection(conn.connection_id);
+                              const r = await api.validateCloudConnection(projectId, conn.connection_id);
                               addToast(r.status === 'active' ? 'success' : 'error',
                                 r.status === 'active' ? 'Connection validated' : `Validation failed: ${r.validation_error || 'unknown'}`);
                             } catch {
@@ -768,7 +771,7 @@ export function SettingsPage() {
                         <button
                           onClick={async () => {
                             try {
-                              await api.deleteCloudConnection(conn.connection_id);
+                              await api.deleteCloudConnection(projectId, conn.connection_id);
                               addToast('success', `Removed ${conn.name}`);
                               loadData();
                             } catch {

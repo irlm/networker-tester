@@ -6,6 +6,7 @@ import { StatusBadge } from '../components/common/StatusBadge';
 import { useLiveStore } from '../stores/liveStore';
 import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
+import { useProject } from '../hooks/useProject';
 
 interface Summary {
   agents_online: number;
@@ -23,6 +24,7 @@ interface VersionInfo {
 }
 
 export function DashboardPage() {
+  const { projectId } = useProject();
   const [summary, setSummary] = useState<Summary | null>(null);
   const [versionInfo, setVersionInfo] = useState<VersionInfo | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -40,15 +42,16 @@ export function DashboardPage() {
   }, []);
 
   const loadData = useCallback(() => {
+    if (!projectId) return;
     Promise.all([
-      api.getDashboardSummary().then(setSummary),
-      api.getAgents().then(r => setAgents(r.agents)),
-      api.getJobs({ limit: 5 }).then(setRecentJobs),
-      api.getDeployments({ limit: 10 }).then(setDeployments),
-      api.getRuns({ limit: 5 }).then(setRecentRuns),
+      api.getDashboardSummary(projectId).then(setSummary),
+      api.getAgents(projectId).then(r => setAgents(r.agents)),
+      api.getJobs(projectId, { limit: 5 }).then(setRecentJobs),
+      api.getDeployments(projectId, { limit: 10 }).then(setDeployments),
+      api.getRuns(projectId, { limit: 5 }).then(setRecentRuns),
     ]).then(() => { setError(null); setLoading(false); })
      .catch(e => { setError(String(e)); setLoading(false); });
-  }, []);
+  }, [projectId]);
 
   usePolling(loadData, 15000);
 
@@ -131,12 +134,12 @@ export function DashboardPage() {
           <div>
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-xs text-gray-500 tracking-wider font-medium">endpoint health</h3>
-              <Link to="/deploy" className="text-xs text-gray-600 hover:text-gray-400 transition-colors">View all →</Link>
+              <Link to={`/projects/${projectId}/deploy`} className="text-xs text-gray-600 hover:text-gray-400 transition-colors">View all →</Link>
             </div>
             {endpoints.length === 0 ? (
               <div className="border border-gray-800 rounded p-6 text-center">
                 <p className="text-gray-600 text-sm">No endpoints deployed</p>
-                <Link to="/deploy" className="text-xs text-cyan-400 mt-1 inline-block">Deploy your first endpoint</Link>
+                <Link to={`/projects/${projectId}/deploy`} className="text-xs text-cyan-400 mt-1 inline-block">Deploy your first endpoint</Link>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
@@ -170,12 +173,12 @@ export function DashboardPage() {
           <div>
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-xs text-gray-500 tracking-wider font-medium">testers</h3>
-              <Link to="/tests" className="text-xs text-gray-600 hover:text-gray-400 transition-colors">Manage →</Link>
+              <Link to={`/projects/${projectId}/tests`} className="text-xs text-gray-600 hover:text-gray-400 transition-colors">Manage →</Link>
             </div>
             {agents.length === 0 ? (
               <div className="border border-gray-800 rounded p-6 text-center">
                 <p className="text-gray-600 text-sm">No testers deployed</p>
-                <Link to="/tests" className="text-xs text-cyan-400 mt-1 inline-block">Add a tester</Link>
+                <Link to={`/projects/${projectId}/tests`} className="text-xs text-cyan-400 mt-1 inline-block">Add a tester</Link>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
@@ -207,12 +210,12 @@ export function DashboardPage() {
           <div>
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-xs text-gray-500 tracking-wider font-medium">recent tests</h3>
-              <Link to="/tests" className="text-xs text-gray-600 hover:text-gray-400 transition-colors">View all →</Link>
+              <Link to={`/projects/${projectId}/tests`} className="text-xs text-gray-600 hover:text-gray-400 transition-colors">View all →</Link>
             </div>
             {recentJobs.length === 0 ? (
               <div className="border border-gray-800 rounded p-6 text-center">
                 <p className="text-gray-600 text-sm">No tests yet</p>
-                <Link to="/tests" className="text-xs text-cyan-400 mt-1 inline-block">Run your first test</Link>
+                <Link to={`/projects/${projectId}/tests`} className="text-xs text-cyan-400 mt-1 inline-block">Run your first test</Link>
               </div>
             ) : (
               <div className="table-container">
@@ -230,7 +233,7 @@ export function DashboardPage() {
                     {recentJobs.map(job => (
                       <tr key={job.job_id} className="border-b border-gray-800/30 hover:bg-gray-800/20">
                         <td className="px-3 py-2">
-                          <Link to={`/tests/${job.job_id}`} className="text-cyan-400 hover:underline font-mono text-xs">
+                          <Link to={`/projects/${projectId}/tests/${job.job_id}`} className="text-cyan-400 hover:underline font-mono text-xs">
                             {job.job_id.slice(0, 8)}
                           </Link>
                         </td>
@@ -260,7 +263,7 @@ export function DashboardPage() {
           {/* Update notice (admin only) — subtle */}
           {versionInfo?.update_available && (
             <Link
-              to="/settings"
+              to={`/projects/${projectId}/settings`}
               className="block border border-gray-800 rounded p-3 hover:border-gray-700 transition-colors"
             >
               <div className="text-yellow-400/70 text-xs">Update available</div>
@@ -274,13 +277,13 @@ export function DashboardPage() {
           <div>
             <h3 className="text-xs text-gray-600 mb-3">quick actions</h3>
             <div className="space-y-1">
-              <Link to="/tests" className="block px-3 py-2 text-sm text-gray-400 hover:text-gray-200 hover:bg-gray-800/30 rounded transition-colors">
+              <Link to={`/projects/${projectId}/tests`} className="block px-3 py-2 text-sm text-gray-400 hover:text-gray-200 hover:bg-gray-800/30 rounded transition-colors">
                 New Test
               </Link>
-              <Link to="/deploy" className="block px-3 py-2 text-sm text-gray-400 hover:text-gray-200 hover:bg-gray-800/30 rounded transition-colors">
+              <Link to={`/projects/${projectId}/deploy`} className="block px-3 py-2 text-sm text-gray-400 hover:text-gray-200 hover:bg-gray-800/30 rounded transition-colors">
                 Deploy Endpoint
               </Link>
-              <Link to="/schedules" className="block px-3 py-2 text-sm text-gray-400 hover:text-gray-200 hover:bg-gray-800/30 rounded transition-colors">
+              <Link to={`/projects/${projectId}/schedules`} className="block px-3 py-2 text-sm text-gray-400 hover:text-gray-200 hover:bg-gray-800/30 rounded transition-colors">
                 New Schedule
               </Link>
             </div>

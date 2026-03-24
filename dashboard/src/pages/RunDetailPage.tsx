@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { api, type RunSummary } from '../api/client';
 import type { LiveAttempt } from '../api/types';
+import { useProject } from '../hooks/useProject';
 import { Breadcrumb } from '../components/common/Breadcrumb';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { usePolling } from '../hooks/usePolling';
@@ -29,6 +30,7 @@ import {
 } from 'recharts';
 
 export function RunDetailPage() {
+  const { projectId } = useProject();
   const { runId } = useParams<{ runId: string }>();
   const [run, setRun] = useState<RunSummary | null>(null);
   const [attempts, setAttempts] = useState<LiveAttempt[]>([]);
@@ -41,9 +43,9 @@ export function RunDetailPage() {
 
   usePolling(
     () => {
-      if (!runId) return;
+      if (!runId || !projectId) return;
       api
-        .getRunAttempts(runId)
+        .getRunAttempts(projectId, runId)
         .then((data) => {
           setAttempts(data as unknown as LiveAttempt[]);
           setError(null);
@@ -51,7 +53,7 @@ export function RunDetailPage() {
         })
         .catch((e) => { setError(String(e)); setLoading(false); });
       api
-        .getRun(runId!)
+        .getRun(projectId, runId!)
         .then((data) => setRun(data as unknown as RunSummary))
         .catch(() => {});
     },
@@ -102,7 +104,7 @@ export function RunDetailPage() {
   const toggleProtocol = (protocol: string) => {
     setExpandedProtocols((prev) => {
       const next = new Set(prev);
-      next.has(protocol) ? next.delete(protocol) : next.add(protocol);
+      if (next.has(protocol)) { next.delete(protocol); } else { next.add(protocol); }
       return next;
     });
   };
@@ -110,7 +112,7 @@ export function RunDetailPage() {
   if (loading && attempts.length === 0) {
     return (
       <div className="p-4 md:p-6">
-        <Breadcrumb items={[{ label: 'Runs', to: '/runs' }, { label: `Run ${shortId}` }]} />
+        <Breadcrumb items={[{ label: 'Runs', to: `/projects/${projectId}/runs` }, { label: `Run ${shortId}` }]} />
         <div className="text-gray-500 motion-safe:animate-pulse">Loading run {shortId}...</div>
       </div>
     );
@@ -119,7 +121,7 @@ export function RunDetailPage() {
   if (error && attempts.length === 0) {
     return (
       <div className="p-4 md:p-6">
-        <Breadcrumb items={[{ label: 'Runs', to: '/runs' }, { label: `Run ${shortId}` }]} />
+        <Breadcrumb items={[{ label: 'Runs', to: `/projects/${projectId}/runs` }, { label: `Run ${shortId}` }]} />
         <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
           <h3 className="text-red-400 font-bold mb-2">Failed to load run</h3>
           <p className="text-red-300 text-sm font-mono">{error}</p>
@@ -133,7 +135,7 @@ export function RunDetailPage() {
 
   return (
     <div className="p-4 md:p-6">
-      <Breadcrumb items={[{ label: 'Runs', to: '/runs' }, { label: `Run ${shortId}` }]} />
+      <Breadcrumb items={[{ label: 'Runs', to: `/projects/${projectId}/runs` }, { label: `Run ${shortId}` }]} />
 
       {/* Header */}
       <div className="mb-6">

@@ -7,8 +7,10 @@ import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { DeployWizard } from '../components/DeployWizard';
 import { formatDuration } from '../lib/format';
+import { useProject } from '../hooks/useProject';
 
 export function DeployPage() {
+  const { projectId } = useProject();
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [loading, setLoading] = useState(true);
@@ -19,10 +21,11 @@ export function DeployPage() {
   usePageTitle('Infrastructure');
 
   const loadData = useCallback(async () => {
+    if (!projectId) return;
     try {
       const [deps, ags] = await Promise.all([
-        api.getDeployments({ limit: 50 }),
-        api.getAgents().then(r => r.agents),
+        api.getDeployments(projectId, { limit: 50 }),
+        api.getAgents(projectId).then(r => r.agents),
       ]);
       setDeployments(deps);
       setAgents(ags);
@@ -32,7 +35,7 @@ export function DeployPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [projectId]);
 
   usePolling(loadData, 10000);
 
@@ -72,7 +75,7 @@ export function DeployPage() {
             {activeDeps.map(d => (
               <Link
                 key={d.deployment_id}
-                to={`/deploy/${d.deployment_id}`}
+                to={`/projects/${projectId}/deploy/${d.deployment_id}`}
                 className="block border border-blue-500/20 bg-blue-500/5 rounded p-3"
               >
                 <div className="flex items-center justify-between mb-1">
@@ -117,7 +120,7 @@ export function DeployPage() {
               {completedDeps.map(d => (
                 <Link
                   key={d.deployment_id}
-                  to={`/deploy/${d.deployment_id}`}
+                  to={`/projects/${projectId}/deploy/${d.deployment_id}`}
                   className="block border border-gray-800 rounded p-3"
                 >
                   <div className="flex items-center justify-between mb-1">
@@ -151,7 +154,7 @@ export function DeployPage() {
                   {completedDeps.map(d => (
                     <tr key={d.deployment_id} className="border-b border-gray-800/30 hover:bg-gray-800/10">
                       <td className="px-4 py-3">
-                        <Link to={`/deploy/${d.deployment_id}`} className="text-cyan-400 hover:text-cyan-300">
+                        <Link to={`/projects/${projectId}/deploy/${d.deployment_id}`} className="text-cyan-400 hover:text-cyan-300">
                           {d.name}
                         </Link>
                       </td>
@@ -182,7 +185,7 @@ export function DeployPage() {
             tester VMs
             {testerVms.length > 0 && <span className="text-gray-600 ml-2">({testerVms.length})</span>}
           </h3>
-          <Link to="/tests" className="text-xs text-gray-600 hover:text-gray-400 transition-colors">
+          <Link to={`/projects/${projectId}/tests`} className="text-xs text-gray-600 hover:text-gray-400 transition-colors">
             Manage in Tests →
           </Link>
         </div>
@@ -190,7 +193,7 @@ export function DeployPage() {
         {testerVms.length === 0 ? (
           <div className="border border-gray-800 rounded p-8 text-center">
             <p className="text-gray-500 text-sm">No tester VMs deployed</p>
-            <Link to="/tests" className="text-xs text-cyan-400 mt-2 inline-block">
+            <Link to={`/projects/${projectId}/tests`} className="text-xs text-cyan-400 mt-2 inline-block">
               Deploy a tester from the Tests page
             </Link>
           </div>
@@ -228,10 +231,11 @@ export function DeployPage() {
 
       {showWizard && (
         <DeployWizard
+          projectId={projectId}
           onClose={() => setShowWizard(false)}
           onCreated={(id) => {
             loadData();
-            navigate(`/deploy/${id}`);
+            navigate(`/projects/${projectId}/deploy/${id}`);
           }}
         />
       )}

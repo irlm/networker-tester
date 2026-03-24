@@ -6,6 +6,7 @@ import { CreateScheduleDialog } from '../components/CreateScheduleDialog';
 import { useToast } from '../hooks/useToast';
 import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
+import { useProject } from '../hooks/useProject';
 
 function formatCron(expr: string): { label: string; raw: string } {
   const presets: Record<string, string> = {
@@ -74,6 +75,7 @@ function scheduleStatus(s: Schedule): { badge: string; label: string; detail: st
 }
 
 export function SchedulesPage() {
+  const { projectId } = useProject();
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
@@ -84,17 +86,18 @@ export function SchedulesPage() {
   usePageTitle('Schedules');
 
   const refresh = useCallback(() => {
-    api.getSchedules()
+    if (!projectId) return;
+    api.getSchedules(projectId)
       .then(s => { setSchedules(s); setLoading(false); })
       .catch(() => { addToast('error', 'Failed to load schedules'); setLoading(false); });
-  }, [addToast]);
+  }, [addToast, projectId]);
 
   usePolling(refresh, 10000);
 
   const handleToggle = async (id: string) => {
     setToggling(id);
     try {
-      const result = await api.toggleSchedule(id);
+      const result = await api.toggleSchedule(projectId, id);
       addToast('success', `Schedule ${result.enabled ? 'enabled' : 'paused'}`);
       refresh();
     } catch {
@@ -106,7 +109,7 @@ export function SchedulesPage() {
 
   const handleTrigger = async (id: string, name: string) => {
     try {
-      const result = await api.triggerSchedule(id);
+      const result = await api.triggerSchedule(projectId, id);
       addToast('success', `Test started from "${name}" (${result.job_id.slice(0, 8)})`);
       refresh();
     } catch {
@@ -122,7 +125,7 @@ export function SchedulesPage() {
     }
     setConfirmDelete(null);
     try {
-      await api.deleteSchedule(id);
+      await api.deleteSchedule(projectId, id);
       addToast('success', 'Schedule deleted');
       refresh();
     } catch {
@@ -375,6 +378,7 @@ export function SchedulesPage() {
 
       {showCreate && (
         <CreateScheduleDialog
+          projectId={projectId}
           onClose={() => setShowCreate(false)}
           onCreated={refresh}
         />

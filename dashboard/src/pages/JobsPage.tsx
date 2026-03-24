@@ -7,10 +7,12 @@ import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useToast } from '../hooks/useToast';
 import { formatDuration } from '../lib/format';
+import { useProject } from '../hooks/useProject';
 
 const STATUS_OPTIONS = ['all', 'pending', 'running', 'completed', 'failed', 'cancelled'] as const;
 
 export function JobsPage() {
+  const { projectId } = useProject();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [testers, setTesters] = useState<Agent[]>([]);
   const [deployments, setDeployments] = useState<Deployment[]>([]);
@@ -34,9 +36,10 @@ export function JobsPage() {
   usePageTitle('Tests');
 
   const loadJobs = useCallback(() => {
+    if (!projectId) return;
     const params: { status?: string; limit?: number } = { limit: 20 };
     if (statusFilter !== 'all') params.status = statusFilter;
-    api.getJobs(params).then((data) => {
+    api.getJobs(projectId, params).then((data) => {
       setJobs(data);
       setError(null);
       setLoading(false);
@@ -44,14 +47,15 @@ export function JobsPage() {
       setError(String(e));
       setLoading(false);
     });
-  }, [statusFilter]);
+  }, [statusFilter, projectId]);
 
   const loadTesters = useCallback(() => {
-    api.getAgents().then(r => setTesters(r.agents)).catch(() => {});
-    api.getDeployments({ limit: 20 }).then(deps => {
+    if (!projectId) return;
+    api.getAgents(projectId).then(r => setTesters(r.agents)).catch(() => {});
+    api.getDeployments(projectId, { limit: 20 }).then(deps => {
       setDeployments(deps.filter(d => d.status === 'completed' && d.endpoint_ips && d.endpoint_ips.length > 0));
     }).catch(() => {});
-  }, []);
+  }, [projectId]);
 
   usePolling(loadJobs, 5000);
   usePolling(loadTesters, 10000);
@@ -61,7 +65,7 @@ export function JobsPage() {
     try {
       if (addTesterMode === 'cloud') {
         const vmName = testerName.trim() || `tester-${cloudRegion}-${Date.now().toString(36).slice(-4)}`;
-        await api.deployTesterVm({
+        await api.deployTesterVm(projectId, {
           name: vmName,
           provider: 'azure',
           region: cloudRegion,
@@ -70,7 +74,7 @@ export function JobsPage() {
         addToast('success', `Tester VM "${vmName}" deploying... (~3 minutes)`);
       } else if (addTesterMode === 'ssh') {
         if (!sshHost.trim()) { setAddingTester(false); return; }
-        const result = await api.createAgent({
+        const result = await api.createAgent(projectId, {
           name: testerName.trim() || `tester-${sshHost}`,
           location: 'ssh',
           ssh_host: sshHost,
@@ -84,7 +88,7 @@ export function JobsPage() {
         const dep = deployments.find(d =>
           d.endpoint_ips?.includes(selectedEndpoint)
         );
-        const result = await api.createAgent({
+        const result = await api.createAgent(projectId, {
           name: testerName.trim() || `tester-${selectedEndpoint}`,
           location: 'ssh',
           ssh_host: selectedEndpoint,
@@ -108,7 +112,7 @@ export function JobsPage() {
 
   const handleDeleteTester = async (id: string, name: string) => {
     try {
-      await api.deleteAgent(id);
+      await api.deleteAgent(projectId, id);
       addToast('info', `Tester "${name}" removed`);
       loadTesters();
     } catch {
@@ -194,7 +198,7 @@ export function JobsPage() {
       </div>
 
       {showCreate && (
-        <CreateJobDialog onClose={() => setShowCreate(false)} onCreated={loadJobs} />
+        <CreateJobDialog projectId={projectId} onClose={() => setShowCreate(false)} onCreated={loadJobs} />
       )}
 
       {/* Testers Panel — flat list, no card wrapper */}
@@ -411,7 +415,7 @@ export function JobsPage() {
           return (
             <Link
               key={job.job_id}
-              to={`/tests/${job.job_id}`}
+              to={`/projects/${projectId}/tests/${job.job_id}`}
               className={`block border border-gray-800 rounded p-3 ${isActive ? 'border-l-2 border-l-blue-500/50' : ''}`}
             >
               <div className="flex items-center justify-between mb-1">
@@ -462,7 +466,7 @@ export function JobsPage() {
                   className={`border-b border-gray-800/50 hover:bg-gray-800/20 ${isActive ? 'bg-blue-500/5' : ''}`}
                 >
                   <td className="px-4 py-3">
-                    <Link to={`/tests/${job.job_id}`} className="text-cyan-400 hover:underline font-mono text-xs">
+                    <Link to={`/projects/${projectId}/tests/${job.job_id}`} className="text-cyan-400 hover:underline font-mono text-xs">
                       {job.job_id.slice(0, 8)}
                     </Link>
                   </td>

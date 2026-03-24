@@ -8,6 +8,7 @@ import { useLiveStore } from '../stores/liveStore';
 import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useToast } from '../hooks/useToast';
+import { useProject } from '../hooks/useProject';
 import {
   computeProtocolStats,
   computeTimingBreakdown,
@@ -34,6 +35,7 @@ const EMPTY_ATTEMPTS: LiveAttempt[] = [];
 const EMPTY_LOGS: { line: string; level: string }[] = [];
 
 export function JobDetailPage() {
+  const { projectId } = useProject();
   const { jobId } = useParams<{ jobId: string }>();
   const [job, setJob] = useState<Job | null>(null);
   const [dbAttempts, setDbAttempts] = useState<LiveAttempt[]>([]);
@@ -59,10 +61,10 @@ export function JobDetailPage() {
   // Load attempts and run metadata from DB when job completes with a run_id.
   // Retry briefly if run_id appears but DB returns empty (race: DB write in progress).
   useEffect(() => {
-    if (!job?.run_id) return;
+    if (!job?.run_id || !projectId) return;
     let cancelled = false;
     const fetchAttempts = (retries: number) => {
-      api.getRunAttempts(job.run_id!).then((data) => {
+      api.getRunAttempts(projectId, job.run_id!).then((data) => {
         if (cancelled) return;
         const loaded = data as unknown as LiveAttempt[];
         if (loaded.length === 0 && retries > 0) {
@@ -74,7 +76,7 @@ export function JobDetailPage() {
       }).catch(() => {});
     };
     fetchAttempts(3);
-    api.getRun(job.run_id).then((data) => {
+    api.getRun(projectId, job.run_id).then((data) => {
       if (cancelled) return;
       setRunMeta({
         client_version: data.client_version,
@@ -86,7 +88,7 @@ export function JobDetailPage() {
       }
     }).catch(() => {});
     return () => { cancelled = true; };
-  }, [job?.run_id]);
+  }, [job?.run_id, projectId]);
 
   // Use live attempts while running; switch to DB attempts once loaded.
   // Keep live attempts visible until DB attempts are available to avoid blank flash.
@@ -110,9 +112,9 @@ export function JobDetailPage() {
   const [finalFetchDone, setFinalFetchDone] = useState(false);
   usePolling(
     () => {
-      if (!jobId) return;
+      if (!jobId || !projectId) return;
       api
-        .getJob(jobId)
+        .getJob(projectId, jobId)
         .then((j) => {
           setJob(j);
           setError(null);
@@ -246,7 +248,7 @@ export function JobDetailPage() {
   const handleCancel = async () => {
     if (!jobId) return;
     try {
-      await api.cancelJob(jobId);
+      await api.cancelJob(projectId, jobId);
       addToast('success', `Job ${shortId} cancelled`);
     } catch (err) {
       addToast('error', err instanceof Error ? err.message : 'Failed to cancel job');
@@ -256,7 +258,7 @@ export function JobDetailPage() {
   if (loading && !job) {
     return (
       <div className="p-4 md:p-6">
-        <Breadcrumb items={[{ label: 'Tests', to: '/tests' }, { label: `Test ${shortId}` }]} />
+        <Breadcrumb items={[{ label: 'Tests', to: `/projects/${projectId}/tests` }, { label: `Test ${shortId}` }]} />
         <div className="text-gray-500 motion-safe:animate-pulse">Loading job {shortId}...</div>
       </div>
     );
@@ -265,7 +267,7 @@ export function JobDetailPage() {
   if (error && !job) {
     return (
       <div className="p-4 md:p-6">
-        <Breadcrumb items={[{ label: 'Tests', to: '/tests' }, { label: `Test ${shortId}` }]} />
+        <Breadcrumb items={[{ label: 'Tests', to: `/projects/${projectId}/tests` }, { label: `Test ${shortId}` }]} />
         <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
           <h3 className="text-red-400 font-bold mb-2">Failed to load job</h3>
           <p className="text-red-300 text-sm font-mono">{error}</p>
@@ -288,7 +290,7 @@ export function JobDetailPage() {
 
   return (
     <div className="p-4 md:p-6">
-      <Breadcrumb items={[{ label: 'Tests', to: '/tests' }, { label: `Test ${shortId}` }]} />
+      <Breadcrumb items={[{ label: 'Tests', to: `/projects/${projectId}/tests` }, { label: `Test ${shortId}` }]} />
 
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
@@ -346,7 +348,7 @@ export function JobDetailPage() {
             Test {job.status}.
             {job.run_id && (
               <span className="ml-2 text-gray-500">
-                Run: <Link to={`/runs/${job.run_id}`} className="font-mono text-cyan-400 hover:underline">{job.run_id.slice(0, 8)}</Link>
+                Run: <Link to={`/projects/${projectId}/runs/${job.run_id}`} className="font-mono text-cyan-400 hover:underline">{job.run_id.slice(0, 8)}</Link>
               </span>
             )}
           </p>
@@ -961,7 +963,7 @@ export function JobDetailPage() {
             <>
               <div className="text-gray-500">Run ID</div>
               <div className="font-mono">
-                <Link to={`/runs/${job.run_id}`} className="text-cyan-400 hover:underline">
+                <Link to={`/projects/${projectId}/runs/${job.run_id}`} className="text-cyan-400 hover:underline">
                   {job.run_id}
                 </Link>
               </div>

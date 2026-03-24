@@ -233,3 +233,29 @@ export interface LiveAttempt {
   page_load?: { total_ms: number; ttfb_ms?: number; asset_count: number; assets_fetched: number; total_bytes?: number; connections_opened?: number; tls_setup_ms?: number; tls_overhead_ratio?: number; cpu_time_ms?: number; connection_reused?: boolean };
   browser?: { load_ms: number; dom_content_loaded_ms?: number; ttfb_ms?: number; resource_count?: number; transferred_bytes?: number; protocol?: string };
 }
+
+// Project types
+export interface ProjectSummary {
+  project_id: string;
+  name: string;
+  slug: string;
+  role: string;
+  description?: string;
+  created_at: string;
+}
+
+export interface ProjectDetail extends ProjectSummary {
+  settings: Record<string, unknown>;
+  created_by: string;
+  updated_at: string;
+}
+
+export interface ProjectMember {
+  project_id: string;
+  user_id: string;
+  role: string;
+  joined_at: string;
+  invited_by: string | null;
+  email: string;
+  display_name: string | null;
+}

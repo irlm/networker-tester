@@ -7,6 +7,7 @@ import { formatDuration } from '../lib/format';
 import { usePolling } from '../hooks/usePolling';
 import { useLiveStore } from '../stores/liveStore';
 import { useToast } from '../hooks/useToast';
+import { useProject } from '../hooks/useProject';
 
 interface EndpointHealth {
   ip: string;
@@ -18,6 +19,7 @@ interface EndpointHealth {
 const EMPTY_LINES: string[] = [];
 
 export function DeployDetailPage() {
+  const { projectId } = useProject();
   const { deploymentId } = useParams<{ deploymentId: string }>();
   const [deployment, setDeployment] = useState<Deployment | null>(null);
   const [loading, setLoading] = useState(true);
@@ -37,7 +39,7 @@ export function DeployDetailPage() {
   const loadDeployment = useCallback(async () => {
     if (!deploymentId) return;
     try {
-      const data = await api.getDeployment(deploymentId);
+      const data = await api.getDeployment(projectId, deploymentId);
       setDeployment(data);
       setError(null);
     } catch {
@@ -45,7 +47,7 @@ export function DeployDetailPage() {
     } finally {
       setLoading(false);
     }
-  }, [deploymentId]);
+  }, [deploymentId, projectId]);
 
   usePolling(loadDeployment, 5000, !!deploymentId);
 
@@ -65,7 +67,7 @@ export function DeployDetailPage() {
   const handleStop = async () => {
     if (!deploymentId) return;
     try {
-      await api.stopDeployment(deploymentId);
+      await api.stopDeployment(projectId, deploymentId);
       addToast('info', 'Deployment stop requested');
       loadDeployment();
     } catch {
@@ -77,7 +79,7 @@ export function DeployDetailPage() {
     if (!deploymentId) return;
     setHealthLoading(true);
     try {
-      const result = await api.checkDeployment(deploymentId) as { endpoints: EndpointHealth[]; latest_release?: string };
+      const result = await api.checkDeployment(projectId, deploymentId) as { endpoints: EndpointHealth[]; latest_release?: string };
       setEndpointHealth(result.endpoints);
       if (result.latest_release) {
         const epVer = result.endpoints.find(e => e.version)?.version ?? null;
@@ -93,9 +95,9 @@ export function DeployDetailPage() {
   const handleDelete = async () => {
     if (!deploymentId) return;
     try {
-      await api.deleteDeployment(deploymentId);
+      await api.deleteDeployment(projectId, deploymentId);
       addToast('success', 'Deployment deleted');
-      navigate('/deploy');
+      navigate(`/projects/${projectId}/deploy`);
     } catch {
       addToast('error', 'Failed to delete deployment');
     }
@@ -135,7 +137,7 @@ export function DeployDetailPage() {
     <div className="p-4 md:p-6">
       {/* Breadcrumb */}
       <div className="flex items-center gap-2 text-sm text-gray-500 mb-4">
-        <Link to="/deploy" className="hover:text-gray-300">
+        <Link to={`/projects/${projectId}/deploy`} className="hover:text-gray-300">
           Deployments
         </Link>
         <span>/</span>
@@ -173,7 +175,7 @@ export function DeployDetailPage() {
                   onClick={async () => {
                     if (!deploymentId) return;
                     try {
-                      await api.updateEndpoint(deploymentId);
+                      await api.updateEndpoint(projectId, deploymentId);
                       addToast('info', 'Endpoint update started');
                       loadDeployment();
                     } catch {
