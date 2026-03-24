@@ -2,17 +2,12 @@ import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useProjectStore, type ProjectSummary } from '../stores/projectStore';
 import { useAuthStore } from '../stores/authStore';
+import { RoleBadge } from './common/RoleBadge';
 
 interface ProjectSwitcherProps {
   collapsed: boolean;
   connectionDot?: React.ReactNode;
 }
-
-const ROLE_COLORS: Record<string, string> = {
-  admin: 'text-green-400',
-  operator: 'text-cyan-400',
-  viewer: 'text-gray-500',
-};
 
 export function ProjectSwitcher({ collapsed, connectionDot }: ProjectSwitcherProps) {
   const [open, setOpen] = useState(false);
@@ -22,7 +17,7 @@ export function ProjectSwitcher({ collapsed, connectionDot }: ProjectSwitcherPro
   const isPlatformAdmin = useAuthStore(s => s.isPlatformAdmin);
 
   const activeProject = projects.find(p => p.project_id === activeProjectId);
-  const displayName = activeProject?.name || 'Select project';
+  const displayName = activeProject?.name || 'Select workspace';
 
   useEffect(() => {
     if (!open) return;
@@ -87,20 +82,18 @@ export function ProjectSwitcher({ collapsed, connectionDot }: ProjectSwitcherPro
               }`}
             >
               <span className="text-sm text-gray-200 truncate">{project.name}</span>
-              <span className={`text-[10px] ${ROLE_COLORS[project.role] || 'text-gray-500'}`}>
-                {project.role}
-              </span>
+              <RoleBadge role={project.role} />
             </button>
           ))}
           {projects.length === 0 && (
-            <div className="px-3 py-2 text-xs text-gray-600">No projects</div>
+            <div className="px-3 py-2 text-xs text-gray-600">No workspaces</div>
           )}
           {isPlatformAdmin && (
             <button
               onClick={() => { setOpen(false); navigate('/projects'); }}
               className="w-full text-left px-3 py-2 border-t border-gray-800 text-xs text-cyan-400 hover:bg-gray-800/50 transition-colors"
             >
-              Manage Projects
+              Manage Workspaces
             </button>
           )}
         </div>

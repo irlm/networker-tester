@@ -5,12 +5,7 @@ import { useProjectStore, type ProjectSummary } from '../stores/projectStore';
 import { useAuthStore } from '../stores/authStore';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useToast } from '../hooks/useToast';
-
-const ROLE_COLORS: Record<string, string> = {
-  admin: 'text-green-400',
-  operator: 'text-cyan-400',
-  viewer: 'text-gray-500',
-};
+import { RoleBadge } from '../components/common/RoleBadge';
 
 export function ProjectsPage() {
   const [loading, setLoading] = useState(true);
@@ -23,7 +18,7 @@ export function ProjectsPage() {
   const { projects, setProjects, setActiveProject } = useProjectStore();
   const isPlatformAdmin = useAuthStore(s => s.isPlatformAdmin);
 
-  usePageTitle('Projects');
+  usePageTitle('Workspaces');
 
   useEffect(() => {
     api.getProjects()
@@ -36,7 +31,7 @@ export function ProjectsPage() {
     setCreating(true);
     try {
       const result = await api.createProject(newName.trim(), newDescription.trim() || undefined);
-      addToast('success', `Project "${newName.trim()}" created`);
+      addToast('success', `Workspace "${newName.trim()}" created`);
       setShowCreate(false);
       setNewName('');
       setNewDescription('');
@@ -49,7 +44,7 @@ export function ProjectsPage() {
         navigate(`/projects/${result.project_id}`);
       }
     } catch {
-      addToast('error', 'Failed to create project');
+      addToast('error', 'Failed to create workspace');
     } finally {
       setCreating(false);
     }
@@ -63,7 +58,7 @@ export function ProjectsPage() {
   if (loading) {
     return (
       <div className="p-4 md:p-6">
-        <h2 className="text-xl font-bold text-gray-100 mb-6">Projects</h2>
+        <h2 className="text-xl font-bold text-gray-100 mb-6">Workspaces</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {[1, 2, 3].map(i => (
             <div key={i} className="border border-gray-800 rounded p-4">
@@ -79,27 +74,27 @@ export function ProjectsPage() {
   return (
     <div className="p-4 md:p-6">
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-bold text-gray-100">Projects</h2>
+        <h2 className="text-xl font-bold text-gray-100">Workspaces</h2>
         {isPlatformAdmin && (
           <button
             onClick={() => setShowCreate(true)}
             className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-2 rounded text-sm transition-colors"
           >
-            Create Project
+            Create Workspace
           </button>
         )}
       </div>
 
       {showCreate && (
         <div className="border border-gray-800 rounded p-4 mb-6">
-          <h3 className="text-sm text-gray-200 font-medium mb-3">New Project</h3>
+          <h3 className="text-sm text-gray-200 font-medium mb-3">New Workspace</h3>
           <div className="space-y-3">
             <div>
               <label className="block text-xs text-gray-400 mb-1">Name</label>
               <input
                 value={newName}
                 onChange={e => setNewName(e.target.value)}
-                placeholder="My Project"
+                placeholder="My Workspace"
                 className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 autoFocus
               />
@@ -134,13 +129,13 @@ export function ProjectsPage() {
 
       {projects.length === 0 ? (
         <div className="border border-gray-800 rounded p-8 text-center">
-          <p className="text-gray-500 text-sm mb-2">No projects yet</p>
+          <p className="text-gray-500 text-sm mb-2">No workspaces yet</p>
           {isPlatformAdmin && (
             <button
               onClick={() => setShowCreate(true)}
               className="text-xs text-cyan-400"
             >
-              Create your first project
+              Create your first workspace
             </button>
           )}
         </div>
@@ -154,9 +149,7 @@ export function ProjectsPage() {
             >
               <div className="flex items-center justify-between mb-2">
                 <h3 className="text-sm text-gray-100 font-medium truncate">{project.name}</h3>
-                <span className={`text-[10px] ${ROLE_COLORS[project.role] || 'text-gray-500'}`}>
-                  {project.role}
-                </span>
+                <RoleBadge role={project.role} />
               </div>
               {project.description && (
                 <p className="text-xs text-gray-500 truncate mb-2">{project.description}</p>

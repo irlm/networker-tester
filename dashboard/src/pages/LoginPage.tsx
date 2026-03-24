@@ -98,7 +98,7 @@ export function LoginPage() {
   const hasSso = providers.length > 0;
 
   return (
-    <div className="min-h-screen bg-[var(--bg-base)] flex items-center justify-center p-4">
+    <div className="min-h-screen bg-[var(--bg-base)] flex flex-col items-center pt-[15vh] p-4">
       <div className="w-full max-w-xs">
         {/* Brand */}
         <div className="text-center mb-8">
@@ -192,7 +192,7 @@ export function LoginPage() {
             <button
               type="submit"
               disabled={loading || checking}
-              className="w-full bg-green-600 hover:bg-green-500 text-white py-2.5 rounded text-sm font-medium transition-colors disabled:opacity-50 mt-2"
+              className="w-full bg-cyan-600 hover:bg-cyan-500 text-white py-2.5 rounded text-sm font-medium transition-colors disabled:opacity-50 mt-2"
             >
               {loading ? 'Signing in...' : checking ? 'Checking...' : showPassword ? 'Sign in' : 'Continue'}
             </button>

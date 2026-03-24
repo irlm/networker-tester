@@ -5,14 +5,9 @@ import { useProject } from '../hooks/useProject';
 import { useAuthStore } from '../stores/authStore';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useToast } from '../hooks/useToast';
+import { RoleBadge } from '../components/common/RoleBadge';
 
 const ROLES = ['admin', 'operator', 'viewer'] as const;
-
-const ROLE_COLORS: Record<string, string> = {
-  admin: 'text-green-400',
-  operator: 'text-cyan-400',
-  viewer: 'text-gray-500',
-};
 
 export function ProjectMembersPage() {
   const { projectId } = useProject();
@@ -25,7 +20,7 @@ export function ProjectMembersPage() {
   const [adding, setAdding] = useState(false);
   const addToast = useToast();
 
-  usePageTitle('Members');
+  usePageTitle('Workspace Members');
 
   const loadMembers = useCallback(async () => {
     if (!projectId) return;
@@ -83,7 +78,7 @@ export function ProjectMembersPage() {
   if (loading) {
     return (
       <div className="p-4 md:p-6">
-        <h2 className="text-xl font-bold text-gray-100 mb-6">Project Members</h2>
+        <h2 className="text-xl font-bold text-gray-100 mb-6">Workspace Members</h2>
         <p className="text-gray-500 motion-safe:animate-pulse">Loading members...</p>
       </div>
     );
@@ -92,7 +87,7 @@ export function ProjectMembersPage() {
   return (
     <div className="p-4 md:p-6">
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-bold text-gray-100">Project Members</h2>
+        <h2 className="text-xl font-bold text-gray-100">Workspace Members</h2>
         <button
           onClick={() => setShowAdd(true)}
           className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-2 rounded text-sm transition-colors"
@@ -169,9 +164,7 @@ export function ProjectMembersPage() {
                     <td className="px-4 py-3 text-gray-400">{member.display_name || '\u2014'}</td>
                     <td className="px-4 py-3">
                       {isSelf ? (
-                        <span className={`text-xs ${ROLE_COLORS[member.role] || 'text-gray-500'}`}>
-                          {member.role}
-                        </span>
+                        <RoleBadge role={member.role} className="text-xs" />
                       ) : (
                         <select
                           value={member.role}

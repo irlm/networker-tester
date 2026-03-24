@@ -6,6 +6,14 @@ import { ProjectSwitcher } from '../ProjectSwitcher';
 import { NotificationBell } from '../NotificationBell';
 import { api } from '../../api/client';
 
+interface NavItem {
+  path: string;
+  label: string;
+  icon: string;
+  exact?: boolean;
+  badge?: React.ReactNode;
+}
+
 interface SidebarProps {
   connectionDot?: React.ReactNode;
 }
@@ -20,16 +28,42 @@ export function Sidebar({ connectionDot }: SidebarProps) {
   const [pendingCount, setPendingCount] = useState(0);
 
   const pid = projectId;
+  const isAdmin = role === 'admin' || isPlatformAdmin;
 
-  const navItems = [
+  // ── Nav item groups ─────────────────────────────────────────────────
+
+  const coreItems: NavItem[] = pid ? [
     { path: `/projects/${pid}`, label: 'Dashboard', icon: '\u25C8', exact: true },
     { path: `/projects/${pid}/deploy`, label: 'Infra', icon: '\u25A3' },
     { path: `/projects/${pid}/tests`, label: 'Tests', icon: '\u25B6' },
     { path: `/projects/${pid}/schedules`, label: 'Schedules', icon: '\u21BB' },
     { path: `/projects/${pid}/runs`, label: 'Runs', icon: '\u25F7' },
-  ];
+  ] : [];
 
-  const isAdmin = role === 'admin' || isPlatformAdmin;
+  const projectItems: NavItem[] = [];
+  if (pid && isOperator) {
+    projectItems.push({ path: `/projects/${pid}/cloud-accounts`, label: 'Cloud', icon: '\u2601' });
+  }
+  if (pid && isProjectAdmin) {
+    projectItems.push({ path: `/projects/${pid}/share-links`, label: 'Share Links', icon: '\u{1F517}' });
+    projectItems.push({ path: `/projects/${pid}/members`, label: 'Members', icon: '\u2302' });
+    projectItems.push({
+      path: `/projects/${pid}/approvals`,
+      label: 'Approvals',
+      icon: '\u2713',
+      badge: pid ? <NotificationBell projectId={pid} /> : undefined,
+    });
+  }
+
+  const platformItems: NavItem[] = [];
+  if (isAdmin) {
+    platformItems.push({ path: '/users', label: 'Users', icon: '\u265F' });
+  }
+  if (pid) {
+    platformItems.push({ path: `/projects/${pid}/settings`, label: 'Settings', icon: '\u2699' });
+  }
+
+  // ── Pending user count (admin only) ─────────────────────────────────
 
   const fetchPending = useCallback(async () => {
     if (!isAdmin) return;
@@ -45,7 +79,6 @@ export function Sidebar({ connectionDot }: SidebarProps) {
     let cancelled = false;
     const run = () => { if (!cancelled) fetchPending(); };
     const id = setInterval(run, 30000);
-    // Schedule initial fetch as microtask to avoid synchronous setState in effect
     void Promise.resolve().then(run);
     return () => { cancelled = true; clearInterval(id); };
   }, [fetchPending]);
@@ -58,6 +91,65 @@ export function Sidebar({ connectionDot }: SidebarProps) {
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
   }, [mobileOpen]);
+
+  // ── Render helpers ──────────────────────────────────────────────────
+
+  const renderItem = (item: NavItem) => {
+    const active = item.exact
+      ? location.pathname === item.path
+      : location.pathname.startsWith(item.path);
+
+    const isUsersWithPending = item.path === '/users' && pendingCount > 0;
+
+    return (
+      <Link
+        key={item.path}
+        to={item.path}
+        onClick={() => setMobileOpen(false)}
+        aria-current={active ? 'page' : undefined}
+        title={collapsed ? item.label : undefined}
+        className={`flex items-center overflow-hidden whitespace-nowrap ${collapsed ? 'justify-center' : 'gap-3 px-3'} py-2 rounded text-sm mb-0.5 transition-all duration-200 ${
+          active
+            ? 'bg-gray-800/40 text-gray-100'
+            : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/30'
+        }`}
+      >
+        <span className="text-base relative" aria-hidden="true">
+          {item.icon}
+          {isUsersWithPending && collapsed && (
+            <span className="absolute -top-1 -right-2 bg-yellow-500 text-[9px] text-black font-bold rounded-full w-3.5 h-3.5 flex items-center justify-center leading-none">
+              {pendingCount > 9 ? '9+' : pendingCount}
+            </span>
+          )}
+        </span>
+        {!collapsed && (
+          <span className="flex items-center gap-2">
+            {item.label}
+            {isUsersWithPending && (
+              <span className="bg-yellow-500 text-[9px] text-black font-bold rounded-full px-1.5 py-0.5 leading-none">
+                {pendingCount}
+              </span>
+            )}
+            {item.badge}
+          </span>
+        )}
+      </Link>
+    );
+  };
+
+  const renderSection = (label: string, items: NavItem[]) => {
+    if (items.length === 0) return null;
+    return (
+      <div className="mt-3 pt-3 border-t border-gray-800/50">
+        {!collapsed && (
+          <div className="px-3 mb-1.5 text-[10px] uppercase tracking-wider text-gray-600">
+            {label}
+          </div>
+        )}
+        {items.map(renderItem)}
+      </div>
+    );
+  };
 
   return (
     <>
@@ -80,172 +172,15 @@ export function Sidebar({ connectionDot }: SidebarProps) {
           <ProjectSwitcher collapsed={collapsed} connectionDot={connectionDot} />
         </div>
 
-        <nav className="flex-1 p-1.5" aria-label="Main navigation">
-          {pid && navItems.map((item) => {
-            const active = item.exact
-              ? location.pathname === item.path
-              : location.pathname.startsWith(item.path);
-            return (
-              <Link
-                key={item.path}
-                to={item.path}
-                onClick={() => setMobileOpen(false)}
-                aria-current={active ? 'page' : undefined}
-                title={collapsed ? item.label : undefined}
-                className={`flex items-center overflow-hidden whitespace-nowrap ${collapsed ? 'justify-center' : 'gap-3 px-3'} py-2 rounded text-sm mb-0.5 transition-all duration-200 ${
-                  active
-                    ? 'bg-gray-800/40 text-gray-100'
-                    : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/30'
-                }`}
-              >
-                <span className="text-base" aria-hidden="true">{item.icon}</span>
-                {!collapsed && item.label}
-              </Link>
-            );
-          })}
-          {pid && isProjectAdmin && (() => {
-            const shareLinksPath = `/projects/${pid}/share-links`;
-            const shareActive = location.pathname.startsWith(shareLinksPath);
-            return (
-              <Link
-                to={shareLinksPath}
-                onClick={() => setMobileOpen(false)}
-                aria-current={shareActive ? 'page' : undefined}
-                title={collapsed ? 'Share Links' : undefined}
-                className={`flex items-center overflow-hidden whitespace-nowrap ${collapsed ? 'justify-center' : 'gap-3 px-3'} py-2 rounded text-sm mb-0.5 transition-all duration-200 ${
-                  shareActive
-                    ? 'bg-gray-800/40 text-gray-100'
-                    : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/30'
-                }`}
-              >
-                <span className="text-base" aria-hidden="true">{'\u{1F517}'}</span>
-                {!collapsed && 'Share Links'}
-              </Link>
-            );
-          })()}
-          {pid && isProjectAdmin && (() => {
-            const membersPath = `/projects/${pid}/members`;
-            const active = location.pathname.startsWith(membersPath);
-            return (
-              <Link
-                to={membersPath}
-                onClick={() => setMobileOpen(false)}
-                aria-current={active ? 'page' : undefined}
-                title={collapsed ? 'Members' : undefined}
-                className={`flex items-center overflow-hidden whitespace-nowrap ${collapsed ? 'justify-center' : 'gap-3 px-3'} py-2 rounded text-sm mb-0.5 transition-all duration-200 ${
-                  active
-                    ? 'bg-gray-800/40 text-gray-100'
-                    : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/30'
-                }`}
-              >
-                <span className="text-base" aria-hidden="true">{'\u2302'}</span>
-                {!collapsed && 'Members'}
-              </Link>
-            );
-          })()}
-          {pid && isOperator && (() => {
-            const cloudPath = `/projects/${pid}/cloud-accounts`;
-            const active = location.pathname.startsWith(cloudPath);
-            return (
-              <Link
-                to={cloudPath}
-                onClick={() => setMobileOpen(false)}
-                aria-current={active ? 'page' : undefined}
-                title={collapsed ? 'Cloud' : undefined}
-                className={`flex items-center overflow-hidden whitespace-nowrap ${collapsed ? 'justify-center' : 'gap-3 px-3'} py-2 rounded text-sm mb-0.5 transition-all duration-200 ${
-                  active
-                    ? 'bg-gray-800/40 text-gray-100'
-                    : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/30'
-                }`}
-              >
-                <span className="text-base" aria-hidden="true">{'\u2601'}</span>
-                {!collapsed && 'Cloud'}
-              </Link>
-            );
-          })()}
-          {pid && isProjectAdmin && (() => {
-            const approvalsPath = `/projects/${pid}/approvals`;
-            const active = location.pathname.startsWith(approvalsPath);
-            return (
-              <Link
-                to={approvalsPath}
-                onClick={() => setMobileOpen(false)}
-                aria-current={active ? 'page' : undefined}
-                title={collapsed ? 'Approvals' : undefined}
-                className={`flex items-center overflow-hidden whitespace-nowrap ${collapsed ? 'justify-center' : 'gap-3 px-3'} py-2 rounded text-sm mb-0.5 transition-all duration-200 ${
-                  active
-                    ? 'bg-gray-800/40 text-gray-100'
-                    : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/30'
-                }`}
-              >
-                <span className="text-base relative" aria-hidden="true">
-                  {'\u2713'}
-                  {!collapsed && <NotificationBell projectId={pid} />}
-                </span>
-                {!collapsed && (
-                  <span className="flex items-center gap-2">
-                    Approvals
-                    {collapsed && <NotificationBell projectId={pid} />}
-                  </span>
-                )}
-              </Link>
-            );
-          })()}
-          {isAdmin && (() => {
-            const active = location.pathname.startsWith('/users');
-            return (
-              <Link
-                to="/users"
-                onClick={() => setMobileOpen(false)}
-                aria-current={active ? 'page' : undefined}
-                title={collapsed ? 'Users' : undefined}
-                className={`flex items-center overflow-hidden whitespace-nowrap ${collapsed ? 'justify-center' : 'gap-3 px-3'} py-2 rounded text-sm mb-0.5 transition-all duration-200 ${
-                  active
-                    ? 'bg-gray-800/40 text-gray-100'
-                    : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/30'
-                }`}
-              >
-                <span className="text-base relative" aria-hidden="true">
-                  {'\u265F'}
-                  {pendingCount > 0 && (
-                    <span className="absolute -top-1 -right-2 bg-yellow-500 text-[9px] text-black font-bold rounded-full w-3.5 h-3.5 flex items-center justify-center leading-none">
-                      {pendingCount > 9 ? '9+' : pendingCount}
-                    </span>
-                  )}
-                </span>
-                {!collapsed && (
-                  <span className="flex items-center gap-2">
-                    Users
-                    {pendingCount > 0 && (
-                      <span className="bg-yellow-500 text-[9px] text-black font-bold rounded-full px-1.5 py-0.5 leading-none">
-                        {pendingCount}
-                      </span>
-                    )}
-                  </span>
-                )}
-              </Link>
-            );
-          })()}
-          {pid && (() => {
-            const settingsPath = `/projects/${pid}/settings`;
-            const active = location.pathname.startsWith(settingsPath);
-            return (
-              <Link
-                to={settingsPath}
-                onClick={() => setMobileOpen(false)}
-                aria-current={active ? 'page' : undefined}
-                title={collapsed ? 'Settings' : undefined}
-                className={`flex items-center overflow-hidden whitespace-nowrap ${collapsed ? 'justify-center' : 'gap-3 px-3'} py-2 rounded text-sm mb-0.5 transition-all duration-200 ${
-                  active
-                    ? 'bg-gray-800/40 text-gray-100'
-                    : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/30'
-                }`}
-              >
-                <span className="text-base" aria-hidden="true">{'\u2699'}</span>
-                {!collapsed && 'Settings'}
-              </Link>
-            );
-          })()}
+        <nav className="flex-1 p-1.5 overflow-y-auto" aria-label="Main navigation">
+          {/* Core: daily workflow */}
+          {coreItems.map(renderItem)}
+
+          {/* Project: admin/operator tools */}
+          {renderSection('workspace', projectItems)}
+
+          {/* Platform: global admin */}
+          {renderSection('platform', platformItems)}
         </nav>
 
         {/* Collapse toggle + user */}
