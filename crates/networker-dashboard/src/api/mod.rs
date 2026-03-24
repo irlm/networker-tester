@@ -17,6 +17,7 @@ mod update;
 mod url_tests;
 mod users;
 mod version;
+mod visibility;
 
 use axum::{middleware, Router};
 use std::sync::Arc;
@@ -67,6 +68,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(url_tests::project_router(state.clone()))
         .merge(project_members::router(state.clone()))
         .merge(share_links::project_router(state.clone()))
+        .merge(visibility::project_router(state.clone()))
         .merge(projects::detail_router(state.clone()))
         .layer(middleware::from_fn_with_state(
             state.clone(),

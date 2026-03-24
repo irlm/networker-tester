@@ -241,16 +241,31 @@ async fn list_jobs_scoped(
     req: axum::extract::Request,
 ) -> Result<Json<Vec<crate::db::jobs::JobRow>>, StatusCode> {
     let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
+    let user = req.extensions().get::<AuthUser>().unwrap().clone();
     let client = state.db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error in list_jobs_scoped");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
-    let jobs = crate::db::jobs::list(
+
+    // Apply visibility filtering for viewers only
+    let visible_ids = if ctx.role == ProjectRole::Viewer {
+        crate::db::visibility::visible_resources(&client, &ctx.project_id, &user.user_id, "job")
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "Failed to check visibility rules");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?
+    } else {
+        None
+    };
+
+    let jobs = crate::db::jobs::list_filtered(
         &client,
         &ctx.project_id,
         q.status.as_deref(),
         q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT),
         q.offset.unwrap_or(0).max(0),
+        visible_ids.as_ref(),
     )
     .await
     .map_err(|e| {
