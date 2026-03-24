@@ -68,26 +68,71 @@ pub async fn list(
     limit: i64,
     offset: i64,
 ) -> anyhow::Result<Vec<JobRow>> {
-    let rows = if let Some(status) = status_filter {
-        client
-            .query(
-                "SELECT job_id, definition_id, agent_id, status, config, created_by,
-                        created_at, started_at, finished_at, run_id, error_message
-                 FROM job WHERE project_id = $1 AND status = $2
-                 ORDER BY created_at DESC LIMIT $3 OFFSET $4",
-                &[project_id, &status, &limit, &offset],
-            )
-            .await?
-    } else {
-        client
-            .query(
-                "SELECT job_id, definition_id, agent_id, status, config, created_by,
-                        created_at, started_at, finished_at, run_id, error_message
-                 FROM job WHERE project_id = $1
-                 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
-                &[project_id, &limit, &offset],
-            )
-            .await?
+    list_filtered(client, project_id, status_filter, limit, offset, None).await
+}
+
+pub async fn list_filtered(
+    client: &Client,
+    project_id: &Uuid,
+    status_filter: Option<&str>,
+    limit: i64,
+    offset: i64,
+    visible_ids: Option<&std::collections::HashSet<uuid::Uuid>>,
+) -> anyhow::Result<Vec<JobRow>> {
+    // If visibility filtering is active but the set is empty, return nothing
+    if let Some(ids) = visible_ids {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+    }
+
+    let visible_vec: Option<Vec<Uuid>> = visible_ids.map(|ids| ids.iter().copied().collect());
+
+    let rows = match (status_filter, &visible_vec) {
+        (Some(status), Some(ids)) => {
+            client
+                .query(
+                    "SELECT job_id, definition_id, agent_id, status, config, created_by,
+                            created_at, started_at, finished_at, run_id, error_message
+                     FROM job WHERE project_id = $1 AND status = $2 AND job_id = ANY($3)
+                     ORDER BY created_at DESC LIMIT $4 OFFSET $5",
+                    &[project_id, &status, ids, &limit, &offset],
+                )
+                .await?
+        }
+        (Some(status), None) => {
+            client
+                .query(
+                    "SELECT job_id, definition_id, agent_id, status, config, created_by,
+                            created_at, started_at, finished_at, run_id, error_message
+                     FROM job WHERE project_id = $1 AND status = $2
+                     ORDER BY created_at DESC LIMIT $3 OFFSET $4",
+                    &[project_id, &status, &limit, &offset],
+                )
+                .await?
+        }
+        (None, Some(ids)) => {
+            client
+                .query(
+                    "SELECT job_id, definition_id, agent_id, status, config, created_by,
+                            created_at, started_at, finished_at, run_id, error_message
+                     FROM job WHERE project_id = $1 AND job_id = ANY($2)
+                     ORDER BY created_at DESC LIMIT $3 OFFSET $4",
+                    &[project_id, ids, &limit, &offset],
+                )
+                .await?
+        }
+        (None, None) => {
+            client
+                .query(
+                    "SELECT job_id, definition_id, agent_id, status, config, created_by,
+                            created_at, started_at, finished_at, run_id, error_message
+                     FROM job WHERE project_id = $1
+                     ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+                    &[project_id, &limit, &offset],
+                )
+                .await?
+        }
     };
 
     Ok(rows

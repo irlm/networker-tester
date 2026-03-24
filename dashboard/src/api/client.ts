@@ -426,6 +426,19 @@ export const api = {
       return r.json();
     }),
 
+  // Visibility Rules (project-scoped, admin only)
+  getVisibilityRules: (projectId: string) =>
+    request<Record<string, unknown>[]>(projectUrl(projectId, 'visibility-rules')),
+
+  addVisibilityRule: (projectId: string, params: { user_id?: string; resource_type: string; resource_id: string }) =>
+    request<{ rule_id: string }>(projectUrl(projectId, 'visibility-rules'), {
+      method: 'POST',
+      body: JSON.stringify(params),
+    }),
+
+  removeVisibilityRule: (projectId: string, ruleId: string) =>
+    request<void>(projectUrl(projectId, `visibility-rules/${ruleId}`), { method: 'DELETE' }),
+
   // Version (NOT project-scoped)
   getVersionInfo: () => request<{
     dashboard_version: string;

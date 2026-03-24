@@ -344,16 +344,36 @@ async fn list_schedules_scoped(
     req: axum::extract::Request,
 ) -> Result<Json<Vec<crate::db::schedules::ScheduleRow>>, StatusCode> {
     let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
+    let user = req.extensions().get::<AuthUser>().unwrap().clone();
     let client = state.db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
-    let schedules = crate::db::schedules::list(&client, &ctx.project_id)
+
+    // Apply visibility filtering for viewers only
+    let visible_ids = if ctx.role == ProjectRole::Viewer {
+        crate::db::visibility::visible_resources(
+            &client,
+            &ctx.project_id,
+            &user.user_id,
+            "schedule",
+        )
         .await
         .map_err(|e| {
-            tracing::error!(error = %e, "Failed to list schedules");
+            tracing::error!(error = %e, "Failed to check visibility rules");
             StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        })?
+    } else {
+        None
+    };
+
+    let schedules =
+        crate::db::schedules::list_filtered(&client, &ctx.project_id, visible_ids.as_ref())
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "Failed to list schedules");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
     Ok(Json(schedules))
 }
 

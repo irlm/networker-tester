@@ -10,6 +10,7 @@ pub mod schedules;
 pub mod share_links;
 pub mod url_tests;
 pub mod users;
+pub mod visibility;
 
 use deadpool_postgres::{Config, Pool, Runtime};
 use tokio_postgres::NoTls;
