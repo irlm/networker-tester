@@ -107,7 +107,7 @@ async fn create_project(
 /// Router for list + create (mounted under protected routes, no project context).
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
-        .route("/api/projects", get(list_projects).post(create_project))
+        .route("/projects", get(list_projects).post(create_project))
         .with_state(state)
 }
 

@@ -219,7 +219,9 @@ pub async fn list(
     // Filter through job table: job.run_id matches a TestRun.RunId,
     // and UrlTestRun.Id links to TestRun.RunId through the same run concept.
     // For backward compat, also include url tests not linked to any job.
-    let rows = client
+    // UrlTestRun table only exists after browser tests have run.
+    // Return empty list if the table doesn't exist yet.
+    let rows = match client
         .query(
             "SELECT u.Id, u.StartedAt, u.CompletedAt, u.RequestedUrl, u.FinalUrl, u.Status,
                     u.PageLoadStrategy, u.ObservedProtocolPrimaryLoad, u.TotalRequests,
@@ -235,7 +237,18 @@ pub async fn list(
              ORDER BY u.StartedAt DESC LIMIT $2 OFFSET $3",
             &[project_id, &limit, &offset],
         )
-        .await?;
+        .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            // Check both the error message and the underlying DB error
+            let msg = format!("{e:?}");
+            if msg.contains("does not exist") || msg.contains("urltestrun") || msg.contains("UrlTestRun") || msg.contains("42P01") {
+                return Ok(vec![]);
+            }
+            return Err(e.into());
+        }
+    };
 
     Ok(rows
         .iter()

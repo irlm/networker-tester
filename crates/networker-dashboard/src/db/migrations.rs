@@ -282,6 +282,7 @@ ALTER TABLE test_definition ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES 
 ALTER TABLE job ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES project(project_id);
 ALTER TABLE schedule ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES project(project_id);
 ALTER TABLE deployment ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES project(project_id);
+ALTER TABLE cloud_connection ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES project(project_id);
 
 -- 8. Add cloud_account_id to deployment
 ALTER TABLE deployment ADD COLUMN IF NOT EXISTS cloud_account_id UUID REFERENCES cloud_account(account_id);
@@ -307,6 +308,7 @@ UPDATE test_definition SET project_id = '00000000-0000-0000-0000-000000000001' W
 UPDATE job SET project_id = '00000000-0000-0000-0000-000000000001' WHERE project_id IS NULL;
 UPDATE schedule SET project_id = '00000000-0000-0000-0000-000000000001' WHERE project_id IS NULL;
 UPDATE deployment SET project_id = '00000000-0000-0000-0000-000000000001' WHERE project_id IS NULL;
+UPDATE cloud_connection SET project_id = '00000000-0000-0000-0000-000000000001' WHERE project_id IS NULL;
 
 -- 13. Add all existing active users to Default project preserving current role
 INSERT INTO project_member (project_id, user_id, role)

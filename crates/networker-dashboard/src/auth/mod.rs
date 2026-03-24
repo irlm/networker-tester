@@ -247,8 +247,12 @@ pub async fn require_project(
     };
 
     // 2. Extract :project_id from the path.
-    //    The URI path looks like /api/projects/<uuid>/... — find the segment after "projects/".
-    let path = req.uri().path().to_string();
+    //    Use OriginalUri to get the full path before axum nest() strips the prefix.
+    let path = req
+        .extensions()
+        .get::<axum::extract::OriginalUri>()
+        .map(|u| u.0.path().to_string())
+        .unwrap_or_else(|| req.uri().path().to_string());
     let project_id = match extract_project_id_from_path(&path) {
         Some(id) => id,
         None => {

@@ -73,7 +73,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             crate::auth::require_auth,
         ));
 
-    let project_nested = Router::new().nest("/api/projects/:project_id", project_scoped);
+    let project_nested = Router::new().nest("/projects/:project_id", project_scoped);
 
     public.merge(protected_flat).merge(project_nested)
 }
