@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, useLocation, useParams } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from './stores/authStore';
 import { useProjectStore } from './stores/projectStore';
 import { api } from './api/client';
@@ -73,21 +73,6 @@ function ProjectRedirect() {
   return <Navigate to="/projects" replace />;
 }
 
-function LegacyRedirect({ to }: { to: string }) {
-  const activeProjectId = useProjectStore(s => s.activeProjectId);
-  if (activeProjectId) return <Navigate to={`/projects/${activeProjectId}/${to}`} replace />;
-  return <Navigate to="/projects" replace />;
-}
-
-function LegacyRedirectWithParam({ to }: { to: string }) {
-  const activeProjectId = useProjectStore(s => s.activeProjectId);
-  const params = useParams();
-  const paramValue = Object.values(params).filter(Boolean)[0];
-  if (activeProjectId && paramValue) return <Navigate to={`/projects/${activeProjectId}/${to}/${paramValue}`} replace />;
-  if (activeProjectId) return <Navigate to={`/projects/${activeProjectId}/${to}`} replace />;
-  return <Navigate to="/projects" replace />;
-}
-
 function AuthenticatedApp() {
   const status = useWebSocket();
   const mustChangePassword = useAuthStore((s) => s.mustChangePassword);
@@ -150,20 +135,8 @@ function AuthenticatedApp() {
           {/* Root redirect */}
           <Route path="/" element={<ProjectRedirect />} />
 
-          {/* Legacy flat route redirects */}
-          <Route path="/tests" element={<LegacyRedirect to="tests" />} />
-          <Route path="/tests/:jobId" element={<LegacyRedirectWithParam to="tests" />} />
-          <Route path="/runs" element={<LegacyRedirect to="runs" />} />
-          <Route path="/runs/:runId" element={<LegacyRedirectWithParam to="runs" />} />
-          <Route path="/deploy" element={<LegacyRedirect to="deploy" />} />
-          <Route path="/deploy/:deploymentId" element={<LegacyRedirectWithParam to="deploy" />} />
-          <Route path="/schedules" element={<LegacyRedirect to="schedules" />} />
-          <Route path="/settings" element={<LegacyRedirect to="settings" />} />
-          {/* Backward compat redirects */}
-          <Route path="/jobs" element={<LegacyRedirect to="tests" />} />
-          <Route path="/jobs/:jobId" element={<LegacyRedirectWithParam to="tests" />} />
-          <Route path="/agents" element={<LegacyRedirect to="tests" />} />
-          <Route path="*" element={<Navigate to="/" />} />
+          {/* Catch-all: redirect unknown routes to project list */}
+          <Route path="*" element={<Navigate to="/projects" replace />} />
         </Routes>
       </main>
     </div>

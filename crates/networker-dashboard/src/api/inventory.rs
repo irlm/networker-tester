@@ -324,12 +324,6 @@ fn is_managed(fqdn: &Option<String>, public_ip: &Option<String>, managed_hosts: 
     false
 }
 
-pub fn router(state: Arc<AppState>) -> Router {
-    Router::new()
-        .route("/inventory", get(scan_inventory))
-        .with_state(state)
-}
-
 /// Project-scoped inventory (pass-through — inventory scan is global).
 pub fn project_router(state: Arc<AppState>) -> Router {
     Router::new()

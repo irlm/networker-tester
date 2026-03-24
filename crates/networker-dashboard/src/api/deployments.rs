@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::auth::{require_role, AuthUser, ProjectContext, ProjectRole, Role, DEFAULT_PROJECT_ID};
+use crate::auth::{require_role, AuthUser, ProjectContext, ProjectRole, Role};
 use crate::AppState;
 
 const DEFAULT_LIMIT: i64 = 50;
@@ -32,93 +32,6 @@ pub struct ListDeploymentsQuery {
     pub offset: Option<i64>,
 }
 
-async fn create_deployment(
-    State(state): State<Arc<AppState>>,
-    Extension(user): Extension<AuthUser>,
-    Json(req): Json<CreateDeploymentRequest>,
-) -> Result<Json<CreateDeploymentResponse>, StatusCode> {
-    require_role(&user, Role::Operator)?;
-    // Build provider summary from config
-    let provider_summary = build_provider_summary(&req.config);
-
-    let client = state.db.get().await.map_err(|e| {
-        tracing::error!(error = %e, "DB pool error in create_deployment");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    let deployment_id = crate::db::deployments::create(
-        &client,
-        &req.name,
-        &req.config,
-        provider_summary.as_deref(),
-        None,
-        &DEFAULT_PROJECT_ID,
-    )
-    .await
-    .map_err(|e| {
-        tracing::error!(error = %e, "Failed to insert deployment into DB");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    tracing::info!(
-        deployment_id = %deployment_id,
-        name = %req.name,
-        "Deployment created, starting runner"
-    );
-
-    // Spawn the deployment runner in a background task
-    let events_tx = state.events_tx.clone();
-    let db_pool = Arc::new(state.db.clone());
-    let config = req.config.clone();
-    tokio::spawn(async move {
-        match crate::deploy::runner::run_deployment(deployment_id, &config, events_tx, db_pool)
-            .await
-        {
-            Ok(ips) => {
-                tracing::info!(
-                    deployment_id = %deployment_id,
-                    endpoint_ips = ?ips,
-                    "Deployment completed successfully"
-                );
-            }
-            Err(e) => {
-                tracing::error!(
-                    deployment_id = %deployment_id,
-                    error = %e,
-                    "Deployment failed"
-                );
-            }
-        }
-    });
-
-    Ok(Json(CreateDeploymentResponse {
-        deployment_id,
-        status: "pending".into(),
-    }))
-}
-
-async fn list_deployments(
-    State(state): State<Arc<AppState>>,
-    Query(q): Query<ListDeploymentsQuery>,
-) -> Result<Json<Vec<crate::db::deployments::DeploymentRow>>, StatusCode> {
-    let client = state.db.get().await.map_err(|e| {
-        tracing::error!(error = %e, "DB pool error in list_deployments");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-    let deployments = crate::db::deployments::list(
-        &client,
-        &DEFAULT_PROJECT_ID,
-        q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT),
-        q.offset.unwrap_or(0).max(0),
-    )
-    .await
-    .map_err(|e| {
-        tracing::error!(error = %e, "Failed to list deployments from DB");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-    Ok(Json(deployments))
-}
-
 async fn get_deployment(
     State(state): State<Arc<AppState>>,
     Path(deployment_id): Path<Uuid>,
@@ -139,71 +52,6 @@ async fn get_deployment(
         })?;
 
     Ok(Json(serde_json::to_value(deployment).unwrap_or_default()))
-}
-
-async fn stop_deployment(
-    State(state): State<Arc<AppState>>,
-    Extension(user): Extension<AuthUser>,
-    Path(deployment_id): Path<Uuid>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    require_role(&user, Role::Operator)?;
-    let client = state.db.get().await.map_err(|e| {
-        tracing::error!(error = %e, "DB pool error in stop_deployment");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    let deployment = crate::db::deployments::get(&client, &deployment_id)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "Failed to get deployment for stop");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    if deployment.status == "running" || deployment.status == "pending" {
-        crate::db::deployments::update_status(&client, &deployment_id, "cancelled")
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "Failed to update deployment status to cancelled");
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?;
-
-        let _ = state
-            .events_tx
-            .send(networker_common::messages::DashboardEvent::DeployComplete {
-                deployment_id,
-                status: "cancelled".into(),
-                endpoint_ips: vec![],
-            });
-        tracing::info!(deployment_id = %deployment_id, "Deployment cancelled");
-    }
-
-    Ok(Json(serde_json::json!({"status": "cancelled"})))
-}
-
-async fn delete_deployment(
-    State(state): State<Arc<AppState>>,
-    Extension(user): Extension<AuthUser>,
-    Path(deployment_id): Path<Uuid>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    require_role(&user, Role::Operator)?;
-    let client = state.db.get().await.map_err(|e| {
-        tracing::error!(error = %e, "DB pool error in delete_deployment");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    let deleted = crate::db::deployments::delete(&client, &deployment_id)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "Failed to delete deployment from DB");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-
-    if deleted {
-        Ok(Json(serde_json::json!({"deleted": true})))
-    } else {
-        Err(StatusCode::NOT_FOUND)
-    }
 }
 
 async fn check_deployment(
@@ -375,22 +223,6 @@ fn build_provider_summary(config: &serde_json::Value) -> Option<String> {
     } else {
         Some(parts.join(" + "))
     }
-}
-
-pub fn router(state: Arc<AppState>) -> Router {
-    Router::new()
-        .route(
-            "/deployments",
-            get(list_deployments).post(create_deployment),
-        )
-        .route(
-            "/deployments/:deployment_id",
-            get(get_deployment).delete(delete_deployment),
-        )
-        .route("/deployments/:deployment_id/stop", post(stop_deployment))
-        .route("/deployments/:deployment_id/check", post(check_deployment))
-        .route("/deployments/:deployment_id/update", post(update_endpoint))
-        .with_state(state)
 }
 
 // ── Project-scoped handlers ────────────────────────────────────────────

@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.15.0] - 2026-03-23
+
+### Added
+- Multi-project tenancy: projects, members, project-scoped resources
+- Project switcher in dashboard sidebar
+- Cloud account encryption (AES-256-GCM) with key rotation
+- Share links: expiring public URLs for test results
+- Command approval flow with SSE notifications
+- Test visibility rules for viewer role
+- Project settings and member management pages
+
+### Changed
+- All resource APIs now scoped under /api/projects/:project_id/
+- Dashboard routes now under /projects/:projectId/
+- Flat API routes removed (were temporary compatibility layer)
+- project_id columns now NOT NULL on agent, job, schedule, deployment
+
+### Migration
+- V010: Creates project tables, adds project_id FKs, migrates existing data to Default project
+- V011: Enforces NOT NULL on project_id columns
+
+---
+
 ## [0.14.0] – 2026-03-21 — Auth overhaul: SSO, email identity, RBAC
 
 ### Added
