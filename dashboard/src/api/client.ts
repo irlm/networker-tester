@@ -1,6 +1,6 @@
-import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, ProjectSummary, ProjectDetail, ProjectMember } from './types';
+import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember } from './types';
 
-export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, ProjectSummary, ProjectDetail, ProjectMember };
+export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember };
 export type { LiveAttempt } from './types';
 
 const API_BASE = '/api';
@@ -394,6 +394,28 @@ export const api = {
 
   validateCloudConnection: (projectId: string, id: string) =>
     request<{ status: string; validation_error: string | null }>(projectUrl(projectId, `cloud-connections/${id}/validate`), { method: 'POST' }),
+
+  // Cloud Accounts
+  getCloudAccounts: (projectId: string) =>
+    request<CloudAccountSummary[]>(projectUrl(projectId, 'cloud-accounts')),
+
+  createCloudAccount: (projectId: string, params: { name: string; provider: string; credentials: Record<string, string>; region_default?: string; personal: boolean }) =>
+    request<{ account_id: string }>(projectUrl(projectId, 'cloud-accounts'), {
+      method: 'POST',
+      body: JSON.stringify(params),
+    }),
+
+  updateCloudAccount: (projectId: string, accountId: string, params: { name: string; region_default?: string }) =>
+    request<void>(projectUrl(projectId, `cloud-accounts/${accountId}`), {
+      method: 'PUT',
+      body: JSON.stringify(params),
+    }),
+
+  deleteCloudAccount: (projectId: string, accountId: string) =>
+    request<void>(projectUrl(projectId, `cloud-accounts/${accountId}`), { method: 'DELETE' }),
+
+  validateCloudAccount: (projectId: string, accountId: string) =>
+    request<{ status: string; validation_error?: string }>(projectUrl(projectId, `cloud-accounts/${accountId}/validate`), { method: 'POST' }),
 
   // Version (NOT project-scoped)
   getVersionInfo: () => request<{

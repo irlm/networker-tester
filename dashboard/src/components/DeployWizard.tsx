@@ -4,6 +4,7 @@ import type { CloudStatus, CloudConnection, DeployEndpoint, ModeGroup } from '..
 import { THROUGHPUT_IDS } from '../lib/chart';
 import { ModeSelector } from './common/ModeSelector';
 import { PayloadSelector } from './common/PayloadSelector';
+import { CloudAccountSelector } from './CloudAccountSelector';
 import { useToast } from '../hooks/useToast';
 
 interface DeployWizardProps {
@@ -53,6 +54,7 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
   const [insecure, setInsecure] = useState(true);
   const [payloadSizes, setPayloadSizes] = useState<Set<string>>(new Set(['64k', '1m']));
   const [endpointOnly, setEndpointOnly] = useState(false);
+  const [selectedCloudAccountId, setSelectedCloudAccountId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modeGroups, setModeGroups] = useState<ModeGroup[]>([]);
@@ -60,6 +62,18 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
   const addToast = useToast();
 
   const needsPayload = THROUGHPUT_IDS.some((m) => selectedModes.has(m));
+  const hasCloudEndpoint = endpoints.some(ep => ep.provider !== 'lan');
+  // Determine the primary cloud provider for the account selector (first non-LAN endpoint)
+  const primaryCloudProvider = endpoints.find(ep => ep.provider !== 'lan')?.provider || 'azure';
+
+  // Step mapping: 1=Cloud Status, 2=Endpoint Config, 3=Cloud Account (if cloud), 4=Test Config (if !endpointOnly), 5=Review
+  // Build ordered step list
+  const stepList: string[] = ['cloud-status', 'endpoint-config'];
+  if (hasCloudEndpoint) stepList.push('cloud-account');
+  if (!endpointOnly) stepList.push('test-config');
+  stepList.push('review');
+  const totalSteps = stepList.length;
+  const currentStepName = stepList[step - 1] || 'cloud-status';
 
   useEffect(() => {
     api.getCloudStatus(projectId)
@@ -168,6 +182,7 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
     const config: Record<string, unknown> = {
       version: 1,
       tester: { provider: 'local' },
+      ...(selectedCloudAccountId ? { cloud_account_id: selectedCloudAccountId } : {}),
       endpoints: endpoints.map(ep => {
         const entry: Record<string, unknown> = { provider: ep.provider };
         if (ep.provider === 'lan') {
@@ -270,7 +285,7 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
                 Deploy & Test
               </h3>
               <div className="flex gap-1">
-                {(endpointOnly ? [1, 2, 3] : [1, 2, 3, 4]).map(s => (
+                {Array.from({ length: totalSteps }, (_, i) => i + 1).map(s => (
                   <div
                     key={s}
                     className={`w-6 h-1 rounded-full ${s <= step ? 'bg-green-500' : 'bg-gray-700'}`}
@@ -287,8 +302,8 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
             </div>
           )}
 
-          {/* Step 1: Cloud Status */}
-          {step === 1 && (
+          {/* Step: Cloud Status */}
+          {currentStepName === 'cloud-status' && (
             <div>
               <p className="text-sm text-gray-400 mb-3">Cloud provider status on this host:</p>
               {cloudLoading ? (
@@ -341,8 +356,8 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
             </div>
           )}
 
-          {/* Step 2: Endpoint Config */}
-          {step === 2 && (
+          {/* Step: Endpoint Config */}
+          {currentStepName === 'endpoint-config' && (
             <div>
               <p className="text-sm text-gray-400 mb-3">Configure endpoints to deploy:</p>
               {endpoints.map((ep, idx) => (
@@ -533,8 +548,21 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
             </div>
           )}
 
-          {/* Step 3: Test Config */}
-          {step === 3 && !endpointOnly && (
+          {/* Step: Cloud Account Selection */}
+          {currentStepName === 'cloud-account' && (
+            <div>
+              <p className="text-sm text-gray-400 mb-3">Select cloud account for deployment:</p>
+              <CloudAccountSelector
+                projectId={projectId}
+                provider={primaryCloudProvider}
+                selectedAccountId={selectedCloudAccountId}
+                onSelect={setSelectedCloudAccountId}
+              />
+            </div>
+          )}
+
+          {/* Step: Test Config */}
+          {currentStepName === 'test-config' && (
             <div>
               <p className="text-sm text-gray-400 mb-3">Configure test to run after deployment:</p>
 
@@ -606,8 +634,8 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
             </div>
           )}
 
-          {/* Step 4: Review */}
-          {step === 4 && (
+          {/* Step: Review */}
+          {currentStepName === 'review' && (
             <div>
               <p className="text-sm text-gray-400 mb-3">Review deployment configuration:</p>
 
@@ -665,7 +693,7 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
               {step > 1 && (
                 <button
                   type="button"
-                  onClick={() => setStep(endpointOnly && step === 4 ? 2 : step - 1)}
+                  onClick={() => setStep(step - 1)}
                   className="px-4 py-1.5 text-sm text-gray-400 hover:text-gray-200"
                 >
                   Back
@@ -680,7 +708,7 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
               >
                 Cancel
               </button>
-              {step === 4 ? (
+              {step === totalSteps ? (
                 <button
                   type="button"
                   onClick={handleSubmit}
@@ -692,7 +720,7 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
               ) : (
                 <button
                   type="button"
-                  onClick={() => setStep(endpointOnly && step === 2 ? 4 : step + 1)}
+                  onClick={() => setStep(step + 1)}
                   className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors"
                 >
                   Next
