@@ -1,8 +1,9 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
+    response::IntoResponse,
     routing::{delete, get, post},
-    Extension, Json, Router,
+    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -11,13 +12,17 @@ use uuid::Uuid;
 use crate::auth::AuthUser;
 use crate::AppState;
 
-/// Require that the authenticated user is a platform admin.
-fn require_platform_admin(user: &AuthUser) -> Result<(), StatusCode> {
-    if user.is_platform_admin {
-        Ok(())
-    } else {
-        Err(StatusCode::FORBIDDEN)
+/// Extract AuthUser from request extensions and require platform admin.
+fn extract_admin(req: &axum::extract::Request) -> Result<AuthUser, StatusCode> {
+    let user = req
+        .extensions()
+        .get::<AuthUser>()
+        .cloned()
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    if !user.is_platform_admin {
+        return Err(StatusCode::FORBIDDEN);
     }
+    Ok(user)
 }
 
 #[derive(Serialize)]
@@ -28,11 +33,15 @@ struct SystemMetricsResponse {
 
 async fn system_metrics(
     State(state): State<Arc<AppState>>,
-    Extension(user): Extension<AuthUser>,
+    req: axum::extract::Request,
 ) -> Result<Json<SystemMetricsResponse>, StatusCode> {
-    require_platform_admin(&user)?;
+    extract_admin(&req)?;
 
-    let sys = crate::system_metrics::collect_system_metrics();
+    let sys = std::panic::catch_unwind(crate::system_metrics::collect_system_metrics)
+        .map_err(|_| {
+            tracing::error!("collect_system_metrics panicked");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     let client = state.db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error in system_metrics");
@@ -53,9 +62,9 @@ async fn system_metrics(
 
 async fn workspace_usage(
     State(state): State<Arc<AppState>>,
-    Extension(user): Extension<AuthUser>,
+    req: axum::extract::Request,
 ) -> Result<Json<Vec<crate::system_metrics::WorkspaceUsage>>, StatusCode> {
-    require_platform_admin(&user)?;
+    extract_admin(&req)?;
 
     let client = state.db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error in workspace_usage");
@@ -80,10 +89,21 @@ struct LogsQuery {
 
 async fn system_logs(
     State(state): State<Arc<AppState>>,
-    Extension(user): Extension<AuthUser>,
-    Query(params): Query<LogsQuery>,
-) -> Result<Json<Vec<crate::log_buffer::LogEntry>>, StatusCode> {
-    require_platform_admin(&user)?;
+    req: axum::extract::Request,
+) -> impl IntoResponse {
+    let user = match extract_admin(&req) {
+        Ok(u) => u,
+        Err(s) => return Err(s),
+    };
+    let _ = user;
+
+    let params: LogsQuery = Query::try_from_uri(req.uri())
+        .map(|Query(q)| q)
+        .unwrap_or(LogsQuery {
+            level: None,
+            search: None,
+            limit: None,
+        });
 
     let limit = params.limit.unwrap_or(200);
     let entries = state
@@ -95,10 +115,10 @@ async fn system_logs(
 
 async fn suspend_workspace(
     State(state): State<Arc<AppState>>,
-    Extension(user): Extension<AuthUser>,
     Path(project_id): Path<Uuid>,
+    req: axum::extract::Request,
 ) -> Result<StatusCode, StatusCode> {
-    require_platform_admin(&user)?;
+    let user = extract_admin(&req)?;
 
     let client = state.db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error in suspend_workspace");
@@ -117,10 +137,10 @@ async fn suspend_workspace(
 
 async fn restore_workspace(
     State(state): State<Arc<AppState>>,
-    Extension(user): Extension<AuthUser>,
     Path(project_id): Path<Uuid>,
+    req: axum::extract::Request,
 ) -> Result<StatusCode, StatusCode> {
-    require_platform_admin(&user)?;
+    let user = extract_admin(&req)?;
 
     let client = state.db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error in restore_workspace");
@@ -144,10 +164,10 @@ struct ProtectResponse {
 
 async fn protect_workspace(
     State(state): State<Arc<AppState>>,
-    Extension(user): Extension<AuthUser>,
     Path(project_id): Path<Uuid>,
+    req: axum::extract::Request,
 ) -> Result<Json<ProtectResponse>, StatusCode> {
-    require_platform_admin(&user)?;
+    let user = extract_admin(&req)?;
 
     let client = state.db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error in protect_workspace");
@@ -173,17 +193,16 @@ async fn protect_workspace(
 
 async fn hard_delete_workspace(
     State(state): State<Arc<AppState>>,
-    Extension(user): Extension<AuthUser>,
     Path(project_id): Path<Uuid>,
+    req: axum::extract::Request,
 ) -> Result<StatusCode, StatusCode> {
-    require_platform_admin(&user)?;
+    let user = extract_admin(&req)?;
 
     let client = state.db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error in hard_delete_workspace");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    // Verify the project is already soft-deleted
     let project = crate::db::projects::get_project(&client, &project_id)
         .await
         .map_err(|e| {
