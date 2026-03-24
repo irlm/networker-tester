@@ -1,3 +1,4 @@
+mod admin;
 mod agents;
 mod auth;
 mod cloud;
@@ -43,6 +44,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(users::router(state.clone()))
         .merge(projects::router(state.clone()))
         .merge(events::router(state.clone()))
+        .merge(admin::router(state.clone()))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::require_auth,

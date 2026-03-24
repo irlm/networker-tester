@@ -373,6 +373,114 @@ pub async fn remove_member(
     Ok(Ok(()))
 }
 
+/// Soft-delete a project by setting deleted_at to now.
+pub async fn suspend_project(client: &Client, project_id: &Uuid) -> anyhow::Result<()> {
+    client
+        .execute(
+            "UPDATE project SET deleted_at = now() WHERE project_id = $1 AND deleted_at IS NULL",
+            &[project_id],
+        )
+        .await?;
+    Ok(())
+}
+
+/// Restore a soft-deleted project by clearing deleted_at and any warnings.
+pub async fn restore_project(client: &Client, project_id: &Uuid) -> anyhow::Result<()> {
+    client
+        .execute(
+            "UPDATE project SET deleted_at = NULL WHERE project_id = $1",
+            &[project_id],
+        )
+        .await?;
+    // Clear warnings
+    client
+        .execute(
+            "DELETE FROM workspace_warning WHERE project_id = $1",
+            &[project_id],
+        )
+        .await?;
+    Ok(())
+}
+
+/// Toggle delete_protection on a project. Returns the new value.
+pub async fn toggle_protection(client: &Client, project_id: &Uuid) -> anyhow::Result<bool> {
+    let row = client
+        .query_one(
+            "UPDATE project SET delete_protection = NOT COALESCE(delete_protection, FALSE) \
+             WHERE project_id = $1 RETURNING delete_protection",
+            &[project_id],
+        )
+        .await?;
+    Ok(row.get(0))
+}
+
+/// Permanently delete a project and all associated data (cascade).
+/// The project must already be soft-deleted (deleted_at IS NOT NULL).
+pub async fn hard_delete_project(client: &Client, project_id: &Uuid) -> anyhow::Result<()> {
+    // Cascade delete in dependency order
+    client
+        .execute(
+            "DELETE FROM workspace_warning WHERE project_id = $1",
+            &[project_id],
+        )
+        .await?;
+    client
+        .execute(
+            "DELETE FROM workspace_invite WHERE project_id = $1",
+            &[project_id],
+        )
+        .await?;
+    client
+        .execute(
+            "DELETE FROM test_visibility_rule WHERE project_id = $1",
+            &[project_id],
+        )
+        .await?;
+    client
+        .execute(
+            "DELETE FROM command_approval WHERE project_id = $1",
+            &[project_id],
+        )
+        .await?;
+    client
+        .execute(
+            "DELETE FROM share_link WHERE project_id = $1",
+            &[project_id],
+        )
+        .await?;
+    client
+        .execute(
+            "DELETE FROM cloud_account WHERE project_id = $1",
+            &[project_id],
+        )
+        .await?;
+    client
+        .execute("DELETE FROM schedule WHERE project_id = $1", &[project_id])
+        .await?;
+    client
+        .execute("DELETE FROM job WHERE project_id = $1", &[project_id])
+        .await?;
+    client
+        .execute(
+            "DELETE FROM deployment WHERE project_id = $1",
+            &[project_id],
+        )
+        .await?;
+    client
+        .execute("DELETE FROM agent WHERE project_id = $1", &[project_id])
+        .await?;
+    client
+        .execute(
+            "DELETE FROM project_member WHERE project_id = $1",
+            &[project_id],
+        )
+        .await?;
+    client
+        .execute("DELETE FROM project WHERE project_id = $1", &[project_id])
+        .await?;
+    Ok(())
+}
+
 /// Convert a project name to a URL-safe slug.
 pub fn slugify(name: &str) -> String {
     name.to_lowercase()
