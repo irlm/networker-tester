@@ -5,6 +5,7 @@ import { useProject } from '../hooks/useProject';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { usePolling } from '../hooks/usePolling';
 import { Breadcrumb } from '../components/common/Breadcrumb';
+import { SettingsTabs } from '../components/common/SettingsTabs';
 
 function statusBadge(link: ShareLink) {
   if (link.revoked) {
@@ -23,7 +24,7 @@ export function ShareLinksPage() {
   const [error, setError] = useState<string | null>(null);
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
 
-  usePageTitle('Share Links');
+  usePageTitle('Settings');
 
   const fetchLinks = useCallback(() => {
     if (!projectId) return;
@@ -78,9 +79,10 @@ export function ShareLinksPage() {
       <Breadcrumb items={[{ label: 'Share Links' }]} />
 
       <div className="mb-6">
-        <h2 className="text-xl font-bold text-gray-100 mb-1">Share Links</h2>
+        <h2 className="text-xl font-bold text-gray-100 mb-1">Settings</h2>
         <p className="text-sm text-gray-500">Manage external share links for runs and tests.</p>
       </div>
+      <SettingsTabs />
 
       {error && (
         <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 mb-4 text-sm text-red-400">

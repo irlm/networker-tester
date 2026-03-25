@@ -5,6 +5,7 @@ import { usePageTitle } from '../hooks/usePageTitle';
 import { useToast } from '../hooks/useToast';
 import { useLiveStore } from '../stores/liveStore';
 import { useProject } from '../hooks/useProject';
+import { SettingsTabs } from '../components/common/SettingsTabs';
 
 interface VersionInfo {
   dashboard_version: string;
@@ -140,7 +141,7 @@ export function SettingsPage() {
 
   return (
     <div className="p-4 md:p-6">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-4">
         <h2 className="text-xl font-bold text-gray-100">Settings</h2>
         <button
           onClick={loadData}
@@ -149,6 +150,8 @@ export function SettingsPage() {
           Refresh
         </button>
       </div>
+
+      <SettingsTabs />
 
       {/* System Versions */}
       <div className="mb-8">

@@ -8,6 +8,7 @@ import { useToast } from '../hooks/useToast';
 import { RoleBadge } from '../components/common/RoleBadge';
 import { PageHeader } from '../components/common/PageHeader';
 import { EmptyState } from '../components/common/EmptyState';
+import { SettingsTabs } from '../components/common/SettingsTabs';
 
 const ROLES = ['admin', 'operator', 'viewer'] as const;
 
@@ -41,7 +42,7 @@ export function ProjectMembersPage() {
   const [copied, setCopied] = useState(false);
   const addToast = useToast();
 
-  usePageTitle('Workspace Members');
+  usePageTitle('Settings');
 
   const loadData = useCallback(async () => {
     if (!projectId) return;
@@ -142,7 +143,8 @@ export function ProjectMembersPage() {
   if (loading) {
     return (
       <div className="p-4 md:p-6">
-        <PageHeader title="Workspace Members" />
+        <PageHeader title="Settings" />
+        <SettingsTabs />
         <p className="text-gray-500 motion-safe:animate-pulse">Loading members...</p>
       </div>
     );
@@ -153,13 +155,14 @@ export function ProjectMembersPage() {
   return (
     <div className="p-4 md:p-6">
       <PageHeader
-        title="Workspace Members"
+        title="Settings"
         action={
           <button onClick={() => { setShowInvite(true); setShowAddExisting(false); setInviteUrl(null); }} className="btn-primary">
             Invite
           </button>
         }
       />
+      <SettingsTabs />
 
       {/* Invite form */}
       {showInvite && (

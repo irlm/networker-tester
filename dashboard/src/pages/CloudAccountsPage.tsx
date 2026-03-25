@@ -4,6 +4,7 @@ import type { CloudAccountSummary } from '../api/types';
 import { useProject } from '../hooks/useProject';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useToast } from '../hooks/useToast';
+import { SettingsTabs } from '../components/common/SettingsTabs';
 
 const PROVIDERS = ['azure', 'aws', 'gcp'] as const;
 
@@ -54,7 +55,7 @@ export function CloudAccountsPage() {
   const [credentials, setCredentials] = useState<CredentialFields>(emptyCredentials());
 
   const addToast = useToast();
-  usePageTitle('Cloud Accounts');
+  usePageTitle('Settings');
 
   const loadAccounts = useCallback(async () => {
     if (!projectId) return;
@@ -138,7 +139,8 @@ export function CloudAccountsPage() {
   if (loading) {
     return (
       <div className="p-4 md:p-6">
-        <h2 className="text-xl font-bold text-gray-100 mb-6">Cloud Accounts</h2>
+        <h2 className="text-xl font-bold text-gray-100 mb-6">Settings</h2>
+        <SettingsTabs />
         <p className="text-gray-500 motion-safe:animate-pulse">Loading accounts...</p>
       </div>
     );
@@ -147,7 +149,7 @@ export function CloudAccountsPage() {
   return (
     <div className="p-4 md:p-6">
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-bold text-gray-100">Cloud Accounts</h2>
+        <h2 className="text-xl font-bold text-gray-100">Settings</h2>
         {isOperator && (
           <button
             onClick={() => setShowAdd(true)}
@@ -157,6 +159,7 @@ export function CloudAccountsPage() {
           </button>
         )}
       </div>
+      <SettingsTabs />
 
       {showAdd && (
         <div className="border border-gray-800 rounded p-4 mb-6">

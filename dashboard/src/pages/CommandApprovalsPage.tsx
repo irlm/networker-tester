@@ -3,6 +3,7 @@ import { useProject } from '../hooks/useProject';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useApprovalSSE } from '../hooks/useSSE';
 import { api, type CommandApproval } from '../api/client';
+import { SettingsTabs } from '../components/common/SettingsTabs';
 
 type Tab = 'pending' | 'history';
 
@@ -50,7 +51,7 @@ function TimeUntil({ iso }: { iso: string }) {
 }
 
 export function CommandApprovalsPage() {
-  usePageTitle('Approvals');
+  usePageTitle('Settings');
   const { projectId } = useProject();
   const [tab, setTab] = useState<Tab>('pending');
   const [pending, setPending] = useState<CommandApproval[]>([]);
@@ -113,7 +114,8 @@ export function CommandApprovalsPage() {
 
   return (
     <div className="p-6 max-w-5xl">
-      <h1 className="text-lg font-semibold text-gray-100 mb-4">Command Approvals</h1>
+      <h1 className="text-lg font-semibold text-gray-100 mb-4">Settings</h1>
+      <SettingsTabs />
 
       {/* Tabs */}
       <div className="flex gap-1 mb-4 border-b border-gray-800 pb-px">

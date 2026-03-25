@@ -22,7 +22,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
   const location = useLocation();
   const { email, role, logout } = useAuthStore();
   const isPlatformAdmin = useAuthStore(s => s.isPlatformAdmin);
-  const { projectId, isProjectAdmin, isOperator } = useProject();
+  const { projectId, isProjectAdmin } = useProject();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('sidebar-collapsed') === '1');
   const [pendingCount, setPendingCount] = useState(0);
@@ -40,21 +40,6 @@ export function Sidebar({ connectionDot }: SidebarProps) {
     { path: `/projects/${pid}/runs`, label: 'Runs', icon: '\u25F7' },
   ] : [];
 
-  const projectItems: NavItem[] = [];
-  if (pid && isOperator) {
-    projectItems.push({ path: `/projects/${pid}/cloud-accounts`, label: 'Cloud', icon: '\u2601' });
-  }
-  if (pid && isProjectAdmin) {
-    projectItems.push({ path: `/projects/${pid}/share-links`, label: 'Share Links', icon: '\u{1F517}' });
-    projectItems.push({ path: `/projects/${pid}/members`, label: 'Members', icon: '\u2302' });
-    projectItems.push({
-      path: `/projects/${pid}/approvals`,
-      label: 'Approvals',
-      icon: '\u2713',
-      badge: pid ? <NotificationBell projectId={pid} /> : undefined,
-    });
-  }
-
   const platformItems: NavItem[] = [];
   if (isPlatformAdmin) {
     platformItems.push({ path: '/admin/system', label: 'System', icon: '\u2318' });
@@ -63,7 +48,12 @@ export function Sidebar({ connectionDot }: SidebarProps) {
     platformItems.push({ path: '/users', label: 'Users', icon: '\u265F' });
   }
   if (pid) {
-    platformItems.push({ path: `/projects/${pid}/settings`, label: 'Settings', icon: '\u2699' });
+    platformItems.push({
+      path: `/projects/${pid}/settings`,
+      label: 'Settings',
+      icon: '\u2699',
+      badge: isProjectAdmin && pid ? <NotificationBell projectId={pid} /> : undefined,
+    });
   }
 
   // ── Pending user count (admin only) ─────────────────────────────────
@@ -179,11 +169,8 @@ export function Sidebar({ connectionDot }: SidebarProps) {
           {/* Core: daily workflow */}
           {coreItems.map(renderItem)}
 
-          {/* Project: admin/operator tools */}
-          {renderSection('workspace', projectItems)}
-
-          {/* Platform: global admin */}
-          {renderSection('platform', platformItems)}
+          {/* Platform: admin tools */}
+          {renderSection('', platformItems)}
         </nav>
 
         {/* Collapse toggle + user */}
