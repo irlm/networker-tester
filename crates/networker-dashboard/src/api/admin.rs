@@ -37,8 +37,8 @@ async fn system_metrics(
 ) -> Result<Json<SystemMetricsResponse>, StatusCode> {
     extract_admin(&req)?;
 
-    let sys = std::panic::catch_unwind(crate::system_metrics::collect_system_metrics)
-        .map_err(|_| {
+    let sys =
+        std::panic::catch_unwind(crate::system_metrics::collect_system_metrics).map_err(|_| {
             tracing::error!("collect_system_metrics panicked");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
