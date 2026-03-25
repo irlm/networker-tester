@@ -42,7 +42,7 @@ tokio-native-tls = { version = "0.3", optional = true }
 
 # --- Headless browser (optional feature) ---
 chromiumoxide = { version = "0.9", optional = true }
-sha2          = { version = "0.10", optional = true }
+sha2          = { version = "0.10" }
 base64        = { version = "0.22", optional = true }
 
 # --- SQL Server (optional) ---
@@ -85,7 +85,7 @@ reqwest  = { version = "0.12", default-features = false, features = ["json", "ru
 default = ["http3", "db-mssql", "browser"]
 http3   = ["quinn", "h3", "h3-quinn"]
 native  = ["dep:native-tls", "dep:tokio-native-tls"]
-browser = ["dep:chromiumoxide", "dep:sha2", "dep:base64"]
+browser = ["dep:chromiumoxide", "dep:base64"]
 db-mssql    = ["dep:tiberius", "dep:tokio-util"]
 db-postgres = ["dep:tokio-postgres"]
 

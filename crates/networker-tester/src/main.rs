@@ -31,6 +31,9 @@ use networker_tester::runner::{
     udp::{run_udp_probe, UdpProbeConfig},
     udp_throughput::{run_udpdownload_probe, run_udpupload_probe, UdpThroughputConfig},
 };
+use networker_tester::tls_profile::{
+    run_tls_endpoint_profile, TlsProfileRequest, TlsProfileTargetKind,
+};
 use networker_tester::url_diagnostic::{
     UrlDiagnosticCapabilities, UrlDiagnosticOrchestrator, UrlDiagnosticRequest,
 };
@@ -79,6 +82,9 @@ async fn main() -> anyhow::Result<()> {
 
     if cfg.url_test_url.is_some() {
         return run_url_test_cli(&cfg).await;
+    }
+    if cfg.tls_profile_url.is_some() {
+        return run_tls_profile_cli(&cfg).await;
     }
 
     // ── Privilege notice (Linux only) ─────────────────────────────────────────
@@ -333,6 +339,67 @@ fn make_url_test_capture_config(cfg: &ResolvedConfig) -> ResolvedConfig {
         .clone()
         .unwrap_or_else(|| "https://example.com".into())];
     resolved
+}
+
+async fn run_tls_profile_cli(cfg: &ResolvedConfig) -> anyhow::Result<()> {
+    let url = url::Url::parse(
+        cfg.tls_profile_url
+            .as_deref()
+            .context("--tls-profile-url is required")?,
+    )
+    .context("parsing --tls-profile-url")?;
+    let host = url
+        .host_str()
+        .context("--tls-profile-url must include a host")?;
+    let port = url.port_or_known_default().unwrap_or(443);
+    let target_kind = match cfg
+        .tls_profile_target_kind
+        .as_deref()
+        .unwrap_or("external-url")
+        .replace('_', "-")
+        .as_str()
+    {
+        "managed-endpoint" => TlsProfileTargetKind::ManagedEndpoint,
+        "external-host" => TlsProfileTargetKind::ExternalHost,
+        _ => TlsProfileTargetKind::ExternalUrl,
+    };
+    let req = TlsProfileRequest {
+        target_kind,
+        source_url: Some(url.to_string()),
+        host: host.to_string(),
+        port,
+        ip_override: cfg
+            .tls_profile_ip
+            .as_deref()
+            .map(str::parse)
+            .transpose()
+            .context("invalid --tls-profile-ip")?,
+        sni_override: cfg.tls_profile_sni.clone(),
+        dns_enabled: cfg.dns_enabled,
+        ipv4_only: cfg.ipv4_only,
+        ipv6_only: cfg.ipv6_only,
+        insecure: cfg.insecure,
+        ca_bundle: cfg.ca_bundle.clone(),
+        timeout_ms: cfg.timeout.saturating_mul(1000).max(1000),
+    };
+
+    let profile = run_tls_endpoint_profile(req).await?;
+    let out_dir = PathBuf::from(&cfg.output_dir);
+    std::fs::create_dir_all(&out_dir).context("Cannot create output directory")?;
+    let ts = Utc::now().format("%Y%m%d-%H%M%S");
+    let json_path = out_dir.join(format!("tls-profile-{ts}.json"));
+    json::save_tls_profile(&profile, &json_path)?;
+
+    if cfg.tls_profile_json {
+        println!("{}", json::to_string_tls_profile(&profile)?);
+    } else {
+        println!("TLS Endpoint Profile");
+        println!("--------------------");
+        println!("Host: {}:{}", profile.target.host, profile.target.port);
+        println!("Status: {}", profile.summary.status);
+        println!("JSON: {}", json_path.display());
+    }
+    Ok(())
 }
 
 async fn run_url_test_cli(cfg: &ResolvedConfig) -> anyhow::Result<()> {
@@ -2066,6 +2133,11 @@ mod tests {
         ResolvedConfig {
             targets: vec!["https://127.0.0.1:8443/health".into()],
             url_test_url: None,
+            tls_profile_url: None,
+            tls_profile_ip: None,
+            tls_profile_sni: None,
+            tls_profile_target_kind: None,
+            tls_profile_json: false,
             url_test_auth_token: None,
             url_test_cookie: None,
             url_test_headers: vec![],
