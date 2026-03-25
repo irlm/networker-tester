@@ -279,6 +279,9 @@ pub async fn run_tls_endpoint_profile(
     if proxy_detected {
         limitations.push("Proxy environment variables may influence path characteristics".into());
     }
+    if req.insecure {
+        limitations.push("Certificate verification was disabled with --insecure; trust results are observational only".into());
+    }
 
     let addr = SocketAddr::new(connect_ip, req.port);
     let first = run_single_handshake(&req, addr, &sni).await?;
@@ -325,7 +328,13 @@ pub async fn run_tls_endpoint_profile(
         TlsPathClassification::Direct
     };
 
-    let mut findings = build_findings(&first, hostname_matches, &resumption, &classification);
+    let mut findings = build_findings(
+        &first,
+        hostname_matches,
+        &resumption,
+        &classification,
+        req.insecure,
+    );
     if first.revocation.ocsp_stapled {
         findings.push(TlsFinding {
             severity: TlsFindingSeverity::Info,
@@ -409,7 +418,8 @@ async fn run_single_handshake(
         std::time::Duration::from_millis(req.timeout_ms),
         TcpStream::connect(addr),
     )
-    .await??;
+    .await
+    .context("timed out connecting TCP socket for TLS profile")??;
     let tcp_connect_ms = t_tcp.elapsed().as_secs_f64() * 1000.0;
 
     let t_tls = Instant::now();
@@ -417,7 +427,8 @@ async fn run_single_handshake(
         std::time::Duration::from_millis(req.timeout_ms),
         connector.connect(server_name, tcp_stream),
     )
-    .await??;
+    .await
+    .context("timed out during TLS handshake for TLS profile")??;
     let tls_handshake_ms = t_tls.elapsed().as_secs_f64() * 1000.0;
 
     let (_, conn) = tls_stream.get_ref();
@@ -465,7 +476,7 @@ async fn run_single_handshake(
         negotiated_cipher_suite,
         alpn,
         leaf,
-        chain_valid: !certs.is_empty(),
+        chain_valid: !certs.is_empty() && !req.insecure,
         trusted_by_system_store: !req.insecure,
         chain,
         revocation,
@@ -482,9 +493,19 @@ async fn run_resumption_check(
     let connector = TlsConnector::from(tls_config.clone());
 
     let one = async {
-        let tcp = TcpStream::connect(addr).await?;
+        let tcp = tokio::time::timeout(
+            std::time::Duration::from_millis(req.timeout_ms),
+            TcpStream::connect(addr),
+        )
+        .await
+        .context("timed out connecting TCP socket during TLS resumption check")??;
         let t = Instant::now();
-        let stream = connector.connect(server_name.clone(), tcp).await?;
+        let stream = tokio::time::timeout(
+            std::time::Duration::from_millis(req.timeout_ms),
+            connector.connect(server_name.clone(), tcp),
+        )
+        .await
+        .context("timed out during TLS handshake in resumption check")??;
         let ms = t.elapsed().as_secs_f64() * 1000.0;
         let (_, conn) = stream.get_ref();
         Ok::<(f64, bool, Option<String>), anyhow::Error>((
@@ -496,9 +517,19 @@ async fn run_resumption_check(
     };
 
     let (initial_ms, _, _) = one.await?;
-    let tcp = TcpStream::connect(addr).await?;
+    let tcp = tokio::time::timeout(
+        std::time::Duration::from_millis(req.timeout_ms),
+        TcpStream::connect(addr),
+    )
+    .await
+    .context("timed out connecting TCP socket during second TLS resumption probe")??;
     let t = Instant::now();
-    let stream = connector.connect(server_name, tcp).await?;
+    let stream = tokio::time::timeout(
+        std::time::Duration::from_millis(req.timeout_ms),
+        connector.connect(server_name, tcp),
+    )
+    .await
+    .context("timed out during second TLS handshake in resumption check")??;
     let resumed_ms = t.elapsed().as_secs_f64() * 1000.0;
     let (_, conn) = stream.get_ref();
     let resumed = matches!(conn.handshake_kind(), Some(rustls::HandshakeKind::Resumed));
@@ -662,7 +693,9 @@ fn parse_certificate_info(cert: &CertificateDer<'_>) -> Option<TlsCertificateInf
 
 fn cert_matches_hostname(cert: &TlsCertificateInfo, host: &str) -> bool {
     if cert.san_dns.is_empty() && cert.san_ip.is_empty() {
-        return cert.subject.contains(host);
+        return extract_subject_cn(&cert.subject)
+            .map(|cn| dns_name_matches(cn, host))
+            .unwrap_or(false);
     }
     if let Ok(ip) = host.parse::<IpAddr>() {
         return cert
@@ -682,17 +715,31 @@ fn dns_name_matches(pattern: &str, host: &str) -> bool {
         return true;
     }
     if let Some(rest) = pattern.strip_prefix("*.") {
-        return host.ends_with(rest) && host.split('.').count() > rest.split('.').count();
+        if let Some(prefix) = host.strip_suffix(rest) {
+            return prefix.ends_with('.') && !prefix[..prefix.len() - 1].contains('.');
+        }
     }
     false
 }
 
+fn extract_subject_cn(subject: &str) -> Option<&str> {
+    let cn_start = subject.find("CN=")? + 3;
+    Some(subject[cn_start..].split(',').next()?.trim())
+}
+
 async fn lookup_caa(host: &str) -> Option<TlsCaaInfo> {
-    let output = tokio::process::Command::new("dig")
-        .args(["+short", "CAA", host])
-        .output()
-        .await
-        .ok()?;
+    if host.starts_with('-') || host.len() > 253 {
+        return None;
+    }
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tokio::process::Command::new("dig")
+            .args(["+short", "+time=3", "+tries=1", "CAA", "--", host])
+            .output(),
+    )
+    .await
+    .ok()?
+    .ok()?;
     if !output.status.success() {
         return None;
     }
@@ -714,6 +761,7 @@ fn build_findings(
     hostname_matches: bool,
     resumption: &TlsResumptionSection,
     classification: &TlsPathClassification,
+    insecure: bool,
 ) -> Vec<TlsFinding> {
     let mut findings = Vec::new();
     if !hostname_matches {
@@ -723,7 +771,13 @@ fn build_findings(
             message: "Certificate does not match the requested host".into(),
         });
     }
-    if !snapshot.trusted_by_system_store {
+    if insecure {
+        findings.push(TlsFinding {
+            severity: TlsFindingSeverity::Warning,
+            code: "INSECURE_MODE_ACTIVE".into(),
+            message: "Certificate verification was disabled with --insecure; trust results are observational only".into(),
+        });
+    } else if !snapshot.trusted_by_system_store {
         findings.push(TlsFinding {
             severity: TlsFindingSeverity::Warning,
             code: "UNTRUSTED_CHAIN".into(),
@@ -841,6 +895,7 @@ mod tests {
     fn wildcard_hostname_matches_single_level_subdomain() {
         assert!(dns_name_matches("*.example.com", "www.example.com"));
         assert!(!dns_name_matches("*.example.com", "example.com"));
+        assert!(!dns_name_matches("*.example.com", "a.b.example.com"));
     }
 
     #[test]
@@ -875,5 +930,32 @@ mod tests {
         assert!(cert_matches_hostname(&cert, "example.com"));
         assert!(cert_matches_hostname(&cert, "foo.example.org"));
         assert!(!cert_matches_hostname(&cert, "bad.test"));
+    }
+
+    #[test]
+    fn hostname_match_cn_fallback_is_exact_not_substring() {
+        let cert = TlsCertificateInfo {
+            subject: "CN=example.com, O=Org".into(),
+            issuer: "CN=CA".into(),
+            serial_number: "01".into(),
+            not_before: None,
+            not_after: None,
+            san_dns: vec![],
+            san_ip: vec![],
+            key_type: "RSA".into(),
+            key_bits: Some(2048),
+            signature_algorithm: "1.2.3".into(),
+            is_ca: false,
+            sha256_fingerprint: "aa".into(),
+            spki_sha256: "bb".into(),
+            ocsp_urls: vec![],
+            crl_urls: vec![],
+            aia_issuers: vec![],
+            must_staple: false,
+            scts_present: false,
+        };
+        assert!(cert_matches_hostname(&cert, "example.com"));
+        assert!(!cert_matches_hostname(&cert, "ple.com"));
+        assert!(!cert_matches_hostname(&cert, "com"));
     }
 }

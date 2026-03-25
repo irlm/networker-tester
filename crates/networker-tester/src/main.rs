@@ -346,7 +346,8 @@ async fn run_tls_profile_cli(cfg: &ResolvedConfig) -> anyhow::Result<()> {
         cfg.tls_profile_url
             .as_deref()
             .context("--tls-profile-url is required")?,
-    )?;
+    )
+    .context("parsing --tls-profile-url")?;
     let host = url
         .host_str()
         .context("--tls-profile-url must include a host")?;
@@ -379,7 +380,7 @@ async fn run_tls_profile_cli(cfg: &ResolvedConfig) -> anyhow::Result<()> {
         ipv6_only: cfg.ipv6_only,
         insecure: cfg.insecure,
         ca_bundle: cfg.ca_bundle.clone(),
-        timeout_ms: cfg.timeout.saturating_mul(1000),
+        timeout_ms: cfg.timeout.saturating_mul(1000).max(1000),
     };
 
     let profile = run_tls_endpoint_profile(req).await?;
