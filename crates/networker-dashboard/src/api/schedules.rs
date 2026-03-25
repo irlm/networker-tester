@@ -125,7 +125,7 @@ async fn create_schedule_scoped(
 
 async fn get_schedule_scoped(
     State(state): State<Arc<AppState>>,
-    Path(schedule_id): Path<Uuid>,
+    Path((_, schedule_id)): Path<(Uuid, Uuid)>,
     req: axum::extract::Request,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
@@ -151,7 +151,7 @@ async fn get_schedule_scoped(
 
 async fn update_schedule_scoped(
     State(state): State<Arc<AppState>>,
-    Path(schedule_id): Path<Uuid>,
+    Path((_, schedule_id)): Path<(Uuid, Uuid)>,
     req: axum::extract::Request,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
@@ -195,7 +195,7 @@ async fn update_schedule_scoped(
 
 async fn delete_schedule_scoped(
     State(state): State<Arc<AppState>>,
-    Path(schedule_id): Path<Uuid>,
+    Path((_, schedule_id)): Path<(Uuid, Uuid)>,
     req: axum::extract::Request,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
@@ -217,7 +217,7 @@ async fn delete_schedule_scoped(
 
 async fn toggle_schedule_scoped(
     State(state): State<Arc<AppState>>,
-    Path(schedule_id): Path<Uuid>,
+    Path((_, schedule_id)): Path<(Uuid, Uuid)>,
     req: axum::extract::Request,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
@@ -254,7 +254,7 @@ async fn toggle_schedule_scoped(
 
 async fn trigger_schedule_scoped(
     State(state): State<Arc<AppState>>,
-    Path(schedule_id): Path<Uuid>,
+    Path((_, schedule_id)): Path<(Uuid, Uuid)>,
     req: axum::extract::Request,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
