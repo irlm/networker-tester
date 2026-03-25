@@ -164,7 +164,7 @@ async fn list_invites(
 /// DELETE /invites/:invite_id — revoke a pending invite
 async fn revoke_invite(
     State(state): State<Arc<AppState>>,
-    Path(invite_id): Path<Uuid>,
+    Path((_, invite_id)): Path<(Uuid, Uuid)>,
     req: axum::extract::Request,
 ) -> impl IntoResponse {
     let ctx = match req.extensions().get::<ProjectContext>() {

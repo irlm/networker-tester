@@ -138,7 +138,7 @@ pub struct UpdateMemberRoleRequest {
 /// PUT /api/projects/:pid/members/:uid — update member role (project admin).
 async fn update_member_role(
     State(state): State<Arc<AppState>>,
-    Path(member_id): Path<Uuid>,
+    Path((_, member_id)): Path<(Uuid, Uuid)>,
     req: axum::extract::Request,
 ) -> impl IntoResponse {
     let ctx = match req.extensions().get::<ProjectContext>() {
@@ -198,7 +198,7 @@ async fn update_member_role(
 /// DELETE /api/projects/:pid/members/:uid — remove member (project admin).
 async fn remove_member(
     State(state): State<Arc<AppState>>,
-    Path(member_id): Path<Uuid>,
+    Path((_, member_id)): Path<(Uuid, Uuid)>,
     req: axum::extract::Request,
 ) -> impl IntoResponse {
     let ctx = match req.extensions().get::<ProjectContext>() {

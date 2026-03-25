@@ -22,7 +22,7 @@ pub struct ListUrlTestsQuery {
 
 async fn get_url_test(
     State(state): State<Arc<AppState>>,
-    Path(run_id): Path<Uuid>,
+    Path((_, run_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<crate::db::url_tests::UrlTestDetail>, StatusCode> {
     let client = state
         .db
@@ -38,7 +38,7 @@ async fn get_url_test(
 
 async fn get_url_test_sections(
     State(state): State<Arc<AppState>>,
-    Path(run_id): Path<Uuid>,
+    Path((_, run_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<crate::db::url_tests::UrlTestSectionedDetail>, StatusCode> {
     let client = state
         .db

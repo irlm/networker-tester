@@ -87,7 +87,7 @@ struct DecideRequest {
 /// POST /command-approvals/:aid — approve or deny (project admin).
 async fn decide_approval(
     State(state): State<Arc<AppState>>,
-    Path(approval_id): Path<Uuid>,
+    Path((_, approval_id)): Path<(Uuid, Uuid)>,
     req: axum::extract::Request,
 ) -> impl IntoResponse {
     let ctx = match req.extensions().get::<ProjectContext>() {

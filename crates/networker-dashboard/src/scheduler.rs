@@ -16,6 +16,7 @@ pub fn spawn(state: Arc<AppState>) {
         tracing::info!("Scheduler background task started");
 
         let mut last_approval_cleanup = std::time::Instant::now();
+        let mut last_inactivity_check: Option<std::time::Instant> = None;
 
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
@@ -59,6 +60,16 @@ pub fn spawn(state: Arc<AppState>) {
                         tracing::error!(error = %e, "DB pool error in approval cleanup");
                     }
                 }
+            }
+
+            // Daily workspace inactivity check
+            let should_check_inactivity = last_inactivity_check
+                .map(|t| t.elapsed() > std::time::Duration::from_secs(86400))
+                .unwrap_or(true);
+
+            if should_check_inactivity {
+                check_workspace_inactivity(&state).await;
+                last_inactivity_check = Some(std::time::Instant::now());
             }
         }
     });
@@ -354,6 +365,150 @@ async fn watch_job_and_stop_vm(
     );
     if let Ok(client) = state.db.get().await {
         let _ = stop_deployment_vm(&client, &deployment_id).await;
+    }
+}
+
+/// Daily check for inactive workspaces: warn, suspend, and hard-delete as needed.
+async fn check_workspace_inactivity(state: &crate::AppState) {
+    let client = match state.db.get().await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(error = %e, "DB error in inactivity check");
+            return;
+        }
+    };
+
+    // 1. Expire stale invites
+    match crate::db::invites::expire_stale_invites(&client).await {
+        Ok(n) if n > 0 => tracing::info!("Expired {n} stale workspace invites"),
+        _ => {}
+    }
+
+    // 2. Find inactive workspaces (90 days, not protected, not suspended)
+    let inactive_90 = match crate::db::projects::find_inactive_workspaces(&client, 90).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to find inactive workspaces");
+            return;
+        }
+    };
+
+    for ws in &inactive_90 {
+        if crate::db::workspace_warnings::has_warning(&client, &ws.project_id, "inactivity_90d")
+            .await
+            .unwrap_or(true)
+        {
+            continue; // Already warned
+        }
+        // Send warning email to all members
+        if let Ok(members) = crate::db::projects::list_members(&client, &ws.project_id).await {
+            for member in &members {
+                let body = format!(
+                    "Hi,\n\n\
+                     Your workspace \"{}\" on AletheDash has had no activity for 90 days.\n\n\
+                     It will be suspended in 30 days if no one logs in.\n\n\
+                     Log in to keep your workspace active:\n{}\n\n\
+                     — AletheDash",
+                    ws.name, state.public_url
+                );
+                let _ = crate::email::send_email(
+                    &member.email,
+                    &format!("AletheDash — {} workspace will be suspended", ws.name),
+                    &body,
+                )
+                .await;
+            }
+        }
+        let _ = crate::db::workspace_warnings::record_warning(
+            &client,
+            &ws.project_id,
+            "inactivity_90d",
+        )
+        .await;
+        tracing::info!(workspace = %ws.name, "Sent 90-day inactivity warning");
+    }
+
+    // 3. Find workspaces warned 30+ days ago -> auto-suspend
+    let warned_ids =
+        crate::db::workspace_warnings::warnings_older_than(&client, "inactivity_90d", 30)
+            .await
+            .unwrap_or_default();
+
+    for pid in &warned_ids {
+        // Check still inactive (no recent activity since warning)
+        let still_inactive = crate::db::projects::find_inactive_workspaces(&client, 90)
+            .await
+            .map(|list| list.iter().any(|p| p.project_id == *pid))
+            .unwrap_or(false);
+        if still_inactive {
+            let _ = crate::db::projects::suspend_project(&client, pid).await;
+            tracing::info!(project_id = %pid, "Auto-suspended workspace due to inactivity");
+        }
+    }
+
+    // 4. Warn system admins about workspaces approaching hard delete (360 days suspended)
+    let approaching_delete = crate::db::projects::find_suspended_older_than(&client, 360)
+        .await
+        .unwrap_or_default();
+
+    for ws in &approaching_delete {
+        if crate::db::workspace_warnings::has_warning(&client, &ws.project_id, "hard_delete_5d")
+            .await
+            .unwrap_or(true)
+        {
+            continue;
+        }
+        // Find system admins and email them
+        let admins = client
+            .query(
+                "SELECT email FROM dash_user WHERE is_platform_admin = TRUE AND status = 'active'",
+                &[],
+            )
+            .await
+            .unwrap_or_default();
+        for admin in &admins {
+            let email: String = admin.get("email");
+            let body = format!(
+                "AletheDash system notice:\n\n\
+                 Workspace \"{}\" has been suspended for over 360 days.\n\
+                 It will be permanently deleted in 5 days.\n\n\
+                 To prevent deletion, restore the workspace from the System Dashboard.\n\n\
+                 — AletheDash",
+                ws.name
+            );
+            let _ = crate::email::send_email(
+                &email,
+                &format!("AletheDash — {} permanent deletion in 5 days", ws.name),
+                &body,
+            )
+            .await;
+        }
+        let _ = crate::db::workspace_warnings::record_warning(
+            &client,
+            &ws.project_id,
+            "hard_delete_5d",
+        )
+        .await;
+        tracing::info!(workspace = %ws.name, "Sent hard-delete warning to system admins");
+    }
+
+    // 5. Hard delete workspaces suspended for 365+ days
+    let to_delete = crate::db::projects::find_suspended_older_than(&client, 365)
+        .await
+        .unwrap_or_default();
+    for ws in &to_delete {
+        tracing::warn!(
+            workspace = %ws.name,
+            project_id = %ws.project_id,
+            "Auto-deleting workspace (365 days suspended)"
+        );
+        let _ = crate::db::projects::hard_delete_project(&client, &ws.project_id).await;
+    }
+
+    // 6. Expire stale command approvals
+    match crate::db::command_approvals::expire_stale(&client).await {
+        Ok(n) if n > 0 => tracing::info!("Expired {n} stale command approvals"),
+        _ => {}
     }
 }
 

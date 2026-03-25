@@ -481,6 +481,84 @@ pub async fn hard_delete_project(client: &Client, project_id: &Uuid) -> anyhow::
     Ok(())
 }
 
+/// Find workspaces where no member has logged in within N days.
+/// Excludes protected workspaces and already-suspended ones.
+pub async fn find_inactive_workspaces(
+    client: &Client,
+    days: i64,
+) -> anyhow::Result<Vec<ProjectRow>> {
+    let rows = client
+        .query(
+            "SELECT p.project_id, p.name, p.slug, p.description, p.created_by, \
+                    p.created_at, p.updated_at, p.settings, p.deleted_at, \
+                    COALESCE(p.delete_protection, FALSE) AS delete_protection \
+             FROM project p \
+             WHERE p.deleted_at IS NULL \
+               AND COALESCE(p.delete_protection, FALSE) = FALSE \
+               AND NOT EXISTS ( \
+                   SELECT 1 FROM project_member pm \
+                   JOIN dash_user u ON u.user_id = pm.user_id \
+                   WHERE pm.project_id = p.project_id \
+                     AND u.last_login_at > now() - ($1::text || ' days')::interval \
+               ) \
+             ORDER BY p.name",
+            &[&days.to_string()],
+        )
+        .await?;
+
+    Ok(rows
+        .iter()
+        .map(|r| ProjectRow {
+            project_id: r.get("project_id"),
+            name: r.get("name"),
+            slug: r.get("slug"),
+            description: r.get("description"),
+            created_by: r.get("created_by"),
+            created_at: r.get("created_at"),
+            updated_at: r.get("updated_at"),
+            settings: r.get("settings"),
+            deleted_at: r.get("deleted_at"),
+            delete_protection: r.get("delete_protection"),
+        })
+        .collect())
+}
+
+/// Find suspended workspaces where deleted_at is older than N days.
+pub async fn find_suspended_older_than(
+    client: &Client,
+    days: i64,
+) -> anyhow::Result<Vec<ProjectRow>> {
+    let rows = client
+        .query(
+            "SELECT p.project_id, p.name, p.slug, p.description, p.created_by, \
+                    p.created_at, p.updated_at, p.settings, p.deleted_at, \
+                    COALESCE(p.delete_protection, FALSE) AS delete_protection \
+             FROM project p \
+             WHERE p.deleted_at IS NOT NULL \
+               AND COALESCE(p.delete_protection, FALSE) = FALSE \
+               AND p.deleted_at < now() - ($1::text || ' days')::interval \
+             ORDER BY p.name",
+            &[&days.to_string()],
+        )
+        .await?;
+
+    Ok(rows
+        .iter()
+        .map(|r| ProjectRow {
+            project_id: r.get("project_id"),
+            name: r.get("name"),
+            slug: r.get("slug"),
+            description: r.get("description"),
+            created_by: r.get("created_by"),
+            created_at: r.get("created_at"),
+            updated_at: r.get("updated_at"),
+            settings: r.get("settings"),
+            deleted_at: r.get("deleted_at"),
+            delete_protection: r.get("delete_protection"),
+        })
+        .collect())
+}
+
 /// Convert a project name to a URL-safe slug.
 pub fn slugify(name: &str) -> String {
     name.to_lowercase()

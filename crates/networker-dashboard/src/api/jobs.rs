@@ -41,7 +41,7 @@ const MAX_CONCURRENCY: usize = 16;
 
 async fn get_job(
     State(state): State<Arc<AppState>>,
-    Path(job_id): Path<Uuid>,
+    Path((_, job_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let correlation_id = job_id.to_string();
     tracing::debug!(correlation_id, "Fetching job details");
@@ -181,7 +181,7 @@ async fn create_job_scoped(
 
 async fn cancel_job_scoped(
     State(state): State<Arc<AppState>>,
-    Path(job_id): Path<Uuid>,
+    Path((_, job_id)): Path<(Uuid, Uuid)>,
     req: axum::extract::Request,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
