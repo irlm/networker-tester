@@ -52,9 +52,10 @@ mod tests {
         UrlOriginSummary, UrlPageLoadStrategy, UrlTestRun,
     };
     use crate::tls_profile::{
-        TlsCertificateSection, TlsEndpointProfile, TlsPathCharacteristics, TlsPathClassification,
-        TlsProfileConnectivity, TlsProfileCoverageLevel, TlsProfileSummary, TlsProfileTarget,
-        TlsProfileTargetKind, TlsResumptionSection, TlsRevocationInfo, TlsTrustSection,
+        TlsCertificateSection, TlsChainDiagnostics, TlsEndpointProfile, TlsPathCharacteristics,
+        TlsPathClassification, TlsProfileConnectivity, TlsProfileCoverageLevel, TlsProfileSummary,
+        TlsProfileTarget, TlsProfileTargetKind, TlsResumptionSection, TlsRevocationInfo,
+        TlsTrustSection,
     };
     use chrono::Utc;
     use tempfile::NamedTempFile;
@@ -234,11 +235,25 @@ mod tests {
                 hostname_matches: true,
                 chain_valid: true,
                 trusted_by_system_store: true,
+                verification_performed: true,
+                chain_presented: false,
+                verified_chain_depth: None,
                 issues: vec![],
+                chain_diagnostics: TlsChainDiagnostics {
+                    presented_chain_length: 0,
+                    leaf_self_signed: false,
+                    has_intermediate: false,
+                    ordered_subject_issuer_links: true,
+                    root_included: false,
+                    notes: vec![],
+                },
                 revocation: TlsRevocationInfo {
                     ocsp_stapled: false,
                     method: "best_effort".into(),
                     status: "unknown".into(),
+                    ocsp_urls: vec![],
+                    crl_urls: vec![],
+                    online_check_attempted: false,
                     notes: vec![],
                 },
                 caa: None,

@@ -141,8 +141,13 @@ pub struct TlsTrustSection {
     pub hostname_matches: bool,
     pub chain_valid: bool,
     pub trusted_by_system_store: bool,
+    pub verification_performed: bool,
+    pub chain_presented: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified_chain_depth: Option<u32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub issues: Vec<String>,
+    pub chain_diagnostics: TlsChainDiagnostics,
     pub revocation: TlsRevocationInfo,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caa: Option<TlsCaaInfo>,
@@ -153,6 +158,20 @@ pub struct TlsRevocationInfo {
     pub ocsp_stapled: bool,
     pub method: String,
     pub status: String,
+    pub ocsp_urls: Vec<String>,
+    pub crl_urls: Vec<String>,
+    pub online_check_attempted: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TlsChainDiagnostics {
+    pub presented_chain_length: u32,
+    pub leaf_self_signed: bool,
+    pub has_intermediate: bool,
+    pub ordered_subject_issuer_links: bool,
+    pub root_included: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
 }
@@ -302,12 +321,15 @@ pub async fn run_tls_endpoint_profile(
             early_data_accepted: None,
         });
 
-    let mut trust_issues = Vec::new();
+    let mut trust_issues = first.chain_diagnostics.notes.clone();
     if !hostname_matches {
         trust_issues.push("hostname mismatch".into());
     }
-    if !first.trusted_by_system_store {
+    if first.verification_performed && !first.trusted_by_system_store {
         trust_issues.push("not trusted by system store".into());
+    }
+    if !first.verification_performed {
+        trust_issues.push("system trust verification was not performed".into());
     }
     if first.chain.is_empty() {
         trust_issues.push("server did not present a certificate chain".into());
@@ -328,6 +350,7 @@ pub async fn run_tls_endpoint_profile(
         TlsPathClassification::Direct
     };
 
+    let chain_presented = !first.chain.is_empty();
     let mut findings = build_findings(
         &first,
         hostname_matches,
@@ -380,7 +403,11 @@ pub async fn run_tls_endpoint_profile(
             hostname_matches,
             chain_valid: first.chain_valid,
             trusted_by_system_store: first.trusted_by_system_store,
+            verification_performed: first.verification_performed,
+            chain_presented,
+            verified_chain_depth: first.verified_chain_depth,
             issues: trust_issues,
+            chain_diagnostics: first.chain_diagnostics,
             revocation: first.revocation,
             caa,
         },
@@ -401,6 +428,9 @@ struct HandshakeSnapshot {
     chain: Vec<TlsCertificateInfo>,
     chain_valid: bool,
     trusted_by_system_store: bool,
+    verification_performed: bool,
+    verified_chain_depth: Option<u32>,
+    chain_diagnostics: TlsChainDiagnostics,
     revocation: TlsRevocationInfo,
 }
 
@@ -450,22 +480,42 @@ async fn run_single_handshake(
         .filter_map(|c| parse_certificate_info(c))
         .collect::<Vec<_>>();
     let leaf = chain.first().cloned();
+    let chain_diagnostics = build_chain_diagnostics(&chain);
+    let verification_performed = !req.insecure;
+    let trusted_by_system_store = verification_performed && !certs.is_empty();
+    let chain_valid =
+        verification_performed && !chain_diagnostics.leaf_self_signed && !chain.is_empty();
+    let verified_chain_depth = if trusted_by_system_store {
+        Some(chain.len() as u32)
+    } else {
+        None
+    };
     let revocation = leaf
         .as_ref()
         .map(|leaf| TlsRevocationInfo {
             ocsp_stapled: false,
             method: "best_effort".into(),
-            status: "unknown".into(),
+            status: if leaf.ocsp_urls.is_empty() && leaf.crl_urls.is_empty() {
+                "no_metadata".into()
+            } else {
+                "unknown".into()
+            },
+            ocsp_urls: leaf.ocsp_urls.clone(),
+            crl_urls: leaf.crl_urls.clone(),
+            online_check_attempted: false,
             notes: if leaf.ocsp_urls.is_empty() && leaf.crl_urls.is_empty() {
                 vec!["No OCSP/CRL endpoints advertised by leaf certificate".into()]
             } else {
-                vec!["Revocation not actively validated in Phase 1".into()]
+                vec!["Revocation metadata collected; online status not actively validated in Phase 2".into()]
             },
         })
         .unwrap_or(TlsRevocationInfo {
             ocsp_stapled: false,
             method: "best_effort".into(),
             status: "unknown".into(),
+            ocsp_urls: vec![],
+            crl_urls: vec![],
+            online_check_attempted: false,
             notes: vec!["No peer certificate available".into()],
         });
 
@@ -476,8 +526,11 @@ async fn run_single_handshake(
         negotiated_cipher_suite,
         alpn,
         leaf,
-        chain_valid: !certs.is_empty() && !req.insecure,
-        trusted_by_system_store: !req.insecure,
+        chain_valid,
+        trusted_by_system_store,
+        verification_performed,
+        verified_chain_depth,
+        chain_diagnostics,
         chain,
         revocation,
     })
@@ -727,6 +780,47 @@ fn extract_subject_cn(subject: &str) -> Option<&str> {
     Some(subject[cn_start..].split(',').next()?.trim())
 }
 
+fn build_chain_diagnostics(chain: &[TlsCertificateInfo]) -> TlsChainDiagnostics {
+    let leaf_self_signed = chain
+        .first()
+        .map(|leaf| leaf.subject == leaf.issuer)
+        .unwrap_or(false);
+    let has_intermediate = chain.len() > 1;
+    let ordered_subject_issuer_links = chain
+        .windows(2)
+        .all(|pair| pair[0].issuer == pair[1].subject);
+    let root_included = chain
+        .last()
+        .map(|cert| cert.subject == cert.issuer)
+        .unwrap_or(false);
+
+    let mut notes = Vec::new();
+    if chain.is_empty() {
+        notes.push("no certificates were presented".into());
+    }
+    if leaf_self_signed {
+        notes.push("leaf certificate appears self-signed".into());
+    }
+    if !ordered_subject_issuer_links && chain.len() > 1 {
+        notes.push("presented chain ordering does not form a clean issuer/subject path".into());
+    }
+    if !has_intermediate && chain.len() == 1 {
+        notes.push("no intermediate certificates were presented".into());
+    }
+    if root_included {
+        notes.push("presented chain includes a self-signed root".into());
+    }
+
+    TlsChainDiagnostics {
+        presented_chain_length: chain.len() as u32,
+        leaf_self_signed,
+        has_intermediate,
+        ordered_subject_issuer_links,
+        root_included,
+        notes,
+    }
+}
+
 async fn lookup_caa(host: &str) -> Option<TlsCaaInfo> {
     if host.starts_with('-') || host.len() > 253 {
         return None;
@@ -782,6 +876,71 @@ fn build_findings(
             severity: TlsFindingSeverity::Warning,
             code: "UNTRUSTED_CHAIN".into(),
             message: "Certificate chain was not validated against the system trust store".into(),
+        });
+    }
+    if snapshot.chain_diagnostics.leaf_self_signed {
+        findings.push(TlsFinding {
+            severity: TlsFindingSeverity::Warning,
+            code: "SELF_SIGNED_LEAF".into(),
+            message: "Leaf certificate appears self-signed".into(),
+        });
+    }
+    if !snapshot.chain_diagnostics.ordered_subject_issuer_links
+        && snapshot.chain_diagnostics.presented_chain_length > 1
+    {
+        findings.push(TlsFinding {
+            severity: TlsFindingSeverity::Warning,
+            code: "CHAIN_ORDERING_ODD".into(),
+            message: "Presented certificate chain ordering does not follow issuer-to-subject links cleanly".into(),
+        });
+    }
+    if !snapshot.chain_diagnostics.has_intermediate
+        && snapshot.chain_diagnostics.presented_chain_length == 1
+    {
+        findings.push(TlsFinding {
+            severity: TlsFindingSeverity::Info,
+            code: "NO_INTERMEDIATE_PRESENTED".into(),
+            message: "Server presented only a leaf certificate and no intermediate certificates"
+                .into(),
+        });
+    }
+    if snapshot.chain_diagnostics.root_included {
+        findings.push(TlsFinding {
+            severity: TlsFindingSeverity::Info,
+            code: "ROOT_INCLUDED_IN_CHAIN".into(),
+            message: "Presented chain includes a self-signed root certificate".into(),
+        });
+    }
+    if !snapshot.revocation.ocsp_urls.is_empty() || !snapshot.revocation.crl_urls.is_empty() {
+        findings.push(TlsFinding {
+            severity: TlsFindingSeverity::Info,
+            code: "REVOCATION_METADATA_PRESENT".into(),
+            message: "Certificate advertises revocation metadata (OCSP and/or CRL endpoints)"
+                .into(),
+        });
+    }
+    if snapshot
+        .leaf
+        .as_ref()
+        .map(|leaf| leaf.scts_present)
+        .unwrap_or(false)
+    {
+        findings.push(TlsFinding {
+            severity: TlsFindingSeverity::Info,
+            code: "CT_PRESENT".into(),
+            message: "Certificate transparency evidence present in certificate extensions".into(),
+        });
+    }
+    if snapshot
+        .leaf
+        .as_ref()
+        .map(|leaf| leaf.must_staple)
+        .unwrap_or(false)
+    {
+        findings.push(TlsFinding {
+            severity: TlsFindingSeverity::Info,
+            code: "MUST_STAPLE".into(),
+            message: "Leaf certificate indicates OCSP Must-Staple".into(),
         });
     }
     if let Some(leaf) = &snapshot.leaf {
@@ -903,6 +1062,57 @@ mod tests {
         let summary = summarize_findings(&[]);
         assert_eq!(summary.status, "ok");
         assert!(summary.score.is_none());
+    }
+
+    #[test]
+    fn chain_diagnostics_detect_self_signed_leaf_and_root() {
+        let chain = vec![
+            TlsCertificateInfo {
+                subject: "CN=leaf".into(),
+                issuer: "CN=leaf".into(),
+                serial_number: "01".into(),
+                not_before: None,
+                not_after: None,
+                san_dns: vec![],
+                san_ip: vec![],
+                key_type: "RSA".into(),
+                key_bits: Some(2048),
+                signature_algorithm: "1.2.3".into(),
+                is_ca: false,
+                sha256_fingerprint: "aa".into(),
+                spki_sha256: "bb".into(),
+                ocsp_urls: vec![],
+                crl_urls: vec![],
+                aia_issuers: vec![],
+                must_staple: false,
+                scts_present: false,
+            },
+            TlsCertificateInfo {
+                subject: "CN=root".into(),
+                issuer: "CN=root".into(),
+                serial_number: "02".into(),
+                not_before: None,
+                not_after: None,
+                san_dns: vec![],
+                san_ip: vec![],
+                key_type: "RSA".into(),
+                key_bits: Some(4096),
+                signature_algorithm: "1.2.3".into(),
+                is_ca: true,
+                sha256_fingerprint: "cc".into(),
+                spki_sha256: "dd".into(),
+                ocsp_urls: vec![],
+                crl_urls: vec![],
+                aia_issuers: vec![],
+                must_staple: false,
+                scts_present: false,
+            },
+        ];
+        let diag = build_chain_diagnostics(&chain);
+        assert!(diag.leaf_self_signed);
+        assert!(diag.root_included);
+        assert!(diag.has_intermediate);
+        assert!(!diag.notes.is_empty());
     }
 
     #[test]
