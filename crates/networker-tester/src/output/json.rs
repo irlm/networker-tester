@@ -1,4 +1,5 @@
 use crate::metrics::{TestRun, UrlTestRun};
+use crate::tls_profile::TlsEndpointProfile;
 use std::path::Path;
 
 /// Serialize a `TestRun` to pretty-printed JSON and write to `path`.
@@ -29,12 +30,31 @@ pub fn to_string_url_test(run: &UrlTestRun) -> anyhow::Result<String> {
     Ok(serde_json::to_string_pretty(run)?)
 }
 
+/// Serialize a `TlsEndpointProfile` to pretty-printed JSON and write to `path`.
+pub fn save_tls_profile(run: &TlsEndpointProfile, path: &Path) -> anyhow::Result<()> {
+    let dir = path.parent().unwrap_or(Path::new("."));
+    std::fs::create_dir_all(dir)?;
+    let json = to_string_tls_profile(run)?;
+    std::fs::write(path, json)?;
+    Ok(())
+}
+
+/// Return the JSON string for a `TlsEndpointProfile` without writing to disk.
+pub fn to_string_tls_profile(run: &TlsEndpointProfile) -> anyhow::Result<String> {
+    Ok(serde_json::to_string_pretty(run)?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::metrics::{
         Protocol, RequestAttempt, TestRun, UrlConnectionSummary, UrlDiagnosticStatus,
         UrlOriginSummary, UrlPageLoadStrategy, UrlTestRun,
+    };
+    use crate::tls_profile::{
+        TlsCertificateSection, TlsEndpointProfile, TlsPathCharacteristics, TlsPathClassification,
+        TlsProfileConnectivity, TlsProfileCoverageLevel, TlsProfileSummary, TlsProfileTarget,
+        TlsProfileTargetKind, TlsResumptionSection, TlsRevocationInfo, TlsTrustSection,
     };
     use chrono::Utc;
     use tempfile::NamedTempFile;
@@ -174,5 +194,73 @@ mod tests {
         save_url_test(&run, tmp.path()).unwrap();
         let contents = std::fs::read_to_string(tmp.path()).unwrap();
         assert!(contents.contains("\"requested_url\""));
+    }
+
+    #[test]
+    fn tls_profile_json_round_trip() {
+        let run = TlsEndpointProfile {
+            target_kind: TlsProfileTargetKind::ExternalUrl,
+            coverage_level: TlsProfileCoverageLevel::ClientObserved,
+            unsupported_checks: vec!["protocol_matrix".into()],
+            limitations: vec!["client-visible only".into()],
+            target: TlsProfileTarget {
+                host: "example.com".into(),
+                port: 443,
+                requested_ip: None,
+                sni: Some("example.com".into()),
+                resolved_ips: vec!["93.184.216.34".into()],
+                source_url: Some("https://example.com".into()),
+            },
+            path_characteristics: TlsPathCharacteristics {
+                connected_ip: Some("93.184.216.34".into()),
+                direct_ip_match: true,
+                proxy_detected: false,
+                classification: TlsPathClassification::Direct,
+                evidence: vec![],
+            },
+            connectivity: TlsProfileConnectivity {
+                tcp_connect_ms: Some(10.0),
+                tls_handshake_ms: Some(20.0),
+                negotiated_tls_version: Some("TLSv1_3".into()),
+                negotiated_cipher_suite: Some("TLS_AES_128_GCM_SHA256".into()),
+                negotiated_key_exchange_group: None,
+                alpn: Some("h2".into()),
+            },
+            certificate: TlsCertificateSection {
+                leaf: None,
+                chain: vec![],
+            },
+            trust: TlsTrustSection {
+                hostname_matches: true,
+                chain_valid: true,
+                trusted_by_system_store: true,
+                issues: vec![],
+                revocation: TlsRevocationInfo {
+                    ocsp_stapled: false,
+                    method: "best_effort".into(),
+                    status: "unknown".into(),
+                    notes: vec![],
+                },
+                caa: None,
+            },
+            capabilities: None,
+            resumption: TlsResumptionSection {
+                supported: false,
+                method: None,
+                initial_handshake_ms: Some(20.0),
+                resumed_handshake_ms: Some(18.0),
+                early_data_offered: false,
+                early_data_accepted: None,
+            },
+            findings: vec![],
+            summary: TlsProfileSummary {
+                status: "ok".into(),
+                score: None,
+            },
+        };
+        let json = to_string_tls_profile(&run).unwrap();
+        let de: TlsEndpointProfile = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.target.host, "example.com");
+        assert!(de.summary.score.is_none());
     }
 }

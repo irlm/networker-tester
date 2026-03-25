@@ -195,6 +195,26 @@ pub struct Cli {
     #[arg(long)]
     pub url_test_json: bool,
 
+    /// Run a TLS endpoint profile against the provided https URL.
+    #[arg(long)]
+    pub tls_profile_url: Option<String>,
+
+    /// Optional IP override for the TLS endpoint profile connection target.
+    #[arg(long)]
+    pub tls_profile_ip: Option<String>,
+
+    /// Optional SNI override for the TLS endpoint profile.
+    #[arg(long)]
+    pub tls_profile_sni: Option<String>,
+
+    /// Target kind for the TLS endpoint profile: managed-endpoint|external-url|external-host.
+    #[arg(long)]
+    pub tls_profile_target_kind: Option<String>,
+
+    /// Emit the TLS endpoint profile as JSON to stdout.
+    #[arg(long)]
+    pub tls_profile_json: bool,
+
     // ── Database ──────────────────────────────────────────────────────────────
     /// Insert results into a database (auto-detects backend from URL scheme)
     #[arg(long)]
@@ -377,6 +397,11 @@ pub struct ResolvedConfig {
     /// One or more target URLs to probe. Always non-empty (defaults to localhost).
     pub targets: Vec<String>,
     pub url_test_url: Option<String>,
+    pub tls_profile_url: Option<String>,
+    pub tls_profile_ip: Option<String>,
+    pub tls_profile_sni: Option<String>,
+    pub tls_profile_target_kind: Option<String>,
+    pub tls_profile_json: bool,
     pub url_test_auth_token: Option<String>,
     pub url_test_cookie: Option<String>,
     pub url_test_headers: Vec<String>,
@@ -558,6 +583,11 @@ impl Cli {
                 ts
             },
             url_test_url: self.url_test_url,
+            tls_profile_url: self.tls_profile_url,
+            tls_profile_ip: self.tls_profile_ip,
+            tls_profile_sni: self.tls_profile_sni,
+            tls_profile_target_kind: self.tls_profile_target_kind,
+            tls_profile_json: self.tls_profile_json,
             url_test_auth_token: self.url_test_auth_token,
             url_test_cookie: self.url_test_cookie,
             url_test_headers: self.url_test_headers,
@@ -639,6 +669,29 @@ impl ResolvedConfig {
             }
             if self.url_test_http3_repeat == 0 {
                 anyhow::bail!("--url-test-http3-repeat must be at least 1");
+            }
+        }
+        if let Some(url) = &self.tls_profile_url {
+            let parsed = url::Url::parse(url)
+                .map_err(|e| anyhow::anyhow!("--tls-profile-url invalid URL: {e}"))?;
+            match parsed.scheme() {
+                "https" => {}
+                other => anyhow::bail!(
+                    "--tls-profile-url unsupported URL scheme '{other}' (expected https)"
+                ),
+            }
+            if parsed.host_str().is_none() {
+                anyhow::bail!("--tls-profile-url must include a host");
+            }
+            if let Some(kind) = &self.tls_profile_target_kind {
+                match kind.as_str() {
+                    "managed-endpoint" | "managed_endpoint" | "external-url" | "external_url" | "external-host" | "external_host" => {}
+                    _ => anyhow::bail!("--tls-profile-target-kind must be one of: managed-endpoint, external-url, external-host"),
+                }
+            }
+            if let Some(ip) = &self.tls_profile_ip {
+                ip.parse::<std::net::IpAddr>()
+                    .map_err(|e| anyhow::anyhow!("--tls-profile-ip invalid IP: {e}"))?;
             }
         }
         if self.save_to_db && self.db_url.is_none() && !self.save_to_sql {
@@ -993,6 +1046,40 @@ mod tests {
             "https://example.com",
             "--url-test-protocol-force",
             "h9",
+        ])
+        .resolve(None);
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn tls_profile_flags_parse_and_validate() {
+        let cfg = Cli::parse_from([
+            "networker-tester",
+            "--tls-profile-url",
+            "https://example.com",
+            "--tls-profile-ip",
+            "93.184.216.34",
+            "--tls-profile-sni",
+            "example.com",
+            "--tls-profile-target-kind",
+            "external-url",
+            "--tls-profile-json",
+        ])
+        .resolve(None);
+        assert!(cfg.validate().is_ok());
+        assert_eq!(cfg.tls_profile_url.as_deref(), Some("https://example.com"));
+        assert_eq!(cfg.tls_profile_ip.as_deref(), Some("93.184.216.34"));
+        assert_eq!(cfg.tls_profile_sni.as_deref(), Some("example.com"));
+        assert_eq!(cfg.tls_profile_target_kind.as_deref(), Some("external-url"));
+        assert!(cfg.tls_profile_json);
+    }
+
+    #[test]
+    fn tls_profile_invalid_scheme_fails_validation() {
+        let cfg = Cli::parse_from([
+            "networker-tester",
+            "--tls-profile-url",
+            "http://example.com",
         ])
         .resolve(None);
         assert!(cfg.validate().is_err());
