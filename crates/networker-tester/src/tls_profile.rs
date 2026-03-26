@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use x509_parser::extensions::{GeneralName, ParsedExtension};
@@ -283,6 +283,7 @@ pub async fn run_tls_endpoint_profile(
     let mut limitations = vec![
         "Result based on client-visible handshake and DNS behavior".to_string(),
         "Cipher-suite enumeration is not implemented in Phase 3".to_string(),
+        "Client-auth behavior is not fully detected yet; mTLS-required servers may be under-reported".to_string(),
     ];
     let unsupported_checks = vec![
         "cipher_matrix".to_string(),
@@ -345,7 +346,15 @@ pub async fn run_tls_endpoint_profile(
 
     let addr = SocketAddr::new(connect_ip, req.port);
     let first = run_single_handshake(&req, addr, &sni).await?;
-    let capabilities = run_capability_probes(&req, addr, &sni).await;
+    let capabilities = tokio::time::timeout(
+        Duration::from_secs(30),
+        run_capability_probes(&req, addr, &sni),
+    )
+    .await
+    .unwrap_or_else(|_| {
+        tracing::warn!(host = %req.host, "capability probes timed out");
+        None
+    });
     let hostname_matches = first
         .leaf
         .as_ref()
@@ -652,27 +661,12 @@ fn build_tls_config(
     insecure: bool,
     ca_bundle: Option<&str>,
 ) -> anyhow::Result<rustls::ClientConfig> {
-    let mut config = if insecure {
-        rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(NoVerifier))
-            .with_no_client_auth()
-    } else {
-        let mut root_store = rustls::RootCertStore::empty();
-        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        let native = rustls_native_certs::load_native_certs();
-        for cert in native.certs {
-            let _ = root_store.add(cert);
-        }
-        if let Some(bundle_path) = ca_bundle {
-            load_ca_bundle(&mut root_store, bundle_path)?;
-        }
-        rustls::ClientConfig::builder()
-            .with_root_certificates(root_store)
-            .with_no_client_auth()
-    };
-    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
-    Ok(config)
+    build_tls_config_with_options(
+        insecure,
+        ca_bundle,
+        vec![b"h2".to_vec(), b"http/1.1".to_vec()],
+        vec![&rustls::version::TLS13, &rustls::version::TLS12],
+    )
 }
 
 async fn probe_tls_handshake(
@@ -682,29 +676,64 @@ async fn probe_tls_handshake(
     alpn_protocols: Vec<Vec<u8>>,
     protocol_versions: Vec<&'static rustls::SupportedProtocolVersion>,
 ) -> Option<HandshakeSnapshot> {
-    let server_name = ServerName::try_from(sni?.to_string()).ok()?;
-    let tls_config = build_tls_config_with_options(
+    let server_name = match sni {
+        Some(sni) => match ServerName::try_from(sni.to_string()) {
+            Ok(name) => name,
+            Err(err) => {
+                tracing::debug!(?err, sni, "tls capability probe rejected invalid SNI");
+                return None;
+            }
+        },
+        None => {
+            tracing::debug!("tls capability probe skipped because rustls requires SNI/server name");
+            return None;
+        }
+    };
+    let tls_config = match build_tls_config_with_options(
         req.insecure,
         req.ca_bundle.as_deref(),
         alpn_protocols,
         protocol_versions,
-    )
-    .ok()?;
+    ) {
+        Ok(cfg) => cfg,
+        Err(err) => {
+            tracing::debug!(?err, "tls capability probe could not build TLS config");
+            return None;
+        }
+    };
     let connector = TlsConnector::from(Arc::new(tls_config));
-    let tcp = tokio::time::timeout(
-        std::time::Duration::from_millis(req.timeout_ms),
+    let tcp = match tokio::time::timeout(
+        Duration::from_millis(req.timeout_ms),
         TcpStream::connect(addr),
     )
     .await
-    .ok()?
-    .ok()?;
-    let stream = tokio::time::timeout(
-        std::time::Duration::from_millis(req.timeout_ms),
+    {
+        Ok(Ok(tcp)) => tcp,
+        Ok(Err(err)) => {
+            tracing::debug!(?err, %addr, "tls capability probe TCP connect failed");
+            return None;
+        }
+        Err(_) => {
+            tracing::debug!(%addr, timeout_ms = req.timeout_ms, "tls capability probe TCP connect timed out");
+            return None;
+        }
+    };
+    let stream = match tokio::time::timeout(
+        Duration::from_millis(req.timeout_ms),
         connector.connect(server_name, tcp),
     )
     .await
-    .ok()?
-    .ok()?;
+    {
+        Ok(Ok(stream)) => stream,
+        Ok(Err(err)) => {
+            tracing::debug!(?err, %addr, "tls capability probe handshake failed");
+            return None;
+        }
+        Err(_) => {
+            tracing::debug!(%addr, timeout_ms = req.timeout_ms, "tls capability probe handshake timed out");
+            return None;
+        }
+    };
     let (_, conn) = stream.get_ref();
     let negotiated_tls_version = conn.protocol_version().map(|v| format!("{v:?}"));
     let negotiated_cipher_suite = conn
@@ -748,97 +777,107 @@ async fn run_capability_probes(
     addr: SocketAddr,
     sni: &str,
 ) -> Option<TlsCapabilitiesSection> {
-    let versions = vec![
-        ("tls1.0", vec![]),
-        ("tls1.1", vec![]),
-        ("tls1.2", vec![&rustls::version::TLS12]),
-        ("tls1.3", vec![&rustls::version::TLS13]),
-    ];
-    let mut protocol_support = Vec::new();
-    let mut alpn_support = Vec::new();
-    for (label, rustls_versions) in versions {
-        if rustls_versions.is_empty() {
-            protocol_support.push(TlsProtocolSupport {
-                protocol: label.into(),
-                supported: false,
-                accepted_ciphers: vec![],
-                supported_groups: vec![],
-            });
-            continue;
-        }
-        let probe = probe_tls_handshake(
-            req,
-            addr,
-            Some(sni),
-            vec![b"h2".to_vec(), b"http/1.1".to_vec()],
-            rustls_versions,
-        )
-        .await;
-        let supported = probe.is_some();
-        let accepted_ciphers = probe
-            .as_ref()
-            .and_then(|p| p.negotiated_cipher_suite.clone())
-            .into_iter()
-            .collect::<Vec<_>>();
-        let supported_groups = probe
-            .as_ref()
-            .and_then(|p| p.negotiated_key_exchange_group.clone())
-            .into_iter()
-            .collect::<Vec<_>>();
-        if let Some(alpn) = probe.as_ref().and_then(|p| p.alpn.clone()) {
-            if !alpn_support.contains(&alpn) {
-                alpn_support.push(alpn);
-            }
-        }
-        protocol_support.push(TlsProtocolSupport {
-            protocol: label.into(),
-            supported,
-            accepted_ciphers,
-            supported_groups,
-        });
-    }
-
-    let h2 = probe_tls_handshake(
+    let tls12_fut = probe_tls_handshake(
+        req,
+        addr,
+        Some(sni),
+        vec![b"h2".to_vec(), b"http/1.1".to_vec()],
+        vec![&rustls::version::TLS12],
+    );
+    let tls13_fut = probe_tls_handshake(
+        req,
+        addr,
+        Some(sni),
+        vec![b"h2".to_vec(), b"http/1.1".to_vec()],
+        vec![&rustls::version::TLS13],
+    );
+    let h2_fut = probe_tls_handshake(
         req,
         addr,
         Some(sni),
         vec![b"h2".to_vec()],
         vec![&rustls::version::TLS13, &rustls::version::TLS12],
-    )
-    .await;
-    if h2.as_ref().and_then(|p| p.alpn.clone()).as_deref() == Some("h2")
-        && !alpn_support.contains(&"h2".to_string())
-    {
-        alpn_support.push("h2".into());
-    }
-    let http11 = probe_tls_handshake(
+    );
+    let http11_fut = probe_tls_handshake(
         req,
         addr,
         Some(sni),
         vec![b"http/1.1".to_vec()],
         vec![&rustls::version::TLS13, &rustls::version::TLS12],
-    )
-    .await;
-    if http11.as_ref().and_then(|p| p.alpn.clone()).as_deref() == Some("http/1.1")
-        && !alpn_support.contains(&"http/1.1".to_string())
-    {
-        alpn_support.push("http/1.1".into());
-    }
-
-    let without_sni = probe_tls_handshake(
+    );
+    let without_sni_fut = probe_tls_handshake(
         req,
         addr,
         None,
         vec![b"h2".to_vec(), b"http/1.1".to_vec()],
         vec![&rustls::version::TLS13, &rustls::version::TLS12],
-    )
-    .await;
+    );
+
+    let (tls12, tls13, h2, http11, without_sni) =
+        tokio::join!(tls12_fut, tls13_fut, h2_fut, http11_fut, without_sni_fut);
+
+    let protocol_support = vec![
+        TlsProtocolSupport {
+            protocol: "tls1.0".into(),
+            supported: false,
+            accepted_ciphers: vec![],
+            supported_groups: vec![],
+        },
+        TlsProtocolSupport {
+            protocol: "tls1.1".into(),
+            supported: false,
+            accepted_ciphers: vec![],
+            supported_groups: vec![],
+        },
+        TlsProtocolSupport {
+            protocol: "tls1.2".into(),
+            supported: tls12.is_some(),
+            accepted_ciphers: tls12
+                .as_ref()
+                .and_then(|p| p.negotiated_cipher_suite.clone())
+                .into_iter()
+                .collect(),
+            supported_groups: tls12
+                .as_ref()
+                .and_then(|p| p.negotiated_key_exchange_group.clone())
+                .into_iter()
+                .collect(),
+        },
+        TlsProtocolSupport {
+            protocol: "tls1.3".into(),
+            supported: tls13.is_some(),
+            accepted_ciphers: tls13
+                .as_ref()
+                .and_then(|p| p.negotiated_cipher_suite.clone())
+                .into_iter()
+                .collect(),
+            supported_groups: tls13
+                .as_ref()
+                .and_then(|p| p.negotiated_key_exchange_group.clone())
+                .into_iter()
+                .collect(),
+        },
+    ];
+
+    let mut alpn_support = Vec::new();
+    for probe in [h2.as_ref(), http11.as_ref()] {
+        if let Some(alpn) = probe.and_then(|p| p.alpn.clone()) {
+            if !alpn_support.contains(&alpn) {
+                alpn_support.push(alpn);
+            }
+        }
+    }
+
+    let with_sni_ok = protocol_support.iter().any(|p| p.supported);
+    if !with_sni_ok && h2.is_none() && http11.is_none() && without_sni.is_none() {
+        return None;
+    }
 
     Some(TlsCapabilitiesSection {
         protocol_support,
         alpn_support,
         sni_behavior: TlsSniBehavior {
-            with_sni_ok: true,
+            with_sni_ok,
             without_sni_ok: Some(without_sni.is_some()),
             default_cert_subject: None,
         },
