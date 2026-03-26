@@ -198,6 +198,28 @@ mod tests {
     }
 
     #[test]
+    fn trust_section_deserializes_without_new_fields() {
+        let old_json = r#"{
+            "hostname_matches": true,
+            "chain_valid": true,
+            "trusted_by_system_store": true,
+            "issues": [],
+            "revocation": {
+                "ocsp_stapled": false,
+                "method": "best_effort",
+                "status": "unknown",
+                "notes": []
+            }
+        }"#;
+        let section: TlsTrustSection = serde_json::from_str(old_json).unwrap();
+        assert!(!section.verification_performed);
+        assert!(!section.chain_presented);
+        assert_eq!(section.chain_diagnostics.presented_chain_length, 0);
+        assert!(section.revocation.ocsp_urls.is_empty());
+        assert!(!section.revocation.online_check_attempted);
+    }
+
+    #[test]
     fn tls_profile_json_round_trip() {
         let run = TlsEndpointProfile {
             target_kind: TlsProfileTargetKind::ExternalUrl,

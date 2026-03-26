@@ -141,12 +141,15 @@ pub struct TlsTrustSection {
     pub hostname_matches: bool,
     pub chain_valid: bool,
     pub trusted_by_system_store: bool,
+    #[serde(default)]
     pub verification_performed: bool,
+    #[serde(default)]
     pub chain_presented: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verified_chain_depth: Option<u32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub issues: Vec<String>,
+    #[serde(default)]
     pub chain_diagnostics: TlsChainDiagnostics,
     pub revocation: TlsRevocationInfo,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -158,14 +161,17 @@ pub struct TlsRevocationInfo {
     pub ocsp_stapled: bool,
     pub method: String,
     pub status: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ocsp_urls: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub crl_urls: Vec<String>,
+    #[serde(default)]
     pub online_check_attempted: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TlsChainDiagnostics {
     pub presented_chain_length: u32,
     pub leaf_self_signed: bool,
@@ -331,9 +337,6 @@ pub async fn run_tls_endpoint_profile(
     if !first.verification_performed {
         trust_issues.push("system trust verification was not performed".into());
     }
-    if first.chain.is_empty() {
-        trust_issues.push("server did not present a certificate chain".into());
-    }
 
     let mut evidence = Vec::new();
     if req.ip_override.is_some() && !direct_ip_match {
@@ -482,11 +485,15 @@ async fn run_single_handshake(
     let leaf = chain.first().cloned();
     let chain_diagnostics = build_chain_diagnostics(&chain);
     let verification_performed = !req.insecure;
+    // Phase 2 note: these are presentation-level trust heuristics derived from the
+    // observed certificate presentation and whether verification was enabled, not a
+    // complete standalone PKIX validation result. The TLS stack still enforces real
+    // verification during the secure handshake path.
     let trusted_by_system_store = verification_performed && !certs.is_empty();
     let chain_valid =
         verification_performed && !chain_diagnostics.leaf_self_signed && !chain.is_empty();
     let verified_chain_depth = if trusted_by_system_store {
-        Some(chain.len() as u32)
+        Some(u32::try_from(chain.len()).unwrap_or(u32::MAX))
     } else {
         None
     };
@@ -627,6 +634,14 @@ fn build_tls_config(
     Ok(config)
 }
 
+fn sanitize_revocation_uri(uri: &str) -> Option<String> {
+    let parsed = url::Url::parse(uri).ok()?;
+    match parsed.scheme() {
+        "http" | "https" => Some(parsed.to_string()),
+        _ => None,
+    }
+}
+
 fn parse_certificate_info(cert: &CertificateDer<'_>) -> Option<TlsCertificateInfo> {
     let (_, cert) = X509Certificate::from_der(cert.as_ref()).ok()?;
     let san = cert.subject_alternative_name().ok().flatten();
@@ -674,7 +689,9 @@ fn parse_certificate_info(cert: &CertificateDer<'_>) -> Option<TlsCertificateInf
                     let access_method = ad.access_method.to_id_string();
                     if let GeneralName::URI(uri) = &ad.access_location {
                         if access_method == "1.3.6.1.5.5.7.48.1" {
-                            ocsp_urls.push(uri.to_string());
+                            if let Some(uri) = sanitize_revocation_uri(uri) {
+                                ocsp_urls.push(uri);
+                            }
                         } else if access_method == "1.3.6.1.5.5.7.48.2" {
                             aia_issuers.push(uri.to_string());
                         }
@@ -688,7 +705,9 @@ fn parse_certificate_info(cert: &CertificateDer<'_>) -> Option<TlsCertificateInf
                     {
                         for gn in names {
                             if let GeneralName::URI(uri) = gn {
-                                crl_urls.push(uri.to_string());
+                                if let Some(uri) = sanitize_revocation_uri(uri) {
+                                    crl_urls.push(uri);
+                                }
                             }
                         }
                     }
@@ -705,12 +724,18 @@ fn parse_certificate_info(cert: &CertificateDer<'_>) -> Option<TlsCertificateInf
     let spki_sha256 = hex_lower(Sha256::digest(public_key));
     let fingerprint = hex_lower(Sha256::digest(cert.as_ref()));
     let serial_number = cert.raw_serial_as_string();
-    let key_bits = cert.public_key().parsed().ok().and_then(|pk| match pk {
-        x509_parser::public_key::PublicKey::RSA(key) => Some((key.modulus.len() * 8) as u32),
-        x509_parser::public_key::PublicKey::EC(_) => None,
+    let parsed_key = cert.public_key().parsed().ok()?;
+    let key_bits = match &parsed_key {
+        x509_parser::public_key::PublicKey::RSA(key) => {
+            Some((key.modulus.iter().skip_while(|&&b| b == 0).count() * 8) as u32)
+        }
+        x509_parser::public_key::PublicKey::EC(ec) => {
+            let bits = ec.key_size();
+            (bits > 0).then_some(bits as u32)
+        }
         _ => None,
-    });
-    let key_type = match cert.public_key().parsed().ok()? {
+    };
+    let key_type = match parsed_key {
         x509_parser::public_key::PublicKey::RSA(_) => "RSA".to_string(),
         x509_parser::public_key::PublicKey::EC(_) => "EC".to_string(),
         x509_parser::public_key::PublicKey::DSA(_) => "DSA".to_string(),
@@ -786,9 +811,13 @@ fn build_chain_diagnostics(chain: &[TlsCertificateInfo]) -> TlsChainDiagnostics 
         .map(|leaf| leaf.subject == leaf.issuer)
         .unwrap_or(false);
     let has_intermediate = chain.len() > 1;
-    let ordered_subject_issuer_links = chain
-        .windows(2)
-        .all(|pair| pair[0].issuer == pair[1].subject);
+    let ordered_subject_issuer_links = if chain.len() < 2 {
+        false
+    } else {
+        chain
+            .windows(2)
+            .all(|pair| pair[0].issuer == pair[1].subject)
+    };
     let root_included = chain
         .last()
         .map(|cert| cert.subject == cert.issuer)
@@ -916,6 +945,13 @@ fn build_findings(
             severity: TlsFindingSeverity::Info,
             code: "REVOCATION_METADATA_PRESENT".into(),
             message: "Certificate advertises revocation metadata (OCSP and/or CRL endpoints)"
+                .into(),
+        });
+    } else if snapshot.leaf.is_some() {
+        findings.push(TlsFinding {
+            severity: TlsFindingSeverity::Warning,
+            code: "UNUSUAL_REVOCATION_URI_SCHEME".into(),
+            message: "Certificate revocation URIs were absent or filtered because they were not HTTP/HTTPS"
                 .into(),
         });
     }
