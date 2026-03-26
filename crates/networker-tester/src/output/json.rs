@@ -52,9 +52,10 @@ mod tests {
         UrlOriginSummary, UrlPageLoadStrategy, UrlTestRun,
     };
     use crate::tls_profile::{
-        TlsCertificateSection, TlsEndpointProfile, TlsPathCharacteristics, TlsPathClassification,
-        TlsProfileConnectivity, TlsProfileCoverageLevel, TlsProfileSummary, TlsProfileTarget,
-        TlsProfileTargetKind, TlsResumptionSection, TlsRevocationInfo, TlsTrustSection,
+        TlsCertificateSection, TlsChainDiagnostics, TlsEndpointProfile, TlsPathCharacteristics,
+        TlsPathClassification, TlsProfileConnectivity, TlsProfileCoverageLevel, TlsProfileSummary,
+        TlsProfileTarget, TlsProfileTargetKind, TlsResumptionSection, TlsRevocationInfo,
+        TlsTrustSection,
     };
     use chrono::Utc;
     use tempfile::NamedTempFile;
@@ -197,6 +198,28 @@ mod tests {
     }
 
     #[test]
+    fn trust_section_deserializes_without_new_fields() {
+        let old_json = r#"{
+            "hostname_matches": true,
+            "chain_valid": true,
+            "trusted_by_system_store": true,
+            "issues": [],
+            "revocation": {
+                "ocsp_stapled": false,
+                "method": "best_effort",
+                "status": "unknown",
+                "notes": []
+            }
+        }"#;
+        let section: TlsTrustSection = serde_json::from_str(old_json).unwrap();
+        assert!(!section.verification_performed);
+        assert!(!section.chain_presented);
+        assert_eq!(section.chain_diagnostics.presented_chain_length, 0);
+        assert!(section.revocation.ocsp_urls.is_empty());
+        assert!(!section.revocation.online_check_attempted);
+    }
+
+    #[test]
     fn tls_profile_json_round_trip() {
         let run = TlsEndpointProfile {
             target_kind: TlsProfileTargetKind::ExternalUrl,
@@ -234,11 +257,25 @@ mod tests {
                 hostname_matches: true,
                 chain_valid: true,
                 trusted_by_system_store: true,
+                verification_performed: true,
+                chain_presented: false,
+                verified_chain_depth: None,
                 issues: vec![],
+                chain_diagnostics: TlsChainDiagnostics {
+                    presented_chain_length: 0,
+                    leaf_self_signed: false,
+                    has_intermediate: false,
+                    ordered_subject_issuer_links: true,
+                    root_included: false,
+                    notes: vec![],
+                },
                 revocation: TlsRevocationInfo {
                     ocsp_stapled: false,
                     method: "best_effort".into(),
                     status: "unknown".into(),
+                    ocsp_urls: vec![],
+                    crl_urls: vec![],
+                    online_check_attempted: false,
                     notes: vec![],
                 },
                 caa: None,
