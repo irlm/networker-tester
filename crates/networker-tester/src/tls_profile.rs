@@ -234,9 +234,17 @@ pub struct TlsResumptionSection {
     pub initial_handshake_ms: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resumed_handshake_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resumption_ratio: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resumed_tls_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resumed_cipher_suite: Option<String>,
     pub early_data_offered: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub early_data_accepted: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -368,8 +376,12 @@ pub async fn run_tls_endpoint_profile(
             method: None,
             initial_handshake_ms: None,
             resumed_handshake_ms: None,
+            resumption_ratio: None,
+            resumed_tls_version: None,
+            resumed_cipher_suite: None,
             early_data_offered: false,
             early_data_accepted: None,
+            notes: vec![],
         });
 
     let mut trust_issues = first.chain_diagnostics.notes.clone();
@@ -618,15 +630,18 @@ async fn run_resumption_check(
         .context("timed out during TLS handshake in resumption check")??;
         let ms = t.elapsed().as_secs_f64() * 1000.0;
         let (_, conn) = stream.get_ref();
-        Ok::<(f64, bool, Option<String>), anyhow::Error>((
+        Ok::<(f64, bool, Option<String>, Option<String>, Option<String>), anyhow::Error>((
             ms,
             matches!(conn.handshake_kind(), Some(rustls::HandshakeKind::Resumed)),
             conn.handshake_kind()
                 .map(|k| format!("{k:?}").to_lowercase()),
+            conn.protocol_version().map(|v| format!("{v:?}")),
+            conn.negotiated_cipher_suite()
+                .map(|c| format!("{:?}", c.suite())),
         ))
     };
 
-    let (initial_ms, _, _) = one.await?;
+    let (initial_ms, _, initial_kind, initial_version, _initial_cipher) = one.await?;
     let tcp = tokio::time::timeout(
         std::time::Duration::from_millis(req.timeout_ms),
         TcpStream::connect(addr),
@@ -643,17 +658,41 @@ async fn run_resumption_check(
     let resumed_ms = t.elapsed().as_secs_f64() * 1000.0;
     let (_, conn) = stream.get_ref();
     let resumed = matches!(conn.handshake_kind(), Some(rustls::HandshakeKind::Resumed));
-    let method = match conn.handshake_kind() {
-        Some(rustls::HandshakeKind::Resumed) => Some("ticket".into()),
-        _ => None,
+    let resumed_kind = conn
+        .handshake_kind()
+        .map(|k| format!("{k:?}").to_lowercase());
+    let resumed_tls_version = conn.protocol_version().map(|v| format!("{v:?}"));
+    let resumed_cipher_suite = conn
+        .negotiated_cipher_suite()
+        .map(|c| format!("{:?}", c.suite()));
+    let method = match (initial_version.as_deref(), resumed_kind.as_deref()) {
+        (Some(v), Some("resumed")) if v.contains("TLSv1_2") => Some("session_id_or_ticket".into()),
+        (_, Some("resumed")) => Some("ticket_or_psk".into()),
+        _ => initial_kind,
     };
+    let resumption_ratio = if resumed_ms > 0.0 {
+        Some(initial_ms / resumed_ms)
+    } else {
+        None
+    };
+    let mut notes = vec![
+        "0-RTT availability is not actively negotiated in this phase; values remain advisory"
+            .into(),
+    ];
+    if !resumed {
+        notes.push("Second handshake did not report a resumed session".into());
+    }
     Ok(TlsResumptionSection {
         supported: resumed,
         method,
         initial_handshake_ms: Some(initial_ms),
         resumed_handshake_ms: Some(resumed_ms),
+        resumption_ratio,
+        resumed_tls_version,
+        resumed_cipher_suite,
         early_data_offered: false,
         early_data_accepted: None,
+        notes,
     })
 }
 
@@ -1286,6 +1325,15 @@ fn build_findings(
             severity: TlsFindingSeverity::Info,
             code: "RESUMPTION_NOT_OBSERVED".into(),
             message: "TLS session resumption was not observed on the second handshake".into(),
+        });
+    } else if let Some(ratio) = resumption.resumption_ratio {
+        findings.push(TlsFinding {
+            severity: TlsFindingSeverity::Info,
+            code: "RESUMPTION_RATIO".into(),
+            message: format!(
+                "Observed handshake speedup ratio on resumed connection: {:.2}x",
+                ratio
+            ),
         });
     }
     if matches!(classification, TlsPathClassification::IndirectSuspicious) {

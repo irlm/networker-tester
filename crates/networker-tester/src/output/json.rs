@@ -304,8 +304,12 @@ mod tests {
                 method: None,
                 initial_handshake_ms: Some(20.0),
                 resumed_handshake_ms: Some(18.0),
+                resumption_ratio: Some(20.0 / 18.0),
+                resumed_tls_version: Some("TLSv1_3".into()),
+                resumed_cipher_suite: Some("TLS_AES_128_GCM_SHA256".into()),
                 early_data_offered: false,
                 early_data_accepted: None,
+                notes: vec!["0-RTT availability is not actively negotiated in this phase; values remain advisory".into()],
             },
             findings: vec![],
             summary: TlsProfileSummary {
