@@ -670,7 +670,7 @@ async fn run_resumption_check(
         (_, Some("resumed")) => Some("ticket_or_psk".into()),
         _ => initial_kind,
     };
-    let resumption_ratio = if resumed_ms > 0.0 {
+    let resumption_ratio = if resumed_ms > 0.0 && initial_ms > 0.0 {
         Some(initial_ms / resumed_ms)
     } else {
         None

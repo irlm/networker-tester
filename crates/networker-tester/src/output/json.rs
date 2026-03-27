@@ -300,7 +300,7 @@ mod tests {
                 },
             }),
             resumption: TlsResumptionSection {
-                supported: false,
+                supported: true,
                 method: None,
                 initial_handshake_ms: Some(20.0),
                 resumed_handshake_ms: Some(18.0),
