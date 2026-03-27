@@ -52,9 +52,10 @@ mod tests {
         UrlOriginSummary, UrlPageLoadStrategy, UrlTestRun,
     };
     use crate::tls_profile::{
-        TlsCertificateSection, TlsChainDiagnostics, TlsEndpointProfile, TlsPathCharacteristics,
-        TlsPathClassification, TlsProfileConnectivity, TlsProfileCoverageLevel, TlsProfileSummary,
-        TlsProfileTarget, TlsProfileTargetKind, TlsResumptionSection, TlsRevocationInfo,
+        TlsCapabilitiesSection, TlsCertificateSection, TlsChainDiagnostics, TlsClientAuthStatus,
+        TlsEndpointProfile, TlsPathCharacteristics, TlsPathClassification, TlsProfileConnectivity,
+        TlsProfileCoverageLevel, TlsProfileSummary, TlsProfileTarget, TlsProfileTargetKind,
+        TlsProtocolSupport, TlsResumptionSection, TlsRevocationInfo, TlsSniBehavior,
         TlsTrustSection,
     };
     use chrono::Utc;
@@ -280,7 +281,24 @@ mod tests {
                 },
                 caa: None,
             },
-            capabilities: None,
+            capabilities: Some(TlsCapabilitiesSection {
+                protocol_support: vec![TlsProtocolSupport {
+                    protocol: "tls1.3".into(),
+                    supported: true,
+                    accepted_ciphers: vec!["TLS_AES_128_GCM_SHA256".into()],
+                    supported_groups: vec!["X25519".into()],
+                }],
+                alpn_support: vec!["h2".into()],
+                sni_behavior: TlsSniBehavior {
+                    with_sni_ok: true,
+                    without_sni_ok: Some(false),
+                    default_cert_subject: None,
+                },
+                client_auth: TlsClientAuthStatus {
+                    requested: false,
+                    required: false,
+                },
+            }),
             resumption: TlsResumptionSection {
                 supported: false,
                 method: None,
