@@ -104,29 +104,39 @@ pub async fn deploy_api(vm: &VmInfo, language: &str, bench_dir: &Path) -> Result
         }
     }
 
-    // 3. Run language-specific deploy.sh
-    let deploy_script = if language == "rust" {
-        // Rust uses the top-level rust-deploy.sh (symlink to networker-endpoint)
-        bench_dir.join("reference-apis/rust-deploy.sh")
-    } else {
-        bench_dir.join(format!("reference-apis/{language}/deploy.sh"))
-    };
-
-    if !deploy_script.exists() {
-        bail!("deploy script not found: {}", deploy_script.display());
-    }
-
-    tracing::info!("Running deploy.sh for {language}");
-    let status = tokio::process::Command::new("bash")
-        .arg(deploy_script.to_str().unwrap())
-        .arg(&vm.ip)
-        .current_dir(bench_dir)
-        .status()
-        .await
-        .context("running deploy.sh")?;
-
-    if !status.success() {
-        bail!("deploy.sh for {language} failed with exit code {status}");
+    // 3. Deploy the language-specific server binary/source
+    tracing::info!("Deploying {language} server to VM");
+    match language {
+        "rust" => {
+            // Build the endpoint if needed, then copy binary
+            let binary = bench_dir.join("../target/release/networker-endpoint");
+            if !binary.exists() {
+                tracing::info!("Building networker-endpoint...");
+                let status = tokio::process::Command::new("cargo")
+                    .args(["build", "--release", "-p", "networker-endpoint"])
+                    .current_dir(bench_dir.join(".."))
+                    .status()
+                    .await?;
+                if !status.success() {
+                    bail!("cargo build networker-endpoint failed");
+                }
+            }
+            scp_to(&vm.ip, binary.to_str().unwrap(), "/opt/bench/server").await
+                .context("copying Rust binary")?;
+            ssh_exec(&vm.ip, "chmod +x /opt/bench/server").await?;
+            ssh_exec(&vm.ip, "nohup /opt/bench/server --cert /opt/bench/cert.pem --key /opt/bench/key.pem --port 8443 > /opt/bench/server.log 2>&1 &").await?;
+        }
+        _ => {
+            // For other languages, run their deploy.sh via SSH
+            let deploy_script = bench_dir.join(format!("reference-apis/{language}/deploy.sh"));
+            if deploy_script.exists() {
+                scp_to(&vm.ip, deploy_script.to_str().unwrap(), "/opt/bench/deploy.sh").await?;
+                ssh_exec(&vm.ip, "chmod +x /opt/bench/deploy.sh && bash /opt/bench/deploy.sh").await
+                    .with_context(|| format!("deploy.sh for {language}"))?;
+            } else {
+                bail!("deploy script not found for {language}");
+            }
+        }
     }
 
     // 4. Deploy metrics-agent

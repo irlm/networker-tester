@@ -109,19 +109,33 @@ pub async fn provision_vm(cloud: &str, os: &str, vm_size: &str, name: &str) -> R
         ]);
     }
 
-    let stdout = az_cmd(&args, PROVISION_TIMEOUT)
-        .await
-        .with_context(|| format!("provisioning VM {name}"))?;
+    let ip = match az_cmd(&args, PROVISION_TIMEOUT).await {
+        Ok(stdout) => {
+            // Parse the JSON output to extract the public IP
+            let parsed: serde_json::Value =
+                serde_json::from_str(&stdout).context("parsing az vm create JSON output")?;
+            parsed["publicIpAddress"].as_str().unwrap_or("").to_string()
+        }
+        Err(e) => {
+            // az vm create can fail at the CLI level even when the VM was created.
+            // Fall back to checking if the VM exists and get its IP.
+            tracing::warn!("az vm create failed ({e:#}), checking if VM was created anyway...");
+            String::new()
+        }
+    };
 
-    // Parse the JSON output to extract the public IP
-    let parsed: serde_json::Value =
-        serde_json::from_str(&stdout).context("parsing az vm create JSON output")?;
-
-    let ip = parsed["publicIpAddress"].as_str().unwrap_or("").to_string();
-
-    if ip.is_empty() {
-        bail!("az vm create succeeded but no publicIpAddress in output");
-    }
+    // If we didn't get an IP from create output, try to fetch it
+    let ip = if ip.is_empty() {
+        match find_existing_vm(name).await? {
+            Some(vm) if !vm.ip.is_empty() => {
+                tracing::info!("VM {name} exists at {}, using existing", vm.ip);
+                vm.ip
+            }
+            _ => bail!("VM {name} was not created and does not exist"),
+        }
+    } else {
+        ip
+    };
 
     // Open port 8443 (HTTPS) and 9100 (metrics agent)
     for port in ["8443", "9100"] {
