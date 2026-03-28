@@ -410,3 +410,40 @@ benchmarks/
 - Filter by: OS, cloud, language family, JIT vs AOT, concurrency level
 - Historical trends: run-over-run comparison for tracked runtimes
 - Export: CSV download for any view
+
+---
+
+## 12. Final Review Feedback — Tracked Improvements
+
+### Cost Control
+- Add `max_cost_usd` option in config — orchestrator estimates cost before provisioning, aborts if over budget
+- Automatic tier downgrade: if estimated cost exceeds budget, suggest a smaller tier
+- Randomize VM placement between repeats + 30s cool-down to mitigate noisy-neighbor
+
+### .NET 10 Notes
+- .NET 10 is mature LTS (Nov 2025, ~10.0.5 patches). Both JIT and AOT variants included.
+- Document expected AOT vs JIT patterns: smaller binary, faster cold start, potentially different GC behavior under sustained load
+
+### Browser Testing Documentation
+- Document: headless mode is more consistent than headed (no GPU variance)
+- Document: Chromium typically fastest, Firefox may lag — weight browser results separately
+- Log negotiated protocol + cipher in browser test metrics
+
+### Metrics Agent Enhancements
+- Track GC metrics for .NET (GC pause time, gen0/gen1/gen2 counts), Java (GC log), Python (gc.get_stats)
+- High-frequency sampling (100ms) during warm phase, 1s during cold
+- Verify agent overhead < 1% CPU on the test VM
+
+### TLS Logging
+- Record negotiated TLS version + cipher suite per test in results
+- Compare session resumption rates across runtimes (some handle TLS tickets better)
+
+### Report Enhancements
+- "Fairness notes" section per runtime in HTML report
+- Capacity test: record CPU saturation point (>95%) and memory pressure point
+- Cost calculations: cache cloud pricing daily, pull fresh at run start
+
+### Validation
+- `alethabench validate --language <lang>` command to test a single implementation against the spec
+- Run automatically before benchmarking — skip language if validation fails
+- Check: response schema, byte count accuracy, HTTP/2 support, TLS version support

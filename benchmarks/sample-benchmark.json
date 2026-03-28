@@ -1,0 +1,68 @@
+{
+  "name": "AletheBench Phase 1 — HTTP JSON API",
+  "version": "0.1.0",
+  "total_requests": 50000,
+  "concurrency_levels": [1, 10, 50, 100, 250],
+  "repeat": 3,
+  "warmup_requests": 1000,
+  "timeout_secs": 30,
+  "endpoint": "/api/health",
+  "method": "GET",
+  "body": null,
+  "languages": [
+    {
+      "name": "rust",
+      "runtime": "axum",
+      "path": "implementations/rust-axum",
+      "build_cmd": "cargo build --release",
+      "run_cmd": "./target/release/api-server",
+      "port": 3001,
+      "docker_image": null
+    },
+    {
+      "name": "go",
+      "runtime": "gin",
+      "path": "implementations/go-gin",
+      "build_cmd": "go build -o api-server .",
+      "run_cmd": "./api-server",
+      "port": 3002,
+      "docker_image": null
+    },
+    {
+      "name": "python",
+      "runtime": "fastapi",
+      "path": "implementations/python-fastapi",
+      "build_cmd": "pip install -r requirements.txt",
+      "run_cmd": "uvicorn main:app --host 0.0.0.0 --port 3003",
+      "port": 3003,
+      "docker_image": null
+    },
+    {
+      "name": "typescript",
+      "runtime": "bun-hono",
+      "path": "implementations/ts-bun-hono",
+      "build_cmd": "bun install",
+      "run_cmd": "bun run src/index.ts",
+      "port": 3004,
+      "docker_image": null
+    },
+    {
+      "name": "java",
+      "runtime": "spring-boot",
+      "path": "implementations/java-spring",
+      "build_cmd": "./gradlew bootJar",
+      "run_cmd": "java -jar build/libs/api-server.jar",
+      "port": 3005,
+      "docker_image": null
+    },
+    {
+      "name": "csharp",
+      "runtime": "aspnet",
+      "path": "implementations/csharp-aspnet",
+      "build_cmd": "dotnet publish -c Release -o out",
+      "run_cmd": "./out/api-server",
+      "port": 3006,
+      "docker_image": null
+    }
+  ]
+}
