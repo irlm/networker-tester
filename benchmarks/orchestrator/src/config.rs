@@ -61,15 +61,18 @@ impl BenchmarkConfig {
     pub fn load(path: &Path) -> Result<Self> {
         let content =
             std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-        let config: Self =
-            serde_json::from_str(&content).with_context(|| format!("parsing {}", path.display()))?;
+        let config: Self = serde_json::from_str(&content)
+            .with_context(|| format!("parsing {}", path.display()))?;
         config.validate()?;
         Ok(config)
     }
 
     /// Validate invariants.
     fn validate(&self) -> Result<()> {
-        anyhow::ensure!(!self.languages.is_empty(), "languages list must not be empty");
+        anyhow::ensure!(
+            !self.languages.is_empty(),
+            "languages list must not be empty"
+        );
         anyhow::ensure!(
             !self.concurrency_levels.is_empty(),
             "concurrency_levels must not be empty"
@@ -115,6 +118,7 @@ impl BenchmarkConfig {
     }
 
     /// Return a list of all available languages with their runtimes.
+    #[allow(dead_code)]
     pub fn language_summary(&self) -> Vec<(String, String)> {
         self.languages
             .iter()

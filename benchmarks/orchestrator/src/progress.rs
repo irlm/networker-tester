@@ -35,13 +35,7 @@ impl ProgressReporter {
     pub fn fail(&self, label: &str, err: &dyn std::fmt::Display) {
         let fail = self.failed.fetch_add(1, Ordering::Relaxed) + 1;
         let done = self.completed.load(Ordering::Relaxed);
-        tracing::error!(
-            "[{}/{}] FAIL {} — {}",
-            done + fail,
-            self.total,
-            label,
-            err
-        );
+        tracing::error!("[{}/{}] FAIL {} — {}", done + fail, self.total, label, err);
     }
 
     /// Print final summary.
@@ -56,14 +50,17 @@ impl ProgressReporter {
         );
     }
 
+    #[allow(dead_code)]
     pub fn completed(&self) -> u32 {
         self.completed.load(Ordering::Relaxed)
     }
 
+    #[allow(dead_code)]
     pub fn failed(&self) -> u32 {
         self.failed.load(Ordering::Relaxed)
     }
 
+    #[allow(dead_code)]
     pub fn total(&self) -> u32 {
         self.total
     }
