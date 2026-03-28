@@ -361,3 +361,52 @@ benchmarks/
 - ARM architecture (x86_64 only initially)
 - Container orchestration benchmarks (Kubernetes, Docker Swarm)
 - Client-side framework comparison (React/Vue/Angular rendering)
+
+---
+
+## 11. Review Feedback — Incorporated Improvements
+
+### Standardization & Validation
+- **Strict response template**: orchestrator validates each API after deploy — schema check on `/health` response, byte count on `/download`, upload echo correctness
+- **Random data generation**: all implementations use the same PRNG seed for `/download` to eliminate data-dependent compression variance
+- **Idle baseline**: measure binary size + idle memory + idle CPU immediately after start, before any requests
+
+### Statistical Rigor
+- Each test configuration runs **3 times minimum** (configurable). Results report mean, stddev, p50/p95/p99 with confidence intervals
+- **Outlier detection**: flag runs where p99 > 3× median (likely cloud noisy-neighbor)
+- Latency reported as **full histograms** (HDR histogram format), not just percentiles
+
+### CLI Enhancements
+- `--dry-run` mode: preview test matrix, estimated VM count, estimated time and cloud cost
+- `--quick` mode: 1000 requests, single concurrency level, no packet capture — for iteration
+- Environment variables / `.env` file support for cloud credentials
+- Terminal TUI progress (ratatui) as optional enhancement in Phase 5
+
+### Packet Capture
+- **Off by default** — only enabled with `capture_packets: true` in config
+- Runs on a **separate interface/process** to minimize measurement bias on the client
+- Document when to enable (diagnosing TCP issues, not for throughput benchmarks)
+
+### Cloud Consistency
+- **Standardized VM images**: pin exact image URN/AMI/image-family per OS per cloud
+- **Accelerated networking**: disable on all VMs (or enable on all) — document which
+- **Same region**: all VMs in a single region per cloud (e.g., Azure eastus, AWS us-east-1, GCP us-central1)
+- **Network validation**: run `iperf3` between client and server before benchmarks to verify network path consistency
+
+### Python/Ruby/PHP Documentation
+- Each reference API README documents **why this library** was chosen
+- For Python: note that `uvicorn+starlette` is the fastest production-ready option, not pure stdlib (which would be unrealistically slow)
+- For Ruby/PHP: same justification — Puma and Swoole are the standard production servers
+
+### Additional Baselines
+- **Nginx static**: serve same `/health` JSON and `/download` as static files — pure network stack baseline, no application code
+- **C minimal**: raw `epoll` + `openssl` implementation — theoretical maximum
+
+### Extensibility
+- Users can add custom implementations via `--custom-api path/to/dir` (must follow the same endpoint spec)
+- CI integration: GitHub Action for running core matrix on PRs that modify reference APIs
+
+### Dashboard Filters
+- Filter by: OS, cloud, language family, JIT vs AOT, concurrency level
+- Historical trends: run-over-run comparison for tracked runtimes
+- Export: CSV download for any view
