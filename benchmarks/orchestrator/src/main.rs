@@ -7,6 +7,7 @@ mod provisioner;
 mod reporter;
 mod runner;
 mod types;
+mod validator;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -84,6 +85,17 @@ enum Command {
         #[arg(long, value_delimiter = ',')]
         runs: Vec<String>,
     },
+
+    /// Validate a deployed API against the AletheBench spec.
+    Validate {
+        /// IP address of the server to validate.
+        #[arg(long)]
+        ip: String,
+
+        /// Language label for the report (e.g. "rust", "go").
+        #[arg(long, default_value = "unknown")]
+        language: String,
+    },
 }
 
 #[tokio::main]
@@ -117,6 +129,8 @@ async fn main() -> Result<()> {
         } => cmd_results(run_id, latest, format),
 
         Command::Compare { runs } => cmd_compare(runs),
+
+        Command::Validate { ip, language } => cmd_validate(ip, language).await,
     }
 }
 
@@ -159,6 +173,29 @@ async fn cmd_run(
     );
 
     if dry_run {
+        // -- Compute summary statistics --
+        let num_languages = {
+            let mut seen = std::collections::HashSet::new();
+            cfg.languages
+                .iter()
+                .filter(|l| seen.insert(l.name.clone()))
+                .count()
+        };
+        let num_vms = num_languages; // one VM per language
+        let num_concurrency = cfg.concurrency_levels.len();
+
+        // Estimated wall-clock time: each test case runs warmup + benchmark
+        // requests. Assume ~5000 RPS baseline, so each case takes
+        // (warmup + requests) / 5000 seconds, plus 30s overhead per VM for
+        // deploy/validate.
+        let requests_per_case = cfg.warmup_requests + cfg.total_requests;
+        let secs_per_case = (requests_per_case as f64 / 5000.0).max(1.0);
+        let total_case_secs = secs_per_case * matrix.len() as f64;
+        let vm_overhead_secs = num_vms as f64 * 30.0; // deploy + validate per VM
+        let total_wall_secs = total_case_secs + vm_overhead_secs;
+        let wall_minutes = total_wall_secs / 60.0;
+
+        // -- Test matrix table --
         println!("\n--- Test Matrix (dry run) ---\n");
         println!(
             "{:<4} {:<12} {:<12} {:<12} {:<8}",
@@ -175,12 +212,47 @@ async fn cmd_run(
                 tc.repeat_index + 1
             );
         }
+
+        // -- Per-language breakdown --
+        println!("\n--- Per-Language Breakdown ---\n");
         println!(
-            "\nTotal: {} cases | {} requests each | est. ${:.2}",
-            matrix.len(),
-            cfg.total_requests,
-            estimated_cost
+            "{:<12} {:<12} {:<8} {:<12} {:<10}",
+            "Language", "Runtime", "Cases", "Requests", "Est. Cost"
         );
+        println!("{}", "-".repeat(56));
+        let mut seen = std::collections::HashSet::new();
+        for lang in &cfg.languages {
+            if !seen.insert(lang.name.clone()) {
+                continue;
+            }
+            let lang_cases = matrix
+                .iter()
+                .filter(|tc| tc.language.name == lang.name)
+                .count();
+            let lang_requests = lang_cases as u64 * cfg.total_requests;
+            let lang_cost = lang_cases as f64 * 0.05; // same heuristic as cost module
+            println!(
+                "{:<12} {:<12} {:<8} {:<12} ${:<9.2}",
+                lang.name, lang.runtime, lang_cases, lang_requests, lang_cost
+            );
+        }
+
+        // -- Summary --
+        println!("\n--- Summary ---\n");
+        println!("  Languages:          {num_languages}");
+        println!("  VMs needed:         {num_vms}");
+        println!("  Concurrency levels: {num_concurrency}");
+        println!("  Repeats:            {}", cfg.repeat);
+        println!("  Total test cases:   {}", matrix.len());
+        println!("  Requests per case:  {}", cfg.total_requests);
+        println!("  Warmup per case:    {}", cfg.warmup_requests);
+        println!("  Estimated cost:     ${estimated_cost:.2}");
+        println!("  Estimated time:     {wall_minutes:.1} minutes");
+
+        if quick {
+            println!("\n  [quick mode active: 1000 requests, concurrency [1,10], repeat 1]");
+        }
+
         return Ok(());
     }
 
@@ -357,6 +429,23 @@ async fn cmd_run(
     }
 
     Ok(())
+}
+
+async fn cmd_validate(ip: String, language: String) -> Result<()> {
+    tracing::info!("Validating API at {ip} (language={language})");
+
+    let result = validator::validate_api(&ip, &language).await?;
+    result.print_summary();
+
+    if result.all_ok() {
+        println!("\nResult: ALL CHECKS PASSED");
+        Ok(())
+    } else {
+        let fail_count = result.errors.len();
+        anyhow::bail!(
+            "Validation failed: {fail_count} check(s) did not pass for {language} at {ip}"
+        );
+    }
 }
 
 fn cmd_list(config_path: PathBuf) -> Result<()> {
