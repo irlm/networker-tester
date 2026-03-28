@@ -23,3 +23,5 @@
 .claude/
 CLAUDE.md
 .superpowers/
+benchmarks/orchestrator/target/
+benchmarks/metrics-agent/target/
