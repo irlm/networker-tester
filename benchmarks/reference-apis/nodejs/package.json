@@ -1,0 +1,12 @@
+{
+  "name": "alethabench-nodejs-reference-api",
+  "version": "1.0.0",
+  "description": "AletheBench Node.js reference API — built-in http2 module, zero dependencies",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "license": "MIT",
+  "dependencies": {}
+}
