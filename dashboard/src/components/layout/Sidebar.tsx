@@ -40,6 +40,10 @@ export function Sidebar({ connectionDot }: SidebarProps) {
     { path: `/projects/${pid}/runs`, label: 'Runs', icon: '\u25F7' },
   ] : [];
 
+  const globalItems: NavItem[] = [
+    { path: '/benchmarks', label: 'Benchmarks', icon: '\u2261' },
+  ];
+
   const platformItems: NavItem[] = [];
   if (isPlatformAdmin) {
     platformItems.push({ path: '/admin/system', label: 'System', icon: '\u2318' });
@@ -168,6 +172,9 @@ export function Sidebar({ connectionDot }: SidebarProps) {
         <nav className="flex-1 p-1.5 overflow-y-auto" aria-label="Main navigation">
           {/* Core: daily workflow */}
           {coreItems.map(renderItem)}
+
+          {/* Global tools (all users) */}
+          {renderSection('', globalItems)}
 
           {/* Platform: admin tools */}
           {renderSection('', platformItems)}
