@@ -16,8 +16,7 @@ COPY --from=build /app/publish .
 
 EXPOSE 8443
 
-ENV BENCH_CERT_PATH=/opt/bench/cert.pem
-ENV BENCH_KEY_PATH=/opt/bench/key.pem
+ENV BENCH_CERT_DIR=/opt/bench
 ENV BENCH_PORT=8443
 
 ENTRYPOINT ["./csharp-net10"]

@@ -39,7 +39,7 @@ import java.util.concurrent.Executors;
 public class Server {
 
     private static final int PORT = 8443;
-    private static final String CERT_DIR = System.getenv().getOrDefault("CERT_DIR", "/opt/bench");
+    private static final String CERT_DIR = System.getenv().getOrDefault("BENCH_CERT_DIR", "/opt/bench");
 
     public static void main(String[] args) throws Exception {
         SSLContext sslContext = buildSslContext(

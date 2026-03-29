@@ -32,7 +32,7 @@ Requires .NET 8 SDK.
 
 ```bash
 # Direct
-BENCH_CERT_PATH=./cert.pem BENCH_KEY_PATH=./key.pem ./publish/csharp-net8
+BENCH_CERT_DIR=. ./publish/csharp-net8
 
 # Docker
 docker build -t alethabench-csharp-net8 .
@@ -49,8 +49,7 @@ docker run -p 8443:8443 -v /path/to/certs:/opt/bench alethabench-csharp-net8
 
 | Environment Variable | Default             | Description          |
 |---------------------|---------------------|----------------------|
-| BENCH_CERT_PATH     | /opt/bench/cert.pem | TLS certificate path |
-| BENCH_KEY_PATH      | /opt/bench/key.pem  | TLS private key path |
+| BENCH_CERT_DIR      | /opt/bench          | Directory containing cert.pem and key.pem |
 | BENCH_PORT          | 8443                | Listen port          |
 
 ## .NET Version Notes

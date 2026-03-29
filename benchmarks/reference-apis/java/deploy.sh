@@ -7,7 +7,7 @@
 # Prerequisites:
 #   - SSH access to the target
 #   - server.jar built locally (run build.sh first)
-#   - cert.pem + key.pem in /opt/bench/ on the target (or set CERT_DIR)
+#   - cert.pem + key.pem in /opt/bench/ on the target (or set BENCH_CERT_DIR)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

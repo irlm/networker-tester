@@ -43,8 +43,8 @@ All endpoints listen on port 8443 (HTTPS).
 # Build
 ./build.sh
 
-# Run locally (needs cert.pem + key.pem in /opt/bench or set CERT_DIR)
-CERT_DIR=../../shared java -jar server.jar
+# Run locally (needs cert.pem + key.pem in /opt/bench or set BENCH_CERT_DIR)
+BENCH_CERT_DIR=../../shared java -jar server.jar
 
 # Docker
 docker build -t alethabench-java .
@@ -57,4 +57,4 @@ docker run -v /opt/bench:/opt/bench -p 8443:8443 alethabench-java
 ## Requirements
 
 - JDK 21+ (for Virtual Threads)
-- TLS certificate and key in PEM format at `$CERT_DIR` (default `/opt/bench`)
+- TLS certificate and key in PEM format at `$BENCH_CERT_DIR` (default `/opt/bench`)

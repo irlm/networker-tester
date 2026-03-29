@@ -115,7 +115,7 @@ kill_server
 echo -e "\n${Y}Building and starting Java...${N}"
 cd "$REPO_ROOT/benchmarks/reference-apis/java"
 javac Server.java 2>&1
-CERT_DIR="$REPO_ROOT/benchmarks/shared" java Server &
+BENCH_CERT_DIR="$REPO_ROOT/benchmarks/shared" java Server &
 sleep 3
 benchmark "Java (JDK HttpServer)"
 kill_server
@@ -125,9 +125,7 @@ kill_server
 echo -e "\n${Y}Building and starting C# .NET 10...${N}"
 cd "$REPO_ROOT/benchmarks/reference-apis/csharp-net10"
 dotnet build -c Release -q 2>&1 | tail -1
-ASPNETCORE_URLS="https://0.0.0.0:$PORT" \
-ASPNETCORE_Kestrel__Certificates__Default__Path="$CERT" \
-ASPNETCORE_Kestrel__Certificates__Default__KeyPath="$KEY" \
+BENCH_CERT_DIR="$REPO_ROOT/benchmarks/shared" \
 dotnet run -c Release --no-build 2>/dev/null &
 sleep 4
 benchmark "C# .NET 10 (Kestrel)"

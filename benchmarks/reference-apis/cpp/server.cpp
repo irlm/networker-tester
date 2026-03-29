@@ -316,14 +316,12 @@ private:
 // ── Main ────────────────────────────────────────────────────────────────────
 
 int main() {
-    auto const cert_path = []() -> std::string {
-        if (auto* v = std::getenv("BENCH_CERT_PATH")) return v;
-        return "/opt/bench/cert.pem";
+    auto const cert_dir = []() -> std::string {
+        if (auto* v = std::getenv("BENCH_CERT_DIR")) return v;
+        return "/opt/bench";
     }();
-    auto const key_path = []() -> std::string {
-        if (auto* v = std::getenv("BENCH_KEY_PATH")) return v;
-        return "/opt/bench/key.pem";
-    }();
+    auto const cert_path = cert_dir + "/cert.pem";
+    auto const key_path  = cert_dir + "/key.pem";
     auto const port = []() -> unsigned short {
         if (auto* v = std::getenv("BENCH_PORT")) return static_cast<unsigned short>(std::atoi(v));
         return 8443;

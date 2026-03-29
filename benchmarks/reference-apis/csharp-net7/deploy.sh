@@ -52,8 +52,7 @@ fi
 
 # Start server
 ssh "$TARGET" "sudo chmod +x $REMOTE_DIR/csharp-net7 && \
-    sudo BENCH_CERT_PATH=$CERT_DIR/cert.pem \
-         BENCH_KEY_PATH=$CERT_DIR/key.pem \
+    sudo BENCH_CERT_DIR=$CERT_DIR \
          BENCH_PORT=8443 \
          nohup $REMOTE_DIR/csharp-net7 > /var/log/csharp-net7.log 2>&1 &"
 

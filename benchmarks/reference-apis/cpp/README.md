@@ -40,8 +40,7 @@ bash build.sh
 
 ```bash
 # TLS certificates must exist at the default paths (or override via env vars)
-BENCH_CERT_PATH=/opt/bench/cert.pem \
-BENCH_KEY_PATH=/opt/bench/key.pem \
+BENCH_CERT_DIR=/opt/bench \
 BENCH_PORT=8443 \
 ./build/server
 ```

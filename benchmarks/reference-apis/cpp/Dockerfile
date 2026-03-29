@@ -27,8 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /src/build/server /usr/local/bin/server
 
 ENV BENCH_PORT=8443
-ENV BENCH_CERT_PATH=/opt/bench/cert.pem
-ENV BENCH_KEY_PATH=/opt/bench/key.pem
+ENV BENCH_CERT_DIR=/opt/bench
 
 EXPOSE 8443
 

@@ -6,8 +6,9 @@ var builder = WebApplication.CreateBuilder(args);
 // Configure Kestrel for HTTPS on port 8443 with HTTP/1.1 and HTTP/2
 builder.WebHost.ConfigureKestrel(options =>
 {
-    var certPath = Environment.GetEnvironmentVariable("BENCH_CERT_PATH") ?? "/opt/bench/cert.pem";
-    var keyPath  = Environment.GetEnvironmentVariable("BENCH_KEY_PATH")  ?? "/opt/bench/key.pem";
+    var certDir  = Environment.GetEnvironmentVariable("BENCH_CERT_DIR") ?? "/opt/bench";
+    var certPath = $"{certDir}/cert.pem";
+    var keyPath  = $"{certDir}/key.pem";
     var port     = int.Parse(Environment.GetEnvironmentVariable("BENCH_PORT") ?? "8443");
 
     var cert = X509Certificate2.CreateFromPemFile(certPath, keyPath);
