@@ -4,6 +4,7 @@
 /// Migration is embedded and tracked via a `_schema_versions` table.
 use super::DatabaseBackend;
 use crate::metrics::{RequestAttempt, TestRun, UrlTestProtocolRun, UrlTestResource, UrlTestRun};
+use crate::tls_profile::TlsEndpointProfile;
 use anyhow::Context;
 use async_trait::async_trait;
 use tokio_postgres::Client as PgClient;
@@ -293,6 +294,27 @@ CREATE INDEX IF NOT EXISTS IX_UrlTestResource_RunId ON UrlTestResource (UrlTestR
 CREATE INDEX IF NOT EXISTS IX_UrlTestProtocolRun_RunId ON UrlTestProtocolRun (UrlTestRunId, ProtocolMode, RunNumber);
 "#;
 
+const V003_TLS_PROFILE_MIGRATION: &str = r#"
+CREATE TABLE IF NOT EXISTS TlsProfileRun (
+    Id UUID NOT NULL PRIMARY KEY,
+    StartedAt TIMESTAMPTZ NOT NULL DEFAULT now(),
+    Host VARCHAR(255) NOT NULL,
+    Port INT NOT NULL,
+    TargetKind VARCHAR(32) NOT NULL,
+    CoverageLevel VARCHAR(32) NOT NULL,
+    SummaryStatus VARCHAR(16) NOT NULL,
+    SummaryScore INT NULL,
+    ProfileJson JSONB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS IX_TlsProfileRun_StartedAt ON TlsProfileRun (StartedAt DESC);
+CREATE INDEX IF NOT EXISTS IX_TlsProfileRun_Host ON TlsProfileRun (Host, StartedAt DESC);
+"#;
+
+const V004_TLS_PROFILE_PROJECT_MIGRATION: &str = r#"
+ALTER TABLE TlsProfileRun ADD COLUMN IF NOT EXISTS ProjectId UUID NULL;
+CREATE INDEX IF NOT EXISTS IX_TlsProfileRun_ProjectId_StartedAt ON TlsProfileRun (ProjectId, StartedAt DESC);
+"#;
+
 #[async_trait]
 impl DatabaseBackend for PostgresBackend {
     async fn migrate(&self) -> anyhow::Result<()> {
@@ -358,6 +380,48 @@ impl DatabaseBackend for PostgresBackend {
                     )
                     .await
                     .context("record V002")?;
+            }
+
+            let row = self
+                .client
+                .query_opt("SELECT 1 FROM _schema_versions WHERE version = 'V003'", &[])
+                .await
+                .context("check V003")?;
+
+            if row.is_none() {
+                self.client
+                    .batch_execute(V003_TLS_PROFILE_MIGRATION)
+                    .await
+                    .context("apply V003 migration")?;
+
+                self.client
+                    .execute(
+                        "INSERT INTO _schema_versions (version) VALUES ('V003')",
+                        &[],
+                    )
+                    .await
+                    .context("record V003")?;
+            }
+
+            let row = self
+                .client
+                .query_opt("SELECT 1 FROM _schema_versions WHERE version = 'V004'", &[])
+                .await
+                .context("check V004")?;
+
+            if row.is_none() {
+                self.client
+                    .batch_execute(V004_TLS_PROFILE_PROJECT_MIGRATION)
+                    .await
+                    .context("apply V004 migration")?;
+
+                self.client
+                    .execute(
+                        "INSERT INTO _schema_versions (version) VALUES ('V004')",
+                        &[],
+                    )
+                    .await
+                    .context("record V004")?;
             }
 
             Ok(())
@@ -438,6 +502,14 @@ impl DatabaseBackend for PostgresBackend {
                 Err(e)
             }
         }
+    }
+
+    async fn save_tls_profile(
+        &self,
+        run: &TlsEndpointProfile,
+        project_id: Option<&uuid::Uuid>,
+    ) -> anyhow::Result<uuid::Uuid> {
+        insert_tls_profile_run(run, project_id, &self.client).await
     }
 
     async fn ping(&self) -> anyhow::Result<()> {
@@ -634,6 +706,41 @@ async fn insert_url_test_resource(
     .await
     .context("INSERT UrlTestResource")?;
     Ok(())
+}
+
+async fn insert_tls_profile_run(
+    run: &TlsEndpointProfile,
+    project_id: Option<&uuid::Uuid>,
+    c: &PgClient,
+) -> anyhow::Result<uuid::Uuid> {
+    let id = uuid::Uuid::new_v4();
+    let target_kind = serde_json::to_value(&run.target_kind)?
+        .as_str()
+        .unwrap_or("external_url")
+        .to_string();
+    let coverage_level = serde_json::to_value(&run.coverage_level)?
+        .as_str()
+        .unwrap_or("client_observed")
+        .to_string();
+    let profile_json = serde_json::to_value(run)?;
+    c.execute(
+        "INSERT INTO TlsProfileRun (Id, ProjectId, Host, Port, TargetKind, CoverageLevel, SummaryStatus, SummaryScore, ProfileJson)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+        &[
+            &id,
+            &project_id,
+            &run.target.host,
+            &(i32::from(run.target.port)),
+            &target_kind,
+            &coverage_level,
+            &run.summary.status,
+            &(run.summary.score.map(i32::from)),
+            &profile_json,
+        ],
+    )
+    .await
+    .context("INSERT TlsProfileRun")?;
+    Ok(id)
 }
 
 async fn insert_url_test_protocol_run(

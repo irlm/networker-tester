@@ -13,6 +13,16 @@ use uuid::Uuid;
 pub struct JobConfig {
     pub target: String,
     pub modes: Vec<String>,
+    #[serde(default)]
+    pub project_id: Option<Uuid>,
+    #[serde(default)]
+    pub tls_profile_url: Option<String>,
+    #[serde(default)]
+    pub tls_profile_ip: Option<String>,
+    #[serde(default)]
+    pub tls_profile_sni: Option<String>,
+    #[serde(default)]
+    pub tls_profile_target_kind: Option<String>,
     #[serde(default = "default_runs")]
     pub runs: u32,
     #[serde(default = "default_concurrency")]
@@ -83,6 +93,11 @@ pub enum AgentMessage {
     JobComplete {
         job_id: Uuid,
         run: Box<networker_tester::metrics::TestRun>,
+    },
+    /// TLS profile job completed.
+    TlsProfileComplete {
+        job_id: Uuid,
+        profile: Box<networker_tester::tls_profile::TlsEndpointProfile>,
     },
     /// Job failed with an error.
     JobError { job_id: Uuid, message: String },

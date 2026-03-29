@@ -384,11 +384,34 @@ async fn run_tls_profile_cli(cfg: &ResolvedConfig) -> anyhow::Result<()> {
     };
 
     let profile = run_tls_endpoint_profile(req).await?;
+    let tls_profile_project_id = cfg
+        .tls_profile_project_id
+        .as_deref()
+        .map(str::parse::<uuid::Uuid>)
+        .transpose()
+        .context("invalid --tls-profile-project-id")?;
     let out_dir = PathBuf::from(&cfg.output_dir);
     std::fs::create_dir_all(&out_dir).context("Cannot create output directory")?;
     let ts = Utc::now().format("%Y%m%d-%H%M%S");
     let json_path = out_dir.join(format!("tls-profile-{ts}.json"));
     json::save_tls_profile(&profile, &json_path)?;
+
+    if cfg.save_to_db || cfg.save_to_sql {
+        let db_url = cfg
+            .db_url
+            .as_deref()
+            .or(cfg.connection_string.as_deref())
+            .context(
+                "--save-to-db requires --db-url (or legacy --connection-string) for TLS profile runs",
+            )?;
+        let backend = db::connect(db_url).await?;
+        if cfg.db_migrate {
+            backend.migrate().await?;
+        }
+        backend
+            .save_tls_profile(&profile, tls_profile_project_id.as_ref())
+            .await?;
+    }
 
     if cfg.tls_profile_json {
         println!("{}", json::to_string_tls_profile(&profile)?);

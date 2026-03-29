@@ -15,6 +15,8 @@ import { JobsPage } from './pages/JobsPage';
 import { JobDetailPage } from './pages/JobDetailPage';
 import { RunsPage } from './pages/RunsPage';
 import { RunDetailPage } from './pages/RunDetailPage';
+import { TlsProfilesPage } from './pages/TlsProfilesPage';
+import { TlsProfileDetailPage } from './pages/TlsProfileDetailPage';
 import { DeployPage } from './pages/DeployPage';
 import { DeployDetailPage } from './pages/DeployDetailPage';
 import { SchedulesPage } from './pages/SchedulesPage';
@@ -122,6 +124,8 @@ function AuthenticatedApp() {
           <Route path="/projects/:projectId/tests/:jobId" element={<JobDetailPage />} />
           <Route path="/projects/:projectId/runs" element={<RunsPage />} />
           <Route path="/projects/:projectId/runs/:runId" element={<RunDetailPage />} />
+          <Route path="/projects/:projectId/tls-profiles" element={<TlsProfilesPage />} />
+          <Route path="/projects/:projectId/tls-profiles/:runId" element={<TlsProfileDetailPage />} />
           <Route path="/projects/:projectId/deploy" element={<DeployPage />} />
           <Route path="/projects/:projectId/deploy/:deploymentId" element={<DeployDetailPage />} />
           <Route path="/projects/:projectId/schedules" element={<SchedulesPage />} />

@@ -155,9 +155,11 @@ async fn create_job_scoped(
     };
 
     if let Some(aid) = agent_id {
+        let mut job_config = create_req.config.clone();
+        job_config.project_id = Some(ctx.project_id);
         let msg = ControlMessage::JobAssign {
             job_id,
-            config: create_req.config,
+            config: job_config,
         };
         if state.agents.send_to_agent(&aid, &msg).await.is_ok() {
             crate::db::jobs::update_status(&client, &job_id, "assigned")

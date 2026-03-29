@@ -17,6 +17,7 @@ mod projects;
 mod runs;
 mod schedules;
 mod share_links;
+mod tls_profiles;
 mod update;
 mod url_tests;
 mod users;
@@ -63,6 +64,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(cloud_connections::project_router(state.clone()))
         .merge(inventory::project_router(state.clone()))
         .merge(url_tests::project_router(state.clone()))
+        .merge(tls_profiles::project_router(state.clone()))
         .merge(project_members::router(state.clone()))
         .merge(share_links::project_router(state.clone()))
         .merge(command_approvals::project_router(state.clone()))

@@ -281,6 +281,60 @@ async fn handle_agent_message(state: &Arc<AppState>, agent_id: Uuid, msg: AgentM
             });
             tracing::info!(correlation_id, "JobComplete event broadcast to browsers");
         }
+        AgentMessage::TlsProfileComplete { job_id, profile } => {
+            let correlation_id = job_id.to_string();
+
+            tracing::info!(correlation_id, host = %profile.target.host, port = profile.target.port, "TLS profile complete — persisting result");
+
+            if let Ok(client) = state.db.get().await {
+                if let Err(e) = crate::db::jobs::update_status(&client, &job_id, "completed").await {
+                    tracing::error!(correlation_id, error = %e, "Failed to update TLS profile job status to completed");
+                }
+            }
+
+            let db_url = &state.database_url;
+            if !db_url.is_empty() {
+                match networker_tester::output::db::connect(db_url).await {
+                    Ok(backend) => {
+                        if let Err(e) = backend.migrate().await {
+                            tracing::error!(correlation_id, error = %e, "DB migration failed");
+                        }
+                        let project_id = if let Ok(client) = state.db.get().await {
+                            crate::db::jobs::get(&client, &job_id)
+                                .await
+                                .ok()
+                                .flatten()
+                                .and_then(|job| job.project_id)
+                        } else {
+                            None
+                        };
+                        match backend.save_tls_profile(&profile, project_id.as_ref()).await {
+                            Ok(tls_profile_run_id) => {
+                                if let Ok(client) = state.db.get().await {
+                                    if let Err(e) = crate::db::jobs::set_tls_profile_run_id(&client, &job_id, &tls_profile_run_id).await {
+                                        tracing::error!(correlation_id, error = %e, "Failed to link TLS profile run to job");
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!(correlation_id, error = %e, "Failed to save TLS profile to database");
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(correlation_id, error = %e, "Failed to connect to DB for TLS profile save")
+                    }
+                }
+            }
+
+            let _ = state.events_tx.send(DashboardEvent::JobUpdate {
+                job_id,
+                status: "completed".into(),
+                agent_id: Some(agent_id),
+                started_at: None,
+                finished_at: Some(chrono::Utc::now()),
+            });
+        }
         AgentMessage::JobLog {
             job_id,
             line,
