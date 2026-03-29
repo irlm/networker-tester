@@ -1,18 +1,18 @@
-using System.Security.Cryptography.X509Certificates;
+using Microsoft.AspNetCore.Http;
+
 using Microsoft.AspNetCore.Server.Kestrel.Core;
+using System.Security.Cryptography.X509Certificates;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Configure Kestrel for HTTPS on port 8443 with HTTP/1.1 and HTTP/2
+var certDir  = Environment.GetEnvironmentVariable("BENCH_CERT_DIR") ?? "/opt/bench";
+var certPath = $"{certDir}/cert.pem";
+var keyPath  = $"{certDir}/key.pem";
+var port     = int.Parse(Environment.GetEnvironmentVariable("BENCH_PORT") ?? "8443");
+
 builder.WebHost.ConfigureKestrel(options =>
 {
-    var certDir  = Environment.GetEnvironmentVariable("BENCH_CERT_DIR") ?? "/opt/bench";
-    var certPath = $"{certDir}/cert.pem";
-    var keyPath  = $"{certDir}/key.pem";
-    var port     = int.Parse(Environment.GetEnvironmentVariable("BENCH_PORT") ?? "8443");
-
     var cert = X509Certificate2.CreateFromPemFile(certPath, keyPath);
-
     options.ListenAnyIP(port, listenOptions =>
     {
         listenOptions.UseHttps(cert);
@@ -22,53 +22,30 @@ builder.WebHost.ConfigureKestrel(options =>
 
 var app = builder.Build();
 
-// GET /health — runtime identity and version
-app.MapGet("/health", () => Results.Json(new
-{
-    status  = "ok",
+app.MapGet("/health", () => Results.Json(new {
+    status = "ok",
     runtime = "csharp-net10",
     version = Environment.Version.ToString()
 }));
 
-// GET /download/{size} — stream `size` bytes of 0x42 in 8 KiB chunks
-app.MapGet("/download/{size}", async (long size, HttpContext ctx) =>
-{
-    if (size <= 0)
-    {
-        ctx.Response.StatusCode = 400;
-        return;
-    }
-
-    ctx.Response.ContentType   = "application/octet-stream";
-    ctx.Response.ContentLength = size;
-
-    const int chunkSize = 8192;
-    var buffer = new byte[chunkSize];
+app.MapGet("/download/{size:long}", (long size) => Results.Stream(async stream => {
+    var buffer = new byte[8192];
     Array.Fill(buffer, (byte)0x42);
-
-    var remaining = size;
-    while (remaining > 0)
-    {
-        var toWrite = (int)Math.Min(remaining, chunkSize);
-        await ctx.Response.Body.WriteAsync(buffer.AsMemory(0, toWrite));
-        remaining -= toWrite;
+    long remaining = size;
+    while (remaining > 0) {
+        int chunk = (int)Math.Min(remaining, buffer.Length);
+        await stream.WriteAsync(buffer.AsMemory(0, chunk));
+        remaining -= chunk;
     }
-});
+}, "application/octet-stream"));
 
-// POST /upload — consume full request body, return byte count
-app.MapPost("/upload", async (HttpContext ctx) =>
-{
-    const int bufferSize = 8192;
-    var buffer = new byte[bufferSize];
-    long totalBytes = 0;
-
-    int bytesRead;
-    while ((bytesRead = await ctx.Request.Body.ReadAsync(buffer)) > 0)
-    {
-        totalBytes += bytesRead;
-    }
-
-    return Results.Json(new { bytes_received = totalBytes });
+app.MapPost("/upload", async (HttpRequest req) => {
+    long total = 0;
+    var buffer = new byte[8192];
+    int read;
+    while ((read = await req.Body.ReadAsync(buffer)) > 0)
+        total += read;
+    return Results.Json(new { bytes_received = total });
 });
 
 app.Run();
