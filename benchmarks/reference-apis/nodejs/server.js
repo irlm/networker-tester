@@ -20,7 +20,8 @@ const CHUNK = Buffer.alloc(8192, 0x42);
 const tlsOptions = {
   cert: fs.readFileSync(path.join(CERT_DIR, "cert.pem")),
   key: fs.readFileSync(path.join(CERT_DIR, "key.pem")),
-  allowHTTP1: true, // accept both HTTP/1.1 and HTTP/2
+  allowHTTP1: true,
+  ALPNProtocols: ["h2", "http/1.1"], // accept both HTTP/1.1 and HTTP/2
 };
 
 // ---------------------------------------------------------------------------

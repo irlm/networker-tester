@@ -15,11 +15,10 @@ import (
 )
 
 const (
-	defaultAddr = ":8443"
-	certPath    = "/opt/bench/cert.pem"
-	keyPath     = "/opt/bench/key.pem"
-	bufSize     = 8192
-	fillByte    = 0x42
+	defaultAddr    = ":8443"
+	defaultCertDir = "/opt/bench"
+	bufSize        = 8192
+	fillByte       = 0x42
 )
 
 func main() {
@@ -27,6 +26,12 @@ func main() {
 	if addr == "" {
 		addr = defaultAddr
 	}
+	certDir := os.Getenv("BENCH_CERT_DIR")
+	if certDir == "" {
+		certDir = defaultCertDir
+	}
+	certPath := certDir + "/cert.pem"
+	keyPath := certDir + "/key.pem"
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handleHealth)
