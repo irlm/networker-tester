@@ -362,3 +362,42 @@ export interface LogEntry {
   target: string;
   message: string;
 }
+
+// Benchmark types
+export interface BenchmarkLeaderboardEntry {
+  language: string;
+  runtime: string;
+  metrics: Record<string, number>;
+  server_os: string | null;
+  client_os: string | null;
+  cloud: string | null;
+  phase: string | null;
+  concurrency: number | null;
+}
+
+export interface BenchmarkRun {
+  run_id: string;
+  name: string;
+  config: Record<string, unknown>;
+  status: string;
+  started_at: string;
+  finished_at: string | null;
+  tier: string | null;
+  created_by: string | null;
+  results?: BenchmarkResultRow[];
+}
+
+export interface BenchmarkResultRow {
+  result_id: string;
+  run_id: string;
+  language: string;
+  runtime: string;
+  server_os: string | null;
+  client_os: string | null;
+  cloud: string | null;
+  phase: string | null;
+  concurrency: number | null;
+  metrics: Record<string, number>;
+  started_at: string | null;
+  finished_at: string | null;
+}

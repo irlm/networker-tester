@@ -1,6 +1,8 @@
-import { useState, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { PageHeader } from '../components/common/PageHeader';
 import { usePageTitle } from '../hooks/usePageTitle';
+import { api } from '../api/client';
+import type { BenchmarkLeaderboardEntry } from '../api/types';
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -21,15 +23,23 @@ type Tab = 'leaderboard' | 'comparison' | 'timeline';
 type SortKey = keyof BenchmarkResult;
 type SortDir = 'asc' | 'desc';
 
-// ── Sample Data ────────────────────────────────────────────────────────
+// ── Transform API data to display format ─────────────────────────────
 
-const SAMPLE_RESULTS: BenchmarkResult[] = [
-  { language: 'Rust', runtime: 'hyper', mean: 0.06, p50: 0.09, p95: 0.13, p99: 0.22, cpu: 5, memory: 18, coldStart: 15, binarySize: 11 },
-  { language: 'Go', runtime: 'net/http', mean: 0.06, p50: 0.07, p95: 0.09, p99: 0.13, cpu: 8, memory: 24, coldStart: 12, binarySize: 7 },
-  { language: 'Python', runtime: 'uvicorn', mean: 0.17, p50: 0.21, p95: 0.22, p99: 0.30, cpu: 15, memory: 45, coldStart: 800, binarySize: 0 },
-  { language: 'Java', runtime: 'HttpServer', mean: 0.24, p50: 0.41, p95: 0.48, p99: 0.90, cpu: 22, memory: 120, coldStart: 1200, binarySize: 0 },
-  { language: 'C# .NET 10', runtime: 'Kestrel', mean: 0.10, p50: 0.08, p95: 0.12, p99: 0.25, cpu: 10, memory: 65, coldStart: 200, binarySize: 45 },
-];
+function toDisplayResult(entry: BenchmarkLeaderboardEntry): BenchmarkResult {
+  const m = entry.metrics ?? {};
+  return {
+    language: entry.language,
+    runtime: entry.runtime,
+    mean: m.mean ?? 0,
+    p50: m.p50 ?? 0,
+    p95: m.p95 ?? 0,
+    p99: m.p99 ?? 0,
+    cpu: m.cpu ?? 0,
+    memory: m.memory ?? 0,
+    coldStart: m.cold_start ?? m.coldStart ?? 0,
+    binarySize: m.binary_size ?? m.binarySize ?? 0,
+  };
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -101,6 +111,20 @@ function ResourceBar({ value, max, color, label, unit }: { value: number; max: n
 function SortArrow({ active, dir }: { active: boolean; dir: SortDir }) {
   if (!active) return <span className="text-gray-700 ml-0.5">{'\u2195'}</span>;
   return <span className="text-cyan-400 ml-0.5">{dir === 'asc' ? '\u2191' : '\u2193'}</span>;
+}
+
+// ── Empty state ───────────────────────────────────────────────────────
+
+function EmptyState() {
+  return (
+    <div className="border border-gray-800 rounded bg-[var(--bg-card)] p-12 text-center">
+      <div className="text-gray-600 text-4xl mb-4">{'\u{1F4CA}'}</div>
+      <div className="text-gray-400 text-sm mb-2">No benchmark results yet</div>
+      <div className="text-gray-600 text-xs">
+        Run <span className="text-cyan-500 font-mono">alethabench</span> to populate.
+      </div>
+    </div>
+  );
 }
 
 // ── Leaderboard Tab ────────────────────────────────────────────────────
@@ -200,7 +224,12 @@ const COMPARISON_COLORS = [
 ];
 
 function ComparisonTab({ data }: { data: BenchmarkResult[] }) {
-  const [selected, setSelected] = useState<Set<string>>(() => new Set(['Rust', 'Go']));
+  const [selected, setSelected] = useState<Set<string>>(() => {
+    const initial = new Set<string>();
+    if (data.length >= 1) initial.add(data[0].language);
+    if (data.length >= 2) initial.add(data[1].language);
+    return initial;
+  });
 
   const toggle = (lang: string) => {
     setSelected(prev => {
@@ -309,6 +338,20 @@ function TimelineTab() {
 export function BenchmarksPage() {
   usePageTitle('Benchmarks');
   const [tab, setTab] = useState<Tab>('leaderboard');
+  const [results, setResults] = useState<BenchmarkResult[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api.getBenchmarkLeaderboard()
+      .then(entries => {
+        setResults(entries.map(toDisplayResult));
+      })
+      .catch(err => {
+        console.error('Failed to fetch benchmark leaderboard:', err);
+        setResults([]);
+      })
+      .finally(() => setLoading(false));
+  }, []);
 
   const tabCls = (t: Tab) =>
     `px-4 py-2 text-sm rounded-t transition-colors ${
@@ -324,16 +367,24 @@ export function BenchmarksPage() {
         subtitle="AletheBench language runtime comparison"
       />
 
-      {/* Tab selector */}
-      <div className="flex gap-1 mb-4">
-        <button onClick={() => setTab('leaderboard')} className={tabCls('leaderboard')}>Leaderboard</button>
-        <button onClick={() => setTab('comparison')} className={tabCls('comparison')}>Comparison</button>
-        <button onClick={() => setTab('timeline')} className={tabCls('timeline')}>Timeline</button>
-      </div>
+      {loading ? (
+        <div className="text-center text-gray-500 py-12">Loading benchmark data...</div>
+      ) : results.length === 0 ? (
+        <EmptyState />
+      ) : (
+        <>
+          {/* Tab selector */}
+          <div className="flex gap-1 mb-4">
+            <button onClick={() => setTab('leaderboard')} className={tabCls('leaderboard')}>Leaderboard</button>
+            <button onClick={() => setTab('comparison')} className={tabCls('comparison')}>Comparison</button>
+            <button onClick={() => setTab('timeline')} className={tabCls('timeline')}>Timeline</button>
+          </div>
 
-      {tab === 'leaderboard' && <LeaderboardTab data={SAMPLE_RESULTS} />}
-      {tab === 'comparison' && <ComparisonTab data={SAMPLE_RESULTS} />}
-      {tab === 'timeline' && <TimelineTab />}
+          {tab === 'leaderboard' && <LeaderboardTab data={results} />}
+          {tab === 'comparison' && <ComparisonTab data={results} />}
+          {tab === 'timeline' && <TimelineTab />}
+        </>
+      )}
     </div>
   );
 }

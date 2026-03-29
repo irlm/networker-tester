@@ -390,6 +390,37 @@ ALTER TABLE schedule ALTER COLUMN project_id SET NOT NULL;
 ALTER TABLE deployment ALTER COLUMN project_id SET NOT NULL;
 "#;
 
+/// V013 migration: Benchmark tables for AletheBench results.
+const V013_BENCHMARKS: &str = r#"
+CREATE TABLE IF NOT EXISTS benchmark_run (
+    run_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name        VARCHAR(200) NOT NULL,
+    config      JSONB NOT NULL DEFAULT '{}',
+    status      VARCHAR(20) NOT NULL DEFAULT 'running',
+    started_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    finished_at TIMESTAMPTZ,
+    tier        VARCHAR(20) DEFAULT 'core',
+    created_by  UUID REFERENCES dash_user(user_id)
+);
+
+CREATE TABLE IF NOT EXISTS benchmark_result (
+    result_id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    run_id       UUID NOT NULL REFERENCES benchmark_run(run_id) ON DELETE CASCADE,
+    language     VARCHAR(50) NOT NULL,
+    runtime      VARCHAR(50) NOT NULL,
+    server_os    VARCHAR(50) DEFAULT 'ubuntu-24.04',
+    client_os    VARCHAR(50) DEFAULT 'ubuntu-24.04',
+    cloud        VARCHAR(20) DEFAULT 'azure',
+    phase        VARCHAR(10) DEFAULT 'warm',
+    concurrency  INTEGER DEFAULT 1,
+    metrics      JSONB NOT NULL DEFAULT '{}',
+    started_at   TIMESTAMPTZ DEFAULT now(),
+    finished_at  TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS ix_benchmark_result_run ON benchmark_result(run_id);
+"#;
+
 /// Run pending migrations.
 pub async fn run(client: &Client) -> anyhow::Result<()> {
     // Ensure migration tracking table exists
@@ -588,6 +619,23 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
             )
             .await?;
         tracing::info!("V012 migration complete");
+    }
+
+    // V013: Benchmark tables for AletheBench
+    let row = client
+        .query_opt("SELECT version FROM _migrations WHERE version = 13", &[])
+        .await?;
+
+    if row.is_none() {
+        tracing::info!("Applying V013 benchmarks migration...");
+        client.batch_execute(V013_BENCHMARKS).await?;
+        client
+            .execute(
+                "INSERT INTO _migrations (version) VALUES (13) ON CONFLICT DO NOTHING",
+                &[],
+            )
+            .await?;
+        tracing::info!("V013 migration complete");
     }
 
     Ok(())
