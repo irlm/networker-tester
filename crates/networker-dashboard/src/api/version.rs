@@ -41,10 +41,11 @@ async fn check_versions(
         _ => false,
     };
 
-    // Check deployed endpoint versions
+    // Check deployed endpoint versions (concurrent, not sequential)
     let mut endpoints = Vec::new();
     if let Ok(client) = state.db.get().await {
         if let Ok(deployments) = crate::db::deployments::list_all(&client, 20, 0).await {
+            let mut hosts = Vec::new();
             for dep in &deployments {
                 if dep.status != "completed" {
                     continue;
@@ -54,15 +55,22 @@ async fn check_versions(
                     .as_ref()
                     .and_then(|v| serde_json::from_value(v.clone()).ok())
                     .unwrap_or_default();
-                for host in &ips {
-                    let (reachable, version) = check_endpoint_version(host).await;
-                    endpoints.push(EndpointVersion {
-                        host: host.clone(),
-                        version,
-                        reachable,
-                    });
-                }
+                hosts.extend(ips);
             }
+            // Deduplicate and check all hosts concurrently
+            hosts.sort();
+            hosts.dedup();
+            let checks: Vec<_> = hosts
+                .iter()
+                .map(|host| {
+                    let h = host.clone();
+                    async move {
+                        let (reachable, version) = check_endpoint_version(&h).await;
+                        EndpointVersion { host: h, version, reachable }
+                    }
+                })
+                .collect();
+            endpoints = futures::future::join_all(checks).await;
         }
     }
 
@@ -114,7 +122,8 @@ async fn get_latest_release() -> Option<String> {
 async fn check_endpoint_version(host: &str) -> (bool, Option<String>) {
     let client = reqwest::Client::builder()
         .danger_accept_invalid_certs(true)
-        .timeout(std::time::Duration::from_secs(5))
+        .connect_timeout(std::time::Duration::from_secs(2))
+        .timeout(std::time::Duration::from_secs(3))
         .build()
         .unwrap_or_default();
 
