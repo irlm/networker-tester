@@ -1,10 +1,9 @@
 use crate::provisioner::VmInfo;
+use crate::ssh::{scp_dir_to, scp_to, ssh_exec, validate_ip};
 use anyhow::{bail, Context, Result};
 use std::path::Path;
 use std::time::Duration;
 
-const SSH_CONNECT_TIMEOUT: &str = "10";
-const SSH_COMMAND_TIMEOUT: Duration = Duration::from_secs(300);
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const HEALTH_POLL_MAX_WAIT: Duration = Duration::from_secs(60);
 
@@ -20,71 +19,7 @@ fn validate_language_name(lang: &str) -> Result<()> {
     Ok(())
 }
 
-/// Validate IP address to prevent shell injection via crafted vm.ip (FINDING-01).
-fn validate_ip(ip: &str) -> Result<()> {
-    ip.parse::<std::net::IpAddr>()
-        .context("vm.ip is not a valid IP address")?;
-    Ok(())
-}
-
-/// Execute a command on the remote VM via SSH with a timeout (RR-005).
-async fn ssh_exec(ip: &str, cmd: &str) -> Result<String> {
-    tracing::debug!(target_ip = ip, command = cmd, "SSH exec");
-    let fut = tokio::process::Command::new("ssh")
-        .args([
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            &format!("ConnectTimeout={SSH_CONNECT_TIMEOUT}"),
-            "-o",
-            "ServerAliveInterval=15",
-            "-o",
-            "ServerAliveCountMax=3",
-            "-o",
-            "BatchMode=yes",
-            &format!("azureuser@{ip}"),
-            cmd,
-        ])
-        .output();
-
-    let output = tokio::time::timeout(SSH_COMMAND_TIMEOUT, fut)
-        .await
-        .context("SSH command timed out (5min limit)")?
-        .context("failed to execute ssh")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("SSH command failed on {ip}: {}", stderr.trim());
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
-}
-
-/// Copy a local file to the remote VM via SCP with timeout.
-async fn scp_to(ip: &str, local: &str, remote: &str) -> Result<()> {
-    tracing::debug!(target_ip = ip, local_path = local, remote_path = remote, "SCP upload");
-    let fut = tokio::process::Command::new("scp")
-        .args([
-            "-o", "StrictHostKeyChecking=no",
-            "-o", &format!("ConnectTimeout={SSH_CONNECT_TIMEOUT}"),
-            "-o", "ServerAliveInterval=15",
-            "-o", "ServerAliveCountMax=3",
-            "-o", "BatchMode=yes",
-            local,
-            &format!("azureuser@{ip}:{remote}"),
-        ])
-        .output();
-
-    let output = tokio::time::timeout(SSH_COMMAND_TIMEOUT, fut)
-        .await
-        .context("SCP timed out (5min limit)")?
-        .context("failed to execute scp")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("SCP to {ip}:{remote} failed: {}", stderr.trim());
-    }
-    Ok(())
-}
+// ssh_exec, scp_to, scp_dir_to, validate_ip imported from crate::ssh
 
 /// Deploy a reference API to the target VM.
 ///
@@ -205,9 +140,9 @@ pub async fn deploy_api(vm: &VmInfo, language: &str, bench_dir: &Path) -> Result
                 "/opt/bench/nodejs/package.json",
             )
             .await?;
-            // Install Node.js if needed, then start
+            // Install Node.js from Ubuntu repos (no curl|bash supply chain risk)
             ssh_exec(&vm.ip,
-                "command -v node >/dev/null 2>&1 || { curl -fsSL https://deb.nodesource.com/setup_22.x | sudo bash - < /dev/null && sudo apt-get install -y nodejs < /dev/null; }; \
+                "command -v node >/dev/null 2>&1 || { sudo apt-get update -qq && sudo apt-get install -y -qq nodejs npm < /dev/null; }; \
                  pkill -f 'node.*server\\.js' || true; sleep 1; \
                  cd /opt/bench/nodejs && BENCH_CERT_DIR=/opt/bench BENCH_PORT=8443 \
                  nohup node server.js > /var/log/bench-nodejs.log 2>&1 &"
@@ -312,23 +247,10 @@ pub async fn deploy_api(vm: &VmInfo, language: &str, bench_dir: &Path) -> Result
                 )
                 .await?;
             } else {
-                // Non-AOT: copy all publish files via scp -r (avoids bash -c interpolation)
-                let scp_status = tokio::process::Command::new("scp")
-                    .args([
-                        "-r",
-                        "-o", "StrictHostKeyChecking=no",
-                        "-o", &format!("ConnectTimeout={SSH_CONNECT_TIMEOUT}"),
-                        "-o", "BatchMode=yes",
-                    ])
-                    .arg(format!("{publish_str}/."))
-                    .arg(format!("azureuser@{}:{remote_dir}/", vm.ip))
-                    .output()
+                // Non-AOT: copy all publish files via shared scp_dir_to (with timeout)
+                scp_dir_to(&vm.ip, publish_str, &remote_dir)
                     .await
-                    .context("scp -r for csharp publish")?;
-                if !scp_status.status.success() {
-                    let stderr = String::from_utf8_lossy(&scp_status.stderr);
-                    bail!("Failed to copy {lang} publish directory: {}", stderr.trim());
-                }
+                    .context("copying csharp publish directory")?;
                 // Find the DLL to run
                 let dll_name = format!("{lang}.dll");
                 ssh_exec(

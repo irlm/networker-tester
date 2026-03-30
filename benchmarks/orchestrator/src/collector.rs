@@ -1,4 +1,5 @@
 use crate::provisioner::VmInfo;
+use crate::ssh::ssh_exec;
 use crate::types::{BinaryMetrics, ResourceMetrics};
 use anyhow::{bail, Context, Result};
 use std::time::Duration;
@@ -23,7 +24,10 @@ pub async fn collect_metrics(vm: &VmInfo, server_pid: Option<u32>) -> Result<Res
     let system: serde_json::Value = match serde_json::from_str(&system_json) {
         Ok(v) => v,
         Err(e) => {
-            tracing::warn!("Invalid metrics JSON from {} (returning defaults): {e}", vm.ip);
+            tracing::warn!(
+                "Invalid metrics JSON from {} (returning defaults): {e}",
+                vm.ip
+            );
             return Ok(ResourceMetrics::default());
         }
     };
@@ -218,28 +222,7 @@ async fn http_get(url: &str) -> Result<String> {
 }
 
 /// SSH helper for executing commands on the VM.
-async fn ssh_exec(ip: &str, cmd: &str) -> Result<String> {
-    let output = tokio::process::Command::new("ssh")
-        .args([
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "ConnectTimeout=10",
-            "-o",
-            "BatchMode=yes",
-            &format!("azureuser@{ip}"),
-            cmd,
-        ])
-        .output()
-        .await
-        .context("failed to run ssh")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("SSH command failed on {ip}: {}", stderr.trim());
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
-}
+// ssh_exec imported from crate::ssh (shared, hardened with timeout + keepalive)
 
 #[cfg(test)]
 mod tests {
