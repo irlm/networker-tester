@@ -215,24 +215,21 @@ pub async fn add_result(
 }
 
 pub async fn get_latest_leaderboard(client: &Client) -> anyhow::Result<Vec<LeaderboardEntry>> {
-    // Get results from the most recent completed run
+    // Get the latest result per language across all completed runs
     let rows = client
         .query(
-            "SELECT br.language, br.runtime, br.metrics, br.server_os, br.client_os,
-                    br.cloud, br.phase, br.concurrency
+            "SELECT DISTINCT ON (br.language) br.language, br.runtime, br.metrics,
+                    br.server_os, br.client_os, br.cloud, br.phase, br.concurrency
              FROM benchmark_result br
              JOIN benchmark_run brun ON brun.run_id = br.run_id
-             WHERE brun.run_id = (
-                 SELECT run_id FROM benchmark_run
-                 WHERE status = 'completed'
-                 ORDER BY started_at DESC LIMIT 1
-             )
-             ORDER BY (br.metrics->>'mean')::float ASC NULLS LAST",
+             WHERE brun.status = 'completed'
+             ORDER BY br.language, brun.started_at DESC",
             &[],
         )
         .await?;
 
-    Ok(rows
+    // Sort by latency (lowest first)
+    let mut entries: Vec<LeaderboardEntry> = rows
         .iter()
         .map(|r| LeaderboardEntry {
             language: r.get("language"),
@@ -244,5 +241,13 @@ pub async fn get_latest_leaderboard(client: &Client) -> anyhow::Result<Vec<Leade
             phase: r.get("phase"),
             concurrency: r.get("concurrency"),
         })
-        .collect())
+        .collect();
+
+    entries.sort_by(|a, b| {
+        let a_ms = a.metrics.get("latency_mean_ms").and_then(|v| v.as_f64()).unwrap_or(f64::MAX);
+        let b_ms = b.metrics.get("latency_mean_ms").and_then(|v| v.as_f64()).unwrap_or(f64::MAX);
+        a_ms.partial_cmp(&b_ms).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    Ok(entries)
 }
