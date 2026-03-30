@@ -1,0 +1,64 @@
+{
+  "name": "AletheBench — Download Throughput (HTTP/1.1)",
+  "version": "0.1.0",
+  "description": "Measures download throughput using networker-tester pageload1/http1 mode against each server's /download/1048576 endpoint (1 MB payload). Falls back to http1 when Chrome is not available on the benchmark host.",
+  "target_pattern": "https://{ip}:8443/download/1048576",
+  "modes": ["http1"],
+  "modes_with_chrome": ["pageload1"],
+  "total_requests": 50,
+  "concurrency_levels": [1],
+  "repeat": 1,
+  "warmup_requests": 20,
+  "timeout_secs": 15,
+  "download_bytes": 1048576,
+  "endpoint": "/download/1048576",
+  "method": "GET",
+  "body": null,
+  "languages": [
+    {
+      "name": "cpp",
+      "runtime": "boost-beast",
+      "path": "reference-apis/cpp",
+      "build_cmd": "bash build.sh",
+      "run_cmd": "/opt/bench/cpp-build/server",
+      "port": 8443,
+      "docker_image": null
+    },
+    {
+      "name": "go",
+      "runtime": "stdlib",
+      "path": "reference-apis/go",
+      "build_cmd": "bash build.sh",
+      "run_cmd": "/opt/bench/go-server",
+      "port": 8443,
+      "docker_image": null
+    },
+    {
+      "name": "rust",
+      "runtime": "axum",
+      "path": "reference-apis/rust",
+      "build_cmd": "cargo build --release -p networker-endpoint",
+      "run_cmd": "/opt/bench/rust-server",
+      "port": 8443,
+      "docker_image": null
+    },
+    {
+      "name": "ruby",
+      "runtime": "puma",
+      "path": "reference-apis/ruby",
+      "build_cmd": "bundle install",
+      "run_cmd": "bundle exec puma -C puma.rb config.ru",
+      "port": 8443,
+      "docker_image": null
+    },
+    {
+      "name": "php",
+      "runtime": "swoole",
+      "path": "reference-apis/php",
+      "build_cmd": "pecl install swoole",
+      "run_cmd": "php server.php",
+      "port": 8443,
+      "docker_image": null
+    }
+  ]
+}
