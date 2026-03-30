@@ -46,9 +46,7 @@ struct NormalizedPresetInput {
     filters: BenchmarkComparePresetFilters,
 }
 
-fn normalize_input(
-    input: BenchmarkComparePresetInput,
-) -> anyhow::Result<NormalizedPresetInput> {
+fn normalize_input(input: BenchmarkComparePresetInput) -> anyhow::Result<NormalizedPresetInput> {
     let name = input.name.trim();
     if name.is_empty() {
         bail!("preset name cannot be empty");
