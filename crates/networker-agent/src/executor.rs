@@ -222,7 +222,9 @@ pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::Sender<String>)
                     tx,
                     &AgentMessage::JobError {
                         job_id,
-                        message: format!("Target blocked: DNS resolution failed during SSRF validation ({e})"),
+                        message: format!(
+                            "Target blocked: DNS resolution failed during SSRF validation ({e})"
+                        ),
                     },
                     &correlation_id,
                 );
@@ -326,7 +328,12 @@ pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::Sender<String>)
                         return;
                     }
                     Err(e) => {
-                        log(tx, job_id, "error", &format!("Could not parse TLS profile JSON: {e}"));
+                        log(
+                            tx,
+                            job_id,
+                            "error",
+                            &format!("Could not parse TLS profile JSON: {e}"),
+                        );
                         send(
                             tx,
                             &AgentMessage::JobError {

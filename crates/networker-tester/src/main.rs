@@ -402,8 +402,8 @@ async fn run_tls_profile_cli(cfg: &ResolvedConfig) -> anyhow::Result<()> {
             .as_deref()
             .or(cfg.connection_string.as_deref())
             .context(
-                "--save-to-db requires --db-url (or legacy --connection-string) for TLS profile runs",
-            )?;
+            "--save-to-db requires --db-url (or legacy --connection-string) for TLS profile runs",
+        )?;
         let backend = db::connect(db_url).await?;
         if cfg.db_migrate {
             backend.migrate().await?;
@@ -2161,6 +2161,7 @@ mod tests {
             tls_profile_sni: None,
             tls_profile_target_kind: None,
             tls_profile_json: false,
+            tls_profile_project_id: None,
             url_test_auth_token: None,
             url_test_cookie: None,
             url_test_headers: vec![],

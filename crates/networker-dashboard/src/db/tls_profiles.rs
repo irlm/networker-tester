@@ -1,8 +1,8 @@
 use chrono::{DateTime, Utc};
 use networker_tester::tls_profile::TlsEndpointProfile;
 use serde::Serialize;
-use tokio_postgres::Client;
 use tokio_postgres::error::SqlState;
+use tokio_postgres::Client;
 use uuid::Uuid;
 
 fn is_undefined_table(err: &tokio_postgres::Error) -> bool {

@@ -306,10 +306,19 @@ async fn handle_agent_message(state: &Arc<AppState>, agent_id: Uuid, msg: AgentM
                         if let Err(e) = backend.migrate().await {
                             tracing::error!(correlation_id, error = %e, "DB migration failed");
                         }
-                        match backend.save_tls_profile(&profile, project_id.as_ref()).await {
+                        match backend
+                            .save_tls_profile(&profile, project_id.as_ref())
+                            .await
+                        {
                             Ok(tls_profile_run_id) => {
                                 if let Some(client) = pooled_client.as_ref() {
-                                    if let Err(e) = crate::db::jobs::set_tls_profile_run_id(client, &job_id, &tls_profile_run_id).await {
+                                    if let Err(e) = crate::db::jobs::set_tls_profile_run_id(
+                                        client,
+                                        &job_id,
+                                        &tls_profile_run_id,
+                                    )
+                                    .await
+                                    {
                                         tracing::error!(correlation_id, error = %e, "Failed to link TLS profile run to job");
                                     }
                                 }

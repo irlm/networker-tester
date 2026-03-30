@@ -682,7 +682,9 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
 
     if row.is_none() {
         tracing::info!("Applying V016 tls_profile_project_backfill migration...");
-        client.batch_execute(V016_TLS_PROFILE_PROJECT_BACKFILL).await?;
+        client
+            .batch_execute(V016_TLS_PROFILE_PROJECT_BACKFILL)
+            .await?;
         client
             .execute(
                 "INSERT INTO _migrations (version) VALUES (16) ON CONFLICT DO NOTHING",
