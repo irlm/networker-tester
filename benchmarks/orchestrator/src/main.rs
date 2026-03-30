@@ -6,6 +6,7 @@ mod progress;
 mod provisioner;
 mod reporter;
 mod runner;
+pub mod ssh;
 mod types;
 mod validator;
 
@@ -452,10 +453,7 @@ fn cmd_list(config_path: PathBuf) -> Result<()> {
     let cfg = config::BenchmarkConfig::load(&config_path)?;
 
     println!("\nAvailable languages:\n");
-    println!(
-        "{:<12} {:<12} {:<6} Path",
-        "Language", "Runtime", "Port"
-    );
+    println!("{:<12} {:<12} {:<6} Path", "Language", "Runtime", "Port");
     println!("{}", "-".repeat(60));
     for lang in &cfg.languages {
         println!(

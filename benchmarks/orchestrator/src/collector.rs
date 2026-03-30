@@ -1,17 +1,36 @@
 use crate::provisioner::VmInfo;
+use crate::ssh::ssh_exec;
 use crate::types::{BinaryMetrics, ResourceMetrics};
 use anyhow::{bail, Context, Result};
 use std::time::Duration;
 
 /// Collect system and optional per-process resource metrics from the metrics agent.
+///
+/// Returns `ResourceMetrics::default()` when the metrics agent is unreachable,
+/// so callers can proceed without resource data.
 pub async fn collect_metrics(vm: &VmInfo, server_pid: Option<u32>) -> Result<ResourceMetrics> {
     // System-level metrics
-    let system_json = http_get(&format!("http://{}:9100/metrics", vm.ip))
-        .await
-        .context("fetching system metrics from metrics-agent")?;
+    let system_json = match http_get(&format!("http://{}:9100/metrics", vm.ip)).await {
+        Ok(json) => json,
+        Err(e) => {
+            tracing::warn!(
+                "Metrics agent unreachable on {} (returning defaults): {e}",
+                vm.ip
+            );
+            return Ok(ResourceMetrics::default());
+        }
+    };
 
-    let system: serde_json::Value =
-        serde_json::from_str(&system_json).context("parsing system metrics JSON")?;
+    let system: serde_json::Value = match serde_json::from_str(&system_json) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                "Invalid metrics JSON from {} (returning defaults): {e}",
+                vm.ip
+            );
+            return Ok(ResourceMetrics::default());
+        }
+    };
 
     let mut metrics = ResourceMetrics {
         peak_rss_bytes: system
@@ -148,10 +167,12 @@ pub async fn collect_during_test(
     }
 
     if samples.is_empty() {
-        bail!(
-            "No metrics samples collected during {}s window",
-            duration_secs
+        tracing::warn!(
+            "No metrics samples collected during {}s window on {} — returning empty series",
+            duration_secs,
+            vm.name
         );
+        return Ok(vec![]);
     }
 
     tracing::info!("Collected {} metric samples", samples.len());
@@ -201,28 +222,7 @@ async fn http_get(url: &str) -> Result<String> {
 }
 
 /// SSH helper for executing commands on the VM.
-async fn ssh_exec(ip: &str, cmd: &str) -> Result<String> {
-    let output = tokio::process::Command::new("ssh")
-        .args([
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "ConnectTimeout=10",
-            "-o",
-            "BatchMode=yes",
-            &format!("azureuser@{ip}"),
-            cmd,
-        ])
-        .output()
-        .await
-        .context("failed to run ssh")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("SSH command failed on {ip}: {}", stderr.trim());
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
-}
+// ssh_exec imported from crate::ssh (shared, hardened with timeout + keepalive)
 
 #[cfg(test)]
 mod tests {

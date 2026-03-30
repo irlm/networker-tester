@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { PageHeader } from '../components/common/PageHeader';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { api } from '../api/client';
-import type { BenchmarkLeaderboardEntry } from '../api/types';
+import type { BenchmarkLeaderboardEntry, BenchmarkRun } from '../api/types';
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -30,14 +30,14 @@ function toDisplayResult(entry: BenchmarkLeaderboardEntry): BenchmarkResult {
   return {
     language: entry.language,
     runtime: entry.runtime,
-    mean: m.mean ?? 0,
-    p50: m.p50 ?? 0,
-    p95: m.p95 ?? 0,
-    p99: m.p99 ?? 0,
-    cpu: m.cpu ?? 0,
-    memory: m.memory ?? 0,
-    coldStart: m.cold_start ?? m.coldStart ?? 0,
-    binarySize: m.binary_size ?? m.binarySize ?? 0,
+    mean: m.latency_mean_ms ?? m.mean ?? 0,
+    p50: m.latency_p50_ms ?? m.p50 ?? 0,
+    p95: m.latency_p95_ms ?? m.p95 ?? 0,
+    p99: m.latency_p99_ms ?? m.p99 ?? 0,
+    cpu: m.cpu_percent_avg ?? m.cpu ?? 0,
+    memory: Math.round((m.memory_rss_bytes ?? 0) / 1048576) || (m.memory ?? 0),
+    coldStart: m.cold_start_ms ?? m.cold_start ?? m.coldStart ?? 0,
+    binarySize: Math.round((m.binary_size_bytes ?? 0) / 1048576) || (m.binary_size ?? m.binarySize ?? 0),
   };
 }
 
@@ -321,14 +321,107 @@ function ComparisonTab({ data }: { data: BenchmarkResult[] }) {
   );
 }
 
-// ── Timeline Tab (placeholder) ─────────────────────────────────────────
+// ── Timeline Tab ───────────────────────────────────────────────────────
 
 function TimelineTab() {
-  return (
+  const [runs, setRuns] = useState<BenchmarkRun[]>([]);
+  const [expandedRun, setExpandedRun] = useState<string | null>(null);
+  const [runDetails, setRunDetails] = useState<Record<string, BenchmarkRun>>({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api.getBenchmarkRuns()
+      .then(setRuns)
+      .catch(() => setRuns([]))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const toggleRun = async (runId: string) => {
+    if (expandedRun === runId) {
+      setExpandedRun(null);
+      return;
+    }
+    setExpandedRun(runId);
+    if (!runDetails[runId]) {
+      try {
+        const detail = await api.getBenchmarkRun(runId);
+        setRunDetails(prev => ({ ...prev, [runId]: detail }));
+      } catch { /* ignore */ }
+    }
+  };
+
+  if (loading) return <div className="text-gray-500 text-sm p-4">Loading runs...</div>;
+  if (runs.length === 0) return (
     <div className="border border-gray-800 rounded bg-[var(--bg-card)] p-8 text-center">
-      <div className="text-gray-600 text-4xl mb-4">{'\u23F3'}</div>
-      <div className="text-gray-400 text-sm mb-2">Coming soon</div>
-      <div className="text-gray-600 text-xs">Run benchmarks to populate historical comparison data</div>
+      <div className="text-gray-500 text-sm">No benchmark runs yet</div>
+    </div>
+  );
+
+  return (
+    <div className="space-y-2">
+      {runs.map(run => {
+        const isExpanded = expandedRun === run.run_id;
+        const detail = runDetails[run.run_id];
+        const results = detail?.results ?? [];
+        const date = new Date(run.started_at).toLocaleString();
+
+        return (
+          <div key={run.run_id} className="border border-gray-800 rounded bg-[var(--bg-card)]">
+            <button
+              onClick={() => toggleRun(run.run_id)}
+              className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-gray-800/50 transition-colors"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <span className={`text-xs px-1.5 py-0.5 rounded font-mono ${
+                  run.status === 'completed' ? 'bg-green-900/40 text-green-400' :
+                  run.status === 'running' ? 'bg-cyan-900/40 text-cyan-400' :
+                  'bg-gray-800 text-gray-500'
+                }`}>{run.status}</span>
+                <span className="text-sm text-gray-200 truncate">{run.name}</span>
+              </div>
+              <div className="flex items-center gap-4 shrink-0">
+                <span className="text-xs text-gray-500 font-mono">{date}</span>
+                <span className="text-gray-500 text-xs">{isExpanded ? '\u25B2' : '\u25BC'}</span>
+              </div>
+            </button>
+
+            {isExpanded && (
+              <div className="border-t border-gray-800 px-4 py-3">
+                {results.length === 0 ? (
+                  <div className="text-gray-500 text-xs">Loading results...</div>
+                ) : (
+                  <table className="w-full text-xs font-mono">
+                    <thead>
+                      <tr className="text-gray-500 text-left">
+                        <th className="pb-1 pr-4">Language</th>
+                        <th className="pb-1 pr-4">Runtime</th>
+                        <th className="pb-1 pr-4 text-right">Mean</th>
+                        <th className="pb-1 pr-4 text-right">p50</th>
+                        <th className="pb-1 pr-4 text-right">p99</th>
+                        <th className="pb-1 text-right">Cloud</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {results
+                        .sort((a, b) => (a.metrics?.latency_mean_ms ?? 999) - (b.metrics?.latency_mean_ms ?? 999))
+                        .map((r, i) => (
+                        <tr key={i} className="text-gray-300 border-t border-gray-800/50">
+                          <td className="py-1 pr-4">{r.language}</td>
+                          <td className="py-1 pr-4 text-gray-500">{r.runtime}</td>
+                          <td className="py-1 pr-4 text-right text-cyan-400">{(r.metrics?.latency_mean_ms ?? 0).toFixed(2)}ms</td>
+                          <td className="py-1 pr-4 text-right">{(r.metrics?.latency_p50_ms ?? 0).toFixed(2)}ms</td>
+                          <td className="py-1 pr-4 text-right">{(r.metrics?.latency_p99_ms ?? 0).toFixed(2)}ms</td>
+                          <td className="py-1 text-right text-gray-500">{r.cloud ?? '\u2014'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
