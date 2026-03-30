@@ -172,6 +172,8 @@ pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::Sender<String>)
         return;
     }
 
+    let mut pinned_tls_profile_ip: Option<std::net::IpAddr> = None;
+
     if let Some(ip) = &config.tls_profile_ip {
         match ip.parse::<std::net::IpAddr>() {
             Ok(parsed_ip) if is_private_ip(&parsed_ip) => {
@@ -187,6 +189,7 @@ pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::Sender<String>)
                 return;
             }
             Ok(parsed_ip) => {
+                pinned_tls_profile_ip = Some(parsed_ip);
                 tracing::warn!(
                     correlation_id,
                     target = %parsed,
@@ -212,13 +215,34 @@ pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::Sender<String>)
         let port = parsed.port_or_known_default().unwrap_or(443);
         match tokio::net::lookup_host((host, port)).await {
             Ok(addrs) => {
-                if addrs.into_iter().any(|addr| is_private_ip(&addr.ip())) {
-                    tracing::error!(target = %parsed, "SSRF blocked after DNS resolution to private/metadata address");
+                let mut public_addrs = vec![];
+                for addr in addrs {
+                    if is_private_ip(&addr.ip()) {
+                        tracing::error!(target = %parsed, resolved_ip = %addr.ip(), "SSRF blocked after DNS resolution to private/metadata address");
+                        send(
+                            tx,
+                            &AgentMessage::JobError {
+                                job_id,
+                                message: "Target blocked: DNS resolved to private, loopback, or metadata address".into(),
+                            },
+                            &correlation_id,
+                        );
+                        return;
+                    }
+                    public_addrs.push(addr.ip());
+                }
+                if pinned_tls_profile_ip.is_none() {
+                    pinned_tls_profile_ip = public_addrs.into_iter().next();
+                }
+                if pinned_tls_profile_ip.is_none() {
+                    tracing::error!(target = %parsed, "SSRF blocked: DNS resolution returned no usable public addresses");
                     send(
                         tx,
                         &AgentMessage::JobError {
                             job_id,
-                            message: "Target blocked: DNS resolved to private, loopback, or metadata address".into(),
+                            message:
+                                "Target blocked: DNS resolution returned no usable public addresses"
+                                    .into(),
                         },
                         &correlation_id,
                     );
@@ -239,6 +263,13 @@ pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::Sender<String>)
                 );
                 return;
             }
+        }
+    }
+
+    if is_tls_profile && config.tls_profile_ip.is_none() {
+        if let Some(pinned_ip) = pinned_tls_profile_ip {
+            args.push("--tls-profile-ip".to_string());
+            args.push(pinned_ip.to_string());
         }
     }
 

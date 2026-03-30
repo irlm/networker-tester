@@ -16,6 +16,42 @@ use crate::AppState;
 use networker_common::messages::{AgentMessage, ControlMessage, DashboardEvent};
 use networker_common::protocol;
 
+const MAX_TLS_PROFILE_JSON_BYTES: usize = 8 * 1024 * 1024;
+const MAX_TLS_PROFILE_FINDINGS: usize = 2048;
+const MAX_TLS_PROFILE_STRINGS: usize = 4096;
+
+fn validate_tls_profile_size(
+    profile: &networker_tester::tls_profile::TlsEndpointProfile,
+) -> anyhow::Result<()> {
+    let json = serde_json::to_vec(profile)?;
+    if json.len() > MAX_TLS_PROFILE_JSON_BYTES {
+        anyhow::bail!(
+            "TLS profile JSON exceeds {} bytes",
+            MAX_TLS_PROFILE_JSON_BYTES
+        );
+    }
+    if profile.findings.len() > MAX_TLS_PROFILE_FINDINGS {
+        anyhow::bail!(
+            "TLS profile findings exceed {} entries",
+            MAX_TLS_PROFILE_FINDINGS
+        );
+    }
+    let stringish = profile.unsupported_checks.len()
+        + profile.limitations.len()
+        + profile.target.resolved_ips.len()
+        + profile.path_characteristics.evidence.len()
+        + profile.trust.issues.len()
+        + profile.trust.revocation.notes.len()
+        + profile.resumption.notes.len();
+    if stringish > MAX_TLS_PROFILE_STRINGS {
+        anyhow::bail!(
+            "TLS profile string list fields exceed {} entries",
+            MAX_TLS_PROFILE_STRINGS
+        );
+    }
+    Ok(())
+}
+
 /// Bounded channel capacity for agent WebSocket outbound messages.
 const AGENT_CHANNEL_CAPACITY: usize = 256;
 
@@ -287,6 +323,7 @@ async fn handle_agent_message(state: &Arc<AppState>, agent_id: Uuid, msg: AgentM
             tracing::info!(correlation_id, agent_id = %agent_id, host = %profile.target.host, port = profile.target.port, "TLS profile complete — persisting result");
 
             let mut project_id = None;
+            let mut authorized = false;
             let pooled_client = match state.db.get().await {
                 Ok(client) => Some(client),
                 Err(e) => {
@@ -298,20 +335,35 @@ async fn handle_agent_message(state: &Arc<AppState>, agent_id: Uuid, msg: AgentM
                 if let Err(e) = crate::db::jobs::update_status(client, &job_id, "completed").await {
                     tracing::error!(correlation_id, error = %e, "Failed to update TLS profile job status to completed");
                 }
-                project_id = crate::db::jobs::get(client, &job_id)
-                    .await
-                    .ok()
-                    .flatten()
-                    .and_then(|job| job.project_id);
+                if let Some(job) = crate::db::jobs::get(client, &job_id).await.ok().flatten() {
+                    project_id = job.project_id;
+                    authorized = job.agent_id == Some(agent_id);
+                }
+            }
+
+            if !authorized {
+                tracing::error!(correlation_id, agent_id = %agent_id, "Rejecting TLS profile completion for unassigned job");
+                return;
+            }
+
+            if let Err(e) = validate_tls_profile_size(&profile) {
+                tracing::error!(correlation_id, agent_id = %agent_id, error = %e, "Rejecting oversized TLS profile payload");
+                return;
             }
 
             let db_url = &state.database_url;
             if !db_url.is_empty() {
                 match networker_tester::output::db::connect(db_url).await {
                     Ok(backend) => {
-                        if let Err(e) = backend.migrate().await {
-                            tracing::error!(correlation_id, error = %e, "DB migration failed");
+                        let mut migrated = state.tls_profile_db_migrated.lock().await;
+                        if !*migrated {
+                            if let Err(e) = backend.migrate().await {
+                                tracing::error!(correlation_id, error = %e, "DB migration failed");
+                            } else {
+                                *migrated = true;
+                            }
                         }
+                        drop(migrated);
                         match backend
                             .save_tls_profile(&profile, project_id.as_ref())
                             .await

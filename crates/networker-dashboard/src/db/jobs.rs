@@ -204,6 +204,26 @@ pub async fn set_tls_profile_run_id(
     Ok(())
 }
 
+pub async fn recent_tls_profile_job_count(
+    client: &Client,
+    project_id: &Uuid,
+    user_id: &Uuid,
+    minutes: i32,
+) -> anyhow::Result<i64> {
+    let row = client
+        .query_one(
+            "SELECT COUNT(*)
+             FROM job
+             WHERE project_id = $1
+               AND created_by = $2
+               AND created_at >= now() - ($3::text || ' minutes')::interval
+               AND config ? 'tls_profile_url'",
+            &[project_id, user_id, &minutes.to_string()],
+        )
+        .await?;
+    Ok(row.get(0))
+}
+
 pub async fn set_error(client: &Client, job_id: &Uuid, message: &str) -> anyhow::Result<()> {
     client
         .execute(

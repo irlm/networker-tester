@@ -38,6 +38,7 @@ const DEFAULT_LIMIT: i64 = 50;
 const MAX_LIMIT: i64 = 200;
 const MAX_TIMEOUT_SECS: u64 = 300;
 const MAX_CONCURRENCY: usize = 16;
+const TLS_PROFILE_RATE_LIMIT_PER_5M: i64 = 20;
 
 async fn get_job(
     State(state): State<Arc<AppState>>,
@@ -136,6 +137,22 @@ async fn create_job_scoped(
         tracing::error!(error = %e, "DB pool error in create_job_scoped");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
+    if create_req.config.tls_profile_url.is_some() {
+        let recent = crate::db::jobs::recent_tls_profile_job_count(
+            &client,
+            &ctx.project_id,
+            &user.user_id,
+            5,
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to enforce TLS profile rate limit");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+        if recent >= TLS_PROFILE_RATE_LIMIT_PER_5M {
+            return Err(StatusCode::TOO_MANY_REQUESTS);
+        }
+    }
     let job_id = crate::db::jobs::create(
         &client,
         &config_json,

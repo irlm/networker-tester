@@ -21,12 +21,32 @@ pub enum TlsProfileTargetKind {
     ExternalHost,
 }
 
+impl TlsProfileTargetKind {
+    pub fn as_db_str(&self) -> &'static str {
+        match self {
+            Self::ManagedEndpoint => "managed_endpoint",
+            Self::ExternalUrl => "external_url",
+            Self::ExternalHost => "external_host",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TlsProfileCoverageLevel {
     FullControl,
     ClientObserved,
     BestEffort,
+}
+
+impl TlsProfileCoverageLevel {
+    pub fn as_db_str(&self) -> &'static str {
+        match self {
+            Self::FullControl => "full_control",
+            Self::ClientObserved => "client_observed",
+            Self::BestEffort => "best_effort",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

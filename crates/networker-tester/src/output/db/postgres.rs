@@ -714,14 +714,8 @@ async fn insert_tls_profile_run(
     c: &PgClient,
 ) -> anyhow::Result<uuid::Uuid> {
     let id = uuid::Uuid::new_v4();
-    let target_kind = serde_json::to_value(&run.target_kind)?
-        .as_str()
-        .unwrap_or("external_url")
-        .to_string();
-    let coverage_level = serde_json::to_value(&run.coverage_level)?
-        .as_str()
-        .unwrap_or("client_observed")
-        .to_string();
+    let target_kind = run.target_kind.as_db_str().to_string();
+    let coverage_level = run.coverage_level.as_db_str().to_string();
     let profile_json = serde_json::to_value(run)?;
     c.execute(
         "INSERT INTO TlsProfileRun (Id, ProjectId, Host, Port, TargetKind, CoverageLevel, SummaryStatus, SummaryScore, ProfileJson)

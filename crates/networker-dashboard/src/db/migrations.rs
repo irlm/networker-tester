@@ -372,18 +372,24 @@ CREATE INDEX IF NOT EXISTS ix_job_tls_profile_run_id ON job (tls_profile_run_id)
 "#;
 
 const V016_TLS_PROFILE_PROJECT_BACKFILL: &str = r#"
--- First, backfill from explicit job linkage when available.
-UPDATE TlsProfileRun t
-SET ProjectId = j.project_id
-FROM job j
-WHERE j.tls_profile_run_id = t.Id
-  AND t.ProjectId IS NULL
-  AND j.project_id IS NOT NULL;
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = current_schema() AND table_name = 'tlsprofilerun'
+    ) THEN
+        UPDATE TlsProfileRun t
+        SET ProjectId = j.project_id
+        FROM job j
+        WHERE j.tls_profile_run_id = t.Id
+          AND t.ProjectId IS NULL
+          AND j.project_id IS NOT NULL;
 
--- Fallback: place any remaining historical rows into Default project so scoped UI can still surface them.
-UPDATE TlsProfileRun
-SET ProjectId = '00000000-0000-0000-0000-000000000001'
-WHERE ProjectId IS NULL;
+        UPDATE TlsProfileRun
+        SET ProjectId = '00000000-0000-0000-0000-000000000001'
+        WHERE ProjectId IS NULL;
+    END IF;
+END $$;
 "#;
 
 /// V011 migration: Enforce NOT NULL on project_id columns (after soak period).
