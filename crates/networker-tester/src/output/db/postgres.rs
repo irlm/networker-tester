@@ -9,6 +9,7 @@ use crate::output::json::{
     BenchmarkDiagnostics, BenchmarkEnvironment, BenchmarkLaunch, BenchmarkMetadata,
     BenchmarkMethodology, BenchmarkSample, BenchmarkSummary,
 };
+use crate::tls_profile::TlsEndpointProfile;
 use anyhow::Context;
 use async_trait::async_trait;
 use tokio_postgres::error::SqlState;
@@ -692,6 +693,15 @@ impl DatabaseBackend for PostgresBackend {
         }
     }
 
+    async fn save_tls_profile(
+        &self,
+        run: &TlsEndpointProfile,
+        project_id: Option<&uuid::Uuid>,
+    ) -> anyhow::Result<uuid::Uuid> {
+        let client = self.client.lock().await;
+        insert_tls_profile_run(run, project_id, &client).await
+    }
+
     async fn ping(&self) -> anyhow::Result<()> {
         let client = self.client.lock().await;
         client
@@ -1234,6 +1244,35 @@ async fn insert_url_test_resource(
     .await
     .context("INSERT UrlTestResource")?;
     Ok(())
+}
+
+async fn insert_tls_profile_run(
+    run: &TlsEndpointProfile,
+    project_id: Option<&uuid::Uuid>,
+    c: &PgClient,
+) -> anyhow::Result<uuid::Uuid> {
+    let id = uuid::Uuid::new_v4();
+    let target_kind = run.target_kind.as_db_str().to_string();
+    let coverage_level = run.coverage_level.as_db_str().to_string();
+    let profile_json = serde_json::to_value(run)?;
+    c.execute(
+        "INSERT INTO TlsProfileRun (Id, ProjectId, Host, Port, TargetKind, CoverageLevel, SummaryStatus, SummaryScore, ProfileJson)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+        &[
+            &id,
+            &project_id,
+            &run.target.host,
+            &(i32::from(run.target.port)),
+            &target_kind,
+            &coverage_level,
+            &run.summary.status,
+            &(run.summary.score.map(i32::from)),
+            &profile_json,
+        ],
+    )
+    .await
+    .context("INSERT TlsProfileRun")?;
+    Ok(id)
 }
 
 async fn insert_url_test_protocol_run(

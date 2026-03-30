@@ -13,6 +13,7 @@ use crate::output::json::{
     BenchmarkDiagnostics, BenchmarkEnvironment, BenchmarkLaunch, BenchmarkMetadata,
     BenchmarkMethodology, BenchmarkSample, BenchmarkSummary,
 };
+use crate::tls_profile::TlsEndpointProfile;
 use anyhow::Context;
 use async_trait::async_trait;
 use serde::Serialize;
@@ -162,6 +163,14 @@ impl DatabaseBackend for MssqlBackend {
                 Err(e)
             }
         }
+    }
+
+    async fn save_tls_profile(
+        &self,
+        _run: &TlsEndpointProfile,
+        _project_id: Option<&uuid::Uuid>,
+    ) -> anyhow::Result<uuid::Uuid> {
+        anyhow::bail!("SQL Server TLS profile persistence not yet implemented")
     }
 
     async fn ping(&self) -> anyhow::Result<()> {
