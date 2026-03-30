@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
-use tokio_postgres::Client;
+use tokio_postgres::{error::SqlState, Client};
 use uuid::Uuid;
 
 use networker_tester::output::json::{
@@ -15,6 +15,10 @@ use networker_tester::output::json::{
 const REPORT_CONFIDENCE_LEVEL: f64 = 0.95;
 const BOOTSTRAP_RESAMPLES: usize = 2_048;
 const MAX_COMPARABLE_RTT_RATIO: f64 = 1.5;
+const DEFAULT_OUTLIER_POLICY: &str =
+    "Tukey 1.5xIQR fences flag outliers for audit while raw measured samples remain preserved in the artifact.";
+const DEFAULT_UNCERTAINTY_METHOD: &str =
+    "Percentile bootstrap confidence intervals around the median with deterministic resampling.";
 
 #[derive(Debug, Clone)]
 struct DeterministicRng {
@@ -317,30 +321,49 @@ pub async fn get_artifact(
     let summary: BenchmarkSummary = serde_json::from_value(run_row.get("aggregatesummaryjson"))
         .context("deserialize BenchmarkRun.aggregate_summary_json")?;
 
-    let environment_row = client
-        .query_one(
+    let environment = match client
+        .query_opt(
             "SELECT EnvironmentJson
              FROM BenchmarkEnvironment
              WHERE BenchmarkRunId = $1",
             &[run_id],
         )
         .await
-        .context("load BenchmarkEnvironment")?;
-    let environment: BenchmarkEnvironment =
-        serde_json::from_value(environment_row.get("environmentjson"))
-            .context("deserialize BenchmarkEnvironment.environment_json")?;
+    {
+        Ok(Some(environment_row)) => serde_json::from_value(environment_row.get("environmentjson"))
+            .context("deserialize BenchmarkEnvironment.environment_json")?,
+        Ok(None) => {
+            tracing::warn!(run_id = %run_id, "BenchmarkEnvironment row missing; using empty fallback");
+            empty_benchmark_environment()
+        }
+        Err(err) if is_missing_benchmark_table_error(&err) => {
+            tracing::warn!(run_id = %run_id, "BenchmarkEnvironment table missing; using empty fallback");
+            empty_benchmark_environment()
+        }
+        Err(err) => return Err(err).context("load BenchmarkEnvironment"),
+    };
 
-    let quality_row = client
-        .query_one(
+    let data_quality = match client
+        .query_opt(
             "SELECT QualityJson
              FROM BenchmarkDataQuality
              WHERE BenchmarkRunId = $1",
             &[run_id],
         )
         .await
-        .context("load BenchmarkDataQuality")?;
-    let data_quality: BenchmarkDataQuality = serde_json::from_value(quality_row.get("qualityjson"))
-        .context("deserialize BenchmarkDataQuality.quality_json")?;
+    {
+        Ok(Some(quality_row)) => serde_json::from_value(quality_row.get("qualityjson"))
+            .context("deserialize BenchmarkDataQuality.quality_json")?,
+        Ok(None) => {
+            tracing::warn!(run_id = %run_id, "BenchmarkDataQuality row missing; using empty fallback");
+            empty_benchmark_data_quality()
+        }
+        Err(err) if is_missing_benchmark_table_error(&err) => {
+            tracing::warn!(run_id = %run_id, "BenchmarkDataQuality table missing; using empty fallback");
+            empty_benchmark_data_quality()
+        }
+        Err(err) => return Err(err).context("load BenchmarkDataQuality"),
+    };
 
     let launch_rows = client
         .query(
@@ -1094,16 +1117,40 @@ fn to_u64(value: i64) -> u64 {
     u64::try_from(value).unwrap_or_default()
 }
 
+fn empty_benchmark_environment() -> BenchmarkEnvironment {
+    BenchmarkEnvironment {
+        client_info: None,
+        server_info: None,
+        network_baseline: None,
+        environment_check: None,
+        stability_check: None,
+        packet_capture_enabled: false,
+    }
+}
+
+fn empty_benchmark_data_quality() -> BenchmarkDataQuality {
+    BenchmarkDataQuality {
+        noise_level: "unknown".into(),
+        sample_stability_cv: 0.0,
+        sufficiency: "unknown".into(),
+        warnings: Vec::new(),
+        publication_ready: false,
+        confidence_level: REPORT_CONFIDENCE_LEVEL,
+        outlier_policy: DEFAULT_OUTLIER_POLICY.into(),
+        uncertainty_method: DEFAULT_UNCERTAINTY_METHOD.into(),
+        relative_margin_of_error: 0.0,
+        quality_tier: "unknown".into(),
+        low_outlier_count: 0,
+        high_outlier_count: 0,
+        outlier_count: 0,
+        publication_blockers: Vec::new(),
+    }
+}
+
 fn is_missing_benchmark_table_error(err: &tokio_postgres::Error) -> bool {
-    let msg = format!("{err:?}").to_ascii_lowercase();
-    msg.contains("42p01")
-        || msg.contains("benchmarkrun")
-        || msg.contains("benchmarksummary")
-        || msg.contains("benchmarksample")
-        || msg.contains("benchmarklaunch")
-        || msg.contains("benchmarkenvironment")
-        || msg.contains("benchmarkdataquality")
-        || msg.contains("benchmarkcase")
+    err.as_db_error()
+        .map(|db_err| db_err.code() == &SqlState::UNDEFINED_TABLE)
+        .unwrap_or(false)
 }
 
 #[cfg(test)]

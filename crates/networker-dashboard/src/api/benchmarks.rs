@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, Query, Request, State},
     http::StatusCode,
     routing::{get, post},
     Json, Router,
@@ -14,6 +14,8 @@ use crate::AppState;
 
 const DEFAULT_LIMIT: i64 = 50;
 const MAX_LIMIT: i64 = 200;
+const MAX_COMPARE_RUNS: usize = 10;
+const COMPARE_BODY_LIMIT_BYTES: usize = 32 * 1024;
 
 #[derive(Debug, Deserialize)]
 pub struct ListBenchmarksQuery {
@@ -30,9 +32,9 @@ pub struct CompareBenchmarksRequest {
 
 async fn list_benchmark_presets_scoped(
     State(state): State<Arc<AppState>>,
-    req: axum::extract::Request,
+    req: Request,
 ) -> Result<Json<Vec<crate::db::benchmark_presets::BenchmarkComparePreset>>, StatusCode> {
-    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
+    let ctx = request_extension::<ProjectContext>(&req, "ProjectContext")?;
     let client = state.db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error in list_benchmark_presets_scoped");
         StatusCode::INTERNAL_SERVER_ERROR
@@ -50,10 +52,10 @@ async fn list_benchmark_presets_scoped(
 
 async fn save_benchmark_preset_scoped(
     State(state): State<Arc<AppState>>,
-    req: axum::extract::Request,
+    req: Request,
 ) -> Result<Json<Vec<crate::db::benchmark_presets::BenchmarkComparePreset>>, StatusCode> {
-    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
-    let user = req.extensions().get::<AuthUser>().unwrap().clone();
+    let ctx = request_extension::<ProjectContext>(&req, "ProjectContext")?;
+    let user = request_extension::<AuthUser>(&req, "AuthUser")?;
     let body = axum::body::to_bytes(req.into_body(), 32 * 1024)
         .await
         .map_err(|_| StatusCode::BAD_REQUEST)?;
@@ -85,9 +87,9 @@ async fn save_benchmark_preset_scoped(
 async fn delete_benchmark_preset_scoped(
     State(state): State<Arc<AppState>>,
     Path((_, preset_id)): Path<(Uuid, Uuid)>,
-    req: axum::extract::Request,
+    req: Request,
 ) -> Result<Json<Vec<crate::db::benchmark_presets::BenchmarkComparePreset>>, StatusCode> {
-    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
+    let ctx = request_extension::<ProjectContext>(&req, "ProjectContext")?;
     let client = state.db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error in delete_benchmark_preset_scoped");
         StatusCode::INTERNAL_SERVER_ERROR
@@ -113,9 +115,9 @@ async fn delete_benchmark_preset_scoped(
 async fn list_benchmarks_scoped(
     State(state): State<Arc<AppState>>,
     Query(q): Query<ListBenchmarksQuery>,
-    req: axum::extract::Request,
+    req: Request,
 ) -> Result<Json<Vec<crate::db::benchmarks::BenchmarkRunSummary>>, StatusCode> {
-    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
+    let ctx = request_extension::<ProjectContext>(&req, "ProjectContext")?;
     let client = state.db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error in list_benchmarks_scoped");
         StatusCode::INTERNAL_SERVER_ERROR
@@ -140,9 +142,9 @@ async fn list_benchmarks_scoped(
 async fn get_benchmark_scoped(
     State(state): State<Arc<AppState>>,
     Path((_, run_id)): Path<(Uuid, Uuid)>,
-    req: axum::extract::Request,
+    req: Request,
 ) -> Result<Json<networker_tester::output::json::BenchmarkArtifact>, StatusCode> {
-    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
+    let ctx = request_extension::<ProjectContext>(&req, "ProjectContext")?;
     let client = state.db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error in get_benchmark_scoped");
         StatusCode::INTERNAL_SERVER_ERROR
@@ -161,18 +163,16 @@ async fn get_benchmark_scoped(
 
 async fn compare_benchmarks_scoped(
     State(state): State<Arc<AppState>>,
-    req: axum::extract::Request,
+    req: Request,
 ) -> Result<Json<crate::db::benchmarks::BenchmarkComparisonReport>, StatusCode> {
-    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
-    let body = axum::body::to_bytes(req.into_body(), 1024 * 1024)
+    let ctx = request_extension::<ProjectContext>(&req, "ProjectContext")?;
+    let body = axum::body::to_bytes(req.into_body(), COMPARE_BODY_LIMIT_BYTES)
         .await
         .map_err(|_| StatusCode::BAD_REQUEST)?;
     let compare_req: CompareBenchmarksRequest =
         serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    if compare_req.run_ids.len() < 2 {
-        return Err(StatusCode::BAD_REQUEST);
-    }
+    validate_compare_request(&compare_req)?;
 
     let client = state.db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error in compare_benchmarks_scoped");
@@ -194,6 +194,24 @@ async fn compare_benchmarks_scoped(
     Ok(Json(report))
 }
 
+fn request_extension<T>(req: &Request, name: &'static str) -> Result<T, StatusCode>
+where
+    T: Clone + Send + Sync + 'static,
+{
+    req.extensions().get::<T>().cloned().ok_or_else(|| {
+        tracing::error!(extension = name, "Missing required request extension");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })
+}
+
+fn validate_compare_request(compare_req: &CompareBenchmarksRequest) -> Result<(), StatusCode> {
+    if compare_req.run_ids.len() < 2 || compare_req.run_ids.len() > MAX_COMPARE_RUNS {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    Ok(())
+}
+
 pub fn project_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/benchmarks", get(list_benchmarks_scoped))
@@ -210,7 +228,13 @@ pub fn project_router(state: Arc<AppState>) -> Router {
 
 #[cfg(test)]
 mod tests {
-    use super::{ListBenchmarksQuery, DEFAULT_LIMIT, MAX_LIMIT};
+    use super::{
+        request_extension, validate_compare_request, CompareBenchmarksRequest, ListBenchmarksQuery,
+        DEFAULT_LIMIT, MAX_COMPARE_RUNS, MAX_LIMIT,
+    };
+    use crate::auth::{ProjectContext, ProjectRole};
+    use axum::{body::Body, extract::Request, http::StatusCode};
+    use uuid::Uuid;
 
     #[test]
     fn benchmark_query_defaults_apply_expected_clamps() {
@@ -232,5 +256,67 @@ mod tests {
         assert!(q.target_host.is_none());
         assert!(q.limit.is_none());
         assert!(q.offset.is_none());
+    }
+
+    #[test]
+    fn compare_request_rejects_too_few_runs() {
+        let request = CompareBenchmarksRequest {
+            run_ids: vec![Uuid::new_v4()],
+            baseline_run_id: None,
+        };
+
+        assert_eq!(
+            validate_compare_request(&request),
+            Err(StatusCode::BAD_REQUEST)
+        );
+    }
+
+    #[test]
+    fn compare_request_rejects_too_many_runs() {
+        let request = CompareBenchmarksRequest {
+            run_ids: (0..=MAX_COMPARE_RUNS).map(|_| Uuid::new_v4()).collect(),
+            baseline_run_id: None,
+        };
+
+        assert_eq!(
+            validate_compare_request(&request),
+            Err(StatusCode::BAD_REQUEST)
+        );
+    }
+
+    #[test]
+    fn compare_request_accepts_bounded_selection() {
+        let request = CompareBenchmarksRequest {
+            run_ids: vec![Uuid::new_v4(), Uuid::new_v4()],
+            baseline_run_id: None,
+        };
+
+        assert_eq!(validate_compare_request(&request), Ok(()));
+    }
+
+    #[test]
+    fn request_extension_returns_internal_error_when_missing() {
+        let req = Request::builder().body(Body::empty()).unwrap();
+
+        assert!(matches!(
+            request_extension::<ProjectContext>(&req, "ProjectContext"),
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        ));
+    }
+
+    #[test]
+    fn request_extension_clones_present_value() {
+        let mut req = Request::builder().body(Body::empty()).unwrap();
+        let expected = ProjectContext {
+            project_id: Uuid::new_v4(),
+            project_slug: "demo".into(),
+            role: ProjectRole::Viewer,
+        };
+        req.extensions_mut().insert(expected.clone());
+
+        let actual = request_extension::<ProjectContext>(&req, "ProjectContext").unwrap();
+        assert_eq!(actual.project_id, expected.project_id);
+        assert_eq!(actual.project_slug, expected.project_slug);
+        assert_eq!(actual.role, expected.role);
     }
 }
