@@ -679,5 +679,45 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
         tracing::info!("V014 migration complete");
     }
 
+    // V015: TLS endpoint profile tables + job.tls_profile_run_id column
+    let row = client
+        .query_opt("SELECT version FROM _migrations WHERE version = 15", &[])
+        .await?;
+
+    if row.is_none() {
+        tracing::info!("Applying V015 TLS profile tables migration...");
+        client
+            .batch_execute(
+                "ALTER TABLE job ADD COLUMN IF NOT EXISTS tls_profile_run_id UUID;
+
+                 CREATE TABLE IF NOT EXISTS TlsProfileRun (
+                     Id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                     ProjectId UUID NOT NULL REFERENCES project(project_id),
+                     JobId UUID REFERENCES job(job_id),
+                     Host VARCHAR(255) NOT NULL,
+                     Port INT NOT NULL DEFAULT 443,
+                     TargetKind VARCHAR(50) NOT NULL DEFAULT 'external',
+                     CoverageLevel VARCHAR(50) NOT NULL DEFAULT 'standard',
+                     SummaryStatus VARCHAR(50) NOT NULL DEFAULT 'pending',
+                     SummaryScore INT,
+                     ProfileJson JSONB,
+                     StartedAt TIMESTAMPTZ NOT NULL DEFAULT now(),
+                     FinishedAt TIMESTAMPTZ,
+                     CreatedBy UUID REFERENCES dash_user(user_id)
+                 );
+
+                 CREATE INDEX IF NOT EXISTS ix_tlsprofilerun_project
+                     ON TlsProfileRun (ProjectId, StartedAt DESC);",
+            )
+            .await?;
+        client
+            .execute(
+                "INSERT INTO _migrations (version) VALUES (15) ON CONFLICT DO NOTHING",
+                &[],
+            )
+            .await?;
+        tracing::info!("V015 migration complete");
+    }
+
     Ok(())
 }
