@@ -244,8 +244,16 @@ pub async fn get_latest_leaderboard(client: &Client) -> anyhow::Result<Vec<Leade
         .collect();
 
     entries.sort_by(|a, b| {
-        let a_ms = a.metrics.get("latency_mean_ms").and_then(|v| v.as_f64()).unwrap_or(f64::MAX);
-        let b_ms = b.metrics.get("latency_mean_ms").and_then(|v| v.as_f64()).unwrap_or(f64::MAX);
+        let a_ms = a
+            .metrics
+            .get("latency_mean_ms")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(f64::MAX);
+        let b_ms = b
+            .metrics
+            .get("latency_mean_ms")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(f64::MAX);
         a_ms.partial_cmp(&b_ms).unwrap_or(std::cmp::Ordering::Equal)
     });
 
