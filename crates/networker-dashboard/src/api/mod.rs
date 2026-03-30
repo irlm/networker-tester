@@ -10,6 +10,7 @@ mod dashboard;
 mod deployments;
 mod events;
 mod inventory;
+mod leaderboard;
 mod invites;
 mod jobs;
 mod modes;
@@ -35,7 +36,8 @@ pub fn router(state: Arc<AppState>) -> Router {
     let public = Router::new()
         .merge(auth::router(state.clone()))
         .merge(share_links::public_router(state.clone()))
-        .merge(invites::public_router(state.clone()));
+        .merge(invites::public_router(state.clone()))
+        .merge(leaderboard::public_router(state.clone()));
 
     // Protected flat routes (require valid JWT, global/platform resources only)
     let protected_flat = Router::new()
@@ -47,6 +49,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(projects::router(state.clone()))
         .merge(events::router(state.clone()))
         .merge(admin::router(state.clone()))
+        .merge(leaderboard::protected_router(state.clone()))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::require_auth,

@@ -44,6 +44,7 @@ const ShareViewPage = lazyPage(() => import('./pages/ShareViewPage'), 'ShareView
 const AcceptInvitePage = lazyPage(() => import('./pages/AcceptInvitePage'), 'AcceptInvitePage');
 const CommandApprovalsPage = lazyPage(() => import('./pages/CommandApprovalsPage'), 'CommandApprovalsPage');
 const SystemDashboardPage = lazyPage(() => import('./pages/SystemDashboardPage'), 'SystemDashboardPage');
+const LeaderboardPage = lazyPage(() => import('./pages/LeaderboardPage'), 'LeaderboardPage');
 
 const statusColors: Record<ConnectionStatus, string> = {
   connected: 'bg-green-400',
@@ -158,6 +159,7 @@ function AuthenticatedApp() {
             <Route path="/projects/:projectId/approvals" element={<CommandApprovalsPage />} />
 
             {/* Platform routes */}
+            <Route path="/leaderboard" element={<LeaderboardPage />} />
             {isPlatformAdmin && <Route path="/admin/system" element={<SystemDashboardPage />} />}
             {isAdmin && <Route path="/users" element={<UsersPage />} />}
             <Route path="/change-password" element={<ChangePasswordPage />} />
