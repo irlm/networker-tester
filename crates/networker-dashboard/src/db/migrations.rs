@@ -366,12 +366,12 @@ ALTER TABLE project ADD COLUMN IF NOT EXISTS delete_protection BOOLEAN NOT NULL 
 UPDATE project SET delete_protection = TRUE WHERE project_id = '00000000-0000-0000-0000-000000000001';
 "#;
 
-const V013_JOB_TLS_PROFILE_LINK: &str = r#"
+const V015_JOB_TLS_PROFILE_LINK: &str = r#"
 ALTER TABLE job ADD COLUMN IF NOT EXISTS tls_profile_run_id UUID REFERENCES TlsProfileRun(Id);
 CREATE INDEX IF NOT EXISTS ix_job_tls_profile_run_id ON job (tls_profile_run_id) WHERE tls_profile_run_id IS NOT NULL;
 "#;
 
-const V014_TLS_PROFILE_PROJECT_BACKFILL: &str = r#"
+const V016_TLS_PROFILE_PROJECT_BACKFILL: &str = r#"
 -- First, backfill from explicit job linkage when available.
 UPDATE TlsProfileRun t
 SET ProjectId = j.project_id
@@ -610,38 +610,38 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
         tracing::info!("V012 migration complete");
     }
 
-    // V013: explicit TLS profile artifact linkage from jobs
+    // V015: explicit TLS profile artifact linkage from jobs
     let row = client
-        .query_opt("SELECT version FROM _migrations WHERE version = 13", &[])
+        .query_opt("SELECT version FROM _migrations WHERE version = 15", &[])
         .await?;
 
     if row.is_none() {
-        tracing::info!("Applying V013 job_tls_profile_link migration...");
-        client.batch_execute(V013_JOB_TLS_PROFILE_LINK).await?;
+        tracing::info!("Applying V015 job_tls_profile_link migration...");
+        client.batch_execute(V015_JOB_TLS_PROFILE_LINK).await?;
         client
             .execute(
-                "INSERT INTO _migrations (version) VALUES (13) ON CONFLICT DO NOTHING",
+                "INSERT INTO _migrations (version) VALUES (15) ON CONFLICT DO NOTHING",
                 &[],
             )
             .await?;
-        tracing::info!("V013 migration complete");
+        tracing::info!("V015 migration complete");
     }
 
-    // V014: backfill historical TLS profile rows into project scope
+    // V016: backfill historical TLS profile rows into project scope
     let row = client
-        .query_opt("SELECT version FROM _migrations WHERE version = 14", &[])
+        .query_opt("SELECT version FROM _migrations WHERE version = 16", &[])
         .await?;
 
     if row.is_none() {
-        tracing::info!("Applying V014 tls_profile_project_backfill migration...");
-        client.batch_execute(V014_TLS_PROFILE_PROJECT_BACKFILL).await?;
+        tracing::info!("Applying V016 tls_profile_project_backfill migration...");
+        client.batch_execute(V016_TLS_PROFILE_PROJECT_BACKFILL).await?;
         client
             .execute(
-                "INSERT INTO _migrations (version) VALUES (14) ON CONFLICT DO NOTHING",
+                "INSERT INTO _migrations (version) VALUES (16) ON CONFLICT DO NOTHING",
                 &[],
             )
             .await?;
-        tracing::info!("V014 migration complete");
+        tracing::info!("V016 migration complete");
     }
 
     Ok(())

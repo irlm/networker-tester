@@ -286,10 +286,17 @@ async fn handle_agent_message(state: &Arc<AppState>, agent_id: Uuid, msg: AgentM
 
             tracing::info!(correlation_id, host = %profile.target.host, port = profile.target.port, "TLS profile complete — persisting result");
 
-            if let Ok(client) = state.db.get().await {
-                if let Err(e) = crate::db::jobs::update_status(&client, &job_id, "completed").await {
+            let mut project_id = None;
+            let pooled_client = state.db.get().await.ok();
+            if let Some(client) = pooled_client.as_ref() {
+                if let Err(e) = crate::db::jobs::update_status(client, &job_id, "completed").await {
                     tracing::error!(correlation_id, error = %e, "Failed to update TLS profile job status to completed");
                 }
+                project_id = crate::db::jobs::get(client, &job_id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|job| job.project_id);
             }
 
             let db_url = &state.database_url;
@@ -299,19 +306,10 @@ async fn handle_agent_message(state: &Arc<AppState>, agent_id: Uuid, msg: AgentM
                         if let Err(e) = backend.migrate().await {
                             tracing::error!(correlation_id, error = %e, "DB migration failed");
                         }
-                        let project_id = if let Ok(client) = state.db.get().await {
-                            crate::db::jobs::get(&client, &job_id)
-                                .await
-                                .ok()
-                                .flatten()
-                                .and_then(|job| job.project_id)
-                        } else {
-                            None
-                        };
                         match backend.save_tls_profile(&profile, project_id.as_ref()).await {
                             Ok(tls_profile_run_id) => {
-                                if let Ok(client) = state.db.get().await {
-                                    if let Err(e) = crate::db::jobs::set_tls_profile_run_id(&client, &job_id, &tls_profile_run_id).await {
+                                if let Some(client) = pooled_client.as_ref() {
+                                    if let Err(e) = crate::db::jobs::set_tls_profile_run_id(client, &job_id, &tls_profile_run_id).await {
                                         tracing::error!(correlation_id, error = %e, "Failed to link TLS profile run to job");
                                     }
                                 }

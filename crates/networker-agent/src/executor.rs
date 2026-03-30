@@ -138,20 +138,96 @@ pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::Sender<String>)
         }
     }
 
-    // SSRF protection: block probes targeting private, loopback, link-local,
-    // or cloud metadata IPs/hostnames.
-    if let Ok(parsed) = url::Url::parse(config.tls_profile_url.as_deref().unwrap_or(&config.target)) {
-        if is_private_or_metadata(&parsed) {
-            tracing::error!(target = %parsed, "SSRF blocked: target resolves to private/metadata address");
+    // SSRF protection: fail closed on parse errors; block private/link-local/
+    // metadata targets, including direct IP overrides and DNS resolution.
+    let ssrf_target = config.tls_profile_url.as_deref().unwrap_or(&config.target);
+    let parsed = match url::Url::parse(ssrf_target) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            tracing::error!(target = %ssrf_target, error = %e, "SSRF check failed: invalid target URL");
             send(
                 tx,
                 &AgentMessage::JobError {
                     job_id,
-                    message: "Target blocked: private, loopback, or metadata address".into(),
+                    message: format!("Target blocked: invalid URL for SSRF validation ({e})"),
                 },
                 &correlation_id,
             );
             return;
+        }
+    };
+
+    if is_private_or_metadata(&parsed) {
+        tracing::error!(target = %parsed, "SSRF blocked: target resolves to private/metadata address");
+        send(
+            tx,
+            &AgentMessage::JobError {
+                job_id,
+                message: "Target blocked: private, loopback, or metadata address".into(),
+            },
+            &correlation_id,
+        );
+        return;
+    }
+
+    if let Some(ip) = &config.tls_profile_ip {
+        match ip.parse::<std::net::IpAddr>() {
+            Ok(parsed_ip) if is_private_ip(&parsed_ip) => {
+                tracing::error!(target_ip = %parsed_ip, "SSRF blocked via tls_profile_ip override");
+                send(
+                    tx,
+                    &AgentMessage::JobError {
+                        job_id,
+                        message: "Target blocked: tls_profile_ip points to private, loopback, or metadata address".into(),
+                    },
+                    &correlation_id,
+                );
+                return;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                send(
+                    tx,
+                    &AgentMessage::JobError {
+                        job_id,
+                        message: format!("Target blocked: invalid tls_profile_ip ({e})"),
+                    },
+                    &correlation_id,
+                );
+                return;
+            }
+        }
+    }
+
+    if let Some(host) = parsed.host_str() {
+        let port = parsed.port_or_known_default().unwrap_or(443);
+        match tokio::net::lookup_host((host, port)).await {
+            Ok(addrs) => {
+                if addrs.into_iter().any(|addr| is_private_ip(&addr.ip())) {
+                    tracing::error!(target = %parsed, "SSRF blocked after DNS resolution to private/metadata address");
+                    send(
+                        tx,
+                        &AgentMessage::JobError {
+                            job_id,
+                            message: "Target blocked: DNS resolved to private, loopback, or metadata address".into(),
+                        },
+                        &correlation_id,
+                    );
+                    return;
+                }
+            }
+            Err(e) => {
+                tracing::error!(target = %parsed, error = %e, "SSRF check failed: DNS resolution error");
+                send(
+                    tx,
+                    &AgentMessage::JobError {
+                        job_id,
+                        message: format!("Target blocked: DNS resolution failed during SSRF validation ({e})"),
+                    },
+                    &correlation_id,
+                );
+                return;
+            }
         }
     }
 

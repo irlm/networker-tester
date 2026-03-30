@@ -2,7 +2,14 @@ use chrono::{DateTime, Utc};
 use networker_tester::tls_profile::TlsEndpointProfile;
 use serde::Serialize;
 use tokio_postgres::Client;
+use tokio_postgres::error::SqlState;
 use uuid::Uuid;
+
+fn is_undefined_table(err: &tokio_postgres::Error) -> bool {
+    err.as_db_error()
+        .map(|db_err| db_err.code() == &SqlState::UNDEFINED_TABLE)
+        .unwrap_or(false)
+}
 
 #[derive(Debug, Serialize)]
 pub struct TlsProfileSummaryRow {
@@ -48,12 +55,7 @@ pub async fn list(
     {
         Ok(rows) => rows,
         Err(e) => {
-            let msg = format!("{e:?}");
-            if msg.contains("does not exist")
-                || msg.contains("tlsprofilerun")
-                || msg.contains("TlsProfileRun")
-                || msg.contains("42P01")
-            {
+            if is_undefined_table(&e) {
                 return Ok(vec![]);
             }
             return Err(e.into());
@@ -91,12 +93,7 @@ pub async fn get(
     {
         Ok(row) => row,
         Err(e) => {
-            let msg = format!("{e:?}");
-            if msg.contains("does not exist")
-                || msg.contains("tlsprofilerun")
-                || msg.contains("TlsProfileRun")
-                || msg.contains("42P01")
-            {
+            if is_undefined_table(&e) {
                 return Ok(None);
             }
             return Err(e.into());
