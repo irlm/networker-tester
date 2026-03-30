@@ -268,7 +268,7 @@ export function DashboardPage() {
             >
               <div className="text-yellow-400/70 text-xs">Update available</div>
               <div className="text-gray-600 text-xs mt-0.5">
-                {versionInfo.dashboard_version} → {versionInfo.latest_release}
+                {versionInfo.tester_version ?? versionInfo.dashboard_version} → {versionInfo.latest_release}
               </div>
             </Link>
           )}

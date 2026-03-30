@@ -180,6 +180,20 @@ pub async fn update_status(client: &Client, job_id: &Uuid, status: &str) -> anyh
     Ok(())
 }
 
+pub async fn assign_to_agent(
+    client: &Client,
+    job_id: &Uuid,
+    agent_id: &Uuid,
+) -> anyhow::Result<()> {
+    client
+        .execute(
+            "UPDATE job SET status = 'assigned', agent_id = $1 WHERE job_id = $2",
+            &[agent_id, job_id],
+        )
+        .await?;
+    Ok(())
+}
+
 pub async fn set_run_id(client: &Client, job_id: &Uuid, run_id: &Uuid) -> anyhow::Result<()> {
     client
         .execute(

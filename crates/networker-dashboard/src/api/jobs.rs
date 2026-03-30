@@ -192,7 +192,7 @@ async fn create_job_scoped(
             config: Box::new(job_config),
         };
         if state.agents.send_to_agent(&aid, &msg).await.is_ok() {
-            crate::db::jobs::update_status(&client, &job_id, "assigned")
+            crate::db::jobs::assign_to_agent(&client, &job_id, &aid)
                 .await
                 .ok();
             let _ = state.events_tx.send(DashboardEvent::JobUpdate {
