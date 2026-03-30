@@ -163,7 +163,7 @@ private:
     }
 
     void on_handshake(beast::error_code ec) {
-        if (ec) return;
+        if (ec) { std::cerr << "handshake: " << ec.message() << "\n"; return; }
         do_read();
     }
 
@@ -178,7 +178,7 @@ private:
     void on_read(beast::error_code ec, std::size_t /*bytes_transferred*/) {
         if (ec == http::error::end_of_stream)
             return do_close();
-        if (ec) return;
+        if (ec) { std::cerr << "handshake: " << ec.message() << "\n"; return; }
 
         handle_request(std::move(req_), [this](auto&& msg, std::uint64_t download_size = 0) {
             using msg_type = std::decay_t<decltype(msg)>;
@@ -192,7 +192,7 @@ private:
                 http::async_write(
                     stream_, *sp,
                     [self = shared_from_this(), sp](beast::error_code ec, std::size_t) {
-                        if (ec) return;
+                        if (ec) { std::cerr << "handshake: " << ec.message() << "\n"; return; }
                         if (sp->need_eof())
                             return self->do_close();
                         self->do_read();
@@ -209,7 +209,7 @@ private:
         http::async_write_header(
             stream_, *sr,
             [self = shared_from_this(), hdr, sr, total](beast::error_code ec, std::size_t) {
-                if (ec) return;
+                if (ec) { std::cerr << "handshake: " << ec.message() << "\n"; return; }
                 self->do_write_download_chunks(hdr, sr, total, 0);
             });
     }
@@ -229,7 +229,7 @@ private:
             http::async_write(
                 stream_, *sr,
                 [self = shared_from_this(), hdr, sr](beast::error_code ec, std::size_t) {
-                    if (ec) return;
+                    if (ec) { std::cerr << "handshake: " << ec.message() << "\n"; return; }
                     self->do_read();
                 });
             return;
@@ -255,7 +255,7 @@ private:
             stream_, *sr,
             [self = shared_from_this(), hdr, sr, total, written, to_write](
                 beast::error_code ec, std::size_t) {
-                if (ec) return;
+                if (ec) { std::cerr << "handshake: " << ec.message() << "\n"; return; }
                 auto new_written = written + to_write;
                 if (new_written >= total) {
                     self->do_read();
@@ -330,11 +330,13 @@ int main() {
     auto const threads = std::max<int>(1, static_cast<int>(std::thread::hardware_concurrency()));
 
     // SSL context
-    ssl::context ctx{ssl::context::tls};
+    ssl::context ctx{ssl::context::tls_server};
     ctx.set_options(
         ssl::context::default_workarounds |
         ssl::context::no_sslv2 |
-        ssl::context::no_sslv3);
+        ssl::context::no_sslv3 |
+        ssl::context::no_tlsv1 |
+        ssl::context::no_tlsv1_1);
     ctx.use_certificate_chain_file(cert_path);
     ctx.use_private_key_file(key_path, ssl::context::pem);
 

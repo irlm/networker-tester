@@ -2,7 +2,7 @@
 
 cert_dir = ENV.fetch("BENCH_CERT_DIR", "/opt/bench")
 
-bind "ssl://0.0.0.0:8443?cert=#{cert_dir}/cert.pem&key=#{cert_dir}/key.pem"
+bind "ssl://0.0.0.0:8443?cert=#{cert_dir}/cert.pem&key=#{cert_dir}/key.pem&verify_mode=none"
 
 # Single process, no cluster — fair comparison with other single-process servers.
 workers 0
