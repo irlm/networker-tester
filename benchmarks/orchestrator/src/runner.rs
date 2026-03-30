@@ -1,9 +1,35 @@
 use crate::provisioner::VmInfo;
 use crate::types::{BenchmarkResult, NetworkMetrics, ResourceMetrics};
 use anyhow::{bail, Context, Result};
+use std::path::PathBuf;
 use std::time::Duration;
 
 const BENCHMARK_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// Resolve the path to `networker-tester`.
+///
+/// 1. Check `../../target/release/networker-tester` relative to the orchestrator binary.
+/// 2. Fall back to `networker-tester` on PATH.
+fn resolve_tester_path() -> String {
+    if let Ok(exe) = std::env::current_exe() {
+        // exe is e.g. .../benchmarks/orchestrator/target/release/alethabench
+        // We want          .../target/release/networker-tester  (workspace root target)
+        let candidate: PathBuf = exe
+            .parent() // .../target/release
+            .and_then(|p| p.parent()) // .../target
+            .and_then(|p| p.parent()) // .../orchestrator
+            .and_then(|p| p.parent()) // .../benchmarks
+            .and_then(|p| p.parent()) // workspace root
+            .map(|root| root.join("target/release/networker-tester"))
+            .unwrap_or_default();
+        if candidate.exists() {
+            tracing::debug!("Using tester at {}", candidate.display());
+            return candidate.to_string_lossy().to_string();
+        }
+    }
+    tracing::debug!("Falling back to networker-tester on PATH");
+    "networker-tester".to_string()
+}
 
 /// Parameters for a benchmark run extracted from the config.
 pub struct TestParams {
@@ -38,9 +64,10 @@ pub async fn run_benchmark(
     );
 
     let target = format!("https://{}:8443/health", vm.ip);
+    let tester_bin = resolve_tester_path();
 
     let output = tokio::time::timeout(BENCHMARK_TIMEOUT, async {
-        tokio::process::Command::new("networker-tester")
+        tokio::process::Command::new(&tester_bin)
             .args([
                 "--target",
                 &target,
