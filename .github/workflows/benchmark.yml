@@ -1,0 +1,237 @@
+name: Benchmarks
+
+# AletheBench CI/CD pipeline — runs reference API benchmarks on demand or weekly.
+
+on:
+  workflow_dispatch:
+    inputs:
+      languages:
+        description: "Comma-separated languages to benchmark"
+        required: false
+        default: "rust,go,nodejs"
+        type: string
+      runs:
+        description: "Number of test runs per language"
+        required: false
+        default: "100"
+        type: string
+      upload:
+        description: "Upload results to dashboard"
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    # Weekly: Sunday at 00:00 UTC
+    - cron: "0 0 * * 0"
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  benchmark:
+    name: Run benchmarks
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      INPUT_LANGUAGES: ${{ inputs.languages || 'rust,go,nodejs' }}
+      INPUT_RUNS: ${{ inputs.runs || '100' }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # ── Rust toolchain ─────────────────────────────────────────────────────
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: bench-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: bench-cargo-
+
+      # ── Build networker binaries ───────────────────────────────────────────
+      - name: Build networker-tester
+        run: cargo build --release -p networker-tester
+
+      - name: Build networker-endpoint
+        run: cargo build --release -p networker-endpoint
+
+      # ── Generate TLS certificates ─────────────────────────────────────────
+      - name: Generate self-signed certs
+        run: |
+          chmod +x benchmarks/ci/generate-certs.sh
+          benchmarks/ci/generate-certs.sh benchmarks/shared
+
+      # ── Install language runtimes ──────────────────────────────────────────
+      - name: Determine languages
+        id: langs
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            LANGS="rust,go,nodejs,python,java"
+          else
+            LANGS="$INPUT_LANGUAGES"
+          fi
+          RUNS="$INPUT_RUNS"
+          echo "languages=$LANGS" >> "$GITHUB_OUTPUT"
+          echo "runs=$RUNS" >> "$GITHUB_OUTPUT"
+          echo "Languages: $LANGS"
+          echo "Runs: $RUNS"
+
+      - name: Setup Go
+        if: contains(steps.langs.outputs.languages, 'go')
+        uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+          cache: false
+
+      - name: Setup Node.js
+        if: contains(steps.langs.outputs.languages, 'nodejs') || contains(steps.langs.outputs.languages, 'node')
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - name: Setup Java
+        if: contains(steps.langs.outputs.languages, 'java')
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "21"
+
+      - name: Setup Python
+        if: contains(steps.langs.outputs.languages, 'python')
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        if: contains(steps.langs.outputs.languages, 'python')
+        run: pip install uvicorn starlette
+
+      - name: Setup .NET
+        if: contains(steps.langs.outputs.languages, 'csharp')
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Setup Ruby
+        if: contains(steps.langs.outputs.languages, 'ruby')
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: Install C++ dependencies
+        if: contains(steps.langs.outputs.languages, 'cpp')
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y cmake libboost-all-dev libssl-dev
+
+      # ── Run benchmarks ────────────────────────────────────────────────────
+      - name: Run benchmarks
+        env:
+          BENCH_LANGUAGES: ${{ steps.langs.outputs.languages }}
+          BENCH_RUNS: ${{ steps.langs.outputs.runs }}
+        run: |
+          chmod +x benchmarks/ci/run-language.sh
+          mkdir -p benchmarks/results
+
+          IFS=',' read -ra LANG_ARRAY <<< "$BENCH_LANGUAGES"
+          FAILED=()
+
+          for lang in "${LANG_ARRAY[@]}"; do
+            lang=$(echo "$lang" | tr -d ' ')
+            echo ""
+            echo "============================================"
+            echo "  Benchmarking: $lang ($BENCH_RUNS runs)"
+            echo "============================================"
+
+            if REPO_ROOT="$GITHUB_WORKSPACE" \
+               CERT_DIR="$GITHUB_WORKSPACE/benchmarks/shared" \
+               TESTER="$GITHUB_WORKSPACE/target/release/networker-tester" \
+               RESULTS_DIR="$GITHUB_WORKSPACE/benchmarks/results" \
+               PORT=8443 \
+               benchmarks/ci/run-language.sh "$lang" "$BENCH_RUNS"; then
+              echo "OK: $lang completed"
+            else
+              echo "FAILED: $lang"
+              FAILED+=("$lang")
+            fi
+
+            # Ensure port is free for next language
+            sleep 2
+          done
+
+          if [ ${#FAILED[@]} -gt 0 ]; then
+            echo ""
+            echo "WARNING: The following languages failed: ${FAILED[*]}"
+            # Don't fail the workflow — partial results are still useful
+          fi
+
+      # ── Collect results ────────────────────────────────────────────────────
+      - name: Summarize results
+        if: always()
+        run: |
+          echo "## Benchmark Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Language | Status | File |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|----------|--------|------|" >> "$GITHUB_STEP_SUMMARY"
+
+          for f in benchmarks/results/*.json; do
+            [ -f "$f" ] || continue
+            lang=$(basename "$f" .json)
+            size=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null || echo "0")
+            if [ "$size" -gt 10 ]; then
+              echo "| $lang | OK | $f |" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "| $lang | EMPTY | $f |" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+
+      - name: Upload results artifact
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: benchmark-results-${{ github.run_id }}
+          path: benchmarks/results/
+          retention-days: 90
+
+      # ── Optional: upload to dashboard ──────────────────────────────────────
+      - name: Upload to dashboard
+        if: inputs.upload == true || (github.event_name == 'schedule')
+        env:
+          DASHBOARD_API_KEY: ${{ secrets.ALETHABENCH_API_KEY }}
+        run: |
+          if [ -z "$DASHBOARD_API_KEY" ]; then
+            echo "WARNING: ALETHABENCH_API_KEY secret not set, skipping upload"
+            exit 0
+          fi
+
+          API_URL="https://alethedash.com/api/benchmarks"
+
+          for f in benchmarks/results/*.json; do
+            [ -f "$f" ] || continue
+            lang=$(basename "$f" .json)
+            size=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null || echo "0")
+            if [ "$size" -le 10 ]; then
+              echo "Skipping empty result: $lang"
+              continue
+            fi
+
+            echo "Uploading $lang results..."
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+              -X POST "$API_URL" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer $DASHBOARD_API_KEY" \
+              -d @"$f")
+
+            if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+              echo "  OK ($HTTP_CODE)"
+            else
+              echo "  FAILED ($HTTP_CODE)"
+            fi
+          done
