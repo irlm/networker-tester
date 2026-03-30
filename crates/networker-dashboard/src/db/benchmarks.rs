@@ -1339,6 +1339,82 @@ fn is_missing_benchmark_table_error(err: &tokio_postgres::Error) -> bool {
         .unwrap_or(false)
 }
 
+#[allow(dead_code)]
+pub async fn add_result(
+    client: &Client,
+    run_id: &Uuid,
+    result: &NewResult,
+) -> anyhow::Result<Uuid> {
+    let row = client
+        .query_one(
+            "INSERT INTO benchmark_result
+                (result_id, run_id, language, runtime, server_os, client_os,
+                 cloud, phase, concurrency, metrics, started_at, finished_at)
+             VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+             RETURNING result_id",
+            &[
+                run_id,
+                &result.language,
+                &result.runtime,
+                &result.server_os.as_deref().unwrap_or("ubuntu-24.04"),
+                &result.client_os.as_deref().unwrap_or("ubuntu-24.04"),
+                &result.cloud.as_deref().unwrap_or("azure"),
+                &result.phase.as_deref().unwrap_or("warm"),
+                &result.concurrency.unwrap_or(1),
+                &result.metrics,
+                &result.started_at,
+                &result.finished_at,
+            ],
+        )
+        .await?;
+    Ok(row.get("result_id"))
+}
+
+#[allow(dead_code)]
+pub async fn get_latest_leaderboard(client: &Client) -> anyhow::Result<Vec<LeaderboardEntry>> {
+    let rows = client
+        .query(
+            "SELECT DISTINCT ON (br.language) br.language, br.runtime, br.metrics,
+                    br.server_os, br.client_os, br.cloud, br.phase, br.concurrency
+             FROM benchmark_result br
+             JOIN benchmark_run brun ON brun.run_id = br.run_id
+             WHERE brun.status = 'completed'
+             ORDER BY br.language, brun.started_at DESC, br.started_at DESC NULLS LAST",
+            &[],
+        )
+        .await?;
+
+    let mut entries: Vec<LeaderboardEntry> = rows
+        .iter()
+        .map(|r| LeaderboardEntry {
+            language: r.get("language"),
+            runtime: r.get("runtime"),
+            metrics: r.get("metrics"),
+            server_os: r.get("server_os"),
+            client_os: r.get("client_os"),
+            cloud: r.get("cloud"),
+            phase: r.get("phase"),
+            concurrency: r.get("concurrency"),
+        })
+        .collect();
+
+    entries.sort_by(|a, b| {
+        let a_ms = a
+            .metrics
+            .get("latency_mean_ms")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(f64::MAX);
+        let b_ms = b
+            .metrics
+            .get("latency_mean_ms")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(f64::MAX);
+        a_ms.partial_cmp(&b_ms).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    Ok(entries)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{build_comparison_report, summarise_values};
@@ -1859,80 +1935,4 @@ mod tests {
         assert!(case.candidates[0].comparable);
         assert!(case.candidates[0].ratio.is_some());
     }
-}
-
-#[allow(dead_code)]
-pub async fn add_result(
-    client: &Client,
-    run_id: &Uuid,
-    result: &NewResult,
-) -> anyhow::Result<Uuid> {
-    let row = client
-        .query_one(
-            "INSERT INTO benchmark_result
-                (result_id, run_id, language, runtime, server_os, client_os,
-                 cloud, phase, concurrency, metrics, started_at, finished_at)
-             VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-             RETURNING result_id",
-            &[
-                run_id,
-                &result.language,
-                &result.runtime,
-                &result.server_os.as_deref().unwrap_or("ubuntu-24.04"),
-                &result.client_os.as_deref().unwrap_or("ubuntu-24.04"),
-                &result.cloud.as_deref().unwrap_or("azure"),
-                &result.phase.as_deref().unwrap_or("warm"),
-                &result.concurrency.unwrap_or(1),
-                &result.metrics,
-                &result.started_at,
-                &result.finished_at,
-            ],
-        )
-        .await?;
-    Ok(row.get("result_id"))
-}
-
-#[allow(dead_code)]
-pub async fn get_latest_leaderboard(client: &Client) -> anyhow::Result<Vec<LeaderboardEntry>> {
-    let rows = client
-        .query(
-            "SELECT DISTINCT ON (br.language) br.language, br.runtime, br.metrics,
-                    br.server_os, br.client_os, br.cloud, br.phase, br.concurrency
-             FROM benchmark_result br
-             JOIN benchmark_run brun ON brun.run_id = br.run_id
-             WHERE brun.status = 'completed'
-             ORDER BY br.language, brun.started_at DESC, br.started_at DESC NULLS LAST",
-            &[],
-        )
-        .await?;
-
-    let mut entries: Vec<LeaderboardEntry> = rows
-        .iter()
-        .map(|r| LeaderboardEntry {
-            language: r.get("language"),
-            runtime: r.get("runtime"),
-            metrics: r.get("metrics"),
-            server_os: r.get("server_os"),
-            client_os: r.get("client_os"),
-            cloud: r.get("cloud"),
-            phase: r.get("phase"),
-            concurrency: r.get("concurrency"),
-        })
-        .collect();
-
-    entries.sort_by(|a, b| {
-        let a_ms = a
-            .metrics
-            .get("latency_mean_ms")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(f64::MAX);
-        let b_ms = b
-            .metrics
-            .get("latency_mean_ms")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(f64::MAX);
-        a_ms.partial_cmp(&b_ms).unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    Ok(entries)
 }
