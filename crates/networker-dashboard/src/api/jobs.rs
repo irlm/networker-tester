@@ -154,6 +154,19 @@ async fn create_job_scoped(
         None => state.agents.any_online_agent().await,
     };
 
+    tracing::info!(
+        user_id = %user.user_id,
+        project_id = %ctx.project_id,
+        job_id = %job_id,
+        target = %create_req.config.target,
+        tls_profile_url = ?create_req.config.tls_profile_url,
+        tls_profile_ip = ?create_req.config.tls_profile_ip,
+        tls_profile_sni = ?create_req.config.tls_profile_sni,
+        requested_agent_id = ?create_req.agent_id,
+        assigned_agent_id = ?agent_id,
+        "Job created"
+    );
+
     if let Some(aid) = agent_id {
         let mut job_config = create_req.config.clone();
         job_config.project_id = Some(ctx.project_id);

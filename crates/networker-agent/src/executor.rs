@@ -16,6 +16,8 @@ use networker_common::protocol;
 use networker_tester::metrics::TestRun;
 use networker_tester::tls_profile::TlsEndpointProfile;
 
+const MAX_STDOUT_BYTES: usize = 128 * 1024 * 1024;
+
 /// Execute a job by running networker-tester CLI and streaming results.
 pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::Sender<String>) {
     let correlation_id = job_id.to_string();
@@ -184,7 +186,14 @@ pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::Sender<String>)
                 );
                 return;
             }
-            Ok(_) => {}
+            Ok(parsed_ip) => {
+                tracing::warn!(
+                    correlation_id,
+                    target = %parsed,
+                    target_ip = %parsed_ip,
+                    "TLS profile using explicit IP override"
+                );
+            }
             Err(e) => {
                 send(
                     tx,
@@ -287,6 +296,7 @@ pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::Sender<String>)
 
     let mut stderr_reader = BufReader::new(stderr).lines();
     let mut stdout_lines = Vec::new();
+    let mut stdout_bytes = 0usize;
     let mut stdout_reader = BufReader::new(stdout).lines();
 
     let tx_clone = tx.clone();
@@ -302,6 +312,23 @@ pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::Sender<String>)
 
     // Read stdout (JSON output when --json is used, or regular output)
     while let Ok(Some(line)) = stdout_reader.next_line().await {
+        stdout_bytes = stdout_bytes.saturating_add(line.len() + 1);
+        if stdout_bytes > MAX_STDOUT_BYTES {
+            let _ = child.kill().await;
+            log(tx, job_id, "error", "Tester stdout exceeded safety limit");
+            send(
+                tx,
+                &AgentMessage::JobError {
+                    job_id,
+                    message: format!(
+                        "Tester stdout exceeded safety limit of {} bytes",
+                        MAX_STDOUT_BYTES
+                    ),
+                },
+                &correlation_id,
+            );
+            return;
+        }
         stdout_lines.push(line);
     }
 

@@ -284,10 +284,16 @@ async fn handle_agent_message(state: &Arc<AppState>, agent_id: Uuid, msg: AgentM
         AgentMessage::TlsProfileComplete { job_id, profile } => {
             let correlation_id = job_id.to_string();
 
-            tracing::info!(correlation_id, host = %profile.target.host, port = profile.target.port, "TLS profile complete — persisting result");
+            tracing::info!(correlation_id, agent_id = %agent_id, host = %profile.target.host, port = profile.target.port, "TLS profile complete — persisting result");
 
             let mut project_id = None;
-            let pooled_client = state.db.get().await.ok();
+            let pooled_client = match state.db.get().await {
+                Ok(client) => Some(client),
+                Err(e) => {
+                    tracing::warn!(correlation_id, agent_id = %agent_id, error = %e, "DB pool unavailable in TlsProfileComplete — project linkage/status updates may be lost");
+                    None
+                }
+            };
             if let Some(client) = pooled_client.as_ref() {
                 if let Err(e) = crate::db::jobs::update_status(client, &job_id, "completed").await {
                     tracing::error!(correlation_id, error = %e, "Failed to update TLS profile job status to completed");

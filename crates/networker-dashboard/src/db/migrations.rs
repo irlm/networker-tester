@@ -367,7 +367,7 @@ UPDATE project SET delete_protection = TRUE WHERE project_id = '00000000-0000-00
 "#;
 
 const V015_JOB_TLS_PROFILE_LINK: &str = r#"
-ALTER TABLE job ADD COLUMN IF NOT EXISTS tls_profile_run_id UUID REFERENCES TlsProfileRun(Id);
+ALTER TABLE job ADD COLUMN IF NOT EXISTS tls_profile_run_id UUID;
 CREATE INDEX IF NOT EXISTS ix_job_tls_profile_run_id ON job (tls_profile_run_id) WHERE tls_profile_run_id IS NOT NULL;
 "#;
 
