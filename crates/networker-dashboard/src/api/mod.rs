@@ -1,6 +1,7 @@
 mod admin;
 mod agents;
 mod auth;
+mod benchmarks;
 mod cloud;
 mod cloud_accounts;
 mod cloud_connections;
@@ -34,7 +35,8 @@ pub fn router(state: Arc<AppState>) -> Router {
     let public = Router::new()
         .merge(auth::router(state.clone()))
         .merge(share_links::public_router(state.clone()))
-        .merge(invites::public_router(state.clone()));
+        .merge(invites::public_router(state.clone()))
+        .merge(benchmarks::public_router(state.clone()));
 
     // Protected flat routes (require valid JWT, global/platform resources only)
     let protected_flat = Router::new()
@@ -46,6 +48,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(projects::router(state.clone()))
         .merge(events::router(state.clone()))
         .merge(admin::router(state.clone()))
+        .merge(benchmarks::protected_router(state.clone()))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::require_auth,

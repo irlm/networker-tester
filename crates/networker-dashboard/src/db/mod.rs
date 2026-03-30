@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod benchmarks;
 pub mod cloud_accounts;
 pub mod cloud_connections;
 pub mod command_approvals;

@@ -32,6 +32,7 @@ import { ShareViewPage } from './pages/ShareViewPage';
 import { AcceptInvitePage } from './pages/AcceptInvitePage';
 import { CommandApprovalsPage } from './pages/CommandApprovalsPage';
 import { SystemDashboardPage } from './pages/SystemDashboardPage';
+import { BenchmarksPage } from './pages/BenchmarksPage';
 
 const statusColors: Record<ConnectionStatus, string> = {
   connected: 'bg-green-400',
@@ -136,6 +137,7 @@ function AuthenticatedApp() {
           <Route path="/projects/:projectId/approvals" element={<CommandApprovalsPage />} />
 
           {/* Platform routes */}
+          <Route path="/benchmarks" element={<BenchmarksPage />} />
           {isPlatformAdmin && <Route path="/admin/system" element={<SystemDashboardPage />} />}
           {isAdmin && <Route path="/users" element={<UsersPage />} />}
           <Route path="/change-password" element={<ChangePasswordPage />} />

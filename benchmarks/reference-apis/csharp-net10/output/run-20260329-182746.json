@@ -1,0 +1,864 @@
+{
+  "run_id": "6a7a0f65-2e06-409a-b881-c7d61b23ae32",
+  "started_at": "2026-03-29T18:27:46.336128Z",
+  "finished_at": "2026-03-29T18:27:46.499830Z",
+  "target_url": "https://localhost:8443/health",
+  "target_host": "localhost",
+  "modes": [
+    "http1"
+  ],
+  "total_runs": 10,
+  "concurrency": 1,
+  "timeout_ms": 5000,
+  "client_os": "macos",
+  "client_version": "0.16.2",
+  "client_info": {
+    "os": "macos",
+    "arch": "aarch64",
+    "cpu_cores": 16,
+    "total_memory_mb": 131072,
+    "os_version": "macOS 26.3.1",
+    "hostname": "Durin"
+  },
+  "baseline": {
+    "samples": 5,
+    "rtt_min_ms": 0.469084,
+    "rtt_avg_ms": 0.7458834,
+    "rtt_max_ms": 0.979917,
+    "rtt_p50_ms": 0.739791,
+    "rtt_p95_ms": 0.9520086,
+    "network_type": "Loopback"
+  },
+  "attempts": [
+    {
+      "attempt_id": "3c8da07b-ec37-4ffd-9fd7-3538847a95d4",
+      "run_id": "6a7a0f65-2e06-409a-b881-c7d61b23ae32",
+      "protocol": "http1",
+      "sequence_num": 0,
+      "started_at": "2026-03-29T18:27:46.337806Z",
+      "finished_at": "2026-03-29T18:27:46.370336Z",
+      "success": true,
+      "dns": {
+        "query_name": "localhost",
+        "resolved_ips": [
+          "127.0.0.1"
+        ],
+        "duration_ms": 4.5417499999999995,
+        "started_at": "2026-03-29T18:27:46.338301Z",
+        "success": true
+      },
+      "tcp": {
+        "local_addr": "127.0.0.1:63503",
+        "remote_addr": "127.0.0.1:8443",
+        "connect_duration_ms": 0.55675,
+        "attempt_count": 1,
+        "started_at": "2026-03-29T18:27:46.342881Z",
+        "success": true,
+        "mss_bytes": 16332,
+        "rtt_estimate_ms": null,
+        "retransmits": null,
+        "total_retrans": null,
+        "snd_cwnd": null,
+        "snd_ssthresh": null,
+        "rtt_variance_ms": null,
+        "rcv_space": null,
+        "segs_out": null,
+        "segs_in": null
+      },
+      "tls": {
+        "protocol_version": "TLSv1_2",
+        "cipher_suite": "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+        "alpn_negotiated": "http/1.1",
+        "cert_subject": "CN=alethabench",
+        "cert_issuer": "CN=alethabench",
+        "cert_expiry": "2036-03-25T02:06:03Z",
+        "handshake_duration_ms": 14.226459,
+        "started_at": "2026-03-29T18:27:46.343500Z",
+        "success": true,
+        "tls_backend": "rustls"
+      },
+      "http": {
+        "negotiated_version": "HTTP/1.1",
+        "status_code": 200,
+        "headers_size_bytes": 129,
+        "body_size_bytes": 59,
+        "ttfb_ms": 10.848125,
+        "total_duration_ms": 12.120000000000001,
+        "redirect_count": 0,
+        "started_at": "2026-03-29T18:27:46.358208Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json; charset=utf-8"
+          ],
+          [
+            "date",
+            "Sun, 29 Mar 2026 18:27:45 GMT"
+          ],
+          [
+            "server",
+            "Kestrel"
+          ],
+          [
+            "transfer-encoding",
+            "chunked"
+          ]
+        ],
+        "payload_bytes": 0,
+        "cpu_time_ms": 3.7889999999999997,
+        "csw_voluntary": 0,
+        "csw_involuntary": 52
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0
+    },
+    {
+      "attempt_id": "d92244f5-8ffc-48ba-bb56-9794186506c1",
+      "run_id": "6a7a0f65-2e06-409a-b881-c7d61b23ae32",
+      "protocol": "http1",
+      "sequence_num": 1,
+      "started_at": "2026-03-29T18:27:46.370620Z",
+      "finished_at": "2026-03-29T18:27:46.389223Z",
+      "success": true,
+      "dns": {
+        "query_name": "localhost",
+        "resolved_ips": [
+          "127.0.0.1"
+        ],
+        "duration_ms": 0.075708,
+        "started_at": "2026-03-29T18:27:46.370625Z",
+        "success": true
+      },
+      "tcp": {
+        "local_addr": "127.0.0.1:63504",
+        "remote_addr": "127.0.0.1:8443",
+        "connect_duration_ms": 0.152083,
+        "attempt_count": 1,
+        "started_at": "2026-03-29T18:27:46.370706Z",
+        "success": true,
+        "mss_bytes": 16332,
+        "rtt_estimate_ms": null,
+        "retransmits": null,
+        "total_retrans": null,
+        "snd_cwnd": null,
+        "snd_ssthresh": null,
+        "rtt_variance_ms": null,
+        "rcv_space": null,
+        "segs_out": null,
+        "segs_in": null
+      },
+      "tls": {
+        "protocol_version": "TLSv1_2",
+        "cipher_suite": "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+        "alpn_negotiated": "http/1.1",
+        "cert_subject": "CN=alethabench",
+        "cert_issuer": "CN=alethabench",
+        "cert_expiry": "2036-03-25T02:06:03Z",
+        "handshake_duration_ms": 17.88975,
+        "started_at": "2026-03-29T18:27:46.370863Z",
+        "success": true,
+        "tls_backend": "rustls"
+      },
+      "http": {
+        "negotiated_version": "HTTP/1.1",
+        "status_code": 200,
+        "headers_size_bytes": 129,
+        "body_size_bytes": 59,
+        "ttfb_ms": 0.409292,
+        "total_duration_ms": 0.4485,
+        "redirect_count": 0,
+        "started_at": "2026-03-29T18:27:46.388770Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json; charset=utf-8"
+          ],
+          [
+            "date",
+            "Sun, 29 Mar 2026 18:27:45 GMT"
+          ],
+          [
+            "server",
+            "Kestrel"
+          ],
+          [
+            "transfer-encoding",
+            "chunked"
+          ]
+        ],
+        "payload_bytes": 0,
+        "cpu_time_ms": 0.545,
+        "csw_voluntary": 0,
+        "csw_involuntary": 18
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0
+    },
+    {
+      "attempt_id": "3ed7e398-294e-4a8a-95dc-f18b2d2b3404",
+      "run_id": "6a7a0f65-2e06-409a-b881-c7d61b23ae32",
+      "protocol": "http1",
+      "sequence_num": 2,
+      "started_at": "2026-03-29T18:27:46.389257Z",
+      "finished_at": "2026-03-29T18:27:46.405575Z",
+      "success": true,
+      "dns": {
+        "query_name": "localhost",
+        "resolved_ips": [
+          "127.0.0.1"
+        ],
+        "duration_ms": 0.055375,
+        "started_at": "2026-03-29T18:27:46.389261Z",
+        "success": true
+      },
+      "tcp": {
+        "local_addr": "127.0.0.1:63505",
+        "remote_addr": "127.0.0.1:8443",
+        "connect_duration_ms": 0.096,
+        "attempt_count": 1,
+        "started_at": "2026-03-29T18:27:46.389320Z",
+        "success": true,
+        "mss_bytes": 16332,
+        "rtt_estimate_ms": null,
+        "retransmits": null,
+        "total_retrans": null,
+        "snd_cwnd": null,
+        "snd_ssthresh": null,
+        "rtt_variance_ms": null,
+        "rcv_space": null,
+        "segs_out": null,
+        "segs_in": null
+      },
+      "tls": {
+        "protocol_version": "TLSv1_2",
+        "cipher_suite": "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+        "alpn_negotiated": "http/1.1",
+        "cert_subject": "CN=alethabench",
+        "cert_issuer": "CN=alethabench",
+        "cert_expiry": "2036-03-25T02:06:03Z",
+        "handshake_duration_ms": 15.831792,
+        "started_at": "2026-03-29T18:27:46.389422Z",
+        "success": true,
+        "tls_backend": "rustls"
+      },
+      "http": {
+        "negotiated_version": "HTTP/1.1",
+        "status_code": 200,
+        "headers_size_bytes": 129,
+        "body_size_bytes": 59,
+        "ttfb_ms": 0.25541600000000003,
+        "total_duration_ms": 0.299667,
+        "redirect_count": 0,
+        "started_at": "2026-03-29T18:27:46.405271Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json; charset=utf-8"
+          ],
+          [
+            "date",
+            "Sun, 29 Mar 2026 18:27:45 GMT"
+          ],
+          [
+            "server",
+            "Kestrel"
+          ],
+          [
+            "transfer-encoding",
+            "chunked"
+          ]
+        ],
+        "payload_bytes": 0,
+        "cpu_time_ms": 0.48500000000000004,
+        "csw_voluntary": 0,
+        "csw_involuntary": 18
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0
+    },
+    {
+      "attempt_id": "091aa95b-b0f8-4114-bb3e-9870895fcc44",
+      "run_id": "6a7a0f65-2e06-409a-b881-c7d61b23ae32",
+      "protocol": "http1",
+      "sequence_num": 3,
+      "started_at": "2026-03-29T18:27:46.405600Z",
+      "finished_at": "2026-03-29T18:27:46.418919Z",
+      "success": true,
+      "dns": {
+        "query_name": "localhost",
+        "resolved_ips": [
+          "127.0.0.1"
+        ],
+        "duration_ms": 0.05375,
+        "started_at": "2026-03-29T18:27:46.405603Z",
+        "success": true
+      },
+      "tcp": {
+        "local_addr": "127.0.0.1:63506",
+        "remote_addr": "127.0.0.1:8443",
+        "connect_duration_ms": 0.127667,
+        "attempt_count": 1,
+        "started_at": "2026-03-29T18:27:46.405660Z",
+        "success": true,
+        "mss_bytes": 16332,
+        "rtt_estimate_ms": null,
+        "retransmits": null,
+        "total_retrans": null,
+        "snd_cwnd": null,
+        "snd_ssthresh": null,
+        "rtt_variance_ms": null,
+        "rcv_space": null,
+        "segs_out": null,
+        "segs_in": null
+      },
+      "tls": {
+        "protocol_version": "TLSv1_2",
+        "cipher_suite": "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+        "alpn_negotiated": "http/1.1",
+        "cert_subject": "CN=alethabench",
+        "cert_issuer": "CN=alethabench",
+        "cert_expiry": "2036-03-25T02:06:03Z",
+        "handshake_duration_ms": 12.779291,
+        "started_at": "2026-03-29T18:27:46.405795Z",
+        "success": true,
+        "tls_backend": "rustls"
+      },
+      "http": {
+        "negotiated_version": "HTTP/1.1",
+        "status_code": 200,
+        "headers_size_bytes": 129,
+        "body_size_bytes": 59,
+        "ttfb_ms": 0.296041,
+        "total_duration_ms": 0.32899999999999996,
+        "redirect_count": 0,
+        "started_at": "2026-03-29T18:27:46.418587Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json; charset=utf-8"
+          ],
+          [
+            "date",
+            "Sun, 29 Mar 2026 18:27:45 GMT"
+          ],
+          [
+            "server",
+            "Kestrel"
+          ],
+          [
+            "transfer-encoding",
+            "chunked"
+          ]
+        ],
+        "payload_bytes": 0,
+        "cpu_time_ms": 0.49,
+        "csw_voluntary": 0,
+        "csw_involuntary": 18
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0
+    },
+    {
+      "attempt_id": "4e3f6e2c-7894-4858-a0e2-3e2f8e4b5752",
+      "run_id": "6a7a0f65-2e06-409a-b881-c7d61b23ae32",
+      "protocol": "http1",
+      "sequence_num": 4,
+      "started_at": "2026-03-29T18:27:46.418937Z",
+      "finished_at": "2026-03-29T18:27:46.431994Z",
+      "success": true,
+      "dns": {
+        "query_name": "localhost",
+        "resolved_ips": [
+          "127.0.0.1"
+        ],
+        "duration_ms": 0.063458,
+        "started_at": "2026-03-29T18:27:46.418940Z",
+        "success": true
+      },
+      "tcp": {
+        "local_addr": "127.0.0.1:63507",
+        "remote_addr": "127.0.0.1:8443",
+        "connect_duration_ms": 0.104625,
+        "attempt_count": 1,
+        "started_at": "2026-03-29T18:27:46.419007Z",
+        "success": true,
+        "mss_bytes": 16332,
+        "rtt_estimate_ms": null,
+        "retransmits": null,
+        "total_retrans": null,
+        "snd_cwnd": null,
+        "snd_ssthresh": null,
+        "rtt_variance_ms": null,
+        "rcv_space": null,
+        "segs_out": null,
+        "segs_in": null
+      },
+      "tls": {
+        "protocol_version": "TLSv1_2",
+        "cipher_suite": "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+        "alpn_negotiated": "http/1.1",
+        "cert_subject": "CN=alethabench",
+        "cert_issuer": "CN=alethabench",
+        "cert_expiry": "2036-03-25T02:06:03Z",
+        "handshake_duration_ms": 12.585667,
+        "started_at": "2026-03-29T18:27:46.419118Z",
+        "success": true,
+        "tls_backend": "rustls"
+      },
+      "http": {
+        "negotiated_version": "HTTP/1.1",
+        "status_code": 200,
+        "headers_size_bytes": 129,
+        "body_size_bytes": 59,
+        "ttfb_ms": 0.238708,
+        "total_duration_ms": 0.274667,
+        "redirect_count": 0,
+        "started_at": "2026-03-29T18:27:46.431714Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json; charset=utf-8"
+          ],
+          [
+            "date",
+            "Sun, 29 Mar 2026 18:27:45 GMT"
+          ],
+          [
+            "server",
+            "Kestrel"
+          ],
+          [
+            "transfer-encoding",
+            "chunked"
+          ]
+        ],
+        "payload_bytes": 0,
+        "cpu_time_ms": 0.499,
+        "csw_voluntary": 0,
+        "csw_involuntary": 18
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0
+    },
+    {
+      "attempt_id": "1e6a5464-6a10-440c-b3e5-2005df19b125",
+      "run_id": "6a7a0f65-2e06-409a-b881-c7d61b23ae32",
+      "protocol": "http1",
+      "sequence_num": 5,
+      "started_at": "2026-03-29T18:27:46.432019Z",
+      "finished_at": "2026-03-29T18:27:46.445196Z",
+      "success": true,
+      "dns": {
+        "query_name": "localhost",
+        "resolved_ips": [
+          "127.0.0.1"
+        ],
+        "duration_ms": 0.063791,
+        "started_at": "2026-03-29T18:27:46.432023Z",
+        "success": true
+      },
+      "tcp": {
+        "local_addr": "127.0.0.1:63508",
+        "remote_addr": "127.0.0.1:8443",
+        "connect_duration_ms": 0.113583,
+        "attempt_count": 1,
+        "started_at": "2026-03-29T18:27:46.432091Z",
+        "success": true,
+        "mss_bytes": 16332,
+        "rtt_estimate_ms": null,
+        "retransmits": null,
+        "total_retrans": null,
+        "snd_cwnd": null,
+        "snd_ssthresh": null,
+        "rtt_variance_ms": null,
+        "rcv_space": null,
+        "segs_out": null,
+        "segs_in": null
+      },
+      "tls": {
+        "protocol_version": "TLSv1_2",
+        "cipher_suite": "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+        "alpn_negotiated": "http/1.1",
+        "cert_subject": "CN=alethabench",
+        "cert_issuer": "CN=alethabench",
+        "cert_expiry": "2036-03-25T02:06:03Z",
+        "handshake_duration_ms": 12.637333,
+        "started_at": "2026-03-29T18:27:46.432210Z",
+        "success": true,
+        "tls_backend": "rustls"
+      },
+      "http": {
+        "negotiated_version": "HTTP/1.1",
+        "status_code": 200,
+        "headers_size_bytes": 129,
+        "body_size_bytes": 59,
+        "ttfb_ms": 0.303417,
+        "total_duration_ms": 0.336667,
+        "redirect_count": 0,
+        "started_at": "2026-03-29T18:27:46.444856Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json; charset=utf-8"
+          ],
+          [
+            "date",
+            "Sun, 29 Mar 2026 18:27:45 GMT"
+          ],
+          [
+            "server",
+            "Kestrel"
+          ],
+          [
+            "transfer-encoding",
+            "chunked"
+          ]
+        ],
+        "payload_bytes": 0,
+        "cpu_time_ms": 0.518,
+        "csw_voluntary": 0,
+        "csw_involuntary": 18
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0
+    },
+    {
+      "attempt_id": "c34fd22b-0379-4486-9e4f-830c7fa4e51c",
+      "run_id": "6a7a0f65-2e06-409a-b881-c7d61b23ae32",
+      "protocol": "http1",
+      "sequence_num": 6,
+      "started_at": "2026-03-29T18:27:46.445217Z",
+      "finished_at": "2026-03-29T18:27:46.458440Z",
+      "success": true,
+      "dns": {
+        "query_name": "localhost",
+        "resolved_ips": [
+          "127.0.0.1"
+        ],
+        "duration_ms": 0.058958,
+        "started_at": "2026-03-29T18:27:46.445221Z",
+        "success": true
+      },
+      "tcp": {
+        "local_addr": "127.0.0.1:63509",
+        "remote_addr": "127.0.0.1:8443",
+        "connect_duration_ms": 0.095458,
+        "attempt_count": 1,
+        "started_at": "2026-03-29T18:27:46.445283Z",
+        "success": true,
+        "mss_bytes": 16332,
+        "rtt_estimate_ms": null,
+        "retransmits": null,
+        "total_retrans": null,
+        "snd_cwnd": null,
+        "snd_ssthresh": null,
+        "rtt_variance_ms": null,
+        "rcv_space": null,
+        "segs_out": null,
+        "segs_in": null
+      },
+      "tls": {
+        "protocol_version": "TLSv1_2",
+        "cipher_suite": "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+        "alpn_negotiated": "http/1.1",
+        "cert_subject": "CN=alethabench",
+        "cert_issuer": "CN=alethabench",
+        "cert_expiry": "2036-03-25T02:06:03Z",
+        "handshake_duration_ms": 12.763834,
+        "started_at": "2026-03-29T18:27:46.445385Z",
+        "success": true,
+        "tls_backend": "rustls"
+      },
+      "http": {
+        "negotiated_version": "HTTP/1.1",
+        "status_code": 200,
+        "headers_size_bytes": 129,
+        "body_size_bytes": 59,
+        "ttfb_ms": 0.239125,
+        "total_duration_ms": 0.277083,
+        "redirect_count": 0,
+        "started_at": "2026-03-29T18:27:46.458160Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json; charset=utf-8"
+          ],
+          [
+            "date",
+            "Sun, 29 Mar 2026 18:27:45 GMT"
+          ],
+          [
+            "server",
+            "Kestrel"
+          ],
+          [
+            "transfer-encoding",
+            "chunked"
+          ]
+        ],
+        "payload_bytes": 0,
+        "cpu_time_ms": 0.5,
+        "csw_voluntary": 0,
+        "csw_involuntary": 18
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0
+    },
+    {
+      "attempt_id": "e6a38482-dff0-4eef-9240-98dece1f6ff5",
+      "run_id": "6a7a0f65-2e06-409a-b881-c7d61b23ae32",
+      "protocol": "http1",
+      "sequence_num": 7,
+      "started_at": "2026-03-29T18:27:46.458458Z",
+      "finished_at": "2026-03-29T18:27:46.471738Z",
+      "success": true,
+      "dns": {
+        "query_name": "localhost",
+        "resolved_ips": [
+          "127.0.0.1"
+        ],
+        "duration_ms": 0.04275,
+        "started_at": "2026-03-29T18:27:46.458461Z",
+        "success": true
+      },
+      "tcp": {
+        "local_addr": "127.0.0.1:63510",
+        "remote_addr": "127.0.0.1:8443",
+        "connect_duration_ms": 0.08029099999999999,
+        "attempt_count": 1,
+        "started_at": "2026-03-29T18:27:46.458507Z",
+        "success": true,
+        "mss_bytes": 16332,
+        "rtt_estimate_ms": null,
+        "retransmits": null,
+        "total_retrans": null,
+        "snd_cwnd": null,
+        "snd_ssthresh": null,
+        "rtt_variance_ms": null,
+        "rcv_space": null,
+        "segs_out": null,
+        "segs_in": null
+      },
+      "tls": {
+        "protocol_version": "TLSv1_2",
+        "cipher_suite": "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+        "alpn_negotiated": "http/1.1",
+        "cert_subject": "CN=alethabench",
+        "cert_issuer": "CN=alethabench",
+        "cert_expiry": "2036-03-25T02:06:03Z",
+        "handshake_duration_ms": 12.784375,
+        "started_at": "2026-03-29T18:27:46.458594Z",
+        "success": true,
+        "tls_backend": "rustls"
+      },
+      "http": {
+        "negotiated_version": "HTTP/1.1",
+        "status_code": 200,
+        "headers_size_bytes": 129,
+        "body_size_bytes": 59,
+        "ttfb_ms": 0.300291,
+        "total_duration_ms": 0.342,
+        "redirect_count": 0,
+        "started_at": "2026-03-29T18:27:46.471391Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json; charset=utf-8"
+          ],
+          [
+            "date",
+            "Sun, 29 Mar 2026 18:27:45 GMT"
+          ],
+          [
+            "server",
+            "Kestrel"
+          ],
+          [
+            "transfer-encoding",
+            "chunked"
+          ]
+        ],
+        "payload_bytes": 0,
+        "cpu_time_ms": 0.559,
+        "csw_voluntary": 0,
+        "csw_involuntary": 19
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0
+    },
+    {
+      "attempt_id": "48450327-a770-4146-8d44-0b983c091a62",
+      "run_id": "6a7a0f65-2e06-409a-b881-c7d61b23ae32",
+      "protocol": "http1",
+      "sequence_num": 8,
+      "started_at": "2026-03-29T18:27:46.471763Z",
+      "finished_at": "2026-03-29T18:27:46.486057Z",
+      "success": true,
+      "dns": {
+        "query_name": "localhost",
+        "resolved_ips": [
+          "127.0.0.1"
+        ],
+        "duration_ms": 0.066666,
+        "started_at": "2026-03-29T18:27:46.471767Z",
+        "success": true
+      },
+      "tcp": {
+        "local_addr": "127.0.0.1:63511",
+        "remote_addr": "127.0.0.1:8443",
+        "connect_duration_ms": 0.131,
+        "attempt_count": 1,
+        "started_at": "2026-03-29T18:27:46.471838Z",
+        "success": true,
+        "mss_bytes": 16332,
+        "rtt_estimate_ms": null,
+        "retransmits": null,
+        "total_retrans": null,
+        "snd_cwnd": null,
+        "snd_ssthresh": null,
+        "rtt_variance_ms": null,
+        "rcv_space": null,
+        "segs_out": null,
+        "segs_in": null
+      },
+      "tls": {
+        "protocol_version": "TLSv1_2",
+        "cipher_suite": "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+        "alpn_negotiated": "http/1.1",
+        "cert_subject": "CN=alethabench",
+        "cert_issuer": "CN=alethabench",
+        "cert_expiry": "2036-03-25T02:06:03Z",
+        "handshake_duration_ms": 13.554208,
+        "started_at": "2026-03-29T18:27:46.471978Z",
+        "success": true,
+        "tls_backend": "rustls"
+      },
+      "http": {
+        "negotiated_version": "HTTP/1.1",
+        "status_code": 200,
+        "headers_size_bytes": 129,
+        "body_size_bytes": 59,
+        "ttfb_ms": 0.44845799999999997,
+        "total_duration_ms": 0.501,
+        "redirect_count": 0,
+        "started_at": "2026-03-29T18:27:46.485551Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json; charset=utf-8"
+          ],
+          [
+            "date",
+            "Sun, 29 Mar 2026 18:27:45 GMT"
+          ],
+          [
+            "server",
+            "Kestrel"
+          ],
+          [
+            "transfer-encoding",
+            "chunked"
+          ]
+        ],
+        "payload_bytes": 0,
+        "cpu_time_ms": 0.734,
+        "csw_voluntary": 0,
+        "csw_involuntary": 18
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0
+    },
+    {
+      "attempt_id": "82caa158-7af6-4cfa-a655-0976085ec0f1",
+      "run_id": "6a7a0f65-2e06-409a-b881-c7d61b23ae32",
+      "protocol": "http1",
+      "sequence_num": 9,
+      "started_at": "2026-03-29T18:27:46.486094Z",
+      "finished_at": "2026-03-29T18:27:46.499818Z",
+      "success": true,
+      "dns": {
+        "query_name": "localhost",
+        "resolved_ips": [
+          "127.0.0.1"
+        ],
+        "duration_ms": 0.078333,
+        "started_at": "2026-03-29T18:27:46.486098Z",
+        "success": true
+      },
+      "tcp": {
+        "local_addr": "127.0.0.1:63512",
+        "remote_addr": "127.0.0.1:8443",
+        "connect_duration_ms": 0.14775000000000002,
+        "attempt_count": 1,
+        "started_at": "2026-03-29T18:27:46.486180Z",
+        "success": true,
+        "mss_bytes": 16332,
+        "rtt_estimate_ms": null,
+        "retransmits": null,
+        "total_retrans": null,
+        "snd_cwnd": null,
+        "snd_ssthresh": null,
+        "rtt_variance_ms": null,
+        "rcv_space": null,
+        "segs_out": null,
+        "segs_in": null
+      },
+      "tls": {
+        "protocol_version": "TLSv1_2",
+        "cipher_suite": "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+        "alpn_negotiated": "http/1.1",
+        "cert_subject": "CN=alethabench",
+        "cert_issuer": "CN=alethabench",
+        "cert_expiry": "2036-03-25T02:06:03Z",
+        "handshake_duration_ms": 13.114416,
+        "started_at": "2026-03-29T18:27:46.486334Z",
+        "success": true,
+        "tls_backend": "rustls"
+      },
+      "http": {
+        "negotiated_version": "HTTP/1.1",
+        "status_code": 200,
+        "headers_size_bytes": 129,
+        "body_size_bytes": 59,
+        "ttfb_ms": 0.30683400000000005,
+        "total_duration_ms": 0.3435,
+        "redirect_count": 0,
+        "started_at": "2026-03-29T18:27:46.499470Z",
+        "response_headers": [
+          [
+            "content-type",
+            "application/json; charset=utf-8"
+          ],
+          [
+            "date",
+            "Sun, 29 Mar 2026 18:27:45 GMT"
+          ],
+          [
+            "server",
+            "Kestrel"
+          ],
+          [
+            "transfer-encoding",
+            "chunked"
+          ]
+        ],
+        "payload_bytes": 0,
+        "cpu_time_ms": 0.588,
+        "csw_voluntary": 0,
+        "csw_involuntary": 18
+      },
+      "udp": null,
+      "error": null,
+      "retry_count": 0
+    }
+  ]
+}
