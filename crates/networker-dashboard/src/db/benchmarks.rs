@@ -493,7 +493,9 @@ pub async fn compare(
         artifacts.push(artifact);
     }
 
-    build_comparison_report(&artifacts, baseline_run_id)
+    tokio::task::spawn_blocking(move || build_comparison_report(&artifacts, baseline_run_id))
+        .await
+        .context("benchmark comparison task join failure")?
 }
 
 pub(crate) fn build_comparison_report(

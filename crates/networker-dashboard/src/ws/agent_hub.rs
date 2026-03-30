@@ -378,9 +378,6 @@ async fn handle_agent_message(state: &Arc<AppState>, agent_id: Uuid, msg: AgentM
                 }
             };
             if let Some(client) = pooled_client.as_ref() {
-                if let Err(e) = crate::db::jobs::update_status(client, &job_id, "completed").await {
-                    tracing::error!(correlation_id, error = %e, "Failed to update TLS profile job status to completed");
-                }
                 if let Some(job) = crate::db::jobs::get(client, &job_id).await.ok().flatten() {
                     project_id = job.project_id;
                     authorized = job.agent_id == Some(agent_id);
@@ -395,6 +392,12 @@ async fn handle_agent_message(state: &Arc<AppState>, agent_id: Uuid, msg: AgentM
             if let Err(e) = validate_tls_profile_size(&profile) {
                 tracing::error!(correlation_id, agent_id = %agent_id, error = %e, "Rejecting oversized TLS profile payload");
                 return;
+            }
+
+            if let Some(client) = pooled_client.as_ref() {
+                if let Err(e) = crate::db::jobs::update_status(client, &job_id, "completed").await {
+                    tracing::error!(correlation_id, error = %e, "Failed to update TLS profile job status to completed");
+                }
             }
 
             let db_url = &state.database_url;

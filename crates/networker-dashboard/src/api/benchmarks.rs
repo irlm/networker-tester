@@ -5,17 +5,20 @@ use axum::{
     Json, Router,
 };
 use serde::Deserialize;
-use std::sync::Arc;
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use uuid::Uuid;
 
-use crate::auth::AuthUser;
-use crate::auth::ProjectContext;
+use crate::auth::{require_project_role, AuthUser, ProjectContext, ProjectRole};
 use crate::AppState;
 
 const DEFAULT_LIMIT: i64 = 50;
 const MAX_LIMIT: i64 = 200;
 const MAX_COMPARE_RUNS: usize = 10;
 const COMPARE_BODY_LIMIT_BYTES: usize = 32 * 1024;
+const COMPARE_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Deserialize)]
 pub struct ListBenchmarksQuery {
@@ -56,6 +59,7 @@ async fn save_benchmark_preset_scoped(
 ) -> Result<Json<Vec<crate::db::benchmark_presets::BenchmarkComparePreset>>, StatusCode> {
     let ctx = request_extension::<ProjectContext>(&req, "ProjectContext")?;
     let user = request_extension::<AuthUser>(&req, "AuthUser")?;
+    require_project_role(&ctx, ProjectRole::Operator)?;
     let body = axum::body::to_bytes(req.into_body(), 32 * 1024)
         .await
         .map_err(|_| StatusCode::BAD_REQUEST)?;
@@ -67,12 +71,23 @@ async fn save_benchmark_preset_scoped(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    crate::db::benchmark_presets::upsert(&client, &ctx.project_id, &user.user_id, payload)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "Failed to save benchmark compare preset");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let preset =
+        crate::db::benchmark_presets::upsert(&client, &ctx.project_id, &user.user_id, payload)
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "Failed to save benchmark compare preset");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+    tracing::info!(
+        audit_event = "benchmark_preset_saved",
+        project_id = %ctx.project_id,
+        user_id = %user.user_id,
+        preset_id = %preset.id,
+        preset_name = %preset.name,
+        run_count = preset.run_ids.len(),
+        baseline_run_id = ?preset.baseline_run_id,
+        "Benchmark compare preset saved"
+    );
 
     let presets = crate::db::benchmark_presets::list(&client, &ctx.project_id)
         .await
@@ -90,6 +105,8 @@ async fn delete_benchmark_preset_scoped(
     req: Request,
 ) -> Result<Json<Vec<crate::db::benchmark_presets::BenchmarkComparePreset>>, StatusCode> {
     let ctx = request_extension::<ProjectContext>(&req, "ProjectContext")?;
+    let user = request_extension::<AuthUser>(&req, "AuthUser")?;
+    require_project_role(&ctx, ProjectRole::Operator)?;
     let client = state.db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error in delete_benchmark_preset_scoped");
         StatusCode::INTERNAL_SERVER_ERROR
@@ -101,6 +118,13 @@ async fn delete_benchmark_preset_scoped(
             tracing::error!(preset_id = %preset_id, error = %e, "Failed to delete benchmark compare preset");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
+    tracing::info!(
+        audit_event = "benchmark_preset_deleted",
+        project_id = %ctx.project_id,
+        user_id = %user.user_id,
+        preset_id = %preset_id,
+        "Benchmark compare preset deleted"
+    );
 
     let presets = crate::db::benchmark_presets::list(&client, &ctx.project_id)
         .await
@@ -145,6 +169,7 @@ async fn get_benchmark_scoped(
     req: Request,
 ) -> Result<Json<networker_tester::output::json::BenchmarkArtifact>, StatusCode> {
     let ctx = request_extension::<ProjectContext>(&req, "ProjectContext")?;
+    let user = request_extension::<AuthUser>(&req, "AuthUser")?;
     let client = state.db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error in get_benchmark_scoped");
         StatusCode::INTERNAL_SERVER_ERROR
@@ -155,8 +180,29 @@ async fn get_benchmark_scoped(
         .map_err(|e| {
             tracing::error!(run_id = %run_id, error = %e, "Failed to load benchmark artifact");
             StatusCode::INTERNAL_SERVER_ERROR
-        })?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        })?;
+
+    let artifact = match artifact {
+        Some(artifact) => artifact,
+        None => {
+            tracing::warn!(
+                audit_event = "benchmark_artifact_missing",
+                project_id = %ctx.project_id,
+                user_id = %user.user_id,
+                run_id = %run_id,
+                "Requested benchmark artifact was not found"
+            );
+            return Err(StatusCode::NOT_FOUND);
+        }
+    };
+
+    tracing::info!(
+        audit_event = "benchmark_artifact_read",
+        project_id = %ctx.project_id,
+        user_id = %user.user_id,
+        run_id = %run_id,
+        "Benchmark artifact loaded"
+    );
 
     Ok(Json(artifact))
 }
@@ -166,9 +212,11 @@ async fn compare_benchmarks_scoped(
     req: Request,
 ) -> Result<Json<crate::db::benchmarks::BenchmarkComparisonReport>, StatusCode> {
     let ctx = request_extension::<ProjectContext>(&req, "ProjectContext")?;
+    let user = request_extension::<AuthUser>(&req, "AuthUser")?;
     let body = axum::body::to_bytes(req.into_body(), COMPARE_BODY_LIMIT_BYTES)
         .await
         .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let body_len = body.len();
     let compare_req: CompareBenchmarksRequest =
         serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
 
@@ -178,18 +226,62 @@ async fn compare_benchmarks_scoped(
         tracing::error!(error = %e, "DB pool error in compare_benchmarks_scoped");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
+    let started_at = Instant::now();
 
-    let report = crate::db::benchmarks::compare(
-        &client,
-        &ctx.project_id,
-        &compare_req.run_ids,
-        compare_req.baseline_run_id,
+    let report = match tokio::time::timeout(
+        COMPARE_TIMEOUT,
+        crate::db::benchmarks::compare(
+            &client,
+            &ctx.project_id,
+            &compare_req.run_ids,
+            compare_req.baseline_run_id,
+        ),
     )
     .await
-    .map_err(|e| {
-        tracing::error!(error = %e, "Failed to compare benchmark runs");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    {
+        Ok(Ok(report)) => report,
+        Ok(Err(e)) => {
+            tracing::error!(
+                audit_event = "benchmark_compare_failed",
+                project_id = %ctx.project_id,
+                user_id = %user.user_id,
+                run_count = compare_req.run_ids.len(),
+                baseline_run_id = ?compare_req.baseline_run_id,
+                body_bytes = body_len,
+                elapsed_ms = started_at.elapsed().as_millis() as u64,
+                error = %e,
+                "Failed to compare benchmark runs"
+            );
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+        Err(_) => {
+            tracing::warn!(
+                audit_event = "benchmark_compare_timed_out",
+                project_id = %ctx.project_id,
+                user_id = %user.user_id,
+                run_count = compare_req.run_ids.len(),
+                baseline_run_id = ?compare_req.baseline_run_id,
+                body_bytes = body_len,
+                timeout_ms = COMPARE_TIMEOUT.as_millis() as u64,
+                elapsed_ms = started_at.elapsed().as_millis() as u64,
+                "Benchmark comparison timed out"
+            );
+            return Err(StatusCode::SERVICE_UNAVAILABLE);
+        }
+    };
+
+    tracing::info!(
+        audit_event = "benchmark_compare_completed",
+        project_id = %ctx.project_id,
+        user_id = %user.user_id,
+        run_count = compare_req.run_ids.len(),
+        baseline_run_id = ?compare_req.baseline_run_id,
+        body_bytes = body_len,
+        elapsed_ms = started_at.elapsed().as_millis() as u64,
+        case_count = report.cases.len(),
+        gated_candidate_count = report.gated_candidate_count,
+        "Benchmark comparison generated"
+    );
 
     Ok(Json(report))
 }
