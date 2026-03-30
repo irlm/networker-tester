@@ -118,7 +118,10 @@ pub enum AgentMessage {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ControlMessage {
     /// Assign a test job to the agent.
-    JobAssign { job_id: Uuid, config: JobConfig },
+    JobAssign {
+        job_id: Uuid,
+        config: Box<JobConfig>,
+    },
     /// Request the agent to cancel a running job.
     JobCancel { job_id: Uuid },
     /// Acknowledge agent registration / reconnection.

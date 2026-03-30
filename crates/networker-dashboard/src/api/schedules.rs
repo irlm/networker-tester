@@ -293,7 +293,7 @@ async fn trigger_schedule_scoped(
             job_config.project_id = Some(ctx.project_id);
             let msg = networker_common::messages::ControlMessage::JobAssign {
                 job_id,
-                config: job_config,
+                config: Box::new(job_config),
             };
             if state.agents.send_to_agent(&aid, &msg).await.is_ok() {
                 crate::db::jobs::update_status(&client, &job_id, "assigned")
