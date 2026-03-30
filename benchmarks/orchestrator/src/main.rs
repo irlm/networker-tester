@@ -6,6 +6,7 @@ mod progress;
 mod provisioner;
 mod reporter;
 mod runner;
+pub mod ssh;
 mod types;
 mod validator;
 

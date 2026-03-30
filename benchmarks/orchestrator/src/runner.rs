@@ -3,9 +3,35 @@ use crate::types::{
     BenchmarkEnvironmentFingerprint, BenchmarkResult, NetworkMetrics, ResourceMetrics,
 };
 use anyhow::{bail, Context, Result};
+use std::path::PathBuf;
 use std::time::Duration;
 
 const BENCHMARK_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// Resolve the path to `networker-tester`.
+///
+/// 1. Check `../../target/release/networker-tester` relative to the orchestrator binary.
+/// 2. Fall back to `networker-tester` on PATH.
+fn resolve_tester_path() -> String {
+    if let Ok(exe) = std::env::current_exe() {
+        // exe is e.g. .../benchmarks/orchestrator/target/release/alethabench
+        // We want          .../target/release/networker-tester  (workspace root target)
+        let candidate: PathBuf = exe
+            .parent() // .../target/release
+            .and_then(|p| p.parent()) // .../target
+            .and_then(|p| p.parent()) // .../orchestrator
+            .and_then(|p| p.parent()) // .../benchmarks
+            .and_then(|p| p.parent()) // workspace root
+            .map(|root| root.join("target/release/networker-tester"))
+            .unwrap_or_default();
+        if candidate.exists() {
+            tracing::debug!("Using tester at {}", candidate.display());
+            return candidate.to_string_lossy().to_string();
+        }
+    }
+    tracing::debug!("Falling back to networker-tester on PATH");
+    "networker-tester".to_string()
+}
 
 /// Parameters for a benchmark run extracted from the config.
 pub struct TestParams {
@@ -52,9 +78,10 @@ async fn run_benchmark(
         "warm" => ("measured", "warm"),
         other => ("measured", other),
     };
+    let tester_bin = resolve_tester_path();
 
     let output = tokio::time::timeout(BENCHMARK_TIMEOUT, async {
-        tokio::process::Command::new("networker-tester")
+        tokio::process::Command::new(&tester_bin)
             .args([
                 "--target",
                 &target,
@@ -311,6 +338,165 @@ pub async fn run_cold_warm_cycle(
     Ok((cold_result, warm_result))
 }
 
+/// Parameters for a download/throughput benchmark run.
+#[allow(dead_code)]
+pub struct DownloadTestParams {
+    /// Number of benchmark requests (each fetches a download payload).
+    pub benchmark_requests: u64,
+    /// Per-request timeout in seconds.
+    pub timeout_secs: u64,
+    /// Download size in bytes (e.g. 1_048_576 for 1 MB).
+    pub download_bytes: u64,
+    /// Mode to use: "http1", "http2", "pageload1", etc.
+    /// Falls back to "http1" if Chrome/pageload is unavailable.
+    pub mode: String,
+}
+
+/// Execute a download/throughput benchmark against a VM.
+///
+/// Uses `networker-tester` with the download endpoint to measure how fast
+/// each server can stream bytes, rather than just health-check latency.
+#[allow(dead_code)]
+async fn run_download_benchmark(
+    vm: &VmInfo,
+    params: &DownloadTestParams,
+    phase: &str,
+) -> Result<ParsedTesterOutput> {
+    let requests = match phase {
+        "cold" => 10,
+        "warmup" => 20,
+        _ => params.benchmark_requests,
+    };
+
+    tracing::info!(
+        "Running {} download benchmark on {} (mode={}, n={}, size={}B, timeout={}s)",
+        phase,
+        vm.name,
+        params.mode,
+        requests,
+        params.download_bytes,
+        params.timeout_secs,
+    );
+
+    let target = format!("https://{}:8443/download/{}", vm.ip, params.download_bytes);
+    let tester_bin = resolve_tester_path();
+    let (benchmark_phase, benchmark_scenario) = match phase {
+        "warmup" => ("warmup", "warmup"),
+        "cold" => ("measured", "cold"),
+        "warm" => ("measured", "warm"),
+        other => ("measured", other),
+    };
+
+    let output = tokio::time::timeout(BENCHMARK_TIMEOUT, async {
+        tokio::process::Command::new(&tester_bin)
+            .args([
+                "--target",
+                &target,
+                "--modes",
+                &params.mode,
+                "--runs",
+                &requests.to_string(),
+                "--timeout",
+                &params.timeout_secs.to_string(),
+                "--insecure",
+                "--json-stdout",
+                "--benchmark-mode",
+                "--benchmark-phase",
+                benchmark_phase,
+                "--benchmark-scenario",
+                benchmark_scenario,
+                "--benchmark-launch-index",
+                "0",
+            ])
+            .output()
+            .await
+    })
+    .await
+    .context("download benchmark timed out")?
+    .context("failed to execute networker-tester")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!(
+            "networker-tester download benchmark failed (phase={phase}, exit={}): {}",
+            output.status,
+            stderr.trim()
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_tester_output(&stdout)
+        .with_context(|| format!("parsing networker-tester JSON output for download {phase} phase"))
+}
+
+/// Run a complete cold/warm download benchmark cycle.
+///
+/// 1. Cold phase: 10 requests (first contact, measures initial throughput)
+/// 2. Warmup: 20 requests (discarded, establishes connections)
+/// 3. Warm phase: params.benchmark_requests (measured throughput)
+///
+/// Returns (cold_result, warm_result).
+#[allow(dead_code)]
+pub async fn run_download_cold_warm_cycle(
+    vm: &VmInfo,
+    params: &DownloadTestParams,
+    language: &str,
+    runtime: &str,
+) -> Result<(BenchmarkResult, BenchmarkResult)> {
+    tracing::info!(
+        "Starting download cold/warm cycle for {language}/{runtime} on {}",
+        vm.name
+    );
+
+    // 1. Cold phase
+    let cold_measurement = run_download_benchmark(vm, params, "cold")
+        .await
+        .context("download cold phase")?;
+
+    // 2. Warmup (discard results)
+    let _ = run_download_benchmark(vm, params, "warmup").await;
+
+    // 3. Warm phase
+    let warm_measurement = run_download_benchmark(vm, params, "warm")
+        .await
+        .context("download warm phase")?;
+
+    let cold_result = BenchmarkResult {
+        language: language.to_string(),
+        runtime: runtime.to_string(),
+        concurrency: 1,
+        repeat_index: 0,
+        scenario: "cold".to_string(),
+        environment: cold_measurement.environment,
+        network: cold_measurement.network,
+        resources: ResourceMetrics::default(),
+        startup: Default::default(),
+        binary: Default::default(),
+    };
+
+    let warm_result = BenchmarkResult {
+        language: language.to_string(),
+        runtime: runtime.to_string(),
+        concurrency: 1,
+        repeat_index: 0,
+        scenario: "warm".to_string(),
+        environment: warm_measurement.environment,
+        network: warm_measurement.network,
+        resources: ResourceMetrics::default(),
+        startup: Default::default(),
+        binary: Default::default(),
+    };
+
+    tracing::info!(
+        "Download cold/warm cycle complete for {language}/{runtime}: \
+         cold={:.1} rps, warm={:.1} rps",
+        cold_result.network.rps,
+        warm_result.network.rps,
+    );
+
+    Ok((cold_result, warm_result))
+}
+
 /// Measure the startup time of the server by restarting it and timing the
 /// first successful /health response.
 #[allow(dead_code)]
@@ -546,6 +732,36 @@ mod tests {
                 _ => params.benchmark_requests,
             },
             10000
+        );
+    }
+
+    #[test]
+    fn test_download_phase_request_counts() {
+        let params = DownloadTestParams {
+            benchmark_requests: 50,
+            timeout_secs: 15,
+            download_bytes: 1_048_576,
+            mode: "http1".to_string(),
+        };
+
+        // Cold phase uses 10 for download benchmarks
+        assert_eq!(
+            match "cold" {
+                "cold" => 10u64,
+                "warmup" => 20u64,
+                _ => params.benchmark_requests,
+            },
+            10
+        );
+
+        // Warm phase uses benchmark_requests
+        assert_eq!(
+            match "warm" {
+                "cold" => 10u64,
+                "warmup" => 20u64,
+                _ => params.benchmark_requests,
+            },
+            50
         );
     }
 }
