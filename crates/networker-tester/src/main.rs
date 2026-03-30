@@ -2446,14 +2446,14 @@ fn benchmark_adaptive_status(
             && samples_by_case.keys().all(|case_id| {
                 values_by_case.get(case_id).is_some_and(|values| {
                     median_error_bounds(values).is_some_and(|error_bounds| {
-                        let relative_ok = criteria.target_relative_error.map_or(true, |target| {
+                        let relative_ok = criteria.target_relative_error.is_none_or(|target| {
                             error_bounds.median.abs() > f64::EPSILON
                                 && error_bounds.absolute_half_width / error_bounds.median.abs()
                                     <= target
                         });
                         let absolute_ok = criteria
                             .target_absolute_error
-                            .map_or(true, |target| error_bounds.absolute_half_width <= target);
+                            .is_none_or(|target| error_bounds.absolute_half_width <= target);
                         relative_ok && absolute_ok
                     })
                 })
@@ -2550,7 +2550,7 @@ fn estimated_samples_for_error_targets(
 fn median_from_sorted(sorted: &[f64]) -> f64 {
     if sorted.is_empty() {
         0.0
-    } else if sorted.len() % 2 == 0 {
+    } else if sorted.len().is_multiple_of(2) {
         let upper = sorted.len() / 2;
         (sorted[upper - 1] + sorted[upper]) / 2.0
     } else {

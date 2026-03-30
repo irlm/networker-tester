@@ -475,6 +475,17 @@ pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::Sender<String>)
                         client_info: None,
                         baseline: None,
                         packet_capture_summary: None,
+                        benchmark_environment_check: None,
+                        benchmark_stability_check: None,
+                        benchmark_phase: None,
+                        benchmark_scenario: None,
+                        benchmark_launch_index: None,
+                        benchmark_warmup_attempt_count: 0,
+                        benchmark_pilot_attempt_count: 0,
+                        benchmark_overhead_attempt_count: 0,
+                        benchmark_cooldown_attempt_count: 0,
+                        benchmark_execution_plan: None,
+                        benchmark_noise_thresholds: None,
                         attempts: vec![],
                     };
                     send(

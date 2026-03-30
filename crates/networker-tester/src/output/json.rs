@@ -1146,7 +1146,7 @@ fn phase_model_for(phases_present: &[String]) -> String {
 fn median_from_sorted(sorted: &[f64]) -> f64 {
     if sorted.is_empty() {
         0.0
-    } else if sorted.len() % 2 == 0 {
+    } else if sorted.len().is_multiple_of(2) {
         let upper = sorted.len() / 2;
         (sorted[upper - 1] + sorted[upper]) / 2.0
     } else {

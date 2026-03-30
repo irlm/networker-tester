@@ -1036,7 +1036,7 @@ fn percentile_from_sorted(sorted: &[f64], percentile: f64) -> f64 {
 fn median_from_sorted(sorted: &[f64]) -> f64 {
     if sorted.is_empty() {
         0.0
-    } else if sorted.len() % 2 == 0 {
+    } else if sorted.len().is_multiple_of(2) {
         let upper = sorted.len() / 2;
         (sorted[upper - 1] + sorted[upper]) / 2.0
     } else {
@@ -1623,7 +1623,7 @@ mod tests {
             baseline_distribution.ci95_upper,
             baseline.summaries[0].ci95_upper
         );
-        assert_eq!(case.candidates[0].comparable, true);
+        assert!(case.candidates[0].comparable);
         assert!(case.candidates[0].ratio.is_some());
     }
 }
