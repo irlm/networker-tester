@@ -707,7 +707,10 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
                  );
 
                  CREATE INDEX IF NOT EXISTS ix_tlsprofilerun_project
-                     ON TlsProfileRun (ProjectId, StartedAt DESC);",
+                     ON TlsProfileRun (ProjectId, StartedAt DESC);
+
+                 ALTER TABLE testrun ADD COLUMN IF NOT EXISTS concurrency INTEGER NOT NULL DEFAULT 1;
+                 ALTER TABLE testrun ADD COLUMN IF NOT EXISTS timeoutms BIGINT NOT NULL DEFAULT 30000;",
             )
             .await?;
         client
