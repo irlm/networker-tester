@@ -561,7 +561,7 @@ export const api = {
 
   // ── System Admin (platform admin only, NOT project-scoped) ──────────
   getSystemMetrics: () =>
-    request<{ system: SystemMetrics; db: DbMetrics }>('/admin/metrics'),
+    request<{ system: SystemMetrics; database: DbMetrics }>('/admin/metrics').then(r => ({ system: r.system, db: r.database })),
 
   getWorkspaceUsage: () =>
     request<WorkspaceUsage[]>('/admin/workspaces'),
