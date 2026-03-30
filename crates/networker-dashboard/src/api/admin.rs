@@ -235,9 +235,9 @@ async fn hard_delete_workspace(
 
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
-        .route("/admin/system/metrics", get(system_metrics))
-        .route("/admin/system/usage", get(workspace_usage))
-        .route("/admin/system/logs", get(system_logs))
+        .route("/admin/metrics", get(system_metrics))
+        .route("/admin/workspaces", get(workspace_usage))
+        .route("/admin/logs", get(system_logs))
         .route(
             "/admin/workspaces/{project_id}/suspend",
             post(suspend_workspace),
