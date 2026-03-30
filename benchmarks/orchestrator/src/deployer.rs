@@ -20,8 +20,16 @@ fn validate_language_name(lang: &str) -> Result<()> {
     Ok(())
 }
 
+/// Validate IP address to prevent shell injection via crafted vm.ip (FINDING-01).
+fn validate_ip(ip: &str) -> Result<()> {
+    ip.parse::<std::net::IpAddr>()
+        .context("vm.ip is not a valid IP address")?;
+    Ok(())
+}
+
 /// Execute a command on the remote VM via SSH with a timeout (RR-005).
 async fn ssh_exec(ip: &str, cmd: &str) -> Result<String> {
+    tracing::debug!(target_ip = ip, command = cmd, "SSH exec");
     let fut = tokio::process::Command::new("ssh")
         .args([
             "-o",
@@ -51,21 +59,24 @@ async fn ssh_exec(ip: &str, cmd: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-/// Copy a local file to the remote VM via SCP.
+/// Copy a local file to the remote VM via SCP with timeout.
 async fn scp_to(ip: &str, local: &str, remote: &str) -> Result<()> {
-    let output = tokio::process::Command::new("scp")
+    tracing::debug!(target_ip = ip, local_path = local, remote_path = remote, "SCP upload");
+    let fut = tokio::process::Command::new("scp")
         .args([
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            &format!("ConnectTimeout={SSH_CONNECT_TIMEOUT}"),
-            "-o",
-            "BatchMode=yes",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", &format!("ConnectTimeout={SSH_CONNECT_TIMEOUT}"),
+            "-o", "ServerAliveInterval=15",
+            "-o", "ServerAliveCountMax=3",
+            "-o", "BatchMode=yes",
             local,
             &format!("azureuser@{ip}:{remote}"),
         ])
-        .output()
+        .output();
+
+    let output = tokio::time::timeout(SSH_COMMAND_TIMEOUT, fut)
         .await
+        .context("SCP timed out (5min limit)")?
         .context("failed to execute scp")?;
 
     if !output.status.success() {
@@ -85,6 +96,7 @@ async fn scp_to(ip: &str, local: &str, remote: &str) -> Result<()> {
 /// 5. Wait for /health endpoint to respond (max 60s)
 pub async fn deploy_api(vm: &VmInfo, language: &str, bench_dir: &Path) -> Result<()> {
     validate_language_name(language)?;
+    validate_ip(&vm.ip)?;
     tracing::info!("Deploying {} API to {} ({})", language, vm.name, vm.ip);
 
     // 1. Create target directory
@@ -300,19 +312,22 @@ pub async fn deploy_api(vm: &VmInfo, language: &str, bench_dir: &Path) -> Result
                 )
                 .await?;
             } else {
-                // Non-AOT: copy all publish files, run with dotnet
-                // Use tar over ssh to copy the directory
-                let tar_cmd = format!(
-                    "cd {} && tar cf - . | ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes azureuser@{} 'tar xf - -C {}'",
-                    publish_str, vm.ip, remote_dir
-                );
-                let status = tokio::process::Command::new("bash")
-                    .args(["-c", &tar_cmd])
+                // Non-AOT: copy all publish files via scp -r (avoids bash -c interpolation)
+                let scp_status = tokio::process::Command::new("scp")
+                    .args([
+                        "-r",
+                        "-o", "StrictHostKeyChecking=no",
+                        "-o", &format!("ConnectTimeout={SSH_CONNECT_TIMEOUT}"),
+                        "-o", "BatchMode=yes",
+                    ])
+                    .arg(format!("{publish_str}/."))
+                    .arg(format!("azureuser@{}:{remote_dir}/", vm.ip))
                     .output()
                     .await
-                    .context("tar pipe for csharp publish")?;
-                if !status.status.success() {
-                    bail!("Failed to copy {lang} publish directory");
+                    .context("scp -r for csharp publish")?;
+                if !scp_status.status.success() {
+                    let stderr = String::from_utf8_lossy(&scp_status.stderr);
+                    bail!("Failed to copy {lang} publish directory: {}", stderr.trim());
                 }
                 // Find the DLL to run
                 let dll_name = format!("{lang}.dll");
@@ -428,7 +443,7 @@ pub async fn deploy_api(vm: &VmInfo, language: &str, bench_dir: &Path) -> Result
                     lang_dir
                         .join("generate-download-files.sh")
                         .to_str()
-                        .unwrap(),
+                        .unwrap_or_default(),
                     "/opt/bench/generate-download-files.sh",
                 )
                 .await?;
