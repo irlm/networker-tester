@@ -1003,12 +1003,33 @@ pub enum UrlPageLoadStrategy {
     Hybrid,
 }
 
+impl UrlPageLoadStrategy {
+    pub fn as_db_str(&self) -> &'static str {
+        match self {
+            Self::Browser => "browser",
+            Self::BrowserProbe => "browser_probe",
+            Self::FetchProbe => "fetch_probe",
+            Self::Hybrid => "hybrid",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum UrlProbeAttemptType {
     Browser,
     Fetch,
     Probe,
+}
+
+impl UrlProbeAttemptType {
+    pub fn as_db_str(&self) -> &'static str {
+        match self {
+            Self::Browser => "browser",
+            Self::Fetch => "fetch",
+            Self::Probe => "probe",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

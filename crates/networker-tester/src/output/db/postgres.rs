@@ -607,10 +607,7 @@ async fn insert_url_test_run(run: &UrlTestRun, c: &PgClient) -> anyhow::Result<(
         .transpose()
         .context("serialize UrlPacketCaptureSummary")?;
     let status = run.status.to_string();
-    let page_load_strategy = serde_json::to_value(&run.page_load_strategy)?
-        .as_str()
-        .unwrap_or("browser")
-        .to_string();
+    let page_load_strategy = run.page_load_strategy.as_db_str().to_string();
 
     c.execute(
         "INSERT INTO UrlTestRun (
@@ -743,10 +740,7 @@ async fn insert_url_test_protocol_run(
     c: &PgClient,
 ) -> anyhow::Result<()> {
     let id = uuid::Uuid::new_v4();
-    let attempt_type = serde_json::to_value(&p.attempt_type)?
-        .as_str()
-        .unwrap_or("probe")
-        .to_string();
+    let attempt_type = p.attempt_type.as_db_str().to_string();
     c.execute(
         "INSERT INTO UrlTestProtocolRun (
             Id, UrlTestRunId, ProtocolMode, RunNumber, AttemptType, ObservedProtocol,

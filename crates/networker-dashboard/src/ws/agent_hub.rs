@@ -52,6 +52,18 @@ fn validate_tls_profile_size(
     Ok(())
 }
 
+async fn job_assigned_to_agent(
+    state: &AppState,
+    job_id: &Uuid,
+    agent_id: Uuid,
+) -> anyhow::Result<bool> {
+    let client = state.db.get().await?;
+    Ok(crate::db::jobs::get(&client, job_id)
+        .await?
+        .and_then(|job| job.agent_id)
+        == Some(agent_id))
+}
+
 /// Bounded channel capacity for agent WebSocket outbound messages.
 const AGENT_CHANNEL_CAPACITY: usize = 256;
 
@@ -227,6 +239,17 @@ async fn handle_agent_message(state: &Arc<AppState>, agent_id: Uuid, msg: AgentM
         AgentMessage::JobAck { job_id } => {
             let correlation_id = job_id.to_string();
             tracing::info!(correlation_id, agent_id = %agent_id, "Job ACK — setting status to running");
+            match job_assigned_to_agent(state, &job_id, agent_id).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    tracing::error!(correlation_id, agent_id = %agent_id, "Rejecting JobAck for unassigned job");
+                    return;
+                }
+                Err(e) => {
+                    tracing::error!(correlation_id, agent_id = %agent_id, error = %e, "Failed to authorize JobAck");
+                    return;
+                }
+            }
             if let Ok(client) = state.db.get().await {
                 if let Err(e) = crate::db::jobs::update_status(&client, &job_id, "running").await {
                     tracing::error!(correlation_id, error = %e, "Failed to update job status to running");
@@ -242,6 +265,17 @@ async fn handle_agent_message(state: &Arc<AppState>, agent_id: Uuid, msg: AgentM
         }
         AgentMessage::AttemptResult { job_id, attempt } => {
             let correlation_id = job_id.to_string();
+            match job_assigned_to_agent(state, &job_id, agent_id).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    tracing::error!(correlation_id, agent_id = %agent_id, "Rejecting AttemptResult for unassigned job");
+                    return;
+                }
+                Err(e) => {
+                    tracing::error!(correlation_id, agent_id = %agent_id, error = %e, "Failed to authorize AttemptResult");
+                    return;
+                }
+            }
             tracing::info!(
                 correlation_id,
                 seq = attempt.sequence_num,
@@ -258,6 +292,18 @@ async fn handle_agent_message(state: &Arc<AppState>, agent_id: Uuid, msg: AgentM
             let run_id = run.run_id;
             let success_count = run.success_count();
             let failure_count = run.failure_count();
+
+            match job_assigned_to_agent(state, &job_id, agent_id).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    tracing::error!(correlation_id, agent_id = %agent_id, "Rejecting JobComplete for unassigned job");
+                    return;
+                }
+                Err(e) => {
+                    tracing::error!(correlation_id, agent_id = %agent_id, error = %e, "Failed to authorize JobComplete");
+                    return;
+                }
+            }
 
             tracing::info!(
                 correlation_id,
@@ -414,6 +460,17 @@ async fn handle_agent_message(state: &Arc<AppState>, agent_id: Uuid, msg: AgentM
         }
         AgentMessage::JobError { job_id, message } => {
             let correlation_id = job_id.to_string();
+            match job_assigned_to_agent(state, &job_id, agent_id).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    tracing::error!(correlation_id, agent_id = %agent_id, "Rejecting JobError for unassigned job");
+                    return;
+                }
+                Err(e) => {
+                    tracing::error!(correlation_id, agent_id = %agent_id, error = %e, "Failed to authorize JobError");
+                    return;
+                }
+            }
             tracing::error!(correlation_id, error = %message, "Job error received from tester");
             if let Ok(client) = state.db.get().await {
                 if let Err(e) = crate::db::jobs::set_error(&client, &job_id, &message).await {
