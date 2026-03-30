@@ -330,7 +330,7 @@ int main() {
     auto const threads = std::max<int>(1, static_cast<int>(std::thread::hardware_concurrency()));
 
     // SSL context
-    ssl::context ctx{ssl::context::tlsv12};
+    ssl::context ctx{ssl::context::tls};
     ctx.set_options(
         ssl::context::default_workarounds |
         ssl::context::no_sslv2 |
