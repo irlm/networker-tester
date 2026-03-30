@@ -66,7 +66,11 @@ async fn check_versions(
                     let h = host.clone();
                     async move {
                         let (reachable, version) = check_endpoint_version(&h).await;
-                        EndpointVersion { host: h, version, reachable }
+                        EndpointVersion {
+                            host: h,
+                            version,
+                            reachable,
+                        }
                     }
                 })
                 .collect();
