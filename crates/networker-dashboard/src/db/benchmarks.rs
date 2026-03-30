@@ -458,7 +458,7 @@ pub async fn list(
                 publication_ready: row.get("publicationready"),
                 noise_level: row.get("noiselevel"),
                 sufficiency: row.get("sufficiency"),
-                publication_blocker_count: to_u64(row.get::<_, i64>("publicationblockercount")),
+                publication_blocker_count: row.get::<_, i32>("publicationblockercount") as u64,
                 warnings: serde_json::from_value(row.get("warningsjson"))
                     .context("deserialize BenchmarkDataQuality.warnings")?,
             })
