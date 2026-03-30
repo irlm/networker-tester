@@ -223,7 +223,7 @@ pub async fn get_latest_leaderboard(client: &Client) -> anyhow::Result<Vec<Leade
              FROM benchmark_result br
              JOIN benchmark_run brun ON brun.run_id = br.run_id
              WHERE brun.status = 'completed'
-             ORDER BY br.language, brun.started_at DESC",
+             ORDER BY br.language, brun.started_at DESC, br.started_at DESC NULLS LAST",
             &[],
         )
         .await?;
