@@ -57,6 +57,362 @@ export interface RunSummary {
   failure_count: number;
 }
 
+export interface BenchmarkRunSummary {
+  run_id: string;
+  generated_at: string;
+  target_url: string;
+  target_host: string;
+  modes: string[];
+  concurrency: number;
+  total_runs: number;
+  contract_version: string;
+  scenario: string;
+  primary_phase: string;
+  phase_model: string;
+  execution_plan_source: string | null;
+  server_region: string | null;
+  network_type: string | null;
+  baseline_rtt_p50_ms: number | null;
+  total_cases: number;
+  total_samples: number;
+  publication_ready: boolean;
+  noise_level: string;
+  sufficiency: string;
+  publication_blocker_count: number;
+  warnings: string[];
+}
+
+export interface BenchmarkComparePresetFilters {
+  targetSearch: string;
+  scenario: string;
+  phaseModel: string;
+  serverRegion: string;
+  networkType: string;
+}
+
+export interface BenchmarkComparePresetInput {
+  id?: string;
+  name: string;
+  runIds: string[];
+  baselineRunId: string | null;
+  filters?: BenchmarkComparePresetFilters;
+}
+
+export interface BenchmarkComparePreset {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  runIds: string[];
+  baselineRunId: string | null;
+  filters?: BenchmarkComparePresetFilters;
+}
+
+export interface BenchmarkHostInfo {
+  os: string;
+  arch: string;
+  cpu_cores: number;
+  total_memory_mb?: number | null;
+  os_version?: string | null;
+  hostname?: string | null;
+  server_version?: string | null;
+  uptime_secs?: number | null;
+  region?: string | null;
+}
+
+export interface BenchmarkNetworkBaseline {
+  samples: number;
+  rtt_min_ms: number;
+  rtt_avg_ms: number;
+  rtt_max_ms: number;
+  rtt_p50_ms: number;
+  rtt_p95_ms: number;
+  network_type: string;
+}
+
+export interface BenchmarkEnvironmentCheck {
+  attempted_samples: number;
+  successful_samples: number;
+  failed_samples: number;
+  duration_ms: number;
+  rtt_min_ms: number;
+  rtt_avg_ms: number;
+  rtt_max_ms: number;
+  rtt_p50_ms: number;
+  rtt_p95_ms: number;
+  packet_loss_percent: number;
+  network_type: string;
+}
+
+export interface BenchmarkStabilityCheck extends BenchmarkEnvironmentCheck {
+  jitter_ms: number;
+}
+
+export interface BenchmarkExecutionPlan {
+  source: string;
+  min_samples: number;
+  max_samples: number;
+  min_duration_ms: number;
+  target_relative_error?: number | null;
+  target_absolute_error?: number | null;
+  pilot_sample_count: number;
+  pilot_elapsed_ms?: number | null;
+}
+
+export interface BenchmarkNoiseThresholds {
+  max_packet_loss_percent: number;
+  max_jitter_ratio: number;
+  max_rtt_spread_ratio: number;
+}
+
+export interface BenchmarkMetadata {
+  contract_version: string;
+  generated_at: string;
+  run_id: string;
+  source: string;
+  target_url: string;
+  target_host: string;
+  modes: string[];
+  total_runs: number;
+  concurrency: number;
+  timeout_ms: number;
+  client_os: string;
+  client_version: string;
+}
+
+export interface BenchmarkEnvironment {
+  client_info: BenchmarkHostInfo | null;
+  server_info: BenchmarkHostInfo | null;
+  network_baseline: BenchmarkNetworkBaseline | null;
+  environment_check?: BenchmarkEnvironmentCheck | null;
+  stability_check?: BenchmarkStabilityCheck | null;
+  packet_capture_enabled: boolean;
+}
+
+export interface BenchmarkMethodology {
+  mode: string;
+  phase_model: string;
+  sample_phase: string;
+  scenario: string;
+  launch_count: number;
+  phases_present: string[];
+  retries_recorded: boolean;
+  higher_is_better_depends_on_workload: boolean;
+  confidence_level?: number;
+  outlier_policy?: string;
+  uncertainty_method?: string;
+  execution_plan?: BenchmarkExecutionPlan | null;
+  noise_thresholds?: BenchmarkNoiseThresholds | null;
+}
+
+export interface BenchmarkLaunch {
+  launch_index: number;
+  scenario: string;
+  primary_phase: string;
+  started_at: string;
+  finished_at: string | null;
+  phases_present: string[];
+  sample_count: number;
+  primary_sample_count: number;
+  warmup_sample_count: number;
+  success_count: number;
+  failure_count: number;
+}
+
+export interface BenchmarkCase {
+  id: string;
+  protocol: string;
+  payload_bytes: number | null;
+  http_stack: string | null;
+  metric_name: string;
+  metric_unit: string;
+  higher_is_better: boolean;
+}
+
+export interface BenchmarkSample {
+  attempt_id: string;
+  case_id: string;
+  launch_index: number;
+  phase: string;
+  iteration_index: number;
+  success: boolean;
+  retry_count: number;
+  inclusion_status: string;
+  metric_value: number | null;
+  metric_unit: string;
+  started_at: string;
+  finished_at: string | null;
+  total_duration_ms: number | null;
+  ttfb_ms: number | null;
+}
+
+export interface BenchmarkSummary {
+  case_id: string;
+  protocol: string;
+  payload_bytes: number | null;
+  http_stack: string | null;
+  metric_name: string;
+  metric_unit: string;
+  higher_is_better: boolean;
+  sample_count: number;
+  included_sample_count: number;
+  excluded_sample_count: number;
+  success_count: number;
+  failure_count: number;
+  total_requests: number;
+  error_count: number;
+  bytes_transferred: number;
+  wall_time_ms: number;
+  rps: number;
+  min: number;
+  mean: number;
+  p5: number;
+  p25: number;
+  p50: number;
+  p75: number;
+  p95: number;
+  p99: number;
+  p999: number;
+  max: number;
+  stddev: number;
+  latency_mean_ms: number | null;
+  latency_p50_ms: number | null;
+  latency_p99_ms: number | null;
+  latency_p999_ms: number | null;
+  latency_max_ms: number | null;
+}
+
+export interface BenchmarkDataQuality {
+  noise_level: string;
+  sample_stability_cv: number;
+  sufficiency: string;
+  warnings: string[];
+  publication_ready: boolean;
+  confidence_level?: number;
+  outlier_policy?: string;
+  uncertainty_method?: string;
+  relative_margin_of_error?: number;
+  quality_tier?: string;
+  low_outlier_count?: number;
+  high_outlier_count?: number;
+  outlier_count?: number;
+  publication_blockers?: string[];
+}
+
+export interface BenchmarkDiagnostics {
+  raw_attempt_count: number;
+  raw_success_count: number;
+  raw_failure_count: number;
+}
+
+export interface BenchmarkArtifact {
+  metadata: BenchmarkMetadata;
+  environment: BenchmarkEnvironment;
+  methodology: BenchmarkMethodology;
+  launches: BenchmarkLaunch[];
+  cases: BenchmarkCase[];
+  samples: BenchmarkSample[];
+  summaries: BenchmarkSummary[];
+  comparisons: unknown[];
+  data_quality: BenchmarkDataQuality;
+  diagnostics: BenchmarkDiagnostics;
+  summary: BenchmarkSummary;
+}
+
+export interface BenchmarkDistributionStats {
+  sample_count: number;
+  min: number;
+  mean: number;
+  median: number;
+  p95: number;
+  p99: number;
+  max: number;
+  stddev: number;
+  cv: number;
+  standard_error: number;
+  ci95_lower: number;
+  ci95_upper: number;
+}
+
+export interface ComparedBenchmarkRun {
+  run_id: string;
+  generated_at: string;
+  target_host: string;
+  scenario: string;
+  primary_phase: string;
+  phase_model: string;
+  publication_ready: boolean;
+  noise_level: string;
+  sufficiency: string;
+  warning_count: number;
+  environment: BenchmarkEnvironmentFingerprintView;
+}
+
+export interface BenchmarkCaseRunView {
+  run_id: string;
+  generated_at: string;
+  target_host: string;
+  scenario: string;
+  primary_phase: string;
+  phase_model: string;
+  publication_ready: boolean;
+  noise_level: string;
+  sufficiency: string;
+  warning_count: number;
+  included_sample_count: number;
+  failure_count: number;
+  error_count: number;
+  rps: number;
+  p95: number;
+  p99: number;
+  environment: BenchmarkEnvironmentFingerprintView;
+  distribution: BenchmarkDistributionStats;
+}
+
+export interface BenchmarkEnvironmentFingerprintView {
+  client_os: string | null;
+  client_arch: string | null;
+  client_cpu_cores: number | null;
+  client_region: string | null;
+  server_os: string | null;
+  server_arch: string | null;
+  server_cpu_cores: number | null;
+  server_region: string | null;
+  network_type: string | null;
+  baseline_rtt_p50_ms: number | null;
+  baseline_rtt_p95_ms: number | null;
+}
+
+export interface BenchmarkCaseCandidateComparison {
+  run: BenchmarkCaseRunView;
+  comparable: boolean;
+  comparability_notes: string[];
+  absolute_delta: number | null;
+  percent_delta: number | null;
+  ratio: number | null;
+  verdict: string;
+}
+
+export interface BenchmarkCaseComparison {
+  case_id: string;
+  protocol: string;
+  payload_bytes: number | null;
+  http_stack: string | null;
+  metric_name: string;
+  metric_unit: string;
+  higher_is_better: boolean;
+  baseline: BenchmarkCaseRunView;
+  candidates: BenchmarkCaseCandidateComparison[];
+}
+
+export interface BenchmarkComparisonReport {
+  baseline_run_id: string;
+  comparability_policy: string;
+  gated_candidate_count: number;
+  runs: ComparedBenchmarkRun[];
+  cases: BenchmarkCaseComparison[];
+}
+
 export interface Attempt {
   attempt_id: string;
   protocol: string;

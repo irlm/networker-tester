@@ -366,30 +366,28 @@ ALTER TABLE project ADD COLUMN IF NOT EXISTS delete_protection BOOLEAN NOT NULL 
 UPDATE project SET delete_protection = TRUE WHERE project_id = '00000000-0000-0000-0000-000000000001';
 "#;
 
-const V015_JOB_TLS_PROFILE_LINK: &str = r#"
-ALTER TABLE job ADD COLUMN IF NOT EXISTS tls_profile_run_id UUID;
-CREATE INDEX IF NOT EXISTS ix_job_tls_profile_run_id ON job (tls_profile_run_id) WHERE tls_profile_run_id IS NOT NULL;
-"#;
-
-const V016_TLS_PROFILE_PROJECT_BACKFILL: &str = r#"
-DO $$
-BEGIN
-    IF EXISTS (
-        SELECT 1 FROM information_schema.tables
-        WHERE table_schema = current_schema() AND table_name = 'tlsprofilerun'
-    ) THEN
-        UPDATE TlsProfileRun t
-        SET ProjectId = j.project_id
-        FROM job j
-        WHERE j.tls_profile_run_id = t.Id
-          AND t.ProjectId IS NULL
-          AND j.project_id IS NOT NULL;
-
-        UPDATE TlsProfileRun
-        SET ProjectId = '00000000-0000-0000-0000-000000000001'
-        WHERE ProjectId IS NULL;
-    END IF;
-END $$;
+/// V014 migration: Project-scoped shared benchmark compare presets.
+const V014_BENCHMARK_COMPARE_PRESETS: &str = r#"
+CREATE TABLE IF NOT EXISTS benchmark_compare_preset (
+    preset_id        UUID           NOT NULL PRIMARY KEY,
+    project_id       UUID           NOT NULL REFERENCES project(project_id) ON DELETE CASCADE,
+    created_by       UUID           NOT NULL REFERENCES dash_user(user_id),
+    name             VARCHAR(200)   NOT NULL,
+    name_key         VARCHAR(200)   NOT NULL,
+    run_ids          UUID[]         NOT NULL,
+    baseline_run_id  UUID           NOT NULL,
+    target_search    VARCHAR(200)   NOT NULL DEFAULT '',
+    scenario         VARCHAR(100)   NOT NULL DEFAULT '',
+    phase_model      VARCHAR(200)   NOT NULL DEFAULT '',
+    server_region    VARCHAR(100)   NOT NULL DEFAULT '',
+    network_type     VARCHAR(50)    NOT NULL DEFAULT '',
+    created_at       TIMESTAMPTZ    NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMPTZ    NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ix_benchmark_compare_preset_name
+    ON benchmark_compare_preset (project_id, name_key);
+CREATE INDEX IF NOT EXISTS ix_benchmark_compare_preset_project_updated
+    ON benchmark_compare_preset (project_id, updated_at DESC);
 "#;
 
 /// V011 migration: Enforce NOT NULL on project_id columns (after soak period).
@@ -664,40 +662,21 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
         tracing::info!("V013 migration complete");
     }
 
-    // V015: explicit TLS profile artifact linkage from jobs
+    // V014: Shared benchmark compare presets
     let row = client
-        .query_opt("SELECT version FROM _migrations WHERE version = 15", &[])
+        .query_opt("SELECT version FROM _migrations WHERE version = 14", &[])
         .await?;
 
     if row.is_none() {
-        tracing::info!("Applying V015 job_tls_profile_link migration...");
-        client.batch_execute(V015_JOB_TLS_PROFILE_LINK).await?;
+        tracing::info!("Applying V014 benchmark_compare_presets migration...");
+        client.batch_execute(V014_BENCHMARK_COMPARE_PRESETS).await?;
         client
             .execute(
-                "INSERT INTO _migrations (version) VALUES (15) ON CONFLICT DO NOTHING",
+                "INSERT INTO _migrations (version) VALUES (14) ON CONFLICT DO NOTHING",
                 &[],
             )
             .await?;
-        tracing::info!("V015 migration complete");
-    }
-
-    // V016: backfill historical TLS profile rows into project scope
-    let row = client
-        .query_opt("SELECT version FROM _migrations WHERE version = 16", &[])
-        .await?;
-
-    if row.is_none() {
-        tracing::info!("Applying V016 tls_profile_project_backfill migration...");
-        client
-            .batch_execute(V016_TLS_PROFILE_PROJECT_BACKFILL)
-            .await?;
-        client
-            .execute(
-                "INSERT INTO _migrations (version) VALUES (16) ON CONFLICT DO NOTHING",
-                &[],
-            )
-            .await?;
-        tracing::info!("V016 migration complete");
+        tracing::info!("V014 migration complete");
     }
 
     Ok(())

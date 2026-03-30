@@ -12,7 +12,8 @@ mod validator;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(
@@ -48,6 +49,30 @@ enum Command {
         /// Generate an HTML report alongside JSON.
         #[arg(long)]
         html: bool,
+
+        /// Randomize benchmark case order before execution.
+        #[arg(long)]
+        randomize_cases: bool,
+
+        /// Deterministic seed used when randomizing benchmark case order.
+        #[arg(long)]
+        random_seed: Option<u64>,
+
+        /// Automatically schedule bounded reruns for cases that fail publication checks.
+        #[arg(long)]
+        auto_rerun_poor_quality: bool,
+
+        /// Target repeat count for publication-oriented reruns.
+        #[arg(long)]
+        auto_rerun_target_repeat_count: Option<u32>,
+
+        /// Maximum additional repeats per case when auto rerun is enabled.
+        #[arg(long)]
+        auto_rerun_max_additional_repeats: Option<u32>,
+
+        /// Maximum allowed relative margin of error before a case is rerun.
+        #[arg(long)]
+        auto_rerun_max_relative_margin: Option<f64>,
 
         /// Azure VM size for provisioning.
         #[arg(long, default_value = "Standard_D2s_v3")]
@@ -87,6 +112,21 @@ enum Command {
         runs: Vec<String>,
     },
 
+    /// Export a benchmark run as a shareable publication bundle.
+    Export {
+        /// UUID of the run to export.
+        #[arg(long)]
+        run_id: Option<String>,
+
+        /// Show the most recent run.
+        #[arg(long)]
+        latest: bool,
+
+        /// Output directory for the export bundle.
+        #[arg(long)]
+        output_dir: Option<PathBuf>,
+    },
+
     /// Validate a deployed API against the AletheBench spec.
     Validate {
         /// IP address of the server to validate.
@@ -117,9 +157,32 @@ async fn main() -> Result<()> {
             dry_run,
             quick,
             html,
+            randomize_cases,
+            random_seed,
+            auto_rerun_poor_quality,
+            auto_rerun_target_repeat_count,
+            auto_rerun_max_additional_repeats,
+            auto_rerun_max_relative_margin,
             vm_size,
             os,
-        } => cmd_run(config_path, languages, dry_run, quick, html, vm_size, os).await,
+        } => {
+            cmd_run(
+                config_path,
+                languages,
+                dry_run,
+                quick,
+                html,
+                randomize_cases,
+                random_seed,
+                auto_rerun_poor_quality,
+                auto_rerun_target_repeat_count,
+                auto_rerun_max_additional_repeats,
+                auto_rerun_max_relative_margin,
+                vm_size,
+                os,
+            )
+            .await
+        }
 
         Command::List { config } => cmd_list(config),
 
@@ -130,6 +193,12 @@ async fn main() -> Result<()> {
         } => cmd_results(run_id, latest, format),
 
         Command::Compare { runs } => cmd_compare(runs),
+
+        Command::Export {
+            run_id,
+            latest,
+            output_dir,
+        } => cmd_export(run_id, latest, output_dir),
 
         Command::Validate { ip, language } => cmd_validate(ip, language).await,
     }
@@ -142,6 +211,12 @@ async fn cmd_run(
     dry_run: bool,
     quick: bool,
     html: bool,
+    randomize_cases: bool,
+    random_seed: Option<u64>,
+    auto_rerun_poor_quality: bool,
+    auto_rerun_target_repeat_count: Option<u32>,
+    auto_rerun_max_additional_repeats: Option<u32>,
+    auto_rerun_max_relative_margin: Option<f64>,
     vm_size: String,
     os: String,
 ) -> Result<()> {
@@ -162,8 +237,19 @@ async fn cmd_run(
         tracing::info!("Quick mode: 1000 requests, concurrency [1,10], repeat 1");
     }
 
-    let matrix = cfg.test_matrix();
+    let case_randomization_seed = resolve_case_randomization_seed(randomize_cases, random_seed);
+    let matrix = cfg.test_matrix_with_seed(case_randomization_seed);
+    let auto_rerun_settings = resolve_auto_rerun_settings(
+        auto_rerun_poor_quality,
+        auto_rerun_target_repeat_count,
+        auto_rerun_max_additional_repeats,
+        auto_rerun_max_relative_margin,
+    )?;
     let estimated_cost = cost::estimate_cost(&cfg);
+
+    if let Some(seed) = case_randomization_seed {
+        tracing::info!("Case randomization enabled with seed {}", seed);
+    }
 
     tracing::info!(
         "Benchmark: {} | {} languages | {} test cases | est. ${:.2}",
@@ -247,6 +333,22 @@ async fn cmd_run(
         println!("  Total test cases:   {}", matrix.len());
         println!("  Requests per case:  {}", cfg.total_requests);
         println!("  Warmup per case:    {}", cfg.warmup_requests);
+        println!(
+            "  Case order:         {}",
+            case_order_label(case_randomization_seed)
+        );
+        println!(
+            "  Auto reruns:        {}",
+            auto_rerun_label(auto_rerun_settings)
+        );
+        if let Some(baseline_language) = &cfg.baseline_language {
+            let baseline_label = cfg
+                .baseline_runtime
+                .as_ref()
+                .map(|runtime| format!("{baseline_language}/{runtime}"))
+                .unwrap_or_else(|| baseline_language.clone());
+            println!("  Baseline:           {baseline_label}");
+        }
         println!("  Estimated cost:     ${estimated_cost:.2}");
         println!("  Estimated time:     {wall_minutes:.1} minutes");
 
@@ -276,16 +378,39 @@ async fn cmd_run(
 
     // -- Execute benchmark --
     let mut run = types::BenchmarkRun::new(&config_path.to_string_lossy());
-    let total_steps = cfg.languages.len() * cfg.concurrency_levels.len();
+    run.case_randomization_enabled = case_randomization_seed.is_some();
+    run.case_randomization_seed = case_randomization_seed;
+    run.auto_rerun_policy = auto_rerun_settings.map(|settings| types::BenchmarkAutoRerunPolicy {
+        target_repeat_count: settings.target_repeat_count,
+        max_additional_repeats: settings.max_additional_repeats,
+        max_relative_margin_of_error: settings.max_relative_margin_of_error,
+    });
+    run.baseline = cfg
+        .baseline_language
+        .as_ref()
+        .map(|language| types::BenchmarkBaseline {
+            language: language.clone(),
+            runtime: cfg.baseline_runtime.clone(),
+        });
+    let total_steps = matrix.len()
+        + auto_rerun_settings
+            .map(|settings| max_auto_rerun_steps(&matrix, settings.max_additional_repeats))
+            .unwrap_or(0);
     let progress = progress::ProgressReporter::new(total_steps as u32);
 
     // Group test cases by language to share a VM per language
     let unique_languages: Vec<config::LanguageEntry> = {
         let mut seen = std::collections::HashSet::new();
-        cfg.languages
+        matrix
             .iter()
-            .filter(|l| seen.insert(l.name.clone()))
+            .filter(|test_case| {
+                seen.insert(format!(
+                    "{}|{}",
+                    test_case.language.name, test_case.language.runtime
+                ))
+            })
             .cloned()
+            .map(|test_case| test_case.language)
             .collect()
     };
 
@@ -337,33 +462,75 @@ async fn cmd_run(
             timeout_secs: cfg.timeout_secs,
         };
 
-        for &conc in &cfg.concurrency_levels {
-            let step_label = format!("{label_prefix} c={conc}");
+        let language_cases: Vec<&config::TestCase> = matrix
+            .iter()
+            .filter(|test_case| {
+                test_case.language.name == lang.name && test_case.language.runtime == lang.runtime
+            })
+            .collect();
 
-            match runner::run_cold_warm_cycle(&vm, &test_params, conc, &lang.name, &lang.runtime)
-                .await
-            {
-                Ok((mut cold, mut warm)) => {
-                    cold.binary = binary_metrics.clone();
-                    warm.binary = binary_metrics.clone();
+        for test_case in language_cases {
+            run_case_cycle(
+                &mut run,
+                &progress,
+                &vm,
+                &test_params,
+                &binary_metrics,
+                cfg.total_requests,
+                &label_prefix,
+                &lang.name,
+                &lang.runtime,
+                test_case.concurrency,
+                test_case.repeat_index,
+                false,
+            )
+            .await;
+        }
 
-                    // Collect resource metrics during the warm phase
-                    // (estimate duration from requests and expected RPS)
-                    let estimated_duration = (cfg.total_requests as f64 / 1000.0).max(5.0) as u64;
-                    if let Ok(samples) =
-                        collector::collect_during_test(&vm, estimated_duration.min(60), None).await
-                    {
-                        let agg = collector::aggregate_metrics(&samples);
-                        warm.resources = agg;
-                    }
-
-                    run.results.push(cold);
-                    run.results.push(warm);
-                    progress.tick(&step_label);
+        if let Some(settings) = auto_rerun_settings {
+            loop {
+                let rerun_targets = collect_auto_rerun_targets(
+                    &run.results,
+                    &run.scheduled_reruns,
+                    &lang.name,
+                    &lang.runtime,
+                    cfg.repeat,
+                    settings,
+                );
+                if rerun_targets.is_empty() {
+                    break;
                 }
-                Err(e) => {
-                    tracing::error!("Benchmark failed for {step_label}: {e:#}");
-                    progress.fail(&step_label, &e);
+
+                tracing::info!(
+                    "Scheduling {} publication-quality rerun(s) for {}/{}",
+                    rerun_targets.len(),
+                    lang.name,
+                    lang.runtime
+                );
+
+                for target in rerun_targets {
+                    run.scheduled_reruns.push(types::BenchmarkScheduledRerun {
+                        language: lang.name.clone(),
+                        runtime: lang.runtime.clone(),
+                        concurrency: target.concurrency,
+                        repeat_index: target.repeat_index,
+                        reasons: target.reasons.clone(),
+                    });
+                    run_case_cycle(
+                        &mut run,
+                        &progress,
+                        &vm,
+                        &test_params,
+                        &binary_metrics,
+                        cfg.total_requests,
+                        &label_prefix,
+                        &lang.name,
+                        &lang.runtime,
+                        target.concurrency,
+                        target.repeat_index,
+                        true,
+                    )
+                    .await;
                 }
             }
         }
@@ -403,25 +570,38 @@ async fn cmd_run(
             .collect::<Vec<_>>()
             .join(", ")
     );
+    if let Some(baseline) = &run.baseline {
+        let baseline_label = baseline
+            .runtime
+            .as_ref()
+            .map(|runtime| format!("{}/{}", baseline.language, runtime))
+            .unwrap_or_else(|| baseline.language.clone());
+        println!("Baseline:  {baseline_label}");
+    }
+    println!(
+        "Case order: {}",
+        case_order_label(run.case_randomization_seed)
+    );
+    println!(
+        "Auto reruns: {}",
+        auto_rerun_label(auto_rerun_settings)
+    );
+    println!("Executed reruns: {}", run.scheduled_reruns.len());
     println!("Results:   {} data points", run.results.len());
     println!("Output:    {}", json_path.display());
 
     if !run.results.is_empty() {
         println!(
-            "\n{:<16} {:<12} {:>10} {:>10} {:>10}",
-            "Language", "Phase", "RPS", "p50 ms", "p99 ms"
+            "\n{:<16} {:<8} {:<8} {:>10} {:>10} {:>10}",
+            "Language", "C", "Scenario", "RPS", "p50 ms", "p99 ms"
         );
-        println!("{}", "-".repeat(62));
+        println!("{}", "-".repeat(74));
         for r in &run.results {
-            let phase = if r.network.total_requests <= 100 {
-                "cold"
-            } else {
-                "warm"
-            };
             println!(
-                "{:<16} {:<12} {:>10.1} {:>10.2} {:>10.2}",
+                "{:<16} {:<8} {:<8} {:>10.1} {:>10.2} {:>10.2}",
                 r.language,
-                phase,
+                r.concurrency,
+                r.scenario,
                 r.network.rps,
                 r.network.latency_p50_ms,
                 r.network.latency_p99_ms
@@ -430,6 +610,242 @@ async fn cmd_run(
     }
 
     Ok(())
+}
+
+fn resolve_case_randomization_seed(randomize_cases: bool, random_seed: Option<u64>) -> Option<u64> {
+    if !randomize_cases && random_seed.is_none() {
+        return None;
+    }
+
+    Some(random_seed.unwrap_or_else(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos() as u64)
+            .unwrap_or(0x9e37_79b9_7f4a_7c15)
+    }))
+}
+
+fn case_order_label(seed: Option<u64>) -> String {
+    seed.map(|seed| format!("randomized (seed {seed})"))
+        .unwrap_or_else(|| "config order".to_string())
+}
+
+#[derive(Clone, Copy)]
+struct AutoRerunSettings {
+    target_repeat_count: u32,
+    max_additional_repeats: u32,
+    max_relative_margin_of_error: f64,
+}
+
+#[derive(Clone)]
+struct AutoRerunTarget {
+    concurrency: u32,
+    repeat_index: u32,
+    reasons: Vec<String>,
+}
+
+fn resolve_auto_rerun_settings(
+    auto_rerun_poor_quality: bool,
+    auto_rerun_target_repeat_count: Option<u32>,
+    auto_rerun_max_additional_repeats: Option<u32>,
+    auto_rerun_max_relative_margin: Option<f64>,
+) -> Result<Option<AutoRerunSettings>> {
+    if !auto_rerun_poor_quality
+        && auto_rerun_target_repeat_count.is_none()
+        && auto_rerun_max_additional_repeats.is_none()
+        && auto_rerun_max_relative_margin.is_none()
+    {
+        return Ok(None);
+    }
+
+    let target_repeat_count = auto_rerun_target_repeat_count.unwrap_or(3);
+    anyhow::ensure!(target_repeat_count > 0, "auto rerun target repeat count must be > 0");
+
+    let max_additional_repeats = auto_rerun_max_additional_repeats.unwrap_or(2);
+    anyhow::ensure!(
+        max_additional_repeats > 0,
+        "auto rerun max additional repeats must be > 0"
+    );
+
+    let max_relative_margin_of_error = auto_rerun_max_relative_margin.unwrap_or(0.05);
+    anyhow::ensure!(
+        max_relative_margin_of_error.is_finite() && max_relative_margin_of_error > 0.0,
+        "auto rerun max relative margin must be a positive finite number"
+    );
+
+    Ok(Some(AutoRerunSettings {
+        target_repeat_count,
+        max_additional_repeats,
+        max_relative_margin_of_error,
+    }))
+}
+
+fn auto_rerun_label(settings: Option<AutoRerunSettings>) -> String {
+    settings
+        .map(|settings| {
+            format!(
+                "enabled (target repeats {}, max additional repeats {}, max relative margin {:.0}%)",
+                settings.target_repeat_count,
+                settings.max_additional_repeats,
+                settings.max_relative_margin_of_error * 100.0
+            )
+        })
+        .unwrap_or_else(|| "disabled".to_string())
+}
+
+fn max_auto_rerun_steps(matrix: &[config::TestCase], max_additional_repeats: u32) -> usize {
+    let unique_cases = matrix
+        .iter()
+        .map(|test_case| {
+            format!(
+                "{}|{}|{}",
+                test_case.language.name, test_case.language.runtime, test_case.concurrency
+            )
+        })
+        .collect::<std::collections::HashSet<_>>()
+        .len();
+    unique_cases * max_additional_repeats as usize
+}
+
+fn collect_auto_rerun_targets(
+    results: &[types::BenchmarkResult],
+    scheduled_reruns: &[types::BenchmarkScheduledRerun],
+    language: &str,
+    runtime: &str,
+    initial_repeat_count: u32,
+    settings: AutoRerunSettings,
+) -> Vec<AutoRerunTarget> {
+    let language_results: Vec<types::BenchmarkResult> = results
+        .iter()
+        .filter(|result| result.language == language && result.runtime == runtime)
+        .cloned()
+        .collect();
+
+    let summaries = reporter::summarise_results(&language_results);
+    let mut targets = Vec::new();
+
+    for summary in summaries {
+        let mut reasons = Vec::new();
+        for scenario in [summary.warm.as_ref(), summary.cold.as_ref()]
+            .into_iter()
+            .flatten()
+        {
+            if scenario.repeat_count < settings.target_repeat_count {
+                reasons.push(format!(
+                    "{} repeat count {} below target {}",
+                    scenario.scenario, scenario.repeat_count, settings.target_repeat_count
+                ));
+            }
+            if scenario.rps.quality_tier == "unreliable"
+                || scenario.latency_p99_ms.quality_tier == "unreliable"
+            {
+                reasons.push(format!("{} variance remains unreliable", scenario.scenario));
+            }
+            if scenario.rps.relative_margin_of_error > settings.max_relative_margin_of_error
+                || scenario.latency_p99_ms.relative_margin_of_error
+                    > settings.max_relative_margin_of_error
+            {
+                reasons.push(format!(
+                    "{} confidence interval exceeds {:.0}% target",
+                    scenario.scenario,
+                    settings.max_relative_margin_of_error * 100.0
+                ));
+            }
+        }
+
+        reasons.sort();
+        reasons.dedup();
+        if reasons.is_empty() {
+            continue;
+        }
+
+        let next_repeat_index = summary
+            .warm
+            .as_ref()
+            .into_iter()
+            .flat_map(|scenario| scenario.repeat_indices.iter().copied())
+            .chain(
+                summary
+                    .cold
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|scenario| scenario.repeat_indices.iter().copied()),
+            )
+            .chain(
+                scheduled_reruns
+                    .iter()
+                    .filter(|rerun| {
+                        rerun.language == summary.language
+                            && rerun.runtime == summary.runtime
+                            && rerun.concurrency == summary.concurrency
+                    })
+                    .map(|rerun| rerun.repeat_index),
+            )
+            .max()
+            .map(|index| index + 1)
+            .unwrap_or(initial_repeat_count);
+
+        let additional_repeats_used = next_repeat_index.saturating_sub(initial_repeat_count);
+        if additional_repeats_used >= settings.max_additional_repeats {
+            continue;
+        }
+
+        targets.push(AutoRerunTarget {
+            concurrency: summary.concurrency,
+            repeat_index: next_repeat_index,
+            reasons,
+        });
+    }
+
+    targets.sort_by_key(|target| (target.concurrency, target.repeat_index));
+    targets
+}
+
+async fn run_case_cycle(
+    run: &mut types::BenchmarkRun,
+    progress: &progress::ProgressReporter,
+    vm: &provisioner::VmInfo,
+    test_params: &runner::TestParams,
+    binary_metrics: &types::BinaryMetrics,
+    total_requests: u64,
+    label_prefix: &str,
+    language: &str,
+    runtime: &str,
+    concurrency: u32,
+    repeat_index: u32,
+    is_auto_rerun: bool,
+) {
+    let suffix = if is_auto_rerun { " [auto-rerun]" } else { "" };
+    let step_label = format!(
+        "{label_prefix} c={concurrency} repeat={}{}",
+        repeat_index + 1,
+        suffix
+    );
+
+    match runner::run_cold_warm_cycle(vm, test_params, concurrency, language, runtime, repeat_index)
+        .await
+    {
+        Ok((mut cold, mut warm)) => {
+            cold.binary = binary_metrics.clone();
+            warm.binary = binary_metrics.clone();
+
+            let estimated_duration = (total_requests as f64 / 1000.0).max(5.0) as u64;
+            if let Ok(samples) =
+                collector::collect_during_test(vm, estimated_duration.min(60), None).await
+            {
+                let agg = collector::aggregate_metrics(&samples);
+                warm.resources = agg;
+            }
+
+            run.results.push(cold);
+            run.results.push(warm);
+            progress.tick(&step_label);
+        }
+        Err(e) => {
+            tracing::error!("Benchmark failed for {step_label}: {e:#}");
+            progress.fail(&step_label, &e);
+        }
+    }
 }
 
 async fn cmd_validate(ip: String, language: String) -> Result<()> {
@@ -465,25 +881,618 @@ fn cmd_list(config_path: PathBuf) -> Result<()> {
     Ok(())
 }
 
+fn report_baseline_label(report: &types::BenchmarkReport) -> Option<String> {
+    report.run.baseline.as_ref().map(|baseline| {
+        baseline
+            .runtime
+            .as_ref()
+            .map(|runtime| format!("{}/{}", baseline.language, runtime))
+            .unwrap_or_else(|| baseline.language.clone())
+    })
+}
+
+fn case_key(summary: &types::BenchmarkCaseSummary) -> String {
+    format!(
+        "{}|{}|{}",
+        summary.language.to_lowercase(),
+        summary.runtime.to_lowercase(),
+        summary.concurrency
+    )
+}
+
+fn result_case_key(result: &types::BenchmarkResult) -> String {
+    format!(
+        "{}|{}|{}",
+        result.language.to_lowercase(),
+        result.runtime.to_lowercase(),
+        result.concurrency
+    )
+}
+
+fn render_results_table(report: &types::BenchmarkReport) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("Run:       {}\n", report.run.id));
+    out.push_str(&format!("Config:    {}\n", report.run.config_path));
+    if let Some(baseline) = report_baseline_label(report) {
+        out.push_str(&format!("Baseline:  {baseline}\n"));
+    }
+    out.push_str(&format!(
+        "Cases:     {}\n",
+        report.aggregation.case_summaries.len()
+    ));
+    out.push_str(&format!(
+        "Generated: {}\n",
+        report.generated_at.format("%Y-%m-%d %H:%M:%S UTC")
+    ));
+    out.push_str(&format!(
+        "Case order: {}\n",
+        case_order_label(report.run.case_randomization_seed)
+    ));
+    out.push_str(&format!(
+        "Auto reruns: {}\n",
+        auto_rerun_label(
+            report
+                .run
+                .auto_rerun_policy
+                .as_ref()
+                .map(|policy| AutoRerunSettings {
+                    target_repeat_count: policy.target_repeat_count,
+                    max_additional_repeats: policy.max_additional_repeats,
+                    max_relative_margin_of_error: policy.max_relative_margin_of_error,
+                })
+        )
+    ));
+    out.push_str(&format!(
+        "Executed reruns: {}\n",
+        report.run.scheduled_reruns.len()
+    ));
+    out.push_str(&format!(
+        "Publication: {}\n",
+        if report.aggregation.publication_ready {
+            "ready"
+        } else {
+            "rerun recommended"
+        }
+    ));
+    if !report.aggregation.recommendations.is_empty() {
+        out.push_str("Recommendations:\n");
+        for recommendation in &report.aggregation.recommendations {
+            out.push_str(&format!("  - {recommendation}\n"));
+        }
+    }
+
+    out.push_str("\nCase summaries:\n\n");
+    out.push_str(&format!(
+        "{:<18} {:<8} {:<8} {:>12} {:>10} {:>10}\n",
+        "Case", "C", "Repeats", "Warm med rps", "Warm CV%", "Warm p99"
+    ));
+    out.push_str(&format!("{}\n", "-".repeat(76)));
+    for summary in &report.aggregation.case_summaries {
+        let warm = summary.warm.as_ref();
+        let repeats = warm
+            .map(|scenario| scenario.repeat_count)
+            .or_else(|| summary.cold.as_ref().map(|scenario| scenario.repeat_count))
+            .unwrap_or(0);
+        let warm_rps = warm.map(|scenario| scenario.rps.median).unwrap_or(0.0);
+        let warm_cv = warm.map(|scenario| scenario.rps.cv * 100.0).unwrap_or(0.0);
+        let warm_p99 = warm
+            .map(|scenario| scenario.latency_p99_ms.median)
+            .unwrap_or(0.0);
+        out.push_str(&format!(
+            "{:<18} {:<8} {:<8} {:>12.0} {:>10.1} {:>10.2}\n",
+            summary.language, summary.concurrency, repeats, warm_rps, warm_cv, warm_p99
+        ));
+    }
+
+    if !report.aggregation.comparisons.is_empty() {
+        out.push_str("\nBaseline comparisons:\n\n");
+        out.push_str(&format!(
+            "{:<18} {:<8} {:>10} {:>12} {:<18}\n",
+            "Case", "Scenario", "Ratio", "Delta %", "Verdict"
+        ));
+        out.push_str(&format!("{}\n", "-".repeat(74)));
+        for comparison in &report.aggregation.comparisons {
+            if !comparison.comparable {
+                out.push_str(&format!(
+                    "{:<18} {:<8} {:>10} {:>12} {:<18}\n",
+                    comparison.language, "gated", "-", "-", "not comparable"
+                ));
+                out.push_str(&format!(
+                    "  note: {}\n",
+                    comparison.comparability_notes.join("; ")
+                ));
+                continue;
+            }
+            for scenario in [&comparison.warm, &comparison.cold].into_iter().flatten() {
+                out.push_str(&format!(
+                    "{:<18} {:<8} {:>10.2} {:>12.1} {:<18}\n",
+                    comparison.language,
+                    scenario.scenario,
+                    scenario.throughput.ratio,
+                    scenario.throughput.percent_delta,
+                    scenario.throughput.verdict
+                ));
+            }
+        }
+    }
+
+    out
+}
+
+fn render_compare_table(
+    baseline_report: &types::BenchmarkReport,
+    candidate_reports: &[types::BenchmarkReport],
+) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("Baseline run: {}\n", baseline_report.run.id));
+    if let Some(baseline) = report_baseline_label(baseline_report) {
+        out.push_str(&format!("Configured baseline: {baseline}\n"));
+    }
+
+    let baseline_cases: BTreeMap<String, &types::BenchmarkCaseSummary> = baseline_report
+        .aggregation
+        .case_summaries
+        .iter()
+        .map(|summary| (case_key(summary), summary))
+        .collect();
+    let baseline_results: BTreeMap<String, Vec<&types::BenchmarkResult>> = baseline_report
+        .run
+        .results
+        .iter()
+        .fold(BTreeMap::new(), |mut grouped, result| {
+            grouped
+                .entry(result_case_key(result))
+                .or_insert_with(Vec::new)
+                .push(result);
+            grouped
+        });
+
+    for candidate in candidate_reports {
+        let candidate_results: BTreeMap<String, Vec<&types::BenchmarkResult>> = candidate
+            .run
+            .results
+            .iter()
+            .fold(BTreeMap::new(), |mut grouped, result| {
+                grouped
+                    .entry(result_case_key(result))
+                    .or_insert_with(Vec::new)
+                    .push(result);
+                grouped
+            });
+        out.push_str(&format!("\nAgainst run: {}\n\n", candidate.run.id));
+        out.push_str(
+            "Cross-run comparisons are gated when benchmark environment fingerprints differ materially.\n\n",
+        );
+        out.push_str(&format!(
+            "{:<18} {:<8} {:>12} {:>12} {:>10}\n",
+            "Case", "C", "Warm ratio", "p99 delta", "Warm CV%"
+        ));
+        out.push_str(&format!("{}\n", "-".repeat(70)));
+        for summary in &candidate.aggregation.case_summaries {
+            let case_key = case_key(summary);
+            let Some(baseline_summary) = baseline_cases.get(&case_key) else {
+                continue;
+            };
+            let Some(candidate_warm) = summary.warm.as_ref() else {
+                continue;
+            };
+            let Some(baseline_warm) = baseline_summary.warm.as_ref() else {
+                continue;
+            };
+            let comparability_notes = candidate_results
+                .get(&case_key)
+                .and_then(|candidate_results| {
+                    baseline_results.get(&case_key).and_then(|baseline_results| {
+                        candidate_results.first().zip(baseline_results.first()).map(
+                            |(candidate_result, baseline_result)| {
+                                reporter::environment_comparability_notes(
+                                    &candidate_result.environment,
+                                    &baseline_result.environment,
+                                )
+                            },
+                        )
+                    })
+                })
+                .unwrap_or_else(|| {
+                    vec!["candidate or baseline benchmark result is missing".to_string()]
+                });
+            if !comparability_notes.is_empty() {
+                out.push_str(&format!(
+                    "{:<18} {:<8} {:>12} {:>12} {:>10}\n",
+                    summary.language, summary.concurrency, "-", "-", "-"
+                ));
+                out.push_str(&format!(
+                    "  note: not comparable: {}\n",
+                    comparability_notes.join("; ")
+                ));
+                continue;
+            }
+
+            let warm_ratio = if baseline_warm.rps.median.abs() > f64::EPSILON {
+                candidate_warm.rps.median / baseline_warm.rps.median
+            } else {
+                0.0
+            };
+            let p99_delta =
+                candidate_warm.latency_p99_ms.median - baseline_warm.latency_p99_ms.median;
+
+            out.push_str(&format!(
+                "{:<18} {:<8} {:>12.2} {:>12.2} {:>10.1}\n",
+                summary.language,
+                summary.concurrency,
+                warm_ratio,
+                p99_delta,
+                candidate_warm.rps.cv * 100.0
+            ));
+        }
+    }
+
+    out
+}
+
+fn discover_report_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in std::fs::read_dir(root).with_context(|| format!("reading {}", root.display()))? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.is_dir() {
+            let dir_name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default();
+            if matches!(dir_name, ".git" | "target" | "node_modules" | "obj") {
+                continue;
+            }
+            discover_report_files(&path, files)?;
+        } else if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name.starts_with("results-") && name.ends_with(".json"))
+            .unwrap_or(false)
+        {
+            files.push(path);
+        }
+    }
+
+    Ok(())
+}
+
+fn resolve_report_path(identifier: &str) -> Result<PathBuf> {
+    let candidate = PathBuf::from(identifier);
+    if candidate.is_file() {
+        return Ok(candidate);
+    }
+
+    let expected_name = if identifier.ends_with(".json") {
+        identifier.to_string()
+    } else {
+        format!("results-{identifier}.json")
+    };
+
+    let mut files = Vec::new();
+    discover_report_files(Path::new("."), &mut files)?;
+    files
+        .into_iter()
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name == expected_name)
+                .unwrap_or(false)
+        })
+        .ok_or_else(|| anyhow::anyhow!("could not find report '{}'", identifier))
+}
+
+fn latest_report_path() -> Result<PathBuf> {
+    let mut files = Vec::new();
+    discover_report_files(Path::new("."), &mut files)?;
+    let current_dir = std::env::current_dir()?;
+    files
+        .into_iter()
+        .max_by_key(|path| {
+            std::fs::metadata(path)
+                .and_then(|metadata| metadata.modified())
+                .ok()
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!("no benchmark reports found under {}", current_dir.display())
+        })
+}
+
 fn cmd_results(run_id: Option<String>, latest: bool, format: String) -> Result<()> {
     if !latest && run_id.is_none() {
         anyhow::bail!("Specify --run-id <UUID> or --latest");
     }
-    // Stub -- results storage not yet implemented
-    tracing::warn!(
-        "results command is a stub (run_id={:?}, latest={}, format={})",
-        run_id,
-        latest,
-        format
-    );
-    println!("Results storage not yet implemented. Run a benchmark to generate a JSON report.");
+
+    let report_path = if latest {
+        latest_report_path()?
+    } else {
+        resolve_report_path(run_id.as_deref().unwrap())?
+    };
+    let report = reporter::load_report(&report_path)?;
+    match format.to_ascii_lowercase().as_str() {
+        "json" => println!("{}", serde_json::to_string_pretty(&report)?),
+        "html" => {
+            let html_path = if report_path.extension().and_then(|ext| ext.to_str()) == Some("json")
+            {
+                let sibling = report_path.with_extension("html");
+                if sibling.exists() {
+                    sibling
+                } else {
+                    let temp_path = std::env::temp_dir()
+                        .join(format!("alethabench-results-{}.html", report.run.id));
+                    reporter::generate_html(&report.run, &temp_path)?;
+                    temp_path
+                }
+            } else {
+                report_path.clone()
+            };
+            println!("{}", html_path.display());
+        }
+        "table" => print!("{}", render_results_table(&report)),
+        other => anyhow::bail!("unsupported results format '{}'", other),
+    }
     Ok(())
 }
 
 fn cmd_compare(runs: Vec<String>) -> Result<()> {
     anyhow::ensure!(runs.len() >= 2, "Need at least 2 run IDs to compare");
-    // Stub -- comparison not yet implemented
-    tracing::warn!("compare command is a stub (runs={:?})", runs);
-    println!("Comparison not yet implemented.");
+
+    let mut reports = Vec::new();
+    for identifier in runs {
+        let path = resolve_report_path(&identifier)?;
+        reports.push(reporter::load_report(&path)?);
+    }
+
+    let baseline_report = reports.remove(0);
+    print!("{}", render_compare_table(&baseline_report, &reports));
     Ok(())
+}
+
+fn cmd_export(
+    run_id: Option<String>,
+    latest: bool,
+    output_dir: Option<PathBuf>,
+) -> Result<()> {
+    anyhow::ensure!(latest || run_id.is_some(), "Specify --run-id <UUID> or --latest");
+
+    let report_path = if latest {
+        latest_report_path()?
+    } else {
+        resolve_report_path(run_id.as_deref().unwrap())?
+    };
+    let report = reporter::load_report(&report_path)?;
+    let bundle_dir = output_dir.unwrap_or_else(|| {
+        report_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(format!("benchmark-export-{}", report.run.id))
+    });
+    reporter::export_bundle(&report, &bundle_dir)?;
+    println!("{}", bundle_dir.display());
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    fn sample_environment() -> types::BenchmarkEnvironmentFingerprint {
+        types::BenchmarkEnvironmentFingerprint {
+            client_os: Some("macos".into()),
+            client_arch: Some("aarch64".into()),
+            client_cpu_cores: Some(12),
+            client_region: Some("us-east".into()),
+            server_os: Some("ubuntu".into()),
+            server_arch: Some("x86_64".into()),
+            server_cpu_cores: Some(4),
+            server_region: Some("eastus".into()),
+            network_type: Some("LAN".into()),
+            baseline_rtt_p50_ms: Some(0.9),
+            baseline_rtt_p95_ms: Some(1.4),
+        }
+    }
+
+    fn sample_run(warm_rps: f64) -> types::BenchmarkRun {
+        types::BenchmarkRun {
+            id: Uuid::new_v4(),
+            started_at: Utc::now(),
+            finished_at: Some(Utc::now()),
+            config_path: "benchmarks/config.json".into(),
+            case_randomization_enabled: true,
+            case_randomization_seed: Some(42),
+            auto_rerun_policy: Some(types::BenchmarkAutoRerunPolicy {
+                target_repeat_count: 3,
+                max_additional_repeats: 2,
+                max_relative_margin_of_error: 0.05,
+            }),
+            scheduled_reruns: vec![types::BenchmarkScheduledRerun {
+                language: "go".into(),
+                runtime: "gin".into(),
+                concurrency: 10,
+                repeat_index: 1,
+                reasons: vec!["warm repeat count 1 below target 3".into()],
+            }],
+            baseline: Some(types::BenchmarkBaseline {
+                language: "rust".into(),
+                runtime: Some("axum".into()),
+            }),
+            results: vec![
+                types::BenchmarkResult {
+                    language: "rust".into(),
+                    runtime: "axum".into(),
+                    concurrency: 10,
+                    repeat_index: 0,
+                    scenario: "warm".into(),
+                    environment: sample_environment(),
+                    network: types::NetworkMetrics {
+                        rps: 100_000.0,
+                        latency_mean_ms: 1.0,
+                        latency_p50_ms: 0.8,
+                        latency_p99_ms: 3.0,
+                        latency_p999_ms: 5.0,
+                        latency_max_ms: 8.0,
+                        bytes_transferred: 1_000_000,
+                        error_count: 0,
+                        total_requests: 10_000,
+                        phase_model: "stability-check->pilot->measured".into(),
+                        phases_present: vec![
+                            "stability-check".into(),
+                            "pilot".into(),
+                            "measured".into(),
+                        ],
+                    },
+                    resources: types::ResourceMetrics::default(),
+                    startup: types::StartupMetrics::default(),
+                    binary: types::BinaryMetrics::default(),
+                },
+                types::BenchmarkResult {
+                    language: "go".into(),
+                    runtime: "gin".into(),
+                    concurrency: 10,
+                    repeat_index: 0,
+                    scenario: "warm".into(),
+                    environment: sample_environment(),
+                    network: types::NetworkMetrics {
+                        rps: warm_rps,
+                        latency_mean_ms: 1.2,
+                        latency_p50_ms: 0.9,
+                        latency_p99_ms: 3.5,
+                        latency_p999_ms: 5.5,
+                        latency_max_ms: 9.0,
+                        bytes_transferred: 1_000_000,
+                        error_count: 0,
+                        total_requests: 10_000,
+                        phase_model: "stability-check->pilot->measured".into(),
+                        phases_present: vec![
+                            "stability-check".into(),
+                            "pilot".into(),
+                            "measured".into(),
+                        ],
+                    },
+                    resources: types::ResourceMetrics::default(),
+                    startup: types::StartupMetrics::default(),
+                    binary: types::BinaryMetrics::default(),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn test_render_results_table_includes_baseline_and_case_summaries() {
+        let report = reporter::report_from_run(&sample_run(90_000.0));
+        let rendered = render_results_table(&report);
+
+        assert!(rendered.contains("Baseline:  rust/axum"));
+        assert!(rendered.contains("Case order: randomized (seed 42)"));
+        assert!(rendered.contains("Auto reruns: enabled"));
+        assert!(rendered.contains("Executed reruns: 1"));
+        assert!(rendered.contains("Publication: rerun recommended"));
+        assert!(rendered.contains("Recommendations:"));
+        assert!(rendered.contains("Case summaries"));
+        assert!(rendered.contains("Baseline comparisons"));
+        assert!(rendered.contains("go"));
+    }
+
+    #[test]
+    fn test_render_results_table_shows_gated_comparison_notes() {
+        let mut run = sample_run(90_000.0);
+        for result in run.results.iter_mut().filter(|result| result.language == "go") {
+            result.environment.server_region = Some("westus".into());
+            result.environment.baseline_rtt_p50_ms = Some(2.2);
+        }
+
+        let report = reporter::report_from_run(&run);
+        let rendered = render_results_table(&report);
+
+        assert!(rendered.contains("not comparable"));
+        assert!(rendered.contains("server region differs"));
+    }
+
+    #[test]
+    fn test_render_compare_table_uses_first_report_as_baseline() {
+        let baseline_report = reporter::report_from_run(&sample_run(90_000.0));
+        let candidate_report = reporter::report_from_run(&sample_run(80_000.0));
+
+        let rendered = render_compare_table(&baseline_report, &[candidate_report]);
+
+        assert!(rendered.contains("Baseline run:"));
+        assert!(rendered.contains("Against run:"));
+        assert!(rendered.contains("Cross-run comparisons are gated"));
+        assert!(rendered.contains("go"));
+        assert!(rendered.contains("0.89"));
+    }
+
+    #[test]
+    fn test_render_compare_table_gates_mismatched_environments() {
+        let baseline_report = reporter::report_from_run(&sample_run(90_000.0));
+        let mut candidate_run = sample_run(80_000.0);
+        for result in candidate_run
+            .results
+            .iter_mut()
+            .filter(|result| result.language == "go")
+        {
+            result.environment.server_region = Some("westus".into());
+            result.environment.baseline_rtt_p50_ms = Some(2.0);
+        }
+        let candidate_report = reporter::report_from_run(&candidate_run);
+
+        let rendered = render_compare_table(&baseline_report, &[candidate_report]);
+
+        assert!(rendered.contains("not comparable"));
+        assert!(rendered.contains("server region differs"));
+    }
+
+    #[test]
+    fn test_resolve_case_randomization_seed_respects_flags() {
+        assert_eq!(resolve_case_randomization_seed(false, None), None);
+        assert_eq!(resolve_case_randomization_seed(false, Some(7)), Some(7));
+        assert_eq!(resolve_case_randomization_seed(true, Some(99)), Some(99));
+    }
+
+    #[test]
+    fn test_collect_auto_rerun_targets_flags_low_repeat_cases() {
+        let targets = collect_auto_rerun_targets(
+            &sample_run(90_000.0).results,
+            &sample_run(90_000.0).scheduled_reruns,
+            "go",
+            "gin",
+            1,
+            AutoRerunSettings {
+                target_repeat_count: 3,
+                max_additional_repeats: 2,
+                max_relative_margin_of_error: 0.05,
+            },
+        );
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].concurrency, 10);
+        assert_eq!(targets[0].repeat_index, 2);
+        assert!(targets[0]
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("below target 3")));
+    }
+
+    #[test]
+    fn test_discover_report_files_finds_nested_json_reports() {
+        let root = std::env::temp_dir().join(format!("alethabench-discovery-{}", Uuid::new_v4()));
+        let nested = root.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(root.join("results-one.json"), "{}").unwrap();
+        std::fs::write(nested.join("results-two.json"), "{}").unwrap();
+        std::fs::create_dir_all(root.join("target")).unwrap();
+        std::fs::write(root.join("target").join("results-skip.json"), "{}").unwrap();
+
+        let mut files = Vec::new();
+        discover_report_files(&root, &mut files).unwrap();
+        files.sort();
+
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().any(|path| path.ends_with("results-one.json")));
+        assert!(files.iter().any(|path| path.ends_with("results-two.json")));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
 }

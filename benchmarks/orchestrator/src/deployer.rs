@@ -90,7 +90,11 @@ pub async fn deploy_api(vm: &VmInfo, language: &str, bench_dir: &Path) -> Result
                     bail!("cargo build networker-endpoint failed");
                 }
             }
-            scp_to(&vm.ip, binary/*safe*/.to_str().unwrap_or_default(), "/opt/bench/server")
+            scp_to(
+                &vm.ip,
+                binary/*safe*/.to_str().unwrap_or_default(),
+                "/opt/bench/server",
+            )
                 .await
                 .context("copying Rust binary")?;
             ssh_exec(&vm.ip, "chmod +x /opt/bench/server").await?;
@@ -385,7 +389,23 @@ pub async fn deploy_api(vm: &VmInfo, language: &str, bench_dir: &Path) -> Result
             ).await?;
         }
         _ => {
-            bail!("Unsupported language: {language}. No deploy handler defined.");
+            let deploy_script = bench_dir.join(format!("reference-apis/{language}/deploy.sh"));
+            if deploy_script.exists() {
+                scp_to(
+                    &vm.ip,
+                    deploy_script/*safe*/.to_str().unwrap_or_default(),
+                    "/opt/bench/deploy.sh",
+                )
+                .await?;
+                ssh_exec(
+                    &vm.ip,
+                    "chmod +x /opt/bench/deploy.sh && bash /opt/bench/deploy.sh",
+                )
+                .await
+                .with_context(|| format!("deploy.sh for {language}"))?;
+            } else {
+                bail!("Unsupported language: {language}. No deploy handler defined.");
+            }
         }
     }
 

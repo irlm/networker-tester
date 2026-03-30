@@ -158,6 +158,96 @@ pub struct Cli {
     #[arg(long)]
     pub json_stdout: bool,
 
+    /// Emit a normalized benchmark contract in JSON stdout mode.
+    /// Intended for benchmark orchestration and comparison workflows.
+    #[arg(long)]
+    pub benchmark_mode: bool,
+
+    /// Primary benchmark phase for this invocation.
+    /// Valid: environment-check, stability-check, pilot, warmup, measured, cooldown, overhead.
+    #[arg(long)]
+    pub benchmark_phase: Option<String>,
+
+    /// Scenario label for this benchmark invocation (for example cold or warm).
+    #[arg(long)]
+    pub benchmark_scenario: Option<String>,
+
+    /// Launch index for repeated benchmark invocations coordinated by an orchestrator.
+    #[arg(long)]
+    pub benchmark_launch_index: Option<u32>,
+
+    /// Minimum measured samples per benchmark case before adaptive stopping is allowed.
+    /// Defaults to `--runs` when omitted.
+    #[arg(long)]
+    pub benchmark_min_samples: Option<u32>,
+
+    /// Maximum measured samples per benchmark case for adaptive benchmark stopping.
+    /// Defaults to `--runs` when omitted.
+    #[arg(long)]
+    pub benchmark_max_samples: Option<u32>,
+
+    /// Minimum measured wall-clock duration in milliseconds before adaptive stopping is allowed.
+    #[arg(long)]
+    pub benchmark_min_duration_ms: Option<u64>,
+
+    /// Target maximum relative error for the median primary metric.
+    /// Interpreted as half-width of the 95% CI divided by the median.
+    #[arg(long)]
+    pub benchmark_target_relative_error: Option<f64>,
+
+    /// Target maximum absolute error for the median primary metric.
+    /// Interpreted as half-width of the 95% CI in the workload's native metric units.
+    #[arg(long)]
+    pub benchmark_target_absolute_error: Option<f64>,
+
+    /// Minimum pilot samples per benchmark case before deriving a measured plan.
+    #[arg(long)]
+    pub benchmark_pilot_min_samples: Option<u32>,
+
+    /// Maximum pilot samples per benchmark case when estimating a measured plan.
+    #[arg(long)]
+    pub benchmark_pilot_max_samples: Option<u32>,
+
+    /// Minimum pilot wall-clock duration in milliseconds before deriving a measured plan.
+    #[arg(long)]
+    pub benchmark_pilot_min_duration_ms: Option<u64>,
+
+    /// Number of RTT probes to run during the internal environment-check phase.
+    #[arg(long)]
+    pub benchmark_environment_check_samples: Option<u32>,
+
+    /// Delay between RTT probes in the internal environment-check phase.
+    #[arg(long)]
+    pub benchmark_environment_check_interval_ms: Option<u64>,
+
+    /// Number of RTT probes to run during the internal stability-check phase.
+    #[arg(long)]
+    pub benchmark_stability_check_samples: Option<u32>,
+
+    /// Delay between RTT probes in the internal stability-check phase.
+    #[arg(long)]
+    pub benchmark_stability_check_interval_ms: Option<u64>,
+
+    /// Maximum packet loss percentage allowed for publication-ready benchmark claims.
+    #[arg(long)]
+    pub benchmark_max_packet_loss_percent: Option<f64>,
+
+    /// Maximum stability-check jitter ratio (jitter / RTT p50) allowed for publication-ready claims.
+    #[arg(long)]
+    pub benchmark_max_jitter_ratio: Option<f64>,
+
+    /// Maximum RTT spread ratio (RTT p95 / RTT p50) allowed for publication-ready benchmark claims.
+    #[arg(long)]
+    pub benchmark_max_rtt_spread_ratio: Option<f64>,
+
+    /// Number of excluded overhead iterations to collect before the measured phase.
+    #[arg(long)]
+    pub benchmark_overhead_samples: Option<u32>,
+
+    /// Number of excluded cooldown iterations to collect after the measured phase.
+    #[arg(long)]
+    pub benchmark_cooldown_samples: Option<u32>,
+
     // ── URL diagnostic (PR-04 path) ─────────────────────────────────────────
     /// Run the URL page-load diagnostic workflow against the provided URL.
     #[arg(long)]
@@ -379,6 +469,27 @@ pub struct ConfigFile {
     pub css: Option<String>,
     pub excel: Option<bool>,
     pub json_stdout: Option<bool>,
+    pub benchmark_mode: Option<bool>,
+    pub benchmark_phase: Option<String>,
+    pub benchmark_scenario: Option<String>,
+    pub benchmark_launch_index: Option<u32>,
+    pub benchmark_min_samples: Option<u32>,
+    pub benchmark_max_samples: Option<u32>,
+    pub benchmark_min_duration_ms: Option<u64>,
+    pub benchmark_target_relative_error: Option<f64>,
+    pub benchmark_target_absolute_error: Option<f64>,
+    pub benchmark_pilot_min_samples: Option<u32>,
+    pub benchmark_pilot_max_samples: Option<u32>,
+    pub benchmark_pilot_min_duration_ms: Option<u64>,
+    pub benchmark_environment_check_samples: Option<u32>,
+    pub benchmark_environment_check_interval_ms: Option<u64>,
+    pub benchmark_stability_check_samples: Option<u32>,
+    pub benchmark_stability_check_interval_ms: Option<u64>,
+    pub benchmark_max_packet_loss_percent: Option<f64>,
+    pub benchmark_max_jitter_ratio: Option<f64>,
+    pub benchmark_max_rtt_spread_ratio: Option<f64>,
+    pub benchmark_overhead_samples: Option<u32>,
+    pub benchmark_cooldown_samples: Option<u32>,
     pub save_to_db: Option<bool>,
     pub db_url: Option<String>,
     pub db_migrate: Option<bool>,
@@ -439,6 +550,27 @@ pub struct ResolvedConfig {
     pub css: Option<String>,
     pub excel: bool,
     pub json_stdout: bool,
+    pub benchmark_mode: bool,
+    pub benchmark_phase: String,
+    pub benchmark_scenario: String,
+    pub benchmark_launch_index: u32,
+    pub benchmark_min_samples: Option<u32>,
+    pub benchmark_max_samples: Option<u32>,
+    pub benchmark_min_duration_ms: Option<u64>,
+    pub benchmark_target_relative_error: Option<f64>,
+    pub benchmark_target_absolute_error: Option<f64>,
+    pub benchmark_pilot_min_samples: Option<u32>,
+    pub benchmark_pilot_max_samples: Option<u32>,
+    pub benchmark_pilot_min_duration_ms: Option<u64>,
+    pub benchmark_environment_check_samples: Option<u32>,
+    pub benchmark_environment_check_interval_ms: Option<u64>,
+    pub benchmark_stability_check_samples: Option<u32>,
+    pub benchmark_stability_check_interval_ms: Option<u64>,
+    pub benchmark_max_packet_loss_percent: Option<f64>,
+    pub benchmark_max_jitter_ratio: Option<f64>,
+    pub benchmark_max_rtt_spread_ratio: Option<f64>,
+    pub benchmark_overhead_samples: Option<u32>,
+    pub benchmark_cooldown_samples: Option<u32>,
     pub save_to_db: bool,
     pub db_url: Option<String>,
     pub db_migrate: bool,
@@ -626,6 +758,66 @@ impl Cli {
             css: self.css.or(f.css),
             excel: flag!(excel),
             json_stdout: self.json_stdout || f.json_stdout.unwrap_or(false),
+            benchmark_mode: self.benchmark_mode || f.benchmark_mode.unwrap_or(false),
+            benchmark_phase: self
+                .benchmark_phase
+                .or(f.benchmark_phase)
+                .unwrap_or_else(|| "measured".into()),
+            benchmark_scenario: self
+                .benchmark_scenario
+                .or(f.benchmark_scenario)
+                .unwrap_or_else(|| "default".into()),
+            benchmark_launch_index: self
+                .benchmark_launch_index
+                .or(f.benchmark_launch_index)
+                .unwrap_or(0),
+            benchmark_min_samples: self.benchmark_min_samples.or(f.benchmark_min_samples),
+            benchmark_max_samples: self.benchmark_max_samples.or(f.benchmark_max_samples),
+            benchmark_min_duration_ms: self
+                .benchmark_min_duration_ms
+                .or(f.benchmark_min_duration_ms),
+            benchmark_target_relative_error: self
+                .benchmark_target_relative_error
+                .or(f.benchmark_target_relative_error),
+            benchmark_target_absolute_error: self
+                .benchmark_target_absolute_error
+                .or(f.benchmark_target_absolute_error),
+            benchmark_pilot_min_samples: self
+                .benchmark_pilot_min_samples
+                .or(f.benchmark_pilot_min_samples),
+            benchmark_pilot_max_samples: self
+                .benchmark_pilot_max_samples
+                .or(f.benchmark_pilot_max_samples),
+            benchmark_pilot_min_duration_ms: self
+                .benchmark_pilot_min_duration_ms
+                .or(f.benchmark_pilot_min_duration_ms),
+            benchmark_environment_check_samples: self
+                .benchmark_environment_check_samples
+                .or(f.benchmark_environment_check_samples),
+            benchmark_environment_check_interval_ms: self
+                .benchmark_environment_check_interval_ms
+                .or(f.benchmark_environment_check_interval_ms),
+            benchmark_stability_check_samples: self
+                .benchmark_stability_check_samples
+                .or(f.benchmark_stability_check_samples),
+            benchmark_stability_check_interval_ms: self
+                .benchmark_stability_check_interval_ms
+                .or(f.benchmark_stability_check_interval_ms),
+            benchmark_max_packet_loss_percent: self
+                .benchmark_max_packet_loss_percent
+                .or(f.benchmark_max_packet_loss_percent),
+            benchmark_max_jitter_ratio: self
+                .benchmark_max_jitter_ratio
+                .or(f.benchmark_max_jitter_ratio),
+            benchmark_max_rtt_spread_ratio: self
+                .benchmark_max_rtt_spread_ratio
+                .or(f.benchmark_max_rtt_spread_ratio),
+            benchmark_overhead_samples: self
+                .benchmark_overhead_samples
+                .or(f.benchmark_overhead_samples),
+            benchmark_cooldown_samples: self
+                .benchmark_cooldown_samples
+                .or(f.benchmark_cooldown_samples),
             save_to_db: self.save_to_db
                 || f.save_to_db.unwrap_or(false)
                 || self.save_to_sql
@@ -659,6 +851,161 @@ impl Cli {
 impl ResolvedConfig {
     /// Validate combinations of flags; return user-friendly errors.
     pub fn validate(&self) -> anyhow::Result<()> {
+        if !matches!(
+            self.benchmark_phase.as_str(),
+            "environment-check"
+                | "stability-check"
+                | "pilot"
+                | "warmup"
+                | "measured"
+                | "cooldown"
+                | "overhead"
+        ) {
+            anyhow::bail!(
+                "--benchmark-phase must be one of: environment-check, stability-check, pilot, warmup, measured, cooldown, overhead"
+            );
+        }
+        if self.benchmark_scenario.trim().is_empty() {
+            anyhow::bail!("--benchmark-scenario must not be empty");
+        }
+        let benchmark_min_samples = self.benchmark_min_samples.unwrap_or(self.runs);
+        let benchmark_max_samples = self.benchmark_max_samples.unwrap_or(self.runs);
+        if benchmark_min_samples == 0 {
+            anyhow::bail!("--benchmark-min-samples must be at least 1");
+        }
+        if benchmark_max_samples == 0 {
+            anyhow::bail!("--benchmark-max-samples must be at least 1");
+        }
+        if benchmark_max_samples < benchmark_min_samples {
+            anyhow::bail!(
+                "--benchmark-max-samples must be greater than or equal to --benchmark-min-samples"
+            );
+        }
+        let benchmark_pilot_min_samples = self.benchmark_pilot_min_samples.unwrap_or(1);
+        let benchmark_pilot_max_samples = self
+            .benchmark_pilot_max_samples
+            .unwrap_or(benchmark_pilot_min_samples);
+        if benchmark_pilot_min_samples == 0 {
+            anyhow::bail!("--benchmark-pilot-min-samples must be at least 1");
+        }
+        if benchmark_pilot_max_samples == 0 {
+            anyhow::bail!("--benchmark-pilot-max-samples must be at least 1");
+        }
+        if benchmark_pilot_max_samples < benchmark_pilot_min_samples {
+            anyhow::bail!(
+                "--benchmark-pilot-max-samples must be greater than or equal to --benchmark-pilot-min-samples"
+            );
+        }
+        if let Some(stability_samples) = self.benchmark_stability_check_samples {
+            if stability_samples == 0 {
+                anyhow::bail!("--benchmark-stability-check-samples must be at least 1");
+            }
+        }
+        if let Some(environment_samples) = self.benchmark_environment_check_samples {
+            if environment_samples == 0 {
+                anyhow::bail!("--benchmark-environment-check-samples must be at least 1");
+            }
+        }
+        if let Some(overhead_samples) = self.benchmark_overhead_samples {
+            if overhead_samples == 0 {
+                anyhow::bail!("--benchmark-overhead-samples must be at least 1");
+            }
+        }
+        if let Some(cooldown_samples) = self.benchmark_cooldown_samples {
+            if cooldown_samples == 0 {
+                anyhow::bail!("--benchmark-cooldown-samples must be at least 1");
+            }
+        }
+        if let Some(target_relative_error) = self.benchmark_target_relative_error {
+            if !target_relative_error.is_finite() || target_relative_error <= 0.0 {
+                anyhow::bail!("--benchmark-target-relative-error must be a positive finite number");
+            }
+        }
+        if let Some(target_absolute_error) = self.benchmark_target_absolute_error {
+            if !target_absolute_error.is_finite() || target_absolute_error <= 0.0 {
+                anyhow::bail!("--benchmark-target-absolute-error must be a positive finite number");
+            }
+        }
+        if let Some(max_packet_loss_percent) = self.benchmark_max_packet_loss_percent {
+            if !max_packet_loss_percent.is_finite()
+                || !(0.0..=100.0).contains(&max_packet_loss_percent)
+            {
+                anyhow::bail!(
+                    "--benchmark-max-packet-loss-percent must be a finite number between 0 and 100"
+                );
+            }
+        }
+        if let Some(max_jitter_ratio) = self.benchmark_max_jitter_ratio {
+            if !max_jitter_ratio.is_finite() || max_jitter_ratio <= 0.0 {
+                anyhow::bail!("--benchmark-max-jitter-ratio must be a positive finite number");
+            }
+        }
+        if let Some(max_rtt_spread_ratio) = self.benchmark_max_rtt_spread_ratio {
+            if !max_rtt_spread_ratio.is_finite() || max_rtt_spread_ratio <= 0.0 {
+                anyhow::bail!("--benchmark-max-rtt-spread-ratio must be a positive finite number");
+            }
+        }
+        let adaptive_benchmark_controls = self.benchmark_min_samples.is_some()
+            || self.benchmark_max_samples.is_some()
+            || self.benchmark_min_duration_ms.is_some()
+            || self.benchmark_target_relative_error.is_some()
+            || self.benchmark_target_absolute_error.is_some();
+        let pilot_benchmark_controls = self.benchmark_pilot_min_samples.is_some()
+            || self.benchmark_pilot_max_samples.is_some()
+            || self.benchmark_pilot_min_duration_ms.is_some();
+        let environment_benchmark_controls = self.benchmark_environment_check_samples.is_some()
+            || self.benchmark_environment_check_interval_ms.is_some();
+        let stability_benchmark_controls = self.benchmark_stability_check_samples.is_some()
+            || self.benchmark_stability_check_interval_ms.is_some();
+        let noise_threshold_controls = self.benchmark_max_packet_loss_percent.is_some()
+            || self.benchmark_max_jitter_ratio.is_some()
+            || self.benchmark_max_rtt_spread_ratio.is_some();
+        if adaptive_benchmark_controls
+            && self.benchmark_mode
+            && self.benchmark_phase == "measured"
+            && !self.http_stacks.is_empty()
+        {
+            anyhow::bail!(
+                "adaptive benchmark stop controls are not yet supported together with --http-stacks"
+            );
+        }
+        if pilot_benchmark_controls
+            && self.benchmark_mode
+            && self.benchmark_phase == "measured"
+            && !self.http_stacks.is_empty()
+        {
+            anyhow::bail!(
+                "pilot benchmark controls are not yet supported together with --http-stacks"
+            );
+        }
+        if stability_benchmark_controls
+            && self.benchmark_mode
+            && self.benchmark_phase == "measured"
+            && !self.http_stacks.is_empty()
+        {
+            anyhow::bail!(
+                "stability-check controls are not yet supported together with --http-stacks"
+            );
+        }
+        if environment_benchmark_controls
+            && self.benchmark_mode
+            && self.benchmark_phase == "measured"
+            && !self.http_stacks.is_empty()
+        {
+            anyhow::bail!(
+                "environment-check controls are not yet supported together with --http-stacks"
+            );
+        }
+        if noise_threshold_controls
+            && self.benchmark_mode
+            && self.benchmark_phase == "measured"
+            && !self.http_stacks.is_empty()
+        {
+            anyhow::bail!(
+                "benchmark noise thresholds are not yet supported together with --http-stacks"
+            );
+        }
+
         if let Some(url) = &self.url_test_url {
             let parsed = url::Url::parse(url)
                 .map_err(|e| anyhow::anyhow!("--url-test-url invalid URL: {e}"))?;
@@ -813,6 +1160,27 @@ mod tests {
         assert!(!cli.insecure);
         assert!(cli.retries.is_none());
         assert!(!cli.excel);
+        assert!(!cli.benchmark_mode);
+        assert!(cli.benchmark_phase.is_none());
+        assert!(cli.benchmark_scenario.is_none());
+        assert!(cli.benchmark_launch_index.is_none());
+        assert!(cli.benchmark_min_samples.is_none());
+        assert!(cli.benchmark_max_samples.is_none());
+        assert!(cli.benchmark_min_duration_ms.is_none());
+        assert!(cli.benchmark_target_relative_error.is_none());
+        assert!(cli.benchmark_target_absolute_error.is_none());
+        assert!(cli.benchmark_pilot_min_samples.is_none());
+        assert!(cli.benchmark_pilot_max_samples.is_none());
+        assert!(cli.benchmark_pilot_min_duration_ms.is_none());
+        assert!(cli.benchmark_environment_check_samples.is_none());
+        assert!(cli.benchmark_environment_check_interval_ms.is_none());
+        assert!(cli.benchmark_stability_check_samples.is_none());
+        assert!(cli.benchmark_stability_check_interval_ms.is_none());
+        assert!(cli.benchmark_max_packet_loss_percent.is_none());
+        assert!(cli.benchmark_max_jitter_ratio.is_none());
+        assert!(cli.benchmark_max_rtt_spread_ratio.is_none());
+        assert!(cli.benchmark_overhead_samples.is_none());
+        assert!(cli.benchmark_cooldown_samples.is_none());
         assert!(cli.udp_throughput_port.is_none());
     }
 
@@ -825,6 +1193,27 @@ mod tests {
         assert!(!cfg.insecure);
         assert_eq!(cfg.retries, 0);
         assert!(!cfg.excel);
+        assert!(!cfg.benchmark_mode);
+        assert_eq!(cfg.benchmark_phase, "measured");
+        assert_eq!(cfg.benchmark_scenario, "default");
+        assert_eq!(cfg.benchmark_launch_index, 0);
+        assert!(cfg.benchmark_min_samples.is_none());
+        assert!(cfg.benchmark_max_samples.is_none());
+        assert!(cfg.benchmark_min_duration_ms.is_none());
+        assert!(cfg.benchmark_target_relative_error.is_none());
+        assert!(cfg.benchmark_target_absolute_error.is_none());
+        assert!(cfg.benchmark_pilot_min_samples.is_none());
+        assert!(cfg.benchmark_pilot_max_samples.is_none());
+        assert!(cfg.benchmark_pilot_min_duration_ms.is_none());
+        assert!(cfg.benchmark_environment_check_samples.is_none());
+        assert!(cfg.benchmark_environment_check_interval_ms.is_none());
+        assert!(cfg.benchmark_stability_check_samples.is_none());
+        assert!(cfg.benchmark_stability_check_interval_ms.is_none());
+        assert!(cfg.benchmark_max_packet_loss_percent.is_none());
+        assert!(cfg.benchmark_max_jitter_ratio.is_none());
+        assert!(cfg.benchmark_max_rtt_spread_ratio.is_none());
+        assert!(cfg.benchmark_overhead_samples.is_none());
+        assert!(cfg.benchmark_cooldown_samples.is_none());
         assert_eq!(cfg.udp_throughput_port, 9998);
         assert!(cfg.dns_enabled);
         assert_eq!(cfg.modes, vec!["http1", "http2", "udp"]);
@@ -840,6 +1229,320 @@ mod tests {
         let cfg = Cli::parse_from(["networker-tester"]).resolve(Some(file));
         assert_eq!(cfg.runs, 7);
         assert_eq!(cfg.targets, vec!["http://myhost/health"]);
+    }
+
+    #[test]
+    fn benchmark_mode_flag_is_resolved() {
+        let cfg = Cli::parse_from(["networker-tester", "--benchmark-mode"]).resolve(None);
+        assert!(cfg.benchmark_mode);
+    }
+
+    #[test]
+    fn benchmark_lifecycle_flags_are_resolved() {
+        let cfg = Cli::parse_from([
+            "networker-tester",
+            "--benchmark-mode",
+            "--benchmark-phase",
+            "warmup",
+            "--benchmark-scenario",
+            "cold",
+            "--benchmark-launch-index",
+            "7",
+        ])
+        .resolve(None);
+        assert!(cfg.benchmark_mode);
+        assert_eq!(cfg.benchmark_phase, "warmup");
+        assert_eq!(cfg.benchmark_scenario, "cold");
+        assert_eq!(cfg.benchmark_launch_index, 7);
+    }
+
+    #[test]
+    fn benchmark_adaptive_flags_are_resolved() {
+        let cfg = Cli::parse_from([
+            "networker-tester",
+            "--benchmark-mode",
+            "--benchmark-min-samples",
+            "10",
+            "--benchmark-max-samples",
+            "50",
+            "--benchmark-min-duration-ms",
+            "1500",
+            "--benchmark-target-relative-error",
+            "0.05",
+            "--benchmark-target-absolute-error",
+            "2.5",
+        ])
+        .resolve(None);
+        assert_eq!(cfg.benchmark_min_samples, Some(10));
+        assert_eq!(cfg.benchmark_max_samples, Some(50));
+        assert_eq!(cfg.benchmark_min_duration_ms, Some(1500));
+        assert_eq!(cfg.benchmark_target_relative_error, Some(0.05));
+        assert_eq!(cfg.benchmark_target_absolute_error, Some(2.5));
+    }
+
+    #[test]
+    fn benchmark_pilot_flags_are_resolved() {
+        let cfg = Cli::parse_from([
+            "networker-tester",
+            "--benchmark-mode",
+            "--benchmark-pilot-min-samples",
+            "4",
+            "--benchmark-pilot-max-samples",
+            "9",
+            "--benchmark-pilot-min-duration-ms",
+            "200",
+        ])
+        .resolve(None);
+        assert_eq!(cfg.benchmark_pilot_min_samples, Some(4));
+        assert_eq!(cfg.benchmark_pilot_max_samples, Some(9));
+        assert_eq!(cfg.benchmark_pilot_min_duration_ms, Some(200));
+    }
+
+    #[test]
+    fn benchmark_environment_check_flags_are_resolved() {
+        let cfg = Cli::parse_from([
+            "networker-tester",
+            "--benchmark-mode",
+            "--benchmark-environment-check-samples",
+            "6",
+            "--benchmark-environment-check-interval-ms",
+            "40",
+        ])
+        .resolve(None);
+        assert_eq!(cfg.benchmark_environment_check_samples, Some(6));
+        assert_eq!(cfg.benchmark_environment_check_interval_ms, Some(40));
+    }
+
+    #[test]
+    fn benchmark_stability_check_flags_are_resolved() {
+        let cfg = Cli::parse_from([
+            "networker-tester",
+            "--benchmark-mode",
+            "--benchmark-stability-check-samples",
+            "15",
+            "--benchmark-stability-check-interval-ms",
+            "75",
+        ])
+        .resolve(None);
+        assert_eq!(cfg.benchmark_stability_check_samples, Some(15));
+        assert_eq!(cfg.benchmark_stability_check_interval_ms, Some(75));
+    }
+
+    #[test]
+    fn benchmark_noise_threshold_flags_are_resolved() {
+        let cfg = Cli::parse_from([
+            "networker-tester",
+            "--benchmark-mode",
+            "--benchmark-max-packet-loss-percent",
+            "2.5",
+            "--benchmark-max-jitter-ratio",
+            "0.2",
+            "--benchmark-max-rtt-spread-ratio",
+            "1.7",
+        ])
+        .resolve(None);
+        assert_eq!(cfg.benchmark_max_packet_loss_percent, Some(2.5));
+        assert_eq!(cfg.benchmark_max_jitter_ratio, Some(0.2));
+        assert_eq!(cfg.benchmark_max_rtt_spread_ratio, Some(1.7));
+    }
+
+    #[test]
+    fn benchmark_overhead_and_cooldown_flags_are_resolved() {
+        let cfg = Cli::parse_from([
+            "networker-tester",
+            "--benchmark-mode",
+            "--benchmark-overhead-samples",
+            "2",
+            "--benchmark-cooldown-samples",
+            "3",
+        ])
+        .resolve(None);
+        assert_eq!(cfg.benchmark_overhead_samples, Some(2));
+        assert_eq!(cfg.benchmark_cooldown_samples, Some(3));
+    }
+
+    #[test]
+    fn validate_rejects_benchmark_max_samples_below_min_samples() {
+        let cfg = Cli::parse_from([
+            "networker-tester",
+            "--benchmark-min-samples",
+            "20",
+            "--benchmark-max-samples",
+            "10",
+        ])
+        .resolve(None);
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("--benchmark-max-samples"));
+    }
+
+    #[test]
+    fn validate_rejects_non_positive_target_relative_error() {
+        let cfg = Cli::parse_from(["networker-tester", "--benchmark-target-relative-error", "0"])
+            .resolve(None);
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("--benchmark-target-relative-error"));
+    }
+
+    #[test]
+    fn validate_rejects_non_positive_target_absolute_error() {
+        let cfg = Cli::parse_from(["networker-tester", "--benchmark-target-absolute-error", "0"])
+            .resolve(None);
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("--benchmark-target-absolute-error"));
+    }
+
+    #[test]
+    fn validate_rejects_benchmark_pilot_max_samples_below_min_samples() {
+        let cfg = Cli::parse_from([
+            "networker-tester",
+            "--benchmark-pilot-min-samples",
+            "8",
+            "--benchmark-pilot-max-samples",
+            "4",
+        ])
+        .resolve(None);
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("--benchmark-pilot-max-samples"));
+    }
+
+    #[test]
+    fn validate_rejects_non_positive_stability_check_samples() {
+        let cfg = Cli::parse_from([
+            "networker-tester",
+            "--benchmark-stability-check-samples",
+            "0",
+        ])
+        .resolve(None);
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("--benchmark-stability-check-samples"));
+    }
+
+    #[test]
+    fn validate_rejects_non_positive_environment_check_samples() {
+        let cfg = Cli::parse_from([
+            "networker-tester",
+            "--benchmark-environment-check-samples",
+            "0",
+        ])
+        .resolve(None);
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("--benchmark-environment-check-samples"));
+    }
+
+    #[test]
+    fn validate_rejects_invalid_benchmark_noise_thresholds() {
+        let packet_loss_cfg = Cli::parse_from([
+            "networker-tester",
+            "--benchmark-max-packet-loss-percent",
+            "120",
+        ])
+        .resolve(None);
+        let packet_loss_err = packet_loss_cfg.validate().unwrap_err().to_string();
+        assert!(packet_loss_err.contains("--benchmark-max-packet-loss-percent"));
+
+        let jitter_cfg = Cli::parse_from(["networker-tester", "--benchmark-max-jitter-ratio", "0"])
+            .resolve(None);
+        let jitter_err = jitter_cfg.validate().unwrap_err().to_string();
+        assert!(jitter_err.contains("--benchmark-max-jitter-ratio"));
+
+        let spread_cfg =
+            Cli::parse_from(["networker-tester", "--benchmark-max-rtt-spread-ratio", "0"])
+                .resolve(None);
+        let spread_err = spread_cfg.validate().unwrap_err().to_string();
+        assert!(spread_err.contains("--benchmark-max-rtt-spread-ratio"));
+    }
+
+    #[test]
+    fn validate_rejects_non_positive_overhead_samples() {
+        let cfg = Cli::parse_from(["networker-tester", "--benchmark-overhead-samples", "0"])
+            .resolve(None);
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("--benchmark-overhead-samples"));
+    }
+
+    #[test]
+    fn validate_rejects_non_positive_cooldown_samples() {
+        let cfg = Cli::parse_from(["networker-tester", "--benchmark-cooldown-samples", "0"])
+            .resolve(None);
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("--benchmark-cooldown-samples"));
+    }
+
+    #[test]
+    fn validate_rejects_adaptive_controls_with_http_stacks_in_measured_benchmark_mode() {
+        let cfg = Cli::parse_from([
+            "networker-tester",
+            "--benchmark-mode",
+            "--runs",
+            "10",
+            "--benchmark-min-samples",
+            "5",
+            "--http-stacks",
+            "nginx",
+        ])
+        .resolve(None);
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("adaptive benchmark stop controls"));
+    }
+
+    #[test]
+    fn validate_rejects_pilot_controls_with_http_stacks_in_measured_benchmark_mode() {
+        let cfg = Cli::parse_from([
+            "networker-tester",
+            "--benchmark-mode",
+            "--benchmark-pilot-min-samples",
+            "5",
+            "--http-stacks",
+            "nginx",
+        ])
+        .resolve(None);
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("pilot benchmark controls"));
+    }
+
+    #[test]
+    fn validate_rejects_stability_controls_with_http_stacks_in_measured_benchmark_mode() {
+        let cfg = Cli::parse_from([
+            "networker-tester",
+            "--benchmark-mode",
+            "--benchmark-stability-check-samples",
+            "8",
+            "--http-stacks",
+            "nginx",
+        ])
+        .resolve(None);
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("stability-check controls"));
+    }
+
+    #[test]
+    fn validate_rejects_environment_check_controls_with_http_stacks_in_measured_benchmark_mode() {
+        let cfg = Cli::parse_from([
+            "networker-tester",
+            "--benchmark-mode",
+            "--benchmark-environment-check-samples",
+            "5",
+            "--http-stacks",
+            "nginx",
+        ])
+        .resolve(None);
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("environment-check controls"));
+    }
+
+    #[test]
+    fn validate_rejects_noise_threshold_controls_with_http_stacks_in_measured_benchmark_mode() {
+        let cfg = Cli::parse_from([
+            "networker-tester",
+            "--benchmark-mode",
+            "--benchmark-max-rtt-spread-ratio",
+            "1.8",
+            "--http-stacks",
+            "nginx",
+        ])
+        .resolve(None);
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("benchmark noise thresholds"));
     }
 
     #[test]

@@ -5,8 +5,10 @@ use networker_tester::capture;
 use networker_tester::cli;
 use networker_tester::cli::ResolvedConfig;
 use networker_tester::metrics::{
-    attempt_payload_bytes, compute_stats, primary_metric_label, primary_metric_value, HostInfo,
-    NetworkBaseline, NetworkType, PageLoadResult, Protocol, RequestAttempt, TestRun,
+    attempt_payload_bytes, compute_stats, primary_metric_label, primary_metric_value,
+    BenchmarkEnvironmentCheck, BenchmarkExecutionPlan, BenchmarkNoiseThresholds,
+    BenchmarkStabilityCheck, HostInfo, NetworkBaseline, NetworkType, PageLoadResult, Protocol,
+    RequestAttempt, TestRun,
 };
 use networker_tester::output;
 use networker_tester::output::db;
@@ -37,6 +39,8 @@ use networker_tester::tls_profile::{
 use networker_tester::url_diagnostic::{
     UrlDiagnosticCapabilities, UrlDiagnosticOrchestrator, UrlDiagnosticRequest,
 };
+use std::cmp::Ordering;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use tracing::{error, info, warn};
 use uuid::Uuid;
@@ -227,25 +231,22 @@ async fn main() -> anyhow::Result<()> {
 
     // ── JSON stdout mode (for agent integration) ─────────────────────────────
     if cfg.json_stdout {
-        // Output all runs as JSON array to stdout, skip file outputs
-        if all_runs.len() == 1 {
+        let result = if cfg.benchmark_mode {
+            json::to_benchmark_string_many(&all_runs)
+        } else if all_runs.len() == 1 {
             let first = all_runs
                 .first()
                 .context("no targets produced any test runs")?;
-            match serde_json::to_string(first) {
-                Ok(json) => println!("{json}"),
-                Err(e) => {
-                    error!(error = %e, "failed to serialize test run");
-                    println!("{{\"error\":\"serialization failed\"}}");
-                }
-            }
+            serde_json::to_string(first).map_err(anyhow::Error::from)
         } else {
-            match serde_json::to_string(&all_runs) {
-                Ok(json) => println!("{json}"),
-                Err(e) => {
-                    error!(error = %e, "failed to serialize test runs");
-                    println!("{{\"error\":\"serialization failed\"}}");
-                }
+            serde_json::to_string(&all_runs).map_err(anyhow::Error::from)
+        };
+
+        match result {
+            Ok(json) => println!("{json}"),
+            Err(e) => {
+                error!(error = %e, "failed to serialize JSON stdout payload");
+                println!("{{\"error\":\"serialization failed\"}}");
             }
         }
         return Ok(());
@@ -736,26 +737,105 @@ async fn run_for_target(
     };
     let client_info = Some(HostInfo::collect_local());
 
+    let benchmark_environment_check = if cfg.benchmark_mode && cfg.benchmark_phase == "measured" {
+        let samples = cfg
+            .benchmark_environment_check_samples
+            .unwrap_or(DEFAULT_ENVIRONMENT_CHECK_SAMPLES);
+        let interval_ms = cfg
+            .benchmark_environment_check_interval_ms
+            .unwrap_or(DEFAULT_ENVIRONMENT_CHECK_INTERVAL_MS);
+        let environment_check = measure_environment_check(&target, samples, interval_ms).await;
+        match environment_check.as_ref() {
+            Some(check) if check.successful_samples > 0 => {
+                info!(
+                    "Environment-check: {} | RTT avg={:.2}ms min={:.2}ms max={:.2}ms p50={:.2}ms p95={:.2}ms loss={:.1}% ({} / {} samples)",
+                    check.network_type,
+                    check.rtt_avg_ms,
+                    check.rtt_min_ms,
+                    check.rtt_max_ms,
+                    check.rtt_p50_ms,
+                    check.rtt_p95_ms,
+                    check.packet_loss_percent,
+                    check.successful_samples,
+                    check.attempted_samples,
+                );
+            }
+            Some(check) => {
+                warn!(
+                    "Environment-check: {} | RTT probes failed (loss={:.1}% across {} attempts)",
+                    check.network_type, check.packet_loss_percent, check.attempted_samples,
+                );
+            }
+            None => warn!("Could not perform benchmark environment-check"),
+        }
+        environment_check
+    } else {
+        None
+    };
+
+    let benchmark_stability_check = if cfg.benchmark_mode && cfg.benchmark_phase == "measured" {
+        let samples = cfg
+            .benchmark_stability_check_samples
+            .unwrap_or(DEFAULT_STABILITY_CHECK_SAMPLES);
+        let interval_ms = cfg
+            .benchmark_stability_check_interval_ms
+            .unwrap_or(DEFAULT_STABILITY_CHECK_INTERVAL_MS);
+        let stability = measure_stability_check(&target, samples, interval_ms).await;
+        match stability.as_ref() {
+            Some(check) if check.successful_samples > 0 => {
+                info!(
+                    "Stability-check: {} | RTT avg={:.2}ms min={:.2}ms max={:.2}ms p50={:.2}ms p95={:.2}ms jitter={:.2}ms loss={:.1}% ({} / {} samples)",
+                    check.network_type,
+                    check.rtt_avg_ms,
+                    check.rtt_min_ms,
+                    check.rtt_max_ms,
+                    check.rtt_p50_ms,
+                    check.rtt_p95_ms,
+                    check.jitter_ms,
+                    check.packet_loss_percent,
+                    check.successful_samples,
+                    check.attempted_samples,
+                );
+            }
+            Some(check) => {
+                warn!(
+                    "Stability-check: {} | RTT probes failed (loss={:.1}% across {} attempts)",
+                    check.network_type, check.packet_loss_percent, check.attempted_samples,
+                );
+            }
+            None => warn!("Could not perform benchmark stability-check"),
+        }
+        stability
+    } else {
+        None
+    };
+
     // ── Measure network baseline RTT ────────────────────────────────────────
-    let baseline = match measure_baseline(&target).await {
-        Some(bl) if bl.samples > 0 => {
-            info!(
+    let baseline = if let Some(environment_check) = benchmark_environment_check.as_ref() {
+        Some(baseline_from_environment_check(environment_check))
+    } else if let Some(stability_check) = benchmark_stability_check.as_ref() {
+        Some(baseline_from_stability_check(stability_check))
+    } else {
+        match measure_baseline(&target).await {
+            Some(bl) if bl.samples > 0 => {
+                info!(
                 "Network baseline: {} | RTT avg={:.2}ms min={:.2}ms max={:.2}ms p50={:.2}ms p95={:.2}ms ({} samples)",
                 bl.network_type, bl.rtt_avg_ms, bl.rtt_min_ms, bl.rtt_max_ms,
                 bl.rtt_p50_ms, bl.rtt_p95_ms, bl.samples,
             );
-            Some(bl)
-        }
-        Some(bl) => {
-            warn!(
+                Some(bl)
+            }
+            Some(bl) => {
+                warn!(
                 "Network baseline: {} | RTT probes failed (target may be unreachable) — network type still detected",
                 bl.network_type,
             );
-            Some(bl)
-        }
-        None => {
-            warn!("Could not measure network baseline");
-            None
+                Some(bl)
+            }
+            None => {
+                warn!("Could not measure network baseline");
+                None
+            }
         }
     };
 
@@ -875,9 +955,8 @@ async fn run_for_target(
     #[cfg(not(feature = "http3"))]
     let shared_h3: Option<std::sync::Arc<tokio::sync::Mutex<()>>> = None;
 
-    for run_num in 0..cfg.runs {
-        info!("Run {}/{}", run_num + 1, cfg.runs);
-
+    let connection_reuse_warmup_attempt_count = all_attempts.len() as u32;
+    let collect_iteration = |seq: &mut u32| {
         let futures: Vec<_> = mode_tasks
             .iter()
             .map(|(proto, payload_sz)| {
@@ -891,11 +970,10 @@ async fn run_for_target(
                 let pageload_cfg_clone = pageload_cfg.clone();
                 let shared_h2_clone = shared_h2.clone();
                 let shared_h3_clone = shared_h3.clone();
-                let current_seq = seq;
-                seq += 1;
+                let current_seq = *seq;
+                *seq += 1;
 
                 async move {
-                    // Helper macro to dispatch: warm probe if shared conn, else cold
                     macro_rules! do_dispatch {
                         () => {{
                             if matches!(proto, Protocol::PageLoad2) {
@@ -967,33 +1045,206 @@ async fn run_for_target(
                         }};
                     }
 
-                    // First attempt
-                    let mut a = do_dispatch!();
+                    let mut attempts = Vec::new();
+                    let first_attempt = do_dispatch!();
+                    attempts.push(first_attempt);
 
-                    // Retry loop
                     for retry_num in 1..=retries {
-                        if a.success {
+                        if attempts.last().is_some_and(|attempt| attempt.success) {
                             break;
                         }
-                        let mut retry_a = do_dispatch!();
-                        retry_a.retry_count = retry_num;
-                        a = retry_a;
+                        let mut retry_attempt = do_dispatch!();
+                        retry_attempt.retry_count = retry_num;
+                        attempts.push(retry_attempt);
                     }
 
-                    // Progress logging
-                    log_attempt(&a);
-                    a
+                    for attempt in &attempts {
+                        log_attempt(attempt);
+                    }
+
+                    published_logical_attempts(attempts)
                 }
             })
             .collect();
 
-        // Run futures with bounded concurrency
-        use futures::stream::{self, StreamExt};
-        let results: Vec<_> = stream::iter(futures)
-            .buffer_unordered(cfg.concurrency)
-            .collect()
-            .await;
-        all_attempts.extend(results);
+        async move {
+            use futures::stream::{self, StreamExt};
+            let results: Vec<Vec<RequestAttempt>> = stream::iter(futures)
+                .buffer_unordered(cfg.concurrency)
+                .collect()
+                .await;
+            results.into_iter().flatten().collect::<Vec<_>>()
+        }
+    };
+
+    let pilot_criteria = benchmark_pilot_criteria(cfg);
+    let pilot_adaptive_criteria = pilot_criteria.map(|criteria| BenchmarkAdaptiveCriteria {
+        min_samples: criteria.min_samples,
+        max_samples: criteria.max_samples,
+        min_duration_ms: criteria.min_duration_ms,
+        target_relative_error: None,
+        target_absolute_error: None,
+    });
+    let overhead_runs = if cfg.benchmark_mode && cfg.benchmark_phase == "measured" {
+        cfg.benchmark_overhead_samples
+            .unwrap_or(DEFAULT_OVERHEAD_SAMPLES)
+    } else {
+        0
+    };
+    let cooldown_runs = if cfg.benchmark_mode && cfg.benchmark_phase == "measured" {
+        cfg.benchmark_cooldown_samples
+            .unwrap_or(DEFAULT_COOLDOWN_SAMPLES)
+    } else {
+        0
+    };
+    let mut overhead_attempts = Vec::new();
+    let mut pilot_attempts = Vec::new();
+    let mut pilot_completed_runs = 0u32;
+
+    if overhead_runs > 0 {
+        info!(samples = overhead_runs, "Benchmark overhead phase enabled");
+        for overhead_index in 0..overhead_runs {
+            info!("Overhead {}/{}", overhead_index + 1, overhead_runs);
+            let published_results = collect_iteration(&mut seq).await;
+            overhead_attempts.extend(published_results.iter().cloned());
+            all_attempts.extend(published_results);
+        }
+    }
+
+    if let Some(criteria) = pilot_adaptive_criteria {
+        info!(
+            min_samples = criteria.min_samples,
+            max_samples = criteria.max_samples,
+            min_duration_ms = criteria.min_duration_ms,
+            "Pilot benchmark plan enabled"
+        );
+        while pilot_completed_runs < criteria.max_samples {
+            info!(
+                "Pilot {}/{}",
+                pilot_completed_runs + 1,
+                criteria.max_samples
+            );
+            let published_results = collect_iteration(&mut seq).await;
+            pilot_attempts.extend(published_results.iter().cloned());
+            all_attempts.extend(published_results);
+            pilot_completed_runs += 1;
+
+            let status = benchmark_adaptive_status(&criteria, &pilot_attempts);
+            match status.stop_reason {
+                Some(BenchmarkAdaptiveStopReason::AccuracyTargetReached) => {
+                    info!(
+                        completed_samples = status.completed_samples,
+                        elapsed_ms = format_args!("{:.1}", status.elapsed_ms),
+                        "Pilot benchmark sample budget satisfied"
+                    );
+                    break;
+                }
+                Some(BenchmarkAdaptiveStopReason::MaxSamplesReached) => {
+                    info!(
+                        completed_samples = status.completed_samples,
+                        elapsed_ms = format_args!("{:.1}", status.elapsed_ms),
+                        "Pilot benchmark reached maximum sample budget"
+                    );
+                    break;
+                }
+                None => {}
+            }
+        }
+    }
+
+    let benchmark_execution_plan = if !pilot_attempts.is_empty() {
+        Some(derive_measured_plan_from_pilot(cfg, &pilot_attempts))
+    } else if let Some(criteria) = benchmark_adaptive_criteria(cfg) {
+        Some(BenchmarkExecutionPlan {
+            source: "explicit".into(),
+            min_samples: criteria.min_samples,
+            max_samples: criteria.max_samples,
+            min_duration_ms: criteria.min_duration_ms,
+            target_relative_error: criteria.target_relative_error,
+            target_absolute_error: criteria.target_absolute_error,
+            pilot_sample_count: 0,
+            pilot_elapsed_ms: None,
+        })
+    } else if cfg.benchmark_mode && cfg.benchmark_phase == "measured" {
+        Some(BenchmarkExecutionPlan {
+            source: "fixed-count".into(),
+            min_samples: cfg.runs,
+            max_samples: cfg.runs,
+            min_duration_ms: 0,
+            target_relative_error: None,
+            target_absolute_error: None,
+            pilot_sample_count: 0,
+            pilot_elapsed_ms: None,
+        })
+    } else {
+        None
+    };
+    let adaptive_criteria = benchmark_execution_plan
+        .as_ref()
+        .filter(|_| cfg.benchmark_mode && cfg.benchmark_phase == "measured")
+        .map(|plan| BenchmarkAdaptiveCriteria {
+            min_samples: plan.min_samples,
+            max_samples: plan.max_samples,
+            min_duration_ms: plan.min_duration_ms,
+            target_relative_error: plan.target_relative_error,
+            target_absolute_error: plan.target_absolute_error,
+        });
+    let max_run_count = adaptive_criteria.map_or(cfg.runs, |criteria| criteria.max_samples);
+    if let Some(plan) = &benchmark_execution_plan {
+        info!(
+            source = %plan.source,
+            min_samples = plan.min_samples,
+            max_samples = plan.max_samples,
+            min_duration_ms = plan.min_duration_ms,
+            target_relative_error = plan.target_relative_error,
+            target_absolute_error = plan.target_absolute_error,
+            pilot_sample_count = plan.pilot_sample_count,
+            "Benchmark measured execution plan resolved"
+        );
+    }
+    let mut measured_attempts = Vec::new();
+    let mut cooldown_attempts = Vec::new();
+    let mut completed_runs = 0u32;
+
+    while completed_runs < max_run_count {
+        info!("Run {}/{}", completed_runs + 1, max_run_count);
+        let published_results = collect_iteration(&mut seq).await;
+        measured_attempts.extend(published_results.iter().cloned());
+        all_attempts.extend(published_results);
+        completed_runs += 1;
+
+        if let Some(criteria) = adaptive_criteria {
+            let status = benchmark_adaptive_status(&criteria, &measured_attempts);
+            match status.stop_reason {
+                Some(BenchmarkAdaptiveStopReason::AccuracyTargetReached) => {
+                    info!(
+                        completed_samples = status.completed_samples,
+                        elapsed_ms = format_args!("{:.1}", status.elapsed_ms),
+                        "Adaptive benchmark stop criteria satisfied"
+                    );
+                    break;
+                }
+                Some(BenchmarkAdaptiveStopReason::MaxSamplesReached) => {
+                    info!(
+                        completed_samples = status.completed_samples,
+                        elapsed_ms = format_args!("{:.1}", status.elapsed_ms),
+                        "Adaptive benchmark reached maximum sample budget"
+                    );
+                    break;
+                }
+                None => {}
+            }
+        }
+    }
+
+    if cooldown_runs > 0 {
+        info!(samples = cooldown_runs, "Benchmark cooldown phase enabled");
+        for cooldown_index in 0..cooldown_runs {
+            info!("Cooldown {}/{}", cooldown_index + 1, cooldown_runs);
+            let published_results = collect_iteration(&mut seq).await;
+            cooldown_attempts.extend(published_results.iter().cloned());
+            all_attempts.extend(published_results);
+        }
     }
 
     // ── HTTP stack comparison probes ──────────────────────────────────────────
@@ -1081,6 +1332,7 @@ async fn run_for_target(
                     } else {
                         (&stack_https_url, &stack_pageload_cfg)
                     };
+                    let mut attempts = Vec::new();
                     let mut attempt = dispatch_once(
                         proto,
                         None,
@@ -1099,10 +1351,11 @@ async fn run_for_target(
 
                     // Tag with the HTTP stack name
                     attempt.http_stack = Some(stack.name.clone());
+                    attempts.push(attempt);
 
                     // Retry loop
                     for retry_num in 1..=retries {
-                        if attempt.success {
+                        if attempts.last().is_some_and(|candidate| candidate.success) {
                             break;
                         }
                         let mut retry_a = dispatch_once(
@@ -1122,17 +1375,31 @@ async fn run_for_target(
                         seq += 1;
                         retry_a.retry_count = retry_num;
                         retry_a.http_stack = Some(stack.name.clone());
-                        attempt = retry_a;
+                        attempts.push(retry_a);
                     }
 
-                    log_attempt(&attempt);
-                    all_attempts.push(attempt);
+                    for attempt in &attempts {
+                        log_attempt(attempt);
+                    }
+                    all_attempts.extend(published_logical_attempts(attempts));
                 }
             }
         }
     }
 
     let finished_at = Utc::now();
+
+    let benchmark_noise_thresholds = cfg.benchmark_mode.then(|| BenchmarkNoiseThresholds {
+        max_packet_loss_percent: cfg
+            .benchmark_max_packet_loss_percent
+            .unwrap_or(BenchmarkNoiseThresholds::default().max_packet_loss_percent),
+        max_jitter_ratio: cfg
+            .benchmark_max_jitter_ratio
+            .unwrap_or(BenchmarkNoiseThresholds::default().max_jitter_ratio),
+        max_rtt_spread_ratio: cfg
+            .benchmark_max_rtt_spread_ratio
+            .unwrap_or(BenchmarkNoiseThresholds::default().max_rtt_spread_ratio),
+    });
 
     let run = TestRun {
         run_id,
@@ -1141,7 +1408,7 @@ async fn run_for_target(
         target_url: target_url_str.to_string(),
         target_host,
         modes: modes.iter().map(|m| m.to_string()).collect(),
-        total_runs: cfg.runs,
+        total_runs: completed_runs,
         concurrency: cfg.concurrency as u32,
         timeout_ms: cfg.timeout * 1000,
         client_os: std::env::consts::OS.to_string(),
@@ -1150,6 +1417,36 @@ async fn run_for_target(
         client_info,
         baseline,
         packet_capture_summary: None,
+        benchmark_environment_check,
+        benchmark_stability_check,
+        benchmark_phase: cfg.benchmark_mode.then(|| cfg.benchmark_phase.clone()),
+        benchmark_scenario: cfg.benchmark_mode.then(|| cfg.benchmark_scenario.clone()),
+        benchmark_launch_index: cfg.benchmark_mode.then_some(cfg.benchmark_launch_index),
+        benchmark_warmup_attempt_count: if cfg.benchmark_mode {
+            connection_reuse_warmup_attempt_count
+        } else {
+            0
+        },
+        benchmark_pilot_attempt_count: if cfg.benchmark_mode {
+            pilot_attempts.len().min(u32::MAX as usize) as u32
+        } else {
+            0
+        },
+        benchmark_overhead_attempt_count: if cfg.benchmark_mode {
+            overhead_attempts.len().min(u32::MAX as usize) as u32
+        } else {
+            0
+        },
+        benchmark_cooldown_attempt_count: if cfg.benchmark_mode {
+            cooldown_attempts.len().min(u32::MAX as usize) as u32
+        } else {
+            0
+        },
+        benchmark_execution_plan: cfg
+            .benchmark_mode
+            .then_some(benchmark_execution_plan)
+            .flatten(),
+        benchmark_noise_thresholds,
         attempts: all_attempts,
     };
 
@@ -1219,8 +1516,21 @@ fn classify_target(host: &str) -> NetworkType {
 
 /// Measure TCP connect RTT to a target N times (returns sorted RTTs in ms).
 async fn measure_rtt(host: &str, port: u16, samples: u32) -> Vec<f64> {
+    measure_rtt_samples(host, port, samples, DEFAULT_STABILITY_CHECK_INTERVAL_MS)
+        .await
+        .0
+}
+
+/// Measure TCP connect RTT to a target N times, preserving attempt order.
+async fn measure_rtt_samples(
+    host: &str,
+    port: u16,
+    samples: u32,
+    interval_ms: u64,
+) -> (Vec<f64>, u32, f64) {
     let mut rtts = Vec::with_capacity(samples as usize);
     let addr = format!("{host}:{port}");
+    let started = std::time::Instant::now();
     for _ in 0..samples {
         let t0 = std::time::Instant::now();
         match tokio::time::timeout(
@@ -1236,11 +1546,11 @@ async fn measure_rtt(host: &str, port: u16, samples: u32) -> Vec<f64> {
                 // Connection failed or timed out; skip this sample
             }
         }
-        // Small delay between samples to avoid flooding
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        if interval_ms > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(interval_ms)).await;
+        }
     }
-    rtts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    rtts
+    (rtts, samples, started.elapsed().as_secs_f64() * 1000.0)
 }
 
 /// Compute a percentile from a sorted slice (linear interpolation).
@@ -1291,6 +1601,150 @@ async fn measure_baseline(target: &url::Url) -> Option<NetworkBaseline> {
         rtt_max_ms: rtts[rtts.len() - 1],
         rtt_p50_ms: percentile(&rtts, 50.0),
         rtt_p95_ms: percentile(&rtts, 95.0),
+        network_type,
+    })
+}
+
+fn baseline_from_environment_check(
+    environment_check: &BenchmarkEnvironmentCheck,
+) -> NetworkBaseline {
+    NetworkBaseline {
+        samples: environment_check.successful_samples,
+        rtt_min_ms: environment_check.rtt_min_ms,
+        rtt_avg_ms: environment_check.rtt_avg_ms,
+        rtt_max_ms: environment_check.rtt_max_ms,
+        rtt_p50_ms: environment_check.rtt_p50_ms,
+        rtt_p95_ms: environment_check.rtt_p95_ms,
+        network_type: environment_check.network_type,
+    }
+}
+
+fn average_jitter_ms(samples: &[f64]) -> f64 {
+    if samples.len() < 2 {
+        return 0.0;
+    }
+    samples
+        .windows(2)
+        .map(|pair| (pair[1] - pair[0]).abs())
+        .sum::<f64>()
+        / (samples.len() - 1) as f64
+}
+
+fn baseline_from_stability_check(stability_check: &BenchmarkStabilityCheck) -> NetworkBaseline {
+    NetworkBaseline {
+        samples: stability_check.successful_samples,
+        rtt_min_ms: stability_check.rtt_min_ms,
+        rtt_avg_ms: stability_check.rtt_avg_ms,
+        rtt_max_ms: stability_check.rtt_max_ms,
+        rtt_p50_ms: stability_check.rtt_p50_ms,
+        rtt_p95_ms: stability_check.rtt_p95_ms,
+        network_type: stability_check.network_type,
+    }
+}
+
+async fn measure_environment_check(
+    target: &url::Url,
+    samples: u32,
+    interval_ms: u64,
+) -> Option<BenchmarkEnvironmentCheck> {
+    let host = target.host_str()?;
+    let port = target.port_or_known_default()?;
+    let network_type = classify_target(host);
+    let (ordered_rtts, attempted_samples, duration_ms) =
+        measure_rtt_samples(host, port, samples, interval_ms).await;
+    let successful_samples = ordered_rtts.len() as u32;
+    let failed_samples = attempted_samples.saturating_sub(successful_samples);
+    let packet_loss_percent = if attempted_samples > 0 {
+        failed_samples as f64 / attempted_samples as f64 * 100.0
+    } else {
+        0.0
+    };
+    let mut sorted_rtts = ordered_rtts.clone();
+    sorted_rtts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    if sorted_rtts.is_empty() {
+        return Some(BenchmarkEnvironmentCheck {
+            attempted_samples,
+            successful_samples,
+            failed_samples,
+            duration_ms,
+            rtt_min_ms: 0.0,
+            rtt_avg_ms: 0.0,
+            rtt_max_ms: 0.0,
+            rtt_p50_ms: 0.0,
+            rtt_p95_ms: 0.0,
+            packet_loss_percent,
+            network_type,
+        });
+    }
+
+    let sum: f64 = sorted_rtts.iter().sum();
+    Some(BenchmarkEnvironmentCheck {
+        attempted_samples,
+        successful_samples,
+        failed_samples,
+        duration_ms,
+        rtt_min_ms: sorted_rtts[0],
+        rtt_avg_ms: sum / sorted_rtts.len() as f64,
+        rtt_max_ms: sorted_rtts[sorted_rtts.len() - 1],
+        rtt_p50_ms: percentile(&sorted_rtts, 50.0),
+        rtt_p95_ms: percentile(&sorted_rtts, 95.0),
+        packet_loss_percent,
+        network_type,
+    })
+}
+
+async fn measure_stability_check(
+    target: &url::Url,
+    samples: u32,
+    interval_ms: u64,
+) -> Option<BenchmarkStabilityCheck> {
+    let host = target.host_str()?;
+    let port = target.port_or_known_default()?;
+    let network_type = classify_target(host);
+    let (ordered_rtts, attempted_samples, duration_ms) =
+        measure_rtt_samples(host, port, samples, interval_ms).await;
+    let successful_samples = ordered_rtts.len() as u32;
+    let failed_samples = attempted_samples.saturating_sub(successful_samples);
+    let packet_loss_percent = if attempted_samples > 0 {
+        failed_samples as f64 / attempted_samples as f64 * 100.0
+    } else {
+        0.0
+    };
+    let jitter_ms = average_jitter_ms(&ordered_rtts);
+    let mut sorted_rtts = ordered_rtts.clone();
+    sorted_rtts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    if sorted_rtts.is_empty() {
+        return Some(BenchmarkStabilityCheck {
+            attempted_samples,
+            successful_samples,
+            failed_samples,
+            duration_ms,
+            rtt_min_ms: 0.0,
+            rtt_avg_ms: 0.0,
+            rtt_max_ms: 0.0,
+            rtt_p50_ms: 0.0,
+            rtt_p95_ms: 0.0,
+            jitter_ms,
+            packet_loss_percent,
+            network_type,
+        });
+    }
+
+    let sum: f64 = sorted_rtts.iter().sum();
+    Some(BenchmarkStabilityCheck {
+        attempted_samples,
+        successful_samples,
+        failed_samples,
+        duration_ms,
+        rtt_min_ms: sorted_rtts[0],
+        rtt_avg_ms: sum / sorted_rtts.len() as f64,
+        rtt_max_ms: *sorted_rtts.last().unwrap_or(&sorted_rtts[0]),
+        rtt_p50_ms: percentile(&sorted_rtts, 50.0),
+        rtt_p95_ms: percentile(&sorted_rtts, 95.0),
+        jitter_ms,
+        packet_loss_percent,
         network_type,
     })
 }
@@ -1745,6 +2199,416 @@ fn log_attempt(a: &networker_tester::metrics::RequestAttempt) {
     }
 }
 
+fn published_logical_attempts(attempts: Vec<RequestAttempt>) -> Vec<RequestAttempt> {
+    attempts.into_iter().last().into_iter().collect()
+}
+
+const ADAPTIVE_BOOTSTRAP_RESAMPLES: usize = 1_024;
+const ADAPTIVE_CONFIDENCE_LEVEL: f64 = 0.95;
+const DEFAULT_AUTO_TARGET_RELATIVE_ERROR: f64 = 0.05;
+const DEFAULT_PILOT_MIN_SAMPLES: u32 = 6;
+const DEFAULT_PILOT_MAX_SAMPLES: u32 = 12;
+const DEFAULT_PILOT_MIN_DURATION_MS: u64 = 0;
+const DEFAULT_ENVIRONMENT_CHECK_SAMPLES: u32 = 5;
+const DEFAULT_ENVIRONMENT_CHECK_INTERVAL_MS: u64 = 50;
+const DEFAULT_STABILITY_CHECK_SAMPLES: u32 = 12;
+const DEFAULT_STABILITY_CHECK_INTERVAL_MS: u64 = 50;
+const DEFAULT_OVERHEAD_SAMPLES: u32 = 1;
+const DEFAULT_COOLDOWN_SAMPLES: u32 = 1;
+
+#[derive(Debug, Clone, Copy)]
+struct BenchmarkAdaptiveCriteria {
+    min_samples: u32,
+    max_samples: u32,
+    min_duration_ms: u64,
+    target_relative_error: Option<f64>,
+    target_absolute_error: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct BenchmarkPilotCriteria {
+    min_samples: u32,
+    max_samples: u32,
+    min_duration_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BenchmarkAdaptiveStopReason {
+    AccuracyTargetReached,
+    MaxSamplesReached,
+}
+
+#[derive(Debug, Clone)]
+struct BenchmarkAdaptiveStatus {
+    completed_samples: u32,
+    elapsed_ms: f64,
+    stop_reason: Option<BenchmarkAdaptiveStopReason>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MedianErrorBounds {
+    median: f64,
+    absolute_half_width: f64,
+}
+
+#[derive(Debug, Clone)]
+struct DeterministicRng {
+    state: u64,
+}
+
+impl DeterministicRng {
+    fn from_values(values: &[f64]) -> Self {
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64 ^ values.len() as u64;
+        for value in values {
+            state ^= value.to_bits().wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            state = state.rotate_left(13);
+        }
+        if state == 0 {
+            state = 0x94d0_49bb_1331_11eb;
+        }
+        Self { state }
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        self.state = self
+            .state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        self.state
+    }
+
+    fn next_index(&mut self, upper: usize) -> usize {
+        (self.next_u64() as usize) % upper
+    }
+}
+
+fn benchmark_pilot_criteria(cfg: &ResolvedConfig) -> Option<BenchmarkPilotCriteria> {
+    if !cfg.benchmark_mode || cfg.benchmark_phase != "measured" || !cfg.http_stacks.is_empty() {
+        return None;
+    }
+
+    let pilot_requested = cfg.benchmark_pilot_min_samples.is_some()
+        || cfg.benchmark_pilot_max_samples.is_some()
+        || cfg.benchmark_pilot_min_duration_ms.is_some();
+    let no_explicit_measured_controls = cfg.benchmark_min_samples.is_none()
+        && cfg.benchmark_max_samples.is_none()
+        && cfg.benchmark_min_duration_ms.is_none()
+        && cfg.benchmark_target_relative_error.is_none()
+        && cfg.benchmark_target_absolute_error.is_none();
+    if !pilot_requested && !no_explicit_measured_controls {
+        return None;
+    }
+
+    let default_pilot_max = cfg.runs.clamp(1, DEFAULT_PILOT_MAX_SAMPLES);
+    let default_pilot_min = default_pilot_max.min(DEFAULT_PILOT_MIN_SAMPLES);
+
+    Some(BenchmarkPilotCriteria {
+        min_samples: cfg.benchmark_pilot_min_samples.unwrap_or(default_pilot_min),
+        max_samples: cfg.benchmark_pilot_max_samples.unwrap_or(default_pilot_max),
+        min_duration_ms: cfg
+            .benchmark_pilot_min_duration_ms
+            .unwrap_or(DEFAULT_PILOT_MIN_DURATION_MS),
+    })
+}
+
+fn benchmark_adaptive_criteria(cfg: &ResolvedConfig) -> Option<BenchmarkAdaptiveCriteria> {
+    let controls_requested = cfg.benchmark_min_samples.is_some()
+        || cfg.benchmark_max_samples.is_some()
+        || cfg.benchmark_min_duration_ms.is_some()
+        || cfg.benchmark_target_relative_error.is_some()
+        || cfg.benchmark_target_absolute_error.is_some();
+    if !cfg.benchmark_mode || cfg.benchmark_phase != "measured" || !controls_requested {
+        return None;
+    }
+
+    Some(BenchmarkAdaptiveCriteria {
+        min_samples: cfg.benchmark_min_samples.unwrap_or(cfg.runs),
+        max_samples: cfg.benchmark_max_samples.unwrap_or(cfg.runs),
+        min_duration_ms: cfg.benchmark_min_duration_ms.unwrap_or(0),
+        target_relative_error: cfg.benchmark_target_relative_error,
+        target_absolute_error: cfg.benchmark_target_absolute_error,
+    })
+}
+
+fn derive_measured_plan_from_pilot(
+    cfg: &ResolvedConfig,
+    pilot_attempts: &[RequestAttempt],
+) -> BenchmarkExecutionPlan {
+    let pilot_status = benchmark_adaptive_status(
+        &BenchmarkAdaptiveCriteria {
+            min_samples: 1,
+            max_samples: u32::MAX,
+            min_duration_ms: 0,
+            target_relative_error: None,
+            target_absolute_error: None,
+        },
+        pilot_attempts,
+    );
+    let target_relative_error = cfg
+        .benchmark_target_relative_error
+        .or(Some(DEFAULT_AUTO_TARGET_RELATIVE_ERROR));
+    let target_absolute_error = cfg.benchmark_target_absolute_error;
+
+    let mut values_by_case: BTreeMap<String, Vec<f64>> = BTreeMap::new();
+    for attempt in pilot_attempts {
+        if attempt.success {
+            if let Some(value) = primary_metric_value(attempt) {
+                values_by_case
+                    .entry(adaptive_case_id(attempt))
+                    .or_default()
+                    .push(value);
+            }
+        }
+    }
+
+    let estimated_max_samples = if values_by_case.is_empty() {
+        cfg.runs
+    } else {
+        values_by_case
+            .values()
+            .map(|values| {
+                estimated_samples_for_error_targets(
+                    values,
+                    target_relative_error,
+                    target_absolute_error,
+                )
+            })
+            .max()
+            .unwrap_or(cfg.runs)
+            .clamp(1, cfg.runs.max(1))
+    };
+
+    let min_samples = cfg
+        .benchmark_min_samples
+        .unwrap_or(pilot_status.completed_samples.max(1));
+    let max_samples = cfg.benchmark_max_samples.unwrap_or(
+        estimated_max_samples
+            .max(min_samples)
+            .min(cfg.runs.max(min_samples)),
+    );
+    let min_duration_ms = cfg
+        .benchmark_min_duration_ms
+        .unwrap_or(pilot_status.elapsed_ms.ceil().clamp(0.0, u64::MAX as f64) as u64);
+    let source = if cfg.benchmark_min_samples.is_none()
+        && cfg.benchmark_max_samples.is_none()
+        && cfg.benchmark_min_duration_ms.is_none()
+        && cfg.benchmark_target_relative_error.is_none()
+        && cfg.benchmark_target_absolute_error.is_none()
+    {
+        "pilot-derived"
+    } else {
+        "pilot-assisted"
+    };
+
+    BenchmarkExecutionPlan {
+        source: source.to_string(),
+        min_samples,
+        max_samples,
+        min_duration_ms,
+        target_relative_error,
+        target_absolute_error,
+        pilot_sample_count: pilot_status.completed_samples,
+        pilot_elapsed_ms: Some(pilot_status.elapsed_ms),
+    }
+}
+
+fn benchmark_adaptive_status(
+    criteria: &BenchmarkAdaptiveCriteria,
+    attempts: &[RequestAttempt],
+) -> BenchmarkAdaptiveStatus {
+    let elapsed_ms = benchmark_attempt_wall_time_ms(attempts);
+    let mut samples_by_case: BTreeMap<String, usize> = BTreeMap::new();
+    let mut values_by_case: BTreeMap<String, Vec<f64>> = BTreeMap::new();
+
+    for attempt in attempts {
+        let case_id = adaptive_case_id(attempt);
+        *samples_by_case.entry(case_id.clone()).or_default() += 1;
+        if attempt.success {
+            if let Some(value) = primary_metric_value(attempt) {
+                values_by_case.entry(case_id).or_default().push(value);
+            }
+        }
+    }
+
+    let completed_samples = samples_by_case
+        .values()
+        .min()
+        .copied()
+        .unwrap_or_default()
+        .try_into()
+        .unwrap_or(u32::MAX);
+    let min_samples_satisfied = completed_samples >= criteria.min_samples;
+    let min_duration_satisfied = elapsed_ms >= criteria.min_duration_ms as f64;
+    let requires_accuracy_target =
+        criteria.target_relative_error.is_some() || criteria.target_absolute_error.is_some();
+    let accuracy_satisfied = if requires_accuracy_target {
+        !samples_by_case.is_empty()
+            && samples_by_case.keys().all(|case_id| {
+                values_by_case.get(case_id).is_some_and(|values| {
+                    median_error_bounds(values).is_some_and(|error_bounds| {
+                        let relative_ok = criteria.target_relative_error.is_none_or(|target| {
+                            error_bounds.median.abs() > f64::EPSILON
+                                && error_bounds.absolute_half_width / error_bounds.median.abs()
+                                    <= target
+                        });
+                        let absolute_ok = criteria
+                            .target_absolute_error
+                            .is_none_or(|target| error_bounds.absolute_half_width <= target);
+                        relative_ok && absolute_ok
+                    })
+                })
+            })
+    } else {
+        true
+    };
+
+    let stop_reason = if completed_samples >= criteria.max_samples {
+        Some(BenchmarkAdaptiveStopReason::MaxSamplesReached)
+    } else if min_samples_satisfied && min_duration_satisfied && accuracy_satisfied {
+        Some(BenchmarkAdaptiveStopReason::AccuracyTargetReached)
+    } else {
+        None
+    };
+
+    BenchmarkAdaptiveStatus {
+        completed_samples,
+        elapsed_ms,
+        stop_reason,
+    }
+}
+
+fn adaptive_case_id(attempt: &RequestAttempt) -> String {
+    let payload = attempt_payload_bytes(attempt)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "default".into());
+    let stack = attempt
+        .http_stack
+        .as_deref()
+        .unwrap_or("default")
+        .replace(':', "_");
+    format!("{}:{}:{}", attempt.protocol, payload, stack)
+}
+
+fn benchmark_attempt_wall_time_ms(attempts: &[RequestAttempt]) -> f64 {
+    let start = attempts.iter().map(|attempt| attempt.started_at).min();
+    let end = attempts
+        .iter()
+        .map(|attempt| attempt.finished_at.unwrap_or(attempt.started_at))
+        .max();
+    match (start, end) {
+        (Some(start), Some(end)) => (end - start)
+            .num_microseconds()
+            .map(|micros| micros as f64 / 1000.0)
+            .unwrap_or(0.0),
+        _ => 0.0,
+    }
+}
+
+fn median_error_bounds(values: &[f64]) -> Option<MedianErrorBounds> {
+    let mut sorted = values
+        .iter()
+        .copied()
+        .filter(|value| value.is_finite())
+        .collect::<Vec<_>>();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+    if sorted.len() < 2 {
+        return None;
+    }
+    let median = percentile_from_sorted(&sorted, 50.0);
+    let (_, lower, upper) = bootstrap_median_interval(&sorted);
+    Some(MedianErrorBounds {
+        median,
+        absolute_half_width: (upper - lower) / 2.0,
+    })
+}
+
+fn estimated_samples_for_error_targets(
+    values: &[f64],
+    target_relative_error: Option<f64>,
+    target_absolute_error: Option<f64>,
+) -> u32 {
+    let current_n = values.len().clamp(1, u32::MAX as usize) as f64;
+    let Some(error_bounds) = median_error_bounds(values) else {
+        return current_n as u32;
+    };
+
+    let mut estimated = current_n;
+    if let Some(target) = target_relative_error {
+        if error_bounds.median.abs() > f64::EPSILON {
+            let current_relative_error =
+                error_bounds.absolute_half_width / error_bounds.median.abs();
+            estimated = estimated.max(current_n * (current_relative_error / target).powi(2));
+        }
+    }
+    if let Some(target) = target_absolute_error {
+        estimated = estimated.max(current_n * (error_bounds.absolute_half_width / target).powi(2));
+    }
+
+    estimated.ceil().clamp(1.0, u32::MAX as f64) as u32
+}
+
+fn median_from_sorted(sorted: &[f64]) -> f64 {
+    if sorted.is_empty() {
+        0.0
+    } else if sorted.len().is_multiple_of(2) {
+        let upper = sorted.len() / 2;
+        (sorted[upper - 1] + sorted[upper]) / 2.0
+    } else {
+        sorted[sorted.len() / 2]
+    }
+}
+
+fn bootstrap_median_interval(values: &[f64]) -> (f64, f64, f64) {
+    if values.is_empty() {
+        return (0.0, 0.0, 0.0);
+    }
+    if values.len() == 1 {
+        return (0.0, values[0], values[0]);
+    }
+
+    let mut rng = DeterministicRng::from_values(values);
+    let mut estimates = Vec::with_capacity(ADAPTIVE_BOOTSTRAP_RESAMPLES);
+    for _ in 0..ADAPTIVE_BOOTSTRAP_RESAMPLES {
+        let mut sample = Vec::with_capacity(values.len());
+        for _ in 0..values.len() {
+            sample.push(values[rng.next_index(values.len())]);
+        }
+        sample.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+        estimates.push(median_from_sorted(&sample));
+    }
+
+    estimates.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+    let estimate_mean = estimates.iter().sum::<f64>() / estimates.len() as f64;
+    let estimate_variance = estimates
+        .iter()
+        .map(|value| (value - estimate_mean).powi(2))
+        .sum::<f64>()
+        / (estimates.len() as f64 - 1.0);
+    let standard_error = estimate_variance.sqrt();
+    let tail = (1.0 - ADAPTIVE_CONFIDENCE_LEVEL) * 50.0;
+    let lower = percentile_from_sorted(&estimates, tail);
+    let upper = percentile_from_sorted(&estimates, 100.0 - tail);
+    (standard_error, lower, upper)
+}
+
+fn percentile_from_sorted(sorted: &[f64], percentile: f64) -> f64 {
+    if sorted.is_empty() {
+        return 0.0;
+    }
+    if sorted.len() == 1 {
+        return sorted[0];
+    }
+
+    let rank = percentile / 100.0 * (sorted.len() - 1) as f64;
+    let lo = rank.floor() as usize;
+    let hi = rank.ceil() as usize;
+    if lo == hi {
+        sorted[lo]
+    } else {
+        sorted[lo] + (sorted[hi] - sorted[lo]) * (rank - lo as f64)
+    }
+}
+
 fn fmt_bytes(n: usize) -> String {
     if n >= 1 << 30 {
         format!("{:.1}GiB", n as f64 / (1u64 << 30) as f64)
@@ -2078,9 +2942,113 @@ fn copy_default_css(out_dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{Duration, TimeZone};
     use networker_tester::cli::{
         ImpairmentProfile, ResolvedImpairmentConfig, ResolvedPacketCaptureConfig,
     };
+    use networker_tester::metrics::HttpResult;
+    use uuid::Uuid;
+
+    fn request_attempt(success: bool, retry_count: u32) -> RequestAttempt {
+        RequestAttempt {
+            attempt_id: Uuid::new_v4(),
+            run_id: Uuid::new_v4(),
+            protocol: Protocol::Http1,
+            sequence_num: 0,
+            started_at: chrono::Utc::now(),
+            finished_at: Some(chrono::Utc::now()),
+            success,
+            dns: None,
+            tcp: None,
+            tls: None,
+            http: None,
+            udp: None,
+            error: None,
+            retry_count,
+            server_timing: None,
+            udp_throughput: None,
+            page_load: None,
+            browser: None,
+            http_stack: None,
+        }
+    }
+
+    fn measured_http_attempt(
+        value_ms: f64,
+        start_offset_ms: i64,
+        wall_time_ms: i64,
+        payload_bytes: usize,
+        stack: Option<&str>,
+    ) -> RequestAttempt {
+        let started_at = Utc.timestamp_millis_opt(start_offset_ms).single().unwrap();
+        RequestAttempt {
+            attempt_id: Uuid::new_v4(),
+            run_id: Uuid::new_v4(),
+            protocol: Protocol::Http1,
+            sequence_num: start_offset_ms.max(0) as u32,
+            started_at,
+            finished_at: Some(started_at + Duration::milliseconds(wall_time_ms)),
+            success: true,
+            dns: None,
+            tcp: None,
+            tls: None,
+            http: Some(HttpResult {
+                negotiated_version: "HTTP/1.1".into(),
+                status_code: 200,
+                headers_size_bytes: 128,
+                body_size_bytes: payload_bytes,
+                ttfb_ms: value_ms / 2.0,
+                total_duration_ms: value_ms,
+                redirect_count: 0,
+                started_at,
+                response_headers: Vec::new(),
+                payload_bytes,
+                throughput_mbps: None,
+                goodput_mbps: None,
+                cpu_time_ms: None,
+                csw_voluntary: None,
+                csw_involuntary: None,
+            }),
+            udp: None,
+            error: None,
+            retry_count: 0,
+            server_timing: None,
+            udp_throughput: None,
+            page_load: None,
+            browser: None,
+            http_stack: stack.map(str::to_string),
+        }
+    }
+
+    fn failed_http_attempt(
+        start_offset_ms: i64,
+        wall_time_ms: i64,
+        _payload_bytes: usize,
+        stack: Option<&str>,
+    ) -> RequestAttempt {
+        let started_at = Utc.timestamp_millis_opt(start_offset_ms).single().unwrap();
+        RequestAttempt {
+            attempt_id: Uuid::new_v4(),
+            run_id: Uuid::new_v4(),
+            protocol: Protocol::Http1,
+            sequence_num: start_offset_ms.max(0) as u32,
+            started_at,
+            finished_at: Some(started_at + Duration::milliseconds(wall_time_ms)),
+            success: false,
+            dns: None,
+            tcp: None,
+            tls: None,
+            http: None,
+            udp: None,
+            error: None,
+            retry_count: 0,
+            server_timing: None,
+            udp_throughput: None,
+            page_load: None,
+            browser: None,
+            http_stack: stack.map(str::to_string),
+        }
+    }
 
     #[test]
     fn rewrite_url_for_stack_http_port() {
@@ -2152,6 +3120,238 @@ mod tests {
         assert!(!stack_modes.contains(&Protocol::Download));
     }
 
+    #[test]
+    fn published_logical_attempts_keep_only_final_retry_outcome() {
+        let published =
+            published_logical_attempts(vec![request_attempt(false, 0), request_attempt(true, 1)]);
+
+        assert_eq!(published.len(), 1);
+        assert!(published[0].success);
+        assert_eq!(published[0].retry_count, 1);
+    }
+
+    #[test]
+    fn benchmark_adaptive_criteria_requires_controls() {
+        let mut cfg = sample_resolved_config(0);
+        cfg.benchmark_mode = true;
+
+        assert!(benchmark_adaptive_criteria(&cfg).is_none());
+
+        cfg.benchmark_min_samples = Some(5);
+        let criteria = benchmark_adaptive_criteria(&cfg).unwrap();
+        assert_eq!(criteria.min_samples, 5);
+        assert_eq!(criteria.max_samples, 1);
+        assert_eq!(criteria.min_duration_ms, 0);
+        assert_eq!(criteria.target_relative_error, None);
+        assert_eq!(criteria.target_absolute_error, None);
+    }
+
+    #[test]
+    fn benchmark_pilot_criteria_defaults_for_measured_benchmark_mode() {
+        let mut cfg = sample_resolved_config(0);
+        cfg.benchmark_mode = true;
+        cfg.runs = 10;
+
+        let criteria = benchmark_pilot_criteria(&cfg).unwrap();
+        assert_eq!(criteria.min_samples, 6);
+        assert_eq!(criteria.max_samples, 10);
+        assert_eq!(criteria.min_duration_ms, 0);
+    }
+
+    #[test]
+    fn benchmark_pilot_criteria_stays_disabled_when_explicit_measured_controls_exist() {
+        let mut cfg = sample_resolved_config(0);
+        cfg.benchmark_mode = true;
+        cfg.benchmark_min_samples = Some(5);
+
+        assert!(benchmark_pilot_criteria(&cfg).is_none());
+    }
+
+    #[test]
+    fn benchmark_adaptive_status_stops_when_accuracy_target_is_met() {
+        let criteria = BenchmarkAdaptiveCriteria {
+            min_samples: 3,
+            max_samples: 10,
+            min_duration_ms: 20,
+            target_relative_error: Some(0.05),
+            target_absolute_error: None,
+        };
+        let attempts = vec![
+            measured_http_attempt(100.0, 0, 10, 1024, None),
+            measured_http_attempt(100.0, 10, 10, 1024, None),
+            measured_http_attempt(100.0, 20, 10, 1024, None),
+        ];
+
+        let status = benchmark_adaptive_status(&criteria, &attempts);
+
+        assert_eq!(status.completed_samples, 3);
+        assert_eq!(
+            status.stop_reason,
+            Some(BenchmarkAdaptiveStopReason::AccuracyTargetReached)
+        );
+    }
+
+    #[test]
+    fn benchmark_adaptive_status_waits_for_min_duration() {
+        let criteria = BenchmarkAdaptiveCriteria {
+            min_samples: 3,
+            max_samples: 10,
+            min_duration_ms: 100,
+            target_relative_error: Some(0.05),
+            target_absolute_error: None,
+        };
+        let attempts = vec![
+            measured_http_attempt(100.0, 0, 10, 1024, None),
+            measured_http_attempt(100.0, 10, 10, 1024, None),
+            measured_http_attempt(100.0, 20, 10, 1024, None),
+        ];
+
+        let status = benchmark_adaptive_status(&criteria, &attempts);
+
+        assert_eq!(status.completed_samples, 3);
+        assert!(status.elapsed_ms < 100.0);
+        assert_eq!(status.stop_reason, None);
+    }
+
+    #[test]
+    fn benchmark_adaptive_status_uses_lowest_case_sample_count() {
+        let criteria = BenchmarkAdaptiveCriteria {
+            min_samples: 3,
+            max_samples: 10,
+            min_duration_ms: 0,
+            target_relative_error: None,
+            target_absolute_error: None,
+        };
+        let attempts = vec![
+            measured_http_attempt(100.0, 0, 5, 1024, None),
+            measured_http_attempt(100.0, 10, 5, 1024, None),
+            measured_http_attempt(100.0, 20, 5, 1024, None),
+            measured_http_attempt(101.0, 0, 5, 1024, Some("nginx")),
+            measured_http_attempt(101.0, 10, 5, 1024, Some("nginx")),
+        ];
+
+        let status = benchmark_adaptive_status(&criteria, &attempts);
+
+        assert_eq!(status.completed_samples, 2);
+        assert_eq!(status.stop_reason, None);
+    }
+
+    #[test]
+    fn benchmark_adaptive_status_requires_metrics_for_every_case() {
+        let criteria = BenchmarkAdaptiveCriteria {
+            min_samples: 1,
+            max_samples: 5,
+            min_duration_ms: 0,
+            target_relative_error: Some(0.05),
+            target_absolute_error: None,
+        };
+        let attempts = vec![
+            measured_http_attempt(100.0, 0, 10, 1024, None),
+            failed_http_attempt(0, 10, 1024, Some("nginx")),
+        ];
+
+        let status = benchmark_adaptive_status(&criteria, &attempts);
+
+        assert_eq!(status.completed_samples, 1);
+        assert_eq!(status.stop_reason, None);
+    }
+
+    #[test]
+    fn benchmark_adaptive_status_stops_at_max_samples_when_noise_stays_high() {
+        let criteria = BenchmarkAdaptiveCriteria {
+            min_samples: 2,
+            max_samples: 4,
+            min_duration_ms: 0,
+            target_relative_error: Some(0.01),
+            target_absolute_error: None,
+        };
+        let attempts = vec![
+            measured_http_attempt(100.0, 0, 5, 1024, None),
+            measured_http_attempt(200.0, 10, 5, 1024, None),
+            measured_http_attempt(50.0, 20, 5, 1024, None),
+            measured_http_attempt(300.0, 30, 5, 1024, None),
+        ];
+
+        let status = benchmark_adaptive_status(&criteria, &attempts);
+
+        assert_eq!(status.completed_samples, 4);
+        assert_eq!(
+            status.stop_reason,
+            Some(BenchmarkAdaptiveStopReason::MaxSamplesReached)
+        );
+    }
+
+    #[test]
+    fn derive_measured_plan_from_pilot_estimates_targets() {
+        let mut cfg = sample_resolved_config(0);
+        cfg.benchmark_mode = true;
+        cfg.runs = 40;
+        let attempts = vec![
+            measured_http_attempt(100.0, 0, 10, 1024, None),
+            measured_http_attempt(100.0, 10, 10, 1024, None),
+            measured_http_attempt(100.0, 20, 10, 1024, None),
+            measured_http_attempt(100.0, 30, 10, 1024, None),
+            measured_http_attempt(100.0, 40, 10, 1024, None),
+            measured_http_attempt(100.0, 50, 10, 1024, None),
+        ];
+
+        let plan = derive_measured_plan_from_pilot(&cfg, &attempts);
+
+        assert_eq!(plan.source, "pilot-derived");
+        assert_eq!(plan.pilot_sample_count, 6);
+        assert_eq!(
+            plan.target_relative_error,
+            Some(DEFAULT_AUTO_TARGET_RELATIVE_ERROR)
+        );
+        assert_eq!(plan.target_absolute_error, None);
+        assert_eq!(plan.min_samples, 6);
+        assert_eq!(plan.max_samples, 6);
+        assert!(plan.pilot_elapsed_ms.is_some());
+    }
+
+    #[test]
+    fn benchmark_adaptive_status_stops_when_absolute_error_target_is_met() {
+        let criteria = BenchmarkAdaptiveCriteria {
+            min_samples: 3,
+            max_samples: 10,
+            min_duration_ms: 0,
+            target_relative_error: None,
+            target_absolute_error: Some(1.0),
+        };
+        let attempts = vec![
+            measured_http_attempt(100.0, 0, 10, 1024, None),
+            measured_http_attempt(100.0, 10, 10, 1024, None),
+            measured_http_attempt(100.0, 20, 10, 1024, None),
+        ];
+
+        let status = benchmark_adaptive_status(&criteria, &attempts);
+
+        assert_eq!(
+            status.stop_reason,
+            Some(BenchmarkAdaptiveStopReason::AccuracyTargetReached)
+        );
+    }
+
+    #[test]
+    fn benchmark_adaptive_status_requires_all_configured_error_targets() {
+        let criteria = BenchmarkAdaptiveCriteria {
+            min_samples: 3,
+            max_samples: 10,
+            min_duration_ms: 0,
+            target_relative_error: Some(0.01),
+            target_absolute_error: Some(100.0),
+        };
+        let attempts = vec![
+            measured_http_attempt(100.0, 0, 10, 1024, None),
+            measured_http_attempt(110.0, 10, 10, 1024, None),
+            measured_http_attempt(90.0, 20, 10, 1024, None),
+        ];
+
+        let status = benchmark_adaptive_status(&criteria, &attempts);
+
+        assert_eq!(status.stop_reason, None);
+    }
+
     fn sample_resolved_config(delay_ms: u64) -> ResolvedConfig {
         ResolvedConfig {
             targets: vec!["https://127.0.0.1:8443/health".into()],
@@ -2192,6 +3392,27 @@ mod tests {
             html_report: "report.html".into(),
             css: None,
             excel: false,
+            benchmark_mode: false,
+            benchmark_phase: "measured".into(),
+            benchmark_scenario: "default".into(),
+            benchmark_launch_index: 0,
+            benchmark_min_samples: None,
+            benchmark_max_samples: None,
+            benchmark_min_duration_ms: None,
+            benchmark_target_relative_error: None,
+            benchmark_target_absolute_error: None,
+            benchmark_pilot_min_samples: None,
+            benchmark_pilot_max_samples: None,
+            benchmark_pilot_min_duration_ms: None,
+            benchmark_environment_check_samples: None,
+            benchmark_environment_check_interval_ms: None,
+            benchmark_stability_check_samples: None,
+            benchmark_stability_check_interval_ms: None,
+            benchmark_max_packet_loss_percent: None,
+            benchmark_max_jitter_ratio: None,
+            benchmark_max_rtt_spread_ratio: None,
+            benchmark_overhead_samples: None,
+            benchmark_cooldown_samples: None,
             save_to_db: false,
             db_url: None,
             db_migrate: false,
@@ -2251,5 +3472,64 @@ mod tests {
         let base = url::Url::parse("https://example.com:8443/health").unwrap();
         let rewritten = apply_impairment_target(&Protocol::Http2, &base, &cfg);
         assert_eq!(rewritten, base);
+    }
+
+    #[test]
+    fn average_jitter_uses_adjacent_rtt_deltas() {
+        let jitter = average_jitter_ms(&[1.0, 1.4, 0.8, 1.1]);
+        assert!((jitter - 0.433_333_333_333_333_35).abs() < 1e-12);
+    }
+
+    #[test]
+    fn baseline_from_stability_check_reuses_rtt_distribution() {
+        let stability = BenchmarkStabilityCheck {
+            attempted_samples: 12,
+            successful_samples: 10,
+            failed_samples: 2,
+            duration_ms: 500.0,
+            rtt_min_ms: 0.8,
+            rtt_avg_ms: 1.1,
+            rtt_max_ms: 1.6,
+            rtt_p50_ms: 1.0,
+            rtt_p95_ms: 1.4,
+            jitter_ms: 0.1,
+            packet_loss_percent: 16.7,
+            network_type: NetworkType::Loopback,
+        };
+
+        let baseline = baseline_from_stability_check(&stability);
+        assert_eq!(baseline.samples, 10);
+        assert_eq!(baseline.rtt_min_ms, 0.8);
+        assert_eq!(baseline.rtt_avg_ms, 1.1);
+        assert_eq!(baseline.rtt_max_ms, 1.6);
+        assert_eq!(baseline.rtt_p50_ms, 1.0);
+        assert_eq!(baseline.rtt_p95_ms, 1.4);
+        assert_eq!(baseline.network_type, NetworkType::Loopback);
+    }
+
+    #[test]
+    fn baseline_from_environment_check_reuses_rtt_distribution() {
+        let environment_check = BenchmarkEnvironmentCheck {
+            attempted_samples: 5,
+            successful_samples: 4,
+            failed_samples: 1,
+            duration_ms: 250.0,
+            rtt_min_ms: 0.7,
+            rtt_avg_ms: 0.9,
+            rtt_max_ms: 1.2,
+            rtt_p50_ms: 0.85,
+            rtt_p95_ms: 1.1,
+            packet_loss_percent: 20.0,
+            network_type: NetworkType::Loopback,
+        };
+
+        let baseline = baseline_from_environment_check(&environment_check);
+        assert_eq!(baseline.samples, 4);
+        assert_eq!(baseline.rtt_min_ms, 0.7);
+        assert_eq!(baseline.rtt_avg_ms, 0.9);
+        assert_eq!(baseline.rtt_max_ms, 1.2);
+        assert_eq!(baseline.rtt_p50_ms, 0.85);
+        assert_eq!(baseline.rtt_p95_ms, 1.1);
+        assert_eq!(baseline.network_type, NetworkType::Loopback);
     }
 }

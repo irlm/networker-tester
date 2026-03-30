@@ -1,6 +1,8 @@
 {
   "name": "AletheBench Phase 1 — HTTP JSON API",
   "version": "0.1.0",
+  "baseline_language": "rust",
+  "baseline_runtime": "axum",
   "total_requests": 50000,
   "concurrency_levels": [1, 10, 50, 100, 250],
   "repeat": 3,

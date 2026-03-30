@@ -115,6 +115,7 @@ jobs:
   frontend:
     name: Dashboard frontend
     runs-on: ubuntu-latest
+    needs: lint
     defaults:
       run:
         working-directory: dashboard
@@ -128,7 +129,8 @@ jobs:
           cache: 'npm'
           cache-dependency-path: dashboard/package-lock.json
 
-      - run: npm install --legacy-peer-deps
+      - run: npm ci
+      - run: npm test
       - run: npm run build
       - run: npx tsc -b
 
@@ -185,23 +187,6 @@ jobs:
           key: ubuntu-coverage-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ubuntu-coverage-cargo-
 
-      - name: Install sqlcmd
-        run: |
-          curl -sSL https://packages.microsoft.com/keys/microsoft.asc | sudo tee /etc/apt/trusted.gpg.d/microsoft.asc
-          sudo add-apt-repository "$(curl -sSL https://packages.microsoft.com/config/ubuntu/22.04/prod.list)"
-          sudo apt-get update && sudo apt-get install -y mssql-tools18 unixodbc-dev
-
-      - name: Create database schema
-        run: |
-          SQLCMD=/opt/mssql-tools18/bin/sqlcmd
-          ARGS="-S localhost -U sa -P NetworkerTest1! -C"
-          $SQLCMD $ARGS -i sql/01_CreateDatabase.sql
-          $SQLCMD $ARGS -i sql/02_StoredProcedures.sql
-          $SQLCMD $ARGS -i sql/04_AddThroughput.sql
-          $SQLCMD $ARGS -i sql/05_ExtendedTcpStats.sql
-          $SQLCMD $ARGS -i sql/06_ServerTiming.sql
-          $SQLCMD $ARGS -i sql/07_MoreTcpStats.sql
-
       - name: Collect coverage (lib tests)
         run: |
           cargo llvm-cov --no-report --workspace --all-features --lib \
@@ -243,7 +228,8 @@ jobs:
   sql-integration:
     name: SQL Server integration
     runs-on: ubuntu-latest
-    if: ${{ vars.NETWORKER_SQL_TESTS == 'true' }}
+    needs: lint
+    timeout-minutes: 30
 
     services:
       mssql:
@@ -263,32 +249,17 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Install sqlcmd
-        run: |
-          curl -sSL https://packages.microsoft.com/keys/microsoft.asc | sudo tee /etc/apt/trusted.gpg.d/microsoft.asc
-          sudo add-apt-repository "$(curl -sSL https://packages.microsoft.com/config/ubuntu/22.04/prod.list)"
-          sudo apt-get update && sudo apt-get install -y mssql-tools18 unixodbc-dev
-
-      - name: Create database schema
-        run: |
-          SQLCMD=/opt/mssql-tools18/bin/sqlcmd
-          ARGS="-S localhost -U sa -P NetworkerTest1! -C"
-          $SQLCMD $ARGS -i sql/01_CreateDatabase.sql
-          $SQLCMD $ARGS -i sql/02_StoredProcedures.sql
-          $SQLCMD $ARGS -i sql/04_AddThroughput.sql
-          $SQLCMD $ARGS -i sql/05_ExtendedTcpStats.sql
-          $SQLCMD $ARGS -i sql/06_ServerTiming.sql
-          $SQLCMD $ARGS -i sql/07_MoreTcpStats.sql
-
       - name: Run SQL tests
         env:
-          NETWORKER_SQL_CONN: "Server=localhost;Database=NetworkDiagnostics;User Id=sa;Password=NetworkerTest1!;TrustServerCertificate=true"
-        run: cargo test --workspace --features db-mssql -- db_mssql --include-ignored
+          NETWORKER_SQL_CONN: "Server=localhost;Database=master;User Id=sa;Password=NetworkerTest1!;TrustServerCertificate=true"
+        run: cargo test -p networker-tester --no-default-features --features db-mssql db_mssql_ -- --ignored --test-threads=1
 
   # ──────────────────────────────────────────────────────────────────────────
   postgres-integration:
     name: PostgreSQL integration
     runs-on: ubuntu-latest
+    needs: lint
+    timeout-minutes: 20
 
     services:
       postgres:
@@ -322,4 +293,4 @@ jobs:
       - name: Run PostgreSQL tests
         env:
           NETWORKER_DB_URL: "postgres://networker:networker@localhost/network_diagnostics"
-        run: cargo test --workspace --features db-postgres -- db_postgres --include-ignored
+        run: cargo test -p networker-tester --no-default-features --features db-postgres db_postgres_ -- --ignored --test-threads=1
