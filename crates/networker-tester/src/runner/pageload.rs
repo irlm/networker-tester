@@ -3206,7 +3206,7 @@ mod tests {
 
     // ── Integration: run_pageload3_probe (H3) ───────────────────────────────
 
-    #[cfg(feature = "http3")]
+    #[cfg(all(feature = "http3", not(target_os = "windows")))]
     #[tokio::test]
     async fn pageload_h3_success() {
         let ep = TestEndpoint::start().await;
@@ -3291,7 +3291,7 @@ mod tests {
 
     // ── Integration: warmup_pageload3 + run_pageload3_warm ──────────────────
 
-    #[cfg(feature = "http3")]
+    #[cfg(all(feature = "http3", not(target_os = "windows")))]
     #[tokio::test]
     async fn warmup_and_warm_h3() {
         let ep = TestEndpoint::start().await;
@@ -3461,7 +3461,7 @@ mod tests {
         assert_eq!(a.protocol, Protocol::PageLoad3);
     }
 
-    #[cfg(feature = "http3")]
+    #[cfg(all(feature = "http3", not(target_os = "windows")))]
     #[tokio::test]
     async fn pageload_h3_empty_assets() {
         let ep = TestEndpoint::start().await;

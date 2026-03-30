@@ -14,6 +14,9 @@ use uuid::Uuid;
 use networker_common::messages::{AgentMessage, JobConfig};
 use networker_common::protocol;
 use networker_tester::metrics::TestRun;
+use networker_tester::tls_profile::TlsEndpointProfile;
+
+const MAX_STDOUT_BYTES: usize = 128 * 1024 * 1024;
 
 /// Execute a job by running networker-tester CLI and streaming results.
 pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::Sender<String>) {
@@ -38,20 +41,50 @@ pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::Sender<String>)
         ),
     );
 
+    let is_tls_profile = config.tls_profile_url.is_some();
+
     // Build CLI args
-    let mut args = vec![
-        "--target".to_string(),
-        config.target.clone(),
-        "--modes".to_string(),
-        config.modes.join(","),
-        "--runs".to_string(),
-        config.runs.to_string(),
-        "--concurrency".to_string(),
-        config.concurrency.to_string(),
-        "--timeout".to_string(),
-        config.timeout_secs.to_string(),
-        "--json-stdout".to_string(), // Output TestRun as JSON to stdout
-    ];
+    let mut args = if let Some(url) = &config.tls_profile_url {
+        vec![
+            "--tls-profile-url".to_string(),
+            url.clone(),
+            "--timeout".to_string(),
+            config.timeout_secs.to_string(),
+            "--tls-profile-json".to_string(),
+        ]
+    } else {
+        vec![
+            "--target".to_string(),
+            config.target.clone(),
+            "--modes".to_string(),
+            config.modes.join(","),
+            "--runs".to_string(),
+            config.runs.to_string(),
+            "--concurrency".to_string(),
+            config.concurrency.to_string(),
+            "--timeout".to_string(),
+            config.timeout_secs.to_string(),
+            "--json-stdout".to_string(), // Output TestRun as JSON to stdout
+        ]
+    };
+
+    if let Some(project_id) = config.project_id {
+        args.push("--tls-profile-project-id".to_string());
+        args.push(project_id.to_string());
+    }
+
+    if let Some(ip) = &config.tls_profile_ip {
+        args.push("--tls-profile-ip".to_string());
+        args.push(ip.clone());
+    }
+    if let Some(sni) = &config.tls_profile_sni {
+        args.push("--tls-profile-sni".to_string());
+        args.push(sni.clone());
+    }
+    if let Some(kind) = &config.tls_profile_target_kind {
+        args.push("--tls-profile-target-kind".to_string());
+        args.push(kind.clone());
+    }
 
     if config.insecure {
         args.push("--insecure".to_string());
@@ -107,20 +140,136 @@ pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::Sender<String>)
         }
     }
 
-    // SSRF protection: block probes targeting private, loopback, link-local,
-    // or cloud metadata IPs/hostnames.
-    if let Ok(parsed) = url::Url::parse(&config.target) {
-        if is_private_or_metadata(&parsed) {
-            tracing::error!(target = %config.target, "SSRF blocked: target resolves to private/metadata address");
+    // SSRF protection: fail closed on parse errors; block private/link-local/
+    // metadata targets, including direct IP overrides and DNS resolution.
+    let ssrf_target = config.tls_profile_url.as_deref().unwrap_or(&config.target);
+    let parsed = match url::Url::parse(ssrf_target) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            tracing::error!(target = %ssrf_target, error = %e, "SSRF check failed: invalid target URL");
             send(
                 tx,
                 &AgentMessage::JobError {
                     job_id,
-                    message: "Target blocked: private, loopback, or metadata address".into(),
+                    message: format!("Target blocked: invalid URL for SSRF validation ({e})"),
                 },
                 &correlation_id,
             );
             return;
+        }
+    };
+
+    if is_private_or_metadata(&parsed) {
+        tracing::error!(target = %parsed, "SSRF blocked: target resolves to private/metadata address");
+        send(
+            tx,
+            &AgentMessage::JobError {
+                job_id,
+                message: "Target blocked: private, loopback, or metadata address".into(),
+            },
+            &correlation_id,
+        );
+        return;
+    }
+
+    let mut pinned_tls_profile_ip: Option<std::net::IpAddr> = None;
+
+    if let Some(ip) = &config.tls_profile_ip {
+        match ip.parse::<std::net::IpAddr>() {
+            Ok(parsed_ip) if is_private_ip(&parsed_ip) => {
+                tracing::error!(target_ip = %parsed_ip, "SSRF blocked via tls_profile_ip override");
+                send(
+                    tx,
+                    &AgentMessage::JobError {
+                        job_id,
+                        message: "Target blocked: tls_profile_ip points to private, loopback, or metadata address".into(),
+                    },
+                    &correlation_id,
+                );
+                return;
+            }
+            Ok(parsed_ip) => {
+                pinned_tls_profile_ip = Some(parsed_ip);
+                tracing::warn!(
+                    correlation_id,
+                    target = %parsed,
+                    target_ip = %parsed_ip,
+                    "TLS profile using explicit IP override"
+                );
+            }
+            Err(e) => {
+                send(
+                    tx,
+                    &AgentMessage::JobError {
+                        job_id,
+                        message: format!("Target blocked: invalid tls_profile_ip ({e})"),
+                    },
+                    &correlation_id,
+                );
+                return;
+            }
+        }
+    }
+
+    if let Some(host) = parsed.host_str() {
+        let port = parsed.port_or_known_default().unwrap_or(443);
+        match tokio::net::lookup_host((host, port)).await {
+            Ok(addrs) => {
+                let mut public_addrs = vec![];
+                for addr in addrs {
+                    if is_private_ip(&addr.ip()) {
+                        tracing::error!(target = %parsed, resolved_ip = %addr.ip(), "SSRF blocked after DNS resolution to private/metadata address");
+                        send(
+                            tx,
+                            &AgentMessage::JobError {
+                                job_id,
+                                message: "Target blocked: DNS resolved to private, loopback, or metadata address".into(),
+                            },
+                            &correlation_id,
+                        );
+                        return;
+                    }
+                    public_addrs.push(addr.ip());
+                }
+                if pinned_tls_profile_ip.is_none() {
+                    pinned_tls_profile_ip = public_addrs.into_iter().next();
+                }
+                if pinned_tls_profile_ip.is_none() {
+                    tracing::error!(target = %parsed, "SSRF blocked: DNS resolution returned no usable public addresses");
+                    send(
+                        tx,
+                        &AgentMessage::JobError {
+                            job_id,
+                            message:
+                                "Target blocked: DNS resolution returned no usable public addresses"
+                                    .into(),
+                        },
+                        &correlation_id,
+                    );
+                    return;
+                }
+            }
+            Err(e) => {
+                tracing::error!(target = %parsed, error = %e, "SSRF check failed: DNS resolution error");
+                send(
+                    tx,
+                    &AgentMessage::JobError {
+                        job_id,
+                        message: format!(
+                            "Target blocked: DNS resolution failed during SSRF validation ({e})"
+                        ),
+                    },
+                    &correlation_id,
+                );
+                return;
+            }
+        }
+    }
+
+    if is_tls_profile && config.tls_profile_ip.is_none() {
+        if let Some(pinned_ip) = pinned_tls_profile_ip {
+            args.push("--tls-profile-ip".to_string());
+            args.push(pinned_ip.to_string());
         }
     }
 
@@ -178,6 +327,7 @@ pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::Sender<String>)
 
     let mut stderr_reader = BufReader::new(stderr).lines();
     let mut stdout_lines = Vec::new();
+    let mut stdout_bytes = 0usize;
     let mut stdout_reader = BufReader::new(stdout).lines();
 
     let tx_clone = tx.clone();
@@ -193,6 +343,23 @@ pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::Sender<String>)
 
     // Read stdout (JSON output when --json is used, or regular output)
     while let Ok(Some(line)) = stdout_reader.next_line().await {
+        stdout_bytes = stdout_bytes.saturating_add(line.len() + 1);
+        if stdout_bytes > MAX_STDOUT_BYTES {
+            let _ = child.kill().await;
+            log(tx, job_id, "error", "Tester stdout exceeded safety limit");
+            send(
+                tx,
+                &AgentMessage::JobError {
+                    job_id,
+                    message: format!(
+                        "Tester stdout exceeded safety limit of {} bytes",
+                        MAX_STDOUT_BYTES
+                    ),
+                },
+                &correlation_id,
+            );
+            return;
+        }
         stdout_lines.push(line);
     }
 
@@ -204,6 +371,39 @@ pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::Sender<String>)
 
     match exit_status {
         Ok(status) if status.success() => {
+            if is_tls_profile {
+                match serde_json::from_str::<TlsEndpointProfile>(&stdout_text) {
+                    Ok(profile) => {
+                        log(tx, job_id, "info", "TLS profile complete");
+                        send(
+                            tx,
+                            &AgentMessage::TlsProfileComplete {
+                                job_id,
+                                profile: Box::new(profile),
+                            },
+                            &correlation_id,
+                        );
+                        return;
+                    }
+                    Err(e) => {
+                        log(
+                            tx,
+                            job_id,
+                            "error",
+                            &format!("Could not parse TLS profile JSON: {e}"),
+                        );
+                        send(
+                            tx,
+                            &AgentMessage::JobError {
+                                job_id,
+                                message: format!("Could not parse TLS profile JSON: {e}"),
+                            },
+                            &correlation_id,
+                        );
+                        return;
+                    }
+                }
+            }
             // Try to parse JSON TestRun from stdout
             match serde_json::from_str::<TestRun>(&stdout_text) {
                 Ok(run) => {

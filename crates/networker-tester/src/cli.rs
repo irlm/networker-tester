@@ -215,6 +215,10 @@ pub struct Cli {
     #[arg(long)]
     pub tls_profile_json: bool,
 
+    /// Optional project UUID to attribute persisted TLS profile runs.
+    #[arg(long)]
+    pub tls_profile_project_id: Option<String>,
+
     // ── Database ──────────────────────────────────────────────────────────────
     /// Insert results into a database (auto-detects backend from URL scheme)
     #[arg(long)]
@@ -378,6 +382,7 @@ pub struct ConfigFile {
     pub save_to_db: Option<bool>,
     pub db_url: Option<String>,
     pub db_migrate: Option<bool>,
+    pub tls_profile_project_id: Option<String>,
     pub save_to_sql: Option<bool>,
     pub connection_string: Option<String>,
     pub log_level: Option<String>,
@@ -402,6 +407,7 @@ pub struct ResolvedConfig {
     pub tls_profile_sni: Option<String>,
     pub tls_profile_target_kind: Option<String>,
     pub tls_profile_json: bool,
+    pub tls_profile_project_id: Option<String>,
     pub url_test_auth_token: Option<String>,
     pub url_test_cookie: Option<String>,
     pub url_test_headers: Vec<String>,
@@ -588,6 +594,7 @@ impl Cli {
             tls_profile_sni: self.tls_profile_sni,
             tls_profile_target_kind: self.tls_profile_target_kind,
             tls_profile_json: self.tls_profile_json,
+            tls_profile_project_id: self.tls_profile_project_id.or(f.tls_profile_project_id),
             url_test_auth_token: self.url_test_auth_token,
             url_test_cookie: self.url_test_cookie,
             url_test_headers: self.url_test_headers,
@@ -692,6 +699,11 @@ impl ResolvedConfig {
             if let Some(ip) = &self.tls_profile_ip {
                 ip.parse::<std::net::IpAddr>()
                     .map_err(|e| anyhow::anyhow!("--tls-profile-ip invalid IP: {e}"))?;
+            }
+            if let Some(project_id) = &self.tls_profile_project_id {
+                project_id
+                    .parse::<uuid::Uuid>()
+                    .map_err(|e| anyhow::anyhow!("--tls-profile-project-id invalid UUID: {e}"))?;
             }
         }
         if self.save_to_db && self.db_url.is_none() && !self.save_to_sql {

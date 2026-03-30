@@ -6,6 +6,8 @@ use uuid::Uuid;
 #[derive(Debug, Serialize)]
 pub struct JobRow {
     pub job_id: Uuid,
+    pub project_id: Option<Uuid>,
+    pub tls_profile_run_id: Option<Uuid>,
     pub definition_id: Option<Uuid>,
     pub agent_id: Option<Uuid>,
     pub status: String,
@@ -39,7 +41,7 @@ pub async fn create(
 pub async fn get(client: &Client, job_id: &Uuid) -> anyhow::Result<Option<JobRow>> {
     let row = client
         .query_opt(
-            "SELECT job_id, definition_id, agent_id, status, config, created_by,
+            "SELECT job_id, project_id, tls_profile_run_id, definition_id, agent_id, status, config, created_by,
                     created_at, started_at, finished_at, run_id, error_message
              FROM job WHERE job_id = $1",
             &[job_id],
@@ -48,6 +50,8 @@ pub async fn get(client: &Client, job_id: &Uuid) -> anyhow::Result<Option<JobRow
 
     Ok(row.map(|r| JobRow {
         job_id: r.get("job_id"),
+        project_id: r.get("project_id"),
+        tls_profile_run_id: r.get("tls_profile_run_id"),
         definition_id: r.get("definition_id"),
         agent_id: r.get("agent_id"),
         status: r.get("status"),
@@ -92,7 +96,7 @@ pub async fn list_filtered(
         (Some(status), Some(ids)) => {
             client
                 .query(
-                    "SELECT job_id, definition_id, agent_id, status, config, created_by,
+                    "SELECT job_id, project_id, tls_profile_run_id, definition_id, agent_id, status, config, created_by,
                             created_at, started_at, finished_at, run_id, error_message
                      FROM job WHERE project_id = $1 AND status = $2 AND job_id = ANY($3)
                      ORDER BY created_at DESC LIMIT $4 OFFSET $5",
@@ -103,7 +107,7 @@ pub async fn list_filtered(
         (Some(status), None) => {
             client
                 .query(
-                    "SELECT job_id, definition_id, agent_id, status, config, created_by,
+                    "SELECT job_id, project_id, tls_profile_run_id, definition_id, agent_id, status, config, created_by,
                             created_at, started_at, finished_at, run_id, error_message
                      FROM job WHERE project_id = $1 AND status = $2
                      ORDER BY created_at DESC LIMIT $3 OFFSET $4",
@@ -114,7 +118,7 @@ pub async fn list_filtered(
         (None, Some(ids)) => {
             client
                 .query(
-                    "SELECT job_id, definition_id, agent_id, status, config, created_by,
+                    "SELECT job_id, project_id, tls_profile_run_id, definition_id, agent_id, status, config, created_by,
                             created_at, started_at, finished_at, run_id, error_message
                      FROM job WHERE project_id = $1 AND job_id = ANY($2)
                      ORDER BY created_at DESC LIMIT $3 OFFSET $4",
@@ -125,7 +129,7 @@ pub async fn list_filtered(
         (None, None) => {
             client
                 .query(
-                    "SELECT job_id, definition_id, agent_id, status, config, created_by,
+                    "SELECT job_id, project_id, tls_profile_run_id, definition_id, agent_id, status, config, created_by,
                             created_at, started_at, finished_at, run_id, error_message
                      FROM job WHERE project_id = $1
                      ORDER BY created_at DESC LIMIT $2 OFFSET $3",
@@ -139,6 +143,8 @@ pub async fn list_filtered(
         .iter()
         .map(|r| JobRow {
             job_id: r.get("job_id"),
+            project_id: r.get("project_id"),
+            tls_profile_run_id: r.get("tls_profile_run_id"),
             definition_id: r.get("definition_id"),
             agent_id: r.get("agent_id"),
             status: r.get("status"),
@@ -182,6 +188,40 @@ pub async fn set_run_id(client: &Client, job_id: &Uuid, run_id: &Uuid) -> anyhow
         )
         .await?;
     Ok(())
+}
+
+pub async fn set_tls_profile_run_id(
+    client: &Client,
+    job_id: &Uuid,
+    tls_profile_run_id: &Uuid,
+) -> anyhow::Result<()> {
+    client
+        .execute(
+            "UPDATE job SET tls_profile_run_id = $1 WHERE job_id = $2",
+            &[tls_profile_run_id, job_id],
+        )
+        .await?;
+    Ok(())
+}
+
+pub async fn recent_tls_profile_job_count(
+    client: &Client,
+    project_id: &Uuid,
+    user_id: &Uuid,
+    minutes: i32,
+) -> anyhow::Result<i64> {
+    let row = client
+        .query_one(
+            "SELECT COUNT(*)
+             FROM job
+             WHERE project_id = $1
+               AND created_by = $2
+               AND created_at >= now() - ($3::text || ' minutes')::interval
+               AND config ? 'tls_profile_url'",
+            &[project_id, user_id, &minutes.to_string()],
+        )
+        .await?;
+    Ok(row.get(0))
 }
 
 pub async fn set_error(client: &Client, job_id: &Uuid, message: &str) -> anyhow::Result<()> {

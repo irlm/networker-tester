@@ -667,6 +667,7 @@ mod real {
 
         // ── Integration: full probe ──────────────────────────────────────────
 
+        #[cfg(not(target_os = "windows"))]
         #[tokio::test]
         async fn h3_probe_success() {
             let ep = TestEndpoint::start().await;

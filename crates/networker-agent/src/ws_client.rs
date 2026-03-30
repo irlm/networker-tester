@@ -123,7 +123,7 @@ async fn handle_control_message(
                         Ok(p) => p,
                         Err(_) => return, // semaphore closed
                     };
-                    crate::executor::run_job(job_id, config, &tx).await;
+                    crate::executor::run_job(job_id, *config, &tx).await;
                     jobs.lock().await.remove(&job_id);
                 }
                 .instrument(span),

@@ -146,12 +146,13 @@ async fn tick(state: &Arc<AppState>) -> anyhow::Result<()> {
         };
 
         if let Some(aid) = agent_id {
-            if let Ok(job_config) =
+            if let Ok(mut job_config) =
                 serde_json::from_value::<networker_common::messages::JobConfig>(config.clone())
             {
+                job_config.project_id = schedule.project_id;
                 let msg = networker_common::messages::ControlMessage::JobAssign {
                     job_id,
-                    config: job_config,
+                    config: Box::new(job_config),
                 };
                 if state.agents.send_to_agent(&aid, &msg).await.is_ok() {
                     crate::db::jobs::update_status(&client, &job_id, "assigned")

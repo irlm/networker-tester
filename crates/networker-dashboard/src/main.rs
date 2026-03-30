@@ -15,7 +15,7 @@ use axum::http::{HeaderValue, Method};
 use axum::Router;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, Mutex, RwLock};
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tracing_subscriber::layer::SubscriberExt;
@@ -62,6 +62,8 @@ pub struct AppState {
     pub invite_expiry_days: u32,
     // In-memory log buffer for admin log viewer
     pub log_buffer: std::sync::Arc<log_buffer::LogBuffer>,
+    // Run tester-side TLS profile migrations only once per dashboard process.
+    pub tls_profile_db_migrated: Mutex<bool>,
 }
 
 #[tokio::main]
@@ -179,6 +181,7 @@ async fn main() -> anyhow::Result<()> {
         approval_tx,
         invite_expiry_days: cfg.invite_expiry_days,
         log_buffer: log_buf,
+        tls_profile_db_migrated: Mutex::new(false),
     });
 
     let cors = {

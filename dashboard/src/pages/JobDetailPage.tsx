@@ -31,6 +31,27 @@ import {
   CartesianGrid,
 } from 'recharts';
 
+function isTlsProfileJob(job: Job | null) {
+  return Boolean(job?.config?.tls_profile_url);
+}
+
+function jobLabel(job: Job | null) {
+  return isTlsProfileJob(job) ? 'TLS Profile' : 'Test';
+}
+
+function jobTarget(job: Job | null) {
+  return job?.config?.tls_profile_url || job?.config?.target || '-';
+}
+
+function jobSummary(job: Job | null) {
+  if (!job) return '-';
+  if (!isTlsProfileJob(job)) return job.config?.modes?.join(', ') || '-';
+  const bits: string[] = [job.config?.tls_profile_target_kind || 'external-url'];
+  if (job.config?.tls_profile_ip) bits.push(`IP ${job.config.tls_profile_ip}`);
+  if (job.config?.tls_profile_sni) bits.push(`SNI ${job.config.tls_profile_sni}`);
+  return bits.join(' · ');
+}
+
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 const EMPTY_ATTEMPTS: LiveAttempt[] = [];
 const EMPTY_LOGS: { line: string; level: string }[] = [];
@@ -299,12 +320,12 @@ export function JobDetailPage() {
         <div>
           <div className="flex items-center gap-3 mb-1">
             <h2 className="text-xl font-bold text-gray-100">
-              Test {job.job_id.slice(0, 8)}
+              {jobLabel(job)} {job.job_id.slice(0, 8)}
             </h2>
             <StatusBadge status={job.status} />
           </div>
           <p className="text-sm text-gray-500">
-            Target: {job.config?.target} | Modes: {job.config?.modes?.join(', ')}
+            Target: {jobTarget(job)} | {isTlsProfileJob(job) ? 'Profile' : 'Modes'}: {jobSummary(job)}
           </p>
           {runMeta && (
             <div className="flex gap-3 mt-1">
@@ -367,6 +388,11 @@ export function JobDetailPage() {
         <div className="border border-gray-800/50 rounded p-4 mb-6">
           <p className="text-gray-400 text-sm">
             Test {job.status}.
+            {job.tls_profile_run_id && (
+              <span className="ml-2 text-gray-500">
+                TLS Profile: <Link to={`/projects/${projectId}/tls-profiles/${job.tls_profile_run_id}`} className="font-mono text-cyan-400 hover:underline">{job.tls_profile_run_id.slice(0, 8)}</Link>
+              </span>
+            )}
             {job.run_id && (
               <span className="ml-2 text-gray-500">
                 Run: <Link to={`/projects/${projectId}/runs/${job.run_id}`} className="font-mono text-cyan-400 hover:underline">{job.run_id.slice(0, 8)}</Link>
@@ -961,9 +987,11 @@ export function JobDetailPage() {
           <div className="text-gray-500">Status</div>
           <div><StatusBadge status={job.status} /></div>
           <div className="text-gray-500">Target</div>
-          <div className="text-gray-300">{job.config?.target}</div>
-          <div className="text-gray-500">Modes</div>
-          <div className="text-gray-300">{job.config?.modes?.join(', ')}</div>
+          <div className="text-gray-300 break-all">{jobTarget(job)}</div>
+          <div className="text-gray-500">Type</div>
+          <div className="text-gray-300">{jobLabel(job)}</div>
+          <div className="text-gray-500">{isTlsProfileJob(job) ? 'Profile' : 'Modes'}</div>
+          <div className="text-gray-300">{jobSummary(job)}</div>
           <div className="text-gray-500">Runs</div>
           <div className="text-gray-300">{job.config?.runs}</div>
           <div className="text-gray-500">Created</div>
@@ -986,6 +1014,16 @@ export function JobDetailPage() {
               <div className="font-mono">
                 <Link to={`/projects/${projectId}/runs/${job.run_id}`} className="text-cyan-400 hover:underline">
                   {job.run_id}
+                </Link>
+              </div>
+            </>
+          )}
+          {job.tls_profile_run_id && (
+            <>
+              <div className="text-gray-500">TLS Profile Run ID</div>
+              <div className="font-mono">
+                <Link to={`/projects/${projectId}/tls-profiles/${job.tls_profile_run_id}`} className="text-cyan-400 hover:underline">
+                  {job.tls_profile_run_id}
                 </Link>
               </div>
             </>

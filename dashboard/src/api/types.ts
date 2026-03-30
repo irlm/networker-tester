@@ -23,12 +23,18 @@ export interface Job {
   started_at: string | null;
   finished_at: string | null;
   run_id: string | null;
+  tls_profile_run_id: string | null;
   error_message: string | null;
 }
 
 export interface JobConfig {
   target: string;
   modes: string[];
+  project_id?: string;
+  tls_profile_url?: string;
+  tls_profile_ip?: string;
+  tls_profile_sni?: string;
+  tls_profile_target_kind?: 'managed-endpoint' | 'external-url' | 'external-host';
   runs: number;
   concurrency: number;
   timeout_secs: number;
@@ -257,6 +263,126 @@ export interface ShareLink {
   revoked: boolean;
   access_count: number;
   last_accessed: string | null;
+}
+
+export interface TlsProfileSummary {
+  id: string;
+  started_at: string;
+  host: string;
+  port: number;
+  target_kind: string;
+  coverage_level: string;
+  summary_status: string;
+  summary_score: number | null;
+}
+
+export interface TlsEndpointProfile {
+  target_kind: string;
+  coverage_level: string;
+  unsupported_checks?: string[];
+  limitations?: string[];
+  target: {
+    host: string;
+    port: number;
+    requested_ip?: string | null;
+    sni?: string | null;
+    resolved_ips?: string[];
+    source_url?: string | null;
+  };
+  path_characteristics: {
+    connected_ip?: string | null;
+    direct_ip_match: boolean;
+    proxy_detected: boolean;
+    classification: string;
+    evidence?: string[];
+  };
+  connectivity: {
+    tcp_connect_ms?: number | null;
+    tls_handshake_ms?: number | null;
+    negotiated_tls_version?: string | null;
+    negotiated_cipher_suite?: string | null;
+    negotiated_key_exchange_group?: string | null;
+    alpn?: string | null;
+  };
+  certificate: {
+    leaf?: {
+      subject: string;
+      issuer: string;
+      serial_number: string;
+      not_before?: string | null;
+      not_after?: string | null;
+      san_dns?: string[];
+      san_ip?: string[];
+      key_type: string;
+      key_bits?: number | null;
+      signature_algorithm: string;
+      is_ca: boolean;
+      sha256_fingerprint: string;
+      spki_sha256: string;
+      ocsp_urls?: string[];
+      crl_urls?: string[];
+      aia_issuers?: string[];
+      must_staple: boolean;
+      scts_present: boolean;
+    } | null;
+    chain?: Array<{
+      subject: string;
+      issuer: string;
+      not_after?: string | null;
+      sha256_fingerprint: string;
+    }>;
+  };
+  trust: {
+    hostname_matches: boolean;
+    chain_valid: boolean;
+    trusted_by_system_store: boolean;
+    verification_performed: boolean;
+    chain_presented: boolean;
+    verified_chain_depth?: number | null;
+    issues?: string[];
+    revocation: {
+      ocsp_stapled: boolean;
+      method: string;
+      status: string;
+      ocsp_urls?: string[];
+      crl_urls?: string[];
+      online_check_attempted: boolean;
+      notes?: string[];
+    };
+  };
+  resumption: {
+    supported: boolean;
+    method?: string | null;
+    initial_handshake_ms?: number | null;
+    resumed_handshake_ms?: number | null;
+    resumption_ratio?: number | null;
+    resumed_tls_version?: string | null;
+    resumed_cipher_suite?: string | null;
+    early_data_offered: boolean;
+    early_data_accepted?: boolean | null;
+    notes?: string[];
+  };
+  findings: Array<{
+    severity: string;
+    code: string;
+    message: string;
+  }>;
+  summary: {
+    status: string;
+    score?: number | null;
+  };
+}
+
+export interface TlsProfileDetail {
+  id: string;
+  started_at: string;
+  host: string;
+  port: number;
+  target_kind: string;
+  coverage_level: string;
+  summary_status: string;
+  summary_score: number | null;
+  profile: TlsEndpointProfile;
 }
 
 // Workspace Invites

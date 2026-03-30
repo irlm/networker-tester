@@ -1,6 +1,6 @@
-import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, BenchmarkLeaderboardEntry, BenchmarkRun } from './types';
+import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, BenchmarkLeaderboardEntry, BenchmarkRun, TlsProfileSummary, TlsProfileDetail } from './types';
 
-export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, BenchmarkLeaderboardEntry, BenchmarkRun };
+export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, BenchmarkLeaderboardEntry, BenchmarkRun, TlsProfileSummary, TlsProfileDetail };
 export type { LiveAttempt } from './types';
 
 const API_BASE = '/api';
@@ -269,6 +269,18 @@ export const api = {
 
   getRunAttempts: (projectId: string, runId: string) =>
     request<Attempt[]>(projectUrl(projectId, `runs/${runId}/attempts`)),
+
+  // TLS Profiles (project-scoped route; DB filtering will tighten once rows carry project attribution)
+  getTlsProfiles: (projectId: string, params?: { limit?: number; offset?: number }) => {
+    const search = new URLSearchParams();
+    if (params?.limit) search.set('limit', String(params.limit));
+    if (params?.offset) search.set('offset', String(params.offset));
+    const qs = search.toString();
+    return request<TlsProfileSummary[]>(projectUrl(projectId, `tls-profiles${qs ? `?${qs}` : ''}`));
+  },
+
+  getTlsProfile: (projectId: string, runId: string) =>
+    request<TlsProfileDetail>(projectUrl(projectId, `tls-profiles/${runId}`)),
 
   // Deployments
   getDeployments: (projectId: string, params?: { limit?: number; offset?: number }) => {

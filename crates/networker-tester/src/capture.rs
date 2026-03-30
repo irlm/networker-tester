@@ -746,6 +746,7 @@ mod tests {
             tls_profile_sni: None,
             tls_profile_target_kind: None,
             tls_profile_json: false,
+            tls_profile_project_id: None,
             url_test_auth_token: None,
             url_test_cookie: None,
             url_test_headers: vec![],

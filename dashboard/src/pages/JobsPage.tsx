@@ -11,6 +11,32 @@ import { useProject } from '../hooks/useProject';
 
 const STATUS_OPTIONS = ['all', 'pending', 'running', 'completed', 'failed', 'cancelled'] as const;
 
+function isTlsProfileJob(job: Job) {
+  return Boolean(job.config?.tls_profile_url);
+}
+
+function jobLabel(job: Job) {
+  return isTlsProfileJob(job) ? 'TLS Profile' : 'Test';
+}
+
+function jobTarget(job: Job) {
+  return job.config?.tls_profile_url || job.config?.target || '-';
+}
+
+function jobSummary(job: Job) {
+  if (!isTlsProfileJob(job)) return job.config?.modes?.join(', ') || '-';
+  const bits: string[] = [job.config?.tls_profile_target_kind || 'external-url'];
+  if (job.config?.tls_profile_ip) bits.push('IP override');
+  if (job.config?.tls_profile_sni) bits.push('SNI override');
+  return bits.join(' · ');
+}
+
+function jobResultLink(projectId: string, job: Job) {
+  if (job.tls_profile_run_id) return `/projects/${projectId}/tls-profiles/${job.tls_profile_run_id}`;
+  if (job.run_id) return `/projects/${projectId}/runs/${job.run_id}`;
+  return null;
+}
+
 export function JobsPage() {
   const { projectId } = useProject();
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -415,16 +441,23 @@ export function JobsPage() {
           return (
             <Link
               key={job.job_id}
-              to={`/projects/${projectId}/tests/${job.job_id}`}
+              to={jobResultLink(projectId, job) ?? `/projects/${projectId}/tests/${job.job_id}`}
               className={`block border border-gray-800 rounded p-3 ${isActive ? 'border-l-2 border-l-blue-500/50' : ''}`}
             >
               <div className="flex items-center justify-between mb-1">
-                <span className="text-cyan-400 font-mono text-xs">{job.job_id.slice(0, 8)}</span>
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-cyan-400 font-mono text-xs">{job.job_id.slice(0, 8)}</span>
+                  <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border ${isTlsProfileJob(job) ? 'border-cyan-500/30 text-cyan-300 bg-cyan-500/10' : 'border-gray-700 text-gray-500 bg-gray-800/30'}`}>
+                    {jobLabel(job)}
+                  </span>
+                </div>
                 <StatusBadge status={job.status} />
               </div>
-              <p className="text-gray-300 text-xs truncate mb-1">{job.config?.target}</p>
+              <p className="text-gray-300 text-xs truncate mb-1">{jobTarget(job)}</p>
               <div className="flex items-center gap-3 text-xs text-gray-500 flex-wrap">
-                <span>{job.config?.modes?.join(', ')}</span>
+                <span>{jobSummary(job)}</span>
+                {job.tls_profile_run_id && <span className="text-cyan-400">View TLS result</span>}
+                {!job.tls_profile_run_id && job.run_id && <span className="text-cyan-400">View run</span>}
                 {duration && <span className="font-mono">{duration}</span>}
                 <span>{new Date(job.created_at).toLocaleTimeString()}</span>
               </div>
@@ -438,9 +471,10 @@ export function JobsPage() {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
-              <th className="px-4 py-2.5 text-left font-medium">Test ID</th>
+              <th className="px-4 py-2.5 text-left font-medium">Job</th>
               <th className="px-4 py-2.5 text-left font-medium">Target</th>
-              <th className="px-4 py-2.5 text-left font-medium">Modes</th>
+              <th className="px-4 py-2.5 text-left font-medium">Type</th>
+              <th className="px-4 py-2.5 text-left font-medium">Summary</th>
               <th className="px-4 py-2.5 text-left font-medium hidden lg:table-cell">Runs</th>
               <th className="px-4 py-2.5 text-left font-medium hidden lg:table-cell">Tester</th>
               <th className="px-4 py-2.5 text-left font-medium">Status</th>
@@ -466,15 +500,21 @@ export function JobsPage() {
                   className={`border-b border-gray-800/50 hover:bg-gray-800/20 ${isActive ? 'bg-blue-500/5' : ''}`}
                 >
                   <td className="px-4 py-3">
-                    <Link to={`/projects/${projectId}/tests/${job.job_id}`} className="text-cyan-400 hover:underline font-mono text-xs">
+                    <Link to={jobResultLink(projectId, job) ?? `/projects/${projectId}/tests/${job.job_id}`} className="text-cyan-400 hover:underline font-mono text-xs">
                       {job.job_id.slice(0, 8)}
                     </Link>
                   </td>
-                  <td className="px-4 py-3 text-gray-300 text-xs max-w-48 truncate" title={job.config?.target}>
-                    {job.config?.target}
+                  <td className="px-4 py-3 text-gray-300 text-xs max-w-48 truncate" title={jobTarget(job)}>
+                    {jobTarget(job)}
                   </td>
-                  <td className="px-4 py-3 text-gray-500 text-xs max-w-32 truncate">
-                    {job.config?.modes?.join(', ')}
+                  <td className="px-4 py-3 text-xs">
+                    <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border ${isTlsProfileJob(job) ? 'border-cyan-500/30 text-cyan-300 bg-cyan-500/10' : 'border-gray-700 text-gray-500 bg-gray-800/30'}`}>
+                      {jobLabel(job)}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-gray-500 text-xs max-w-40 truncate" title={jobSummary(job)}>
+                    <div>{jobSummary(job)}</div>
+                    {job.tls_profile_run_id && <div className="text-cyan-400 mt-1">Linked TLS result</div>}
                   </td>
                   <td className="px-4 py-3 text-gray-500 text-xs hidden lg:table-cell">{job.config?.runs ?? '-'}</td>
                   <td className="px-4 py-3 text-gray-500 text-xs hidden lg:table-cell">{testerName}</td>

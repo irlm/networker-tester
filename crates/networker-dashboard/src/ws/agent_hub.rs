@@ -16,6 +16,54 @@ use crate::AppState;
 use networker_common::messages::{AgentMessage, ControlMessage, DashboardEvent};
 use networker_common::protocol;
 
+const MAX_TLS_PROFILE_JSON_BYTES: usize = 8 * 1024 * 1024;
+const MAX_TLS_PROFILE_FINDINGS: usize = 2048;
+const MAX_TLS_PROFILE_STRINGS: usize = 4096;
+
+fn validate_tls_profile_size(
+    profile: &networker_tester::tls_profile::TlsEndpointProfile,
+) -> anyhow::Result<()> {
+    let json = serde_json::to_vec(profile)?;
+    if json.len() > MAX_TLS_PROFILE_JSON_BYTES {
+        anyhow::bail!(
+            "TLS profile JSON exceeds {} bytes",
+            MAX_TLS_PROFILE_JSON_BYTES
+        );
+    }
+    if profile.findings.len() > MAX_TLS_PROFILE_FINDINGS {
+        anyhow::bail!(
+            "TLS profile findings exceed {} entries",
+            MAX_TLS_PROFILE_FINDINGS
+        );
+    }
+    let stringish = profile.unsupported_checks.len()
+        + profile.limitations.len()
+        + profile.target.resolved_ips.len()
+        + profile.path_characteristics.evidence.len()
+        + profile.trust.issues.len()
+        + profile.trust.revocation.notes.len()
+        + profile.resumption.notes.len();
+    if stringish > MAX_TLS_PROFILE_STRINGS {
+        anyhow::bail!(
+            "TLS profile string list fields exceed {} entries",
+            MAX_TLS_PROFILE_STRINGS
+        );
+    }
+    Ok(())
+}
+
+async fn job_assigned_to_agent(
+    state: &AppState,
+    job_id: &Uuid,
+    agent_id: Uuid,
+) -> anyhow::Result<bool> {
+    let client = state.db.get().await?;
+    Ok(crate::db::jobs::get(&client, job_id)
+        .await?
+        .and_then(|job| job.agent_id)
+        == Some(agent_id))
+}
+
 /// Bounded channel capacity for agent WebSocket outbound messages.
 const AGENT_CHANNEL_CAPACITY: usize = 256;
 
@@ -191,6 +239,17 @@ async fn handle_agent_message(state: &Arc<AppState>, agent_id: Uuid, msg: AgentM
         AgentMessage::JobAck { job_id } => {
             let correlation_id = job_id.to_string();
             tracing::info!(correlation_id, agent_id = %agent_id, "Job ACK — setting status to running");
+            match job_assigned_to_agent(state, &job_id, agent_id).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    tracing::error!(correlation_id, agent_id = %agent_id, "Rejecting JobAck for unassigned job");
+                    return;
+                }
+                Err(e) => {
+                    tracing::error!(correlation_id, agent_id = %agent_id, error = %e, "Failed to authorize JobAck");
+                    return;
+                }
+            }
             if let Ok(client) = state.db.get().await {
                 if let Err(e) = crate::db::jobs::update_status(&client, &job_id, "running").await {
                     tracing::error!(correlation_id, error = %e, "Failed to update job status to running");
@@ -206,6 +265,17 @@ async fn handle_agent_message(state: &Arc<AppState>, agent_id: Uuid, msg: AgentM
         }
         AgentMessage::AttemptResult { job_id, attempt } => {
             let correlation_id = job_id.to_string();
+            match job_assigned_to_agent(state, &job_id, agent_id).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    tracing::error!(correlation_id, agent_id = %agent_id, "Rejecting AttemptResult for unassigned job");
+                    return;
+                }
+                Err(e) => {
+                    tracing::error!(correlation_id, agent_id = %agent_id, error = %e, "Failed to authorize AttemptResult");
+                    return;
+                }
+            }
             tracing::info!(
                 correlation_id,
                 seq = attempt.sequence_num,
@@ -222,6 +292,18 @@ async fn handle_agent_message(state: &Arc<AppState>, agent_id: Uuid, msg: AgentM
             let run_id = run.run_id;
             let success_count = run.success_count();
             let failure_count = run.failure_count();
+
+            match job_assigned_to_agent(state, &job_id, agent_id).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    tracing::error!(correlation_id, agent_id = %agent_id, "Rejecting JobComplete for unassigned job");
+                    return;
+                }
+                Err(e) => {
+                    tracing::error!(correlation_id, agent_id = %agent_id, error = %e, "Failed to authorize JobComplete");
+                    return;
+                }
+            }
 
             tracing::info!(
                 correlation_id,
@@ -281,6 +363,89 @@ async fn handle_agent_message(state: &Arc<AppState>, agent_id: Uuid, msg: AgentM
             });
             tracing::info!(correlation_id, "JobComplete event broadcast to browsers");
         }
+        AgentMessage::TlsProfileComplete { job_id, profile } => {
+            let correlation_id = job_id.to_string();
+
+            tracing::info!(correlation_id, agent_id = %agent_id, host = %profile.target.host, port = profile.target.port, "TLS profile complete — persisting result");
+
+            let mut project_id = None;
+            let mut authorized = false;
+            let pooled_client = match state.db.get().await {
+                Ok(client) => Some(client),
+                Err(e) => {
+                    tracing::warn!(correlation_id, agent_id = %agent_id, error = %e, "DB pool unavailable in TlsProfileComplete — project linkage/status updates may be lost");
+                    None
+                }
+            };
+            if let Some(client) = pooled_client.as_ref() {
+                if let Err(e) = crate::db::jobs::update_status(client, &job_id, "completed").await {
+                    tracing::error!(correlation_id, error = %e, "Failed to update TLS profile job status to completed");
+                }
+                if let Some(job) = crate::db::jobs::get(client, &job_id).await.ok().flatten() {
+                    project_id = job.project_id;
+                    authorized = job.agent_id == Some(agent_id);
+                }
+            }
+
+            if !authorized {
+                tracing::error!(correlation_id, agent_id = %agent_id, "Rejecting TLS profile completion for unassigned job");
+                return;
+            }
+
+            if let Err(e) = validate_tls_profile_size(&profile) {
+                tracing::error!(correlation_id, agent_id = %agent_id, error = %e, "Rejecting oversized TLS profile payload");
+                return;
+            }
+
+            let db_url = &state.database_url;
+            if !db_url.is_empty() {
+                match networker_tester::output::db::connect(db_url).await {
+                    Ok(backend) => {
+                        let mut migrated = state.tls_profile_db_migrated.lock().await;
+                        if !*migrated {
+                            if let Err(e) = backend.migrate().await {
+                                tracing::error!(correlation_id, error = %e, "DB migration failed");
+                            } else {
+                                *migrated = true;
+                            }
+                        }
+                        drop(migrated);
+                        match backend
+                            .save_tls_profile(&profile, project_id.as_ref())
+                            .await
+                        {
+                            Ok(tls_profile_run_id) => {
+                                if let Some(client) = pooled_client.as_ref() {
+                                    if let Err(e) = crate::db::jobs::set_tls_profile_run_id(
+                                        client,
+                                        &job_id,
+                                        &tls_profile_run_id,
+                                    )
+                                    .await
+                                    {
+                                        tracing::error!(correlation_id, error = %e, "Failed to link TLS profile run to job");
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!(correlation_id, error = %e, "Failed to save TLS profile to database");
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(correlation_id, error = %e, "Failed to connect to DB for TLS profile save")
+                    }
+                }
+            }
+
+            let _ = state.events_tx.send(DashboardEvent::JobUpdate {
+                job_id,
+                status: "completed".into(),
+                agent_id: Some(agent_id),
+                started_at: None,
+                finished_at: Some(chrono::Utc::now()),
+            });
+        }
         AgentMessage::JobLog {
             job_id,
             line,
@@ -295,6 +460,17 @@ async fn handle_agent_message(state: &Arc<AppState>, agent_id: Uuid, msg: AgentM
         }
         AgentMessage::JobError { job_id, message } => {
             let correlation_id = job_id.to_string();
+            match job_assigned_to_agent(state, &job_id, agent_id).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    tracing::error!(correlation_id, agent_id = %agent_id, "Rejecting JobError for unassigned job");
+                    return;
+                }
+                Err(e) => {
+                    tracing::error!(correlation_id, agent_id = %agent_id, error = %e, "Failed to authorize JobError");
+                    return;
+                }
+            }
             tracing::error!(correlation_id, error = %message, "Job error received from tester");
             if let Ok(client) = state.db.get().await {
                 if let Err(e) = crate::db::jobs::set_error(&client, &job_id, &message).await {
