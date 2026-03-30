@@ -121,7 +121,8 @@ pub async fn deploy_api(vm: &VmInfo, language: &str, bench_dir: &Path) -> Result
                     bail!("cargo build networker-endpoint failed");
                 }
             }
-            scp_to(&vm.ip, binary.to_str().unwrap(), "/opt/bench/server").await
+            scp_to(&vm.ip, binary.to_str().unwrap(), "/opt/bench/server")
+                .await
                 .context("copying Rust binary")?;
             ssh_exec(&vm.ip, "chmod +x /opt/bench/server").await?;
             ssh_exec(&vm.ip, "nohup /opt/bench/server --cert /opt/bench/cert.pem --key /opt/bench/key.pem --port 8443 > /opt/bench/server.log 2>&1 &").await?;
@@ -130,9 +131,18 @@ pub async fn deploy_api(vm: &VmInfo, language: &str, bench_dir: &Path) -> Result
             // For other languages, run their deploy.sh via SSH
             let deploy_script = bench_dir.join(format!("reference-apis/{language}/deploy.sh"));
             if deploy_script.exists() {
-                scp_to(&vm.ip, deploy_script.to_str().unwrap(), "/opt/bench/deploy.sh").await?;
-                ssh_exec(&vm.ip, "chmod +x /opt/bench/deploy.sh && bash /opt/bench/deploy.sh").await
-                    .with_context(|| format!("deploy.sh for {language}"))?;
+                scp_to(
+                    &vm.ip,
+                    deploy_script.to_str().unwrap(),
+                    "/opt/bench/deploy.sh",
+                )
+                .await?;
+                ssh_exec(
+                    &vm.ip,
+                    "chmod +x /opt/bench/deploy.sh && bash /opt/bench/deploy.sh",
+                )
+                .await
+                .with_context(|| format!("deploy.sh for {language}"))?;
             } else {
                 bail!("deploy script not found for {language}");
             }

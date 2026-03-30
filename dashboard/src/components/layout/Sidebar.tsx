@@ -38,7 +38,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
     { path: `/projects/${pid}/tests`, label: 'Tests', icon: '\u25B6' },
     { path: `/projects/${pid}/schedules`, label: 'Schedules', icon: '\u21BB' },
     { path: `/projects/${pid}/runs`, label: 'Runs', icon: '\u25F7' },
-    { path: `/projects/${pid}/tls-profiles`, label: 'TLS Profiles', icon: '\u{1F512}' },
+    { path: `/projects/${pid}/benchmarks`, label: 'Benchmarks', icon: '\u25A6' },
   ] : [];
 
   const globalItems: NavItem[] = [

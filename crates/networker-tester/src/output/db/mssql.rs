@@ -8,9 +8,14 @@
 ///   "Server=localhost;Database=NetworkDiagnostics;User Id=sa;Password=Pass!;TrustServerCertificate=true"
 use super::DatabaseBackend;
 use crate::metrics::{RequestAttempt, TestRun, UrlTestProtocolRun, UrlTestResource, UrlTestRun};
-use crate::tls_profile::TlsEndpointProfile;
+use crate::output::json::{
+    benchmark_artifact_if_present, BenchmarkArtifact, BenchmarkCase, BenchmarkDataQuality,
+    BenchmarkDiagnostics, BenchmarkEnvironment, BenchmarkLaunch, BenchmarkMetadata,
+    BenchmarkMethodology, BenchmarkSample, BenchmarkSummary,
+};
 use anyhow::Context;
 use async_trait::async_trait;
+use serde::Serialize;
 use tiberius::{Client, Config, Query};
 use tokio::net::TcpStream;
 use tokio_util::compat::TokioAsyncWriteCompatExt;
@@ -49,42 +54,84 @@ impl DatabaseBackend for MssqlBackend {
 
     async fn save(&self, run: &TestRun) -> anyhow::Result<()> {
         let mut c = self.client.lock().await;
+        let benchmark_schema_ready = benchmark_schema_installed(&mut c).await?;
+        let benchmark_artifact = benchmark_artifact_if_present(run)?;
 
-        insert_test_run(run, &mut c).await?;
+        c.simple_query("BEGIN TRAN")
+            .await
+            .context("BEGIN TestRun transaction")?
+            .into_results()
+            .await
+            .context("BEGIN TestRun transaction")?;
 
-        for attempt in &run.attempts {
-            insert_request_attempt(attempt, &mut c).await?;
+        let result = async {
+            insert_test_run(run, &mut c).await?;
 
-            if let Some(dns) = &attempt.dns {
-                insert_dns_result(attempt, dns, &mut c).await?;
+            for attempt in &run.attempts {
+                insert_request_attempt(attempt, &mut c).await?;
+
+                if let Some(dns) = &attempt.dns {
+                    insert_dns_result(attempt, dns, &mut c).await?;
+                }
+                if let Some(tcp) = &attempt.tcp {
+                    insert_tcp_result(attempt, tcp, &mut c).await?;
+                }
+                if let Some(tls) = &attempt.tls {
+                    insert_tls_result(attempt, tls, &mut c).await?;
+                }
+                if let Some(http) = &attempt.http {
+                    insert_http_result(attempt, http, &mut c).await?;
+                }
+                if let Some(udp) = &attempt.udp {
+                    insert_udp_result(attempt, udp, &mut c).await?;
+                }
+                if let Some(err) = &attempt.error {
+                    insert_error(attempt, err, &mut c).await?;
+                }
+                if let Some(st) = &attempt.server_timing {
+                    insert_server_timing_result(attempt, st, &mut c).await?;
+                }
             }
-            if let Some(tcp) = &attempt.tcp {
-                insert_tcp_result(attempt, tcp, &mut c).await?;
+
+            if benchmark_schema_ready {
+                if let Some(artifact) = &benchmark_artifact {
+                    insert_benchmark_artifact(run.run_id, artifact, &mut c).await?;
+                }
+            } else if benchmark_artifact.is_some() {
+                tracing::debug!(
+                    "Benchmark schema not installed in SQL Server; skipping benchmark persistence"
+                );
+            } else {
+                tracing::trace!("Run is not benchmark-mode; skipping benchmark persistence");
             }
-            if let Some(tls) = &attempt.tls {
-                insert_tls_result(attempt, tls, &mut c).await?;
+
+            Ok::<(), anyhow::Error>(())
+        }
+        .await;
+
+        match result {
+            Ok(()) => {
+                c.simple_query("COMMIT TRAN")
+                    .await
+                    .context("COMMIT TestRun transaction")?
+                    .into_results()
+                    .await
+                    .context("COMMIT TestRun transaction")?;
+                Ok(())
             }
-            if let Some(http) = &attempt.http {
-                insert_http_result(attempt, http, &mut c).await?;
-            }
-            if let Some(udp) = &attempt.udp {
-                insert_udp_result(attempt, udp, &mut c).await?;
-            }
-            if let Some(err) = &attempt.error {
-                insert_error(attempt, err, &mut c).await?;
-            }
-            if let Some(st) = &attempt.server_timing {
-                insert_server_timing_result(attempt, st, &mut c).await?;
+            Err(e) => {
+                let _ = c.simple_query("ROLLBACK TRAN").await;
+                Err(e)
             }
         }
-
-        Ok(())
     }
 
     async fn save_url_test(&self, run: &UrlTestRun) -> anyhow::Result<()> {
         let mut c = self.client.lock().await;
-        Query::new("BEGIN TRAN")
-            .execute(&mut c)
+        c.simple_query("BEGIN TRAN")
+            .await
+            .context("BEGIN UrlTest transaction")?
+            .into_results()
             .await
             .context("BEGIN UrlTest transaction")?;
 
@@ -102,25 +149,19 @@ impl DatabaseBackend for MssqlBackend {
 
         match result {
             Ok(()) => {
-                Query::new("COMMIT TRAN")
-                    .execute(&mut c)
+                c.simple_query("COMMIT TRAN")
+                    .await
+                    .context("COMMIT UrlTest transaction")?
+                    .into_results()
                     .await
                     .context("COMMIT UrlTest transaction")?;
                 Ok(())
             }
             Err(e) => {
-                let _ = Query::new("ROLLBACK TRAN").execute(&mut c).await;
+                let _ = c.simple_query("ROLLBACK TRAN").await;
                 Err(e)
             }
         }
-    }
-
-    async fn save_tls_profile(
-        &self,
-        _run: &TlsEndpointProfile,
-        _project_id: Option<&uuid::Uuid>,
-    ) -> anyhow::Result<uuid::Uuid> {
-        anyhow::bail!("SQL Server TLS profile persistence not yet implemented")
     }
 
     async fn ping(&self) -> anyhow::Result<()> {
@@ -165,6 +206,333 @@ async fn insert_test_run(run: &TestRun, c: &mut SqlClient) -> anyhow::Result<()>
     q.bind(run.success_count() as i32);
     q.bind(run.failure_count() as i32);
     q.execute(c).await.context("INSERT TestRun")?;
+    Ok(())
+}
+
+fn to_json_string<T: Serialize>(value: &T, label: &str) -> anyhow::Result<String> {
+    serde_json::to_string(value).context(format!("serialize {label}"))
+}
+
+async fn benchmark_schema_installed(c: &mut SqlClient) -> anyhow::Result<bool> {
+    let row = c
+        .query(
+            "SELECT CASE
+                WHEN OBJECT_ID(N'dbo.BenchmarkRun') IS NOT NULL
+                 AND OBJECT_ID(N'dbo.BenchmarkLaunch') IS NOT NULL
+                 AND OBJECT_ID(N'dbo.BenchmarkEnvironment') IS NOT NULL
+                 AND OBJECT_ID(N'dbo.BenchmarkDataQuality') IS NOT NULL
+                 AND OBJECT_ID(N'dbo.BenchmarkCase') IS NOT NULL
+                 AND OBJECT_ID(N'dbo.BenchmarkSample') IS NOT NULL
+                 AND OBJECT_ID(N'dbo.BenchmarkSummary') IS NOT NULL
+                THEN 1 ELSE 0 END",
+            &[],
+        )
+        .await
+        .context("query benchmark schema readiness")?
+        .into_row()
+        .await
+        .context("read benchmark schema readiness row")?;
+
+    let installed = row.and_then(|row| row.get::<i32, _>(0)).unwrap_or(0);
+    Ok(installed == 1)
+}
+
+async fn insert_benchmark_artifact(
+    run_id: uuid::Uuid,
+    artifact: &BenchmarkArtifact,
+    c: &mut SqlClient,
+) -> anyhow::Result<()> {
+    insert_benchmark_run(
+        run_id,
+        &artifact.metadata,
+        &artifact.methodology,
+        &artifact.diagnostics,
+        &artifact.summary,
+        c,
+    )
+    .await?;
+    insert_benchmark_environment(run_id, &artifact.environment, c).await?;
+    insert_benchmark_data_quality(run_id, &artifact.data_quality, c).await?;
+    for launch in &artifact.launches {
+        insert_benchmark_launch(run_id, launch, c).await?;
+    }
+
+    for case in &artifact.cases {
+        insert_benchmark_case(run_id, case, c).await?;
+    }
+    for sample in &artifact.samples {
+        insert_benchmark_sample(run_id, sample, c).await?;
+    }
+    for summary in &artifact.summaries {
+        insert_benchmark_summary(run_id, summary, c).await?;
+    }
+
+    Ok(())
+}
+
+async fn insert_benchmark_launch(
+    run_id: uuid::Uuid,
+    launch: &BenchmarkLaunch,
+    c: &mut SqlClient,
+) -> anyhow::Result<()> {
+    let run_id = run_id.to_string();
+    let phases_json = to_json_string(&launch.phases_present, "BenchmarkLaunch.phases_present")?;
+
+    let mut q = Query::new(
+        "INSERT INTO dbo.BenchmarkLaunch (
+            BenchmarkRunId, LaunchIndex, Scenario, PrimaryPhase, StartedAt, FinishedAt,
+            SampleCount, PrimarySampleCount, WarmupSampleCount, SuccessCount, FailureCount,
+            PhasesJson
+         ) VALUES (
+            @P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9,@P10,@P11,@P12
+         )",
+    );
+    q.bind(run_id.as_str());
+    q.bind(launch.launch_index as i32);
+    q.bind(launch.scenario.as_str());
+    q.bind(launch.primary_phase.as_str());
+    q.bind(launch.started_at.naive_utc());
+    q.bind(launch.finished_at.map(|value| value.naive_utc()));
+    q.bind(launch.sample_count as i64);
+    q.bind(launch.primary_sample_count as i64);
+    q.bind(launch.warmup_sample_count as i64);
+    q.bind(launch.success_count as i64);
+    q.bind(launch.failure_count as i64);
+    q.bind(phases_json.as_str());
+    q.execute(c).await.context("INSERT BenchmarkLaunch")?;
+    Ok(())
+}
+
+async fn insert_benchmark_run(
+    run_id: uuid::Uuid,
+    metadata: &BenchmarkMetadata,
+    methodology: &BenchmarkMethodology,
+    diagnostics: &BenchmarkDiagnostics,
+    aggregate_summary: &BenchmarkSummary,
+    c: &mut SqlClient,
+) -> anyhow::Result<()> {
+    let run_id = run_id.to_string();
+    let modes = metadata.modes.join(",");
+    let methodology_json = to_json_string(methodology, "BenchmarkMethodology")?;
+    let diagnostics_json = to_json_string(diagnostics, "BenchmarkDiagnostics")?;
+    let aggregate_summary_json = to_json_string(aggregate_summary, "BenchmarkSummary")?;
+
+    let mut q = Query::new(
+        "INSERT INTO dbo.BenchmarkRun (
+            BenchmarkRunId, ContractVersion, GeneratedAt, Source, TargetUrl, TargetHost,
+            Modes, TotalRuns, Concurrency, TimeoutMs, ClientOs, ClientVersion,
+            MethodologyJson, DiagnosticsJson, AggregateSummaryJson
+         ) VALUES (
+            @P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9,@P10,@P11,@P12,@P13,@P14,@P15
+         )",
+    );
+    q.bind(run_id.as_str());
+    q.bind(metadata.contract_version.as_str());
+    q.bind(metadata.generated_at.naive_utc());
+    q.bind(metadata.source.as_str());
+    q.bind(metadata.target_url.as_str());
+    q.bind(metadata.target_host.as_str());
+    q.bind(modes.as_str());
+    q.bind(metadata.total_runs as i32);
+    q.bind(metadata.concurrency as i32);
+    q.bind(metadata.timeout_ms as i64);
+    q.bind(metadata.client_os.as_str());
+    q.bind(metadata.client_version.as_str());
+    q.bind(methodology_json.as_str());
+    q.bind(diagnostics_json.as_str());
+    q.bind(aggregate_summary_json.as_str());
+    q.execute(c).await.context("INSERT BenchmarkRun")?;
+    Ok(())
+}
+
+async fn insert_benchmark_environment(
+    run_id: uuid::Uuid,
+    environment: &BenchmarkEnvironment,
+    c: &mut SqlClient,
+) -> anyhow::Result<()> {
+    let run_id = run_id.to_string();
+    let client_info_json = environment
+        .client_info
+        .as_ref()
+        .map(|value| to_json_string(value, "BenchmarkEnvironment.client_info"))
+        .transpose()?;
+    let server_info_json = environment
+        .server_info
+        .as_ref()
+        .map(|value| to_json_string(value, "BenchmarkEnvironment.server_info"))
+        .transpose()?;
+    let network_baseline_json = environment
+        .network_baseline
+        .as_ref()
+        .map(|value| to_json_string(value, "BenchmarkEnvironment.network_baseline"))
+        .transpose()?;
+    let environment_json = to_json_string(environment, "BenchmarkEnvironment")?;
+
+    let mut q = Query::new(
+        "INSERT INTO dbo.BenchmarkEnvironment (
+            BenchmarkRunId, ClientInfoJson, ServerInfoJson, NetworkBaselineJson,
+            PacketCaptureEnabled, EnvironmentJson
+         ) VALUES (@P1,@P2,@P3,@P4,@P5,@P6)",
+    );
+    q.bind(run_id.as_str());
+    q.bind(client_info_json.as_deref());
+    q.bind(server_info_json.as_deref());
+    q.bind(network_baseline_json.as_deref());
+    q.bind(environment.packet_capture_enabled);
+    q.bind(environment_json.as_str());
+    q.execute(c).await.context("INSERT BenchmarkEnvironment")?;
+    Ok(())
+}
+
+async fn insert_benchmark_data_quality(
+    run_id: uuid::Uuid,
+    quality: &BenchmarkDataQuality,
+    c: &mut SqlClient,
+) -> anyhow::Result<()> {
+    let run_id = run_id.to_string();
+    let warnings_json = to_json_string(&quality.warnings, "BenchmarkDataQuality.warnings")?;
+    let quality_json = to_json_string(quality, "BenchmarkDataQuality")?;
+
+    let mut q = Query::new(
+        "INSERT INTO dbo.BenchmarkDataQuality (
+            BenchmarkRunId, NoiseLevel, SampleStabilityCv, Sufficiency,
+            PublicationReady, WarningsJson, QualityJson
+         ) VALUES (@P1,@P2,@P3,@P4,@P5,@P6,@P7)",
+    );
+    q.bind(run_id.as_str());
+    q.bind(quality.noise_level.as_str());
+    q.bind(quality.sample_stability_cv);
+    q.bind(quality.sufficiency.as_str());
+    q.bind(quality.publication_ready);
+    q.bind(warnings_json.as_str());
+    q.bind(quality_json.as_str());
+    q.execute(c).await.context("INSERT BenchmarkDataQuality")?;
+    Ok(())
+}
+
+async fn insert_benchmark_case(
+    run_id: uuid::Uuid,
+    case: &BenchmarkCase,
+    c: &mut SqlClient,
+) -> anyhow::Result<()> {
+    let run_id = run_id.to_string();
+    let case_json = to_json_string(case, "BenchmarkCase")?;
+
+    let mut q = Query::new(
+        "INSERT INTO dbo.BenchmarkCase (
+            BenchmarkRunId, CaseId, Protocol, PayloadBytes, HttpStack,
+            MetricName, MetricUnit, HigherIsBetter, CaseJson
+         ) VALUES (@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9)",
+    );
+    q.bind(run_id.as_str());
+    q.bind(case.id.as_str());
+    q.bind(case.protocol.as_str());
+    q.bind(case.payload_bytes.map(|value| value as i64));
+    q.bind(case.http_stack.as_deref());
+    q.bind(case.metric_name.as_str());
+    q.bind(case.metric_unit.as_str());
+    q.bind(case.higher_is_better);
+    q.bind(case_json.as_str());
+    q.execute(c).await.context("INSERT BenchmarkCase")?;
+    Ok(())
+}
+
+async fn insert_benchmark_sample(
+    run_id: uuid::Uuid,
+    sample: &BenchmarkSample,
+    c: &mut SqlClient,
+) -> anyhow::Result<()> {
+    let attempt_id = sample.attempt_id.to_string();
+    let run_id = run_id.to_string();
+    let sample_json = to_json_string(sample, "BenchmarkSample")?;
+
+    let mut q = Query::new(
+        "INSERT INTO dbo.BenchmarkSample (
+            AttemptId, BenchmarkRunId, CaseId, LaunchIndex, Phase, IterationIndex,
+            Success, RetryCount, InclusionStatus, MetricValue, MetricUnit, StartedAt,
+            FinishedAt, TotalDurationMs, TtfbMs, SampleJson
+         ) VALUES (
+            @P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9,@P10,@P11,@P12,@P13,@P14,@P15,@P16
+         )",
+    );
+    q.bind(attempt_id.as_str());
+    q.bind(run_id.as_str());
+    q.bind(sample.case_id.as_str());
+    q.bind(sample.launch_index as i32);
+    q.bind(sample.phase.as_str());
+    q.bind(sample.iteration_index as i32);
+    q.bind(sample.success);
+    q.bind(sample.retry_count as i32);
+    q.bind(sample.inclusion_status.as_str());
+    q.bind(sample.metric_value);
+    q.bind(sample.metric_unit.as_str());
+    q.bind(sample.started_at.naive_utc());
+    q.bind(sample.finished_at.map(|value| value.naive_utc()));
+    q.bind(sample.total_duration_ms);
+    q.bind(sample.ttfb_ms);
+    q.bind(sample_json.as_str());
+    q.execute(c).await.context("INSERT BenchmarkSample")?;
+    Ok(())
+}
+
+async fn insert_benchmark_summary(
+    run_id: uuid::Uuid,
+    summary: &BenchmarkSummary,
+    c: &mut SqlClient,
+) -> anyhow::Result<()> {
+    let run_id = run_id.to_string();
+    let summary_json = to_json_string(summary, "BenchmarkSummary")?;
+
+    let mut q = Query::new(
+        "INSERT INTO dbo.BenchmarkSummary (
+            BenchmarkRunId, CaseId, Protocol, PayloadBytes, HttpStack, MetricName,
+            MetricUnit, HigherIsBetter, SampleCount, IncludedSampleCount,
+            ExcludedSampleCount, SuccessCount, FailureCount, TotalRequests, ErrorCount,
+            BytesTransferred, WallTimeMs, Rps, Min, Mean, P5, P25, P50, P75, P95, P99,
+            P999, Max, Stddev, LatencyMeanMs, LatencyP50Ms, LatencyP99Ms,
+            LatencyP999Ms, LatencyMaxMs, SummaryJson
+         ) VALUES (
+            @P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9,@P10,@P11,@P12,@P13,@P14,@P15,@P16,@P17,
+            @P18,@P19,@P20,@P21,@P22,@P23,@P24,@P25,@P26,@P27,@P28,@P29,@P30,@P31,@P32,
+            @P33,@P34,@P35
+         )",
+    );
+    q.bind(run_id.as_str());
+    q.bind(summary.case_id.as_str());
+    q.bind(summary.protocol.as_str());
+    q.bind(summary.payload_bytes.map(|value| value as i64));
+    q.bind(summary.http_stack.as_deref());
+    q.bind(summary.metric_name.as_str());
+    q.bind(summary.metric_unit.as_str());
+    q.bind(summary.higher_is_better);
+    q.bind(summary.sample_count as i64);
+    q.bind(summary.included_sample_count as i64);
+    q.bind(summary.excluded_sample_count as i64);
+    q.bind(summary.success_count as i64);
+    q.bind(summary.failure_count as i64);
+    q.bind(summary.total_requests as i64);
+    q.bind(summary.error_count as i64);
+    q.bind(summary.bytes_transferred as i64);
+    q.bind(summary.wall_time_ms);
+    q.bind(summary.rps);
+    q.bind(summary.min);
+    q.bind(summary.mean);
+    q.bind(summary.p5);
+    q.bind(summary.p25);
+    q.bind(summary.p50);
+    q.bind(summary.p75);
+    q.bind(summary.p95);
+    q.bind(summary.p99);
+    q.bind(summary.p999);
+    q.bind(summary.max);
+    q.bind(summary.stddev);
+    q.bind(summary.latency_mean_ms);
+    q.bind(summary.latency_p50_ms);
+    q.bind(summary.latency_p99_ms);
+    q.bind(summary.latency_p999_ms);
+    q.bind(summary.latency_max_ms);
+    q.bind(summary_json.as_str());
+    q.execute(c).await.context("INSERT BenchmarkSummary")?;
     Ok(())
 }
 
@@ -569,20 +937,193 @@ async fn insert_error(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::output::db::test_fixtures::{bare_attempt, full_attempt, make_run};
+    use crate::output::db::test_fixtures::{
+        bare_attempt, full_attempt, make_benchmark_run, make_run,
+    };
+    use tokio::time::{sleep, Duration};
     use uuid::Uuid;
+
+    const DOCUMENTED_V001_SCHEMA: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../sql/01_CreateDatabase.sql"
+    ));
+    const DOCUMENTED_V004_THROUGHPUT: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../sql/04_AddThroughput.sql"
+    ));
+    const DOCUMENTED_V005_EXTENDED_TCP: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../sql/05_ExtendedTcpStats.sql"
+    ));
+    const DOCUMENTED_V006_SERVER_TIMING: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../sql/06_ServerTiming.sql"
+    ));
+    const DOCUMENTED_V007_MORE_TCP: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../sql/07_MoreTcpStats.sql"
+    ));
+    const DOCUMENTED_V008_URL_DIAGNOSTICS: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../sql/08_UrlDiagnostics.sql"
+    ));
+    const BENCHMARK_SCHEMA_SQL: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../sql/09_BenchmarkSchema.sql"
+    ));
 
     /// Returns `NETWORKER_SQL_CONN` or skips the test (returns None) if unset.
     fn sql_conn() -> Option<String> {
         std::env::var("NETWORKER_SQL_CONN").ok()
     }
 
+    fn connection_string_with_database(base_conn: &str, db_name: &str) -> String {
+        let mut parts = Vec::new();
+        let mut replaced = false;
+
+        for segment in base_conn.split(';') {
+            let trimmed = segment.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            if let Some((key, _)) = trimmed.split_once('=') {
+                let normalized = key.trim().to_ascii_lowercase();
+                if normalized == "database" || normalized == "initial catalog" {
+                    if !replaced {
+                        parts.push(format!("Database={db_name}"));
+                        replaced = true;
+                    }
+                    continue;
+                }
+            }
+
+            parts.push(trimmed.to_string());
+        }
+
+        if !replaced {
+            parts.push(format!("Database={db_name}"));
+        }
+
+        parts.join(";")
+    }
+
+    fn render_documented_script(script: &str, db_name: &str) -> String {
+        script.replace("NetworkDiagnostics", db_name)
+    }
+
+    fn split_sqlcmd_batches(script: &str) -> Vec<String> {
+        let mut batches = Vec::new();
+        let mut current = String::new();
+
+        for line in script.lines() {
+            if line.trim().eq_ignore_ascii_case("GO") {
+                if !current.trim().is_empty() {
+                    batches.push(current.trim().to_string());
+                    current.clear();
+                }
+                continue;
+            }
+
+            current.push_str(line);
+            current.push('\n');
+        }
+
+        if !current.trim().is_empty() {
+            batches.push(current.trim().to_string());
+        }
+
+        batches
+    }
+
+    async fn try_test_connect(conn_str: &str) -> anyhow::Result<SqlClient> {
+        let config = Config::from_ado_string(conn_str).unwrap();
+        let tcp = TcpStream::connect(config.get_addr()).await?;
+        tcp.set_nodelay(true)?;
+        Ok(Client::connect(config, tcp.compat_write()).await?)
+    }
+
     /// Helper: connect directly for test verification queries.
     async fn test_connect(conn_str: &str) -> SqlClient {
-        let config = Config::from_ado_string(conn_str).unwrap();
-        let tcp = TcpStream::connect(config.get_addr()).await.unwrap();
-        tcp.set_nodelay(true).unwrap();
-        Client::connect(config, tcp.compat_write()).await.unwrap()
+        let mut last_err = None;
+
+        for _ in 0..20 {
+            match try_test_connect(conn_str).await {
+                Ok(client) => return client,
+                Err(err) => {
+                    last_err = Some(err);
+                    sleep(Duration::from_millis(250)).await;
+                }
+            }
+        }
+
+        panic!(
+            "failed to connect to SQL Server test database: {}",
+            last_err.unwrap()
+        );
+    }
+
+    async fn execute_sqlcmd_script(
+        client: &mut SqlClient,
+        script: &str,
+        db_name: &str,
+    ) -> anyhow::Result<()> {
+        let rendered = render_documented_script(script, db_name);
+        for batch in split_sqlcmd_batches(&rendered) {
+            client.simple_query(batch).await?.into_results().await?;
+        }
+        Ok(())
+    }
+
+    async fn install_documented_schema(
+        base_conn: &str,
+        db_name: &str,
+        benchmark_schema: bool,
+    ) -> anyhow::Result<()> {
+        let admin_conn = connection_string_with_database(base_conn, "master");
+        let mut client = test_connect(&admin_conn).await;
+
+        for script in [
+            DOCUMENTED_V001_SCHEMA,
+            DOCUMENTED_V004_THROUGHPUT,
+            DOCUMENTED_V005_EXTENDED_TCP,
+            DOCUMENTED_V006_SERVER_TIMING,
+            DOCUMENTED_V007_MORE_TCP,
+            DOCUMENTED_V008_URL_DIAGNOSTICS,
+        ] {
+            execute_sqlcmd_script(&mut client, script, db_name).await?;
+        }
+
+        if benchmark_schema {
+            execute_sqlcmd_script(&mut client, BENCHMARK_SCHEMA_SQL, db_name).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn isolated_backend_with_documented_schema(
+        base_conn: &str,
+        prefix: &str,
+        benchmark_schema: bool,
+    ) -> (String, MssqlBackend) {
+        let db_name = format!("networker_{}_{}", prefix, Uuid::new_v4().simple());
+        install_documented_schema(base_conn, &db_name, benchmark_schema)
+            .await
+            .unwrap();
+        let db_conn = connection_string_with_database(base_conn, &db_name);
+        let backend = MssqlBackend::connect(&db_conn).await.unwrap();
+        (db_conn, backend)
+    }
+
+    async fn benchmark_table_exists(client: &mut SqlClient, table: &str) -> bool {
+        let row = query_one(
+            client,
+            &format!("SELECT CASE WHEN OBJECT_ID(N'dbo.{table}') IS NOT NULL THEN 1 ELSE 0 END"),
+        )
+        .await
+        .expect("benchmark table existence row");
+        let exists: i32 = row.get(0).unwrap();
+        exists == 1
     }
 
     /// Helper: execute a SELECT, return the first row.
@@ -598,17 +1139,64 @@ mod tests {
         stream.into_first_result().await.unwrap()
     }
 
+    #[test]
+    fn mssql_benchmark_schema_contains_tables() {
+        for table in [
+            "dbo.BenchmarkRun",
+            "dbo.BenchmarkLaunch",
+            "dbo.BenchmarkEnvironment",
+            "dbo.BenchmarkDataQuality",
+            "dbo.BenchmarkCase",
+            "dbo.BenchmarkSample",
+            "dbo.BenchmarkSummary",
+        ] {
+            assert!(
+                BENCHMARK_SCHEMA_SQL.contains(&format!("CREATE TABLE {table}")),
+                "SQL Server benchmark schema missing CREATE TABLE {table}"
+            );
+        }
+    }
+
+    #[test]
+    fn mssql_benchmark_schema_contains_indexes() {
+        for idx in [
+            "IX_BenchmarkRun_GeneratedAt",
+            "IX_BenchmarkLaunch_Phase",
+            "IX_BenchmarkCase_Protocol",
+            "IX_BenchmarkSample_RunCase",
+            "IX_BenchmarkSummary_RunProtocol",
+            "IX_BenchmarkDataQuality_PublicationReady",
+        ] {
+            assert!(
+                BENCHMARK_SCHEMA_SQL.contains(idx),
+                "SQL Server benchmark schema missing index: {idx}"
+            );
+        }
+    }
+
+    #[test]
+    fn mssql_benchmark_schema_starts_with_header_comment() {
+        let trimmed = BENCHMARK_SCHEMA_SQL.trim();
+        assert!(
+            trimmed.starts_with(
+                "-- ============================================================================="
+            ),
+            "SQL Server benchmark schema should start with a header comment"
+        );
+    }
+
     /// Basic round-trip: TestRun + bare RequestAttempt (no sub-results).
     #[tokio::test]
     #[ignore = "requires SQL Server -- set NETWORKER_SQL_CONN to enable"]
     async fn db_mssql_insert_round_trip() {
-        let conn = match sql_conn() {
+        let base_conn = match sql_conn() {
             Some(c) => c,
             None => return,
         };
+        let (_db_conn, backend) =
+            isolated_backend_with_documented_schema(&base_conn, "insert_round_trip", false).await;
         let run_id = Uuid::new_v4();
         let run = make_run(run_id, vec![bare_attempt(run_id)]);
-        let backend = MssqlBackend::connect(&conn).await.unwrap();
         backend.save(&run).await.expect("SQL save should succeed");
     }
 
@@ -616,13 +1204,14 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires SQL Server -- set NETWORKER_SQL_CONN to enable"]
     async fn db_mssql_full_round_trip() {
-        let conn = match sql_conn() {
+        let base_conn = match sql_conn() {
             Some(c) => c,
             None => return,
         };
+        let (_db_conn, backend) =
+            isolated_backend_with_documented_schema(&base_conn, "full_round_trip", false).await;
         let run_id = Uuid::new_v4();
         let run = make_run(run_id, vec![bare_attempt(run_id), full_attempt(run_id)]);
-        let backend = MssqlBackend::connect(&conn).await.unwrap();
         backend
             .save(&run)
             .await
@@ -633,14 +1222,15 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires SQL Server -- set NETWORKER_SQL_CONN to enable"]
     async fn db_mssql_verify_test_run_fields() {
-        let conn_str = match sql_conn() {
+        let base_conn = match sql_conn() {
             Some(c) => c,
             None => return,
         };
+        let (conn_str, backend) =
+            isolated_backend_with_documented_schema(&base_conn, "verify_run_fields", false).await;
         let run_id = Uuid::new_v4();
         let attempt = bare_attempt(run_id);
         let run = make_run(run_id, vec![attempt]);
-        let backend = MssqlBackend::connect(&conn_str).await.unwrap();
         backend.save(&run).await.unwrap();
 
         let mut client = test_connect(&conn_str).await;
@@ -683,15 +1273,16 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires SQL Server -- set NETWORKER_SQL_CONN to enable"]
     async fn db_mssql_verify_all_sub_results() {
-        let conn_str = match sql_conn() {
+        let base_conn = match sql_conn() {
             Some(c) => c,
             None => return,
         };
+        let (conn_str, backend) =
+            isolated_backend_with_documented_schema(&base_conn, "verify_sub_results", false).await;
         let run_id = Uuid::new_v4();
         let attempt = full_attempt(run_id);
         let attempt_id = attempt.attempt_id;
         let run = make_run(run_id, vec![attempt]);
-        let backend = MssqlBackend::connect(&conn_str).await.unwrap();
         backend.save(&run).await.unwrap();
 
         let mut c = test_connect(&conn_str).await;
@@ -874,15 +1465,16 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires SQL Server -- set NETWORKER_SQL_CONN to enable"]
     async fn db_mssql_cascade_delete() {
-        let conn_str = match sql_conn() {
+        let base_conn = match sql_conn() {
             Some(c) => c,
             None => return,
         };
+        let (conn_str, backend) =
+            isolated_backend_with_documented_schema(&base_conn, "cascade_delete", false).await;
         let run_id = Uuid::new_v4();
         let attempt = full_attempt(run_id);
         let attempt_id = attempt.attempt_id;
         let run = make_run(run_id, vec![attempt]);
-        let backend = MssqlBackend::connect(&conn_str).await.unwrap();
         backend.save(&run).await.unwrap();
 
         let mut c = test_connect(&conn_str).await;
@@ -939,13 +1531,14 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires SQL Server -- set NETWORKER_SQL_CONN to enable"]
     async fn db_mssql_duplicate_run_id_fails() {
-        let conn_str = match sql_conn() {
+        let base_conn = match sql_conn() {
             Some(c) => c,
             None => return,
         };
+        let (conn_str, backend) =
+            isolated_backend_with_documented_schema(&base_conn, "duplicate_run", false).await;
         let run_id = Uuid::new_v4();
         let run = make_run(run_id, vec![bare_attempt(run_id)]);
-        let backend = MssqlBackend::connect(&conn_str).await.unwrap();
         backend.save(&run).await.unwrap();
 
         // Second insert with same RunId should fail on PK.
@@ -959,10 +1552,12 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires SQL Server -- set NETWORKER_SQL_CONN to enable"]
     async fn db_mssql_multiple_attempts_count() {
-        let conn_str = match sql_conn() {
+        let base_conn = match sql_conn() {
             Some(c) => c,
             None => return,
         };
+        let (conn_str, backend) =
+            isolated_backend_with_documented_schema(&base_conn, "multiple_attempts", false).await;
         let run_id = Uuid::new_v4();
         let attempts = vec![
             bare_attempt(run_id),
@@ -971,7 +1566,6 @@ mod tests {
         ];
         let mut run = make_run(run_id, attempts);
         run.total_runs = 3;
-        let backend = MssqlBackend::connect(&conn_str).await.unwrap();
         backend.save(&run).await.unwrap();
 
         let mut c = test_connect(&conn_str).await;
@@ -1011,15 +1605,16 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires SQL Server -- set NETWORKER_SQL_CONN to enable"]
     async fn db_mssql_bare_attempt_no_child_rows() {
-        let conn_str = match sql_conn() {
+        let base_conn = match sql_conn() {
             Some(c) => c,
             None => return,
         };
+        let (conn_str, backend) =
+            isolated_backend_with_documented_schema(&base_conn, "bare_attempt", false).await;
         let run_id = Uuid::new_v4();
         let attempt = bare_attempt(run_id);
         let aid = attempt.attempt_id.to_string();
         let run = make_run(run_id, vec![attempt]);
-        let backend = MssqlBackend::connect(&conn_str).await.unwrap();
         backend.save(&run).await.unwrap();
 
         let mut c = test_connect(&conn_str).await;
@@ -1039,5 +1634,307 @@ mod tests {
             .await;
             assert!(rows.is_empty(), "bare attempt should have no {table} rows");
         }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires SQL Server -- set NETWORKER_SQL_CONN and apply sql/09_BenchmarkSchema.sql"]
+    async fn db_mssql_persists_benchmark_rows() {
+        let base_conn = match sql_conn() {
+            Some(c) => c,
+            None => return,
+        };
+        let (conn_str, backend) =
+            isolated_backend_with_documented_schema(&base_conn, "persist_benchmark", true).await;
+        let run_id = Uuid::new_v4();
+        let run = make_benchmark_run(run_id, vec![bare_attempt(run_id)]);
+        backend.save(&run).await.unwrap();
+
+        let mut c = test_connect(&conn_str).await;
+        if !benchmark_schema_installed(&mut c).await.unwrap() {
+            return;
+        }
+
+        let rid = run_id.to_string();
+        let row = query_one(
+            &mut c,
+            &format!(
+                "SELECT ContractVersion, TargetHost \
+                 FROM dbo.BenchmarkRun WHERE BenchmarkRunId = '{rid}'"
+            ),
+        )
+        .await
+        .expect("BenchmarkRun row must exist");
+        let contract_version: &str = row.get(0).unwrap();
+        assert_eq!(contract_version, "1.2");
+        let target_host: &str = row.get(1).unwrap();
+        assert_eq!(target_host, "localhost");
+
+        let row = query_one(
+            &mut c,
+            &format!(
+                "SELECT LaunchIndex, Scenario, PrimaryPhase, WarmupSampleCount \
+                 FROM dbo.BenchmarkLaunch WHERE BenchmarkRunId = '{rid}'"
+            ),
+        )
+        .await
+        .expect("BenchmarkLaunch row");
+        let launch_index: i32 = row.get(0).unwrap();
+        assert_eq!(launch_index, 0);
+        let scenario: &str = row.get(1).unwrap();
+        assert_eq!(scenario, "warm");
+        let primary_phase: &str = row.get(2).unwrap();
+        assert_eq!(primary_phase, "measured");
+        let warmup_sample_count: i64 = row.get(3).unwrap();
+        assert_eq!(warmup_sample_count, 0);
+
+        let row = query_one(
+            &mut c,
+            &format!(
+                "SELECT CaseId, Protocol, MetricUnit \
+                 FROM dbo.BenchmarkCase WHERE BenchmarkRunId = '{rid}'"
+            ),
+        )
+        .await
+        .expect("BenchmarkCase row");
+        let case_id: &str = row.get(0).unwrap();
+        assert_eq!(case_id, "http1:default:default");
+        let protocol: &str = row.get(1).unwrap();
+        assert_eq!(protocol, "http1");
+        let metric_unit: &str = row.get(2).unwrap();
+        assert_eq!(metric_unit, "ms");
+
+        let row = query_one(
+            &mut c,
+            &format!(
+                "SELECT InclusionStatus, MetricUnit \
+                 FROM dbo.BenchmarkSample WHERE BenchmarkRunId = '{rid}'"
+            ),
+        )
+        .await
+        .expect("BenchmarkSample row");
+        let inclusion_status: &str = row.get(0).unwrap();
+        assert_eq!(inclusion_status, "excluded_missing_metric");
+        let sample_metric_unit: &str = row.get(1).unwrap();
+        assert_eq!(sample_metric_unit, "ms");
+
+        let row = query_one(
+            &mut c,
+            &format!(
+                "SELECT SampleCount, IncludedSampleCount, FailureCount \
+                 FROM dbo.BenchmarkSummary \
+                 WHERE BenchmarkRunId = '{rid}' AND CaseId = 'http1:default:default'"
+            ),
+        )
+        .await
+        .expect("BenchmarkSummary row");
+        let sample_count: i64 = row.get(0).unwrap();
+        assert_eq!(sample_count, 1);
+        let included_sample_count: i64 = row.get(1).unwrap();
+        assert_eq!(included_sample_count, 0);
+        let failure_count: i64 = row.get(2).unwrap();
+        assert_eq!(failure_count, 0);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires SQL Server -- set NETWORKER_SQL_CONN to enable"]
+    async fn db_mssql_plain_run_succeeds_with_documented_base_schema() {
+        let base_conn = match sql_conn() {
+            Some(c) => c,
+            None => return,
+        };
+        let (db_conn, backend) =
+            isolated_backend_with_documented_schema(&base_conn, "base_plain", false).await;
+        let run_id = Uuid::new_v4();
+        let run = make_run(run_id, vec![bare_attempt(run_id)]);
+        backend.save(&run).await.unwrap();
+
+        let mut client = test_connect(&db_conn).await;
+        let test_run_row = query_one(
+            &mut client,
+            &format!("SELECT COUNT_BIG(*) FROM dbo.TestRun WHERE RunId = '{run_id}'"),
+        )
+        .await
+        .expect("TestRun count row");
+        let test_run_count: i64 = test_run_row.get(0).unwrap();
+        assert_eq!(test_run_count, 1);
+
+        let attempt_row = query_one(
+            &mut client,
+            &format!("SELECT COUNT_BIG(*) FROM dbo.RequestAttempt WHERE RunId = '{run_id}'"),
+        )
+        .await
+        .expect("RequestAttempt count row");
+        let attempt_count: i64 = attempt_row.get(0).unwrap();
+        assert_eq!(attempt_count, 1);
+
+        assert!(!benchmark_table_exists(&mut client, "BenchmarkRun").await);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires SQL Server -- set NETWORKER_SQL_CONN to enable"]
+    async fn db_mssql_benchmark_run_skips_benchmark_rows_with_documented_base_schema() {
+        let base_conn = match sql_conn() {
+            Some(c) => c,
+            None => return,
+        };
+        let (db_conn, backend) =
+            isolated_backend_with_documented_schema(&base_conn, "base_bench", false).await;
+        let run_id = Uuid::new_v4();
+        let run = make_benchmark_run(run_id, vec![bare_attempt(run_id)]);
+        backend.save(&run).await.unwrap();
+
+        let mut client = test_connect(&db_conn).await;
+        let test_run_row = query_one(
+            &mut client,
+            &format!("SELECT COUNT_BIG(*) FROM dbo.TestRun WHERE RunId = '{run_id}'"),
+        )
+        .await
+        .expect("TestRun count row");
+        let test_run_count: i64 = test_run_row.get(0).unwrap();
+        assert_eq!(test_run_count, 1);
+
+        assert!(!benchmark_table_exists(&mut client, "BenchmarkRun").await);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires SQL Server -- set NETWORKER_SQL_CONN to enable"]
+    async fn db_mssql_plain_run_does_not_create_benchmark_rows_when_schema_exists() {
+        let base_conn = match sql_conn() {
+            Some(c) => c,
+            None => return,
+        };
+        let (db_conn, backend) =
+            isolated_backend_with_documented_schema(&base_conn, "migrated_plain", true).await;
+        let run_id = Uuid::new_v4();
+        let run = make_run(run_id, vec![bare_attempt(run_id)]);
+        backend.save(&run).await.unwrap();
+
+        let mut client = test_connect(&db_conn).await;
+        let row = query_one(
+            &mut client,
+            &format!("SELECT COUNT_BIG(*) FROM dbo.BenchmarkRun WHERE BenchmarkRunId = '{run_id}'"),
+        )
+        .await
+        .expect("BenchmarkRun count row");
+        let benchmark_run_count: i64 = row.get(0).unwrap();
+        assert_eq!(benchmark_run_count, 0);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires SQL Server -- set NETWORKER_SQL_CONN to enable"]
+    async fn db_mssql_benchmark_run_persists_rows_with_documented_benchmark_schema() {
+        let base_conn = match sql_conn() {
+            Some(c) => c,
+            None => return,
+        };
+        let (db_conn, backend) =
+            isolated_backend_with_documented_schema(&base_conn, "migrated_bench", true).await;
+        let run_id = Uuid::new_v4();
+        let run = make_benchmark_run(run_id, vec![bare_attempt(run_id)]);
+        backend.save(&run).await.unwrap();
+
+        let mut c = test_connect(&db_conn).await;
+        let rid = run_id.to_string();
+
+        let row = query_one(
+            &mut c,
+            &format!(
+                "SELECT ContractVersion, TargetHost \
+                 FROM dbo.BenchmarkRun WHERE BenchmarkRunId = '{rid}'"
+            ),
+        )
+        .await
+        .expect("BenchmarkRun row must exist");
+        let contract_version: &str = row.get(0).unwrap();
+        assert_eq!(contract_version, "1.2");
+        let target_host: &str = row.get(1).unwrap();
+        assert_eq!(target_host, "localhost");
+
+        let env_row = query_one(
+            &mut c,
+            &format!(
+                "SELECT COUNT_BIG(*) FROM dbo.BenchmarkEnvironment WHERE BenchmarkRunId = '{rid}'"
+            ),
+        )
+        .await
+        .expect("BenchmarkEnvironment count row");
+        let env_count: i64 = env_row.get(0).unwrap();
+        assert_eq!(env_count, 1);
+
+        let quality_row = query_one(
+            &mut c,
+            &format!(
+                "SELECT COUNT_BIG(*) FROM dbo.BenchmarkDataQuality WHERE BenchmarkRunId = '{rid}'"
+            ),
+        )
+        .await
+        .expect("BenchmarkDataQuality count row");
+        let quality_count: i64 = quality_row.get(0).unwrap();
+        assert_eq!(quality_count, 1);
+
+        let row = query_one(
+            &mut c,
+            &format!(
+                "SELECT LaunchIndex, Scenario, PrimaryPhase, WarmupSampleCount \
+                 FROM dbo.BenchmarkLaunch WHERE BenchmarkRunId = '{rid}'"
+            ),
+        )
+        .await
+        .expect("BenchmarkLaunch row");
+        let launch_index: i32 = row.get(0).unwrap();
+        assert_eq!(launch_index, 0);
+        let scenario: &str = row.get(1).unwrap();
+        assert_eq!(scenario, "warm");
+        let primary_phase: &str = row.get(2).unwrap();
+        assert_eq!(primary_phase, "measured");
+        let warmup_sample_count: i64 = row.get(3).unwrap();
+        assert_eq!(warmup_sample_count, 0);
+
+        let row = query_one(
+            &mut c,
+            &format!(
+                "SELECT CaseId, Protocol, MetricUnit \
+                 FROM dbo.BenchmarkCase WHERE BenchmarkRunId = '{rid}'"
+            ),
+        )
+        .await
+        .expect("BenchmarkCase row");
+        let case_id: &str = row.get(0).unwrap();
+        assert_eq!(case_id, "http1:default:default");
+        let protocol: &str = row.get(1).unwrap();
+        assert_eq!(protocol, "http1");
+        let metric_unit: &str = row.get(2).unwrap();
+        assert_eq!(metric_unit, "ms");
+
+        let row = query_one(
+            &mut c,
+            &format!(
+                "SELECT InclusionStatus, MetricUnit \
+                 FROM dbo.BenchmarkSample WHERE BenchmarkRunId = '{rid}'"
+            ),
+        )
+        .await
+        .expect("BenchmarkSample row");
+        let inclusion_status: &str = row.get(0).unwrap();
+        assert_eq!(inclusion_status, "excluded_missing_metric");
+        let sample_metric_unit: &str = row.get(1).unwrap();
+        assert_eq!(sample_metric_unit, "ms");
+
+        let row = query_one(
+            &mut c,
+            &format!(
+                "SELECT SampleCount, IncludedSampleCount, FailureCount \
+                 FROM dbo.BenchmarkSummary \
+                 WHERE BenchmarkRunId = '{rid}' AND CaseId = 'http1:default:default'"
+            ),
+        )
+        .await
+        .expect("BenchmarkSummary row");
+        let sample_count: i64 = row.get(0).unwrap();
+        assert_eq!(sample_count, 1);
+        let included_sample_count: i64 = row.get(1).unwrap();
+        assert_eq!(included_sample_count, 0);
+        let failure_count: i64 = row.get(2).unwrap();
+        assert_eq!(failure_count, 0);
     }
 }

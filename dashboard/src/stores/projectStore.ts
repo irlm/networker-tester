@@ -19,16 +19,40 @@ interface ProjectState {
   clear: () => void;
 }
 
+function storageGet(key: string): string | null {
+  if (typeof window === 'undefined' || typeof window.localStorage?.getItem !== 'function') {
+    return null;
+  }
+  return window.localStorage.getItem(key);
+}
+
+function storageSet(key: string, value: string) {
+  if (typeof window === 'undefined' || typeof window.localStorage?.setItem !== 'function') {
+    return;
+  }
+  window.localStorage.setItem(key, value);
+}
+
+function storageRemove(key: string) {
+  if (
+    typeof window === 'undefined' ||
+    typeof window.localStorage?.removeItem !== 'function'
+  ) {
+    return;
+  }
+  window.localStorage.removeItem(key);
+}
+
 export const useProjectStore = create<ProjectState>((set) => ({
   projects: [],
-  activeProjectId: localStorage.getItem('activeProjectId'),
-  activeProjectSlug: localStorage.getItem('activeProjectSlug'),
-  activeProjectRole: localStorage.getItem('activeProjectRole'),
+  activeProjectId: storageGet('activeProjectId'),
+  activeProjectSlug: storageGet('activeProjectSlug'),
+  activeProjectRole: storageGet('activeProjectRole'),
   setProjects: (projects) => set({ projects }),
   setActiveProject: (project) => {
-    localStorage.setItem('activeProjectId', project.project_id);
-    localStorage.setItem('activeProjectSlug', project.slug);
-    localStorage.setItem('activeProjectRole', project.role);
+    storageSet('activeProjectId', project.project_id);
+    storageSet('activeProjectSlug', project.slug);
+    storageSet('activeProjectRole', project.role);
     set({
       activeProjectId: project.project_id,
       activeProjectSlug: project.slug,
@@ -36,15 +60,15 @@ export const useProjectStore = create<ProjectState>((set) => ({
     });
   },
   clearActiveProject: () => {
-    localStorage.removeItem('activeProjectId');
-    localStorage.removeItem('activeProjectSlug');
-    localStorage.removeItem('activeProjectRole');
+    storageRemove('activeProjectId');
+    storageRemove('activeProjectSlug');
+    storageRemove('activeProjectRole');
     set({ activeProjectId: null, activeProjectSlug: null, activeProjectRole: null });
   },
   clear: () => {
-    localStorage.removeItem('activeProjectId');
-    localStorage.removeItem('activeProjectSlug');
-    localStorage.removeItem('activeProjectRole');
+    storageRemove('activeProjectId');
+    storageRemove('activeProjectSlug');
+    storageRemove('activeProjectRole');
     set({ projects: [], activeProjectId: null, activeProjectSlug: null, activeProjectRole: null });
   },
 }));

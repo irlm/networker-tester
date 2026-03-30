@@ -79,6 +79,75 @@ pub struct NetworkBaseline {
     pub network_type: NetworkType,
 }
 
+/// Short pre-benchmark baseline measurement recorded as an explicit lifecycle phase.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BenchmarkEnvironmentCheck {
+    pub attempted_samples: u32,
+    pub successful_samples: u32,
+    pub failed_samples: u32,
+    pub duration_ms: f64,
+    pub rtt_min_ms: f64,
+    pub rtt_avg_ms: f64,
+    pub rtt_max_ms: f64,
+    pub rtt_p50_ms: f64,
+    pub rtt_p95_ms: f64,
+    pub packet_loss_percent: f64,
+    pub network_type: NetworkType,
+}
+
+/// Short pre-benchmark noise measurement used to assess environment stability.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BenchmarkStabilityCheck {
+    pub attempted_samples: u32,
+    pub successful_samples: u32,
+    pub failed_samples: u32,
+    pub duration_ms: f64,
+    pub rtt_min_ms: f64,
+    pub rtt_avg_ms: f64,
+    pub rtt_max_ms: f64,
+    pub rtt_p50_ms: f64,
+    pub rtt_p95_ms: f64,
+    pub jitter_ms: f64,
+    pub packet_loss_percent: f64,
+    pub network_type: NetworkType,
+}
+
+/// Adaptive benchmark execution plan applied to the measured phase.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BenchmarkExecutionPlan {
+    /// Origin of the applied plan, e.g. explicit, pilot-derived, pilot-assisted.
+    pub source: String,
+    pub min_samples: u32,
+    pub max_samples: u32,
+    pub min_duration_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_relative_error: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_absolute_error: Option<f64>,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub pilot_sample_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pilot_elapsed_ms: Option<f64>,
+}
+
+/// Publication thresholds used to classify benchmark noise and publication readiness.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BenchmarkNoiseThresholds {
+    pub max_packet_loss_percent: f64,
+    pub max_jitter_ratio: f64,
+    pub max_rtt_spread_ratio: f64,
+}
+
+impl Default for BenchmarkNoiseThresholds {
+    fn default() -> Self {
+        Self {
+            max_packet_loss_percent: 5.0,
+            max_jitter_ratio: 0.25,
+            max_rtt_spread_ratio: 2.0,
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Top-level run
 // ─────────────────────────────────────────────────────────────────────────────
@@ -108,6 +177,39 @@ pub struct TestRun {
     /// Optional packet capture summary for runs where capture was enabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub packet_capture_summary: Option<PacketCaptureSummary>,
+    /// Optional explicit environment-check phase for benchmark-mode runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub benchmark_environment_check: Option<BenchmarkEnvironmentCheck>,
+    /// Optional short pre-benchmark noise measurement for benchmark-mode runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub benchmark_stability_check: Option<BenchmarkStabilityCheck>,
+    /// Primary benchmark phase for this run when emitted in benchmark mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub benchmark_phase: Option<String>,
+    /// Benchmark scenario label (for example cold, warm, warmup).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub benchmark_scenario: Option<String>,
+    /// Launch index supplied by an orchestrator when the run is part of a repeated benchmark.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub benchmark_launch_index: Option<u32>,
+    /// Number of leading attempts that belong to an internal warmup phase.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub benchmark_warmup_attempt_count: u32,
+    /// Number of attempts collected in the internal pilot phase before measured samples.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub benchmark_pilot_attempt_count: u32,
+    /// Number of attempts collected in the internal overhead phase before measured samples.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub benchmark_overhead_attempt_count: u32,
+    /// Number of attempts collected in the internal cooldown phase after measured samples.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub benchmark_cooldown_attempt_count: u32,
+    /// Applied adaptive execution plan for benchmark-mode measured runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub benchmark_execution_plan: Option<BenchmarkExecutionPlan>,
+    /// Configured publication thresholds used to assess benchmark noise quality.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub benchmark_noise_thresholds: Option<BenchmarkNoiseThresholds>,
     pub attempts: Vec<RequestAttempt>,
 }
 
@@ -152,6 +254,10 @@ impl HostInfo {
             region: None,
         }
     }
+}
+
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
 }
 
 fn detect_total_memory_mb() -> Option<u64> {
@@ -1559,6 +1665,17 @@ mod tests {
             client_info: None,
             baseline: None,
             packet_capture_summary: None,
+            benchmark_environment_check: None,
+            benchmark_stability_check: None,
+            benchmark_phase: None,
+            benchmark_scenario: None,
+            benchmark_launch_index: None,
+            benchmark_warmup_attempt_count: 0,
+            benchmark_pilot_attempt_count: 0,
+            benchmark_overhead_attempt_count: 0,
+            benchmark_cooldown_attempt_count: 0,
+            benchmark_execution_plan: None,
+            benchmark_noise_thresholds: None,
             attempts: vec![mk(true), mk(false), mk(true)],
         };
         assert_eq!(run.success_count(), 2);
@@ -1929,6 +2046,17 @@ mod tests {
             client_info: None,
             baseline: None,
             packet_capture_summary: None,
+            benchmark_environment_check: None,
+            benchmark_stability_check: None,
+            benchmark_phase: None,
+            benchmark_scenario: None,
+            benchmark_launch_index: None,
+            benchmark_warmup_attempt_count: 0,
+            benchmark_pilot_attempt_count: 0,
+            benchmark_overhead_attempt_count: 0,
+            benchmark_cooldown_attempt_count: 0,
+            benchmark_execution_plan: None,
+            benchmark_noise_thresholds: None,
             attempts: vec![
                 mk(Protocol::Http1),
                 mk(Protocol::Http2),

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { api } from '../api/client';
 import type { Deployment, CloudConnection } from '../api/types';
 import { usePageTitle } from '../hooks/usePageTitle';
@@ -47,7 +47,7 @@ export function SettingsPage() {
 
   usePageTitle('Settings');
 
-  const loadData = () => {
+  const loadData = useCallback(() => {
     if (!projectId) return;
     const promises: Promise<unknown>[] = [
       api.getVersionInfo().then(setVersionInfo),
@@ -59,9 +59,9 @@ export function SettingsPage() {
       promises.push(api.getCloudConnections(projectId).then(setCloudConnections).catch(() => {}));
     }
     Promise.all(promises).finally(() => setLoading(false));
-  };
+  }, [projectId, userRole]);
 
-  useEffect(() => { loadData(); }, []);
+  useEffect(() => { loadData(); }, [loadData]);
 
   // Auto-scroll log
   useEffect(() => {
@@ -101,7 +101,7 @@ export function SettingsPage() {
         setActiveUpdateId(null);
       }, 2000);
     }
-  }, [events, activeUpdateId]);
+  }, [events, activeUpdateId, addToast, loadData]);
 
   const handleUpdateAll = async () => {
     const outdated = getOutdatedDeployments();

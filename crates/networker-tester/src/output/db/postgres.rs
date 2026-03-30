@@ -4,14 +4,19 @@
 /// Migration is embedded and tracked via a `_schema_versions` table.
 use super::DatabaseBackend;
 use crate::metrics::{RequestAttempt, TestRun, UrlTestProtocolRun, UrlTestResource, UrlTestRun};
-use crate::tls_profile::TlsEndpointProfile;
+use crate::output::json::{
+    benchmark_artifact_if_present, BenchmarkArtifact, BenchmarkCase, BenchmarkDataQuality,
+    BenchmarkDiagnostics, BenchmarkEnvironment, BenchmarkLaunch, BenchmarkMetadata,
+    BenchmarkMethodology, BenchmarkSample, BenchmarkSummary,
+};
 use anyhow::Context;
 use async_trait::async_trait;
+use tokio_postgres::error::SqlState;
 use tokio_postgres::Client as PgClient;
 
 /// PostgreSQL database backend.
 pub struct PostgresBackend {
-    client: PgClient,
+    client: tokio::sync::Mutex<PgClient>,
 }
 
 impl PostgresBackend {
@@ -28,7 +33,9 @@ impl PostgresBackend {
             }
         });
 
-        Ok(Self { client })
+        Ok(Self {
+            client: tokio::sync::Mutex::new(client),
+        })
     }
 }
 
@@ -294,41 +301,190 @@ CREATE INDEX IF NOT EXISTS IX_UrlTestResource_RunId ON UrlTestResource (UrlTestR
 CREATE INDEX IF NOT EXISTS IX_UrlTestProtocolRun_RunId ON UrlTestProtocolRun (UrlTestRunId, ProtocolMode, RunNumber);
 "#;
 
-const V003_TLS_PROFILE_MIGRATION: &str = r#"
-CREATE TABLE IF NOT EXISTS TlsProfileRun (
-    Id UUID NOT NULL PRIMARY KEY,
-    StartedAt TIMESTAMPTZ NOT NULL DEFAULT now(),
-    Host VARCHAR(255) NOT NULL,
-    Port INT NOT NULL,
-    TargetKind VARCHAR(32) NOT NULL,
-    CoverageLevel VARCHAR(32) NOT NULL,
-    SummaryStatus VARCHAR(16) NOT NULL,
-    SummaryScore INT NULL,
-    ProfileJson JSONB NOT NULL
+const V003_MIGRATION: &str = r#"
+-- V003: Add normalized benchmark storage tables
+
+CREATE TABLE IF NOT EXISTS BenchmarkRun (
+    BenchmarkRunId      UUID            NOT NULL,
+    ContractVersion     VARCHAR(20)     NOT NULL,
+    GeneratedAt         TIMESTAMPTZ     NOT NULL,
+    Source              VARCHAR(64)     NOT NULL,
+    TargetUrl           VARCHAR(2048)   NOT NULL,
+    TargetHost          VARCHAR(255)    NOT NULL,
+    Modes               VARCHAR(200)    NOT NULL,
+    TotalRuns           INT             NOT NULL,
+    Concurrency         INT             NOT NULL,
+    TimeoutMs           BIGINT          NOT NULL,
+    ClientOs            VARCHAR(50)     NOT NULL,
+    ClientVersion       VARCHAR(50)     NOT NULL,
+    MethodologyJson     JSONB           NOT NULL,
+    DiagnosticsJson     JSONB           NOT NULL,
+    AggregateSummaryJson JSONB          NOT NULL,
+    CONSTRAINT PK_BenchmarkRun PRIMARY KEY (BenchmarkRunId),
+    CONSTRAINT FK_BenchmarkRun_TestRun FOREIGN KEY (BenchmarkRunId)
+        REFERENCES TestRun (RunId) ON DELETE CASCADE
 );
-CREATE INDEX IF NOT EXISTS IX_TlsProfileRun_StartedAt ON TlsProfileRun (StartedAt DESC);
-CREATE INDEX IF NOT EXISTS IX_TlsProfileRun_Host ON TlsProfileRun (Host, StartedAt DESC);
+
+CREATE TABLE IF NOT EXISTS BenchmarkEnvironment (
+    BenchmarkRunId        UUID          NOT NULL,
+    ClientInfoJson        JSONB         NULL,
+    ServerInfoJson        JSONB         NULL,
+    NetworkBaselineJson   JSONB         NULL,
+    PacketCaptureEnabled  BOOLEAN       NOT NULL DEFAULT FALSE,
+    EnvironmentJson       JSONB         NOT NULL,
+    CONSTRAINT PK_BenchmarkEnvironment PRIMARY KEY (BenchmarkRunId),
+    CONSTRAINT FK_BenchmarkEnvironment_Run FOREIGN KEY (BenchmarkRunId)
+        REFERENCES BenchmarkRun (BenchmarkRunId) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS BenchmarkDataQuality (
+    BenchmarkRunId        UUID              NOT NULL,
+    NoiseLevel            VARCHAR(16)       NOT NULL,
+    SampleStabilityCv     DOUBLE PRECISION  NOT NULL,
+    Sufficiency           VARCHAR(16)       NOT NULL,
+    PublicationReady      BOOLEAN           NOT NULL DEFAULT FALSE,
+    WarningsJson          JSONB             NOT NULL,
+    QualityJson           JSONB             NOT NULL,
+    CONSTRAINT PK_BenchmarkDataQuality PRIMARY KEY (BenchmarkRunId),
+    CONSTRAINT FK_BenchmarkDataQuality_Run FOREIGN KEY (BenchmarkRunId)
+        REFERENCES BenchmarkRun (BenchmarkRunId) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS BenchmarkCase (
+    BenchmarkRunId        UUID            NOT NULL,
+    CaseId                VARCHAR(255)    NOT NULL,
+    Protocol              VARCHAR(32)     NOT NULL,
+    PayloadBytes          BIGINT          NULL,
+    HttpStack             VARCHAR(128)    NULL,
+    MetricName            VARCHAR(64)     NOT NULL,
+    MetricUnit            VARCHAR(32)     NOT NULL,
+    HigherIsBetter        BOOLEAN         NOT NULL,
+    CaseJson              JSONB           NOT NULL,
+    CONSTRAINT PK_BenchmarkCase PRIMARY KEY (BenchmarkRunId, CaseId),
+    CONSTRAINT FK_BenchmarkCase_Run FOREIGN KEY (BenchmarkRunId)
+        REFERENCES BenchmarkRun (BenchmarkRunId) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS BenchmarkSample (
+    AttemptId             UUID              NOT NULL,
+    BenchmarkRunId        UUID              NOT NULL,
+    CaseId                VARCHAR(255)      NOT NULL,
+    LaunchIndex           INT               NOT NULL DEFAULT 0,
+    Phase                 VARCHAR(32)       NOT NULL,
+    IterationIndex        INT               NOT NULL,
+    Success               BOOLEAN           NOT NULL DEFAULT FALSE,
+    RetryCount            INT               NOT NULL DEFAULT 0,
+    InclusionStatus       VARCHAR(64)       NOT NULL,
+    MetricValue           DOUBLE PRECISION  NULL,
+    MetricUnit            VARCHAR(32)       NOT NULL,
+    StartedAt             TIMESTAMPTZ       NOT NULL,
+    FinishedAt            TIMESTAMPTZ       NULL,
+    TotalDurationMs       DOUBLE PRECISION  NULL,
+    TtfbMs                DOUBLE PRECISION  NULL,
+    SampleJson            JSONB             NOT NULL,
+    CONSTRAINT PK_BenchmarkSample PRIMARY KEY (AttemptId),
+    CONSTRAINT FK_BenchmarkSample_Run FOREIGN KEY (BenchmarkRunId)
+        REFERENCES BenchmarkRun (BenchmarkRunId) ON DELETE CASCADE,
+    CONSTRAINT FK_BenchmarkSample_Case FOREIGN KEY (BenchmarkRunId, CaseId)
+        REFERENCES BenchmarkCase (BenchmarkRunId, CaseId) ON DELETE CASCADE,
+    CONSTRAINT FK_BenchmarkSample_Attempt FOREIGN KEY (AttemptId)
+        REFERENCES RequestAttempt (AttemptId) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS BenchmarkSummary (
+    BenchmarkRunId         UUID              NOT NULL,
+    CaseId                 VARCHAR(255)      NOT NULL,
+    Protocol               VARCHAR(32)       NOT NULL,
+    PayloadBytes           BIGINT            NULL,
+    HttpStack              VARCHAR(128)      NULL,
+    MetricName             VARCHAR(64)       NOT NULL,
+    MetricUnit             VARCHAR(32)       NOT NULL,
+    HigherIsBetter         BOOLEAN           NOT NULL,
+    SampleCount            BIGINT            NOT NULL,
+    IncludedSampleCount    BIGINT            NOT NULL,
+    ExcludedSampleCount    BIGINT            NOT NULL,
+    SuccessCount           BIGINT            NOT NULL,
+    FailureCount           BIGINT            NOT NULL,
+    TotalRequests          BIGINT            NOT NULL,
+    ErrorCount             BIGINT            NOT NULL,
+    BytesTransferred       BIGINT            NOT NULL,
+    WallTimeMs             DOUBLE PRECISION  NOT NULL,
+    Rps                    DOUBLE PRECISION  NOT NULL,
+    Min                    DOUBLE PRECISION  NOT NULL,
+    Mean                   DOUBLE PRECISION  NOT NULL,
+    P5                     DOUBLE PRECISION  NOT NULL,
+    P25                    DOUBLE PRECISION  NOT NULL,
+    P50                    DOUBLE PRECISION  NOT NULL,
+    P75                    DOUBLE PRECISION  NOT NULL,
+    P95                    DOUBLE PRECISION  NOT NULL,
+    P99                    DOUBLE PRECISION  NOT NULL,
+    P999                   DOUBLE PRECISION  NOT NULL,
+    Max                    DOUBLE PRECISION  NOT NULL,
+    Stddev                 DOUBLE PRECISION  NOT NULL,
+    LatencyMeanMs          DOUBLE PRECISION  NULL,
+    LatencyP50Ms           DOUBLE PRECISION  NULL,
+    LatencyP99Ms           DOUBLE PRECISION  NULL,
+    LatencyP999Ms          DOUBLE PRECISION  NULL,
+    LatencyMaxMs           DOUBLE PRECISION  NULL,
+    SummaryJson            JSONB             NOT NULL,
+    CONSTRAINT PK_BenchmarkSummary PRIMARY KEY (BenchmarkRunId, CaseId),
+    CONSTRAINT FK_BenchmarkSummary_Run FOREIGN KEY (BenchmarkRunId)
+        REFERENCES BenchmarkRun (BenchmarkRunId) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS IX_BenchmarkRun_GeneratedAt
+    ON BenchmarkRun (GeneratedAt DESC);
+CREATE INDEX IF NOT EXISTS IX_BenchmarkCase_Protocol
+    ON BenchmarkCase (Protocol, BenchmarkRunId);
+CREATE INDEX IF NOT EXISTS IX_BenchmarkSample_RunCase
+    ON BenchmarkSample (BenchmarkRunId, CaseId, Phase, Success);
+CREATE INDEX IF NOT EXISTS IX_BenchmarkSummary_RunProtocol
+    ON BenchmarkSummary (BenchmarkRunId, Protocol);
+CREATE INDEX IF NOT EXISTS IX_BenchmarkDataQuality_PublicationReady
+    ON BenchmarkDataQuality (PublicationReady, NoiseLevel);
 "#;
 
-const V004_TLS_PROFILE_PROJECT_MIGRATION: &str = r#"
-ALTER TABLE TlsProfileRun ADD COLUMN IF NOT EXISTS ProjectId UUID NULL;
-CREATE INDEX IF NOT EXISTS IX_TlsProfileRun_ProjectId_StartedAt ON TlsProfileRun (ProjectId, StartedAt DESC);
+const V004_MIGRATION: &str = r#"
+-- V004: Add explicit benchmark launch lifecycle table
+
+CREATE TABLE IF NOT EXISTS BenchmarkLaunch (
+    BenchmarkRunId       UUID            NOT NULL,
+    LaunchIndex          INT             NOT NULL,
+    Scenario             VARCHAR(64)     NOT NULL,
+    PrimaryPhase         VARCHAR(32)     NOT NULL,
+    StartedAt            TIMESTAMPTZ     NOT NULL,
+    FinishedAt           TIMESTAMPTZ     NULL,
+    SampleCount          BIGINT          NOT NULL,
+    PrimarySampleCount   BIGINT          NOT NULL,
+    WarmupSampleCount    BIGINT          NOT NULL,
+    SuccessCount         BIGINT          NOT NULL,
+    FailureCount         BIGINT          NOT NULL,
+    PhasesJson           JSONB           NOT NULL,
+    CONSTRAINT PK_BenchmarkLaunch PRIMARY KEY (BenchmarkRunId, LaunchIndex),
+    CONSTRAINT FK_BenchmarkLaunch_Run FOREIGN KEY (BenchmarkRunId)
+        REFERENCES BenchmarkRun (BenchmarkRunId) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS IX_BenchmarkLaunch_Phase
+    ON BenchmarkLaunch (PrimaryPhase, Scenario, BenchmarkRunId);
 "#;
 
 #[async_trait]
 impl DatabaseBackend for PostgresBackend {
     async fn migrate(&self) -> anyhow::Result<()> {
+        let client = self.client.lock().await;
+
         // Serialize migrations across concurrently-running tests/processes.
         // CI runs PostgreSQL tests in parallel, and without a lock multiple
         // workers can race while creating/checking `_schema_versions`.
-        self.client
+        client
             .execute("SELECT pg_advisory_lock($1)", &[&0x4E54505747524D31_i64])
             .await
             .context("acquire postgres migration advisory lock")?;
 
         let migrate_result: anyhow::Result<()> = async {
             // Create the version-tracking table if it doesn't exist.
-            self.client
+            client
                 .execute(
                     "CREATE TABLE IF NOT EXISTS _schema_versions (
                         version  VARCHAR(20) NOT NULL PRIMARY KEY,
@@ -340,19 +496,18 @@ impl DatabaseBackend for PostgresBackend {
                 .context("create _schema_versions")?;
 
             // Check if V001 has already been applied.
-            let row = self
-                .client
+            let row = client
                 .query_opt("SELECT 1 FROM _schema_versions WHERE version = 'V001'", &[])
                 .await
                 .context("check V001")?;
 
             if row.is_none() {
-                self.client
+                client
                     .batch_execute(V001_MIGRATION)
                     .await
                     .context("apply V001 migration")?;
 
-                self.client
+                client
                     .execute(
                         "INSERT INTO _schema_versions (version) VALUES ('V001')",
                         &[],
@@ -361,19 +516,18 @@ impl DatabaseBackend for PostgresBackend {
                     .context("record V001")?;
             }
 
-            let row = self
-                .client
+            let row = client
                 .query_opt("SELECT 1 FROM _schema_versions WHERE version = 'V002'", &[])
                 .await
                 .context("check V002")?;
 
             if row.is_none() {
-                self.client
+                client
                     .batch_execute(V002_MIGRATION)
                     .await
                     .context("apply V002 migration")?;
 
-                self.client
+                client
                     .execute(
                         "INSERT INTO _schema_versions (version) VALUES ('V002')",
                         &[],
@@ -382,19 +536,18 @@ impl DatabaseBackend for PostgresBackend {
                     .context("record V002")?;
             }
 
-            let row = self
-                .client
+            let row = client
                 .query_opt("SELECT 1 FROM _schema_versions WHERE version = 'V003'", &[])
                 .await
                 .context("check V003")?;
 
             if row.is_none() {
-                self.client
-                    .batch_execute(V003_TLS_PROFILE_MIGRATION)
+                client
+                    .batch_execute(V003_MIGRATION)
                     .await
                     .context("apply V003 migration")?;
 
-                self.client
+                client
                     .execute(
                         "INSERT INTO _schema_versions (version) VALUES ('V003')",
                         &[],
@@ -403,19 +556,18 @@ impl DatabaseBackend for PostgresBackend {
                     .context("record V003")?;
             }
 
-            let row = self
-                .client
+            let row = client
                 .query_opt("SELECT 1 FROM _schema_versions WHERE version = 'V004'", &[])
                 .await
                 .context("check V004")?;
 
             if row.is_none() {
-                self.client
-                    .batch_execute(V004_TLS_PROFILE_PROJECT_MIGRATION)
+                client
+                    .batch_execute(V004_MIGRATION)
                     .await
                     .context("apply V004 migration")?;
 
-                self.client
+                client
                     .execute(
                         "INSERT INTO _schema_versions (version) VALUES ('V004')",
                         &[],
@@ -428,8 +580,7 @@ impl DatabaseBackend for PostgresBackend {
         }
         .await;
 
-        let unlock_result = self
-            .client
+        let unlock_result = client
             .execute("SELECT pg_advisory_unlock($1)", &[&0x4E54505747524D31_i64])
             .await
             .context("release postgres migration advisory lock");
@@ -440,50 +591,53 @@ impl DatabaseBackend for PostgresBackend {
     }
 
     async fn save(&self, run: &TestRun) -> anyhow::Result<()> {
-        insert_test_run(run, &self.client).await?;
-
-        for attempt in &run.attempts {
-            insert_request_attempt(attempt, &self.client).await?;
-
-            if let Some(dns) = &attempt.dns {
-                insert_dns_result(attempt, dns, &self.client).await?;
-            }
-            if let Some(tcp) = &attempt.tcp {
-                insert_tcp_result(attempt, tcp, &self.client).await?;
-            }
-            if let Some(tls) = &attempt.tls {
-                insert_tls_result(attempt, tls, &self.client).await?;
-            }
-            if let Some(http) = &attempt.http {
-                insert_http_result(attempt, http, &self.client).await?;
-            }
-            if let Some(udp) = &attempt.udp {
-                insert_udp_result(attempt, udp, &self.client).await?;
-            }
-            if let Some(err) = &attempt.error {
-                insert_error(attempt, err, &self.client).await?;
-            }
-            if let Some(st) = &attempt.server_timing {
-                insert_server_timing_result(attempt, st, &self.client).await?;
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn save_url_test(&self, run: &UrlTestRun) -> anyhow::Result<()> {
-        self.client
+        let client = self.client.lock().await;
+        let benchmark_schema_ready = benchmark_schema_installed(&client).await?;
+        let benchmark_artifact = benchmark_artifact_if_present(run)?;
+        client
             .batch_execute("BEGIN")
             .await
-            .context("BEGIN UrlTest transaction")?;
+            .context("BEGIN TestRun transaction")?;
 
         let result = async {
-            insert_url_test_run(run, &self.client).await?;
-            for resource in &run.resources {
-                insert_url_test_resource(run.id, resource, &self.client).await?;
+            insert_test_run(run, &client).await?;
+
+            for attempt in &run.attempts {
+                insert_request_attempt(attempt, &client).await?;
+
+                if let Some(dns) = &attempt.dns {
+                    insert_dns_result(attempt, dns, &client).await?;
+                }
+                if let Some(tcp) = &attempt.tcp {
+                    insert_tcp_result(attempt, tcp, &client).await?;
+                }
+                if let Some(tls) = &attempt.tls {
+                    insert_tls_result(attempt, tls, &client).await?;
+                }
+                if let Some(http) = &attempt.http {
+                    insert_http_result(attempt, http, &client).await?;
+                }
+                if let Some(udp) = &attempt.udp {
+                    insert_udp_result(attempt, udp, &client).await?;
+                }
+                if let Some(err) = &attempt.error {
+                    insert_error(attempt, err, &client).await?;
+                }
+                if let Some(st) = &attempt.server_timing {
+                    insert_server_timing_result(attempt, st, &client).await?;
+                }
             }
-            for probe in &run.protocol_runs {
-                insert_url_test_protocol_run(run.id, probe, &self.client).await?;
+
+            if benchmark_schema_ready {
+                if let Some(artifact) = &benchmark_artifact {
+                    insert_benchmark_artifact(run.run_id, artifact, &client).await?;
+                }
+            } else if benchmark_artifact.is_some() {
+                tracing::debug!(
+                    "Benchmark schema not installed in PostgreSQL; skipping benchmark persistence"
+                );
+            } else {
+                tracing::trace!("Run is not benchmark-mode; skipping benchmark persistence");
             }
             Ok::<(), anyhow::Error>(())
         }
@@ -491,29 +645,56 @@ impl DatabaseBackend for PostgresBackend {
 
         match result {
             Ok(()) => {
-                self.client
+                client
+                    .batch_execute("COMMIT")
+                    .await
+                    .context("COMMIT TestRun transaction")?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = client.batch_execute("ROLLBACK").await;
+                Err(e)
+            }
+        }
+    }
+
+    async fn save_url_test(&self, run: &UrlTestRun) -> anyhow::Result<()> {
+        let client = self.client.lock().await;
+        client
+            .batch_execute("BEGIN")
+            .await
+            .context("BEGIN UrlTest transaction")?;
+
+        let result = async {
+            insert_url_test_run(run, &client).await?;
+            for resource in &run.resources {
+                insert_url_test_resource(run.id, resource, &client).await?;
+            }
+            for probe in &run.protocol_runs {
+                insert_url_test_protocol_run(run.id, probe, &client).await?;
+            }
+            Ok::<(), anyhow::Error>(())
+        }
+        .await;
+
+        match result {
+            Ok(()) => {
+                client
                     .batch_execute("COMMIT")
                     .await
                     .context("COMMIT UrlTest transaction")?;
                 Ok(())
             }
             Err(e) => {
-                let _ = self.client.batch_execute("ROLLBACK").await;
+                let _ = client.batch_execute("ROLLBACK").await;
                 Err(e)
             }
         }
     }
 
-    async fn save_tls_profile(
-        &self,
-        run: &TlsEndpointProfile,
-        project_id: Option<&uuid::Uuid>,
-    ) -> anyhow::Result<uuid::Uuid> {
-        insert_tls_profile_run(run, project_id, &self.client).await
-    }
-
     async fn ping(&self) -> anyhow::Result<()> {
-        self.client
+        let client = self.client.lock().await;
+        client
             .execute("SELECT 1", &[])
             .await
             .context("PostgreSQL ping")?;
@@ -533,6 +714,9 @@ async fn insert_test_run(run: &TestRun, c: &PgClient) -> anyhow::Result<()> {
         .and_then(|s| serde_json::to_value(s).ok());
 
     // Try with packet_capture_json column first (V005+), fall back without it
+    c.batch_execute("SAVEPOINT testrun_packet_capture_column")
+        .await
+        .context("SAVEPOINT TestRun packet_capture_json")?;
     let result = c
         .execute(
             "INSERT INTO TestRun (
@@ -561,8 +745,24 @@ async fn insert_test_run(run: &TestRun, c: &PgClient) -> anyhow::Result<()> {
         .await;
 
     match result {
-        Ok(_) => Ok(()),
-        Err(_) => {
+        Ok(_) => {
+            c.batch_execute("RELEASE SAVEPOINT testrun_packet_capture_column")
+                .await
+                .context("RELEASE SAVEPOINT TestRun packet_capture_json")?;
+            Ok(())
+        }
+        Err(err) => {
+            c.batch_execute(
+                "ROLLBACK TO SAVEPOINT testrun_packet_capture_column;
+                 RELEASE SAVEPOINT testrun_packet_capture_column;",
+            )
+            .await
+            .context("ROLLBACK SAVEPOINT TestRun packet_capture_json")?;
+
+            if !is_missing_column_error(&err, "packet_capture_json") {
+                return Err(err).context("INSERT TestRun");
+            }
+
             // Fallback: insert without packet_capture_json (older schema)
             c.execute(
                 "INSERT INTO TestRun (
@@ -593,6 +793,334 @@ async fn insert_test_run(run: &TestRun, c: &PgClient) -> anyhow::Result<()> {
     }
 }
 
+async fn insert_benchmark_artifact(
+    run_id: uuid::Uuid,
+    artifact: &BenchmarkArtifact,
+    c: &PgClient,
+) -> anyhow::Result<()> {
+    insert_benchmark_run(
+        run_id,
+        &artifact.metadata,
+        &artifact.methodology,
+        &artifact.diagnostics,
+        &artifact.summary,
+        c,
+    )
+    .await?;
+    insert_benchmark_environment(run_id, &artifact.environment, c).await?;
+    insert_benchmark_data_quality(run_id, &artifact.data_quality, c).await?;
+    for launch in &artifact.launches {
+        insert_benchmark_launch(run_id, launch, c).await?;
+    }
+
+    for case in &artifact.cases {
+        insert_benchmark_case(run_id, case, c).await?;
+    }
+    for sample in &artifact.samples {
+        insert_benchmark_sample(run_id, sample, c).await?;
+    }
+    for summary in &artifact.summaries {
+        insert_benchmark_summary(run_id, summary, c).await?;
+    }
+
+    Ok(())
+}
+
+async fn benchmark_schema_installed(c: &PgClient) -> anyhow::Result<bool> {
+    let row = c
+        .query_one(
+            "SELECT
+                to_regclass('public.benchmarkrun') IS NOT NULL
+            AND to_regclass('public.benchmarklaunch') IS NOT NULL
+            AND to_regclass('public.benchmarkenvironment') IS NOT NULL
+            AND to_regclass('public.benchmarkdataquality') IS NOT NULL
+            AND to_regclass('public.benchmarkcase') IS NOT NULL
+            AND to_regclass('public.benchmarksample') IS NOT NULL
+            AND to_regclass('public.benchmarksummary') IS NOT NULL",
+            &[],
+        )
+        .await
+        .context("query postgres benchmark schema readiness")?;
+
+    Ok(row.get::<usize, bool>(0))
+}
+
+async fn insert_benchmark_launch(
+    run_id: uuid::Uuid,
+    launch: &BenchmarkLaunch,
+    c: &PgClient,
+) -> anyhow::Result<()> {
+    let phases_json = serde_json::to_value(&launch.phases_present)?;
+    c.execute(
+        "INSERT INTO BenchmarkLaunch (
+            BenchmarkRunId, LaunchIndex, Scenario, PrimaryPhase, StartedAt, FinishedAt,
+            SampleCount, PrimarySampleCount, WarmupSampleCount, SuccessCount, FailureCount,
+            PhasesJson
+         ) VALUES (
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12
+         )",
+        &[
+            &run_id,
+            &(launch.launch_index as i32),
+            &launch.scenario,
+            &launch.primary_phase,
+            &launch.started_at,
+            &launch.finished_at,
+            &(launch.sample_count as i64),
+            &(launch.primary_sample_count as i64),
+            &(launch.warmup_sample_count as i64),
+            &(launch.success_count as i64),
+            &(launch.failure_count as i64),
+            &phases_json,
+        ],
+    )
+    .await
+    .context("INSERT BenchmarkLaunch")?;
+    Ok(())
+}
+
+async fn insert_benchmark_run(
+    run_id: uuid::Uuid,
+    metadata: &BenchmarkMetadata,
+    methodology: &BenchmarkMethodology,
+    diagnostics: &BenchmarkDiagnostics,
+    aggregate_summary: &BenchmarkSummary,
+    c: &PgClient,
+) -> anyhow::Result<()> {
+    let modes = metadata.modes.join(",");
+    let methodology_json = serde_json::to_value(methodology)?;
+    let diagnostics_json = serde_json::to_value(diagnostics)?;
+    let aggregate_summary_json = serde_json::to_value(aggregate_summary)?;
+
+    c.execute(
+        "INSERT INTO BenchmarkRun (
+            BenchmarkRunId, ContractVersion, GeneratedAt, Source, TargetUrl, TargetHost,
+            Modes, TotalRuns, Concurrency, TimeoutMs, ClientOs, ClientVersion,
+            MethodologyJson, DiagnosticsJson, AggregateSummaryJson
+         ) VALUES (
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15
+         )",
+        &[
+            &run_id,
+            &metadata.contract_version,
+            &metadata.generated_at,
+            &metadata.source,
+            &metadata.target_url,
+            &metadata.target_host,
+            &modes,
+            &(metadata.total_runs as i32),
+            &(metadata.concurrency as i32),
+            &(metadata.timeout_ms as i64),
+            &metadata.client_os,
+            &metadata.client_version,
+            &methodology_json,
+            &diagnostics_json,
+            &aggregate_summary_json,
+        ],
+    )
+    .await
+    .context("INSERT BenchmarkRun")?;
+    Ok(())
+}
+
+async fn insert_benchmark_environment(
+    run_id: uuid::Uuid,
+    environment: &BenchmarkEnvironment,
+    c: &PgClient,
+) -> anyhow::Result<()> {
+    let client_info_json = environment
+        .client_info
+        .as_ref()
+        .map(serde_json::to_value)
+        .transpose()
+        .context("serialize BenchmarkEnvironment.client_info")?;
+    let server_info_json = environment
+        .server_info
+        .as_ref()
+        .map(serde_json::to_value)
+        .transpose()
+        .context("serialize BenchmarkEnvironment.server_info")?;
+    let network_baseline_json = environment
+        .network_baseline
+        .as_ref()
+        .map(serde_json::to_value)
+        .transpose()
+        .context("serialize BenchmarkEnvironment.network_baseline")?;
+    let environment_json = serde_json::to_value(environment)?;
+
+    c.execute(
+        "INSERT INTO BenchmarkEnvironment (
+            BenchmarkRunId, ClientInfoJson, ServerInfoJson, NetworkBaselineJson,
+            PacketCaptureEnabled, EnvironmentJson
+         ) VALUES ($1,$2,$3,$4,$5,$6)",
+        &[
+            &run_id,
+            &client_info_json,
+            &server_info_json,
+            &network_baseline_json,
+            &environment.packet_capture_enabled,
+            &environment_json,
+        ],
+    )
+    .await
+    .context("INSERT BenchmarkEnvironment")?;
+    Ok(())
+}
+
+async fn insert_benchmark_data_quality(
+    run_id: uuid::Uuid,
+    quality: &BenchmarkDataQuality,
+    c: &PgClient,
+) -> anyhow::Result<()> {
+    let warnings_json = serde_json::to_value(&quality.warnings)?;
+    let quality_json = serde_json::to_value(quality)?;
+    c.execute(
+        "INSERT INTO BenchmarkDataQuality (
+            BenchmarkRunId, NoiseLevel, SampleStabilityCv, Sufficiency,
+            PublicationReady, WarningsJson, QualityJson
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7)",
+        &[
+            &run_id,
+            &quality.noise_level,
+            &quality.sample_stability_cv,
+            &quality.sufficiency,
+            &quality.publication_ready,
+            &warnings_json,
+            &quality_json,
+        ],
+    )
+    .await
+    .context("INSERT BenchmarkDataQuality")?;
+    Ok(())
+}
+
+async fn insert_benchmark_case(
+    run_id: uuid::Uuid,
+    case: &BenchmarkCase,
+    c: &PgClient,
+) -> anyhow::Result<()> {
+    let case_json = serde_json::to_value(case)?;
+    c.execute(
+        "INSERT INTO BenchmarkCase (
+            BenchmarkRunId, CaseId, Protocol, PayloadBytes, HttpStack,
+            MetricName, MetricUnit, HigherIsBetter, CaseJson
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+        &[
+            &run_id,
+            &case.id,
+            &case.protocol,
+            &case.payload_bytes.map(|v| v as i64),
+            &case.http_stack,
+            &case.metric_name,
+            &case.metric_unit,
+            &case.higher_is_better,
+            &case_json,
+        ],
+    )
+    .await
+    .context("INSERT BenchmarkCase")?;
+    Ok(())
+}
+
+async fn insert_benchmark_sample(
+    run_id: uuid::Uuid,
+    sample: &BenchmarkSample,
+    c: &PgClient,
+) -> anyhow::Result<()> {
+    let sample_json = serde_json::to_value(sample)?;
+    c.execute(
+        "INSERT INTO BenchmarkSample (
+            AttemptId, BenchmarkRunId, CaseId, LaunchIndex, Phase, IterationIndex,
+            Success, RetryCount, InclusionStatus, MetricValue, MetricUnit, StartedAt,
+            FinishedAt, TotalDurationMs, TtfbMs, SampleJson
+         ) VALUES (
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16
+         )",
+        &[
+            &sample.attempt_id,
+            &run_id,
+            &sample.case_id,
+            &(sample.launch_index as i32),
+            &sample.phase,
+            &(sample.iteration_index as i32),
+            &sample.success,
+            &(sample.retry_count as i32),
+            &sample.inclusion_status,
+            &sample.metric_value,
+            &sample.metric_unit,
+            &sample.started_at,
+            &sample.finished_at,
+            &sample.total_duration_ms,
+            &sample.ttfb_ms,
+            &sample_json,
+        ],
+    )
+    .await
+    .context("INSERT BenchmarkSample")?;
+    Ok(())
+}
+
+async fn insert_benchmark_summary(
+    run_id: uuid::Uuid,
+    summary: &BenchmarkSummary,
+    c: &PgClient,
+) -> anyhow::Result<()> {
+    let summary_json = serde_json::to_value(summary)?;
+    c.execute(
+        "INSERT INTO BenchmarkSummary (
+            BenchmarkRunId, CaseId, Protocol, PayloadBytes, HttpStack, MetricName,
+            MetricUnit, HigherIsBetter, SampleCount, IncludedSampleCount,
+            ExcludedSampleCount, SuccessCount, FailureCount, TotalRequests, ErrorCount,
+            BytesTransferred, WallTimeMs, Rps, Min, Mean, P5, P25, P50, P75, P95, P99,
+            P999, Max, Stddev, LatencyMeanMs, LatencyP50Ms, LatencyP99Ms,
+            LatencyP999Ms, LatencyMaxMs, SummaryJson
+         ) VALUES (
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+            $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35
+         )",
+        &[
+            &run_id,
+            &summary.case_id,
+            &summary.protocol,
+            &summary.payload_bytes.map(|v| v as i64),
+            &summary.http_stack,
+            &summary.metric_name,
+            &summary.metric_unit,
+            &summary.higher_is_better,
+            &(summary.sample_count as i64),
+            &(summary.included_sample_count as i64),
+            &(summary.excluded_sample_count as i64),
+            &(summary.success_count as i64),
+            &(summary.failure_count as i64),
+            &(summary.total_requests as i64),
+            &(summary.error_count as i64),
+            &(summary.bytes_transferred as i64),
+            &summary.wall_time_ms,
+            &summary.rps,
+            &summary.min,
+            &summary.mean,
+            &summary.p5,
+            &summary.p25,
+            &summary.p50,
+            &summary.p75,
+            &summary.p95,
+            &summary.p99,
+            &summary.p999,
+            &summary.max,
+            &summary.stddev,
+            &summary.latency_mean_ms,
+            &summary.latency_p50_ms,
+            &summary.latency_p99_ms,
+            &summary.latency_p999_ms,
+            &summary.latency_max_ms,
+            &summary_json,
+        ],
+    )
+    .await
+    .context("INSERT BenchmarkSummary")?;
+    Ok(())
+}
+
 async fn insert_url_test_run(run: &UrlTestRun, c: &PgClient) -> anyhow::Result<()> {
     let validated_http_versions = run.validated_http_versions.join(",");
     let capture_errors = if run.capture_errors.is_empty() {
@@ -607,7 +1135,10 @@ async fn insert_url_test_run(run: &UrlTestRun, c: &PgClient) -> anyhow::Result<(
         .transpose()
         .context("serialize UrlPacketCaptureSummary")?;
     let status = run.status.to_string();
-    let page_load_strategy = run.page_load_strategy.as_db_str().to_string();
+    let page_load_strategy = serde_json::to_value(&run.page_load_strategy)?
+        .as_str()
+        .unwrap_or("browser")
+        .to_string();
 
     c.execute(
         "INSERT INTO UrlTestRun (
@@ -705,42 +1236,16 @@ async fn insert_url_test_resource(
     Ok(())
 }
 
-async fn insert_tls_profile_run(
-    run: &TlsEndpointProfile,
-    project_id: Option<&uuid::Uuid>,
-    c: &PgClient,
-) -> anyhow::Result<uuid::Uuid> {
-    let id = uuid::Uuid::new_v4();
-    let target_kind = run.target_kind.as_db_str().to_string();
-    let coverage_level = run.coverage_level.as_db_str().to_string();
-    let profile_json = serde_json::to_value(run)?;
-    c.execute(
-        "INSERT INTO TlsProfileRun (Id, ProjectId, Host, Port, TargetKind, CoverageLevel, SummaryStatus, SummaryScore, ProfileJson)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
-        &[
-            &id,
-            &project_id,
-            &run.target.host,
-            &(i32::from(run.target.port)),
-            &target_kind,
-            &coverage_level,
-            &run.summary.status,
-            &(run.summary.score.map(i32::from)),
-            &profile_json,
-        ],
-    )
-    .await
-    .context("INSERT TlsProfileRun")?;
-    Ok(id)
-}
-
 async fn insert_url_test_protocol_run(
     run_id: uuid::Uuid,
     p: &UrlTestProtocolRun,
     c: &PgClient,
 ) -> anyhow::Result<()> {
     let id = uuid::Uuid::new_v4();
-    let attempt_type = p.attempt_type.as_db_str().to_string();
+    let attempt_type = serde_json::to_value(&p.attempt_type)?
+        .as_str()
+        .unwrap_or("probe")
+        .to_string();
     c.execute(
         "INSERT INTO UrlTestProtocolRun (
             Id, UrlTestRunId, ProtocolMode, RunNumber, AttemptType, ObservedProtocol,
@@ -777,6 +1282,9 @@ async fn insert_request_attempt(a: &RequestAttempt, c: &PgClient) -> anyhow::Res
     let extra_json: Option<serde_json::Value> = serde_json::to_value(a).ok();
 
     // Try with extra_json column first (V004+), fall back to without
+    c.batch_execute("SAVEPOINT requestattempt_extra_json_column")
+        .await
+        .context("SAVEPOINT RequestAttempt extra_json")?;
     let result = c
         .execute(
             "INSERT INTO RequestAttempt (
@@ -799,8 +1307,24 @@ async fn insert_request_attempt(a: &RequestAttempt, c: &PgClient) -> anyhow::Res
         .await;
 
     match result {
-        Ok(_) => Ok(()),
-        Err(_) => {
+        Ok(_) => {
+            c.batch_execute("RELEASE SAVEPOINT requestattempt_extra_json_column")
+                .await
+                .context("RELEASE SAVEPOINT RequestAttempt extra_json")?;
+            Ok(())
+        }
+        Err(err) => {
+            c.batch_execute(
+                "ROLLBACK TO SAVEPOINT requestattempt_extra_json_column;
+                 RELEASE SAVEPOINT requestattempt_extra_json_column;",
+            )
+            .await
+            .context("ROLLBACK SAVEPOINT RequestAttempt extra_json")?;
+
+            if !is_missing_column_error(&err, "extra_json") {
+                return Err(err).context("INSERT RequestAttempt");
+            }
+
             // Fallback: insert without extra_json (older schema)
             c.execute(
                 "INSERT INTO RequestAttempt (
@@ -824,6 +1348,16 @@ async fn insert_request_attempt(a: &RequestAttempt, c: &PgClient) -> anyhow::Res
             Ok(())
         }
     }
+}
+
+fn is_missing_column_error(err: &tokio_postgres::Error, column: &str) -> bool {
+    err.as_db_error().is_some_and(|db_err| {
+        db_err.code() == &SqlState::UNDEFINED_COLUMN
+            && db_err
+                .message()
+                .to_ascii_lowercase()
+                .contains(&column.to_ascii_lowercase())
+    })
 }
 
 async fn insert_dns_result(
@@ -1076,8 +1610,20 @@ async fn insert_server_timing_result(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::output::db::test_fixtures::{bare_attempt, full_attempt, make_run};
+    use crate::output::db::test_fixtures::{
+        bare_attempt, full_attempt, make_benchmark_run, make_run,
+    };
+    use url::Url;
     use uuid::Uuid;
+
+    const DOCUMENTED_V001_SCHEMA: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../sql/postgres/01_CreateSchema.sql"
+    ));
+    const DOCUMENTED_V003_BENCHMARK_SCHEMA: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../sql/postgres/02_BenchmarkSchema.sql"
+    ));
 
     // ── Migration SQL content tests (no database required) ────────────────────
 
@@ -1256,6 +1802,73 @@ mod tests {
         );
     }
 
+    #[test]
+    fn v003_migration_contains_benchmark_tables() {
+        for table in [
+            "BenchmarkRun",
+            "BenchmarkEnvironment",
+            "BenchmarkDataQuality",
+            "BenchmarkCase",
+            "BenchmarkSample",
+            "BenchmarkSummary",
+        ] {
+            assert!(
+                V003_MIGRATION.contains(&format!("CREATE TABLE IF NOT EXISTS {table}")),
+                "V003 migration missing CREATE TABLE IF NOT EXISTS {table}"
+            );
+        }
+    }
+
+    #[test]
+    fn v003_migration_contains_benchmark_indexes() {
+        for idx in [
+            "IX_BenchmarkRun_GeneratedAt",
+            "IX_BenchmarkCase_Protocol",
+            "IX_BenchmarkSample_RunCase",
+            "IX_BenchmarkSummary_RunProtocol",
+            "IX_BenchmarkDataQuality_PublicationReady",
+        ] {
+            assert!(
+                V003_MIGRATION.contains(idx),
+                "V003 migration missing index: {idx}"
+            );
+        }
+    }
+
+    #[test]
+    fn v003_migration_starts_with_version_comment() {
+        let trimmed = V003_MIGRATION.trim();
+        assert!(
+            trimmed.starts_with("-- V003:"),
+            "migration should start with -- V003: comment"
+        );
+    }
+
+    #[test]
+    fn v004_migration_contains_benchmark_launch_table() {
+        assert!(
+            V004_MIGRATION.contains("CREATE TABLE IF NOT EXISTS BenchmarkLaunch"),
+            "V004 migration missing BenchmarkLaunch table"
+        );
+    }
+
+    #[test]
+    fn v004_migration_contains_benchmark_launch_index() {
+        assert!(
+            V004_MIGRATION.contains("IX_BenchmarkLaunch_Phase"),
+            "V004 migration missing benchmark launch index"
+        );
+    }
+
+    #[test]
+    fn v004_migration_starts_with_version_comment() {
+        let trimmed = V004_MIGRATION.trim();
+        assert!(
+            trimmed.starts_with("-- V004:"),
+            "migration should start with -- V004: comment"
+        );
+    }
+
     /// Returns `NETWORKER_DB_URL` (postgres://...) or None if unset.
     fn pg_url() -> Option<String> {
         std::env::var("NETWORKER_DB_URL").ok()
@@ -1279,6 +1892,55 @@ mod tests {
             }
         });
         client
+    }
+
+    fn database_url_with_name(base_url: &str, db_name: &str) -> String {
+        let mut parsed = Url::parse(base_url).expect("NETWORKER_DB_URL should be a valid URL");
+        parsed.set_path(&format!("/{db_name}"));
+        parsed.to_string()
+    }
+
+    fn quote_identifier(name: &str) -> String {
+        format!("\"{}\"", name.replace('"', "\"\""))
+    }
+
+    async fn create_isolated_database(base_url: &str, prefix: &str) -> String {
+        let admin = raw_client(base_url).await;
+        let db_name = format!("networker_{}_{}", prefix, Uuid::new_v4().simple());
+        let quoted_name = quote_identifier(&db_name);
+
+        admin
+            .execute(&format!("DROP DATABASE IF EXISTS {quoted_name}"), &[])
+            .await
+            .unwrap();
+        admin
+            .execute(&format!("CREATE DATABASE {quoted_name}"), &[])
+            .await
+            .unwrap();
+
+        database_url_with_name(base_url, &db_name)
+    }
+
+    async fn install_documented_schema(url: &str, benchmark_schema: bool) {
+        let client = raw_client(url).await;
+        client.batch_execute(DOCUMENTED_V001_SCHEMA).await.unwrap();
+        if benchmark_schema {
+            client
+                .batch_execute(DOCUMENTED_V003_BENCHMARK_SCHEMA)
+                .await
+                .unwrap();
+        }
+    }
+
+    async fn isolated_backend_with_documented_schema(
+        base_url: &str,
+        prefix: &str,
+        benchmark_schema: bool,
+    ) -> (String, PostgresBackend) {
+        let db_url = create_isolated_database(base_url, prefix).await;
+        install_documented_schema(&db_url, benchmark_schema).await;
+        let backend = PostgresBackend::connect(&db_url).await.unwrap();
+        (db_url, backend)
     }
 
     #[tokio::test]
@@ -1720,5 +2382,242 @@ mod tests {
                 .unwrap();
             assert!(rows.is_empty(), "bare attempt should have no {table} rows");
         }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires PostgreSQL"]
+    async fn db_postgres_persists_benchmark_rows() {
+        let url = match pg_url() {
+            Some(u) => u,
+            None => return,
+        };
+        let backend = setup(&url).await;
+        let run_id = Uuid::new_v4();
+        let run = make_benchmark_run(run_id, vec![bare_attempt(run_id)]);
+        backend.save(&run).await.unwrap();
+
+        let c = raw_client(&url).await;
+
+        let benchmark_run = c
+            .query_one(
+                "SELECT ContractVersion, TargetHost
+                 FROM BenchmarkRun WHERE BenchmarkRunId = $1",
+                &[&run_id],
+            )
+            .await
+            .expect("BenchmarkRun row must exist");
+        let contract_version: &str = benchmark_run.get(0);
+        assert_eq!(contract_version, "1.2");
+        let target_host: &str = benchmark_run.get(1);
+        assert_eq!(target_host, "localhost");
+
+        let env_rows = c
+            .query(
+                "SELECT 1 FROM BenchmarkEnvironment WHERE BenchmarkRunId = $1",
+                &[&run_id],
+            )
+            .await
+            .unwrap();
+        assert_eq!(env_rows.len(), 1);
+
+        let quality_rows = c
+            .query(
+                "SELECT 1 FROM BenchmarkDataQuality WHERE BenchmarkRunId = $1",
+                &[&run_id],
+            )
+            .await
+            .unwrap();
+        assert_eq!(quality_rows.len(), 1);
+
+        let launch_row = c
+            .query_one(
+                "SELECT LaunchIndex, Scenario, PrimaryPhase, WarmupSampleCount
+                 FROM BenchmarkLaunch WHERE BenchmarkRunId = $1",
+                &[&run_id],
+            )
+            .await
+            .expect("BenchmarkLaunch row");
+        let launch_index: i32 = launch_row.get(0);
+        assert_eq!(launch_index, 0);
+        let scenario: &str = launch_row.get(1);
+        assert_eq!(scenario, "warm");
+        let primary_phase: &str = launch_row.get(2);
+        assert_eq!(primary_phase, "measured");
+        let warmup_sample_count: i64 = launch_row.get(3);
+        assert_eq!(warmup_sample_count, 0);
+
+        let case_row = c
+            .query_one(
+                "SELECT CaseId, Protocol, MetricUnit
+                 FROM BenchmarkCase WHERE BenchmarkRunId = $1",
+                &[&run_id],
+            )
+            .await
+            .expect("BenchmarkCase row");
+        let case_id: &str = case_row.get(0);
+        assert_eq!(case_id, "http1:default:default");
+        let protocol: &str = case_row.get(1);
+        assert_eq!(protocol, "http1");
+        let metric_unit: &str = case_row.get(2);
+        assert_eq!(metric_unit, "ms");
+
+        let sample_row = c
+            .query_one(
+                "SELECT InclusionStatus, MetricUnit
+                 FROM BenchmarkSample WHERE BenchmarkRunId = $1",
+                &[&run_id],
+            )
+            .await
+            .expect("BenchmarkSample row");
+        let inclusion_status: &str = sample_row.get(0);
+        assert_eq!(inclusion_status, "excluded_missing_metric");
+        let sample_metric_unit: &str = sample_row.get(1);
+        assert_eq!(sample_metric_unit, "ms");
+
+        let summary_row = c
+            .query_one(
+                "SELECT SampleCount, IncludedSampleCount, FailureCount
+                 FROM BenchmarkSummary WHERE BenchmarkRunId = $1 AND CaseId = $2",
+                &[&run_id, &case_id],
+            )
+            .await
+            .expect("BenchmarkSummary row");
+        let sample_count: i64 = summary_row.get(0);
+        assert_eq!(sample_count, 1);
+        let included_sample_count: i64 = summary_row.get(1);
+        assert_eq!(included_sample_count, 0);
+        let failure_count: i64 = summary_row.get(2);
+        assert_eq!(failure_count, 0);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires PostgreSQL"]
+    async fn db_postgres_plain_run_succeeds_with_documented_legacy_schema() {
+        let base_url = match pg_url() {
+            Some(u) => u,
+            None => return,
+        };
+        let (db_url, backend) =
+            isolated_backend_with_documented_schema(&base_url, "legacy_plain", false).await;
+        let run_id = Uuid::new_v4();
+        let run = make_run(run_id, vec![bare_attempt(run_id)]);
+        backend.save(&run).await.unwrap();
+
+        let client = raw_client(&db_url).await;
+        let test_run_count: i64 = client
+            .query_one("SELECT COUNT(*) FROM TestRun WHERE RunId = $1", &[&run_id])
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(test_run_count, 1);
+
+        let attempt_count: i64 = client
+            .query_one(
+                "SELECT COUNT(*) FROM RequestAttempt WHERE RunId = $1",
+                &[&run_id],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(attempt_count, 1);
+
+        let benchmark_tables_present: bool = client
+            .query_one("SELECT to_regclass('public.benchmarkrun') IS NOT NULL", &[])
+            .await
+            .unwrap()
+            .get(0);
+        assert!(!benchmark_tables_present);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires PostgreSQL"]
+    async fn db_postgres_benchmark_run_skips_benchmark_rows_with_documented_legacy_schema() {
+        let base_url = match pg_url() {
+            Some(u) => u,
+            None => return,
+        };
+        let (db_url, backend) =
+            isolated_backend_with_documented_schema(&base_url, "legacy_bench", false).await;
+        let run_id = Uuid::new_v4();
+        let run = make_benchmark_run(run_id, vec![bare_attempt(run_id)]);
+        backend.save(&run).await.unwrap();
+
+        let client = raw_client(&db_url).await;
+        let test_run_count: i64 = client
+            .query_one("SELECT COUNT(*) FROM TestRun WHERE RunId = $1", &[&run_id])
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(test_run_count, 1);
+
+        let benchmark_tables_present: bool = client
+            .query_one("SELECT to_regclass('public.benchmarkrun') IS NOT NULL", &[])
+            .await
+            .unwrap()
+            .get(0);
+        assert!(!benchmark_tables_present);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires PostgreSQL"]
+    async fn db_postgres_plain_run_does_not_create_benchmark_rows_when_schema_exists() {
+        let base_url = match pg_url() {
+            Some(u) => u,
+            None => return,
+        };
+        let (db_url, backend) =
+            isolated_backend_with_documented_schema(&base_url, "migrated_plain", true).await;
+        let run_id = Uuid::new_v4();
+        let run = make_run(run_id, vec![bare_attempt(run_id)]);
+        backend.save(&run).await.unwrap();
+
+        let client = raw_client(&db_url).await;
+        let benchmark_run_count: i64 = client
+            .query_one(
+                "SELECT COUNT(*) FROM BenchmarkRun WHERE BenchmarkRunId = $1",
+                &[&run_id],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(benchmark_run_count, 0);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires PostgreSQL"]
+    async fn db_postgres_benchmark_run_persists_rows_with_documented_benchmark_schema() {
+        let base_url = match pg_url() {
+            Some(u) => u,
+            None => return,
+        };
+        let (db_url, backend) =
+            isolated_backend_with_documented_schema(&base_url, "migrated_bench", true).await;
+        let run_id = Uuid::new_v4();
+        let run = make_benchmark_run(run_id, vec![bare_attempt(run_id)]);
+        backend.save(&run).await.unwrap();
+
+        let client = raw_client(&db_url).await;
+        let benchmark_run = client
+            .query_one(
+                "SELECT ContractVersion, TargetHost
+                 FROM BenchmarkRun WHERE BenchmarkRunId = $1",
+                &[&run_id],
+            )
+            .await
+            .expect("BenchmarkRun row must exist");
+        let contract_version: &str = benchmark_run.get(0);
+        assert_eq!(contract_version, "1.2");
+        let target_host: &str = benchmark_run.get(1);
+        assert_eq!(target_host, "localhost");
+
+        let launch_count: i64 = client
+            .query_one(
+                "SELECT COUNT(*) FROM BenchmarkLaunch WHERE BenchmarkRunId = $1",
+                &[&run_id],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(launch_count, 1);
     }
 }

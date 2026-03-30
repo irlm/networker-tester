@@ -57,6 +57,7 @@ pub fn router(state: Arc<AppState>) -> Router {
     // Project-scoped routes (require auth + project membership)
     let project_scoped = Router::new()
         .merge(agents::project_router(state.clone()))
+        .merge(benchmarks::project_router(state.clone()))
         .merge(jobs::project_router(state.clone()))
         .merge(runs::project_router(state.clone()))
         .merge(schedules::project_router(state.clone()))

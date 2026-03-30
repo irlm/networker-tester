@@ -26,8 +26,27 @@ pub(crate) fn make_run(run_id: Uuid, attempts: Vec<RequestAttempt>) -> TestRun {
         client_info: None,
         baseline: None,
         packet_capture_summary: None,
+        benchmark_environment_check: None,
+        benchmark_stability_check: None,
+        benchmark_phase: None,
+        benchmark_scenario: None,
+        benchmark_launch_index: None,
+        benchmark_warmup_attempt_count: 0,
+        benchmark_pilot_attempt_count: 0,
+        benchmark_overhead_attempt_count: 0,
+        benchmark_cooldown_attempt_count: 0,
+        benchmark_execution_plan: None,
+        benchmark_noise_thresholds: None,
         attempts,
     }
+}
+
+pub(crate) fn make_benchmark_run(run_id: Uuid, attempts: Vec<RequestAttempt>) -> TestRun {
+    let mut run = make_run(run_id, attempts);
+    run.benchmark_phase = Some("measured".into());
+    run.benchmark_scenario = Some("warm".into());
+    run.benchmark_launch_index = Some(0);
+    run
 }
 
 pub(crate) fn bare_attempt(run_id: Uuid) -> RequestAttempt {
@@ -246,6 +265,15 @@ mod tests {
         // bare_attempt has success = true
         assert_eq!(run.success_count(), 1);
         assert_eq!(run.failure_count(), 0);
+    }
+
+    #[test]
+    fn make_benchmark_run_sets_benchmark_metadata() {
+        let id = Uuid::new_v4();
+        let run = make_benchmark_run(id, vec![bare_attempt(id)]);
+        assert_eq!(run.benchmark_phase.as_deref(), Some("measured"));
+        assert_eq!(run.benchmark_scenario.as_deref(), Some("warm"));
+        assert_eq!(run.benchmark_launch_index, Some(0));
     }
 
     // ── bare_attempt ──────────────────────────────────────────────────────────

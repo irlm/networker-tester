@@ -50,7 +50,7 @@ tiberius     = { version = "0.12", default-features = false, features = ["rustls
 tokio-util   = { version = "0.7",  features = ["compat"], optional = true }
 
 # --- PostgreSQL (optional) ---
-tokio-postgres = { version = "0.7", features = ["with-chrono-0_4", "with-uuid-1"], optional = true }
+tokio-postgres = { version = "0.7", features = ["with-chrono-0_4", "with-uuid-1", "with-serde_json-1"], optional = true }
 
 # --- Trait ---
 async-trait = "0.1"

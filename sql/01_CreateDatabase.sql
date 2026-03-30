@@ -184,27 +184,56 @@ GO
 -- ── 3. Indexes ------------------------------------------------------------------
 
 -- Filter by time range (most common dashboard query)
-CREATE INDEX IF NOT EXISTS IX_TestRun_StartedAt
-    ON dbo.TestRun (StartedAt DESC);
+IF NOT EXISTS (
+    SELECT 1 FROM sys.indexes
+    WHERE object_id = OBJECT_ID(N'dbo.TestRun') AND name = N'IX_TestRun_StartedAt'
+)
+    CREATE INDEX IX_TestRun_StartedAt
+        ON dbo.TestRun (StartedAt DESC);
+GO
 
 -- Filter by target host
-CREATE INDEX IF NOT EXISTS IX_TestRun_TargetHost
-    ON dbo.TestRun (TargetHost);
+IF NOT EXISTS (
+    SELECT 1 FROM sys.indexes
+    WHERE object_id = OBJECT_ID(N'dbo.TestRun') AND name = N'IX_TestRun_TargetHost'
+)
+    CREATE INDEX IX_TestRun_TargetHost
+        ON dbo.TestRun (TargetHost);
+GO
 
 -- Filter by protocol and HTTP version
-CREATE INDEX IF NOT EXISTS IX_Attempt_Protocol
-    ON dbo.RequestAttempt (Protocol, Success);
+IF NOT EXISTS (
+    SELECT 1 FROM sys.indexes
+    WHERE object_id = OBJECT_ID(N'dbo.RequestAttempt') AND name = N'IX_Attempt_Protocol'
+)
+    CREATE INDEX IX_Attempt_Protocol
+        ON dbo.RequestAttempt (Protocol, Success);
+GO
 
-CREATE INDEX IF NOT EXISTS IX_HttpResult_Version
-    ON dbo.HttpResult (NegotiatedVersion, StatusCode);
+IF NOT EXISTS (
+    SELECT 1 FROM sys.indexes
+    WHERE object_id = OBJECT_ID(N'dbo.HttpResult') AND name = N'IX_HttpResult_Version'
+)
+    CREATE INDEX IX_HttpResult_Version
+        ON dbo.HttpResult (NegotiatedVersion, StatusCode);
+GO
 
 -- Filter errors by category
-CREATE INDEX IF NOT EXISTS IX_Error_Category
-    ON dbo.ErrorRecord (ErrorCategory, OccurredAt DESC);
+IF NOT EXISTS (
+    SELECT 1 FROM sys.indexes
+    WHERE object_id = OBJECT_ID(N'dbo.ErrorRecord') AND name = N'IX_Error_Category'
+)
+    CREATE INDEX IX_Error_Category
+        ON dbo.ErrorRecord (ErrorCategory, OccurredAt DESC);
+GO
 
 -- Lookup all attempts for a run
-CREATE INDEX IF NOT EXISTS IX_Attempt_RunId
-    ON dbo.RequestAttempt (RunId, SequenceNum);
+IF NOT EXISTS (
+    SELECT 1 FROM sys.indexes
+    WHERE object_id = OBJECT_ID(N'dbo.RequestAttempt') AND name = N'IX_Attempt_RunId'
+)
+    CREATE INDEX IX_Attempt_RunId
+        ON dbo.RequestAttempt (RunId, SequenceNum);
 GO
 
 PRINT 'NetworkDiagnostics schema created / verified successfully.';

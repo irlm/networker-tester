@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { Suspense, lazy, useEffect, type ComponentType } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from './stores/authStore';
 import { useProjectStore } from './stores/projectStore';
@@ -6,33 +6,44 @@ import { api } from './api/client';
 import { useWebSocket, type ConnectionStatus } from './hooks/useWebSocket';
 import { Sidebar } from './components/layout/Sidebar';
 import { ToastContainer } from './components/common/Toast';
-import { LoginPage } from './pages/LoginPage';
-import { ForgotPasswordPage } from './pages/ForgotPasswordPage';
-import { ResetPasswordPage } from './pages/ResetPasswordPage';
-import { ChangePasswordPage } from './pages/ChangePasswordPage';
-import { DashboardPage } from './pages/DashboardPage';
-import { JobsPage } from './pages/JobsPage';
-import { JobDetailPage } from './pages/JobDetailPage';
-import { RunsPage } from './pages/RunsPage';
-import { RunDetailPage } from './pages/RunDetailPage';
-import { TlsProfilesPage } from './pages/TlsProfilesPage';
-import { TlsProfileDetailPage } from './pages/TlsProfileDetailPage';
-import { DeployPage } from './pages/DeployPage';
-import { DeployDetailPage } from './pages/DeployDetailPage';
-import { SchedulesPage } from './pages/SchedulesPage';
-import { SettingsPage } from './pages/SettingsPage';
-import { UsersPage } from './pages/UsersPage';
-import { PendingPage } from './pages/PendingPage';
-import { SSOCompletePage } from './pages/SSOCompletePage';
-import { ProjectsPage } from './pages/ProjectsPage';
-import { ProjectMembersPage } from './pages/ProjectMembersPage';
-import { CloudAccountsPage } from './pages/CloudAccountsPage';
-import { ShareLinksPage } from './pages/ShareLinksPage';
-import { ShareViewPage } from './pages/ShareViewPage';
-import { AcceptInvitePage } from './pages/AcceptInvitePage';
-import { CommandApprovalsPage } from './pages/CommandApprovalsPage';
-import { SystemDashboardPage } from './pages/SystemDashboardPage';
-import { BenchmarksPage } from './pages/BenchmarksPage';
+
+function lazyPage<TModule extends Record<string, ComponentType<unknown>>>(
+  load: () => Promise<TModule>,
+  exportName: keyof TModule,
+) {
+  return lazy(async () => {
+    const module = await load();
+    return { default: module[exportName] as ComponentType<unknown> };
+  });
+}
+
+const LoginPage = lazyPage(() => import('./pages/LoginPage'), 'LoginPage');
+const ForgotPasswordPage = lazyPage(() => import('./pages/ForgotPasswordPage'), 'ForgotPasswordPage');
+const ResetPasswordPage = lazyPage(() => import('./pages/ResetPasswordPage'), 'ResetPasswordPage');
+const ChangePasswordPage = lazyPage(() => import('./pages/ChangePasswordPage'), 'ChangePasswordPage');
+const DashboardPage = lazyPage(() => import('./pages/DashboardPage'), 'DashboardPage');
+const JobsPage = lazyPage(() => import('./pages/JobsPage'), 'JobsPage');
+const JobDetailPage = lazyPage(() => import('./pages/JobDetailPage'), 'JobDetailPage');
+const RunsPage = lazyPage(() => import('./pages/RunsPage'), 'RunsPage');
+const RunDetailPage = lazyPage(() => import('./pages/RunDetailPage'), 'RunDetailPage');
+const BenchmarksPage = lazyPage(() => import('./pages/BenchmarksPage'), 'BenchmarksPage');
+const BenchmarkDetailPage = lazyPage(() => import('./pages/BenchmarkDetailPage'), 'BenchmarkDetailPage');
+const BenchmarkComparePage = lazyPage(() => import('./pages/BenchmarkComparePage'), 'BenchmarkComparePage');
+const DeployPage = lazyPage(() => import('./pages/DeployPage'), 'DeployPage');
+const DeployDetailPage = lazyPage(() => import('./pages/DeployDetailPage'), 'DeployDetailPage');
+const SchedulesPage = lazyPage(() => import('./pages/SchedulesPage'), 'SchedulesPage');
+const SettingsPage = lazyPage(() => import('./pages/SettingsPage'), 'SettingsPage');
+const UsersPage = lazyPage(() => import('./pages/UsersPage'), 'UsersPage');
+const PendingPage = lazyPage(() => import('./pages/PendingPage'), 'PendingPage');
+const SSOCompletePage = lazyPage(() => import('./pages/SSOCompletePage'), 'SSOCompletePage');
+const ProjectsPage = lazyPage(() => import('./pages/ProjectsPage'), 'ProjectsPage');
+const ProjectMembersPage = lazyPage(() => import('./pages/ProjectMembersPage'), 'ProjectMembersPage');
+const CloudAccountsPage = lazyPage(() => import('./pages/CloudAccountsPage'), 'CloudAccountsPage');
+const ShareLinksPage = lazyPage(() => import('./pages/ShareLinksPage'), 'ShareLinksPage');
+const ShareViewPage = lazyPage(() => import('./pages/ShareViewPage'), 'ShareViewPage');
+const AcceptInvitePage = lazyPage(() => import('./pages/AcceptInvitePage'), 'AcceptInvitePage');
+const CommandApprovalsPage = lazyPage(() => import('./pages/CommandApprovalsPage'), 'CommandApprovalsPage');
+const SystemDashboardPage = lazyPage(() => import('./pages/SystemDashboardPage'), 'SystemDashboardPage');
 
 const statusColors: Record<ConnectionStatus, string> = {
   connected: 'bg-green-400',
@@ -79,6 +90,14 @@ function ProjectRedirect() {
   return <Navigate to="/projects" replace />;
 }
 
+function RouteFallback() {
+  return (
+    <div className="px-4 py-8 text-sm text-gray-500 motion-safe:animate-pulse">
+      Loading page...
+    </div>
+  );
+}
+
 function AuthenticatedApp() {
   const status = useWebSocket();
   const mustChangePassword = useAuthStore((s) => s.mustChangePassword);
@@ -115,40 +134,42 @@ function AuthenticatedApp() {
       <main className="flex-1 overflow-auto pt-12 md:pt-0">
         <ConnectionBanner status={status} />
         <ToastContainer />
-        <Routes>
-          {/* Project list */}
-          <Route path="/projects" element={<ProjectsPage />} />
+        <Suspense fallback={<RouteFallback />}>
+          <Routes>
+            {/* Project list */}
+            <Route path="/projects" element={<ProjectsPage />} />
 
-          {/* Project-scoped routes */}
-          <Route path="/projects/:projectId" element={<DashboardPage />} />
-          <Route path="/projects/:projectId/tests" element={<JobsPage />} />
-          <Route path="/projects/:projectId/tests/:jobId" element={<JobDetailPage />} />
-          <Route path="/projects/:projectId/runs" element={<RunsPage />} />
-          <Route path="/projects/:projectId/runs/:runId" element={<RunDetailPage />} />
-          <Route path="/projects/:projectId/tls-profiles" element={<TlsProfilesPage />} />
-          <Route path="/projects/:projectId/tls-profiles/:runId" element={<TlsProfileDetailPage />} />
-          <Route path="/projects/:projectId/deploy" element={<DeployPage />} />
-          <Route path="/projects/:projectId/deploy/:deploymentId" element={<DeployDetailPage />} />
-          <Route path="/projects/:projectId/schedules" element={<SchedulesPage />} />
-          <Route path="/projects/:projectId/settings" element={<SettingsPage />} />
-          <Route path="/projects/:projectId/members" element={<ProjectMembersPage />} />
-          <Route path="/projects/:projectId/cloud-accounts" element={<CloudAccountsPage />} />
-          <Route path="/projects/:projectId/share-links" element={<ShareLinksPage />} />
-          <Route path="/projects/:projectId/approvals" element={<CommandApprovalsPage />} />
+            {/* Project-scoped routes */}
+            <Route path="/projects/:projectId" element={<DashboardPage />} />
+            <Route path="/projects/:projectId/tests" element={<JobsPage />} />
+            <Route path="/projects/:projectId/tests/:jobId" element={<JobDetailPage />} />
+            <Route path="/projects/:projectId/runs" element={<RunsPage />} />
+            <Route path="/projects/:projectId/runs/:runId" element={<RunDetailPage />} />
+            <Route path="/projects/:projectId/benchmarks" element={<BenchmarksPage />} />
+            <Route path="/projects/:projectId/benchmarks/compare" element={<BenchmarkComparePage />} />
+            <Route path="/projects/:projectId/benchmarks/:runId" element={<BenchmarkDetailPage />} />
+            <Route path="/projects/:projectId/deploy" element={<DeployPage />} />
+            <Route path="/projects/:projectId/deploy/:deploymentId" element={<DeployDetailPage />} />
+            <Route path="/projects/:projectId/schedules" element={<SchedulesPage />} />
+            <Route path="/projects/:projectId/settings" element={<SettingsPage />} />
+            <Route path="/projects/:projectId/members" element={<ProjectMembersPage />} />
+            <Route path="/projects/:projectId/cloud-accounts" element={<CloudAccountsPage />} />
+            <Route path="/projects/:projectId/share-links" element={<ShareLinksPage />} />
+            <Route path="/projects/:projectId/approvals" element={<CommandApprovalsPage />} />
 
-          {/* Platform routes */}
-          <Route path="/benchmarks" element={<BenchmarksPage />} />
-          {isPlatformAdmin && <Route path="/admin/system" element={<SystemDashboardPage />} />}
-          {isAdmin && <Route path="/users" element={<UsersPage />} />}
-          <Route path="/change-password" element={<ChangePasswordPage />} />
-          <Route path="/pending" element={<PendingPage />} />
+            {/* Platform routes */}
+            {isPlatformAdmin && <Route path="/admin/system" element={<SystemDashboardPage />} />}
+            {isAdmin && <Route path="/users" element={<UsersPage />} />}
+            <Route path="/change-password" element={<ChangePasswordPage />} />
+            <Route path="/pending" element={<PendingPage />} />
 
-          {/* Root redirect */}
-          <Route path="/" element={<ProjectRedirect />} />
+            {/* Root redirect */}
+            <Route path="/" element={<ProjectRedirect />} />
 
-          {/* Catch-all: redirect unknown routes to project list */}
-          <Route path="*" element={<Navigate to="/projects" replace />} />
-        </Routes>
+            {/* Catch-all: redirect unknown routes to project list */}
+            <Route path="*" element={<Navigate to="/projects" replace />} />
+          </Routes>
+        </Suspense>
       </main>
     </div>
   );
@@ -159,20 +180,22 @@ function App() {
 
   return (
     <BrowserRouter>
-      <Routes>
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/sso-complete" element={<SSOCompletePage />} />
-        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-        <Route path="/reset-password" element={<ResetPasswordPage />} />
-        <Route path="/share/:token" element={<ShareViewPage />} />
-        <Route path="/invite/:token" element={<AcceptInvitePage />} />
-        <Route
-          path="/*"
-          element={
-            isAuthenticated ? <AuthenticatedApp /> : <Navigate to="/login" />
-          }
-        />
-      </Routes>
+      <Suspense fallback={<RouteFallback />}>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/sso-complete" element={<SSOCompletePage />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
+          <Route path="/share/:token" element={<ShareViewPage />} />
+          <Route path="/invite/:token" element={<AcceptInvitePage />} />
+          <Route
+            path="/*"
+            element={
+              isAuthenticated ? <AuthenticatedApp /> : <Navigate to="/login" />
+            }
+          />
+        </Routes>
+      </Suspense>
     </BrowserRouter>
   );
 }

@@ -1,6 +1,6 @@
-import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, BenchmarkLeaderboardEntry, BenchmarkRun, TlsProfileSummary, TlsProfileDetail } from './types';
+import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, BenchmarkComparePreset, BenchmarkComparePresetInput } from './types';
 
-export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, BenchmarkLeaderboardEntry, BenchmarkRun, TlsProfileSummary, TlsProfileDetail };
+export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, BenchmarkComparePreset, BenchmarkComparePresetInput };
 export type { LiveAttempt } from './types';
 
 const API_BASE = '/api';
@@ -270,17 +270,37 @@ export const api = {
   getRunAttempts: (projectId: string, runId: string) =>
     request<Attempt[]>(projectUrl(projectId, `runs/${runId}/attempts`)),
 
-  // TLS Profiles (project-scoped route; DB filtering will tighten once rows carry project attribution)
-  getTlsProfiles: (projectId: string, params?: { limit?: number; offset?: number }) => {
+  getBenchmarks: (projectId: string, params?: { target_host?: string; limit?: number; offset?: number }) => {
     const search = new URLSearchParams();
+    if (params?.target_host) search.set('target_host', params.target_host);
     if (params?.limit) search.set('limit', String(params.limit));
     if (params?.offset) search.set('offset', String(params.offset));
     const qs = search.toString();
-    return request<TlsProfileSummary[]>(projectUrl(projectId, `tls-profiles${qs ? `?${qs}` : ''}`));
+    return request<BenchmarkRunSummary[]>(projectUrl(projectId, `benchmarks${qs ? `?${qs}` : ''}`));
   },
 
-  getTlsProfile: (projectId: string, runId: string) =>
-    request<TlsProfileDetail>(projectUrl(projectId, `tls-profiles/${runId}`)),
+  getBenchmark: (projectId: string, runId: string) =>
+    request<BenchmarkArtifact>(projectUrl(projectId, `benchmarks/${runId}`)),
+
+  compareBenchmarks: (projectId: string, runIds: string[], baselineRunId?: string) =>
+    request<BenchmarkComparisonReport>(projectUrl(projectId, 'benchmarks/compare'), {
+      method: 'POST',
+      body: JSON.stringify({ run_ids: runIds, baseline_run_id: baselineRunId }),
+    }),
+
+  getBenchmarkComparePresets: (projectId: string) =>
+    request<BenchmarkComparePreset[]>(projectUrl(projectId, 'benchmarks/presets')),
+
+  saveBenchmarkComparePreset: (projectId: string, preset: BenchmarkComparePresetInput) =>
+    request<BenchmarkComparePreset[]>(projectUrl(projectId, 'benchmarks/presets'), {
+      method: 'POST',
+      body: JSON.stringify(preset),
+    }),
+
+  deleteBenchmarkComparePreset: (projectId: string, presetId: string) =>
+    request<BenchmarkComparePreset[]>(projectUrl(projectId, `benchmarks/presets/${presetId}`), {
+      method: 'DELETE',
+    }),
 
   // Deployments
   getDeployments: (projectId: string, params?: { limit?: number; offset?: number }) => {
@@ -518,34 +538,6 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ approved, reason }),
     }).then(() => {}),
-
-  // ── Benchmarks (public reads, auth writes) ────────────────────────────
-  getBenchmarkLeaderboard: () =>
-    fetch(`${API_BASE}/benchmarks/latest/leaderboard`)
-      .then(async r => {
-        if (!r.ok) return [];
-        return r.json() as Promise<BenchmarkLeaderboardEntry[]>;
-      }),
-
-  getBenchmarkRuns: () =>
-    fetch(`${API_BASE}/benchmarks`)
-      .then(async r => {
-        if (!r.ok) return [];
-        return r.json() as Promise<BenchmarkRun[]>;
-      }),
-
-  getBenchmarkRun: (runId: string) =>
-    fetch(`${API_BASE}/benchmarks/${runId}`)
-      .then(async r => {
-        if (!r.ok) throw new Error(`API error: ${r.status}`);
-        return r.json() as Promise<BenchmarkRun>;
-      }),
-
-  uploadBenchmarkResults: (data: unknown) =>
-    request<{ run_id: string }>('/benchmarks', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    }),
 
   // Version (NOT project-scoped)
   getVersionInfo: () => request<{

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// A single language implementation to benchmark.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LanguageEntry {
     /// Language name, e.g. "rust", "go", "python".
     pub name: String,
@@ -28,6 +28,12 @@ pub struct BenchmarkConfig {
     pub name: String,
     /// Benchmark version / revision tag.
     pub version: String,
+    /// Optional baseline language used for report comparisons.
+    #[serde(default)]
+    pub baseline_language: Option<String>,
+    /// Optional baseline runtime to disambiguate the baseline language.
+    #[serde(default)]
+    pub baseline_runtime: Option<String>,
     /// Total number of HTTP requests per test case.
     pub total_requests: u64,
     /// List of concurrency levels to sweep.
@@ -49,11 +55,46 @@ pub struct BenchmarkConfig {
 }
 
 /// One cell in the test matrix: a specific (language, concurrency, repeat) triple.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TestCase {
     pub language: LanguageEntry,
     pub concurrency: u32,
     pub repeat_index: u32,
+}
+
+#[derive(Debug, Clone)]
+struct MatrixRng {
+    state: u64,
+}
+
+impl MatrixRng {
+    fn new(seed: u64) -> Self {
+        let state = if seed == 0 {
+            0x9e37_79b9_7f4a_7c15
+        } else {
+            seed
+        };
+        Self { state }
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        self.state = self
+            .state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        self.state
+    }
+}
+
+fn shuffle_cases(cases: &mut [TestCase], seed: u64) {
+    if cases.len() < 2 {
+        return;
+    }
+    let mut rng = MatrixRng::new(seed ^ cases.len() as u64);
+    for idx in (1..cases.len()).rev() {
+        let swap_idx = (rng.next_u64() as usize) % (idx + 1);
+        cases.swap(idx, swap_idx);
+    }
 }
 
 impl BenchmarkConfig {
@@ -83,11 +124,40 @@ impl BenchmarkConfig {
             anyhow::ensure!(!lang.name.is_empty(), "language name must not be empty");
             anyhow::ensure!(lang.port > 0, "port must be > 0 for {}", lang.name);
         }
+        if let Some(baseline_language) = &self.baseline_language {
+            let baseline = self
+                .languages
+                .iter()
+                .find(|lang| lang.name.eq_ignore_ascii_case(baseline_language))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "baseline_language '{}' does not match any configured language",
+                        baseline_language
+                    )
+                })?;
+
+            if let Some(baseline_runtime) = &self.baseline_runtime {
+                anyhow::ensure!(
+                    baseline.runtime.eq_ignore_ascii_case(baseline_runtime),
+                    "baseline_runtime '{}' does not match runtime '{}' for baseline language '{}'",
+                    baseline_runtime,
+                    baseline.runtime,
+                    baseline_language
+                );
+            }
+        } else if self.baseline_runtime.is_some() {
+            anyhow::bail!("baseline_runtime requires baseline_language");
+        }
         Ok(())
     }
 
     /// Expand the config into a flat list of test cases.
     pub fn test_matrix(&self) -> Vec<TestCase> {
+        self.test_matrix_with_seed(None)
+    }
+
+    /// Expand the config into a flat list of test cases, optionally shuffled with a deterministic seed.
+    pub fn test_matrix_with_seed(&self, seed: Option<u64>) -> Vec<TestCase> {
         let mut cases = Vec::new();
         for lang in &self.languages {
             for &conc in &self.concurrency_levels {
@@ -99,6 +169,9 @@ impl BenchmarkConfig {
                     });
                 }
             }
+        }
+        if let Some(seed) = seed {
+            shuffle_cases(&mut cases, seed);
         }
         cases
     }
@@ -135,6 +208,8 @@ mod tests {
         BenchmarkConfig {
             name: "test".into(),
             version: "0.1.0".into(),
+            baseline_language: Some("rust".into()),
+            baseline_runtime: Some("axum".into()),
             total_requests: 10_000,
             concurrency_levels: vec![1, 10, 100],
             repeat: 2,
@@ -191,6 +266,27 @@ mod tests {
     }
 
     #[test]
+    fn test_matrix_with_seed_is_deterministic() {
+        let cfg = sample_config();
+        let first = cfg.test_matrix_with_seed(Some(42));
+        let second = cfg.test_matrix_with_seed(Some(42));
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn test_matrix_with_seed_changes_case_order() {
+        let cfg = sample_config();
+        let original = cfg.test_matrix();
+        let randomized = cfg.test_matrix_with_seed(Some(42));
+
+        assert_eq!(original.len(), randomized.len());
+        assert_ne!(original, randomized);
+        for case in original {
+            assert!(randomized.contains(&case));
+        }
+    }
+
+    #[test]
     fn test_quick_override() {
         let mut cfg = sample_config();
         cfg.apply_quick();
@@ -214,6 +310,21 @@ mod tests {
         cfg.filter_languages(&["GO".to_string()]);
         assert_eq!(cfg.languages.len(), 1);
         assert_eq!(cfg.languages[0].name, "go");
+    }
+
+    #[test]
+    fn test_validate_rejects_unknown_baseline_language() {
+        let mut cfg = sample_config();
+        cfg.baseline_language = Some("node".into());
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_rejects_baseline_runtime_without_language() {
+        let mut cfg = sample_config();
+        cfg.baseline_language = None;
+        cfg.baseline_runtime = Some("axum".into());
+        assert!(cfg.validate().is_err());
     }
 
     #[test]

@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { api } from '../api/client';
 import { useApprovalSSE } from '../hooks/useSSE';
+import { usePolling } from '../hooks/usePolling';
 
 interface Props {
   projectId: string;
@@ -18,13 +19,13 @@ export function NotificationBell({ projectId }: Props) {
     }
   }, [projectId]);
 
-  useEffect(() => {
-    fetchCount();
-  }, [fetchCount]);
+  usePolling(() => {
+    void fetchCount();
+  }, 30000, !!projectId);
 
   // Refetch count on any SSE approval event
   useApprovalSSE(() => {
-    fetchCount();
+    void fetchCount();
   });
 
   if (count === 0) return null;

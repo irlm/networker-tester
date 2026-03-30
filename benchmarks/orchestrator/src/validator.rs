@@ -159,10 +159,7 @@ async fn check_health(client: &reqwest::Client, base: &str) -> Result<()> {
         .and_then(serde_json::Value::as_str)
         .unwrap_or("");
     if status_field != "ok" {
-        anyhow::bail!(
-            "/health status field is '{}', expected 'ok'",
-            status_field
-        );
+        anyhow::bail!("/health status field is '{}', expected 'ok'", status_field);
     }
 
     if body.get("runtime").is_none() {
@@ -230,9 +227,7 @@ async fn check_upload(client: &reqwest::Client, base: &str) -> Result<()> {
         .unwrap_or(0);
 
     if received != 2048 {
-        anyhow::bail!(
-            "/upload reported bytes_received={received}, expected 2048"
-        );
+        anyhow::bail!("/upload reported bytes_received={received}, expected 2048");
     }
 
     Ok(())
@@ -255,10 +250,7 @@ async fn check_http2(ip: &str) -> Result<()> {
 
     let version = resp.version();
     if version != reqwest::Version::HTTP_2 {
-        anyhow::bail!(
-            "expected HTTP/2 but got {:?}",
-            version
-        );
+        anyhow::bail!("expected HTTP/2 but got {:?}", version);
     }
 
     Ok(())
