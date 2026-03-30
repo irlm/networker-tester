@@ -586,4 +586,20 @@ export const api = {
 
   hardDeleteWorkspace: (projectId: string) =>
     request<void>(`/admin/workspaces/${projectId}`, { method: 'DELETE' }),
+
+  // Leaderboard (simple benchmark routes)
+  getLeaderboard: () =>
+    request<import('./types').BenchmarkLeaderboardEntry[]>('/leaderboard'),
+
+  getLeaderboardRuns: () =>
+    request<import('./types').BenchmarkRun[]>('/leaderboard/runs'),
+
+  getLeaderboardRun: (runId: string) =>
+    request<import('./types').BenchmarkRun>(`/leaderboard/runs/${runId}`),
+
+  uploadLeaderboardResults: (payload: { name: string; config?: Record<string, unknown>; results: Array<{ language: string; runtime: string; metrics?: Record<string, number>; server_os?: string; client_os?: string; cloud?: string; phase?: string; concurrency?: number }> }) =>
+    request<import('./types').BenchmarkRun>('/leaderboard/upload', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 };

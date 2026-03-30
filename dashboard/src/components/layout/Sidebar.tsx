@@ -41,7 +41,9 @@ export function Sidebar({ connectionDot }: SidebarProps) {
     { path: `/projects/${pid}/benchmarks`, label: 'Benchmarks', icon: '\u25A6' },
   ] : [];
 
-  const globalItems: NavItem[] = [];
+  const globalItems: NavItem[] = [
+    { path: '/leaderboard', label: 'Leaderboard', icon: '\u2261' },
+  ];
 
   const platformItems: NavItem[] = [];
   if (isPlatformAdmin) {

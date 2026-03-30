@@ -178,7 +178,6 @@ pub struct BenchmarkComparisonReport {
     pub cases: Vec<BenchmarkCaseComparison>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 pub struct BenchmarkRunRow {
     pub run_id: Uuid,
@@ -193,7 +192,6 @@ pub struct BenchmarkRunRow {
     pub results: Option<Vec<BenchmarkResultRow>>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BenchmarkResultRow {
     pub result_id: Uuid,
@@ -210,7 +208,6 @@ pub struct BenchmarkResultRow {
     pub finished_at: Option<DateTime<Utc>>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 pub struct LeaderboardEntry {
     pub language: String,
@@ -223,7 +220,6 @@ pub struct LeaderboardEntry {
     pub concurrency: Option<i32>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct NewResult {
     pub language: String,
@@ -246,12 +242,10 @@ pub struct NewResult {
     pub finished_at: Option<DateTime<Utc>>,
 }
 
-#[allow(dead_code)]
 fn default_empty_object() -> serde_json::Value {
     serde_json::json!({})
 }
 
-#[allow(dead_code)]
 pub async fn list_runs(client: &Client) -> anyhow::Result<Vec<BenchmarkRunRow>> {
     let rows = client
         .query(
@@ -279,7 +273,6 @@ pub async fn list_runs(client: &Client) -> anyhow::Result<Vec<BenchmarkRunRow>> 
         .collect())
 }
 
-#[allow(dead_code)]
 pub async fn get_run(client: &Client, run_id: &Uuid) -> anyhow::Result<Option<BenchmarkRunRow>> {
     let row = client
         .query_opt(
@@ -334,7 +327,6 @@ pub async fn get_run(client: &Client, run_id: &Uuid) -> anyhow::Result<Option<Be
     }))
 }
 
-#[allow(dead_code)]
 pub async fn create_run(
     client: &Client,
     name: &str,
@@ -351,7 +343,6 @@ pub async fn create_run(
     Ok(row.get("run_id"))
 }
 
-#[allow(dead_code)]
 pub async fn finish_run(client: &Client, run_id: &Uuid) -> anyhow::Result<()> {
     client
         .execute(
@@ -1339,7 +1330,6 @@ fn is_missing_benchmark_table_error(err: &tokio_postgres::Error) -> bool {
         .unwrap_or(false)
 }
 
-#[allow(dead_code)]
 pub async fn add_result(
     client: &Client,
     run_id: &Uuid,
@@ -1370,7 +1360,6 @@ pub async fn add_result(
     Ok(row.get("result_id"))
 }
 
-#[allow(dead_code)]
 pub async fn get_latest_leaderboard(client: &Client) -> anyhow::Result<Vec<LeaderboardEntry>> {
     let rows = client
         .query(
