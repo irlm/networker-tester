@@ -240,6 +240,36 @@ async fn cmd_run(
     callback_url: Option<String>,
     callback_token: Option<String>,
 ) -> Result<()> {
+    // If callback_url is set, try dashboard config format first (it doesn't have 'name' field)
+    if let (Some(ref url), Some(ref token)) = (&callback_url, &callback_token) {
+        if let Ok(dashboard_config) = config::DashboardBenchmarkConfig::load(&config_path) {
+            tracing::info!(
+                "Dashboard benchmark config detected (config_id={}), using executor",
+                dashboard_config.config_id
+            );
+
+            let callback_client = std::sync::Arc::new(callback::CallbackClient::new(
+                url,
+                token,
+                &dashboard_config.config_id,
+            ));
+
+            // PID file
+            let pid_path = format!("/tmp/alethabench-{}.pid", dashboard_config.config_id);
+            std::fs::write(&pid_path, std::process::id().to_string()).ok();
+
+            let result = crate::executor::execute_dashboard_benchmark(
+                dashboard_config,
+                callback_client.clone(),
+            )
+            .await;
+
+            // Cleanup
+            std::fs::remove_file(&pid_path).ok();
+            return result;
+        }
+    }
+
     let mut cfg = config::BenchmarkConfig::load(&config_path)
         .with_context(|| format!("loading config from {}", config_path.display()))?;
 
