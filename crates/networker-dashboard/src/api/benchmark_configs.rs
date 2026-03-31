@@ -18,26 +18,36 @@ const MAX_LIMIT: i64 = 200;
 pub struct CreateBenchmarkConfigRequest {
     pub name: String,
     pub template: Option<String>,
-    pub config_json: serde_json::Value,
+    #[serde(default)]
+    pub config_json: Option<serde_json::Value>,
     #[serde(default = "default_max_duration")]
     pub max_duration_secs: i32,
     pub baseline_run_id: Option<Uuid>,
     #[serde(default)]
     pub cells: Vec<CellInput>,
+    // Frontend sends these as top-level fields; we pack them into config_json
+    #[serde(default)]
+    pub languages: Option<Vec<String>>,
+    #[serde(default)]
+    pub methodology: Option<serde_json::Value>,
+    #[serde(default)]
+    pub auto_teardown: Option<bool>,
 }
 
 fn default_max_duration() -> i32 {
     14400
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct CellInput {
     pub cloud: String,
     pub region: String,
     #[serde(default = "default_topology")]
     pub topology: String,
+    #[serde(default)]
     pub languages: serde_json::Value,
     pub vm_size: Option<String>,
+    pub existing_vm_ip: Option<String>,
 }
 
 fn default_topology() -> String {
@@ -113,11 +123,30 @@ async fn create_config(
         .await
         .map_err(|_| StatusCode::BAD_REQUEST)?;
     let payload: CreateBenchmarkConfigRequest =
-        serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+        serde_json::from_slice(&body).map_err(|e| {
+            tracing::error!(error = %e, "Failed to parse benchmark config request");
+            StatusCode::BAD_REQUEST
+        })?;
 
     if payload.name.is_empty() || payload.name.len() > 200 {
         return Err(StatusCode::BAD_REQUEST);
     }
+
+    // Build config_json from top-level fields if not provided directly
+    let config_json = payload.config_json.unwrap_or_else(|| {
+        serde_json::json!({
+            "languages": payload.languages,
+            "methodology": payload.methodology,
+            "auto_teardown": payload.auto_teardown.unwrap_or(true),
+            "cells": payload.cells.iter().map(|c| serde_json::json!({
+                "cloud": c.cloud,
+                "region": c.region,
+                "topology": c.topology,
+                "vm_size": c.vm_size,
+                "languages": c.languages,
+            })).collect::<Vec<_>>(),
+        })
+    });
 
     let client = state.db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error in create_benchmark_config");
@@ -129,7 +158,7 @@ async fn create_config(
         &ctx.project_id,
         &payload.name,
         payload.template.as_deref(),
-        &payload.config_json,
+        &config_json,
         Some(&user.user_id),
         payload.max_duration_secs,
         payload.baseline_run_id.as_ref(),
