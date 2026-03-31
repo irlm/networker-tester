@@ -82,9 +82,15 @@ const LANGUAGE_GROUPS: { label: string; entries: LanguageEntry[] }[] = [
   {
     label: 'Managed',
     entries: [
+      { id: 'csharp-net48', label: 'C# .NET 4.8', group: 'Managed' },
       { id: 'csharp-net6', label: 'C# .NET 6', group: 'Managed' },
+      { id: 'csharp-net7', label: 'C# .NET 7', group: 'Managed' },
       { id: 'csharp-net8', label: 'C# .NET 8', group: 'Managed' },
+      { id: 'csharp-net8-aot', label: 'C# .NET 8 AOT', group: 'Managed' },
+      { id: 'csharp-net9', label: 'C# .NET 9', group: 'Managed' },
+      { id: 'csharp-net9-aot', label: 'C# .NET 9 AOT', group: 'Managed' },
       { id: 'csharp-net10', label: 'C# .NET 10', group: 'Managed' },
+      { id: 'csharp-net10-aot', label: 'C# .NET 10 AOT', group: 'Managed' },
       { id: 'java', label: 'Java', group: 'Managed' },
     ],
   },
