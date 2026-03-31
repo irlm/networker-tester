@@ -133,7 +133,12 @@ async fn poll_and_run(state: &AppState, worker_id: &str) -> anyhow::Result<()> {
                                 config_id = %config_id,
                                 "Benchmark orchestrator completed successfully"
                             );
-                            // Status will be set by the callback complete handler
+                            // Update status as fallback (callback may have already set it)
+                            if let Ok(db) = db_pool.get().await {
+                                let _ = crate::db::benchmark_configs::update_status(
+                                    &db, &config_id, "completed", None,
+                                ).await;
+                            }
                         } else {
                             let stderr = child.stderr.take();
                             let err_msg = if let Some(mut stderr) = stderr {
