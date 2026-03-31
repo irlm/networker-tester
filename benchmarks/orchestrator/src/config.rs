@@ -2,6 +2,135 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+// ---------------------------------------------------------------------------
+// Dashboard-triggered benchmark config (used by executor.rs)
+// ---------------------------------------------------------------------------
+
+/// Top-level config for a dashboard-triggered benchmark run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DashboardBenchmarkConfig {
+    /// Unique identifier for this config (matches the dashboard DB row).
+    pub config_id: String,
+    /// Cells to execute — each is a VM + set of languages.
+    pub cells: Vec<CellConfig>,
+    /// Benchmark methodology parameters.
+    pub methodology: MethodologyConfig,
+    /// Whether to destroy provisioned VMs after the run.
+    #[serde(default)]
+    pub auto_teardown: bool,
+}
+
+/// A single cell in the benchmark matrix.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CellConfig {
+    /// Unique identifier for this cell.
+    pub cell_id: String,
+    /// Cloud provider: "azure", "aws", "gcp".
+    pub cloud: String,
+    /// Cloud region, e.g. "eastus".
+    pub region: String,
+    /// VM topology: "loopback", "cross-region", etc.
+    #[serde(default = "default_topology")]
+    pub topology: String,
+    /// VM size / instance type.
+    pub vm_size: String,
+    /// IP of an existing VM to reuse (skip provisioning if set).
+    #[serde(default)]
+    pub existing_vm_ip: Option<String>,
+    /// Languages to benchmark on this cell.
+    pub languages: Vec<String>,
+}
+
+/// Benchmark methodology parameters.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MethodologyConfig {
+    /// Number of warmup requests before measurement.
+    #[serde(default = "default_warmup")]
+    pub warmup_runs: u32,
+    /// Minimum number of measured requests.
+    #[serde(default = "default_min_measured")]
+    pub min_measured: u32,
+    /// Maximum number of measured requests.
+    #[serde(default = "default_max_measured")]
+    pub max_measured: u32,
+    /// Target relative error for adaptive stopping.
+    #[serde(default = "default_target_relative_error")]
+    pub target_relative_error: f64,
+    /// Confidence level (e.g. 0.95 for 95%).
+    #[serde(default = "default_confidence_level")]
+    pub confidence_level: f64,
+    /// Protocol modes to test, e.g. ["http1", "http2"].
+    #[serde(default = "default_modes")]
+    pub modes: Vec<String>,
+    /// Per-request timeout in seconds.
+    #[serde(default = "default_timeout_secs")]
+    pub timeout_secs: u32,
+}
+
+fn default_topology() -> String {
+    "loopback".to_string()
+}
+fn default_warmup() -> u32 {
+    10
+}
+fn default_min_measured() -> u32 {
+    50
+}
+fn default_max_measured() -> u32 {
+    200
+}
+fn default_target_relative_error() -> f64 {
+    0.05
+}
+fn default_confidence_level() -> f64 {
+    0.95
+}
+fn default_modes() -> Vec<String> {
+    vec!["http1".to_string(), "http2".to_string()]
+}
+fn default_timeout_secs() -> u32 {
+    30
+}
+
+impl DashboardBenchmarkConfig {
+    /// Load a dashboard benchmark config from a JSON file.
+    pub fn load(path: &Path) -> Result<Self> {
+        let content =
+            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        let config: Self = serde_json::from_str(&content)
+            .with_context(|| format!("parsing dashboard config from {}", path.display()))?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    /// Validate the config.
+    fn validate(&self) -> Result<()> {
+        anyhow::ensure!(!self.config_id.is_empty(), "config_id must not be empty");
+        anyhow::ensure!(!self.cells.is_empty(), "cells list must not be empty");
+        for cell in &self.cells {
+            anyhow::ensure!(!cell.cell_id.is_empty(), "cell_id must not be empty");
+            anyhow::ensure!(
+                !cell.languages.is_empty(),
+                "cell {} has no languages",
+                cell.cell_id
+            );
+        }
+        anyhow::ensure!(
+            self.methodology.min_measured > 0,
+            "min_measured must be > 0"
+        );
+        anyhow::ensure!(
+            self.methodology.timeout_secs > 0,
+            "timeout_secs must be > 0"
+        );
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Original orchestrator config (used by cmd_run)
+// ---------------------------------------------------------------------------
+
 /// A single language implementation to benchmark.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LanguageEntry {
@@ -360,5 +489,101 @@ mod tests {
         assert_eq!(loaded.name, cfg.name);
         assert_eq!(loaded.languages.len(), cfg.languages.len());
         std::fs::remove_file(&path).ok();
+    }
+
+    // --- Dashboard config tests ---
+
+    fn sample_dashboard_config() -> DashboardBenchmarkConfig {
+        DashboardBenchmarkConfig {
+            config_id: "test-uuid-1234".into(),
+            cells: vec![CellConfig {
+                cell_id: "cell-uuid-5678".into(),
+                cloud: "azure".into(),
+                region: "eastus".into(),
+                topology: "loopback".into(),
+                vm_size: "Standard_D2s_v3".into(),
+                existing_vm_ip: Some("40.87.23.80".into()),
+                languages: vec!["rust".into(), "go".into()],
+            }],
+            methodology: MethodologyConfig {
+                warmup_runs: 10,
+                min_measured: 50,
+                max_measured: 200,
+                target_relative_error: 0.05,
+                confidence_level: 0.95,
+                modes: vec!["http1".into(), "http2".into()],
+                timeout_secs: 30,
+            },
+            auto_teardown: true,
+        }
+    }
+
+    #[test]
+    fn test_dashboard_config_roundtrip() {
+        let cfg = sample_dashboard_config();
+        let json = serde_json::to_string_pretty(&cfg).unwrap();
+        let loaded: DashboardBenchmarkConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.config_id, "test-uuid-1234");
+        assert_eq!(loaded.cells.len(), 1);
+        assert_eq!(loaded.cells[0].languages.len(), 2);
+        assert_eq!(loaded.methodology.warmup_runs, 10);
+        assert!(loaded.auto_teardown);
+    }
+
+    #[test]
+    fn test_dashboard_config_load_from_file() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("alethabench-dashboard-test-config.json");
+        let cfg = sample_dashboard_config();
+        std::fs::write(&path, serde_json::to_string_pretty(&cfg).unwrap()).unwrap();
+        let loaded = DashboardBenchmarkConfig::load(&path).unwrap();
+        assert_eq!(loaded.config_id, cfg.config_id);
+        assert_eq!(loaded.cells.len(), 1);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_dashboard_config_validates_empty_config_id() {
+        let mut cfg = sample_dashboard_config();
+        cfg.config_id = String::new();
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_dashboard_config_validates_empty_cells() {
+        let mut cfg = sample_dashboard_config();
+        cfg.cells.clear();
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_dashboard_config_validates_empty_languages() {
+        let mut cfg = sample_dashboard_config();
+        cfg.cells[0].languages.clear();
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_dashboard_config_defaults() {
+        let json = r#"{
+            "config_id": "test",
+            "cells": [{
+                "cell_id": "c1",
+                "cloud": "azure",
+                "region": "eastus",
+                "vm_size": "Standard_D2s_v3",
+                "languages": ["rust"]
+            }],
+            "methodology": {}
+        }"#;
+        let cfg: DashboardBenchmarkConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.methodology.warmup_runs, 10);
+        assert_eq!(cfg.methodology.min_measured, 50);
+        assert_eq!(cfg.methodology.max_measured, 200);
+        assert_eq!(cfg.methodology.timeout_secs, 30);
+        assert_eq!(cfg.methodology.modes, vec!["http1", "http2"]);
+        assert!(!cfg.auto_teardown);
+        assert_eq!(cfg.cells[0].topology, "loopback");
+        assert!(cfg.cells[0].existing_vm_ip.is_none());
     }
 }

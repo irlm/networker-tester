@@ -10,6 +10,7 @@ use std::time::Instant;
 use tokio::sync::watch;
 
 /// Outcome of a single cell execution.
+#[allow(dead_code)]
 struct CellOutcome {
     cell_id: String,
     languages_completed: u32,
