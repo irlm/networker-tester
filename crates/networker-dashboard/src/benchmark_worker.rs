@@ -93,7 +93,6 @@ async fn poll_and_run(state: &AppState, worker_id: &str) -> anyhow::Result<()> {
             &callback_url,
             "--callback-token",
             &callback_token,
-            "--stream-logs",
         ])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
