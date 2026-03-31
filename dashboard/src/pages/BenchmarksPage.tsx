@@ -81,8 +81,15 @@ export function BenchmarksPage() {
   const [presets, setPresets] = useState<BenchmarkComparePreset[]>([]);
   const [presetName, setPresetName] = useState('');
   const [presetStatus, setPresetStatus] = useState<string | null>(null);
+  const [configs, setConfigs] = useState<import('../api/types').BenchmarkConfigSummary[]>([]);
 
   usePageTitle('Benchmarks');
+
+  // Load benchmark configs (running/recent)
+  useEffect(() => {
+    if (!projectId) return;
+    api.listBenchmarkConfigs(projectId).then(setConfigs).catch(() => {});
+  }, [projectId]);
 
   const loadBenchmarks = useCallback(() => {
     if (!projectId) return;
@@ -312,6 +319,34 @@ export function BenchmarksPage() {
 
   return (
     <div className="p-4 md:p-6">
+      {/* Running / Recent Benchmark Configs */}
+      {configs.length > 0 && (
+        <div className="mb-6">
+          <h3 className="text-xs text-gray-500 tracking-wider mb-2 font-medium">recent benchmarks</h3>
+          <div className="space-y-1">
+            {configs.slice(0, 5).map(c => (
+              <Link
+                key={c.config_id}
+                to={c.status === 'completed' || c.status === 'failed'
+                  ? `/projects/${projectId}/benchmark-configs/${c.config_id}/results`
+                  : `/projects/${projectId}/benchmark-progress/${c.config_id}`}
+                className="flex items-center gap-3 px-3 py-2 rounded border border-gray-800 hover:border-gray-700 transition-colors"
+              >
+                <span className={`text-xs px-1.5 py-0.5 rounded font-mono ${
+                  c.status === 'running' ? 'bg-cyan-900/40 text-cyan-400' :
+                  c.status === 'queued' ? 'bg-yellow-900/40 text-yellow-400' :
+                  c.status === 'completed' ? 'bg-green-900/40 text-green-400' :
+                  c.status === 'failed' ? 'bg-red-900/40 text-red-400' :
+                  'bg-gray-800 text-gray-500'
+                }`}>{c.status}</span>
+                <span className="text-sm text-gray-200 truncate flex-1">{c.name}</span>
+                <span className="text-xs text-gray-600 font-mono">{new Date(c.created_at).toLocaleString()}</span>
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4 md:mb-6">
         <div>
           <h2 className="text-lg md:text-xl font-bold text-gray-100">Benchmark Runs</h2>
