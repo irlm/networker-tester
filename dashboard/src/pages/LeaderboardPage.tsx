@@ -56,10 +56,17 @@ function LeaderboardTab({ entries }: { entries: BenchmarkLeaderboardEntry[] }) {
           {entries.map((entry, i) => (
             <tr
               key={`${entry.language}-${entry.runtime}`}
-              className={`border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors ${i === 0 ? 'bg-yellow-500/5' : ''}`}
+              className={`border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors ${
+                i === 0 ? 'bg-yellow-500/[0.06]' : i === 1 ? 'bg-gray-300/[0.03]' : i === 2 ? 'bg-orange-400/[0.03]' : ''
+              }`}
             >
               <td className={`py-2.5 px-3 font-mono font-bold ${rankColor(i)}`}>
-                {getRank(i)}
+                <span className={i < 3 ? 'inline-flex items-center gap-1' : ''}>
+                  {i === 0 && <span title="Gold">{'\uD83E\uDD47'}</span>}
+                  {i === 1 && <span title="Silver">{'\uD83E\uDD48'}</span>}
+                  {i === 2 && <span title="Bronze">{'\uD83E\uDD49'}</span>}
+                  {getRank(i)}
+                </span>
               </td>
               <td className="py-2.5 px-3 font-medium text-gray-200">{entry.language}</td>
               <td className="py-2.5 px-3 text-gray-400">{entry.runtime}</td>

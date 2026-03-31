@@ -840,13 +840,29 @@ export function BenchmarkWizardPage() {
             </div>
           )}
 
-          {/* Launch button */}
+          {/* Launch button — the hero moment */}
           <button
             onClick={handleLaunch}
             disabled={submitting || cells.length === 0}
-            className="bg-cyan-600 hover:bg-cyan-500 disabled:bg-gray-700 disabled:text-gray-500 text-white px-6 py-2.5 rounded text-sm font-medium transition-colors"
+            className={`relative overflow-hidden text-white px-8 py-3 rounded text-sm font-bold tracking-wide transition-all duration-200 ${
+              submitting
+                ? 'bg-cyan-700 cursor-wait'
+                : cells.length === 0
+                  ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
+                  : 'bg-cyan-600 hover:bg-cyan-500 hover:-translate-y-0.5 hover:shadow-[0_4px_20px_rgba(71,191,255,0.25)] active:translate-y-0 active:shadow-none'
+            }`}
           >
-            {submitting ? 'Launching...' : 'Launch Benchmark'}
+            {submitting ? (
+              <span className="flex items-center gap-2">
+                <span className="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                Launching...
+              </span>
+            ) : (
+              <span className="flex items-center gap-2">
+                <span className="text-base">{'\u25B6'}</span>
+                Launch Benchmark
+              </span>
+            )}
           </button>
         </div>
       )}

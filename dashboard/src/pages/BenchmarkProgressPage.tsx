@@ -331,7 +331,15 @@ export function BenchmarkProgressPage() {
               return (
                 <div
                   key={cell.cell_id || idx}
-                  className="border border-gray-800 rounded-lg p-4 bg-[var(--bg-surface)]/40"
+                  className={`rounded-lg p-4 transition-all duration-500 ${
+                    cellStatus === 'running'
+                      ? 'border border-cyan-500/40 bg-cyan-950/10 shadow-[0_0_12px_rgba(71,191,255,0.06)]'
+                      : cellStatus === 'completed'
+                        ? 'border border-green-500/30 bg-green-950/10'
+                        : cellStatus === 'failed'
+                          ? 'border border-red-500/30 bg-red-950/10'
+                          : 'border border-gray-800 bg-[var(--bg-surface)]/40'
+                  }`}
                 >
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2">
