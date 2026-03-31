@@ -78,6 +78,8 @@ The user's benchmark request, created by the wizard and stored before execution.
 | finished_at | TIMESTAMPTZ NULL | |
 | config_json | JSONB | Full config (cells, languages, methodology) |
 | error_message | TEXT NULL | |
+| max_duration_secs | INT | Hard timeout (default 14400 = 4 hours) |
+| baseline_run_id | UUID NULL | Reference run for regression detection |
 
 ### benchmark_cell
 
@@ -371,7 +373,95 @@ S1-S4 start simultaneously. S5-S8 start once S1 lands (small, fast migration + C
 
 ---
 
-## 9. Success Criteria
+## 9. Reliability & Operational Concerns
+
+### Long-running process management
+
+Benchmarks can run for hours (multi-cell, many languages, rigorous methodology). The orchestrator MUST NOT run on the API worker thread.
+
+**Approach:** Dashboard writes config to DB with status `queued`, then spawns orchestrator via `tokio::process::Command` as a detached background process. The orchestrator runs independently — if the dashboard restarts, the orchestrator keeps running and reports via HTTP callbacks. On dashboard startup, check for `running` benchmark configs and reconnect to their log streams.
+
+**Heartbeat:** Orchestrator sends a heartbeat callback every 60 seconds. Dashboard marks a benchmark as `stalled` if no heartbeat for 10 minutes. Stalled benchmarks surface in the UI with a "Retry" button.
+
+**Retry:** On partial failure (e.g., one cell fails provisioning), other cells continue. Failed cells are marked individually. User can retry failed cells without re-running successful ones.
+
+### Credential management
+
+Cloud CLIs require authentication. Credentials are managed per-project via the existing cloud accounts system (Settings → Cloud tab).
+
+- **Azure:** Service principal or `az login` session on the dashboard VM
+- **AWS:** IAM keys stored in cloud_account table (encrypted at rest)
+- **GCP:** Service account JSON stored in cloud_account table
+
+The orchestrator inherits the dashboard's environment. For per-project isolation, the dashboard sets `AWS_ACCESS_KEY_ID`, `AZURE_*`, `GOOGLE_APPLICATION_CREDENTIALS` environment variables when spawning the orchestrator.
+
+### VM size normalization
+
+Users pick a logical size tier, not cloud-specific names:
+
+| Tier | Azure | AWS | GCP | Specs |
+|------|-------|-----|-----|-------|
+| Small | Standard_B2s | t3.small | e2-small | 2 vCPU, 4 GiB |
+| Medium | Standard_D2s_v3 | t3.medium | n2-standard-2 | 2 vCPU, 8 GiB |
+| Large | Standard_D4s_v3 | m5.xlarge | n2-standard-4 | 4 vCPU, 16 GiB |
+
+Wizard shows tier + specs. Orchestrator maps to cloud-specific names.
+
+### Region validation
+
+Wizard fetches available regions per cloud on cell creation. Orchestrator validates VM size availability in the selected region before provisioning. User-friendly error if unavailable.
+
+### Cost control
+
+- Auto-teardown is default ON for provisioned VMs
+- Maximum benchmark duration: configurable per config (default 4 hours)
+- Orchestrator self-terminates after max duration
+- Dashboard shows estimated cost in review step (VM hours × approximate pricing)
+
+### Partial failure handling
+
+| Failure | Behavior |
+|---------|----------|
+| One cell fails provisioning | Other cells continue. Failed cell marked `failed`. |
+| One language crashes | Skip to next language. Mark as failed in results. |
+| Orchestrator crashes | Dashboard detects via missing heartbeat. Status → `stalled`. User can retry. |
+| Dashboard restarts | Orchestrator keeps running. Dashboard reconnects via heartbeat on startup. |
+| SSH connection lost | Orchestrator retries 3 times with backoff. Then marks cell as failed. |
+
+### Security
+
+- Callback JWT is scoped to the specific `config_id` and expires after `max_duration + 1 hour`
+- SSH keys stored per-project in cloud_account table, encrypted with AES-GCM
+- Orchestrator runs with minimal permissions (no DB access, only HTTP callback)
+- VM provisioning uses project-scoped credentials, not dashboard-admin credentials
+
+---
+
+## 10. Edge Cases & Extensibility
+
+### Manual VMs
+
+Catalog entries with `cloud: manual` skip provisioning entirely. Orchestrator SSHes directly to the provided IP. No teardown.
+
+### Language parallelization (future)
+
+Current design runs languages sequentially on port 8443. Future optimization: assign different ports per language (8443, 8444, 8445...) and run 2-3 languages concurrently on the same VM if CPU/memory allows. Or use container isolation (Docker) per language.
+
+### nginx as baseline
+
+In the wizard, nginx is always selected by default as a static-file baseline. Users can deselect it but get a warning that comparison loses a reference point.
+
+### Regression baselines
+
+Each benchmark config stores a `baseline_run_id` pointing to the last successful run. Regression detection compares against this baseline. Users can manually pin a baseline ("use this run as the reference").
+
+### Multi-tenancy
+
+All queries are scoped by `project_id`. One workspace's benchmarks cannot access another's VMs, results, or credentials. The orchestrator receives only the credentials for the owning project.
+
+---
+
+## 11. Success Criteria
 
 - User can create a benchmark via wizard, selecting Azure + AWS, 5 languages, Standard methodology
 - Orchestrator provisions VMs, deploys languages, runs benchmarks, reports results via callbacks
