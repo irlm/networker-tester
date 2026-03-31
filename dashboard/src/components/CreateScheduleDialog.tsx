@@ -218,7 +218,6 @@ export function CreateScheduleDialog({ projectId, onClose, onCreated }: CreateSc
                 className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 mb-2 focus:outline-none focus:border-cyan-500"
               >
                 <option value="">Select endpoint...</option>
-                <option value="https://localhost:8443/health">Local endpoint (localhost:8443)</option>
                 {deployments.flatMap(d => {
                   const health = endpointHealth[d.deployment_id];
                   const status = health === undefined ? '...' : health ? '\u2714' : '\u2716 offline';
