@@ -207,9 +207,13 @@ export function BenchmarkCatalogPage() {
 
       {/* Empty state */}
       {vms.length === 0 && (
-        <p className="text-gray-500 text-sm py-12 text-center">
-          No benchmark VMs registered. Register a VM to get started.
-        </p>
+        <div className="text-center py-12 space-y-2">
+          <p className="text-gray-400 text-sm">No benchmark VMs registered</p>
+          <p className="text-gray-600 text-xs max-w-md mx-auto">
+            Register a VM that has language servers deployed at <code className="text-gray-500">/opt/bench/</code>.
+            Registered VMs appear in the benchmark wizard under "Use existing VM".
+          </p>
+        </div>
       )}
 
       {/* VM table */}

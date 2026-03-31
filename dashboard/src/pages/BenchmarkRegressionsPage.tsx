@@ -93,10 +93,11 @@ export function BenchmarkRegressionsPage() {
 
       {regressions.length === 0 ? (
         <div className="border border-gray-800 rounded p-10 text-center">
-          <p className="text-gray-500 text-sm">No regressions detected</p>
-          <p className="text-gray-700 text-xs mt-1">
-            Regressions are flagged when benchmark p50 latency increases by more than 10%
-            or success rate drops below 99% compared to baseline.
+          <p className="text-gray-400 text-sm">No regressions detected</p>
+          <p className="text-gray-600 text-xs mt-2 max-w-lg mx-auto">
+            Regressions are automatically flagged when a benchmark completes and its p50 latency
+            increases by more than 10% or success rate drops below 99% compared to the baseline run.
+            Run benchmarks with a baseline set to enable regression tracking.
           </p>
         </div>
       ) : (
