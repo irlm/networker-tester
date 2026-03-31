@@ -13,7 +13,7 @@ interface CreateJobDialogProps {
 }
 
 export function CreateJobDialog({ projectId, onClose, onCreated }: CreateJobDialogProps) {
-  const [target, setTarget] = useState('https://localhost:8443/health');
+  const [target, setTarget] = useState('');
   const [selectedModes, setSelectedModes] = useState<Set<string>>(
     new Set<string>()
   );
@@ -244,7 +244,7 @@ export function CreateJobDialog({ projectId, onClose, onCreated }: CreateJobDial
                 </option>
               ));
             })}
-            {target && !['', 'https://localhost:8443/health'].includes(target) &&
+            {target && target !== '' &&
               !deployments.some(d => (d.endpoint_ips || []).some(ip => target.includes(ip))) && (
               <option value={target}>Custom: {target}</option>
             )}
@@ -430,7 +430,7 @@ export function CreateJobDialog({ projectId, onClose, onCreated }: CreateJobDial
             </button>
             <button
               type="submit"
-              disabled={loading || selectedModes.size === 0}
+              disabled={loading || selectedModes.size === 0 || !target}
               className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors disabled:opacity-50"
             >
               {loading ? 'Creating...' : 'Run Test'}
