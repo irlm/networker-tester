@@ -144,6 +144,7 @@ async fn create_config(
                 "topology": c.topology,
                 "vm_size": c.vm_size,
                 "languages": c.languages,
+                "existing_vm_ip": c.existing_vm_ip,
             })).collect::<Vec<_>>(),
         })
     });
