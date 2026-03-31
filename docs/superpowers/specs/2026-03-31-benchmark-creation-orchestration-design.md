@@ -29,7 +29,7 @@ Dashboard is the control plane (config, storage, display). Orchestrator is the e
 
 Two modes, both available from the same wizard:
 
-**Single endpoint** — one target, one tester, tagged as benchmark with full methodology. Quick check against a known endpoint.
+**Single endpoint** — one target, one tester, tagged as benchmark with full methodology. Quick check against a known endpoint. In the cell model, this is a single cell with `topology: external` — no provisioning, no language deployment. The user provides the target URL directly (e.g., an existing networker-endpoint deployment). The orchestrator runs `networker-tester --benchmark` against it and reports the artifact.
 
 **Multi-language sweep** — one or more cloud/region cells, each running multiple language servers sequentially. The core comparison use case.
 
@@ -358,18 +358,35 @@ Compare latest benchmark results against a stored baseline:
 
 ## 8. Parallel Implementation Streams
 
-| Stream | Scope | Dependencies | Agent |
-|--------|-------|-------------|-------|
-| S1: DB + API | Migration V016, config CRUD, cell CRUD, catalog CRUD | None | 1 |
-| S2: Orchestrator callbacks | Add --callback-url mode to alethabench, HTTP POST on events | None | 1 |
-| S3: Wizard UI | All 5 wizard steps, template presets, form validation | None | 1 |
-| S4: Catalog + VM registry | Catalog CRUD page, SSH language detection, health checks | None | 1 |
-| S5: Deploy-on-demand | Provision VMs via az/aws/gcloud from orchestrator, integrate with cell model | S1 | 1 |
-| S6: Progress + live logs | WebSocket streaming, progress bar UI, live log viewer | S1, S2 | 1 |
-| S7: Results pipeline | Callback result → pipeline tables, comparison views, box-and-whisker per cell | S1 | 1 |
-| S8: Scheduling + notifications | Cron triggers, regression detection, email/webhook alerts | S1, S2 | 1 |
+### Wave 1 (start immediately, no dependencies)
 
-S1-S4 start simultaneously. S5-S8 start once S1 lands (small, fast migration + CRUD).
+| Stream | Scope | Agent |
+|--------|-------|-------|
+| S0: Orchestrator foundations | Heartbeat loop, --callback-url flag, graceful shutdown (SIGTERM), cancel polling, PID file | 1 |
+| S1: DB + API | Migration V016, benchmark_config CRUD, benchmark_cell CRUD, benchmark_vm_catalog CRUD, callback endpoints | 1 |
+| S3: Wizard UI | All 5 wizard steps, template presets, form validation, review summary | 1 |
+| S4: Catalog + VM registry | Catalog management page, manual VM registration, SSH language detection, periodic health checks | 1 |
+
+### Wave 2 (start once S0 or S1 lands)
+
+| Stream | Scope | Depends on | Agent |
+|--------|-------|-----------|-------|
+| S2: Orchestrator execution | Cell loop, language sweep, tester invocation, callback reporting, heartbeat emission | S0 | 1 |
+| S5: Deploy-on-demand | Provision VMs via az/aws/gcloud, tier-to-size mapping, region validation, auto-teardown | S1 | 1 |
+| S6: Progress + live logs | WebSocket streaming from callbacks, progress bar per cell, live log viewer, cancel button | S1, S0 | 1 |
+| S7: Results pipeline | Callback result → pipeline tables, cross-cell comparison view, box-and-whisker per cell | S1 | 1 |
+
+### Wave 3 (after core loop works end-to-end)
+
+| Stream | Scope | Depends on | Agent |
+|--------|-------|-----------|-------|
+| S8: Scheduling + notifications | Cron triggers, regression detection, baseline management, email/webhook alerts | S1, S2 | 1 |
+
+### Recommended risk mitigation
+
+- **S5 (deploy-on-demand)** is highest risk — prototype Azure provisioning early, even before S1 is complete, using the existing orchestrator deployer module.
+- **S0** is foundational — without heartbeat and graceful shutdown, the worker loop (S6) can't detect stalled runs.
+- **S3 (wizard)** can use mock API responses until S1 is ready — build the full UI flow independently.
 
 ---
 
@@ -379,11 +396,23 @@ S1-S4 start simultaneously. S5-S8 start once S1 lands (small, fast migration + C
 
 Benchmarks can run for hours (multi-cell, many languages, rigorous methodology). The orchestrator MUST NOT run on the API worker thread.
 
-**Approach:** Dashboard writes config to DB with status `queued`, then spawns orchestrator via `tokio::process::Command` as a detached background process. The orchestrator runs independently — if the dashboard restarts, the orchestrator keeps running and reports via HTTP callbacks. On dashboard startup, check for `running` benchmark configs and reconnect to their log streams.
+**Approach:** PostgreSQL-based job queue. Dashboard writes config to DB with status `queued`. A dedicated benchmark worker loop (separate tokio task in the dashboard binary, not on the API worker) polls for queued configs every 5 seconds and spawns the orchestrator. This avoids zombie processes, works with dashboard restarts (worker re-scans on startup), and doesn't require external infrastructure (Redis, Sidekiq).
+
+The worker:
+1. Claims a queued config by setting status `running` + worker_id (prevents double-pickup if multiple dashboard instances exist)
+2. Spawns `alethabench` via `tokio::process::Command`
+3. Monitors the child process (exit code, stdout/stderr)
+4. On dashboard restart, scans for `running` configs and checks if the orchestrator process is still alive (via PID file or heartbeat)
 
 **Heartbeat:** Orchestrator sends a heartbeat callback every 60 seconds. Dashboard marks a benchmark as `stalled` if no heartbeat for 10 minutes. Stalled benchmarks surface in the UI with a "Retry" button.
 
+**Cancellation:** Dashboard sends `POST /api/benchmarks/callback/cancel` which the orchestrator polls every heartbeat cycle. On cancel, orchestrator gracefully stops current language, tears down provisioned VMs, and exits. Dashboard also sends SIGTERM to the child process as a fallback.
+
+**Cleanup cron:** Dashboard background task runs every 15 minutes, checking for orphaned processes (PID in DB but process not running) and marking them as `failed`.
+
 **Retry:** On partial failure (e.g., one cell fails provisioning), other cells continue. Failed cells are marked individually. User can retry failed cells without re-running successful ones.
+
+**Future scaling:** If horizontal scaling is needed, extract the worker into a separate `alethabench-worker` binary that connects to the same DB. No architectural changes required — just move the polling loop.
 
 ### Credential management
 
