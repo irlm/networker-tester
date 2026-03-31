@@ -38,14 +38,16 @@ export function Sidebar({ connectionDot }: SidebarProps) {
     { path: `/projects/${pid}/tests`, label: 'Tests', icon: '\u25B6' },
     { path: `/projects/${pid}/schedules`, label: 'Schedules', icon: '\u21BB' },
     { path: `/projects/${pid}/runs`, label: 'Runs', icon: '\u25F7' },
-    { path: `/projects/${pid}/benchmarks`, label: 'Benchmarks', icon: '\u25A6' },
-    { path: `/projects/${pid}/benchmark-regressions`, label: 'Regressions', icon: '\u26A0' },
-    ...(isOperator ? [{ path: `/projects/${pid}/benchmark-catalog`, label: 'VM Catalog', icon: '\u2395' }] : []),
   ] : [];
 
-  const globalItems: NavItem[] = [
+  const benchItems: NavItem[] = pid ? [
+    { path: `/projects/${pid}/benchmarks`, label: 'Benchmarks', icon: '\u25A6' },
     { path: '/leaderboard', label: 'Leaderboard', icon: '\u2261' },
-  ];
+    ...(isOperator ? [{ path: `/projects/${pid}/benchmark-catalog`, label: 'VM Catalog', icon: '\u2395' }] : []),
+    { path: `/projects/${pid}/benchmark-regressions`, label: 'Regressions', icon: '\u26A0' },
+  ] : [];
+
+  // globalItems merged into benchItems
 
   const platformItems: NavItem[] = [];
   if (isPlatformAdmin) {
@@ -176,8 +178,8 @@ export function Sidebar({ connectionDot }: SidebarProps) {
           {/* Core: daily workflow */}
           {coreItems.map(renderItem)}
 
-          {/* Global tools (all users) */}
-          {renderSection('', globalItems)}
+          {/* Benchmarks group */}
+          {renderSection('benchmarks', benchItems)}
 
           {/* Platform: admin tools */}
           {renderSection('', platformItems)}
