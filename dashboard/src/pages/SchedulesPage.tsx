@@ -225,8 +225,13 @@ export function SchedulesPage() {
               >
                 <div className="flex items-start justify-between gap-2 mb-2">
                   <div className="min-w-0">
-                    <p className="text-gray-200 text-sm font-medium truncate">{scheduleName}</p>
-                    <p className="text-gray-500 text-xs font-mono truncate">{targetShort}</p>
+                    <p className="text-gray-200 text-sm font-medium truncate">
+                      {scheduleName}
+                      {s.benchmark_config_id && (
+                        <span className="ml-2 text-xs text-purple-400 bg-purple-500/10 px-1.5 py-0.5 rounded">benchmark</span>
+                      )}
+                    </p>
+                    <p className="text-gray-500 text-xs font-mono truncate">{s.benchmark_config_id ? 'benchmark schedule' : targetShort}</p>
                   </div>
                   <button
                     onClick={() => handleToggle(s.schedule_id)}
@@ -305,7 +310,12 @@ export function SchedulesPage() {
                     isOverdue ? 'bg-yellow-500/5' : ''
                   } ${isPaused ? 'opacity-60' : ''}`}
                 >
-                  <td className="px-4 py-3 text-gray-200">{scheduleName}</td>
+                  <td className="px-4 py-3 text-gray-200">
+                    {scheduleName}
+                    {s.benchmark_config_id && (
+                      <span className="ml-2 text-xs text-purple-400 bg-purple-500/10 px-1.5 py-0.5 rounded">benchmark</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-gray-400 font-mono text-xs truncate max-w-40" title={target}>
                     {targetShort}
                   </td>

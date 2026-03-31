@@ -39,6 +39,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
     { path: `/projects/${pid}/schedules`, label: 'Schedules', icon: '\u21BB' },
     { path: `/projects/${pid}/runs`, label: 'Runs', icon: '\u25F7' },
     { path: `/projects/${pid}/benchmarks`, label: 'Benchmarks', icon: '\u25A6' },
+    { path: `/projects/${pid}/benchmark-regressions`, label: 'Regressions', icon: '\u26A0' },
     ...(isOperator ? [{ path: `/projects/${pid}/benchmark-catalog`, label: 'VM Catalog', icon: '\u2395' }] : []),
   ] : [];
 

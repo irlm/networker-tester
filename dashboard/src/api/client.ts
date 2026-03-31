@@ -384,11 +384,12 @@ export const api = {
   createSchedule: (projectId: string, params: {
     name: string;
     cron_expr: string;
-    config: JobConfig;
+    config: JobConfig | Record<string, never>;
     agent_id?: string;
     deployment_id?: string;
     auto_start_vm?: boolean;
     auto_stop_vm?: boolean;
+    benchmark_config_id?: string;
   }) =>
     request<{ schedule_id: string; next_run_at: string }>(projectUrl(projectId, 'schedules'), {
       method: 'POST',
@@ -640,4 +641,15 @@ export const api = {
 
   getBenchmarkConfigResults: (projectId: string, configId: string) =>
     request<import('./types').BenchmarkConfigResults>(projectUrl(projectId, `benchmark-configs/${configId}/results`)),
+
+  // ── Benchmark Regressions ──────────────────────────────────────────
+  listBenchmarkRegressions: (projectId: string, limit?: number) =>
+    request<import('./types').BenchmarkRegressionWithConfig[]>(
+      projectUrl(projectId, `benchmark-regressions${limit ? `?limit=${limit}` : ''}`)
+    ),
+
+  getBenchmarkConfigRegressions: (projectId: string, configId: string) =>
+    request<import('./types').BenchmarkRegression[]>(
+      projectUrl(projectId, `benchmark-configs/${configId}/regressions`)
+    ),
 };

@@ -531,6 +531,7 @@ export interface Schedule {
   created_at: string;
   next_run_at: string | null;
   last_run_at: string | null;
+  benchmark_config_id: string | null;
 }
 
 export interface DashUser {
@@ -981,4 +982,23 @@ export interface BenchmarkConfigResults {
   };
   cells: BenchmarkCellRow[];
   results: ConfigCellResult[];
+}
+
+// ── Benchmark Regressions ─────────────────────────────────────────
+
+export interface BenchmarkRegression {
+  regression_id: string;
+  config_id: string;
+  baseline_config_id: string | null;
+  language: string;
+  metric: string;
+  baseline_value: number;
+  current_value: number;
+  delta_percent: number;
+  severity: string;
+  detected_at: string;
+}
+
+export interface BenchmarkRegressionWithConfig extends BenchmarkRegression {
+  config_name: string;
 }
