@@ -58,14 +58,14 @@ async fn poll_and_run(state: &AppState, worker_id: &str) -> anyhow::Result<()> {
         "Claimed benchmark config for execution"
     );
 
-    // Write config JSON to temp file
+    // Write config JSON in the format the orchestrator's DashboardBenchmarkConfig expects
     let config_path = format!("/tmp/bench-{}.json", config.config_id);
+    let inner = &config.config_json;
     let config_data = serde_json::json!({
-        "config_id": config.config_id,
-        "project_id": config.project_id,
-        "name": config.name,
-        "config": config.config_json,
-        "max_duration_secs": config.max_duration_secs,
+        "config_id": config.config_id.to_string(),
+        "cells": inner.get("cells").cloned().unwrap_or(serde_json::json!([])),
+        "methodology": inner.get("methodology").cloned().unwrap_or(serde_json::json!({})),
+        "auto_teardown": inner.get("auto_teardown").and_then(|v| v.as_bool()).unwrap_or(true),
     });
     tokio::fs::write(&config_path, serde_json::to_string_pretty(&config_data)?)
         .await
@@ -102,6 +102,7 @@ async fn poll_and_run(state: &AppState, worker_id: &str) -> anyhow::Result<()> {
     match child_result {
         Ok(mut child) => {
             let config_id = config.config_id;
+            let db_pool = state.db.clone();
 
             // Monitor the child process in a spawned task
             tokio::spawn(async move {
@@ -112,12 +113,30 @@ async fn poll_and_run(state: &AppState, worker_id: &str) -> anyhow::Result<()> {
                                 config_id = %config_id,
                                 "Benchmark orchestrator completed successfully"
                             );
+                            // Status will be set by the callback complete handler
                         } else {
-                            tracing::warn!(
+                            let stderr = child.stderr.take();
+                            let err_msg = if let Some(mut stderr) = stderr {
+                                let mut buf = String::new();
+                                use tokio::io::AsyncReadExt;
+                                let _ = stderr.read_to_string(&mut buf).await;
+                                buf
+                            } else {
+                                format!("exit code {:?}", status.code())
+                            };
+                            tracing::error!(
                                 config_id = %config_id,
                                 exit_code = ?status.code(),
-                                "Benchmark orchestrator exited with non-zero status"
+                                stderr = %err_msg,
+                                "Benchmark orchestrator failed"
                             );
+                            // Mark as failed in DB
+                            if let Ok(db) = db_pool.get().await {
+                                let _ = crate::db::benchmark_configs::update_status(
+                                    &db, &config_id, "failed",
+                                    Some(&format!("Orchestrator exited with code {:?}: {}", status.code(), err_msg.chars().take(500).collect::<String>())),
+                                ).await;
+                            }
                         }
                     }
                     Err(e) => {
@@ -126,6 +145,12 @@ async fn poll_and_run(state: &AppState, worker_id: &str) -> anyhow::Result<()> {
                             error = %e,
                             "Failed to wait for benchmark orchestrator"
                         );
+                        if let Ok(db) = db_pool.get().await {
+                            let _ = crate::db::benchmark_configs::update_status(
+                                &db, &config_id, "failed",
+                                Some(&format!("Process wait error: {e}")),
+                            ).await;
+                        }
                     }
                 }
 
