@@ -258,11 +258,35 @@ async fn cmd_run(
             let pid_path = format!("/tmp/alethabench-{}.pid", dashboard_config.config_id);
             std::fs::write(&pid_path, std::process::id().to_string()).ok();
 
+            // Cancellation channel
+            let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+
+            // Spawn heartbeat with cancellation
+            let hb_client = callback_client.clone();
+            let hb_handle = tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+                loop {
+                    interval.tick().await;
+                    let _ = hb_client.heartbeat().await;
+                    if hb_client.check_cancelled().await.unwrap_or(false) {
+                        let _ = cancel_tx.send(true);
+                        break;
+                    }
+                }
+            });
+
+            // Use the benchmarks directory as bench_dir
+            let bench_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
+
             let result = crate::executor::execute_dashboard_benchmark(
-                dashboard_config,
-                callback_client.clone(),
+                &dashboard_config,
+                &callback_client,
+                &cancel_rx,
+                bench_dir,
             )
             .await;
+
+            hb_handle.abort();
 
             // Cleanup
             std::fs::remove_file(&pid_path).ok();
