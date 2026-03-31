@@ -487,7 +487,6 @@ async fn run_language_benchmark(
                 &params.timeout_secs.to_string(),
                 "--insecure",
                 "--json-stdout",
-                "--benchmark-mode",
             ])
             .output(),
     )
