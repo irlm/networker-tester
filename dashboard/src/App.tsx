@@ -45,6 +45,7 @@ const AcceptInvitePage = lazyPage(() => import('./pages/AcceptInvitePage'), 'Acc
 const CommandApprovalsPage = lazyPage(() => import('./pages/CommandApprovalsPage'), 'CommandApprovalsPage');
 const SystemDashboardPage = lazyPage(() => import('./pages/SystemDashboardPage'), 'SystemDashboardPage');
 const LeaderboardPage = lazyPage(() => import('./pages/LeaderboardPage'), 'LeaderboardPage');
+const BenchmarkCatalogPage = lazyPage(() => import('./pages/BenchmarkCatalogPage'), 'BenchmarkCatalogPage');
 
 const statusColors: Record<ConnectionStatus, string> = {
   connected: 'bg-green-400',
@@ -157,6 +158,7 @@ function AuthenticatedApp() {
             <Route path="/projects/:projectId/cloud-accounts" element={<CloudAccountsPage />} />
             <Route path="/projects/:projectId/share-links" element={<ShareLinksPage />} />
             <Route path="/projects/:projectId/approvals" element={<CommandApprovalsPage />} />
+            <Route path="/projects/:projectId/benchmark-catalog" element={<BenchmarkCatalogPage />} />
 
             {/* Platform routes */}
             <Route path="/leaderboard" element={<LeaderboardPage />} />

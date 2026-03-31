@@ -1,6 +1,6 @@
-import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, BenchmarkComparePreset, BenchmarkComparePresetInput, TlsProfileSummary, TlsProfileDetail } from './types';
+import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, BenchmarkComparePreset, BenchmarkComparePresetInput, TlsProfileSummary, TlsProfileDetail, BenchmarkConfigSummary, BenchmarkVmCatalogEntry } from './types';
 
-export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, BenchmarkComparePreset, BenchmarkComparePresetInput, TlsProfileSummary, TlsProfileDetail };
+export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, BenchmarkComparePreset, BenchmarkComparePresetInput, TlsProfileSummary, TlsProfileDetail, BenchmarkConfigSummary, BenchmarkVmCatalogEntry };
 export type { LiveAttempt } from './types';
 
 const API_BASE = '/api';
@@ -602,4 +602,39 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+
+  // ── Benchmark VM Catalog ──
+  listBenchmarkCatalog: (projectId: string) =>
+    request<import('./types').BenchmarkVmCatalogEntry[]>(projectUrl(projectId, 'benchmark-catalog')),
+
+  registerBenchmarkVm: (projectId: string, payload: { name: string; ip: string; ssh_user: string; cloud: string; region: string }) =>
+    request<import('./types').BenchmarkVmCatalogEntry>(projectUrl(projectId, 'benchmark-catalog'), {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  deleteBenchmarkVm: (projectId: string, vmId: string) =>
+    request<{ deleted: boolean }>(projectUrl(projectId, `benchmark-catalog/${vmId}`), { method: 'DELETE' }),
+
+  detectBenchmarkVmLanguages: (projectId: string, vmId: string) =>
+    request<{ languages: string[] }>(projectUrl(projectId, `benchmark-catalog/${vmId}/detect`), { method: 'POST' }),
+
+  // ── Benchmark Configs (wizard) ────────────────────────────────────────
+  listBenchmarkConfigs: (projectId: string) =>
+    request<BenchmarkConfigSummary[]>(projectUrl(projectId, 'benchmark-configs')),
+
+  getBenchmarkConfig: (projectId: string, configId: string) =>
+    request<BenchmarkConfigSummary>(projectUrl(projectId, `benchmark-configs/${configId}`)),
+
+  createBenchmarkConfig: (projectId: string, payload: { name: string; template: string | null; cells: import('./types').BenchmarkCellConfig[]; languages: string[]; methodology: Record<string, unknown>; auto_teardown: boolean }) =>
+    request<{ config_id: string }>(projectUrl(projectId, 'benchmark-configs'), {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  launchBenchmarkConfig: (projectId: string, configId: string) =>
+    request<{ status: string }>(projectUrl(projectId, `benchmark-configs/${configId}/launch`), { method: 'POST' }),
+
+  cancelBenchmarkConfig: (projectId: string, configId: string) =>
+    request<{ status: string }>(projectUrl(projectId, `benchmark-configs/${configId}/cancel`), { method: 'POST' }),
 };

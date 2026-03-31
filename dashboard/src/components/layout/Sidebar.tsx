@@ -22,7 +22,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
   const location = useLocation();
   const { email, role, logout } = useAuthStore();
   const isPlatformAdmin = useAuthStore(s => s.isPlatformAdmin);
-  const { projectId, isProjectAdmin } = useProject();
+  const { projectId, isProjectAdmin, isOperator } = useProject();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('sidebar-collapsed') === '1');
   const [pendingCount, setPendingCount] = useState(0);
@@ -39,6 +39,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
     { path: `/projects/${pid}/schedules`, label: 'Schedules', icon: '\u21BB' },
     { path: `/projects/${pid}/runs`, label: 'Runs', icon: '\u25F7' },
     { path: `/projects/${pid}/benchmarks`, label: 'Benchmarks', icon: '\u25A6' },
+    ...(isOperator ? [{ path: `/projects/${pid}/benchmark-catalog`, label: 'VM Catalog', icon: '\u2395' }] : []),
   ] : [];
 
   const globalItems: NavItem[] = [
