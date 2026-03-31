@@ -180,6 +180,12 @@ pub enum DashboardEvent {
         status: String,
         endpoint_ips: Vec<String>,
     },
+    /// A benchmark config update (status, log, result, complete).
+    BenchmarkUpdate {
+        config_id: Uuid,
+        event_type: String,
+        payload: serde_json::Value,
+    },
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -356,7 +356,7 @@ export function BenchmarkWizardPage() {
       const payload = buildPayload();
       const { config_id } = await api.createBenchmarkConfig(projectId, payload);
       await api.launchBenchmarkConfig(projectId, config_id);
-      navigate(`/projects/${projectId}/benchmarks`);
+      navigate(`/projects/${projectId}/benchmark-progress/${config_id}`);
     } catch (err) {
       setSubmitError(String(err));
     } finally {

@@ -28,6 +28,7 @@ const RunsPage = lazyPage(() => import('./pages/RunsPage'), 'RunsPage');
 const RunDetailPage = lazyPage(() => import('./pages/RunDetailPage'), 'RunDetailPage');
 const BenchmarksPage = lazyPage(() => import('./pages/BenchmarksPage'), 'BenchmarksPage');
 const BenchmarkWizardPage = lazyPage(() => import('./pages/BenchmarkWizardPage'), 'BenchmarkWizardPage');
+const BenchmarkProgressPage = lazyPage(() => import('./pages/BenchmarkProgressPage'), 'BenchmarkProgressPage');
 const BenchmarkDetailPage = lazyPage(() => import('./pages/BenchmarkDetailPage'), 'BenchmarkDetailPage');
 const BenchmarkComparePage = lazyPage(() => import('./pages/BenchmarkComparePage'), 'BenchmarkComparePage');
 const DeployPage = lazyPage(() => import('./pages/DeployPage'), 'DeployPage');
@@ -150,6 +151,7 @@ function AuthenticatedApp() {
             <Route path="/projects/:projectId/runs/:runId" element={<RunDetailPage />} />
             <Route path="/projects/:projectId/benchmarks" element={<BenchmarksPage />} />
             <Route path="/projects/:projectId/benchmark-wizard" element={<BenchmarkWizardPage />} />
+            <Route path="/projects/:projectId/benchmark-progress/:configId" element={<BenchmarkProgressPage />} />
             <Route path="/projects/:projectId/benchmarks/compare" element={<BenchmarkComparePage />} />
             <Route path="/projects/:projectId/benchmarks/:runId" element={<BenchmarkDetailPage />} />
             <Route path="/projects/:projectId/deploy" element={<DeployPage />} />

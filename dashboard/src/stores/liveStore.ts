@@ -18,11 +18,16 @@ export interface DashboardEvent {
   endpoint_ips?: string[];
   // Job log events
   level?: string;
+  // Benchmark events
+  config_id?: string;
+  event_type?: string;
+  payload?: Record<string, unknown>;
 }
 
 const MAX_ATTEMPTS_PER_JOB = 2000;
 const MAX_DEPLOY_LINES = 5000;
 const MAX_JOB_LOGS = 2000;
+const MAX_BENCHMARK_LOGS = 5000;
 // Batch rapid attempt_result events to avoid re-rendering on every probe.
 // Attempts are buffered and flushed at most every FLUSH_INTERVAL_MS.
 const FLUSH_INTERVAL_MS = 500;
@@ -32,14 +37,39 @@ interface JobLogLine {
   level: string;
 }
 
+export interface BenchmarkCellStatus {
+  cell_id: string;
+  status: string;
+  current_language: string | null;
+  language_index: number | null;
+  language_total: number | null;
+}
+
+export interface BenchmarkResult {
+  language: string;
+  run_id: string;
+  artifact: Record<string, unknown>;
+}
+
+export interface BenchmarkLive {
+  logs: string[];
+  cells: Record<string, BenchmarkCellStatus>;
+  results: BenchmarkResult[];
+  configStatus: string | null;
+  completedAt: number | null;
+  errorMessage: string | null;
+}
+
 interface LiveState {
   events: DashboardEvent[];
   liveAttempts: Record<string, LiveAttempt[]>;
   deployLogs: Record<string, string[]>;
   jobLogs: Record<string, JobLogLine[]>;
+  benchmarks: Record<string, BenchmarkLive>;
   addEvent: (event: DashboardEvent) => void;
   cleanupJob: (jobId: string) => void;
   cleanupDeploy: (deploymentId: string) => void;
+  cleanupBenchmark: (configId: string) => void;
   clearEvents: () => void;
 }
 
@@ -69,11 +99,16 @@ function scheduleFlush(set: (fn: (state: LiveState) => Partial<LiveState>) => vo
   }, FLUSH_INTERVAL_MS);
 }
 
+function emptyBenchmarkLive(): BenchmarkLive {
+  return { logs: [], cells: {}, results: [], configStatus: null, completedAt: null, errorMessage: null };
+}
+
 export const useLiveStore = create<LiveState>((set) => ({
   events: [],
   liveAttempts: {},
   deployLogs: {},
   jobLogs: {},
+  benchmarks: {},
   addEvent: (event) => {
     // Buffer attempt_result events — flush in batches to avoid render thrash
     if (event.type === 'attempt_result' && event.job_id && event.attempt) {
@@ -126,6 +161,52 @@ export const useLiveStore = create<LiveState>((set) => ({
           deployLogs: { ...state.deployLogs, [event.deployment_id]: [...capped, event.line] },
         };
       }
+      // Benchmark update events
+      if (event.type === 'benchmark_update' && event.config_id && event.event_type && event.payload) {
+        const cid = event.config_id;
+        const existing = state.benchmarks[cid] || emptyBenchmarkLive();
+        const updated = { ...existing };
+
+        if (event.event_type === 'log') {
+          const newLines = (event.payload.lines as string[]) || [];
+          const merged = [...existing.logs, ...newLines];
+          updated.logs = merged.length > MAX_BENCHMARK_LOGS ? merged.slice(-MAX_BENCHMARK_LOGS) : merged;
+        } else if (event.event_type === 'status') {
+          const cellId = event.payload.cell_id as string | null;
+          if (cellId) {
+            updated.cells = {
+              ...existing.cells,
+              [cellId]: {
+                cell_id: cellId,
+                status: (event.payload.status as string) || 'unknown',
+                current_language: (event.payload.current_language as string | null) ?? null,
+                language_index: (event.payload.language_index as number | null) ?? null,
+                language_total: (event.payload.language_total as number | null) ?? null,
+              },
+            };
+          } else {
+            updated.configStatus = (event.payload.status as string) || null;
+          }
+        } else if (event.event_type === 'result') {
+          updated.results = [
+            ...existing.results,
+            {
+              language: (event.payload.language as string) || 'unknown',
+              run_id: (event.payload.run_id as string) || '',
+              artifact: (event.payload.artifact as Record<string, unknown>) || {},
+            },
+          ];
+        } else if (event.event_type === 'complete') {
+          updated.configStatus = (event.payload.status as string) || 'completed';
+          updated.completedAt = Date.now();
+          updated.errorMessage = (event.payload.error_message as string | null) ?? null;
+        }
+
+        return {
+          events,
+          benchmarks: { ...state.benchmarks, [cid]: updated },
+        };
+      }
       return { events };
     });
   },
@@ -141,5 +222,11 @@ export const useLiveStore = create<LiveState>((set) => ({
       delete deployLogs[deploymentId];
       return { deployLogs };
     }),
-  clearEvents: () => set({ events: [], liveAttempts: {}, deployLogs: {}, jobLogs: {} }),
+  cleanupBenchmark: (configId) =>
+    set((state) => {
+      const benchmarks = { ...state.benchmarks };
+      delete benchmarks[configId];
+      return { benchmarks };
+    }),
+  clearEvents: () => set({ events: [], liveAttempts: {}, deployLogs: {}, jobLogs: {}, benchmarks: {} }),
 }));

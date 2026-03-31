@@ -109,7 +109,21 @@ async fn callback_status(
         })?;
     }
 
-    // TODO(S6): Broadcast benchmark status to dashboard WebSocket clients
+    // Broadcast benchmark status to dashboard WebSocket clients
+    let _ = state.events_tx.send(
+        networker_common::messages::DashboardEvent::BenchmarkUpdate {
+            config_id: payload.config_id,
+            event_type: "status".into(),
+            payload: serde_json::json!({
+                "cell_id": payload.cell_id,
+                "status": payload.status,
+                "current_language": payload.current_language,
+                "language_index": payload.language_index,
+                "language_total": payload.language_total,
+                "message": payload.message,
+            }),
+        },
+    );
     tracing::debug!(
         config_id = %payload.config_id,
         status = %payload.status,
@@ -129,7 +143,17 @@ async fn callback_log(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let _claims = extract_callback_token(&headers, &state.jwt_secret)?;
 
-    // TODO(S6): Broadcast log lines to dashboard WebSocket clients
+    // Broadcast log lines to dashboard WebSocket clients
+    let _ = state.events_tx.send(
+        networker_common::messages::DashboardEvent::BenchmarkUpdate {
+            config_id: payload.config_id,
+            event_type: "log".into(),
+            payload: serde_json::json!({
+                "cell_id": payload.cell_id,
+                "lines": payload.lines,
+            }),
+        },
+    );
     tracing::debug!(
         config_id = %payload.config_id,
         line_count = payload.lines.len(),
@@ -179,6 +203,20 @@ async fn callback_result(
 
     // TODO(S7): Save detailed results to pipeline tables
 
+    // Broadcast result to dashboard WebSocket clients
+    let _ = state.events_tx.send(
+        networker_common::messages::DashboardEvent::BenchmarkUpdate {
+            config_id: payload.config_id,
+            event_type: "result".into(),
+            payload: serde_json::json!({
+                "cell_id": payload.cell_id,
+                "language": payload.language,
+                "run_id": run_id,
+                "artifact": payload.artifact,
+            }),
+        },
+    );
+
     tracing::info!(
         config_id = %payload.config_id,
         language = %payload.language,
@@ -213,6 +251,19 @@ async fn callback_complete(
         tracing::error!(error = %e, "Failed to update config on complete");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
+
+    // Broadcast complete to dashboard WebSocket clients
+    let _ = state.events_tx.send(
+        networker_common::messages::DashboardEvent::BenchmarkUpdate {
+            config_id: payload.config_id,
+            event_type: "complete".into(),
+            payload: serde_json::json!({
+                "status": payload.status,
+                "duration_seconds": payload.duration_seconds,
+                "error_message": payload.error_message,
+            }),
+        },
+    );
 
     tracing::info!(
         config_id = %payload.config_id,
