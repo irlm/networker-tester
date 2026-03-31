@@ -637,4 +637,7 @@ export const api = {
 
   cancelBenchmarkConfig: (projectId: string, configId: string) =>
     request<{ status: string }>(projectUrl(projectId, `benchmark-configs/${configId}/cancel`), { method: 'POST' }),
+
+  getBenchmarkConfigResults: (projectId: string, configId: string) =>
+    request<import('./types').BenchmarkConfigResults>(projectUrl(projectId, `benchmark-configs/${configId}/results`)),
 };

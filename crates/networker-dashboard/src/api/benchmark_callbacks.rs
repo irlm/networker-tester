@@ -185,7 +185,14 @@ async fn callback_result(
         })?
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    // Save as a benchmark_run in existing pipeline tables
+    // Deserialize the artifact from the callback JSON
+    let artifact: networker_tester::output::json::BenchmarkArtifact =
+        serde_json::from_value(payload.artifact.clone()).map_err(|e| {
+            tracing::error!(error = %e, "Failed to deserialize BenchmarkArtifact from callback");
+            StatusCode::BAD_REQUEST
+        })?;
+
+    // Save as a lightweight benchmark_run row (lowercase table)
     let run_name = format!("{} - {}", config.name, payload.language);
     let run_id = crate::db::benchmarks::create_run(&client, &run_name, &payload.artifact)
         .await
@@ -201,7 +208,49 @@ async fn callback_result(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
-    // TODO(S7): Save detailed results to pipeline tables
+    // Persist the full artifact into pipeline tables (BenchmarkRun, BenchmarkCase,
+    // BenchmarkSample, BenchmarkSummary, etc.) and link to project via job row
+    let pipeline_run_id = crate::db::benchmarks::save_artifact(
+        &client,
+        &config.project_id,
+        &payload.config_id,
+        payload.cell_id.as_ref(),
+        &payload.language,
+        &artifact,
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, "Failed to save benchmark artifact to pipeline tables");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    // Also save a benchmark_result row for the leaderboard
+    let metrics = serde_json::json!({
+        "mean_ms": artifact.summary.mean,
+        "p50_ms": artifact.summary.p50,
+        "p95_ms": artifact.summary.p95,
+        "p99_ms": artifact.summary.p99,
+        "stddev_ms": artifact.summary.stddev,
+        "rps": artifact.summary.rps,
+        "sample_count": artifact.summary.sample_count,
+    });
+
+    let result = crate::db::benchmarks::NewResult {
+        language: payload.language.clone(),
+        runtime: payload.language.clone(),
+        server_os: None,
+        client_os: Some(artifact.metadata.client_os.clone()),
+        cloud: None,
+        phase: Some("measured".to_string()),
+        concurrency: Some(artifact.metadata.concurrency as i32),
+        metrics,
+        started_at: Some(artifact.metadata.generated_at),
+        finished_at: Some(chrono::Utc::now()),
+    };
+
+    if let Err(e) = crate::db::benchmarks::add_result(&client, &run_id, &result).await {
+        tracing::warn!(error = %e, "Failed to add benchmark_result row (non-fatal)");
+    }
 
     // Broadcast result to dashboard WebSocket clients
     let _ = state.events_tx.send(
@@ -212,6 +261,7 @@ async fn callback_result(
                 "cell_id": payload.cell_id,
                 "language": payload.language,
                 "run_id": run_id,
+                "pipeline_run_id": pipeline_run_id.to_string(),
                 "artifact": payload.artifact,
             }),
         },
@@ -221,7 +271,8 @@ async fn callback_result(
         config_id = %payload.config_id,
         language = %payload.language,
         run_id = %run_id,
-        "Benchmark callback: result saved"
+        pipeline_run_id = %pipeline_run_id,
+        "Benchmark callback: result saved to pipeline tables"
     );
 
     Ok(Json(serde_json::json!({"ok": true, "run_id": run_id})))

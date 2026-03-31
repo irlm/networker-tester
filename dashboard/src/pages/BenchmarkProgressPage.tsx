@@ -219,12 +219,20 @@ export function BenchmarkProgressPage() {
             </button>
           )}
           {isDone && (
-            <button
-              onClick={() => navigate(`/projects/${projectId}/benchmarks`)}
-              className="border border-gray-700 hover:border-cyan-500 text-gray-300 hover:text-cyan-400 px-4 py-1.5 rounded text-sm transition-colors"
-            >
-              Back to Benchmarks
-            </button>
+            <>
+              <button
+                onClick={() => navigate(`/projects/${projectId}/benchmark-configs/${configId}/results`)}
+                className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors"
+              >
+                View Results
+              </button>
+              <button
+                onClick={() => navigate(`/projects/${projectId}/benchmarks`)}
+                className="border border-gray-700 hover:border-cyan-500 text-gray-300 hover:text-cyan-400 px-4 py-1.5 rounded text-sm transition-colors"
+              >
+                Back to Benchmarks
+              </button>
+            </>
           )}
         </div>
       </div>

@@ -296,11 +296,64 @@ async fn cancel_config(
     Ok(Json(serde_json::json!({"status": "cancelled"})))
 }
 
+/// Response for the config results endpoint.
+#[derive(Debug, Serialize)]
+pub struct BenchmarkConfigResults {
+    pub config: crate::db::benchmark_configs::BenchmarkConfigRow,
+    pub cells: Vec<crate::db::benchmark_cells::BenchmarkCellRow>,
+    pub results: Vec<crate::db::benchmarks::ConfigCellResult>,
+}
+
+/// GET /projects/:pid/benchmark-configs/:id/results
+async fn get_config_results(
+    State(state): State<Arc<AppState>>,
+    Path((_, config_id)): Path<(Uuid, Uuid)>,
+    req: Request,
+) -> Result<Json<BenchmarkConfigResults>, StatusCode> {
+    let _ctx = request_extension::<ProjectContext>(&req, "ProjectContext")?;
+    let client = state.db.get().await.map_err(|e| {
+        tracing::error!(error = %e, "DB pool error in get_benchmark_config_results");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let config = crate::db::benchmark_configs::get(&client, &config_id)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to get benchmark config");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let cells = crate::db::benchmark_cells::list_for_config(&client, &config_id)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to list benchmark cells");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    let results = crate::db::benchmarks::get_config_results(&client, &config_id)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to get benchmark config results");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(Json(BenchmarkConfigResults {
+        config,
+        cells,
+        results,
+    }))
+}
+
 pub fn project_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/benchmark-configs", get(list_configs).post(create_config))
         .route("/benchmark-configs/:config_id", get(get_config))
         .route("/benchmark-configs/:config_id/launch", post(launch_config))
         .route("/benchmark-configs/:config_id/cancel", post(cancel_config))
+        .route(
+            "/benchmark-configs/:config_id/results",
+            get(get_config_results),
+        )
         .with_state(state)
 }

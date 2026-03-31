@@ -353,6 +353,359 @@ pub async fn finish_run(client: &Client, run_id: &Uuid) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Persist a full BenchmarkArtifact into the pipeline tables (BenchmarkRun, BenchmarkLaunch,
+/// BenchmarkEnvironment, BenchmarkDataQuality, BenchmarkCase, BenchmarkSample, BenchmarkSummary).
+/// Also creates a job row to link the pipeline run to the project, and updates the
+/// lightweight `benchmark_run` (lowercase) row with cell_id/config_id for grouping.
+#[allow(clippy::too_many_arguments)]
+pub async fn save_artifact(
+    client: &Client,
+    project_id: &Uuid,
+    config_id: &Uuid,
+    cell_id: Option<&Uuid>,
+    language: &str,
+    artifact: &BenchmarkArtifact,
+) -> anyhow::Result<Uuid> {
+    let run_id = artifact.metadata.run_id;
+
+    // 1. Insert into pipeline BenchmarkRun table (Pascal-case)
+    let modes = artifact.metadata.modes.join(",");
+    let methodology_json = serde_json::to_value(&artifact.methodology)?;
+    let diagnostics_json = serde_json::to_value(&artifact.diagnostics)?;
+    let aggregate_summary_json = serde_json::to_value(&artifact.summary)?;
+
+    client
+        .execute(
+            "INSERT INTO BenchmarkRun (
+                BenchmarkRunId, ContractVersion, GeneratedAt, Source, TargetUrl, TargetHost,
+                Modes, TotalRuns, Concurrency, TimeoutMs, ClientOs, ClientVersion,
+                MethodologyJson, DiagnosticsJson, AggregateSummaryJson
+             ) VALUES (
+                $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15
+             )
+             ON CONFLICT (BenchmarkRunId) DO NOTHING",
+            &[
+                &run_id,
+                &artifact.metadata.contract_version,
+                &artifact.metadata.generated_at,
+                &artifact.metadata.source,
+                &artifact.metadata.target_url,
+                &artifact.metadata.target_host,
+                &modes,
+                &(artifact.metadata.total_runs as i32),
+                &(artifact.metadata.concurrency as i32),
+                &(artifact.metadata.timeout_ms as i64),
+                &artifact.metadata.client_os,
+                &artifact.metadata.client_version,
+                &methodology_json,
+                &diagnostics_json,
+                &aggregate_summary_json,
+            ],
+        )
+        .await
+        .context("INSERT BenchmarkRun (pipeline)")?;
+
+    // 2. BenchmarkEnvironment
+    let environment_json = serde_json::to_value(&artifact.environment)?;
+    let client_info_json = artifact
+        .environment
+        .client_info
+        .as_ref()
+        .map(serde_json::to_value)
+        .transpose()?;
+    let server_info_json = artifact
+        .environment
+        .server_info
+        .as_ref()
+        .map(serde_json::to_value)
+        .transpose()?;
+    let network_baseline_json = artifact
+        .environment
+        .network_baseline
+        .as_ref()
+        .map(serde_json::to_value)
+        .transpose()?;
+
+    client
+        .execute(
+            "INSERT INTO BenchmarkEnvironment (
+                BenchmarkRunId, ClientInfoJson, ServerInfoJson, NetworkBaselineJson,
+                PacketCaptureEnabled, EnvironmentJson
+             ) VALUES ($1,$2,$3,$4,$5,$6)
+             ON CONFLICT DO NOTHING",
+            &[
+                &run_id,
+                &client_info_json,
+                &server_info_json,
+                &network_baseline_json,
+                &artifact.environment.packet_capture_enabled,
+                &environment_json,
+            ],
+        )
+        .await
+        .context("INSERT BenchmarkEnvironment")?;
+
+    // 3. BenchmarkDataQuality
+    let warnings_json = serde_json::to_value(&artifact.data_quality.warnings)?;
+    let quality_json = serde_json::to_value(&artifact.data_quality)?;
+    client
+        .execute(
+            "INSERT INTO BenchmarkDataQuality (
+                BenchmarkRunId, NoiseLevel, SampleStabilityCv, Sufficiency,
+                PublicationReady, WarningsJson, QualityJson
+             ) VALUES ($1,$2,$3,$4,$5,$6,$7)
+             ON CONFLICT DO NOTHING",
+            &[
+                &run_id,
+                &artifact.data_quality.noise_level,
+                &artifact.data_quality.sample_stability_cv,
+                &artifact.data_quality.sufficiency,
+                &artifact.data_quality.publication_ready,
+                &warnings_json,
+                &quality_json,
+            ],
+        )
+        .await
+        .context("INSERT BenchmarkDataQuality")?;
+
+    // 4. BenchmarkLaunch rows
+    for launch in &artifact.launches {
+        let phases_json = serde_json::to_value(&launch.phases_present)?;
+        client
+            .execute(
+                "INSERT INTO BenchmarkLaunch (
+                    BenchmarkRunId, LaunchIndex, Scenario, PrimaryPhase, StartedAt, FinishedAt,
+                    SampleCount, PrimarySampleCount, WarmupSampleCount, SuccessCount, FailureCount,
+                    PhasesJson
+                 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
+                &[
+                    &run_id,
+                    &(launch.launch_index as i32),
+                    &launch.scenario,
+                    &launch.primary_phase,
+                    &launch.started_at,
+                    &launch.finished_at,
+                    &(launch.sample_count as i64),
+                    &(launch.primary_sample_count as i64),
+                    &(launch.warmup_sample_count as i64),
+                    &(launch.success_count as i64),
+                    &(launch.failure_count as i64),
+                    &phases_json,
+                ],
+            )
+            .await
+            .context("INSERT BenchmarkLaunch")?;
+    }
+
+    // 5. BenchmarkCase rows
+    for case in &artifact.cases {
+        let case_json = serde_json::to_value(case)?;
+        client
+            .execute(
+                "INSERT INTO BenchmarkCase (
+                    BenchmarkRunId, CaseId, Protocol, PayloadBytes, HttpStack,
+                    MetricName, MetricUnit, HigherIsBetter, CaseJson
+                 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+                &[
+                    &run_id,
+                    &case.id,
+                    &case.protocol,
+                    &case.payload_bytes.map(|v| v as i64),
+                    &case.http_stack,
+                    &case.metric_name,
+                    &case.metric_unit,
+                    &case.higher_is_better,
+                    &case_json,
+                ],
+            )
+            .await
+            .context("INSERT BenchmarkCase")?;
+    }
+
+    // 6. BenchmarkSample rows
+    for sample in &artifact.samples {
+        let sample_json = serde_json::to_value(sample)?;
+        client
+            .execute(
+                "INSERT INTO BenchmarkSample (
+                    AttemptId, BenchmarkRunId, CaseId, LaunchIndex, Phase, IterationIndex,
+                    Success, RetryCount, InclusionStatus, MetricValue, MetricUnit, StartedAt,
+                    FinishedAt, TotalDurationMs, TtfbMs, SampleJson
+                 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)",
+                &[
+                    &sample.attempt_id,
+                    &run_id,
+                    &sample.case_id,
+                    &(sample.launch_index as i32),
+                    &sample.phase,
+                    &(sample.iteration_index as i32),
+                    &sample.success,
+                    &(sample.retry_count as i32),
+                    &sample.inclusion_status,
+                    &sample.metric_value,
+                    &sample.metric_unit,
+                    &sample.started_at,
+                    &sample.finished_at,
+                    &sample.total_duration_ms,
+                    &sample.ttfb_ms,
+                    &sample_json,
+                ],
+            )
+            .await
+            .context("INSERT BenchmarkSample")?;
+    }
+
+    // 7. BenchmarkSummary rows
+    for summary in &artifact.summaries {
+        let summary_json = serde_json::to_value(summary)?;
+        client
+            .execute(
+                "INSERT INTO BenchmarkSummary (
+                    BenchmarkRunId, CaseId, Protocol, PayloadBytes, HttpStack, MetricName,
+                    MetricUnit, HigherIsBetter, SampleCount, IncludedSampleCount,
+                    ExcludedSampleCount, SuccessCount, FailureCount, TotalRequests, ErrorCount,
+                    BytesTransferred, WallTimeMs, Rps, Min, Mean, P5, P25, P50, P75, P95, P99,
+                    P999, Max, Stddev, LatencyMeanMs, LatencyP50Ms, LatencyP99Ms,
+                    LatencyP999Ms, LatencyMaxMs, SummaryJson
+                 ) VALUES (
+                    $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+                    $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35
+                 )",
+                &[
+                    &run_id,
+                    &summary.case_id,
+                    &summary.protocol,
+                    &summary.payload_bytes.map(|v| v as i64),
+                    &summary.http_stack,
+                    &summary.metric_name,
+                    &summary.metric_unit,
+                    &summary.higher_is_better,
+                    &(summary.sample_count as i64),
+                    &(summary.included_sample_count as i64),
+                    &(summary.excluded_sample_count as i64),
+                    &(summary.success_count as i64),
+                    &(summary.failure_count as i64),
+                    &(summary.total_requests as i64),
+                    &(summary.error_count as i64),
+                    &(summary.bytes_transferred as i64),
+                    &summary.wall_time_ms,
+                    &summary.rps,
+                    &summary.min,
+                    &summary.mean,
+                    &summary.p5,
+                    &summary.p25,
+                    &summary.p50,
+                    &summary.p75,
+                    &summary.p95,
+                    &summary.p99,
+                    &summary.p999,
+                    &summary.max,
+                    &summary.stddev,
+                    &summary.latency_mean_ms,
+                    &summary.latency_p50_ms,
+                    &summary.latency_p99_ms,
+                    &summary.latency_p999_ms,
+                    &summary.latency_max_ms,
+                    &summary_json,
+                ],
+            )
+            .await
+            .context("INSERT BenchmarkSummary")?;
+    }
+
+    // 8. Create a job row to link the pipeline run to the project
+    let job_config = serde_json::json!({
+        "type": "benchmark_artifact",
+        "config_id": config_id,
+        "cell_id": cell_id,
+        "language": language,
+    });
+    let job_id = crate::db::jobs::create(client, &job_config, None, None, project_id).await?;
+    crate::db::jobs::set_run_id(client, &job_id, &run_id).await?;
+
+    // 9. Update the lightweight benchmark_run row with cell_id/config_id
+    client
+        .execute(
+            "UPDATE benchmark_run SET cell_id = $1, config_id = $2 WHERE run_id = $3",
+            &[&cell_id, config_id, &run_id],
+        )
+        .await
+        .context("UPDATE benchmark_run cell_id/config_id")?;
+
+    Ok(run_id)
+}
+
+/// Retrieve benchmark results for a config, grouped by cell.
+pub async fn get_config_results(
+    client: &Client,
+    config_id: &Uuid,
+) -> anyhow::Result<Vec<ConfigCellResult>> {
+    // Get all benchmark_run rows linked to this config
+    let rows = client
+        .query(
+            "SELECT br.run_id, br.name, br.cell_id, br.config_id,
+                    br.status, br.started_at, br.finished_at
+             FROM benchmark_run br
+             WHERE br.config_id = $1
+             ORDER BY br.started_at",
+            &[config_id],
+        )
+        .await?;
+
+    let mut results = Vec::new();
+    for row in &rows {
+        let run_id: Uuid = row.get("run_id");
+        let cell_id: Option<Uuid> = row.get("cell_id");
+        let name: String = row.get("name");
+
+        // Get summaries for this run from the pipeline tables
+        let summary_rows = client
+            .query(
+                "SELECT SummaryJson FROM BenchmarkSummary WHERE BenchmarkRunId = $1
+                 ORDER BY Protocol, PayloadBytes NULLS FIRST",
+                &[&run_id],
+            )
+            .await
+            .unwrap_or_default();
+
+        let summaries: Vec<BenchmarkSummary> = summary_rows
+            .iter()
+            .filter_map(|r| {
+                serde_json::from_value(r.get("summaryjson")).ok()
+            })
+            .collect();
+
+        // Extract language from the run name (format: "Config Name - language")
+        let language = name
+            .rsplit_once(" - ")
+            .map(|(_, lang)| lang.to_string())
+            .unwrap_or_else(|| name.clone());
+
+        results.push(ConfigCellResult {
+            run_id,
+            cell_id,
+            language,
+            status: row.get("status"),
+            started_at: row.get("started_at"),
+            finished_at: row.get("finished_at"),
+            summaries,
+        });
+    }
+
+    Ok(results)
+}
+
+#[derive(Debug, Serialize)]
+pub struct ConfigCellResult {
+    pub run_id: Uuid,
+    pub cell_id: Option<Uuid>,
+    pub language: String,
+    pub status: String,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub summaries: Vec<BenchmarkSummary>,
+}
+
 pub async fn list(
     client: &Client,
     project_id: &Uuid,

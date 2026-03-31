@@ -48,6 +48,7 @@ const CommandApprovalsPage = lazyPage(() => import('./pages/CommandApprovalsPage
 const SystemDashboardPage = lazyPage(() => import('./pages/SystemDashboardPage'), 'SystemDashboardPage');
 const LeaderboardPage = lazyPage(() => import('./pages/LeaderboardPage'), 'LeaderboardPage');
 const BenchmarkCatalogPage = lazyPage(() => import('./pages/BenchmarkCatalogPage'), 'BenchmarkCatalogPage');
+const BenchmarkConfigResultsPage = lazyPage(() => import('./pages/BenchmarkConfigResultsPage'), 'BenchmarkConfigResultsPage');
 
 const statusColors: Record<ConnectionStatus, string> = {
   connected: 'bg-green-400',
@@ -163,6 +164,7 @@ function AuthenticatedApp() {
             <Route path="/projects/:projectId/share-links" element={<ShareLinksPage />} />
             <Route path="/projects/:projectId/approvals" element={<CommandApprovalsPage />} />
             <Route path="/projects/:projectId/benchmark-catalog" element={<BenchmarkCatalogPage />} />
+            <Route path="/projects/:projectId/benchmark-configs/:configId/results" element={<BenchmarkConfigResultsPage />} />
 
             {/* Platform routes */}
             <Route path="/leaderboard" element={<LeaderboardPage />} />

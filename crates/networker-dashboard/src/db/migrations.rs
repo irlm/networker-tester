@@ -504,6 +504,14 @@ CREATE TABLE IF NOT EXISTS benchmark_cell (
 CREATE INDEX IF NOT EXISTS ix_benchmark_cell_config ON benchmark_cell (config_id);
 "#;
 
+/// V017 migration: Add cell_id/config_id to benchmark_run for cross-cell grouping.
+const V017_BENCHMARK_RUN_CELL_LINK: &str = r#"
+ALTER TABLE benchmark_run ADD COLUMN IF NOT EXISTS cell_id UUID;
+ALTER TABLE benchmark_run ADD COLUMN IF NOT EXISTS config_id UUID;
+CREATE INDEX IF NOT EXISTS ix_benchmark_run_config ON benchmark_run (config_id) WHERE config_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS ix_benchmark_run_cell ON benchmark_run (cell_id) WHERE cell_id IS NOT NULL;
+"#;
+
 /// Run pending migrations.
 pub async fn run(client: &Client) -> anyhow::Result<()> {
     // Ensure migration tracking table exists
@@ -796,6 +804,23 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
             )
             .await?;
         tracing::info!("V016 migration complete");
+    }
+
+    // V017: Add cell_id/config_id to benchmark_run for cross-cell grouping
+    let row = client
+        .query_opt("SELECT version FROM _migrations WHERE version = 17", &[])
+        .await?;
+
+    if row.is_none() {
+        tracing::info!("Applying V017 benchmark_run_cell_link migration...");
+        client.batch_execute(V017_BENCHMARK_RUN_CELL_LINK).await?;
+        client
+            .execute(
+                "INSERT INTO _migrations (version) VALUES (17) ON CONFLICT DO NOTHING",
+                &[],
+            )
+            .await?;
+        tracing::info!("V017 migration complete");
     }
 
     Ok(())

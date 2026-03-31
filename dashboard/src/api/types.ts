@@ -916,3 +916,69 @@ export interface BenchmarkVmCatalogEntry {
   status: string;
   last_health_check: string | null;
 }
+
+// ── Benchmark Config Results (cross-cell comparison) ─────────────────
+
+export interface BenchmarkConfigResultSummary {
+  case_id: string;
+  protocol: string;
+  payload_bytes: number | null;
+  http_stack: string | null;
+  metric_name: string;
+  metric_unit: string;
+  higher_is_better: boolean;
+  sample_count: number;
+  included_sample_count: number;
+  mean: number;
+  p5: number;
+  p25: number;
+  p50: number;
+  p75: number;
+  p95: number;
+  p99: number;
+  p999: number;
+  max: number;
+  min: number;
+  stddev: number;
+  rps: number;
+}
+
+export interface ConfigCellResult {
+  run_id: string;
+  cell_id: string | null;
+  language: string;
+  status: string;
+  started_at: string;
+  finished_at: string | null;
+  summaries: BenchmarkConfigResultSummary[];
+}
+
+export interface BenchmarkCellRow {
+  cell_id: string;
+  config_id: string;
+  cloud: string;
+  region: string;
+  topology: string;
+  endpoint_vm_id: string | null;
+  tester_vm_id: string | null;
+  endpoint_ip: string | null;
+  tester_ip: string | null;
+  status: string;
+  languages: string[];
+  vm_size: string | null;
+}
+
+export interface BenchmarkConfigResults {
+  config: BenchmarkConfigSummary & {
+    project_id: string;
+    config_json: Record<string, unknown>;
+    error_message: string | null;
+    max_duration_secs: number;
+    baseline_run_id: string | null;
+    created_by: string | null;
+    worker_id: string | null;
+    last_heartbeat: string | null;
+  };
+  cells: BenchmarkCellRow[];
+  results: ConfigCellResult[];
+}
