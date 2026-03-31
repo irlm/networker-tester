@@ -1,3 +1,5 @@
+#[allow(dead_code)]
+mod callback;
 mod collector;
 mod config;
 mod cost;
@@ -14,6 +16,8 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use tokio::sync::watch;
 
 #[derive(Parser)]
 #[command(
@@ -81,6 +85,14 @@ enum Command {
         /// Operating system: ubuntu or windows.
         #[arg(long, default_value = "ubuntu")]
         os: String,
+
+        /// Dashboard callback URL for progress reporting.
+        #[arg(long)]
+        callback_url: Option<String>,
+
+        /// Bearer token for dashboard callback authentication.
+        #[arg(long)]
+        callback_token: Option<String>,
     },
 
     /// List available languages defined in a config file.
@@ -165,6 +177,8 @@ async fn main() -> Result<()> {
             auto_rerun_max_relative_margin,
             vm_size,
             os,
+            callback_url,
+            callback_token,
         } => {
             cmd_run(
                 config_path,
@@ -180,6 +194,8 @@ async fn main() -> Result<()> {
                 auto_rerun_max_relative_margin,
                 vm_size,
                 os,
+                callback_url,
+                callback_token,
             )
             .await
         }
@@ -219,6 +235,8 @@ async fn cmd_run(
     auto_rerun_max_relative_margin: Option<f64>,
     vm_size: String,
     os: String,
+    callback_url: Option<String>,
+    callback_token: Option<String>,
 ) -> Result<()> {
     let mut cfg = config::BenchmarkConfig::load(&config_path)
         .with_context(|| format!("loading config from {}", config_path.display()))?;
@@ -359,6 +377,97 @@ async fn cmd_run(
         return Ok(());
     }
 
+    // -- Callback client + heartbeat + cancellation --
+    let callback_client = match (&callback_url, &callback_token) {
+        (Some(url), Some(token)) => {
+            let config_id = config_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+            Some(Arc::new(callback::CallbackClient::new(
+                url, token, &config_id,
+            )))
+        }
+        _ => None,
+    };
+
+    // Cancellation channel: SIGTERM or dashboard cancel both trigger this.
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+
+    // PID file — write if we have a callback (dashboard-launched run).
+    let pid_file_path = callback_client.as_ref().map(|_| {
+        let config_id = config_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown");
+        let path = PathBuf::from(format!("/tmp/alethabench-{config_id}.pid"));
+        if let Err(e) = std::fs::write(&path, std::process::id().to_string()) {
+            tracing::warn!("Failed to write PID file {}: {e}", path.display());
+        } else {
+            tracing::info!("PID file written: {}", path.display());
+        }
+        path
+    });
+
+    // Heartbeat background task — runs every 60s, also checks cancellation.
+    let heartbeat_handle = if let Some(client) = callback_client.clone() {
+        let cancel_tx = cancel_tx.clone();
+        Some(tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            interval.tick().await; // skip immediate first tick
+            loop {
+                interval.tick().await;
+                if let Err(e) = client.heartbeat().await {
+                    tracing::warn!("Heartbeat failed: {e}");
+                }
+                match client.check_cancelled().await {
+                    Ok(true) => {
+                        tracing::warn!("Dashboard requested cancellation");
+                        let _ = cancel_tx.send(true);
+                        break;
+                    }
+                    Ok(false) => {}
+                    Err(e) => tracing::warn!("Cancellation check failed: {e}"),
+                }
+            }
+        }))
+    } else {
+        None
+    };
+
+    // SIGTERM handler — signals cancellation on graceful shutdown request.
+    {
+        let cancel_tx = cancel_tx.clone();
+        tokio::spawn(async move {
+            #[cfg(unix)]
+            {
+                use tokio::signal::unix::{signal, SignalKind};
+                let mut sigterm =
+                    signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+                sigterm.recv().await;
+            }
+            #[cfg(not(unix))]
+            {
+                // On non-Unix, fall back to ctrl-c only.
+                let _ = tokio::signal::ctrl_c().await;
+            }
+            tracing::warn!("Received termination signal, requesting graceful shutdown");
+            let _ = cancel_tx.send(true);
+        });
+    }
+
+    // Helper closure to clean up PID file.
+    let cleanup_pid = |path: &Option<PathBuf>| {
+        if let Some(ref p) = path {
+            if let Err(e) = std::fs::remove_file(p) {
+                tracing::warn!("Failed to remove PID file {}: {e}", p.display());
+            } else {
+                tracing::debug!("PID file removed: {}", p.display());
+            }
+        }
+    };
+
     // -- Resolve the benchmarks directory (parent of orchestrator/) --
     let bench_dir = config_path
         .canonicalize()
@@ -415,6 +524,12 @@ async fn cmd_run(
     };
 
     for lang in &unique_languages {
+        // Check cancellation before starting each language.
+        if *cancel_rx.borrow() {
+            tracing::warn!("Cancellation requested, stopping benchmark");
+            break;
+        }
+
         let vm_name = format!("ab-{}", lang.name);
         let label_prefix = format!("{}/{}", lang.name, lang.runtime);
 
@@ -546,6 +661,14 @@ async fn cmd_run(
 
     run.finish();
     progress.finish();
+
+    // Stop heartbeat task.
+    if let Some(handle) = heartbeat_handle {
+        handle.abort();
+    }
+
+    // Remove PID file.
+    cleanup_pid(&pid_file_path);
 
     // -- Write results --
     let output_dir = config_path

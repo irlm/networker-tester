@@ -1,5 +1,8 @@
 pub mod agents;
+pub mod benchmark_cells;
+pub mod benchmark_configs;
 pub mod benchmark_presets;
+pub mod benchmark_vm_catalog;
 pub mod benchmarks;
 pub mod cloud_accounts;
 pub mod cloud_connections;

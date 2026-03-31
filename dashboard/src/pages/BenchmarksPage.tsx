@@ -331,6 +331,12 @@ export function BenchmarksPage() {
             placeholder="Filter by host..."
             className="bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-300 w-40 md:w-64 focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
           />
+          <Link
+            to={`/projects/${projectId}/benchmark-wizard`}
+            className="bg-cyan-600 hover:bg-cyan-500 text-white px-3 py-1.5 rounded text-sm transition-colors flex-shrink-0"
+          >
+            New Benchmark
+          </Link>
           <button
             onClick={compareSelected}
             disabled={selectedRunIds.length < 2}

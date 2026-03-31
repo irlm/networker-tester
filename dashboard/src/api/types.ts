@@ -883,3 +883,36 @@ export interface BenchmarkResultRow {
   started_at: string | null;
   finished_at: string | null;
 }
+
+// ── Benchmark Creation (wizard) ─────────────────────────────────────────
+export interface BenchmarkConfigSummary {
+  config_id: string;
+  name: string;
+  status: string;
+  template: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  cell_count: number;
+}
+
+export interface BenchmarkCellConfig {
+  cloud: string;
+  region: string;
+  topology: string;
+  vm_size: string;
+  existing_vm_ip: string | null;
+  languages: string[];
+}
+
+export interface BenchmarkVmCatalogEntry {
+  vm_id: string;
+  name: string;
+  cloud: string;
+  region: string;
+  ip: string;
+  ssh_user: string;
+  languages: string[];
+  status: string;
+  last_health_check: string | null;
+}
