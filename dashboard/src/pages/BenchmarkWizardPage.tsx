@@ -548,7 +548,7 @@ export function BenchmarkWizardPage() {
                     >
                       <option value="">Select VM...</option>
                       {catalog
-                        .filter(vm => vm.cloud === cell.cloud && vm.region === cell.region)
+                        .filter(vm => vm.cloud.toLowerCase() === cell.cloud.toLowerCase() && vm.region.toLowerCase() === cell.region.toLowerCase())
                         .map(vm => (
                           <option key={vm.vm_id} value={vm.vm_id}>
                             {vm.name} ({vm.ip}) - {vm.status}
