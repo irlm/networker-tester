@@ -1,5 +1,6 @@
 mod api;
 mod auth;
+mod benchmark_worker;
 mod config;
 mod crypto;
 mod db;
@@ -223,6 +224,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Start the scheduler background task (checks for due schedules every 30s)
     scheduler::spawn(state.clone());
+
+    // Start the benchmark worker background task (polls for queued configs every 5s)
+    benchmark_worker::spawn(state.clone());
 
     // Resolve bare IPs to FQDNs for existing deployments
     {
