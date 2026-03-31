@@ -266,6 +266,56 @@ export function RunDetailPage() {
         </div>
       )}
 
+      {/* ── Box-and-Whisker Chart ── */}
+      {protocolStats.length > 0 && (
+        <div className="mb-6">
+          <h3 className="text-xs text-gray-500 tracking-wider mb-3 font-medium">latency distribution — box &amp; whisker</h3>
+          <div className="border border-gray-800 rounded bg-[var(--bg-card)] p-4">
+            <div className="space-y-3">
+              {protocolStats.map((ps) => {
+                const s = ps.stats;
+                const maxVal = Math.max(...protocolStats.map(p => p.stats.max));
+                const scale = (v: number) => maxVal > 0 ? (v / maxVal) * 100 : 0;
+                const whiskerLeft = scale(s.min);
+                const boxLeft = scale(s.p25);
+                const median = scale(s.p50);
+                const boxRight = scale(s.p75);
+                const whiskerRight = scale(s.max);
+                return (
+                  <div key={ps.protocol} className="flex items-center gap-3">
+                    <div className="w-20 text-xs text-gray-400 font-mono text-right shrink-0">{ps.protocol}</div>
+                    <div className="flex-1 relative h-6">
+                      {/* Whisker line (min to max) */}
+                      <div className="absolute top-1/2 -translate-y-1/2 h-px bg-gray-600" style={{ left: `${whiskerLeft}%`, width: `${whiskerRight - whiskerLeft}%` }} />
+                      {/* Min tick */}
+                      <div className="absolute top-1 bottom-1 w-px bg-gray-500" style={{ left: `${whiskerLeft}%` }} />
+                      {/* Max tick */}
+                      <div className="absolute top-1 bottom-1 w-px bg-gray-500" style={{ left: `${whiskerRight}%` }} />
+                      {/* Box (p25 to p75) */}
+                      <div className="absolute top-0.5 bottom-0.5 rounded-sm border border-cyan-600/60 bg-cyan-900/30" style={{ left: `${boxLeft}%`, width: `${Math.max(boxRight - boxLeft, 0.5)}%` }} />
+                      {/* Median line */}
+                      <div className="absolute top-0 bottom-0 w-0.5 bg-cyan-400" style={{ left: `${median}%` }} />
+                    </div>
+                    <div className="w-24 text-xs text-gray-500 font-mono shrink-0">
+                      {formatMs(s.min)}&ndash;{formatMs(s.max)}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="flex justify-between text-[10px] text-gray-600 mt-2 px-[calc(5rem+0.75rem)]">
+              <span>0ms</span>
+              <span>{formatMs(Math.max(...protocolStats.map(p => p.stats.max)))}</span>
+            </div>
+            <div className="flex items-center gap-4 mt-3 text-[10px] text-gray-600 px-[calc(5rem+0.75rem)]">
+              <span className="flex items-center gap-1"><span className="w-3 h-px bg-gray-500 inline-block" /> whisker (min/max)</span>
+              <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-sm border border-cyan-600/60 bg-cyan-900/30 inline-block" /> IQR (p25–p75)</span>
+              <span className="flex items-center gap-1"><span className="w-0.5 h-3 bg-cyan-400 inline-block" /> median (p50)</span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── TTFB Distribution ── */}
       {ttfbDistribution.length > 0 && (
         <div className="mb-6">
