@@ -89,6 +89,33 @@ async fn tick(state: &Arc<AppState>) -> anyhow::Result<()> {
         let schedule_id = schedule.schedule_id;
         let schedule_name = schedule.name.as_deref().unwrap_or("unnamed");
 
+        // ── Benchmark schedule: clone config and queue it ──────────
+        if let Some(ref bench_config_id) = schedule.benchmark_config_id {
+            match clone_and_queue_benchmark(&client, bench_config_id, schedule_name).await {
+                Ok(new_config_id) => {
+                    tracing::info!(
+                        schedule_id = %schedule_id,
+                        schedule_name = %schedule_name,
+                        template_config_id = %bench_config_id,
+                        new_config_id = %new_config_id,
+                        "Cloned benchmark config from schedule"
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(
+                        schedule_id = %schedule_id,
+                        error = %e,
+                        "Failed to clone benchmark config from schedule"
+                    );
+                }
+            }
+            // Update last_run_at and compute next_run_at
+            let next = compute_next_run(&schedule.cron_expr);
+            crate::db::schedules::mark_run(&client, &schedule_id, next).await?;
+            continue;
+        }
+
+        // ── Regular job schedule ───────────────────────────────────
         let config = match &schedule.config {
             Some(c) => c.clone(),
             None => {
@@ -205,6 +232,59 @@ async fn tick(state: &Arc<AppState>) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Clone a benchmark config template and insert as queued for the worker to pick up.
+async fn clone_and_queue_benchmark(
+    client: &tokio_postgres::Client,
+    template_config_id: &uuid::Uuid,
+    schedule_name: &str,
+) -> anyhow::Result<uuid::Uuid> {
+    // Load the template config
+    let template = crate::db::benchmark_configs::get(client, template_config_id)
+        .await?
+        .ok_or_else(|| {
+            anyhow::anyhow!("Benchmark config template not found: {template_config_id}")
+        })?;
+
+    // Create a new config cloned from the template
+    let run_name = format!(
+        "{} (scheduled {})",
+        schedule_name,
+        chrono::Utc::now().format("%Y-%m-%d %H:%M")
+    );
+
+    let new_config_id = crate::db::benchmark_configs::create(
+        client,
+        &template.project_id,
+        &run_name,
+        template.template.as_deref(),
+        &template.config_json,
+        template.created_by.as_ref(),
+        template.max_duration_secs,
+        template.baseline_run_id.as_ref(),
+    )
+    .await?;
+
+    // Clone cells from the template
+    let cells = crate::db::benchmark_cells::list_for_config(client, template_config_id).await?;
+    for cell in &cells {
+        crate::db::benchmark_cells::create(
+            client,
+            &new_config_id,
+            &cell.cloud,
+            &cell.region,
+            &cell.topology,
+            &cell.languages,
+            cell.vm_size.as_deref(),
+        )
+        .await?;
+    }
+
+    // Set to queued so the benchmark worker picks it up
+    crate::db::benchmark_configs::update_status(client, &new_config_id, "queued", None).await?;
+
+    Ok(new_config_id)
 }
 
 /// Start VMs associated with a deployment using cloud CLI tools.

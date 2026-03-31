@@ -186,6 +186,13 @@ pub enum DashboardEvent {
         event_type: String,
         payload: serde_json::Value,
     },
+    /// Benchmark regression detected after completion.
+    BenchmarkRegression {
+        config_id: Uuid,
+        config_name: String,
+        regression_count: usize,
+        regressions: serde_json::Value,
+    },
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

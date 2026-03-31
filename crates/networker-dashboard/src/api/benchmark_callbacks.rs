@@ -323,6 +323,21 @@ async fn callback_complete(
         "Benchmark callback: complete"
     );
 
+    // Run regression detection on successful completion
+    if payload.status == "completed" {
+        let state_clone = state.clone();
+        let config_id = payload.config_id;
+        tokio::spawn(async move {
+            if let Err(e) = run_regression_detection(&state_clone, &config_id).await {
+                tracing::error!(
+                    error = %e,
+                    config_id = %config_id,
+                    "Regression detection failed"
+                );
+            }
+        });
+    }
+
     Ok(Json(serde_json::json!({"ok": true})))
 }
 
@@ -373,6 +388,51 @@ async fn callback_cancelled(
     let cancelled = config.status == "cancelled";
 
     Ok(Json(serde_json::json!({"cancelled": cancelled})))
+}
+
+/// Run regression detection after a benchmark completes, notify via WS and email.
+async fn run_regression_detection(
+    state: &Arc<AppState>,
+    config_id: &Uuid,
+) -> anyhow::Result<()> {
+    let client = state.db.get().await?;
+
+    let regressions = crate::regression::detect(&client, config_id, None, None).await?;
+
+    if regressions.is_empty() {
+        tracing::info!(config_id = %config_id, "No regressions detected");
+        return Ok(());
+    }
+
+    // Load config name for notifications
+    let config = crate::db::benchmark_configs::get(&client, config_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Config not found: {config_id}"))?;
+
+    // Broadcast regression event to dashboard WebSocket clients
+    let regressions_json = serde_json::to_value(&regressions)?;
+    let _ = state.events_tx.send(
+        networker_common::messages::DashboardEvent::BenchmarkRegression {
+            config_id: *config_id,
+            config_name: config.name.clone(),
+            regression_count: regressions.len(),
+            regressions: regressions_json,
+        },
+    );
+
+    // Send email notifications to project members
+    let members = crate::db::projects::list_members(&client, &config.project_id).await?;
+    let emails: Vec<String> = members.iter().map(|m| m.email.clone()).collect();
+
+    crate::regression::notify_regressions(config_id, &config.name, &regressions, &emails).await;
+
+    tracing::info!(
+        config_id = %config_id,
+        regression_count = regressions.len(),
+        "Regression detection complete — notifications sent"
+    );
+
+    Ok(())
 }
 
 /// Public callback routes -- JWT verified internally per handler.

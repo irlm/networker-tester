@@ -20,6 +20,7 @@ pub struct CreateScheduleRequest {
     pub deployment_id: Option<Uuid>,
     pub auto_start_vm: Option<bool>,
     pub auto_stop_vm: Option<bool>,
+    pub benchmark_config_id: Option<Uuid>,
 }
 
 #[derive(Deserialize)]
@@ -110,6 +111,7 @@ async fn create_schedule_scoped(
         create_req.auto_stop_vm.unwrap_or(false),
         Some(next_run),
         &ctx.project_id,
+        create_req.benchmark_config_id.as_ref(),
     )
     .await
     .map_err(|e| {

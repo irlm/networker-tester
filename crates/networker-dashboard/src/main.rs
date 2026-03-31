@@ -7,6 +7,7 @@ mod db;
 mod deploy;
 mod email;
 mod log_buffer;
+mod regression;
 mod scheduler;
 mod system_metrics;
 mod ws;

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { api } from '../api/client';
-import type { ModeGroup, Deployment, Agent } from '../api/types';
+import type { ModeGroup, Deployment, Agent, BenchmarkConfigSummary } from '../api/types';
 import { THROUGHPUT_IDS } from '../lib/chart';
 import { ModeSelector } from './common/ModeSelector';
 import { PayloadSelector } from './common/PayloadSelector';
@@ -24,6 +24,13 @@ const FREQUENCY_PRESETS = [
 export function CreateScheduleDialog({ projectId, onClose, onCreated }: CreateScheduleDialogProps) {
   // Step tracking
   const [step, setStep] = useState(1);
+
+  // Schedule type: 'test' or 'benchmark'
+  const [scheduleType, setScheduleType] = useState<'test' | 'benchmark'>('test');
+
+  // Benchmark config template selection
+  const [benchmarkConfigs, setBenchmarkConfigs] = useState<BenchmarkConfigSummary[]>([]);
+  const [selectedBenchmarkConfigId, setSelectedBenchmarkConfigId] = useState('');
 
   // Schedule metadata
   const [name, setName] = useState('');
@@ -65,6 +72,10 @@ export function CreateScheduleDialog({ projectId, onClose, onCreated }: CreateSc
 
   useEffect(() => {
     api.getModes().then(r => setModeGroups(r.groups)).catch(() => {});
+    api.listBenchmarkConfigs(projectId).then(configs => {
+      // Only show completed configs as templates
+      setBenchmarkConfigs(configs.filter(c => c.status === 'completed' || c.status === 'draft'));
+    }).catch(() => {});
     api.getDeployments(projectId, { limit: 20 }).then(deps => {
       const completed = deps.filter(d => d.status === 'completed' && d.endpoint_ips && d.endpoint_ips.length > 0);
       setDeployments(completed);
@@ -111,7 +122,15 @@ export function CreateScheduleDialog({ projectId, onClose, onCreated }: CreateSc
 
   const handleSubmit = async () => {
     if (!name.trim()) { setError('Name is required'); return; }
-    if (selectedModes.size === 0) { setError('Select at least one mode'); return; }
+
+    if (scheduleType === 'test' && selectedModes.size === 0) {
+      setError('Select at least one mode');
+      return;
+    }
+    if (scheduleType === 'benchmark' && !selectedBenchmarkConfigId) {
+      setError('Select a benchmark config template');
+      return;
+    }
 
     const finalCron = useCustomCron ? customCron : cronExpr;
 
@@ -122,7 +141,7 @@ export function CreateScheduleDialog({ projectId, onClose, onCreated }: CreateSc
       const result = await api.createSchedule(projectId, {
         name: name.trim(),
         cron_expr: finalCron,
-        config: {
+        config: scheduleType === 'test' ? {
           target: normalizedTarget,
           modes: Array.from(selectedModes),
           runs,
@@ -132,12 +151,13 @@ export function CreateScheduleDialog({ projectId, onClose, onCreated }: CreateSc
           insecure,
           dns_enabled: true,
           connection_reuse: connectionReuse,
-        },
+        } : {},
         agent_id: selectedTester || undefined,
         deployment_id: selectedDeploymentId || undefined,
         auto_start_vm: autoStartVm,
         auto_stop_vm: autoStopVm,
-      });
+        benchmark_config_id: scheduleType === 'benchmark' ? selectedBenchmarkConfigId : undefined,
+      } as Parameters<typeof api.createSchedule>[1]);
       addToast('success', `Schedule created — next run ${new Date(result.next_run_at).toLocaleString()}`);
       onCreated();
       onClose();
@@ -151,7 +171,8 @@ export function CreateScheduleDialog({ projectId, onClose, onCreated }: CreateSc
   };
 
   const titleId = 'create-schedule-dialog-title';
-  const totalSteps = 4;
+  // Benchmark schedules skip step 2 (test config) — only 3 steps
+  const totalSteps = scheduleType === 'benchmark' ? 3 : 4;
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
@@ -193,17 +214,66 @@ export function CreateScheduleDialog({ projectId, onClose, onCreated }: CreateSc
           {/* Step 1: Name & Target */}
           {step === 1 && (
             <div>
-              <p className="text-xs text-gray-500 mb-4">Step 1 — Name & Target</p>
+              <p className="text-xs text-gray-500 mb-4">Step 1 — Name & Type</p>
+
+              {/* Schedule type toggle */}
+              <div className="flex gap-2 mb-4">
+                <button
+                  type="button"
+                  onClick={() => setScheduleType('test')}
+                  className={`flex-1 px-3 py-2 text-sm rounded border transition-colors ${
+                    scheduleType === 'test'
+                      ? 'border-cyan-500 text-cyan-400 bg-cyan-500/10'
+                      : 'border-gray-700 text-gray-400 hover:border-cyan-500/50'
+                  }`}
+                >
+                  Test
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setScheduleType('benchmark')}
+                  className={`flex-1 px-3 py-2 text-sm rounded border transition-colors ${
+                    scheduleType === 'benchmark'
+                      ? 'border-cyan-500 text-cyan-400 bg-cyan-500/10'
+                      : 'border-gray-700 text-gray-400 hover:border-cyan-500/50'
+                  }`}
+                >
+                  Benchmark
+                </button>
+              </div>
 
               <label className="block text-xs text-gray-400 mb-1">Schedule Name</label>
               <input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="e.g., Hourly Azure check"
+                placeholder={scheduleType === 'test' ? 'e.g., Hourly Azure check' : 'e.g., Nightly latency benchmark'}
                 className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 mb-4 focus:outline-none focus:border-cyan-500"
                 autoFocus
               />
 
+              {/* Benchmark config selector */}
+              {scheduleType === 'benchmark' && (
+                <div className="mb-4">
+                  <label className="block text-xs text-gray-400 mb-1">Benchmark Config Template</label>
+                  <select
+                    value={selectedBenchmarkConfigId}
+                    onChange={(e) => setSelectedBenchmarkConfigId(e.target.value)}
+                    className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                  >
+                    <option value="">Select a benchmark config...</option>
+                    {benchmarkConfigs.map(c => (
+                      <option key={c.config_id} value={c.config_id}>
+                        {c.name} ({c.status})
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-gray-600 mt-1">
+                    The selected config will be cloned each time the schedule triggers.
+                  </p>
+                </div>
+              )}
+
+              {scheduleType === 'test' && (<>
               <label className="block text-xs text-gray-400 mb-1">Target Endpoint</label>
               <select
                 value={target}
@@ -252,11 +322,12 @@ export function CreateScheduleDialog({ projectId, onClose, onCreated }: CreateSc
                   </select>
                 </div>
               )}
+              </>)}
             </div>
           )}
 
-          {/* Step 2: Test Configuration */}
-          {step === 2 && (
+          {/* Step 2: Test Configuration (test type only; benchmark skips) */}
+          {step === 2 && scheduleType === 'test' && (
             <div>
               <p className="text-xs text-gray-500 mb-4">Step 2 — Test Configuration</p>
 
@@ -320,10 +391,10 @@ export function CreateScheduleDialog({ projectId, onClose, onCreated }: CreateSc
             </div>
           )}
 
-          {/* Step 3: Frequency */}
-          {step === 3 && (
+          {/* Step 3 (test) / Step 2 (benchmark): Frequency */}
+          {((scheduleType === 'test' && step === 3) || (scheduleType === 'benchmark' && step === 2)) && (
             <div>
-              <p className="text-xs text-gray-500 mb-4">Step 3 — Frequency</p>
+              <p className="text-xs text-gray-500 mb-4">Step {scheduleType === 'benchmark' ? 2 : 3} — Frequency</p>
 
               <div className="grid grid-cols-2 gap-2 mb-4">
                 {FREQUENCY_PRESETS.map((p) => (
@@ -365,10 +436,10 @@ export function CreateScheduleDialog({ projectId, onClose, onCreated }: CreateSc
             </div>
           )}
 
-          {/* Step 4: VM Options & Review */}
-          {step === 4 && (
+          {/* Step 4 (test) / Step 3 (benchmark): VM Options & Review */}
+          {((scheduleType === 'test' && step === 4) || (scheduleType === 'benchmark' && step === 3)) && (
             <div>
-              <p className="text-xs text-gray-500 mb-4">Step 4 — VM Options & Review</p>
+              <p className="text-xs text-gray-500 mb-4">Step {scheduleType === 'benchmark' ? 3 : 4} — VM Options & Review</p>
 
               {selectedDeploymentId && (
                 <div className="mb-4 border border-gray-800 rounded p-3">
@@ -404,17 +475,33 @@ export function CreateScheduleDialog({ projectId, onClose, onCreated }: CreateSc
                     <span className="text-gray-200">{name || '—'}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-gray-500">Target</span>
-                    <span className="text-gray-200 text-xs font-mono truncate max-w-[250px]">
-                      {target.replace('https://', '').replace('/health', '')}
-                    </span>
+                    <span className="text-gray-500">Type</span>
+                    <span className="text-gray-200">{scheduleType === 'benchmark' ? 'Benchmark' : 'Test'}</span>
                   </div>
-                  <div className="flex justify-between items-start">
-                    <span className="text-gray-500">Modes</span>
-                    <span className="text-gray-200 text-xs text-right max-w-[280px]">
-                      {Array.from(selectedModes).join(', ')}
-                    </span>
-                  </div>
+                  {scheduleType === 'benchmark' && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">Template</span>
+                      <span className="text-gray-200 text-xs truncate max-w-[250px]">
+                        {benchmarkConfigs.find(c => c.config_id === selectedBenchmarkConfigId)?.name || '—'}
+                      </span>
+                    </div>
+                  )}
+                  {scheduleType === 'test' && (
+                    <>
+                      <div className="flex justify-between">
+                        <span className="text-gray-500">Target</span>
+                        <span className="text-gray-200 text-xs font-mono truncate max-w-[250px]">
+                          {target.replace('https://', '').replace('/health', '')}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-start">
+                        <span className="text-gray-500">Modes</span>
+                        <span className="text-gray-200 text-xs text-right max-w-[280px]">
+                          {Array.from(selectedModes).join(', ')}
+                        </span>
+                      </div>
+                    </>
+                  )}
                   <div className="flex justify-between">
                     <span className="text-gray-500">Frequency</span>
                     <span className="text-gray-200 text-xs">
@@ -426,6 +513,7 @@ export function CreateScheduleDialog({ projectId, onClose, onCreated }: CreateSc
                     </span>
                   </div>
 
+                  {scheduleType === 'test' && (<>
                   <div className="border-t border-gray-800/50 my-2" />
 
                   <div className="flex justify-between">
@@ -440,6 +528,7 @@ export function CreateScheduleDialog({ projectId, onClose, onCreated }: CreateSc
                     <span className="text-gray-500">Timeout</span>
                     <span className="text-gray-200">{timeout}s</span>
                   </div>
+                  </>)}
 
                   {/* Non-default options */}
                   {(insecure || connectionReuse || autoStartVm || autoStopVm) && (
@@ -473,7 +562,8 @@ export function CreateScheduleDialog({ projectId, onClose, onCreated }: CreateSc
                 onClick={() => {
                   setError(null);
                   if (step === 1 && !name.trim()) { setError('Name is required'); return; }
-                  if (step === 2 && selectedModes.size === 0) { setError('Select at least one mode'); return; }
+                  if (step === 1 && scheduleType === 'benchmark' && !selectedBenchmarkConfigId) { setError('Select a benchmark config template'); return; }
+                  if (step === 2 && scheduleType === 'test' && selectedModes.size === 0) { setError('Select at least one mode'); return; }
                   setStep(step + 1);
                 }}
                 className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors"
