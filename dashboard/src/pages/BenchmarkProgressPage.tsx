@@ -237,6 +237,74 @@ export function BenchmarkProgressPage() {
         </div>
       </div>
 
+      {/* Pipeline Indicator */}
+      {isActive && (
+        <div className="mb-6 border border-gray-800 rounded p-4 bg-[var(--bg-card)]">
+          <div className="flex items-center gap-1 mb-3">
+            {['queued', 'provisioning', 'deploying', 'running', 'collecting', 'done'].map((phase, i) => {
+              const phases = ['queued', 'provisioning', 'deploying', 'running', 'collecting', 'done'];
+              const currentIdx = phases.indexOf(effectiveStatus === 'pending' ? 'queued' : effectiveStatus === 'completed' ? 'done' : effectiveStatus);
+              const isCurrentPhase = i === currentIdx;
+              const isPast = i < currentIdx;
+              return (
+                <div key={phase} className="flex items-center gap-1 flex-1">
+                  <div className={`h-1.5 flex-1 rounded-full transition-colors ${
+                    isPast ? 'bg-cyan-500' :
+                    isCurrentPhase ? 'bg-cyan-500 animate-pulse' :
+                    'bg-gray-800'
+                  }`} />
+                  {i < phases.length - 1 && <span className="text-gray-700 text-[8px]">{'\u25B8'}</span>}
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex items-center justify-between text-[10px] text-gray-600 font-mono">
+            <span>queued</span>
+            <span>provision</span>
+            <span>deploy</span>
+            <span className={effectiveStatus === 'running' ? 'text-cyan-400' : ''}>running</span>
+            <span>collect</span>
+            <span>done</span>
+          </div>
+        </div>
+      )}
+
+      {/* Config Summary (what's being benchmarked) */}
+      {config && isActive && (
+        <div className="mb-6 border border-gray-800/50 rounded p-3 bg-gray-900/30">
+          <div className="flex items-center gap-4 text-xs text-gray-500">
+            <span>
+              <span className="text-gray-400">{cells.length}</span> cell{cells.length !== 1 ? 's' : ''}
+            </span>
+            <span>{'\u00B7'}</span>
+            <span>
+              <span className="text-gray-400">{cells[0]?.languages?.length ?? '?'}</span> languages
+            </span>
+            <span>{'\u00B7'}</span>
+            <span className="text-gray-400">
+              {(() => {
+                const cfg = (config as unknown as Record<string, unknown>).config_json as Record<string, unknown> | undefined;
+                const meth = cfg?.methodology as Record<string, unknown> | undefined;
+                if (meth) return `${meth.warmup_runs ?? '?'} warmup + ${meth.measured_runs ?? meth.min_measured ?? '?'} measured`;
+                return 'methodology loading...';
+              })()}
+            </span>
+            <span>{'\u00B7'}</span>
+            <span>
+              est. {(() => {
+                const langCount = cells[0]?.languages?.length ?? 3;
+                const cellCount = cells.length || 1;
+                const runsPerLang = 15; // rough estimate
+                const secsPerProbe = 2;
+                const total = langCount * cellCount * runsPerLang * secsPerProbe;
+                if (total > 3600) return `${Math.round(total / 3600)}h`;
+                return `${Math.round(total / 60)}m`;
+              })()}
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Error message */}
       {live.errorMessage && (
         <div className="bg-red-500/10 border border-red-500/30 rounded p-3 mb-4">
@@ -381,9 +449,27 @@ export function BenchmarkProgressPage() {
           className="bg-[var(--bg-base)] border border-gray-800 rounded-lg p-4 h-[400px] overflow-y-auto font-mono text-xs leading-5"
         >
           {live.logs.length === 0 ? (
-            <p className="text-gray-600">
-              {isActive ? 'Waiting for output...' : 'No log output'}
-            </p>
+            <div className="text-gray-600 space-y-2">
+              {isActive ? (
+                <>
+                  <p className="flex items-center gap-2">
+                    <span className="inline-block w-2 h-2 rounded-full bg-cyan-500 animate-pulse" />
+                    {effectiveStatus === 'pending' || effectiveStatus === 'queued'
+                      ? 'Benchmark queued — worker will pick it up shortly...'
+                      : effectiveStatus === 'provisioning'
+                        ? 'Provisioning VM — this may take 1-2 minutes...'
+                        : effectiveStatus === 'deploying'
+                          ? 'Deploying language servers to VM...'
+                          : 'Orchestrator running — log output will stream here...'}
+                  </p>
+                  <p className="text-gray-700 text-[10px]">
+                    Logs stream in real-time via WebSocket. If nothing appears after 30 seconds, check System {'>'} Logs for errors.
+                  </p>
+                </>
+              ) : (
+                <p>No log output was captured for this benchmark.</p>
+              )}
+            </div>
           ) : (
             live.logs.map((line, i) => (
               <div key={i} className="text-gray-300 whitespace-pre-wrap break-all">
