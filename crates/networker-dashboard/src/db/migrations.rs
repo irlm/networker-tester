@@ -512,6 +512,28 @@ CREATE INDEX IF NOT EXISTS ix_benchmark_run_config ON benchmark_run (config_id) 
 CREATE INDEX IF NOT EXISTS ix_benchmark_run_cell ON benchmark_run (cell_id) WHERE cell_id IS NOT NULL;
 "#;
 
+/// V018 migration: Scheduled benchmarks + regression detection.
+const V018_SCHEDULED_BENCHMARKS_REGRESSION: &str = r#"
+-- Allow schedules to reference a benchmark config template
+ALTER TABLE schedule ADD COLUMN IF NOT EXISTS benchmark_config_id UUID REFERENCES benchmark_config(config_id);
+
+-- Regression detection results
+CREATE TABLE IF NOT EXISTS benchmark_regression (
+    regression_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    config_id UUID NOT NULL REFERENCES benchmark_config(config_id) ON DELETE CASCADE,
+    baseline_config_id UUID REFERENCES benchmark_config(config_id),
+    language VARCHAR(100) NOT NULL,
+    metric VARCHAR(50) NOT NULL,
+    baseline_value DOUBLE PRECISION NOT NULL,
+    current_value DOUBLE PRECISION NOT NULL,
+    delta_percent DOUBLE PRECISION NOT NULL,
+    severity VARCHAR(20) NOT NULL DEFAULT 'warning',
+    detected_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_benchmark_regression_config ON benchmark_regression (config_id, detected_at DESC);
+CREATE INDEX IF NOT EXISTS ix_benchmark_regression_project ON benchmark_regression (config_id);
+"#;
+
 /// Run pending migrations.
 pub async fn run(client: &Client) -> anyhow::Result<()> {
     // Ensure migration tracking table exists
@@ -821,6 +843,25 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
             )
             .await?;
         tracing::info!("V017 migration complete");
+    }
+
+    // V018: Scheduled benchmarks + regression detection
+    let row = client
+        .query_opt("SELECT version FROM _migrations WHERE version = 18", &[])
+        .await?;
+
+    if row.is_none() {
+        tracing::info!("Applying V018 scheduled_benchmarks_regression migration...");
+        client
+            .batch_execute(V018_SCHEDULED_BENCHMARKS_REGRESSION)
+            .await?;
+        client
+            .execute(
+                "INSERT INTO _migrations (version) VALUES (18) ON CONFLICT DO NOTHING",
+                &[],
+            )
+            .await?;
+        tracing::info!("V018 migration complete");
     }
 
     Ok(())
