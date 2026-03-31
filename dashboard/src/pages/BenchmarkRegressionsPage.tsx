@@ -5,6 +5,8 @@ import type { BenchmarkRegressionWithConfig } from '../api/types';
 import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useProject } from '../hooks/useProject';
+import { PageHeader } from '../components/common/PageHeader';
+import { EmptyState } from '../components/common/EmptyState';
 
 function timeAgo(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -73,33 +75,16 @@ export function BenchmarkRegressionsPage() {
 
   return (
     <div className="p-4 md:p-6">
-      <div className="flex items-center justify-between mb-4 md:mb-6">
-        <div className="flex items-center gap-3">
-          <h2 className="text-lg md:text-xl font-bold text-gray-100">Benchmark Regressions</h2>
-          {regressions.length > 0 && (
-            <span className="text-xs text-gray-600">
-              {criticalCount > 0 && (
-                <span className="text-red-400">{criticalCount} critical</span>
-              )}
-              {criticalCount > 0 && warningCount > 0 && ' / '}
-              {warningCount > 0 && (
-                <span className="text-yellow-400">{warningCount} warning</span>
-              )}
-              {' '}{regressions.length} total
-            </span>
-          )}
-        </div>
-      </div>
+      <PageHeader
+        title="Benchmark Regressions"
+        subtitle={regressions.length > 0 ? `${criticalCount > 0 ? `${criticalCount} critical` : ''}${criticalCount > 0 && warningCount > 0 ? ' / ' : ''}${warningCount > 0 ? `${warningCount} warning` : ''} — ${regressions.length} total` : undefined}
+      />
 
       {regressions.length === 0 ? (
-        <div className="border border-gray-800 rounded p-10 text-center">
-          <p className="text-gray-400 text-sm">No regressions detected</p>
-          <p className="text-gray-600 text-xs mt-2 max-w-lg mx-auto">
-            Regressions are automatically flagged when a benchmark completes and its p50 latency
-            increases by more than 10% or success rate drops below 99% compared to the baseline run.
-            Run benchmarks with a baseline set to enable regression tracking.
-          </p>
-        </div>
+        <EmptyState
+          message="No regressions detected"
+          detail="Regressions are automatically flagged when a benchmark completes and its p50 latency increases by more than 10% or success rate drops below 99% compared to the baseline run. Run benchmarks with a baseline set to enable regression tracking."
+        />
       ) : (
         <>
           {/* Mobile card layout */}

@@ -5,6 +5,8 @@ import { useProject } from '../hooks/useProject';
 import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useToast } from '../hooks/useToast';
+import { PageHeader } from '../components/common/PageHeader';
+import { EmptyState } from '../components/common/EmptyState';
 
 const cloudBadge: Record<string, string> = {
   azure: 'bg-blue-500/20 text-blue-400',
@@ -115,18 +117,17 @@ export function BenchmarkCatalogPage() {
 
   return (
     <div className="p-4 md:p-6 max-w-5xl">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-lg md:text-xl font-bold text-gray-100">VM Catalog</h1>
-        {isOperator && (
+      <PageHeader
+        title="VM Catalog"
+        action={isOperator ? (
           <button
             onClick={() => setShowRegister(!showRegister)}
             className="px-3 py-1.5 text-xs rounded border border-cyan-700 text-cyan-400 hover:bg-cyan-500/10 transition-colors"
           >
             Register VM
           </button>
-        )}
-      </div>
+        ) : undefined}
+      />
 
       {/* Register form */}
       {showRegister && (
@@ -207,13 +208,10 @@ export function BenchmarkCatalogPage() {
 
       {/* Empty state */}
       {vms.length === 0 && (
-        <div className="text-center py-12 space-y-2">
-          <p className="text-gray-400 text-sm">No benchmark VMs registered</p>
-          <p className="text-gray-600 text-xs max-w-md mx-auto">
-            Register a VM that has language servers deployed at <code className="text-gray-500">/opt/bench/</code>.
-            Registered VMs appear in the benchmark wizard under "Use existing VM".
-          </p>
-        </div>
+        <EmptyState
+          message="No benchmark VMs registered"
+          detail={<>Register a VM that has language servers deployed at <code className="text-gray-500">/opt/bench/</code>. Registered VMs appear in the benchmark wizard under "Use existing VM".</>}
+        />
       )}
 
       {/* VM table */}
