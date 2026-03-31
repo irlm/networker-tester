@@ -102,7 +102,8 @@ async fn poll_and_run(state: &AppState, worker_id: &str) -> anyhow::Result<()> {
     )?;
 
     // Construct callback URL
-    let callback_url = format!("{}/api", state.public_url);
+    // Callback client adds /api/benchmarks/callback/... so base_url should NOT include /api
+    let callback_url = state.public_url.clone();
 
     // Spawn alethabench as a child process
     let child_result = tokio::process::Command::new("alethabench")
