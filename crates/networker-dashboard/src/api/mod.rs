@@ -1,6 +1,9 @@
 mod admin;
 mod agents;
 mod auth;
+mod benchmark_callbacks;
+mod benchmark_catalog;
+mod benchmark_configs;
 mod benchmarks;
 mod cloud;
 mod cloud_accounts;
@@ -10,9 +13,9 @@ mod dashboard;
 mod deployments;
 mod events;
 mod inventory;
-mod leaderboard;
 mod invites;
 mod jobs;
+mod leaderboard;
 mod modes;
 mod project_members;
 mod projects;
@@ -37,7 +40,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(auth::router(state.clone()))
         .merge(share_links::public_router(state.clone()))
         .merge(invites::public_router(state.clone()))
-        .merge(leaderboard::public_router(state.clone()));
+        .merge(leaderboard::public_router(state.clone()))
+        .merge(benchmark_callbacks::public_router(state.clone()));
 
     // Protected flat routes (require valid JWT, global/platform resources only)
     let protected_flat = Router::new()
@@ -75,6 +79,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(command_approvals::project_router(state.clone()))
         .merge(visibility::project_router(state.clone()))
         .merge(invites::project_router(state.clone()))
+        .merge(benchmark_configs::project_router(state.clone()))
+        .merge(benchmark_catalog::project_router(state.clone()))
         .merge(projects::detail_router(state.clone()))
         .layer(middleware::from_fn_with_state(
             state.clone(),

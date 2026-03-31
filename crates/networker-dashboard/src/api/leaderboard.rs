@@ -8,7 +8,6 @@ use serde::Deserialize;
 use std::sync::Arc;
 use uuid::Uuid;
 
-
 use crate::db::benchmarks::{BenchmarkRunRow, LeaderboardEntry, NewResult};
 use crate::AppState;
 
