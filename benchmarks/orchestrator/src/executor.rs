@@ -3,11 +3,81 @@ use crate::config::{CellConfig, DashboardBenchmarkConfig, MethodologyConfig};
 use crate::deployer;
 use crate::provisioner::{self, VmInfo};
 use crate::runner;
+use crate::ssh;
 use anyhow::{Context, Result};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::watch;
+
+/// Start a pre-deployed language server on an existing VM.
+async fn start_existing_server(vm: &VmInfo, language: &str) -> Result<()> {
+    // Kill anything on port 8443
+    let _ = ssh::ssh_exec(
+        &vm.ip,
+        "sudo lsof -ti :8443 | xargs sudo kill -9 2>/dev/null || true",
+    )
+    .await;
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+    let start_cmd = match language {
+        "rust" => "nohup /opt/bench/rust-server --https-port 8443 > /dev/null 2>&1 &",
+        "go" => "BENCH_CERT_DIR=/opt/bench nohup /opt/bench/go-server > /dev/null 2>&1 &",
+        "cpp" => "BENCH_CERT_DIR=/opt/bench nohup /opt/bench/cpp-build/server > /dev/null 2>&1 &",
+        "nodejs" => "BENCH_CERT_DIR=/opt/bench BENCH_PORT=8443 nohup node /opt/bench/nodejs-server.js > /dev/null 2>&1 &",
+        "python" => "cd /opt/bench && BENCH_CERT_DIR=/opt/bench nohup uvicorn server:app --host 0.0.0.0 --port 8443 --ssl-keyfile /opt/bench/key.pem --ssl-certfile /opt/bench/cert.pem --log-level error > /dev/null 2>&1 &",
+        "java" => "cd /opt/bench && BENCH_CERT_DIR=/opt/bench nohup java Server > /dev/null 2>&1 &",
+        "ruby" => "cd /opt/bench/ruby && BENCH_CERT_DIR=/opt/bench BENCH_PORT=8443 nohup bundle exec puma -C puma.rb > /dev/null 2>&1 &",
+        "php" => "BENCH_CERT_DIR=/opt/bench nohup php /opt/bench/php/server.php > /dev/null 2>&1 &",
+        "nginx" => "sudo systemctl restart nginx",
+        _ if language.starts_with("csharp-") => {
+            // Handled below with dynamic string
+            ""
+        }
+        _ => anyhow::bail!("Unknown language: {language}"),
+    };
+
+    if language.starts_with("csharp-") {
+        let cmd = format!(
+            "chmod +x /opt/bench/{lang}/{lang} 2>/dev/null; BENCH_CERT_DIR=/opt/bench BENCH_PORT=8443 nohup /opt/bench/{lang}/{lang} > /dev/null 2>&1 &",
+            lang = language
+        );
+        ssh::ssh_exec(&vm.ip, &cmd).await?;
+    } else {
+        ssh::ssh_exec(&vm.ip, start_cmd).await?;
+    }
+
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    // Health check
+    for i in 0..15 {
+        if let Ok(out) = ssh::ssh_exec(
+            &vm.ip,
+            "curl -sk --max-time 2 https://localhost:8443/health 2>/dev/null",
+        )
+        .await
+        {
+            if out.contains("ok") || out.contains("status") {
+                tracing::info!("{} server healthy on {}", language, vm.ip);
+                return Ok(());
+            }
+        }
+        if i < 14 {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+    }
+    anyhow::bail!("{} server failed health check after 15s", language)
+}
+
+/// Stop any running server on port 8443.
+#[allow(dead_code)]
+async fn stop_existing_server(vm: &VmInfo) {
+    let _ = ssh::ssh_exec(
+        &vm.ip,
+        "sudo lsof -ti :8443 | xargs sudo kill -9 2>/dev/null || true",
+    )
+    .await;
+}
 
 /// Outcome of a single cell execution.
 #[allow(dead_code)]
@@ -193,30 +263,54 @@ async fn execute_cell(
         )
         .await;
 
-        // Deploy language server.
-        log_callback(
-            callback,
-            &cell.cell_id,
-            vec![format!("Deploying {} server...", language)],
-        )
-        .await;
-
-        if let Err(e) = deployer::deploy_api(&vm, language, bench_dir).await {
-            tracing::error!("Deploy failed for {} on cell {}: {:#}", language, cell.cell_id, e);
+        // Start language server — skip full deploy for existing VMs (already deployed).
+        let use_existing = cell.existing_vm_ip.is_some();
+        if use_existing {
+            // Existing VM: just start the server, skip build+deploy
             log_callback(
                 callback,
                 &cell.cell_id,
-                vec![format!("Deploy failed for {}: {e:#}", language)],
+                vec![format!("Starting {} server on existing VM...", language)],
             )
             .await;
-            languages_failed += 1;
-            continue;
+
+            if let Err(e) = start_existing_server(&vm, language).await {
+                tracing::error!("Start failed for {} on cell {}: {:#}", language, cell.cell_id, e);
+                log_callback(
+                    callback,
+                    &cell.cell_id,
+                    vec![format!("Start failed for {}: {e:#}", language)],
+                )
+                .await;
+                languages_failed += 1;
+                continue;
+            }
+        } else {
+            // New VM: full deploy (build + copy + start)
+            log_callback(
+                callback,
+                &cell.cell_id,
+                vec![format!("Deploying {} server...", language)],
+            )
+            .await;
+
+            if let Err(e) = deployer::deploy_api(&vm, language, bench_dir).await {
+                tracing::error!("Deploy failed for {} on cell {}: {:#}", language, cell.cell_id, e);
+                log_callback(
+                    callback,
+                    &cell.cell_id,
+                    vec![format!("Deploy failed for {}: {e:#}", language)],
+                )
+                .await;
+                languages_failed += 1;
+                continue;
+            }
         }
 
         log_callback(
             callback,
             &cell.cell_id,
-            vec![format!("{} server deployed and healthy", language)],
+            vec![format!("{} server ready", language)],
         )
         .await;
 
@@ -280,7 +374,9 @@ async fn execute_cell(
         }
 
         // Stop the server before the next language.
-        if let Err(e) = deployer::stop_api(&vm).await {
+        if use_existing {
+            stop_existing_server(&vm).await;
+        } else if let Err(e) = deployer::stop_api(&vm).await {
             tracing::warn!("Failed to stop API after {}: {e}", language);
         }
     }
