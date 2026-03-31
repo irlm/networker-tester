@@ -237,6 +237,7 @@ export function BenchmarkWizardPage() {
     setMeasured(preset.measured);
     setTargetError(preset.targetError);
 
+    loadCatalog();
     setStep(1);
   };
 
