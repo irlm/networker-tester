@@ -4,6 +4,7 @@ mod collector;
 mod config;
 mod cost;
 mod deployer;
+mod executor;
 mod progress;
 mod provisioner;
 mod reporter;
@@ -11,6 +12,7 @@ mod runner;
 pub mod ssh;
 mod types;
 mod validator;
+mod vm_tiers;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -377,7 +379,121 @@ async fn cmd_run(
         return Ok(());
     }
 
-    // -- Callback client + heartbeat + cancellation --
+    // -- Cancellation channel: SIGTERM or dashboard cancel both trigger this --
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+
+    // SIGTERM handler — signals cancellation on graceful shutdown request.
+    {
+        let cancel_tx = cancel_tx.clone();
+        tokio::spawn(async move {
+            #[cfg(unix)]
+            {
+                use tokio::signal::unix::{signal, SignalKind};
+                let mut sigterm =
+                    signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+                sigterm.recv().await;
+            }
+            #[cfg(not(unix))]
+            {
+                // On non-Unix, fall back to ctrl-c only.
+                let _ = tokio::signal::ctrl_c().await;
+            }
+            tracing::warn!("Received termination signal, requesting graceful shutdown");
+            let _ = cancel_tx.send(true);
+        });
+    }
+
+    // -- Resolve the benchmarks directory (parent of orchestrator/) --
+    let bench_dir = config_path
+        .canonicalize()
+        .ok()
+        .and_then(|p| {
+            p.ancestors()
+                .find(|a| a.join("shared").is_dir())
+                .map(|a| a.to_path_buf())
+        })
+        .unwrap_or_else(|| {
+            // Fallback: assume benchmarks/ is two levels up from the config
+            config_path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .to_path_buf()
+        });
+
+    // -- Dashboard executor path --
+    // When both --callback-url and --callback-token are provided, try to parse
+    // the config as a DashboardBenchmarkConfig and run the cell-based executor.
+    if let (Some(ref url), Some(ref token)) = (&callback_url, &callback_token) {
+        if let Ok(dashboard_config) = config::DashboardBenchmarkConfig::load(&config_path) {
+            tracing::info!(
+                "Dashboard benchmark config detected (config_id={}), using executor",
+                dashboard_config.config_id
+            );
+
+            let callback_client = Arc::new(callback::CallbackClient::new(
+                url,
+                token,
+                &dashboard_config.config_id,
+            ));
+
+            // PID file
+            let pid_path = PathBuf::from(format!(
+                "/tmp/alethabench-{}.pid",
+                dashboard_config.config_id
+            ));
+            if let Err(e) = std::fs::write(&pid_path, std::process::id().to_string()) {
+                tracing::warn!("Failed to write PID file: {e}");
+            } else {
+                tracing::info!("PID file written: {}", pid_path.display());
+            }
+
+            // Heartbeat background task
+            let heartbeat_handle = {
+                let client = callback_client.clone();
+                let cancel_tx = cancel_tx.clone();
+                tokio::spawn(async move {
+                    let mut interval =
+                        tokio::time::interval(std::time::Duration::from_secs(60));
+                    interval.tick().await; // skip immediate first tick
+                    loop {
+                        interval.tick().await;
+                        if let Err(e) = client.heartbeat().await {
+                            tracing::warn!("Heartbeat failed: {e}");
+                        }
+                        match client.check_cancelled().await {
+                            Ok(true) => {
+                                tracing::warn!("Dashboard requested cancellation");
+                                let _ = cancel_tx.send(true);
+                                break;
+                            }
+                            Ok(false) => {}
+                            Err(e) => tracing::warn!("Cancellation check failed: {e}"),
+                        }
+                    }
+                })
+            };
+
+            let result = executor::execute_dashboard_benchmark(
+                &dashboard_config,
+                &callback_client,
+                &cancel_rx,
+                &bench_dir,
+            )
+            .await;
+
+            heartbeat_handle.abort();
+            let _ = std::fs::remove_file(&pid_path);
+
+            return result;
+        }
+        // If parsing as DashboardBenchmarkConfig failed, fall through to the
+        // original orchestrator flow (the config is a BenchmarkConfig).
+        tracing::info!(
+            "Config is not a DashboardBenchmarkConfig, falling back to orchestrator flow"
+        );
+    }
+
+    // -- Original orchestrator flow (callback + heartbeat + PID) --
     let callback_client = match (&callback_url, &callback_token) {
         (Some(url), Some(token)) => {
             let config_id = config_path
@@ -391,9 +507,6 @@ async fn cmd_run(
         }
         _ => None,
     };
-
-    // Cancellation channel: SIGTERM or dashboard cancel both trigger this.
-    let (cancel_tx, cancel_rx) = watch::channel(false);
 
     // PID file — write if we have a callback (dashboard-launched run).
     let pid_file_path = callback_client.as_ref().map(|_| {
@@ -436,27 +549,6 @@ async fn cmd_run(
         None
     };
 
-    // SIGTERM handler — signals cancellation on graceful shutdown request.
-    {
-        let cancel_tx = cancel_tx.clone();
-        tokio::spawn(async move {
-            #[cfg(unix)]
-            {
-                use tokio::signal::unix::{signal, SignalKind};
-                let mut sigterm =
-                    signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
-                sigterm.recv().await;
-            }
-            #[cfg(not(unix))]
-            {
-                // On non-Unix, fall back to ctrl-c only.
-                let _ = tokio::signal::ctrl_c().await;
-            }
-            tracing::warn!("Received termination signal, requesting graceful shutdown");
-            let _ = cancel_tx.send(true);
-        });
-    }
-
     // Helper closure to clean up PID file.
     let cleanup_pid = |path: &Option<PathBuf>| {
         if let Some(ref p) = path {
@@ -467,23 +559,6 @@ async fn cmd_run(
             }
         }
     };
-
-    // -- Resolve the benchmarks directory (parent of orchestrator/) --
-    let bench_dir = config_path
-        .canonicalize()
-        .ok()
-        .and_then(|p| {
-            p.ancestors()
-                .find(|a| a.join("shared").is_dir())
-                .map(|a| a.to_path_buf())
-        })
-        .unwrap_or_else(|| {
-            // Fallback: assume benchmarks/ is two levels up from the config
-            config_path
-                .parent()
-                .unwrap_or_else(|| std::path::Path::new("."))
-                .to_path_buf()
-        });
 
     // -- Execute benchmark --
     let mut run = types::BenchmarkRun::new(&config_path.to_string_lossy());
@@ -544,7 +619,7 @@ async fn cmd_run(
                 }
                 existing
             }
-            None => provisioner::provision_vm("azure", &os, &vm_size, &vm_name)
+            None => provisioner::provision_vm("azure", "eastus", &os, &vm_size, &vm_name)
                 .await
                 .with_context(|| format!("provisioning VM for {}", lang.name))?,
         };

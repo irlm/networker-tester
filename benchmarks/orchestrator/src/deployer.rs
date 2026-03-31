@@ -635,9 +635,11 @@ mod tests {
             name: "test-vm".into(),
             ip: "127.0.0.1".into(),
             cloud: "azure".into(),
+            region: "eastus".into(),
             os: "ubuntu".into(),
             vm_size: "Standard_D2s_v3".into(),
             resource_group: "alethabench-rg".into(),
+            ssh_user: "azureuser".into(),
         }
     }
 
