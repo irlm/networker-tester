@@ -40,14 +40,10 @@ async fn deploy_remote(vm: &VmInfo, language: &str) -> Result<()> {
                 "sudo mkdir -p /opt/bench && sudo chown azureuser:azureuser /opt/bench; \
                  openssl req -x509 -newkey rsa:2048 -keyout /opt/bench/key.pem \
                  -out /opt/bench/cert.pem -days 365 -nodes -subj '/CN=bench' 2>/dev/null; \
-                 LATEST=$(curl -sL https://api.github.com/repos/irlm/networker-tester/releases/latest \
-                   | grep -o '\"tag_name\":\"[^\"]*' | cut -d'\"' -f4); \
-                 if [ -n \"$LATEST\" ]; then \
-                     curl -sL \"https://github.com/irlm/networker-tester/releases/download/${{LATEST}}/networker-endpoint-x86_64-unknown-linux-musl.tar.gz\" \
-                       -o /tmp/endpoint.tar.gz 2>/dev/null && \
-                     tar xzf /tmp/endpoint.tar.gz -C /opt/bench/ && \
-                     mv /opt/bench/networker-endpoint /opt/bench/server 2>/dev/null; \
-                 fi; \
+                 curl -sLo /tmp/endpoint.tar.gz \
+                   https://github.com/irlm/networker-tester/releases/latest/download/networker-endpoint-x86_64-unknown-linux-musl.tar.gz && \
+                 tar xzf /tmp/endpoint.tar.gz -C /opt/bench/ && \
+                 mv /opt/bench/networker-endpoint /opt/bench/server 2>/dev/null; \
                  if [ ! -s /opt/bench/server ]; then \
                      echo 'Release download failed, building from source...'; \
                      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y < /dev/null && \
