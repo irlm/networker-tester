@@ -343,6 +343,26 @@ pub async fn create_run(
     Ok(row.get("run_id"))
 }
 
+pub async fn create_run_linked(
+    client: &Client,
+    run_id: &Uuid,
+    name: &str,
+    config: &serde_json::Value,
+    config_id: &Uuid,
+    cell_id: Option<&Uuid>,
+) -> anyhow::Result<Uuid> {
+    let row = client
+        .query_one(
+            "INSERT INTO benchmark_run (run_id, name, config, config_id, cell_id)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (run_id) DO UPDATE SET config_id = $4, cell_id = $5
+             RETURNING run_id",
+            &[run_id, &name, config, config_id, &cell_id],
+        )
+        .await?;
+    Ok(row.get("run_id"))
+}
+
 pub async fn finish_run(client: &Client, run_id: &Uuid) -> anyhow::Result<()> {
     client
         .execute(
@@ -1711,6 +1731,238 @@ pub async fn add_result(
         )
         .await?;
     Ok(row.get("result_id"))
+}
+
+// ── Grouped leaderboard (pipeline BenchmarkSummary tables) ──────────────────
+
+#[derive(Debug, Serialize)]
+pub struct GroupedLeaderboardEntry {
+    pub language: String,
+    pub run_count: i64,
+    pub p5: f64,
+    pub p25: f64,
+    pub p50: f64,
+    pub p75: f64,
+    pub p95: f64,
+    pub mean: f64,
+    pub rps: f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GroupedLeaderboard {
+    pub groups: Vec<String>,
+    pub selected: String,
+    pub languages: Vec<GroupedLeaderboardEntry>,
+}
+
+/// Get a grouped leaderboard aggregated over all completed runs that have pipeline summary data.
+///
+/// `group` — optional filter in the form `"cloud-region-topology"`, parsed by splitting on `-`
+/// into three parts. Runs are joined to `benchmark_cell` (via `benchmark_run.cell_id`) and
+/// filtered accordingly.  When omitted, all completed runs are included.
+///
+/// Primary case selection per run:
+///   metricname = 'latency' AND payloadbytes IS NULL AND protocol in preference order (http1 > http2 > http3).
+///   Tiebreaker: lowest caseid.
+///
+/// Percentile computation: PostgreSQL `percentile_cont` over the per-run `mean` values.
+/// Language extraction: `benchmark_run.name` format "Config Name - language", split on " - ", last part.
+pub async fn get_grouped_leaderboard(
+    client: &Client,
+    group: Option<&str>,
+) -> anyhow::Result<GroupedLeaderboard> {
+    // 1. Resolve available groups (distinct cloud/region/topology from cells that have
+    //    completed runs with pipeline summaries).
+    let group_rows = client
+        .query(
+            "SELECT DISTINCT bc.cloud, bc.region, bc.topology
+             FROM benchmark_cell bc
+             JOIN benchmark_run br ON br.cell_id = bc.cell_id
+             WHERE br.status = 'completed'
+               AND EXISTS (
+                   SELECT 1 FROM benchmarksummary bs
+                   WHERE bs.benchmarkrunid = br.run_id
+                     AND bs.metricname IN ('latency', 'Total ms')
+                     AND bs.payloadbytes IS NULL
+               )
+             ORDER BY bc.cloud, bc.region, bc.topology",
+            &[],
+        )
+        .await
+        .context("query available groups")?;
+
+    let groups: Vec<String> = group_rows
+        .iter()
+        .map(|r| {
+            let cloud: String = r.get("cloud");
+            let region: String = r.get("region");
+            let topology: String = r.get("topology");
+            format!("{cloud}-{region}-{topology}")
+        })
+        .collect();
+
+    // 2. Determine the selected group string.
+    let selected = group.unwrap_or("all").to_string();
+
+    // 3. Parse optional group filter into (cloud, region, topology).
+    //    Format: "cloud-region-topology".  We split on '-' taking the first token as cloud,
+    //    the last as topology, and everything in between as the region (regions can contain '-').
+    let cell_filter: Option<(String, String, String)> = if let Some(g) = group {
+        let parts: Vec<&str> = g.splitn(3, '-').collect();
+        if parts.len() == 3 {
+            Some((
+                parts[0].to_string(),
+                parts[1].to_string(),
+                parts[2].to_string(),
+            ))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // 4. Query the primary summary per run (protocol preference: http1 > http2 > http3).
+    //    We use a CTE to rank summaries within each run and pick the best one.
+    let lang_rows = if let Some((cloud, region, topology)) = cell_filter {
+        client
+            .query(
+                "WITH ranked AS (
+                    SELECT
+                        br.run_id,
+                        br.name,
+                        bs.mean,
+                        bs.rps,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY br.run_id
+                            ORDER BY
+                                CASE bs.protocol
+                                    WHEN 'http1' THEN 1
+                                    WHEN 'http2' THEN 2
+                                    WHEN 'http3' THEN 3
+                                    ELSE 4
+                                END,
+                                bs.caseid
+                        ) AS rn
+                    FROM benchmark_run br
+                    JOIN benchmark_cell bc ON bc.cell_id = br.cell_id
+                    JOIN benchmarksummary bs ON bs.benchmarkrunid = br.run_id
+                    WHERE br.status = 'completed'
+                      AND bs.metricname IN ('latency', 'Total ms')
+                      AND bs.payloadbytes IS NULL
+                      AND bc.cloud = $1
+                      AND bc.region = $2
+                      AND bc.topology = $3
+                ),
+                primary_per_run AS (
+                    SELECT
+                        run_id,
+                        -- extract language: last part after ' - '
+                        CASE
+                            WHEN name LIKE '% - %'
+                            THEN TRIM(SUBSTRING(name FROM POSITION(' - ' IN name) + 3))
+                            ELSE name
+                        END AS language,
+                        mean AS primary_mean,
+                        rps  AS primary_rps
+                    FROM ranked
+                    WHERE rn = 1
+                )
+                SELECT
+                    language,
+                    COUNT(*)::bigint                                                         AS run_count,
+                    percentile_cont(0.05) WITHIN GROUP (ORDER BY primary_mean)              AS p5,
+                    percentile_cont(0.25) WITHIN GROUP (ORDER BY primary_mean)              AS p25,
+                    percentile_cont(0.50) WITHIN GROUP (ORDER BY primary_mean)              AS p50,
+                    percentile_cont(0.75) WITHIN GROUP (ORDER BY primary_mean)              AS p75,
+                    percentile_cont(0.95) WITHIN GROUP (ORDER BY primary_mean)              AS p95,
+                    AVG(primary_mean)                                                       AS mean,
+                    AVG(primary_rps)                                                        AS rps
+                FROM primary_per_run
+                GROUP BY language
+                ORDER BY p50 ASC NULLS LAST",
+                &[&cloud, &region, &topology],
+            )
+            .await
+            .context("query grouped leaderboard (filtered)")?
+    } else {
+        client
+            .query(
+                "WITH ranked AS (
+                    SELECT
+                        br.run_id,
+                        br.name,
+                        bs.mean,
+                        bs.rps,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY br.run_id
+                            ORDER BY
+                                CASE bs.protocol
+                                    WHEN 'http1' THEN 1
+                                    WHEN 'http2' THEN 2
+                                    WHEN 'http3' THEN 3
+                                    ELSE 4
+                                END,
+                                bs.caseid
+                        ) AS rn
+                    FROM benchmark_run br
+                    JOIN benchmarksummary bs ON bs.benchmarkrunid = br.run_id
+                    WHERE br.status = 'completed'
+                      AND bs.metricname IN ('latency', 'Total ms')
+                      AND bs.payloadbytes IS NULL
+                ),
+                primary_per_run AS (
+                    SELECT
+                        run_id,
+                        CASE
+                            WHEN name LIKE '% - %'
+                            THEN TRIM(SUBSTRING(name FROM POSITION(' - ' IN name) + 3))
+                            ELSE name
+                        END AS language,
+                        mean AS primary_mean,
+                        rps  AS primary_rps
+                    FROM ranked
+                    WHERE rn = 1
+                )
+                SELECT
+                    language,
+                    COUNT(*)::bigint                                                         AS run_count,
+                    percentile_cont(0.05) WITHIN GROUP (ORDER BY primary_mean)              AS p5,
+                    percentile_cont(0.25) WITHIN GROUP (ORDER BY primary_mean)              AS p25,
+                    percentile_cont(0.50) WITHIN GROUP (ORDER BY primary_mean)              AS p50,
+                    percentile_cont(0.75) WITHIN GROUP (ORDER BY primary_mean)              AS p75,
+                    percentile_cont(0.95) WITHIN GROUP (ORDER BY primary_mean)              AS p95,
+                    AVG(primary_mean)                                                       AS mean,
+                    AVG(primary_rps)                                                        AS rps
+                FROM primary_per_run
+                GROUP BY language
+                ORDER BY p50 ASC NULLS LAST",
+                &[],
+            )
+            .await
+            .context("query grouped leaderboard (all)")?
+    };
+
+    let languages: Vec<GroupedLeaderboardEntry> = lang_rows
+        .iter()
+        .map(|r| GroupedLeaderboardEntry {
+            language: r.get("language"),
+            run_count: r.get("run_count"),
+            p5: r.get::<_, f64>("p5"),
+            p25: r.get::<_, f64>("p25"),
+            p50: r.get::<_, f64>("p50"),
+            p75: r.get::<_, f64>("p75"),
+            p95: r.get::<_, f64>("p95"),
+            mean: r.get::<_, f64>("mean"),
+            rps: r.get::<_, f64>("rps"),
+        })
+        .collect();
+
+    Ok(GroupedLeaderboard {
+        groups,
+        selected,
+        languages,
+    })
 }
 
 pub async fn get_latest_leaderboard(client: &Client) -> anyhow::Result<Vec<LeaderboardEntry>> {

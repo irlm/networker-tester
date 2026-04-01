@@ -173,7 +173,8 @@ pub async fn execute_dashboard_benchmark(
         duration_secs,
     );
 
-    if let Err(e) = callback.complete(final_status, duration_secs).await {
+    let error_msg = if any_failure { Some("One or more cells had errors".to_string()) } else { None };
+    if let Err(e) = callback.complete(final_status, duration_secs, error_msg).await {
         tracing::error!("Failed to report completion: {e:#}");
     }
 
@@ -427,6 +428,8 @@ async fn resolve_vm(cell: &CellConfig) -> Result<(VmInfo, bool)> {
         };
         Ok((vm, false))
     } else {
+        // For now, auto-provisioning requires cloud CLI tools (az/aws/gcloud).
+        // If none are available, fail fast with a helpful message.
         let vm_name = format!(
             "ab-{}-{}",
             &cell.cell_id[..8.min(cell.cell_id.len())],
@@ -449,8 +452,11 @@ async fn resolve_vm(cell: &CellConfig) -> Result<(VmInfo, bool)> {
             cell.vm_size,
         );
 
+        let cloud_lower = cell.cloud.to_lowercase();
+        let size_lower = cell.vm_size.to_lowercase();
+        let resolved_size = crate::vm_tiers::resolve_vm_size(&cloud_lower, &size_lower);
         let vm =
-            provisioner::provision_vm(&cell.cloud, &cell.region, "ubuntu", &cell.vm_size, &vm_name).await?;
+            provisioner::provision_vm(&cell.cloud, &cell.region, "ubuntu", resolved_size, &vm_name).await?;
         Ok((vm, true))
     }
 }
@@ -473,21 +479,38 @@ async fn run_language_benchmark(
         params.timeout_secs,
     );
 
+    // Build args; add --payload-sizes if download/upload modes are present
+    let mut args = vec![
+        "--target".to_string(),
+        target.clone(),
+        "--modes".to_string(),
+        modes.to_string(),
+        "--runs".to_string(),
+        params.benchmark_requests.to_string(),
+        "--timeout".to_string(),
+        params.timeout_secs.to_string(),
+        "--insecure".to_string(),
+        "--json-stdout".to_string(),
+        "--benchmark-mode".to_string(),
+    ];
+
+    let needs_payload = modes.split(',').any(|m| {
+        let m = m.trim();
+        m.starts_with("download") || m.starts_with("upload") || m.starts_with("udp")
+    });
+    if needs_payload {
+        args.push("--payload-sizes".to_string());
+        args.push("4k,64k,1m".to_string());
+    }
+
+    // Timeout: account for modes * payload-sizes * runs * timeout, plus warmup buffer
+    let mode_count = modes.split(',').count() as u64;
+    let payload_multiplier = if needs_payload { 3u64 } else { 1u64 }; // 4k, 64k, 1m
+    let total_requests = mode_count * payload_multiplier * params.benchmark_requests;
     let output = tokio::time::timeout(
-        std::time::Duration::from_secs(params.timeout_secs * params.benchmark_requests + 120),
+        std::time::Duration::from_secs(params.timeout_secs * total_requests + 120),
         tokio::process::Command::new(&tester_bin)
-            .args([
-                "--target",
-                &target,
-                "--modes",
-                modes,
-                "--runs",
-                &params.benchmark_requests.to_string(),
-                "--timeout",
-                &params.timeout_secs.to_string(),
-                "--insecure",
-                "--json-stdout",
-            ])
+            .args(&args)
             .output(),
     )
     .await

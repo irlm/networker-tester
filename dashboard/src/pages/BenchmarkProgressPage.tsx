@@ -75,6 +75,9 @@ export function BenchmarkProgressPage() {
   const logContainerRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
 
+  // Already-completed results fetched from API (survives page reload)
+  const [savedResults, setSavedResults] = useState<Array<{ language: string; run_id: string }>>([]);
+
   // Live data from WebSocket
   const live = useLiveStore(
     useCallback((s) => (configId ? s.benchmarks[configId] : undefined) ?? EMPTY_LIVE, [configId])
@@ -111,6 +114,26 @@ export function BenchmarkProgressPage() {
       })
       .catch(() => {})
       .finally(() => setLoading(false));
+  }, [configId, projectId]);
+
+  // Fetch saved results from API (handles page reload — WS results are ephemeral)
+  useEffect(() => {
+    if (!configId || !projectId) return;
+    const fetchSaved = () => {
+      api.getBenchmarkConfigResults(projectId, configId)
+        .then((data) => {
+          if (data.results && data.results.length > 0) {
+            setSavedResults(data.results.map((r: { language: string; run_id: string }) => ({
+              language: r.language,
+              run_id: r.run_id,
+            })));
+          }
+        })
+        .catch(() => {});
+    };
+    fetchSaved();
+    const interval = setInterval(fetchSaved, 10000);
+    return () => clearInterval(interval);
   }, [configId, projectId]);
 
   // Elapsed time timer
@@ -153,13 +176,25 @@ export function BenchmarkProgressPage() {
   const isActive = ['running', 'provisioning', 'deploying', 'pending'].includes(effectiveStatus);
   const isDone = ['completed', 'failed', 'cancelled'].includes(effectiveStatus);
 
-  // Parse result artifacts for the results table
+  // Merge live WS results with saved DB results (DB survives page reload)
   const resultRows = useMemo(() => {
-    return live.results.map((r) => {
+    const seen = new Set<string>();
+    const rows: Array<{
+      language: string;
+      run_id?: string;
+      mean_latency: number | null;
+      p50: number | null;
+      p99: number | null;
+      success_rate: number | null;
+      runtime_ms: number | null;
+    }> = [];
+
+    // Live WS results first (may have artifact metrics)
+    for (const r of live.results) {
+      seen.add(r.language);
       const a = r.artifact || {};
-      // Try to extract common metrics from the artifact
       const summary = (a.summary ?? a) as Record<string, unknown>;
-      return {
+      rows.push({
         language: r.language,
         run_id: r.run_id,
         mean_latency: typeof summary.mean_latency_ms === 'number' ? summary.mean_latency_ms : null,
@@ -167,9 +202,24 @@ export function BenchmarkProgressPage() {
         p99: typeof summary.p99_ms === 'number' ? summary.p99_ms : null,
         success_rate: typeof summary.success_rate === 'number' ? summary.success_rate : null,
         runtime_ms: typeof summary.runtime_ms === 'number' ? summary.runtime_ms : null,
-      };
-    }).sort((a, b) => (a.mean_latency ?? Infinity) - (b.mean_latency ?? Infinity));
-  }, [live.results]);
+      });
+    }
+
+    // Add saved DB results not already in live (completed before page load)
+    for (const sr of savedResults) {
+      if (!seen.has(sr.language)) {
+        seen.add(sr.language);
+        rows.push({
+          language: sr.language,
+          run_id: sr.run_id,
+          mean_latency: null, p50: null, p99: null,
+          success_rate: null, runtime_ms: null,
+        });
+      }
+    }
+
+    return rows.sort((a, b) => (a.mean_latency ?? Infinity) - (b.mean_latency ?? Infinity));
+  }, [live.results, savedResults]);
 
   // ── Render ──────────────────────────────────────────────────────────────
 

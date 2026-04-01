@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     routing::{get, post},
     Json, Router,
@@ -8,7 +8,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::db::benchmarks::{BenchmarkRunRow, LeaderboardEntry, NewResult};
+use crate::db::benchmarks::{BenchmarkRunRow, GroupedLeaderboard, LeaderboardEntry, NewResult};
 use crate::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -140,10 +140,39 @@ async fn upload(
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub struct GroupedLeaderboardParams {
+    pub group: Option<String>,
+}
+
+/// GET /api/leaderboard/grouped — grouped leaderboard by cloud/region/topology (public, no auth)
+async fn grouped_leaderboard(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<GroupedLeaderboardParams>,
+) -> Result<Json<GroupedLeaderboard>, StatusCode> {
+    let client = state.db.get().await.map_err(|e| {
+        tracing::error!(error = %e, "DB pool error in grouped_leaderboard");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let result = crate::db::benchmarks::get_grouped_leaderboard(
+        &client,
+        params.group.as_deref(),
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, "Failed to fetch grouped leaderboard");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    Ok(Json(result))
+}
+
 /// Public leaderboard routes (no auth): GET /leaderboard, GET /leaderboard/runs, GET /leaderboard/runs/:run_id
 pub fn public_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/leaderboard", get(leaderboard))
+        .route("/leaderboard/grouped", get(grouped_leaderboard))
         .route("/leaderboard/runs", get(list_runs))
         .route("/leaderboard/runs/:run_id", get(get_run))
         .with_state(state)

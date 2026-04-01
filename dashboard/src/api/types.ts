@@ -1002,3 +1002,21 @@ export interface BenchmarkRegression {
 export interface BenchmarkRegressionWithConfig extends BenchmarkRegression {
   config_name: string;
 }
+
+export interface GroupedLeaderboardEntry {
+  language: string;
+  run_count: number;
+  p5: number;
+  p25: number;
+  p50: number;
+  p75: number;
+  p95: number;
+  mean: number;
+  rps: number;
+}
+
+export interface GroupedLeaderboard {
+  groups: string[];
+  selected: string;
+  languages: GroupedLeaderboardEntry[];
+}

@@ -471,7 +471,7 @@ CREATE TABLE IF NOT EXISTS benchmark_config (
     project_id         UUID           NOT NULL REFERENCES project(project_id) ON DELETE CASCADE,
     name               VARCHAR(200)   NOT NULL,
     template           VARCHAR(50),
-    status             VARCHAR(20)    NOT NULL DEFAULT 'draft',
+    status             VARCHAR(30)    NOT NULL DEFAULT 'draft',
     created_by         UUID           REFERENCES dash_user(user_id),
     created_at         TIMESTAMPTZ    NOT NULL DEFAULT now(),
     started_at         TIMESTAMPTZ,
@@ -497,7 +497,7 @@ CREATE TABLE IF NOT EXISTS benchmark_cell (
     tester_vm_id       VARCHAR(200),
     endpoint_ip        VARCHAR(200),
     tester_ip          VARCHAR(200),
-    status             VARCHAR(20)    NOT NULL DEFAULT 'pending',
+    status             VARCHAR(30)    NOT NULL DEFAULT 'pending',
     languages          JSONB          NOT NULL DEFAULT '[]'::jsonb,
     vm_size            VARCHAR(100)
 );
@@ -862,6 +862,30 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
             )
             .await?;
         tracing::info!("V018 migration complete");
+    }
+
+    // V019: Drop FK constraints that block benchmark pipeline inserts.
+    // The pipeline tables (benchmarkrun, benchmarksample) were created by the tester
+    // with FKs to testrun/requestattempt, but benchmark pipeline bypasses those tables.
+    let row = client
+        .query_opt("SELECT version FROM _migrations WHERE version = 19", &[])
+        .await?;
+
+    if row.is_none() {
+        tracing::info!("Applying V019 drop benchmark pipeline FK constraints...");
+        client
+            .batch_execute(
+                "ALTER TABLE benchmarkrun DROP CONSTRAINT IF EXISTS fk_benchmarkrun_testrun;
+                 ALTER TABLE benchmarksample DROP CONSTRAINT IF EXISTS fk_benchmarksample_attempt;",
+            )
+            .await?;
+        client
+            .execute(
+                "INSERT INTO _migrations (version) VALUES (19) ON CONFLICT DO NOTHING",
+                &[],
+            )
+            .await?;
+        tracing::info!("V019 migration complete");
     }
 
     Ok(())

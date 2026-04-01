@@ -1,9 +1,22 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../api/client';
-import type { BenchmarkLeaderboardEntry, BenchmarkRun } from '../api/types';
+import type { BenchmarkLeaderboardEntry, BenchmarkRun, GroupedLeaderboard } from '../api/types';
+import { HorizontalBoxWhiskerChart } from '../components/charts/HorizontalBoxWhiskerChart';
+import type { HBoxGroup } from '../components/charts/HorizontalBoxWhiskerChart';
 import { usePageTitle } from '../hooks/usePageTitle';
 
-type Tab = 'leaderboard' | 'comparison' | 'timeline';
+type Tab = 'grouped' | 'leaderboard' | 'comparison' | 'timeline';
+
+const LANGUAGE_PALETTE = [
+  '#06b6d4',
+  '#a78bfa',
+  '#f59e0b',
+  '#10b981',
+  '#ef4444',
+  '#3b82f6',
+  '#ec4899',
+  '#84cc16',
+];
 
 function formatMs(val: number | undefined): string {
   if (val === undefined || val === null) return '--';
@@ -24,6 +37,182 @@ function rankColor(index: number): string {
   if (index === 1) return 'text-gray-300';
   if (index === 2) return 'text-orange-400';
   return 'text-gray-500';
+}
+
+/** Format a group slug like "azure-eastus-loopback" → "Azure / eastus / loopback" */
+function formatGroupLabel(group: string): string {
+  const parts = group.split('-');
+  if (parts.length < 2) return group;
+  const [provider, ...rest] = parts;
+  return [provider.charAt(0).toUpperCase() + provider.slice(1), ...rest].join(' / ');
+}
+
+function GroupedTab() {
+  const [data, setData] = useState<GroupedLeaderboard | null>(null);
+  const [selectedGroup, setSelectedGroup] = useState<string>('');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchGrouped = useCallback(async (group?: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await api.getGroupedLeaderboard(group || undefined);
+      setData(result);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Failed to load grouped leaderboard';
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchGrouped();
+  }, [fetchGrouped]);
+
+  const handleGroupChange = useCallback((group: string) => {
+    setSelectedGroup(group);
+    void fetchGrouped(group || undefined);
+  }, [fetchGrouped]);
+
+  const hboxGroups: HBoxGroup[] = (data?.languages ?? []).map((lang, i) => {
+    const limited = lang.run_count < 3;
+    return {
+      label: lang.language,
+      sublabel: limited ? `${lang.run_count} runs (limited data)` : `${lang.run_count} runs`,
+      color: LANGUAGE_PALETTE[i % LANGUAGE_PALETTE.length],
+      p5: lang.p5,
+      p25: lang.p25,
+      p50: lang.p50,
+      p75: lang.p75,
+      p95: lang.p95,
+      mean: lang.mean,
+    };
+  });
+
+  // Sort table by p50 ascending
+  const sortedForTable = [...(data?.languages ?? [])].sort((a, b) => a.p50 - b.p50);
+
+  const showAllWarning = !selectedGroup;
+  const groups = data?.groups ?? [];
+
+  if (loading) {
+    return (
+      <div className="text-center text-gray-500 py-16 motion-safe:animate-pulse">
+        Loading benchmark data...
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="text-center text-red-400 py-16">
+        {error}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Group selector */}
+      <div className="flex items-center gap-3">
+        <span className="text-xs text-gray-500 uppercase tracking-wider">Group</span>
+        <select
+          value={selectedGroup}
+          onChange={e => handleGroupChange(e.target.value)}
+          className="bg-[#111827] border border-gray-700 rounded px-3 py-1.5 text-xs text-gray-200 focus:outline-none focus:border-cyan-600"
+        >
+          <option value="">All</option>
+          {groups.map(g => (
+            <option key={g} value={g}>{formatGroupLabel(g)}</option>
+          ))}
+        </select>
+      </div>
+
+      {/* All-groups warning */}
+      {showAllWarning && (
+        <div className="border-l-4 border-amber-500 bg-[#1a1a2e] text-gray-400 text-sm p-3 rounded">
+          Mixed network conditions — results are not directly comparable. Use for general trends only.
+        </div>
+      )}
+
+      {/* Chart */}
+      {hboxGroups.length === 0 ? (
+        <div className="text-center text-gray-500 py-16">
+          No benchmark data yet
+        </div>
+      ) : (
+        <div className="bg-[#0d1117] border border-gray-800 rounded p-4">
+          <HorizontalBoxWhiskerChart
+            groups={hboxGroups}
+            unit="ms"
+            title="Latency distribution by language"
+          />
+        </div>
+      )}
+
+      {/* Data table */}
+      {sortedForTable.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-800 text-right text-gray-500 text-xs uppercase tracking-wider">
+                <th className="py-2 px-3 text-left">Language</th>
+                <th className="py-2 px-3">Mean</th>
+                <th className="py-2 px-3">p50</th>
+                <th className="py-2 px-3">p95</th>
+                <th className="py-2 px-3">p99</th>
+                <th className="py-2 px-3">RPS</th>
+                <th className="py-2 px-3">Runs</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedForTable.map((lang, i) => {
+                const langIndex = (data?.languages ?? []).findIndex(l => l.language === lang.language);
+                const color = LANGUAGE_PALETTE[langIndex >= 0 ? langIndex % LANGUAGE_PALETTE.length : i % LANGUAGE_PALETTE.length];
+                const limited = lang.run_count < 3;
+                return (
+                  <tr
+                    key={lang.language}
+                    className={`border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors ${i === 0 ? 'bg-cyan-500/[0.04]' : ''}`}
+                  >
+                    <td className="py-2.5 px-3 font-medium" style={{ color }}>
+                      {lang.language}
+                    </td>
+                    <td className="py-2.5 px-3 text-right font-mono text-gray-300">
+                      {formatMs(lang.mean)}
+                    </td>
+                    <td className="py-2.5 px-3 text-right font-mono text-gray-300">
+                      {formatMs(lang.p50)}
+                    </td>
+                    <td className="py-2.5 px-3 text-right font-mono text-gray-400">
+                      {formatMs(lang.p95)}
+                    </td>
+                    <td className="py-2.5 px-3 text-right font-mono text-gray-500">
+                      --
+                    </td>
+                    <td className="py-2.5 px-3 text-right font-mono text-gray-400">
+                      {lang.rps > 0 ? lang.rps.toFixed(0) : '--'}
+                    </td>
+                    <td className={`py-2.5 px-3 text-right font-mono ${limited ? 'text-amber-500' : 'text-gray-500'}`}>
+                      {lang.run_count}
+                      {limited && <span className="text-gray-600 text-xs ml-1">*</span>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {sortedForTable.some(l => l.run_count < 3) && (
+            <p className="text-xs text-gray-600 mt-2 px-3">
+              * fewer than 3 runs — limited data, interpret with caution
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function LeaderboardTab({ entries }: { entries: BenchmarkLeaderboardEntry[] }) {
@@ -269,7 +458,7 @@ function TimelineTab({ runs }: { runs: BenchmarkRun[] }) {
 export function LeaderboardPage() {
   usePageTitle('Leaderboard');
 
-  const [tab, setTab] = useState<Tab>('leaderboard');
+  const [tab, setTab] = useState<Tab>('grouped');
   const [entries, setEntries] = useState<BenchmarkLeaderboardEntry[]>([]);
   const [runs, setRuns] = useState<BenchmarkRun[]>([]);
   const [loading, setLoading] = useState(true);
@@ -294,10 +483,13 @@ export function LeaderboardPage() {
   }, []);
 
   useEffect(() => {
-    void fetchData();
-  }, [fetchData]);
+    if (tab !== 'grouped') {
+      void fetchData();
+    }
+  }, [fetchData, tab]);
 
   const tabs: { key: Tab; label: string }[] = [
+    { key: 'grouped', label: 'Distribution' },
     { key: 'leaderboard', label: 'Leaderboard' },
     { key: 'comparison', label: 'Comparison' },
     { key: 'timeline', label: 'Timeline' },
@@ -312,7 +504,7 @@ export function LeaderboardPage() {
             Language performance rankings from benchmark runs
           </p>
         </div>
-        {entries.length > 0 && (
+        {tab !== 'grouped' && entries.length > 0 && (
           <span className="text-xs text-gray-600 font-mono">
             {entries.length} {entries.length === 1 ? 'entry' : 'entries'}
           </span>
@@ -337,19 +529,24 @@ export function LeaderboardPage() {
       </div>
 
       {/* Content */}
-      {loading ? (
-        <div className="text-center text-gray-500 py-16 motion-safe:animate-pulse">
-          Loading leaderboard...
-        </div>
-      ) : error ? (
-        <div className="text-center text-red-400 py-16">
-          {error}
-        </div>
-      ) : (
+      {tab === 'grouped' && <GroupedTab />}
+      {tab !== 'grouped' && (
         <>
-          {tab === 'leaderboard' && <LeaderboardTab entries={entries} />}
-          {tab === 'comparison' && <ComparisonTab entries={entries} />}
-          {tab === 'timeline' && <TimelineTab runs={runs} />}
+          {loading ? (
+            <div className="text-center text-gray-500 py-16 motion-safe:animate-pulse">
+              Loading leaderboard...
+            </div>
+          ) : error ? (
+            <div className="text-center text-red-400 py-16">
+              {error}
+            </div>
+          ) : (
+            <>
+              {tab === 'leaderboard' && <LeaderboardTab entries={entries} />}
+              {tab === 'comparison' && <ComparisonTab entries={entries} />}
+              {tab === 'timeline' && <TimelineTab runs={runs} />}
+            </>
+          )}
         </>
       )}
     </div>
