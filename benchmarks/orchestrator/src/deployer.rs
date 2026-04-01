@@ -43,10 +43,10 @@ async fn deploy_remote(vm: &VmInfo, language: &str) -> Result<()> {
                  LATEST=$(curl -sL https://api.github.com/repos/irlm/networker-tester/releases/latest \
                    | grep -o '\"tag_name\":\"[^\"]*' | cut -d'\"' -f4); \
                  if [ -n \"$LATEST\" ]; then \
-                     curl -sL \"https://github.com/irlm/networker-tester/releases/download/${{LATEST}}/networker-endpoint-x86_64-unknown-linux-gnu\" \
-                       -o /opt/bench/server 2>/dev/null || \
-                     curl -sL \"https://github.com/irlm/networker-tester/releases/download/${{LATEST}}/networker-endpoint-linux-x86_64\" \
-                       -o /opt/bench/server 2>/dev/null; \
+                     curl -sL \"https://github.com/irlm/networker-tester/releases/download/${{LATEST}}/networker-endpoint-x86_64-unknown-linux-musl.tar.gz\" \
+                       -o /tmp/endpoint.tar.gz 2>/dev/null && \
+                     tar xzf /tmp/endpoint.tar.gz -C /opt/bench/ && \
+                     mv /opt/bench/networker-endpoint /opt/bench/server 2>/dev/null; \
                  fi; \
                  if [ ! -s /opt/bench/server ]; then \
                      echo 'Release download failed, building from source...'; \
