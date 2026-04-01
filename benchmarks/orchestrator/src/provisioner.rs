@@ -121,7 +121,7 @@ pub async fn provision_vm(
     vm_size: &str,
     name: &str,
 ) -> Result<VmInfo> {
-    match cloud {
+    match cloud.to_lowercase().as_str() {
         "azure" => provision_azure(region, os, vm_size, name).await,
         "aws" => provision_aws(region, os, vm_size, name).await,
         "gcp" => provision_gcp(region, os, vm_size, name).await,
@@ -167,7 +167,18 @@ async fn provision_azure(
     ];
 
     if is_linux {
-        args.extend_from_slice(&["--generate-ssh-keys", "--admin-username", "azureuser"]);
+        // Use the ed25519 key (same key used by ssh_exec/scp_to).
+        // --generate-ssh-keys only installs id_rsa which doesn't match the ed25519 key
+        // used by the SSH module, causing auth failures.
+        let ed25519_pub = std::path::Path::new("/root/.ssh/id_ed25519.pub");
+        if ed25519_pub.exists() {
+            args.extend_from_slice(&[
+                "--ssh-key-values", "/root/.ssh/id_ed25519.pub",
+                "--admin-username", "azureuser",
+            ]);
+        } else {
+            args.extend_from_slice(&["--generate-ssh-keys", "--admin-username", "azureuser"]);
+        }
     } else {
         args.extend_from_slice(&[
             "--admin-username", "azureuser",

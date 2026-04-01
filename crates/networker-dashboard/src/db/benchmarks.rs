@@ -1782,7 +1782,7 @@ pub async fn get_grouped_leaderboard(
                AND EXISTS (
                    SELECT 1 FROM benchmarksummary bs
                    WHERE bs.benchmarkrunid = br.run_id
-                     AND bs.metricname = 'latency'
+                     AND bs.metricname IN ('latency', 'Total ms')
                      AND bs.payloadbytes IS NULL
                )
              ORDER BY bc.cloud, bc.region, bc.topology",
@@ -1848,7 +1848,7 @@ pub async fn get_grouped_leaderboard(
                     JOIN benchmark_cell bc ON bc.cell_id = br.cell_id
                     JOIN benchmarksummary bs ON bs.benchmarkrunid = br.run_id
                     WHERE br.status = 'completed'
-                      AND bs.metricname = 'latency'
+                      AND bs.metricname IN ('latency', 'Total ms')
                       AND bs.payloadbytes IS NULL
                       AND bc.cloud = $1
                       AND bc.region = $2
@@ -1908,7 +1908,7 @@ pub async fn get_grouped_leaderboard(
                     FROM benchmark_run br
                     JOIN benchmarksummary bs ON bs.benchmarkrunid = br.run_id
                     WHERE br.status = 'completed'
-                      AND bs.metricname = 'latency'
+                      AND bs.metricname IN ('latency', 'Total ms')
                       AND bs.payloadbytes IS NULL
                 ),
                 primary_per_run AS (

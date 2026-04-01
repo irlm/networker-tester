@@ -21,200 +21,337 @@ fn validate_language_name(lang: &str) -> Result<()> {
 
 // ssh_exec, scp_to, scp_dir_to, validate_ip imported from crate::ssh
 
+/// The GitHub repo URL for cloning reference APIs.
+const REPO_URL: &str = "https://github.com/irlm/networker-tester.git";
+const REPO_BRANCH: &str = "main";
+/// GitHub raw URL for the installer script.
+const INSTALLER_URL: &str = "https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh";
+
+/// Deploy a language server to a remote VM using ONE SSH call.
+/// Downloads the install script via HTTP and runs it — no SCP, no multiple connections.
+async fn deploy_remote(vm: &VmInfo, language: &str) -> Result<()> {
+    tracing::info!("Remote deploy: {} to {} via installer", language, vm.ip);
+
+    // Build the install command based on language
+    let install_cmd = match language {
+        "rust" => {
+            // Download pre-built endpoint from GitHub Releases, or fall back to install.sh
+            format!(
+                "sudo mkdir -p /opt/bench && sudo chown azureuser:azureuser /opt/bench; \
+                 openssl req -x509 -newkey rsa:2048 -keyout /opt/bench/key.pem \
+                 -out /opt/bench/cert.pem -days 365 -nodes -subj '/CN=bench' 2>/dev/null; \
+                 LATEST=$(curl -sL https://api.github.com/repos/irlm/networker-tester/releases/latest \
+                   | grep -o '\"tag_name\":\"[^\"]*' | cut -d'\"' -f4); \
+                 if [ -n \"$LATEST\" ]; then \
+                     curl -sL \"https://github.com/irlm/networker-tester/releases/download/${{LATEST}}/networker-endpoint-x86_64-unknown-linux-gnu\" \
+                       -o /opt/bench/server 2>/dev/null || \
+                     curl -sL \"https://github.com/irlm/networker-tester/releases/download/${{LATEST}}/networker-endpoint-linux-x86_64\" \
+                       -o /opt/bench/server 2>/dev/null; \
+                 fi; \
+                 if [ ! -s /opt/bench/server ]; then \
+                     echo 'Release download failed, building from source...'; \
+                     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y < /dev/null && \
+                     source $HOME/.cargo/env && \
+                     sudo apt-get update -qq && sudo apt-get install -y -qq git < /dev/null && \
+                     git clone --depth 1 {REPO_URL} /tmp/nwk-repo 2>/dev/null && \
+                     cd /tmp/nwk-repo && cargo build --release -p networker-endpoint && \
+                     cp target/release/networker-endpoint /opt/bench/server; \
+                 fi; \
+                 chmod +x /opt/bench/server && \
+                 nohup /opt/bench/server --https-port 8443 > /opt/bench/server.log 2>&1 &"
+            )
+        }
+        "nginx" => {
+            format!(
+                "sudo apt-get update -qq && sudo apt-get install -y -qq nginx git < /dev/null; \
+                 sudo mkdir -p /opt/bench && sudo chown azureuser:azureuser /opt/bench; \
+                 openssl req -x509 -newkey rsa:2048 -keyout /opt/bench/key.pem \
+                 -out /opt/bench/cert.pem -days 365 -nodes -subj '/CN=bench' 2>/dev/null; \
+                 git clone --depth 1 {REPO_URL} /tmp/nwk-repo 2>/dev/null; \
+                 if [ -f /tmp/nwk-repo/benchmarks/reference-apis/nginx/nginx.conf ]; then \
+                     sudo cp /tmp/nwk-repo/benchmarks/reference-apis/nginx/nginx.conf /etc/nginx/nginx.conf; \
+                 fi; \
+                 sudo mkdir -p /opt/bench/download /tmp/nginx_uploads; \
+                 sudo chown www-data:www-data /tmp/nginx_uploads; \
+                 if [ -f /tmp/nwk-repo/benchmarks/reference-apis/nginx/generate-download-files.sh ]; then \
+                     bash /tmp/nwk-repo/benchmarks/reference-apis/nginx/generate-download-files.sh /opt/bench/download; \
+                 fi; \
+                 sudo nginx -t && sudo systemctl restart nginx"
+            )
+        }
+        "go" => {
+            format!(
+                "sudo mkdir -p /opt/bench && sudo chown azureuser:azureuser /opt/bench; \
+                 openssl req -x509 -newkey rsa:2048 -keyout /opt/bench/key.pem \
+                 -out /opt/bench/cert.pem -days 365 -nodes -subj '/CN=bench' 2>/dev/null; \
+                 command -v go >/dev/null 2>&1 || {{ sudo snap install go --classic < /dev/null; }}; \
+                 sudo apt-get update -qq && sudo apt-get install -y -qq git < /dev/null; \
+                 git clone --depth 1 {REPO_URL} /tmp/nwk-repo 2>/dev/null; \
+                 cd /tmp/nwk-repo/benchmarks/reference-apis/go && go build -o /opt/bench/go-server . 2>/dev/null; \
+                 chmod +x /opt/bench/go-server; \
+                 BENCH_CERT_DIR=/opt/bench BENCH_PORT=8443 \
+                 nohup /opt/bench/go-server > /opt/bench/go-server.log 2>&1 &"
+            )
+        }
+        "nodejs" => {
+            format!(
+                "sudo mkdir -p /opt/bench && sudo chown azureuser:azureuser /opt/bench; \
+                 openssl req -x509 -newkey rsa:2048 -keyout /opt/bench/key.pem \
+                 -out /opt/bench/cert.pem -days 365 -nodes -subj '/CN=bench' 2>/dev/null; \
+                 command -v node >/dev/null 2>&1 || {{ sudo apt-get update -qq && sudo apt-get install -y -qq nodejs npm < /dev/null; }}; \
+                 sudo apt-get install -y -qq git < /dev/null; \
+                 git clone --depth 1 {REPO_URL} /tmp/nwk-repo 2>/dev/null; \
+                 cd /tmp/nwk-repo/benchmarks/reference-apis/nodejs && npm install --quiet 2>/dev/null; \
+                 BENCH_CERT_DIR=/opt/bench BENCH_PORT=8443 \
+                 nohup node server.js > /var/log/bench-nodejs.log 2>&1 &"
+            )
+        }
+        "python" => {
+            format!(
+                "sudo mkdir -p /opt/bench && sudo chown azureuser:azureuser /opt/bench; \
+                 openssl req -x509 -newkey rsa:2048 -keyout /opt/bench/key.pem \
+                 -out /opt/bench/cert.pem -days 365 -nodes -subj '/CN=bench' 2>/dev/null; \
+                 sudo apt-get update -qq && sudo apt-get install -y -qq python3 python3-venv python3-pip git < /dev/null; \
+                 git clone --depth 1 {REPO_URL} /tmp/nwk-repo 2>/dev/null; \
+                 cd /tmp/nwk-repo/benchmarks/reference-apis/python && \
+                 python3 -m venv /opt/bench/pyenv && /opt/bench/pyenv/bin/pip install --quiet -r requirements.txt; \
+                 BENCH_CERT_DIR=/opt/bench BENCH_PORT=8443 \
+                 nohup /opt/bench/pyenv/bin/uvicorn server:app --host 0.0.0.0 --port 8443 \
+                     --ssl-keyfile /opt/bench/key.pem --ssl-certfile /opt/bench/cert.pem \
+                     > /var/log/python-bench.log 2>&1 &"
+            )
+        }
+        other => {
+            // Generic: clone repo and run deploy.sh if it exists
+            format!(
+                "sudo mkdir -p /opt/bench && sudo chown azureuser:azureuser /opt/bench; \
+                 openssl req -x509 -newkey rsa:2048 -keyout /opt/bench/key.pem \
+                 -out /opt/bench/cert.pem -days 365 -nodes -subj '/CN=bench' 2>/dev/null; \
+                 sudo apt-get update -qq && sudo apt-get install -y -qq git < /dev/null; \
+                 git clone --depth 1 {REPO_URL} /tmp/nwk-repo 2>/dev/null; \
+                 cd /tmp/nwk-repo/benchmarks/reference-apis/{other} && \
+                 if [ -f deploy.sh ]; then BENCH_CERT_DIR=/opt/bench BENCH_PORT=8443 bash deploy.sh; \
+                 elif [ -f build.sh ]; then bash build.sh && BENCH_CERT_DIR=/opt/bench BENCH_PORT=8443 bash start.sh; \
+                 else echo 'No deploy.sh or build.sh found for {other}'; exit 1; fi"
+            )
+        }
+    };
+
+    // ONE SSH call does everything — setup, download, build, start
+    for attempt in 1..=5 {
+        match ssh_exec(&vm.ip, &install_cmd).await {
+            Ok(_) => {
+                tracing::info!("Remote deploy succeeded for {} on {}", language, vm.ip);
+                // Wait for health check
+                return wait_for_health(vm).await;
+            }
+            Err(e) => {
+                if attempt == 5 {
+                    return Err(e).context(format!("remote deploy of {language} failed after 5 attempts"));
+                }
+                tracing::warn!("Deploy attempt {attempt}/5 failed for {language}, retrying in 10s...");
+                tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            }
+        }
+    }
+    unreachable!()
+}
+
 /// Deploy a reference API to the target VM.
 ///
 /// Steps:
-/// 1. Create /opt/bench/ directory on the VM
-/// 2. Copy shared TLS cert + key
-/// 3. Run the language-specific deploy.sh script
-/// 4. Deploy metrics-agent binary and start it on :9100
-/// 5. Wait for /health endpoint to respond (max 60s)
+/// 1. Create /opt/bench/ directory and generate TLS certs on the VM
+/// 2. Clone the repo (if not already cloned) to get reference-api source
+/// 3. Deploy the language-specific server
+/// 4. Wait for /health endpoint to respond (max 60s)
+///
+/// Works in two modes:
+/// - **Local mode**: If `bench_dir/reference-apis/` exists locally, SCP files to the VM.
+/// - **Remote mode**: If local files don't exist (production dashboard), clone the repo
+///   on the VM and build from source there. This is the default for auto-provisioned VMs.
 pub async fn deploy_api(vm: &VmInfo, language: &str, bench_dir: &Path) -> Result<()> {
     validate_language_name(language)?;
     validate_ip(&vm.ip)?;
     tracing::info!("Deploying {} API to {} ({})", language, vm.name, vm.ip);
 
-    // 1. Create target directory
-    ssh_exec(
-        &vm.ip,
-        "sudo mkdir -p /opt/bench && sudo chown azureuser:azureuser /opt/bench",
-    )
-    .await
-    .context("creating /opt/bench on VM")?;
+    // Determine deploy mode
+    let api_dir = bench_dir.join("reference-apis");
+    let use_remote = !api_dir.join(language).exists() && !api_dir.exists();
 
-    // 2. Copy shared TLS certs
-    let shared_dir = bench_dir.join("shared");
-    let cert_path = shared_dir.join("cert.pem");
-    let key_path = shared_dir.join("key.pem");
-
-    if cert_path.exists() && key_path.exists() {
-        scp_to(&vm.ip, cert_path/*safe*/.to_str().unwrap_or_default(), "/opt/bench/cert.pem")
-            .await
-            .context("copying cert.pem")?;
-        scp_to(&vm.ip, key_path/*safe*/.to_str().unwrap_or_default(), "/opt/bench/key.pem")
-            .await
-            .context("copying key.pem")?;
-        tracing::debug!("TLS certs copied to VM");
-    } else {
-        tracing::warn!(
-            "Shared certs not found at {}, generating on VM",
-            shared_dir.display()
-        );
-        let gen_script = shared_dir.join("generate-cert.sh");
-        if gen_script.exists() {
-            scp_to(
-                &vm.ip,
-                gen_script/*safe*/.to_str().unwrap_or_default(),
-                "/opt/bench/generate-cert.sh",
-            )
-            .await?;
-            ssh_exec(&vm.ip, "bash /opt/bench/generate-cert.sh").await?;
-        }
+    if use_remote {
+        // Remote mode: ONE SSH call downloads install.sh and runs it.
+        // The install script handles everything via HTTP — no SCP needed.
+        return deploy_remote(vm, language).await;
     }
 
-    // 3. Deploy the language-specific server binary/source
-    tracing::info!("Deploying {language} server to VM");
-    let api_dir = bench_dir.join("reference-apis");
+    // Local mode: SCP files from local disk (dev workflow)
+    ssh_exec(&vm.ip, "sudo mkdir -p /opt/bench && sudo chown azureuser:azureuser /opt/bench")
+        .await.context("creating /opt/bench on VM")?;
+
+    // 4. Deploy the language-specific server
+    tracing::info!("Deploying {language} server to VM (remote={use_remote})");
+    let remote_api_base = "/opt/bench/repo/benchmarks/reference-apis";
     match language {
         "rust" => {
-            // Build the endpoint if needed, then copy binary
-            let binary = bench_dir.join("../target/release/networker-endpoint");
-            if !binary.exists() {
-                tracing::info!("Building networker-endpoint...");
-                let status = tokio::process::Command::new("cargo")
-                    .args(["build", "--release", "-p", "networker-endpoint"])
-                    .current_dir(bench_dir.join(".."))
-                    .status()
-                    .await?;
-                if !status.success() {
-                    bail!("cargo build networker-endpoint failed");
+            let local_endpoint = std::path::Path::new("/usr/local/bin/networker-endpoint");
+            if use_remote && local_endpoint.exists() {
+                // SCP binary + start server in a single follow-up SSH call
+                tracing::info!("Deploying Rust endpoint to {}...", vm.ip);
+                // SCP binary, then wait before the next SSH to avoid connection rate-limiting
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                scp_to(&vm.ip, "/usr/local/bin/networker-endpoint", "/opt/bench/server")
+                    .await
+                    .context("copying Rust endpoint binary to VM")?;
+                // Wait before next SSH — Azure VMs throttle rapid SSH connections
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                ssh_exec(&vm.ip,
+                    "chmod +x /opt/bench/server && \
+                     pkill -f '/opt/bench/server' 2>/dev/null; sleep 1; \
+                     nohup /opt/bench/server --https-port 8443 > /opt/bench/server.log 2>&1 &"
+                ).await.context("starting Rust server on VM")?;
+            } else if use_remote {
+                // No local binary — build on the VM from cloned repo
+                ssh_exec(&vm.ip,
+                    "if [ ! -f /opt/bench/server ]; then \
+                        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y < /dev/null && \
+                        source $HOME/.cargo/env && \
+                        cd /opt/bench/repo && cargo build --release -p networker-endpoint && \
+                        cp target/release/networker-endpoint /opt/bench/server; \
+                    fi && chmod +x /opt/bench/server && \
+                    pkill -f /opt/bench/server 2>/dev/null; sleep 1; \
+                    nohup /opt/bench/server --https-port 8443 > /opt/bench/server.log 2>&1 &"
+                ).await.context("building+starting Rust endpoint on VM")?;
+            } else {
+                // Local mode: SCP + start
+                let binary = bench_dir.join("../target/release/networker-endpoint");
+                if !binary.exists() {
+                    let status = tokio::process::Command::new("cargo")
+                        .args(["build", "--release", "-p", "networker-endpoint"])
+                        .current_dir(bench_dir.join(".."))
+                        .status().await?;
+                    if !status.success() { bail!("cargo build networker-endpoint failed"); }
                 }
+                scp_to(&vm.ip, binary.to_str().unwrap_or_default(), "/opt/bench/server").await?;
+                ssh_exec(&vm.ip, "chmod +x /opt/bench/server && \
+                    pkill -f /opt/bench/server 2>/dev/null; sleep 1; \
+                    nohup /opt/bench/server --https-port 8443 > /opt/bench/server.log 2>&1 &").await?;
             }
-            scp_to(
-                &vm.ip,
-                binary/*safe*/.to_str().unwrap_or_default(),
-                "/opt/bench/server",
-            )
-                .await
-                .context("copying Rust binary")?;
-            ssh_exec(&vm.ip, "chmod +x /opt/bench/server").await?;
-            ssh_exec(&vm.ip, "nohup /opt/bench/server --cert /opt/bench/cert.pem --key /opt/bench/key.pem --https-port 8443 > /opt/bench/server.log 2>&1 &").await?;
         }
         "go" => {
-            let lang_dir = api_dir.join("go");
-            // Build locally if binary doesn't exist
-            let go_binary = lang_dir.join("server");
-            if !go_binary.exists() {
-                let build_sh = lang_dir.join("build.sh");
-                if build_sh.exists() {
-                    tracing::info!("Building Go binary...");
-                    let status = tokio::process::Command::new("bash")
-                        .arg(build_sh/*safe*/.to_str().unwrap_or_default())
-                        .current_dir(&lang_dir)
-                        .status()
-                        .await?;
-                    if !status.success() {
-                        bail!("Go build.sh failed");
+            if use_remote {
+                // Build Go server on the VM from cloned repo
+                ssh_exec(&vm.ip, &format!(
+                    "command -v go >/dev/null 2>&1 || {{ sudo apt-get update -qq && sudo snap install go --classic < /dev/null; }}; \
+                    cd {remote_api_base}/go && go build -o /opt/bench/go-server . 2>/dev/null"
+                )).await.context("building Go server on VM")?;
+            } else {
+                let lang_dir = api_dir.join("go");
+                let go_binary = lang_dir.join("server");
+                if !go_binary.exists() {
+                    let build_sh = lang_dir.join("build.sh");
+                    if build_sh.exists() {
+                        let status = tokio::process::Command::new("bash")
+                            .arg(build_sh.to_str().unwrap_or_default())
+                            .current_dir(&lang_dir)
+                            .status()
+                            .await?;
+                        if !status.success() {
+                            bail!("Go build.sh failed");
+                        }
                     }
                 }
+                scp_to(&vm.ip, go_binary.to_str().unwrap_or_default(), "/opt/bench/go-server")
+                    .await
+                    .context("copying Go binary")?;
             }
-            scp_to(&vm.ip, go_binary/*safe*/.to_str().unwrap_or_default(), "/opt/bench/go-server")
-                .await
-                .context("copying Go binary")?;
             ssh_exec(
                 &vm.ip,
-                "chmod +x /opt/bench/go-server && \
+                "chmod +x /opt/bench/go-server; pkill -f '/opt/bench/go-server' || true; sleep 1; \
                 BENCH_CERT_DIR=/opt/bench BENCH_PORT=8443 \
                 nohup /opt/bench/go-server > /opt/bench/go-server.log 2>&1 &",
             )
             .await?;
         }
         "nodejs" => {
-            let lang_dir = api_dir.join("nodejs");
-            ssh_exec(&vm.ip, "mkdir -p /opt/bench/nodejs").await?;
-            scp_to(
-                &vm.ip,
-                lang_dir.join("server.js")/*safe*/.to_str().unwrap_or_default(),
-                "/opt/bench/nodejs/server.js",
-            )
-            .await?;
-            scp_to(
-                &vm.ip,
-                lang_dir.join("package.json")/*safe*/.to_str().unwrap_or_default(),
-                "/opt/bench/nodejs/package.json",
-            )
-            .await?;
-            // Install Node.js from Ubuntu repos (no curl|bash supply chain risk)
-            ssh_exec(&vm.ip,
-                "command -v node >/dev/null 2>&1 || { sudo apt-get update -qq && sudo apt-get install -y -qq nodejs npm < /dev/null; }; \
+            let src = if use_remote {
+                format!("{remote_api_base}/nodejs")
+            } else {
+                let lang_dir = api_dir.join("nodejs");
+                ssh_exec(&vm.ip, "mkdir -p /opt/bench/nodejs").await?;
+                scp_to(&vm.ip, lang_dir.join("server.js").to_str().unwrap_or_default(), "/opt/bench/nodejs/server.js").await?;
+                scp_to(&vm.ip, lang_dir.join("package.json").to_str().unwrap_or_default(), "/opt/bench/nodejs/package.json").await?;
+                "/opt/bench/nodejs".to_string()
+            };
+            ssh_exec(&vm.ip, &format!(
+                "command -v node >/dev/null 2>&1 || {{ sudo apt-get update -qq && sudo apt-get install -y -qq nodejs npm < /dev/null; }}; \
                  pkill -f 'node.*server\\.js' || true; sleep 1; \
-                 cd /opt/bench/nodejs && BENCH_CERT_DIR=/opt/bench BENCH_PORT=8443 \
+                 cd {src} && npm install --quiet 2>/dev/null; \
+                 cd {src} && BENCH_CERT_DIR=/opt/bench BENCH_PORT=8443 \
                  nohup node server.js > /var/log/bench-nodejs.log 2>&1 &"
-            ).await?;
+            )).await?;
         }
         "python" => {
-            let lang_dir = api_dir.join("python");
-            ssh_exec(&vm.ip, "mkdir -p /opt/bench/python").await?;
-            scp_to(
-                &vm.ip,
-                lang_dir.join("server.py")/*safe*/.to_str().unwrap_or_default(),
-                "/opt/bench/python/server.py",
-            )
-            .await?;
-            scp_to(
-                &vm.ip,
-                lang_dir.join("requirements.txt")/*safe*/.to_str().unwrap_or_default(),
-                "/opt/bench/python/requirements.txt",
-            )
-            .await?;
-            ssh_exec(&vm.ip,
+            let src = if use_remote {
+                format!("{remote_api_base}/python")
+            } else {
+                let lang_dir = api_dir.join("python");
+                ssh_exec(&vm.ip, "mkdir -p /opt/bench/python").await?;
+                scp_to(&vm.ip, lang_dir.join("server.py").to_str().unwrap_or_default(), "/opt/bench/python/server.py").await?;
+                scp_to(&vm.ip, lang_dir.join("requirements.txt").to_str().unwrap_or_default(), "/opt/bench/python/requirements.txt").await?;
+                "/opt/bench/python".to_string()
+            };
+            ssh_exec(&vm.ip, &format!(
                 "sudo apt-get update -qq && sudo apt-get install -y -qq python3 python3-venv python3-pip < /dev/null; \
-                 cd /opt/bench/python && python3 -m venv venv && venv/bin/pip install --quiet -r requirements.txt; \
+                 cd {src} && python3 -m venv /opt/bench/python-venv && /opt/bench/python-venv/bin/pip install --quiet -r requirements.txt; \
                  pkill -f 'uvicorn server:app' || true; sleep 1; \
-                 cd /opt/bench/python && BENCH_CERT_DIR=/opt/bench BENCH_PORT=8443 \
-                 nohup venv/bin/uvicorn server:app --host 0.0.0.0 --port 8443 \
+                 cd {src} && BENCH_CERT_DIR=/opt/bench BENCH_PORT=8443 \
+                 nohup /opt/bench/python-venv/bin/uvicorn server:app --host 0.0.0.0 --port 8443 \
                      --ssl-keyfile /opt/bench/key.pem --ssl-certfile /opt/bench/cert.pem \
                      > /var/log/python-bench.log 2>&1 &"
-            ).await?;
+            )).await?;
         }
         "java" => {
-            let lang_dir = api_dir.join("java");
-            // Build locally if jar doesn't exist
-            let jar = lang_dir.join("server.jar");
-            if !jar.exists() {
-                let build_sh = lang_dir.join("build.sh");
-                if build_sh.exists() {
-                    tracing::info!("Building Java server.jar...");
-                    let status = tokio::process::Command::new("bash")
-                        .arg(build_sh/*safe*/.to_str().unwrap_or_default())
-                        .current_dir(&lang_dir)
-                        .status()
-                        .await?;
-                    if !status.success() {
-                        bail!("Java build.sh failed");
+            let src = if use_remote {
+                // Build on VM from cloned repo
+                ssh_exec(&vm.ip, &format!(
+                    "command -v java >/dev/null 2>&1 || {{ sudo apt-get update -qq && sudo apt-get install -y -qq openjdk-21-jdk-headless maven < /dev/null; }}; \
+                     cd {remote_api_base}/java && bash build.sh 2>/dev/null; \
+                     mkdir -p /opt/bench/java && cp server.jar /opt/bench/java/ 2>/dev/null || true"
+                )).await.context("building Java on VM")?;
+                "/opt/bench/java".to_string()
+            } else {
+                let lang_dir = api_dir.join("java");
+                let jar = lang_dir.join("server.jar");
+                if !jar.exists() {
+                    let build_sh = lang_dir.join("build.sh");
+                    if build_sh.exists() {
+                        let status = tokio::process::Command::new("bash")
+                            .arg(build_sh.to_str().unwrap_or_default())
+                            .current_dir(&lang_dir)
+                            .status().await?;
+                        if !status.success() { bail!("Java build.sh failed"); }
                     }
                 }
-            }
-            ssh_exec(&vm.ip, "mkdir -p /opt/bench/java").await?;
-            scp_to(&vm.ip, jar/*safe*/.to_str().unwrap_or_default(), "/opt/bench/java/server.jar")
-                .await
-                .context("copying Java server.jar")?;
-            ssh_exec(&vm.ip,
-                "command -v java >/dev/null 2>&1 || { sudo apt-get update -qq && sudo apt-get install -y -qq openjdk-21-jdk-headless < /dev/null; }; \
+                ssh_exec(&vm.ip, "mkdir -p /opt/bench/java").await?;
+                scp_to(&vm.ip, jar.to_str().unwrap_or_default(), "/opt/bench/java/server.jar").await?;
+                "/opt/bench/java".to_string()
+            };
+            ssh_exec(&vm.ip, &format!(
+                "command -v java >/dev/null 2>&1 || {{ sudo apt-get update -qq && sudo apt-get install -y -qq openjdk-21-jdk-headless < /dev/null; }}; \
                  pkill -f 'java.*server.jar' || true; sleep 1; \
-                 cd /opt/bench/java && BENCH_CERT_DIR=/opt/bench BENCH_PORT=8443 \
+                 cd {src} && BENCH_CERT_DIR=/opt/bench BENCH_PORT=8443 \
                  nohup java -jar server.jar > /opt/bench/java/server.log 2>&1 &"
-            ).await?;
+            )).await?;
         }
         lang if lang.starts_with("csharp") => {
             let lang_dir = api_dir.join(lang);
             let publish_dir = lang_dir.join("publish");
-            if !publish_dir.exists() {
+            if !publish_dir.exists() && !use_remote {
                 let build_sh = lang_dir.join("build.sh");
                 if build_sh.exists() {
                     tracing::info!("Building {lang}...");
                     let status = tokio::process::Command::new("bash")
-                        .arg(build_sh/*safe*/.to_str().unwrap_or_default())
+                        .arg(build_sh.to_str().unwrap_or_default())
                         .current_dir(&lang_dir)
                         .status()
                         .await?;
@@ -224,6 +361,20 @@ pub async fn deploy_api(vm: &VmInfo, language: &str, bench_dir: &Path) -> Result
                 } else {
                     bail!("No publish/ dir and no build.sh for {lang}");
                 }
+            }
+            if use_remote {
+                // C# requires .NET SDK — install and build on VM using Docker
+                ssh_exec(&vm.ip, &format!(
+                    "command -v docker >/dev/null 2>&1 || {{ curl -fsSL https://get.docker.com | sudo sh < /dev/null; }}; \
+                     cd {remote_api_base}/{lang} && \
+                     sudo docker build -t bench-{lang} . 2>/dev/null && \
+                     sudo docker run -d --name bench-{lang} --rm -p 8443:8443 \
+                         -v /opt/bench/cert.pem:/app/cert.pem -v /opt/bench/key.pem:/app/key.pem \
+                         -e BENCH_CERT_DIR=/app -e BENCH_PORT=8443 bench-{lang} 2>/dev/null || \
+                     echo 'Docker build/run failed for {lang} — skipping'"
+                )).await.context(format!("deploying {lang} via Docker on VM"))?;
+                // Skip the local SCP path below
+                return wait_for_health(vm).await;
             }
             let remote_dir = format!("/opt/bench/{lang}");
             ssh_exec(&vm.ip, &format!("mkdir -p {remote_dir}")).await?;
@@ -269,119 +420,83 @@ pub async fn deploy_api(vm: &VmInfo, language: &str, bench_dir: &Path) -> Result
             }
         }
         "cpp" => {
-            let lang_dir = api_dir.join("cpp");
-            ssh_exec(&vm.ip, "mkdir -p /opt/bench/cpp").await?;
-            scp_to(
-                &vm.ip,
-                lang_dir.join("server.cpp")/*safe*/.to_str().unwrap_or_default(),
-                "/opt/bench/cpp/server.cpp",
-            )
-            .await?;
-            scp_to(
-                &vm.ip,
-                lang_dir.join("CMakeLists.txt")/*safe*/.to_str().unwrap_or_default(),
-                "/opt/bench/cpp/CMakeLists.txt",
-            )
-            .await?;
-            scp_to(
-                &vm.ip,
-                lang_dir.join("build.sh")/*safe*/.to_str().unwrap_or_default(),
-                "/opt/bench/cpp/build.sh",
-            )
-            .await?;
-            ssh_exec(&vm.ip,
+            let src = if use_remote { format!("{remote_api_base}/cpp") } else {
+                let lang_dir = api_dir.join("cpp");
+                ssh_exec(&vm.ip, "mkdir -p /opt/bench/cpp").await?;
+                scp_to(&vm.ip, lang_dir.join("server.cpp").to_str().unwrap_or_default(), "/opt/bench/cpp/server.cpp").await?;
+                scp_to(&vm.ip, lang_dir.join("CMakeLists.txt").to_str().unwrap_or_default(), "/opt/bench/cpp/CMakeLists.txt").await?;
+                scp_to(&vm.ip, lang_dir.join("build.sh").to_str().unwrap_or_default(), "/opt/bench/cpp/build.sh").await?;
+                "/opt/bench/cpp".to_string()
+            };
+            ssh_exec(&vm.ip, &format!(
                 "sudo apt-get update -qq && sudo apt-get install -y -qq build-essential cmake libboost-system-dev libboost-dev libssl-dev < /dev/null; \
-                 cd /opt/bench/cpp && bash build.sh; \
-                 pkill -f '/opt/bench/cpp/build/server' || true; sleep 1; \
+                 cd {src} && bash build.sh; \
+                 pkill -f 'cpp.*server\\|/opt/bench/cpp' || true; sleep 1; \
                  BENCH_CERT_DIR=/opt/bench BENCH_PORT=8443 \
-                 nohup /opt/bench/cpp/build/server > /opt/bench/cpp/server.log 2>&1 &"
-            ).await?;
+                 nohup {src}/build/server > /opt/bench/cpp-server.log 2>&1 &"
+            )).await?;
         }
         "ruby" => {
-            let lang_dir = api_dir.join("ruby");
-            ssh_exec(&vm.ip, "mkdir -p /opt/bench/ruby").await?;
-            scp_to(
-                &vm.ip,
-                lang_dir.join("config.ru")/*safe*/.to_str().unwrap_or_default(),
-                "/opt/bench/ruby/config.ru",
-            )
-            .await?;
-            scp_to(
-                &vm.ip,
-                lang_dir.join("Gemfile")/*safe*/.to_str().unwrap_or_default(),
-                "/opt/bench/ruby/Gemfile",
-            )
-            .await?;
-            scp_to(
-                &vm.ip,
-                lang_dir.join("puma.rb")/*safe*/.to_str().unwrap_or_default(),
-                "/opt/bench/ruby/puma.rb",
-            )
-            .await?;
-            ssh_exec(&vm.ip,
+            let src = if use_remote { format!("{remote_api_base}/ruby") } else {
+                let lang_dir = api_dir.join("ruby");
+                ssh_exec(&vm.ip, "mkdir -p /opt/bench/ruby").await?;
+                scp_to(&vm.ip, lang_dir.join("config.ru").to_str().unwrap_or_default(), "/opt/bench/ruby/config.ru").await?;
+                scp_to(&vm.ip, lang_dir.join("Gemfile").to_str().unwrap_or_default(), "/opt/bench/ruby/Gemfile").await?;
+                scp_to(&vm.ip, lang_dir.join("puma.rb").to_str().unwrap_or_default(), "/opt/bench/ruby/puma.rb").await?;
+                "/opt/bench/ruby".to_string()
+            };
+            ssh_exec(&vm.ip, &format!(
                 "sudo apt-get update -qq && sudo apt-get install -y -qq ruby ruby-dev build-essential libssl-dev < /dev/null && \
                  sudo gem install bundler --no-document < /dev/null; \
-                 cd /opt/bench/ruby && bundle install --quiet; \
+                 cd {src} && bundle install --quiet; \
                  pkill -f 'puma.*config.ru' || true; sleep 1; \
-                 cd /opt/bench/ruby && BENCH_CERT_DIR=/opt/bench BENCH_PORT=8443 \
+                 cd {src} && BENCH_CERT_DIR=/opt/bench BENCH_PORT=8443 \
                  nohup bundle exec puma -C puma.rb config.ru > /var/log/ruby-bench.log 2>&1 &"
-            ).await?;
+            )).await?;
         }
         "php" => {
-            let lang_dir = api_dir.join("php");
-            ssh_exec(&vm.ip, "mkdir -p /opt/bench/php").await?;
-            scp_to(
-                &vm.ip,
-                lang_dir.join("server.php")/*safe*/.to_str().unwrap_or_default(),
-                "/opt/bench/php/server.php",
-            )
-            .await?;
-            ssh_exec(&vm.ip,
+            let src = if use_remote { format!("{remote_api_base}/php") } else {
+                let lang_dir = api_dir.join("php");
+                ssh_exec(&vm.ip, "mkdir -p /opt/bench/php").await?;
+                scp_to(&vm.ip, lang_dir.join("server.php").to_str().unwrap_or_default(), "/opt/bench/php/server.php").await?;
+                "/opt/bench/php".to_string()
+            };
+            ssh_exec(&vm.ip, &format!(
                 "sudo apt-get update -qq && sudo apt-get install -y -qq php-cli php-dev php-curl libssl-dev < /dev/null; \
-                 php -m | grep -q swoole || { sudo pecl install swoole < /dev/null && echo 'extension=swoole.so' | sudo tee /etc/php/*/cli/conf.d/20-swoole.ini; }; \
+                 php -m | grep -q swoole || {{ sudo pecl install swoole < /dev/null && echo 'extension=swoole.so' | sudo tee /etc/php/*/cli/conf.d/20-swoole.ini; }}; \
                  pkill -f 'php.*server.php' || true; sleep 1; \
-                 cd /opt/bench/php && BENCH_CERT_DIR=/opt/bench BENCH_PORT=8443 \
+                 cd {src} && BENCH_CERT_DIR=/opt/bench BENCH_PORT=8443 \
                  nohup php server.php > /var/log/php-bench.log 2>&1 &"
-            ).await?;
+            )).await?;
         }
         "nginx" => {
-            let lang_dir = api_dir.join("nginx");
-            ssh_exec(
-                &vm.ip,
+            ssh_exec(&vm.ip,
                 "sudo apt-get update -qq && sudo apt-get install -y -qq nginx < /dev/null",
-            )
-            .await?;
+            ).await?;
             ssh_exec(&vm.ip, "mkdir -p /opt/bench/download").await?;
-            scp_to(
-                &vm.ip,
-                lang_dir.join("nginx.conf")/*safe*/.to_str().unwrap_or_default(),
-                "/tmp/bench-nginx.conf",
-            )
-            .await?;
-            ssh_exec(
-                &vm.ip,
-                "sudo cp /tmp/bench-nginx.conf /etc/nginx/nginx.conf",
-            )
-            .await?;
-            if lang_dir.join("generate-download-files.sh").exists() {
-                scp_to(
-                    &vm.ip,
-                    lang_dir
-                        .join("generate-download-files.sh")
-                        .to_str()
-                        .unwrap_or_default(),
-                    "/opt/bench/generate-download-files.sh",
-                )
-                .await?;
-                ssh_exec(&vm.ip, "chmod +x /opt/bench/generate-download-files.sh && /opt/bench/generate-download-files.sh /opt/bench/download").await?;
-            }
-            if lang_dir.join("health.json").exists() {
-                scp_to(
-                    &vm.ip,
-                    lang_dir.join("health.json")/*safe*/.to_str().unwrap_or_default(),
-                    "/opt/bench/health.json",
-                )
-                .await?;
+
+            if use_remote {
+                // Use nginx.conf from cloned repo
+                ssh_exec(&vm.ip, &format!(
+                    "sudo cp {remote_api_base}/nginx/nginx.conf /etc/nginx/nginx.conf; \
+                     if [ -f {remote_api_base}/nginx/generate-download-files.sh ]; then \
+                         bash {remote_api_base}/nginx/generate-download-files.sh /opt/bench/download; \
+                     fi; \
+                     if [ -f {remote_api_base}/nginx/health.json ]; then \
+                         cp {remote_api_base}/nginx/health.json /opt/bench/health.json; \
+                     fi"
+                )).await?;
+            } else {
+                let lang_dir = api_dir.join("nginx");
+                scp_to(&vm.ip, lang_dir.join("nginx.conf").to_str().unwrap_or_default(), "/tmp/bench-nginx.conf").await?;
+                ssh_exec(&vm.ip, "sudo cp /tmp/bench-nginx.conf /etc/nginx/nginx.conf").await?;
+                if lang_dir.join("generate-download-files.sh").exists() {
+                    scp_to(&vm.ip, lang_dir.join("generate-download-files.sh").to_str().unwrap_or_default(), "/opt/bench/generate-download-files.sh").await?;
+                    ssh_exec(&vm.ip, "chmod +x /opt/bench/generate-download-files.sh && /opt/bench/generate-download-files.sh /opt/bench/download").await?;
+                }
+                if lang_dir.join("health.json").exists() {
+                    scp_to(&vm.ip, lang_dir.join("health.json").to_str().unwrap_or_default(), "/opt/bench/health.json").await?;
+                }
             }
             ssh_exec(&vm.ip,
                 "sudo mkdir -p /tmp/nginx_uploads && sudo chown www-data:www-data /tmp/nginx_uploads; \

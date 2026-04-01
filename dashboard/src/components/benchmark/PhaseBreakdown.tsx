@@ -233,7 +233,7 @@ function computeDeltas(
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export function PhaseBreakdown({ language, color, modes, comparison }: PhaseBreakdownProps) {
+export function PhaseBreakdown({ language: _language, color, modes, comparison }: PhaseBreakdownProps) {
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
 
   if (modes.length === 0) {

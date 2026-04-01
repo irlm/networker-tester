@@ -49,9 +49,9 @@ function findPrimarySummary(
   summaries: BenchmarkConfigResultSummary[],
 ): BenchmarkConfigResultSummary | null {
   const candidates = summaries.filter(
-    (s) => s.metric_name === 'latency' && (s.payload_bytes === null || s.payload_bytes === undefined),
+    (s) => (s.metric_name === 'latency' || s.metric_name === 'Total ms') && (s.payload_bytes == null),
   );
-  if (candidates.length === 0) return null;
+  if (candidates.length === 0) return summaries[0] ?? null;
 
   const protocolOrder: Record<string, number> = { http1: 0, http2: 1, http3: 2 };
   candidates.sort((a, b) => {
@@ -124,7 +124,7 @@ function extractPhaseData(result: ConfigCellResult): PhaseData[] {
 
   for (const [key, summaries] of groupMap) {
     // Use the latency summary if available, otherwise first
-    const primary = summaries.find((s) => s.metric_name === 'latency') ?? summaries[0];
+    const primary = summaries.find((s) => (s.metric_name === 'latency' || s.metric_name === 'Total ms')) ?? summaries[0];
 
     // Derive mode label
     let mode: string;

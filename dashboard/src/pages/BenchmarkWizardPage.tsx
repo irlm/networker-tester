@@ -196,7 +196,23 @@ export function BenchmarkWizardPage() {
   const loadCatalog = useCallback(() => {
     if (catalogLoaded || !projectId) return;
     api.listBenchmarkCatalog(projectId)
-      .then(data => { setCatalog(data); setCatalogLoaded(true); })
+      .then(data => {
+        setCatalog(data);
+        setCatalogLoaded(true);
+        // If cell has useExisting checked, auto-select the first matching VM
+        setCells(prev => prev.map(cell => {
+          if (cell.useExisting && !cell.existingVmId) {
+            const matches = data.filter(vm =>
+              vm.cloud.toLowerCase() === cell.cloud.toLowerCase() &&
+              vm.region.toLowerCase() === cell.region.toLowerCase()
+            );
+            if (matches.length >= 1) {
+              return { ...cell, existingVmId: matches[0].vm_id };
+            }
+          }
+          return cell;
+        }));
+      })
       .catch(() => { setCatalogLoaded(true); });
   }, [projectId, catalogLoaded]);
 
@@ -308,11 +324,11 @@ export function BenchmarkWizardPage() {
 
   const canNext = useMemo(() => {
     if (step === 0) return selectedTemplate !== null;
-    if (step === 1) return cells.length > 0;
+    if (step === 1) return cells.length > 0 && cells.every(c => !c.useExisting || c.existingVmId !== ''); // existing VM requires selection; new VM proceeds freely
     if (step === 2) return selectedLangs.size > 0;
     if (step === 3) return warmup > 0 && measured > 0 && selectedModes.size > 0;
     return true;
-  }, [step, selectedTemplate, cells.length, selectedLangs.size, warmup, measured, selectedModes.size]);
+  }, [step, selectedTemplate, cells, selectedLangs.size, warmup, measured, selectedModes.size]);
 
   const goNext = () => {
     if (step === 0 && selectedTemplate === null) return;
@@ -361,6 +377,7 @@ export function BenchmarkWizardPage() {
     setSubmitError(null);
     try {
       const payload = buildPayload();
+      // Cells without existing_vm_ip will be auto-provisioned by the orchestrator
       const { config_id } = await api.createBenchmarkConfig(projectId, payload);
       await api.launchBenchmarkConfig(projectId, config_id);
       navigate(`/projects/${projectId}/benchmark-progress/${config_id}`);

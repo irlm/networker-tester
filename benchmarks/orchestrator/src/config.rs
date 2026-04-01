@@ -48,7 +48,7 @@ pub struct MethodologyConfig {
     #[serde(default = "default_warmup")]
     pub warmup_runs: u32,
     /// Minimum number of measured requests.
-    #[serde(default = "default_min_measured")]
+    #[serde(default = "default_min_measured", alias = "measured_runs")]
     pub min_measured: u32,
     /// Maximum number of measured requests.
     #[serde(default = "default_max_measured")]

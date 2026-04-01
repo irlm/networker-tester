@@ -11,6 +11,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.17.0] - 2026-04-01
+
+### Added
+- **Benchmark results overhaul**: horizontal box-and-whisker chart, inline phase breakdown with stacked bars (DNS/TCP/TLS/TTFB/Transfer), click-to-expand language comparison with delta percentages
+- **Grouped leaderboard**: Distribution tab with fingerprint grouping (cloud/region/topology), cross-run percentile aggregation, "All" group with mixed-conditions warning
+- **VM auto-provisioning**: benchmark wizard creates Azure VMs on demand, deploys language servers via single-SSH installer, auto-teardown after benchmark
+- **Remote deploy mode**: orchestrator clones repo on provisioned VM, downloads/builds language servers via HTTP (no SCP needed)
+- **V019 migration**: drops FK constraints blocking benchmark pipeline inserts (benchmarkrun→testrun, benchmarksample→requestattempt)
+- **BenchmarkArtifact pipeline**: `--benchmark-mode` on tester produces full artifact, saved to pipeline tables (BenchmarkSummary, BenchmarkSample, etc.)
+- **Progress page saved results**: polls DB every 10s so completed languages survive page reload
+- **SSH ControlMaster**: multiplexed SSH connections for VM deploy operations
+
+### Fixed
+- Callback field name mismatches (artifact_json→artifact, duration_secs→duration_seconds)
+- metric_name mismatch (tester uses "Total ms", frontend expected "latency")
+- VARCHAR(20) too short for "completed_with_errors" status → widened to VARCHAR(30)
+- Azure provisioner case sensitivity (cloud name "Azure" vs "azure")
+- VM size tier resolution (wizard "Medium" → Azure "Standard_D2s_v3")
+- Orchestrator `--payload-sizes` auto-detection for download/upload modes
+- Serde alias `measured_runs` for orchestrator config compatibility
+- Timeout calculation accounting for modes × payload sizes × runs
+- SSH key mismatch on provisioned VMs (ed25519 vs rsa)
+- Endpoint `--cert`/`--key` flags removed (binary auto-generates self-signed certs)
+
+---
+
 ## [0.15.0] - 2026-03-23
 
 ### Added

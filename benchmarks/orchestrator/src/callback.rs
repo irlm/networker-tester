@@ -33,14 +33,16 @@ struct ResultPayload {
     config_id: String,
     cell_id: String,
     language: String,
-    artifact_json: serde_json::Value,
+    artifact: serde_json::Value,
 }
 
 #[derive(Serialize)]
 struct CompletePayload {
     config_id: String,
     status: String,
-    duration_secs: f64,
+    duration_seconds: Option<i64>,
+    error_message: Option<String>,
+    teardown_status: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -96,23 +98,25 @@ impl CallbackClient {
         &self,
         cell_id: &str,
         language: &str,
-        artifact_json: serde_json::Value,
+        artifact: serde_json::Value,
     ) -> Result<()> {
         let payload = ResultPayload {
             config_id: self.config_id.clone(),
             cell_id: cell_id.to_string(),
             language: language.to_string(),
-            artifact_json,
+            artifact,
         };
         self.post("result", &payload).await
     }
 
     /// Report that the orchestrator run is complete.
-    pub async fn complete(&self, status: &str, duration_secs: f64) -> Result<()> {
+    pub async fn complete(&self, status: &str, duration_secs: f64, error_message: Option<String>) -> Result<()> {
         let payload = CompletePayload {
             config_id: self.config_id.clone(),
             status: status.to_string(),
-            duration_secs,
+            duration_seconds: Some(duration_secs as i64),
+            error_message,
+            teardown_status: None,
         };
         self.post("complete", &payload).await
     }
