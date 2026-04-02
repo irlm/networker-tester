@@ -1,5 +1,5 @@
 use crate::callback::CallbackClient;
-use crate::config::{CellConfig, DashboardBenchmarkConfig, MethodologyConfig};
+use crate::config::{DashboardBenchmarkConfig, MethodologyConfig, TestbedConfig};
 use crate::deployer;
 use crate::provisioner::{self, VmInfo};
 use crate::runner;
@@ -79,10 +79,10 @@ async fn stop_existing_server(vm: &VmInfo) {
     .await;
 }
 
-/// Outcome of a single cell execution.
+/// Outcome of a single testbed execution.
 #[allow(dead_code)]
-struct CellOutcome {
-    cell_id: String,
+struct TestbedOutcome {
+    testbed_id: String,
     languages_completed: u32,
     languages_failed: u32,
     provisioned_vm: bool,
@@ -90,7 +90,7 @@ struct CellOutcome {
 
 /// Execute the full benchmark sweep triggered by the dashboard.
 ///
-/// For each cell in the config, provisions/reuses a VM, deploys each language,
+/// For each testbed in the config, provisions/reuses a VM, deploys each language,
 /// runs the benchmark, reports results via callback, and optionally tears down.
 pub async fn execute_dashboard_benchmark(
     config: &DashboardBenchmarkConfig,
@@ -99,40 +99,47 @@ pub async fn execute_dashboard_benchmark(
     bench_dir: &Path,
 ) -> Result<()> {
     let overall_start = Instant::now();
-    let total_cells = config.cells.len();
+    let total_testbeds = config.testbeds.len();
 
     tracing::info!(
-        "Starting dashboard benchmark: config_id={}, cells={}, languages_per_cell=variable",
+        "Starting dashboard benchmark: config_id={}, testbeds={}, languages_per_testbed=variable",
         config.config_id,
-        total_cells,
+        total_testbeds,
     );
 
     let mut any_failure = false;
 
-    for (cell_index, cell) in config.cells.iter().enumerate() {
-        // Check cancellation before each cell.
+    for (testbed_index, testbed) in config.testbeds.iter().enumerate() {
+        // Check cancellation before each testbed.
         if *cancel_rx.borrow() {
-            tracing::warn!("Cancellation requested before cell {}", cell.cell_id);
+            tracing::warn!(
+                "Cancellation requested before testbed {}",
+                testbed.testbed_id
+            );
             log_callback(
                 callback,
-                &cell.cell_id,
-                vec![format!("Cancelled before cell {} of {}", cell_index + 1, total_cells)],
+                &testbed.testbed_id,
+                vec![format!(
+                    "Cancelled before testbed {} of {}",
+                    testbed_index + 1,
+                    total_testbeds
+                )],
             )
             .await;
             break;
         }
 
         tracing::info!(
-            "--- Cell {}/{}: {} ({}/{}) ---",
-            cell_index + 1,
-            total_cells,
-            cell.cell_id,
-            cell.cloud,
-            cell.region,
+            "--- Testbed {}/{}: {} ({}/{}) ---",
+            testbed_index + 1,
+            total_testbeds,
+            testbed.testbed_id,
+            testbed.cloud,
+            testbed.region,
         );
 
-        let outcome = execute_cell(cell, &config.methodology, callback, cancel_rx, bench_dir)
-            .await;
+        let outcome =
+            execute_testbed(testbed, &config.methodology, callback, cancel_rx, bench_dir).await;
 
         match outcome {
             Ok(outcome) => {
@@ -141,16 +148,16 @@ pub async fn execute_dashboard_benchmark(
                 }
                 // Teardown if auto_teardown and we provisioned the VM
                 if config.auto_teardown && outcome.provisioned_vm {
-                    teardown_cell(cell, callback).await;
+                    teardown_testbed(testbed, callback).await;
                 }
             }
             Err(e) => {
                 any_failure = true;
-                tracing::error!("Cell {} failed: {:#}", cell.cell_id, e);
+                tracing::error!("Testbed {} failed: {:#}", testbed.testbed_id, e);
                 log_callback(
                     callback,
-                    &cell.cell_id,
-                    vec![format!("Cell failed: {e:#}")],
+                    &testbed.testbed_id,
+                    vec![format!("Testbed failed: {e:#}")],
                 )
                 .await;
             }
@@ -173,30 +180,37 @@ pub async fn execute_dashboard_benchmark(
         duration_secs,
     );
 
-    let error_msg = if any_failure { Some("One or more cells had errors".to_string()) } else { None };
-    if let Err(e) = callback.complete(final_status, duration_secs, error_msg).await {
+    let error_msg = if any_failure {
+        Some("One or more testbeds had errors".to_string())
+    } else {
+        None
+    };
+    if let Err(e) = callback
+        .complete(final_status, duration_secs, error_msg)
+        .await
+    {
         tracing::error!("Failed to report completion: {e:#}");
     }
 
     Ok(())
 }
 
-/// Execute a single cell: provision/reuse VM, deploy + benchmark each language.
-async fn execute_cell(
-    cell: &CellConfig,
+/// Execute a single testbed: provision/reuse VM, deploy + benchmark each language.
+async fn execute_testbed(
+    testbed: &TestbedConfig,
     methodology: &MethodologyConfig,
     callback: &Arc<CallbackClient>,
     cancel_rx: &watch::Receiver<bool>,
     bench_dir: &Path,
-) -> Result<CellOutcome> {
-    let language_total = cell.languages.len() as u32;
+) -> Result<TestbedOutcome> {
+    let language_total = testbed.languages.len() as u32;
     let mut languages_completed = 0u32;
     let mut languages_failed = 0u32;
 
     // Step 1: Resolve VM — use existing_vm_ip or provision.
     status_callback(
         callback,
-        &cell.cell_id,
+        &testbed.testbed_id,
         "provisioning",
         "",
         0,
@@ -205,13 +219,13 @@ async fn execute_cell(
     )
     .await;
 
-    let (vm, provisioned) = resolve_vm(cell)
+    let (vm, provisioned) = resolve_vm(testbed)
         .await
-        .with_context(|| format!("resolving VM for cell {}", cell.cell_id))?;
+        .with_context(|| format!("resolving VM for testbed {}", testbed.testbed_id))?;
 
     log_callback(
         callback,
-        &cell.cell_id,
+        &testbed.testbed_id,
         vec![format!(
             "VM ready: {} at {} (provisioned={})",
             vm.name, vm.ip, provisioned
@@ -220,16 +234,21 @@ async fn execute_cell(
     .await;
 
     // Step 2: Iterate over languages.
-    for (lang_index, language) in cell.languages.iter().enumerate() {
+    for (lang_index, language) in testbed.languages.iter().enumerate() {
         let lang_index_u32 = lang_index as u32;
 
         // Check cancellation between languages.
         if *cancel_rx.borrow() {
-            tracing::warn!("Cancellation requested, stopping cell {}", cell.cell_id);
+            tracing::warn!(
+                "Cancellation requested, stopping testbed {}",
+                testbed.testbed_id
+            );
             log_callback(
                 callback,
-                &cell.cell_id,
-                vec![format!("Cancelled after {languages_completed} of {language_total} languages")],
+                &testbed.testbed_id,
+                vec![format!(
+                    "Cancelled after {languages_completed} of {language_total} languages"
+                )],
             )
             .await;
             break;
@@ -238,7 +257,10 @@ async fn execute_cell(
         // Also check via callback (in case heartbeat hasn't caught up yet).
         match callback.check_cancelled().await {
             Ok(true) => {
-                tracing::warn!("Dashboard cancelled, stopping cell {}", cell.cell_id);
+                tracing::warn!(
+                    "Dashboard cancelled, stopping testbed {}",
+                    testbed.testbed_id
+                );
                 break;
             }
             Ok(false) => {}
@@ -246,40 +268,50 @@ async fn execute_cell(
         }
 
         tracing::info!(
-            "Language {}/{}: {} on cell {}",
+            "Language {}/{}: {} on testbed {}",
             lang_index + 1,
             language_total,
             language,
-            cell.cell_id,
+            testbed.testbed_id,
         );
 
         status_callback(
             callback,
-            &cell.cell_id,
+            &testbed.testbed_id,
             "running",
             language,
             lang_index_u32 + 1,
             language_total,
-            &format!("Running language {} of {}: {}", lang_index + 1, language_total, language),
+            &format!(
+                "Running language {} of {}: {}",
+                lang_index + 1,
+                language_total,
+                language
+            ),
         )
         .await;
 
         // Start language server — skip full deploy for existing VMs (already deployed).
-        let use_existing = cell.existing_vm_ip.is_some();
+        let use_existing = testbed.existing_vm_ip.is_some();
         if use_existing {
             // Existing VM: just start the server, skip build+deploy
             log_callback(
                 callback,
-                &cell.cell_id,
+                &testbed.testbed_id,
                 vec![format!("Starting {} server on existing VM...", language)],
             )
             .await;
 
             if let Err(e) = start_existing_server(&vm, language).await {
-                tracing::error!("Start failed for {} on cell {}: {:#}", language, cell.cell_id, e);
+                tracing::error!(
+                    "Start failed for {} on testbed {}: {:#}",
+                    language,
+                    testbed.testbed_id,
+                    e
+                );
                 log_callback(
                     callback,
-                    &cell.cell_id,
+                    &testbed.testbed_id,
                     vec![format!("Start failed for {}: {e:#}", language)],
                 )
                 .await;
@@ -290,16 +322,21 @@ async fn execute_cell(
             // New VM: full deploy (build + copy + start)
             log_callback(
                 callback,
-                &cell.cell_id,
+                &testbed.testbed_id,
                 vec![format!("Deploying {} server...", language)],
             )
             .await;
 
             if let Err(e) = deployer::deploy_api(&vm, language, bench_dir).await {
-                tracing::error!("Deploy failed for {} on cell {}: {:#}", language, cell.cell_id, e);
+                tracing::error!(
+                    "Deploy failed for {} on testbed {}: {:#}",
+                    language,
+                    testbed.testbed_id,
+                    e
+                );
                 log_callback(
                     callback,
-                    &cell.cell_id,
+                    &testbed.testbed_id,
                     vec![format!("Deploy failed for {}: {e:#}", language)],
                 )
                 .await;
@@ -310,7 +347,7 @@ async fn execute_cell(
 
         log_callback(
             callback,
-            &cell.cell_id,
+            &testbed.testbed_id,
             vec![format!("{} server ready", language)],
         )
         .await;
@@ -331,7 +368,7 @@ async fn execute_cell(
 
         log_callback(
             callback,
-            &cell.cell_id,
+            &testbed.testbed_id,
             vec![format!(
                 "Running benchmark: modes={}, warmup={}, measured={}, timeout={}s",
                 modes_str,
@@ -344,16 +381,23 @@ async fn execute_cell(
 
         match run_language_benchmark(&vm, &test_params, language, &modes_str).await {
             Ok(artifact_json) => {
-                tracing::info!("Benchmark complete for {} on cell {}", language, cell.cell_id);
+                tracing::info!(
+                    "Benchmark complete for {} on testbed {}",
+                    language,
+                    testbed.testbed_id
+                );
                 log_callback(
                     callback,
-                    &cell.cell_id,
+                    &testbed.testbed_id,
                     vec![format!("{} benchmark complete", language)],
                 )
                 .await;
 
                 // Report result via callback.
-                if let Err(e) = callback.result(&cell.cell_id, language, artifact_json).await {
+                if let Err(e) = callback
+                    .result(&testbed.testbed_id, language, artifact_json)
+                    .await
+                {
                     tracing::error!("Failed to report result for {}: {e:#}", language);
                 }
 
@@ -361,12 +405,14 @@ async fn execute_cell(
             }
             Err(e) => {
                 tracing::error!(
-                    "Benchmark failed for {} on cell {}: {:#}",
-                    language, cell.cell_id, e
+                    "Benchmark failed for {} on testbed {}: {:#}",
+                    language,
+                    testbed.testbed_id,
+                    e
                 );
                 log_callback(
                     callback,
-                    &cell.cell_id,
+                    &testbed.testbed_id,
                     vec![format!("Benchmark failed for {}: {e:#}", language)],
                 )
                 .await;
@@ -382,8 +428,8 @@ async fn execute_cell(
         }
     }
 
-    // Report cell complete.
-    let cell_status = if languages_failed == 0 && !*cancel_rx.borrow() {
+    // Report testbed complete.
+    let testbed_status = if languages_failed == 0 && !*cancel_rx.borrow() {
         "completed"
     } else if *cancel_rx.borrow() {
         "cancelled"
@@ -393,36 +439,41 @@ async fn execute_cell(
 
     status_callback(
         callback,
-        &cell.cell_id,
-        cell_status,
+        &testbed.testbed_id,
+        testbed_status,
         "",
         language_total,
         language_total,
-        &format!(
-            "Cell complete: {languages_completed} succeeded, {languages_failed} failed"
-        ),
+        &format!("Testbed complete: {languages_completed} succeeded, {languages_failed} failed"),
     )
     .await;
 
-    Ok(CellOutcome {
-        cell_id: cell.cell_id.clone(),
+    Ok(TestbedOutcome {
+        testbed_id: testbed.testbed_id.clone(),
         languages_completed,
         languages_failed,
         provisioned_vm: provisioned,
     })
 }
 
-/// Resolve the VM for a cell: use existing IP or provision a new one.
-async fn resolve_vm(cell: &CellConfig) -> Result<(VmInfo, bool)> {
-    if let Some(ip) = &cell.existing_vm_ip {
-        tracing::info!("Using existing VM at {} for cell {}", ip, cell.cell_id);
+/// Resolve the VM for a testbed: use existing IP or provision a new one.
+async fn resolve_vm(testbed: &TestbedConfig) -> Result<(VmInfo, bool)> {
+    if let Some(ip) = &testbed.existing_vm_ip {
+        tracing::info!(
+            "Using existing VM at {} for testbed {}",
+            ip,
+            testbed.testbed_id
+        );
         let vm = VmInfo {
-            name: format!("existing-{}", &cell.cell_id[..8.min(cell.cell_id.len())]),
+            name: format!(
+                "existing-{}",
+                &testbed.testbed_id[..8.min(testbed.testbed_id.len())]
+            ),
             ip: ip.clone(),
-            cloud: cell.cloud.clone(),
-            region: cell.region.clone(),
+            cloud: testbed.cloud.clone(),
+            region: testbed.region.clone(),
             os: "ubuntu".to_string(),
-            vm_size: cell.vm_size.clone(),
+            vm_size: testbed.vm_size.clone(),
             resource_group: String::new(),
             ssh_user: "azureuser".to_string(),
         };
@@ -432,8 +483,8 @@ async fn resolve_vm(cell: &CellConfig) -> Result<(VmInfo, bool)> {
         // If none are available, fail fast with a helpful message.
         let vm_name = format!(
             "ab-{}-{}",
-            &cell.cell_id[..8.min(cell.cell_id.len())],
-            cell.region
+            &testbed.testbed_id[..8.min(testbed.testbed_id.len())],
+            testbed.region
         );
 
         // Check if VM already exists.
@@ -447,16 +498,22 @@ async fn resolve_vm(cell: &CellConfig) -> Result<(VmInfo, bool)> {
         tracing::info!(
             "Provisioning new VM: name={}, cloud={}, region={}, size={}",
             vm_name,
-            cell.cloud,
-            cell.region,
-            cell.vm_size,
+            testbed.cloud,
+            testbed.region,
+            testbed.vm_size,
         );
 
-        let cloud_lower = cell.cloud.to_lowercase();
-        let size_lower = cell.vm_size.to_lowercase();
+        let cloud_lower = testbed.cloud.to_lowercase();
+        let size_lower = testbed.vm_size.to_lowercase();
         let resolved_size = crate::vm_tiers::resolve_vm_size(&cloud_lower, &size_lower);
-        let vm =
-            provisioner::provision_vm(&cell.cloud, &cell.region, "ubuntu", resolved_size, &vm_name).await?;
+        let vm = provisioner::provision_vm(
+            &testbed.cloud,
+            &testbed.region,
+            "ubuntu",
+            resolved_size,
+            &vm_name,
+        )
+        .await?;
         Ok((vm, true))
     }
 }
@@ -551,17 +608,17 @@ fn resolve_tester_path() -> String {
     "networker-tester".to_string()
 }
 
-/// Tear down a provisioned VM for a cell.
-async fn teardown_cell(cell: &CellConfig, callback: &Arc<CallbackClient>) {
+/// Tear down a provisioned VM for a testbed.
+async fn teardown_testbed(testbed: &TestbedConfig, callback: &Arc<CallbackClient>) {
     let vm_name = format!(
         "ab-{}-{}",
-        &cell.cell_id[..8.min(cell.cell_id.len())],
-        cell.region
+        &testbed.testbed_id[..8.min(testbed.testbed_id.len())],
+        testbed.region
     );
 
     log_callback(
         callback,
-        &cell.cell_id,
+        &testbed.testbed_id,
         vec![format!("Tearing down VM {vm_name}...")],
     )
     .await;
@@ -573,7 +630,7 @@ async fn teardown_cell(cell: &CellConfig, callback: &Arc<CallbackClient>) {
                 tracing::error!("Failed to destroy VM {}: {e:#}", vm_name);
                 log_callback(
                     callback,
-                    &cell.cell_id,
+                    &testbed.testbed_id,
                     vec![format!("Teardown failed for {vm_name}: {e:#}")],
                 )
                 .await;
@@ -581,7 +638,7 @@ async fn teardown_cell(cell: &CellConfig, callback: &Arc<CallbackClient>) {
                 tracing::info!("VM {} destroyed", vm_name);
                 log_callback(
                     callback,
-                    &cell.cell_id,
+                    &testbed.testbed_id,
                     vec![format!("VM {vm_name} destroyed")],
                 )
                 .await;
@@ -599,7 +656,7 @@ async fn teardown_cell(cell: &CellConfig, callback: &Arc<CallbackClient>) {
 /// Helper: send a status callback, logging errors but not failing.
 async fn status_callback(
     callback: &CallbackClient,
-    cell_id: &str,
+    testbed_id: &str,
     status: &str,
     current_language: &str,
     language_index: u32,
@@ -608,7 +665,7 @@ async fn status_callback(
 ) {
     if let Err(e) = callback
         .status(
-            cell_id,
+            testbed_id,
             status,
             current_language,
             language_index,
@@ -622,8 +679,8 @@ async fn status_callback(
 }
 
 /// Helper: send a log callback, logging errors but not failing.
-async fn log_callback(callback: &CallbackClient, cell_id: &str, lines: Vec<String>) {
-    if let Err(e) = callback.log(cell_id, lines).await {
+async fn log_callback(callback: &CallbackClient, testbed_id: &str, lines: Vec<String>) {
+    if let Err(e) = callback.log(testbed_id, lines).await {
         tracing::warn!("Log callback failed: {e}");
     }
 }

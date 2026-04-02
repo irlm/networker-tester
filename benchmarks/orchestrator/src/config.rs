@@ -11,8 +11,9 @@ use std::path::Path;
 pub struct DashboardBenchmarkConfig {
     /// Unique identifier for this config (matches the dashboard DB row).
     pub config_id: String,
-    /// Cells to execute — each is a VM + set of languages.
-    pub cells: Vec<CellConfig>,
+    /// Testbeds to execute — each is a VM + set of languages.
+    #[serde(alias = "cells")]
+    pub testbeds: Vec<TestbedConfig>,
     /// Benchmark methodology parameters.
     pub methodology: MethodologyConfig,
     /// Whether to destroy provisioned VMs after the run.
@@ -20,11 +21,12 @@ pub struct DashboardBenchmarkConfig {
     pub auto_teardown: bool,
 }
 
-/// A single cell in the benchmark matrix.
+/// A single testbed in the benchmark matrix.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CellConfig {
-    /// Unique identifier for this cell.
-    pub cell_id: String,
+pub struct TestbedConfig {
+    /// Unique identifier for this testbed.
+    #[serde(alias = "cell_id")]
+    pub testbed_id: String,
     /// Cloud provider: "azure", "aws", "gcp".
     pub cloud: String,
     /// Cloud region, e.g. "eastus".
@@ -37,7 +39,10 @@ pub struct CellConfig {
     /// IP of an existing VM to reuse (skip provisioning if set).
     #[serde(default)]
     pub existing_vm_ip: Option<String>,
-    /// Languages to benchmark on this cell.
+    /// Operating system: "linux" or "windows".
+    #[serde(default = "default_os")]
+    pub os: String,
+    /// Languages to benchmark on this testbed.
     pub languages: Vec<String>,
 }
 
@@ -69,6 +74,9 @@ pub struct MethodologyConfig {
 
 fn default_topology() -> String {
     "loopback".to_string()
+}
+fn default_os() -> String {
+    "linux".to_string()
 }
 fn default_warmup() -> u32 {
     10
@@ -106,13 +114,16 @@ impl DashboardBenchmarkConfig {
     /// Validate the config.
     fn validate(&self) -> Result<()> {
         anyhow::ensure!(!self.config_id.is_empty(), "config_id must not be empty");
-        anyhow::ensure!(!self.cells.is_empty(), "cells list must not be empty");
-        for cell in &self.cells {
-            anyhow::ensure!(!cell.cell_id.is_empty(), "cell_id must not be empty");
+        anyhow::ensure!(!self.testbeds.is_empty(), "testbeds list must not be empty");
+        for testbed in &self.testbeds {
             anyhow::ensure!(
-                !cell.languages.is_empty(),
-                "cell {} has no languages",
-                cell.cell_id
+                !testbed.testbed_id.is_empty(),
+                "testbed_id must not be empty"
+            );
+            anyhow::ensure!(
+                !testbed.languages.is_empty(),
+                "testbed {} has no languages",
+                testbed.testbed_id
             );
         }
         anyhow::ensure!(
@@ -496,13 +507,14 @@ mod tests {
     fn sample_dashboard_config() -> DashboardBenchmarkConfig {
         DashboardBenchmarkConfig {
             config_id: "test-uuid-1234".into(),
-            cells: vec![CellConfig {
-                cell_id: "cell-uuid-5678".into(),
+            testbeds: vec![TestbedConfig {
+                testbed_id: "testbed-uuid-5678".into(),
                 cloud: "azure".into(),
                 region: "eastus".into(),
                 topology: "loopback".into(),
                 vm_size: "Standard_D2s_v3".into(),
                 existing_vm_ip: Some("40.87.23.80".into()),
+                os: "linux".into(),
                 languages: vec!["rust".into(), "go".into()],
             }],
             methodology: MethodologyConfig {
@@ -524,8 +536,8 @@ mod tests {
         let json = serde_json::to_string_pretty(&cfg).unwrap();
         let loaded: DashboardBenchmarkConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(loaded.config_id, "test-uuid-1234");
-        assert_eq!(loaded.cells.len(), 1);
-        assert_eq!(loaded.cells[0].languages.len(), 2);
+        assert_eq!(loaded.testbeds.len(), 1);
+        assert_eq!(loaded.testbeds[0].languages.len(), 2);
         assert_eq!(loaded.methodology.warmup_runs, 10);
         assert!(loaded.auto_teardown);
     }
@@ -538,7 +550,7 @@ mod tests {
         std::fs::write(&path, serde_json::to_string_pretty(&cfg).unwrap()).unwrap();
         let loaded = DashboardBenchmarkConfig::load(&path).unwrap();
         assert_eq!(loaded.config_id, cfg.config_id);
-        assert_eq!(loaded.cells.len(), 1);
+        assert_eq!(loaded.testbeds.len(), 1);
         std::fs::remove_file(&path).ok();
     }
 
@@ -552,14 +564,14 @@ mod tests {
     #[test]
     fn test_dashboard_config_validates_empty_cells() {
         let mut cfg = sample_dashboard_config();
-        cfg.cells.clear();
+        cfg.testbeds.clear();
         assert!(cfg.validate().is_err());
     }
 
     #[test]
     fn test_dashboard_config_validates_empty_languages() {
         let mut cfg = sample_dashboard_config();
-        cfg.cells[0].languages.clear();
+        cfg.testbeds[0].languages.clear();
         assert!(cfg.validate().is_err());
     }
 
@@ -567,8 +579,8 @@ mod tests {
     fn test_dashboard_config_defaults() {
         let json = r#"{
             "config_id": "test",
-            "cells": [{
-                "cell_id": "c1",
+            "testbeds": [{
+                "testbed_id": "tb1",
                 "cloud": "azure",
                 "region": "eastus",
                 "vm_size": "Standard_D2s_v3",
@@ -583,7 +595,7 @@ mod tests {
         assert_eq!(cfg.methodology.timeout_secs, 30);
         assert_eq!(cfg.methodology.modes, vec!["http1", "http2"]);
         assert!(!cfg.auto_teardown);
-        assert_eq!(cfg.cells[0].topology, "loopback");
-        assert!(cfg.cells[0].existing_vm_ip.is_none());
+        assert_eq!(cfg.testbeds[0].topology, "loopback");
+        assert!(cfg.testbeds[0].existing_vm_ip.is_none());
     }
 }

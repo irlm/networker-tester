@@ -13,7 +13,7 @@ pub struct CallbackClient {
 #[derive(Serialize)]
 struct StatusPayload {
     config_id: String,
-    cell_id: String,
+    testbed_id: String,
     status: String,
     current_language: String,
     language_index: u32,
@@ -24,14 +24,14 @@ struct StatusPayload {
 #[derive(Serialize)]
 struct LogPayload {
     config_id: String,
-    cell_id: String,
+    testbed_id: String,
     lines: Vec<String>,
 }
 
 #[derive(Serialize)]
 struct ResultPayload {
     config_id: String,
-    cell_id: String,
+    testbed_id: String,
     language: String,
     artifact: serde_json::Value,
 }
@@ -61,10 +61,10 @@ impl CallbackClient {
         }
     }
 
-    /// Report cell status to the dashboard.
+    /// Report testbed status to the dashboard.
     pub async fn status(
         &self,
-        cell_id: &str,
+        testbed_id: &str,
         status: &str,
         current_language: &str,
         language_index: u32,
@@ -73,7 +73,7 @@ impl CallbackClient {
     ) -> Result<()> {
         let payload = StatusPayload {
             config_id: self.config_id.clone(),
-            cell_id: cell_id.to_string(),
+            testbed_id: testbed_id.to_string(),
             status: status.to_string(),
             current_language: current_language.to_string(),
             language_index,
@@ -83,26 +83,26 @@ impl CallbackClient {
         self.post("status", &payload).await
     }
 
-    /// Send log lines for a cell.
-    pub async fn log(&self, cell_id: &str, lines: Vec<String>) -> Result<()> {
+    /// Send log lines for a testbed.
+    pub async fn log(&self, testbed_id: &str, lines: Vec<String>) -> Result<()> {
         let payload = LogPayload {
             config_id: self.config_id.clone(),
-            cell_id: cell_id.to_string(),
+            testbed_id: testbed_id.to_string(),
             lines,
         };
         self.post("log", &payload).await
     }
 
-    /// Submit a benchmark result artifact for a cell/language.
+    /// Submit a benchmark result artifact for a testbed/language.
     pub async fn result(
         &self,
-        cell_id: &str,
+        testbed_id: &str,
         language: &str,
         artifact: serde_json::Value,
     ) -> Result<()> {
         let payload = ResultPayload {
             config_id: self.config_id.clone(),
-            cell_id: cell_id.to_string(),
+            testbed_id: testbed_id.to_string(),
             language: language.to_string(),
             artifact,
         };
@@ -110,7 +110,12 @@ impl CallbackClient {
     }
 
     /// Report that the orchestrator run is complete.
-    pub async fn complete(&self, status: &str, duration_secs: f64, error_message: Option<String>) -> Result<()> {
+    pub async fn complete(
+        &self,
+        status: &str,
+        duration_secs: f64,
+        error_message: Option<String>,
+    ) -> Result<()> {
         let payload = CompletePayload {
             config_id: self.config_id.clone(),
             status: status.to_string(),
@@ -144,10 +149,7 @@ impl CallbackClient {
             .context("callback cancelled check failed")?;
 
         if !resp.status().is_success() {
-            anyhow::bail!(
-                "callback cancelled check returned HTTP {}",
-                resp.status()
-            );
+            anyhow::bail!("callback cancelled check returned HTTP {}", resp.status());
         }
 
         #[derive(serde::Deserialize)]
@@ -164,10 +166,7 @@ impl CallbackClient {
 
     /// POST a JSON payload to a callback endpoint.
     async fn post<T: Serialize>(&self, endpoint: &str, payload: &T) -> Result<()> {
-        let url = format!(
-            "{}/api/benchmarks/callback/{}",
-            self.base_url, endpoint
-        );
+        let url = format!("{}/api/benchmarks/callback/{}", self.base_url, endpoint);
         let resp = self
             .client
             .post(&url)
