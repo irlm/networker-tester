@@ -21,36 +21,9 @@ interface TemplateOption {
 
 const TEMPLATES: TemplateOption[] = [
   {
-    id: 'quick-check',
-    name: 'Quick Check',
-    description: 'Single loopback testbed. Fast validation that the benchmark pipeline works end-to-end.',
-    defaultTestbedCount: 1,
-    defaultOs: 'linux' as const,
-    defaultLanguages: ['nginx', 'rust', 'go'],
-    methodology: 'quick',
-  },
-  {
-    id: 'regional-comparison',
-    name: 'Regional Comparison',
-    description: 'Same cloud, two regions. Measures language performance across geographic distance.',
-    defaultTestbedCount: 2,
-    defaultOs: 'linux' as const,
-    defaultLanguages: ['nginx', 'rust', 'go', 'csharp-net8', 'java', 'nodejs'],
-    methodology: 'standard',
-  },
-  {
-    id: 'cross-cloud',
-    name: 'Cross-Cloud',
-    description: 'One testbed per cloud provider. Compares language behaviour on Azure, AWS, and GCP.',
-    defaultTestbedCount: 3,
-    defaultOs: 'linux' as const,
-    defaultLanguages: ['nginx', 'rust', 'go', 'csharp-net8', 'java', 'nodejs', 'python'],
-    methodology: 'standard',
-  },
-  {
     id: 'linux-focus',
-    name: 'Linux Focus',
-    description: 'Single Linux testbed with top-performing languages. Best for quick language comparison on Ubuntu.',
+    name: 'Linux',
+    description: 'Single Ubuntu testbed, top languages.',
     defaultTestbedCount: 1,
     defaultOs: 'linux' as const,
     defaultLanguages: ['nginx', 'rust', 'go', 'csharp-net8', 'java', 'nodejs'],
@@ -59,7 +32,7 @@ const TEMPLATES: TemplateOption[] = [
   {
     id: 'windows-dotnet',
     name: 'Windows .NET',
-    description: 'Single Windows testbed focused on the C# .NET ecosystem — Framework 4.8 through .NET 10 AOT.',
+    description: 'Single Windows testbed, full C# ecosystem.',
     defaultTestbedCount: 1,
     defaultOs: 'windows' as const,
     defaultLanguages: ['nginx', 'csharp-net48', 'csharp-net8', 'csharp-net8-aot', 'csharp-net9', 'csharp-net9-aot', 'csharp-net10', 'csharp-net10-aot'],
@@ -68,16 +41,34 @@ const TEMPLATES: TemplateOption[] = [
   {
     id: 'cross-os',
     name: 'Cross-OS',
-    description: 'Two testbeds — Linux and Windows — same cloud and region. Compares language performance across operating systems.',
+    description: 'Linux + Windows side-by-side, same region.',
     defaultTestbedCount: 2,
     defaultOs: null,
     defaultLanguages: ['nginx', 'rust', 'go', 'csharp-net8', 'csharp-net8-aot', 'java', 'nodejs'],
     methodology: 'standard',
   },
   {
+    id: 'regional-comparison',
+    name: 'Regional',
+    description: 'Same cloud, two regions.',
+    defaultTestbedCount: 2,
+    defaultOs: 'linux' as const,
+    defaultLanguages: ['nginx', 'rust', 'go', 'csharp-net8', 'java', 'nodejs'],
+    methodology: 'standard',
+  },
+  {
+    id: 'cross-cloud',
+    name: 'Cross-Cloud',
+    description: 'Azure + AWS + GCP, one testbed each.',
+    defaultTestbedCount: 3,
+    defaultOs: 'linux' as const,
+    defaultLanguages: ['nginx', 'rust', 'go', 'csharp-net8', 'java', 'nodejs', 'python'],
+    methodology: 'standard',
+  },
+  {
     id: 'custom',
     name: 'Custom',
-    description: 'Start from scratch. Full control over testbeds, languages, and methodology.',
+    description: 'Start from scratch.',
     defaultTestbedCount: 0,
     defaultOs: null,
     defaultLanguages: ['nginx'],
@@ -263,7 +254,7 @@ export function BenchmarkWizardPage() {
 
     // Pre-fill testbeds
     const newTestbeds: TestbedState[] = [];
-    if (tmpl.id === 'quick-check' || tmpl.id === 'linux-focus' || tmpl.id === 'windows-dotnet') {
+    if (tmpl.id === 'linux-focus' || tmpl.id === 'windows-dotnet') {
       const k = testbedKey;
       setTestbedKey(k + 1);
       newTestbeds.push(makeTestbed(k, 'Azure', tmpl.defaultOs ?? 'linux'));
@@ -456,9 +447,6 @@ export function BenchmarkWizardPage() {
       {/* Header */}
       <div className="mb-6">
         <h2 className="text-lg md:text-xl font-bold text-gray-100">New Benchmark</h2>
-        <p className="text-xs text-gray-500 mt-1">
-          Configure testbeds, languages, and methodology, then launch.
-        </p>
       </div>
 
       {/* Stepper */}
@@ -492,24 +480,24 @@ export function BenchmarkWizardPage() {
       {step === 0 && (
         <div>
           <h3 className="text-sm font-semibold text-gray-200 mb-4">Choose a template</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
             {TEMPLATES.map(tmpl => (
               <button
                 key={tmpl.id}
                 onClick={() => applyTemplate(tmpl)}
-                className={`text-left border rounded-lg p-4 transition-colors ${
+                className={`text-left border px-3 py-2.5 transition-colors ${
                   selectedTemplate === tmpl.id
                     ? 'border-cyan-500/50 bg-cyan-500/5'
-                    : 'border-gray-800 bg-[var(--bg-surface)]/40 hover:border-gray-600'
+                    : 'border-gray-800 hover:border-gray-600'
                 }`}
               >
-                <h4 className="text-sm font-medium text-gray-100">{tmpl.name}</h4>
-                <p className="text-xs text-gray-500 mt-1">{tmpl.description}</p>
-                <div className="flex items-center gap-3 mt-3 text-[11px] text-gray-600">
-                  {tmpl.defaultTestbedCount > 0 && <span>{tmpl.defaultTestbedCount} testbed{tmpl.defaultTestbedCount > 1 ? 's' : ''}</span>}
-                  <span>{tmpl.defaultLanguages.length} languages</span>
-                  <span>{tmpl.methodology} methodology</span>
-                </div>
+                <div className="text-sm font-medium text-gray-100">{tmpl.name}</div>
+                <div className="text-[11px] text-gray-500 mt-0.5">{tmpl.description}</div>
+                {tmpl.defaultTestbedCount > 0 && (
+                  <div className="text-[10px] font-mono text-gray-600 mt-1.5">
+                    {tmpl.defaultTestbedCount} testbed{tmpl.defaultTestbedCount > 1 ? 's' : ''} / {tmpl.defaultLanguages.length} lang
+                  </div>
+                )}
               </button>
             ))}
           </div>
@@ -854,82 +842,50 @@ export function BenchmarkWizardPage() {
             />
           </label>
 
-          {/* Testbed summaries */}
-          <div className="space-y-2 mb-4">
-            {testbeds.map((testbed, idx) => (
-              <div key={testbed.key} className="border border-gray-800 rounded-lg p-3 bg-[var(--bg-surface)]/40">
-                <div className="flex items-center gap-3">
-                  <span className="text-xs font-medium text-gray-400">Testbed {idx + 1}</span>
-                  <span className="text-xs text-gray-300 font-mono">
-                    {testbed.cloud} / {testbed.region}
-                  </span>
-                  <span className="text-xs text-gray-500">{testbed.topology}</span>
-                  <span className="text-xs text-gray-500">{testbed.vmSize}</span>
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
-                    testbed.os === 'windows'
-                      ? 'border-blue-500/30 text-blue-300'
-                      : 'border-green-500/30 text-green-300'
+          {/* Summary line */}
+          <div className="text-xs font-mono text-gray-400 mb-4">
+            {testbeds.length} testbed{testbeds.length !== 1 ? 's' : ''} / {totalLanguages} languages / {totalCombinations} combinations / {totalVMs} new VM{totalVMs !== 1 ? 's' : ''}{totalExisting > 0 ? ` + ${totalExisting} existing` : ''}
+          </div>
+
+          {/* Testbeds */}
+          <div className="mb-4">
+            <div className="text-[10px] uppercase tracking-wider text-gray-600 mb-1.5">Testbeds</div>
+            <div className="space-y-0.5">
+              {testbeds.map((testbed, idx) => (
+                <div key={testbed.key} className="flex items-center gap-2 text-xs font-mono py-1 border-b border-gray-800/50 last:border-0">
+                  <span className="text-gray-500 w-4">{idx + 1}</span>
+                  <span className="text-gray-200">{testbed.cloud}</span>
+                  <span className="text-gray-500">/</span>
+                  <span className="text-gray-300">{testbed.region}</span>
+                  <span className={`text-[10px] px-1 ${
+                    testbed.os === 'windows' ? 'text-blue-400' : 'text-green-400'
                   }`}>
-                    {testbed.os === 'windows' ? 'Windows' : 'Linux'}
+                    {testbed.os === 'windows' ? 'win' : 'linux'}
                   </span>
-                  {testbed.useExisting && <span className="text-[10px] text-yellow-500/80">existing VM</span>}
+                  <span className="text-gray-600">{testbed.vmSize}</span>
+                  <span className="text-gray-700">{testbed.topology}</span>
+                  {testbed.useExisting && <span className="text-yellow-600">existing</span>}
                 </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Totals */}
-          <div className="border border-gray-800 rounded-lg p-4 bg-[var(--bg-surface)]/40 mb-4">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
-              <div>
-                <div className="text-lg font-bold text-gray-100 font-mono">{testbeds.length}</div>
-                <div className="text-xs text-gray-500">Testbeds</div>
-              </div>
-              <div>
-                <div className="text-lg font-bold text-gray-100 font-mono">{totalLanguages}</div>
-                <div className="text-xs text-gray-500">Languages</div>
-              </div>
-              <div>
-                <div className="text-lg font-bold text-gray-100 font-mono">{totalCombinations}</div>
-                <div className="text-xs text-gray-500">Combinations</div>
-              </div>
-              <div>
-                <div className="text-lg font-bold text-gray-100 font-mono">{totalVMs}</div>
-                <div className="text-xs text-gray-500">New VMs{totalExisting > 0 ? ` + ${totalExisting} existing` : ''}</div>
-              </div>
+              ))}
             </div>
           </div>
 
-          {/* Methodology summary */}
-          <div className="border border-gray-800 rounded-lg p-4 bg-[var(--bg-surface)]/40 mb-4">
-            <h4 className="text-xs font-medium text-gray-500 mb-2">Methodology</h4>
-            <div className="flex flex-wrap gap-3 text-xs text-gray-300">
-              <span>{warmup} warmup</span>
-              <span>{measured} measured</span>
-              {targetError != null && <span>{targetError}% error target</span>}
-              <span>modes: {Array.from(selectedModes).join(', ')}</span>
+          {/* Methodology */}
+          <div className="mb-4">
+            <div className="text-[10px] uppercase tracking-wider text-gray-600 mb-1.5">Methodology</div>
+            <div className="text-xs font-mono text-gray-400">
+              {warmup} warmup / {measured} measured{targetError != null ? ` / ${targetError}% target` : ''} / {Array.from(selectedModes).join(' ')}
             </div>
           </div>
 
-          {/* Languages summary */}
-          <div className="border border-gray-800 rounded-lg p-4 bg-[var(--bg-surface)]/40 mb-4">
-            <h4 className="text-xs font-medium text-gray-500 mb-2">Languages</h4>
-            <div className="flex flex-wrap gap-2">
+          {/* Languages */}
+          <div className="mb-4">
+            <div className="text-[10px] uppercase tracking-wider text-gray-600 mb-1.5">Languages</div>
+            <div className="text-xs font-mono text-gray-400">
               {Array.from(selectedLangs).sort().map(lang => {
                 const entry = LANGUAGE_GROUPS.flatMap(g => g.entries).find(e => e.id === lang);
-                return (
-                  <span
-                    key={lang}
-                    className={`px-2 py-1 rounded border text-xs ${
-                      lang === 'nginx'
-                        ? 'border-cyan-500/30 text-cyan-300'
-                        : 'border-gray-700 text-gray-300'
-                    }`}
-                  >
-                    {entry?.label ?? lang}
-                  </span>
-                );
-              })}
+                return entry?.label ?? lang;
+              }).join(', ')}
             </div>
           </div>
 
@@ -950,28 +906,24 @@ export function BenchmarkWizardPage() {
             </div>
           )}
 
-          {/* Launch button — the hero moment */}
           <button
             onClick={handleLaunch}
             disabled={submitting || testbeds.length === 0}
-            className={`relative overflow-hidden text-white px-8 py-3 rounded text-sm font-bold tracking-wide transition-all duration-200 ${
+            className={`text-white px-6 py-2.5 text-sm font-medium transition-colors ${
               submitting
                 ? 'bg-cyan-700 cursor-wait'
                 : testbeds.length === 0
                   ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
-                  : 'bg-cyan-600 hover:bg-cyan-500 hover:-translate-y-0.5 hover:shadow-[0_4px_20px_rgba(71,191,255,0.25)] active:translate-y-0 active:shadow-none'
+                  : 'bg-cyan-600 hover:bg-cyan-500'
             }`}
           >
             {submitting ? (
               <span className="flex items-center gap-2">
-                <span className="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                <span className="inline-block w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                 Launching...
               </span>
             ) : (
-              <span className="flex items-center gap-2">
-                <span className="text-base">{'\u25B6'}</span>
-                Launch Benchmark
-              </span>
+              'Launch Benchmark'
             )}
           </button>
         </div>
