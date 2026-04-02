@@ -39,17 +39,18 @@ const STATUS_COLORS: Record<string, string> = {
   pending: 'text-gray-500',
 };
 
-interface CellDetail {
-  cell_id: string;
+interface TestbedDetail {
+  testbed_id: string;
   cloud: string;
   region: string;
+  os?: string;
   topology: string;
   languages: string[];
 }
 
 const EMPTY_LIVE: BenchmarkLive = {
   logs: [],
-  cells: {},
+  testbeds: {},
   results: [],
   configStatus: null,
   completedAt: null,
@@ -66,7 +67,7 @@ export function BenchmarkProgressPage() {
   usePageTitle('Benchmark Progress');
 
   const [config, setConfig] = useState<BenchmarkConfigSummary | null>(null);
-  const [cells, setCells] = useState<CellDetail[]>([]);
+  const [testbeds, setTestbeds] = useState<TestbedDetail[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [elapsedStr, setElapsedStr] = useState('--:--');
@@ -99,17 +100,17 @@ export function BenchmarkProgressPage() {
 
   usePolling(loadConfig, 5000, !!configId);
 
-  // Load cell details on mount
+  // Load testbed details on mount
   useEffect(() => {
     if (!configId || !projectId) return;
     api.getBenchmarkConfig(projectId, configId)
       .then((data) => {
         setConfig(data);
-        // Extract cell details from config
+        // Extract testbed details from config
         const configData = data as unknown as Record<string, unknown>;
-        const rawCells = (configData.cells ?? configData.cell_configs ?? []) as CellDetail[];
-        if (Array.isArray(rawCells)) {
-          setCells(rawCells);
+        const rawTestbeds = (configData.testbeds ?? configData.testbed_configs ?? []) as TestbedDetail[];
+        if (Array.isArray(rawTestbeds)) {
+          setTestbeds(rawTestbeds);
         }
       })
       .catch(() => {})
@@ -324,11 +325,11 @@ export function BenchmarkProgressPage() {
         <div className="mb-6 border border-gray-800/50 rounded p-3 bg-gray-900/30">
           <div className="flex items-center gap-4 text-xs text-gray-500">
             <span>
-              <span className="text-gray-400">{cells.length}</span> cell{cells.length !== 1 ? 's' : ''}
+              <span className="text-gray-400">{testbeds.length}</span> testbed{testbeds.length !== 1 ? 's' : ''}
             </span>
             <span>{'\u00B7'}</span>
             <span>
-              <span className="text-gray-400">{cells[0]?.languages?.length ?? '?'}</span> languages
+              <span className="text-gray-400">{testbeds[0]?.languages?.length ?? '?'}</span> languages
             </span>
             <span>{'\u00B7'}</span>
             <span className="text-gray-400">
@@ -342,11 +343,11 @@ export function BenchmarkProgressPage() {
             <span>{'\u00B7'}</span>
             <span>
               est. {(() => {
-                const langCount = cells[0]?.languages?.length ?? 3;
-                const cellCount = cells.length || 1;
+                const langCount = testbeds[0]?.languages?.length ?? 3;
+                const testbedCount = testbeds.length || 1;
                 const runsPerLang = 15; // rough estimate
                 const secsPerProbe = 2;
-                const total = langCount * cellCount * runsPerLang * secsPerProbe;
+                const total = langCount * testbedCount * runsPerLang * secsPerProbe;
                 if (total > 3600) return `${Math.round(total / 3600)}h`;
                 return `${Math.round(total / 60)}m`;
               })()}
@@ -362,31 +363,31 @@ export function BenchmarkProgressPage() {
         </div>
       )}
 
-      {/* Cell Status Cards */}
-      {cells.length > 0 && (
+      {/* Testbed Status Cards */}
+      {testbeds.length > 0 && (
         <div className="mb-6">
-          <p className="text-xs text-gray-500 tracking-wider font-medium mb-3">cell status</p>
+          <p className="text-xs text-gray-500 tracking-wider font-medium mb-3">testbed status</p>
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-            {cells.map((cell, idx) => {
-              const cellLive = live.cells[cell.cell_id];
-              const cellStatus = cellLive?.status || 'pending';
-              const currentLang = cellLive?.current_language;
-              const langIdx = cellLive?.language_index;
-              const langTotal = cellLive?.language_total ?? cell.languages?.length ?? 0;
+            {testbeds.map((testbed, idx) => {
+              const testbedLive = live.testbeds[testbed.testbed_id];
+              const testbedStatus = testbedLive?.status || 'pending';
+              const currentLang = testbedLive?.current_language;
+              const langIdx = testbedLive?.language_index;
+              const langTotal = testbedLive?.language_total ?? testbed.languages?.length ?? 0;
               const progressPct = langTotal > 0 && langIdx != null
                 ? Math.round(((langIdx + 1) / langTotal) * 100)
                 : 0;
-              const cellDone = cellStatus === 'completed' || cellStatus === 'failed';
+              const testbedDone = testbedStatus === 'completed' || testbedStatus === 'failed';
 
               return (
                 <div
-                  key={cell.cell_id || idx}
+                  key={testbed.testbed_id || idx}
                   className={`rounded-lg p-4 transition-all duration-500 ${
-                    cellStatus === 'running'
+                    testbedStatus === 'running'
                       ? 'border border-cyan-500/40 bg-cyan-950/10 shadow-[0_0_12px_rgba(71,191,255,0.06)]'
-                      : cellStatus === 'completed'
+                      : testbedStatus === 'completed'
                         ? 'border border-green-500/30 bg-green-950/10'
-                        : cellStatus === 'failed'
+                        : testbedStatus === 'failed'
                           ? 'border border-red-500/30 bg-red-950/10'
                           : 'border border-gray-800 bg-[var(--bg-surface)]/40'
                   }`}
@@ -394,21 +395,30 @@ export function BenchmarkProgressPage() {
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2">
                       <span className="text-xs font-bold text-gray-300 bg-gray-800 rounded px-1.5 py-0.5">
-                        {CLOUD_ICONS[cell.cloud] || cell.cloud}
+                        {CLOUD_ICONS[testbed.cloud] || testbed.cloud}
                       </span>
-                      <span className="text-xs text-gray-400 font-mono">{cell.region}</span>
+                      <span className="text-xs text-gray-400 font-mono">{testbed.region}</span>
+                      {testbed.os && (
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
+                          testbed.os === 'windows'
+                            ? 'border-blue-500/30 text-blue-300'
+                            : 'border-green-500/30 text-green-300'
+                        }`}>
+                          {testbed.os === 'windows' ? 'Windows' : 'Linux'}
+                        </span>
+                      )}
                     </div>
-                    <span className={`text-xs font-medium ${STATUS_COLORS[cellStatus] || 'text-gray-500'}`}>
-                      {cellStatus}
-                      {cellStatus === 'running' && (
+                    <span className={`text-xs font-medium ${STATUS_COLORS[testbedStatus] || 'text-gray-500'}`}>
+                      {testbedStatus}
+                      {testbedStatus === 'running' && (
                         <span className="inline-block w-1.5 h-1.5 rounded-full bg-cyan-400 ml-1.5 motion-safe:animate-pulse" />
                       )}
                     </span>
                   </div>
 
-                  <div className="text-[11px] text-gray-500 mb-2">{cell.topology}</div>
+                  <div className="text-[11px] text-gray-500 mb-2">{testbed.topology}</div>
 
-                  {currentLang && !cellDone && (
+                  {currentLang && !testbedDone && (
                     <div className="flex items-center gap-2 mb-2">
                       <span className="text-xs text-cyan-300 font-mono">{currentLang}</span>
                       {langIdx != null && langTotal > 0 && (
@@ -423,11 +433,11 @@ export function BenchmarkProgressPage() {
                   <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
                     <div
                       className={`h-full rounded-full transition-all duration-500 ${
-                        cellDone
-                          ? cellStatus === 'completed' ? 'bg-green-500' : 'bg-red-500'
+                        testbedDone
+                          ? testbedStatus === 'completed' ? 'bg-green-500' : 'bg-red-500'
                           : 'bg-cyan-500'
                       }`}
-                      style={{ width: `${cellDone ? 100 : progressPct}%` }}
+                      style={{ width: `${testbedDone ? 100 : progressPct}%` }}
                     />
                   </div>
                 </div>
