@@ -217,11 +217,15 @@ fn extract_string(v: &serde_json::Value, key: &str) -> Option<String> {
 }
 
 fn extract_u32(v: &serde_json::Value, key: &str) -> Option<u32> {
-    v.get(key).and_then(|val| val.as_u64()).map(|value| value as u32)
+    v.get(key)
+        .and_then(|val| val.as_u64())
+        .map(|value| value as u32)
 }
 
 fn parse_environment_fingerprint(payload: &serde_json::Value) -> BenchmarkEnvironmentFingerprint {
-    let environment = payload.get("environment").unwrap_or(&serde_json::Value::Null);
+    let environment = payload
+        .get("environment")
+        .unwrap_or(&serde_json::Value::Null);
     let client = environment
         .get("client_info")
         .unwrap_or(&serde_json::Value::Null);

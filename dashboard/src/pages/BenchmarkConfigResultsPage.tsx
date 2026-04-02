@@ -282,7 +282,7 @@ export function BenchmarkConfigResultsPage() {
 
   // Result lookup by language for the active testbed
   const resultByLanguage = useMemo(() => {
-    const map = new Map<string, ConfigCellResult>();
+    const map = new Map<string, ConfigTestbedResult>();
     for (const r of activeTestbedResults) {
       map.set(r.language, r);
     }

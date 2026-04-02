@@ -16,14 +16,22 @@ fn ssh_control_args(ip: &str) -> Vec<String> {
         "/root/.ssh/id_rsa".to_string()
     };
     vec![
-        "-i".to_string(), key_path,
-        "-o".to_string(), "StrictHostKeyChecking=no".to_string(),
-        "-o".to_string(), format!("ConnectTimeout={SSH_CONNECT_TIMEOUT}"),
-        "-o".to_string(), "ServerAliveInterval=15".to_string(),
-        "-o".to_string(), "ServerAliveCountMax=3".to_string(),
-        "-o".to_string(), format!("ControlPath={socket}"),
-        "-o".to_string(), "ControlMaster=auto".to_string(),
-        "-o".to_string(), "ControlPersist=120".to_string(),
+        "-i".to_string(),
+        key_path,
+        "-o".to_string(),
+        "StrictHostKeyChecking=no".to_string(),
+        "-o".to_string(),
+        format!("ConnectTimeout={SSH_CONNECT_TIMEOUT}"),
+        "-o".to_string(),
+        "ServerAliveInterval=15".to_string(),
+        "-o".to_string(),
+        "ServerAliveCountMax=3".to_string(),
+        "-o".to_string(),
+        format!("ControlPath={socket}"),
+        "-o".to_string(),
+        "ControlMaster=auto".to_string(),
+        "-o".to_string(),
+        "ControlPersist=120".to_string(),
     ]
 }
 
@@ -33,9 +41,7 @@ pub async fn ssh_exec(ip: &str, cmd: &str) -> Result<String> {
     let mut args = ssh_control_args(ip);
     args.push(format!("azureuser@{ip}"));
     args.push(cmd.to_string());
-    let fut = tokio::process::Command::new("ssh")
-        .args(&args)
-        .output();
+    let fut = tokio::process::Command::new("ssh").args(&args).output();
 
     let output = tokio::time::timeout(SSH_COMMAND_TIMEOUT, fut)
         .await
@@ -49,7 +55,11 @@ pub async fn ssh_exec(ip: &str, cmd: &str) -> Result<String> {
             if stdout.trim().is_empty() {
                 format!("exit code {:?}, no output", output.status.code())
             } else {
-                format!("exit code {:?}, stdout: {}", output.status.code(), stdout.trim().chars().take(500).collect::<String>())
+                format!(
+                    "exit code {:?}, stdout: {}",
+                    output.status.code(),
+                    stdout.trim().chars().take(500).collect::<String>()
+                )
             }
         } else {
             stderr.trim().to_string()
@@ -61,13 +71,16 @@ pub async fn ssh_exec(ip: &str, cmd: &str) -> Result<String> {
 
 /// Copy a local file to a remote VM via SCP with timeout and ControlMaster.
 pub async fn scp_to(ip: &str, local: &str, remote: &str) -> Result<()> {
-    tracing::debug!(target_ip = ip, local_path = local, remote_path = remote, "SCP upload");
+    tracing::debug!(
+        target_ip = ip,
+        local_path = local,
+        remote_path = remote,
+        "SCP upload"
+    );
     let mut args = ssh_control_args(ip);
     args.push(local.to_string());
     args.push(format!("azureuser@{ip}:{remote}"));
-    let fut = tokio::process::Command::new("scp")
-        .args(&args)
-        .output();
+    let fut = tokio::process::Command::new("scp").args(&args).output();
 
     let output = tokio::time::timeout(SSH_COMMAND_TIMEOUT, fut)
         .await
@@ -83,16 +96,27 @@ pub async fn scp_to(ip: &str, local: &str, remote: &str) -> Result<()> {
 
 /// Recursive SCP copy of a directory with timeout.
 pub async fn scp_dir_to(ip: &str, local_dir: &str, remote_dir: &str) -> Result<()> {
-    tracing::debug!(target_ip = ip, local_dir = local_dir, remote_dir = remote_dir, "SCP -r upload");
+    tracing::debug!(
+        target_ip = ip,
+        local_dir = local_dir,
+        remote_dir = remote_dir,
+        "SCP -r upload"
+    );
     let fut = tokio::process::Command::new("scp")
         .args([
             "-r",
-            "-o", "StrictHostKeyChecking=no",
-            "-o", &format!("ConnectTimeout={SSH_CONNECT_TIMEOUT}"),
-            "-o", "ServerAliveInterval=15",
-            "-o", "ServerAliveCountMax=3",
-            "-o", "BatchMode=no",
-            "-o", "PasswordAuthentication=no",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            &format!("ConnectTimeout={SSH_CONNECT_TIMEOUT}"),
+            "-o",
+            "ServerAliveInterval=15",
+            "-o",
+            "ServerAliveCountMax=3",
+            "-o",
+            "BatchMode=no",
+            "-o",
+            "PasswordAuthentication=no",
         ])
         .arg(format!("{local_dir}/."))
         .arg(format!("azureuser@{ip}:{remote_dir}/"))

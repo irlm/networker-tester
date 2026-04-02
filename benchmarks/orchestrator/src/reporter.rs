@@ -1,8 +1,7 @@
 use crate::types::{
-    BenchmarkBaseline, BenchmarkCaseSummary, BenchmarkComparison,
-    BenchmarkEnvironmentFingerprint, BenchmarkReport, BenchmarkResult, BenchmarkRun,
-    ComparisonMetricSummary, MetricSummary, ReportAggregation, ScenarioComparison,
-    ScenarioSummary,
+    BenchmarkBaseline, BenchmarkCaseSummary, BenchmarkComparison, BenchmarkEnvironmentFingerprint,
+    BenchmarkReport, BenchmarkResult, BenchmarkRun, ComparisonMetricSummary, MetricSummary,
+    ReportAggregation, ScenarioComparison, ScenarioSummary,
 };
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -188,11 +187,15 @@ fn render_results_csv(report: &BenchmarkReport) -> String {
             escape_csv(&phases),
             escape_csv(env.client_os.as_deref().unwrap_or("")),
             escape_csv(env.client_arch.as_deref().unwrap_or("")),
-            env.client_cpu_cores.map(|value| value.to_string()).unwrap_or_default(),
+            env.client_cpu_cores
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
             escape_csv(env.client_region.as_deref().unwrap_or("")),
             escape_csv(env.server_os.as_deref().unwrap_or("")),
             escape_csv(env.server_arch.as_deref().unwrap_or("")),
-            env.server_cpu_cores.map(|value| value.to_string()).unwrap_or_default(),
+            env.server_cpu_cores
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
             escape_csv(env.server_region.as_deref().unwrap_or("")),
             escape_csv(env.network_type.as_deref().unwrap_or("")),
             env.baseline_rtt_p50_ms
@@ -220,17 +223,49 @@ fn render_markdown_report(report: &BenchmarkReport) -> String {
     let _ = writeln!(md, "- Run ID: `{}`", run.id);
     let _ = writeln!(md, "- Generated at: `{}`", report.generated_at);
     let _ = writeln!(md, "- Config: `{}`", run.config_path);
-    let _ = writeln!(md, "- Case order: `{}`", if run.case_randomization_seed.is_some() { "randomized" } else { "config order" });
-    let _ = writeln!(md, "- Publication ready: `{}`", aggregation.publication_ready);
-    let _ = writeln!(md, "- Rerun recommended: `{}`", aggregation.rerun_recommended);
+    let _ = writeln!(
+        md,
+        "- Case order: `{}`",
+        if run.case_randomization_seed.is_some() {
+            "randomized"
+        } else {
+            "config order"
+        }
+    );
+    let _ = writeln!(
+        md,
+        "- Publication ready: `{}`",
+        aggregation.publication_ready
+    );
+    let _ = writeln!(
+        md,
+        "- Rerun recommended: `{}`",
+        aggregation.rerun_recommended
+    );
     let _ = writeln!(md);
 
     let _ = writeln!(md, "## Methodology");
-    let _ = writeln!(md, "- Confidence level: `{:.0}%`", aggregation.confidence_level * 100.0);
-    let _ = writeln!(md, "- Primary estimator: `{}`", aggregation.primary_estimator);
+    let _ = writeln!(
+        md,
+        "- Confidence level: `{:.0}%`",
+        aggregation.confidence_level * 100.0
+    );
+    let _ = writeln!(
+        md,
+        "- Primary estimator: `{}`",
+        aggregation.primary_estimator
+    );
     let _ = writeln!(md, "- Outlier policy: {}", aggregation.outlier_policy);
-    let _ = writeln!(md, "- Uncertainty method: {}", aggregation.uncertainty_method);
-    let _ = writeln!(md, "- Anti-cherry-picking policy: {}", aggregation.anti_cherry_picking_policy);
+    let _ = writeln!(
+        md,
+        "- Uncertainty method: {}",
+        aggregation.uncertainty_method
+    );
+    let _ = writeln!(
+        md,
+        "- Anti-cherry-picking policy: {}",
+        aggregation.anti_cherry_picking_policy
+    );
     let _ = writeln!(md);
 
     let _ = writeln!(md, "## Publication Blockers");
@@ -274,10 +309,7 @@ fn render_markdown_report(report: &BenchmarkReport) -> String {
             let _ = writeln!(
                 md,
                 "  - warm p99 latency: `{:.2}ms`, CV: `{:.4}`, CI95: `[{:.2}, {:.2}]`",
-                warm.latency_p99_ms.median,
-                warm.rps.cv,
-                warm.rps.ci95_lower,
-                warm.rps.ci95_upper
+                warm.latency_p99_ms.median, warm.rps.cv, warm.rps.ci95_lower, warm.rps.ci95_upper
             );
         }
         if let Some(cold) = &case.cold {
@@ -346,7 +378,10 @@ fn collect_observed_phases(run: &BenchmarkRun) -> Vec<String> {
     let mut observed_phases = Vec::new();
     for result in &run.results {
         for phase in &result.network.phases_present {
-            if !observed_phases.iter().any(|existing: &String| existing == phase) {
+            if !observed_phases
+                .iter()
+                .any(|existing: &String| existing == phase)
+            {
                 observed_phases.push(phase.clone());
             }
         }
@@ -373,7 +408,10 @@ fn build_recommendations(
             ));
         }
     }
-    if !observed_phases.iter().any(|observed| observed == "cooldown") {
+    if !observed_phases
+        .iter()
+        .any(|observed| observed == "cooldown")
+    {
         recommendations.push(
             "Cooldown phase is missing from the observed lifecycle; collect post-measured cooldown samples for publication-grade runs."
                 .to_string(),
@@ -384,7 +422,10 @@ fn build_recommendations(
     let mut wide_ci = Vec::new();
     let mut low_repeats = Vec::new();
     for case in case_summaries {
-        for scenario in [case.warm.as_ref(), case.cold.as_ref()].into_iter().flatten() {
+        for scenario in [case.warm.as_ref(), case.cold.as_ref()]
+            .into_iter()
+            .flatten()
+        {
             let label = scenario_label(case, &scenario.scenario);
             if scenario.repeat_count < 3 {
                 low_repeats.push(label.clone());
@@ -887,13 +928,11 @@ pub(crate) fn environment_comparability_notes(
         candidate.network_type.as_deref(),
         baseline.network_type.as_deref(),
     ) {
-        (Some(candidate), Some(baseline)) if !candidate.eq_ignore_ascii_case(baseline) => notes
-            .push(format!(
-                "network type differs ({candidate} vs {baseline})"
-            )),
-        (None, _) | (_, None) => notes.push(
-            "network type is missing from the benchmark environment fingerprint".to_string(),
-        ),
+        (Some(candidate), Some(baseline)) if !candidate.eq_ignore_ascii_case(baseline) => {
+            notes.push(format!("network type differs ({candidate} vs {baseline})"))
+        }
+        (None, _) | (_, None) => notes
+            .push("network type is missing from the benchmark environment fingerprint".to_string()),
         _ => {}
     }
 
@@ -908,7 +947,9 @@ pub(crate) fn environment_comparability_notes(
             ));
         }
     } else {
-        notes.push("baseline RTT p50 is missing from the benchmark environment fingerprint".to_string());
+        notes.push(
+            "baseline RTT p50 is missing from the benchmark environment fingerprint".to_string(),
+        );
     }
 
     if let Some(ratio) =
@@ -1141,26 +1182,24 @@ fn build_comparisons(
         });
     }
 
-    comparisons.sort_by(|a, b| {
-        match (a.comparable, b.comparable) {
-            (true, false) => Ordering::Less,
-            (false, true) => Ordering::Greater,
-            _ => {
-                let a_ratio = a
-                    .warm
-                    .as_ref()
-                    .map(|warm| warm.throughput.ratio)
-                    .unwrap_or(0.0);
-                let b_ratio = b
-                    .warm
-                    .as_ref()
-                    .map(|warm| warm.throughput.ratio)
-                    .unwrap_or(0.0);
-                b_ratio
-                    .partial_cmp(&a_ratio)
-                    .unwrap_or(Ordering::Equal)
-                    .then_with(|| a.case_label.cmp(&b.case_label))
-            }
+    comparisons.sort_by(|a, b| match (a.comparable, b.comparable) {
+        (true, false) => Ordering::Less,
+        (false, true) => Ordering::Greater,
+        _ => {
+            let a_ratio = a
+                .warm
+                .as_ref()
+                .map(|warm| warm.throughput.ratio)
+                .unwrap_or(0.0);
+            let b_ratio = b
+                .warm
+                .as_ref()
+                .map(|warm| warm.throughput.ratio)
+                .unwrap_or(0.0);
+            b_ratio
+                .partial_cmp(&a_ratio)
+                .unwrap_or(Ordering::Equal)
+                .then_with(|| a.case_label.cmp(&b.case_label))
         }
     });
     comparisons
@@ -2823,7 +2862,10 @@ mod tests {
             loaded.run.case_randomization_seed,
             report.run.case_randomization_seed
         );
-        assert_eq!(loaded.run.scheduled_reruns.len(), report.run.scheduled_reruns.len());
+        assert_eq!(
+            loaded.run.scheduled_reruns.len(),
+            report.run.scheduled_reruns.len()
+        );
         assert_eq!(
             loaded.aggregation.case_summaries.len(),
             report.aggregation.case_summaries.len()
@@ -2867,7 +2909,10 @@ mod tests {
             loaded.aggregation.publication_ready,
             report.aggregation.publication_ready
         );
-        assert_eq!(loaded.aggregation.recommendations.len(), report.aggregation.recommendations.len());
+        assert_eq!(
+            loaded.aggregation.recommendations.len(),
+            report.aggregation.recommendations.len()
+        );
 
         let markdown = std::fs::read_to_string(&md_path).unwrap();
         assert!(markdown.contains("Publication Bundle"));
@@ -2997,7 +3042,11 @@ mod tests {
     #[test]
     fn test_build_report_gates_baseline_comparisons_when_environments_differ() {
         let mut run = sample_run();
-        for result in run.results.iter_mut().filter(|result| result.language == "go") {
+        for result in run
+            .results
+            .iter_mut()
+            .filter(|result| result.language == "go")
+        {
             result.environment.server_region = Some("westus".into());
             result.environment.baseline_rtt_p50_ms = Some(2.1);
             result.environment.baseline_rtt_p95_ms = Some(3.1);
@@ -3014,23 +3063,20 @@ mod tests {
         assert!(!go.comparable);
         assert!(go.warm.is_none());
         assert!(go.cold.is_none());
-        assert!(
-            go.comparability_notes
-                .iter()
-                .any(|note| note.contains("server region"))
-        );
-        assert!(
-            go.comparability_notes
-                .iter()
-                .any(|note| note.contains("baseline RTT p50"))
-        );
-        assert!(
-            report
-                .aggregation
-                .recommendations
-                .iter()
-                .any(|recommendation| recommendation.contains("Baseline comparisons are not publication-grade"))
-        );
+        assert!(go
+            .comparability_notes
+            .iter()
+            .any(|note| note.contains("server region")));
+        assert!(go
+            .comparability_notes
+            .iter()
+            .any(|note| note.contains("baseline RTT p50")));
+        assert!(report
+            .aggregation
+            .recommendations
+            .iter()
+            .any(|recommendation| recommendation
+                .contains("Baseline comparisons are not publication-grade")));
     }
 
     #[test]
@@ -3039,20 +3085,16 @@ mod tests {
 
         assert!(!report.aggregation.publication_ready);
         assert!(report.aggregation.rerun_recommended);
-        assert!(
-            report
-                .aggregation
-                .recommendations
-                .iter()
-                .any(|recommendation| recommendation.contains("environment-check"))
-        );
-        assert!(
-            report
-                .aggregation
-                .recommendations
-                .iter()
-                .any(|recommendation| recommendation.contains("Repeat count"))
-        );
+        assert!(report
+            .aggregation
+            .recommendations
+            .iter()
+            .any(|recommendation| recommendation.contains("environment-check")));
+        assert!(report
+            .aggregation
+            .recommendations
+            .iter()
+            .any(|recommendation| recommendation.contains("Repeat count")));
     }
 
     #[test]

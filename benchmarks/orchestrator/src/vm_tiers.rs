@@ -194,7 +194,10 @@ mod tests {
     #[test]
     fn tier_passthrough() {
         // Exact cloud-specific names pass through unchanged
-        assert_eq!(resolve_vm_size("azure", "Standard_D8s_v3"), "Standard_D8s_v3");
+        assert_eq!(
+            resolve_vm_size("azure", "Standard_D8s_v3"),
+            "Standard_D8s_v3"
+        );
         assert_eq!(resolve_vm_size("aws", "c5.2xlarge"), "c5.2xlarge");
         assert_eq!(resolve_vm_size("gcp", "c2-standard-8"), "c2-standard-8");
         // Unknown cloud also passes through

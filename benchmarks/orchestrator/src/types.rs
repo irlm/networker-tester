@@ -78,7 +78,10 @@ pub struct BenchmarkResult {
     pub repeat_index: u32,
     #[serde(default = "default_result_scenario")]
     pub scenario: String,
-    #[serde(default, skip_serializing_if = "BenchmarkEnvironmentFingerprint::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "BenchmarkEnvironmentFingerprint::is_empty"
+    )]
     pub environment: BenchmarkEnvironmentFingerprint,
     pub network: NetworkMetrics,
     pub resources: ResourceMetrics,
