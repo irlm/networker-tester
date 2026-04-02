@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.17.1] - 2026-04-02
+
+### Changed
+- Renamed "Cell" to "Testbed" across entire stack (V020 DB migration, Rust backend, orchestrator, frontend)
+- Added OS selection per testbed (Linux/Windows) in benchmark wizard
+
+### Added
+- Three new benchmark templates: Linux Focus, Windows .NET, Cross-OS
+- Auto-detection: selecting C# .NET 4.8 auto-switches testbed to Windows with warning banner
+- OS badge (Linux/Windows) shown in wizard review, progress page, and results page
+- `os` field on testbed config (database, API, and frontend)
+
 ## [0.17.0] - 2026-04-01
 
 ### Added
