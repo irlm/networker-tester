@@ -3,8 +3,8 @@ use tokio_postgres::Client;
 use uuid::Uuid;
 
 #[derive(Debug, Serialize)]
-pub struct BenchmarkCellRow {
-    pub cell_id: Uuid,
+pub struct BenchmarkTestbedRow {
+    pub testbed_id: Uuid,
     pub config_id: Uuid,
     pub cloud: String,
     pub region: String,
@@ -16,11 +16,12 @@ pub struct BenchmarkCellRow {
     pub status: String,
     pub languages: serde_json::Value,
     pub vm_size: Option<String>,
+    pub os: String,
 }
 
-fn row_to_cell(r: &tokio_postgres::Row) -> BenchmarkCellRow {
-    BenchmarkCellRow {
-        cell_id: r.get("cell_id"),
+fn row_to_testbed(r: &tokio_postgres::Row) -> BenchmarkTestbedRow {
+    BenchmarkTestbedRow {
+        testbed_id: r.get("testbed_id"),
         config_id: r.get("config_id"),
         cloud: r.get("cloud"),
         region: r.get("region"),
@@ -32,9 +33,11 @@ fn row_to_cell(r: &tokio_postgres::Row) -> BenchmarkCellRow {
         status: r.get("status"),
         languages: r.get("languages"),
         vm_size: r.get("vm_size"),
+        os: r.get("os"),
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn create(
     client: &Client,
     config_id: &Uuid,
@@ -43,15 +46,16 @@ pub async fn create(
     topology: &str,
     languages: &serde_json::Value,
     vm_size: Option<&str>,
+    os: &str,
 ) -> anyhow::Result<Uuid> {
     let id = Uuid::new_v4();
     client
         .execute(
-            "INSERT INTO benchmark_cell
-                (cell_id, config_id, cloud, region, topology, languages, vm_size)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            "INSERT INTO benchmark_testbed
+                (testbed_id, config_id, cloud, region, topology, languages, vm_size, os)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
             &[
-                &id, config_id, &cloud, &region, &topology, languages, &vm_size,
+                &id, config_id, &cloud, &region, &topology, languages, &vm_size, &os,
             ],
         )
         .await?;
@@ -61,24 +65,24 @@ pub async fn create(
 pub async fn list_for_config(
     client: &Client,
     config_id: &Uuid,
-) -> anyhow::Result<Vec<BenchmarkCellRow>> {
+) -> anyhow::Result<Vec<BenchmarkTestbedRow>> {
     let rows = client
         .query(
-            "SELECT cell_id, config_id, cloud, region, topology, endpoint_vm_id,
-                    tester_vm_id, endpoint_ip, tester_ip, status, languages, vm_size
-             FROM benchmark_cell WHERE config_id = $1
+            "SELECT testbed_id, config_id, cloud, region, topology, endpoint_vm_id,
+                    tester_vm_id, endpoint_ip, tester_ip, status, languages, vm_size, os
+             FROM benchmark_testbed WHERE config_id = $1
              ORDER BY cloud, region",
             &[config_id],
         )
         .await?;
-    Ok(rows.iter().map(row_to_cell).collect())
+    Ok(rows.iter().map(row_to_testbed).collect())
 }
 
-pub async fn update_status(client: &Client, cell_id: &Uuid, status: &str) -> anyhow::Result<()> {
+pub async fn update_status(client: &Client, testbed_id: &Uuid, status: &str) -> anyhow::Result<()> {
     client
         .execute(
-            "UPDATE benchmark_cell SET status = $1 WHERE cell_id = $2",
-            &[&status, cell_id],
+            "UPDATE benchmark_testbed SET status = $1 WHERE testbed_id = $2",
+            &[&status, testbed_id],
         )
         .await?;
     Ok(())
@@ -87,7 +91,7 @@ pub async fn update_status(client: &Client, cell_id: &Uuid, status: &str) -> any
 #[allow(dead_code)] // Used by orchestrator callbacks in Wave 2
 pub async fn update_vm_info(
     client: &Client,
-    cell_id: &Uuid,
+    testbed_id: &Uuid,
     endpoint_vm_id: Option<&str>,
     tester_vm_id: Option<&str>,
     endpoint_ip: Option<&str>,
@@ -95,18 +99,18 @@ pub async fn update_vm_info(
 ) -> anyhow::Result<()> {
     client
         .execute(
-            "UPDATE benchmark_cell SET
+            "UPDATE benchmark_testbed SET
                 endpoint_vm_id = COALESCE($1, endpoint_vm_id),
                 tester_vm_id = COALESCE($2, tester_vm_id),
                 endpoint_ip = COALESCE($3, endpoint_ip),
                 tester_ip = COALESCE($4, tester_ip)
-             WHERE cell_id = $5",
+             WHERE testbed_id = $5",
             &[
                 &endpoint_vm_id,
                 &tester_vm_id,
                 &endpoint_ip,
                 &tester_ip,
-                cell_id,
+                testbed_id,
             ],
         )
         .await?;

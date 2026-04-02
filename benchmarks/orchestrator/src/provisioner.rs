@@ -131,12 +131,7 @@ pub async fn provision_vm(
 
 // ─── Azure ─────────────────────────────────────────────────────────────────
 
-async fn provision_azure(
-    region: &str,
-    os: &str,
-    vm_size: &str,
-    name: &str,
-) -> Result<VmInfo> {
+async fn provision_azure(region: &str, os: &str, vm_size: &str, name: &str) -> Result<VmInfo> {
     let image = azure_image_for_os(os)?;
     let is_linux = !os.eq_ignore_ascii_case("windows");
 
@@ -145,10 +140,14 @@ async fn provision_azure(
     // Ensure resource group exists in the requested region
     let _ = az_cmd(
         &[
-            "group", "create",
-            "--name", RESOURCE_GROUP,
-            "--location", region,
-            "--output", "none",
+            "group",
+            "create",
+            "--name",
+            RESOURCE_GROUP,
+            "--location",
+            region,
+            "--output",
+            "none",
         ],
         START_STOP_TIMEOUT,
     )
@@ -156,14 +155,22 @@ async fn provision_azure(
 
     // Build az vm create command
     let mut args = vec![
-        "vm", "create",
-        "--resource-group", RESOURCE_GROUP,
-        "--name", name,
-        "--image", image,
-        "--size", vm_size,
-        "--location", region,
-        "--tags", "alethabench=true",
-        "--output", "json",
+        "vm",
+        "create",
+        "--resource-group",
+        RESOURCE_GROUP,
+        "--name",
+        name,
+        "--image",
+        image,
+        "--size",
+        vm_size,
+        "--location",
+        region,
+        "--tags",
+        "alethabench=true",
+        "--output",
+        "json",
     ];
 
     if is_linux {
@@ -173,16 +180,20 @@ async fn provision_azure(
         let ed25519_pub = std::path::Path::new("/root/.ssh/id_ed25519.pub");
         if ed25519_pub.exists() {
             args.extend_from_slice(&[
-                "--ssh-key-values", "/root/.ssh/id_ed25519.pub",
-                "--admin-username", "azureuser",
+                "--ssh-key-values",
+                "/root/.ssh/id_ed25519.pub",
+                "--admin-username",
+                "azureuser",
             ]);
         } else {
             args.extend_from_slice(&["--generate-ssh-keys", "--admin-username", "azureuser"]);
         }
     } else {
         args.extend_from_slice(&[
-            "--admin-username", "azureuser",
-            "--admin-password", "AletheBench!2026",
+            "--admin-username",
+            "azureuser",
+            "--admin-password",
+            "AletheBench!2026",
         ]);
     }
 
@@ -215,12 +226,18 @@ async fn provision_azure(
     for port in ["8443", "9100"] {
         let _ = az_cmd(
             &[
-                "vm", "open-port",
-                "--resource-group", RESOURCE_GROUP,
-                "--name", name,
-                "--port", port,
-                "--priority", if port == "8443" { "1001" } else { "1002" },
-                "--output", "none",
+                "vm",
+                "open-port",
+                "--resource-group",
+                RESOURCE_GROUP,
+                "--name",
+                name,
+                "--port",
+                port,
+                "--priority",
+                if port == "8443" { "1001" } else { "1002" },
+                "--output",
+                "none",
             ],
             START_STOP_TIMEOUT,
         )
@@ -243,26 +260,28 @@ async fn provision_azure(
 
 // ─── AWS ───────────────────────────────────────────────────────────────────
 
-async fn provision_aws(
-    region: &str,
-    _os: &str,
-    vm_size: &str,
-    name: &str,
-) -> Result<VmInfo> {
+async fn provision_aws(region: &str, _os: &str, vm_size: &str, name: &str) -> Result<VmInfo> {
     // Currently only Ubuntu is supported on AWS.
     let ami = aws_ami_for_region(region);
 
-    tracing::info!("Provisioning AWS EC2 instance {name} (type={vm_size}, region={region}, ami={ami})");
+    tracing::info!(
+        "Provisioning AWS EC2 instance {name} (type={vm_size}, region={region}, ami={ami})"
+    );
 
     // Ensure security group exists (idempotent — ignores "already exists" errors)
     let sg_name = "alethabench-sg";
     let _ = aws_cmd(
         &[
-            "ec2", "create-security-group",
-            "--group-name", sg_name,
-            "--description", "AletheBench benchmark VMs",
-            "--region", region,
-            "--output", "json",
+            "ec2",
+            "create-security-group",
+            "--group-name",
+            sg_name,
+            "--description",
+            "AletheBench benchmark VMs",
+            "--region",
+            region,
+            "--output",
+            "json",
         ],
         START_STOP_TIMEOUT,
     )
@@ -272,12 +291,18 @@ async fn provision_aws(
     for port in ["22", "8443", "9100"] {
         let _ = aws_cmd(
             &[
-                "ec2", "authorize-security-group-ingress",
-                "--group-name", sg_name,
-                "--protocol", "tcp",
-                "--port", port,
-                "--cidr", "0.0.0.0/0",
-                "--region", region,
+                "ec2",
+                "authorize-security-group-ingress",
+                "--group-name",
+                sg_name,
+                "--protocol",
+                "tcp",
+                "--port",
+                port,
+                "--cidr",
+                "0.0.0.0/0",
+                "--region",
+                region,
             ],
             START_STOP_TIMEOUT,
         )
@@ -285,18 +310,29 @@ async fn provision_aws(
     }
 
     // Launch instance
-    let tag_spec = format!("ResourceType=instance,Tags=[{{Key=Name,Value={name}}},{{Key=alethabench,Value=true}}]");
+    let tag_spec = format!(
+        "ResourceType=instance,Tags=[{{Key=Name,Value={name}}},{{Key=alethabench,Value=true}}]"
+    );
     let stdout = aws_cmd(
         &[
-            "ec2", "run-instances",
-            "--image-id", ami,
-            "--instance-type", vm_size,
-            "--region", region,
-            "--key-name", "alethabench-key",
-            "--security-groups", sg_name,
-            "--tag-specifications", &tag_spec,
-            "--count", "1",
-            "--output", "json",
+            "ec2",
+            "run-instances",
+            "--image-id",
+            ami,
+            "--instance-type",
+            vm_size,
+            "--region",
+            region,
+            "--key-name",
+            "alethabench-key",
+            "--security-groups",
+            sg_name,
+            "--tag-specifications",
+            &tag_spec,
+            "--count",
+            "1",
+            "--output",
+            "json",
         ],
         PROVISION_TIMEOUT,
     )
@@ -340,11 +376,16 @@ async fn poll_aws_public_ip(instance_id: &str, region: &str) -> Result<String> {
 
         let result = aws_cmd(
             &[
-                "ec2", "describe-instances",
-                "--instance-ids", instance_id,
-                "--region", region,
-                "--query", "Reservations[0].Instances[0].PublicIpAddress",
-                "--output", "text",
+                "ec2",
+                "describe-instances",
+                "--instance-ids",
+                instance_id,
+                "--region",
+                region,
+                "--query",
+                "Reservations[0].Instances[0].PublicIpAddress",
+                "--output",
+                "text",
             ],
             START_STOP_TIMEOUT,
         )
@@ -363,25 +404,30 @@ async fn poll_aws_public_ip(instance_id: &str, region: &str) -> Result<String> {
 
 // ─── GCP ───────────────────────────────────────────────────────────────────
 
-async fn provision_gcp(
-    zone: &str,
-    _os: &str,
-    vm_size: &str,
-    name: &str,
-) -> Result<VmInfo> {
+async fn provision_gcp(zone: &str, _os: &str, vm_size: &str, name: &str) -> Result<VmInfo> {
     // Currently only Ubuntu is supported on GCP.
     tracing::info!("Provisioning GCP instance {name} (type={vm_size}, zone={zone})");
 
     let stdout = gcloud_cmd(
         &[
-            "compute", "instances", "create", name,
-            "--zone", zone,
-            "--machine-type", vm_size,
-            "--image-family", "ubuntu-2404-lts",
-            "--image-project", "ubuntu-os-cloud",
-            "--tags", "alethabench",
-            "--metadata", "alethabench=true",
-            "--format", "json",
+            "compute",
+            "instances",
+            "create",
+            name,
+            "--zone",
+            zone,
+            "--machine-type",
+            vm_size,
+            "--image-family",
+            "ubuntu-2404-lts",
+            "--image-project",
+            "ubuntu-os-cloud",
+            "--tags",
+            "alethabench",
+            "--metadata",
+            "alethabench=true",
+            "--format",
+            "json",
         ],
         PROVISION_TIMEOUT,
     )
@@ -411,10 +457,16 @@ async fn provision_gcp(
     let rule_name = format!("alethabench-allow-{name}");
     let _ = gcloud_cmd(
         &[
-            "compute", "firewall-rules", "create", &rule_name,
-            "--allow", "tcp:8443,tcp:9100,tcp:22",
-            "--target-tags", "alethabench",
-            "--source-ranges", "0.0.0.0/0",
+            "compute",
+            "firewall-rules",
+            "create",
+            &rule_name,
+            "--allow",
+            "tcp:8443,tcp:9100,tcp:22",
+            "--target-tags",
+            "alethabench",
+            "--source-ranges",
+            "0.0.0.0/0",
             "--quiet",
         ],
         START_STOP_TIMEOUT,
@@ -444,10 +496,14 @@ pub async fn start_vm(vm: &VmInfo) -> Result<()> {
         "azure" => {
             az_cmd(
                 &[
-                    "vm", "start",
-                    "--resource-group", &vm.resource_group,
-                    "--name", &vm.name,
-                    "--output", "none",
+                    "vm",
+                    "start",
+                    "--resource-group",
+                    &vm.resource_group,
+                    "--name",
+                    &vm.name,
+                    "--output",
+                    "none",
                 ],
                 START_STOP_TIMEOUT,
             )
@@ -456,9 +512,12 @@ pub async fn start_vm(vm: &VmInfo) -> Result<()> {
         "aws" => {
             aws_cmd(
                 &[
-                    "ec2", "start-instances",
-                    "--instance-ids", &vm.resource_group,
-                    "--region", &vm.region,
+                    "ec2",
+                    "start-instances",
+                    "--instance-ids",
+                    &vm.resource_group,
+                    "--region",
+                    &vm.region,
                 ],
                 START_STOP_TIMEOUT,
             )
@@ -467,8 +526,12 @@ pub async fn start_vm(vm: &VmInfo) -> Result<()> {
         "gcp" => {
             gcloud_cmd(
                 &[
-                    "compute", "instances", "start", &vm.name,
-                    "--zone", &vm.region,
+                    "compute",
+                    "instances",
+                    "start",
+                    &vm.name,
+                    "--zone",
+                    &vm.region,
                     "--quiet",
                 ],
                 START_STOP_TIMEOUT,
@@ -488,10 +551,14 @@ pub async fn stop_vm(vm: &VmInfo) -> Result<()> {
         "azure" => {
             az_cmd(
                 &[
-                    "vm", "deallocate",
-                    "--resource-group", &vm.resource_group,
-                    "--name", &vm.name,
-                    "--output", "none",
+                    "vm",
+                    "deallocate",
+                    "--resource-group",
+                    &vm.resource_group,
+                    "--name",
+                    &vm.name,
+                    "--output",
+                    "none",
                 ],
                 START_STOP_TIMEOUT,
             )
@@ -500,9 +567,12 @@ pub async fn stop_vm(vm: &VmInfo) -> Result<()> {
         "aws" => {
             aws_cmd(
                 &[
-                    "ec2", "stop-instances",
-                    "--instance-ids", &vm.resource_group,
-                    "--region", &vm.region,
+                    "ec2",
+                    "stop-instances",
+                    "--instance-ids",
+                    &vm.resource_group,
+                    "--region",
+                    &vm.region,
                 ],
                 START_STOP_TIMEOUT,
             )
@@ -511,8 +581,12 @@ pub async fn stop_vm(vm: &VmInfo) -> Result<()> {
         "gcp" => {
             gcloud_cmd(
                 &[
-                    "compute", "instances", "stop", &vm.name,
-                    "--zone", &vm.region,
+                    "compute",
+                    "instances",
+                    "stop",
+                    &vm.name,
+                    "--zone",
+                    &vm.region,
                     "--quiet",
                 ],
                 START_STOP_TIMEOUT,
@@ -532,12 +606,17 @@ pub async fn destroy_vm(vm: &VmInfo) -> Result<()> {
         "azure" => {
             az_cmd(
                 &[
-                    "vm", "delete",
-                    "--resource-group", &vm.resource_group,
-                    "--name", &vm.name,
+                    "vm",
+                    "delete",
+                    "--resource-group",
+                    &vm.resource_group,
+                    "--name",
+                    &vm.name,
                     "--yes",
-                    "--force-deletion", "true",
-                    "--output", "none",
+                    "--force-deletion",
+                    "true",
+                    "--output",
+                    "none",
                 ],
                 PROVISION_TIMEOUT,
             )
@@ -546,9 +625,12 @@ pub async fn destroy_vm(vm: &VmInfo) -> Result<()> {
         "aws" => {
             aws_cmd(
                 &[
-                    "ec2", "terminate-instances",
-                    "--instance-ids", &vm.resource_group,
-                    "--region", &vm.region,
+                    "ec2",
+                    "terminate-instances",
+                    "--instance-ids",
+                    &vm.resource_group,
+                    "--region",
+                    &vm.region,
                 ],
                 PROVISION_TIMEOUT,
             )
@@ -557,8 +639,12 @@ pub async fn destroy_vm(vm: &VmInfo) -> Result<()> {
         "gcp" => {
             gcloud_cmd(
                 &[
-                    "compute", "instances", "delete", &vm.name,
-                    "--zone", &vm.region,
+                    "compute",
+                    "instances",
+                    "delete",
+                    &vm.name,
+                    "--zone",
+                    &vm.region,
                     "--quiet",
                 ],
                 PROVISION_TIMEOUT,
@@ -579,11 +665,15 @@ pub async fn find_existing_vm_azure(name: &str) -> Result<Option<VmInfo>> {
 
     let result = az_cmd(
         &[
-            "vm", "show",
-            "--resource-group", RESOURCE_GROUP,
-            "--name", name,
+            "vm",
+            "show",
+            "--resource-group",
+            RESOURCE_GROUP,
+            "--name",
+            name,
             "--show-details",
-            "--output", "json",
+            "--output",
+            "json",
         ],
         START_STOP_TIMEOUT,
     )
@@ -599,10 +689,7 @@ pub async fn find_existing_vm_azure(name: &str) -> Result<Option<VmInfo>> {
                 .as_str()
                 .unwrap_or("unknown")
                 .to_string();
-            let location = parsed["location"]
-                .as_str()
-                .unwrap_or("eastus")
-                .to_string();
+            let location = parsed["location"].as_str().unwrap_or("eastus").to_string();
             let os = if parsed["storageProfile"]["osDisk"]["osType"]
                 .as_str()
                 .unwrap_or("")
@@ -643,11 +730,15 @@ pub async fn refresh_ip(vm: &mut VmInfo) -> Result<()> {
         "azure" => {
             let stdout = az_cmd(
                 &[
-                    "vm", "show",
-                    "--resource-group", &vm.resource_group,
-                    "--name", &vm.name,
+                    "vm",
+                    "show",
+                    "--resource-group",
+                    &vm.resource_group,
+                    "--name",
+                    &vm.name,
                     "--show-details",
-                    "--output", "json",
+                    "--output",
+                    "json",
                 ],
                 START_STOP_TIMEOUT,
             )
@@ -660,11 +751,16 @@ pub async fn refresh_ip(vm: &mut VmInfo) -> Result<()> {
         "aws" => {
             let stdout = aws_cmd(
                 &[
-                    "ec2", "describe-instances",
-                    "--instance-ids", &vm.resource_group,
-                    "--region", &vm.region,
-                    "--query", "Reservations[0].Instances[0].PublicIpAddress",
-                    "--output", "text",
+                    "ec2",
+                    "describe-instances",
+                    "--instance-ids",
+                    &vm.resource_group,
+                    "--region",
+                    &vm.region,
+                    "--query",
+                    "Reservations[0].Instances[0].PublicIpAddress",
+                    "--output",
+                    "text",
                 ],
                 START_STOP_TIMEOUT,
             )
@@ -677,9 +773,14 @@ pub async fn refresh_ip(vm: &mut VmInfo) -> Result<()> {
         "gcp" => {
             let stdout = gcloud_cmd(
                 &[
-                    "compute", "instances", "describe", &vm.name,
-                    "--zone", &vm.region,
-                    "--format", "json",
+                    "compute",
+                    "instances",
+                    "describe",
+                    &vm.name,
+                    "--zone",
+                    &vm.region,
+                    "--format",
+                    "json",
                 ],
                 START_STOP_TIMEOUT,
             )
@@ -737,10 +838,19 @@ mod tests {
     #[test]
     fn test_unsupported_cloud() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt.block_on(provision_vm("digitalocean", "nyc1", "ubuntu", "s-1vcpu-1gb", "test"));
+        let result = rt.block_on(provision_vm(
+            "digitalocean",
+            "nyc1",
+            "ubuntu",
+            "s-1vcpu-1gb",
+            "test",
+        ));
         assert!(result.is_err());
         assert!(
-            result.unwrap_err().to_string().contains("unsupported cloud"),
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported cloud"),
             "should reject unknown clouds"
         );
     }

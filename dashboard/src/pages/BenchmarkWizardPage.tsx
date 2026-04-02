@@ -1,53 +1,76 @@
 import { useState, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
-import type { BenchmarkCellConfig, BenchmarkVmCatalogEntry } from '../api/types';
+import type { BenchmarkTestbedConfig, BenchmarkVmCatalogEntry } from '../api/types';
 import { useProject } from '../hooks/useProject';
 import { usePageTitle } from '../hooks/usePageTitle';
 
 // ── Constants ────────────────────────────────────────────────────────────
 
-const STEP_LABELS = ['Template', 'Cells', 'Languages', 'Methodology', 'Review'] as const;
+const STEP_LABELS = ['Template', 'Testbeds', 'Languages', 'Methodology', 'Review'] as const;
 
 interface TemplateOption {
   id: string;
   name: string;
   description: string;
-  defaultCellCount: number;
+  defaultTestbedCount: number;
+  defaultOs: 'linux' | 'windows' | null;
   defaultLanguages: string[];
   methodology: string;
 }
 
 const TEMPLATES: TemplateOption[] = [
   {
-    id: 'quick-check',
-    name: 'Quick Check',
-    description: 'Single loopback cell. Fast validation that the benchmark pipeline works end-to-end.',
-    defaultCellCount: 1,
-    defaultLanguages: ['nginx', 'rust', 'go'],
-    methodology: 'quick',
+    id: 'linux-focus',
+    name: 'Linux',
+    description: 'Single Ubuntu testbed, top languages.',
+    defaultTestbedCount: 1,
+    defaultOs: 'linux' as const,
+    defaultLanguages: ['nginx', 'rust', 'go', 'csharp-net8', 'java', 'nodejs'],
+    methodology: 'standard',
+  },
+  {
+    id: 'windows-dotnet',
+    name: 'Windows .NET',
+    description: 'Single Windows testbed, full C# ecosystem.',
+    defaultTestbedCount: 1,
+    defaultOs: 'windows' as const,
+    defaultLanguages: ['nginx', 'csharp-net48', 'csharp-net8', 'csharp-net8-aot', 'csharp-net9', 'csharp-net9-aot', 'csharp-net10', 'csharp-net10-aot'],
+    methodology: 'standard',
+  },
+  {
+    id: 'cross-os',
+    name: 'Cross-OS',
+    description: 'Linux + Windows side-by-side, same region.',
+    defaultTestbedCount: 2,
+    defaultOs: null,
+    defaultLanguages: ['nginx', 'rust', 'go', 'csharp-net8', 'csharp-net8-aot', 'java', 'nodejs'],
+    methodology: 'standard',
   },
   {
     id: 'regional-comparison',
-    name: 'Regional Comparison',
-    description: 'Same cloud, two regions. Measures language performance across geographic distance.',
-    defaultCellCount: 2,
+    name: 'Regional',
+    description: 'Same cloud, two regions.',
+    defaultTestbedCount: 2,
+    defaultOs: 'linux' as const,
     defaultLanguages: ['nginx', 'rust', 'go', 'csharp-net8', 'java', 'nodejs'],
     methodology: 'standard',
   },
   {
     id: 'cross-cloud',
     name: 'Cross-Cloud',
-    description: 'One cell per cloud provider. Compares language behaviour on Azure, AWS, and GCP.',
-    defaultCellCount: 3,
+    description: 'Azure + AWS + GCP, one testbed each.',
+    defaultTestbedCount: 3,
+    defaultOs: 'linux' as const,
     defaultLanguages: ['nginx', 'rust', 'go', 'csharp-net8', 'java', 'nodejs', 'python'],
     methodology: 'standard',
   },
   {
     id: 'custom',
     name: 'Custom',
-    description: 'Start from scratch. Full control over cells, languages, and methodology.',
-    defaultCellCount: 0,
+    description: 'Start from scratch.',
+    defaultTestbedCount: 0,
+    defaultOs: null,
     defaultLanguages: ['nginx'],
     methodology: 'standard',
   },
@@ -115,6 +138,12 @@ const ALL_LANGUAGE_IDS = LANGUAGE_GROUPS.flatMap(g => g.entries.map(e => e.id));
 const TOP_5_IDS = ['nginx', 'rust', 'go', 'csharp-net8', 'java'];
 const SYSTEMS_IDS = ['rust', 'go', 'cpp'];
 
+const WINDOWS_ONLY_LANGS = new Set(['csharp-net48']);
+
+function requiresWindows(langs: Set<string>): boolean {
+  return [...langs].some(id => WINDOWS_ONLY_LANGS.has(id));
+}
+
 interface MethodologyPreset {
   id: string;
   label: string;
@@ -131,19 +160,20 @@ const METHODOLOGY_PRESETS: MethodologyPreset[] = [
 
 const DEFAULT_MODES = ['http1', 'http2', 'http3', 'download', 'upload'];
 
-// ── Cell state ───────────────────────────────────────────────────────────
+// ── Testbed state ───────────────────────────────────────────────────────
 
-interface CellState {
+interface TestbedState {
   key: number;
   cloud: string;
   region: string;
   topology: string;
   vmSize: string;
+  os: 'linux' | 'windows';
   useExisting: boolean;
   existingVmId: string;
 }
 
-function makeCell(key: number, cloud?: string): CellState {
+function makeTestbed(key: number, cloud?: string, os?: 'linux' | 'windows'): TestbedState {
   const c = cloud ?? 'Azure';
   return {
     key,
@@ -151,6 +181,7 @@ function makeCell(key: number, cloud?: string): CellState {
     region: REGIONS[c]?.[0] ?? '',
     topology: 'Loopback',
     vmSize: 'Medium',
+    os: os ?? 'linux',
     useExisting: false,
     existingVmId: '',
   };
@@ -168,9 +199,9 @@ export function BenchmarkWizardPage() {
   // Step 1: Template
   const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
 
-  // Step 2: Cells
-  const [cellKey, setCellKey] = useState(0);
-  const [cells, setCells] = useState<CellState[]>([]);
+  // Step 2: Testbeds
+  const [testbedKey, setTestbedKey] = useState(0);
+  const [testbeds, setTestbeds] = useState<TestbedState[]>([]);
 
   // Step 3: Languages
   const [selectedLangs, setSelectedLangs] = useState<Set<string>>(new Set(['nginx']));
@@ -199,18 +230,18 @@ export function BenchmarkWizardPage() {
       .then(data => {
         setCatalog(data);
         setCatalogLoaded(true);
-        // If cell has useExisting checked, auto-select the first matching VM
-        setCells(prev => prev.map(cell => {
-          if (cell.useExisting && !cell.existingVmId) {
+        // If testbed has useExisting checked, auto-select the first matching VM
+        setTestbeds(prev => prev.map(testbed => {
+          if (testbed.useExisting && !testbed.existingVmId) {
             const matches = data.filter(vm =>
-              vm.cloud.toLowerCase() === cell.cloud.toLowerCase() &&
-              vm.region.toLowerCase() === cell.region.toLowerCase()
+              vm.cloud.toLowerCase() === testbed.cloud.toLowerCase() &&
+              vm.region.toLowerCase() === testbed.region.toLowerCase()
             );
             if (matches.length >= 1) {
-              return { ...cell, existingVmId: matches[0].vm_id };
+              return { ...testbed, existingVmId: matches[0].vm_id };
             }
           }
-          return cell;
+          return testbed;
         }));
       })
       .catch(() => { setCatalogLoaded(true); });
@@ -221,27 +252,32 @@ export function BenchmarkWizardPage() {
   const applyTemplate = (tmpl: TemplateOption) => {
     setSelectedTemplate(tmpl.id);
 
-    // Pre-fill cells
-    const newCells: CellState[] = [];
-    if (tmpl.id === 'quick-check') {
-      const k = cellKey;
-      setCellKey(k + 1);
-      newCells.push(makeCell(k, 'Azure'));
+    // Pre-fill testbeds
+    const newTestbeds: TestbedState[] = [];
+    if (tmpl.id === 'linux-focus' || tmpl.id === 'windows-dotnet') {
+      const k = testbedKey;
+      setTestbedKey(k + 1);
+      newTestbeds.push(makeTestbed(k, 'Azure', tmpl.defaultOs ?? 'linux'));
     } else if (tmpl.id === 'regional-comparison') {
-      let k = cellKey;
-      newCells.push(makeCell(k++, 'Azure'));
-      const c2 = makeCell(k++, 'Azure');
-      c2.region = REGIONS.Azure[1] ?? '';
-      newCells.push(c2);
-      setCellKey(k);
+      let k = testbedKey;
+      newTestbeds.push(makeTestbed(k++, 'Azure', tmpl.defaultOs ?? 'linux'));
+      const tb2 = makeTestbed(k++, 'Azure', tmpl.defaultOs ?? 'linux');
+      tb2.region = REGIONS.Azure[1] ?? '';
+      newTestbeds.push(tb2);
+      setTestbedKey(k);
     } else if (tmpl.id === 'cross-cloud') {
-      let k = cellKey;
-      newCells.push(makeCell(k++, 'Azure'));
-      newCells.push(makeCell(k++, 'AWS'));
-      newCells.push(makeCell(k++, 'GCP'));
-      setCellKey(k);
+      let k = testbedKey;
+      newTestbeds.push(makeTestbed(k++, 'Azure', tmpl.defaultOs ?? 'linux'));
+      newTestbeds.push(makeTestbed(k++, 'AWS', tmpl.defaultOs ?? 'linux'));
+      newTestbeds.push(makeTestbed(k++, 'GCP', tmpl.defaultOs ?? 'linux'));
+      setTestbedKey(k);
+    } else if (tmpl.id === 'cross-os') {
+      let k = testbedKey;
+      newTestbeds.push(makeTestbed(k++, 'Azure', 'linux'));
+      newTestbeds.push(makeTestbed(k++, 'Azure', 'windows'));
+      setTestbedKey(k);
     }
-    setCells(newCells);
+    setTestbeds(newTestbeds);
 
     // Languages
     setSelectedLangs(new Set(tmpl.defaultLanguages));
@@ -257,20 +293,20 @@ export function BenchmarkWizardPage() {
     setStep(1);
   };
 
-  // ── Cell helpers ───────────────────────────────────────────────────────
+  // ── Testbed helpers ───────────────────────────────────────────────────
 
-  const addCell = () => {
-    const k = cellKey;
-    setCellKey(k + 1);
-    setCells(prev => [...prev, makeCell(k)]);
+  const addTestbed = () => {
+    const k = testbedKey;
+    setTestbedKey(k + 1);
+    setTestbeds(prev => [...prev, makeTestbed(k)]);
   };
 
-  const removeCell = (key: number) => {
-    setCells(prev => prev.filter(c => c.key !== key));
+  const removeTestbed = (key: number) => {
+    setTestbeds(prev => prev.filter(c => c.key !== key));
   };
 
-  const updateCell = (key: number, patch: Partial<CellState>) => {
-    setCells(prev => prev.map(c => {
+  const updateTestbed = (key: number, patch: Partial<TestbedState>) => {
+    setTestbeds(prev => prev.map(c => {
       if (c.key !== key) return c;
       const updated = { ...c, ...patch };
       // Reset region when cloud changes
@@ -324,14 +360,23 @@ export function BenchmarkWizardPage() {
 
   const canNext = useMemo(() => {
     if (step === 0) return selectedTemplate !== null;
-    if (step === 1) return cells.length > 0 && cells.every(c => !c.useExisting || c.existingVmId !== ''); // existing VM requires selection; new VM proceeds freely
+    if (step === 1) return testbeds.length > 0 && testbeds.every(c => !c.useExisting || c.existingVmId !== ''); // existing VM requires selection; new VM proceeds freely
     if (step === 2) return selectedLangs.size > 0;
     if (step === 3) return warmup > 0 && measured > 0 && selectedModes.size > 0;
     return true;
-  }, [step, selectedTemplate, cells, selectedLangs.size, warmup, measured, selectedModes.size]);
+  }, [step, selectedTemplate, testbeds, selectedLangs.size, warmup, measured, selectedModes.size]);
 
   const goNext = () => {
     if (step === 0 && selectedTemplate === null) return;
+    // Auto-switch single Linux testbed to Windows when .NET 4.8 is selected
+    if (step === 2 && requiresWindows(selectedLangs)) {
+      setTestbeds(prev => prev.map(tb => {
+        if (tb.os === 'linux' && prev.length === 1) {
+          return { ...tb, os: 'windows' };
+        }
+        return tb;
+      }));
+    }
     if (step < STEP_LABELS.length - 1) {
       const next = step + 1;
       if (next === 1) loadCatalog();
@@ -346,19 +391,20 @@ export function BenchmarkWizardPage() {
   // ── Submit ─────────────────────────────────────────────────────────────
 
   const buildPayload = () => {
-    const cellConfigs: BenchmarkCellConfig[] = cells.map(c => ({
-      cloud: c.cloud,
-      region: c.region,
-      topology: c.topology,
-      vm_size: c.vmSize,
-      existing_vm_ip: c.useExisting ? (catalog.find(v => v.vm_id === c.existingVmId)?.ip ?? null) : null,
+    const testbedConfigs: BenchmarkTestbedConfig[] = testbeds.map(tb => ({
+      cloud: tb.cloud,
+      region: tb.region,
+      topology: tb.topology,
+      vm_size: tb.vmSize,
+      os: tb.os,
+      existing_vm_ip: tb.useExisting ? (catalog.find(v => v.vm_id === tb.existingVmId)?.ip ?? null) : null,
       languages: Array.from(selectedLangs),
     }));
 
     return {
       name: benchmarkName.trim() || `Benchmark ${new Date().toISOString().slice(0, 16)}`,
       template: selectedTemplate,
-      cells: cellConfigs,
+      testbeds: testbedConfigs,
       languages: Array.from(selectedLangs),
       methodology: {
         preset: methodPreset,
@@ -377,7 +423,7 @@ export function BenchmarkWizardPage() {
     setSubmitError(null);
     try {
       const payload = buildPayload();
-      // Cells without existing_vm_ip will be auto-provisioned by the orchestrator
+      // Testbeds without existing_vm_ip will be auto-provisioned by the orchestrator
       const { config_id } = await api.createBenchmarkConfig(projectId, payload);
       await api.launchBenchmarkConfig(projectId, config_id);
       navigate(`/projects/${projectId}/benchmark-progress/${config_id}`);
@@ -390,47 +436,36 @@ export function BenchmarkWizardPage() {
 
   // ── Total estimates ────────────────────────────────────────────────────
 
-  const totalVMs = cells.filter(c => !c.useExisting).length;
-  const totalExisting = cells.filter(c => c.useExisting).length;
+  const totalVMs = testbeds.filter(c => !c.useExisting).length;
+  const totalExisting = testbeds.filter(c => c.useExisting).length;
   const totalLanguages = selectedLangs.size;
-  const totalCombinations = cells.length * totalLanguages;
+  const totalCombinations = testbeds.length * totalLanguages;
 
   // ── Render ─────────────────────────────────────────────────────────────
-
   return (
     <div className="p-4 md:p-6 max-w-5xl">
       {/* Header */}
       <div className="mb-6">
         <h2 className="text-lg md:text-xl font-bold text-gray-100">New Benchmark</h2>
-        <p className="text-xs text-gray-500 mt-1">
-          Configure cells, languages, and methodology, then launch.
-        </p>
       </div>
 
       {/* Stepper */}
-      <div className="flex items-center gap-1 mb-8">
+      <div className="flex items-center gap-0.5 mb-8 font-mono text-xs">
         {STEP_LABELS.map((label, i) => (
-          <div key={label} className="flex items-center gap-1">
-            {i > 0 && <div className={`w-6 md:w-10 h-px ${i <= step ? 'bg-cyan-500/60' : 'bg-gray-700'}`} />}
-            <button
-              onClick={() => { if (i < step) setStep(i); }}
-              disabled={i > step}
-              className={`flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium transition-colors ${
-                i === step
-                  ? 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/40'
-                  : i < step
-                    ? 'text-gray-400 hover:text-gray-200 border border-transparent'
-                    : 'text-gray-600 border border-transparent cursor-not-allowed'
-              }`}
-            >
-              <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-bold ${
-                i === step ? 'bg-cyan-500/30 text-cyan-200' : i < step ? 'bg-gray-700 text-gray-400' : 'bg-gray-800 text-gray-600'
-              }`}>
-                {i + 1}
-              </span>
-              <span className="hidden md:inline">{label}</span>
-            </button>
-          </div>
+          <button
+            key={label}
+            onClick={() => { if (i < step) setStep(i); }}
+            disabled={i > step}
+            className={`px-2 py-1 transition-colors ${
+              i === step
+                ? 'text-cyan-300'
+                : i < step
+                  ? 'text-gray-500 hover:text-gray-300 cursor-pointer'
+                  : 'text-gray-700 cursor-not-allowed'
+            }`}
+          >
+            {i + 1}. {label}
+          </button>
         ))}
       </div>
 
@@ -438,142 +473,181 @@ export function BenchmarkWizardPage() {
       {step === 0 && (
         <div>
           <h3 className="text-sm font-semibold text-gray-200 mb-4">Choose a template</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
             {TEMPLATES.map(tmpl => (
               <button
                 key={tmpl.id}
                 onClick={() => applyTemplate(tmpl)}
-                className={`text-left border rounded-lg p-4 transition-colors ${
+                className={`text-left border px-3 py-2.5 transition-colors ${
                   selectedTemplate === tmpl.id
                     ? 'border-cyan-500/50 bg-cyan-500/5'
-                    : 'border-gray-800 bg-[var(--bg-surface)]/40 hover:border-gray-600'
+                    : 'border-gray-800 hover:border-gray-600'
                 }`}
               >
-                <h4 className="text-sm font-medium text-gray-100">{tmpl.name}</h4>
-                <p className="text-xs text-gray-500 mt-1">{tmpl.description}</p>
-                <div className="flex items-center gap-3 mt-3 text-[11px] text-gray-600">
-                  {tmpl.defaultCellCount > 0 && <span>{tmpl.defaultCellCount} cell{tmpl.defaultCellCount > 1 ? 's' : ''}</span>}
-                  <span>{tmpl.defaultLanguages.length} languages</span>
-                  <span>{tmpl.methodology} methodology</span>
-                </div>
+                <div className="text-sm font-medium text-gray-100">{tmpl.name}</div>
+                <div className="text-[11px] text-gray-500 mt-0.5">{tmpl.description}</div>
+                {tmpl.defaultTestbedCount > 0 && (
+                  <div className="text-[10px] font-mono text-gray-600 mt-1.5">
+                    {tmpl.defaultTestbedCount} testbed{tmpl.defaultTestbedCount > 1 ? 's' : ''} / {tmpl.defaultLanguages.length} lang
+                  </div>
+                )}
               </button>
             ))}
           </div>
         </div>
       )}
 
-      {/* ── Step 1: Cells ── */}
+      {/* ── Step 1: Testbeds ── */}
       {step === 1 && (
         <div>
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-semibold text-gray-200">Configure Cells</h3>
+            <h3 className="text-sm font-semibold text-gray-200">Configure Testbeds</h3>
             <button
-              onClick={addCell}
+              onClick={addTestbed}
               className="px-3 py-1.5 rounded border border-gray-700 text-xs text-gray-200 hover:border-cyan-500 transition-colors"
             >
-              + Add Cell
+              + Add Testbed
             </button>
           </div>
 
-          {cells.length === 0 && (
-            <div className="border border-dashed border-gray-800 rounded-lg p-8 text-center">
-              <p className="text-gray-500 text-sm">No cells yet</p>
-              <p className="text-gray-700 text-xs mt-1">Add at least one cell to define where benchmarks will run.</p>
+          {testbeds.length === 0 && (
+            <div className="border border-dashed border-gray-800 p-4">
+              <p className="text-xs text-gray-500 mb-3">No testbeds configured. Add one to define where benchmarks run.</p>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => { const k = testbedKey; setTestbedKey(k + 1); setTestbeds([makeTestbed(k, 'Azure', 'linux')]); }}
+                  className="px-3 py-1.5 text-xs font-mono border border-gray-700 text-gray-300 hover:border-cyan-500 hover:text-cyan-300 transition-colors"
+                >
+                  + Azure / Linux
+                </button>
+                <button
+                  onClick={() => { const k = testbedKey; setTestbedKey(k + 1); setTestbeds([makeTestbed(k, 'Azure', 'windows')]); }}
+                  className="px-3 py-1.5 text-xs font-mono border border-gray-700 text-gray-300 hover:border-cyan-500 hover:text-cyan-300 transition-colors"
+                >
+                  + Azure / Windows
+                </button>
+                <button
+                  onClick={() => { const k = testbedKey; setTestbedKey(k + 1); setTestbeds([makeTestbed(k, 'AWS', 'linux')]); }}
+                  className="px-3 py-1.5 text-xs font-mono border border-gray-700 text-gray-300 hover:border-cyan-500 hover:text-cyan-300 transition-colors"
+                >
+                  + AWS / Linux
+                </button>
+                <button
+                  onClick={() => { const k = testbedKey; setTestbedKey(k + 1); setTestbeds([makeTestbed(k, 'GCP', 'linux')]); }}
+                  className="px-3 py-1.5 text-xs font-mono border border-gray-700 text-gray-300 hover:border-cyan-500 hover:text-cyan-300 transition-colors"
+                >
+                  + GCP / Linux
+                </button>
+              </div>
             </div>
           )}
 
-          <div className="space-y-3">
-            {cells.map((cell, idx) => (
-              <div key={cell.key} className="border border-gray-800 rounded-lg p-4 bg-[var(--bg-surface)]/40">
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-xs font-medium text-gray-400">Cell {idx + 1}</span>
-                  <button
-                    onClick={() => removeCell(cell.key)}
-                    className="text-xs text-gray-500 hover:text-red-400 transition-colors"
+          <div className="space-y-2">
+            {testbeds.map((testbed, idx) => (
+              <div key={testbed.key} className="border border-gray-800 p-3">
+                {/* Row 1: primary axes — Cloud, OS, Region + remove action */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[10px] font-mono text-gray-600 w-3">{idx + 1}</span>
+
+                  {/* Cloud — pill buttons */}
+                  <div className="flex">
+                    {CLOUDS.map(c => (
+                      <button
+                        key={c}
+                        onClick={() => updateTestbed(testbed.key, { cloud: c })}
+                        className={`px-2.5 py-1 text-xs font-mono border transition-colors ${
+                          testbed.cloud === c
+                            ? 'bg-cyan-500/10 border-cyan-500/40 text-cyan-300 z-10'
+                            : 'border-gray-700 text-gray-500 hover:text-gray-300'
+                        } ${c === 'Azure' ? '' : '-ml-px'}`}
+                      >
+                        {c}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* OS — pill buttons */}
+                  <div className="flex">
+                    {(['linux', 'windows'] as const).map(os => (
+                      <button
+                        key={os}
+                        onClick={() => updateTestbed(testbed.key, { os })}
+                        className={`px-2.5 py-1 text-xs font-mono border transition-colors ${
+                          testbed.os === os
+                            ? os === 'linux'
+                              ? 'bg-green-500/10 border-green-500/40 text-green-300 z-10'
+                              : 'bg-blue-500/10 border-blue-500/40 text-blue-300 z-10'
+                            : 'border-gray-700 text-gray-500 hover:text-gray-300'
+                        } ${os === 'linux' ? '' : '-ml-px'}`}
+                      >
+                        {os === 'linux' ? 'Linux' : 'Windows'}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Region — dropdown (many options) */}
+                  <select
+                    value={testbed.region}
+                    onChange={e => updateTestbed(testbed.key, { region: e.target.value })}
+                    className="bg-[var(--bg-base)] border border-gray-700 px-2 py-1 text-xs font-mono text-gray-300 focus:outline-none focus:border-cyan-500"
                   >
-                    Remove
+                    {(REGIONS[testbed.cloud] ?? []).map(r => <option key={r} value={r}>{r}</option>)}
+                  </select>
+
+                  {/* Secondary: topology, size — compact inline */}
+                  <select
+                    value={testbed.topology}
+                    onChange={e => updateTestbed(testbed.key, { topology: e.target.value })}
+                    className="bg-[var(--bg-base)] border border-gray-700 px-2 py-1 text-xs text-gray-500 focus:outline-none focus:border-cyan-500"
+                  >
+                    {TOPOLOGIES.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                  <select
+                    value={testbed.vmSize}
+                    onChange={e => updateTestbed(testbed.key, { vmSize: e.target.value })}
+                    className="bg-[var(--bg-base)] border border-gray-700 px-2 py-1 text-xs text-gray-500 focus:outline-none focus:border-cyan-500"
+                  >
+                    {VM_SIZES.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+
+                  {/* Existing VM toggle */}
+                  <label className="flex items-center gap-1.5 text-[11px] text-gray-500 cursor-pointer ml-auto">
+                    <input
+                      type="checkbox"
+                      checked={testbed.useExisting}
+                      onChange={e => updateTestbed(testbed.key, { useExisting: e.target.checked })}
+                      className="accent-cyan-400"
+                    />
+                    existing
+                  </label>
+
+                  <button
+                    onClick={() => removeTestbed(testbed.key)}
+                    className="text-[11px] text-gray-600 hover:text-red-400 transition-colors"
+                  >
+                    remove
                   </button>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
-                  {/* Cloud */}
-                  <label className="text-xs text-gray-500">
-                    Cloud
+                {/* Row 2: Existing VM selector (conditional) */}
+                {testbed.useExisting && (
+                  <div className="mt-2 ml-5">
                     <select
-                      value={cell.cloud}
-                      onChange={e => updateCell(cell.key, { cloud: e.target.value })}
-                      className="mt-1 w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
-                    >
-                      {CLOUDS.map(c => <option key={c} value={c}>{c}</option>)}
-                    </select>
-                  </label>
-
-                  {/* Region */}
-                  <label className="text-xs text-gray-500">
-                    Region
-                    <select
-                      value={cell.region}
-                      onChange={e => updateCell(cell.key, { region: e.target.value })}
-                      className="mt-1 w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
-                    >
-                      {(REGIONS[cell.cloud] ?? []).map(r => <option key={r} value={r}>{r}</option>)}
-                    </select>
-                  </label>
-
-                  {/* Topology */}
-                  <label className="text-xs text-gray-500">
-                    Topology
-                    <select
-                      value={cell.topology}
-                      onChange={e => updateCell(cell.key, { topology: e.target.value })}
-                      className="mt-1 w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
-                    >
-                      {TOPOLOGIES.map(t => <option key={t} value={t}>{t}</option>)}
-                    </select>
-                  </label>
-
-                  {/* VM Size */}
-                  <label className="text-xs text-gray-500">
-                    VM Size
-                    <select
-                      value={cell.vmSize}
-                      onChange={e => updateCell(cell.key, { vmSize: e.target.value })}
-                      className="mt-1 w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
-                    >
-                      {VM_SIZES.map(s => <option key={s} value={s}>{s}</option>)}
-                    </select>
-                  </label>
-                </div>
-
-                {/* Use existing VM toggle */}
-                <div className="mt-3 flex items-center gap-3">
-                  <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={cell.useExisting}
-                      onChange={e => updateCell(cell.key, { useExisting: e.target.checked })}
-                      className="accent-cyan-400"
-                    />
-                    Use existing VM
-                  </label>
-
-                  {cell.useExisting && (
-                    <select
-                      value={cell.existingVmId}
-                      onChange={e => updateCell(cell.key, { existingVmId: e.target.value })}
-                      className="bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-xs text-gray-200 focus:outline-none focus:border-cyan-500"
+                      value={testbed.existingVmId}
+                      onChange={e => updateTestbed(testbed.key, { existingVmId: e.target.value })}
+                      className="bg-[var(--bg-base)] border border-gray-700 px-2 py-1 text-xs font-mono text-gray-300 focus:outline-none focus:border-cyan-500"
                     >
                       <option value="">Select VM...</option>
                       {catalog
-                        .filter(vm => vm.cloud.toLowerCase() === cell.cloud.toLowerCase() && vm.region.toLowerCase() === cell.region.toLowerCase())
+                        .filter(vm => vm.cloud.toLowerCase() === testbed.cloud.toLowerCase() && vm.region.toLowerCase() === testbed.region.toLowerCase())
                         .map(vm => (
                           <option key={vm.vm_id} value={vm.vm_id}>
                             {vm.name} ({vm.ip}) - {vm.status}
                           </option>
                         ))}
                     </select>
-                  )}
-                </div>
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -607,11 +681,11 @@ export function BenchmarkWizardPage() {
             </div>
           </div>
 
-          <div className="space-y-4">
+          <div className="space-y-5">
             {LANGUAGE_GROUPS.map(group => (
               <div key={group.label}>
-                <h4 className="text-xs font-medium text-gray-500 mb-2">{group.label}</h4>
-                <div className="flex flex-wrap gap-2">
+                <div className="text-[10px] uppercase tracking-wider font-mono text-gray-600 mb-2">{group.label}</div>
+                <div className="flex flex-wrap gap-1.5">
                   {group.entries.map(entry => {
                     const checked = selectedLangs.has(entry.id);
                     const isNginx = entry.id === 'nginx';
@@ -648,6 +722,24 @@ export function BenchmarkWizardPage() {
           <p className="text-xs text-gray-600 mt-4">
             {selectedLangs.size} language{selectedLangs.size !== 1 ? 's' : ''} selected. nginx is always included as the static baseline.
           </p>
+
+          {requiresWindows(selectedLangs) && testbeds.length === 1 && testbeds[0].os === 'linux' && (
+            <div className="mt-3 border border-yellow-500/30 bg-yellow-500/5 rounded-lg p-3">
+              <p className="text-xs text-yellow-300">
+                C# .NET 4.8 requires Windows Server. When you proceed, your testbed will be
+                switched to Windows automatically.
+              </p>
+            </div>
+          )}
+
+          {requiresWindows(selectedLangs) && testbeds.length > 1 && testbeds.some(tb => tb.os === 'linux') && (
+            <div className="mt-3 border border-yellow-500/30 bg-yellow-500/5 rounded-lg p-3">
+              <p className="text-xs text-yellow-300">
+                C# .NET 4.8 requires Windows Server. It will only run on testbeds configured with Windows OS.
+                Linux testbeds will skip .NET 4.8 automatically.
+              </p>
+            </div>
+          )}
         </div>
       )}
 
@@ -769,75 +861,50 @@ export function BenchmarkWizardPage() {
             />
           </label>
 
-          {/* Cell summaries */}
-          <div className="space-y-2 mb-4">
-            {cells.map((cell, idx) => (
-              <div key={cell.key} className="border border-gray-800 rounded-lg p-3 bg-[var(--bg-surface)]/40">
-                <div className="flex items-center gap-3">
-                  <span className="text-xs font-medium text-gray-400">Cell {idx + 1}</span>
-                  <span className="text-xs text-gray-300 font-mono">
-                    {cell.cloud} / {cell.region}
+          {/* Summary line */}
+          <div className="text-xs font-mono text-gray-400 mb-4">
+            {testbeds.length} testbed{testbeds.length !== 1 ? 's' : ''} / {totalLanguages} languages / {totalCombinations} combinations / {totalVMs} new VM{totalVMs !== 1 ? 's' : ''}{totalExisting > 0 ? ` + ${totalExisting} existing` : ''}
+          </div>
+
+          {/* Testbeds */}
+          <div className="mb-4">
+            <div className="text-[10px] uppercase tracking-wider text-gray-600 mb-1.5">Testbeds</div>
+            <div className="space-y-0.5">
+              {testbeds.map((testbed, idx) => (
+                <div key={testbed.key} className="flex items-center gap-2 text-xs font-mono py-1 border-b border-gray-800/50 last:border-0">
+                  <span className="text-gray-500 w-4">{idx + 1}</span>
+                  <span className="text-gray-200">{testbed.cloud}</span>
+                  <span className="text-gray-500">/</span>
+                  <span className="text-gray-300">{testbed.region}</span>
+                  <span className={`text-[10px] px-1 ${
+                    testbed.os === 'windows' ? 'text-blue-400' : 'text-green-400'
+                  }`}>
+                    {testbed.os === 'windows' ? 'win' : 'linux'}
                   </span>
-                  <span className="text-xs text-gray-500">{cell.topology}</span>
-                  <span className="text-xs text-gray-500">{cell.vmSize}</span>
-                  {cell.useExisting && <span className="text-[10px] text-yellow-500/80">existing VM</span>}
+                  <span className="text-gray-600">{testbed.vmSize}</span>
+                  <span className="text-gray-700">{testbed.topology}</span>
+                  {testbed.useExisting && <span className="text-yellow-600">existing</span>}
                 </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Totals */}
-          <div className="border border-gray-800 rounded-lg p-4 bg-[var(--bg-surface)]/40 mb-4">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
-              <div>
-                <div className="text-lg font-bold text-gray-100 font-mono">{cells.length}</div>
-                <div className="text-xs text-gray-500">Cells</div>
-              </div>
-              <div>
-                <div className="text-lg font-bold text-gray-100 font-mono">{totalLanguages}</div>
-                <div className="text-xs text-gray-500">Languages</div>
-              </div>
-              <div>
-                <div className="text-lg font-bold text-gray-100 font-mono">{totalCombinations}</div>
-                <div className="text-xs text-gray-500">Combinations</div>
-              </div>
-              <div>
-                <div className="text-lg font-bold text-gray-100 font-mono">{totalVMs}</div>
-                <div className="text-xs text-gray-500">New VMs{totalExisting > 0 ? ` + ${totalExisting} existing` : ''}</div>
-              </div>
+              ))}
             </div>
           </div>
 
-          {/* Methodology summary */}
-          <div className="border border-gray-800 rounded-lg p-4 bg-[var(--bg-surface)]/40 mb-4">
-            <h4 className="text-xs font-medium text-gray-500 mb-2">Methodology</h4>
-            <div className="flex flex-wrap gap-3 text-xs text-gray-300">
-              <span>{warmup} warmup</span>
-              <span>{measured} measured</span>
-              {targetError != null && <span>{targetError}% error target</span>}
-              <span>modes: {Array.from(selectedModes).join(', ')}</span>
+          {/* Methodology */}
+          <div className="mb-4">
+            <div className="text-[10px] uppercase tracking-wider text-gray-600 mb-1.5">Methodology</div>
+            <div className="text-xs font-mono text-gray-400">
+              {warmup} warmup / {measured} measured{targetError != null ? ` / ${targetError}% target` : ''} / {Array.from(selectedModes).join(' ')}
             </div>
           </div>
 
-          {/* Languages summary */}
-          <div className="border border-gray-800 rounded-lg p-4 bg-[var(--bg-surface)]/40 mb-4">
-            <h4 className="text-xs font-medium text-gray-500 mb-2">Languages</h4>
-            <div className="flex flex-wrap gap-2">
+          {/* Languages */}
+          <div className="mb-4">
+            <div className="text-[10px] uppercase tracking-wider text-gray-600 mb-1.5">Languages</div>
+            <div className="text-xs font-mono text-gray-400">
               {Array.from(selectedLangs).sort().map(lang => {
                 const entry = LANGUAGE_GROUPS.flatMap(g => g.entries).find(e => e.id === lang);
-                return (
-                  <span
-                    key={lang}
-                    className={`px-2 py-1 rounded border text-xs ${
-                      lang === 'nginx'
-                        ? 'border-cyan-500/30 text-cyan-300'
-                        : 'border-gray-700 text-gray-300'
-                    }`}
-                  >
-                    {entry?.label ?? lang}
-                  </span>
-                );
-              })}
+                return entry?.label ?? lang;
+              }).join(', ')}
             </div>
           </div>
 
@@ -858,39 +925,35 @@ export function BenchmarkWizardPage() {
             </div>
           )}
 
-          {/* Launch button — the hero moment */}
           <button
             onClick={handleLaunch}
-            disabled={submitting || cells.length === 0}
-            className={`relative overflow-hidden text-white px-8 py-3 rounded text-sm font-bold tracking-wide transition-all duration-200 ${
+            disabled={submitting || testbeds.length === 0}
+            className={`text-white px-6 py-2.5 text-sm font-medium transition-colors ${
               submitting
                 ? 'bg-cyan-700 cursor-wait'
-                : cells.length === 0
+                : testbeds.length === 0
                   ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
-                  : 'bg-cyan-600 hover:bg-cyan-500 hover:-translate-y-0.5 hover:shadow-[0_4px_20px_rgba(71,191,255,0.25)] active:translate-y-0 active:shadow-none'
+                  : 'bg-cyan-600 hover:bg-cyan-500'
             }`}
           >
             {submitting ? (
               <span className="flex items-center gap-2">
-                <span className="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                <span className="inline-block w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                 Launching...
               </span>
             ) : (
-              <span className="flex items-center gap-2">
-                <span className="text-base">{'\u25B6'}</span>
-                Launch Benchmark
-              </span>
+              'Launch Benchmark'
             )}
           </button>
         </div>
       )}
 
-      {/* ── Navigation buttons ── */}
-      <div className="flex items-center justify-between mt-8 pt-4 border-t border-gray-800">
+      {/* ── Navigation ── */}
+      <div className="flex items-center justify-between mt-10 pt-4 border-t border-gray-800/50">
         <button
           onClick={goBack}
           disabled={step === 0}
-          className="px-4 py-2 rounded border border-gray-700 text-sm text-gray-300 disabled:text-gray-600 disabled:border-gray-800 disabled:cursor-not-allowed hover:border-gray-500 transition-colors"
+          className="text-xs text-gray-500 disabled:text-gray-700 disabled:cursor-not-allowed hover:text-gray-300 transition-colors"
         >
           Back
         </button>
@@ -899,7 +962,7 @@ export function BenchmarkWizardPage() {
           <button
             onClick={goNext}
             disabled={!canNext}
-            className="px-4 py-2 rounded bg-cyan-600 hover:bg-cyan-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-medium transition-colors"
+            className="px-5 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:bg-gray-800 disabled:text-gray-600 text-white text-xs font-medium transition-colors"
           >
             Next
           </button>

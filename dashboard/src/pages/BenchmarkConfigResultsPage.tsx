@@ -3,8 +3,8 @@ import { Link, useParams } from 'react-router-dom';
 import { api } from '../api/client';
 import type {
   BenchmarkConfigResults,
-  BenchmarkCellRow,
-  ConfigCellResult,
+  BenchmarkTestbedRow,
+  ConfigTestbedResult,
   BenchmarkConfigResultSummary,
 } from '../api/types';
 import { Breadcrumb } from '../components/common/Breadcrumb';
@@ -37,8 +37,9 @@ const MAX_EXPANDED = 2;
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-function cellLabel(cell: BenchmarkCellRow): string {
-  return `${cell.cloud} / ${cell.region} (${cell.topology})`;
+function testbedLabel(testbed: BenchmarkTestbedRow): string {
+  const os = testbed.os === 'windows' ? 'Win' : 'Linux';
+  return `${testbed.cloud} / ${testbed.region} (${testbed.topology}) [${os}]`;
 }
 
 /**
@@ -64,11 +65,11 @@ function findPrimarySummary(
 }
 
 /**
- * Build HBoxGroup[] from active cell results. Returns groups and a map of
+ * Build HBoxGroup[] from active testbed results. Returns groups and a map of
  * language → color for use in PhaseBreakdown.
  */
 function buildBoxGroups(
-  results: ConfigCellResult[],
+  results: ConfigTestbedResult[],
 ): { groups: HBoxGroup[]; colorMap: Map<string, string> } {
   const groups: HBoxGroup[] = [];
   const colorMap = new Map<string, string>();
@@ -102,12 +103,12 @@ function buildBoxGroups(
 }
 
 /**
- * Extract PhaseData[] from a ConfigCellResult.
+ * Extract PhaseData[] from a ConfigTestbedResult.
  * Groups summaries by protocol (and payload if present).
  * Phase breakdown (dns/tcp/tls) is not available in the current API response —
  * ttfb is approximated as mean * 0.6.
  */
-function extractPhaseData(result: ConfigCellResult): PhaseData[] {
+function extractPhaseData(result: ConfigTestbedResult): PhaseData[] {
   // Group by (protocol, payload_bytes)
   const groupMap = new Map<string, BenchmarkConfigResultSummary[]>();
 
@@ -172,11 +173,11 @@ function extractPhaseData(result: ConfigCellResult): PhaseData[] {
   return phases;
 }
 
-// ── Cross-cell helpers ────────────────────────────────────────────────────────
+// ── Cross-testbed helpers ─────────────────────────────────────────────────────
 
-interface CrossCellRow {
+interface CrossTestbedRow {
   language: string;
-  cells: Map<string, { mean: number; p50: number; p95: number }>;
+  testbeds: Map<string, { mean: number; p50: number; p95: number }>;
 }
 
 function weightedAvg(
@@ -188,19 +189,19 @@ function weightedAvg(
   return summaries.reduce((s, x) => s + x[key] * x.included_sample_count, 0) / totalSamples;
 }
 
-function buildCrossCellRows(
-  results: ConfigCellResult[],
-  cells: BenchmarkCellRow[],
-): CrossCellRow[] {
-  const byLang = new Map<string, CrossCellRow>();
+function buildCrossTestbedRows(
+  results: ConfigTestbedResult[],
+  testbeds: BenchmarkTestbedRow[],
+): CrossTestbedRow[] {
+  const byLang = new Map<string, CrossTestbedRow>();
   for (const r of results) {
-    if (r.summaries.length === 0 || !r.cell_id) continue;
+    if (r.summaries.length === 0 || !r.testbed_id) continue;
     let row = byLang.get(r.language);
     if (!row) {
-      row = { language: r.language, cells: new Map() };
+      row = { language: r.language, testbeds: new Map() };
       byLang.set(r.language, row);
     }
-    row.cells.set(r.cell_id, {
+    row.testbeds.set(r.testbed_id, {
       mean: weightedAvg(r.summaries, 'mean'),
       p50: weightedAvg(r.summaries, 'p50'),
       p95: weightedAvg(r.summaries, 'p95'),
@@ -208,10 +209,10 @@ function buildCrossCellRows(
   }
 
   return Array.from(byLang.values())
-    .filter((row) => row.cells.size >= Math.min(2, cells.length))
+    .filter((row) => row.testbeds.size >= Math.min(2, testbeds.length))
     .sort((a, b) => {
-      const aMean = Math.min(...Array.from(a.cells.values()).map((c) => c.mean));
-      const bMean = Math.min(...Array.from(b.cells.values()).map((c) => c.mean));
+      const aMean = Math.min(...Array.from(a.testbeds.values()).map((c) => c.mean));
+      const bMean = Math.min(...Array.from(b.testbeds.values()).map((c) => c.mean));
       return aMean - bMean;
     });
 }
@@ -224,7 +225,7 @@ export function BenchmarkConfigResultsPage() {
   const [data, setData] = useState<BenchmarkConfigResults | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeCell, setActiveCell] = useState<string | null>(null);
+  const [activeTestbed, setActiveTestbed] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string[]>([]);
   const [hideIncomplete, setHideIncomplete] = useState(true);
 
@@ -238,40 +239,40 @@ export function BenchmarkConfigResultsPage() {
         setData(res);
         setError(null);
         setLoading(false);
-        if (res.cells.length > 0 && !activeCell) {
-          setActiveCell(res.cells[0].cell_id);
+        if (res.testbeds.length > 0 && !activeTestbed) {
+          setActiveTestbed(res.testbeds[0].testbed_id);
         }
       })
       .catch((e) => {
         setError(String(e));
         setLoading(false);
       });
-  }, [projectId, configId, activeCell]);
+  }, [projectId, configId, activeTestbed]);
 
-  const cellMap = useMemo(() => {
-    if (!data) return new Map<string, BenchmarkCellRow>();
-    return new Map(data.cells.map((c) => [c.cell_id, c]));
+  const testbedMap = useMemo(() => {
+    if (!data) return new Map<string, BenchmarkTestbedRow>();
+    return new Map(data.testbeds.map((c) => [c.testbed_id, c]));
   }, [data]);
 
-  const activeCellResults = useMemo(() => {
-    if (!data || !activeCell) return [];
-    return data.results.filter((r) => r.cell_id === activeCell);
-  }, [data, activeCell]);
+  const activeTestbedResults = useMemo(() => {
+    if (!data || !activeTestbed) return [];
+    return data.results.filter((r) => r.testbed_id === activeTestbed);
+  }, [data, activeTestbed]);
 
   // Determine complete vs incomplete
   const completeResults = useMemo(
-    () => activeCellResults.filter((r) => r.summaries.length > 0),
-    [activeCellResults],
+    () => activeTestbedResults.filter((r) => r.summaries.length > 0),
+    [activeTestbedResults],
   );
-  const incompleteCount = activeCellResults.length - completeResults.length;
-  const allIncomplete = activeCellResults.length > 0 && completeResults.length === 0;
+  const incompleteCount = activeTestbedResults.length - completeResults.length;
+  const allIncomplete = activeTestbedResults.length > 0 && completeResults.length === 0;
 
   // Effective hide toggle: default off when all are incomplete
   const effectiveHideIncomplete = allIncomplete ? false : hideIncomplete;
 
   const visibleResults = useMemo(
-    () => (effectiveHideIncomplete ? completeResults : activeCellResults),
-    [effectiveHideIncomplete, completeResults, activeCellResults],
+    () => (effectiveHideIncomplete ? completeResults : activeTestbedResults),
+    [effectiveHideIncomplete, completeResults, activeTestbedResults],
   );
 
   const { groups: boxGroups, colorMap } = useMemo(
@@ -279,21 +280,21 @@ export function BenchmarkConfigResultsPage() {
     [visibleResults],
   );
 
-  // Result lookup by language for the active cell
+  // Result lookup by language for the active testbed
   const resultByLanguage = useMemo(() => {
-    const map = new Map<string, ConfigCellResult>();
-    for (const r of activeCellResults) {
+    const map = new Map<string, ConfigTestbedResult>();
+    for (const r of activeTestbedResults) {
       map.set(r.language, r);
     }
     return map;
-  }, [activeCellResults]);
+  }, [activeTestbedResults]);
 
-  const crossCellRows = useMemo(
-    () => (data ? buildCrossCellRows(data.results, data.cells) : []),
+  const crossTestbedRows = useMemo(
+    () => (data ? buildCrossTestbedRows(data.results, data.testbeds) : []),
     [data],
   );
 
-  const hasMultipleCells = (data?.cells.length ?? 0) > 1;
+  const hasMultipleTestbeds = (data?.testbeds.length ?? 0) > 1;
 
   // Toggle expand/collapse (FIFO max 2)
   const handleClickGroup = useCallback((label: string) => {
@@ -357,7 +358,7 @@ export function BenchmarkConfigResultsPage() {
             </span>
           )}
           <span>
-            {data.cells.length} cell{data.cells.length !== 1 ? 's' : ''} /{' '}
+            {data.testbeds.length} testbed{data.testbeds.length !== 1 ? 's' : ''} /{' '}
             {data.results.length} result{data.results.length !== 1 ? 's' : ''}
           </span>
         </div>
@@ -369,53 +370,53 @@ export function BenchmarkConfigResultsPage() {
         </div>
       )}
 
-      {/* Cell tabs */}
-      {data.cells.length > 0 && data.results.length > 0 && (
+      {/* Testbed tabs */}
+      {data.testbeds.length > 0 && data.results.length > 0 && (
         <div className="border-b border-gray-700">
           <nav className="flex gap-1 -mb-px">
-            {data.cells.map((cell) => (
+            {data.testbeds.map((testbed) => (
               <button
-                key={cell.cell_id}
+                key={testbed.testbed_id}
                 onClick={() => {
-                  setActiveCell(cell.cell_id);
+                  setActiveTestbed(testbed.testbed_id);
                   setExpanded([]);
                 }}
                 className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-                  activeCell === cell.cell_id
+                  activeTestbed === testbed.testbed_id
                     ? 'border-cyan-400 text-cyan-400'
                     : 'border-transparent text-gray-400 hover:text-gray-300 hover:border-gray-600'
                 }`}
               >
-                {cellLabel(cell)}
+                {testbedLabel(testbed)}
               </button>
             ))}
-            {hasMultipleCells && (
+            {hasMultipleTestbeds && (
               <button
                 onClick={() => {
-                  setActiveCell('__cross_cell__');
+                  setActiveTestbed('__cross_testbed__');
                   setExpanded([]);
                 }}
                 className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-                  activeCell === '__cross_cell__'
+                  activeTestbed === '__cross_testbed__'
                     ? 'border-cyan-400 text-cyan-400'
                     : 'border-transparent text-gray-400 hover:text-gray-300 hover:border-gray-600'
                 }`}
               >
-                Cross-Cell Comparison
+                Cross-Testbed Comparison
               </button>
             )}
           </nav>
         </div>
       )}
 
-      {/* Per-cell chart + phase breakdown */}
-      {activeCell && activeCell !== '__cross_cell__' && activeCellResults.length > 0 && (
+      {/* Per-testbed chart + phase breakdown */}
+      {activeTestbed && activeTestbed !== '__cross_testbed__' && activeTestbedResults.length > 0 && (
         <div className="space-y-4">
           {/* Section header with hide-incomplete toggle */}
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">
               Language Comparison &mdash;{' '}
-              {cellMap.get(activeCell) ? cellLabel(cellMap.get(activeCell)!) : 'Unknown Cell'}
+              {testbedMap.get(activeTestbed) ? testbedLabel(testbedMap.get(activeTestbed)!) : 'Unknown Testbed'}
             </h2>
             <div className="flex items-center gap-3 text-xs text-gray-500">
               {allIncomplete && (
@@ -506,11 +507,11 @@ export function BenchmarkConfigResultsPage() {
         </div>
       )}
 
-      {/* Cross-cell comparison */}
-      {activeCell === '__cross_cell__' && hasMultipleCells && crossCellRows.length > 0 && (
+      {/* Cross-testbed comparison */}
+      {activeTestbed === '__cross_testbed__' && hasMultipleTestbeds && crossTestbedRows.length > 0 && (
         <div className="space-y-4">
           <h2 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">
-            Cross-Cell Comparison
+            Cross-Testbed Comparison
           </h2>
 
           <div className="overflow-x-auto">
@@ -518,12 +519,12 @@ export function BenchmarkConfigResultsPage() {
               <thead>
                 <tr className="border-b border-gray-700 text-gray-400 text-left">
                   <th className="py-2 pr-4 font-medium">Language</th>
-                  {data.cells.map((cell) => (
-                    <th key={cell.cell_id} className="py-2 pr-4 font-medium text-right">
-                      {cellLabel(cell)}
+                  {data.testbeds.map((testbed) => (
+                    <th key={testbed.testbed_id} className="py-2 pr-4 font-medium text-right">
+                      {testbedLabel(testbed)}
                     </th>
                   ))}
-                  {data.cells.length === 2 && (
+                  {data.testbeds.length === 2 && (
                     <>
                       <th className="py-2 pr-4 font-medium text-right">Delta</th>
                       <th className="py-2 font-medium text-center">Winner</th>
@@ -532,44 +533,44 @@ export function BenchmarkConfigResultsPage() {
                 </tr>
               </thead>
               <tbody>
-                {crossCellRows.map((row) => {
-                  const cellValues = data.cells.map((c) => row.cells.get(c.cell_id));
-                  const means = cellValues.map((v) => v?.mean ?? Infinity);
+                {crossTestbedRows.map((row) => {
+                  const testbedValues = data.testbeds.map((c) => row.testbeds.get(c.testbed_id));
+                  const means = testbedValues.map((v) => v?.mean ?? Infinity);
                   const minMean = Math.min(...means);
                   const maxMean = Math.max(...means.filter((m) => m !== Infinity));
                   const deltaPercent =
-                    data.cells.length === 2 && minMean > 0
+                    data.testbeds.length === 2 && minMean > 0
                       ? ((maxMean - minMean) / minMean) * 100
                       : null;
                   const winnerIdx = means.indexOf(minMean);
-                  const winnerCell =
-                    data.cells.length === 2 && winnerIdx >= 0
-                      ? data.cells[winnerIdx]
+                  const winnerTestbed =
+                    data.testbeds.length === 2 && winnerIdx >= 0
+                      ? data.testbeds[winnerIdx]
                       : null;
 
                   return (
                     <tr key={row.language} className="border-b border-gray-800 text-gray-300">
                       <td className="py-2 pr-4 font-mono">{row.language}</td>
-                      {data.cells.map((cell) => {
-                        const v = row.cells.get(cell.cell_id);
+                      {data.testbeds.map((testbed) => {
+                        const v = row.testbeds.get(testbed.testbed_id);
                         const isBest = v && v.mean === minMean;
                         return (
                           <td
-                            key={cell.cell_id}
+                            key={testbed.testbed_id}
                             className={`py-2 pr-4 text-right font-mono ${isBest ? 'text-cyan-300' : ''}`}
                           >
                             {v ? formatBenchmarkMetric(v.mean, 'ms') : '-'}
                           </td>
                         );
                       })}
-                      {data.cells.length === 2 && (
+                      {data.testbeds.length === 2 && (
                         <>
                           <td className="py-2 pr-4 text-right font-mono text-yellow-400">
                             {deltaPercent !== null ? formatBenchmarkDelta(deltaPercent) : '-'}
                           </td>
                           <td className="py-2 text-center font-mono text-sm">
-                            {winnerCell ? (
-                              <span className="text-cyan-400">{winnerCell.cloud}</span>
+                            {winnerTestbed ? (
+                              <span className="text-cyan-400">{winnerTestbed.cloud}</span>
                             ) : (
                               '-'
                             )}
@@ -585,9 +586,9 @@ export function BenchmarkConfigResultsPage() {
         </div>
       )}
 
-      {activeCell === '__cross_cell__' && crossCellRows.length === 0 && (
+      {activeTestbed === '__cross_testbed__' && crossTestbedRows.length === 0 && (
         <div className="text-sm text-gray-500 py-4">
-          Cross-cell comparison requires results from at least two cells for the same language.
+          Cross-testbed comparison requires results from at least two testbeds for the same language.
         </div>
       )}
 

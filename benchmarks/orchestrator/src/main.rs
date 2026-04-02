@@ -506,8 +506,7 @@ async fn cmd_run(
                 let client = callback_client.clone();
                 let cancel_tx = cancel_tx.clone();
                 tokio::spawn(async move {
-                    let mut interval =
-                        tokio::time::interval(std::time::Duration::from_secs(60));
+                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
                     interval.tick().await; // skip immediate first tick
                     loop {
                         interval.tick().await;
@@ -834,10 +833,7 @@ async fn cmd_run(
         "Case order: {}",
         case_order_label(run.case_randomization_seed)
     );
-    println!(
-        "Auto reruns: {}",
-        auto_rerun_label(auto_rerun_settings)
-    );
+    println!("Auto reruns: {}", auto_rerun_label(auto_rerun_settings));
     println!("Executed reruns: {}", run.scheduled_reruns.len());
     println!("Results:   {} data points", run.results.len());
     println!("Output:    {}", json_path.display());
@@ -911,7 +907,10 @@ fn resolve_auto_rerun_settings(
     }
 
     let target_repeat_count = auto_rerun_target_repeat_count.unwrap_or(3);
-    anyhow::ensure!(target_repeat_count > 0, "auto rerun target repeat count must be > 0");
+    anyhow::ensure!(
+        target_repeat_count > 0,
+        "auto rerun target repeat count must be > 0"
+    );
 
     let max_additional_repeats = auto_rerun_max_additional_repeats.unwrap_or(2);
     anyhow::ensure!(
@@ -1074,8 +1073,15 @@ async fn run_case_cycle(
         suffix
     );
 
-    match runner::run_cold_warm_cycle(vm, test_params, concurrency, language, runtime, repeat_index)
-        .await
+    match runner::run_cold_warm_cycle(
+        vm,
+        test_params,
+        concurrency,
+        language,
+        runtime,
+        repeat_index,
+    )
+    .await
     {
         Ok((mut cold, mut warm)) => {
             cold.binary = binary_metrics.clone();
@@ -1334,16 +1340,18 @@ fn render_compare_table(
             let comparability_notes = candidate_results
                 .get(&case_key)
                 .and_then(|candidate_results| {
-                    baseline_results.get(&case_key).and_then(|baseline_results| {
-                        candidate_results.first().zip(baseline_results.first()).map(
-                            |(candidate_result, baseline_result)| {
-                                reporter::environment_comparability_notes(
-                                    &candidate_result.environment,
-                                    &baseline_result.environment,
-                                )
-                            },
-                        )
-                    })
+                    baseline_results
+                        .get(&case_key)
+                        .and_then(|baseline_results| {
+                            candidate_results.first().zip(baseline_results.first()).map(
+                                |(candidate_result, baseline_result)| {
+                                    reporter::environment_comparability_notes(
+                                        &candidate_result.environment,
+                                        &baseline_result.environment,
+                                    )
+                                },
+                            )
+                        })
                 })
                 .unwrap_or_else(|| {
                     vec!["candidate or baseline benchmark result is missing".to_string()]
@@ -1500,12 +1508,11 @@ fn cmd_compare(runs: Vec<String>) -> Result<()> {
     Ok(())
 }
 
-fn cmd_export(
-    run_id: Option<String>,
-    latest: bool,
-    output_dir: Option<PathBuf>,
-) -> Result<()> {
-    anyhow::ensure!(latest || run_id.is_some(), "Specify --run-id <UUID> or --latest");
+fn cmd_export(run_id: Option<String>, latest: bool, output_dir: Option<PathBuf>) -> Result<()> {
+    anyhow::ensure!(
+        latest || run_id.is_some(),
+        "Specify --run-id <UUID> or --latest"
+    );
 
     let report_path = if latest {
         latest_report_path()?
@@ -1650,7 +1657,11 @@ mod tests {
     #[test]
     fn test_render_results_table_shows_gated_comparison_notes() {
         let mut run = sample_run(90_000.0);
-        for result in run.results.iter_mut().filter(|result| result.language == "go") {
+        for result in run
+            .results
+            .iter_mut()
+            .filter(|result| result.language == "go")
+        {
             result.environment.server_region = Some("westus".into());
             result.environment.baseline_rtt_p50_ms = Some(2.2);
         }

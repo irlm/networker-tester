@@ -24,7 +24,7 @@ pub struct CreateBenchmarkConfigRequest {
     pub max_duration_secs: i32,
     pub baseline_run_id: Option<Uuid>,
     #[serde(default)]
-    pub cells: Vec<CellInput>,
+    pub testbeds: Vec<TestbedInput>,
     // Frontend sends these as top-level fields; we pack them into config_json
     #[serde(default)]
     pub languages: Option<Vec<String>>,
@@ -39,7 +39,7 @@ fn default_max_duration() -> i32 {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct CellInput {
+pub struct TestbedInput {
     pub cloud: String,
     pub region: String,
     #[serde(default = "default_topology")]
@@ -48,6 +48,7 @@ pub struct CellInput {
     pub languages: serde_json::Value,
     pub vm_size: Option<String>,
     pub existing_vm_ip: Option<String>,
+    pub os: Option<String>,
 }
 
 fn default_topology() -> String {
@@ -57,7 +58,7 @@ fn default_topology() -> String {
 #[derive(Debug, Serialize)]
 pub struct CreateBenchmarkConfigResponse {
     pub config_id: Uuid,
-    pub cell_ids: Vec<Uuid>,
+    pub testbed_ids: Vec<Uuid>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -67,10 +68,10 @@ pub struct ListQuery {
 }
 
 #[derive(Debug, Serialize)]
-pub struct BenchmarkConfigWithCells {
+pub struct BenchmarkConfigWithTestbeds {
     #[serde(flatten)]
     pub config: crate::db::benchmark_configs::BenchmarkConfigRow,
-    pub cells: Vec<crate::db::benchmark_cells::BenchmarkCellRow>,
+    pub testbeds: Vec<crate::db::benchmark_testbeds::BenchmarkTestbedRow>,
 }
 
 fn request_extension<T>(req: &Request, name: &'static str) -> Result<T, StatusCode>
@@ -122,11 +123,10 @@ async fn create_config(
     let body = axum::body::to_bytes(req.into_body(), 256 * 1024)
         .await
         .map_err(|_| StatusCode::BAD_REQUEST)?;
-    let payload: CreateBenchmarkConfigRequest =
-        serde_json::from_slice(&body).map_err(|e| {
-            tracing::error!(error = %e, "Failed to parse benchmark config request");
-            StatusCode::BAD_REQUEST
-        })?;
+    let payload: CreateBenchmarkConfigRequest = serde_json::from_slice(&body).map_err(|e| {
+        tracing::error!(error = %e, "Failed to parse benchmark config request");
+        StatusCode::BAD_REQUEST
+    })?;
 
     if payload.name.is_empty() || payload.name.len() > 200 {
         return Err(StatusCode::BAD_REQUEST);
@@ -138,13 +138,14 @@ async fn create_config(
             "languages": payload.languages,
             "methodology": payload.methodology,
             "auto_teardown": payload.auto_teardown.unwrap_or(true),
-            "cells": payload.cells.iter().map(|c| serde_json::json!({
-                "cloud": c.cloud,
-                "region": c.region,
-                "topology": c.topology,
-                "vm_size": c.vm_size,
-                "languages": c.languages,
-                "existing_vm_ip": c.existing_vm_ip,
+            "testbeds": payload.testbeds.iter().map(|t| serde_json::json!({
+                "cloud": t.cloud,
+                "region": t.region,
+                "topology": t.topology,
+                "vm_size": t.vm_size,
+                "languages": t.languages,
+                "existing_vm_ip": t.existing_vm_ip,
+                "os": t.os,
             })).collect::<Vec<_>>(),
         })
     });
@@ -170,23 +171,24 @@ async fn create_config(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    let mut cell_ids = Vec::new();
-    for cell in &payload.cells {
-        let cell_id = crate::db::benchmark_cells::create(
+    let mut testbed_ids = Vec::new();
+    for testbed in &payload.testbeds {
+        let testbed_id = crate::db::benchmark_testbeds::create(
             &client,
             &config_id,
-            &cell.cloud,
-            &cell.region,
-            &cell.topology,
-            &cell.languages,
-            cell.vm_size.as_deref(),
+            &testbed.cloud,
+            &testbed.region,
+            &testbed.topology,
+            &testbed.languages,
+            testbed.vm_size.as_deref(),
+            testbed.os.as_deref().unwrap_or("linux"),
         )
         .await
         .map_err(|e| {
-            tracing::error!(error = %e, "Failed to create benchmark cell");
+            tracing::error!(error = %e, "Failed to create benchmark testbed");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
-        cell_ids.push(cell_id);
+        testbed_ids.push(testbed_id);
     }
 
     tracing::info!(
@@ -195,13 +197,13 @@ async fn create_config(
         user_id = %user.user_id,
         config_id = %config_id,
         name = %payload.name,
-        cell_count = cell_ids.len(),
+        testbed_count = testbed_ids.len(),
         "Benchmark config created"
     );
 
     Ok(Json(CreateBenchmarkConfigResponse {
         config_id,
-        cell_ids,
+        testbed_ids,
     }))
 }
 
@@ -210,7 +212,7 @@ async fn get_config(
     State(state): State<Arc<AppState>>,
     Path((_, config_id)): Path<(Uuid, Uuid)>,
     req: Request,
-) -> Result<Json<BenchmarkConfigWithCells>, StatusCode> {
+) -> Result<Json<BenchmarkConfigWithTestbeds>, StatusCode> {
     let _ctx = request_extension::<ProjectContext>(&req, "ProjectContext")?;
     let client = state.db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error in get_benchmark_config");
@@ -225,14 +227,14 @@ async fn get_config(
         })?
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    let cells = crate::db::benchmark_cells::list_for_config(&client, &config_id)
+    let testbeds = crate::db::benchmark_testbeds::list_for_config(&client, &config_id)
         .await
         .map_err(|e| {
-            tracing::error!(error = %e, "Failed to list benchmark cells");
+            tracing::error!(error = %e, "Failed to list benchmark testbeds");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
-    Ok(Json(BenchmarkConfigWithCells { config, cells }))
+    Ok(Json(BenchmarkConfigWithTestbeds { config, testbeds }))
 }
 
 /// POST /projects/:pid/benchmark-configs/:id/launch
@@ -330,8 +332,8 @@ async fn cancel_config(
 #[derive(Debug, Serialize)]
 pub struct BenchmarkConfigResults {
     pub config: crate::db::benchmark_configs::BenchmarkConfigRow,
-    pub cells: Vec<crate::db::benchmark_cells::BenchmarkCellRow>,
-    pub results: Vec<crate::db::benchmarks::ConfigCellResult>,
+    pub testbeds: Vec<crate::db::benchmark_testbeds::BenchmarkTestbedRow>,
+    pub results: Vec<crate::db::benchmarks::ConfigTestbedResult>,
 }
 
 /// GET /projects/:pid/benchmark-configs/:id/results
@@ -354,10 +356,10 @@ async fn get_config_results(
         })?
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    let cells = crate::db::benchmark_cells::list_for_config(&client, &config_id)
+    let testbeds = crate::db::benchmark_testbeds::list_for_config(&client, &config_id)
         .await
         .map_err(|e| {
-            tracing::error!(error = %e, "Failed to list benchmark cells");
+            tracing::error!(error = %e, "Failed to list benchmark testbeds");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
@@ -370,7 +372,7 @@ async fn get_config_results(
 
     Ok(Json(BenchmarkConfigResults {
         config,
-        cells,
+        testbeds,
         results,
     }))
 }

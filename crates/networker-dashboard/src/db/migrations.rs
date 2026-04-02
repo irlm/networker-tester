@@ -888,5 +888,46 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
         tracing::info!("V019 migration complete");
     }
 
+    // V020: Rename benchmark_cell → benchmark_testbed, cell_id → testbed_id, add os column.
+    let row = client
+        .query_opt("SELECT version FROM _migrations WHERE version = 20", &[])
+        .await?;
+
+    if row.is_none() {
+        let already_renamed: bool = client
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'benchmark_testbed')",
+                &[],
+            )
+            .await?
+            .get(0);
+
+        if !already_renamed {
+            tracing::info!("Applying V020 rename benchmark_cell to benchmark_testbed...");
+            client
+                .batch_execute(
+                    "ALTER TABLE IF EXISTS benchmark_cell RENAME TO benchmark_testbed;
+                     ALTER TABLE IF EXISTS benchmark_testbed RENAME COLUMN cell_id TO testbed_id;
+                     ALTER TABLE IF EXISTS benchmark_run RENAME COLUMN cell_id TO testbed_id;
+                     ALTER TABLE IF EXISTS benchmark_testbed ADD COLUMN IF NOT EXISTS os TEXT NOT NULL DEFAULT 'linux';
+                     DROP INDEX IF EXISTS ix_benchmark_cell_config;
+                     CREATE INDEX IF NOT EXISTS ix_benchmark_testbed_config ON benchmark_testbed (config_id);
+                     DROP INDEX IF EXISTS ix_benchmark_run_cell;
+                     CREATE INDEX IF NOT EXISTS ix_benchmark_run_testbed ON benchmark_run (testbed_id) WHERE testbed_id IS NOT NULL;",
+                )
+                .await?;
+        } else {
+            tracing::info!("V020: benchmark_testbed table already exists, skipping rename");
+        }
+
+        client
+            .execute(
+                "INSERT INTO _migrations (version) VALUES (20) ON CONFLICT DO NOTHING",
+                &[],
+            )
+            .await?;
+        tracing::info!("V020 migration complete");
+    }
+
     Ok(())
 }

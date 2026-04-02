@@ -28,7 +28,7 @@ fn extract_callback_token(
 #[derive(Debug, Deserialize)]
 pub struct StatusPayload {
     pub config_id: Uuid,
-    pub cell_id: Option<Uuid>,
+    pub testbed_id: Option<Uuid>,
     pub status: String,
     pub current_language: Option<String>,
     #[allow(dead_code)]
@@ -43,7 +43,7 @@ pub struct StatusPayload {
 pub struct LogPayload {
     pub config_id: Uuid,
     #[allow(dead_code)]
-    pub cell_id: Option<Uuid>,
+    pub testbed_id: Option<Uuid>,
     pub lines: Vec<String>,
 }
 
@@ -51,7 +51,7 @@ pub struct LogPayload {
 pub struct ResultPayload {
     pub config_id: Uuid,
     #[allow(dead_code)]
-    pub cell_id: Option<Uuid>,
+    pub testbed_id: Option<Uuid>,
     pub language: String,
     pub artifact: serde_json::Value,
 }
@@ -84,18 +84,18 @@ async fn callback_status(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    // Update cell status if cell_id provided
-    if let Some(cell_id) = &payload.cell_id {
-        crate::db::benchmark_cells::update_status(&client, cell_id, &payload.status)
+    // Update testbed status if testbed_id provided
+    if let Some(testbed_id) = &payload.testbed_id {
+        crate::db::benchmark_testbeds::update_status(&client, testbed_id, &payload.status)
             .await
             .map_err(|e| {
-                tracing::error!(error = %e, "Failed to update cell status");
+                tracing::error!(error = %e, "Failed to update testbed status");
                 StatusCode::INTERNAL_SERVER_ERROR
             })?;
     }
 
-    // Update config status if it's a config-level status (no cell_id)
-    if payload.cell_id.is_none() {
+    // Update config status if it's a config-level status (no testbed_id)
+    if payload.testbed_id.is_none() {
         crate::db::benchmark_configs::update_status(
             &client,
             &payload.config_id,
@@ -115,7 +115,7 @@ async fn callback_status(
             config_id: payload.config_id,
             event_type: "status".into(),
             payload: serde_json::json!({
-                "cell_id": payload.cell_id,
+                "testbed_id": payload.testbed_id,
                 "status": payload.status,
                 "current_language": payload.current_language,
                 "language_index": payload.language_index,
@@ -127,7 +127,7 @@ async fn callback_status(
     tracing::debug!(
         config_id = %payload.config_id,
         status = %payload.status,
-        cell_id = ?payload.cell_id,
+        testbed_id = ?payload.testbed_id,
         language = ?payload.current_language,
         "Benchmark callback: status"
     );
@@ -149,7 +149,7 @@ async fn callback_log(
             config_id: payload.config_id,
             event_type: "log".into(),
             payload: serde_json::json!({
-                "cell_id": payload.cell_id,
+                "testbed_id": payload.testbed_id,
                 "lines": payload.lines,
             }),
         },
@@ -201,7 +201,7 @@ async fn callback_result(
             &run_name,
             &payload.artifact,
             &payload.config_id,
-            payload.cell_id.as_ref(),
+            payload.testbed_id.as_ref(),
         )
         .await
         .map_err(|e| {
@@ -215,7 +215,7 @@ async fn callback_result(
             &client,
             &config.project_id,
             &payload.config_id,
-            payload.cell_id.as_ref(),
+            payload.testbed_id.as_ref(),
             &payload.language,
             artifact,
         )
@@ -259,21 +259,17 @@ async fn callback_result(
             language = %payload.language,
             "Result callback received legacy format — saving as lightweight run"
         );
-        let rid = crate::db::benchmarks::create_run(
-            &client,
-            &run_name,
-            &payload.artifact,
-        )
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "Failed to create benchmark run for legacy result");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        let rid = crate::db::benchmarks::create_run(&client, &run_name, &payload.artifact)
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "Failed to create benchmark run for legacy result");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
 
-        // Link to config/cell
+        // Link to config/testbed
         client.execute(
-            "UPDATE benchmark_run SET config_id = $1, cell_id = $2, status = 'completed', finished_at = now() WHERE run_id = $3",
-            &[&payload.config_id, &payload.cell_id, &rid],
+            "UPDATE benchmark_run SET config_id = $1, testbed_id = $2, status = 'completed', finished_at = now() WHERE run_id = $3",
+            &[&payload.config_id, &payload.testbed_id, &rid],
         ).await.ok();
 
         (rid, rid)
@@ -285,7 +281,7 @@ async fn callback_result(
             config_id: payload.config_id,
             event_type: "result".into(),
             payload: serde_json::json!({
-                "cell_id": payload.cell_id,
+                "testbed_id": payload.testbed_id,
                 "language": payload.language,
                 "run_id": run_id,
                 "pipeline_run_id": pipeline_run_id.to_string(),
@@ -419,10 +415,7 @@ async fn callback_cancelled(
 }
 
 /// Run regression detection after a benchmark completes, notify via WS and email.
-async fn run_regression_detection(
-    state: &Arc<AppState>,
-    config_id: &Uuid,
-) -> anyhow::Result<()> {
+async fn run_regression_detection(state: &Arc<AppState>, config_id: &Uuid) -> anyhow::Result<()> {
     let client = state.db.get().await?;
 
     let regressions = crate::regression::detect(&client, config_id, None, None).await?;
