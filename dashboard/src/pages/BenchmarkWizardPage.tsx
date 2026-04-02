@@ -511,9 +511,34 @@ export function BenchmarkWizardPage() {
           </div>
 
           {testbeds.length === 0 && (
-            <div className="border border-dashed border-gray-800 rounded-lg p-8 text-center">
-              <p className="text-gray-500 text-sm">No testbeds yet</p>
-              <p className="text-gray-700 text-xs mt-1">Add at least one testbed to define where benchmarks will run.</p>
+            <div className="border border-dashed border-gray-800 p-4">
+              <p className="text-xs text-gray-500 mb-3">No testbeds configured. Add one to define where benchmarks run.</p>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => { const k = testbedKey; setTestbedKey(k + 1); setTestbeds([makeTestbed(k, 'Azure', 'linux')]); }}
+                  className="px-3 py-1.5 text-xs font-mono border border-gray-700 text-gray-300 hover:border-cyan-500 hover:text-cyan-300 transition-colors"
+                >
+                  + Azure / Linux
+                </button>
+                <button
+                  onClick={() => { const k = testbedKey; setTestbedKey(k + 1); setTestbeds([makeTestbed(k, 'Azure', 'windows')]); }}
+                  className="px-3 py-1.5 text-xs font-mono border border-gray-700 text-gray-300 hover:border-cyan-500 hover:text-cyan-300 transition-colors"
+                >
+                  + Azure / Windows
+                </button>
+                <button
+                  onClick={() => { const k = testbedKey; setTestbedKey(k + 1); setTestbeds([makeTestbed(k, 'AWS', 'linux')]); }}
+                  className="px-3 py-1.5 text-xs font-mono border border-gray-700 text-gray-300 hover:border-cyan-500 hover:text-cyan-300 transition-colors"
+                >
+                  + AWS / Linux
+                </button>
+                <button
+                  onClick={() => { const k = testbedKey; setTestbedKey(k + 1); setTestbeds([makeTestbed(k, 'GCP', 'linux')]); }}
+                  className="px-3 py-1.5 text-xs font-mono border border-gray-700 text-gray-300 hover:border-cyan-500 hover:text-cyan-300 transition-colors"
+                >
+                  + GCP / Linux
+                </button>
+              </div>
             </div>
           )}
 
