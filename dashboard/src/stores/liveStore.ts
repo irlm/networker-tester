@@ -37,8 +37,8 @@ interface JobLogLine {
   level: string;
 }
 
-export interface BenchmarkCellStatus {
-  cell_id: string;
+export interface BenchmarkTestbedStatus {
+  testbed_id: string;
   status: string;
   current_language: string | null;
   language_index: number | null;
@@ -53,7 +53,7 @@ export interface BenchmarkResult {
 
 export interface BenchmarkLive {
   logs: string[];
-  cells: Record<string, BenchmarkCellStatus>;
+  testbeds: Record<string, BenchmarkTestbedStatus>;
   results: BenchmarkResult[];
   configStatus: string | null;
   completedAt: number | null;
@@ -100,7 +100,7 @@ function scheduleFlush(set: (fn: (state: LiveState) => Partial<LiveState>) => vo
 }
 
 function emptyBenchmarkLive(): BenchmarkLive {
-  return { logs: [], cells: {}, results: [], configStatus: null, completedAt: null, errorMessage: null };
+  return { logs: [], testbeds: {}, results: [], configStatus: null, completedAt: null, errorMessage: null };
 }
 
 export const useLiveStore = create<LiveState>((set) => ({
@@ -172,12 +172,12 @@ export const useLiveStore = create<LiveState>((set) => ({
           const merged = [...existing.logs, ...newLines];
           updated.logs = merged.length > MAX_BENCHMARK_LOGS ? merged.slice(-MAX_BENCHMARK_LOGS) : merged;
         } else if (event.event_type === 'status') {
-          const cellId = event.payload.cell_id as string | null;
-          if (cellId) {
-            updated.cells = {
-              ...existing.cells,
-              [cellId]: {
-                cell_id: cellId,
+          const testbedId = event.payload.testbed_id as string | null;
+          if (testbedId) {
+            updated.testbeds = {
+              ...existing.testbeds,
+              [testbedId]: {
+                testbed_id: testbedId,
                 status: (event.payload.status as string) || 'unknown',
                 current_language: (event.payload.current_language as string | null) ?? null,
                 language_index: (event.payload.language_index as number | null) ?? null,

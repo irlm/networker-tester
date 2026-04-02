@@ -894,15 +894,16 @@ export interface BenchmarkConfigSummary {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
-  cell_count: number;
+  testbed_count: number;
 }
 
-export interface BenchmarkCellConfig {
+export interface BenchmarkTestbedConfig {
   cloud: string;
   region: string;
   topology: string;
   vm_size: string;
   existing_vm_ip: string | null;
+  os: string;
   languages: string[];
 }
 
@@ -918,7 +919,7 @@ export interface BenchmarkVmCatalogEntry {
   last_health_check: string | null;
 }
 
-// ── Benchmark Config Results (cross-cell comparison) ─────────────────
+// ── Benchmark Config Results (cross-testbed comparison) ─────────────────
 
 export interface BenchmarkConfigResultSummary {
   case_id: string;
@@ -944,9 +945,9 @@ export interface BenchmarkConfigResultSummary {
   rps: number;
 }
 
-export interface ConfigCellResult {
+export interface ConfigTestbedResult {
   run_id: string;
-  cell_id: string | null;
+  testbed_id: string | null;
   language: string;
   status: string;
   started_at: string;
@@ -954,8 +955,8 @@ export interface ConfigCellResult {
   summaries: BenchmarkConfigResultSummary[];
 }
 
-export interface BenchmarkCellRow {
-  cell_id: string;
+export interface BenchmarkTestbedRow {
+  testbed_id: string;
   config_id: string;
   cloud: string;
   region: string;
@@ -965,6 +966,7 @@ export interface BenchmarkCellRow {
   endpoint_ip: string | null;
   tester_ip: string | null;
   status: string;
+  os: string;
   languages: string[];
   vm_size: string | null;
 }
@@ -980,8 +982,8 @@ export interface BenchmarkConfigResults {
     worker_id: string | null;
     last_heartbeat: string | null;
   };
-  cells: BenchmarkCellRow[];
-  results: ConfigCellResult[];
+  testbeds: BenchmarkTestbedRow[];
+  results: ConfigTestbedResult[];
 }
 
 // ── Benchmark Regressions ─────────────────────────────────────────
