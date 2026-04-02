@@ -37,6 +37,7 @@ fn row_to_testbed(r: &tokio_postgres::Row) -> BenchmarkTestbedRow {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn create(
     client: &Client,
     config_id: &Uuid,
