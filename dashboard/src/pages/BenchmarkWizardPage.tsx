@@ -1,19 +1,20 @@
 import { useState, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
-import type { BenchmarkCellConfig, BenchmarkVmCatalogEntry } from '../api/types';
+import type { BenchmarkTestbedConfig, BenchmarkVmCatalogEntry } from '../api/types';
 import { useProject } from '../hooks/useProject';
 import { usePageTitle } from '../hooks/usePageTitle';
 
 // ── Constants ────────────────────────────────────────────────────────────
 
-const STEP_LABELS = ['Template', 'Cells', 'Languages', 'Methodology', 'Review'] as const;
+const STEP_LABELS = ['Template', 'Testbeds', 'Languages', 'Methodology', 'Review'] as const;
 
 interface TemplateOption {
   id: string;
   name: string;
   description: string;
-  defaultCellCount: number;
+  defaultTestbedCount: number;
+  defaultOs: 'linux' | 'windows' | null;
   defaultLanguages: string[];
   methodology: string;
 }
@@ -22,8 +23,9 @@ const TEMPLATES: TemplateOption[] = [
   {
     id: 'quick-check',
     name: 'Quick Check',
-    description: 'Single loopback cell. Fast validation that the benchmark pipeline works end-to-end.',
-    defaultCellCount: 1,
+    description: 'Single loopback testbed. Fast validation that the benchmark pipeline works end-to-end.',
+    defaultTestbedCount: 1,
+    defaultOs: 'linux' as const,
     defaultLanguages: ['nginx', 'rust', 'go'],
     methodology: 'quick',
   },
@@ -31,23 +33,53 @@ const TEMPLATES: TemplateOption[] = [
     id: 'regional-comparison',
     name: 'Regional Comparison',
     description: 'Same cloud, two regions. Measures language performance across geographic distance.',
-    defaultCellCount: 2,
+    defaultTestbedCount: 2,
+    defaultOs: 'linux' as const,
     defaultLanguages: ['nginx', 'rust', 'go', 'csharp-net8', 'java', 'nodejs'],
     methodology: 'standard',
   },
   {
     id: 'cross-cloud',
     name: 'Cross-Cloud',
-    description: 'One cell per cloud provider. Compares language behaviour on Azure, AWS, and GCP.',
-    defaultCellCount: 3,
+    description: 'One testbed per cloud provider. Compares language behaviour on Azure, AWS, and GCP.',
+    defaultTestbedCount: 3,
+    defaultOs: 'linux' as const,
     defaultLanguages: ['nginx', 'rust', 'go', 'csharp-net8', 'java', 'nodejs', 'python'],
+    methodology: 'standard',
+  },
+  {
+    id: 'linux-focus',
+    name: 'Linux Focus',
+    description: 'Single Linux testbed with top-performing languages. Best for quick language comparison on Ubuntu.',
+    defaultTestbedCount: 1,
+    defaultOs: 'linux' as const,
+    defaultLanguages: ['nginx', 'rust', 'go', 'csharp-net8', 'java', 'nodejs'],
+    methodology: 'standard',
+  },
+  {
+    id: 'windows-dotnet',
+    name: 'Windows .NET',
+    description: 'Single Windows testbed focused on the C# .NET ecosystem — Framework 4.8 through .NET 10 AOT.',
+    defaultTestbedCount: 1,
+    defaultOs: 'windows' as const,
+    defaultLanguages: ['nginx', 'csharp-net48', 'csharp-net8', 'csharp-net8-aot', 'csharp-net9', 'csharp-net9-aot', 'csharp-net10', 'csharp-net10-aot'],
+    methodology: 'standard',
+  },
+  {
+    id: 'cross-os',
+    name: 'Cross-OS',
+    description: 'Two testbeds — Linux and Windows — same cloud and region. Compares language performance across operating systems.',
+    defaultTestbedCount: 2,
+    defaultOs: null,
+    defaultLanguages: ['nginx', 'rust', 'go', 'csharp-net8', 'csharp-net8-aot', 'java', 'nodejs'],
     methodology: 'standard',
   },
   {
     id: 'custom',
     name: 'Custom',
-    description: 'Start from scratch. Full control over cells, languages, and methodology.',
-    defaultCellCount: 0,
+    description: 'Start from scratch. Full control over testbeds, languages, and methodology.',
+    defaultTestbedCount: 0,
+    defaultOs: null,
     defaultLanguages: ['nginx'],
     methodology: 'standard',
   },
@@ -115,6 +147,12 @@ const ALL_LANGUAGE_IDS = LANGUAGE_GROUPS.flatMap(g => g.entries.map(e => e.id));
 const TOP_5_IDS = ['nginx', 'rust', 'go', 'csharp-net8', 'java'];
 const SYSTEMS_IDS = ['rust', 'go', 'cpp'];
 
+const WINDOWS_ONLY_LANGS = new Set(['csharp-net48']);
+
+function requiresWindows(langs: Set<string>): boolean {
+  return [...langs].some(id => WINDOWS_ONLY_LANGS.has(id));
+}
+
 interface MethodologyPreset {
   id: string;
   label: string;
@@ -131,19 +169,20 @@ const METHODOLOGY_PRESETS: MethodologyPreset[] = [
 
 const DEFAULT_MODES = ['http1', 'http2', 'http3', 'download', 'upload'];
 
-// ── Cell state ───────────────────────────────────────────────────────────
+// ── Testbed state ───────────────────────────────────────────────────────
 
-interface CellState {
+interface TestbedState {
   key: number;
   cloud: string;
   region: string;
   topology: string;
   vmSize: string;
+  os: 'linux' | 'windows';
   useExisting: boolean;
   existingVmId: string;
 }
 
-function makeCell(key: number, cloud?: string): CellState {
+function makeTestbed(key: number, cloud?: string, os?: 'linux' | 'windows'): TestbedState {
   const c = cloud ?? 'Azure';
   return {
     key,
@@ -151,6 +190,7 @@ function makeCell(key: number, cloud?: string): CellState {
     region: REGIONS[c]?.[0] ?? '',
     topology: 'Loopback',
     vmSize: 'Medium',
+    os: os ?? 'linux',
     useExisting: false,
     existingVmId: '',
   };
@@ -168,9 +208,9 @@ export function BenchmarkWizardPage() {
   // Step 1: Template
   const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
 
-  // Step 2: Cells
-  const [cellKey, setCellKey] = useState(0);
-  const [cells, setCells] = useState<CellState[]>([]);
+  // Step 2: Testbeds
+  const [testbedKey, setTestbedKey] = useState(0);
+  const [testbeds, setTestbeds] = useState<TestbedState[]>([]);
 
   // Step 3: Languages
   const [selectedLangs, setSelectedLangs] = useState<Set<string>>(new Set(['nginx']));
@@ -199,18 +239,18 @@ export function BenchmarkWizardPage() {
       .then(data => {
         setCatalog(data);
         setCatalogLoaded(true);
-        // If cell has useExisting checked, auto-select the first matching VM
-        setCells(prev => prev.map(cell => {
-          if (cell.useExisting && !cell.existingVmId) {
+        // If testbed has useExisting checked, auto-select the first matching VM
+        setTestbeds(prev => prev.map(testbed => {
+          if (testbed.useExisting && !testbed.existingVmId) {
             const matches = data.filter(vm =>
-              vm.cloud.toLowerCase() === cell.cloud.toLowerCase() &&
-              vm.region.toLowerCase() === cell.region.toLowerCase()
+              vm.cloud.toLowerCase() === testbed.cloud.toLowerCase() &&
+              vm.region.toLowerCase() === testbed.region.toLowerCase()
             );
             if (matches.length >= 1) {
-              return { ...cell, existingVmId: matches[0].vm_id };
+              return { ...testbed, existingVmId: matches[0].vm_id };
             }
           }
-          return cell;
+          return testbed;
         }));
       })
       .catch(() => { setCatalogLoaded(true); });
@@ -221,27 +261,32 @@ export function BenchmarkWizardPage() {
   const applyTemplate = (tmpl: TemplateOption) => {
     setSelectedTemplate(tmpl.id);
 
-    // Pre-fill cells
-    const newCells: CellState[] = [];
-    if (tmpl.id === 'quick-check') {
-      const k = cellKey;
-      setCellKey(k + 1);
-      newCells.push(makeCell(k, 'Azure'));
+    // Pre-fill testbeds
+    const newTestbeds: TestbedState[] = [];
+    if (tmpl.id === 'quick-check' || tmpl.id === 'linux-focus' || tmpl.id === 'windows-dotnet') {
+      const k = testbedKey;
+      setTestbedKey(k + 1);
+      newTestbeds.push(makeTestbed(k, 'Azure', tmpl.defaultOs ?? 'linux'));
     } else if (tmpl.id === 'regional-comparison') {
-      let k = cellKey;
-      newCells.push(makeCell(k++, 'Azure'));
-      const c2 = makeCell(k++, 'Azure');
-      c2.region = REGIONS.Azure[1] ?? '';
-      newCells.push(c2);
-      setCellKey(k);
+      let k = testbedKey;
+      newTestbeds.push(makeTestbed(k++, 'Azure', tmpl.defaultOs ?? 'linux'));
+      const tb2 = makeTestbed(k++, 'Azure', tmpl.defaultOs ?? 'linux');
+      tb2.region = REGIONS.Azure[1] ?? '';
+      newTestbeds.push(tb2);
+      setTestbedKey(k);
     } else if (tmpl.id === 'cross-cloud') {
-      let k = cellKey;
-      newCells.push(makeCell(k++, 'Azure'));
-      newCells.push(makeCell(k++, 'AWS'));
-      newCells.push(makeCell(k++, 'GCP'));
-      setCellKey(k);
+      let k = testbedKey;
+      newTestbeds.push(makeTestbed(k++, 'Azure', tmpl.defaultOs ?? 'linux'));
+      newTestbeds.push(makeTestbed(k++, 'AWS', tmpl.defaultOs ?? 'linux'));
+      newTestbeds.push(makeTestbed(k++, 'GCP', tmpl.defaultOs ?? 'linux'));
+      setTestbedKey(k);
+    } else if (tmpl.id === 'cross-os') {
+      let k = testbedKey;
+      newTestbeds.push(makeTestbed(k++, 'Azure', 'linux'));
+      newTestbeds.push(makeTestbed(k++, 'Azure', 'windows'));
+      setTestbedKey(k);
     }
-    setCells(newCells);
+    setTestbeds(newTestbeds);
 
     // Languages
     setSelectedLangs(new Set(tmpl.defaultLanguages));
@@ -257,20 +302,20 @@ export function BenchmarkWizardPage() {
     setStep(1);
   };
 
-  // ── Cell helpers ───────────────────────────────────────────────────────
+  // ── Testbed helpers ───────────────────────────────────────────────────
 
-  const addCell = () => {
-    const k = cellKey;
-    setCellKey(k + 1);
-    setCells(prev => [...prev, makeCell(k)]);
+  const addTestbed = () => {
+    const k = testbedKey;
+    setTestbedKey(k + 1);
+    setTestbeds(prev => [...prev, makeTestbed(k)]);
   };
 
-  const removeCell = (key: number) => {
-    setCells(prev => prev.filter(c => c.key !== key));
+  const removeTestbed = (key: number) => {
+    setTestbeds(prev => prev.filter(c => c.key !== key));
   };
 
-  const updateCell = (key: number, patch: Partial<CellState>) => {
-    setCells(prev => prev.map(c => {
+  const updateTestbed = (key: number, patch: Partial<TestbedState>) => {
+    setTestbeds(prev => prev.map(c => {
       if (c.key !== key) return c;
       const updated = { ...c, ...patch };
       // Reset region when cloud changes
@@ -324,14 +369,23 @@ export function BenchmarkWizardPage() {
 
   const canNext = useMemo(() => {
     if (step === 0) return selectedTemplate !== null;
-    if (step === 1) return cells.length > 0 && cells.every(c => !c.useExisting || c.existingVmId !== ''); // existing VM requires selection; new VM proceeds freely
+    if (step === 1) return testbeds.length > 0 && testbeds.every(c => !c.useExisting || c.existingVmId !== ''); // existing VM requires selection; new VM proceeds freely
     if (step === 2) return selectedLangs.size > 0;
     if (step === 3) return warmup > 0 && measured > 0 && selectedModes.size > 0;
     return true;
-  }, [step, selectedTemplate, cells, selectedLangs.size, warmup, measured, selectedModes.size]);
+  }, [step, selectedTemplate, testbeds, selectedLangs.size, warmup, measured, selectedModes.size]);
 
   const goNext = () => {
     if (step === 0 && selectedTemplate === null) return;
+    // Auto-switch single Linux testbed to Windows when .NET 4.8 is selected
+    if (step === 2 && requiresWindows(selectedLangs)) {
+      setTestbeds(prev => prev.map(tb => {
+        if (tb.os === 'linux' && prev.length === 1) {
+          return { ...tb, os: 'windows' };
+        }
+        return tb;
+      }));
+    }
     if (step < STEP_LABELS.length - 1) {
       const next = step + 1;
       if (next === 1) loadCatalog();
@@ -346,19 +400,20 @@ export function BenchmarkWizardPage() {
   // ── Submit ─────────────────────────────────────────────────────────────
 
   const buildPayload = () => {
-    const cellConfigs: BenchmarkCellConfig[] = cells.map(c => ({
-      cloud: c.cloud,
-      region: c.region,
-      topology: c.topology,
-      vm_size: c.vmSize,
-      existing_vm_ip: c.useExisting ? (catalog.find(v => v.vm_id === c.existingVmId)?.ip ?? null) : null,
+    const testbedConfigs: BenchmarkTestbedConfig[] = testbeds.map(tb => ({
+      cloud: tb.cloud,
+      region: tb.region,
+      topology: tb.topology,
+      vm_size: tb.vmSize,
+      os: tb.os,
+      existing_vm_ip: tb.useExisting ? (catalog.find(v => v.vm_id === tb.existingVmId)?.ip ?? null) : null,
       languages: Array.from(selectedLangs),
     }));
 
     return {
       name: benchmarkName.trim() || `Benchmark ${new Date().toISOString().slice(0, 16)}`,
       template: selectedTemplate,
-      cells: cellConfigs,
+      testbeds: testbedConfigs,
       languages: Array.from(selectedLangs),
       methodology: {
         preset: methodPreset,
@@ -377,7 +432,7 @@ export function BenchmarkWizardPage() {
     setSubmitError(null);
     try {
       const payload = buildPayload();
-      // Cells without existing_vm_ip will be auto-provisioned by the orchestrator
+      // Testbeds without existing_vm_ip will be auto-provisioned by the orchestrator
       const { config_id } = await api.createBenchmarkConfig(projectId, payload);
       await api.launchBenchmarkConfig(projectId, config_id);
       navigate(`/projects/${projectId}/benchmark-progress/${config_id}`);
@@ -390,20 +445,19 @@ export function BenchmarkWizardPage() {
 
   // ── Total estimates ────────────────────────────────────────────────────
 
-  const totalVMs = cells.filter(c => !c.useExisting).length;
-  const totalExisting = cells.filter(c => c.useExisting).length;
+  const totalVMs = testbeds.filter(c => !c.useExisting).length;
+  const totalExisting = testbeds.filter(c => c.useExisting).length;
   const totalLanguages = selectedLangs.size;
-  const totalCombinations = cells.length * totalLanguages;
+  const totalCombinations = testbeds.length * totalLanguages;
 
   // ── Render ─────────────────────────────────────────────────────────────
-
   return (
     <div className="p-4 md:p-6 max-w-5xl">
       {/* Header */}
       <div className="mb-6">
         <h2 className="text-lg md:text-xl font-bold text-gray-100">New Benchmark</h2>
         <p className="text-xs text-gray-500 mt-1">
-          Configure cells, languages, and methodology, then launch.
+          Configure testbeds, languages, and methodology, then launch.
         </p>
       </div>
 
@@ -452,7 +506,7 @@ export function BenchmarkWizardPage() {
                 <h4 className="text-sm font-medium text-gray-100">{tmpl.name}</h4>
                 <p className="text-xs text-gray-500 mt-1">{tmpl.description}</p>
                 <div className="flex items-center gap-3 mt-3 text-[11px] text-gray-600">
-                  {tmpl.defaultCellCount > 0 && <span>{tmpl.defaultCellCount} cell{tmpl.defaultCellCount > 1 ? 's' : ''}</span>}
+                  {tmpl.defaultTestbedCount > 0 && <span>{tmpl.defaultTestbedCount} testbed{tmpl.defaultTestbedCount > 1 ? 's' : ''}</span>}
                   <span>{tmpl.defaultLanguages.length} languages</span>
                   <span>{tmpl.methodology} methodology</span>
                 </div>
@@ -462,46 +516,46 @@ export function BenchmarkWizardPage() {
         </div>
       )}
 
-      {/* ── Step 1: Cells ── */}
+      {/* ── Step 1: Testbeds ── */}
       {step === 1 && (
         <div>
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-semibold text-gray-200">Configure Cells</h3>
+            <h3 className="text-sm font-semibold text-gray-200">Configure Testbeds</h3>
             <button
-              onClick={addCell}
+              onClick={addTestbed}
               className="px-3 py-1.5 rounded border border-gray-700 text-xs text-gray-200 hover:border-cyan-500 transition-colors"
             >
-              + Add Cell
+              + Add Testbed
             </button>
           </div>
 
-          {cells.length === 0 && (
+          {testbeds.length === 0 && (
             <div className="border border-dashed border-gray-800 rounded-lg p-8 text-center">
-              <p className="text-gray-500 text-sm">No cells yet</p>
-              <p className="text-gray-700 text-xs mt-1">Add at least one cell to define where benchmarks will run.</p>
+              <p className="text-gray-500 text-sm">No testbeds yet</p>
+              <p className="text-gray-700 text-xs mt-1">Add at least one testbed to define where benchmarks will run.</p>
             </div>
           )}
 
           <div className="space-y-3">
-            {cells.map((cell, idx) => (
-              <div key={cell.key} className="border border-gray-800 rounded-lg p-4 bg-[var(--bg-surface)]/40">
+            {testbeds.map((testbed, idx) => (
+              <div key={testbed.key} className="border border-gray-800 rounded-lg p-4 bg-[var(--bg-surface)]/40">
                 <div className="flex items-center justify-between mb-3">
-                  <span className="text-xs font-medium text-gray-400">Cell {idx + 1}</span>
+                  <span className="text-xs font-medium text-gray-400">Testbed {idx + 1}</span>
                   <button
-                    onClick={() => removeCell(cell.key)}
+                    onClick={() => removeTestbed(testbed.key)}
                     className="text-xs text-gray-500 hover:text-red-400 transition-colors"
                   >
                     Remove
                   </button>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
                   {/* Cloud */}
                   <label className="text-xs text-gray-500">
                     Cloud
                     <select
-                      value={cell.cloud}
-                      onChange={e => updateCell(cell.key, { cloud: e.target.value })}
+                      value={testbed.cloud}
+                      onChange={e => updateTestbed(testbed.key, { cloud: e.target.value })}
                       className="mt-1 w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                     >
                       {CLOUDS.map(c => <option key={c} value={c}>{c}</option>)}
@@ -512,11 +566,11 @@ export function BenchmarkWizardPage() {
                   <label className="text-xs text-gray-500">
                     Region
                     <select
-                      value={cell.region}
-                      onChange={e => updateCell(cell.key, { region: e.target.value })}
+                      value={testbed.region}
+                      onChange={e => updateTestbed(testbed.key, { region: e.target.value })}
                       className="mt-1 w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                     >
-                      {(REGIONS[cell.cloud] ?? []).map(r => <option key={r} value={r}>{r}</option>)}
+                      {(REGIONS[testbed.cloud] ?? []).map(r => <option key={r} value={r}>{r}</option>)}
                     </select>
                   </label>
 
@@ -524,8 +578,8 @@ export function BenchmarkWizardPage() {
                   <label className="text-xs text-gray-500">
                     Topology
                     <select
-                      value={cell.topology}
-                      onChange={e => updateCell(cell.key, { topology: e.target.value })}
+                      value={testbed.topology}
+                      onChange={e => updateTestbed(testbed.key, { topology: e.target.value })}
                       className="mt-1 w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                     >
                       {TOPOLOGIES.map(t => <option key={t} value={t}>{t}</option>)}
@@ -536,11 +590,24 @@ export function BenchmarkWizardPage() {
                   <label className="text-xs text-gray-500">
                     VM Size
                     <select
-                      value={cell.vmSize}
-                      onChange={e => updateCell(cell.key, { vmSize: e.target.value })}
+                      value={testbed.vmSize}
+                      onChange={e => updateTestbed(testbed.key, { vmSize: e.target.value })}
                       className="mt-1 w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                     >
                       {VM_SIZES.map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                  </label>
+
+                  {/* OS */}
+                  <label className="text-xs text-gray-500">
+                    OS
+                    <select
+                      value={testbed.os}
+                      onChange={e => updateTestbed(testbed.key, { os: e.target.value as 'linux' | 'windows' })}
+                      className="mt-1 w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                    >
+                      <option value="linux">Linux (Ubuntu)</option>
+                      <option value="windows">Windows Server</option>
                     </select>
                   </label>
                 </div>
@@ -550,22 +617,22 @@ export function BenchmarkWizardPage() {
                   <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
                     <input
                       type="checkbox"
-                      checked={cell.useExisting}
-                      onChange={e => updateCell(cell.key, { useExisting: e.target.checked })}
+                      checked={testbed.useExisting}
+                      onChange={e => updateTestbed(testbed.key, { useExisting: e.target.checked })}
                       className="accent-cyan-400"
                     />
                     Use existing VM
                   </label>
 
-                  {cell.useExisting && (
+                  {testbed.useExisting && (
                     <select
-                      value={cell.existingVmId}
-                      onChange={e => updateCell(cell.key, { existingVmId: e.target.value })}
+                      value={testbed.existingVmId}
+                      onChange={e => updateTestbed(testbed.key, { existingVmId: e.target.value })}
                       className="bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-xs text-gray-200 focus:outline-none focus:border-cyan-500"
                     >
                       <option value="">Select VM...</option>
                       {catalog
-                        .filter(vm => vm.cloud.toLowerCase() === cell.cloud.toLowerCase() && vm.region.toLowerCase() === cell.region.toLowerCase())
+                        .filter(vm => vm.cloud.toLowerCase() === testbed.cloud.toLowerCase() && vm.region.toLowerCase() === testbed.region.toLowerCase())
                         .map(vm => (
                           <option key={vm.vm_id} value={vm.vm_id}>
                             {vm.name} ({vm.ip}) - {vm.status}
@@ -648,6 +715,24 @@ export function BenchmarkWizardPage() {
           <p className="text-xs text-gray-600 mt-4">
             {selectedLangs.size} language{selectedLangs.size !== 1 ? 's' : ''} selected. nginx is always included as the static baseline.
           </p>
+
+          {requiresWindows(selectedLangs) && testbeds.length === 1 && testbeds[0].os === 'linux' && (
+            <div className="mt-3 border border-yellow-500/30 bg-yellow-500/5 rounded-lg p-3">
+              <p className="text-xs text-yellow-300">
+                C# .NET 4.8 requires Windows Server. When you proceed, your testbed will be
+                switched to Windows automatically.
+              </p>
+            </div>
+          )}
+
+          {requiresWindows(selectedLangs) && testbeds.length > 1 && testbeds.some(tb => tb.os === 'linux') && (
+            <div className="mt-3 border border-yellow-500/30 bg-yellow-500/5 rounded-lg p-3">
+              <p className="text-xs text-yellow-300">
+                C# .NET 4.8 requires Windows Server. It will only run on testbeds configured with Windows OS.
+                Linux testbeds will skip .NET 4.8 automatically.
+              </p>
+            </div>
+          )}
         </div>
       )}
 
@@ -769,18 +854,25 @@ export function BenchmarkWizardPage() {
             />
           </label>
 
-          {/* Cell summaries */}
+          {/* Testbed summaries */}
           <div className="space-y-2 mb-4">
-            {cells.map((cell, idx) => (
-              <div key={cell.key} className="border border-gray-800 rounded-lg p-3 bg-[var(--bg-surface)]/40">
+            {testbeds.map((testbed, idx) => (
+              <div key={testbed.key} className="border border-gray-800 rounded-lg p-3 bg-[var(--bg-surface)]/40">
                 <div className="flex items-center gap-3">
-                  <span className="text-xs font-medium text-gray-400">Cell {idx + 1}</span>
+                  <span className="text-xs font-medium text-gray-400">Testbed {idx + 1}</span>
                   <span className="text-xs text-gray-300 font-mono">
-                    {cell.cloud} / {cell.region}
+                    {testbed.cloud} / {testbed.region}
                   </span>
-                  <span className="text-xs text-gray-500">{cell.topology}</span>
-                  <span className="text-xs text-gray-500">{cell.vmSize}</span>
-                  {cell.useExisting && <span className="text-[10px] text-yellow-500/80">existing VM</span>}
+                  <span className="text-xs text-gray-500">{testbed.topology}</span>
+                  <span className="text-xs text-gray-500">{testbed.vmSize}</span>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
+                    testbed.os === 'windows'
+                      ? 'border-blue-500/30 text-blue-300'
+                      : 'border-green-500/30 text-green-300'
+                  }`}>
+                    {testbed.os === 'windows' ? 'Windows' : 'Linux'}
+                  </span>
+                  {testbed.useExisting && <span className="text-[10px] text-yellow-500/80">existing VM</span>}
                 </div>
               </div>
             ))}
@@ -790,8 +882,8 @@ export function BenchmarkWizardPage() {
           <div className="border border-gray-800 rounded-lg p-4 bg-[var(--bg-surface)]/40 mb-4">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
               <div>
-                <div className="text-lg font-bold text-gray-100 font-mono">{cells.length}</div>
-                <div className="text-xs text-gray-500">Cells</div>
+                <div className="text-lg font-bold text-gray-100 font-mono">{testbeds.length}</div>
+                <div className="text-xs text-gray-500">Testbeds</div>
               </div>
               <div>
                 <div className="text-lg font-bold text-gray-100 font-mono">{totalLanguages}</div>
@@ -861,11 +953,11 @@ export function BenchmarkWizardPage() {
           {/* Launch button — the hero moment */}
           <button
             onClick={handleLaunch}
-            disabled={submitting || cells.length === 0}
+            disabled={submitting || testbeds.length === 0}
             className={`relative overflow-hidden text-white px-8 py-3 rounded text-sm font-bold tracking-wide transition-all duration-200 ${
               submitting
                 ? 'bg-cyan-700 cursor-wait'
-                : cells.length === 0
+                : testbeds.length === 0
                   ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
                   : 'bg-cyan-600 hover:bg-cyan-500 hover:-translate-y-0.5 hover:shadow-[0_4px_20px_rgba(71,191,255,0.25)] active:translate-y-0 active:shadow-none'
             }`}
