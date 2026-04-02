@@ -450,29 +450,22 @@ export function BenchmarkWizardPage() {
       </div>
 
       {/* Stepper */}
-      <div className="flex items-center gap-1 mb-8">
+      <div className="flex items-center gap-0.5 mb-8 font-mono text-xs">
         {STEP_LABELS.map((label, i) => (
-          <div key={label} className="flex items-center gap-1">
-            {i > 0 && <div className={`w-6 md:w-10 h-px ${i <= step ? 'bg-cyan-500/60' : 'bg-gray-700'}`} />}
-            <button
-              onClick={() => { if (i < step) setStep(i); }}
-              disabled={i > step}
-              className={`flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium transition-colors ${
-                i === step
-                  ? 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/40'
-                  : i < step
-                    ? 'text-gray-400 hover:text-gray-200 border border-transparent'
-                    : 'text-gray-600 border border-transparent cursor-not-allowed'
-              }`}
-            >
-              <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-bold ${
-                i === step ? 'bg-cyan-500/30 text-cyan-200' : i < step ? 'bg-gray-700 text-gray-400' : 'bg-gray-800 text-gray-600'
-              }`}>
-                {i + 1}
-              </span>
-              <span className="hidden md:inline">{label}</span>
-            </button>
-          </div>
+          <button
+            key={label}
+            onClick={() => { if (i < step) setStep(i); }}
+            disabled={i > step}
+            className={`px-2 py-1 transition-colors ${
+              i === step
+                ? 'text-cyan-300'
+                : i < step
+                  ? 'text-gray-500 hover:text-gray-300 cursor-pointer'
+                  : 'text-gray-700 cursor-not-allowed'
+            }`}
+          >
+            {i + 1}. {label}
+          </button>
         ))}
       </div>
 
@@ -524,99 +517,100 @@ export function BenchmarkWizardPage() {
             </div>
           )}
 
-          <div className="space-y-3">
+          <div className="space-y-2">
             {testbeds.map((testbed, idx) => (
-              <div key={testbed.key} className="border border-gray-800 rounded-lg p-4 bg-[var(--bg-surface)]/40">
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-xs font-medium text-gray-400">Testbed {idx + 1}</span>
-                  <button
-                    onClick={() => removeTestbed(testbed.key)}
-                    className="text-xs text-gray-500 hover:text-red-400 transition-colors"
+              <div key={testbed.key} className="border border-gray-800 p-3">
+                {/* Row 1: primary axes — Cloud, OS, Region + remove action */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[10px] font-mono text-gray-600 w-3">{idx + 1}</span>
+
+                  {/* Cloud — pill buttons */}
+                  <div className="flex">
+                    {CLOUDS.map(c => (
+                      <button
+                        key={c}
+                        onClick={() => updateTestbed(testbed.key, { cloud: c })}
+                        className={`px-2.5 py-1 text-xs font-mono border transition-colors ${
+                          testbed.cloud === c
+                            ? 'bg-cyan-500/10 border-cyan-500/40 text-cyan-300 z-10'
+                            : 'border-gray-700 text-gray-500 hover:text-gray-300'
+                        } ${c === 'Azure' ? '' : '-ml-px'}`}
+                      >
+                        {c}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* OS — pill buttons */}
+                  <div className="flex">
+                    {(['linux', 'windows'] as const).map(os => (
+                      <button
+                        key={os}
+                        onClick={() => updateTestbed(testbed.key, { os })}
+                        className={`px-2.5 py-1 text-xs font-mono border transition-colors ${
+                          testbed.os === os
+                            ? os === 'linux'
+                              ? 'bg-green-500/10 border-green-500/40 text-green-300 z-10'
+                              : 'bg-blue-500/10 border-blue-500/40 text-blue-300 z-10'
+                            : 'border-gray-700 text-gray-500 hover:text-gray-300'
+                        } ${os === 'linux' ? '' : '-ml-px'}`}
+                      >
+                        {os === 'linux' ? 'Linux' : 'Windows'}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Region — dropdown (many options) */}
+                  <select
+                    value={testbed.region}
+                    onChange={e => updateTestbed(testbed.key, { region: e.target.value })}
+                    className="bg-[var(--bg-base)] border border-gray-700 px-2 py-1 text-xs font-mono text-gray-300 focus:outline-none focus:border-cyan-500"
                   >
-                    Remove
-                  </button>
-                </div>
+                    {(REGIONS[testbed.cloud] ?? []).map(r => <option key={r} value={r}>{r}</option>)}
+                  </select>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
-                  {/* Cloud */}
-                  <label className="text-xs text-gray-500">
-                    Cloud
-                    <select
-                      value={testbed.cloud}
-                      onChange={e => updateTestbed(testbed.key, { cloud: e.target.value })}
-                      className="mt-1 w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
-                    >
-                      {CLOUDS.map(c => <option key={c} value={c}>{c}</option>)}
-                    </select>
-                  </label>
+                  {/* Secondary: topology, size — compact inline */}
+                  <select
+                    value={testbed.topology}
+                    onChange={e => updateTestbed(testbed.key, { topology: e.target.value })}
+                    className="bg-[var(--bg-base)] border border-gray-700 px-2 py-1 text-xs text-gray-500 focus:outline-none focus:border-cyan-500"
+                  >
+                    {TOPOLOGIES.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                  <select
+                    value={testbed.vmSize}
+                    onChange={e => updateTestbed(testbed.key, { vmSize: e.target.value })}
+                    className="bg-[var(--bg-base)] border border-gray-700 px-2 py-1 text-xs text-gray-500 focus:outline-none focus:border-cyan-500"
+                  >
+                    {VM_SIZES.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
 
-                  {/* Region */}
-                  <label className="text-xs text-gray-500">
-                    Region
-                    <select
-                      value={testbed.region}
-                      onChange={e => updateTestbed(testbed.key, { region: e.target.value })}
-                      className="mt-1 w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
-                    >
-                      {(REGIONS[testbed.cloud] ?? []).map(r => <option key={r} value={r}>{r}</option>)}
-                    </select>
-                  </label>
-
-                  {/* Topology */}
-                  <label className="text-xs text-gray-500">
-                    Topology
-                    <select
-                      value={testbed.topology}
-                      onChange={e => updateTestbed(testbed.key, { topology: e.target.value })}
-                      className="mt-1 w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
-                    >
-                      {TOPOLOGIES.map(t => <option key={t} value={t}>{t}</option>)}
-                    </select>
-                  </label>
-
-                  {/* VM Size */}
-                  <label className="text-xs text-gray-500">
-                    VM Size
-                    <select
-                      value={testbed.vmSize}
-                      onChange={e => updateTestbed(testbed.key, { vmSize: e.target.value })}
-                      className="mt-1 w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
-                    >
-                      {VM_SIZES.map(s => <option key={s} value={s}>{s}</option>)}
-                    </select>
-                  </label>
-
-                  {/* OS */}
-                  <label className="text-xs text-gray-500">
-                    OS
-                    <select
-                      value={testbed.os}
-                      onChange={e => updateTestbed(testbed.key, { os: e.target.value as 'linux' | 'windows' })}
-                      className="mt-1 w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
-                    >
-                      <option value="linux">Linux (Ubuntu)</option>
-                      <option value="windows">Windows Server</option>
-                    </select>
-                  </label>
-                </div>
-
-                {/* Use existing VM toggle */}
-                <div className="mt-3 flex items-center gap-3">
-                  <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
+                  {/* Existing VM toggle */}
+                  <label className="flex items-center gap-1.5 text-[11px] text-gray-500 cursor-pointer ml-auto">
                     <input
                       type="checkbox"
                       checked={testbed.useExisting}
                       onChange={e => updateTestbed(testbed.key, { useExisting: e.target.checked })}
                       className="accent-cyan-400"
                     />
-                    Use existing VM
+                    existing
                   </label>
 
-                  {testbed.useExisting && (
+                  <button
+                    onClick={() => removeTestbed(testbed.key)}
+                    className="text-[11px] text-gray-600 hover:text-red-400 transition-colors"
+                  >
+                    remove
+                  </button>
+                </div>
+
+                {/* Row 2: Existing VM selector (conditional) */}
+                {testbed.useExisting && (
+                  <div className="mt-2 ml-5">
                     <select
                       value={testbed.existingVmId}
                       onChange={e => updateTestbed(testbed.key, { existingVmId: e.target.value })}
-                      className="bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-xs text-gray-200 focus:outline-none focus:border-cyan-500"
+                      className="bg-[var(--bg-base)] border border-gray-700 px-2 py-1 text-xs font-mono text-gray-300 focus:outline-none focus:border-cyan-500"
                     >
                       <option value="">Select VM...</option>
                       {catalog
@@ -627,8 +621,8 @@ export function BenchmarkWizardPage() {
                           </option>
                         ))}
                     </select>
-                  )}
-                </div>
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -662,11 +656,11 @@ export function BenchmarkWizardPage() {
             </div>
           </div>
 
-          <div className="space-y-4">
+          <div className="space-y-5">
             {LANGUAGE_GROUPS.map(group => (
               <div key={group.label}>
-                <h4 className="text-xs font-medium text-gray-500 mb-2">{group.label}</h4>
-                <div className="flex flex-wrap gap-2">
+                <div className="text-[10px] uppercase tracking-wider font-mono text-gray-600 mb-2">{group.label}</div>
+                <div className="flex flex-wrap gap-1.5">
                   {group.entries.map(entry => {
                     const checked = selectedLangs.has(entry.id);
                     const isNginx = entry.id === 'nginx';
@@ -929,12 +923,12 @@ export function BenchmarkWizardPage() {
         </div>
       )}
 
-      {/* ── Navigation buttons ── */}
-      <div className="flex items-center justify-between mt-8 pt-4 border-t border-gray-800">
+      {/* ── Navigation ── */}
+      <div className="flex items-center justify-between mt-10 pt-4 border-t border-gray-800/50">
         <button
           onClick={goBack}
           disabled={step === 0}
-          className="px-4 py-2 rounded border border-gray-700 text-sm text-gray-300 disabled:text-gray-600 disabled:border-gray-800 disabled:cursor-not-allowed hover:border-gray-500 transition-colors"
+          className="text-xs text-gray-500 disabled:text-gray-700 disabled:cursor-not-allowed hover:text-gray-300 transition-colors"
         >
           Back
         </button>
@@ -943,7 +937,7 @@ export function BenchmarkWizardPage() {
           <button
             onClick={goNext}
             disabled={!canNext}
-            className="px-4 py-2 rounded bg-cyan-600 hover:bg-cyan-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-medium transition-colors"
+            className="px-5 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:bg-gray-800 disabled:text-gray-600 text-white text-xs font-medium transition-colors"
           >
             Next
           </button>
