@@ -224,10 +224,7 @@ async fn save_regression(
 }
 
 /// List regressions for a specific config.
-pub async fn list_for_config(
-    client: &Client,
-    config_id: &Uuid,
-) -> Result<Vec<RegressionRow>> {
+pub async fn list_for_config(client: &Client, config_id: &Uuid) -> Result<Vec<RegressionRow>> {
     let rows = client
         .query(
             "SELECT regression_id, config_id, baseline_config_id, language, metric,
@@ -333,11 +330,18 @@ pub async fn notify_regressions(
     for reg in regressions {
         body.push_str(&format!(
             "  - {} / {}: {:.2} -> {:.2} ({:+.1}%) [{}]\n",
-            reg.language, reg.metric, reg.baseline_value, reg.current_value, reg.delta_percent, reg.severity
+            reg.language,
+            reg.metric,
+            reg.baseline_value,
+            reg.current_value,
+            reg.delta_percent,
+            reg.severity
         ));
     }
 
-    body.push_str("\nReview regressions in the AletheDash benchmark results page.\n\n-- AletheDash");
+    body.push_str(
+        "\nReview regressions in the AletheDash benchmark results page.\n\n-- AletheDash",
+    );
 
     let subject = format!(
         "AletheDash -- Benchmark regression in \"{}\" ({} issue{})",

@@ -266,17 +266,19 @@ async fn clone_and_queue_benchmark(
     )
     .await?;
 
-    // Clone cells from the template
-    let cells = crate::db::benchmark_cells::list_for_config(client, template_config_id).await?;
-    for cell in &cells {
-        crate::db::benchmark_cells::create(
+    // Clone testbeds from the template
+    let testbeds =
+        crate::db::benchmark_testbeds::list_for_config(client, template_config_id).await?;
+    for testbed in &testbeds {
+        crate::db::benchmark_testbeds::create(
             client,
             &new_config_id,
-            &cell.cloud,
-            &cell.region,
-            &cell.topology,
-            &cell.languages,
-            cell.vm_size.as_deref(),
+            &testbed.cloud,
+            &testbed.region,
+            &testbed.topology,
+            &testbed.languages,
+            testbed.vm_size.as_deref(),
+            testbed.os.as_str(),
         )
         .await?;
     }

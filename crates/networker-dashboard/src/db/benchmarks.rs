@@ -349,15 +349,15 @@ pub async fn create_run_linked(
     name: &str,
     config: &serde_json::Value,
     config_id: &Uuid,
-    cell_id: Option<&Uuid>,
+    testbed_id: Option<&Uuid>,
 ) -> anyhow::Result<Uuid> {
     let row = client
         .query_one(
-            "INSERT INTO benchmark_run (run_id, name, config, config_id, cell_id)
+            "INSERT INTO benchmark_run (run_id, name, config, config_id, testbed_id)
              VALUES ($1, $2, $3, $4, $5)
-             ON CONFLICT (run_id) DO UPDATE SET config_id = $4, cell_id = $5
+             ON CONFLICT (run_id) DO UPDATE SET config_id = $4, testbed_id = $5
              RETURNING run_id",
-            &[run_id, &name, config, config_id, &cell_id],
+            &[run_id, &name, config, config_id, &testbed_id],
         )
         .await?;
     Ok(row.get("run_id"))
@@ -376,13 +376,13 @@ pub async fn finish_run(client: &Client, run_id: &Uuid) -> anyhow::Result<()> {
 /// Persist a full BenchmarkArtifact into the pipeline tables (BenchmarkRun, BenchmarkLaunch,
 /// BenchmarkEnvironment, BenchmarkDataQuality, BenchmarkCase, BenchmarkSample, BenchmarkSummary).
 /// Also creates a job row to link the pipeline run to the project, and updates the
-/// lightweight `benchmark_run` (lowercase) row with cell_id/config_id for grouping.
+/// lightweight `benchmark_run` (lowercase) row with testbed_id/config_id for grouping.
 #[allow(clippy::too_many_arguments)]
 pub async fn save_artifact(
     client: &Client,
     project_id: &Uuid,
     config_id: &Uuid,
-    cell_id: Option<&Uuid>,
+    testbed_id: Option<&Uuid>,
     language: &str,
     artifact: &BenchmarkArtifact,
 ) -> anyhow::Result<Uuid> {
@@ -637,33 +637,33 @@ pub async fn save_artifact(
     let job_config = serde_json::json!({
         "type": "benchmark_artifact",
         "config_id": config_id,
-        "cell_id": cell_id,
+        "testbed_id": testbed_id,
         "language": language,
     });
     let job_id = crate::db::jobs::create(client, &job_config, None, None, project_id).await?;
     crate::db::jobs::set_run_id(client, &job_id, &run_id).await?;
 
-    // 9. Update the lightweight benchmark_run row with cell_id/config_id
+    // 9. Update the lightweight benchmark_run row with testbed_id/config_id
     client
         .execute(
-            "UPDATE benchmark_run SET cell_id = $1, config_id = $2 WHERE run_id = $3",
-            &[&cell_id, config_id, &run_id],
+            "UPDATE benchmark_run SET testbed_id = $1, config_id = $2 WHERE run_id = $3",
+            &[&testbed_id, config_id, &run_id],
         )
         .await
-        .context("UPDATE benchmark_run cell_id/config_id")?;
+        .context("UPDATE benchmark_run testbed_id/config_id")?;
 
     Ok(run_id)
 }
 
-/// Retrieve benchmark results for a config, grouped by cell.
+/// Retrieve benchmark results for a config, grouped by testbed.
 pub async fn get_config_results(
     client: &Client,
     config_id: &Uuid,
-) -> anyhow::Result<Vec<ConfigCellResult>> {
+) -> anyhow::Result<Vec<ConfigTestbedResult>> {
     // Get all benchmark_run rows linked to this config
     let rows = client
         .query(
-            "SELECT br.run_id, br.name, br.cell_id, br.config_id,
+            "SELECT br.run_id, br.name, br.testbed_id, br.config_id,
                     br.status, br.started_at, br.finished_at
              FROM benchmark_run br
              WHERE br.config_id = $1
@@ -675,7 +675,7 @@ pub async fn get_config_results(
     let mut results = Vec::new();
     for row in &rows {
         let run_id: Uuid = row.get("run_id");
-        let cell_id: Option<Uuid> = row.get("cell_id");
+        let testbed_id: Option<Uuid> = row.get("testbed_id");
         let name: String = row.get("name");
 
         // Get summaries for this run from the pipeline tables
@@ -690,9 +690,7 @@ pub async fn get_config_results(
 
         let summaries: Vec<BenchmarkSummary> = summary_rows
             .iter()
-            .filter_map(|r| {
-                serde_json::from_value(r.get("summaryjson")).ok()
-            })
+            .filter_map(|r| serde_json::from_value(r.get("summaryjson")).ok())
             .collect();
 
         // Extract language from the run name (format: "Config Name - language")
@@ -701,9 +699,9 @@ pub async fn get_config_results(
             .map(|(_, lang)| lang.to_string())
             .unwrap_or_else(|| name.clone());
 
-        results.push(ConfigCellResult {
+        results.push(ConfigTestbedResult {
             run_id,
-            cell_id,
+            testbed_id,
             language,
             status: row.get("status"),
             started_at: row.get("started_at"),
@@ -716,9 +714,9 @@ pub async fn get_config_results(
 }
 
 #[derive(Debug, Serialize)]
-pub struct ConfigCellResult {
+pub struct ConfigTestbedResult {
     pub run_id: Uuid,
-    pub cell_id: Option<Uuid>,
+    pub testbed_id: Option<Uuid>,
     pub language: String,
     pub status: String,
     pub started_at: DateTime<Utc>,
@@ -1758,7 +1756,7 @@ pub struct GroupedLeaderboard {
 /// Get a grouped leaderboard aggregated over all completed runs that have pipeline summary data.
 ///
 /// `group` — optional filter in the form `"cloud-region-topology"`, parsed by splitting on `-`
-/// into three parts. Runs are joined to `benchmark_cell` (via `benchmark_run.cell_id`) and
+/// into three parts. Runs are joined to `benchmark_testbed` (via `benchmark_run.testbed_id`) and
 /// filtered accordingly.  When omitted, all completed runs are included.
 ///
 /// Primary case selection per run:
@@ -1771,13 +1769,13 @@ pub async fn get_grouped_leaderboard(
     client: &Client,
     group: Option<&str>,
 ) -> anyhow::Result<GroupedLeaderboard> {
-    // 1. Resolve available groups (distinct cloud/region/topology from cells that have
+    // 1. Resolve available groups (distinct cloud/region/topology from testbeds that have
     //    completed runs with pipeline summaries).
     let group_rows = client
         .query(
             "SELECT DISTINCT bc.cloud, bc.region, bc.topology
-             FROM benchmark_cell bc
-             JOIN benchmark_run br ON br.cell_id = bc.cell_id
+             FROM benchmark_testbed bc
+             JOIN benchmark_run br ON br.testbed_id = bc.testbed_id
              WHERE br.status = 'completed'
                AND EXISTS (
                    SELECT 1 FROM benchmarksummary bs
@@ -1807,7 +1805,7 @@ pub async fn get_grouped_leaderboard(
     // 3. Parse optional group filter into (cloud, region, topology).
     //    Format: "cloud-region-topology".  We split on '-' taking the first token as cloud,
     //    the last as topology, and everything in between as the region (regions can contain '-').
-    let cell_filter: Option<(String, String, String)> = if let Some(g) = group {
+    let testbed_filter: Option<(String, String, String)> = if let Some(g) = group {
         let parts: Vec<&str> = g.splitn(3, '-').collect();
         if parts.len() == 3 {
             Some((
@@ -1824,7 +1822,7 @@ pub async fn get_grouped_leaderboard(
 
     // 4. Query the primary summary per run (protocol preference: http1 > http2 > http3).
     //    We use a CTE to rank summaries within each run and pick the best one.
-    let lang_rows = if let Some((cloud, region, topology)) = cell_filter {
+    let lang_rows = if let Some((cloud, region, topology)) = testbed_filter {
         client
             .query(
                 "WITH ranked AS (
@@ -1845,7 +1843,7 @@ pub async fn get_grouped_leaderboard(
                                 bs.caseid
                         ) AS rn
                     FROM benchmark_run br
-                    JOIN benchmark_cell bc ON bc.cell_id = br.cell_id
+                    JOIN benchmark_testbed bc ON bc.testbed_id = br.testbed_id
                     JOIN benchmarksummary bs ON bs.benchmarkrunid = br.run_id
                     WHERE br.status = 'completed'
                       AND bs.metricname IN ('latency', 'Total ms')

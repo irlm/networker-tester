@@ -58,33 +58,47 @@ async fn poll_and_run(state: &AppState, worker_id: &str) -> anyhow::Result<()> {
         "Claimed benchmark config for execution"
     );
 
-    // Fetch cells from DB (they have cell_id which the config_json might not)
-    let db_cells = crate::db::benchmark_cells::list_for_config(&client, &config.config_id)
+    // Fetch testbeds from DB (they have testbed_id which the config_json might not)
+    let db_testbeds = crate::db::benchmark_testbeds::list_for_config(&client, &config.config_id)
         .await
         .unwrap_or_default();
 
-    // Build cells array with cell_id + data from config_json
+    // Build testbeds array with testbed_id + data from config_json
     let inner = &config.config_json;
-    let config_cells = inner.get("cells").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-    let merged_cells: Vec<serde_json::Value> = db_cells.iter().enumerate().map(|(i, db_cell)| {
-        let mut cell = config_cells.get(i).cloned().unwrap_or(serde_json::json!({}));
-        if let Some(obj) = cell.as_object_mut() {
-            obj.insert("cell_id".to_string(), serde_json::json!(db_cell.cell_id.to_string()));
-            // Ensure existing_vm_ip is present
-            if !obj.contains_key("existing_vm_ip") {
-                if let Some(ip) = &db_cell.endpoint_ip {
-                    obj.insert("existing_vm_ip".to_string(), serde_json::json!(ip));
+    let config_testbeds = inner
+        .get("testbeds")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let merged_testbeds: Vec<serde_json::Value> = db_testbeds
+        .iter()
+        .enumerate()
+        .map(|(i, db_testbed)| {
+            let mut testbed = config_testbeds
+                .get(i)
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
+            if let Some(obj) = testbed.as_object_mut() {
+                obj.insert(
+                    "testbed_id".to_string(),
+                    serde_json::json!(db_testbed.testbed_id.to_string()),
+                );
+                // Ensure existing_vm_ip is present
+                if !obj.contains_key("existing_vm_ip") {
+                    if let Some(ip) = &db_testbed.endpoint_ip {
+                        obj.insert("existing_vm_ip".to_string(), serde_json::json!(ip));
+                    }
                 }
             }
-        }
-        cell
-    }).collect();
+            testbed
+        })
+        .collect();
 
     // Write config JSON in the format the orchestrator's DashboardBenchmarkConfig expects
     let config_path = format!("/tmp/bench-{}.json", config.config_id);
     let config_data = serde_json::json!({
         "config_id": config.config_id.to_string(),
-        "cells": merged_cells,
+        "testbeds": merged_testbeds,
         "methodology": inner.get("methodology").cloned().unwrap_or(serde_json::json!({})),
         "auto_teardown": inner.get("auto_teardown").and_then(|v| v.as_bool()).unwrap_or(true),
     });
@@ -137,8 +151,12 @@ async fn poll_and_run(state: &AppState, worker_id: &str) -> anyhow::Result<()> {
                             // Update status as fallback (callback may have already set it)
                             if let Ok(db) = db_pool.get().await {
                                 let _ = crate::db::benchmark_configs::update_status(
-                                    &db, &config_id, "completed", None,
-                                ).await;
+                                    &db,
+                                    &config_id,
+                                    "completed",
+                                    None,
+                                )
+                                .await;
                             }
                         } else {
                             let stderr = child.stderr.take();
@@ -159,9 +177,16 @@ async fn poll_and_run(state: &AppState, worker_id: &str) -> anyhow::Result<()> {
                             // Mark as failed in DB
                             if let Ok(db) = db_pool.get().await {
                                 let _ = crate::db::benchmark_configs::update_status(
-                                    &db, &config_id, "failed",
-                                    Some(&format!("Orchestrator exited with code {:?}: {}", status.code(), err_msg.chars().take(500).collect::<String>())),
-                                ).await;
+                                    &db,
+                                    &config_id,
+                                    "failed",
+                                    Some(&format!(
+                                        "Orchestrator exited with code {:?}: {}",
+                                        status.code(),
+                                        err_msg.chars().take(500).collect::<String>()
+                                    )),
+                                )
+                                .await;
                             }
                         }
                     }
@@ -173,9 +198,12 @@ async fn poll_and_run(state: &AppState, worker_id: &str) -> anyhow::Result<()> {
                         );
                         if let Ok(db) = db_pool.get().await {
                             let _ = crate::db::benchmark_configs::update_status(
-                                &db, &config_id, "failed",
+                                &db,
+                                &config_id,
+                                "failed",
                                 Some(&format!("Process wait error: {e}")),
-                            ).await;
+                            )
+                            .await;
                         }
                     }
                 }

@@ -155,15 +155,12 @@ async fn grouped_leaderboard(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    let result = crate::db::benchmarks::get_grouped_leaderboard(
-        &client,
-        params.group.as_deref(),
-    )
-    .await
-    .map_err(|e| {
-        tracing::error!(error = %e, "Failed to fetch grouped leaderboard");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    let result = crate::db::benchmarks::get_grouped_leaderboard(&client, params.group.as_deref())
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to fetch grouped leaderboard");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     Ok(Json(result))
 }
