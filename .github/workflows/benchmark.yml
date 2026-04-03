@@ -24,6 +24,9 @@ on:
     # Weekly: Sunday at 00:00 UTC
     - cron: "0 0 * * 0"
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
@@ -39,14 +42,14 @@ jobs:
       INPUT_RUNS: ${{ inputs.runs || '100' }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
       # ── Rust toolchain ─────────────────────────────────────────────────────
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
 
       - name: Cache cargo
-        uses: actions/cache@v5
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
         with:
           path: |
             ~/.cargo/registry
@@ -71,8 +74,10 @@ jobs:
       # ── Install language runtimes ──────────────────────────────────────────
       - name: Determine languages
         id: langs
+        env:
+          EVENT_NAME: ${{ github.event_name }}
         run: |
-          if [ "${{ github.event_name }}" = "schedule" ]; then
+          if [ "$EVENT_NAME" = "schedule" ]; then
             LANGS="rust,go,nodejs,python,java"
           else
             LANGS="$INPUT_LANGUAGES"
@@ -85,27 +90,27 @@ jobs:
 
       - name: Setup Go
         if: contains(steps.langs.outputs.languages, 'go')
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: "stable"
           cache: false
 
       - name: Setup Node.js
         if: contains(steps.langs.outputs.languages, 'nodejs') || contains(steps.langs.outputs.languages, 'node')
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: "22"
 
       - name: Setup Java
         if: contains(steps.langs.outputs.languages, 'java')
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
         with:
           distribution: "temurin"
           java-version: "21"
 
       - name: Setup Python
         if: contains(steps.langs.outputs.languages, 'python')
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
 
@@ -115,13 +120,13 @@ jobs:
 
       - name: Setup .NET
         if: contains(steps.langs.outputs.languages, 'csharp')
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: "10.0.x"
 
       - name: Setup Ruby
         if: contains(steps.langs.outputs.languages, 'ruby')
-        uses: ruby/setup-ruby@v1
+        uses: ruby/setup-ruby@3ff19f5e2baf30647122352b96108b1fbe250c64 # v1
         with:
           ruby-version: "3.3"
 
@@ -194,7 +199,7 @@ jobs:
 
       - name: Upload results artifact
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: benchmark-results-${{ github.run_id }}
           path: benchmarks/results/
