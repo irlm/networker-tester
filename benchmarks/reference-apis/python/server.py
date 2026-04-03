@@ -1,5 +1,6 @@
-"""AletheBench Python reference API — uvicorn + starlette."""
+"""AletheBench Python reference API — hypercorn + starlette (HTTP/3 QUIC)."""
 
+import os
 import sys
 
 from starlette.applications import Starlette
@@ -50,10 +51,36 @@ async def upload(request: Request) -> JSONResponse:
     return JSONResponse({"bytes_received": total})
 
 
-app = Starlette(
-    routes=[
-        Route("/health", health, methods=["GET"]),
-        Route("/download/{size:int}", download, methods=["GET"]),
-        Route("/upload", upload, methods=["POST"]),
-    ],
+class AltSvcMiddleware:
+    """Advertise HTTP/3 via Alt-Svc header on every HTTP response."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            port = os.environ.get("BENCH_PORT", "8443")
+
+            async def send_with_alt_svc(message):
+                if message["type"] == "http.response.start":
+                    headers = list(message.get("headers", []))
+                    headers.append(
+                        (b"alt-svc", f'h3=":{port}"; ma=86400'.encode())
+                    )
+                    message = {**message, "headers": headers}
+                await send(message)
+
+            await self.app(scope, receive, send_with_alt_svc)
+        else:
+            await self.app(scope, receive, send)
+
+
+app = AltSvcMiddleware(
+    Starlette(
+        routes=[
+            Route("/health", health, methods=["GET"]),
+            Route("/download/{size:int}", download, methods=["GET"]),
+            Route("/upload", upload, methods=["POST"]),
+        ],
+    )
 )
