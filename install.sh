@@ -9003,7 +9003,7 @@ deploy_chrome_harness() {
     if ! command -v node &>/dev/null; then
         echo ">> Installing Node.js"
         if [ -f /etc/debian_version ]; then
-            curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - < /dev/null
+            curl -fsSL https://deb.nodesource.com/setup_20.x < /dev/null | sudo -E bash -
             sudo apt-get install -y -qq nodejs < /dev/null
         fi
     fi
@@ -9358,7 +9358,7 @@ deploy_benchmark_server() {
             if [ ! -s "$BENCH_DIR/rust-server" ]; then
                 echo ">> Release download failed, building from source..."
                 command -v cargo >/dev/null 2>&1 || {
-                    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y < /dev/null
+                    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs < /dev/null | sh -s -- -y
                     # shellcheck disable=SC1091
                     source "$HOME/.cargo/env"
                 }
@@ -9511,7 +9511,7 @@ deploy_benchmark_server() {
             echo ">> Installing .NET $dotnet_version SDK"
             # Install .NET SDK via Microsoft feed
             if ! command -v dotnet >/dev/null 2>&1; then
-                curl -fsSL https://dot.net/v1/dotnet-install.sh | bash -s -- --channel "$dotnet_version" < /dev/null
+                curl -fsSL https://dot.net/v1/dotnet-install.sh < /dev/null | bash -s -- --channel "$dotnet_version"
                 export PATH="$HOME/.dotnet:$PATH"
             fi
             local csharp_dir="$API_DIR/$lang"
