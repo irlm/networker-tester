@@ -89,6 +89,16 @@ async fn poll_and_run(state: &AppState, worker_id: &str) -> anyhow::Result<()> {
                         obj.insert("existing_vm_ip".to_string(), serde_json::json!(ip));
                     }
                 }
+                // Ensure proxies and tester_os from DB are present
+                if !obj.contains_key("proxies") {
+                    obj.insert("proxies".to_string(), db_testbed.proxies.clone());
+                }
+                if !obj.contains_key("tester_os") {
+                    obj.insert(
+                        "tester_os".to_string(),
+                        serde_json::json!(db_testbed.tester_os),
+                    );
+                }
             }
             testbed
         })
@@ -111,6 +121,7 @@ async fn poll_and_run(state: &AppState, worker_id: &str) -> anyhow::Result<()> {
     let config_path = format!("/tmp/bench-{}.json", config.config_id);
     let config_data = serde_json::json!({
         "config_id": config.config_id.to_string(),
+        "benchmark_type": config.benchmark_type,
         "testbeds": merged_testbeds,
         "methodology": inner.get("methodology").cloned().unwrap_or(serde_json::json!({})),
         "auto_teardown": inner.get("auto_teardown").and_then(|v| v.as_bool()).unwrap_or(true),
