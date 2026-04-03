@@ -4,19 +4,9 @@ import type { BenchmarkLeaderboardEntry, BenchmarkRun, GroupedLeaderboard } from
 import { HorizontalBoxWhiskerChart } from '../components/charts/HorizontalBoxWhiskerChart';
 import type { HBoxGroup } from '../components/charts/HorizontalBoxWhiskerChart';
 import { usePageTitle } from '../hooks/usePageTitle';
+import { languageColor } from '../lib/languageColors';
 
 type Tab = 'grouped' | 'leaderboard' | 'comparison' | 'timeline';
-
-const LANGUAGE_PALETTE = [
-  '#06b6d4',
-  '#a78bfa',
-  '#f59e0b',
-  '#10b981',
-  '#ef4444',
-  '#3b82f6',
-  '#ec4899',
-  '#84cc16',
-];
 
 function formatMs(val: number | undefined): string {
   if (val === undefined || val === null) return '--';
@@ -76,12 +66,12 @@ function GroupedTab() {
     void fetchGrouped(group || undefined);
   }, [fetchGrouped]);
 
-  const hboxGroups: HBoxGroup[] = (data?.languages ?? []).map((lang, i) => {
+  const hboxGroups: HBoxGroup[] = (data?.languages ?? []).map((lang) => {
     const limited = lang.run_count < 3;
     return {
       label: lang.language,
       sublabel: limited ? `${lang.run_count} runs (limited data)` : `${lang.run_count} runs`,
-      color: LANGUAGE_PALETTE[i % LANGUAGE_PALETTE.length],
+      color: languageColor(lang.language),
       p5: lang.p5,
       p25: lang.p25,
       p50: lang.p50,
@@ -169,8 +159,7 @@ function GroupedTab() {
             </thead>
             <tbody>
               {sortedForTable.map((lang, i) => {
-                const langIndex = (data?.languages ?? []).findIndex(l => l.language === lang.language);
-                const color = LANGUAGE_PALETTE[langIndex >= 0 ? langIndex % LANGUAGE_PALETTE.length : i % LANGUAGE_PALETTE.length];
+                const color = languageColor(lang.language);
                 const limited = lang.run_count < 3;
                 return (
                   <tr
@@ -302,16 +291,17 @@ function ComparisonTab({ entries }: { entries: BenchmarkLeaderboardEntry[] }) {
       <div>
         <h3 className="text-xs uppercase tracking-wider text-gray-500 mb-3">Mean Latency (lower is better)</h3>
         <div className="space-y-2">
-          {entries.map((entry, i) => {
+          {entries.map((entry) => {
             const val = entry.metrics?.latency_mean_ms ?? 0;
             const pct = maxLatency > 0 ? (val / maxLatency) * 100 : 0;
+            const color = languageColor(entry.language);
             return (
               <div key={`lat-${entry.language}-${entry.runtime}`} className="flex items-center gap-3">
-                <span className="w-24 text-sm text-gray-400 truncate">{entry.language}</span>
-                <div className="flex-1 h-6 bg-gray-800/50 rounded overflow-hidden">
+                <span className="w-36 text-sm truncate" style={{ color }}>{entry.language}</span>
+                <div className="flex-1 h-6 bg-gray-800/50 overflow-hidden">
                   <div
-                    className={`h-full rounded transition-all ${i === 0 ? 'bg-cyan-500' : 'bg-gray-600'}`}
-                    style={{ width: `${Math.max(pct, 1)}%` }}
+                    className="h-full transition-all"
+                    style={{ width: `${Math.max(pct, 1)}%`, backgroundColor: color, opacity: 0.6 }}
                   />
                 </div>
                 <span className="w-24 text-right text-sm font-mono text-gray-300">
@@ -326,16 +316,17 @@ function ComparisonTab({ entries }: { entries: BenchmarkLeaderboardEntry[] }) {
       <div>
         <h3 className="text-xs uppercase tracking-wider text-gray-500 mb-3">Throughput (higher is better)</h3>
         <div className="space-y-2">
-          {entries.map((entry, i) => {
+          {entries.map((entry) => {
             const val = entry.metrics?.requests_per_sec ?? 0;
             const pct = maxThroughput > 0 ? (val / maxThroughput) * 100 : 0;
+            const color = languageColor(entry.language);
             return (
               <div key={`rps-${entry.language}-${entry.runtime}`} className="flex items-center gap-3">
-                <span className="w-24 text-sm text-gray-400 truncate">{entry.language}</span>
-                <div className="flex-1 h-6 bg-gray-800/50 rounded overflow-hidden">
+                <span className="w-36 text-sm truncate" style={{ color }}>{entry.language}</span>
+                <div className="flex-1 h-6 bg-gray-800/50 overflow-hidden">
                   <div
-                    className={`h-full rounded transition-all ${i === 0 ? 'bg-cyan-500' : 'bg-gray-600'}`}
-                    style={{ width: `${Math.max(pct, 1)}%` }}
+                    className="h-full transition-all"
+                    style={{ width: `${Math.max(pct, 1)}%`, backgroundColor: color, opacity: 0.6 }}
                   />
                 </div>
                 <span className="w-24 text-right text-sm font-mono text-gray-300">
