@@ -94,18 +94,6 @@ async fn poll_and_run(state: &AppState, worker_id: &str) -> anyhow::Result<()> {
         })
         .collect();
 
-    // Write config JSON in the format the orchestrator's DashboardBenchmarkConfig expects
-    let config_path = format!("/tmp/bench-{}.json", config.config_id);
-    let config_data = serde_json::json!({
-        "config_id": config.config_id.to_string(),
-        "testbeds": merged_testbeds,
-        "methodology": inner.get("methodology").cloned().unwrap_or(serde_json::json!({})),
-        "auto_teardown": inner.get("auto_teardown").and_then(|v| v.as_bool()).unwrap_or(true),
-    });
-    tokio::fs::write(&config_path, serde_json::to_string_pretty(&config_data)?)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to write config file: {e}"))?;
-
     // Generate a scoped callback JWT for the orchestrator
     let callback_token = crate::auth::create_token(
         config.config_id, // Use config_id as the subject for scoped token
@@ -118,6 +106,20 @@ async fn poll_and_run(state: &AppState, worker_id: &str) -> anyhow::Result<()> {
     // Construct callback URL
     // Callback client adds /api/benchmarks/callback/... so base_url should NOT include /api
     let callback_url = state.public_url.clone();
+
+    // Write config JSON in the format the orchestrator's DashboardBenchmarkConfig expects
+    let config_path = format!("/tmp/bench-{}.json", config.config_id);
+    let config_data = serde_json::json!({
+        "config_id": config.config_id.to_string(),
+        "testbeds": merged_testbeds,
+        "methodology": inner.get("methodology").cloned().unwrap_or(serde_json::json!({})),
+        "auto_teardown": inner.get("auto_teardown").and_then(|v| v.as_bool()).unwrap_or(true),
+        "callback_url": callback_url,
+        "callback_token": callback_token,
+    });
+    tokio::fs::write(&config_path, serde_json::to_string_pretty(&config_data)?)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to write config file: {e}"))?;
 
     // Spawn alethabench as a child process
     let child_result = tokio::process::Command::new("alethabench")

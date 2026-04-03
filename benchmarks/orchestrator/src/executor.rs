@@ -138,8 +138,7 @@ pub async fn execute_dashboard_benchmark(
             testbed.region,
         );
 
-        let outcome =
-            execute_testbed(testbed, &config.methodology, callback, cancel_rx, bench_dir).await;
+        let outcome = execute_testbed(testbed, config, callback, cancel_rx, bench_dir).await;
 
         match outcome {
             Ok(outcome) => {
@@ -198,11 +197,12 @@ pub async fn execute_dashboard_benchmark(
 /// Execute a single testbed: provision/reuse VM, deploy + benchmark each language.
 async fn execute_testbed(
     testbed: &TestbedConfig,
-    methodology: &MethodologyConfig,
+    config: &DashboardBenchmarkConfig,
     callback: &Arc<CallbackClient>,
     cancel_rx: &watch::Receiver<bool>,
     bench_dir: &Path,
 ) -> Result<TestbedOutcome> {
+    let methodology = &config.methodology;
     let language_total = testbed.languages.len() as u32;
     let mut languages_completed = 0u32;
     let mut languages_failed = 0u32;
@@ -379,7 +379,18 @@ async fn execute_testbed(
         )
         .await;
 
-        match run_language_benchmark(&vm, &test_params, language, &modes_str).await {
+        match run_language_benchmark(
+            &vm,
+            &test_params,
+            language,
+            &modes_str,
+            config.callback_url.as_deref(),
+            config.callback_token.as_deref(),
+            &config.config_id,
+            &testbed.testbed_id,
+        )
+        .await
+        {
             Ok(artifact_json) => {
                 tracing::info!(
                     "Benchmark complete for {} on testbed {}",
@@ -524,6 +535,10 @@ async fn run_language_benchmark(
     params: &runner::TestParams,
     language: &str,
     modes: &str,
+    callback_url: Option<&str>,
+    callback_token: Option<&str>,
+    config_id: &str,
+    testbed_id: &str,
 ) -> Result<serde_json::Value> {
     let target = format!("https://{}:8443/health", vm.ip);
     let tester_bin = resolve_tester_path();
@@ -558,6 +573,22 @@ async fn run_language_benchmark(
     if needs_payload {
         args.push("--payload-sizes".to_string());
         args.push("4k,64k,1m".to_string());
+    }
+
+    // Pass progress callback flags so the tester can report live progress to the dashboard.
+    if let Some(url) = callback_url {
+        args.push("--progress-url".to_string());
+        args.push(url.to_string());
+        if let Some(token) = callback_token {
+            args.push("--progress-token".to_string());
+            args.push(token.to_string());
+        }
+        args.push("--progress-config-id".to_string());
+        args.push(config_id.to_string());
+        args.push("--progress-testbed-id".to_string());
+        args.push(testbed_id.to_string());
+        args.push("--benchmark-language".to_string());
+        args.push(language.to_string());
     }
 
     // Timeout: account for modes * payload-sizes * runs * timeout, plus warmup buffer
