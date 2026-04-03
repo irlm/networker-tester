@@ -534,6 +534,28 @@ CREATE INDEX IF NOT EXISTS ix_benchmark_regression_config ON benchmark_regressio
 CREATE INDEX IF NOT EXISTS ix_benchmark_regression_project ON benchmark_regression (config_id);
 "#;
 
+/// V021 migration: Per-request benchmark progress tracking.
+const V021_BENCHMARK_REQUEST_PROGRESS: &str = r#"
+CREATE TABLE IF NOT EXISTS benchmark_request_progress (
+    id              BIGSERIAL       PRIMARY KEY,
+    config_id       UUID            NOT NULL,
+    testbed_id      UUID,
+    language        TEXT            NOT NULL,
+    mode            TEXT            NOT NULL,
+    request_index   INT             NOT NULL,
+    total_requests  INT             NOT NULL,
+    latency_ms      DOUBLE PRECISION NOT NULL,
+    success         BOOLEAN         NOT NULL DEFAULT TRUE,
+    created_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS ix_brp_config_lang
+    ON benchmark_request_progress (config_id, language, mode);
+
+CREATE INDEX IF NOT EXISTS ix_brp_config
+    ON benchmark_request_progress (config_id);
+"#;
+
 /// Run pending migrations.
 pub async fn run(client: &Client) -> anyhow::Result<()> {
     // Ensure migration tracking table exists
@@ -927,6 +949,36 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
             )
             .await?;
         tracing::info!("V020 migration complete");
+    }
+
+    // V021: Per-request benchmark progress tracking
+    let row = client
+        .query_opt("SELECT version FROM _migrations WHERE version = 21", &[])
+        .await?;
+
+    if row.is_none() {
+        let already_exists: bool = client
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'benchmark_request_progress')",
+                &[],
+            )
+            .await?
+            .get(0);
+
+        if !already_exists {
+            tracing::info!("Applying V021 benchmark_request_progress migration...");
+            client
+                .batch_execute(V021_BENCHMARK_REQUEST_PROGRESS)
+                .await?;
+        }
+
+        client
+            .execute(
+                "INSERT INTO _migrations (version) VALUES (21) ON CONFLICT DO NOTHING",
+                &[],
+            )
+            .await?;
+        tracing::info!("V021 migration complete");
     }
 
     Ok(())

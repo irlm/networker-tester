@@ -248,6 +248,31 @@ pub struct Cli {
     #[arg(long)]
     pub benchmark_cooldown_samples: Option<u32>,
 
+    // ── Benchmark progress reporting ────────────────────────────────────────
+    /// URL to POST per-request progress (used by orchestrator integration)
+    #[arg(long, hide = true)]
+    pub progress_url: Option<String>,
+
+    /// Bearer token for progress URL authentication
+    #[arg(long, hide = true)]
+    pub progress_token: Option<String>,
+
+    /// POST progress every N requests (default: 1 = every request)
+    #[arg(long, hide = true, default_value = "1")]
+    pub progress_interval: u32,
+
+    /// Config ID for progress reporting (passed by orchestrator)
+    #[arg(long, hide = true)]
+    pub progress_config_id: Option<String>,
+
+    /// Testbed ID for progress reporting (passed by orchestrator)
+    #[arg(long, hide = true)]
+    pub progress_testbed_id: Option<String>,
+
+    /// Language name for progress reporting (passed by orchestrator)
+    #[arg(long, hide = true)]
+    pub benchmark_language: Option<String>,
+
     // ── URL diagnostic (PR-04 path) ─────────────────────────────────────────
     /// Run the URL page-load diagnostic workflow against the provided URL.
     #[arg(long)]
@@ -571,6 +596,12 @@ pub struct ResolvedConfig {
     pub benchmark_max_rtt_spread_ratio: Option<f64>,
     pub benchmark_overhead_samples: Option<u32>,
     pub benchmark_cooldown_samples: Option<u32>,
+    pub progress_url: Option<String>,
+    pub progress_token: Option<String>,
+    pub progress_interval: u32,
+    pub progress_config_id: Option<String>,
+    pub progress_testbed_id: Option<String>,
+    pub benchmark_language: Option<String>,
     pub save_to_db: bool,
     pub db_url: Option<String>,
     pub db_migrate: bool,
@@ -818,6 +849,12 @@ impl Cli {
             benchmark_cooldown_samples: self
                 .benchmark_cooldown_samples
                 .or(f.benchmark_cooldown_samples),
+            progress_url: self.progress_url,
+            progress_token: self.progress_token,
+            progress_interval: self.progress_interval,
+            progress_config_id: self.progress_config_id,
+            progress_testbed_id: self.progress_testbed_id,
+            benchmark_language: self.benchmark_language,
             save_to_db: self.save_to_db
                 || f.save_to_db.unwrap_or(false)
                 || self.save_to_sql

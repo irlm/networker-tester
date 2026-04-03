@@ -19,6 +19,12 @@ pub struct DashboardBenchmarkConfig {
     /// Whether to destroy provisioned VMs after the run.
     #[serde(default)]
     pub auto_teardown: bool,
+    /// Callback URL for the dashboard (passed to tester for progress reporting).
+    #[serde(default)]
+    pub callback_url: Option<String>,
+    /// Callback token for authentication.
+    #[serde(default)]
+    pub callback_token: Option<String>,
 }
 
 /// A single testbed in the benchmark matrix.

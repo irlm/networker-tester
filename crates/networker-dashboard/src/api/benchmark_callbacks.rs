@@ -456,6 +456,70 @@ async fn run_regression_detection(state: &Arc<AppState>, config_id: &Uuid) -> an
     Ok(())
 }
 
+#[derive(Debug, Deserialize)]
+pub struct RequestProgressPayload {
+    pub config_id: Uuid,
+    pub testbed_id: Option<Uuid>,
+    pub language: String,
+    pub mode: String,
+    pub request_index: i32,
+    pub total_requests: i32,
+    pub latency_ms: f64,
+    pub success: bool,
+}
+
+/// POST /api/benchmarks/callback/request-progress
+async fn callback_request_progress(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<RequestProgressPayload>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let _claims = extract_callback_token(&headers, &state.jwt_secret)?;
+
+    let client = state.db.get().await.map_err(|e| {
+        tracing::error!(error = %e, "DB pool error in callback_request_progress");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    crate::db::benchmark_progress::insert_single(
+        &client,
+        &payload.config_id,
+        payload.testbed_id.as_ref(),
+        &payload.language,
+        &payload.mode,
+        payload.request_index,
+        payload.total_requests,
+        payload.latency_ms,
+        payload.success,
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, "Failed to insert request progress");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    // Throttle WS broadcasts to every 10th request
+    if payload.request_index % 10 == 0 {
+        let _ = state.events_tx.send(
+            networker_common::messages::DashboardEvent::BenchmarkUpdate {
+                config_id: payload.config_id,
+                event_type: "request_progress".into(),
+                payload: serde_json::json!({
+                    "testbed_id": payload.testbed_id,
+                    "language": payload.language,
+                    "mode": payload.mode,
+                    "request_index": payload.request_index,
+                    "total_requests": payload.total_requests,
+                    "latency_ms": payload.latency_ms,
+                    "success": payload.success,
+                }),
+            },
+        );
+    }
+
+    Ok(Json(serde_json::json!({"ok": true})))
+}
+
 /// Public callback routes -- JWT verified internally per handler.
 pub fn public_router(state: Arc<AppState>) -> Router {
     Router::new()
@@ -464,6 +528,10 @@ pub fn public_router(state: Arc<AppState>) -> Router {
         .route("/benchmarks/callback/result", post(callback_result))
         .route("/benchmarks/callback/complete", post(callback_complete))
         .route("/benchmarks/callback/heartbeat", post(callback_heartbeat))
+        .route(
+            "/benchmarks/callback/request-progress",
+            post(callback_request_progress),
+        )
         .route(
             "/benchmarks/callback/cancelled/:config_id",
             get(callback_cancelled),

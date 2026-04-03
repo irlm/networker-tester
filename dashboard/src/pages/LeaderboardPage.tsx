@@ -61,6 +61,15 @@ function GroupedTab() {
     void fetchGrouped();
   }, [fetchGrouped]);
 
+  // Auto-select first group once data loads — "All" mixes network conditions
+  useEffect(() => {
+    if (!selectedGroup && data?.groups && data.groups.length > 0) {
+      const first = data.groups[0];
+      setSelectedGroup(first);
+      void fetchGrouped(first);
+    }
+  }, [data?.groups]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleGroupChange = useCallback((group: string) => {
     setSelectedGroup(group);
     void fetchGrouped(group || undefined);
