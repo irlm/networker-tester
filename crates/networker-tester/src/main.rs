@@ -49,6 +49,81 @@ use uuid::Uuid;
 use networker_tester::runner::pageload::{run_pageload3_warm, warmup_pageload3};
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Progress reporting
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Fire-and-forget HTTP progress reporter for benchmark orchestrator integration.
+struct ProgressReporter {
+    client: reqwest::Client,
+    url: String,
+    token: String,
+    config_id: String,
+    testbed_id: Option<String>,
+    language: String,
+    interval: u32,
+}
+
+impl ProgressReporter {
+    fn new(
+        url: String,
+        token: String,
+        config_id: String,
+        testbed_id: Option<String>,
+        language: String,
+        interval: u32,
+    ) -> Self {
+        Self {
+            client: reqwest::Client::builder()
+                .danger_accept_invalid_certs(true)
+                .build()
+                .unwrap_or_default(),
+            url,
+            token,
+            config_id,
+            testbed_id,
+            language,
+            interval,
+        }
+    }
+
+    async fn report(
+        &self,
+        mode: &str,
+        request_index: u32,
+        total_requests: u32,
+        latency_ms: f64,
+        success: bool,
+    ) {
+        // Only POST at the configured interval
+        if self.interval > 1
+            && !request_index.is_multiple_of(self.interval)
+            && request_index < total_requests
+        {
+            return;
+        }
+        let payload = serde_json::json!({
+            "config_id": self.config_id,
+            "testbed_id": self.testbed_id,
+            "language": self.language,
+            "mode": mode,
+            "request_index": request_index,
+            "total_requests": total_requests,
+            "latency_ms": latency_ms,
+            "success": success,
+        });
+        // Fire and forget — don't block the benchmark
+        let _ = self
+            .client
+            .post(&self.url)
+            .bearer_auth(&self.token)
+            .json(&payload)
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Main
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -187,11 +262,36 @@ async fn main() -> anyhow::Result<()> {
         None => None,
     };
 
+    // ── Progress reporter (benchmark orchestrator integration) ─────────────
+    let progress_reporter: Option<std::sync::Arc<ProgressReporter>> =
+        cfg.progress_url.as_ref().map(|url| {
+            std::sync::Arc::new(ProgressReporter::new(
+                format!(
+                    "{}/api/benchmarks/callback/request-progress",
+                    url.trim_end_matches('/')
+                ),
+                cfg.progress_token.clone().unwrap_or_default(),
+                cfg.progress_config_id.clone().unwrap_or_default(),
+                cfg.progress_testbed_id.clone(),
+                cfg.benchmark_language
+                    .clone()
+                    .unwrap_or_else(|| "unknown".to_string()),
+                cfg.progress_interval,
+            ))
+        });
+
     // ── Run probes for every target ───────────────────────────────────────────
     let mut all_runs: Vec<TestRun> = Vec::new();
     for target_url_str in &cfg.targets {
         info!(target = %target_url_str, "Running probes for target");
-        let run = run_for_target(target_url_str, &cfg, &modes, &payload_sizes).await?;
+        let run = run_for_target(
+            target_url_str,
+            &cfg,
+            &modes,
+            &payload_sizes,
+            progress_reporter.clone(),
+        )
+        .await?;
         all_runs.push(run);
     }
 
@@ -686,6 +786,7 @@ async fn run_for_target(
     cfg: &cli::ResolvedConfig,
     modes: &[Protocol],
     payload_sizes: &[usize],
+    progress_reporter: Option<std::sync::Arc<ProgressReporter>>,
 ) -> anyhow::Result<TestRun> {
     let target = url::Url::parse(target_url_str)
         .with_context(|| format!("Invalid --target URL: {target_url_str}"))?;
@@ -1205,10 +1306,29 @@ async fn run_for_target(
     let mut measured_attempts = Vec::new();
     let mut cooldown_attempts = Vec::new();
     let mut completed_runs = 0u32;
+    let mut progress_request_counter = 0u32;
+    let total_estimated_requests = max_run_count.saturating_mul(mode_tasks.len() as u32);
 
     while completed_runs < max_run_count {
         info!("Run {}/{}", completed_runs + 1, max_run_count);
         let published_results = collect_iteration(&mut seq).await;
+
+        // Report progress for each measured attempt
+        if let Some(ref reporter) = progress_reporter {
+            for attempt in &published_results {
+                progress_request_counter += 1;
+                let r = reporter.clone();
+                let mode = attempt.protocol.to_string();
+                let lat = primary_metric_value(attempt).unwrap_or(0.0);
+                let ok = attempt.success;
+                let idx = progress_request_counter;
+                let total = total_estimated_requests;
+                tokio::spawn(async move {
+                    r.report(&mode, idx, total, lat, ok).await;
+                });
+            }
+        }
+
         measured_attempts.extend(published_results.iter().cloned());
         all_attempts.extend(published_results);
         completed_runs += 1;
@@ -1381,6 +1501,23 @@ async fn run_for_target(
                     for attempt in &attempts {
                         log_attempt(attempt);
                     }
+
+                    // Report progress for HTTP stack attempts
+                    if let Some(ref reporter) = progress_reporter {
+                        for attempt in &attempts {
+                            progress_request_counter += 1;
+                            let r = reporter.clone();
+                            let mode = format!("{}:{}", attempt.protocol, stack.name);
+                            let lat = primary_metric_value(attempt).unwrap_or(0.0);
+                            let ok = attempt.success;
+                            let idx = progress_request_counter;
+                            let total = total_estimated_requests;
+                            tokio::spawn(async move {
+                                r.report(&mode, idx, total, lat, ok).await;
+                            });
+                        }
+                    }
+
                     all_attempts.extend(published_logical_attempts(attempts));
                 }
             }
