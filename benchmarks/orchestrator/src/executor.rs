@@ -154,14 +154,6 @@ async fn stop_app_language(vm: &VmInfo) {
 /// Deploy the Chrome test harness to the VM.
 async fn deploy_chrome_harness(vm: &VmInfo) -> Result<()> {
     tracing::info!("Deploying Chrome test harness on {}", vm.ip);
-    let cmd = "curl -fsSL https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh | sudo bash -s -- 2>/dev/null; \
-               command -v deploy_chrome_harness >/dev/null 2>&1 || { \
-                 sudo mkdir -p /opt/bench/chrome-harness && \
-                 cd /tmp/nwk-repo/benchmarks/chrome-harness 2>/dev/null && \
-                 sudo cp package.json runner.js test-page.html /opt/bench/chrome-harness/ && \
-                 cd /opt/bench/chrome-harness && sudo npm install --production --silent 2>/dev/null; \
-               }";
-    // Simpler: just deploy harness files and install deps
     let setup_cmd = concat!(
         "sudo mkdir -p /opt/bench/chrome-harness && ",
         "sudo chown $(whoami):$(whoami) /opt/bench/chrome-harness && ",
@@ -193,6 +185,14 @@ async fn deploy_chrome_harness(vm: &VmInfo) -> Result<()> {
     ssh::ssh_exec(&vm.ip, deploy_cmd)
         .await
         .with_context(|| format!("Failed to deploy Chrome harness files on {}", vm.ip))?;
+
+    // Verify harness files were actually deployed
+    ssh::ssh_exec(
+        &vm.ip,
+        "test -f /opt/bench/chrome-harness/runner.js && test -f /opt/bench/chrome-harness/package.json",
+    )
+    .await
+    .context("Chrome harness files not found after deploy — repo may not have been cloned")?;
 
     tracing::info!("Chrome harness deployed on {}", vm.ip);
     Ok(())
@@ -706,6 +706,12 @@ async fn execute_testbed_application(
     let total_combinations = (testbed.proxies.len() * testbed.languages.len()) as u32;
     let mut combination_index = 0u32;
 
+    // Wall-clock deadline: timeout_secs per combination, capped by max_measured * timeout_secs
+    let deadline = Instant::now()
+        + std::time::Duration::from_secs(
+            methodology.timeout_secs as u64 * total_combinations.max(1) as u64,
+        );
+
     // Deploy Chrome test harness on the VM
     log_callback(
         callback,
@@ -735,8 +741,21 @@ async fn execute_testbed_application(
     }
 
     for proxy in &testbed.proxies {
-        // Check cancellation
+        // Check cancellation or deadline
         if *cancel_rx.borrow() {
+            break;
+        }
+        if Instant::now() > deadline {
+            tracing::warn!(
+                "Application benchmark exceeded deadline on testbed {}, stopping",
+                testbed.testbed_id
+            );
+            log_callback(
+                callback,
+                &testbed.testbed_id,
+                vec!["Benchmark exceeded wall-clock deadline, stopping".to_string()],
+            )
+            .await;
             break;
         }
 

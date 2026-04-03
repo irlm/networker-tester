@@ -152,11 +152,21 @@ impl DashboardBenchmarkConfig {
             "benchmark_type must be 'fullstack' or 'application', got '{}'",
             self.benchmark_type
         );
+        const VALID_PROXIES: &[&str] =
+            &["nginx", "iis", "caddy", "traefik", "haproxy", "apache"];
         if self.benchmark_type == "application" {
             for testbed in &self.testbeds {
                 if testbed.proxies.is_empty() {
                     anyhow::bail!(
                         "Application benchmark testbed '{}' requires at least one proxy",
+                        testbed.testbed_id
+                    );
+                }
+                for proxy in &testbed.proxies {
+                    anyhow::ensure!(
+                        VALID_PROXIES.contains(&proxy.as_str()),
+                        "Invalid proxy '{}' in testbed '{}'",
+                        proxy,
                         testbed.testbed_id
                     );
                 }
