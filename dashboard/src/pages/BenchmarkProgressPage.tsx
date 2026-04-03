@@ -77,7 +77,7 @@ export function BenchmarkProgressPage() {
   const [autoScroll, setAutoScroll] = useState(true);
 
   // Already-completed results fetched from API (survives page reload)
-  const [savedResults, setSavedResults] = useState<Array<{ language: string; run_id: string }>>([]);
+  const [savedResults, setSavedResults] = useState<Array<{ language: string; run_id: string; started_at?: string | null; finished_at?: string | null }>>([]);
 
   // Live data from WebSocket
   const live = useLiveStore(
@@ -124,9 +124,11 @@ export function BenchmarkProgressPage() {
       api.getBenchmarkConfigResults(projectId, configId)
         .then((data) => {
           if (data.results && data.results.length > 0) {
-            setSavedResults(data.results.map((r: { language: string; run_id: string }) => ({
+            setSavedResults(data.results.map((r: { language: string; run_id: string; started_at?: string | null; finished_at?: string | null }) => ({
               language: r.language,
               run_id: r.run_id,
+              started_at: r.started_at,
+              finished_at: r.finished_at,
             })));
           }
         })
@@ -176,6 +178,43 @@ export function BenchmarkProgressPage() {
   const effectiveStatus = live.configStatus || config?.status || 'pending';
   const isActive = ['running', 'provisioning', 'deploying', 'pending'].includes(effectiveStatus);
   const isDone = ['completed', 'failed', 'cancelled'].includes(effectiveStatus);
+
+  // Extract methodology for progress estimates
+  const methodology = useMemo(() => {
+    const cfg = (config as unknown as Record<string, unknown>)?.config_json as Record<string, unknown> | undefined;
+    const meth = cfg?.methodology as Record<string, unknown> | undefined;
+    if (!meth) return null;
+    const warmup = (meth.warmup_runs ?? 10) as number;
+    const measured = (meth.measured_runs ?? meth.min_measured ?? 50) as number;
+    const modes = (meth.modes as string[]) ?? ['http1'];
+    const hasPayloadModes = modes.some(m => m.startsWith('download') || m.startsWith('upload') || m.startsWith('udp'));
+    const payloadMultiplier = hasPayloadModes ? 3 : 1; // 4k, 64k, 1m
+    return { warmup, measured, modes, modeCount: modes.length, payloadMultiplier };
+  }, [config]);
+
+  // Compute progress stats
+  const progressStats = useMemo(() => {
+    const totalLangs = testbeds[0]?.languages?.length ?? 0;
+    const totalTestbeds = testbeds.length || 1;
+    const totalRuns = totalLangs * totalTestbeds;
+    const completedRuns = savedResults.length;
+    const uniqueCompleted = new Set(savedResults.map(r => r.language)).size;
+
+    // Last completed result
+    const sorted = [...savedResults].filter(r => r.finished_at).sort((a, b) =>
+      new Date(b.finished_at!).getTime() - new Date(a.finished_at!).getTime()
+    );
+    const lastResult = sorted[0] ?? null;
+    let lastResultAge: string | null = null;
+    if (lastResult?.finished_at) {
+      const ago = Math.floor((Date.now() - new Date(lastResult.finished_at).getTime()) / 60000);
+      if (ago < 1) lastResultAge = 'just now';
+      else if (ago < 60) lastResultAge = `${ago}m ago`;
+      else lastResultAge = `${Math.floor(ago / 60)}h ${ago % 60}m ago`;
+    }
+
+    return { totalLangs, totalTestbeds, totalRuns, completedRuns, uniqueCompleted, lastResult, lastResultAge };
+  }, [testbeds, savedResults]);
 
   // Merge live WS results with saved DB results (DB survives page reload)
   const resultRows = useMemo(() => {
@@ -320,37 +359,58 @@ export function BenchmarkProgressPage() {
         </div>
       )}
 
-      {/* Config Summary (what's being benchmarked) */}
+      {/* Config Summary + Progress */}
       {config && isActive && (
-        <div className="mb-6 border border-gray-800/50 rounded p-3 bg-gray-900/30">
-          <div className="flex items-center gap-4 text-xs text-gray-500">
+        <div className="mb-6 border border-gray-800/50 rounded p-3 bg-gray-900/30 space-y-2">
+          <div className="flex items-center gap-4 text-xs text-gray-500 flex-wrap">
             <span>
-              <span className="text-gray-400">{testbeds.length}</span> testbed{testbeds.length !== 1 ? 's' : ''}
+              <span className="text-gray-400">{progressStats.totalTestbeds}</span> testbed{progressStats.totalTestbeds !== 1 ? 's' : ''}
             </span>
             <span>{'\u00B7'}</span>
             <span>
-              <span className="text-gray-400">{testbeds[0]?.languages?.length ?? '?'}</span> languages
+              <span className="text-gray-400">{progressStats.totalLangs}</span> languages
             </span>
             <span>{'\u00B7'}</span>
+            {methodology && (
+              <span className="text-gray-400">
+                {methodology.warmup} warmup + {methodology.measured} measured &times; {methodology.modeCount} mode{methodology.modeCount !== 1 ? 's' : ''}
+                {methodology.payloadMultiplier > 1 ? ` \u00D7 ${methodology.payloadMultiplier} sizes` : ''}
+              </span>
+            )}
+            <span>{'\u00B7'}</span>
+            <span>
+              <span className="text-cyan-400">{progressStats.completedRuns}</span>
+              <span className="text-gray-500">/{progressStats.totalRuns} runs</span>
+            </span>
+            {progressStats.lastResult && (
+              <>
+                <span>{'\u00B7'}</span>
+                <span className="text-gray-500">
+                  last: <span className="text-gray-400">{progressStats.lastResult.language}</span>
+                  {progressStats.lastResultAge && <span className="text-gray-600"> ({progressStats.lastResultAge})</span>}
+                </span>
+              </>
+            )}
+          </div>
+          {/* Overall progress bar */}
+          {progressStats.totalRuns > 0 && (
+            <div className="h-1 bg-gray-800 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-cyan-500/70 rounded-full transition-all duration-1000"
+                style={{ width: `${Math.round((progressStats.completedRuns / progressStats.totalRuns) * 100)}%` }}
+              />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Activity indicator — shown when running but no logs streaming */}
+      {isActive && effectiveStatus === 'running' && live.logs.length === 0 && savedResults.length === 0 && (
+        <div className="mb-6 border border-gray-800/50 rounded p-3 bg-gray-900/20">
+          <div className="flex items-center gap-2 text-xs text-gray-500">
+            <span className="inline-block w-1.5 h-1.5 rounded-full bg-cyan-500 animate-pulse" />
             <span className="text-gray-400">
-              {(() => {
-                const cfg = (config as unknown as Record<string, unknown>).config_json as Record<string, unknown> | undefined;
-                const meth = cfg?.methodology as Record<string, unknown> | undefined;
-                if (meth) return `${meth.warmup_runs ?? '?'} warmup + ${meth.measured_runs ?? meth.min_measured ?? '?'} measured`;
-                return 'methodology loading...';
-              })()}
-            </span>
-            <span>{'\u00B7'}</span>
-            <span>
-              est. {(() => {
-                const langCount = testbeds[0]?.languages?.length ?? 3;
-                const testbedCount = testbeds.length || 1;
-                const runsPerLang = 15; // rough estimate
-                const secsPerProbe = 2;
-                const total = langCount * testbedCount * runsPerLang * secsPerProbe;
-                if (total > 3600) return `${Math.round(total / 3600)}h`;
-                return `${Math.round(total / 60)}m`;
-              })()}
+              Provisioning VMs and deploying first language server. Results will appear as each language completes.
             </span>
           </div>
         </div>
@@ -447,15 +507,16 @@ export function BenchmarkProgressPage() {
         </div>
       )}
 
-      {/* Results Table */}
-      {resultRows.length > 0 && (
+      {/* Language Progress — show all languages with completed/pending status */}
+      {testbeds.length > 0 && (
         <div className="mb-6">
-          <p className="text-xs text-gray-500 tracking-wider font-medium mb-3">results</p>
+          <p className="text-xs text-gray-500 tracking-wider font-medium mb-3">language progress</p>
           <div className="border border-gray-800 rounded-lg overflow-hidden">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-[var(--bg-surface)]/60 text-gray-500 text-xs">
                   <th className="text-left px-4 py-2 font-medium">Language</th>
+                  <th className="text-left px-4 py-2 font-medium">Status</th>
                   <th className="text-right px-4 py-2 font-medium">Mean Latency</th>
                   <th className="text-right px-4 py-2 font-medium">p50</th>
                   <th className="text-right px-4 py-2 font-medium">p99</th>
@@ -464,29 +525,68 @@ export function BenchmarkProgressPage() {
                 </tr>
               </thead>
               <tbody>
-                {resultRows.map((row, i) => (
-                  <tr
-                    key={row.run_id || i}
-                    className={`border-t border-gray-800/50 ${i === 0 ? 'bg-cyan-500/5' : ''}`}
-                  >
-                    <td className="px-4 py-2 text-gray-200 font-mono text-xs">{row.language}</td>
-                    <td className="px-4 py-2 text-right text-gray-300 font-mono text-xs">
-                      {row.mean_latency != null ? `${row.mean_latency.toFixed(2)} ms` : '--'}
-                    </td>
-                    <td className="px-4 py-2 text-right text-gray-400 font-mono text-xs">
-                      {row.p50 != null ? `${row.p50.toFixed(2)} ms` : '--'}
-                    </td>
-                    <td className="px-4 py-2 text-right text-gray-400 font-mono text-xs">
-                      {row.p99 != null ? `${row.p99.toFixed(2)} ms` : '--'}
-                    </td>
-                    <td className="px-4 py-2 text-right text-gray-400 font-mono text-xs">
-                      {row.success_rate != null ? `${(row.success_rate * 100).toFixed(1)}%` : '--'}
-                    </td>
-                    <td className="px-4 py-2 text-right text-gray-500 font-mono text-xs">
-                      {row.runtime_ms != null ? `${(row.runtime_ms / 1000).toFixed(1)}s` : '--'}
-                    </td>
-                  </tr>
-                ))}
+                {(() => {
+                  // Build per-language status across all testbeds
+                  const completedSet = new Set(savedResults.map(r => r.language));
+                  const uniqueLangs = [...new Set(testbeds.flatMap(tb => tb.languages ?? []))];
+                  // Count how many testbeds completed each language
+                  const langCompletedCount = new Map<string, number>();
+                  for (const r of savedResults) {
+                    langCompletedCount.set(r.language, (langCompletedCount.get(r.language) ?? 0) + 1);
+                  }
+                  const totalTestbeds = testbeds.length;
+
+                  return uniqueLangs.map((lang, i) => {
+                    const result = resultRows.find(r => r.language === lang);
+                    const doneCount = langCompletedCount.get(lang) ?? 0;
+                    const allDone = doneCount >= totalTestbeds;
+                    const partialDone = doneCount > 0 && !allDone;
+                    const currentLang = Object.values(live.testbeds).find(t => t.current_language === lang);
+                    const isRunning = !!currentLang;
+
+                    return (
+                      <tr
+                        key={lang + i}
+                        className={`border-t border-gray-800/50 ${
+                          isRunning ? 'bg-cyan-500/5' : ''
+                        }`}
+                      >
+                        <td className={`px-4 py-2 font-mono text-xs ${completedSet.has(lang) ? 'text-gray-200' : 'text-gray-600'}`}>
+                          {lang}
+                        </td>
+                        <td className="px-4 py-2 text-xs">
+                          {allDone ? (
+                            <span className="text-green-400">{totalTestbeds > 1 ? `done (${doneCount}/${totalTestbeds})` : 'done'}</span>
+                          ) : partialDone ? (
+                            <span className="text-yellow-400">{doneCount}/{totalTestbeds} done</span>
+                          ) : isRunning ? (
+                            <span className="text-cyan-400 flex items-center gap-1.5">
+                              running
+                              <span className="inline-block w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                            </span>
+                          ) : (
+                            <span className="text-gray-600">pending</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2 text-right text-gray-300 font-mono text-xs">
+                          {result?.mean_latency != null ? `${result.mean_latency.toFixed(2)} ms` : doneCount > 0 ? 'done' : '--'}
+                        </td>
+                        <td className="px-4 py-2 text-right text-gray-400 font-mono text-xs">
+                          {result?.p50 != null ? `${result.p50.toFixed(2)} ms` : '--'}
+                        </td>
+                        <td className="px-4 py-2 text-right text-gray-400 font-mono text-xs">
+                          {result?.p99 != null ? `${result.p99.toFixed(2)} ms` : '--'}
+                        </td>
+                        <td className="px-4 py-2 text-right text-gray-400 font-mono text-xs">
+                          {result?.success_rate != null ? `${(result.success_rate * 100).toFixed(1)}%` : '--'}
+                        </td>
+                        <td className="px-4 py-2 text-right text-gray-500 font-mono text-xs">
+                          {result?.runtime_ms != null ? `${(result.runtime_ms / 1000).toFixed(1)}s` : '--'}
+                        </td>
+                      </tr>
+                    );
+                  });
+                })()}
               </tbody>
             </table>
           </div>
@@ -528,11 +628,15 @@ export function BenchmarkProgressPage() {
                         ? 'Provisioning VM — this may take 1-2 minutes...'
                         : effectiveStatus === 'deploying'
                           ? 'Deploying language servers to VM...'
-                          : 'Orchestrator running — log output will stream here...'}
+                          : savedResults.length > 0
+                            ? `${progressStats.completedRuns}/${progressStats.totalRuns} runs done. Logs appear between language transitions.${progressStats.lastResult ? ` Last completed: ${progressStats.lastResult.language}${progressStats.lastResultAge ? ` (${progressStats.lastResultAge})` : ''}.` : ''}`
+                            : 'Orchestrator running — log output will stream here...'}
                   </p>
-                  <p className="text-gray-700 text-[10px]">
-                    Logs stream in real-time via WebSocket. If nothing appears after 30 seconds, check System {'>'} Logs for errors.
-                  </p>
+                  {effectiveStatus === 'running' && savedResults.length === 0 && (
+                    <p className="text-gray-700 text-[10px]">
+                      Logs stream between language deployments. During a benchmark run, the tester executes silently. Check the language progress table above for completed results.
+                    </p>
+                  )}
                 </>
               ) : (
                 <p>No log output was captured for this benchmark.</p>

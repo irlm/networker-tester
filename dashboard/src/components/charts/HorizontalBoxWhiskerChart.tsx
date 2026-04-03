@@ -110,13 +110,14 @@ export function HorizontalBoxWhiskerChart({
 
   if (rows.length === 0) return null;
 
-  // Layout constants
-  const LBL_W = 70;      // right-aligned label area
-  const MEAN_W = 60;     // right annotation area for mean text
-  const ROW_H = 28;
-  const BOX_H = 14;
-  const PAD_TOP = title ? 32 : 8;
-  const PAD_BOT = 24;    // space for x-axis labels
+  // Layout constants — wider viewBox = smaller rendered fonts
+  const longestLabel = Math.max(...rows.map(r => r.label.length), 4);
+  const LBL_W = Math.max(100, longestLabel * 7 + 20); // ~7px per char at fontSize 9
+  const MEAN_W = 65;     // right annotation area for mean text
+  const ROW_H = 24;      // tighter rows
+  const BOX_H = 12;
+  const PAD_TOP = title ? 28 : 6;
+  const PAD_BOT = 20;    // space for x-axis labels
   const PAD_LEFT = 4;    // small left margin inside chart area
 
   // Domain: 0 to max(p95) * 1.1
@@ -128,7 +129,7 @@ export function HorizontalBoxWhiskerChart({
 
   // We'll compute the chart area width dynamically via viewBox but use a stable
   // internal width. The SVG uses width="100%" with a viewBox — responsive.
-  const CHART_W = 480; // internal coordinate system
+  const CHART_W = LBL_W + MEAN_W + PAD_LEFT + 500; // wider viewBox = fonts render smaller on screen
   const CHART_AREA = CHART_W - LBL_W - MEAN_W - PAD_LEFT;
   const totalH = PAD_TOP + rows.length * ROW_H + PAD_BOT;
 
@@ -150,7 +151,7 @@ export function HorizontalBoxWhiskerChart({
         width="100%"
         viewBox={`0 0 ${CHART_W} ${totalH}`}
         preserveAspectRatio="xMinYMin meet"
-        style={{ fontFamily: 'var(--font-mono, ui-monospace, monospace)', fontSize: 10, display: 'block' }}
+        style={{ fontFamily: 'var(--font-mono, ui-monospace, monospace)', fontSize: 9, display: 'block' }}
       >
         {/* Grid lines */}
         {ticks.map(t => {
@@ -167,10 +168,10 @@ export function HorizontalBoxWhiskerChart({
               />
               <text
                 x={x}
-                y={PAD_TOP + rows.length * ROW_H + 14}
+                y={PAD_TOP + rows.length * ROW_H + 13}
                 textAnchor="middle"
                 fill="#6b7280"
-                fontSize={9}
+                fontSize={8}
               >
                 {fmt(t, unit)}
               </text>
@@ -218,22 +219,22 @@ export function HorizontalBoxWhiskerChart({
               {/* Label — right-aligned */}
               <text
                 x={LBL_W - 6}
-                y={cy - (row.sublabel ? 4 : 0)}
+                y={cy - (row.sublabel ? 3 : 0)}
                 textAnchor="end"
                 dominantBaseline="middle"
                 fill="#6b7280"
-                fontSize={10}
+                fontSize={9}
               >
                 {row.label}
               </text>
               {row.sublabel && (
                 <text
                   x={LBL_W - 6}
-                  y={cy + 8}
+                  y={cy + 7}
                   textAnchor="end"
                   dominantBaseline="middle"
                   fill="#4b5563"
-                  fontSize={8}
+                  fontSize={7}
                 >
                   {row.sublabel}
                 </text>
@@ -250,9 +251,9 @@ export function HorizontalBoxWhiskerChart({
               />
 
               {/* p5 end cap */}
-              <line x1={p5x} y1={cy - 5} x2={p5x} y2={cy + 5} stroke="#444" strokeWidth={1.5} />
+              <line x1={p5x} y1={cy - 4} x2={p5x} y2={cy + 4} stroke="#444" strokeWidth={1} />
               {/* p95 end cap */}
-              <line x1={p95x} y1={cy - 5} x2={p95x} y2={cy + 5} stroke="#444" strokeWidth={1.5} />
+              <line x1={p95x} y1={cy - 4} x2={p95x} y2={cy + 4} stroke="#444" strokeWidth={1} />
 
               {/* IQR box: p25 to p75 */}
               <rect
@@ -281,7 +282,7 @@ export function HorizontalBoxWhiskerChart({
                 y={cy}
                 dominantBaseline="middle"
                 fill={row.color}
-                fontSize={9}
+                fontSize={8}
               >
                 {fmt(row.mean, unit)}
               </text>

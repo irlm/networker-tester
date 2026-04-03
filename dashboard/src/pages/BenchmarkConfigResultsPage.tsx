@@ -19,19 +19,9 @@ import {
   formatBenchmarkMetric,
   formatBenchmarkDelta,
 } from '../lib/benchmark';
+import { languageColor } from '../lib/languageColors';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
-
-const COLOR_PALETTE = [
-  '#06b6d4', // cyan
-  '#a78bfa', // violet
-  '#f59e0b', // amber
-  '#10b981', // emerald
-  '#ef4444', // red
-  '#3b82f6', // blue
-  '#ec4899', // pink
-  '#84cc16', // lime
-];
 
 const MAX_EXPANDED = 2;
 
@@ -73,7 +63,6 @@ function buildBoxGroups(
 ): { groups: HBoxGroup[]; colorMap: Map<string, string> } {
   const groups: HBoxGroup[] = [];
   const colorMap = new Map<string, string>();
-  let colorIdx = 0;
 
   for (const r of results) {
     if (r.summaries.length === 0) continue;
@@ -82,8 +71,7 @@ function buildBoxGroups(
       console.log(`[BenchmarkConfigResults] No primary summary for language "${r.language}" — skipped`);
       continue;
     }
-    const color = COLOR_PALETTE[colorIdx % COLOR_PALETTE.length];
-    colorIdx++;
+    const color = languageColor(r.language);
     colorMap.set(r.language, color);
     groups.push({
       label: r.language,
@@ -463,7 +451,7 @@ export function BenchmarkConfigResultsPage() {
               {expanded.map((lang, idx) => {
                 const result = resultByLanguage.get(lang);
                 if (!result) return null;
-                const color = colorMap.get(lang) ?? '#06b6d4';
+                const color = colorMap.get(lang) ?? languageColor(lang);
                 const modes = extractPhaseData(result);
 
                 // Comparison: the other expanded language (if 2 expanded)
@@ -474,7 +462,7 @@ export function BenchmarkConfigResultsPage() {
                   if (otherResult) {
                     comparison = {
                       otherLanguage: otherLang,
-                      otherColor: colorMap.get(otherLang) ?? '#a78bfa',
+                      otherColor: colorMap.get(otherLang) ?? languageColor(otherLang),
                       otherModes: extractPhaseData(otherResult),
                     };
                   }
