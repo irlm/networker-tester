@@ -426,6 +426,28 @@ async fn list_project_regressions(
     Ok(Json(regressions))
 }
 
+/// GET /projects/:pid/benchmark-configs/:id/progress
+async fn get_benchmark_progress(
+    State(state): State<Arc<AppState>>,
+    Path((_, config_id)): Path<(Uuid, Uuid)>,
+    req: Request,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let _ctx = request_extension::<ProjectContext>(&req, "ProjectContext")?;
+    let client = state.db.get().await.map_err(|e| {
+        tracing::error!(error = %e, "DB pool error in get_benchmark_progress");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let progress = crate::db::benchmark_progress::get_progress(&client, &config_id)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to get benchmark progress");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(Json(serde_json::json!({"progress": progress})))
+}
+
 pub fn project_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/benchmark-configs", get(list_configs).post(create_config))
@@ -435,6 +457,10 @@ pub fn project_router(state: Arc<AppState>) -> Router {
         .route(
             "/benchmark-configs/:config_id/results",
             get(get_config_results),
+        )
+        .route(
+            "/benchmark-configs/:config_id/progress",
+            get(get_benchmark_progress),
         )
         .route(
             "/benchmark-configs/:config_id/regressions",
