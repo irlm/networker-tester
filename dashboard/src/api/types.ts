@@ -885,6 +885,27 @@ export interface BenchmarkResultRow {
   finished_at: string | null;
 }
 
+// ── Benchmark Progress (per-mode live stats) ───────────────────────────
+export interface BenchmarkModeProgress {
+  mode: string;
+  completed: number;
+  total: number;
+  p50_ms: number | null;
+  mean_ms: number | null;
+  success_count: number;
+  fail_count: number;
+}
+
+export interface BenchmarkLanguageProgress {
+  language: string;
+  testbed_id: string | null;
+  modes: BenchmarkModeProgress[];
+}
+
+export interface BenchmarkProgressResponse {
+  progress: BenchmarkLanguageProgress[];
+}
+
 // ── Benchmark Creation (wizard) ─────────────────────────────────────────
 export interface BenchmarkConfigSummary {
   config_id: string;

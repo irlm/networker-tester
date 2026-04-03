@@ -1,7 +1,7 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
-import type { BenchmarkConfigSummary } from '../api/types';
+import type { BenchmarkConfigSummary, BenchmarkLanguageProgress } from '../api/types';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { useLiveStore } from '../stores/liveStore';
 import type { BenchmarkLive } from '../stores/liveStore';
@@ -78,6 +78,9 @@ export function BenchmarkProgressPage() {
 
   // Already-completed results fetched from API (survives page reload)
   const [savedResults, setSavedResults] = useState<Array<{ language: string; run_id: string; started_at?: string | null; finished_at?: string | null }>>([]);
+
+  // Per-mode progress from progress endpoint
+  const [langProgress, setLangProgress] = useState<BenchmarkLanguageProgress[]>([]);
 
   // Live data from WebSocket
   const live = useLiveStore(
@@ -178,6 +181,19 @@ export function BenchmarkProgressPage() {
   const effectiveStatus = live.configStatus || config?.status || 'pending';
   const isActive = ['running', 'provisioning', 'deploying', 'pending'].includes(effectiveStatus);
   const isDone = ['completed', 'failed', 'cancelled'].includes(effectiveStatus);
+
+  // Poll per-mode progress while benchmark is active
+  useEffect(() => {
+    if (!configId || !projectId || !isActive) return;
+    const fetchProgress = () => {
+      api.getBenchmarkProgress(projectId, configId)
+        .then(data => setLangProgress(data.progress ?? []))
+        .catch(() => {});
+    };
+    fetchProgress();
+    const interval = setInterval(fetchProgress, 5000);
+    return () => clearInterval(interval);
+  }, [configId, projectId, isActive]);
 
   // Extract methodology for progress estimates
   const methodology = useMemo(() => {
@@ -536,7 +552,7 @@ export function BenchmarkProgressPage() {
                   }
                   const totalTestbeds = testbeds.length;
 
-                  return uniqueLangs.map((lang, i) => {
+                  return uniqueLangs.flatMap((lang, i) => {
                     const result = resultRows.find(r => r.language === lang);
                     const doneCount = langCompletedCount.get(lang) ?? 0;
                     const allDone = doneCount >= totalTestbeds;
@@ -544,7 +560,17 @@ export function BenchmarkProgressPage() {
                     const currentLang = Object.values(live.testbeds).find(t => t.current_language === lang);
                     const isRunning = !!currentLang;
 
-                    return (
+                    // Per-mode progress for this language
+                    const langModes = langProgress
+                      .filter(lp => lp.language === lang)
+                      .flatMap(lp => lp.modes);
+                    const langTotalCompleted = langModes.reduce((sum, m) => sum + m.completed, 0);
+                    const langTotalExpected = langModes.reduce((sum, m) => sum + m.total, 0);
+                    const hasProgress = langTotalCompleted > 0;
+
+                    const rows: React.ReactNode[] = [];
+
+                    rows.push(
                       <tr
                         key={lang + i}
                         className={`border-t border-gray-800/50 ${
@@ -559,6 +585,11 @@ export function BenchmarkProgressPage() {
                             <span className="text-green-400">{totalTestbeds > 1 ? `done (${doneCount}/${totalTestbeds})` : 'done'}</span>
                           ) : partialDone ? (
                             <span className="text-yellow-400">{doneCount}/{totalTestbeds} done</span>
+                          ) : hasProgress && !allDone ? (
+                            <span className="text-cyan-400 flex items-center gap-1.5">
+                              running ({langTotalCompleted}/{langTotalExpected})
+                              <span className="inline-block w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                            </span>
                           ) : isRunning ? (
                             <span className="text-cyan-400 flex items-center gap-1.5">
                               running
@@ -585,6 +616,40 @@ export function BenchmarkProgressPage() {
                         </td>
                       </tr>
                     );
+
+                    // Per-mode progress sub-row
+                    if (langModes.length > 0) {
+                      rows.push(
+                        <tr key={`${lang}-modes`}>
+                          <td colSpan={7} className="px-4 py-1.5 bg-gray-900/30">
+                            <div className="space-y-1">
+                              {langModes.map(m => {
+                                const pct = m.total > 0 ? (m.completed / m.total) * 100 : 0;
+                                return (
+                                  <div key={m.mode} className="flex items-center gap-3 text-[11px] font-mono">
+                                    <span className="w-20 text-gray-500 text-right">{m.mode}</span>
+                                    <div className="flex-1 h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                                      <div
+                                        className="h-full bg-cyan-500/60 rounded-full transition-all duration-500"
+                                        style={{ width: `${pct}%` }}
+                                      />
+                                    </div>
+                                    <span className="w-20 text-gray-400">{m.completed}/{m.total}</span>
+                                    {m.p50_ms != null && (
+                                      <span className="w-28 text-gray-500">
+                                        p50: {m.p50_ms < 1 ? `${(m.p50_ms * 1000).toFixed(0)}\u00B5s` : `${m.p50_ms.toFixed(2)}ms`}
+                                      </span>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    }
+
+                    return rows;
                   });
                 })()}
               </tbody>
