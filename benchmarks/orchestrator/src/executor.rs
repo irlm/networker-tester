@@ -79,6 +79,99 @@ async fn stop_existing_server(vm: &VmInfo) {
     .await;
 }
 
+/// Deploy a reverse proxy on a VM. Uses install.sh --benchmark-proxy-swap.
+async fn deploy_proxy(vm: &VmInfo, proxy: &str) -> Result<()> {
+    tracing::info!("Deploying proxy {} on {}", proxy, vm.ip);
+    let cmd = format!(
+        "curl -fsSL https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh | sudo bash -s -- --benchmark-proxy-swap {}",
+        proxy
+    );
+    ssh::ssh_exec(&vm.ip, &cmd)
+        .await
+        .with_context(|| format!("Failed to deploy proxy {proxy} on {}", vm.ip))?;
+
+    // Health check through proxy
+    for i in 0..30 {
+        if let Ok(out) = ssh::ssh_exec(
+            &vm.ip,
+            "curl -sk --max-time 2 https://localhost:8443/health 2>/dev/null",
+        )
+        .await
+        {
+            if out.contains("ok") || out.contains("status") {
+                tracing::info!("Proxy {} healthy on {}", proxy, vm.ip);
+                return Ok(());
+            }
+        }
+        if i < 29 {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+    }
+    anyhow::bail!(
+        "Proxy {} failed health check after 60s on {}",
+        proxy,
+        vm.ip
+    )
+}
+
+/// Stop the current proxy and flush connections (isolation protocol).
+async fn stop_proxy(vm: &VmInfo) {
+    tracing::info!("Stopping proxy on {}", vm.ip);
+    let _ = ssh::ssh_exec(
+        &vm.ip,
+        "sudo systemctl stop nginx caddy traefik haproxy apache2 httpd 2>/dev/null; sudo fuser -k 8443/tcp 2>/dev/null; sleep 2",
+    )
+    .await;
+}
+
+/// Deploy a language server in application mode (localhost:8080, no TLS).
+async fn deploy_app_language(vm: &VmInfo, language: &str, proxy: &str) -> Result<()> {
+    tracing::info!(
+        "Deploying {} in application mode on {}",
+        language,
+        vm.ip
+    );
+    let cmd = format!(
+        "curl -fsSL https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh | sudo bash -s -- --benchmark-server {} --benchmark-proxy {}",
+        language, proxy
+    );
+    ssh::ssh_exec(&vm.ip, &cmd)
+        .await
+        .with_context(|| format!("Failed to deploy {language} in application mode on {}", vm.ip))?;
+    Ok(())
+}
+
+/// Stop the language server on port 8080.
+async fn stop_app_language(vm: &VmInfo) {
+    let _ = ssh::ssh_exec(
+        &vm.ip,
+        "sudo lsof -ti :8080 | xargs sudo kill -9 2>/dev/null || true",
+    )
+    .await;
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+}
+
+/// In application mode, HTTP/3 support depends on the proxy, not the language.
+fn proxy_supports_http3(proxy: &str) -> bool {
+    matches!(proxy, "nginx" | "caddy" | "traefik" | "iis")
+}
+
+fn effective_modes_for_proxy(proxy: &str, modes: &[String]) -> String {
+    if proxy_supports_http3(proxy) {
+        modes.join(",")
+    } else {
+        let filtered: Vec<&str> = modes
+            .iter()
+            .map(|s| s.as_str())
+            .filter(|m| *m != "http3")
+            .collect();
+        if filtered.len() < modes.len() {
+            tracing::info!("Skipping http3 for proxy {} (no QUIC support)", proxy);
+        }
+        filtered.join(",")
+    }
+}
+
 /// Outcome of a single testbed execution.
 #[allow(dead_code)]
 struct TestbedOutcome {
@@ -233,7 +326,15 @@ async fn execute_testbed(
     )
     .await;
 
-    // Step 2: Iterate over languages.
+    // Branch: application mode uses proxy × language matrix.
+    if config.benchmark_type == "application" {
+        return execute_testbed_application(
+            testbed, config, callback, cancel_rx, bench_dir, &vm, provisioned,
+        )
+        .await;
+    }
+
+    // Step 2: Iterate over languages (fullstack mode).
     for (lang_index, language) in testbed.languages.iter().enumerate() {
         let lang_index_u32 = lang_index as u32;
 
@@ -456,6 +557,231 @@ async fn execute_testbed(
         language_total,
         language_total,
         &format!("Testbed complete: {languages_completed} succeeded, {languages_failed} failed"),
+    )
+    .await;
+
+    Ok(TestbedOutcome {
+        testbed_id: testbed.testbed_id.clone(),
+        languages_completed,
+        languages_failed,
+        provisioned_vm: provisioned,
+    })
+}
+
+/// Execute application benchmark: proxy × language matrix.
+async fn execute_testbed_application(
+    testbed: &TestbedConfig,
+    config: &DashboardBenchmarkConfig,
+    callback: &Arc<CallbackClient>,
+    cancel_rx: &watch::Receiver<bool>,
+    _bench_dir: &Path,
+    vm: &VmInfo,
+    provisioned: bool,
+) -> Result<TestbedOutcome> {
+    let methodology = &config.methodology;
+    let mut languages_completed = 0u32;
+    let mut languages_failed = 0u32;
+    let total_combinations = (testbed.proxies.len() * testbed.languages.len()) as u32;
+    let mut combination_index = 0u32;
+
+    for proxy in &testbed.proxies {
+        // Check cancellation
+        if *cancel_rx.borrow() {
+            break;
+        }
+
+        log_callback(
+            callback,
+            &testbed.testbed_id,
+            vec![format!("Deploying proxy: {}", proxy)],
+        )
+        .await;
+
+        // Deploy proxy
+        if let Err(e) = deploy_proxy(vm, proxy).await {
+            tracing::error!(
+                "Proxy deploy failed for {} on testbed {}: {:#}",
+                proxy,
+                testbed.testbed_id,
+                e
+            );
+            log_callback(
+                callback,
+                &testbed.testbed_id,
+                vec![format!("Proxy {} deploy failed: {e:#}", proxy)],
+            )
+            .await;
+            languages_failed += testbed.languages.len() as u32;
+            continue;
+        }
+
+        for language in &testbed.languages {
+            combination_index += 1;
+
+            if *cancel_rx.borrow() {
+                break;
+            }
+
+            tracing::info!(
+                "Application benchmark {}/{}: {} behind {} on testbed {}",
+                combination_index,
+                total_combinations,
+                language,
+                proxy,
+                testbed.testbed_id,
+            );
+
+            status_callback(
+                callback,
+                &testbed.testbed_id,
+                "running",
+                language,
+                combination_index,
+                total_combinations,
+                &format!(
+                    "{} behind {} ({}/{})",
+                    language, proxy, combination_index, total_combinations
+                ),
+            )
+            .await;
+
+            // Deploy language in application mode
+            log_callback(
+                callback,
+                &testbed.testbed_id,
+                vec![format!(
+                    "Deploying {} (application mode, behind {})...",
+                    language, proxy
+                )],
+            )
+            .await;
+
+            if let Err(e) = deploy_app_language(vm, language, proxy).await {
+                tracing::error!(
+                    "App deploy failed for {} behind {}: {:#}",
+                    language,
+                    proxy,
+                    e
+                );
+                log_callback(
+                    callback,
+                    &testbed.testbed_id,
+                    vec![format!(
+                        "Deploy failed for {} behind {}: {e:#}",
+                        language, proxy
+                    )],
+                )
+                .await;
+                languages_failed += 1;
+                continue;
+            }
+
+            // Run benchmark through the proxy (same target as fullstack: https://vm:8443)
+            let modes_str = effective_modes_for_proxy(proxy, &methodology.modes);
+
+            let test_params = runner::TestParams {
+                warmup_requests: methodology.warmup_runs as u64,
+                benchmark_requests: methodology.min_measured as u64,
+                timeout_secs: methodology.timeout_secs as u64,
+            };
+
+            log_callback(
+                callback,
+                &testbed.testbed_id,
+                vec![format!(
+                    "Running benchmark: {} behind {}, modes={}",
+                    language, proxy, modes_str,
+                )],
+            )
+            .await;
+
+            match run_language_benchmark(
+                vm,
+                &test_params,
+                language,
+                &modes_str,
+                config.callback_url.as_deref(),
+                config.callback_token.as_deref(),
+                &config.config_id,
+                &testbed.testbed_id,
+            )
+            .await
+            {
+                Ok(artifact_json) => {
+                    tracing::info!(
+                        "{} behind {} complete on testbed {}",
+                        language,
+                        proxy,
+                        testbed.testbed_id
+                    );
+                    log_callback(
+                        callback,
+                        &testbed.testbed_id,
+                        vec![format!("{} behind {} benchmark complete", language, proxy)],
+                    )
+                    .await;
+
+                    // Report result via callback.
+                    if let Err(e) = callback
+                        .result(&testbed.testbed_id, language, artifact_json)
+                        .await
+                    {
+                        tracing::error!(
+                            "Failed to report result for {} behind {}: {e:#}",
+                            language,
+                            proxy
+                        );
+                    }
+
+                    languages_completed += 1;
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "{} behind {} benchmark failed: {:#}",
+                        language,
+                        proxy,
+                        e
+                    );
+                    log_callback(
+                        callback,
+                        &testbed.testbed_id,
+                        vec![format!(
+                            "{} behind {} benchmark failed: {e:#}",
+                            language, proxy
+                        )],
+                    )
+                    .await;
+                    languages_failed += 1;
+                }
+            }
+
+            // Stop language server before next language
+            stop_app_language(vm).await;
+        }
+
+        // Stop proxy before swap (isolation protocol)
+        stop_proxy(vm).await;
+    }
+
+    // Report testbed complete.
+    let testbed_status = if languages_failed == 0 && !*cancel_rx.borrow() {
+        "completed"
+    } else if *cancel_rx.borrow() {
+        "cancelled"
+    } else {
+        "completed_with_errors"
+    };
+
+    status_callback(
+        callback,
+        &testbed.testbed_id,
+        testbed_status,
+        "",
+        total_combinations,
+        total_combinations,
+        &format!(
+            "Testbed complete: {languages_completed} succeeded, {languages_failed} failed"
+        ),
     )
     .await;
 
