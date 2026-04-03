@@ -222,7 +222,7 @@ async fn provision_azure(region: &str, os: &str, vm_size: &str, name: &str) -> R
         ip
     };
 
-    // Open port 8443 (HTTPS) and 9100 (metrics agent)
+    // Open TCP ports 8443 (HTTPS) and 9100 (metrics agent)
     for port in ["8443", "9100"] {
         let _ = az_cmd(
             &[
@@ -243,6 +243,38 @@ async fn provision_azure(region: &str, os: &str, vm_size: &str, name: &str) -> R
         )
         .await;
     }
+
+    // Open UDP 8443 for HTTP/3 (QUIC) — az vm open-port only does TCP,
+    // so we add an NSG rule directly for UDP.
+    let nsg_name = format!("{name}NSG");
+    let _ = az_cmd(
+        &[
+            "network",
+            "nsg",
+            "rule",
+            "create",
+            "--resource-group",
+            RESOURCE_GROUP,
+            "--nsg-name",
+            &nsg_name,
+            "--name",
+            "AllowUDP8443",
+            "--priority",
+            "1003",
+            "--protocol",
+            "Udp",
+            "--destination-port-ranges",
+            "8443",
+            "--access",
+            "Allow",
+            "--direction",
+            "Inbound",
+            "--output",
+            "none",
+        ],
+        START_STOP_TIMEOUT,
+    )
+    .await;
 
     tracing::info!("Azure VM {name} provisioned at {ip}");
 
@@ -287,7 +319,7 @@ async fn provision_aws(region: &str, _os: &str, vm_size: &str, name: &str) -> Re
     )
     .await;
 
-    // Open ports 22, 8443, 9100 (idempotent — ignores duplicate rules)
+    // Open TCP ports 22, 8443, 9100 (idempotent — ignores duplicate rules)
     for port in ["22", "8443", "9100"] {
         let _ = aws_cmd(
             &[
@@ -308,6 +340,26 @@ async fn provision_aws(region: &str, _os: &str, vm_size: &str, name: &str) -> Re
         )
         .await;
     }
+
+    // Open UDP 8443 for HTTP/3 (QUIC)
+    let _ = aws_cmd(
+        &[
+            "ec2",
+            "authorize-security-group-ingress",
+            "--group-name",
+            sg_name,
+            "--protocol",
+            "udp",
+            "--port",
+            "8443",
+            "--cidr",
+            "0.0.0.0/0",
+            "--region",
+            region,
+        ],
+        START_STOP_TIMEOUT,
+    )
+    .await;
 
     // Launch instance
     let tag_spec = format!(
@@ -462,7 +514,7 @@ async fn provision_gcp(zone: &str, _os: &str, vm_size: &str, name: &str) -> Resu
             "create",
             &rule_name,
             "--allow",
-            "tcp:8443,tcp:9100,tcp:22",
+            "tcp:8443,udp:8443,tcp:9100,tcp:22",
             "--target-tags",
             "alethabench",
             "--source-ranges",
