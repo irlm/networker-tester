@@ -59,8 +59,20 @@ async fn deploy_remote(vm: &VmInfo, language: &str) -> Result<()> {
             )
         }
         "nginx" => {
+            // Install nginx mainline (1.27+) for HTTP/3 QUIC support.
+            // Ubuntu 24.04 ships 1.24 which has no quic module.
             format!(
-                "sudo apt-get update -qq && sudo apt-get install -y -qq nginx git < /dev/null; \
+                "sudo apt-get update -qq && sudo apt-get install -y -qq curl gnupg2 ca-certificates lsb-release git < /dev/null; \
+                 if nginx -v 2>&1 | grep -q 'nginx/1.2[5-9]\\|nginx/1.[3-9]'; then \
+                     echo 'nginx mainline already installed'; \
+                 else \
+                     echo 'Installing nginx mainline for HTTP/3...'; \
+                     curl -fsSL https://nginx.org/keys/nginx_signing.key | sudo gpg --dearmor -o /usr/share/keyrings/nginx-archive-keyring.gpg 2>/dev/null; \
+                     echo 'deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] http://nginx.org/packages/mainline/ubuntu '$(lsb_release -cs)' nginx' \
+                         | sudo tee /etc/apt/sources.list.d/nginx.list > /dev/null; \
+                     sudo apt-get update -qq < /dev/null; \
+                     sudo apt-get install -y -qq nginx < /dev/null; \
+                 fi; \
                  sudo mkdir -p /opt/bench && sudo chown azureuser:azureuser /opt/bench; \
                  openssl req -x509 -newkey rsa:2048 -keyout /opt/bench/key.pem \
                  -out /opt/bench/cert.pem -days 365 -nodes -subj '/CN=bench' 2>/dev/null; \
@@ -574,9 +586,19 @@ pub async fn deploy_api(vm: &VmInfo, language: &str, bench_dir: &Path) -> Result
             )).await?;
         }
         "nginx" => {
+            // Install nginx mainline (1.27+) for HTTP/3 QUIC support
             ssh_exec(
                 &vm.ip,
-                "sudo apt-get update -qq && sudo apt-get install -y -qq nginx < /dev/null",
+                "if nginx -v 2>&1 | grep -qE 'nginx/1.2[5-9]|nginx/1.[3-9]'; then \
+                     echo 'nginx mainline already installed'; \
+                 else \
+                     sudo apt-get update -qq && sudo apt-get install -y -qq curl gnupg2 ca-certificates lsb-release < /dev/null && \
+                     curl -fsSL https://nginx.org/keys/nginx_signing.key | sudo gpg --dearmor -o /usr/share/keyrings/nginx-archive-keyring.gpg 2>/dev/null && \
+                     echo \"deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] http://nginx.org/packages/mainline/ubuntu $(lsb_release -cs) nginx\" \
+                         | sudo tee /etc/apt/sources.list.d/nginx.list > /dev/null && \
+                     sudo apt-get update -qq < /dev/null && \
+                     sudo apt-get install -y -qq nginx < /dev/null; \
+                 fi",
             )
             .await?;
             ssh_exec(&vm.ip, "mkdir -p /opt/bench/download").await?;
