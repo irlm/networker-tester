@@ -926,6 +926,8 @@ export interface BenchmarkTestbedConfig {
   existing_vm_ip: string | null;
   os: string;
   languages: string[];
+  proxies?: string[];
+  tester_os?: string;
 }
 
 export interface BenchmarkVmCatalogEntry {
