@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.17.2] - 2026-04-03
+
+### Added
+- Real-time per-request benchmark progress: tester POSTs each request result to dashboard via HTTP callback
+- V021 migration: `benchmark_request_progress` table with per-mode tracking and p50 aggregation
+- Progress page: per-mode progress bars with running p50 latency stats, request counts
+- `--progress-url`/`--progress-token`/`--benchmark-language` flags on networker-tester for orchestrator integration
+- Orchestrator passes progress callback URL/token through to tester subprocess
+
+---
+
 ## [0.17.1] - 2026-04-02
 
 ### Changed
