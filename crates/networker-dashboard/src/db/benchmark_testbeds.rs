@@ -17,6 +17,8 @@ pub struct BenchmarkTestbedRow {
     pub languages: serde_json::Value,
     pub vm_size: Option<String>,
     pub os: String,
+    pub proxies: serde_json::Value,
+    pub tester_os: String,
 }
 
 fn row_to_testbed(r: &tokio_postgres::Row) -> BenchmarkTestbedRow {
@@ -34,6 +36,8 @@ fn row_to_testbed(r: &tokio_postgres::Row) -> BenchmarkTestbedRow {
         languages: r.get("languages"),
         vm_size: r.get("vm_size"),
         os: r.get("os"),
+        proxies: r.get("proxies"),
+        tester_os: r.get("tester_os"),
     }
 }
 
@@ -47,15 +51,18 @@ pub async fn create(
     languages: &serde_json::Value,
     vm_size: Option<&str>,
     os: &str,
+    proxies: &serde_json::Value,
+    tester_os: &str,
 ) -> anyhow::Result<Uuid> {
     let id = Uuid::new_v4();
     client
         .execute(
             "INSERT INTO benchmark_testbed
-                (testbed_id, config_id, cloud, region, topology, languages, vm_size, os)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                (testbed_id, config_id, cloud, region, topology, languages, vm_size, os, proxies, tester_os)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
             &[
                 &id, config_id, &cloud, &region, &topology, languages, &vm_size, &os,
+                proxies, &tester_os,
             ],
         )
         .await?;
@@ -69,7 +76,8 @@ pub async fn list_for_config(
     let rows = client
         .query(
             "SELECT testbed_id, config_id, cloud, region, topology, endpoint_vm_id,
-                    tester_vm_id, endpoint_ip, tester_ip, status, languages, vm_size, os
+                    tester_vm_id, endpoint_ip, tester_ip, status, languages, vm_size, os,
+                    proxies, tester_os
              FROM benchmark_testbed WHERE config_id = $1
              ORDER BY cloud, region",
             &[config_id],
