@@ -25,6 +25,9 @@ pub struct DashboardBenchmarkConfig {
     /// Callback token for authentication.
     #[serde(default)]
     pub callback_token: Option<String>,
+    /// Benchmark type: "fullstack" (raw) or "application" (reverse proxy).
+    #[serde(default = "default_benchmark_type")]
+    pub benchmark_type: String,
 }
 
 /// A single testbed in the benchmark matrix.
@@ -50,6 +53,12 @@ pub struct TestbedConfig {
     pub os: String,
     /// Languages to benchmark on this testbed.
     pub languages: Vec<String>,
+    /// Reverse proxies to test in application mode.
+    #[serde(default)]
+    pub proxies: Vec<String>,
+    /// Tester VM OS: "server", "desktop-linux", "desktop-windows".
+    #[serde(default = "default_tester_os")]
+    pub tester_os: String,
 }
 
 /// Benchmark methodology parameters.
@@ -83,6 +92,12 @@ fn default_topology() -> String {
 }
 fn default_os() -> String {
     "linux".to_string()
+}
+fn default_benchmark_type() -> String {
+    "fullstack".to_string()
+}
+fn default_tester_os() -> String {
+    "server".to_string()
 }
 fn default_warmup() -> u32 {
     10
@@ -131,6 +146,16 @@ impl DashboardBenchmarkConfig {
                 "testbed {} has no languages",
                 testbed.testbed_id
             );
+        }
+        if self.benchmark_type == "application" {
+            for testbed in &self.testbeds {
+                if testbed.proxies.is_empty() {
+                    anyhow::bail!(
+                        "Application benchmark testbed '{}' requires at least one proxy",
+                        testbed.testbed_id
+                    );
+                }
+            }
         }
         anyhow::ensure!(
             self.methodology.min_measured > 0,
@@ -522,6 +547,8 @@ mod tests {
                 existing_vm_ip: Some("40.87.23.80".into()),
                 os: "linux".into(),
                 languages: vec!["rust".into(), "go".into()],
+                proxies: vec![],
+                tester_os: "server".into(),
             }],
             methodology: MethodologyConfig {
                 warmup_runs: 10,
@@ -533,6 +560,9 @@ mod tests {
                 timeout_secs: 30,
             },
             auto_teardown: true,
+            callback_url: None,
+            callback_token: None,
+            benchmark_type: "fullstack".into(),
         }
     }
 
