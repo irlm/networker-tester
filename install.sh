@@ -9091,9 +9091,12 @@ deploy_benchmark_server() {
             cd "$API_DIR/python"
             python3 -m venv "$BENCH_DIR/pyenv" < /dev/null
             "$BENCH_DIR/pyenv/bin/pip" install --quiet -r requirements.txt < /dev/null
-            BENCH_CERT_DIR="$BENCH_DIR" \
-                nohup "$BENCH_DIR/pyenv/bin/uvicorn" server:app --host 0.0.0.0 --port 8443 \
-                    --ssl-keyfile "$CERT_KEY" --ssl-certfile "$CERT_PEM" --log-level error \
+            BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT=8443 \
+                nohup "$BENCH_DIR/pyenv/bin/hypercorn" server:app \
+                    --bind "0.0.0.0:8443" \
+                    --certfile "$CERT_PEM" --keyfile "$CERT_KEY" \
+                    --quic-bind "0.0.0.0:8443" \
+                    --access-log - \
                     > "$BENCH_DIR/python.log" 2>&1 &
             ;;
 
