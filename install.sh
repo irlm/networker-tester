@@ -8979,6 +8979,52 @@ deploy_from_config() {
     _deploy_display_completion
 }
 
+# ── Chrome test harness deployment ─────────────────────────────────────────────
+# Installs Chrome + Node.js + puppeteer-core for Application mode benchmarking.
+
+deploy_chrome_harness() {
+    echo ">> Installing Chrome test harness"
+    local HARNESS_DIR="/opt/bench/chrome-harness"
+    sudo mkdir -p "$HARNESS_DIR"
+    sudo chown "$(whoami):$(whoami)" "$HARNESS_DIR"
+
+    # Install Chrome (if not present)
+    if ! command -v google-chrome &>/dev/null && ! command -v chromium-browser &>/dev/null; then
+        echo ">> Installing Chrome"
+        if [ -f /etc/debian_version ]; then
+            curl -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -o /tmp/chrome.deb < /dev/null
+            sudo apt-get install -y -qq /tmp/chrome.deb < /dev/null || sudo apt-get install -y -qq chromium-browser < /dev/null
+            rm -f /tmp/chrome.deb
+        fi
+    fi
+    echo ">> Chrome: $(google-chrome --version 2>/dev/null || chromium-browser --version 2>/dev/null || echo 'not found')"
+
+    # Install Node.js (if not present)
+    if ! command -v node &>/dev/null; then
+        echo ">> Installing Node.js"
+        if [ -f /etc/debian_version ]; then
+            curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - < /dev/null
+            sudo apt-get install -y -qq nodejs < /dev/null
+        fi
+    fi
+    echo ">> Node.js: $(node --version 2>/dev/null || echo 'not found')"
+
+    # Deploy harness files from repo
+    local REPO_DIR="/tmp/nwk-repo"
+    if [ -d "$REPO_DIR/benchmarks/chrome-harness" ]; then
+        cp "$REPO_DIR/benchmarks/chrome-harness/package.json" "$HARNESS_DIR/"
+        cp "$REPO_DIR/benchmarks/chrome-harness/runner.js" "$HARNESS_DIR/"
+        cp "$REPO_DIR/benchmarks/chrome-harness/test-page.html" "$HARNESS_DIR/"
+    else
+        echo "WARNING: Chrome harness files not found in repo, using inline deployment"
+        # Fallback: the orchestrator will SCP the files directly
+    fi
+
+    # Install dependencies
+    cd "$HARNESS_DIR" && npm install --production --silent 2>/dev/null < /dev/null
+    echo ">> Chrome harness deployed at $HARNESS_DIR"
+}
+
 # ── Benchmark proxy deployment (Application mode) ─────────────────────────────
 # Deploys a reverse proxy on port 8443 forwarding to localhost:8080.
 # Used by the orchestrator via: --benchmark-proxy <proxy>

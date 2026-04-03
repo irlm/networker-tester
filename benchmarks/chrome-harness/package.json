@@ -1,0 +1,12 @@
+{
+  "name": "bench-chrome-harness",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Chrome-based benchmark harness for Application mode",
+  "scripts": {
+    "bench": "node runner.js"
+  },
+  "dependencies": {
+    "puppeteer-core": "^23.0.0"
+  }
+}

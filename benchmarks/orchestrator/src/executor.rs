@@ -151,9 +151,131 @@ async fn stop_app_language(vm: &VmInfo) {
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 }
 
+/// Deploy the Chrome test harness to the VM.
+async fn deploy_chrome_harness(vm: &VmInfo) -> Result<()> {
+    tracing::info!("Deploying Chrome test harness on {}", vm.ip);
+    let cmd = "curl -fsSL https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh | sudo bash -s -- 2>/dev/null; \
+               command -v deploy_chrome_harness >/dev/null 2>&1 || { \
+                 sudo mkdir -p /opt/bench/chrome-harness && \
+                 cd /tmp/nwk-repo/benchmarks/chrome-harness 2>/dev/null && \
+                 sudo cp package.json runner.js test-page.html /opt/bench/chrome-harness/ && \
+                 cd /opt/bench/chrome-harness && sudo npm install --production --silent 2>/dev/null; \
+               }";
+    // Simpler: just deploy harness files and install deps
+    let setup_cmd = concat!(
+        "sudo mkdir -p /opt/bench/chrome-harness && ",
+        "sudo chown $(whoami):$(whoami) /opt/bench/chrome-harness && ",
+        // Install Chrome if missing
+        "if ! command -v google-chrome >/dev/null 2>&1 && ! command -v chromium-browser >/dev/null 2>&1; then ",
+        "  curl -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -o /tmp/chrome.deb < /dev/null && ",
+        "  sudo apt-get install -y -qq /tmp/chrome.deb < /dev/null || sudo apt-get install -y -qq chromium-browser < /dev/null; ",
+        "  rm -f /tmp/chrome.deb; ",
+        "fi && ",
+        // Install Node.js if missing
+        "if ! command -v node >/dev/null 2>&1; then ",
+        "  curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - < /dev/null && ",
+        "  sudo apt-get install -y -qq nodejs < /dev/null; ",
+        "fi",
+    );
+    ssh::ssh_exec(&vm.ip, setup_cmd)
+        .await
+        .with_context(|| format!("Failed to install Chrome/Node.js on {}", vm.ip))?;
+
+    // Deploy harness files via the repo (should already be cloned by deploy_benchmark_server)
+    let deploy_cmd = concat!(
+        "if [ -d /tmp/nwk-repo/benchmarks/chrome-harness ]; then ",
+        "  cp /tmp/nwk-repo/benchmarks/chrome-harness/package.json /opt/bench/chrome-harness/ && ",
+        "  cp /tmp/nwk-repo/benchmarks/chrome-harness/runner.js /opt/bench/chrome-harness/ && ",
+        "  cp /tmp/nwk-repo/benchmarks/chrome-harness/test-page.html /opt/bench/chrome-harness/ && ",
+        "  cd /opt/bench/chrome-harness && npm install --production --silent 2>/dev/null < /dev/null; ",
+        "fi",
+    );
+    ssh::ssh_exec(&vm.ip, deploy_cmd)
+        .await
+        .with_context(|| format!("Failed to deploy Chrome harness files on {}", vm.ip))?;
+
+    tracing::info!("Chrome harness deployed on {}", vm.ip);
+    Ok(())
+}
+
+/// Run the Chrome-based benchmark for a proxy+language combination.
+async fn run_chrome_benchmark(
+    vm: &VmInfo,
+    proxy: &str,
+    language: &str,
+    http_version: &str,
+    connection_mode: &str,
+    methodology: &MethodologyConfig,
+) -> Result<serde_json::Value> {
+    let cmd = format!(
+        "cd /opt/bench/chrome-harness && node runner.js \
+         --target https://localhost:8443 \
+         --warmup {} \
+         --measured {} \
+         --concurrency 10 \
+         --http-version {} \
+         --connection-mode {} \
+         --timeout {}",
+        methodology.warmup_runs,
+        methodology.min_measured,
+        http_version,
+        connection_mode,
+        methodology.timeout_secs,
+    );
+
+    tracing::info!(
+        "Running Chrome benchmark: {} behind {}, http={}, conn={}",
+        language, proxy, http_version, connection_mode,
+    );
+
+    let output = ssh::ssh_exec(&vm.ip, &cmd)
+        .await
+        .with_context(|| {
+            format!(
+                "Chrome benchmark failed for {language} behind {proxy} (http={http_version}, conn={connection_mode})"
+            )
+        })?;
+
+    // Parse JSON output
+    let result: serde_json::Value = serde_json::from_str(&output).with_context(|| {
+        format!(
+            "Failed to parse Chrome benchmark output for {language} behind {proxy}: {}",
+            &output[..output.len().min(200)]
+        )
+    })?;
+
+    // Check for error in results
+    if result.get("error").is_some() {
+        anyhow::bail!(
+            "Chrome benchmark returned error: {}",
+            result["error"].as_str().unwrap_or("unknown")
+        );
+    }
+
+    Ok(result)
+}
+
 /// In application mode, HTTP/3 support depends on the proxy, not the language.
 fn proxy_supports_http3(proxy: &str) -> bool {
     matches!(proxy, "nginx" | "caddy" | "traefik" | "iis")
+}
+
+/// Convert methodology modes to HTTP version labels for Chrome harness.
+/// Maps http1→h1, http2→h2, http3→h3, filters by proxy capability.
+fn effective_http_versions_for_proxy(proxy: &str, modes: &[String]) -> Vec<String> {
+    modes
+        .iter()
+        .filter_map(|m| match m.as_str() {
+            "http1" => Some("h1".to_string()),
+            "http2" => Some("h2".to_string()),
+            "http3" if proxy_supports_http3(proxy) => Some("h3".to_string()),
+            "http3" => {
+                tracing::info!("Skipping http3 for proxy {} (no QUIC support)", proxy);
+                None
+            }
+            _ => None, // skip non-HTTP modes like download/upload
+        })
+        .collect()
 }
 
 fn effective_modes_for_proxy(proxy: &str, modes: &[String]) -> String {
@@ -584,6 +706,34 @@ async fn execute_testbed_application(
     let total_combinations = (testbed.proxies.len() * testbed.languages.len()) as u32;
     let mut combination_index = 0u32;
 
+    // Deploy Chrome test harness on the VM
+    log_callback(
+        callback,
+        &testbed.testbed_id,
+        vec!["Installing Chrome test harness...".to_string()],
+    )
+    .await;
+
+    if let Err(e) = deploy_chrome_harness(vm).await {
+        tracing::error!(
+            "Chrome harness deploy failed on testbed {}: {:#}",
+            testbed.testbed_id,
+            e
+        );
+        log_callback(
+            callback,
+            &testbed.testbed_id,
+            vec![format!("Chrome harness deploy failed: {e:#}")],
+        )
+        .await;
+        return Ok(TestbedOutcome {
+            testbed_id: testbed.testbed_id.clone(),
+            languages_completed: 0,
+            languages_failed: total_combinations,
+            provisioned_vm: provisioned,
+        });
+    }
+
     for proxy in &testbed.proxies {
         // Check cancellation
         if *cancel_rx.borrow() {
@@ -676,83 +826,78 @@ async fn execute_testbed_application(
                 continue;
             }
 
-            // Run benchmark through the proxy (same target as fullstack: https://vm:8443)
-            let modes_str = effective_modes_for_proxy(proxy, &methodology.modes);
-
-            let test_params = runner::TestParams {
-                warmup_requests: methodology.warmup_runs as u64,
-                benchmark_requests: methodology.min_measured as u64,
-                timeout_secs: methodology.timeout_secs as u64,
-            };
+            // Run Chrome benchmark for each HTTP version the proxy supports
+            let http_versions = effective_http_versions_for_proxy(proxy, &methodology.modes);
 
             log_callback(
                 callback,
                 &testbed.testbed_id,
                 vec![format!(
-                    "Running benchmark: {} behind {}, modes={}",
-                    language, proxy, modes_str,
+                    "Running Chrome benchmark: {} behind {}, versions={:?}",
+                    language, proxy, http_versions,
                 )],
             )
             .await;
 
-            match run_language_benchmark(
-                vm,
-                &test_params,
-                language,
-                &modes_str,
-                config.callback_url.as_deref(),
-                config.callback_token.as_deref(),
-                &config.config_id,
-                &testbed.testbed_id,
-            )
-            .await
-            {
-                Ok(artifact_json) => {
-                    tracing::info!(
-                        "{} behind {} complete on testbed {}",
-                        language,
-                        proxy,
-                        testbed.testbed_id
-                    );
-                    log_callback(
-                        callback,
-                        &testbed.testbed_id,
-                        vec![format!("{} behind {} benchmark complete", language, proxy)],
-                    )
-                    .await;
-
-                    // Report result via callback.
-                    if let Err(e) = callback
-                        .result(&testbed.testbed_id, language, artifact_json)
-                        .await
-                    {
-                        tracing::error!(
-                            "Failed to report result for {} behind {}: {e:#}",
+            let mut lang_ok = true;
+            for http_ver in &http_versions {
+                // Run warm connection phase
+                match run_chrome_benchmark(vm, proxy, language, http_ver, "warm", methodology).await
+                {
+                    Ok(result) => {
+                        tracing::info!(
+                            "{} behind {} ({}:warm) complete",
                             language,
-                            proxy
+                            proxy,
+                            http_ver
                         );
-                    }
 
-                    languages_completed += 1;
+                        // Wrap result with metadata for callback
+                        let artifact = serde_json::json!({
+                            "proxy": proxy,
+                            "http_version": http_ver,
+                            "connection_mode": "warm",
+                            "chrome_results": result,
+                        });
+
+                        if let Err(e) = callback
+                            .result(&testbed.testbed_id, language, artifact)
+                            .await
+                        {
+                            tracing::error!(
+                                "Failed to report result for {} behind {} ({}:warm): {e:#}",
+                                language,
+                                proxy,
+                                http_ver
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "{} behind {} ({}:warm) failed: {:#}",
+                            language,
+                            proxy,
+                            http_ver,
+                            e
+                        );
+                        log_callback(
+                            callback,
+                            &testbed.testbed_id,
+                            vec![format!(
+                                "{} behind {} ({}:warm) failed: {e:#}",
+                                language, proxy, http_ver
+                            )],
+                        )
+                        .await;
+                        lang_ok = false;
+                    }
                 }
-                Err(e) => {
-                    tracing::error!(
-                        "{} behind {} benchmark failed: {:#}",
-                        language,
-                        proxy,
-                        e
-                    );
-                    log_callback(
-                        callback,
-                        &testbed.testbed_id,
-                        vec![format!(
-                            "{} behind {} benchmark failed: {e:#}",
-                            language, proxy
-                        )],
-                    )
-                    .await;
-                    languages_failed += 1;
-                }
+            }
+
+            if lang_ok {
+                languages_completed += 1;
+            } else {
+                languages_failed += 1;
             }
 
             // Stop language server before next language
