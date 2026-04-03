@@ -1,0 +1,71 @@
+{
+  "description": "Golden Run Validation Plan — expected invariants for measurement correctness",
+  "setup": {
+    "proxy": "nginx",
+    "languages": ["rust", "python"],
+    "http_versions": ["h2", "h3"],
+    "connection_modes": ["warm"],
+    "testbed_os": "linux",
+    "tester_os": "server"
+  },
+  "positive_invariants": [
+    {
+      "id": "warm_faster_than_cold",
+      "description": "Warm connections should be faster than cold (no TLS handshake)",
+      "check": "warm.cycle_duration.p50 < cold.cycle_duration.p50",
+      "severity": "critical",
+      "if_violated": "Connection control is broken"
+    },
+    {
+      "id": "rust_faster_than_python",
+      "description": "Rust app_time should be less than Python app_time",
+      "check": "rust.app_ms.mean < python.app_ms.mean",
+      "severity": "critical",
+      "if_violated": "Workload contract mismatch or Server-Timing not working"
+    },
+    {
+      "id": "proxy_overhead_stable",
+      "description": "nginx proxy overhead should be similar for both languages",
+      "check": "abs(rust.proxy_overhead_ms.mean - python.proxy_overhead_ms.mean) < 5",
+      "severity": "warning",
+      "if_violated": "Timing normalization may be broken"
+    },
+    {
+      "id": "server_timing_consistency",
+      "description": "Server-Timing app;dur should approximately match proxy upstream;dur",
+      "check": "abs(app_ms.mean - upstream_ms.mean) < 3",
+      "severity": "critical",
+      "if_violated": "Timing header pipeline broken"
+    },
+    {
+      "id": "low_error_rate",
+      "description": "Error rate should be approximately 0% for a clean run",
+      "check": "error_rate < 0.02",
+      "severity": "critical",
+      "if_violated": "Deployment or configuration issue"
+    },
+    {
+      "id": "protocol_matches",
+      "description": "Forced HTTP version should be the actual negotiated protocol",
+      "check": "protocol_validation.mismatch == false",
+      "severity": "critical",
+      "if_violated": "Chrome flags not applied correctly"
+    }
+  ],
+  "negative_controls": [
+    {
+      "id": "h3_on_haproxy",
+      "description": "Force HTTP/3 against HAProxy (no QUIC support)",
+      "action": "Request h3 mode for HAProxy proxy",
+      "expected": "protocol_mismatch = true OR http3 mode filtered out",
+      "if_not_triggered": "Protocol mismatch detection pipeline is broken"
+    },
+    {
+      "id": "missing_timing_allow_origin",
+      "description": "Omit Timing-Allow-Origin header from one test",
+      "action": "Deploy a language without the Timing-Allow-Origin response header",
+      "expected": "Raw timing fields (dns_ms, tcp_ms, etc.) are zeroed or absent",
+      "if_not_triggered": "Measurement quality badge system is broken"
+    }
+  ]
+}

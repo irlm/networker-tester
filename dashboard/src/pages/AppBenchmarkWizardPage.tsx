@@ -48,6 +48,24 @@ const TEMPLATES: TemplateOption[] = [
     methodology: 'standard',
   },
   {
+    id: 'validation-run',
+    name: 'Validation Run',
+    description: 'Golden run: nginx proxy, Rust + Python, h2 + h3. Validates measurement correctness.',
+    defaultTestbedCount: 1,
+    defaultOs: 'linux' as const,
+    defaultLanguages: ['rust', 'python'],
+    methodology: 'standard',
+  },
+  {
+    id: 'low-noise',
+    name: 'Low Noise',
+    description: 'Single proxy + language, extended warmup. For regression tracking.',
+    defaultTestbedCount: 1,
+    defaultOs: 'linux' as const,
+    defaultLanguages: ['rust'],
+    methodology: 'rigorous',
+  },
+  {
     id: 'custom',
     name: 'Custom',
     description: 'Start from scratch.',
@@ -91,6 +109,8 @@ const TEMPLATE_DEFAULT_PROXIES: Record<string, string[]> = {
   'linux-api-stack': ['nginx', 'caddy'],
   'windows-api-stack': ['iis', 'nginx'],
   'proxy-comparison': ['nginx', 'caddy', 'traefik', 'haproxy', 'apache'],
+  'validation-run': ['nginx'],
+  'low-noise': ['nginx'],
   'custom': [],
 };
 
@@ -270,7 +290,7 @@ export function AppBenchmarkWizardPage() {
 
     // Pre-fill testbeds
     const newTestbeds: TestbedState[] = [];
-    if (tmpl.id === 'linux-api-stack' || tmpl.id === 'windows-api-stack' || tmpl.id === 'proxy-comparison') {
+    if (tmpl.id !== 'custom') {
       const k = testbedKey;
       setTestbedKey(k + 1);
       newTestbeds.push(makeTestbed(k, 'Azure', tmpl.defaultOs ?? 'linux', defaultProxies));
@@ -286,6 +306,15 @@ export function AppBenchmarkWizardPage() {
     setWarmup(preset.warmup);
     setMeasured(preset.measured);
     setTargetError(preset.targetError);
+
+    // Validation Run: only http2 + http3 modes
+    if (tmpl.id === 'validation-run') {
+      setSelectedModes(new Set(['http2', 'http3']));
+    }
+    // Low Noise: extended warmup (20 cycles)
+    if (tmpl.id === 'low-noise') {
+      setWarmup(20);
+    }
 
     setProxyWarning(false);
     loadCatalog();
