@@ -1,5 +1,5 @@
 // AletheBench Go reference API.
-// Pure net/http stdlib — no frameworks, no external dependencies.
+// net/http for HTTP/1.1 + HTTP/2, quic-go for HTTP/3 (QUIC/UDP).
 package main
 
 import (
@@ -12,6 +12,8 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+
+	"github.com/quic-go/quic-go/http3"
 )
 
 const (
@@ -42,14 +44,30 @@ func main() {
 		MinVersion: tls.VersionTLS12,
 	}
 
-	srv := &http.Server{
+	// Wrap handler to advertise HTTP/3 via Alt-Svc header.
+	altSvcHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Alt-Svc", fmt.Sprintf(`h3="%s"; ma=86400`, addr))
+		mux.ServeHTTP(w, r)
+	})
+
+	// HTTP/3 server (QUIC/UDP) — run in background goroutine.
+	h3srv := &http3.Server{Addr: addr, Handler: altSvcHandler}
+	go func() {
+		log.Printf("HTTP/3 (QUIC) listening on %s", addr)
+		if err := h3srv.ListenAndServeTLS(certPath, keyPath); err != nil {
+			log.Printf("HTTP/3 server error: %v", err)
+		}
+	}()
+
+	// TCP server (HTTP/1.1 + HTTP/2) — blocks on main goroutine.
+	tcpSrv := &http.Server{
 		Addr:      addr,
-		Handler:   mux,
+		Handler:   altSvcHandler,
 		TLSConfig: tlsCfg,
 	}
 
-	log.Printf("AletheBench Go reference API listening on %s (TLS)", addr)
-	if err := srv.ListenAndServeTLS(certPath, keyPath); err != nil {
+	log.Printf("AletheBench Go reference API listening on %s (TLS + QUIC)", addr)
+	if err := tcpSrv.ListenAndServeTLS(certPath, keyPath); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
 }
