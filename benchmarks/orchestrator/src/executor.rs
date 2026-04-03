@@ -529,6 +529,26 @@ async fn resolve_vm(testbed: &TestbedConfig) -> Result<(VmInfo, bool)> {
     }
 }
 
+/// Languages that support HTTP/3 (QUIC).
+/// Others will have http3 stripped from modes to avoid wasted benchmark time.
+fn supports_http3(language: &str) -> bool {
+    matches!(
+        language,
+        "rust"
+            | "nginx"
+            | "go"
+            | "python"
+            | "csharp-net7"
+            | "csharp-net8"
+            | "csharp-net8-aot"
+            | "csharp-net9"
+            | "csharp-net9-aot"
+            | "csharp-net10"
+            | "csharp-net10-aot"
+            | "php"
+    )
+}
+
 /// Run the benchmark for a single language and collect JSON output.
 async fn run_language_benchmark(
     vm: &VmInfo,
@@ -540,13 +560,24 @@ async fn run_language_benchmark(
     config_id: &str,
     testbed_id: &str,
 ) -> Result<serde_json::Value> {
+    // Skip http3 for languages that don't support QUIC
+    let effective_modes = if supports_http3(language) {
+        modes.to_string()
+    } else {
+        let filtered: Vec<&str> = modes.split(',').filter(|m| m.trim() != "http3").collect();
+        if filtered.len() < modes.split(',').count() {
+            tracing::info!("Skipping http3 for {} (no QUIC support)", language);
+        }
+        filtered.join(",")
+    };
+
     let target = format!("https://{}:8443/health", vm.ip);
     let tester_bin = resolve_tester_path();
 
     tracing::info!(
         "Running tester: target={}, modes={}, runs={}, timeout={}s",
         target,
-        modes,
+        effective_modes,
         params.benchmark_requests,
         params.timeout_secs,
     );
@@ -556,7 +587,7 @@ async fn run_language_benchmark(
         "--target".to_string(),
         target.clone(),
         "--modes".to_string(),
-        modes.to_string(),
+        effective_modes.clone(),
         "--runs".to_string(),
         params.benchmark_requests.to_string(),
         "--timeout".to_string(),
@@ -566,7 +597,7 @@ async fn run_language_benchmark(
         "--benchmark-mode".to_string(),
     ];
 
-    let needs_payload = modes.split(',').any(|m| {
+    let needs_payload = effective_modes.split(',').any(|m| {
         let m = m.trim();
         m.starts_with("download") || m.starts_with("upload") || m.starts_with("udp")
     });
@@ -592,7 +623,7 @@ async fn run_language_benchmark(
     }
 
     // Timeout: account for modes * payload-sizes * runs * timeout, plus warmup buffer
-    let mode_count = modes.split(',').count() as u64;
+    let mode_count = effective_modes.split(',').count() as u64;
     let payload_multiplier = if needs_payload { 3u64 } else { 1u64 }; // 4k, 64k, 1m
     let total_requests = mode_count * payload_multiplier * params.benchmark_requests;
     let output = tokio::time::timeout(
