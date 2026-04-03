@@ -147,6 +147,11 @@ impl DashboardBenchmarkConfig {
                 testbed.testbed_id
             );
         }
+        anyhow::ensure!(
+            ["fullstack", "application"].contains(&self.benchmark_type.as_str()),
+            "benchmark_type must be 'fullstack' or 'application', got '{}'",
+            self.benchmark_type
+        );
         if self.benchmark_type == "application" {
             for testbed in &self.testbeds {
                 if testbed.proxies.is_empty() {
