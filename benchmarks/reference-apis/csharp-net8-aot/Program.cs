@@ -10,17 +10,26 @@ record HealthResponse(string status, string runtime, string version);
 record UploadResponse(long bytes_received);
 
 // --- Application ---
+var port = int.Parse(Environment.GetEnvironmentVariable("BENCH_PORT") ?? "8443");
+
 var builder = WebApplication.CreateSlimBuilder(args);
 builder.WebHost.ConfigureKestrel(options =>
 {
-    options.ListenAnyIP(8443, listenOptions =>
+    options.ListenAnyIP(port, listenOptions =>
     {
         listenOptions.UseHttps("/opt/bench/cert.pem", "/opt/bench/key.pem");
-        listenOptions.Protocols = HttpProtocols.Http1AndHttp2;
+        listenOptions.Protocols = HttpProtocols.Http1AndHttp2AndHttp3;
     });
 });
 
 var app = builder.Build();
+
+// Advertise HTTP/3 via Alt-Svc header
+app.Use(async (context, next) =>
+{
+    context.Response.Headers["Alt-Svc"] = $"h3=\":{port}\"; ma=86400";
+    await next();
+});
 
 app.MapGet("/health", () => Results.Json(
     new HealthResponse("ok", "csharp-net8-aot", Environment.Version.ToString()),

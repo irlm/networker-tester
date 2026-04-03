@@ -16,11 +16,18 @@ builder.WebHost.ConfigureKestrel(options =>
     options.ListenAnyIP(port, listenOptions =>
     {
         listenOptions.UseHttps(cert);
-        listenOptions.Protocols = HttpProtocols.Http1AndHttp2;
+        listenOptions.Protocols = HttpProtocols.Http1AndHttp2AndHttp3;
     });
 });
 
 var app = builder.Build();
+
+// Advertise HTTP/3 via Alt-Svc header
+app.Use(async (context, next) =>
+{
+    context.Response.Headers["Alt-Svc"] = $"h3=\":{port}\"; ma=86400";
+    await next();
+});
 
 app.MapGet("/health", () => Results.Json(new {
     status = "ok",
