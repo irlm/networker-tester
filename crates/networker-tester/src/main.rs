@@ -3571,6 +3571,12 @@ mod tests {
                 delay_ms,
             },
             json_stdout: false,
+            progress_url: None,
+            progress_token: None,
+            progress_interval: 1,
+            progress_config_id: None,
+            progress_testbed_id: None,
+            benchmark_language: None,
         }
     }
 

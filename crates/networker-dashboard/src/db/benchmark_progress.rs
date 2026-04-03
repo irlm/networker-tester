@@ -20,6 +20,7 @@ pub struct LanguageProgress {
 }
 
 /// Insert a single request-progress row.
+#[allow(clippy::too_many_arguments)]
 pub async fn insert_single(
     client: &Client,
     config_id: &Uuid,
