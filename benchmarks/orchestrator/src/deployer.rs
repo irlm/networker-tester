@@ -31,127 +31,19 @@ const INSTALLER_URL: &str =
 /// Deploy a language server to a remote VM using ONE SSH call.
 /// Downloads the install script via HTTP and runs it — no SCP, no multiple connections.
 async fn deploy_remote(vm: &VmInfo, language: &str) -> Result<()> {
-    tracing::info!("Remote deploy: {} to {} via installer", language, vm.ip);
+    tracing::info!("Remote deploy: {} to {} via install.sh --benchmark-server", language, vm.ip);
 
-    // Build the install command based on language
-    let install_cmd = match language {
-        "rust" => {
-            // Download pre-built endpoint from GitHub Releases, or fall back to install.sh
-            format!(
-                "sudo mkdir -p /opt/bench && sudo chown azureuser:azureuser /opt/bench; \
-                 openssl req -x509 -newkey rsa:2048 -keyout /opt/bench/key.pem \
-                 -out /opt/bench/cert.pem -days 365 -nodes -subj '/CN=bench' 2>/dev/null; \
-                 curl -sLo /tmp/endpoint.tar.gz \
-                   https://github.com/irlm/networker-tester/releases/latest/download/networker-endpoint-x86_64-unknown-linux-musl.tar.gz && \
-                 tar xzf /tmp/endpoint.tar.gz -C /opt/bench/ && \
-                 mv /opt/bench/networker-endpoint /opt/bench/server 2>/dev/null; \
-                 if [ ! -s /opt/bench/server ]; then \
-                     echo 'Release download failed, building from source...'; \
-                     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y < /dev/null && \
-                     source $HOME/.cargo/env && \
-                     sudo apt-get update -qq && sudo apt-get install -y -qq git < /dev/null && \
-                     git clone --depth 1 {REPO_URL} /tmp/nwk-repo 2>/dev/null && \
-                     cd /tmp/nwk-repo && cargo build --release -p networker-endpoint && \
-                     cp target/release/networker-endpoint /opt/bench/server; \
-                 fi; \
-                 chmod +x /opt/bench/server && \
-                 nohup /opt/bench/server --https-port 8443 > /opt/bench/server.log 2>&1 &"
-            )
-        }
-        "nginx" => {
-            // Install nginx mainline (1.27+) for HTTP/3 QUIC support.
-            // Ubuntu 24.04 ships 1.24 which has no quic module.
-            format!(
-                "sudo apt-get update -qq && sudo apt-get install -y -qq curl gnupg2 ca-certificates lsb-release git < /dev/null; \
-                 if nginx -v 2>&1 | grep -q 'nginx/1.2[5-9]\\|nginx/1.[3-9]'; then \
-                     echo 'nginx mainline already installed'; \
-                 else \
-                     echo 'Installing nginx mainline for HTTP/3...'; \
-                     curl -fsSL https://nginx.org/keys/nginx_signing.key | sudo gpg --dearmor -o /usr/share/keyrings/nginx-archive-keyring.gpg 2>/dev/null; \
-                     echo 'deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] http://nginx.org/packages/mainline/ubuntu '$(lsb_release -cs)' nginx' \
-                         | sudo tee /etc/apt/sources.list.d/nginx.list > /dev/null; \
-                     sudo apt-get update -qq < /dev/null; \
-                     sudo apt-get install -y -qq nginx < /dev/null; \
-                 fi; \
-                 sudo mkdir -p /opt/bench && sudo chown azureuser:azureuser /opt/bench; \
-                 openssl req -x509 -newkey rsa:2048 -keyout /opt/bench/key.pem \
-                 -out /opt/bench/cert.pem -days 365 -nodes -subj '/CN=bench' 2>/dev/null; \
-                 git clone --depth 1 {REPO_URL} /tmp/nwk-repo 2>/dev/null; \
-                 if [ -f /tmp/nwk-repo/benchmarks/reference-apis/nginx/nginx.conf ]; then \
-                     sudo cp /tmp/nwk-repo/benchmarks/reference-apis/nginx/nginx.conf /etc/nginx/nginx.conf; \
-                 fi; \
-                 sudo mkdir -p /opt/bench/download /tmp/nginx_uploads; \
-                 sudo chown www-data:www-data /tmp/nginx_uploads; \
-                 if [ -f /tmp/nwk-repo/benchmarks/reference-apis/nginx/generate-download-files.sh ]; then \
-                     bash /tmp/nwk-repo/benchmarks/reference-apis/nginx/generate-download-files.sh /opt/bench/download; \
-                 fi; \
-                 sudo nginx -t && sudo systemctl restart nginx"
-            )
-        }
-        "go" => {
-            format!(
-                "sudo mkdir -p /opt/bench && sudo chown azureuser:azureuser /opt/bench; \
-                 openssl req -x509 -newkey rsa:2048 -keyout /opt/bench/key.pem \
-                 -out /opt/bench/cert.pem -days 365 -nodes -subj '/CN=bench' 2>/dev/null; \
-                 command -v go >/dev/null 2>&1 || {{ sudo snap install go --classic < /dev/null; }}; \
-                 sudo apt-get update -qq && sudo apt-get install -y -qq git < /dev/null; \
-                 git clone --depth 1 {REPO_URL} /tmp/nwk-repo 2>/dev/null; \
-                 cd /tmp/nwk-repo/benchmarks/reference-apis/go && go build -o /opt/bench/go-server . 2>/dev/null; \
-                 chmod +x /opt/bench/go-server; \
-                 BENCH_CERT_DIR=/opt/bench BENCH_PORT=8443 \
-                 nohup /opt/bench/go-server > /opt/bench/go-server.log 2>&1 &"
-            )
-        }
-        "nodejs" => {
-            format!(
-                "sudo mkdir -p /opt/bench && sudo chown azureuser:azureuser /opt/bench; \
-                 openssl req -x509 -newkey rsa:2048 -keyout /opt/bench/key.pem \
-                 -out /opt/bench/cert.pem -days 365 -nodes -subj '/CN=bench' 2>/dev/null; \
-                 command -v node >/dev/null 2>&1 || {{ sudo apt-get update -qq && sudo apt-get install -y -qq nodejs npm < /dev/null; }}; \
-                 sudo apt-get install -y -qq git < /dev/null; \
-                 git clone --depth 1 {REPO_URL} /tmp/nwk-repo 2>/dev/null; \
-                 cd /tmp/nwk-repo/benchmarks/reference-apis/nodejs && npm install --quiet 2>/dev/null; \
-                 BENCH_CERT_DIR=/opt/bench BENCH_PORT=8443 \
-                 nohup node server.js > /var/log/bench-nodejs.log 2>&1 &"
-            )
-        }
-        "python" => {
-            format!(
-                "sudo mkdir -p /opt/bench && sudo chown azureuser:azureuser /opt/bench; \
-                 openssl req -x509 -newkey rsa:2048 -keyout /opt/bench/key.pem \
-                 -out /opt/bench/cert.pem -days 365 -nodes -subj '/CN=bench' 2>/dev/null; \
-                 sudo apt-get update -qq && sudo apt-get install -y -qq python3 python3-venv python3-pip git < /dev/null; \
-                 git clone --depth 1 {REPO_URL} /tmp/nwk-repo 2>/dev/null; \
-                 cd /tmp/nwk-repo/benchmarks/reference-apis/python && \
-                 python3 -m venv /opt/bench/pyenv && /opt/bench/pyenv/bin/pip install --quiet -r requirements.txt; \
-                 BENCH_CERT_DIR=/opt/bench BENCH_PORT=8443 \
-                 nohup /opt/bench/pyenv/bin/uvicorn server:app --host 0.0.0.0 --port 8443 \
-                     --ssl-keyfile /opt/bench/key.pem --ssl-certfile /opt/bench/cert.pem \
-                     > /var/log/python-bench.log 2>&1 &"
-            )
-        }
-        other => {
-            // Generic: clone repo and run deploy.sh if it exists
-            format!(
-                "sudo mkdir -p /opt/bench && sudo chown azureuser:azureuser /opt/bench; \
-                 openssl req -x509 -newkey rsa:2048 -keyout /opt/bench/key.pem \
-                 -out /opt/bench/cert.pem -days 365 -nodes -subj '/CN=bench' 2>/dev/null; \
-                 sudo apt-get update -qq && sudo apt-get install -y -qq git < /dev/null; \
-                 git clone --depth 1 {REPO_URL} /tmp/nwk-repo 2>/dev/null; \
-                 cd /tmp/nwk-repo/benchmarks/reference-apis/{other} && \
-                 if [ -f deploy.sh ]; then BENCH_CERT_DIR=/opt/bench BENCH_PORT=8443 bash deploy.sh; \
-                 elif [ -f build.sh ]; then bash build.sh && BENCH_CERT_DIR=/opt/bench BENCH_PORT=8443 bash start.sh; \
-                 else echo 'No deploy.sh or build.sh found for {other}'; exit 1; fi"
-            )
-        }
-    };
+    // Use install.sh --benchmark-server for all languages.
+    // One script, one deploy path — tested with bats, handles nginx mainline,
+    // HTTP/3, TLS certs, health checks, and all language runtimes.
+    let install_cmd = format!(
+        "curl -fsSL {INSTALLER_URL} | bash -s -- --benchmark-server {language}"
+    );
 
-    // ONE SSH call does everything — setup, download, build, start
     for attempt in 1..=5 {
         match ssh_exec(&vm.ip, &install_cmd).await {
             Ok(_) => {
                 tracing::info!("Remote deploy succeeded for {} on {}", language, vm.ip);
-                // Wait for health check
                 return wait_for_health(vm).await;
             }
             Err(e) => {

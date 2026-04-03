@@ -289,6 +289,12 @@ Config-driven deploy:
                            Validates prereqs, deploys tester + endpoint(s), runs tests.
                            Requires: jq. See docs/deploy-config.md for schema.
 
+Benchmark server (used by orchestrator):
+  --benchmark-server LANG  Deploy a benchmark reference API server for LANG on port 8443.
+                           Supported: rust, nginx, go, nodejs, python, java, cpp, ruby, php,
+                           csharp-net8, csharp-net8-aot, csharp-net9, csharp-net10, csharp-net48.
+                           Non-interactive. Installs runtime, clones reference API, starts server.
+
   -h, --help               Show this help message
 
 Examples:
@@ -428,6 +434,9 @@ GCP_SHUTDOWN_ASKED=0
 
 CONFIG_FILE_PATH=""
 
+# ── Benchmark server mode ────────────────────────────────────────────────
+BENCHMARK_SERVER_LANG=""        # language to deploy as benchmark server (--benchmark-server)
+
 # ── Deploy-config state ──────────────────────────────────────────────────
 DEPLOY_CONFIG_PATH=""           # path to deploy.json (--deploy flag)
 DEPLOY_ENDPOINT_COUNT=0         # number of endpoints in config
@@ -553,6 +562,10 @@ parse_args() {
                 shift; LAN_ENDPOINT_IP="${1:-}" ;;
             --lan-endpoint-user)
                 shift; LAN_ENDPOINT_USER="${1:-}" ;;
+            # Benchmark server mode (used by orchestrator)
+            --benchmark-server)
+                shift; BENCHMARK_SERVER_LANG="${1:-}"
+                AUTO_YES=1 ;;
             # Deploy config
             --deploy)
                 shift; DEPLOY_CONFIG_PATH="${1:-}"
@@ -8958,10 +8971,281 @@ deploy_from_config() {
     _deploy_display_completion
 }
 
+# ── Benchmark server deployment ────────────────────────────────────────────────
+# Deploys a reference API server for language benchmarking on port 8443.
+# Used by the orchestrator via: curl | bash -s -- --benchmark-server <language>
+#
+# Handles: runtime install, repo clone, TLS certs, build, start, health check.
+# All languages serve /health, /download/{size}, /upload on port 8443 HTTPS.
+deploy_benchmark_server() {
+    local lang="$1"
+    local BENCH_DIR="/opt/bench"
+    local REPO="https://github.com/irlm/networker-tester.git"
+    local REPO_DIR="/tmp/nwk-repo"
+    local CERT_KEY="$BENCH_DIR/key.pem"
+    local CERT_PEM="$BENCH_DIR/cert.pem"
+    local RELEASE_BASE="https://github.com/irlm/networker-tester/releases/latest/download"
+
+    echo ">> Deploying benchmark server: $lang"
+
+    # ── Common setup: directory, TLS certs, clone repo ────────────────────
+    sudo mkdir -p "$BENCH_DIR" /tmp/nginx_uploads
+    sudo chown "$(whoami):$(whoami)" "$BENCH_DIR"
+
+    if [ ! -f "$CERT_PEM" ]; then
+        echo ">> Generating self-signed TLS certificate"
+        openssl req -x509 -newkey rsa:2048 -keyout "$CERT_KEY" \
+            -out "$CERT_PEM" -days 365 -nodes -subj '/CN=bench' 2>/dev/null
+    fi
+
+    if [ ! -d "$REPO_DIR/.git" ]; then
+        echo ">> Cloning reference APIs"
+        rm -rf "$REPO_DIR"
+        git clone --depth 1 "$REPO" "$REPO_DIR" 2>/dev/null < /dev/null
+    else
+        echo ">> Updating reference APIs"
+        cd "$REPO_DIR" && git pull --quiet 2>/dev/null < /dev/null
+    fi
+
+    local API_DIR="$REPO_DIR/benchmarks/reference-apis"
+
+    # ── Kill any existing server on port 8443 ─────────────────────────────
+    sudo lsof -ti :8443 | xargs sudo kill -9 2>/dev/null || true
+    sleep 1
+
+    # ── Language-specific deployment ──────────────────────────────────────
+    case "$lang" in
+        rust)
+            echo ">> Installing Rust endpoint (pre-built binary)"
+            curl -sLo /tmp/endpoint.tar.gz \
+                "$RELEASE_BASE/networker-endpoint-x86_64-unknown-linux-musl.tar.gz" < /dev/null
+            tar xzf /tmp/endpoint.tar.gz -C "$BENCH_DIR/" 2>/dev/null
+            mv "$BENCH_DIR/networker-endpoint" "$BENCH_DIR/rust-server" 2>/dev/null
+            if [ ! -s "$BENCH_DIR/rust-server" ]; then
+                echo ">> Release download failed, building from source..."
+                command -v cargo >/dev/null 2>&1 || {
+                    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y < /dev/null
+                    # shellcheck disable=SC1091
+                    source "$HOME/.cargo/env"
+                }
+                cd "$REPO_DIR" && cargo build --release -p networker-endpoint < /dev/null
+                cp target/release/networker-endpoint "$BENCH_DIR/rust-server"
+            fi
+            chmod +x "$BENCH_DIR/rust-server"
+            nohup "$BENCH_DIR/rust-server" --https-port 8443 > "$BENCH_DIR/rust-server.log" 2>&1 &
+            ;;
+
+        nginx)
+            echo ">> Installing nginx mainline (HTTP/3 support)"
+            # Check if nginx mainline is already installed
+            if nginx -v 2>&1 | grep -qE 'nginx/1\.2[5-9]|nginx/1\.[3-9]'; then
+                echo ">> nginx mainline already installed: $(nginx -v 2>&1)"
+            else
+                sudo apt-get update -qq < /dev/null
+                sudo apt-get install -y -qq curl gnupg2 ca-certificates lsb-release < /dev/null
+                curl -fsSL https://nginx.org/keys/nginx_signing.key \
+                    | sudo gpg --dearmor -o /usr/share/keyrings/nginx-archive-keyring.gpg 2>/dev/null
+                echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] http://nginx.org/packages/mainline/ubuntu $(lsb_release -cs) nginx" \
+                    | sudo tee /etc/apt/sources.list.d/nginx.list > /dev/null
+                sudo apt-get update -qq < /dev/null
+                sudo apt-get install -y -qq nginx < /dev/null
+            fi
+            # Deploy config + download files
+            if [ -f "$API_DIR/nginx/nginx.conf" ]; then
+                sudo cp "$API_DIR/nginx/nginx.conf" /etc/nginx/nginx.conf
+            fi
+            sudo mkdir -p "$BENCH_DIR/download"
+            sudo chown www-data:www-data /tmp/nginx_uploads 2>/dev/null || true
+            if [ -f "$API_DIR/nginx/generate-download-files.sh" ]; then
+                bash "$API_DIR/nginx/generate-download-files.sh" "$BENCH_DIR/download"
+            fi
+            sudo nginx -t && sudo systemctl restart nginx
+            ;;
+
+        go)
+            echo ">> Installing Go server"
+            command -v go >/dev/null 2>&1 || {
+                sudo snap install go --classic < /dev/null
+            }
+            cd "$API_DIR/go" && go build -o "$BENCH_DIR/go-server" . 2>/dev/null < /dev/null
+            chmod +x "$BENCH_DIR/go-server"
+            BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT=8443 \
+                nohup "$BENCH_DIR/go-server" > "$BENCH_DIR/go-server.log" 2>&1 &
+            ;;
+
+        nodejs)
+            echo ">> Installing Node.js server"
+            command -v node >/dev/null 2>&1 || {
+                sudo apt-get update -qq < /dev/null
+                sudo apt-get install -y -qq nodejs npm < /dev/null
+            }
+            cd "$API_DIR/nodejs" && npm install --quiet 2>/dev/null < /dev/null
+            BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT=8443 \
+                nohup node "$API_DIR/nodejs/server.js" > "$BENCH_DIR/nodejs.log" 2>&1 &
+            ;;
+
+        python)
+            echo ">> Installing Python server"
+            sudo apt-get update -qq < /dev/null
+            sudo apt-get install -y -qq python3 python3-venv python3-pip < /dev/null
+            cd "$API_DIR/python"
+            python3 -m venv "$BENCH_DIR/pyenv" < /dev/null
+            "$BENCH_DIR/pyenv/bin/pip" install --quiet -r requirements.txt < /dev/null
+            BENCH_CERT_DIR="$BENCH_DIR" \
+                nohup "$BENCH_DIR/pyenv/bin/uvicorn" server:app --host 0.0.0.0 --port 8443 \
+                    --ssl-keyfile "$CERT_KEY" --ssl-certfile "$CERT_PEM" --log-level error \
+                    > "$BENCH_DIR/python.log" 2>&1 &
+            ;;
+
+        java)
+            echo ">> Installing Java server"
+            command -v javac >/dev/null 2>&1 || {
+                sudo apt-get update -qq < /dev/null
+                sudo apt-get install -y -qq default-jdk-headless < /dev/null
+            }
+            cd "$API_DIR/java"
+            javac -d "$BENCH_DIR/java-build" Server.java 2>/dev/null < /dev/null || {
+                mkdir -p "$BENCH_DIR/java-build"
+                javac -d "$BENCH_DIR/java-build" *.java 2>/dev/null < /dev/null
+            }
+            cd "$BENCH_DIR/java-build"
+            BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT=8443 \
+                nohup java Server > "$BENCH_DIR/java.log" 2>&1 &
+            ;;
+
+        cpp)
+            echo ">> Installing C++ server"
+            sudo apt-get update -qq < /dev/null
+            sudo apt-get install -y -qq build-essential cmake libssl-dev libboost-all-dev < /dev/null
+            cd "$API_DIR/cpp"
+            mkdir -p build && cd build
+            cmake .. -DCMAKE_BUILD_TYPE=Release < /dev/null 2>/dev/null
+            make -j"$(nproc)" < /dev/null 2>/dev/null
+            cp server "$BENCH_DIR/cpp-server" 2>/dev/null || cp bench-server "$BENCH_DIR/cpp-server" 2>/dev/null
+            chmod +x "$BENCH_DIR/cpp-server"
+            BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT=8443 \
+                nohup "$BENCH_DIR/cpp-server" > "$BENCH_DIR/cpp.log" 2>&1 &
+            ;;
+
+        ruby)
+            echo ">> Installing Ruby server"
+            sudo apt-get update -qq < /dev/null
+            sudo apt-get install -y -qq ruby ruby-dev build-essential < /dev/null
+            cd "$API_DIR/ruby"
+            sudo gem install bundler --quiet < /dev/null
+            bundle install --quiet < /dev/null
+            BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT=8443 \
+                nohup bundle exec puma -C puma.rb > "$BENCH_DIR/ruby.log" 2>&1 &
+            ;;
+
+        php)
+            echo ">> Installing PHP server"
+            sudo apt-get update -qq < /dev/null
+            sudo apt-get install -y -qq php-cli php-dev php-curl libssl-dev < /dev/null
+            php -m | grep -q swoole || {
+                sudo pecl install swoole < /dev/null
+                echo 'extension=swoole.so' | sudo tee /etc/php/*/cli/conf.d/20-swoole.ini
+            }
+            BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT=8443 \
+                nohup php "$API_DIR/php/server.php" > "$BENCH_DIR/php.log" 2>&1 &
+            ;;
+
+        csharp-net48)
+            echo ">> Installing C# .NET 4.8 (Windows only)"
+            echo "ERROR: .NET Framework 4.8 requires Windows. Use a Windows VM."
+            return 1
+            ;;
+
+        csharp-*)
+            # Handle all .NET versions: csharp-net6, csharp-net8, csharp-net8-aot, etc.
+            local dotnet_version=""
+            local is_aot=false
+            case "$lang" in
+                csharp-net6)     dotnet_version="6.0" ;;
+                csharp-net7)     dotnet_version="7.0" ;;
+                csharp-net8)     dotnet_version="8.0" ;;
+                csharp-net8-aot) dotnet_version="8.0"; is_aot=true ;;
+                csharp-net9)     dotnet_version="9.0" ;;
+                csharp-net9-aot) dotnet_version="9.0"; is_aot=true ;;
+                csharp-net10)    dotnet_version="10.0" ;;
+                csharp-net10-aot) dotnet_version="10.0"; is_aot=true ;;
+                *) echo "ERROR: Unknown C# variant: $lang"; return 1 ;;
+            esac
+            echo ">> Installing .NET $dotnet_version SDK"
+            # Install .NET SDK via Microsoft feed
+            if ! command -v dotnet >/dev/null 2>&1; then
+                curl -fsSL https://dot.net/v1/dotnet-install.sh | bash -s -- --channel "$dotnet_version" < /dev/null
+                export PATH="$HOME/.dotnet:$PATH"
+            fi
+            local csharp_dir="$API_DIR/$lang"
+            if [ ! -d "$csharp_dir" ]; then
+                # Try the base csharp dir with version selection
+                csharp_dir="$API_DIR/csharp"
+            fi
+            if [ -d "$csharp_dir" ]; then
+                cd "$csharp_dir"
+                if $is_aot; then
+                    dotnet publish -c Release -r linux-x64 --self-contained -o "$BENCH_DIR/$lang" < /dev/null 2>/dev/null
+                else
+                    dotnet publish -c Release -o "$BENCH_DIR/$lang" < /dev/null 2>/dev/null
+                fi
+                chmod +x "$BENCH_DIR/$lang/$lang" 2>/dev/null || true
+                BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT=8443 \
+                    nohup "$BENCH_DIR/$lang/$lang" > "$BENCH_DIR/$lang.log" 2>&1 &
+            else
+                echo "ERROR: No reference API found for $lang at $csharp_dir"
+                return 1
+            fi
+            ;;
+
+        *)
+            # Generic: try deploy.sh or build.sh in the language directory
+            echo ">> Deploying $lang (generic)"
+            local lang_dir="$API_DIR/$lang"
+            if [ ! -d "$lang_dir" ]; then
+                echo "ERROR: No reference API directory found at $lang_dir"
+                return 1
+            fi
+            cd "$lang_dir"
+            if [ -f deploy.sh ]; then
+                BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT=8443 bash deploy.sh
+            elif [ -f build.sh ]; then
+                bash build.sh < /dev/null
+                BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT=8443 bash start.sh
+            else
+                echo "ERROR: No deploy.sh or build.sh found for $lang"
+                return 1
+            fi
+            ;;
+    esac
+
+    # ── Health check ──────────────────────────────────────────────────────
+    echo ">> Waiting for health check on port 8443..."
+    local max_wait=60
+    local waited=0
+    while [ $waited -lt $max_wait ]; do
+        if curl -sk --max-time 2 https://localhost:8443/health 2>/dev/null | grep -q '"status"'; then
+            echo ">> $lang server healthy on port 8443"
+            echo ">> Benchmark server deployment complete: $lang"
+            return 0
+        fi
+        sleep 2
+        waited=$((waited + 2))
+    done
+    echo "ERROR: $lang server failed health check after ${max_wait}s"
+    return 1
+}
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 main() {
     parse_args "$@"
     discover_system
+
+    # Benchmark server mode: deploy a reference API server, then exit
+    if [[ -n "$BENCHMARK_SERVER_LANG" ]]; then
+        deploy_benchmark_server "$BENCHMARK_SERVER_LANG"
+        return $?
+    fi
 
     # Config-driven deploy mode: skip all interactive flow
     if [[ -n "$DEPLOY_CONFIG_PATH" ]]; then
