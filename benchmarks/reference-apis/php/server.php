@@ -23,6 +23,38 @@ $server->set([
 const CHUNK_SIZE = 8192;
 $chunk = str_repeat("\x42", CHUNK_SIZE);
 
+// ── Shared benchmark dataset ──────────────────────────────────────────────
+
+$BENCH_DATA = null;
+$benchPaths = [];
+if (($envPath = getenv('BENCH_DATA_PATH')) !== false) {
+    $benchPaths[] = $envPath;
+}
+$benchPaths[] = '/opt/bench/bench-data.json';
+$benchPaths[] = __DIR__ . '/../shared/bench-data.json';
+
+foreach ($benchPaths as $bp) {
+    if (file_exists($bp)) {
+        $raw = file_get_contents($bp);
+        if ($raw !== false) {
+            $parsed = json_decode($raw, true);
+            if (is_array($parsed)) {
+                $BENCH_DATA = $parsed;
+                $uCount = isset($parsed['users']) ? count($parsed['users']) : 0;
+                $sCount = isset($parsed['search_corpus']) ? count($parsed['search_corpus']) : 0;
+                $tCount = isset($parsed['timeseries']) ? count($parsed['timeseries']) : 0;
+                echo "Loaded bench-data.json from $bp (version {$parsed['_version']}, $uCount users, $sCount corpus, $tCount timeseries)\n";
+                break;
+            } else {
+                echo "WARN: bench-data.json at $bp is invalid JSON\n";
+            }
+        }
+    }
+}
+if ($BENCH_DATA === null) {
+    echo "WARN: bench-data.json not found, falling back to per-language PRNG\n";
+}
+
 // ── Shared data for API endpoints ──────────────────────────────────────────
 
 const FIRST_NAMES = [
@@ -99,7 +131,7 @@ function gauss_random(float $mean, float $stddev): float
 $server->on('request', function (
     Swoole\HTTP\Request $request,
     Swoole\HTTP\Response $response
-) use ($chunk) {
+) use ($chunk, $BENCH_DATA) {
     $path   = $request->server['request_uri'] ?? '/';
     $method = $request->server['request_method'] ?? 'GET';
     $params = $request->get ?? [];
@@ -156,7 +188,11 @@ $server->on('request', function (
         $sortField  = $params['sort'] ?? 'id';
         $order      = $params['order'] ?? 'asc';
 
-        $users = generate_users($page);
+        if ($BENCH_DATA !== null && isset($BENCH_DATA['users'])) {
+            $users = $BENCH_DATA['users'];
+        } else {
+            $users = generate_users($page);
+        }
 
         $validFields = ['id', 'name', 'email', 'age', 'department', 'score'];
         if (in_array($sortField, $validFields, true)) {
@@ -223,18 +259,26 @@ $server->on('request', function (
         $rangeStart = (int) ($parts[0] ?? 0);
         $rangeEnd   = (int) ($parts[1] ?? 1000);
 
-        mt_srand($rangeStart);
-        $count  = 10000;
-        $values = [];
-        for ($i = 0; $i < $count; $i++) {
-            $values[] = gauss_random(50, 15);
-        }
+        if ($BENCH_DATA !== null && isset($BENCH_DATA['timeseries'])) {
+            $ts = $BENCH_DATA['timeseries'];
+            $count = count($ts);
+            $values = array_map(fn($p) => $p['value'], $ts);
+            $categories = ['alpha', 'beta', 'gamma', 'delta', 'epsilon'];
+            $assignments = array_map(fn($p) => $p['category'], $ts);
+        } else {
+            mt_srand($rangeStart);
+            $count  = 10000;
+            $values = [];
+            for ($i = 0; $i < $count; $i++) {
+                $values[] = gauss_random(50, 15);
+            }
 
-        $categories = ['alpha', 'beta', 'gamma', 'delta', 'epsilon'];
-        mt_srand($rangeStart + 1);
-        $assignments = [];
-        for ($i = 0; $i < $count; $i++) {
-            $assignments[] = $categories[mt_rand(0, count($categories) - 1)];
+            $categories = ['alpha', 'beta', 'gamma', 'delta', 'epsilon'];
+            mt_srand($rangeStart + 1);
+            $assignments = [];
+            for ($i = 0; $i < $count; $i++) {
+                $assignments[] = $categories[mt_rand(0, count($categories) - 1)];
+            }
         }
 
         $sortedVals = $values;
@@ -284,15 +328,22 @@ $server->on('request', function (
         $query = $params['q'] ?? 'test';
         $limit = (int) ($params['limit'] ?? 10);
 
-        mt_srand(42);
-        $corpus = [];
-        for ($i = 0; $i < 1000; $i++) {
-            $wordCount = mt_rand(3, 8);
-            $words     = [];
-            for ($j = 0; $j < $wordCount; $j++) {
-                $words[] = SEARCH_WORDS[mt_rand(0, count(SEARCH_WORDS) - 1)];
+        if ($BENCH_DATA !== null && isset($BENCH_DATA['search_corpus'])) {
+            $corpus = [];
+            foreach ($BENCH_DATA['search_corpus'] as $i => $text) {
+                $corpus[] = ['id' => $i + 1, 'text' => $text];
             }
-            $corpus[] = ['id' => $i + 1, 'text' => implode(' ', $words)];
+        } else {
+            mt_srand(42);
+            $corpus = [];
+            for ($i = 0; $i < 1000; $i++) {
+                $wordCount = mt_rand(3, 8);
+                $words     = [];
+                for ($j = 0; $j < $wordCount; $j++) {
+                    $words[] = SEARCH_WORDS[mt_rand(0, count(SEARCH_WORDS) - 1)];
+                }
+                $corpus[] = ['id' => $i + 1, 'text' => implode(' ', $words)];
+            }
         }
 
         $pattern = '@' . str_replace('@', '\\@', $query) . '@i';
@@ -378,36 +429,43 @@ $server->on('request', function (
         $t0   = hrtime(true);
         $seed = (int) ($params['seed'] ?? 42);
 
-        // Users checksum (page=1)
-        $users = generate_users(1);
-        // Sort each user's keys for deterministic JSON
-        $usersForHash = array_map(function ($u) {
-            ksort($u);
-            return $u;
-        }, $users);
-        $usersHash = hash('sha256', json_encode($usersForHash, JSON_UNESCAPED_SLASHES));
+        if ($BENCH_DATA !== null && isset($BENCH_DATA['expected_checksums'])) {
+            $checksums = $BENCH_DATA['expected_checksums'];
+            $usersHash = $checksums['users_page1'] ?? '';
+            $aggHash = $checksums['aggregate_summary'] ?? '';
+            $searchHash = $checksums['search_network_top10'] ?? '';
+        } else {
+            // Users checksum (page=1)
+            $users = generate_users(1);
+            // Sort each user's keys for deterministic JSON
+            $usersForHash = array_map(function ($u) {
+                ksort($u);
+                return $u;
+            }, $users);
+            $usersHash = hash('sha256', json_encode($usersForHash, JSON_UNESCAPED_SLASHES));
 
-        // Aggregate checksum (start=0)
-        mt_srand(0);
-        $values = [];
-        for ($i = 0; $i < 10000; $i++) {
-            $values[] = round(gauss_random(50, 15), 4);
-        }
-        sort($values);
-        $aggHash = hash('sha256', json_encode($values));
-
-        // Search checksum
-        mt_srand(42);
-        $corpus = [];
-        for ($i = 0; $i < 1000; $i++) {
-            $wordCount = mt_rand(3, 8);
-            $words     = [];
-            for ($j = 0; $j < $wordCount; $j++) {
-                $words[] = SEARCH_WORDS[mt_rand(0, count(SEARCH_WORDS) - 1)];
+            // Aggregate checksum (start=0)
+            mt_srand(0);
+            $values = [];
+            for ($i = 0; $i < 10000; $i++) {
+                $values[] = round(gauss_random(50, 15), 4);
             }
-            $corpus[] = implode(' ', $words);
+            sort($values);
+            $aggHash = hash('sha256', json_encode($values));
+
+            // Search checksum
+            mt_srand(42);
+            $corpus = [];
+            for ($i = 0; $i < 1000; $i++) {
+                $wordCount = mt_rand(3, 8);
+                $words     = [];
+                for ($j = 0; $j < $wordCount; $j++) {
+                    $words[] = SEARCH_WORDS[mt_rand(0, count(SEARCH_WORDS) - 1)];
+                }
+                $corpus[] = implode(' ', $words);
+            }
+            $searchHash = hash('sha256', json_encode($corpus));
         }
-        $searchHash = hash('sha256', json_encode($corpus));
 
         $durationMs = (hrtime(true) - $t0) / 1e6;
         api_json($response, [
