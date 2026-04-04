@@ -23,8 +23,10 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <numeric>
 #include <random>
@@ -76,6 +78,213 @@ static const int NUM_WORDS = 20;
 
 static const char* CATEGORIES[] = {"alpha", "beta", "gamma", "delta", "epsilon"};
 static const int NUM_CATS = 5;
+
+// ── Shared benchmark dataset (loaded once at startup) ──────────────────────
+
+struct BenchUser {
+    int id;
+    std::string name;
+    std::string email;
+    double score;
+    std::string created_at;
+
+    std::string to_json() const {
+        std::ostringstream ss;
+        ss << "{\"id\":" << id
+           << ",\"name\":\"" << name << "\""
+           << ",\"email\":\"" << email << "\""
+           << ",\"score\":" << std::fixed << std::setprecision(2) << score
+           << ",\"created_at\":\"" << created_at << "\"}";
+        return ss.str();
+    }
+};
+
+struct BenchTimeseriesPoint {
+    double value;
+    std::string category;
+};
+
+static bool bench_data_loaded = false;
+static std::vector<BenchUser> bench_users;
+static std::vector<std::string> bench_search_corpus;
+static std::vector<BenchTimeseriesPoint> bench_timeseries;
+static std::map<std::string, std::string> bench_checksums;
+
+// Minimal JSON helpers for parsing bench-data.json
+static std::string extract_json_string(const std::string& obj, const std::string& key) {
+    std::string search = "\"" + key + "\"";
+    auto pos = obj.find(search);
+    if (pos == std::string::npos) return "";
+    pos = obj.find(':', pos + search.size());
+    if (pos == std::string::npos) return "";
+    pos = obj.find('"', pos + 1);
+    if (pos == std::string::npos) return "";
+    auto end = pos + 1;
+    while (end < obj.size() && !(obj[end] == '"' && obj[end - 1] != '\\')) ++end;
+    return obj.substr(pos + 1, end - pos - 1);
+}
+
+static double extract_json_double(const std::string& obj, const std::string& key) {
+    std::string search = "\"" + key + "\"";
+    auto pos = obj.find(search);
+    if (pos == std::string::npos) return 0.0;
+    pos = obj.find(':', pos + search.size());
+    if (pos == std::string::npos) return 0.0;
+    ++pos;
+    while (pos < obj.size() && (obj[pos] == ' ' || obj[pos] == '\t')) ++pos;
+    auto end = pos;
+    while (end < obj.size() && (std::isdigit(obj[end]) || obj[end] == '.' || obj[end] == '-' || obj[end] == 'e' || obj[end] == 'E' || obj[end] == '+')) ++end;
+    try { return std::stod(obj.substr(pos, end - pos)); } catch (...) { return 0.0; }
+}
+
+static int extract_json_int(const std::string& obj, const std::string& key) {
+    std::string search = "\"" + key + "\"";
+    auto pos = obj.find(search);
+    if (pos == std::string::npos) return 0;
+    pos = obj.find(':', pos + search.size());
+    if (pos == std::string::npos) return 0;
+    ++pos;
+    while (pos < obj.size() && (obj[pos] == ' ' || obj[pos] == '\t')) ++pos;
+    auto end = pos;
+    while (end < obj.size() && (std::isdigit(obj[end]) || obj[end] == '-')) ++end;
+    try { return std::stoi(obj.substr(pos, end - pos)); } catch (...) { return 0; }
+}
+
+static size_t find_matching_bracket(const std::string& s, size_t open_pos, char open_ch, char close_ch) {
+    if (open_pos >= s.size() || s[open_pos] != open_ch) return std::string::npos;
+    int depth = 0;
+    bool in_str = false;
+    for (size_t i = open_pos; i < s.size(); ++i) {
+        char c = s[i];
+        if (c == '"' && (i == 0 || s[i - 1] != '\\')) in_str = !in_str;
+        if (!in_str) {
+            if (c == open_ch) ++depth;
+            else if (c == close_ch) { --depth; if (depth == 0) return i; }
+        }
+    }
+    return std::string::npos;
+}
+
+static void load_bench_data() {
+    std::vector<std::string> paths;
+    if (auto* env = std::getenv("BENCH_DATA_PATH")) {
+        paths.emplace_back(env);
+    }
+    paths.emplace_back("/opt/bench/bench-data.json");
+    paths.emplace_back("../shared/bench-data.json");
+
+    for (const auto& p : paths) {
+        std::ifstream file(p);
+        if (!file.is_open()) continue;
+
+        std::string content((std::istreambuf_iterator<char>(file)),
+                            std::istreambuf_iterator<char>());
+        file.close();
+
+        // Parse users array
+        auto users_key = content.find("\"users\"");
+        if (users_key != std::string::npos) {
+            auto arr_start = content.find('[', users_key);
+            auto arr_end = find_matching_bracket(content, arr_start, '[', ']');
+            if (arr_start != std::string::npos && arr_end != std::string::npos) {
+                std::string arr = content.substr(arr_start + 1, arr_end - arr_start - 1);
+                size_t pos = 0;
+                while (pos < arr.size()) {
+                    auto obj_start = arr.find('{', pos);
+                    if (obj_start == std::string::npos) break;
+                    auto obj_end = find_matching_bracket(arr, obj_start, '{', '}');
+                    if (obj_end == std::string::npos) break;
+                    std::string obj = arr.substr(obj_start + 1, obj_end - obj_start - 1);
+                    BenchUser u;
+                    u.id = extract_json_int(obj, "id");
+                    u.name = extract_json_string(obj, "name");
+                    u.email = extract_json_string(obj, "email");
+                    u.score = extract_json_double(obj, "score");
+                    u.created_at = extract_json_string(obj, "created_at");
+                    bench_users.push_back(std::move(u));
+                    pos = obj_end + 1;
+                }
+            }
+        }
+
+        // Parse search_corpus array (array of strings)
+        auto search_key = content.find("\"search_corpus\"");
+        if (search_key != std::string::npos) {
+            auto arr_start = content.find('[', search_key);
+            auto arr_end = find_matching_bracket(content, arr_start, '[', ']');
+            if (arr_start != std::string::npos && arr_end != std::string::npos) {
+                std::string arr = content.substr(arr_start + 1, arr_end - arr_start - 1);
+                size_t pos = 0;
+                while (pos < arr.size()) {
+                    auto q_start = arr.find('"', pos);
+                    if (q_start == std::string::npos) break;
+                    auto q_end = q_start + 1;
+                    while (q_end < arr.size() && !(arr[q_end] == '"' && arr[q_end - 1] != '\\')) ++q_end;
+                    bench_search_corpus.push_back(arr.substr(q_start + 1, q_end - q_start - 1));
+                    pos = q_end + 1;
+                }
+            }
+        }
+
+        // Parse timeseries array
+        auto ts_key = content.find("\"timeseries\"");
+        if (ts_key != std::string::npos) {
+            auto arr_start = content.find('[', ts_key);
+            auto arr_end = find_matching_bracket(content, arr_start, '[', ']');
+            if (arr_start != std::string::npos && arr_end != std::string::npos) {
+                std::string arr = content.substr(arr_start + 1, arr_end - arr_start - 1);
+                size_t pos = 0;
+                while (pos < arr.size()) {
+                    auto obj_start = arr.find('{', pos);
+                    if (obj_start == std::string::npos) break;
+                    auto obj_end = find_matching_bracket(arr, obj_start, '{', '}');
+                    if (obj_end == std::string::npos) break;
+                    std::string obj = arr.substr(obj_start + 1, obj_end - obj_start - 1);
+                    BenchTimeseriesPoint pt;
+                    pt.value = extract_json_double(obj, "value");
+                    pt.category = extract_json_string(obj, "category");
+                    bench_timeseries.push_back(std::move(pt));
+                    pos = obj_end + 1;
+                }
+            }
+        }
+
+        // Parse expected_checksums object
+        auto cs_key = content.find("\"expected_checksums\"");
+        if (cs_key != std::string::npos) {
+            auto obj_start = content.find('{', cs_key);
+            auto obj_end = find_matching_bracket(content, obj_start, '{', '}');
+            if (obj_start != std::string::npos && obj_end != std::string::npos) {
+                std::string obj = content.substr(obj_start + 1, obj_end - obj_start - 1);
+                // Parse key-value pairs
+                size_t pos = 0;
+                while (pos < obj.size()) {
+                    auto k_start = obj.find('"', pos);
+                    if (k_start == std::string::npos) break;
+                    auto k_end = obj.find('"', k_start + 1);
+                    if (k_end == std::string::npos) break;
+                    std::string key = obj.substr(k_start + 1, k_end - k_start - 1);
+                    auto v_start = obj.find('"', k_end + 1);
+                    // skip the colon, find next quote
+                    v_start = obj.find('"', k_end + 2);
+                    if (v_start == std::string::npos) break;
+                    auto v_end = obj.find('"', v_start + 1);
+                    if (v_end == std::string::npos) break;
+                    bench_checksums[key] = obj.substr(v_start + 1, v_end - v_start - 1);
+                    pos = v_end + 1;
+                }
+            }
+        }
+
+        bench_data_loaded = true;
+        std::cout << "Loaded bench-data.json from " << p
+                  << " (" << bench_users.size() << " users, "
+                  << bench_search_corpus.size() << " corpus, "
+                  << bench_timeseries.size() << " timeseries)\n";
+        return;
+    }
+    std::cerr << "WARN: bench-data.json not found, falling back to per-language PRNG\n";
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -323,41 +532,75 @@ void handle_request(http::request<http::string_body>&& req, Send&& send) {
         std::string sort_field = get_param(params, "sort", "id");
         std::string order = get_param(params, "order", "asc");
 
-        std::mt19937 rng(page);
-        auto users = generate_users(rng);
+        bool use_bench = bench_data_loaded && !bench_users.empty();
+        std::string users_json;
+        int total_users;
 
-        // Sort
-        if (sort_field == "id")
-            std::sort(users.begin(), users.end(), [](auto& a, auto& b) { return a.id < b.id; });
-        else if (sort_field == "name")
-            std::sort(users.begin(), users.end(), [](auto& a, auto& b) { return a.name < b.name; });
-        else if (sort_field == "email")
-            std::sort(users.begin(), users.end(), [](auto& a, auto& b) { return a.email < b.email; });
-        else if (sort_field == "age")
-            std::sort(users.begin(), users.end(), [](auto& a, auto& b) { return a.age < b.age; });
-        else if (sort_field == "department")
-            std::sort(users.begin(), users.end(), [](auto& a, auto& b) { return a.department < b.department; });
-        else if (sort_field == "score")
-            std::sort(users.begin(), users.end(), [](auto& a, auto& b) { return a.score < b.score; });
+        if (use_bench) {
+            // Use shared benchmark data — sort a copy of bench_users
+            auto bu = bench_users; // copy for sorting
+            if (sort_field == "name")
+                std::sort(bu.begin(), bu.end(), [](auto& a, auto& b) { return a.name < b.name; });
+            else if (sort_field == "email")
+                std::sort(bu.begin(), bu.end(), [](auto& a, auto& b) { return a.email < b.email; });
+            else if (sort_field == "score")
+                std::sort(bu.begin(), bu.end(), [](auto& a, auto& b) { return a.score < b.score; });
+            else
+                std::sort(bu.begin(), bu.end(), [](auto& a, auto& b) { return a.id < b.id; });
 
-        if (order == "desc")
-            std::reverse(users.begin(), users.end());
+            if (order == "desc")
+                std::reverse(bu.begin(), bu.end());
+
+            total_users = static_cast<int>(bu.size());
+            int page_size = 20;
+            int start_idx = (page - 1) * page_size;
+            int end_idx = std::min(start_idx + page_size, total_users);
+
+            users_json = "[";
+            for (int i = start_idx; i < end_idx; ++i) {
+                if (i > start_idx) users_json += ",";
+                users_json += bu[i].to_json();
+            }
+            users_json += "]";
+        } else {
+            std::mt19937 rng(page);
+            auto users = generate_users(rng);
+
+            // Sort
+            if (sort_field == "id")
+                std::sort(users.begin(), users.end(), [](auto& a, auto& b) { return a.id < b.id; });
+            else if (sort_field == "name")
+                std::sort(users.begin(), users.end(), [](auto& a, auto& b) { return a.name < b.name; });
+            else if (sort_field == "email")
+                std::sort(users.begin(), users.end(), [](auto& a, auto& b) { return a.email < b.email; });
+            else if (sort_field == "age")
+                std::sort(users.begin(), users.end(), [](auto& a, auto& b) { return a.age < b.age; });
+            else if (sort_field == "department")
+                std::sort(users.begin(), users.end(), [](auto& a, auto& b) { return a.department < b.department; });
+            else if (sort_field == "score")
+                std::sort(users.begin(), users.end(), [](auto& a, auto& b) { return a.score < b.score; });
+
+            if (order == "desc")
+                std::reverse(users.begin(), users.end());
+
+            total_users = static_cast<int>(users.size());
+            int page_size = 20;
+            int start_idx = (page - 1) * page_size;
+            int end_idx = std::min(start_idx + page_size, total_users);
+
+            users_json = "[";
+            for (int i = start_idx; i < end_idx; ++i) {
+                if (i > start_idx) users_json += ",";
+                users_json += users[i].to_json();
+            }
+            users_json += "]";
+        }
 
         int page_size = 20;
-        int start = (page - 1) * page_size;
-        int end_idx = std::min(start + page_size, static_cast<int>(users.size()));
-
-        std::string users_json = "[";
-        for (int i = start; i < end_idx; ++i) {
-            if (i > start) users_json += ",";
-            users_json += users[i].to_json();
-        }
-        users_json += "]";
-
         double duration_ms = now_ms() - t0;
         std::string body = "{\"page\":" + std::to_string(page) +
             ",\"page_size\":" + std::to_string(page_size) +
-            ",\"total\":" + std::to_string(users.size()) +
+            ",\"total\":" + std::to_string(total_users) +
             ",\"sort\":\"" + sort_field + "\"" +
             ",\"order\":\"" + order + "\"" +
             ",\"users\":" + users_json + "}";
@@ -479,17 +722,36 @@ void handle_request(http::request<http::string_body>&& req, Send&& send) {
             range_start = std::atoi(range_param.c_str());
         }
 
-        std::mt19937 rng(range_start);
-        std::normal_distribution<double> dist(50.0, 15.0);
-        int count = 10000;
-        std::vector<double> values(count);
-        for (int i = 0; i < count; ++i)
-            values[i] = dist(rng);
+        int count;
+        std::vector<double> values;
+        std::vector<int> assignments;
 
-        std::mt19937 cat_rng(range_start + 1);
-        std::vector<int> assignments(count);
-        for (int i = 0; i < count; ++i)
-            assignments[i] = cat_rng() % NUM_CATS;
+        if (bench_data_loaded && !bench_timeseries.empty()) {
+            count = static_cast<int>(bench_timeseries.size());
+            values.resize(count);
+            assignments.resize(count);
+            for (int i = 0; i < count; ++i) {
+                values[i] = bench_timeseries[i].value;
+                // Map category string to index
+                int cat_idx = 0;
+                for (int c = 0; c < NUM_CATS; ++c) {
+                    if (bench_timeseries[i].category == CATEGORIES[c]) { cat_idx = c; break; }
+                }
+                assignments[i] = cat_idx;
+            }
+        } else {
+            std::mt19937 rng(range_start);
+            std::normal_distribution<double> dist(50.0, 15.0);
+            count = 10000;
+            values.resize(count);
+            for (int i = 0; i < count; ++i)
+                values[i] = dist(rng);
+
+            std::mt19937 cat_rng(range_start + 1);
+            assignments.resize(count);
+            for (int i = 0; i < count; ++i)
+                assignments[i] = cat_rng() % NUM_CATS;
+        }
 
         auto sorted_vals = values;
         std::sort(sorted_vals.begin(), sorted_vals.end());
@@ -543,18 +805,26 @@ void handle_request(http::request<http::string_body>&& req, Send&& send) {
         std::string query = get_param(params, "q", "test");
         int limit = std::max(1, std::atoi(get_param(params, "limit", "10").c_str()));
 
-        std::mt19937 rng(42);
         struct CorpusItem { int id; std::string text; };
         std::vector<CorpusItem> corpus;
-        corpus.reserve(1000);
-        for (int i = 0; i < 1000; ++i) {
-            int word_count = 3 + static_cast<int>(rng() % 6); // 3..8
-            std::string phrase;
-            for (int j = 0; j < word_count; ++j) {
-                if (j > 0) phrase += " ";
-                phrase += SEARCH_WORDS[rng() % NUM_WORDS];
+
+        if (bench_data_loaded && !bench_search_corpus.empty()) {
+            corpus.reserve(bench_search_corpus.size());
+            for (size_t i = 0; i < bench_search_corpus.size(); ++i) {
+                corpus.push_back({static_cast<int>(i + 1), bench_search_corpus[i]});
             }
-            corpus.push_back({i + 1, std::move(phrase)});
+        } else {
+            std::mt19937 rng(42);
+            corpus.reserve(1000);
+            for (int i = 0; i < 1000; ++i) {
+                int word_count = 3 + static_cast<int>(rng() % 6); // 3..8
+                std::string phrase;
+                for (int j = 0; j < word_count; ++j) {
+                    if (j > 0) phrase += " ";
+                    phrase += SEARCH_WORDS[rng() % NUM_WORDS];
+                }
+                corpus.push_back({i + 1, std::move(phrase)});
+            }
         }
 
         std::regex pattern;
@@ -680,53 +950,64 @@ void handle_request(http::request<http::string_body>&& req, Send&& send) {
         double t0 = now_ms();
         int seed = std::atoi(get_param(params, "seed", "42").c_str());
 
-        // Users checksum (page=1)
-        std::mt19937 rng1(1);
-        auto users = generate_users(rng1);
-        std::string users_json = "[";
-        for (size_t i = 0; i < users.size(); ++i) {
-            if (i > 0) users_json += ",";
-            users_json += users[i].to_sorted_json();
-        }
-        users_json += "]";
-        std::string users_hash = sha256_hex(users_json);
+        std::string users_hash_str, agg_hash_str, search_hash_str;
 
-        // Aggregate checksum (start=0)
-        std::mt19937 rng2(0);
-        std::normal_distribution<double> dist(50.0, 15.0);
-        std::vector<double> values(10000);
-        for (int i = 0; i < 10000; ++i)
-            values[i] = std::round(dist(rng2) * 10000) / 10000;
-        std::sort(values.begin(), values.end());
-        std::string agg_json = "[";
-        for (size_t i = 0; i < values.size(); ++i) {
-            if (i > 0) agg_json += ",";
-            agg_json += format_double(values[i], 4);
-        }
-        agg_json += "]";
-        std::string agg_hash = sha256_hex(agg_json);
-
-        // Search checksum
-        std::mt19937 rng3(42);
-        std::string search_json = "[";
-        for (int i = 0; i < 1000; ++i) {
-            int word_count = 3 + static_cast<int>(rng3() % 6);
-            std::string phrase;
-            for (int j = 0; j < word_count; ++j) {
-                if (j > 0) phrase += " ";
-                phrase += SEARCH_WORDS[rng3() % NUM_WORDS];
+        if (bench_data_loaded && !bench_checksums.empty()) {
+            auto it_u = bench_checksums.find("users_page1");
+            auto it_a = bench_checksums.find("aggregate_summary");
+            auto it_s = bench_checksums.find("search_network_top10");
+            users_hash_str = (it_u != bench_checksums.end()) ? it_u->second.substr(0, 16) : "";
+            agg_hash_str = (it_a != bench_checksums.end()) ? it_a->second.substr(0, 16) : "";
+            search_hash_str = (it_s != bench_checksums.end()) ? it_s->second.substr(0, 16) : "";
+        } else {
+            // Users checksum (page=1)
+            std::mt19937 rng1(1);
+            auto users = generate_users(rng1);
+            std::string users_json = "[";
+            for (size_t i = 0; i < users.size(); ++i) {
+                if (i > 0) users_json += ",";
+                users_json += users[i].to_sorted_json();
             }
-            if (i > 0) search_json += ",";
-            search_json += "\"" + json_escape(phrase) + "\"";
+            users_json += "]";
+            users_hash_str = sha256_hex(users_json).substr(0, 16);
+
+            // Aggregate checksum (start=0)
+            std::mt19937 rng2(0);
+            std::normal_distribution<double> dist(50.0, 15.0);
+            std::vector<double> values(10000);
+            for (int i = 0; i < 10000; ++i)
+                values[i] = std::round(dist(rng2) * 10000) / 10000;
+            std::sort(values.begin(), values.end());
+            std::string agg_json = "[";
+            for (size_t i = 0; i < values.size(); ++i) {
+                if (i > 0) agg_json += ",";
+                agg_json += format_double(values[i], 4);
+            }
+            agg_json += "]";
+            agg_hash_str = sha256_hex(agg_json).substr(0, 16);
+
+            // Search checksum
+            std::mt19937 rng3(42);
+            std::string search_json = "[";
+            for (int i = 0; i < 1000; ++i) {
+                int word_count = 3 + static_cast<int>(rng3() % 6);
+                std::string phrase;
+                for (int j = 0; j < word_count; ++j) {
+                    if (j > 0) phrase += " ";
+                    phrase += SEARCH_WORDS[rng3() % NUM_WORDS];
+                }
+                if (i > 0) search_json += ",";
+                search_json += "\"" + json_escape(phrase) + "\"";
+            }
+            search_json += "]";
+            search_hash_str = sha256_hex(search_json).substr(0, 16);
         }
-        search_json += "]";
-        std::string search_hash = sha256_hex(search_json);
 
         double duration_ms = now_ms() - t0;
         std::string body = "{\"seed\":" + std::to_string(seed) +
-            ",\"checksums\":{\"users_page1\":\"" + users_hash.substr(0, 16) + "\"" +
-            ",\"aggregate_start0\":\"" + agg_hash.substr(0, 16) + "\"" +
-            ",\"search_corpus\":\"" + search_hash.substr(0, 16) + "\"}}";
+            ",\"checksums\":{\"users_page1\":\"" + users_hash_str + "\"" +
+            ",\"aggregate_start0\":\"" + agg_hash_str + "\"" +
+            ",\"search_corpus\":\"" + search_hash_str + "\"}}";
 
         http::response<http::string_body> res{http::status::ok, req.version()};
         set_api_headers(res, duration_ms);
@@ -918,6 +1199,8 @@ private:
 // ── Main ────────────────────────────────────────────────────────────────────
 
 int main() {
+    load_bench_data();
+
     auto const cert_dir = []() -> std::string {
         if (auto* v = std::getenv("BENCH_CERT_DIR")) return v;
         return "/opt/bench";
