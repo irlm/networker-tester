@@ -98,19 +98,23 @@ const SEARCH_WORDS = [
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-function api_headers(Swoole\HTTP\Response $response, float $duration_ms): void
+function api_headers(Swoole\HTTP\Response $response, float $duration_ms, ?float $authDurMs = null): void
 {
     $response->header('Content-Type', 'application/json');
-    $response->header('Server-Timing', sprintf('app;dur=%.1f', $duration_ms));
+    $timing = sprintf('app;dur=%.1f', $duration_ms);
+    if ($authDurMs !== null) {
+        $timing = sprintf('auth;dur=%.1f, ', $authDurMs) . $timing;
+    }
+    $response->header('Server-Timing', $timing);
     $response->header('Cache-Control', 'no-store, no-cache, must-revalidate');
     $response->header('Timing-Allow-Origin', '*');
     $response->header('Access-Control-Allow-Origin', '*');
 }
 
-function api_json(Swoole\HTTP\Response $response, array $body, float $duration_ms, int $status = 200): void
+function api_json(Swoole\HTTP\Response $response, array $body, float $duration_ms, int $status = 200, ?float $authDurMs = null): void
 {
     $response->status($status);
-    api_headers($response, $duration_ms);
+    api_headers($response, $duration_ms, $authDurMs);
     $response->end(json_encode($body, JSON_UNESCAPED_SLASHES));
 }
 
@@ -140,15 +144,35 @@ function gauss_random(float $mean, float $stddev): float
     return $mean + $stddev * $z;
 }
 
+// ── Bearer token auth ─────────────────────────────────────────────────────
+
+$BENCH_API_TOKEN = getenv('BENCH_API_TOKEN') ?: '';
+
 // ── Request handler ────────────────────────────────────────────────────────
 
 $server->on('request', function (
     Swoole\HTTP\Request $request,
     Swoole\HTTP\Response $response
-) use ($chunk, $BENCH_DATA) {
+) use ($chunk, $BENCH_DATA, $BENCH_API_TOKEN) {
     $path   = $request->server['request_uri'] ?? '/';
     $method = $request->server['request_method'] ?? 'GET';
     $params = $request->get ?? [];
+
+    // Bearer token authentication
+    $authDurMs = null;
+    if ($BENCH_API_TOKEN && $path !== '/health') {
+        $authT0 = hrtime(true);
+        $auth = $request->header['authorization'] ?? '';
+        if ($auth !== 'Bearer ' . $BENCH_API_TOKEN) {
+            $authDurMs = (hrtime(true) - $authT0) / 1e6;
+            $response->status(401);
+            $response->header('Content-Type', 'application/json');
+            $response->header('Server-Timing', sprintf('auth;dur=%.1f', $authDurMs));
+            $response->end('{"error":"unauthorized"}');
+            return;
+        }
+        $authDurMs = (hrtime(true) - $authT0) / 1e6;
+    }
 
     // GET /health
     if ($method === 'GET' && $path === '/health') {
@@ -393,12 +417,6 @@ $server->on('request', function (
         $t0   = hrtime(true);
         $body = $request->rawContent();
         $body = $body !== false ? $body : '';
-        $maxBody = 50 * 1024 * 1024; // 50 MiB
-        if (strlen($body) > $maxBody) {
-            $durationMs = (hrtime(true) - $t0) / 1e6;
-            api_json($response, ['error' => 'body too large'], $durationMs, 413);
-            return;
-        }
 
         $crc        = crc32($body) & 0xFFFFFFFF;
         $sha        = hash('sha256', $body);
