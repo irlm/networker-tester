@@ -48,6 +48,8 @@ export function BenchTokensPage() {
   const [error, setError] = useState<string | null>(null);
   const [revoking, setRevoking] = useState<string | null>(null);
   const [revokingAll, setRevokingAll] = useState(false);
+  const [activeOpen, setActiveOpen] = useState(true);
+  const [disabledOpen, setDisabledOpen] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
@@ -135,23 +137,26 @@ export function BenchTokensPage() {
         </div>
       )}
 
-      {/* Token table */}
-      {!loading && !error && tokens.length > 0 && (
-        <div className="border border-gray-800 rounded overflow-hidden">
+      {/* Token sections */}
+      {!loading && !error && tokens.length > 0 && (() => {
+        const active = tokens.filter((t) => t.enabled);
+        const disabled = tokens.filter((t) => !t.enabled);
+
+        const renderTable = (items: BenchTokenInfo[]) => (
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-800 text-left text-xs text-gray-500 uppercase tracking-wider">
-                <th className="px-3 py-2.5">Name</th>
-                <th className="px-3 py-2.5">Config</th>
-                <th className="px-3 py-2.5">Testbed</th>
-                <th className="px-3 py-2.5">Created</th>
-                <th className="px-3 py-2.5">Expires</th>
-                <th className="px-3 py-2.5">Status</th>
-                <th className="px-3 py-2.5 text-right">Actions</th>
+                <th className="px-3 py-2">Name</th>
+                <th className="px-3 py-2">Config</th>
+                <th className="px-3 py-2">Testbed</th>
+                <th className="px-3 py-2">Created</th>
+                <th className="px-3 py-2">Expires</th>
+                <th className="px-3 py-2">Status</th>
+                <th className="px-3 py-2 text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {tokens.map((t) => (
+              {items.map((t) => (
                 <tr
                   key={t.name}
                   className="border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors"
@@ -204,8 +209,48 @@ export function BenchTokensPage() {
               ))}
             </tbody>
           </table>
-        </div>
-      )}
+        );
+
+        return (
+          <div className="space-y-4">
+            {/* Active tokens */}
+            {active.length > 0 && (
+              <div className="border border-gray-800 rounded overflow-hidden">
+                <button
+                  onClick={() => setActiveOpen(!activeOpen)}
+                  className="w-full flex items-center justify-between px-3 py-2.5 bg-gray-800/30 hover:bg-gray-800/50 transition-colors text-left"
+                >
+                  <span className="text-sm text-gray-200 flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-green-400" />
+                    Active
+                    <span className="text-xs text-gray-500">{active.length}</span>
+                  </span>
+                  <span className="text-gray-500 text-xs">{activeOpen ? '\u25B2' : '\u25BC'}</span>
+                </button>
+                {activeOpen && renderTable(active)}
+              </div>
+            )}
+
+            {/* Disabled / expired tokens */}
+            {disabled.length > 0 && (
+              <div className="border border-gray-800 rounded overflow-hidden">
+                <button
+                  onClick={() => setDisabledOpen(!disabledOpen)}
+                  className="w-full flex items-center justify-between px-3 py-2.5 bg-gray-800/30 hover:bg-gray-800/50 transition-colors text-left"
+                >
+                  <span className="text-sm text-gray-400 flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-gray-500" />
+                    Disabled / Expired
+                    <span className="text-xs text-gray-500">{disabled.length}</span>
+                  </span>
+                  <span className="text-gray-500 text-xs">{disabledOpen ? '\u25B2' : '\u25BC'}</span>
+                </button>
+                {disabledOpen && renderTable(disabled)}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Footer count */}
       {!loading && !error && tokens.length > 0 && (
