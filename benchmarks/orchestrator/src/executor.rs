@@ -12,6 +12,8 @@ use tokio::sync::watch;
 
 /// Start a pre-deployed language server on an existing VM.
 async fn start_existing_server(vm: &VmInfo, language: &str) -> Result<()> {
+    validate_shell_safe(language, "language")?;
+
     // Kill anything on port 8443
     let _ = ssh::ssh_exec(
         &vm.ip,
@@ -999,6 +1001,18 @@ fn validate_ip(ip: &str, is_cloud: bool) -> Result<()> {
         }
         if first == 169 && second == 254 {
             anyhow::bail!("Link-local address not allowed for cloud VMs: {ip}");
+        }
+        if first == 10 {
+            anyhow::bail!("RFC1918 private address not allowed for cloud VMs: {ip}");
+        }
+        if first == 172 && (16..=31).contains(&second) {
+            anyhow::bail!("RFC1918 private address not allowed for cloud VMs: {ip}");
+        }
+        if first == 192 && second == 168 {
+            anyhow::bail!("RFC1918 private address not allowed for cloud VMs: {ip}");
+        }
+        if first == 0 {
+            anyhow::bail!("Invalid address not allowed for cloud VMs: {ip}");
         }
     }
     Ok(())

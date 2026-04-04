@@ -173,7 +173,8 @@ async fn poll_and_run(
         }
     }
 
-    // Spawn alethabench as a child process
+    // Spawn alethabench as a child process.
+    // Pass callback token via env var to avoid leaking in /proc/PID/cmdline.
     let child_result = tokio::process::Command::new("alethabench")
         .args([
             "run",
@@ -181,9 +182,8 @@ async fn poll_and_run(
             &config_path,
             "--callback-url",
             &callback_url,
-            "--callback-token",
-            &callback_token,
         ])
+        .env("BENCH_CALLBACK_TOKEN", &callback_token)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn();
