@@ -1407,4 +1407,89 @@ mod tests {
         assert!(contents.contains("\"entries\""));
         assert!(contents.contains("app.js"));
     }
+
+    // ─── is_blocked_url_test_ip — security boundary ──────────────────────
+
+    #[test]
+    fn blocked_ip_ipv4_loopback() {
+        assert!(is_blocked_url_test_ip("127.0.0.1".parse().unwrap()));
+        assert!(is_blocked_url_test_ip("127.255.255.255".parse().unwrap()));
+    }
+
+    #[test]
+    fn blocked_ip_ipv4_private_10() {
+        assert!(is_blocked_url_test_ip("10.0.0.1".parse().unwrap()));
+        assert!(is_blocked_url_test_ip("10.255.255.255".parse().unwrap()));
+    }
+
+    #[test]
+    fn blocked_ip_ipv4_private_172() {
+        assert!(is_blocked_url_test_ip("172.16.0.1".parse().unwrap()));
+        assert!(is_blocked_url_test_ip("172.31.255.255".parse().unwrap()));
+        // 172.32.x should NOT be blocked (outside private range)
+        assert!(!is_blocked_url_test_ip("172.32.0.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn blocked_ip_ipv4_private_192() {
+        assert!(is_blocked_url_test_ip("192.168.0.1".parse().unwrap()));
+        assert!(is_blocked_url_test_ip("192.168.255.255".parse().unwrap()));
+    }
+
+    #[test]
+    fn blocked_ip_ipv4_link_local() {
+        assert!(is_blocked_url_test_ip("169.254.0.1".parse().unwrap()));
+        assert!(is_blocked_url_test_ip("169.254.255.255".parse().unwrap()));
+    }
+
+    #[test]
+    fn blocked_ip_ipv4_cgnat() {
+        assert!(is_blocked_url_test_ip("100.64.0.1".parse().unwrap()));
+        assert!(is_blocked_url_test_ip("100.127.255.255".parse().unwrap()));
+        // Just outside CGNAT range
+        assert!(!is_blocked_url_test_ip("100.63.255.255".parse().unwrap()));
+        assert!(!is_blocked_url_test_ip("100.128.0.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn blocked_ip_ipv4_unspecified() {
+        assert!(is_blocked_url_test_ip("0.0.0.0".parse().unwrap()));
+    }
+
+    #[test]
+    fn blocked_ip_ipv4_public_allowed() {
+        assert!(!is_blocked_url_test_ip("8.8.8.8".parse().unwrap()));
+        assert!(!is_blocked_url_test_ip("1.1.1.1".parse().unwrap()));
+        assert!(!is_blocked_url_test_ip("93.184.216.34".parse().unwrap()));
+    }
+
+    #[test]
+    fn blocked_ip_ipv6_loopback() {
+        assert!(is_blocked_url_test_ip("::1".parse().unwrap()));
+    }
+
+    #[test]
+    fn blocked_ip_ipv6_unspecified() {
+        assert!(is_blocked_url_test_ip("::".parse().unwrap()));
+    }
+
+    #[test]
+    fn blocked_ip_ipv6_unique_local() {
+        assert!(is_blocked_url_test_ip("fc00::1".parse().unwrap()));
+        assert!(is_blocked_url_test_ip("fd12:3456:789a::1".parse().unwrap()));
+    }
+
+    #[test]
+    fn blocked_ip_ipv6_link_local() {
+        assert!(is_blocked_url_test_ip("fe80::1".parse().unwrap()));
+        assert!(is_blocked_url_test_ip("fe80::abcd:1234".parse().unwrap()));
+    }
+
+    #[test]
+    fn blocked_ip_ipv6_public_allowed() {
+        assert!(!is_blocked_url_test_ip("2001:db8::1".parse().unwrap()));
+        assert!(!is_blocked_url_test_ip(
+            "2607:f8b0:4004:800::200e".parse().unwrap()
+        ));
+    }
 }

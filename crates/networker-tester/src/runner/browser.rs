@@ -992,6 +992,65 @@ mod real {
         }
 
         #[test]
+        fn parse_perf_timing_malformed_json() {
+            let (load, dcl, ttfb) = parse_perf_timing("{invalid json");
+            assert_eq!(load, 0.0);
+            assert_eq!(dcl, 0.0);
+            assert_eq!(ttfb, 0.0);
+        }
+
+        #[test]
+        fn parse_perf_timing_missing_fields() {
+            // Only navigationStart present — other fields default to 0.0.
+            let json = r#"{"navigationStart":1000}"#;
+            let (load, dcl, ttfb) = parse_perf_timing(json);
+            // load = (0.0 - 1000.0).max(0.0) = 0.0
+            assert_eq!(load, 0.0);
+            assert_eq!(dcl, 0.0);
+            assert_eq!(ttfb, 0.0);
+        }
+
+        #[test]
+        fn parse_perf_timing_zero_navigation_start() {
+            let json = r#"{"navigationStart":0,"responseStart":50,"loadEventEnd":500}"#;
+            let (load, dcl, ttfb) = parse_perf_timing(json);
+            // navigationStart == 0 → early return (0, 0, 0)
+            assert_eq!(load, 0.0);
+            assert_eq!(dcl, 0.0);
+            assert_eq!(ttfb, 0.0);
+        }
+
+        #[test]
+        fn parse_perf_timing_negative_timings_clamped() {
+            // loadEventEnd < navigationStart → negative → clamped to 0.0
+            let json = r#"{"navigationStart":2000,"responseStart":1000,"domContentLoadedEventEnd":1500,"loadEventEnd":1800}"#;
+            let (load, dcl, ttfb) = parse_perf_timing(json);
+            assert_eq!(load, 0.0); // 1800 - 2000 = -200 → 0.0
+            assert_eq!(dcl, 0.0); // 1500 - 2000 = -500 → 0.0
+            assert_eq!(ttfb, 0.0); // 1000 - 2000 = -1000 → 0.0
+        }
+
+        #[test]
+        fn parse_perf_timing_string_values_ignored() {
+            // String values instead of numbers → as_f64() returns None → 0.0.
+            let json = r#"{"navigationStart":"1000","responseStart":"1050"}"#;
+            let (load, dcl, ttfb) = parse_perf_timing(json);
+            // navigationStart parses as 0.0 → early return
+            assert_eq!(load, 0.0);
+            assert_eq!(dcl, 0.0);
+            assert_eq!(ttfb, 0.0);
+        }
+
+        #[test]
+        fn parse_perf_timing_null_values() {
+            let json = r#"{"navigationStart":null,"responseStart":null}"#;
+            let (load, dcl, ttfb) = parse_perf_timing(json);
+            assert_eq!(load, 0.0);
+            assert_eq!(dcl, 0.0);
+            assert_eq!(ttfb, 0.0);
+        }
+
+        #[test]
         fn compute_spki_sha256_base64_rejects_invalid_der() {
             // Non-DER bytes should return None without panicking.
             let result = compute_spki_sha256_base64(&[0u8; 32]);

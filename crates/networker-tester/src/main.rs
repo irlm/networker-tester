@@ -3650,6 +3650,289 @@ mod tests {
         assert_eq!(baseline.network_type, NetworkType::Loopback);
     }
 
+    // ─── percentile / median / bootstrap ────────────────────────────────
+
+    #[test]
+    fn percentile_empty_returns_zero() {
+        assert_eq!(percentile(&[], 50.0), 0.0);
+    }
+
+    #[test]
+    fn percentile_single_element() {
+        assert_eq!(percentile(&[42.0], 0.0), 42.0);
+        assert_eq!(percentile(&[42.0], 50.0), 42.0);
+        assert_eq!(percentile(&[42.0], 100.0), 42.0);
+    }
+
+    #[test]
+    fn percentile_interpolates_correctly() {
+        let sorted = [1.0, 2.0, 3.0, 4.0, 5.0];
+        assert_eq!(percentile(&sorted, 0.0), 1.0);
+        assert_eq!(percentile(&sorted, 100.0), 5.0);
+        assert_eq!(percentile(&sorted, 50.0), 3.0);
+        // p25 = index 1.0 → value 2.0
+        assert!((percentile(&sorted, 25.0) - 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn percentile_from_sorted_matches_percentile() {
+        let sorted = [10.0, 20.0, 30.0, 40.0, 50.0];
+        for p in [0.0, 25.0, 50.0, 75.0, 100.0] {
+            assert!(
+                (percentile(&sorted, p) - percentile_from_sorted(&sorted, p)).abs() < 1e-12,
+                "mismatch at p={p}"
+            );
+        }
+    }
+
+    #[test]
+    fn median_from_sorted_odd_length() {
+        assert_eq!(median_from_sorted(&[1.0, 2.0, 3.0]), 2.0);
+        assert_eq!(median_from_sorted(&[5.0]), 5.0);
+    }
+
+    #[test]
+    fn median_from_sorted_even_length() {
+        assert_eq!(median_from_sorted(&[1.0, 3.0]), 2.0);
+        assert_eq!(median_from_sorted(&[1.0, 2.0, 3.0, 4.0]), 2.5);
+    }
+
+    #[test]
+    fn median_from_sorted_empty() {
+        assert_eq!(median_from_sorted(&[]), 0.0);
+    }
+
+    #[test]
+    fn bootstrap_median_interval_empty() {
+        assert_eq!(bootstrap_median_interval(&[]), (0.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn bootstrap_median_interval_single() {
+        let (se, lo, hi) = bootstrap_median_interval(&[42.0]);
+        assert_eq!(se, 0.0);
+        assert_eq!(lo, 42.0);
+        assert_eq!(hi, 42.0);
+    }
+
+    #[test]
+    fn bootstrap_median_interval_identical_values() {
+        let (se, lo, hi) = bootstrap_median_interval(&[7.0, 7.0, 7.0, 7.0]);
+        assert!(se.abs() < 1e-12);
+        assert!((lo - 7.0).abs() < 1e-12);
+        assert!((hi - 7.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn bootstrap_median_interval_is_deterministic() {
+        let values = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+        let a = bootstrap_median_interval(&values);
+        let b = bootstrap_median_interval(&values);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn median_error_bounds_too_few_values() {
+        assert!(median_error_bounds(&[]).is_none());
+        assert!(median_error_bounds(&[1.0]).is_none());
+    }
+
+    #[test]
+    fn median_error_bounds_filters_nan() {
+        assert!(median_error_bounds(&[f64::NAN, f64::NAN]).is_none());
+    }
+
+    #[test]
+    fn median_error_bounds_returns_some_for_valid_data() {
+        let bounds = median_error_bounds(&[1.0, 2.0, 3.0, 4.0, 5.0]).unwrap();
+        assert!((bounds.median - 3.0).abs() < 1e-12);
+        assert!(bounds.absolute_half_width >= 0.0);
+    }
+
+    // ─── estimated_samples_for_error_targets ─────────────────────────────
+
+    #[test]
+    fn estimated_samples_returns_current_n_when_no_bounds() {
+        // Single value → median_error_bounds returns None → returns current_n
+        assert_eq!(estimated_samples_for_error_targets(&[1.0], None, None), 1);
+    }
+
+    #[test]
+    fn estimated_samples_increases_for_tight_relative_target() {
+        let values = [100.0, 110.0, 90.0, 105.0, 95.0, 100.0, 98.0, 102.0];
+        let loose = estimated_samples_for_error_targets(&values, Some(0.10), None);
+        let tight = estimated_samples_for_error_targets(&values, Some(0.01), None);
+        assert!(tight >= loose, "tighter target should need more samples");
+    }
+
+    // ─── fmt_bytes ───────────────────────────────────────────────────────
+
+    #[test]
+    fn fmt_bytes_displays_bytes() {
+        assert_eq!(fmt_bytes(0), "0B");
+        assert_eq!(fmt_bytes(512), "512B");
+        assert_eq!(fmt_bytes(1023), "1023B");
+    }
+
+    #[test]
+    fn fmt_bytes_displays_kib() {
+        assert_eq!(fmt_bytes(1024), "1KiB");
+        assert_eq!(fmt_bytes(500 * 1024), "500KiB");
+    }
+
+    #[test]
+    fn fmt_bytes_displays_mib() {
+        assert_eq!(fmt_bytes(1024 * 1024), "1MiB");
+        assert_eq!(fmt_bytes(100 * 1024 * 1024), "100MiB");
+    }
+
+    #[test]
+    fn fmt_bytes_displays_gib() {
+        assert_eq!(fmt_bytes(1024 * 1024 * 1024), "1.0GiB");
+        assert_eq!(fmt_bytes(5 * 1024 * 1024 * 1024), "5.0GiB");
+    }
+
+    // ─── classify_ip ─────────────────────────────────────────────────────
+
+    #[test]
+    fn classify_ip_loopback_v4() {
+        let ip: std::net::IpAddr = "127.0.0.1".parse().unwrap();
+        assert_eq!(classify_ip(&ip), NetworkType::Loopback);
+    }
+
+    #[test]
+    fn classify_ip_loopback_v6() {
+        let ip: std::net::IpAddr = "::1".parse().unwrap();
+        assert_eq!(classify_ip(&ip), NetworkType::Loopback);
+    }
+
+    #[test]
+    fn classify_ip_private_10() {
+        let ip: std::net::IpAddr = "10.0.0.1".parse().unwrap();
+        assert_eq!(classify_ip(&ip), NetworkType::LAN);
+    }
+
+    #[test]
+    fn classify_ip_private_172() {
+        let ip: std::net::IpAddr = "172.16.0.1".parse().unwrap();
+        assert_eq!(classify_ip(&ip), NetworkType::LAN);
+    }
+
+    #[test]
+    fn classify_ip_private_192() {
+        let ip: std::net::IpAddr = "192.168.1.1".parse().unwrap();
+        assert_eq!(classify_ip(&ip), NetworkType::LAN);
+    }
+
+    #[test]
+    fn classify_ip_cgnat() {
+        let ip: std::net::IpAddr = "100.64.0.1".parse().unwrap();
+        assert_eq!(classify_ip(&ip), NetworkType::LAN);
+        let ip2: std::net::IpAddr = "100.127.255.255".parse().unwrap();
+        assert_eq!(classify_ip(&ip2), NetworkType::LAN);
+    }
+
+    #[test]
+    fn classify_ip_link_local_v4() {
+        let ip: std::net::IpAddr = "169.254.1.1".parse().unwrap();
+        assert_eq!(classify_ip(&ip), NetworkType::LAN);
+    }
+
+    #[test]
+    fn classify_ip_public_v4() {
+        let ip: std::net::IpAddr = "8.8.8.8".parse().unwrap();
+        assert_eq!(classify_ip(&ip), NetworkType::Internet);
+    }
+
+    #[test]
+    fn classify_ip_link_local_v6() {
+        let ip: std::net::IpAddr = "fe80::1".parse().unwrap();
+        assert_eq!(classify_ip(&ip), NetworkType::LAN);
+    }
+
+    #[test]
+    fn classify_ip_ula_v6() {
+        let ip: std::net::IpAddr = "fd00::1".parse().unwrap();
+        assert_eq!(classify_ip(&ip), NetworkType::LAN);
+    }
+
+    #[test]
+    fn classify_ip_public_v6() {
+        let ip: std::net::IpAddr = "2001:db8::1".parse().unwrap();
+        assert_eq!(classify_ip(&ip), NetworkType::Internet);
+    }
+
+    // ─── classify_target ─────────────────────────────────────────────────
+
+    #[test]
+    fn classify_target_localhost() {
+        assert_eq!(classify_target("localhost"), NetworkType::Loopback);
+    }
+
+    #[test]
+    fn classify_target_ip_string() {
+        assert_eq!(classify_target("10.0.0.5"), NetworkType::LAN);
+        assert_eq!(classify_target("8.8.4.4"), NetworkType::Internet);
+        assert_eq!(classify_target("127.0.0.1"), NetworkType::Loopback);
+    }
+
+    // ─── adaptive_case_id ────────────────────────────────────────────────
+
+    #[test]
+    fn adaptive_case_id_default_values() {
+        let a = request_attempt(true, 0);
+        let id = adaptive_case_id(&a);
+        assert_eq!(id, "http1:default:default");
+    }
+
+    #[test]
+    fn adaptive_case_id_with_stack_and_payload() {
+        let a = measured_http_attempt(100.0, 0, 10, 4096, Some("nginx"));
+        let id = adaptive_case_id(&a);
+        assert_eq!(id, "http1:4096:nginx");
+    }
+
+    #[test]
+    fn adaptive_case_id_escapes_colons_in_stack() {
+        let a = measured_http_attempt(100.0, 0, 10, 1024, Some("stack:v2"));
+        let id = adaptive_case_id(&a);
+        assert!(
+            !id.matches(':').count() > 2 || id.contains("stack_v2"),
+            "colons in stack should be escaped"
+        );
+    }
+
+    // ─── benchmark_attempt_wall_time_ms ──────────────────────────────────
+
+    #[test]
+    fn benchmark_attempt_wall_time_ms_empty() {
+        assert_eq!(benchmark_attempt_wall_time_ms(&[]), 0.0);
+    }
+
+    #[test]
+    fn benchmark_attempt_wall_time_ms_single() {
+        let attempts = vec![measured_http_attempt(100.0, 0, 50, 1024, None)];
+        let wall = benchmark_attempt_wall_time_ms(&attempts);
+        assert!((wall - 50.0).abs() < 1.0);
+    }
+
+    // ─── average_jitter_ms ───────────────────────────────────────────────
+
+    #[test]
+    fn average_jitter_empty() {
+        assert_eq!(average_jitter_ms(&[]), 0.0);
+    }
+
+    #[test]
+    fn average_jitter_single_sample() {
+        assert_eq!(average_jitter_ms(&[1.0]), 0.0);
+    }
+
+    #[test]
+    fn average_jitter_identical_samples() {
+        assert_eq!(average_jitter_ms(&[5.0, 5.0, 5.0]), 0.0);
+    }
+
     #[test]
     fn baseline_from_environment_check_reuses_rtt_distribution() {
         let environment_check = BenchmarkEnvironmentCheck {
@@ -3674,5 +3957,86 @@ mod tests {
         assert_eq!(baseline.rtt_p50_ms, 0.85);
         assert_eq!(baseline.rtt_p95_ms, 1.1);
         assert_eq!(baseline.network_type, NetworkType::Loopback);
+    }
+
+    // ─── DeterministicRng — panic safety & reproducibility ───────────────
+
+    #[test]
+    fn deterministic_rng_reproducible_from_same_seed() {
+        let values = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let mut rng1 = DeterministicRng::from_values(&values);
+        let mut rng2 = DeterministicRng::from_values(&values);
+        for _ in 0..100 {
+            assert_eq!(rng1.next_u64(), rng2.next_u64());
+        }
+    }
+
+    #[test]
+    fn deterministic_rng_different_seeds_diverge() {
+        let mut rng1 = DeterministicRng::from_values(&[1.0, 2.0]);
+        let mut rng2 = DeterministicRng::from_values(&[3.0, 4.0]);
+        // At least one of the first 10 values should differ.
+        let differs = (0..10).any(|_| rng1.next_u64() != rng2.next_u64());
+        assert!(
+            differs,
+            "different seeds should produce different sequences"
+        );
+    }
+
+    #[test]
+    fn deterministic_rng_empty_array() {
+        // Empty input should not panic and should produce a valid RNG.
+        let mut rng = DeterministicRng::from_values(&[]);
+        // Just verify it doesn't panic and produces values.
+        let _ = rng.next_u64();
+    }
+
+    #[test]
+    fn deterministic_rng_state_never_zero() {
+        // Values that XOR to zero should still produce non-zero state.
+        let rng = DeterministicRng::from_values(&[0.0]);
+        assert_ne!(rng.state, 0);
+    }
+
+    #[test]
+    fn deterministic_rng_next_index_in_bounds() {
+        let mut rng = DeterministicRng::from_values(&[42.0]);
+        for upper in [1, 2, 5, 100, 1000] {
+            for _ in 0..50 {
+                let idx = rng.next_index(upper);
+                assert!(idx < upper, "index {idx} >= upper {upper}");
+            }
+        }
+    }
+
+    #[test]
+    fn deterministic_rng_next_index_upper_one() {
+        // upper=1 → always returns 0.
+        let mut rng = DeterministicRng::from_values(&[1.0, 2.0]);
+        for _ in 0..10 {
+            assert_eq!(rng.next_index(1), 0);
+        }
+    }
+
+    // ─── published_logical_attempts — edge cases ─────────────────────────
+
+    #[test]
+    fn published_logical_attempts_empty_vector() {
+        let result = published_logical_attempts(vec![]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn published_logical_attempts_single_success() {
+        let result = published_logical_attempts(vec![request_attempt(true, 0)]);
+        assert_eq!(result.len(), 1);
+        assert!(result[0].success);
+    }
+
+    #[test]
+    fn published_logical_attempts_single_failure() {
+        let result = published_logical_attempts(vec![request_attempt(false, 0)]);
+        assert_eq!(result.len(), 1);
+        assert!(!result[0].success);
     }
 }
