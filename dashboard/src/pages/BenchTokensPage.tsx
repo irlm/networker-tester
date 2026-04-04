@@ -212,7 +212,7 @@ export function BenchTokensPage() {
   // ── Render ──────────────────────────────────────────────────────────
 
   return (
-    <div className="p-4 md:p-6 h-full flex flex-col">
+    <div className="p-4 md:p-6">
       <Breadcrumb items={[{ label: 'Admin' }, { label: 'Tokens' }]} />
 
       {/* Top bar */}
@@ -282,7 +282,7 @@ export function BenchTokensPage() {
 
       {/* Adaptive layout: pills for <4 runs, master-detail panel for 4+ */}
       {!loading && !error && activeTokens.length > 0 && (
-        <div className="flex flex-col flex-1 min-h-0">
+        <div className="flex flex-col">
           {/* Run selector: horizontal pills when few runs, vertical panel when many */}
           {filteredRuns.length < 4 ? (
             /* Horizontal pills */
@@ -317,7 +317,7 @@ export function BenchTokensPage() {
             </div>
           ) : null}
 
-          <div className={`flex flex-1 border border-gray-800 rounded overflow-hidden min-h-0 ${filteredRuns.length >= 4 ? '' : ''}`}>
+          <div className="flex border border-gray-800 rounded overflow-hidden">
             {/* Left panel — only show for 4+ runs */}
             {filteredRuns.length >= 4 && (
               <div className="w-[25%] min-w-[180px] border-r border-gray-800 overflow-y-auto">
@@ -448,12 +448,28 @@ export function BenchTokensPage() {
         </div>
       )}
 
-      {/* Footer */}
-      {!loading && !error && activeTokens.length > 0 && (
-        <div className="mt-2 text-[10px] text-gray-600">
-          {(() => { const s = Math.floor((Date.now() - lastRefresh) / 1000); return s < 5 ? 'refreshed just now' : `refreshed ${s}s ago`; })()}
-        </div>
-      )}
+      {/* Status summary + footer */}
+      {!loading && !error && activeTokens.length > 0 && (() => {
+        const critical = activeTokens.filter(t => { const ms = ttlMs(t.expires); return ms > 0 && ms < 1800_000; }).length;
+        const warning = activeTokens.filter(t => { const ms = ttlMs(t.expires); return ms >= 1800_000 && ms < 3600_000; }).length;
+        const healthy = activeTokens.length - critical - warning;
+        const nextExpiry = Math.min(...activeTokens.map(t => ttlMs(t.expires)).filter(ms => ms > 0));
+        const s = Math.floor((Date.now() - lastRefresh) / 1000);
+
+        return (
+          <div className="mt-3 flex items-center justify-between text-[10px] text-gray-600 border-t border-gray-800/50 pt-2">
+            <div className="flex items-center gap-4">
+              {healthy > 0 && <span><span className="text-green-400">{healthy}</span> healthy</span>}
+              {warning > 0 && <span><span className="text-yellow-400">{warning}</span> expiring &lt;1h</span>}
+              {critical > 0 && <span><span className="text-red-400">{critical}</span> critical &lt;30m</span>}
+              {nextExpiry > 0 && nextExpiry < Infinity && (
+                <span>next expiry in <span className={ttlColor(nextExpiry)}>{ttlLabel(nextExpiry)}</span></span>
+              )}
+            </div>
+            <span>{s < 5 ? 'refreshed just now' : `refreshed ${s}s ago`}</span>
+          </div>
+        );
+      })()}
     </div>
   );
 }
