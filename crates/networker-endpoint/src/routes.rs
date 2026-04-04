@@ -1378,7 +1378,7 @@ async fn api_search(Query(p): Query<SearchParams>) -> impl IntoResponse {
 
 /// POST /api/upload/process
 /// Read body, compute CRC32 + SHA-256, compress with zlib.
-async fn api_upload_process(req: Request) -> impl IntoResponse {
+async fn api_upload_process(req: Request) -> Response {
     let t0 = Instant::now();
 
     const MAX_BODY: usize = 50 * 1024 * 1024; // 50 MiB
