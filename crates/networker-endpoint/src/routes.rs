@@ -995,33 +995,52 @@ fn bench_headers(dur_ms: f64) -> HeaderMap {
         "cache-control",
         HeaderValue::from_static("no-store, no-cache, must-revalidate"),
     );
-    h.insert(
-        "timing-allow-origin",
-        HeaderValue::from_static("*"),
-    );
-    h.insert(
-        "access-control-allow-origin",
-        HeaderValue::from_static("*"),
-    );
+    h.insert("timing-allow-origin", HeaderValue::from_static("*"));
+    h.insert("access-control-allow-origin", HeaderValue::from_static("*"));
     h
 }
 
 // ── Deterministic name/email generators ─────────────────────────────────────
 
 const FIRST_NAMES: &[&str] = &[
-    "Alice", "Bob", "Charlie", "Diana", "Eve", "Frank", "Grace", "Hector",
-    "Iris", "Jack", "Karen", "Leo", "Mona", "Nick", "Olivia", "Paul",
-    "Quinn", "Rosa", "Steve", "Tina", "Uma", "Victor", "Wendy", "Xander",
-    "Yuki", "Zane",
+    "Alice", "Bob", "Charlie", "Diana", "Eve", "Frank", "Grace", "Hector", "Iris", "Jack", "Karen",
+    "Leo", "Mona", "Nick", "Olivia", "Paul", "Quinn", "Rosa", "Steve", "Tina", "Uma", "Victor",
+    "Wendy", "Xander", "Yuki", "Zane",
 ];
 const LAST_NAMES: &[&str] = &[
-    "Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller",
-    "Davis", "Rodriguez", "Martinez", "Hernandez", "Lopez", "Gonzalez",
-    "Wilson", "Anderson", "Thomas", "Taylor", "Moore", "Jackson", "Martin",
-    "Lee", "Perez", "Thompson", "White", "Harris", "Sanchez",
+    "Smith",
+    "Johnson",
+    "Williams",
+    "Brown",
+    "Jones",
+    "Garcia",
+    "Miller",
+    "Davis",
+    "Rodriguez",
+    "Martinez",
+    "Hernandez",
+    "Lopez",
+    "Gonzalez",
+    "Wilson",
+    "Anderson",
+    "Thomas",
+    "Taylor",
+    "Moore",
+    "Jackson",
+    "Martin",
+    "Lee",
+    "Perez",
+    "Thompson",
+    "White",
+    "Harris",
+    "Sanchez",
 ];
 const DOMAINS: &[&str] = &[
-    "example.com", "test.org", "mail.net", "corp.io", "bench.dev",
+    "example.com",
+    "test.org",
+    "mail.net",
+    "corp.io",
+    "bench.dev",
 ];
 
 fn gen_user(rng: &mut StdRng, id: u64) -> serde_json::Value {
@@ -1057,19 +1076,46 @@ async fn api_users(Query(p): Query<UsersParams>) -> impl IntoResponse {
     let ascending = p.order.as_deref().unwrap_or("asc") != "desc";
 
     let mut rng = StdRng::seed_from_u64(page);
-    let mut users: Vec<serde_json::Value> = (0..100).map(|i| gen_user(&mut rng, (page - 1) * 100 + i + 1)).collect();
+    let mut users: Vec<serde_json::Value> = (0..100)
+        .map(|i| gen_user(&mut rng, (page - 1) * 100 + i + 1))
+        .collect();
 
     // Sort by requested field
     users.sort_by(|a, b| {
         let cmp = match sort_field {
-            "name" => a["name"].as_str().unwrap_or("").cmp(a["name"].as_str().unwrap_or(""))
-                .then(a["name"].as_str().unwrap_or("").cmp(b["name"].as_str().unwrap_or(""))),
-            "email" => a["email"].as_str().unwrap_or("").cmp(b["email"].as_str().unwrap_or("")),
-            "score" => a["score"].as_f64().unwrap_or(0.0).partial_cmp(&b["score"].as_f64().unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal),
-            "created_at" => a["created_at"].as_str().unwrap_or("").cmp(b["created_at"].as_str().unwrap_or("")),
-            _ => a["id"].as_u64().unwrap_or(0).cmp(&b["id"].as_u64().unwrap_or(0)),
+            "name" => a["name"]
+                .as_str()
+                .unwrap_or("")
+                .cmp(a["name"].as_str().unwrap_or(""))
+                .then(
+                    a["name"]
+                        .as_str()
+                        .unwrap_or("")
+                        .cmp(b["name"].as_str().unwrap_or("")),
+                ),
+            "email" => a["email"]
+                .as_str()
+                .unwrap_or("")
+                .cmp(b["email"].as_str().unwrap_or("")),
+            "score" => a["score"]
+                .as_f64()
+                .unwrap_or(0.0)
+                .partial_cmp(&b["score"].as_f64().unwrap_or(0.0))
+                .unwrap_or(std::cmp::Ordering::Equal),
+            "created_at" => a["created_at"]
+                .as_str()
+                .unwrap_or("")
+                .cmp(b["created_at"].as_str().unwrap_or("")),
+            _ => a["id"]
+                .as_u64()
+                .unwrap_or(0)
+                .cmp(&b["id"].as_u64().unwrap_or(0)),
         };
-        if ascending { cmp } else { cmp.reverse() }
+        if ascending {
+            cmp
+        } else {
+            cmp.reverse()
+        }
     });
 
     let paginated: Vec<_> = users.into_iter().take(20).collect();
@@ -1089,11 +1135,16 @@ struct TransformBody {
 async fn api_transform(Json(body): Json<TransformBody>) -> impl IntoResponse {
     let t0 = Instant::now();
 
-    let hashed_fields: Vec<String> = body.fields.unwrap_or_default().iter().map(|f| {
-        let mut hasher = Sha256::new();
-        hasher.update(f.as_bytes());
-        format!("{:x}", hasher.finalize())
-    }).collect();
+    let hashed_fields: Vec<String> = body
+        .fields
+        .unwrap_or_default()
+        .iter()
+        .map(|f| {
+            let mut hasher = Sha256::new();
+            hasher.update(f.as_bytes());
+            format!("{:x}", hasher.finalize())
+        })
+        .collect();
 
     let mut reversed_values = body.values.unwrap_or_default();
     reversed_values.reverse();
@@ -1141,18 +1192,20 @@ async fn api_aggregate(Query(p): Query<AggregateParams>) -> impl IntoResponse {
 
     // Group into 5 categories by quintile
     let chunk_size = values.len() / 5;
-    let categories: Vec<serde_json::Value> = (0..5).map(|i| {
-        let chunk = &values[i * chunk_size..(i + 1) * chunk_size];
-        let cat_sum: f64 = chunk.iter().sum();
-        let cat_mean = cat_sum / chunk.len() as f64;
-        serde_json::json!({
-            "category": format!("q{}", i + 1),
-            "count": chunk.len(),
-            "mean": (cat_mean * 100.0).round() / 100.0,
-            "min": (chunk[0] * 100.0).round() / 100.0,
-            "max": (chunk[chunk.len() - 1] * 100.0).round() / 100.0,
+    let categories: Vec<serde_json::Value> = (0..5)
+        .map(|i| {
+            let chunk = &values[i * chunk_size..(i + 1) * chunk_size];
+            let cat_sum: f64 = chunk.iter().sum();
+            let cat_mean = cat_sum / chunk.len() as f64;
+            serde_json::json!({
+                "category": format!("q{}", i + 1),
+                "count": chunk.len(),
+                "mean": (cat_mean * 100.0).round() / 100.0,
+                "min": (chunk[0] * 100.0).round() / 100.0,
+                "max": (chunk[chunk.len() - 1] * 100.0).round() / 100.0,
+            })
         })
-    }).collect();
+        .collect();
 
     let result = serde_json::json!({
         "total_points": 10_000,
@@ -1182,39 +1235,70 @@ async fn api_search(Query(p): Query<SearchParams>) -> impl IntoResponse {
 
     let mut rng = StdRng::seed_from_u64(42);
     let words: &[&str] = &[
-        "network", "latency", "throughput", "bandwidth", "packet", "server",
-        "client", "request", "response", "timeout", "connection", "socket",
-        "protocol", "testing", "benchmark", "performance", "endpoint", "proxy",
-        "firewall", "router", "switch", "gateway", "dns", "tls", "quic",
+        "network",
+        "latency",
+        "throughput",
+        "bandwidth",
+        "packet",
+        "server",
+        "client",
+        "request",
+        "response",
+        "timeout",
+        "connection",
+        "socket",
+        "protocol",
+        "testing",
+        "benchmark",
+        "performance",
+        "endpoint",
+        "proxy",
+        "firewall",
+        "router",
+        "switch",
+        "gateway",
+        "dns",
+        "tls",
+        "quic",
     ];
 
-    let items: Vec<String> = (0..1_000).map(|_| {
-        let w1 = words[rng.gen_range(0..words.len())];
-        let w2 = words[rng.gen_range(0..words.len())];
-        let n: u32 = rng.gen_range(1..1000);
-        format!("{w1}-{w2}-{n}")
-    }).collect();
+    let items: Vec<String> = (0..1_000)
+        .map(|_| {
+            let w1 = words[rng.gen_range(0..words.len())];
+            let w2 = words[rng.gen_range(0..words.len())];
+            let n: u32 = rng.gen_range(1..1000);
+            format!("{w1}-{w2}-{n}")
+        })
+        .collect();
 
     // Apply regex filter; fall back to literal match on invalid regex
     let re = regex::Regex::new(query).ok();
-    let mut scored: Vec<(usize, &str)> = items.iter().filter_map(|item| {
-        let matched = match &re {
-            Some(r) => r.find(item).map(|m| m.start()),
-            None => item.find(query),
-        };
-        matched.map(|pos| (pos, item.as_str()))
-    }).collect();
+    let mut scored: Vec<(usize, &str)> = items
+        .iter()
+        .filter_map(|item| {
+            let matched = match &re {
+                Some(r) => r.find(item).map(|m| m.start()),
+                None => item.find(query),
+            };
+            matched.map(|pos| (pos, item.as_str()))
+        })
+        .collect();
 
     // Sort by match position (earlier = better), then alphabetically
     scored.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(b.1)));
 
-    let results: Vec<serde_json::Value> = scored.iter().take(limit).enumerate().map(|(rank, (pos, item))| {
-        serde_json::json!({
-            "rank": rank + 1,
-            "item": item,
-            "match_position": pos,
+    let results: Vec<serde_json::Value> = scored
+        .iter()
+        .take(limit)
+        .enumerate()
+        .map(|(rank, (pos, item))| {
+            serde_json::json!({
+                "rank": rank + 1,
+                "item": item,
+                "match_position": pos,
+            })
         })
-    }).collect();
+        .collect();
 
     let result = serde_json::json!({
         "query": query,
@@ -1305,7 +1389,9 @@ async fn api_validate(Query(p): Query<ValidateParams>) -> impl IntoResponse {
 
     // Users: generate page=seed, hash the JSON
     let mut rng = StdRng::seed_from_u64(seed);
-    let users: Vec<serde_json::Value> = (0..100).map(|i| gen_user(&mut rng, (seed - 1) * 100 + i + 1)).collect();
+    let users: Vec<serde_json::Value> = (0..100)
+        .map(|i| gen_user(&mut rng, (seed - 1) * 100 + i + 1))
+        .collect();
     let users_json = serde_json::to_string(&users).unwrap_or_default();
     let users_hash = format!("{:x}", Sha256::digest(users_json.as_bytes()));
 
@@ -1325,17 +1411,40 @@ async fn api_validate(Query(p): Query<ValidateParams>) -> impl IntoResponse {
     // Search: hash the item list (seed=42 always)
     let mut rng3 = StdRng::seed_from_u64(42);
     let words: &[&str] = &[
-        "network", "latency", "throughput", "bandwidth", "packet", "server",
-        "client", "request", "response", "timeout", "connection", "socket",
-        "protocol", "testing", "benchmark", "performance", "endpoint", "proxy",
-        "firewall", "router", "switch", "gateway", "dns", "tls", "quic",
+        "network",
+        "latency",
+        "throughput",
+        "bandwidth",
+        "packet",
+        "server",
+        "client",
+        "request",
+        "response",
+        "timeout",
+        "connection",
+        "socket",
+        "protocol",
+        "testing",
+        "benchmark",
+        "performance",
+        "endpoint",
+        "proxy",
+        "firewall",
+        "router",
+        "switch",
+        "gateway",
+        "dns",
+        "tls",
+        "quic",
     ];
-    let items: Vec<String> = (0..1_000).map(|_| {
-        let w1 = words[rng3.gen_range(0..words.len())];
-        let w2 = words[rng3.gen_range(0..words.len())];
-        let n: u32 = rng3.gen_range(1..1000);
-        format!("{w1}-{w2}-{n}")
-    }).collect();
+    let items: Vec<String> = (0..1_000)
+        .map(|_| {
+            let w1 = words[rng3.gen_range(0..words.len())];
+            let w2 = words[rng3.gen_range(0..words.len())];
+            let n: u32 = rng3.gen_range(1..1000);
+            format!("{w1}-{w2}-{n}")
+        })
+        .collect();
     let search_json = serde_json::to_string(&items).unwrap_or_default();
     let search_hash = format!("{:x}", Sha256::digest(search_json.as_bytes()));
 
@@ -1628,8 +1737,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), 200);
-        assert!(resp.headers().contains_key("server-timing"), "missing server-timing");
-        assert!(resp.headers().contains_key("cache-control"), "missing cache-control");
+        assert!(
+            resp.headers().contains_key("server-timing"),
+            "missing server-timing"
+        );
+        assert!(
+            resp.headers().contains_key("cache-control"),
+            "missing cache-control"
+        );
         let body = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json.as_array().unwrap().len(), 20);
