@@ -38,6 +38,9 @@ import java.util.Random;
 import java.util.concurrent.Executors;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.logging.ConsoleHandler;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import java.util.zip.CRC32;
 import java.util.zip.Deflater;
 
@@ -63,6 +66,28 @@ public class Server {
 
     private static final int PORT = 8443;
     private static final String CERT_DIR = System.getenv().getOrDefault("BENCH_CERT_DIR", "/opt/bench");
+
+    private static final Logger logger = Logger.getLogger("bench-api");
+
+    static {
+        // Direct all logging to stderr with configurable level via LOG_LEVEL env var.
+        Logger rootLogger = Logger.getLogger("");
+        for (var h : rootLogger.getHandlers()) rootLogger.removeHandler(h);
+        ConsoleHandler handler = new ConsoleHandler(); // writes to stderr by default
+        handler.setLevel(Level.ALL);
+        rootLogger.addHandler(handler);
+
+        String envLevel = System.getenv("LOG_LEVEL");
+        if (envLevel != null) {
+            try {
+                Level level = Level.parse(envLevel.toUpperCase());
+                logger.setLevel(level);
+                handler.setLevel(level);
+            } catch (IllegalArgumentException ignored) {
+                // keep default INFO
+            }
+        }
+    }
 
     // ── Shared benchmark dataset (loaded once at startup) ─────────────
 
@@ -92,19 +117,19 @@ public class Server {
                 String content = Files.readString(Path.of(p), StandardCharsets.UTF_8);
                 benchRawContent = content;
                 parseBenchData(content);
-                System.out.printf("Loaded bench-data.json from %s (%d users, %d corpus, %d timeseries)%n",
+                logger.info(String.format("Loaded bench-data.json from %s (%d users, %d corpus, %d timeseries)",
                         p,
                         benchUsers != null ? benchUsers.size() : 0,
                         benchSearchCorpus != null ? benchSearchCorpus.size() : 0,
-                        benchTimeseries != null ? benchTimeseries.size() : 0);
+                        benchTimeseries != null ? benchTimeseries.size() : 0));
                 return;
             } catch (IOException ignored) {
                 // try next path
             } catch (Exception e) {
-                System.err.printf("WARN: bench-data.json at %s is invalid: %s%n", p, e.getMessage());
+                logger.warning(String.format("bench-data.json at %s is invalid: %s", p, e.getMessage()));
             }
         }
-        System.err.println("WARN: bench-data.json not found, falling back to per-language PRNG");
+        logger.warning("bench-data.json not found, falling back to per-language PRNG");
     }
 
     /** Minimal JSON parser for bench-data.json — extracts users, search_corpus, timeseries, expected_checksums. */
@@ -330,7 +355,7 @@ public class Server {
         server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
         server.start();
 
-        System.out.printf("Java HTTPS server listening on :%d (Virtual Threads)%n", PORT);
+        logger.info(String.format("Java HTTPS server listening on :%d (Virtual Threads)", PORT));
     }
 
     // ── Handlers ──────────────────────────────────────────────────────
