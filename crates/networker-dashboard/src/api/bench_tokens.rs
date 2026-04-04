@@ -66,7 +66,13 @@ async fn list_tokens(
 
     let vault = match vault_name() {
         Some(v) => v,
-        None => return Ok(Json(vec![])),
+        None => {
+            // Mock mode for local dev: return sample tokens when BENCH_MOCK_TOKENS=1
+            if std::env::var("BENCH_MOCK_TOKENS").unwrap_or_default() == "1" {
+                return Ok(Json(mock_tokens()));
+            }
+            return Ok(Json(vec![]));
+        }
     };
 
     let output = tokio::process::Command::new("az")
@@ -278,6 +284,47 @@ async fn revoke_all(
         "revoked": revoked,
         "errors": errors,
     })))
+}
+
+/// Mock tokens for local development (when BENCH_MOCK_TOKENS=1).
+fn mock_tokens() -> Vec<TokenInfo> {
+    let now = chrono::Utc::now();
+    vec![
+        TokenInfo {
+            name: "bench-c4da3bda-vm-7b75a519".to_string(),
+            config_id: "c4da3bda".to_string(),
+            testbed_id: "7b75a519".to_string(),
+            created: Some((now - chrono::Duration::hours(2)).to_rfc3339()),
+            expires: Some((now + chrono::Duration::hours(2)).to_rfc3339()),
+            enabled: true,
+        },
+        TokenInfo {
+            name: "bench-a1b2c3d4-vm-eastus-01".to_string(),
+            config_id: "a1b2c3d4".to_string(),
+            testbed_id: "eastus-01".to_string(),
+            created: Some((now - chrono::Duration::hours(5)).to_rfc3339()),
+            expires: Some((now - chrono::Duration::hours(1)).to_rfc3339()),
+            enabled: false,
+        },
+        TokenInfo {
+            name: "bench-e5f6g7h8-vm-westus-02".to_string(),
+            config_id: "e5f6g7h8".to_string(),
+            testbed_id: "westus-02".to_string(),
+            created: Some((now - chrono::Duration::minutes(30)).to_rfc3339()),
+            expires: Some(
+                (now + chrono::Duration::hours(3) + chrono::Duration::minutes(30)).to_rfc3339(),
+            ),
+            enabled: true,
+        },
+        TokenInfo {
+            name: "bench-i9j0k1l2-vm-eu-west-1".to_string(),
+            config_id: "i9j0k1l2".to_string(),
+            testbed_id: "eu-west-1".to_string(),
+            created: Some((now - chrono::Duration::minutes(10)).to_rfc3339()),
+            expires: Some((now + chrono::Duration::minutes(50)).to_rfc3339()),
+            enabled: true,
+        },
+    ]
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
