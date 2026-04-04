@@ -28,6 +28,7 @@ MODE="docker"
 SINGLE_URL=""
 RUST_ONLY=0
 SEED=42
+TOKEN=""
 
 for arg in "$@"; do
     case "$arg" in
@@ -35,9 +36,16 @@ for arg in "$@"; do
         --url)   shift; SINGLE_URL="${1:-}"; MODE="single" ;;
         --rust-only) RUST_ONLY=1; MODE="rust" ;;
         --seed=*) SEED="${arg#*=}" ;;
-        --help) echo "Usage: $0 [--url=URL | --rust-only] [--seed=N]"; exit 0 ;;
+        --token=*) TOKEN="${arg#*=}" ;;
+        --help) echo "Usage: $0 [--url=URL | --rust-only] [--seed=N] [--token=TOKEN]"; exit 0 ;;
     esac
 done
+
+# Build auth header args for curl when a token is provided
+AUTH_ARGS=()
+if [[ -n "$TOKEN" ]]; then
+    AUTH_ARGS=(-H "Authorization: Bearer $TOKEN")
+fi
 
 # ── Test helpers ─────────────────────────────────────────────────────────────
 
@@ -48,7 +56,7 @@ check() {
     local body="${4:-}"
     local expect_field="${5:-}"
 
-    local curl_args=(-sk --max-time 10 -X "$method")
+    local curl_args=(-sk --max-time 10 -X "$method" "${AUTH_ARGS[@]}")
     if [[ -n "$body" ]]; then
         curl_args+=(-H "Content-Type: application/json" -d "$body")
     fi
@@ -105,7 +113,7 @@ check_header() {
     local header="$3"
 
     local headers
-    headers=$(curl -sk --max-time 10 -I "$url" 2>/dev/null) || {
+    headers=$(curl -sk --max-time 10 -I "${AUTH_ARGS[@]}" "$url" 2>/dev/null) || {
         printf "  ${RED}FAIL${NC} %-45s %s\n" "$label" "connection refused"
         FAIL=$((FAIL + 1))
         return 1
@@ -126,8 +134,8 @@ check_deterministic() {
     local url="$2"
 
     local r1 r2
-    r1=$(curl -sk --max-time 10 "$url" 2>/dev/null)
-    r2=$(curl -sk --max-time 10 "$url" 2>/dev/null)
+    r1=$(curl -sk --max-time 10 "${AUTH_ARGS[@]}" "$url" 2>/dev/null)
+    r2=$(curl -sk --max-time 10 "${AUTH_ARGS[@]}" "$url" 2>/dev/null)
 
     if [[ "$r1" == "$r2" ]]; then
         printf "  ${GREEN}PASS${NC} %-45s %s\n" "$label" "deterministic"
@@ -176,6 +184,20 @@ validate_server() {
     # 7. /api/validate (deterministic)
     check "$name /api/validate" "$base/api/validate?seed=$SEED" "GET" "" ""
     check_deterministic "$name /api/validate determinism" "$base/api/validate?seed=$SEED"
+
+    # Auth rejection test (only when --token is provided)
+    if [[ -n "$TOKEN" ]]; then
+        local code
+        code=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 5 "$base/api/users?page=1")
+        if [[ "$code" == "401" ]]; then
+            printf "  ${GREEN}PASS${NC} %-45s %s\n" "$name auth rejection" "401"
+            PASS=$((PASS + 1))
+        else
+            printf "  ${RED}FAIL${NC} %-45s %s\n" "$name auth rejection" "expected 401, got $code"
+            FAIL=$((FAIL + 1))
+            ERRORS+="  $name auth rejection: expected 401, got $code\n"
+        fi
+    fi
 
     # Header checks
     check_header "$name Server-Timing" "$base/api/users?page=1" "Server-Timing"

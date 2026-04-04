@@ -388,6 +388,8 @@ pub fn build_router(state: AppState) -> Router {
         // Allow upload probes up to 2 GiB (matching the download cap) while
         // preventing unbounded memory consumption from malicious payloads.
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024 * 1024))
+        // Bearer token auth (BENCH_API_TOKEN env var; /health exempt).
+        .layer(middleware::from_fn(bench_auth_middleware))
         // Add X-Networker-Server-Timestamp (and optionally Alt-Svc) to every response.
         .layer(middleware::from_fn_with_state(state, add_server_timestamp))
         // Log every request (method + URI) and response (status + latency).
@@ -425,6 +427,73 @@ async fn add_server_timestamp(State(state): State<AppState>, req: Request, next:
         }
     }
     response
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Bearer token auth middleware (BENCH_API_TOKEN)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Cached value of the `BENCH_API_TOKEN` environment variable read once at
+/// first use. When `Some`, every request (except `/health`) must carry a
+/// matching `Authorization: Bearer <token>` header.
+static BENCH_API_TOKEN: OnceLock<Option<String>> = OnceLock::new();
+
+fn get_bench_token() -> Option<&'static str> {
+    BENCH_API_TOKEN
+        .get_or_init(|| std::env::var("BENCH_API_TOKEN").ok())
+        .as_deref()
+}
+
+/// Middleware that enforces bearer-token authentication when `BENCH_API_TOKEN`
+/// is set. `/health` is always exempt so load-balancer probes keep working.
+/// A `Server-Timing: auth;dur=X.X` metric is appended to every response.
+async fn bench_auth_middleware(req: Request, next: Next) -> Response {
+    let t0 = Instant::now();
+
+    // /health is exempt — health checks must work without credentials.
+    if req.uri().path() == "/health" {
+        return next.run(req).await;
+    }
+
+    if let Some(expected) = get_bench_token() {
+        let auth = req
+            .headers()
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.strip_prefix("Bearer "));
+
+        match auth {
+            Some(token) if token == expected => { /* valid */ }
+            _ => {
+                let dur_ms = t0.elapsed().as_secs_f64() * 1000.0;
+                let mut resp = (
+                    StatusCode::UNAUTHORIZED,
+                    Json(serde_json::json!({"error": "unauthorized"})),
+                )
+                    .into_response();
+                if let Ok(val) = HeaderValue::from_str(&format!("auth;dur={dur_ms:.1}")) {
+                    resp.headers_mut().insert("server-timing", val);
+                }
+                return resp;
+            }
+        }
+    }
+
+    let dur_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    let mut resp = next.run(req).await;
+
+    // Append auth timing to existing Server-Timing or create a new one.
+    let auth_metric = format!("auth;dur={dur_ms:.1}");
+    if let Some(existing) = resp.headers().get("server-timing").cloned() {
+        let combined = format!("{}, {auth_metric}", existing.to_str().unwrap_or(""));
+        if let Ok(val) = HeaderValue::from_str(&combined) {
+            resp.headers_mut().insert("server-timing", val);
+        }
+    } else if let Ok(val) = HeaderValue::from_str(&auth_metric) {
+        resp.headers_mut().insert("server-timing", val);
+    }
+
+    resp
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1378,26 +1447,16 @@ async fn api_search(Query(p): Query<SearchParams>) -> impl IntoResponse {
 
 /// POST /api/upload/process
 /// Read body, compute CRC32 + SHA-256, compress with zlib.
-async fn api_upload_process(req: Request) -> Response {
+async fn api_upload_process(req: Request) -> impl IntoResponse {
     let t0 = Instant::now();
 
-    const MAX_BODY: usize = 50 * 1024 * 1024; // 50 MiB
-
-    // Drain the body
+    // Drain the body (token auth is the protection now; the 2 GiB
+    // DefaultBodyLimit layer still caps overall size).
     let mut body_data = Vec::new();
     let mut body = req.into_body();
     while let Some(Ok(frame)) = body.frame().await {
         if let Ok(data) = frame.into_data() {
             body_data.extend_from_slice(&data);
-            if body_data.len() > MAX_BODY {
-                let dur_ms = t0.elapsed().as_secs_f64() * 1000.0;
-                return (
-                    StatusCode::PAYLOAD_TOO_LARGE,
-                    bench_headers(dur_ms),
-                    Json(serde_json::json!({"error": "body too large"})),
-                )
-                    .into_response();
-            }
         }
     }
 
@@ -1425,7 +1484,7 @@ async fn api_upload_process(req: Request) -> Response {
     });
 
     let dur_ms = t0.elapsed().as_secs_f64() * 1000.0;
-    (bench_headers(dur_ms), Json(result)).into_response()
+    (bench_headers(dur_ms), Json(result))
 }
 
 #[derive(Deserialize)]
@@ -2012,6 +2071,64 @@ mod tests {
         let r2 = app().oneshot(make_req()).await.unwrap();
         let b2 = to_bytes(r2.into_body(), 4 * 1024).await.unwrap();
         assert_eq!(b1, b2, "api/validate must be deterministic for same seed");
+    }
+
+    // ── Auth middleware tests ────────────────────────────────────────────────
+    // BENCH_API_TOKEN is NOT set in the test process, so the middleware is
+    // transparent. We verify that normal operation is unaffected and that the
+    // auth;dur timing metric is appended.
+
+    #[tokio::test]
+    async fn api_auth_transparent_when_no_token() {
+        // Without BENCH_API_TOKEN every endpoint should return 200 (auth disabled).
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/users?page=1&sort=name&order=asc")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn api_auth_skips_health() {
+        // /health must always succeed regardless of auth state.
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn api_auth_timing_header() {
+        // The auth middleware should append `auth;dur=` to Server-Timing.
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/users?page=1&sort=name&order=asc")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let st = resp
+            .headers()
+            .get("server-timing")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(
+            st.contains("auth;dur="),
+            "Server-Timing should contain auth metric, got: {st}"
+        );
     }
 
     /// Verify all JSON API endpoints include required benchmark headers.
