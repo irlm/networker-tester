@@ -45,6 +45,28 @@ namespace net   = boost::asio;
 namespace ssl   = net::ssl;
 using tcp       = net::ip::tcp;
 
+// ── Leveled logging (all output to stderr) ─────────────────────────────────
+
+enum LogLevel { LOG_ERROR = 0, LOG_WARN = 1, LOG_INFO = 2, LOG_DEBUG = 3 };
+static LogLevel g_log_level = LOG_INFO;
+
+static void bench_log(LogLevel level, const std::string& msg) {
+    if (level > g_log_level) return;
+    static const char* names[] = {"ERROR", "WARN", "INFO", "DEBUG"};
+    std::cerr << "[" << names[level] << "] " << msg << std::endl;
+}
+
+static void init_log_level() {
+    if (auto* env = std::getenv("LOG_LEVEL")) {
+        std::string val(env);
+        std::transform(val.begin(), val.end(), val.begin(), ::toupper);
+        if (val == "ERROR") g_log_level = LOG_ERROR;
+        else if (val == "WARN")  g_log_level = LOG_WARN;
+        else if (val == "DEBUG") g_log_level = LOG_DEBUG;
+        else g_log_level = LOG_INFO;
+    }
+}
+
 // ── Shared data ────────────────────────────────────────────────────────────
 
 static const char* FIRST_NAMES[] = {
@@ -277,13 +299,13 @@ static void load_bench_data() {
         }
 
         bench_data_loaded = true;
-        std::cout << "Loaded bench-data.json from " << p
-                  << " (" << bench_users.size() << " users, "
-                  << bench_search_corpus.size() << " corpus, "
-                  << bench_timeseries.size() << " timeseries)\n";
+        bench_log(LOG_INFO, "Loaded bench-data.json from " + p
+                  + " (" + std::to_string(bench_users.size()) + " users, "
+                  + std::to_string(bench_search_corpus.size()) + " corpus, "
+                  + std::to_string(bench_timeseries.size()) + " timeseries)");
         return;
     }
-    std::cerr << "WARN: bench-data.json not found, falling back to per-language PRNG\n";
+    bench_log(LOG_WARN, "bench-data.json not found, falling back to per-language PRNG");
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -1046,7 +1068,7 @@ private:
     }
 
     void on_handshake(beast::error_code ec) {
-        if (ec) { std::cerr << "handshake: " << ec.message() << "\n"; return; }
+        if (ec) { bench_log(LOG_ERROR, "handshake: " + ec.message()); return; }
         do_read();
     }
 
@@ -1061,7 +1083,7 @@ private:
     void on_read(beast::error_code ec, std::size_t /*bytes_transferred*/) {
         if (ec == http::error::end_of_stream)
             return do_close();
-        if (ec) { std::cerr << "read: " << ec.message() << "\n"; return; }
+        if (ec) { bench_log(LOG_ERROR, "read: " + ec.message()); return; }
 
         handle_request(std::move(req_), [this](auto&& msg, std::uint64_t download_size = 0) {
             using msg_type = std::decay_t<decltype(msg)>;
@@ -1075,7 +1097,7 @@ private:
                 http::async_write(
                     stream_, *sp,
                     [self = shared_from_this(), sp](beast::error_code ec, std::size_t) {
-                        if (ec) { std::cerr << "write: " << ec.message() << "\n"; return; }
+                        if (ec) { bench_log(LOG_ERROR, "write: " + ec.message()); return; }
                         if (sp->need_eof())
                             return self->do_close();
                         self->do_read();
@@ -1092,7 +1114,7 @@ private:
         http::async_write_header(
             stream_, *sr,
             [self = shared_from_this(), hdr, sr, total](beast::error_code ec, std::size_t) {
-                if (ec) { std::cerr << "write_header: " << ec.message() << "\n"; return; }
+                if (ec) { bench_log(LOG_ERROR, "write_header: " + ec.message()); return; }
                 self->do_write_download_chunks(hdr, sr, total, 0);
             });
     }
@@ -1112,7 +1134,7 @@ private:
             http::async_write(
                 stream_, *sr,
                 [self = shared_from_this(), hdr, sr](beast::error_code ec, std::size_t) {
-                    if (ec) { std::cerr << "write: " << ec.message() << "\n"; return; }
+                    if (ec) { bench_log(LOG_ERROR, "write: " + ec.message()); return; }
                     self->do_read();
                 });
             return;
@@ -1138,7 +1160,7 @@ private:
             stream_, *sr,
             [self = shared_from_this(), hdr, sr, total, written, to_write](
                 beast::error_code ec, std::size_t) {
-                if (ec) { std::cerr << "write: " << ec.message() << "\n"; return; }
+                if (ec) { bench_log(LOG_ERROR, "write: " + ec.message()); return; }
                 auto new_written = written + to_write;
                 if (new_written >= total) {
                     self->do_read();
@@ -1167,14 +1189,14 @@ public:
         : ioc_(ioc), ctx_(ctx), acceptor_(net::make_strand(ioc)) {
         beast::error_code ec;
         acceptor_.open(endpoint.protocol(), ec);
-        if (ec) { std::cerr << "open: " << ec.message() << "\n"; return; }
+        if (ec) { bench_log(LOG_ERROR, "open: " + ec.message()); return; }
 
         acceptor_.set_option(net::socket_base::reuse_address(true), ec);
         acceptor_.bind(endpoint, ec);
-        if (ec) { std::cerr << "bind: " << ec.message() << "\n"; return; }
+        if (ec) { bench_log(LOG_ERROR, "bind: " + ec.message()); return; }
 
         acceptor_.listen(net::socket_base::max_listen_connections, ec);
-        if (ec) { std::cerr << "listen: " << ec.message() << "\n"; return; }
+        if (ec) { bench_log(LOG_ERROR, "listen: " + ec.message()); return; }
     }
 
     void run() { do_accept(); }
@@ -1188,7 +1210,7 @@ private:
 
     void on_accept(beast::error_code ec, tcp::socket socket) {
         if (ec) {
-            std::cerr << "accept: " << ec.message() << "\n";
+            bench_log(LOG_ERROR, "accept: " + ec.message());
         } else {
             std::make_shared<session>(std::move(socket), ctx_)->run();
         }
@@ -1199,6 +1221,7 @@ private:
 // ── Main ────────────────────────────────────────────────────────────────────
 
 int main() {
+    init_log_level();
     load_bench_data();
 
     auto const cert_dir = []() -> std::string {
@@ -1230,8 +1253,8 @@ int main() {
     std::make_shared<listener>(
         ioc, ctx, tcp::endpoint{tcp::v4(), port})->run();
 
-    std::cout << "C++ Boost.Beast server listening on port " << port
-              << " (" << threads << " threads, C++" << __cplusplus << ")\n";
+    bench_log(LOG_INFO, "C++ Boost.Beast server listening on port " + std::to_string(port)
+              + " (" + std::to_string(threads) + " threads, C++" + std::to_string(__cplusplus) + ")");
 
     // Run the I/O context on multiple threads
     std::vector<std::thread> v;
