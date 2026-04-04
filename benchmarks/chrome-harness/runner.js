@@ -20,6 +20,25 @@ for (let i = 2; i < process.argv.length; i += 2) {
 }
 
 const TARGET = args.target || 'https://localhost:8443';
+
+// SEC-007: Validate TARGET to prevent SSRF against cloud metadata / internal services
+try {
+  const url = new URL(TARGET);
+  const host = url.hostname;
+  const blocked = ['169.254.169.254', '169.254.170.2', 'metadata.google.internal', '[fd00:ec2::254]'];
+  if (blocked.includes(host)) {
+    process.stderr.write(`FATAL: TARGET hostname ${host} is blocked (cloud metadata)\n`);
+    process.exit(1);
+  }
+  // Allow only IPs and localhost — no arbitrary hostnames on cloud VMs
+  if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(host) && host !== 'localhost') {
+    process.stderr.write(`WARNING: TARGET hostname ${host} is not an IP address — ensure this is intentional\n`);
+  }
+} catch (e) {
+  process.stderr.write(`FATAL: Invalid TARGET URL: ${e.message}\n`);
+  process.exit(1);
+}
+
 const WARMUP = parseInt(args.warmup || '5', 10);
 const MEASURED = parseInt(args.measured || '10', 10);
 const CONCURRENCY = parseInt(args.concurrency || '10', 10);

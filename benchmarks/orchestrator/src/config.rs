@@ -146,6 +146,18 @@ impl DashboardBenchmarkConfig {
                 "testbed {} has no languages",
                 testbed.testbed_id
             );
+            // Validate language names to prevent shell injection (RR-001)
+            for lang in &testbed.languages {
+                anyhow::ensure!(
+                    !lang.is_empty()
+                        && lang
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.'),
+                    "Invalid language name {:?} in testbed '{}' — must be alphanumeric/dash/underscore/dot",
+                    lang,
+                    testbed.testbed_id
+                );
+            }
         }
         anyhow::ensure!(
             ["fullstack", "application"].contains(&self.benchmark_type.as_str()),
