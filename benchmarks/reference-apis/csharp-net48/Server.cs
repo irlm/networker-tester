@@ -184,6 +184,7 @@ namespace BenchmarkServer
     {
         static readonly string Runtime = "csharp-net48";
         static readonly Random FallbackRng = new Random(42);
+        static readonly string BenchApiToken = Environment.GetEnvironmentVariable("BENCH_API_TOKEN") ?? "";
 
         static void Main(string[] args)
         {
@@ -246,6 +247,28 @@ namespace BenchmarkServer
                 var path = req.Url.AbsolutePath.TrimEnd('/');
                 var method = req.HttpMethod;
 
+                // Bearer token authentication
+                double authDurMs = -1;
+                if (!string.IsNullOrEmpty(BenchApiToken) && path != "/health")
+                {
+                    var authSw = Stopwatch.StartNew();
+                    var auth = req.Headers["Authorization"] ?? "";
+                    if (auth != "Bearer " + BenchApiToken)
+                    {
+                        authSw.Stop();
+                        resp.StatusCode = 401;
+                        var errBytes = Encoding.UTF8.GetBytes("{\"error\":\"unauthorized\"}");
+                        resp.ContentType = "application/json";
+                        resp.AddHeader("Server-Timing", string.Format("auth;dur={0:F1}", authSw.Elapsed.TotalMilliseconds));
+                        resp.ContentLength64 = errBytes.Length;
+                        resp.OutputStream.Write(errBytes, 0, errBytes.Length);
+                        resp.Close();
+                        return;
+                    }
+                    authSw.Stop();
+                    authDurMs = authSw.Elapsed.TotalMilliseconds;
+                }
+
                 // Route dispatch
                 string body;
                 switch (path)
@@ -287,7 +310,7 @@ namespace BenchmarkServer
                 }
 
                 sw.Stop();
-                SetBenchHeaders(resp, sw.Elapsed.TotalMilliseconds);
+                SetBenchHeaders(resp, sw.Elapsed.TotalMilliseconds, authDurMs);
                 var bytes = Encoding.UTF8.GetBytes(body);
                 resp.ContentType = "application/json";
                 resp.ContentLength64 = bytes.Length;
@@ -304,9 +327,14 @@ namespace BenchmarkServer
             }
         }
 
-        static void SetBenchHeaders(HttpListenerResponse resp, double durationMs)
+        static void SetBenchHeaders(HttpListenerResponse resp, double durationMs, double authDurMs = -1)
         {
-            resp.AddHeader("Server-Timing", string.Format("app;dur={0:F1}", durationMs));
+            string timing = string.Format("app;dur={0:F1}", durationMs);
+            if (authDurMs >= 0)
+            {
+                timing = string.Format("auth;dur={0:F1}, ", authDurMs) + timing;
+            }
+            resp.AddHeader("Server-Timing", timing);
             resp.AddHeader("Cache-Control", "no-store, no-cache, must-revalidate");
             resp.AddHeader("Timing-Allow-Origin", "*");
             resp.AddHeader("Access-Control-Allow-Origin", "*");
@@ -592,10 +620,7 @@ namespace BenchmarkServer
         // -- /api/upload/process ------------------------------------------
         static string HandleApiUploadProcess(HttpListenerRequest req)
         {
-            const int maxBody = 50 * 1024 * 1024; // 50 MiB
             var bodyBytes = ReadBodyBytes(req);
-            if (bodyBytes.Length > maxBody)
-                return "{\"error\":\"body too large\"}";
             int originalSize = bodyBytes.Length;
 
             // CRC32
