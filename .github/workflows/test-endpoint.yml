@@ -6,12 +6,16 @@ on:
     branches: ["main", "develop"]
     paths:
       - "crates/networker-endpoint/**"
+      - "benchmarks/reference-apis/**"
+      - "benchmarks/validate/**"
       - "tests/endpoint.bats"
       - ".github/workflows/test-endpoint.yml"
   pull_request:
     branches: ["main"]
     paths:
       - "crates/networker-endpoint/**"
+      - "benchmarks/reference-apis/**"
+      - "benchmarks/validate/**"
       - "tests/endpoint.bats"
       - ".github/workflows/test-endpoint.yml"
 
@@ -70,3 +74,26 @@ jobs:
 
       - name: Run endpoint integration tests
         run: bats --tap tests/endpoint.bats
+
+  # ── JSON API validation (starts endpoint, tests all benchmark API endpoints) ─
+  json-api-validation:
+    name: JSON API validation (Rust endpoint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-endpoint-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-endpoint-
+
+      - name: Run JSON API validation (Rust endpoint)
+        run: ./benchmarks/validate/run-validation.sh --rust-only
