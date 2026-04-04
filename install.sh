@@ -9343,6 +9343,12 @@ deploy_benchmark_server() {
 
     local API_DIR="$REPO_DIR/benchmarks/reference-apis"
 
+    # ── Deploy shared benchmark dataset ──────────────────────────────────
+    if [ -f "$API_DIR/shared/bench-data.json" ]; then
+        echo ">> Deploying shared benchmark dataset"
+        cp "$API_DIR/shared/bench-data.json" "$BENCH_DIR/bench-data.json"
+    fi
+
     # ── Kill any existing server on the target port ────────────────────────
     sudo lsof -ti :${BENCH_PORT} | xargs sudo kill -9 2>/dev/null || true
     sleep 1
