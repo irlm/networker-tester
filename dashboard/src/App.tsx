@@ -1,11 +1,16 @@
-import { Suspense, lazy, useEffect, type ComponentType } from 'react';
+import { Suspense, lazy, useEffect, useCallback, type ComponentType } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from './stores/authStore';
 import { useProjectStore } from './stores/projectStore';
+import { useDocsStore } from './stores/docsStore';
 import { api } from './api/client';
 import { useWebSocket, type ConnectionStatus } from './hooks/useWebSocket';
+import { useHotkey } from './hooks/useHotkey';
 import { Sidebar } from './components/layout/Sidebar';
 import { ToastContainer } from './components/common/Toast';
+
+const HelpPanel = lazy(() => import('./components/docs/HelpPanel'));
+const CommandPalette = lazy(() => import('./components/docs/CommandPalette'));
 
 function lazyPage<TModule extends Record<string, ComponentType<unknown>>>(
   load: () => Promise<TModule>,
@@ -107,6 +112,18 @@ function RouteFallback() {
   );
 }
 
+function LazyHelpPanel() {
+  const open = useDocsStore((s) => s.helpOpen);
+  if (!open) return null;
+  return <HelpPanel />;
+}
+
+function LazyCommandPalette() {
+  const open = useDocsStore((s) => s.paletteOpen);
+  if (!open) return null;
+  return <CommandPalette />;
+}
+
 function AuthenticatedApp() {
   const status = useWebSocket();
   const mustChangePassword = useAuthStore((s) => s.mustChangePassword);
@@ -114,6 +131,15 @@ function AuthenticatedApp() {
   const role = useAuthStore((s) => s.role);
   const isPlatformAdmin = useAuthStore((s) => s.isPlatformAdmin);
   const location = useLocation();
+  const openHelp = useDocsStore((s) => s.openHelp);
+  const openPalette = useDocsStore((s) => s.openPalette);
+  const helpOpen = useDocsStore((s) => s.helpOpen);
+  const paletteOpen = useDocsStore((s) => s.paletteOpen);
+
+  const handleHelp = useCallback(() => { if (!paletteOpen) openHelp(); }, [openHelp, paletteOpen]);
+  const handlePalette = useCallback(() => { if (!helpOpen) openPalette(); }, [openPalette, helpOpen]);
+  useHotkey('?', handleHelp);
+  useHotkey('/', handlePalette);
 
   // Fetch projects on mount
   useEffect(() => {
@@ -143,6 +169,10 @@ function AuthenticatedApp() {
       <main className="flex-1 overflow-auto pt-12 md:pt-0">
         <ConnectionBanner status={status} />
         <ToastContainer />
+        <Suspense fallback={null}>
+          <LazyHelpPanel />
+          <LazyCommandPalette />
+        </Suspense>
         <Suspense fallback={<RouteFallback />}>
           <Routes>
             {/* Project list */}

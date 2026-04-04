@@ -1556,4 +1556,371 @@ mod tests {
         assert!(!cert_matches_hostname(&cert, "ple.com"));
         assert!(!cert_matches_hostname(&cert, "com"));
     }
+
+    // ─── hex_lower ────────────���───────────────────────────��──────────────
+
+    #[test]
+    fn hex_lower_empty() {
+        assert_eq!(hex_lower(b""), "");
+    }
+
+    #[test]
+    fn hex_lower_single_byte() {
+        assert_eq!(hex_lower([0x0a]), "0a");
+        assert_eq!(hex_lower([0xff]), "ff");
+        assert_eq!(hex_lower([0x00]), "00");
+    }
+
+    #[test]
+    fn hex_lower_multi_byte() {
+        assert_eq!(hex_lower([0xde, 0xad, 0xbe, 0xef]), "deadbeef");
+    }
+
+    // ─── extract_subject_cn ───────────────────────────────────────────��──
+
+    #[test]
+    fn extract_subject_cn_simple() {
+        assert_eq!(extract_subject_cn("CN=example.com"), Some("example.com"));
+    }
+
+    #[test]
+    fn extract_subject_cn_with_extra_rdns() {
+        assert_eq!(
+            extract_subject_cn("CN=example.com, O=Org, C=US"),
+            Some("example.com")
+        );
+    }
+
+    #[test]
+    fn extract_subject_cn_no_cn() {
+        assert_eq!(extract_subject_cn("O=Org, C=US"), None);
+    }
+
+    #[test]
+    fn extract_subject_cn_empty() {
+        assert_eq!(extract_subject_cn(""), None);
+    }
+
+    // ─── sanitize_revocation_uri ────────���────────────────────────────────
+
+    #[test]
+    fn sanitize_revocation_uri_http() {
+        assert_eq!(
+            sanitize_revocation_uri("http://ocsp.example.com"),
+            Some("http://ocsp.example.com/".into())
+        );
+    }
+
+    #[test]
+    fn sanitize_revocation_uri_https() {
+        assert_eq!(
+            sanitize_revocation_uri("https://crl.example.com/root.crl"),
+            Some("https://crl.example.com/root.crl".into())
+        );
+    }
+
+    #[test]
+    fn sanitize_revocation_uri_ldap_rejected() {
+        assert_eq!(
+            sanitize_revocation_uri("ldap://directory.example.com/cn=CRL"),
+            None
+        );
+    }
+
+    #[test]
+    fn sanitize_revocation_uri_invalid() {
+        assert_eq!(sanitize_revocation_uri("not a url"), None);
+    }
+
+    // ─── build_findings ──────────────────────────────────────────────────
+
+    fn minimal_snapshot() -> HandshakeSnapshot {
+        HandshakeSnapshot {
+            tcp_connect_ms: 1.0,
+            tls_handshake_ms: 2.0,
+            negotiated_tls_version: Some("TLSv1.3".into()),
+            negotiated_cipher_suite: None,
+            negotiated_key_exchange_group: None,
+            alpn: None,
+            leaf: None,
+            chain: vec![],
+            chain_valid: true,
+            trusted_by_system_store: true,
+            verification_performed: true,
+            verified_chain_depth: None,
+            chain_diagnostics: TlsChainDiagnostics {
+                presented_chain_length: 0,
+                leaf_self_signed: false,
+                root_included: false,
+                has_intermediate: false,
+                ordered_subject_issuer_links: false,
+                notes: vec![],
+            },
+            revocation: TlsRevocationInfo {
+                ocsp_urls: vec![],
+                crl_urls: vec![],
+                ocsp_stapled: false,
+                method: String::new(),
+                status: String::new(),
+                online_check_attempted: false,
+                notes: vec![],
+            },
+        }
+    }
+
+    fn minimal_resumption() -> TlsResumptionSection {
+        TlsResumptionSection {
+            supported: true,
+            method: None,
+            initial_handshake_ms: Some(2.0),
+            resumed_handshake_ms: Some(1.0),
+            resumption_ratio: Some(2.0),
+            resumed_tls_version: None,
+            resumed_cipher_suite: None,
+            early_data_offered: false,
+            early_data_accepted: None,
+            notes: vec![],
+        }
+    }
+
+    #[test]
+    fn build_findings_hostname_mismatch_produces_error() {
+        let findings = build_findings(
+            &minimal_snapshot(),
+            false,
+            &minimal_resumption(),
+            &TlsPathClassification::Direct,
+            false,
+        );
+        assert!(findings.iter().any(|f| f.code == "HOSTNAME_MISMATCH"));
+        assert!(findings
+            .iter()
+            .any(|f| f.severity == TlsFindingSeverity::Error));
+    }
+
+    #[test]
+    fn build_findings_insecure_mode_warning() {
+        let findings = build_findings(
+            &minimal_snapshot(),
+            true,
+            &minimal_resumption(),
+            &TlsPathClassification::Direct,
+            true,
+        );
+        assert!(findings.iter().any(|f| f.code == "INSECURE_MODE_ACTIVE"));
+    }
+
+    #[test]
+    fn build_findings_untrusted_chain() {
+        let mut snap = minimal_snapshot();
+        snap.trusted_by_system_store = false;
+        let findings = build_findings(
+            &snap,
+            true,
+            &minimal_resumption(),
+            &TlsPathClassification::Direct,
+            false,
+        );
+        assert!(findings.iter().any(|f| f.code == "UNTRUSTED_CHAIN"));
+    }
+
+    #[test]
+    fn build_findings_self_signed_leaf() {
+        let mut snap = minimal_snapshot();
+        snap.chain_diagnostics.leaf_self_signed = true;
+        let findings = build_findings(
+            &snap,
+            true,
+            &minimal_resumption(),
+            &TlsPathClassification::Direct,
+            false,
+        );
+        assert!(findings.iter().any(|f| f.code == "SELF_SIGNED_LEAF"));
+    }
+
+    #[test]
+    fn build_findings_no_intermediate_presented() {
+        let mut snap = minimal_snapshot();
+        snap.chain_diagnostics.presented_chain_length = 1;
+        let findings = build_findings(
+            &snap,
+            true,
+            &minimal_resumption(),
+            &TlsPathClassification::Direct,
+            false,
+        );
+        assert!(findings
+            .iter()
+            .any(|f| f.code == "NO_INTERMEDIATE_PRESENTED"));
+    }
+
+    #[test]
+    fn build_findings_root_included() {
+        let mut snap = minimal_snapshot();
+        snap.chain_diagnostics.root_included = true;
+        let findings = build_findings(
+            &snap,
+            true,
+            &minimal_resumption(),
+            &TlsPathClassification::Direct,
+            false,
+        );
+        assert!(findings.iter().any(|f| f.code == "ROOT_INCLUDED_IN_CHAIN"));
+    }
+
+    #[test]
+    fn build_findings_revocation_metadata_present() {
+        let mut snap = minimal_snapshot();
+        snap.revocation.ocsp_urls = vec!["http://ocsp.example.com".into()];
+        let findings = build_findings(
+            &snap,
+            true,
+            &minimal_resumption(),
+            &TlsPathClassification::Direct,
+            false,
+        );
+        assert!(findings
+            .iter()
+            .any(|f| f.code == "REVOCATION_METADATA_PRESENT"));
+    }
+
+    #[test]
+    fn build_findings_resumption_not_observed() {
+        let resumption = TlsResumptionSection {
+            supported: false,
+            method: None,
+            initial_handshake_ms: None,
+            resumed_handshake_ms: None,
+            resumption_ratio: None,
+            resumed_tls_version: None,
+            resumed_cipher_suite: None,
+            early_data_offered: false,
+            early_data_accepted: None,
+            notes: vec![],
+        };
+        let findings = build_findings(
+            &minimal_snapshot(),
+            true,
+            &resumption,
+            &TlsPathClassification::Direct,
+            false,
+        );
+        assert!(findings.iter().any(|f| f.code == "RESUMPTION_NOT_OBSERVED"));
+    }
+
+    #[test]
+    fn build_findings_suspicious_path() {
+        let findings = build_findings(
+            &minimal_snapshot(),
+            true,
+            &minimal_resumption(),
+            &TlsPathClassification::IndirectSuspicious,
+            false,
+        );
+        assert!(findings.iter().any(|f| f.code == "PATH_SUSPICIOUS"));
+    }
+
+    #[test]
+    fn build_findings_ct_and_must_staple() {
+        let mut snap = minimal_snapshot();
+        snap.leaf = Some(TlsCertificateInfo {
+            subject: "CN=test".into(),
+            issuer: "CN=CA".into(),
+            serial_number: "01".into(),
+            not_before: None,
+            not_after: None,
+            san_dns: vec![],
+            san_ip: vec![],
+            key_type: "RSA".into(),
+            key_bits: Some(2048),
+            signature_algorithm: "1.2.3".into(),
+            is_ca: false,
+            sha256_fingerprint: "aa".into(),
+            spki_sha256: "bb".into(),
+            ocsp_urls: vec![],
+            crl_urls: vec![],
+            aia_issuers: vec![],
+            must_staple: true,
+            scts_present: true,
+        });
+        let findings = build_findings(
+            &snap,
+            true,
+            &minimal_resumption(),
+            &TlsPathClassification::Direct,
+            false,
+        );
+        assert!(findings.iter().any(|f| f.code == "CT_PRESENT"));
+        assert!(findings.iter().any(|f| f.code == "MUST_STAPLE"));
+    }
+
+    #[test]
+    fn build_findings_expired_cert() {
+        let mut snap = minimal_snapshot();
+        snap.leaf = Some(TlsCertificateInfo {
+            subject: "CN=test".into(),
+            issuer: "CN=CA".into(),
+            serial_number: "01".into(),
+            not_before: None,
+            not_after: Some(Utc::now() - chrono::Duration::days(1)),
+            san_dns: vec![],
+            san_ip: vec![],
+            key_type: "RSA".into(),
+            key_bits: Some(2048),
+            signature_algorithm: "1.2.3".into(),
+            is_ca: false,
+            sha256_fingerprint: "aa".into(),
+            spki_sha256: "bb".into(),
+            ocsp_urls: vec![],
+            crl_urls: vec![],
+            aia_issuers: vec![],
+            must_staple: false,
+            scts_present: false,
+        });
+        let findings = build_findings(
+            &snap,
+            true,
+            &minimal_resumption(),
+            &TlsPathClassification::Direct,
+            false,
+        );
+        assert!(findings.iter().any(|f| f.code == "CERT_EXPIRED"));
+    }
+
+    // ─── summarize_findings ──────────���───────────────────────────────────
+
+    #[test]
+    fn summarize_findings_error_takes_precedence() {
+        let findings = vec![
+            TlsFinding {
+                severity: TlsFindingSeverity::Info,
+                code: "X".into(),
+                message: "".into(),
+            },
+            TlsFinding {
+                severity: TlsFindingSeverity::Error,
+                code: "Y".into(),
+                message: "".into(),
+            },
+        ];
+        assert_eq!(summarize_findings(&findings).status, "error");
+    }
+
+    #[test]
+    fn summarize_findings_warn_without_error() {
+        let findings = vec![TlsFinding {
+            severity: TlsFindingSeverity::Warning,
+            code: "W".into(),
+            message: "".into(),
+        }];
+        assert_eq!(summarize_findings(&findings).status, "warn");
+    }
+
+    // ─── dns_name_matches edge cases ─────────────────────────────────────
+
+    #[test]
+    fn dns_name_matches_case_insensitive() {
+        assert!(dns_name_matches("Example.COM", "example.com"));
+        assert!(dns_name_matches("*.EXAMPLE.COM", "www.example.com"));
+    }
 }

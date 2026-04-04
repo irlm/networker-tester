@@ -1035,4 +1035,289 @@ mod tests {
         assert!(summary.capture_may_be_ambiguous);
         assert!(!summary.warnings.is_empty());
     }
+
+    // ─── endpoint_candidates_from_target ─────────────────────────────────
+
+    #[test]
+    fn endpoint_candidates_url() {
+        let candidates = endpoint_candidates_from_target("https://198.51.100.10:8443/health");
+        assert!(candidates.contains(&"198.51.100.10".to_string()));
+    }
+
+    #[test]
+    fn endpoint_candidates_hostname_url() {
+        let candidates = endpoint_candidates_from_target("https://example.com:8443/path");
+        assert!(candidates.contains(&"example.com".to_string()));
+    }
+
+    #[test]
+    fn endpoint_candidates_bare_host_port() {
+        let candidates = endpoint_candidates_from_target("10.0.0.1:8443");
+        assert!(candidates.contains(&"10.0.0.1".to_string()));
+    }
+
+    #[test]
+    fn endpoint_candidates_ipv6_bracket() {
+        let candidates = endpoint_candidates_from_target("[::1]:8443");
+        assert!(candidates.contains(&"::1".to_string()));
+    }
+
+    #[test]
+    fn endpoint_candidates_bare_ipv6() {
+        let candidates = endpoint_candidates_from_target("::1");
+        assert!(candidates.contains(&"::1".to_string()));
+    }
+
+    #[test]
+    fn endpoint_candidates_deduplicates() {
+        // URL parse and bare-host parse both yield the same host
+        let candidates = endpoint_candidates_from_target("https://10.0.0.1/");
+        assert_eq!(candidates.iter().filter(|c| *c == "10.0.0.1").count(), 1);
+    }
+
+    // ─── pct ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn pct_basic() {
+        assert_eq!(pct(50, 100.0), 50.0);
+        assert_eq!(pct(100, 100.0), 100.0);
+        assert_eq!(pct(0, 100.0), 0.0);
+    }
+
+    #[test]
+    fn pct_zero_total() {
+        assert_eq!(pct(10, 0.0), 0.0);
+    }
+
+    #[test]
+    fn pct_rounds_to_one_decimal() {
+        // 33 / 100 = 33.0%
+        assert_eq!(pct(33, 100.0), 33.0);
+        // 1 / 3 ≈ 33.3%
+        assert_eq!(pct(1, 3.0), 33.3);
+    }
+
+    // ─── top_n_endpoints ─────────────────────────────────────────────────
+
+    #[test]
+    fn top_n_endpoints_sorts_and_truncates() {
+        let mut counts = BTreeMap::new();
+        counts.insert("a".into(), 10);
+        counts.insert("b".into(), 50);
+        counts.insert("c".into(), 30);
+
+        let top = top_n_endpoints(counts, 2);
+        assert_eq!(top.len(), 2);
+        assert_eq!(top[0].endpoint, "b");
+        assert_eq!(top[0].packets, 50);
+        assert_eq!(top[1].endpoint, "c");
+    }
+
+    #[test]
+    fn top_n_endpoints_empty() {
+        let counts = BTreeMap::new();
+        assert!(top_n_endpoints(counts, 5).is_empty());
+    }
+
+    // ─── top_n_ports ─────────────────────────────────────────────────────
+
+    #[test]
+    fn top_n_ports_sorts_and_truncates() {
+        let mut counts = BTreeMap::new();
+        counts.insert(443u16, 80);
+        counts.insert(80, 20);
+        counts.insert(8443, 50);
+
+        let top = top_n_ports(counts, 2);
+        assert_eq!(top.len(), 2);
+        assert_eq!(top[0].port, 443);
+        assert_eq!(top[1].port, 8443);
+    }
+
+    #[test]
+    fn top_n_ports_empty() {
+        let counts = BTreeMap::new();
+        assert!(top_n_ports(counts, 5).is_empty());
+    }
+
+    // ─── dominant_trace_port ─────────────────────────────────────────────
+
+    #[test]
+    fn dominant_trace_port_returns_first_when_target_present() {
+        let ports = vec![
+            PortPacketCount {
+                port: 443,
+                packets: 80,
+            },
+            PortPacketCount {
+                port: 80,
+                packets: 20,
+            },
+        ];
+        assert_eq!(dominant_trace_port(&ports, 50), Some(443));
+    }
+
+    #[test]
+    fn dominant_trace_port_none_when_no_target_packets() {
+        let ports = vec![PortPacketCount {
+            port: 443,
+            packets: 80,
+        }];
+        assert_eq!(dominant_trace_port(&ports, 0), None);
+    }
+
+    #[test]
+    fn dominant_trace_port_none_when_empty() {
+        assert_eq!(dominant_trace_port(&[], 10), None);
+    }
+
+    // ─── likely_target_packet_count ──────────────────────────────────────
+
+    #[test]
+    fn likely_target_packet_count_sums_matches() {
+        let rows = vec![
+            EndpointPacketCount {
+                endpoint: "10.0.0.1".into(),
+                packets: 40,
+            },
+            EndpointPacketCount {
+                endpoint: "10.0.0.2".into(),
+                packets: 30,
+            },
+            EndpointPacketCount {
+                endpoint: "10.0.0.3".into(),
+                packets: 20,
+            },
+        ];
+        let targets = vec!["10.0.0.1".to_string(), "10.0.0.3".to_string()];
+        assert_eq!(likely_target_packet_count(&rows, &targets), 60);
+    }
+
+    // ─── apply_interpretation — edge cases ─────────────────────────────────
+
+    fn empty_summary(tcp: u64, udp: u64, quic: u64, total: u64) -> PacketCaptureSummary {
+        PacketCaptureSummary {
+            mode: "tester".into(),
+            interface: "lo0".into(),
+            capture_path: "x".into(),
+            tshark_path: "tshark".into(),
+            total_packets: total,
+            capture_status: "captured".into(),
+            note: None,
+            warnings: vec![],
+            likely_target_endpoints: vec![],
+            likely_target_packets: 0,
+            likely_target_pct_of_total: 0.0,
+            dominant_trace_port: None,
+            capture_confidence: "low".into(),
+            tcp_packets: tcp,
+            udp_packets: udp,
+            quic_packets: quic,
+            http_packets: 0,
+            dns_packets: 0,
+            retransmissions: 0,
+            duplicate_acks: 0,
+            resets: 0,
+            transport_shares: vec![],
+            top_endpoints: vec![],
+            top_ports: vec![],
+            observed_quic: false,
+            observed_tcp_only: false,
+            observed_mixed_transport: false,
+            capture_may_be_ambiguous: false,
+        }
+    }
+
+    #[test]
+    fn apply_interpretation_tcp_only_sets_flag_and_note() {
+        let mut summary = empty_summary(50, 0, 0, 50);
+        apply_interpretation(&mut summary);
+        assert!(summary.observed_tcp_only);
+        assert!(!summary.observed_quic);
+        assert!(!summary.observed_mixed_transport);
+        assert!(summary.note.is_some());
+        assert!(!summary.warnings.is_empty());
+    }
+
+    #[test]
+    fn apply_interpretation_zero_packets_is_ambiguous() {
+        let mut summary = empty_summary(0, 0, 0, 0);
+        apply_interpretation(&mut summary);
+        assert!(summary.capture_may_be_ambiguous);
+        assert!(summary.warnings.iter().any(|w| w.contains("no packets")));
+    }
+
+    #[test]
+    fn apply_interpretation_quic_only() {
+        let mut summary = empty_summary(0, 30, 30, 30);
+        apply_interpretation(&mut summary);
+        assert!(summary.observed_quic);
+        assert!(!summary.observed_tcp_only);
+        assert!(!summary.observed_mixed_transport); // no TCP → not mixed
+    }
+
+    #[test]
+    fn apply_interpretation_retransmissions_add_warning() {
+        let mut summary = empty_summary(50, 0, 0, 50);
+        summary.retransmissions = 3;
+        apply_interpretation(&mut summary);
+        assert!(summary
+            .warnings
+            .iter()
+            .any(|w| w.contains("retransmissions")));
+    }
+
+    #[test]
+    fn apply_interpretation_resets_add_warning() {
+        let mut summary = empty_summary(50, 0, 0, 50);
+        summary.resets = 1;
+        apply_interpretation(&mut summary);
+        assert!(summary.warnings.iter().any(|w| w.contains("resets")));
+    }
+
+    #[test]
+    fn apply_interpretation_multiple_endpoints_ambiguous() {
+        let mut summary = empty_summary(50, 0, 0, 50);
+        summary.top_endpoints = vec![
+            EndpointPacketCount {
+                endpoint: "1.1.1.1".into(),
+                packets: 30,
+            },
+            EndpointPacketCount {
+                endpoint: "2.2.2.2".into(),
+                packets: 20,
+            },
+        ];
+        // No likely targets identified → ambiguous
+        apply_interpretation(&mut summary);
+        assert!(summary.capture_may_be_ambiguous);
+    }
+
+    #[test]
+    fn apply_interpretation_no_likely_target_with_endpoints_ambiguous() {
+        let mut summary = empty_summary(50, 0, 0, 50);
+        summary.top_endpoints = vec![EndpointPacketCount {
+            endpoint: "1.1.1.1".into(),
+            packets: 50,
+        }];
+        // Endpoints present but no likely target → ambiguous
+        apply_interpretation(&mut summary);
+        assert!(summary.capture_may_be_ambiguous);
+        assert!(summary
+            .warnings
+            .iter()
+            .any(|w| w.contains("No clear target")));
+    }
+
+    #[test]
+    fn likely_target_packet_count_no_matches() {
+        let rows = vec![EndpointPacketCount {
+            endpoint: "10.0.0.1".into(),
+            packets: 40,
+        }];
+        assert_eq!(
+            likely_target_packet_count(&rows, &["192.168.1.1".to_string()]),
+            0
+        );
+    }
 }

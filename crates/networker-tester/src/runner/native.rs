@@ -847,3 +847,115 @@ fn make_failed(
         http_stack: None,
     }
 }
+
+#[cfg(test)]
+#[cfg(feature = "native")]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    #[test]
+    fn native_backend_name_is_not_empty() {
+        let name = native_backend_name();
+        assert!(!name.is_empty());
+        assert!(name.starts_with("native/"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn native_backend_name_macos() {
+        assert_eq!(native_backend_name(), "native/secure-transport");
+    }
+
+    #[test]
+    fn make_failed_populates_error_fields() {
+        let run_id = Uuid::new_v4();
+        let attempt_id = Uuid::new_v4();
+        let started = Utc::now();
+        let attempt = make_failed(
+            run_id,
+            attempt_id,
+            0,
+            started,
+            ErrorCategory::Tcp,
+            "connect failed".into(),
+            Some("detail".into()),
+            None,
+            None,
+        );
+        assert!(!attempt.success);
+        assert_eq!(attempt.protocol, Protocol::Native);
+        assert_eq!(attempt.run_id, run_id);
+        assert_eq!(attempt.attempt_id, attempt_id);
+        let err = attempt.error.unwrap();
+        assert_eq!(err.category, ErrorCategory::Tcp);
+        assert_eq!(err.message, "connect failed");
+        assert_eq!(err.detail, Some("detail".into()));
+    }
+
+    #[test]
+    fn make_failed_preserves_partial_dns_tcp() {
+        let run_id = Uuid::new_v4();
+        let attempt_id = Uuid::new_v4();
+        let now = Utc::now();
+        let dns = DnsResult {
+            query_name: "example.com".into(),
+            resolved_ips: vec!["1.2.3.4".into()],
+            duration_ms: 5.0,
+            started_at: now,
+            success: true,
+        };
+        let tcp = TcpResult {
+            local_addr: None,
+            remote_addr: "1.2.3.4:443".into(),
+            connect_duration_ms: 10.0,
+            attempt_count: 1,
+            started_at: now,
+            success: true,
+            mss_bytes: None,
+            rtt_estimate_ms: None,
+            retransmits: None,
+            total_retrans: None,
+            snd_cwnd: None,
+            snd_ssthresh: None,
+            rtt_variance_ms: None,
+            rcv_space: None,
+            segs_out: None,
+            segs_in: None,
+            congestion_algorithm: None,
+            delivery_rate_bps: None,
+            min_rtt_ms: None,
+        };
+        let attempt = make_failed(
+            run_id,
+            attempt_id,
+            1,
+            now,
+            ErrorCategory::Tls,
+            "tls failed".into(),
+            None,
+            Some(dns),
+            Some(tcp),
+        );
+        assert!(attempt.dns.is_some());
+        assert!(attempt.tcp.is_some());
+        assert!(attempt.tls.is_none());
+        assert!(attempt.http.is_none());
+    }
+
+    #[test]
+    fn load_native_ca_bundle_fails_on_missing_file() {
+        let result = load_native_ca_bundle("/nonexistent/path/ca.pem");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_native_ca_bundle_fails_on_empty_pem() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("empty.pem");
+        std::fs::write(&path, "not a cert\n").unwrap();
+        let result = load_native_ca_bundle(path.to_str().unwrap());
+        assert!(result.is_err());
+    }
+}

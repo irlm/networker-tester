@@ -94,7 +94,8 @@ enum Command {
         callback_url: Option<String>,
 
         /// Bearer token for dashboard callback authentication.
-        #[arg(long)]
+        /// Also reads from BENCH_CALLBACK_TOKEN env var.
+        #[arg(long, env = "BENCH_CALLBACK_TOKEN")]
         callback_token: Option<String>,
     },
 
