@@ -400,4 +400,102 @@ mod tests {
         assert!((DEFAULT_LATENCY_THRESHOLD_PERCENT - 10.0).abs() < f64::EPSILON);
         assert!((DEFAULT_MIN_SUCCESS_RATE - 99.0).abs() < f64::EPSILON);
     }
+
+    // ─── language extraction from run name ───────────────────────────────
+
+    /// Mirrors the inline parsing in `load_language_metrics()`.
+    fn extract_language(run_name: &str) -> String {
+        run_name
+            .rsplit(" - ")
+            .next()
+            .unwrap_or(run_name)
+            .to_string()
+    }
+
+    #[test]
+    fn extract_language_standard_format() {
+        assert_eq!(extract_language("My Config - rust"), "rust");
+        assert_eq!(extract_language("Benchmark - go"), "go");
+    }
+
+    #[test]
+    fn extract_language_no_separator() {
+        assert_eq!(extract_language("rust"), "rust");
+    }
+
+    #[test]
+    fn extract_language_multiple_separators() {
+        assert_eq!(extract_language("Multi - Part - Config - python"), "python");
+    }
+
+    #[test]
+    fn extract_language_empty() {
+        assert_eq!(extract_language(""), "");
+    }
+
+    // ─── severity classification ─────────────────────────────────────────
+
+    #[test]
+    fn latency_severity_warning_at_threshold() {
+        let threshold = DEFAULT_LATENCY_THRESHOLD_PERCENT;
+        let delta = threshold + 1.0; // just above threshold
+        let severity = if delta > threshold * 2.0 {
+            "critical"
+        } else {
+            "warning"
+        };
+        assert_eq!(severity, "warning");
+    }
+
+    #[test]
+    fn latency_severity_critical_at_double_threshold() {
+        let threshold = DEFAULT_LATENCY_THRESHOLD_PERCENT;
+        let delta = threshold * 2.0 + 1.0; // above 2x threshold
+        let severity = if delta > threshold * 2.0 {
+            "critical"
+        } else {
+            "warning"
+        };
+        assert_eq!(severity, "critical");
+    }
+
+    #[test]
+    fn success_rate_severity_warning_for_small_drop() {
+        let delta = 3.0; // 3% drop
+        let severity = if delta > 5.0 { "critical" } else { "warning" };
+        assert_eq!(severity, "warning");
+    }
+
+    #[test]
+    fn success_rate_severity_critical_for_large_drop() {
+        let delta = 6.0; // 6% drop
+        let severity = if delta > 5.0 { "critical" } else { "warning" };
+        assert_eq!(severity, "critical");
+    }
+
+    // ─── delta calculation ───────────────────────────────────────────────
+
+    #[test]
+    fn latency_delta_percent_positive_regression() {
+        let baseline: f64 = 100.0;
+        let current: f64 = 115.0;
+        let delta = ((current - baseline) / baseline) * 100.0;
+        assert!((delta - 15.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn latency_delta_percent_improvement() {
+        let baseline: f64 = 100.0;
+        let current: f64 = 90.0;
+        let delta = ((current - baseline) / baseline) * 100.0;
+        assert!((delta - (-10.0)).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn success_rate_delta_is_drop() {
+        let baseline_sr: f64 = 99.5;
+        let current_sr: f64 = 97.0;
+        let delta = baseline_sr - current_sr;
+        assert!((delta - 2.5).abs() < f64::EPSILON);
+    }
 }

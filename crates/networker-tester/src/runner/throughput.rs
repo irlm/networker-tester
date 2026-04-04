@@ -1326,4 +1326,291 @@ mod tests {
         verify_upload(&mut attempt, 100);
         assert!(attempt.success);
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // rewrite_to_http — URL scheme and port mapping
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn rewrite_to_http_maps_8443_to_8080() {
+        let u = url::Url::parse("https://example.com:8443/download").unwrap();
+        let r = rewrite_to_http(&u);
+        assert_eq!(r.scheme(), "http");
+        assert_eq!(r.port(), Some(8080));
+        assert_eq!(r.host_str(), Some("example.com"));
+    }
+
+    #[test]
+    fn rewrite_to_http_maps_8444_to_8081() {
+        let u = url::Url::parse("https://example.com:8444/").unwrap();
+        let r = rewrite_to_http(&u);
+        assert_eq!(r.scheme(), "http");
+        assert_eq!(r.port(), Some(8081));
+    }
+
+    #[test]
+    fn rewrite_to_http_maps_8445_to_8082() {
+        let u = url::Url::parse("https://example.com:8445/").unwrap();
+        let r = rewrite_to_http(&u);
+        assert_eq!(r.scheme(), "http");
+        assert_eq!(r.port(), Some(8082));
+    }
+
+    #[test]
+    fn rewrite_to_http_standard_https_drops_port() {
+        let u = url::Url::parse("https://example.com/path").unwrap();
+        let r = rewrite_to_http(&u);
+        assert_eq!(r.scheme(), "http");
+        assert_eq!(r.port(), None); // default port 80
+    }
+
+    #[test]
+    fn rewrite_to_http_noop_for_http() {
+        let u = url::Url::parse("http://example.com:8080/").unwrap();
+        let r = rewrite_to_http(&u);
+        assert_eq!(r, u);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // compute_overhead_ms — connection phase overhead
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn compute_overhead_ms_all_none() {
+        let attempt = RequestAttempt {
+            attempt_id: Uuid::new_v4(),
+            run_id: Uuid::new_v4(),
+            protocol: Protocol::Download,
+            sequence_num: 0,
+            started_at: Utc::now(),
+            finished_at: Some(Utc::now()),
+            success: true,
+            dns: None,
+            tcp: None,
+            tls: None,
+            http: None,
+            udp: None,
+            error: None,
+            retry_count: 0,
+            server_timing: None,
+            udp_throughput: None,
+            page_load: None,
+            browser: None,
+            http_stack: None,
+        };
+        assert_eq!(compute_overhead_ms(&attempt), 0.0);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // verify_upload — malformed header edge cases
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn verify_upload_non_numeric_header_silently_skips() {
+        // Non-numeric header value parses as None → treated as absent.
+        let mut attempt = RequestAttempt {
+            attempt_id: Uuid::new_v4(),
+            run_id: Uuid::new_v4(),
+            protocol: Protocol::Upload,
+            sequence_num: 0,
+            started_at: Utc::now(),
+            finished_at: Some(Utc::now()),
+            success: true,
+            dns: None,
+            tcp: None,
+            tls: None,
+            http: Some(HttpResult {
+                negotiated_version: "HTTP/1.1".into(),
+                status_code: 200,
+                headers_size_bytes: 0,
+                body_size_bytes: 0,
+                ttfb_ms: 1.0,
+                total_duration_ms: 100.0,
+                redirect_count: 0,
+                started_at: Utc::now(),
+                response_headers: vec![(
+                    "x-networker-received-bytes".into(),
+                    "not-a-number".into(),
+                )],
+                payload_bytes: 0,
+                throughput_mbps: None,
+                goodput_mbps: None,
+                cpu_time_ms: None,
+                csw_voluntary: None,
+                csw_involuntary: None,
+            }),
+            udp: None,
+            error: None,
+            retry_count: 0,
+            server_timing: None,
+            udp_throughput: None,
+            page_load: None,
+            browser: None,
+            http_stack: None,
+        };
+        verify_upload(&mut attempt, 100);
+        // Non-numeric treated as absent → skip verification, stay successful.
+        assert!(attempt.success);
+        assert!(attempt.error.is_none());
+    }
+
+    #[test]
+    fn verify_upload_float_header_skips() {
+        let mut attempt = RequestAttempt {
+            attempt_id: Uuid::new_v4(),
+            run_id: Uuid::new_v4(),
+            protocol: Protocol::Upload,
+            sequence_num: 0,
+            started_at: Utc::now(),
+            finished_at: Some(Utc::now()),
+            success: true,
+            dns: None,
+            tcp: None,
+            tls: None,
+            http: Some(HttpResult {
+                negotiated_version: "HTTP/1.1".into(),
+                status_code: 200,
+                headers_size_bytes: 0,
+                body_size_bytes: 0,
+                ttfb_ms: 1.0,
+                total_duration_ms: 100.0,
+                redirect_count: 0,
+                started_at: Utc::now(),
+                response_headers: vec![("x-networker-received-bytes".into(), "12.5".into())],
+                payload_bytes: 0,
+                throughput_mbps: None,
+                goodput_mbps: None,
+                cpu_time_ms: None,
+                csw_voluntary: None,
+                csw_involuntary: None,
+            }),
+            udp: None,
+            error: None,
+            retry_count: 0,
+            server_timing: None,
+            udp_throughput: None,
+            page_load: None,
+            browser: None,
+            http_stack: None,
+        };
+        verify_upload(&mut attempt, 12);
+        // "12.5" doesn't parse as usize → treated as absent → skip.
+        assert!(attempt.success);
+    }
+
+    #[test]
+    fn verify_upload_empty_header_value_skips() {
+        let mut attempt = RequestAttempt {
+            attempt_id: Uuid::new_v4(),
+            run_id: Uuid::new_v4(),
+            protocol: Protocol::Upload,
+            sequence_num: 0,
+            started_at: Utc::now(),
+            finished_at: Some(Utc::now()),
+            success: true,
+            dns: None,
+            tcp: None,
+            tls: None,
+            http: Some(HttpResult {
+                negotiated_version: "HTTP/1.1".into(),
+                status_code: 200,
+                headers_size_bytes: 0,
+                body_size_bytes: 0,
+                ttfb_ms: 1.0,
+                total_duration_ms: 100.0,
+                redirect_count: 0,
+                started_at: Utc::now(),
+                response_headers: vec![("x-networker-received-bytes".into(), "".into())],
+                payload_bytes: 0,
+                throughput_mbps: None,
+                goodput_mbps: None,
+                cpu_time_ms: None,
+                csw_voluntary: None,
+                csw_involuntary: None,
+            }),
+            udp: None,
+            error: None,
+            retry_count: 0,
+            server_timing: None,
+            udp_throughput: None,
+            page_load: None,
+            browser: None,
+            http_stack: None,
+        };
+        verify_upload(&mut attempt, 100);
+        assert!(attempt.success);
+    }
+
+    #[test]
+    fn compute_overhead_ms_sums_phases() {
+        use crate::metrics::{DnsResult, TcpResult, TlsResult};
+        let now = Utc::now();
+        let attempt = RequestAttempt {
+            attempt_id: Uuid::new_v4(),
+            run_id: Uuid::new_v4(),
+            protocol: Protocol::Download,
+            sequence_num: 0,
+            started_at: now,
+            finished_at: Some(now),
+            success: true,
+            dns: Some(DnsResult {
+                query_name: "example.com".into(),
+                resolved_ips: vec![],
+                duration_ms: 5.0,
+                started_at: now,
+                success: true,
+            }),
+            tcp: Some(TcpResult {
+                local_addr: None,
+                remote_addr: "10.0.0.1:443".into(),
+                connect_duration_ms: 10.0,
+                attempt_count: 1,
+                started_at: now,
+                success: true,
+                mss_bytes: None,
+                rtt_estimate_ms: None,
+                retransmits: None,
+                total_retrans: None,
+                snd_cwnd: None,
+                snd_ssthresh: None,
+                rtt_variance_ms: None,
+                rcv_space: None,
+                segs_out: None,
+                segs_in: None,
+                congestion_algorithm: None,
+                delivery_rate_bps: None,
+                min_rtt_ms: None,
+            }),
+            tls: Some(TlsResult {
+                protocol_version: "TLSv1.3".into(),
+                cipher_suite: "AES_256_GCM".into(),
+                alpn_negotiated: None,
+                cert_subject: None,
+                cert_issuer: None,
+                cert_expiry: None,
+                handshake_duration_ms: 15.0,
+                started_at: now,
+                success: true,
+                cert_chain: vec![],
+                tls_backend: None,
+                resumed: None,
+                handshake_kind: None,
+                tls13_tickets_received: None,
+                previous_handshake_duration_ms: None,
+                previous_handshake_kind: None,
+                previous_http_status_code: None,
+                http_status_code: None,
+            }),
+            http: None,
+            udp: None,
+            error: None,
+            retry_count: 0,
+            server_timing: None,
+            udp_throughput: None,
+            page_load: None,
+            browser: None,
+            http_stack: None,
+        };
+        assert!((compute_overhead_ms(&attempt) - 30.0).abs() < 1e-12);
+    }
 }

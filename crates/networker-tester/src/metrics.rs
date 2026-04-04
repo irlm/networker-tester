@@ -1599,29 +1599,101 @@ mod tests {
     }
 
     #[test]
-    fn test_protocol_roundtrip() {
+    fn test_protocol_roundtrip_all_variants() {
         use std::str::FromStr;
-        for p in &[
+        // Every Protocol variant must survive Display→FromStr round-trip.
+        let all = [
             "tcp",
             "http1",
             "http2",
             "http3",
             "udp",
             "download",
+            "download1",
+            "download2",
+            "download3",
             "upload",
+            "upload1",
+            "upload2",
+            "upload3",
             "webdownload",
             "webupload",
             "udpdownload",
             "udpupload",
+            "dns",
+            "tls",
+            "tlsresume",
             "native",
             "curl",
             "pageload",
             "pageload2",
             "pageload3",
             "browser",
+            "browser1",
+            "browser2",
+            "browser3",
+        ];
+        for p in &all {
+            let parsed = Protocol::from_str(p)
+                .unwrap_or_else(|_| panic!("Protocol::from_str({p:?}) must succeed"));
+            assert_eq!(
+                parsed.to_string(),
+                *p,
+                "Display→FromStr round-trip failed for {p}"
+            );
+        }
+        // Verify we tested every variant (count must match enum variant count).
+        assert_eq!(
+            all.len(),
+            29,
+            "Update this test when adding Protocol variants"
+        );
+    }
+
+    #[test]
+    fn protocol_from_str_rejects_unknown() {
+        use std::str::FromStr;
+        assert!(Protocol::from_str("unknown").is_err());
+        assert!(Protocol::from_str("").is_err());
+        assert!(Protocol::from_str("http4").is_err());
+    }
+
+    #[test]
+    fn protocol_from_str_is_case_insensitive() {
+        use std::str::FromStr;
+        assert_eq!(Protocol::from_str("HTTP1").unwrap(), Protocol::Http1);
+        assert_eq!(Protocol::from_str("DNS").unwrap(), Protocol::Dns);
+        assert_eq!(Protocol::from_str("PageLoad").unwrap(), Protocol::PageLoad);
+    }
+
+    #[test]
+    fn error_category_display_round_trip() {
+        // Verify all ErrorCategory variants produce expected strings.
+        assert_eq!(ErrorCategory::Dns.to_string(), "dns");
+        assert_eq!(ErrorCategory::Tcp.to_string(), "tcp");
+        assert_eq!(ErrorCategory::Tls.to_string(), "tls");
+        assert_eq!(ErrorCategory::Http.to_string(), "http");
+        assert_eq!(ErrorCategory::Udp.to_string(), "udp");
+        assert_eq!(ErrorCategory::Timeout.to_string(), "timeout");
+        assert_eq!(ErrorCategory::Config.to_string(), "config");
+        assert_eq!(ErrorCategory::Other.to_string(), "other");
+    }
+
+    #[test]
+    fn error_category_serde_round_trip() {
+        for cat in [
+            ErrorCategory::Dns,
+            ErrorCategory::Tcp,
+            ErrorCategory::Tls,
+            ErrorCategory::Http,
+            ErrorCategory::Udp,
+            ErrorCategory::Timeout,
+            ErrorCategory::Config,
+            ErrorCategory::Other,
         ] {
-            let parsed = Protocol::from_str(p).unwrap();
-            assert_eq!(parsed.to_string(), *p);
+            let json = serde_json::to_string(&cat).unwrap();
+            let de: ErrorCategory = serde_json::from_str(&json).unwrap();
+            assert_eq!(de, cat, "serde round-trip failed for {cat:?}");
         }
     }
 
@@ -1947,6 +2019,269 @@ mod tests {
     fn primary_metric_value_browser_absent() {
         let a = bare_attempt(Protocol::Browser);
         assert!(primary_metric_value(&a).is_none());
+    }
+
+    #[test]
+    fn primary_metric_value_http_family() {
+        for proto in [
+            Protocol::Http1,
+            Protocol::Http2,
+            Protocol::Http3,
+            Protocol::Native,
+            Protocol::Curl,
+        ] {
+            let mut a = bare_attempt(proto.clone());
+            assert!(
+                primary_metric_value(&a).is_none(),
+                "{proto}: absent http should be None"
+            );
+            a.http = Some(HttpResult {
+                negotiated_version: "HTTP/1.1".into(),
+                status_code: 200,
+                headers_size_bytes: 0,
+                body_size_bytes: 0,
+                ttfb_ms: 5.0,
+                total_duration_ms: 25.0,
+                redirect_count: 0,
+                started_at: Utc::now(),
+                response_headers: vec![],
+                payload_bytes: 0,
+                throughput_mbps: None,
+                goodput_mbps: None,
+                cpu_time_ms: None,
+                csw_voluntary: None,
+                csw_involuntary: None,
+            });
+            assert!(
+                (primary_metric_value(&a).unwrap() - 25.0).abs() < 1e-9,
+                "{proto}: expected total_duration_ms"
+            );
+        }
+    }
+
+    #[test]
+    fn primary_metric_value_tcp() {
+        let mut a = bare_attempt(Protocol::Tcp);
+        a.tcp = Some(TcpResult {
+            local_addr: None,
+            remote_addr: "1.2.3.4:443".into(),
+            connect_duration_ms: 3.5,
+            attempt_count: 1,
+            started_at: Utc::now(),
+            success: true,
+            mss_bytes: None,
+            rtt_estimate_ms: None,
+            retransmits: None,
+            total_retrans: None,
+            snd_cwnd: None,
+            snd_ssthresh: None,
+            rtt_variance_ms: None,
+            rcv_space: None,
+            segs_out: None,
+            segs_in: None,
+            congestion_algorithm: None,
+            delivery_rate_bps: None,
+            min_rtt_ms: None,
+        });
+        assert!((primary_metric_value(&a).unwrap() - 3.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn primary_metric_value_udp() {
+        let mut a = bare_attempt(Protocol::Udp);
+        a.udp = Some(UdpResult {
+            remote_addr: "1.2.3.4:9999".into(),
+            probe_count: 10,
+            success_count: 10,
+            rtt_min_ms: 1.0,
+            rtt_avg_ms: 1.5,
+            rtt_p95_ms: 2.0,
+            jitter_ms: 0.1,
+            loss_percent: 0.0,
+            started_at: Utc::now(),
+            probe_rtts_ms: vec![Some(1.0), Some(2.0)],
+        });
+        assert!((primary_metric_value(&a).unwrap() - 1.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn primary_metric_value_throughput_protocols() {
+        for proto in [
+            Protocol::Download,
+            Protocol::Download1,
+            Protocol::Download2,
+            Protocol::Download3,
+            Protocol::Upload,
+            Protocol::Upload1,
+            Protocol::Upload2,
+            Protocol::Upload3,
+            Protocol::WebDownload,
+            Protocol::WebUpload,
+        ] {
+            let mut a = bare_attempt(proto.clone());
+            assert!(
+                primary_metric_value(&a).is_none(),
+                "{proto}: absent http should be None"
+            );
+            a.http = Some(HttpResult {
+                negotiated_version: "HTTP/1.1".into(),
+                status_code: 200,
+                headers_size_bytes: 0,
+                body_size_bytes: 0,
+                ttfb_ms: 0.0,
+                total_duration_ms: 10.0,
+                redirect_count: 0,
+                started_at: Utc::now(),
+                response_headers: vec![],
+                payload_bytes: 1024,
+                throughput_mbps: Some(100.0),
+                goodput_mbps: None,
+                cpu_time_ms: None,
+                csw_voluntary: None,
+                csw_involuntary: None,
+            });
+            assert!(
+                (primary_metric_value(&a).unwrap() - 100.0).abs() < 1e-9,
+                "{proto}: expected throughput_mbps"
+            );
+        }
+    }
+
+    #[test]
+    fn primary_metric_value_udp_throughput_protocols() {
+        for proto in [Protocol::UdpDownload, Protocol::UdpUpload] {
+            let mut a = bare_attempt(proto.clone());
+            a.udp_throughput = Some(UdpThroughputResult {
+                remote_addr: "127.0.0.1:9998".into(),
+                payload_bytes: 1_048_576,
+                datagrams_sent: 100,
+                datagrams_received: 100,
+                bytes_acked: None,
+                loss_percent: 0.0,
+                transfer_ms: 50.0,
+                throughput_mbps: Some(20.0),
+                started_at: Utc::now(),
+            });
+            assert!(
+                (primary_metric_value(&a).unwrap() - 20.0).abs() < 1e-9,
+                "{proto}: expected udp throughput_mbps"
+            );
+        }
+    }
+
+    #[test]
+    fn primary_metric_value_pageload() {
+        for proto in [Protocol::PageLoad, Protocol::PageLoad2, Protocol::PageLoad3] {
+            let mut a = bare_attempt(proto.clone());
+            a.page_load = Some(PageLoadResult {
+                asset_count: 5,
+                assets_fetched: 5,
+                total_bytes: 10000,
+                total_ms: 500.0,
+                ttfb_ms: 50.0,
+                connections_opened: 1,
+                asset_timings_ms: vec![],
+                started_at: Utc::now(),
+                tls_setup_ms: 0.0,
+                tls_overhead_ratio: 0.0,
+                per_connection_tls_ms: vec![],
+                cpu_time_ms: None,
+                connection_reused: false,
+            });
+            assert!(
+                (primary_metric_value(&a).unwrap() - 500.0).abs() < 1e-9,
+                "{proto}: expected total_ms"
+            );
+        }
+    }
+
+    #[test]
+    fn primary_metric_value_browser_variants() {
+        for proto in [Protocol::Browser1, Protocol::Browser2, Protocol::Browser3] {
+            let mut a = bare_attempt(proto.clone());
+            a.browser = Some(BrowserResult {
+                load_ms: 700.0,
+                dom_content_loaded_ms: 300.0,
+                ttfb_ms: 80.0,
+                resource_count: 15,
+                transferred_bytes: 200000,
+                protocol: "h2".into(),
+                resource_protocols: vec![],
+                started_at: Utc::now(),
+            });
+            assert!(
+                (primary_metric_value(&a).unwrap() - 700.0).abs() < 1e-9,
+                "{proto}: expected load_ms"
+            );
+        }
+    }
+
+    #[test]
+    fn primary_metric_value_tls_resume() {
+        let mut a = bare_attempt(Protocol::TlsResume);
+        a.tls = Some(TlsResult {
+            protocol_version: "TLSv1.3".into(),
+            cipher_suite: "AES_256_GCM".into(),
+            alpn_negotiated: None,
+            cert_subject: None,
+            cert_issuer: None,
+            cert_expiry: None,
+            handshake_duration_ms: 3.0,
+            started_at: Utc::now(),
+            success: true,
+            cert_chain: vec![],
+            tls_backend: None,
+            resumed: None,
+            handshake_kind: None,
+            tls13_tickets_received: None,
+            previous_handshake_duration_ms: None,
+            previous_handshake_kind: None,
+            previous_http_status_code: None,
+            http_status_code: None,
+        });
+        assert!((primary_metric_value(&a).unwrap() - 3.0).abs() < 1e-9);
+    }
+
+    // ── primary_metric_label exhaustive ──────────────────────────────────────
+
+    #[test]
+    fn primary_metric_label_all_variants_have_labels() {
+        // Every protocol variant must produce a non-empty label.
+        let all = [
+            Protocol::Tcp,
+            Protocol::Http1,
+            Protocol::Http2,
+            Protocol::Http3,
+            Protocol::Udp,
+            Protocol::Download,
+            Protocol::Download1,
+            Protocol::Download2,
+            Protocol::Download3,
+            Protocol::Upload,
+            Protocol::Upload1,
+            Protocol::Upload2,
+            Protocol::Upload3,
+            Protocol::WebDownload,
+            Protocol::WebUpload,
+            Protocol::UdpDownload,
+            Protocol::UdpUpload,
+            Protocol::Dns,
+            Protocol::Tls,
+            Protocol::TlsResume,
+            Protocol::Native,
+            Protocol::Curl,
+            Protocol::PageLoad,
+            Protocol::PageLoad2,
+            Protocol::PageLoad3,
+            Protocol::Browser,
+            Protocol::Browser1,
+            Protocol::Browser2,
+            Protocol::Browser3,
+        ];
+        for proto in &all {
+            let label = primary_metric_label(proto);
+            assert!(!label.is_empty(), "{proto}: label must not be empty");
+        }
     }
 
     // ── attempt_payload_bytes ─────────────────────────────────────────────────
