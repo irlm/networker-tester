@@ -146,6 +146,8 @@ async fn poll_and_run(
         "auto_teardown": inner.get("auto_teardown").and_then(|v| v.as_bool()).unwrap_or(true),
         "callback_url": callback_url,
         "callback_token": callback_token,
+        "created_by_email": config.created_by.map(|u| u.to_string()),
+        "project_id": config.project_id.to_string(),
     });
     // RR-009: Write with restricted permissions (0600) — config contains callback JWT
     {

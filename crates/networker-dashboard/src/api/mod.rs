@@ -1,6 +1,7 @@
 mod admin;
 mod agents;
 mod auth;
+mod bench_tokens;
 mod benchmark_callbacks;
 mod benchmark_catalog;
 mod benchmark_configs;
@@ -53,6 +54,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(projects::router(state.clone()))
         .merge(events::router(state.clone()))
         .merge(admin::router(state.clone()))
+        .merge(bench_tokens::router(state.clone()))
         .merge(leaderboard::protected_router(state.clone()))
         .layer(middleware::from_fn_with_state(
             state.clone(),

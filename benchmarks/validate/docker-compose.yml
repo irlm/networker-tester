@@ -1,0 +1,109 @@
+## Local validation: spins up all reference API servers for JSON endpoint testing.
+## Usage:
+##   cd benchmarks/validate
+##   ./run-validation.sh
+##
+## Each language gets a unique port (8501-8516) so all can run simultaneously.
+
+services:
+  certs:
+    image: alpine/openssl
+    command: >
+      req -x509 -newkey rsa:2048
+        -keyout /certs/key.pem -out /certs/cert.pem
+        -days 1 -nodes -subj '/CN=bench'
+    volumes:
+      - certs:/certs
+
+  go:
+    build: ../reference-apis/go
+    ports: ["8501:8443"]
+    environment:
+      BENCH_CERT_DIR: /opt/bench
+    volumes:
+      - certs:/opt/bench:ro
+    depends_on:
+      certs:
+        condition: service_completed_successfully
+
+  python:
+    build: ../reference-apis/python
+    ports: ["8502:8443"]
+    environment:
+      BENCH_CERT_DIR: /opt/bench
+    volumes:
+      - certs:/opt/bench:ro
+    depends_on:
+      certs:
+        condition: service_completed_successfully
+
+  nodejs:
+    build: ../reference-apis/nodejs
+    ports: ["8503:8443"]
+    environment:
+      BENCH_CERT_DIR: /opt/bench
+      BENCH_PORT: "8443"
+    volumes:
+      - certs:/opt/bench:ro
+    depends_on:
+      certs:
+        condition: service_completed_successfully
+
+  java:
+    build: ../reference-apis/java
+    ports: ["8504:8443"]
+    environment:
+      BENCH_CERT_DIR: /opt/bench
+    volumes:
+      - certs:/opt/bench:ro
+    depends_on:
+      certs:
+        condition: service_completed_successfully
+
+  ruby:
+    build: ../reference-apis/ruby
+    ports: ["8505:8443"]
+    environment:
+      BENCH_CERT_DIR: /opt/bench
+      BENCH_PORT: "8443"
+    volumes:
+      - certs:/opt/bench:ro
+    depends_on:
+      certs:
+        condition: service_completed_successfully
+
+  php:
+    build: ../reference-apis/php
+    ports: ["8506:8443"]
+    environment:
+      BENCH_CERT_DIR: /opt/bench
+    volumes:
+      - certs:/opt/bench:ro
+    depends_on:
+      certs:
+        condition: service_completed_successfully
+
+  cpp:
+    build: ../reference-apis/cpp
+    ports: ["8507:8443"]
+    environment:
+      BENCH_CERT_DIR: /opt/bench
+    volumes:
+      - certs:/opt/bench:ro
+    depends_on:
+      certs:
+        condition: service_completed_successfully
+
+  csharp-net8:
+    build: ../reference-apis/csharp-net8
+    ports: ["8508:8443"]
+    environment:
+      BENCH_CERT_DIR: /opt/bench
+    volumes:
+      - certs:/opt/bench:ro
+    depends_on:
+      certs:
+        condition: service_completed_successfully
+
+volumes:
+  certs:

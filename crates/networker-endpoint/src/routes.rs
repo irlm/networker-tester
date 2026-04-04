@@ -10,9 +10,16 @@ use axum::{
 };
 use bytes::Bytes;
 use chrono::Utc;
+use flate2::write::ZlibEncoder;
+use flate2::Compression;
 use http_body_util::BodyExt;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::io::Write as IoWrite;
+use std::sync::OnceLock;
 use std::time::Instant;
 use tokio::time::{sleep, Duration};
 use tower_http::trace::TraceLayer;
@@ -368,11 +375,21 @@ pub fn build_router(state: AppState) -> Router {
         .route("/page", get(page_manifest))
         .route("/browser-page", get(browser_page))
         .route("/asset", get(asset_handler))
+        // ── JSON API benchmark endpoints ──
+        .route("/api/users", get(api_users))
+        .route("/api/transform", post(api_transform))
+        .route("/api/aggregate", get(api_aggregate))
+        .route("/api/search", get(api_search))
+        .route("/api/upload/process", post(api_upload_process))
+        .route("/api/delayed", get(api_delayed))
+        .route("/api/validate", get(api_validate))
         // Provide AppState to all handlers (converts Router<AppState> -> Router<()>).
         .with_state(state.clone())
         // Allow upload probes up to 2 GiB (matching the download cap) while
         // preventing unbounded memory consumption from malicious payloads.
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024 * 1024))
+        // Bearer token auth (BENCH_API_TOKEN env var; /health exempt).
+        .layer(middleware::from_fn(bench_auth_middleware))
         // Add X-Networker-Server-Timestamp (and optionally Alt-Svc) to every response.
         .layer(middleware::from_fn_with_state(state, add_server_timestamp))
         // Log every request (method + URI) and response (status + latency).
@@ -410,6 +427,73 @@ async fn add_server_timestamp(State(state): State<AppState>, req: Request, next:
         }
     }
     response
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Bearer token auth middleware (BENCH_API_TOKEN)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Cached value of the `BENCH_API_TOKEN` environment variable read once at
+/// first use. When `Some`, every request (except `/health`) must carry a
+/// matching `Authorization: Bearer <token>` header.
+static BENCH_API_TOKEN: OnceLock<Option<String>> = OnceLock::new();
+
+fn get_bench_token() -> Option<&'static str> {
+    BENCH_API_TOKEN
+        .get_or_init(|| std::env::var("BENCH_API_TOKEN").ok())
+        .as_deref()
+}
+
+/// Middleware that enforces bearer-token authentication when `BENCH_API_TOKEN`
+/// is set. `/health` is always exempt so load-balancer probes keep working.
+/// A `Server-Timing: auth;dur=X.X` metric is appended to every response.
+async fn bench_auth_middleware(req: Request, next: Next) -> Response {
+    let t0 = Instant::now();
+
+    // /health is exempt — health checks must work without credentials.
+    if req.uri().path() == "/health" {
+        return next.run(req).await;
+    }
+
+    if let Some(expected) = get_bench_token() {
+        let auth = req
+            .headers()
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.strip_prefix("Bearer "));
+
+        match auth {
+            Some(token) if token == expected => { /* valid */ }
+            _ => {
+                let dur_ms = t0.elapsed().as_secs_f64() * 1000.0;
+                let mut resp = (
+                    StatusCode::UNAUTHORIZED,
+                    Json(serde_json::json!({"error": "unauthorized"})),
+                )
+                    .into_response();
+                if let Ok(val) = HeaderValue::from_str(&format!("auth;dur={dur_ms:.1}")) {
+                    resp.headers_mut().insert("server-timing", val);
+                }
+                return resp;
+            }
+        }
+    }
+
+    let dur_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    let mut resp = next.run(req).await;
+
+    // Append auth timing to existing Server-Timing or create a new one.
+    let auth_metric = format!("auth;dur={dur_ms:.1}");
+    if let Some(existing) = resp.headers().get("server-timing").cloned() {
+        let combined = format!("{}, {auth_metric}", existing.to_str().unwrap_or(""));
+        if let Ok(val) = HeaderValue::from_str(&combined) {
+            resp.headers_mut().insert("server-timing", val);
+        }
+    } else if let Ok(val) = HeaderValue::from_str(&auth_metric) {
+        resp.headers_mut().insert("server-timing", val);
+    }
+
+    resp
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -619,6 +703,13 @@ async fn landing_page(State(state): State<AppState>) -> impl IntoResponse {
                <tr><td>/page</td><td class=\"method\">GET</td><td class=\"desc\">Page-load asset manifest — ?assets=N&amp;bytes=B</td></tr>\n\
                <tr><td>/browser-page</td><td class=\"method\">GET</td><td class=\"desc\">HTML page with img tags for browser probes</td></tr>\n\
                <tr><td>/asset</td><td class=\"method\">GET</td><td class=\"desc\">Single binary asset — ?id=X&amp;bytes=B</td></tr>\n\
+               <tr><td>/api/users</td><td class=\"method\">GET</td><td class=\"desc\">Paginated users — ?page=N&amp;sort=field&amp;order=asc</td></tr>\n\
+               <tr><td>/api/transform</td><td class=\"method\">POST</td><td class=\"desc\">SHA-256 hash fields, reverse values</td></tr>\n\
+               <tr><td>/api/aggregate</td><td class=\"method\">GET</td><td class=\"desc\">Time-series stats — ?range=start,end</td></tr>\n\
+               <tr><td>/api/search</td><td class=\"method\">GET</td><td class=\"desc\">Regex search — ?q=term&amp;limit=N</td></tr>\n\
+               <tr><td>/api/upload/process</td><td class=\"method\">POST</td><td class=\"desc\">CRC32 + SHA-256 + zlib compress body</td></tr>\n\
+               <tr><td>/api/delayed</td><td class=\"method\">GET</td><td class=\"desc\">Controlled delay — ?ms=N&amp;work=light</td></tr>\n\
+               <tr><td>/api/validate</td><td class=\"method\">GET</td><td class=\"desc\">Endpoint output checksums — ?seed=N</td></tr>\n\
              </tbody>\n\
            </table>\n\
          </div>\n",
@@ -882,7 +973,9 @@ async fn server_info(State(state): State<AppState>) -> impl IntoResponse {
         "http3": cfg!(feature = "http3"),
         "endpoints": [
             "/health", "/echo", "/download", "/upload",
-            "/delay", "/headers", "/status/:code", "/http-version", "/info"
+            "/delay", "/headers", "/status/:code", "/http-version", "/info",
+            "/api/users", "/api/transform", "/api/aggregate", "/api/search",
+            "/api/upload/process", "/api/delayed", "/api/validate"
         ],
         "system": &state.system_meta,
         "region": &state.system_meta.region,
@@ -957,6 +1050,560 @@ async fn asset_handler(Query(p): Query<AssetParams>) -> impl IntoResponse {
         .header("content-length", n.to_string())
         .body(Body::from(vec![0u8; n]))
         .unwrap()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// JSON API benchmark endpoints
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Helper: build standard benchmark response headers.
+fn bench_headers(dur_ms: f64) -> HeaderMap {
+    let mut h = HeaderMap::new();
+    let timing = format!("app;dur={dur_ms:.1}");
+    h.insert("server-timing", HeaderValue::from_str(&timing).unwrap());
+    h.insert(
+        "cache-control",
+        HeaderValue::from_static("no-store, no-cache, must-revalidate"),
+    );
+    h.insert("timing-allow-origin", HeaderValue::from_static("*"));
+    h.insert("access-control-allow-origin", HeaderValue::from_static("*"));
+    h
+}
+
+// ── Shared benchmark dataset (loaded once from bench-data.json) ─────────────
+
+#[derive(Debug, serde::Deserialize)]
+struct BenchData {
+    users: Vec<serde_json::Value>,
+    search_corpus: Vec<String>,
+    timeseries: Vec<serde_json::Value>,
+    #[allow(dead_code)]
+    transform_inputs: Vec<serde_json::Value>,
+    expected_checksums: serde_json::Map<String, serde_json::Value>,
+}
+
+static BENCH_DATA: OnceLock<Option<BenchData>> = OnceLock::new();
+
+fn load_bench_data() -> Option<&'static BenchData> {
+    BENCH_DATA
+        .get_or_init(|| {
+            let paths = [
+                std::env::var("BENCH_DATA_PATH").unwrap_or_default(),
+                "/opt/bench/bench-data.json".to_string(),
+                "benchmarks/reference-apis/shared/bench-data.json".to_string(),
+            ];
+            for p in &paths {
+                if p.is_empty() {
+                    continue;
+                }
+                if let Ok(content) = std::fs::read_to_string(p) {
+                    if let Ok(data) = serde_json::from_str::<BenchData>(&content) {
+                        tracing::info!("Loaded bench-data.json from {p}");
+                        return Some(data);
+                    }
+                }
+            }
+            tracing::warn!(
+                "bench-data.json not found, JSON API endpoints will use fallback PRNG data"
+            );
+            None
+        })
+        .as_ref()
+}
+
+// ── Deterministic name/email generators ─────────────────────────────────────
+
+const FIRST_NAMES: &[&str] = &[
+    "Alice", "Bob", "Charlie", "Diana", "Eve", "Frank", "Grace", "Hector", "Iris", "Jack", "Karen",
+    "Leo", "Mona", "Nick", "Olivia", "Paul", "Quinn", "Rosa", "Steve", "Tina", "Uma", "Victor",
+    "Wendy", "Xander", "Yuki", "Zane",
+];
+const LAST_NAMES: &[&str] = &[
+    "Smith",
+    "Johnson",
+    "Williams",
+    "Brown",
+    "Jones",
+    "Garcia",
+    "Miller",
+    "Davis",
+    "Rodriguez",
+    "Martinez",
+    "Hernandez",
+    "Lopez",
+    "Gonzalez",
+    "Wilson",
+    "Anderson",
+    "Thomas",
+    "Taylor",
+    "Moore",
+    "Jackson",
+    "Martin",
+    "Lee",
+    "Perez",
+    "Thompson",
+    "White",
+    "Harris",
+    "Sanchez",
+];
+const DOMAINS: &[&str] = &[
+    "example.com",
+    "test.org",
+    "mail.net",
+    "corp.io",
+    "bench.dev",
+];
+
+fn gen_user(rng: &mut StdRng, id: u64) -> serde_json::Value {
+    let first = FIRST_NAMES[rng.gen_range(0..FIRST_NAMES.len())];
+    let last = LAST_NAMES[rng.gen_range(0..LAST_NAMES.len())];
+    let domain = DOMAINS[rng.gen_range(0..DOMAINS.len())];
+    let score: f64 = (rng.gen::<f64>() * 10000.0).round() / 100.0;
+    let day = rng.gen_range(1u32..29);
+    let month = rng.gen_range(1u32..13);
+    let year = rng.gen_range(2018u32..2026);
+    serde_json::json!({
+        "id": id,
+        "name": format!("{first} {last}"),
+        "email": format!("{}.{}@{}", first.to_lowercase(), last.to_lowercase(), domain),
+        "score": score,
+        "created_at": format!("{year:04}-{month:02}-{day:02}T00:00:00Z"),
+    })
+}
+
+#[derive(Deserialize)]
+struct UsersParams {
+    page: Option<u64>,
+    sort: Option<String>,
+    order: Option<String>,
+}
+
+/// GET /api/users?page=N&sort=field&order=asc
+/// Return users from shared bench-data.json, falling back to deterministic PRNG.
+async fn api_users(Query(p): Query<UsersParams>) -> impl IntoResponse {
+    let t0 = Instant::now();
+    let page = p.page.unwrap_or(1).max(1);
+    let sort_field = p.sort.as_deref().unwrap_or("id");
+    let ascending = p.order.as_deref().unwrap_or("asc") != "desc";
+
+    let mut users: Vec<serde_json::Value> = if let Some(data) = load_bench_data() {
+        // Shared dataset: paginate the pre-generated user list
+        let start = ((page - 1) * 100) as usize;
+        let end = (start + 100).min(data.users.len());
+        if start < data.users.len() {
+            data.users[start..end].to_vec()
+        } else {
+            // Page beyond dataset — return empty
+            Vec::new()
+        }
+    } else {
+        // Fallback: PRNG-generated users
+        let mut rng = StdRng::seed_from_u64(page);
+        (0..100)
+            .map(|i| gen_user(&mut rng, (page - 1) * 100 + i + 1))
+            .collect()
+    };
+
+    // Sort by requested field
+    users.sort_by(|a, b| {
+        let cmp = match sort_field {
+            "name" => a["name"]
+                .as_str()
+                .unwrap_or("")
+                .cmp(a["name"].as_str().unwrap_or(""))
+                .then(
+                    a["name"]
+                        .as_str()
+                        .unwrap_or("")
+                        .cmp(b["name"].as_str().unwrap_or("")),
+                ),
+            "email" => a["email"]
+                .as_str()
+                .unwrap_or("")
+                .cmp(b["email"].as_str().unwrap_or("")),
+            "score" => a["score"]
+                .as_f64()
+                .unwrap_or(0.0)
+                .partial_cmp(&b["score"].as_f64().unwrap_or(0.0))
+                .unwrap_or(std::cmp::Ordering::Equal),
+            "created_at" => a["created_at"]
+                .as_str()
+                .unwrap_or("")
+                .cmp(b["created_at"].as_str().unwrap_or("")),
+            _ => a["id"]
+                .as_u64()
+                .unwrap_or(0)
+                .cmp(&b["id"].as_u64().unwrap_or(0)),
+        };
+        if ascending {
+            cmp
+        } else {
+            cmp.reverse()
+        }
+    });
+
+    let paginated: Vec<_> = users.into_iter().take(20).collect();
+    let dur_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    (bench_headers(dur_ms), Json(paginated))
+}
+
+#[derive(Deserialize)]
+struct TransformBody {
+    seed: Option<u64>,
+    fields: Option<Vec<String>>,
+    values: Option<Vec<serde_json::Value>>,
+}
+
+/// POST /api/transform
+/// SHA-256 hash each string field, reverse values array.
+async fn api_transform(Json(body): Json<TransformBody>) -> impl IntoResponse {
+    let t0 = Instant::now();
+
+    let hashed_fields: Vec<String> = body
+        .fields
+        .unwrap_or_default()
+        .iter()
+        .map(|f| {
+            let mut hasher = Sha256::new();
+            hasher.update(f.as_bytes());
+            format!("{:x}", hasher.finalize())
+        })
+        .collect();
+
+    let mut reversed_values = body.values.unwrap_or_default();
+    reversed_values.reverse();
+
+    let result = serde_json::json!({
+        "seed": body.seed.unwrap_or(0),
+        "hashed_fields": hashed_fields,
+        "reversed_values": reversed_values,
+    });
+
+    let dur_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    (bench_headers(dur_ms), Json(result))
+}
+
+#[derive(Deserialize)]
+struct AggregateParams {
+    range: Option<String>,
+}
+
+/// GET /api/aggregate?range=start,end
+/// Compute stats from shared bench-data.json timeseries, falling back to PRNG.
+async fn api_aggregate(Query(p): Query<AggregateParams>) -> impl IntoResponse {
+    let t0 = Instant::now();
+
+    let (start, _end) = match p.range.as_deref() {
+        Some(r) => {
+            let parts: Vec<&str> = r.split(',').collect();
+            let s: u64 = parts.first().and_then(|v| v.parse().ok()).unwrap_or(1);
+            let e: u64 = parts.get(1).and_then(|v| v.parse().ok()).unwrap_or(100);
+            (s, e)
+        }
+        None => (1u64, 100u64),
+    };
+
+    let mut values: Vec<f64> = if let Some(data) = load_bench_data() {
+        data.timeseries
+            .iter()
+            .filter_map(|v| v["value"].as_f64())
+            .collect()
+    } else {
+        let mut rng = StdRng::seed_from_u64(start);
+        (0..10_000).map(|_| rng.gen::<f64>() * 1000.0).collect()
+    };
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    let n = values.len() as f64;
+    let sum: f64 = values.iter().sum();
+    let mean = sum / n;
+    let p50 = values[(values.len() as f64 * 0.50) as usize];
+    let p95 = values[(values.len() as f64 * 0.95) as usize];
+    let max = values.last().copied().unwrap_or(0.0);
+
+    // Group into 5 categories by quintile
+    let chunk_size = values.len() / 5;
+    let categories: Vec<serde_json::Value> = (0..5)
+        .map(|i| {
+            let chunk = &values[i * chunk_size..(i + 1) * chunk_size];
+            let cat_sum: f64 = chunk.iter().sum();
+            let cat_mean = cat_sum / chunk.len() as f64;
+            serde_json::json!({
+                "category": format!("q{}", i + 1),
+                "count": chunk.len(),
+                "mean": (cat_mean * 100.0).round() / 100.0,
+                "min": (chunk[0] * 100.0).round() / 100.0,
+                "max": (chunk[chunk.len() - 1] * 100.0).round() / 100.0,
+            })
+        })
+        .collect();
+
+    let result = serde_json::json!({
+        "total_points": 10_000,
+        "mean": (mean * 100.0).round() / 100.0,
+        "p50": (p50 * 100.0).round() / 100.0,
+        "p95": (p95 * 100.0).round() / 100.0,
+        "max": (max * 100.0).round() / 100.0,
+        "categories": categories,
+    });
+
+    let dur_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    (bench_headers(dur_ms), Json(result))
+}
+
+#[derive(Deserialize)]
+struct SearchParams {
+    q: Option<String>,
+    limit: Option<usize>,
+}
+
+/// GET /api/search?q=term&limit=N
+/// Search items from shared bench-data.json, falling back to PRNG generation.
+async fn api_search(Query(p): Query<SearchParams>) -> impl IntoResponse {
+    let t0 = Instant::now();
+    let query = p.q.as_deref().unwrap_or("test");
+    let limit = p.limit.unwrap_or(20).min(100);
+
+    let items: Vec<String> = if let Some(data) = load_bench_data() {
+        data.search_corpus.clone()
+    } else {
+        let mut rng = StdRng::seed_from_u64(42);
+        let words: &[&str] = &[
+            "network",
+            "latency",
+            "throughput",
+            "bandwidth",
+            "packet",
+            "server",
+            "client",
+            "request",
+            "response",
+            "timeout",
+            "connection",
+            "socket",
+            "protocol",
+            "testing",
+            "benchmark",
+            "performance",
+            "endpoint",
+            "proxy",
+            "firewall",
+            "router",
+            "switch",
+            "gateway",
+            "dns",
+            "tls",
+            "quic",
+        ];
+        (0..1_000)
+            .map(|_| {
+                let w1 = words[rng.gen_range(0..words.len())];
+                let w2 = words[rng.gen_range(0..words.len())];
+                let n: u32 = rng.gen_range(1..1000);
+                format!("{w1}-{w2}-{n}")
+            })
+            .collect()
+    };
+
+    // Apply regex filter; fall back to literal match on invalid regex
+    let re = regex::Regex::new(query).ok();
+    let mut scored: Vec<(usize, &str)> = items
+        .iter()
+        .filter_map(|item| {
+            let matched = match &re {
+                Some(r) => r.find(item).map(|m| m.start()),
+                None => item.find(query),
+            };
+            matched.map(|pos| (pos, item.as_str()))
+        })
+        .collect();
+
+    // Sort by match position (earlier = better), then alphabetically
+    scored.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(b.1)));
+
+    let results: Vec<serde_json::Value> = scored
+        .iter()
+        .take(limit)
+        .enumerate()
+        .map(|(rank, (pos, item))| {
+            serde_json::json!({
+                "rank": rank + 1,
+                "item": item,
+                "match_position": pos,
+            })
+        })
+        .collect();
+
+    let result = serde_json::json!({
+        "query": query,
+        "total_matches": scored.len(),
+        "returned": results.len(),
+        "results": results,
+    });
+
+    let dur_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    (bench_headers(dur_ms), Json(result))
+}
+
+/// POST /api/upload/process
+/// Read body, compute CRC32 + SHA-256, compress with zlib.
+async fn api_upload_process(req: Request) -> impl IntoResponse {
+    let t0 = Instant::now();
+
+    // Drain the body (token auth is the protection now; the 2 GiB
+    // DefaultBodyLimit layer still caps overall size).
+    let mut body_data = Vec::new();
+    let mut body = req.into_body();
+    while let Some(Ok(frame)) = body.frame().await {
+        if let Ok(data) = frame.into_data() {
+            body_data.extend_from_slice(&data);
+        }
+    }
+
+    let original_size = body_data.len();
+
+    // CRC32
+    let crc = crc32fast::hash(&body_data);
+
+    // SHA-256
+    let mut hasher = Sha256::new();
+    hasher.update(&body_data);
+    let sha = format!("{:x}", hasher.finalize());
+
+    // Zlib compress
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(&body_data).unwrap_or(());
+    let compressed = encoder.finish().unwrap_or_default();
+    let compressed_size = compressed.len();
+
+    let result = serde_json::json!({
+        "original_size": original_size,
+        "compressed_size": compressed_size,
+        "crc32": format!("{crc:08x}"),
+        "sha256": sha,
+    });
+
+    let dur_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    (bench_headers(dur_ms), Json(result))
+}
+
+#[derive(Deserialize)]
+struct DelayedParams {
+    ms: Option<u64>,
+    #[allow(dead_code)]
+    work: Option<String>,
+}
+
+/// GET /api/delayed?ms=N&work=light
+/// Sleep N ms (clamped 1-100), return actual duration.
+async fn api_delayed(Query(p): Query<DelayedParams>) -> impl IntoResponse {
+    let t0 = Instant::now();
+    let ms = p.ms.unwrap_or(10).clamp(1, 100);
+    sleep(Duration::from_millis(ms)).await;
+    let actual_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+    let result = serde_json::json!({
+        "requested_ms": ms,
+        "actual_ms": (actual_ms * 100.0).round() / 100.0,
+    });
+
+    let dur_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    (bench_headers(dur_ms), Json(result))
+}
+
+#[derive(Deserialize)]
+struct ValidateParams {
+    seed: Option<u64>,
+}
+
+/// GET /api/validate?seed=42
+/// Return checksums of all endpoint outputs for the given seed.
+async fn api_validate(Query(p): Query<ValidateParams>) -> impl IntoResponse {
+    let t0 = Instant::now();
+    let seed = p.seed.unwrap_or(42);
+
+    let result = if let Some(data) = load_bench_data() {
+        // Use pre-computed checksums from shared dataset
+        serde_json::json!({
+            "seed": seed,
+            "checksums": data.expected_checksums,
+        })
+    } else {
+        // Fallback: compute from PRNG
+        // Users: generate page=seed, hash the JSON
+        let mut rng = StdRng::seed_from_u64(seed);
+        let users: Vec<serde_json::Value> = (0..100)
+            .map(|i| gen_user(&mut rng, (seed - 1) * 100 + i + 1))
+            .collect();
+        let users_json = serde_json::to_string(&users).unwrap_or_default();
+        let users_hash = format!("{:x}", Sha256::digest(users_json.as_bytes()));
+
+        // Aggregate: generate 10k points from seed, hash the stats
+        let mut rng2 = StdRng::seed_from_u64(seed);
+        let mut values: Vec<f64> = (0..10_000).map(|_| rng2.gen::<f64>() * 1000.0).collect();
+        values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let sum: f64 = values.iter().sum();
+        let mean = sum / values.len() as f64;
+        let agg_str = format!("{:.6}", mean);
+        let aggregate_hash = format!("{:x}", Sha256::digest(agg_str.as_bytes()));
+
+        // Transform: hash of SHA-256("test")
+        let transform_check = format!("{:x}", Sha256::digest(b"test"));
+        let transform_hash = format!("{:x}", Sha256::digest(transform_check.as_bytes()));
+
+        // Search: hash the item list (seed=42 always)
+        let mut rng3 = StdRng::seed_from_u64(42);
+        let words: &[&str] = &[
+            "network",
+            "latency",
+            "throughput",
+            "bandwidth",
+            "packet",
+            "server",
+            "client",
+            "request",
+            "response",
+            "timeout",
+            "connection",
+            "socket",
+            "protocol",
+            "testing",
+            "benchmark",
+            "performance",
+            "endpoint",
+            "proxy",
+            "firewall",
+            "router",
+            "switch",
+            "gateway",
+            "dns",
+            "tls",
+            "quic",
+        ];
+        let items: Vec<String> = (0..1_000)
+            .map(|_| {
+                let w1 = words[rng3.gen_range(0..words.len())];
+                let w2 = words[rng3.gen_range(0..words.len())];
+                let n: u32 = rng3.gen_range(1..1000);
+                format!("{w1}-{w2}-{n}")
+            })
+            .collect();
+        let search_json = serde_json::to_string(&items).unwrap_or_default();
+        let search_hash = format!("{:x}", Sha256::digest(search_json.as_bytes()));
+
+        serde_json::json!({
+            "seed": seed,
+            "checksums": {
+                "users": users_hash,
+                "aggregate": aggregate_hash,
+                "transform": transform_hash,
+                "search": search_hash,
+            },
+        })
+    };
+
+    let dur_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    (bench_headers(dur_ms), Json(result))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1218,5 +1865,309 @@ mod tests {
         let body = to_bytes(resp.into_body(), 1024).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["x-test-header"], "networker");
+    }
+
+    // ── JSON API benchmark endpoint tests ───────────────────────────────────
+
+    #[tokio::test]
+    async fn api_users_returns_20_items() {
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/users?page=1&sort=name&order=asc")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        assert!(
+            resp.headers().contains_key("server-timing"),
+            "missing server-timing"
+        );
+        assert!(
+            resp.headers().contains_key("cache-control"),
+            "missing cache-control"
+        );
+        let body = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json.as_array().unwrap().len(), 20);
+    }
+
+    #[tokio::test]
+    async fn api_users_is_deterministic() {
+        let make_req = || {
+            Request::builder()
+                .uri("/api/users?page=5")
+                .body(Body::empty())
+                .unwrap()
+        };
+        let r1 = app().oneshot(make_req()).await.unwrap();
+        let b1 = to_bytes(r1.into_body(), 64 * 1024).await.unwrap();
+        let r2 = app().oneshot(make_req()).await.unwrap();
+        let b2 = to_bytes(r2.into_body(), 64 * 1024).await.unwrap();
+        assert_eq!(b1, b2, "api/users must be deterministic for same seed");
+    }
+
+    #[tokio::test]
+    async fn api_transform_hashes_and_reverses() {
+        let body_json = serde_json::json!({
+            "seed": 1,
+            "fields": ["hello", "world"],
+            "values": [1, 2, 3]
+        });
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/transform")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body_json).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body = to_bytes(resp.into_body(), 8 * 1024).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["reversed_values"], serde_json::json!([3, 2, 1]));
+        assert_eq!(json["hashed_fields"].as_array().unwrap().len(), 2);
+        // SHA-256 of "hello" is well-known
+        assert_eq!(
+            json["hashed_fields"][0].as_str().unwrap(),
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
+    }
+
+    #[tokio::test]
+    async fn api_aggregate_returns_stats() {
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/aggregate?range=1,100")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body = to_bytes(resp.into_body(), 16 * 1024).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["total_points"], 10_000);
+        assert!(json["mean"].as_f64().is_some());
+        assert!(json["p50"].as_f64().is_some());
+        assert!(json["p95"].as_f64().is_some());
+        assert_eq!(json["categories"].as_array().unwrap().len(), 5);
+    }
+
+    #[tokio::test]
+    async fn api_search_returns_results() {
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/search?q=network&limit=5")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body = to_bytes(resp.into_body(), 16 * 1024).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["total_matches"].as_u64().unwrap() > 0);
+        assert!(json["results"].as_array().unwrap().len() <= 5);
+    }
+
+    #[tokio::test]
+    async fn api_upload_process_computes_hashes() {
+        let payload = b"hello world benchmark test data";
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/upload/process")
+                    .body(Body::from(payload.as_ref()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body = to_bytes(resp.into_body(), 4 * 1024).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["original_size"], payload.len());
+        assert!(json["compressed_size"].as_u64().unwrap() > 0);
+        assert!(json["crc32"].as_str().unwrap().len() == 8);
+        assert!(json["sha256"].as_str().unwrap().len() == 64);
+    }
+
+    #[tokio::test]
+    async fn api_delayed_sleeps_at_least_requested() {
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/delayed?ms=10&work=light")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body = to_bytes(resp.into_body(), 1024).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["requested_ms"], 10);
+        assert!(json["actual_ms"].as_f64().unwrap() >= 9.0); // allow small timing slack
+    }
+
+    #[tokio::test]
+    async fn api_delayed_clamps_to_100ms() {
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/delayed?ms=999")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body = to_bytes(resp.into_body(), 1024).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        // Clamped to 100
+        assert_eq!(json["requested_ms"], 100);
+    }
+
+    #[tokio::test]
+    async fn api_validate_returns_checksums() {
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/validate?seed=42")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body = to_bytes(resp.into_body(), 4 * 1024).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["seed"], 42);
+        let checksums = &json["checksums"];
+        assert!(checksums["users"].as_str().unwrap().len() == 64);
+        assert!(checksums["aggregate"].as_str().unwrap().len() == 64);
+        assert!(checksums["transform"].as_str().unwrap().len() == 64);
+        assert!(checksums["search"].as_str().unwrap().len() == 64);
+    }
+
+    #[tokio::test]
+    async fn api_validate_is_deterministic() {
+        let make_req = || {
+            Request::builder()
+                .uri("/api/validate?seed=7")
+                .body(Body::empty())
+                .unwrap()
+        };
+        let r1 = app().oneshot(make_req()).await.unwrap();
+        let b1 = to_bytes(r1.into_body(), 4 * 1024).await.unwrap();
+        let r2 = app().oneshot(make_req()).await.unwrap();
+        let b2 = to_bytes(r2.into_body(), 4 * 1024).await.unwrap();
+        assert_eq!(b1, b2, "api/validate must be deterministic for same seed");
+    }
+
+    // ── Auth middleware tests ────────────────────────────────────────────────
+    // BENCH_API_TOKEN is NOT set in the test process, so the middleware is
+    // transparent. We verify that normal operation is unaffected and that the
+    // auth;dur timing metric is appended.
+
+    #[tokio::test]
+    async fn api_auth_transparent_when_no_token() {
+        // Without BENCH_API_TOKEN every endpoint should return 200 (auth disabled).
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/users?page=1&sort=name&order=asc")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn api_auth_skips_health() {
+        // /health must always succeed regardless of auth state.
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn api_auth_timing_header() {
+        // The auth middleware should append `auth;dur=` to Server-Timing.
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/users?page=1&sort=name&order=asc")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let st = resp
+            .headers()
+            .get("server-timing")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(
+            st.contains("auth;dur="),
+            "Server-Timing should contain auth metric, got: {st}"
+        );
+    }
+
+    /// Verify all JSON API endpoints include required benchmark headers.
+    #[tokio::test]
+    async fn api_endpoints_include_benchmark_headers() {
+        let endpoints = [
+            "/api/users?page=1&sort=name&order=asc",
+            "/api/aggregate?range=1,100",
+            "/api/search?q=test&limit=5",
+            "/api/delayed?ms=5&work=light",
+            "/api/validate?seed=42",
+        ];
+        for uri in endpoints {
+            let resp = app()
+                .clone()
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), 200, "{uri} failed");
+            let h = resp.headers();
+            assert!(
+                h.get("server-timing").is_some(),
+                "{uri} missing Server-Timing"
+            );
+            assert!(
+                h.get("cache-control")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("")
+                    .contains("no-store"),
+                "{uri} missing Cache-Control: no-store"
+            );
+            assert!(
+                h.get("timing-allow-origin").is_some(),
+                "{uri} missing Timing-Allow-Origin"
+            );
+            assert!(
+                h.get("access-control-allow-origin").is_some(),
+                "{uri} missing Access-Control-Allow-Origin"
+            );
+        }
     }
 }

@@ -52,6 +52,13 @@ tracing-subscriber.workspace = true
 chrono.workspace      = true
 bytes.workspace       = true
 
+# --- JSON API benchmark endpoints ---
+sha2       = "0.10"
+flate2     = "1"
+crc32fast  = "1"
+rand       = "0.8"
+regex      = "1"
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 

@@ -28,6 +28,12 @@ pub struct DashboardBenchmarkConfig {
     /// Benchmark type: "fullstack" (raw) or "application" (reverse proxy).
     #[serde(default = "default_benchmark_type")]
     pub benchmark_type: String,
+    /// Email of the user who created this benchmark config.
+    #[serde(default)]
+    pub created_by_email: Option<String>,
+    /// Project ID that owns this benchmark config.
+    #[serde(default)]
+    pub project_id: Option<String>,
 }
 
 /// A single testbed in the benchmark matrix.

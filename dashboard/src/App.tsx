@@ -56,6 +56,8 @@ const BenchmarkCatalogPage = lazyPage(() => import('./pages/BenchmarkCatalogPage
 const BenchmarkConfigResultsPage = lazyPage(() => import('./pages/BenchmarkConfigResultsPage'), 'BenchmarkConfigResultsPage');
 const BenchmarkRegressionsPage = lazyPage(() => import('./pages/BenchmarkRegressionsPage'), 'BenchmarkRegressionsPage');
 const AppBenchmarkWizardPage = lazyPage(() => import('./pages/AppBenchmarkWizardPage'), 'AppBenchmarkWizardPage');
+const BenchTokensPage = lazyPage(() => import('./pages/BenchTokensPage'), 'BenchTokensPage');
+const BenchTokenHistoryPage = lazyPage(() => import('./pages/BenchTokenHistoryPage'), 'BenchTokenHistoryPage');
 
 const statusColors: Record<ConnectionStatus, string> = {
   connected: 'bg-green-400',
@@ -203,6 +205,8 @@ function AuthenticatedApp() {
             {/* Platform routes */}
             <Route path="/leaderboard" element={<LeaderboardPage />} />
             {isPlatformAdmin && <Route path="/admin/system" element={<SystemDashboardPage />} />}
+            {isPlatformAdmin && <Route path="/bench-tokens" element={<BenchTokensPage />} />}
+            {isPlatformAdmin && <Route path="/bench-tokens/history" element={<BenchTokenHistoryPage />} />}
             {isAdmin && <Route path="/users" element={<UsersPage />} />}
             <Route path="/change-password" element={<ChangePasswordPage />} />
             <Route path="/pending" element={<PendingPage />} />

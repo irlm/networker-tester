@@ -1,0 +1,27 @@
+name: Validate Benchmark APIs (all languages)
+
+# Runs weekly and on-demand. Builds Docker images for all reference APIs
+# and validates JSON endpoints + headers across every language.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Monday 6am UTC
+  workflow_dispatch: # Manual trigger
+
+permissions:
+  contents: read
+
+jobs:
+  validate-all:
+    name: Docker validation (all languages)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Run full validation via Docker Compose
+        working-directory: benchmarks/validate
+        run: |
+          chmod +x run-validation.sh
+          ./run-validation.sh
