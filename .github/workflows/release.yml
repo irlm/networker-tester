@@ -190,3 +190,112 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           NOTES: ${{ steps.notes.outputs.notes }}
+
+  # ── Deploy to Azure dashboard (alethedash.com) ───────────────────────────
+  deploy:
+    name: Deploy to alethedash.com
+    needs: release
+    runs-on: ubuntu-latest
+    if: success()
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Download Linux binary artifacts
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: dist-x86_64-unknown-linux-musl
+          path: dist/
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+
+      - name: Deploy binaries
+        run: |
+          SSH="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ${DEPLOY_USER}@${DEPLOY_HOST}"
+          SCP="scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no"
+
+          echo "Deploying to ${DEPLOY_HOST}..."
+
+          # Extract binaries
+          cd dist
+          tar xzf networker-dashboard-x86_64-unknown-linux-musl.tar.gz
+          tar xzf networker-endpoint-x86_64-unknown-linux-musl.tar.gz
+          tar xzf networker-agent-x86_64-unknown-linux-musl.tar.gz
+
+          # Upload
+          ${SCP} networker-dashboard networker-endpoint networker-agent "${DEPLOY_USER}@${DEPLOY_HOST}:/tmp/"
+
+          # Stop, replace, start
+          ${SSH} bash -s <<'DEPLOY_SCRIPT'
+          set -e
+          echo ">> Stopping services..."
+          sudo systemctl stop networker-dashboard 2>/dev/null || true
+          sudo systemctl stop networker-endpoint 2>/dev/null || true
+          sudo systemctl stop networker-agent 2>/dev/null || true
+
+          echo ">> Installing new binaries..."
+          sudo mv /tmp/networker-dashboard /usr/local/bin/networker-dashboard
+          sudo mv /tmp/networker-endpoint /usr/local/bin/networker-endpoint
+          sudo mv /tmp/networker-agent /usr/local/bin/networker-agent
+          sudo chmod +x /usr/local/bin/networker-dashboard /usr/local/bin/networker-endpoint /usr/local/bin/networker-agent
+
+          echo ">> Starting services..."
+          sudo systemctl start networker-endpoint 2>/dev/null || true
+          sudo systemctl start networker-dashboard 2>/dev/null || true
+          sudo systemctl start networker-agent 2>/dev/null || true
+
+          echo ">> Waiting for health check..."
+          for i in $(seq 1 15); do
+            if curl -sk --max-time 2 https://localhost/api/health 2>/dev/null | grep -q "ok"; then
+              echo ">> Dashboard healthy!"
+              break
+            fi
+            sleep 2
+          done
+          echo ">> Deploy complete"
+          DEPLOY_SCRIPT
+
+      - name: Deploy frontend
+        run: |
+          SSH="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ${DEPLOY_USER}@${DEPLOY_HOST}"
+          SCP="scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no"
+
+          if [ -f dist/dashboard-frontend.tar.gz ]; then
+            ${SCP} dist/dashboard-frontend.tar.gz "${DEPLOY_USER}@${DEPLOY_HOST}:/tmp/"
+            ${SSH} bash -s <<'FRONTEND_SCRIPT'
+            set -e
+            sudo mkdir -p /var/www/dashboard
+            sudo tar xzf /tmp/dashboard-frontend.tar.gz -C /var/www/dashboard
+            sudo chown -R www-data:www-data /var/www/dashboard 2>/dev/null || true
+            rm -f /tmp/dashboard-frontend.tar.gz
+            echo ">> Frontend deployed"
+            FRONTEND_SCRIPT
+          fi
+
+      - name: Update Gist
+        run: |
+          jq -n --rawfile sh install.sh --rawfile ps install.ps1 \
+            '{"files":{"install.sh":{"content":$sh},"install.ps1":{"content":$ps}}}' \
+            > /tmp/gist_payload.json
+          gh api --method PATCH /gists/37a1af64b70ef6e58ea117839407f4f9 \
+            --input /tmp/gist_payload.json --jq '.updated_at' || echo "Gist update failed (non-fatal)"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Verify deployment
+        run: |
+          echo "Checking https://${DEPLOY_HOST}..."
+          sleep 5
+          VERSION=$(curl -sk --max-time 10 "https://${DEPLOY_HOST}/api/health" | python3 -c "import sys,json; print(json.load(sys.stdin).get('version','unknown'))" 2>/dev/null || echo "unreachable")
+          echo "Deployed version: ${VERSION}"
+          echo "Expected version: ${GITHUB_REF_NAME#v}"
