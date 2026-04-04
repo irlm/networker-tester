@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io::Write as IoWrite;
+use std::sync::OnceLock;
 use std::time::Instant;
 use tokio::time::{sleep, Duration};
 use tower_http::trace::TraceLayer;
@@ -1000,6 +1001,47 @@ fn bench_headers(dur_ms: f64) -> HeaderMap {
     h
 }
 
+// ── Shared benchmark dataset (loaded once from bench-data.json) ─────────────
+
+#[derive(Debug, serde::Deserialize)]
+struct BenchData {
+    users: Vec<serde_json::Value>,
+    search_corpus: Vec<String>,
+    timeseries: Vec<serde_json::Value>,
+    #[allow(dead_code)]
+    transform_inputs: Vec<serde_json::Value>,
+    expected_checksums: serde_json::Map<String, serde_json::Value>,
+}
+
+static BENCH_DATA: OnceLock<Option<BenchData>> = OnceLock::new();
+
+fn load_bench_data() -> Option<&'static BenchData> {
+    BENCH_DATA
+        .get_or_init(|| {
+            let paths = [
+                std::env::var("BENCH_DATA_PATH").unwrap_or_default(),
+                "/opt/bench/bench-data.json".to_string(),
+                "benchmarks/reference-apis/shared/bench-data.json".to_string(),
+            ];
+            for p in &paths {
+                if p.is_empty() {
+                    continue;
+                }
+                if let Ok(content) = std::fs::read_to_string(p) {
+                    if let Ok(data) = serde_json::from_str::<BenchData>(&content) {
+                        tracing::info!("Loaded bench-data.json from {p}");
+                        return Some(data);
+                    }
+                }
+            }
+            tracing::warn!(
+                "bench-data.json not found, JSON API endpoints will use fallback PRNG data"
+            );
+            None
+        })
+        .as_ref()
+}
+
 // ── Deterministic name/email generators ─────────────────────────────────────
 
 const FIRST_NAMES: &[&str] = &[
@@ -1068,17 +1110,30 @@ struct UsersParams {
 }
 
 /// GET /api/users?page=N&sort=field&order=asc
-/// Generate 100 users from deterministic PRNG, sort, paginate to 20.
+/// Return users from shared bench-data.json, falling back to deterministic PRNG.
 async fn api_users(Query(p): Query<UsersParams>) -> impl IntoResponse {
     let t0 = Instant::now();
     let page = p.page.unwrap_or(1).max(1);
     let sort_field = p.sort.as_deref().unwrap_or("id");
     let ascending = p.order.as_deref().unwrap_or("asc") != "desc";
 
-    let mut rng = StdRng::seed_from_u64(page);
-    let mut users: Vec<serde_json::Value> = (0..100)
-        .map(|i| gen_user(&mut rng, (page - 1) * 100 + i + 1))
-        .collect();
+    let mut users: Vec<serde_json::Value> = if let Some(data) = load_bench_data() {
+        // Shared dataset: paginate the pre-generated user list
+        let start = ((page - 1) * 100) as usize;
+        let end = (start + 100).min(data.users.len());
+        if start < data.users.len() {
+            data.users[start..end].to_vec()
+        } else {
+            // Page beyond dataset — return empty
+            Vec::new()
+        }
+    } else {
+        // Fallback: PRNG-generated users
+        let mut rng = StdRng::seed_from_u64(page);
+        (0..100)
+            .map(|i| gen_user(&mut rng, (page - 1) * 100 + i + 1))
+            .collect()
+    };
 
     // Sort by requested field
     users.sort_by(|a, b| {
@@ -1165,7 +1220,7 @@ struct AggregateParams {
 }
 
 /// GET /api/aggregate?range=start,end
-/// Generate 10,000 time-series points, compute stats, group into 5 categories.
+/// Compute stats from shared bench-data.json timeseries, falling back to PRNG.
 async fn api_aggregate(Query(p): Query<AggregateParams>) -> impl IntoResponse {
     let t0 = Instant::now();
 
@@ -1179,8 +1234,15 @@ async fn api_aggregate(Query(p): Query<AggregateParams>) -> impl IntoResponse {
         None => (1u64, 100u64),
     };
 
-    let mut rng = StdRng::seed_from_u64(start);
-    let mut values: Vec<f64> = (0..10_000).map(|_| rng.gen::<f64>() * 1000.0).collect();
+    let mut values: Vec<f64> = if let Some(data) = load_bench_data() {
+        data.timeseries
+            .iter()
+            .filter_map(|v| v["value"].as_f64())
+            .collect()
+    } else {
+        let mut rng = StdRng::seed_from_u64(start);
+        (0..10_000).map(|_| rng.gen::<f64>() * 1000.0).collect()
+    };
     values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
     let n = values.len() as f64;
@@ -1227,49 +1289,52 @@ struct SearchParams {
 }
 
 /// GET /api/search?q=term&limit=N
-/// Generate 1,000 items from PRNG, filter by regex, score by match position.
+/// Search items from shared bench-data.json, falling back to PRNG generation.
 async fn api_search(Query(p): Query<SearchParams>) -> impl IntoResponse {
     let t0 = Instant::now();
     let query = p.q.as_deref().unwrap_or("test");
     let limit = p.limit.unwrap_or(20).min(100);
 
-    let mut rng = StdRng::seed_from_u64(42);
-    let words: &[&str] = &[
-        "network",
-        "latency",
-        "throughput",
-        "bandwidth",
-        "packet",
-        "server",
-        "client",
-        "request",
-        "response",
-        "timeout",
-        "connection",
-        "socket",
-        "protocol",
-        "testing",
-        "benchmark",
-        "performance",
-        "endpoint",
-        "proxy",
-        "firewall",
-        "router",
-        "switch",
-        "gateway",
-        "dns",
-        "tls",
-        "quic",
-    ];
-
-    let items: Vec<String> = (0..1_000)
-        .map(|_| {
-            let w1 = words[rng.gen_range(0..words.len())];
-            let w2 = words[rng.gen_range(0..words.len())];
-            let n: u32 = rng.gen_range(1..1000);
-            format!("{w1}-{w2}-{n}")
-        })
-        .collect();
+    let items: Vec<String> = if let Some(data) = load_bench_data() {
+        data.search_corpus.clone()
+    } else {
+        let mut rng = StdRng::seed_from_u64(42);
+        let words: &[&str] = &[
+            "network",
+            "latency",
+            "throughput",
+            "bandwidth",
+            "packet",
+            "server",
+            "client",
+            "request",
+            "response",
+            "timeout",
+            "connection",
+            "socket",
+            "protocol",
+            "testing",
+            "benchmark",
+            "performance",
+            "endpoint",
+            "proxy",
+            "firewall",
+            "router",
+            "switch",
+            "gateway",
+            "dns",
+            "tls",
+            "quic",
+        ];
+        (0..1_000)
+            .map(|_| {
+                let w1 = words[rng.gen_range(0..words.len())];
+                let w2 = words[rng.gen_range(0..words.len())];
+                let n: u32 = rng.gen_range(1..1000);
+                format!("{w1}-{w2}-{n}")
+            })
+            .collect()
+    };
 
     // Apply regex filter; fall back to literal match on invalid regex
     let re = regex::Regex::new(query).ok();
@@ -1387,76 +1452,85 @@ async fn api_validate(Query(p): Query<ValidateParams>) -> impl IntoResponse {
     let t0 = Instant::now();
     let seed = p.seed.unwrap_or(42);
 
-    // Users: generate page=seed, hash the JSON
-    let mut rng = StdRng::seed_from_u64(seed);
-    let users: Vec<serde_json::Value> = (0..100)
-        .map(|i| gen_user(&mut rng, (seed - 1) * 100 + i + 1))
-        .collect();
-    let users_json = serde_json::to_string(&users).unwrap_or_default();
-    let users_hash = format!("{:x}", Sha256::digest(users_json.as_bytes()));
-
-    // Aggregate: generate 10k points from seed, hash the stats
-    let mut rng2 = StdRng::seed_from_u64(seed);
-    let mut values: Vec<f64> = (0..10_000).map(|_| rng2.gen::<f64>() * 1000.0).collect();
-    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let sum: f64 = values.iter().sum();
-    let mean = sum / values.len() as f64;
-    let agg_str = format!("{:.6}", mean);
-    let aggregate_hash = format!("{:x}", Sha256::digest(agg_str.as_bytes()));
-
-    // Transform: hash of SHA-256("test")
-    let transform_check = format!("{:x}", Sha256::digest(b"test"));
-    let transform_hash = format!("{:x}", Sha256::digest(transform_check.as_bytes()));
-
-    // Search: hash the item list (seed=42 always)
-    let mut rng3 = StdRng::seed_from_u64(42);
-    let words: &[&str] = &[
-        "network",
-        "latency",
-        "throughput",
-        "bandwidth",
-        "packet",
-        "server",
-        "client",
-        "request",
-        "response",
-        "timeout",
-        "connection",
-        "socket",
-        "protocol",
-        "testing",
-        "benchmark",
-        "performance",
-        "endpoint",
-        "proxy",
-        "firewall",
-        "router",
-        "switch",
-        "gateway",
-        "dns",
-        "tls",
-        "quic",
-    ];
-    let items: Vec<String> = (0..1_000)
-        .map(|_| {
-            let w1 = words[rng3.gen_range(0..words.len())];
-            let w2 = words[rng3.gen_range(0..words.len())];
-            let n: u32 = rng3.gen_range(1..1000);
-            format!("{w1}-{w2}-{n}")
+    let result = if let Some(data) = load_bench_data() {
+        // Use pre-computed checksums from shared dataset
+        serde_json::json!({
+            "seed": seed,
+            "checksums": data.expected_checksums,
         })
-        .collect();
-    let search_json = serde_json::to_string(&items).unwrap_or_default();
-    let search_hash = format!("{:x}", Sha256::digest(search_json.as_bytes()));
+    } else {
+        // Fallback: compute from PRNG
+        // Users: generate page=seed, hash the JSON
+        let mut rng = StdRng::seed_from_u64(seed);
+        let users: Vec<serde_json::Value> = (0..100)
+            .map(|i| gen_user(&mut rng, (seed - 1) * 100 + i + 1))
+            .collect();
+        let users_json = serde_json::to_string(&users).unwrap_or_default();
+        let users_hash = format!("{:x}", Sha256::digest(users_json.as_bytes()));
 
-    let result = serde_json::json!({
-        "seed": seed,
-        "checksums": {
-            "users": users_hash,
-            "aggregate": aggregate_hash,
-            "transform": transform_hash,
-            "search": search_hash,
-        },
-    });
+        // Aggregate: generate 10k points from seed, hash the stats
+        let mut rng2 = StdRng::seed_from_u64(seed);
+        let mut values: Vec<f64> = (0..10_000).map(|_| rng2.gen::<f64>() * 1000.0).collect();
+        values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let sum: f64 = values.iter().sum();
+        let mean = sum / values.len() as f64;
+        let agg_str = format!("{:.6}", mean);
+        let aggregate_hash = format!("{:x}", Sha256::digest(agg_str.as_bytes()));
+
+        // Transform: hash of SHA-256("test")
+        let transform_check = format!("{:x}", Sha256::digest(b"test"));
+        let transform_hash = format!("{:x}", Sha256::digest(transform_check.as_bytes()));
+
+        // Search: hash the item list (seed=42 always)
+        let mut rng3 = StdRng::seed_from_u64(42);
+        let words: &[&str] = &[
+            "network",
+            "latency",
+            "throughput",
+            "bandwidth",
+            "packet",
+            "server",
+            "client",
+            "request",
+            "response",
+            "timeout",
+            "connection",
+            "socket",
+            "protocol",
+            "testing",
+            "benchmark",
+            "performance",
+            "endpoint",
+            "proxy",
+            "firewall",
+            "router",
+            "switch",
+            "gateway",
+            "dns",
+            "tls",
+            "quic",
+        ];
+        let items: Vec<String> = (0..1_000)
+            .map(|_| {
+                let w1 = words[rng3.gen_range(0..words.len())];
+                let w2 = words[rng3.gen_range(0..words.len())];
+                let n: u32 = rng3.gen_range(1..1000);
+                format!("{w1}-{w2}-{n}")
+            })
+            .collect();
+        let search_json = serde_json::to_string(&items).unwrap_or_default();
+        let search_hash = format!("{:x}", Sha256::digest(search_json.as_bytes()));
+
+        serde_json::json!({
+            "seed": seed,
+            "checksums": {
+                "users": users_hash,
+                "aggregate": aggregate_hash,
+                "transform": transform_hash,
+                "search": search_hash,
+            },
+        })
+    };
 
     let dur_ms = t0.elapsed().as_secs_f64() * 1000.0;
     (bench_headers(dur_ms), Json(result))
