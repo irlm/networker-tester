@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
-	"log"
+	"log/slog"
 	"math"
 	"math/rand"
 	"net/http"
@@ -60,15 +60,17 @@ func loadBenchData() {
 		}
 		var bd BenchDataFile
 		if err := json.Unmarshal(data, &bd); err != nil {
-			log.Printf("WARN: bench-data.json at %s is invalid JSON: %v", p, err)
+			slog.Warn("bench-data.json is invalid JSON", "path", p, "error", err)
 			continue
 		}
 		benchData = &bd
-		log.Printf("Loaded bench-data.json from %s (version %d, %d users, %d corpus, %d timeseries)",
-			p, bd.Version, len(bd.Users), len(bd.SearchCorpus), len(bd.Timeseries))
+		slog.Info("Loaded bench-data.json",
+			"path", p, "version", bd.Version,
+			"users", len(bd.Users), "corpus", len(bd.SearchCorpus),
+			"timeseries", len(bd.Timeseries))
 		return
 	}
-	log.Printf("WARN: bench-data.json not found, falling back to per-language PRNG")
+	slog.Warn("bench-data.json not found, falling back to per-language PRNG")
 }
 
 const (
@@ -79,6 +81,18 @@ const (
 )
 
 func main() {
+	// Configure structured logging with LOG_LEVEL env var (debug, info, warn, error).
+	logLevel := slog.LevelInfo
+	switch strings.ToLower(os.Getenv("LOG_LEVEL")) {
+	case "debug":
+		logLevel = slog.LevelDebug
+	case "warn", "warning":
+		logLevel = slog.LevelWarn
+	case "error":
+		logLevel = slog.LevelError
+	}
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})))
+
 	loadBenchData()
 
 	addr := os.Getenv("LISTEN_ADDR")
@@ -117,9 +131,9 @@ func main() {
 	// HTTP/3 server (QUIC/UDP) — run in background goroutine.
 	h3srv := &http3.Server{Addr: addr, Handler: altSvcHandler}
 	go func() {
-		log.Printf("HTTP/3 (QUIC) listening on %s", addr)
+		slog.Info("HTTP/3 (QUIC) listening", "addr", addr)
 		if err := h3srv.ListenAndServeTLS(certPath, keyPath); err != nil {
-			log.Printf("HTTP/3 server error: %v", err)
+			slog.Error("HTTP/3 server error", "error", err)
 		}
 	}()
 
@@ -130,9 +144,10 @@ func main() {
 		TLSConfig: tlsCfg,
 	}
 
-	log.Printf("AletheBench Go reference API listening on %s (TLS + QUIC)", addr)
+	slog.Info("AletheBench Go reference API listening", "addr", addr, "tls", true, "quic", true)
 	if err := tcpSrv.ListenAndServeTLS(certPath, keyPath); err != nil {
-		log.Fatalf("server error: %v", err)
+		slog.Error("Server failed to start", "error", err)
+		os.Exit(1)
 	}
 }
 
