@@ -3,12 +3,20 @@
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
 import random
 import sys
 import time
 import zlib
+
+logging.basicConfig(
+    level=getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    stream=sys.stderr,
+)
+logger = logging.getLogger("bench-api")
 
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -36,17 +44,16 @@ def _load_bench_data() -> dict | None:
         try:
             with open(p) as f:
                 data = json.load(f)
-            print(f"Loaded bench-data.json from {p} (version {data.get('_version')}, "
-                  f"{len(data.get('users', []))} users, "
-                  f"{len(data.get('search_corpus', []))} corpus, "
-                  f"{len(data.get('timeseries', []))} timeseries)",
-                  file=sys.stderr)
+            logger.info("Loaded bench-data.json from %s (version %s, %d users, %d corpus, %d timeseries)",
+                        p, data.get('_version'),
+                        len(data.get('users', [])),
+                        len(data.get('search_corpus', [])),
+                        len(data.get('timeseries', [])))
             return data
         except (OSError, json.JSONDecodeError):
             continue
 
-    print("WARN: bench-data.json not found, falling back to per-language PRNG",
-          file=sys.stderr)
+    logger.warning("bench-data.json not found, falling back to per-language PRNG")
     return None
 
 
