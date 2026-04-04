@@ -9,7 +9,7 @@ using Microsoft.AspNetCore.Server.Kestrel.Core;
 
 // Load shared benchmark data at startup
 static JsonDocument? BenchData = null;
-static void LoadBenchData() {
+static void LoadBenchData(ILogger logger) {
     string[] paths = {
         Environment.GetEnvironmentVariable("BENCH_DATA_PATH") ?? "",
         "/opt/bench/bench-data.json",
@@ -21,14 +21,12 @@ static void LoadBenchData() {
         try {
             var content = File.ReadAllText(p);
             BenchData = JsonDocument.Parse(content);
-            Console.Error.WriteLine($"[INFO] Loaded bench-data.json from {p}");
+            logger.LogInformation("Loaded bench-data.json from {Path}", p);
             return;
         } catch { }
     }
-    Console.Error.WriteLine("[WARN] bench-data.json not found, using PRNG fallback");
+    logger.LogWarning("bench-data.json not found, using PRNG fallback");
 }
-
-LoadBenchData();
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -51,6 +49,7 @@ builder.WebHost.ConfigureKestrel(options =>
 
 var app = builder.Build();
 var logger = app.Logger;
+LoadBenchData(logger);
 logger.LogInformation("csharp-net8 reference API starting");
 
 // Advertise HTTP/3 via Alt-Svc header
