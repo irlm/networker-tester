@@ -80,6 +80,14 @@ async fn stop_existing_server(vm: &VmInfo) {
 }
 
 /// Deploy a reverse proxy on a VM. Uses install.sh --benchmark-proxy-swap.
+/// Generate a random API token for this test run (64 hex chars from OS randomness).
+fn generate_bench_token() -> String {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    let bytes: [u8; 32] = rng.gen();
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// Validate a name is safe for shell interpolation (alphanumeric + dash/underscore/dot).
 fn validate_shell_safe(name: &str, label: &str) -> Result<()> {
     anyhow::ensure!(
@@ -138,7 +146,13 @@ async fn stop_proxy(vm: &VmInfo) {
 }
 
 /// Deploy a language server in application mode (localhost:8080, no TLS).
-async fn deploy_app_language(vm: &VmInfo, language: &str, proxy: &str) -> Result<()> {
+/// Sets BENCH_API_TOKEN env var on the VM so the server requires auth.
+async fn deploy_app_language(
+    vm: &VmInfo,
+    language: &str,
+    proxy: &str,
+    bench_token: &str,
+) -> Result<()> {
     validate_shell_safe(language, "language")?;
     validate_shell_safe(proxy, "proxy")?;
     tracing::info!(
@@ -147,8 +161,8 @@ async fn deploy_app_language(vm: &VmInfo, language: &str, proxy: &str) -> Result
         vm.ip
     );
     let cmd = format!(
-        "curl -fsSL https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh | sudo bash -s -- --benchmark-server {} --benchmark-proxy {}",
-        language, proxy
+        "export BENCH_API_TOKEN='{}' && curl -fsSL https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh | sudo -E bash -s -- --benchmark-server {} --benchmark-proxy {}",
+        bench_token, language, proxy
     );
     ssh::ssh_exec(&vm.ip, &cmd)
         .await
@@ -221,13 +235,13 @@ async fn run_chrome_benchmark(
     http_version: &str,
     connection_mode: &str,
     methodology: &MethodologyConfig,
+    bench_token: &str,
 ) -> Result<serde_json::Value> {
-    // Pass BENCH_API_TOKEN to Chrome runner if set
-    let token_arg = std::env::var("BENCH_API_TOKEN")
-        .ok()
-        .filter(|t| !t.is_empty())
-        .map(|t| format!(" --token {t}"))
-        .unwrap_or_default();
+    let token_arg = if bench_token.is_empty() {
+        String::new()
+    } else {
+        format!(" --token {bench_token}")
+    };
     let cmd = format!(
         "cd /opt/bench/chrome-harness && node runner.js \
          --target https://localhost:8443 \
@@ -734,6 +748,14 @@ async fn execute_testbed_application(
             methodology.timeout_secs as u64 * total_combinations.max(1) as u64,
         );
 
+    // Generate a unique API token for this test run (rotated per testbed)
+    let bench_token = generate_bench_token();
+    tracing::info!(
+        "Generated bench API token for testbed {} ({}...)",
+        testbed.testbed_id,
+        &bench_token[..8]
+    );
+
     // Deploy Chrome test harness on the VM
     log_callback(
         callback,
@@ -847,7 +869,7 @@ async fn execute_testbed_application(
             )
             .await;
 
-            if let Err(e) = deploy_app_language(vm, language, proxy).await {
+            if let Err(e) = deploy_app_language(vm, language, proxy, &bench_token).await {
                 tracing::error!(
                     "App deploy failed for {} behind {}: {:#}",
                     language,
@@ -883,7 +905,7 @@ async fn execute_testbed_application(
             let mut lang_ok = true;
             for http_ver in &http_versions {
                 // Run warm connection phase
-                match run_chrome_benchmark(vm, proxy, language, http_ver, "warm", methodology).await
+                match run_chrome_benchmark(vm, proxy, language, http_ver, "warm", methodology, &bench_token).await
                 {
                     Ok(result) => {
                         tracing::info!(
