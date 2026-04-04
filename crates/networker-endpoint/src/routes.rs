@@ -1813,4 +1813,44 @@ mod tests {
         let b2 = to_bytes(r2.into_body(), 4 * 1024).await.unwrap();
         assert_eq!(b1, b2, "api/validate must be deterministic for same seed");
     }
+
+    /// Verify all JSON API endpoints include required benchmark headers.
+    #[tokio::test]
+    async fn api_endpoints_include_benchmark_headers() {
+        let endpoints = [
+            "/api/users?page=1&sort=name&order=asc",
+            "/api/aggregate?range=1,100",
+            "/api/search?q=test&limit=5",
+            "/api/delayed?ms=5&work=light",
+            "/api/validate?seed=42",
+        ];
+        for uri in endpoints {
+            let resp = app()
+                .clone()
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), 200, "{uri} failed");
+            let h = resp.headers();
+            assert!(
+                h.get("server-timing").is_some(),
+                "{uri} missing Server-Timing"
+            );
+            assert!(
+                h.get("cache-control")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("")
+                    .contains("no-store"),
+                "{uri} missing Cache-Control: no-store"
+            );
+            assert!(
+                h.get("timing-allow-origin").is_some(),
+                "{uri} missing Timing-Allow-Origin"
+            );
+            assert!(
+                h.get("access-control-allow-origin").is_some(),
+                "{uri} missing Access-Control-Allow-Origin"
+            );
+        }
+    }
 }
