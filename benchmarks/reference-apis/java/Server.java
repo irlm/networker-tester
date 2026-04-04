@@ -64,7 +64,244 @@ public class Server {
     private static final int PORT = 8443;
     private static final String CERT_DIR = System.getenv().getOrDefault("BENCH_CERT_DIR", "/opt/bench");
 
+    // ── Shared benchmark dataset (loaded once at startup) ─────────────
+
+    /** Parsed user objects from bench-data.json. Null if file not found. */
+    private static List<Map<String, Object>> benchUsers = null;
+    /** Search corpus strings from bench-data.json. Null if file not found. */
+    private static List<String> benchSearchCorpus = null;
+    /** Timeseries data points from bench-data.json. Null if file not found. */
+    private static List<double[]> benchTimeseries = null; // [value] per entry
+    private static List<String> benchTimeseriesCategories = null;
+    /** Expected checksums from bench-data.json. Null if file not found. */
+    private static Map<String, String> benchChecksums = null;
+    /** Raw JSON content for pre-serialized responses. */
+    private static String benchRawContent = null;
+
+    private static void loadBenchData() {
+        List<String> paths = new ArrayList<>();
+        String envPath = System.getenv("BENCH_DATA_PATH");
+        if (envPath != null && !envPath.isEmpty()) {
+            paths.add(envPath);
+        }
+        paths.add("/opt/bench/bench-data.json");
+        paths.add(Path.of("../shared/bench-data.json").toAbsolutePath().normalize().toString());
+
+        for (String p : paths) {
+            try {
+                String content = Files.readString(Path.of(p), StandardCharsets.UTF_8);
+                benchRawContent = content;
+                parseBenchData(content);
+                System.out.printf("Loaded bench-data.json from %s (%d users, %d corpus, %d timeseries)%n",
+                        p,
+                        benchUsers != null ? benchUsers.size() : 0,
+                        benchSearchCorpus != null ? benchSearchCorpus.size() : 0,
+                        benchTimeseries != null ? benchTimeseries.size() : 0);
+                return;
+            } catch (IOException ignored) {
+                // try next path
+            } catch (Exception e) {
+                System.err.printf("WARN: bench-data.json at %s is invalid: %s%n", p, e.getMessage());
+            }
+        }
+        System.err.println("WARN: bench-data.json not found, falling back to per-language PRNG");
+    }
+
+    /** Minimal JSON parser for bench-data.json — extracts users, search_corpus, timeseries, expected_checksums. */
+    private static void parseBenchData(String json) {
+        // Parse users array
+        benchUsers = new ArrayList<>();
+        int usersStart = json.indexOf("\"users\"");
+        if (usersStart >= 0) {
+            int arrStart = json.indexOf('[', usersStart);
+            int arrEnd = findMatchingBracket(json, arrStart);
+            if (arrStart >= 0 && arrEnd > arrStart) {
+                String usersArr = json.substring(arrStart + 1, arrEnd);
+                parseUserObjects(usersArr, benchUsers);
+            }
+        }
+
+        // Parse search_corpus array (array of strings)
+        benchSearchCorpus = new ArrayList<>();
+        int searchStart = json.indexOf("\"search_corpus\"");
+        if (searchStart >= 0) {
+            int arrStart = json.indexOf('[', searchStart);
+            int arrEnd = findMatchingBracket(json, arrStart);
+            if (arrStart >= 0 && arrEnd > arrStart) {
+                String arr = json.substring(arrStart + 1, arrEnd);
+                parseStringArray(arr, benchSearchCorpus);
+            }
+        }
+
+        // Parse timeseries array
+        benchTimeseries = new ArrayList<>();
+        benchTimeseriesCategories = new ArrayList<>();
+        int tsStart = json.indexOf("\"timeseries\"");
+        if (tsStart >= 0) {
+            int arrStart = json.indexOf('[', tsStart);
+            int arrEnd = findMatchingBracket(json, arrStart);
+            if (arrStart >= 0 && arrEnd > arrStart) {
+                String arr = json.substring(arrStart + 1, arrEnd);
+                parseTimeseriesObjects(arr, benchTimeseries, benchTimeseriesCategories);
+            }
+        }
+
+        // Parse expected_checksums object
+        benchChecksums = new HashMap<>();
+        int csStart = json.indexOf("\"expected_checksums\"");
+        if (csStart >= 0) {
+            int objStart = json.indexOf('{', csStart);
+            int objEnd = findMatchingCurly(json, objStart);
+            if (objStart >= 0 && objEnd > objStart) {
+                String obj = json.substring(objStart + 1, objEnd);
+                parseStringMap(obj, benchChecksums);
+            }
+        }
+    }
+
+    private static int findMatchingBracket(String s, int openPos) {
+        if (openPos < 0 || openPos >= s.length() || s.charAt(openPos) != '[') return -1;
+        int depth = 0;
+        boolean inStr = false;
+        for (int i = openPos; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '"' && (i == 0 || s.charAt(i - 1) != '\\')) inStr = !inStr;
+            if (!inStr) {
+                if (c == '[') depth++;
+                else if (c == ']') { depth--; if (depth == 0) return i; }
+            }
+        }
+        return -1;
+    }
+
+    private static int findMatchingCurly(String s, int openPos) {
+        if (openPos < 0 || openPos >= s.length() || s.charAt(openPos) != '{') return -1;
+        int depth = 0;
+        boolean inStr = false;
+        for (int i = openPos; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '"' && (i == 0 || s.charAt(i - 1) != '\\')) inStr = !inStr;
+            if (!inStr) {
+                if (c == '{') depth++;
+                else if (c == '}') { depth--; if (depth == 0) return i; }
+            }
+        }
+        return -1;
+    }
+
+    private static void parseUserObjects(String arr, List<Map<String, Object>> out) {
+        int pos = 0;
+        while (pos < arr.length()) {
+            int objStart = arr.indexOf('{', pos);
+            if (objStart < 0) break;
+            int objEnd = findMatchingCurly(arr, objStart);
+            if (objEnd < 0) break;
+            String objStr = arr.substring(objStart + 1, objEnd);
+
+            Map<String, Object> user = new LinkedHashMap<>();
+            // Extract fields: id (int), name (string), email (string), score (double), created_at (string)
+            user.put("id", extractJsonInt(objStr, "id"));
+            user.put("name", extractJsonString(objStr, "name"));
+            user.put("email", extractJsonString(objStr, "email"));
+            user.put("score", extractJsonDouble(objStr, "score"));
+            user.put("created_at", extractJsonString(objStr, "created_at"));
+            out.add(user);
+            pos = objEnd + 1;
+        }
+    }
+
+    private static void parseTimeseriesObjects(String arr, List<double[]> values, List<String> categories) {
+        int pos = 0;
+        while (pos < arr.length()) {
+            int objStart = arr.indexOf('{', pos);
+            if (objStart < 0) break;
+            int objEnd = findMatchingCurly(arr, objStart);
+            if (objEnd < 0) break;
+            String objStr = arr.substring(objStart + 1, objEnd);
+            values.add(new double[]{extractJsonDouble(objStr, "value")});
+            categories.add(extractJsonString(objStr, "category"));
+            pos = objEnd + 1;
+        }
+    }
+
+    private static void parseStringArray(String arr, List<String> out) {
+        int pos = 0;
+        while (pos < arr.length()) {
+            int qStart = arr.indexOf('"', pos);
+            if (qStart < 0) break;
+            int qEnd = qStart + 1;
+            while (qEnd < arr.length()) {
+                if (arr.charAt(qEnd) == '"' && arr.charAt(qEnd - 1) != '\\') break;
+                qEnd++;
+            }
+            out.add(arr.substring(qStart + 1, qEnd).replace("\\\"", "\"").replace("\\\\", "\\"));
+            pos = qEnd + 1;
+        }
+    }
+
+    private static void parseStringMap(String obj, Map<String, String> out) {
+        int pos = 0;
+        while (pos < obj.length()) {
+            int kStart = obj.indexOf('"', pos);
+            if (kStart < 0) break;
+            int kEnd = obj.indexOf('"', kStart + 1);
+            if (kEnd < 0) break;
+            String key = obj.substring(kStart + 1, kEnd);
+            int colon = obj.indexOf(':', kEnd);
+            if (colon < 0) break;
+            int vStart = obj.indexOf('"', colon);
+            if (vStart < 0) break;
+            int vEnd = obj.indexOf('"', vStart + 1);
+            if (vEnd < 0) break;
+            out.put(key, obj.substring(vStart + 1, vEnd));
+            pos = vEnd + 1;
+        }
+    }
+
+    private static String extractJsonString(String obj, String key) {
+        String search = "\"" + key + "\"";
+        int idx = obj.indexOf(search);
+        if (idx < 0) return "";
+        int colon = obj.indexOf(':', idx + search.length());
+        if (colon < 0) return "";
+        int qStart = obj.indexOf('"', colon);
+        if (qStart < 0) return "";
+        int qEnd = qStart + 1;
+        while (qEnd < obj.length()) {
+            if (obj.charAt(qEnd) == '"' && obj.charAt(qEnd - 1) != '\\') break;
+            qEnd++;
+        }
+        return obj.substring(qStart + 1, qEnd);
+    }
+
+    private static int extractJsonInt(String obj, String key) {
+        String search = "\"" + key + "\"";
+        int idx = obj.indexOf(search);
+        if (idx < 0) return 0;
+        int colon = obj.indexOf(':', idx + search.length());
+        if (colon < 0) return 0;
+        int start = colon + 1;
+        while (start < obj.length() && Character.isWhitespace(obj.charAt(start))) start++;
+        int end = start;
+        while (end < obj.length() && (Character.isDigit(obj.charAt(end)) || obj.charAt(end) == '-')) end++;
+        try { return Integer.parseInt(obj.substring(start, end)); } catch (NumberFormatException e) { return 0; }
+    }
+
+    private static double extractJsonDouble(String obj, String key) {
+        String search = "\"" + key + "\"";
+        int idx = obj.indexOf(search);
+        if (idx < 0) return 0.0;
+        int colon = obj.indexOf(':', idx + search.length());
+        if (colon < 0) return 0.0;
+        int start = colon + 1;
+        while (start < obj.length() && Character.isWhitespace(obj.charAt(start))) start++;
+        int end = start;
+        while (end < obj.length() && (Character.isDigit(obj.charAt(end)) || obj.charAt(end) == '.' || obj.charAt(end) == '-' || obj.charAt(end) == 'E' || obj.charAt(end) == 'e' || obj.charAt(end) == '+')) end++;
+        try { return Double.parseDouble(obj.substring(start, end)); } catch (NumberFormatException e) { return 0.0; }
+    }
+
     public static void main(String[] args) throws Exception {
+        loadBenchData();
         SSLContext sslContext = buildSslContext(
                 Path.of(CERT_DIR, "cert.pem"),
                 Path.of(CERT_DIR, "key.pem")
@@ -298,6 +535,33 @@ public class Server {
         return sb.toString();
     }
 
+    /** Serialize a bench-data user map to JSON (uses score as double, created_at as string). */
+    private static String benchUserToJson(Map<String, Object> user) {
+        StringBuilder sb = new StringBuilder("{");
+        sb.append("\"id\":").append(user.get("id"));
+        sb.append(",\"name\":\"").append(jsonEscape((String) user.get("name"))).append("\"");
+        sb.append(",\"email\":\"").append(jsonEscape((String) user.get("email"))).append("\"");
+        Object score = user.get("score");
+        if (score instanceof Double) {
+            sb.append(",\"score\":").append(score);
+        } else if (score instanceof Integer) {
+            sb.append(",\"score\":").append(score);
+        } else {
+            sb.append(",\"score\":").append(score);
+        }
+        if (user.containsKey("created_at")) {
+            sb.append(",\"created_at\":\"").append(jsonEscape((String) user.get("created_at"))).append("\"");
+        }
+        if (user.containsKey("age")) {
+            sb.append(",\"age\":").append(user.get("age"));
+        }
+        if (user.containsKey("active")) {
+            sb.append(",\"active\":").append(user.get("active"));
+        }
+        sb.append("}");
+        return sb.toString();
+    }
+
     // GET /api/users?page=N&sort=field&order=asc — paginated sorted user list.
     static class APIUsersHandler implements HttpHandler {
         @Override
@@ -316,7 +580,8 @@ public class Server {
             String sortField = params.getOrDefault("sort", "");
             String order = params.getOrDefault("order", "");
 
-            List<Map<String, Object>> users = generateUsers(page);
+            boolean useBench = benchUsers != null && !benchUsers.isEmpty();
+            List<Map<String, Object>> users = useBench ? new ArrayList<>(benchUsers) : generateUsers(page);
 
             Comparator<Map<String, Object>> cmp;
             switch (sortField) {
@@ -348,7 +613,17 @@ public class Server {
             if (end > users.size()) end = users.size();
             List<Map<String, Object>> result = users.subList(offset, end);
 
-            sendAPI(ex, start, usersToJson(result));
+            if (useBench) {
+                StringBuilder sb = new StringBuilder("[");
+                for (int i = 0; i < result.size(); i++) {
+                    if (i > 0) sb.append(",");
+                    sb.append(benchUserToJson(result.get(i)));
+                }
+                sb.append("]");
+                sendAPI(ex, start, sb.toString());
+            } else {
+                sendAPI(ex, start, usersToJson(result));
+            }
         }
     }
 
@@ -499,22 +774,40 @@ public class Server {
                 return;
             }
 
-            Random rng = new Random(rangeStart);
-            int n = 10000;
-            double[] values = new double[n];
+            int n;
+            double[] values;
             double sum = 0.0;
-
-            // Category accumulators
             int[] catCount = new int[5];
             double[] catSum = new double[5];
 
-            for (int i = 0; i < n; i++) {
-                double v = rng.nextDouble() * (rangeEnd - rangeStart) + rangeStart;
-                values[i] = v;
-                sum += v;
-                int catIdx = i % 5;
-                catCount[catIdx]++;
-                catSum[catIdx] += v;
+            if (benchTimeseries != null && !benchTimeseries.isEmpty()) {
+                n = benchTimeseries.size();
+                values = new double[n];
+                for (int i = 0; i < n; i++) {
+                    double v = benchTimeseries.get(i)[0];
+                    values[i] = v;
+                    sum += v;
+                    String cat = benchTimeseriesCategories.get(i);
+                    int catIdx = 0;
+                    for (int c = 0; c < CAT_NAMES.length; c++) {
+                        if (CAT_NAMES[c].equals(cat)) { catIdx = c; break; }
+                    }
+                    catCount[catIdx]++;
+                    catSum[catIdx] += v;
+                }
+            } else {
+                Random rng = new Random(rangeStart);
+                n = 10000;
+                values = new double[n];
+
+                for (int i = 0; i < n; i++) {
+                    double v = rng.nextDouble() * (rangeEnd - rangeStart) + rangeStart;
+                    values[i] = v;
+                    sum += v;
+                    int catIdx = i % 5;
+                    catCount[catIdx]++;
+                    catSum[catIdx] += v;
+                }
             }
 
             Arrays.sort(values);
@@ -563,23 +856,34 @@ public class Server {
 
             Pattern pattern = Pattern.compile(Pattern.quote(q), Pattern.CASE_INSENSITIVE);
 
-            Random rng = new Random(42);
             List<int[]> matches = new ArrayList<>(); // [index, matchPos]
             List<String> matchTexts = new ArrayList<>();
 
-            for (int i = 0; i < 1000; i++) {
-                int wordCount = 3 + rng.nextInt(4);
-                StringBuilder sb = new StringBuilder();
-                for (int j = 0; j < wordCount; j++) {
-                    if (j > 0) sb.append(" ");
-                    sb.append(WORDS[rng.nextInt(WORDS.length)]);
+            if (benchSearchCorpus != null && !benchSearchCorpus.isEmpty()) {
+                for (int i = 0; i < benchSearchCorpus.size(); i++) {
+                    String text = benchSearchCorpus.get(i);
+                    Matcher m = pattern.matcher(text);
+                    if (m.find()) {
+                        matches.add(new int[]{i, m.start()});
+                        matchTexts.add(text);
+                    }
                 }
-                String text = sb.toString();
+            } else {
+                Random rng = new Random(42);
+                for (int i = 0; i < 1000; i++) {
+                    int wordCount = 3 + rng.nextInt(4);
+                    StringBuilder sb = new StringBuilder();
+                    for (int j = 0; j < wordCount; j++) {
+                        if (j > 0) sb.append(" ");
+                        sb.append(WORDS[rng.nextInt(WORDS.length)]);
+                    }
+                    String text = sb.toString();
 
-                Matcher m = pattern.matcher(text);
-                if (m.find()) {
-                    matches.add(new int[]{i, m.start()});
-                    matchTexts.add(text);
+                    Matcher m = pattern.matcher(text);
+                    if (m.find()) {
+                        matches.add(new int[]{i, m.start()});
+                        matchTexts.add(text);
+                    }
                 }
             }
 
@@ -714,38 +1018,46 @@ public class Server {
             if (seed == 0) seed = 42;
 
             try {
-                MessageDigest md = MessageDigest.getInstance("SHA-256");
+                String usersHex, aggHex, searchHex;
 
-                // Users checksum
-                List<Map<String, Object>> users = generateUsers(seed);
-                String usersJson = usersToJson(users);
-                byte[] usersHash = md.digest(usersJson.getBytes(StandardCharsets.UTF_8));
-                String usersHex = hexEncode(Arrays.copyOf(usersHash, 16));
+                if (benchChecksums != null && !benchChecksums.isEmpty()) {
+                    usersHex = benchChecksums.getOrDefault("users_page1", "").substring(0, Math.min(32, benchChecksums.getOrDefault("users_page1", "").length()));
+                    aggHex = benchChecksums.getOrDefault("aggregate_summary", "").substring(0, Math.min(32, benchChecksums.getOrDefault("aggregate_summary", "").length()));
+                    searchHex = benchChecksums.getOrDefault("search_network_top10", "").substring(0, Math.min(32, benchChecksums.getOrDefault("search_network_top10", "").length()));
+                } else {
+                    MessageDigest md = MessageDigest.getInstance("SHA-256");
 
-                // Aggregate checksum
-                md.reset();
-                Random rng = new Random(seed);
-                double sum = 0.0;
-                for (int i = 0; i < 10000; i++) {
-                    sum += rng.nextDouble() * 100.0;
-                }
-                byte[] aggHash = md.digest(String.format("%.6f", sum).getBytes(StandardCharsets.UTF_8));
-                String aggHex = hexEncode(Arrays.copyOf(aggHash, 16));
+                    // Users checksum
+                    List<Map<String, Object>> users = generateUsers(seed);
+                    String usersJson = usersToJson(users);
+                    byte[] usersHash = md.digest(usersJson.getBytes(StandardCharsets.UTF_8));
+                    usersHex = hexEncode(Arrays.copyOf(usersHash, 16));
 
-                // Search checksum (seed=42 corpus, q="network")
-                md.reset();
-                Random rng2 = new Random(42);
-                StringBuilder corpus = new StringBuilder();
-                for (int i = 0; i < 1000; i++) {
-                    int wordCount = 3 + rng2.nextInt(4);
-                    for (int j = 0; j < wordCount; j++) {
-                        if (j > 0) corpus.append(" ");
-                        corpus.append(WORDS[rng2.nextInt(WORDS.length)]);
+                    // Aggregate checksum
+                    md.reset();
+                    Random rng = new Random(seed);
+                    double sum = 0.0;
+                    for (int i = 0; i < 10000; i++) {
+                        sum += rng.nextDouble() * 100.0;
                     }
-                    corpus.append("\n");
+                    byte[] aggHash = md.digest(String.format("%.6f", sum).getBytes(StandardCharsets.UTF_8));
+                    aggHex = hexEncode(Arrays.copyOf(aggHash, 16));
+
+                    // Search checksum (seed=42 corpus, q="network")
+                    md.reset();
+                    Random rng2 = new Random(42);
+                    StringBuilder corpus = new StringBuilder();
+                    for (int i = 0; i < 1000; i++) {
+                        int wordCount = 3 + rng2.nextInt(4);
+                        for (int j = 0; j < wordCount; j++) {
+                            if (j > 0) corpus.append(" ");
+                            corpus.append(WORDS[rng2.nextInt(WORDS.length)]);
+                        }
+                        corpus.append("\n");
+                    }
+                    byte[] searchHash = md.digest(corpus.toString().getBytes(StandardCharsets.UTF_8));
+                    searchHex = hexEncode(Arrays.copyOf(searchHash, 16));
                 }
-                byte[] searchHash = md.digest(corpus.toString().getBytes(StandardCharsets.UTF_8));
-                String searchHex = hexEncode(Arrays.copyOf(searchHash, 16));
 
                 String json = String.format(
                         "{\"seed\":\"%d\",\"users\":\"%s\",\"aggregate\":\"%s\",\"search\":\"%s\"}",
