@@ -2,7 +2,11 @@
 
 require 'digest/sha2'
 require 'json'
+require 'logger'
 require 'zlib'
+
+LOGGER = Logger.new($stderr)
+LOGGER.level = ENV.fetch('LOG_LEVEL', 'INFO').upcase == 'DEBUG' ? Logger::DEBUG : Logger::INFO
 
 CHUNK_SIZE = 8192
 CHUNK = ("\x42" * CHUNK_SIZE).b.freeze
@@ -20,16 +24,16 @@ BENCH_DATA = begin
     next unless File.exist?(p)
     begin
       loaded = JSON.parse(File.read(p))
-      $stderr.puts "Loaded bench-data.json from #{p} (version #{loaded['_version']}, " \
-                   "#{loaded['users']&.size} users, #{loaded['search_corpus']&.size} corpus, " \
-                   "#{loaded['timeseries']&.size} timeseries)"
+      LOGGER.info("Loaded bench-data.json from #{p} (version #{loaded['_version']}, " \
+                  "#{loaded['users']&.size} users, #{loaded['search_corpus']&.size} corpus, " \
+                  "#{loaded['timeseries']&.size} timeseries)")
       break
     rescue => e
-      $stderr.puts "WARN: bench-data.json at #{p} is invalid: #{e}"
+      LOGGER.warn("bench-data.json at #{p} is invalid: #{e}")
     end
   end
   unless loaded
-    $stderr.puts "WARN: bench-data.json not found, falling back to per-language PRNG"
+    LOGGER.warn("bench-data.json not found, falling back to per-language PRNG")
   end
   loaded
 end
