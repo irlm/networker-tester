@@ -15,6 +15,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"sort"
@@ -25,6 +26,51 @@ import (
 	"github.com/quic-go/quic-go/http3"
 )
 
+// BenchDataFile mirrors the shared bench-data.json schema.
+type BenchDataFile struct {
+	Version            int                `json:"_version"`
+	Users              []json.RawMessage  `json:"users"`
+	SearchCorpus       []json.RawMessage  `json:"search_corpus"`
+	Timeseries         []json.RawMessage  `json:"timeseries"`
+	TransformInputs    []json.RawMessage  `json:"transform_inputs"`
+	ExpectedChecksums  map[string]string  `json:"expected_checksums"`
+}
+
+// benchData holds the shared dataset (nil if file not found — PRNG fallback).
+var benchData *BenchDataFile
+
+// loadBenchData tries BENCH_DATA_PATH, /opt/bench/bench-data.json, ../shared/bench-data.json.
+func loadBenchData() {
+	paths := []string{}
+	if env := os.Getenv("BENCH_DATA_PATH"); env != "" {
+		paths = append(paths, env)
+	}
+	paths = append(paths, "/opt/bench/bench-data.json")
+
+	// Relative to executable directory.
+	if exe, err := os.Executable(); err == nil {
+		paths = append(paths, filepath.Join(filepath.Dir(exe), "..", "shared", "bench-data.json"))
+	}
+	paths = append(paths, "../shared/bench-data.json")
+
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		var bd BenchDataFile
+		if err := json.Unmarshal(data, &bd); err != nil {
+			log.Printf("WARN: bench-data.json at %s is invalid JSON: %v", p, err)
+			continue
+		}
+		benchData = &bd
+		log.Printf("Loaded bench-data.json from %s (version %d, %d users, %d corpus, %d timeseries)",
+			p, bd.Version, len(bd.Users), len(bd.SearchCorpus), len(bd.Timeseries))
+		return
+	}
+	log.Printf("WARN: bench-data.json not found, falling back to per-language PRNG")
+}
+
 const (
 	defaultAddr    = ":8443"
 	defaultCertDir = "/opt/bench"
@@ -33,6 +79,8 @@ const (
 )
 
 func main() {
+	loadBenchData()
+
 	addr := os.Getenv("LISTEN_ADDR")
 	if addr == "" {
 		addr = defaultAddr
@@ -212,7 +260,15 @@ func handleAPIUsers(w http.ResponseWriter, r *http.Request) {
 	sortField := r.URL.Query().Get("sort")
 	order := r.URL.Query().Get("order")
 
-	users := generateUsers(int64(page))
+	var users []User
+	if benchData != nil && len(benchData.Users) > 0 {
+		users = make([]User, len(benchData.Users))
+		for i, raw := range benchData.Users {
+			json.Unmarshal(raw, &users[i])
+		}
+	} else {
+		users = generateUsers(int64(page))
+	}
 
 	switch sortField {
 	case "name":
@@ -312,9 +368,22 @@ func handleAPIAggregate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rng := rand.New(rand.NewSource(rangeStart))
-	n := 10000
-	values := make([]float64, n)
+	// Load timeseries from shared data or generate via PRNG.
+	var values []float64
+	if benchData != nil && len(benchData.Timeseries) > 0 {
+		values = make([]float64, len(benchData.Timeseries))
+		for i, raw := range benchData.Timeseries {
+			json.Unmarshal(raw, &values[i])
+		}
+	} else {
+		rng := rand.New(rand.NewSource(rangeStart))
+		values = make([]float64, 10000)
+		for i := range values {
+			values[i] = rng.Float64()*float64(rangeEnd-rangeStart) + float64(rangeStart)
+		}
+	}
+
+	n := len(values)
 	sum := 0.0
 	catNames := []string{"alpha", "beta", "gamma", "delta", "epsilon"}
 	cats := make(map[string]*CategoryBucket)
@@ -323,12 +392,10 @@ func handleAPIAggregate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for i := 0; i < n; i++ {
-		v := rng.Float64()*float64(rangeEnd-rangeStart) + float64(rangeStart)
-		values[i] = v
-		sum += v
+		sum += values[i]
 		cat := catNames[i%len(catNames)]
 		cats[cat].Count++
-		cats[cat].Sum += v
+		cats[cat].Sum += values[i]
 	}
 
 	sort.Float64s(values)
@@ -383,26 +450,42 @@ func handleAPISearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rng := rand.New(rand.NewSource(42))
-	words := []string{
-		"network", "latency", "throughput", "bandwidth", "packet", "socket",
-		"connection", "timeout", "buffer", "stream", "protocol", "endpoint",
-		"request", "response", "header", "payload", "router", "gateway",
-		"firewall", "proxy",
+	// Build corpus from shared data or PRNG fallback.
+	type corpusItem struct {
+		Index int
+		Text  string
+	}
+	var corpus []corpusItem
+
+	if benchData != nil && len(benchData.SearchCorpus) > 0 {
+		for i, raw := range benchData.SearchCorpus {
+			var text string
+			json.Unmarshal(raw, &text)
+			corpus = append(corpus, corpusItem{Index: i, Text: text})
+		}
+	} else {
+		rng := rand.New(rand.NewSource(42))
+		words := []string{
+			"network", "latency", "throughput", "bandwidth", "packet", "socket",
+			"connection", "timeout", "buffer", "stream", "protocol", "endpoint",
+			"request", "response", "header", "payload", "router", "gateway",
+			"firewall", "proxy",
+		}
+		for i := 0; i < 1000; i++ {
+			parts := make([]string, 3+rng.Intn(4))
+			for j := range parts {
+				parts[j] = words[rng.Intn(len(words))]
+			}
+			corpus = append(corpus, corpusItem{Index: i, Text: strings.Join(parts, " ")})
+		}
 	}
 
 	var results []SearchResult
-	for i := 0; i < 1000; i++ {
-		parts := make([]string, 3+rng.Intn(4))
-		for j := range parts {
-			parts[j] = words[rng.Intn(len(words))]
-		}
-		text := strings.Join(parts, " ")
-
-		loc := re.FindStringIndex(text)
+	for _, item := range corpus {
+		loc := re.FindStringIndex(item.Text)
 		if loc != nil {
 			score := 1.0 / (1.0 + float64(loc[0]))
-			results = append(results, SearchResult{Index: i, Text: text, Score: score})
+			results = append(results, SearchResult{Index: item.Index, Text: item.Text, Score: score})
 		}
 	}
 
@@ -494,6 +577,19 @@ func handleAPIValidate(w http.ResponseWriter, r *http.Request) {
 		seed = 42
 	}
 
+	// If shared data is loaded, return pre-computed checksums.
+	if benchData != nil && len(benchData.ExpectedChecksums) > 0 {
+		result := make(map[string]string)
+		result["seed"] = fmt.Sprintf("%d", seed)
+		for k, v := range benchData.ExpectedChecksums {
+			result[k] = v
+		}
+		writeServerTiming(w, start)
+		json.NewEncoder(w).Encode(result)
+		return
+	}
+
+	// PRNG fallback.
 	// Users checksum
 	users := generateUsers(seed)
 	usersJSON, _ := json.Marshal(users)
