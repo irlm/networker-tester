@@ -8,6 +8,8 @@ require 'zlib'
 LOGGER = Logger.new($stderr)
 LOGGER.level = ENV.fetch('LOG_LEVEL', 'INFO').upcase == 'DEBUG' ? Logger::DEBUG : Logger::INFO
 
+BENCH_API_TOKEN = ENV['BENCH_API_TOKEN'] || ''
+
 CHUNK_SIZE = 8192
 CHUNK = ("\x42" * CHUNK_SIZE).b.freeze
 
@@ -67,18 +69,20 @@ SEARCH_WORDS = %w[
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-def api_headers(duration_ms)
+def api_headers(duration_ms, auth_dur = nil)
+  timing = "app;dur=#{format('%.1f', duration_ms)}"
+  timing = "auth;dur=#{format('%.1f', auth_dur)}, #{timing}" if auth_dur
   {
     "content-type"                => "application/json",
-    "server-timing"               => "app;dur=#{format('%.1f', duration_ms)}",
+    "server-timing"               => timing,
     "cache-control"               => "no-store, no-cache, must-revalidate",
     "timing-allow-origin"         => "*",
     "access-control-allow-origin" => "*",
   }
 end
 
-def api_json(body, duration_ms, status = "200")
-  [status, api_headers(duration_ms), [JSON.generate(body)]]
+def api_json(body, duration_ms, status = "200", auth_dur = nil)
+  [status, api_headers(duration_ms, auth_dur), [JSON.generate(body)]]
 end
 
 def parse_query(qs)
@@ -108,6 +112,17 @@ app = proc do |env|
   path = env["PATH_INFO"]
   method = env["REQUEST_METHOD"]
   params = parse_query(env["QUERY_STRING"])
+
+  # Bearer token authentication
+  unless path == '/health' || BENCH_API_TOKEN.empty?
+    auth_t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    auth = env['HTTP_AUTHORIZATION'] || ''
+    unless auth == "Bearer #{BENCH_API_TOKEN}"
+      auth_dur = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - auth_t0) * 1000
+      next [401, {'Content-Type'=>'application/json', 'Server-Timing'=>"auth;dur=#{format('%.1f', auth_dur)}"}, ['{"error":"unauthorized"}']]
+    end
+    auth_dur = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - auth_t0) * 1000
+  end
 
   case [method, path]
   when ["GET", "/health"]
@@ -308,20 +323,10 @@ app = proc do |env|
 
   when ["POST", "/api/upload/process"]
     t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-    max_body = 50 * 1024 * 1024 # 50 MiB
-    content_length = (env["CONTENT_LENGTH"] || "0").to_i
-    if content_length > max_body
-      duration_ms = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0) * 1000
-      next api_json({ error: "body too large" }, duration_ms, "413")
-    end
     input = env["rack.input"]
     body = "".b
     while (chunk = input.read(8192))
       body << chunk
-      if body.bytesize > max_body
-        duration_ms = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0) * 1000
-        next api_json({ error: "body too large" }, duration_ms, "413")
-      end
     end
 
     crc = Zlib.crc32(body) & 0xFFFFFFFF
