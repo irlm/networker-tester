@@ -19,6 +19,40 @@ CHUNK_SIZE = 8192
 CHUNK = bytes([0x42]) * CHUNK_SIZE
 
 
+# ---------------------------------------------------------------------------
+# Shared benchmark dataset
+# ---------------------------------------------------------------------------
+
+def _load_bench_data() -> dict | None:
+    """Load bench-data.json from BENCH_DATA_PATH, /opt/bench, or ../shared."""
+    candidates = []
+    env_path = os.environ.get("BENCH_DATA_PATH")
+    if env_path:
+        candidates.append(env_path)
+    candidates.append("/opt/bench/bench-data.json")
+    candidates.append(os.path.join(os.path.dirname(__file__), "..", "shared", "bench-data.json"))
+
+    for p in candidates:
+        try:
+            with open(p) as f:
+                data = json.load(f)
+            print(f"Loaded bench-data.json from {p} (version {data.get('_version')}, "
+                  f"{len(data.get('users', []))} users, "
+                  f"{len(data.get('search_corpus', []))} corpus, "
+                  f"{len(data.get('timeseries', []))} timeseries)",
+                  file=sys.stderr)
+            return data
+        except (OSError, json.JSONDecodeError):
+            continue
+
+    print("WARN: bench-data.json not found, falling back to per-language PRNG",
+          file=sys.stderr)
+    return None
+
+
+BENCH_DATA: dict | None = _load_bench_data()
+
+
 async def health(request: Request) -> JSONResponse:
     """GET /health -- runtime identity and version."""
     return JSONResponse(
@@ -115,8 +149,11 @@ async def api_users(request: Request) -> JSONResponse:
     sort_field = request.query_params.get("sort", "id")
     order = request.query_params.get("order", "asc")
 
-    rng = random.Random(page)
-    users = _generate_users(rng)
+    if BENCH_DATA is not None and BENCH_DATA.get("users"):
+        users = list(BENCH_DATA["users"])  # shallow copy for sorting
+    else:
+        rng = random.Random(page)
+        users = _generate_users(rng)
 
     if sort_field in ("id", "name", "email", "age", "department", "score"):
         users.sort(key=lambda u: u[sort_field], reverse=(order == "desc"))
@@ -176,9 +213,13 @@ async def api_aggregate(request: Request) -> JSONResponse:
     start = int(parts[0]) if len(parts) >= 1 else 0
     end = int(parts[1]) if len(parts) >= 2 else 1000
 
-    rng = random.Random(start)
-    count = 10000
-    values = [rng.gauss(50, 15) for _ in range(count)]
+    if BENCH_DATA is not None and BENCH_DATA.get("timeseries"):
+        values = list(BENCH_DATA["timeseries"])
+    else:
+        rng = random.Random(start)
+        values = [rng.gauss(50, 15) for _ in range(10000)]
+
+    count = len(values)
     categories = ["alpha", "beta", "gamma", "delta", "epsilon"]
     cat_rng = random.Random(start + 1)
     assignments = [cat_rng.choice(categories) for _ in range(count)]
@@ -225,15 +266,18 @@ async def api_search(request: Request) -> JSONResponse:
     query = request.query_params.get("q", "test")
     limit = int(request.query_params.get("limit", "10"))
 
-    rng = random.Random(42)
-    words = ["network", "latency", "throughput", "bandwidth", "packet",
-             "routing", "firewall", "proxy", "endpoint", "server",
-             "client", "protocol", "socket", "buffer", "stream",
-             "timeout", "retry", "cache", "queue", "load"]
-    corpus = []
-    for i in range(1000):
-        phrase = " ".join(rng.choices(words, k=rng.randint(3, 8)))
-        corpus.append({"id": i + 1, "text": phrase})
+    if BENCH_DATA is not None and BENCH_DATA.get("search_corpus"):
+        corpus = [{"id": i + 1, "text": t} for i, t in enumerate(BENCH_DATA["search_corpus"])]
+    else:
+        rng = random.Random(42)
+        words = ["network", "latency", "throughput", "bandwidth", "packet",
+                 "routing", "firewall", "proxy", "endpoint", "server",
+                 "client", "protocol", "socket", "buffer", "stream",
+                 "timeout", "retry", "cache", "queue", "load"]
+        corpus = []
+        for i in range(1000):
+            phrase = " ".join(rng.choices(words, k=rng.randint(3, 8)))
+            corpus.append({"id": i + 1, "text": phrase})
 
     try:
         pattern = re.compile(query, re.IGNORECASE)
@@ -318,6 +362,16 @@ async def api_validate(request: Request) -> JSONResponse:
     t0 = time.perf_counter()
     seed = int(request.query_params.get("seed", "42"))
 
+    # If shared data is loaded, return pre-computed checksums.
+    if BENCH_DATA is not None and BENCH_DATA.get("expected_checksums"):
+        checksums = dict(BENCH_DATA["expected_checksums"])
+        duration_ms = (time.perf_counter() - t0) * 1000
+        return api_json({
+            "seed": seed,
+            "checksums": checksums,
+        }, duration_ms)
+
+    # PRNG fallback.
     # Users checksum
     rng = random.Random(1)  # page=1
     users = _generate_users(rng)
