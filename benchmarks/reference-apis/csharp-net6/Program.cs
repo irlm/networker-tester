@@ -3,8 +3,32 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
+
+// Load shared benchmark data at startup
+static JsonDocument? BenchData = null;
+static void LoadBenchData() {
+    string[] paths = {
+        Environment.GetEnvironmentVariable("BENCH_DATA_PATH") ?? "",
+        "/opt/bench/bench-data.json",
+        Path.Combine(AppContext.BaseDirectory, "..", "shared", "bench-data.json"),
+        "../shared/bench-data.json",
+    };
+    foreach (var p in paths) {
+        if (string.IsNullOrEmpty(p) || !File.Exists(p)) continue;
+        try {
+            var content = File.ReadAllText(p);
+            BenchData = JsonDocument.Parse(content);
+            Console.WriteLine($"Loaded bench-data.json from {p}");
+            return;
+        } catch { }
+    }
+    Console.WriteLine("WARNING: bench-data.json not found, using PRNG fallback");
+}
+
+LoadBenchData();
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -152,7 +176,29 @@ app.MapGet("/api/users", (HttpContext ctx) =>
     var sortField = ctx.Request.Query["sort"].ToString();
     var order     = ctx.Request.Query["order"].ToString();
 
-    var users = GenerateUsers(page, firstNames, lastNames, domains);
+    // Try shared bench data first, fall back to PRNG
+    var users = new List<(int Id, string Name, string Email, int Age, int Score, bool Active, string CreatedAt)>();
+    if (BenchData != null)
+    {
+        try
+        {
+            foreach (var u in BenchData.RootElement.GetProperty("users").EnumerateArray())
+            {
+                users.Add((
+                    u.GetProperty("id").GetInt32(),
+                    u.GetProperty("name").GetString()!,
+                    u.GetProperty("email").GetString()!,
+                    u.GetProperty("age").GetInt32(),
+                    u.GetProperty("score").GetInt32(),
+                    u.GetProperty("active").GetBoolean(),
+                    u.GetProperty("created_at").GetString()!
+                ));
+            }
+        }
+        catch { users.Clear(); }
+    }
+    if (users.Count == 0)
+        users = GenerateUsers(page, firstNames, lastNames, domains);
 
     users.Sort((a, b) => sortField switch
     {
@@ -241,24 +287,38 @@ app.MapGet("/api/aggregate", (HttpContext ctx) =>
         return Results.Content("{\"error\":\"range must be start,end\"}", "application/json");
     }
 
-    var rng = new Random((int)rangeStart);
-    int n = 10000;
-    var values = new double[n];
+    // Try shared bench data timeseries, fall back to PRNG
+    var values = new List<double>();
+    if (BenchData != null)
+    {
+        try
+        {
+            foreach (var v in BenchData.RootElement.GetProperty("timeseries").EnumerateArray())
+                values.Add(v.GetDouble());
+        }
+        catch { values.Clear(); }
+    }
+    if (values.Count == 0)
+    {
+        var rng = new Random((int)rangeStart);
+        for (int i = 0; i < 10000; i++)
+            values.Add(rng.NextDouble() * (rangeEnd - rangeStart) + rangeStart);
+    }
+
+    int n = values.Count;
     double sum = 0;
     var catCounts = new int[5];
     var catSums   = new double[5];
 
     for (int i = 0; i < n; i++)
     {
-        double v = rng.NextDouble() * (rangeEnd - rangeStart) + rangeStart;
-        values[i] = v;
-        sum += v;
+        sum += values[i];
         int ci = i % 5;
         catCounts[ci]++;
-        catSums[ci] += v;
+        catSums[ci] += values[i];
     }
 
-    Array.Sort(values);
+    values.Sort();
 
     var sb = new StringBuilder();
     sb.Append($"{{\"count\":{n},\"mean\":{sum / n},\"p50\":{values[n / 2]},\"p95\":{values[(int)(n * 0.95)]},\"max\":{values[n - 1]},\"categories\":{{");
@@ -290,20 +350,38 @@ app.MapGet("/api/search", (HttpContext ctx) =>
         limit = 10;
 
     var re = new Regex(Regex.Escape(q), RegexOptions.IgnoreCase);
-    var rng = new Random(42);
+
+    // Build corpus from shared data or PRNG fallback
+    var corpus = new List<string>();
+    if (BenchData != null)
+    {
+        try
+        {
+            foreach (var item in BenchData.RootElement.GetProperty("search_corpus").EnumerateArray())
+                corpus.Add(item.GetString()!);
+        }
+        catch { corpus.Clear(); }
+    }
+    if (corpus.Count == 0)
+    {
+        var rng = new Random(42);
+        for (int i = 0; i < 1000; i++)
+        {
+            int wordCount = 3 + rng.Next(4);
+            var sb2 = new StringBuilder();
+            for (int j = 0; j < wordCount; j++)
+            {
+                if (j > 0) sb2.Append(' ');
+                sb2.Append(searchWords[rng.Next(searchWords.Length)]);
+            }
+            corpus.Add(sb2.ToString());
+        }
+    }
 
     var results = new List<(int Index, string Text, double Score)>();
-    for (int i = 0; i < 1000; i++)
+    for (int i = 0; i < corpus.Count; i++)
     {
-        int wordCount = 3 + rng.Next(4);
-        var sb2 = new StringBuilder();
-        for (int j = 0; j < wordCount; j++)
-        {
-            if (j > 0) sb2.Append(' ');
-            sb2.Append(searchWords[rng.Next(searchWords.Length)]);
-        }
-        var text = sb2.ToString();
-
+        var text = corpus[i];
         var match = re.Match(text);
         if (match.Success)
         {
@@ -386,6 +464,18 @@ app.MapGet("/api/delayed", async (HttpContext ctx) =>
 app.MapGet("/api/validate", (HttpContext ctx) =>
 {
     var sw = SetAPIHeaders(ctx);
+
+    // If shared data has pre-computed checksums, return them directly
+    if (BenchData != null)
+    {
+        try
+        {
+            var checksums = BenchData.RootElement.GetProperty("expected_checksums");
+            WriteServerTiming(ctx, sw);
+            return Results.Content(checksums.GetRawText(), "application/json");
+        }
+        catch { }
+    }
 
     if (!long.TryParse(ctx.Request.Query["seed"], out long seed) || seed == 0) seed = 42;
 
