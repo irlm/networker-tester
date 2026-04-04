@@ -4,6 +4,7 @@ import { useAuthStore } from '../../stores/authStore';
 import { useProject } from '../../hooks/useProject';
 import { ProjectSwitcher } from '../ProjectSwitcher';
 import { NotificationBell } from '../NotificationBell';
+import { HelpHint } from '../docs/HelpHint';
 import { api } from '../../api/client';
 
 interface NavItem {
@@ -186,7 +187,10 @@ export function Sidebar({ connectionDot }: SidebarProps) {
           {renderSection('', platformItems)}
         </nav>
 
-        {/* Collapse toggle + user */}
+        {/* Help hint + Collapse toggle + user */}
+        <div className="border-t border-gray-800">
+          <HelpHint collapsed={collapsed} />
+        </div>
         <div className="border-t border-gray-800">
           {!collapsed && (
             <div className="px-3 py-3 flex items-center justify-between">

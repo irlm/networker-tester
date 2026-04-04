@@ -101,10 +101,7 @@ async fn poll_and_run(
                 .cloned()
                 .unwrap_or(serde_json::json!({}));
             if let Some(obj) = testbed.as_object_mut() {
-                obj.insert(
-                    "testbed_id".to_string(),
-                    serde_json::json!(id_str),
-                );
+                obj.insert("testbed_id".to_string(), serde_json::json!(id_str));
                 // Ensure existing_vm_ip is present
                 if !obj.contains_key("existing_vm_ip") {
                     if let Some(ip) = &db_testbed.endpoint_ip {
