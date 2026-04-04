@@ -80,7 +80,20 @@ async fn stop_existing_server(vm: &VmInfo) {
 }
 
 /// Deploy a reverse proxy on a VM. Uses install.sh --benchmark-proxy-swap.
+/// Validate a name is safe for shell interpolation (alphanumeric + dash/underscore/dot).
+fn validate_shell_safe(name: &str, label: &str) -> Result<()> {
+    anyhow::ensure!(
+        !name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.'),
+        "{label} name {name:?} contains unsafe characters for shell interpolation"
+    );
+    Ok(())
+}
+
 async fn deploy_proxy(vm: &VmInfo, proxy: &str) -> Result<()> {
+    validate_shell_safe(proxy, "proxy")?;
     tracing::info!("Deploying proxy {} on {}", proxy, vm.ip);
     let cmd = format!(
         "curl -fsSL https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh | sudo bash -s -- --benchmark-proxy-swap {}",
@@ -126,6 +139,8 @@ async fn stop_proxy(vm: &VmInfo) {
 
 /// Deploy a language server in application mode (localhost:8080, no TLS).
 async fn deploy_app_language(vm: &VmInfo, language: &str, proxy: &str) -> Result<()> {
+    validate_shell_safe(language, "language")?;
+    validate_shell_safe(proxy, "proxy")?;
     tracing::info!(
         "Deploying {} in application mode on {}",
         language,

@@ -25,14 +25,30 @@ const TARGET = args.target || 'https://localhost:8443';
 try {
   const url = new URL(TARGET);
   const host = url.hostname;
-  const blocked = ['169.254.169.254', '169.254.170.2', 'metadata.google.internal', '[fd00:ec2::254]'];
-  if (blocked.includes(host)) {
+  // Block specific metadata hostnames
+  const blockedHosts = ['metadata.google.internal', 'metadata.google.com'];
+  if (blockedHosts.includes(host)) {
     process.stderr.write(`FATAL: TARGET hostname ${host} is blocked (cloud metadata)\n`);
     process.exit(1);
   }
-  // Allow only IPs and localhost — no arbitrary hostnames on cloud VMs
-  if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(host) && host !== 'localhost') {
-    process.stderr.write(`WARNING: TARGET hostname ${host} is not an IP address — ensure this is intentional\n`);
+  // Block IPv6 link-local
+  if (host.startsWith('fe80:') || host.startsWith('[fe80:')) {
+    process.stderr.write(`FATAL: TARGET in IPv6 link-local range\n`);
+    process.exit(1);
+  }
+  // Check IPv4 — block full 169.254.0.0/16 link-local range
+  const ipv4Match = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (ipv4Match) {
+    const [, a, b] = ipv4Match.map(Number);
+    if (a === 169 && b === 254) {
+      process.stderr.write(`FATAL: TARGET ${host} is in link-local range (169.254.0.0/16)\n`);
+      process.exit(1);
+    }
+  }
+  // Require IP address or localhost — block arbitrary hostnames that could resolve to internal IPs
+  if (!ipv4Match && host !== 'localhost') {
+    process.stderr.write(`FATAL: TARGET hostname ${host} must be an IP address or localhost (hostname-based SSRF risk)\n`);
+    process.exit(1);
   }
 } catch (e) {
   process.stderr.write(`FATAL: Invalid TARGET URL: ${e.message}\n`);

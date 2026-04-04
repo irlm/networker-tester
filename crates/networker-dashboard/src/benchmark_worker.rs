@@ -130,19 +130,28 @@ async fn poll_and_run(state: &AppState, worker_id: &str) -> anyhow::Result<()> {
     });
     // RR-009: Write with restricted permissions (0600) — config contains callback JWT
     {
-        use std::os::unix::fs::OpenOptionsExt;
         let content = serde_json::to_string_pretty(&config_data)?;
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&config_path)
-            .and_then(|mut f| {
-                use std::io::Write;
-                f.write_all(content.as_bytes())
-            })
-            .map_err(|e| anyhow::anyhow!("Failed to write config file: {e}"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&config_path)
+                .and_then(|mut f| {
+                    use std::io::Write;
+                    f.write_all(content.as_bytes())
+                })
+                .map_err(|e| anyhow::anyhow!("Failed to write config file: {e}"))?;
+        }
+        #[cfg(not(unix))]
+        {
+            tokio::fs::write(&config_path, &content)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to write config file: {e}"))?;
+        }
     }
 
     // Spawn alethabench as a child process
