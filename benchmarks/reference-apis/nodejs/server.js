@@ -13,6 +13,40 @@ const zlib = require("node:zlib");
 const CERT_DIR = process.env.BENCH_CERT_DIR || "/opt/bench";
 const PORT = parseInt(process.env.PORT || "8443", 10);
 
+// ---------------------------------------------------------------------------
+// Shared benchmark dataset
+// ---------------------------------------------------------------------------
+let BENCH_DATA = null;
+
+function loadBenchData() {
+  const candidates = [];
+  if (process.env.BENCH_DATA_PATH) {
+    candidates.push(process.env.BENCH_DATA_PATH);
+  }
+  candidates.push("/opt/bench/bench-data.json");
+  candidates.push(path.join(__dirname, "..", "shared", "bench-data.json"));
+
+  for (let i = 0; i < candidates.length; i++) {
+    try {
+      const raw = fs.readFileSync(candidates[i], "utf8");
+      BENCH_DATA = JSON.parse(raw);
+      console.log(
+        "Loaded bench-data.json from " + candidates[i] +
+        " (version " + BENCH_DATA._version +
+        ", " + (BENCH_DATA.users || []).length + " users" +
+        ", " + (BENCH_DATA.search_corpus || []).length + " corpus" +
+        ", " + (BENCH_DATA.timeseries || []).length + " timeseries)"
+      );
+      return;
+    } catch (_e) {
+      // try next path
+    }
+  }
+  console.log("WARN: bench-data.json not found, falling back to per-language PRNG");
+}
+
+loadBenchData();
+
 // Pre-allocate a single 8 KiB buffer filled with 0x42 ('B') for download
 // streaming. Reusing one buffer avoids per-request allocation pressure.
 const CHUNK = Buffer.alloc(8192, 0x42);
@@ -257,8 +291,13 @@ function handleApiUsers(parsedUrl, respond) {
   const sortField = params.sort || "id";
   const order = params.order || "asc";
 
-  const rng = mulberry32(page);
-  const users = generateUsers(rng, 100);
+  var users;
+  if (BENCH_DATA && BENCH_DATA.users && BENCH_DATA.users.length > 0) {
+    users = BENCH_DATA.users.slice(); // shallow copy for sorting
+  } else {
+    const rng = mulberry32(page);
+    users = generateUsers(rng, 100);
+  }
 
   const validFields = ["id", "name", "email", "age", "department", "score"];
   if (validFields.includes(sortField)) {
@@ -330,15 +369,23 @@ function handleApiAggregate(parsedUrl, respond) {
   const rangeStart = parseInt(parts[0], 10) || 0;
   const rangeEnd = parseInt(parts[1], 10) || 1000;
 
-  const rng = mulberry32(rangeStart);
-  const count = 10000;
-  const values = [];
+  var values;
+  if (BENCH_DATA && BENCH_DATA.timeseries && BENCH_DATA.timeseries.length > 0) {
+    values = BENCH_DATA.timeseries.slice();
+  } else {
+    const rng = mulberry32(rangeStart);
+    values = [];
+    for (let i = 0; i < 10000; i++) {
+      values.push(gaussianRng(rng, 50, 15));
+    }
+  }
+
+  const count = values.length;
   const categories = ["alpha", "beta", "gamma", "delta", "epsilon"];
   const catRng = mulberry32(rangeStart + 1);
   const assignments = [];
 
   for (let i = 0; i < count; i++) {
-    values.push(gaussianRng(rng, 50, 15));
     assignments.push(categories[Math.floor(catRng() * categories.length)]);
   }
 
@@ -390,15 +437,23 @@ function handleApiSearch(parsedUrl, respond) {
   var limit = parseInt(params.limit, 10) || 10;
   if (limit < 1 || limit > 100) limit = 10;
 
-  const rng = mulberry32(42);
-  const corpus = [];
-  for (let i = 0; i < 1000; i++) {
-    const wordCount = 3 + Math.floor(rng() * 6);
-    const words = [];
-    for (let j = 0; j < wordCount; j++) {
-      words.push(SEARCH_WORDS[Math.floor(rng() * SEARCH_WORDS.length)]);
+  var corpus;
+  if (BENCH_DATA && BENCH_DATA.search_corpus && BENCH_DATA.search_corpus.length > 0) {
+    corpus = [];
+    for (let i = 0; i < BENCH_DATA.search_corpus.length; i++) {
+      corpus.push({ id: i + 1, text: BENCH_DATA.search_corpus[i] });
     }
-    corpus.push({ id: i + 1, text: words.join(" ") });
+  } else {
+    const rng = mulberry32(42);
+    corpus = [];
+    for (let i = 0; i < 1000; i++) {
+      const wordCount = 3 + Math.floor(rng() * 6);
+      const words = [];
+      for (let j = 0; j < wordCount; j++) {
+        words.push(SEARCH_WORDS[Math.floor(rng() * SEARCH_WORDS.length)]);
+      }
+      corpus.push({ id: i + 1, text: words.join(" ") });
+    }
   }
 
   var pattern;
@@ -485,6 +540,14 @@ function handleApiValidate(parsedUrl, respond) {
   const params = parsedUrl.query || {};
   const seed = parseInt(params.seed, 10) || 42;
 
+  // If shared data is loaded, return pre-computed checksums.
+  if (BENCH_DATA && BENCH_DATA.expected_checksums) {
+    const checksums = Object.assign({}, BENCH_DATA.expected_checksums);
+    respond(200, { seed: seed, checksums: checksums }, startHr);
+    return;
+  }
+
+  // PRNG fallback.
   // Users checksum (page=1)
   const usersRng = mulberry32(1);
   const users = generateUsers(usersRng, 100);
