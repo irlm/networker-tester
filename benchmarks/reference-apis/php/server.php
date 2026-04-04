@@ -5,6 +5,20 @@
 
 declare(strict_types=1);
 
+// ── Structured logging ────────────────────────────────────────────────────
+
+$LOG_LEVEL = strtolower(getenv('LOG_LEVEL') ?: 'info');
+$LOG_LEVELS = ['error' => 0, 'warn' => 1, 'info' => 2, 'debug' => 3];
+$CURRENT_LEVEL = $LOG_LEVELS[$LOG_LEVEL] ?? 2;
+
+function bench_log(string $level, string $msg): void
+{
+    global $CURRENT_LEVEL, $LOG_LEVELS;
+    if (($LOG_LEVELS[$level] ?? 0) <= $CURRENT_LEVEL) {
+        fwrite(STDERR, json_encode(['level' => $level, 'ts' => date('c'), 'msg' => $msg]) . "\n");
+    }
+}
+
 $certDir = getenv('BENCH_CERT_DIR') ?: '/opt/bench';
 
 $server = new Swoole\HTTP\Server(
@@ -43,16 +57,16 @@ foreach ($benchPaths as $bp) {
                 $uCount = isset($parsed['users']) ? count($parsed['users']) : 0;
                 $sCount = isset($parsed['search_corpus']) ? count($parsed['search_corpus']) : 0;
                 $tCount = isset($parsed['timeseries']) ? count($parsed['timeseries']) : 0;
-                echo "Loaded bench-data.json from $bp (version {$parsed['_version']}, $uCount users, $sCount corpus, $tCount timeseries)\n";
+                bench_log('info', "Loaded bench-data.json from $bp (version {$parsed['_version']}, $uCount users, $sCount corpus, $tCount timeseries)");
                 break;
             } else {
-                echo "WARN: bench-data.json at $bp is invalid JSON\n";
+                bench_log('warn', "bench-data.json at $bp is invalid JSON");
             }
         }
     }
 }
 if ($BENCH_DATA === null) {
-    echo "WARN: bench-data.json not found, falling back to per-language PRNG\n";
+    bench_log('warn', "bench-data.json not found, falling back to per-language PRNG");
 }
 
 // ── Shared data for API endpoints ──────────────────────────────────────────
@@ -485,5 +499,5 @@ $server->on('request', function (
     $response->end('{"error":"not found"}');
 });
 
-echo "PHP Swoole server starting on https://0.0.0.0:8443\n";
+bench_log('info', "PHP Swoole server starting on https://0.0.0.0:8443");
 $server->start();
