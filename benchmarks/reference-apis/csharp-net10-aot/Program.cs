@@ -21,11 +21,11 @@ static void LoadBenchData() {
         try {
             var content = File.ReadAllText(p);
             BenchData = JsonDocument.Parse(content);
-            Console.WriteLine($"Loaded bench-data.json from {p}");
+            Console.Error.WriteLine($"[INFO] Loaded bench-data.json from {p}");
             return;
         } catch { }
     }
-    Console.WriteLine("WARNING: bench-data.json not found, using PRNG fallback");
+    Console.Error.WriteLine("[WARN] bench-data.json not found, using PRNG fallback");
 }
 
 LoadBenchData();
@@ -52,6 +52,8 @@ builder.WebHost.ConfigureKestrel(options =>
 });
 
 var app = builder.Build();
+var logger = app.Logger;
+logger.LogInformation("csharp-net10-aot reference API starting");
 
 // Advertise HTTP/3 via Alt-Svc header
 app.Use(async (context, next) =>
