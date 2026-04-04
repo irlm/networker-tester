@@ -204,6 +204,45 @@ async fn create_config(
         }
     }
 
+    // If config_json is provided directly, validate its testbed values
+    // against the same allowlists to prevent validation bypass
+    if let Some(ref cj) = payload.config_json {
+        if let Some(testbeds) = cj.get("testbeds").and_then(|v| v.as_array()) {
+            for tb in testbeds {
+                if let Some(proxies) = tb.get("proxies").and_then(|v| v.as_array()) {
+                    for p in proxies {
+                        if let Some(name) = p.as_str() {
+                            if !VALID_PROXIES.contains(&name) {
+                                tracing::warn!(proxy = %name, "Invalid proxy in config_json");
+                                return Err(StatusCode::BAD_REQUEST);
+                            }
+                        }
+                    }
+                }
+                if let Some(cloud) = tb.get("cloud").and_then(|v| v.as_str()) {
+                    if !VALID_CLOUDS.contains(&cloud) {
+                        tracing::warn!(cloud = %cloud, "Invalid cloud in config_json");
+                        return Err(StatusCode::BAD_REQUEST);
+                    }
+                }
+                if let Some(langs) = tb.get("languages").and_then(|v| v.as_array()) {
+                    for l in langs {
+                        if let Some(name) = l.as_str() {
+                            if name.is_empty()
+                                || !name.chars().all(|c| {
+                                    c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.'
+                                })
+                            {
+                                tracing::warn!(language = %name, "Invalid language in config_json");
+                                return Err(StatusCode::BAD_REQUEST);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Build config_json from top-level fields if not provided directly
     let config_json = payload.config_json.unwrap_or_else(|| {
         serde_json::json!({
