@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client';
 import type { BenchTokenInfo } from '../api/types';
@@ -81,12 +81,21 @@ export function BenchTokensPage() {
   const [revoking, setRevoking] = useState<string | null>(null);
   const [revokingAll, setRevokingAll] = useState(false);
   const [revokingRun, setRevokingRun] = useState<string | null>(null);
+  const [lastRefresh, setLastRefresh] = useState<number>(Date.now());
+  const [, setTick] = useState(0); // force re-render for relative time
+
+  // Tick every 5s so "refreshed Xs ago" updates
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 5000);
+    return () => clearInterval(id);
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
       const data = await api.listBenchTokens();
       setTokens(data);
       setError(null);
+      setLastRefresh(Date.now());
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to fetch tokens';
       if (msg.includes('404') || msg.includes('501')) {
@@ -271,61 +280,83 @@ export function BenchTokensPage() {
         </div>
       )}
 
-      {/* Master-detail layout */}
+      {/* Adaptive layout: pills for <4 runs, master-detail panel for 4+ */}
       {!loading && !error && activeTokens.length > 0 && (
-        <div className="flex flex-1 border border-gray-800 rounded overflow-hidden min-h-0">
-          {/* Left panel — run list */}
-          <div className="w-[35%] min-w-[220px] border-r border-gray-800 overflow-y-auto">
-            {filteredRuns.length === 0 && (
-              <div className="p-4 text-xs text-gray-500 text-center">No matching runs</div>
-            )}
-            {filteredRuns.map((run) => {
-              const isSelected = run.configId === effectiveSelectedRun;
-              return (
-                <button
-                  key={run.configId}
-                  onClick={() => setSelectedRun(run.configId)}
-                  className={`w-full text-left px-3 py-2.5 border-b border-gray-800/50 transition-colors ${
-                    isSelected ? 'bg-cyan-500/10' : 'hover:bg-gray-800/30'
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono text-sm text-cyan-400 truncate">{run.configId}</span>
-                    <span className="text-[10px] text-gray-500 ml-2 shrink-0">
-                      {run.tokens.length} VM{run.tokens.length !== 1 ? 's' : ''}
-                    </span>
-                  </div>
-                  {/* Health dots */}
-                  <div className="flex gap-0.5 mt-1.5">
-                    {run.tokens.map((t) => (
-                      <span
-                        key={t.name}
-                        className={`inline-block w-2 h-2 rounded-[1px] ${healthDotColor(ttlMs(t.expires))}`}
-                        title={`${t.testbed_id}: ${ttlLabel(ttlMs(t.expires))}`}
-                      />
-                    ))}
-                  </div>
-                  {/* Revoke run link */}
-                  <div className="mt-1">
-                    <span
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleRevokeRun(run.configId);
-                      }}
-                      className={`text-[10px] text-red-400/60 hover:text-red-400 transition-colors cursor-pointer ${
-                        revokingRun === run.configId ? 'opacity-30 pointer-events-none' : ''
+        <div className="flex flex-col flex-1 min-h-0">
+          {/* Run selector: horizontal pills when few runs, vertical panel when many */}
+          {filteredRuns.length < 4 ? (
+            /* Horizontal pills */
+            <div className="flex gap-2 mb-3 flex-wrap">
+              {filteredRuns.map((run) => {
+                const isSelected = run.configId === effectiveSelectedRun;
+                const label = run.configId === 'unknown' ? 'Ungrouped' : run.configId;
+                return (
+                  <button
+                    key={run.configId}
+                    onClick={() => setSelectedRun(run.configId)}
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded border text-xs transition-colors ${
+                      isSelected
+                        ? 'bg-cyan-500/10 border-cyan-700 text-cyan-300'
+                        : 'border-gray-700 text-gray-400 hover:border-gray-600'
+                    }`}
+                  >
+                    <span className="font-mono">{label}</span>
+                    <div className="flex gap-0.5">
+                      {run.tokens.map((t) => (
+                        <span
+                          key={t.name}
+                          className={`inline-block w-2.5 h-2.5 rounded-[1px] ${healthDotColor(ttlMs(t.expires))}`}
+                          title={`${t.testbed_id}: ${ttlLabel(ttlMs(t.expires))}`}
+                        />
+                      ))}
+                    </div>
+                    <span className="text-gray-600">{run.tokens.length}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+
+          <div className={`flex flex-1 border border-gray-800 rounded overflow-hidden min-h-0 ${filteredRuns.length >= 4 ? '' : ''}`}>
+            {/* Left panel — only show for 4+ runs */}
+            {filteredRuns.length >= 4 && (
+              <div className="w-[25%] min-w-[180px] border-r border-gray-800 overflow-y-auto">
+                {filteredRuns.map((run) => {
+                  const isSelected = run.configId === effectiveSelectedRun;
+                  const label = run.configId === 'unknown' ? 'Ungrouped' : run.configId;
+                  return (
+                    <button
+                      key={run.configId}
+                      onClick={() => setSelectedRun(run.configId)}
+                      className={`w-full text-left px-3 py-2 border-b border-gray-800/50 transition-colors ${
+                        isSelected ? 'bg-cyan-500/10' : 'hover:bg-gray-800/30'
                       }`}
                     >
-                      {revokingRun === run.configId ? 'revoking...' : 'revoke run'}
-                    </span>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
+                      <div className="flex items-center justify-between">
+                        <span className={`font-mono text-xs truncate ${run.configId === 'unknown' ? 'text-gray-500 italic' : 'text-cyan-400'}`}>
+                          {label}
+                        </span>
+                        <span className="text-[10px] text-gray-600 ml-2 shrink-0">
+                          {run.tokens.length}
+                        </span>
+                      </div>
+                      <div className="flex gap-0.5 mt-1">
+                        {run.tokens.map((t) => (
+                          <span
+                            key={t.name}
+                            className={`inline-block w-2.5 h-2.5 rounded-[1px] ${healthDotColor(ttlMs(t.expires))}`}
+                            title={`${t.testbed_id}: ${ttlLabel(ttlMs(t.expires))}`}
+                          />
+                        ))}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
 
-          {/* Right panel — VM detail */}
-          <div className="w-[65%] overflow-y-auto">
+            {/* Detail panel — VM table */}
+            <div className={`${filteredRuns.length >= 4 ? 'w-[75%]' : 'w-full'} overflow-y-auto`}>
             {!selectedRunData && (
               <div className="p-8 text-center text-gray-500 text-sm">Select a run</div>
             )}
@@ -372,7 +403,7 @@ export function BenchTokensPage() {
                           }`}
                         >
                           <td className="px-4 py-2.5 font-mono text-xs text-gray-300" title={t.name}>
-                            {t.testbed_id || t.name}
+                            {t.testbed_id || t.name.replace(/^bench-[^-]+-vm-/, '')}
                           </td>
                           <td className="px-4 py-2.5 text-xs text-gray-500 truncate max-w-[140px]" title={t.user ?? undefined}>
                             {t.user ?? '\u2014'}
@@ -408,13 +439,14 @@ export function BenchTokensPage() {
               </>
             )}
           </div>
+          </div>
         </div>
       )}
 
       {/* Footer */}
       {!loading && !error && activeTokens.length > 0 && (
         <div className="mt-2 text-[10px] text-gray-600">
-          auto-refresh 30s
+          refreshed {Math.floor((Date.now() - lastRefresh) / 1000)}s ago
         </div>
       )}
     </div>
