@@ -101,6 +101,9 @@ static const int NUM_WORDS = 20;
 static const char* CATEGORIES[] = {"alpha", "beta", "gamma", "delta", "epsilon"};
 static const int NUM_CATS = 5;
 
+// Bearer token authentication
+static std::string bench_api_token;
+
 // ── Shared benchmark dataset (loaded once at startup) ──────────────────────
 
 struct BenchUser {
@@ -423,9 +426,13 @@ static std::uint64_t parse_download_size(beast::string_view target) {
 }
 
 // Set API response headers
-static void set_api_headers(auto& res, double duration_ms) {
+static void set_api_headers(auto& res, double duration_ms, double auth_dur_ms = -1) {
     res.set(http::field::content_type, "application/json");
-    res.set("Server-Timing", "app;dur=" + format_double(duration_ms, 1));
+    std::string timing = "app;dur=" + format_double(duration_ms, 1);
+    if (auth_dur_ms >= 0) {
+        timing = "auth;dur=" + format_double(auth_dur_ms, 1) + ", " + timing;
+    }
+    res.set("Server-Timing", timing);
     res.set(http::field::cache_control, "no-store, no-cache, must-revalidate");
     res.set("Timing-Allow-Origin", "*");
     res.set(http::field::access_control_allow_origin, "*");
@@ -502,6 +509,25 @@ void handle_request(http::request<http::string_body>&& req, Send&& send) {
     auto target = req.target();
     auto path = get_path(target);
     auto params = parse_query(target);
+
+    // Bearer token authentication
+    double auth_dur_ms = -1;
+    if (!bench_api_token.empty() && path != "/health") {
+        double auth_t0 = now_ms();
+        auto auth_it = req.find(http::field::authorization);
+        std::string expected = "Bearer " + bench_api_token;
+        if (auth_it == req.end() || std::string(auth_it->value()) != expected) {
+            auth_dur_ms = now_ms() - auth_t0;
+            http::response<http::string_body> res{http::status::unauthorized, req.version()};
+            res.set(http::field::content_type, "application/json");
+            res.set("Server-Timing", "auth;dur=" + format_double(auth_dur_ms, 1));
+            res.keep_alive(req.keep_alive());
+            res.body() = R"({"error":"unauthorized"})";
+            res.prepare_payload();
+            return send(std::move(res));
+        }
+        auth_dur_ms = now_ms() - auth_t0;
+    }
 
     // GET /health
     if (req.method() == http::verb::get && path == "/health") {
@@ -628,7 +654,7 @@ void handle_request(http::request<http::string_body>&& req, Send&& send) {
             ",\"users\":" + users_json + "}";
 
         http::response<http::string_body> res{http::status::ok, req.version()};
-        set_api_headers(res, duration_ms);
+        set_api_headers(res, duration_ms, auth_dur_ms);
         res.keep_alive(req.keep_alive());
         res.body() = std::move(body);
         res.prepare_payload();
@@ -645,7 +671,7 @@ void handle_request(http::request<http::string_body>&& req, Send&& send) {
         if (raw.empty() || raw[0] != '{') {
             double duration_ms = now_ms() - t0;
             http::response<http::string_body> res{http::status::bad_request, req.version()};
-            set_api_headers(res, duration_ms);
+            set_api_headers(res, duration_ms, auth_dur_ms);
             res.keep_alive(req.keep_alive());
             res.body() = R"({"error":"invalid JSON"})";
             res.prepare_payload();
@@ -724,7 +750,7 @@ void handle_request(http::request<http::string_body>&& req, Send&& send) {
             ",\"transformed\":" + transformed + "}";
 
         http::response<http::string_body> res{http::status::ok, req.version()};
-        set_api_headers(res, duration_ms);
+        set_api_headers(res, duration_ms, auth_dur_ms);
         res.keep_alive(req.keep_alive());
         res.body() = std::move(body);
         res.prepare_payload();
@@ -814,7 +840,7 @@ void handle_request(http::request<http::string_body>&& req, Send&& send) {
             ",\"groups\":" + groups + "}";
 
         http::response<http::string_body> res{http::status::ok, req.version()};
-        set_api_headers(res, duration_ms);
+        set_api_headers(res, duration_ms, auth_dur_ms);
         res.keep_alive(req.keep_alive());
         res.body() = std::move(body);
         res.prepare_payload();
@@ -885,7 +911,7 @@ void handle_request(http::request<http::string_body>&& req, Send&& send) {
             ",\"results\":" + results_json + "}";
 
         http::response<http::string_body> res{http::status::ok, req.version()};
-        set_api_headers(res, duration_ms);
+        set_api_headers(res, duration_ms, auth_dur_ms);
         res.keep_alive(req.keep_alive());
         res.body() = std::move(body);
         res.prepare_payload();
@@ -896,18 +922,6 @@ void handle_request(http::request<http::string_body>&& req, Send&& send) {
     if (req.method() == http::verb::post && path == "/api/upload/process") {
         double t0 = now_ms();
         auto& body_data = req.body();
-
-        // Reject bodies larger than 50 MiB
-        constexpr size_t max_body = 50UL * 1024 * 1024;
-        if (body_data.size() > max_body) {
-            double duration_ms = now_ms() - t0;
-            http::response<http::string_body> res{http::status::payload_too_large, req.version()};
-            set_api_headers(res, duration_ms);
-            res.keep_alive(req.keep_alive());
-            res.body() = R"({"error":"body too large"})";
-            res.prepare_payload();
-            return send(std::move(res));
-        }
 
         // CRC32
         uLong crc = crc32(0L, Z_NULL, 0);
@@ -938,7 +952,7 @@ void handle_request(http::request<http::string_body>&& req, Send&& send) {
             ",\"sha256\":\"" + sha + "\"}";
 
         http::response<http::string_body> res{http::status::ok, req.version()};
-        set_api_headers(res, duration_ms);
+        set_api_headers(res, duration_ms, auth_dur_ms);
         res.keep_alive(req.keep_alive());
         res.body() = std::move(body);
         res.prepare_payload();
@@ -965,7 +979,7 @@ void handle_request(http::request<http::string_body>&& req, Send&& send) {
             ",\"work\":\"" + work + "\"}";
 
         http::response<http::string_body> res{http::status::ok, req.version()};
-        set_api_headers(res, actual_ms);
+        set_api_headers(res, actual_ms, auth_dur_ms);
         res.keep_alive(req.keep_alive());
         res.body() = std::move(body);
         res.prepare_payload();
@@ -1037,7 +1051,7 @@ void handle_request(http::request<http::string_body>&& req, Send&& send) {
             ",\"search_corpus\":\"" + search_hash_str + "\"}}";
 
         http::response<http::string_body> res{http::status::ok, req.version()};
-        set_api_headers(res, duration_ms);
+        set_api_headers(res, duration_ms, auth_dur_ms);
         res.keep_alive(req.keep_alive());
         res.body() = std::move(body);
         res.prepare_payload();
@@ -1228,6 +1242,10 @@ private:
 int main() {
     init_log_level();
     load_bench_data();
+
+    // Bearer token auth
+    const char* tok = getenv("BENCH_API_TOKEN");
+    if (tok) bench_api_token = tok;
 
     auto const cert_dir = []() -> std::string {
         if (auto* v = std::getenv("BENCH_CERT_DIR")) return v;
