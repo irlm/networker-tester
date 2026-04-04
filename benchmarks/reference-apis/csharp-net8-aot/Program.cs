@@ -61,6 +61,32 @@ app.Use(async (context, next) =>
     await next();
 });
 
+// Bearer token authentication
+var benchToken = Environment.GetEnvironmentVariable("BENCH_API_TOKEN") ?? "";
+if (!string.IsNullOrEmpty(benchToken))
+{
+    app.Use(async (context, next) =>
+    {
+        if (context.Request.Path != "/health")
+        {
+            var authSw = Stopwatch.StartNew();
+            var auth = context.Request.Headers["Authorization"].FirstOrDefault() ?? "";
+            if (auth != "Bearer " + benchToken)
+            {
+                authSw.Stop();
+                context.Response.StatusCode = 401;
+                context.Response.ContentType = "application/json";
+                context.Response.Headers["Server-Timing"] = $"auth;dur={authSw.Elapsed.TotalMilliseconds:F1}";
+                await context.Response.WriteAsync("{\"error\":\"unauthorized\"}");
+                return;
+            }
+            authSw.Stop();
+            context.Items["AuthDurMs"] = authSw.Elapsed.TotalMilliseconds;
+        }
+        await next();
+    });
+}
+
 app.MapGet("/health", () => Results.Json(
     new HealthResponse("ok", "csharp-net8-aot", Environment.Version.ToString()),
     AppJsonContext.Default.HealthResponse));
@@ -131,7 +157,10 @@ static void WriteServerTiming(HttpContext ctx, Stopwatch sw)
 {
     sw.Stop();
     var ms = sw.Elapsed.TotalMilliseconds;
-    ctx.Response.Headers["Server-Timing"] = $"app;dur={ms:F1}";
+    var timing = $"app;dur={ms:F1}";
+    if (ctx.Items.TryGetValue("AuthDurMs", out var authObj) && authObj is double authMs)
+        timing = $"auth;dur={authMs:F1}, {timing}";
+    ctx.Response.Headers["Server-Timing"] = timing;
 }
 
 static string JsonEsc(string s)
@@ -406,15 +435,8 @@ app.MapPost("/api/upload/process", async (HttpContext ctx) =>
 {
     var sw = SetAPIHeaders(ctx);
 
-    const int maxBody = 50 * 1024 * 1024; // 50 MiB
     using var ms = new MemoryStream();
     await ctx.Request.Body.CopyToAsync(ms);
-    if (ms.Length > maxBody)
-    {
-        ctx.Response.StatusCode = 413;
-        WriteServerTiming(ctx, sw);
-        return Results.Content("{\"error\":\"body too large\"}", "application/json");
-    }
     var body = ms.ToArray();
 
     uint crc = Crc32(body);
