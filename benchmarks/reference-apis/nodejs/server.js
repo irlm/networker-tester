@@ -14,6 +14,19 @@ const CERT_DIR = process.env.BENCH_CERT_DIR || "/opt/bench";
 const PORT = parseInt(process.env.PORT || "8443", 10);
 
 // ---------------------------------------------------------------------------
+// Structured stderr logger (LOG_LEVEL env var: error, warn, info, debug)
+// ---------------------------------------------------------------------------
+const LOG_LEVEL = (process.env.LOG_LEVEL || "info").toLowerCase();
+const LOG_LEVELS = { error: 0, warn: 1, info: 2, debug: 3 };
+const currentLogLevel = LOG_LEVELS[LOG_LEVEL] !== undefined ? LOG_LEVELS[LOG_LEVEL] : 2;
+const log = {
+  error: function () { if (currentLogLevel >= 0) process.stderr.write(JSON.stringify({ level: "error", ts: new Date().toISOString(), msg: Array.prototype.join.call(arguments, " ") }) + "\n"); },
+  warn:  function () { if (currentLogLevel >= 1) process.stderr.write(JSON.stringify({ level: "warn",  ts: new Date().toISOString(), msg: Array.prototype.join.call(arguments, " ") }) + "\n"); },
+  info:  function () { if (currentLogLevel >= 2) process.stderr.write(JSON.stringify({ level: "info",  ts: new Date().toISOString(), msg: Array.prototype.join.call(arguments, " ") }) + "\n"); },
+  debug: function () { if (currentLogLevel >= 3) process.stderr.write(JSON.stringify({ level: "debug", ts: new Date().toISOString(), msg: Array.prototype.join.call(arguments, " ") }) + "\n"); },
+};
+
+// ---------------------------------------------------------------------------
 // Shared benchmark dataset
 // ---------------------------------------------------------------------------
 let BENCH_DATA = null;
@@ -30,7 +43,7 @@ function loadBenchData() {
     try {
       const raw = fs.readFileSync(candidates[i], "utf8");
       BENCH_DATA = JSON.parse(raw);
-      console.log(
+      log.info(
         "Loaded bench-data.json from " + candidates[i] +
         " (version " + BENCH_DATA._version +
         ", " + (BENCH_DATA.users || []).length + " users" +
@@ -42,7 +55,7 @@ function loadBenchData() {
       // try next path
     }
   }
-  console.log("WARN: bench-data.json not found, falling back to per-language PRNG");
+  log.warn("bench-data.json not found, falling back to per-language PRNG");
 }
 
 loadBenchData();
@@ -732,9 +745,9 @@ server.on("stream", onStream);
 server.on("request", onRequest);
 
 server.on("error", (err) => {
-  console.error("server error:", err.message);
+  log.error("server error:", err.message);
 });
 
 server.listen(PORT, () => {
-  console.log(`nodejs reference-api listening on https://0.0.0.0:${PORT}`);
+  log.info("nodejs reference-api listening on https://0.0.0.0:" + PORT);
 });
