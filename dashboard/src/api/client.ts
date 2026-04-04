@@ -1,6 +1,6 @@
-import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, BenchmarkComparePreset, BenchmarkComparePresetInput, TlsProfileSummary, TlsProfileDetail, BenchmarkConfigSummary, BenchmarkVmCatalogEntry } from './types';
+import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, BenchmarkComparePreset, BenchmarkComparePresetInput, TlsProfileSummary, TlsProfileDetail, BenchmarkConfigSummary, BenchmarkVmCatalogEntry, BenchTokenInfo } from './types';
 
-export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, BenchmarkComparePreset, BenchmarkComparePresetInput, TlsProfileSummary, TlsProfileDetail, BenchmarkConfigSummary, BenchmarkVmCatalogEntry };
+export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, BenchmarkComparePreset, BenchmarkComparePresetInput, TlsProfileSummary, TlsProfileDetail, BenchmarkConfigSummary, BenchmarkVmCatalogEntry, BenchTokenInfo };
 export type { LiveAttempt } from './types';
 
 const API_BASE = '/api';
@@ -662,4 +662,14 @@ export const api = {
     request<import('./types').BenchmarkRegression[]>(
       projectUrl(projectId, `benchmark-configs/${configId}/regressions`)
     ),
+
+  // ── Benchmark Tokens (platform admin only, NOT project-scoped) ──────
+  listBenchTokens: () =>
+    request<BenchTokenInfo[]>('/bench-tokens'),
+
+  revokeBenchToken: (name: string) =>
+    request<{ deleted: boolean }>(`/bench-tokens/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+
+  revokeAllBenchTokens: () =>
+    request<{ deleted: number }>('/bench-tokens', { method: 'DELETE' }),
 };

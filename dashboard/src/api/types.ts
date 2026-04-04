@@ -1045,3 +1045,12 @@ export interface GroupedLeaderboard {
   selected: string;
   languages: GroupedLeaderboardEntry[];
 }
+
+export interface BenchTokenInfo {
+  name: string;
+  config_id: string;
+  testbed_id: string;
+  created: string | null;
+  expires: string | null;
+  enabled: boolean;
+}

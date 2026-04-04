@@ -53,6 +53,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
   const platformItems: NavItem[] = [];
   if (isPlatformAdmin) {
     platformItems.push({ path: '/admin/system', label: 'System', icon: '\u2318' });
+    platformItems.push({ path: '/bench-tokens', label: 'Tokens', icon: '\u26BF' });
   }
   if (isAdmin) {
     platformItems.push({ path: '/users', label: 'Users', icon: '\u265F' });
