@@ -752,6 +752,8 @@ async fn execute_testbed_application(
         &config.config_id,
         &testbed.testbed_id,
         &bench_token,
+        config.created_by_email.as_deref().unwrap_or("unknown"),
+        config.project_id.as_deref().unwrap_or("unknown"),
     )
     .await
     {

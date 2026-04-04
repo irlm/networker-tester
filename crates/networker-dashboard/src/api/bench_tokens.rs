@@ -21,15 +21,21 @@ struct TokenInfo {
     created: Option<String>,
     expires: Option<String>,
     enabled: bool,
+    user: Option<String>,
+    project_id: Option<String>,
+}
+
+/// Extract AuthUser from request extensions (any authenticated user).
+fn extract_user(req: &axum::extract::Request) -> Result<AuthUser, StatusCode> {
+    req.extensions()
+        .get::<AuthUser>()
+        .cloned()
+        .ok_or(StatusCode::UNAUTHORIZED)
 }
 
 /// Extract AuthUser from request extensions and require platform admin.
 fn extract_admin(req: &axum::extract::Request) -> Result<AuthUser, StatusCode> {
-    let user = req
-        .extensions()
-        .get::<AuthUser>()
-        .cloned()
-        .ok_or(StatusCode::UNAUTHORIZED)?;
+    let user = extract_user(req)?;
     if !user.is_platform_admin {
         return Err(StatusCode::FORBIDDEN);
     }
@@ -62,14 +68,16 @@ async fn list_tokens(
     State(_state): State<Arc<AppState>>,
     req: axum::extract::Request,
 ) -> Result<Json<Vec<TokenInfo>>, StatusCode> {
-    extract_admin(&req)?;
+    let user = extract_user(&req)?;
 
     let vault = match vault_name() {
         Some(v) => v,
         None => {
             // Mock mode for local dev: return sample tokens when BENCH_MOCK_TOKENS=1
             if std::env::var("BENCH_MOCK_TOKENS").unwrap_or_default() == "1" {
-                return Ok(Json(mock_tokens()));
+                let all = mock_tokens();
+                let filtered = filter_tokens_for_user(all, &user);
+                return Ok(Json(filtered));
             }
             return Ok(Json(vec![]));
         }
@@ -105,7 +113,7 @@ async fn list_tokens(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    let tokens: Vec<TokenInfo> = items
+    let all_tokens: Vec<TokenInfo> = items
         .into_iter()
         .filter_map(|item| {
             let name = item.get("name")?.as_str()?.to_string();
@@ -123,6 +131,16 @@ async fn list_tokens(
                 .and_then(|a| a.get("enabled"))
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
+            // Parse user and project_id from Key Vault tags
+            let tags = item.get("tags");
+            let token_user = tags
+                .and_then(|t| t.get("user"))
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let token_project_id = tags
+                .and_then(|t| t.get("project"))
+                .and_then(|v| v.as_str())
+                .map(String::from);
             Some(TokenInfo {
                 name,
                 config_id,
@@ -130,11 +148,14 @@ async fn list_tokens(
                 created,
                 expires,
                 enabled,
+                user: token_user,
+                project_id: token_project_id,
             })
         })
         .collect();
 
-    Ok(Json(tokens))
+    let filtered = filter_tokens_for_user(all_tokens, &user);
+    Ok(Json(filtered))
 }
 
 /// DELETE /api/bench-tokens/{name} -- revoke a single benchmark token.
@@ -143,7 +164,7 @@ async fn revoke_token(
     Path(name): Path<String>,
     req: axum::extract::Request,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let user = extract_admin(&req)?;
+    let user = extract_user(&req)?;
 
     // Prevent arbitrary secret deletion -- name must start with "bench-"
     if !name.starts_with("bench-") {
@@ -159,6 +180,47 @@ async fn revoke_token(
         tracing::error!("BENCH_KEYVAULT_NAME not set, cannot revoke token");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
+
+    // Non-admin users must own the token to revoke it
+    if !user.is_platform_admin {
+        let show_output = tokio::process::Command::new("az")
+            .args([
+                "keyvault",
+                "secret",
+                "show",
+                "--vault-name",
+                &vault,
+                "--name",
+                &name,
+                "-o",
+                "json",
+            ])
+            .output()
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "Failed to check token ownership");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+        if show_output.status.success() {
+            let secret: serde_json::Value = serde_json::from_slice(&show_output.stdout)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let tag_user = secret
+                .get("tags")
+                .and_then(|t| t.get("user"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if tag_user != user.user_id.to_string() && tag_user != user.email {
+                tracing::warn!(
+                    name = %name,
+                    user = %user.email,
+                    tag_user = %tag_user,
+                    "User attempted to revoke token they do not own"
+                );
+                return Err(StatusCode::FORBIDDEN);
+            }
+        }
+    }
 
     let output = tokio::process::Command::new("az")
         .args([
@@ -286,6 +348,21 @@ async fn revoke_all(
     })))
 }
 
+/// Filter tokens based on user role: admins see all, others see only their own.
+fn filter_tokens_for_user(tokens: Vec<TokenInfo>, user: &AuthUser) -> Vec<TokenInfo> {
+    if user.is_platform_admin {
+        return tokens;
+    }
+    let uid = user.user_id.to_string();
+    let email = &user.email;
+    tokens
+        .into_iter()
+        .filter(|t| {
+            t.user.as_deref() == Some(uid.as_str()) || t.user.as_deref() == Some(email.as_str())
+        })
+        .collect()
+}
+
 /// Mock tokens for local development (when BENCH_MOCK_TOKENS=1).
 fn mock_tokens() -> Vec<TokenInfo> {
     let now = chrono::Utc::now();
@@ -297,6 +374,8 @@ fn mock_tokens() -> Vec<TokenInfo> {
             created: Some((now - chrono::Duration::hours(2)).to_rfc3339()),
             expires: Some((now + chrono::Duration::hours(2)).to_rfc3339()),
             enabled: true,
+            user: Some("admin@localhost".to_string()),
+            project_id: Some("benchmark-test".to_string()),
         },
         TokenInfo {
             name: "bench-a1b2c3d4-vm-eastus-01".to_string(),
@@ -305,6 +384,8 @@ fn mock_tokens() -> Vec<TokenInfo> {
             created: Some((now - chrono::Duration::hours(5)).to_rfc3339()),
             expires: Some((now - chrono::Duration::hours(1)).to_rfc3339()),
             enabled: false,
+            user: Some("admin@localhost".to_string()),
+            project_id: Some("benchmark-test".to_string()),
         },
         TokenInfo {
             name: "bench-e5f6g7h8-vm-westus-02".to_string(),
@@ -315,6 +396,8 @@ fn mock_tokens() -> Vec<TokenInfo> {
                 (now + chrono::Duration::hours(3) + chrono::Duration::minutes(30)).to_rfc3339(),
             ),
             enabled: true,
+            user: Some("dev@example.com".to_string()),
+            project_id: Some("perf-testing".to_string()),
         },
         TokenInfo {
             name: "bench-i9j0k1l2-vm-eu-west-1".to_string(),
@@ -323,6 +406,8 @@ fn mock_tokens() -> Vec<TokenInfo> {
             created: Some((now - chrono::Duration::minutes(10)).to_rfc3339()),
             expires: Some((now + chrono::Duration::minutes(50)).to_rfc3339()),
             enabled: true,
+            user: Some("admin@localhost".to_string()),
+            project_id: Some("benchmark-test".to_string()),
         },
     ]
 }

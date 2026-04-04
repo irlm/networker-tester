@@ -353,6 +353,7 @@ export function BenchTokensPage() {
                   <thead>
                     <tr className="border-b border-gray-800 text-left text-[10px] text-gray-500 uppercase tracking-wider">
                       <th className="px-4 py-2">VM</th>
+                      <th className="px-4 py-2">User</th>
                       <th className="px-4 py-2">Created</th>
                       <th className="px-4 py-2">TTL</th>
                       <th className="px-4 py-2 text-right">Actions</th>
@@ -372,6 +373,9 @@ export function BenchTokensPage() {
                         >
                           <td className="px-4 py-2.5 font-mono text-xs text-gray-300" title={t.name}>
                             {t.testbed_id || t.name}
+                          </td>
+                          <td className="px-4 py-2.5 text-xs text-gray-500 truncate max-w-[140px]" title={t.user ?? undefined}>
+                            {t.user ?? '\u2014'}
                           </td>
                           <td className="px-4 py-2.5 text-xs text-gray-500 whitespace-nowrap">
                             {relativeDate(t.created)}

@@ -1053,4 +1053,6 @@ export interface BenchTokenInfo {
   created: string | null;
   expires: string | null;
   enabled: boolean;
+  user: string | null;
+  project_id: string | null;
 }

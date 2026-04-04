@@ -118,7 +118,8 @@ export function BenchTokenHistoryPage() {
           t.config_id.toLowerCase().includes(q) ||
           t.testbed_id.toLowerCase().includes(q) ||
           (t.created && t.created.toLowerCase().includes(q)) ||
-          t.name.toLowerCase().includes(q),
+          t.name.toLowerCase().includes(q) ||
+          (t.user && t.user.toLowerCase().includes(q)),
       );
     }
     // Sort newest first by created date
@@ -224,6 +225,7 @@ export function BenchTokenHistoryPage() {
               <tr className="border-b border-gray-800 text-left text-[10px] text-gray-500 uppercase tracking-wider">
                 <th className="px-4 py-2">Config</th>
                 <th className="px-4 py-2">VM</th>
+                <th className="px-4 py-2">User</th>
                 <th className="px-4 py-2">Created</th>
                 <th className="px-4 py-2">Expired</th>
                 <th className="px-4 py-2">Lived</th>
@@ -245,6 +247,9 @@ export function BenchTokenHistoryPage() {
                     </td>
                     <td className="px-4 py-2.5 font-mono text-xs text-gray-400">
                       {t.testbed_id || '\u2014'}
+                    </td>
+                    <td className="px-4 py-2.5 text-xs text-gray-500 truncate max-w-[140px]" title={t.user ?? undefined}>
+                      {t.user ?? '\u2014'}
                     </td>
                     <td className="px-4 py-2.5 text-xs text-gray-500 whitespace-nowrap">
                       {formatAbsDate(t.created)}

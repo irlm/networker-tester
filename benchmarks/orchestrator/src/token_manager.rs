@@ -37,6 +37,8 @@ pub async fn store_in_keyvault(
     config_id: &str,
     testbed_id: &str,
     token: &str,
+    user_email: &str,
+    project_id: &str,
 ) -> Result<()> {
     let vault_name = match keyvault_name() {
         Some(name) => name,
@@ -62,6 +64,7 @@ pub async fn store_in_keyvault(
     );
 
     // Uses az CLI with explicit args (no shell interpolation)
+    let tags = format!("user={} project={}", user_email, project_id);
     let output = tokio::process::Command::new("az")
         .args([
             "keyvault",
@@ -75,6 +78,8 @@ pub async fn store_in_keyvault(
             token,
             "--expires",
             &expiry_str,
+            "--tags",
+            &tags,
             "--output",
             "none",
         ])
