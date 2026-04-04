@@ -121,14 +121,15 @@ namespace BenchmarkServer
             serializer.MaxJsonLength = int.MaxValue;
             var data = serializer.Deserialize<Dictionary<string, object>>(json);
 
+            // JavaScriptSerializer returns arrays as ArrayList, not object[]
             // Users
             Users = new List<Dictionary<string, object>>();
             if (data.ContainsKey("users"))
             {
-                var usersObj = data["users"] as object[];
-                if (usersObj != null)
+                var usersArr = data["users"] as System.Collections.ArrayList;
+                if (usersArr != null)
                 {
-                    foreach (var item in usersObj)
+                    foreach (var item in usersArr)
                     {
                         var u = item as Dictionary<string, object>;
                         if (u != null)
@@ -141,10 +142,10 @@ namespace BenchmarkServer
             SearchCorpus = new List<string>();
             if (data.ContainsKey("search_corpus"))
             {
-                var corpusObj = data["search_corpus"] as object[];
-                if (corpusObj != null)
+                var corpusArr = data["search_corpus"] as System.Collections.ArrayList;
+                if (corpusArr != null)
                 {
-                    foreach (var s in corpusObj)
+                    foreach (var s in corpusArr)
                         SearchCorpus.Add(s.ToString());
                 }
             }
@@ -153,10 +154,10 @@ namespace BenchmarkServer
             Timeseries = new List<Dictionary<string, object>>();
             if (data.ContainsKey("timeseries"))
             {
-                var tsObj = data["timeseries"] as object[];
-                if (tsObj != null)
+                var tsArr = data["timeseries"] as System.Collections.ArrayList;
+                if (tsArr != null)
                 {
-                    foreach (var item in tsObj)
+                    foreach (var item in tsArr)
                     {
                         var t = item as Dictionary<string, object>;
                         if (t != null)
@@ -449,11 +450,11 @@ namespace BenchmarkServer
             // Hash fields
             if (data.ContainsKey("fields"))
             {
-                var fields = data["fields"] as object[];
+                var fields = data["fields"] as System.Collections.ArrayList;
                 if (fields != null)
                 {
                     sb.Append("\"hashed_fields\":[");
-                    for (int i = 0; i < fields.Length; i++)
+                    for (int i = 0; i < fields.Count; i++)
                     {
                         if (i > 0) sb.Append(",");
                         var hash = Sha256Hex(fields[i].ToString());
@@ -466,13 +467,13 @@ namespace BenchmarkServer
             // Reverse values
             if (data.ContainsKey("values"))
             {
-                var values = data["values"] as object[];
+                var values = data["values"] as System.Collections.ArrayList;
                 if (values != null)
                 {
                     sb.Append("\"reversed_values\":[");
-                    for (int i = values.Length - 1; i >= 0; i--)
+                    for (int i = values.Count - 1; i >= 0; i--)
                     {
-                        if (i < values.Length - 1) sb.Append(",");
+                        if (i < values.Count - 1) sb.Append(",");
                         sb.Append(values[i]);
                     }
                     sb.Append("],");
@@ -528,13 +529,17 @@ namespace BenchmarkServer
                 for (int i = c; i < values.Length; i += 5)
                     catValues.Add(values[i]);
                 var catMean = catValues.Average();
-                groups.Append(string.Format("{{\"category\":\"{0}\",\"count\":{1},\"mean\":{2:F4}}}",
-                    categories[c], catValues.Count, catMean));
+                groups.Append("{\"category\":\"" + categories[c] + "\",\"count\":" + catValues.Count
+                    + ",\"mean\":" + catMean.ToString("F4", System.Globalization.CultureInfo.InvariantCulture) + "}");
             }
             groups.Append("]");
 
-            return string.Format("{{\"count\":{0},\"mean\":{1:F4},\"p50\":{2},\"p95\":{3},\"max\":{4},\"categories\":{5}}}",
-                n, mean, p50, p95, max, groups);
+            return "{\"count\":" + n
+                + ",\"mean\":" + mean.ToString("F4", System.Globalization.CultureInfo.InvariantCulture)
+                + ",\"p50\":" + p50.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + ",\"p95\":" + p95.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + ",\"max\":" + max.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + ",\"categories\":" + groups + "}";
         }
 
         // -- /api/search --------------------------------------------------
