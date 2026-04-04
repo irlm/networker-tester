@@ -2,6 +2,7 @@
 //! `alethabench` orchestrator process. Runs as a tokio task alongside the
 //! dashboard API server.
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use crate::AppState;
@@ -20,13 +21,19 @@ pub fn spawn(state: Arc<AppState>) {
                 .unwrap_or_else(|_| "unknown".into())
         );
 
+        let in_flight = Arc::new(AtomicU32::new(0));
         let mut last_cleanup = std::time::Instant::now();
 
         loop {
             // Poll every 5 seconds
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
-            if let Err(e) = poll_and_run(&state, &worker_id).await {
+            // Concurrency guard: only one orchestrator at a time
+            if in_flight.load(Ordering::SeqCst) >= 1 {
+                continue;
+            }
+
+            if let Err(e) = poll_and_run(&state, &worker_id, &in_flight).await {
                 tracing::error!(error = %e, "Benchmark worker poll failed");
             }
 
@@ -42,7 +49,11 @@ pub fn spawn(state: Arc<AppState>) {
 }
 
 /// Poll for a queued benchmark config, claim it, and spawn the orchestrator.
-async fn poll_and_run(state: &AppState, worker_id: &str) -> anyhow::Result<()> {
+async fn poll_and_run(
+    state: &AppState,
+    worker_id: &str,
+    in_flight: &Arc<AtomicU32>,
+) -> anyhow::Result<()> {
     let client = state.db.get().await?;
     let config = crate::db::benchmark_configs::claim_queued(&client, worker_id).await?;
 
@@ -61,27 +72,38 @@ async fn poll_and_run(state: &AppState, worker_id: &str) -> anyhow::Result<()> {
     // Fetch testbeds from DB (they have testbed_id which the config_json might not)
     let db_testbeds = crate::db::benchmark_testbeds::list_for_config(&client, &config.config_id)
         .await
-        .unwrap_or_default();
+        .map_err(|e| {
+            tracing::error!(config_id = %config.config_id, error = %e, "Failed to list testbeds for config");
+            anyhow::anyhow!("Failed to list testbeds: {e}")
+        })?;
 
-    // Build testbeds array with testbed_id + data from config_json
+    // Build testbeds array with testbed_id + data from config_json.
+    // Match by testbed_id rather than positional index.
     let inner = &config.config_json;
     let config_testbeds = inner
         .get("testbeds")
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
+    let config_testbed_map: std::collections::HashMap<String, serde_json::Value> = config_testbeds
+        .into_iter()
+        .filter_map(|v| {
+            let id = v.get("testbed_id")?.as_str()?.to_string();
+            Some((id, v))
+        })
+        .collect();
     let merged_testbeds: Vec<serde_json::Value> = db_testbeds
         .iter()
-        .enumerate()
-        .map(|(i, db_testbed)| {
-            let mut testbed = config_testbeds
-                .get(i)
+        .map(|db_testbed| {
+            let id_str = db_testbed.testbed_id.to_string();
+            let mut testbed = config_testbed_map
+                .get(&id_str)
                 .cloned()
                 .unwrap_or(serde_json::json!({}));
             if let Some(obj) = testbed.as_object_mut() {
                 obj.insert(
                     "testbed_id".to_string(),
-                    serde_json::json!(db_testbed.testbed_id.to_string()),
+                    serde_json::json!(id_str),
                 );
                 // Ensure existing_vm_ip is present
                 if !obj.contains_key("existing_vm_ip") {
@@ -173,6 +195,8 @@ async fn poll_and_run(state: &AppState, worker_id: &str) -> anyhow::Result<()> {
         Ok(mut child) => {
             let config_id = config.config_id;
             let db_pool = state.db.clone();
+            let in_flight = in_flight.clone();
+            in_flight.fetch_add(1, Ordering::SeqCst);
 
             // Monitor the child process in a spawned task
             tokio::spawn(async move {
@@ -243,7 +267,8 @@ async fn poll_and_run(state: &AppState, worker_id: &str) -> anyhow::Result<()> {
                     }
                 }
 
-                // Clean up temp file
+                // Decrement in-flight counter and clean up temp file
+                in_flight.fetch_sub(1, Ordering::SeqCst);
                 let _ = tokio::fs::remove_file(&format!("/tmp/bench-{config_id}.json")).await;
             });
         }

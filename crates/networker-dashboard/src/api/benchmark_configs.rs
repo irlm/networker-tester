@@ -182,6 +182,28 @@ async fn create_config(
         }
     }
 
+    // Validate cloud provider
+    const VALID_CLOUDS: &[&str] = &["azure", "aws", "gcp"];
+    for testbed in &payload.testbeds {
+        if !VALID_CLOUDS.contains(&testbed.cloud.as_str()) {
+            tracing::warn!(cloud = %testbed.cloud, "Invalid cloud provider");
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+
+    // Validate region (alphanumeric + hyphens only)
+    for testbed in &payload.testbeds {
+        if testbed.region.is_empty()
+            || !testbed
+                .region
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        {
+            tracing::warn!(region = %testbed.region, "Invalid region format");
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+
     // Build config_json from top-level fields if not provided directly
     let config_json = payload.config_json.unwrap_or_else(|| {
         serde_json::json!({

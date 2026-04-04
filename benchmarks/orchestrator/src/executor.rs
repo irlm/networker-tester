@@ -972,9 +972,45 @@ async fn execute_testbed_application(
     })
 }
 
+/// Validate an IPv4 address string: must be 4 octets 0-255, no shell metacharacters.
+/// For cloud-provisioned VMs, blocks link-local (169.254.x.x) and localhost (127.x.x.x).
+fn validate_ip(ip: &str, is_cloud: bool) -> Result<()> {
+    // Reject any shell metacharacters
+    if ip.chars().any(|c| !c.is_ascii_digit() && c != '.') {
+        anyhow::bail!("IP address contains invalid characters: {ip}");
+    }
+    let octets: Vec<&str> = ip.split('.').collect();
+    if octets.len() != 4 {
+        anyhow::bail!("IP address must have exactly 4 octets: {ip}");
+    }
+    for octet in &octets {
+        let val: u16 = octet
+            .parse()
+            .map_err(|_| anyhow::anyhow!("Invalid octet in IP address: {ip}"))?;
+        if val > 255 {
+            anyhow::bail!("Octet out of range in IP address: {ip}");
+        }
+    }
+    if is_cloud {
+        let first: u8 = octets[0].parse().unwrap();
+        let second: u8 = octets[1].parse().unwrap();
+        if first == 127 {
+            anyhow::bail!("Localhost address not allowed for cloud VMs: {ip}");
+        }
+        if first == 169 && second == 254 {
+            anyhow::bail!("Link-local address not allowed for cloud VMs: {ip}");
+        }
+    }
+    Ok(())
+}
+
 /// Resolve the VM for a testbed: use existing IP or provision a new one.
 async fn resolve_vm(testbed: &TestbedConfig) -> Result<(VmInfo, bool)> {
     if let Some(ip) = &testbed.existing_vm_ip {
+        let is_cloud = ["azure", "aws", "gcp"]
+            .contains(&testbed.cloud.to_lowercase().as_str());
+        validate_ip(ip, is_cloud)
+            .with_context(|| format!("Invalid existing_vm_ip for testbed {}", testbed.testbed_id))?;
         tracing::info!(
             "Using existing VM at {} for testbed {}",
             ip,
