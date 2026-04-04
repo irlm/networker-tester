@@ -213,7 +213,7 @@ export function BenchTokensPage() {
 
   return (
     <div className="p-4 md:p-6 h-full flex flex-col">
-      <Breadcrumb items={[{ label: 'Active Tokens' }]} />
+      <Breadcrumb items={[{ label: 'Admin' }, { label: 'Tokens' }]} />
 
       {/* Top bar */}
       <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
@@ -230,7 +230,7 @@ export function BenchTokensPage() {
             type="text"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            placeholder="Filter config or VM..."
+            placeholder="Filter config, VM, user..."
             className="px-2.5 py-1.5 text-xs bg-gray-800 border border-gray-700 rounded text-gray-200 placeholder-gray-600 focus:outline-none focus:border-cyan-500/50 w-48"
           />
           {totalVms > 0 && (
@@ -365,18 +365,23 @@ export function BenchTokensPage() {
                 {/* Detail header */}
                 <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800 bg-gray-800/20">
                   <div className="flex items-center gap-3">
-                    <span className="font-mono text-sm text-cyan-400">{selectedRunData.configId}</span>
+                    <span className={`font-mono text-sm ${selectedRunData.configId === 'unknown' ? 'text-gray-500 italic' : 'text-cyan-400'}`}>
+                      {selectedRunData.configId === 'unknown' ? 'Ungrouped' : selectedRunData.configId}
+                    </span>
                     <span className="text-xs text-gray-500">
                       {selectedRunData.tokens.length} VM{selectedRunData.tokens.length !== 1 ? 's' : ''}
                     </span>
                   </div>
-                  <button
-                    onClick={() => handleRevokeRun(selectedRunData.configId)}
-                    disabled={revokingRun === selectedRunData.configId}
-                    className="px-2.5 py-1 text-xs rounded border border-red-700/50 text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                  >
-                    {revokingRun === selectedRunData.configId ? 'Revoking...' : 'Revoke Run'}
-                  </button>
+                  {/* Only show Revoke Run when there are 2+ runs (otherwise Revoke All suffices) */}
+                  {filteredRuns.length > 1 && (
+                    <button
+                      onClick={() => handleRevokeRun(selectedRunData.configId)}
+                      disabled={revokingRun === selectedRunData.configId}
+                      className="px-2.5 py-1 text-xs rounded border border-red-700/50 text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                      {revokingRun === selectedRunData.configId ? 'Revoking...' : 'Revoke Run'}
+                    </button>
+                  )}
                 </div>
 
                 {/* VM table */}
@@ -446,7 +451,7 @@ export function BenchTokensPage() {
       {/* Footer */}
       {!loading && !error && activeTokens.length > 0 && (
         <div className="mt-2 text-[10px] text-gray-600">
-          refreshed {Math.floor((Date.now() - lastRefresh) / 1000)}s ago
+          {(() => { const s = Math.floor((Date.now() - lastRefresh) / 1000); return s < 5 ? 'refreshed just now' : `refreshed ${s}s ago`; })()}
         </div>
       )}
     </div>
