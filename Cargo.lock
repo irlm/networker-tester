@@ -119,9 +119,9 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "arc-swap"
-version = "1.9.0"
+version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a07d1f37ff60921c83bdfc7407723bdefe89b44b98a9b772f225c8f9d67141a6"
+checksum = "6a3a1fd6f75306b68087b831f025c712524bcb19aad54e557b1129cfa0a2b207"
 dependencies = [
  "rustversion",
 ]
@@ -951,9 +951,9 @@ dependencies = [
 
 [[package]]
 name = "fastrand"
-version = "2.3.0"
+version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
+checksum = "a043dc74da1e37d6afe657061213aa6f425f855399a11d3463c6ecccc4dfda1f"
 
 [[package]]
 name = "find-msvc-tools"
@@ -1905,7 +1905,7 @@ dependencies = [
 
 [[package]]
 name = "networker-agent"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1924,7 +1924,7 @@ dependencies = [
 
 [[package]]
 name = "networker-common"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "chrono",
  "networker-tester",
@@ -1935,7 +1935,7 @@ dependencies = [
 
 [[package]]
 name = "networker-dashboard"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1974,7 +1974,7 @@ dependencies = [
 
 [[package]]
 name = "networker-endpoint"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2010,7 +2010,7 @@ dependencies = [
 
 [[package]]
 name = "networker-tester"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2972,9 +2972,9 @@ dependencies = [
 
 [[package]]
 name = "semver"
-version = "1.0.27"
+version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d767eb0aabc880b29956c35734170f26ed551a859dbd361d140cdbeca61ab1e2"
+checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
 
 [[package]]
 name = "serde"

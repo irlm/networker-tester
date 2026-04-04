@@ -11,6 +11,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.19.0] - 2026-04-04
+
+### Added
+- **JSON API endpoints** for Application Benchmark Mode across all 17 language reference APIs (Rust, Go, Python, Node.js, Java, Ruby, PHP, C++, C# .NET 6-10+AOT, .NET 4.8)
+- Shared `bench-data.json` dataset for cross-language validation (deterministic output across all implementations)
+- **Bearer token authentication** on all reference API endpoints (`BENCH_API_TOKEN` env var, `/health` exempt)
+- `Server-Timing: auth;dur=X.X` header measuring auth validation overhead
+- **Per-run token rotation** via Azure Key Vault with 4h auto-expiry and per-VM isolation
+- Token ownership: user + project scoping with role-based filtering (admin sees all, users see own)
+- **Token management dashboard** — Active Tokens page (master-detail with health dots, TTL bars) + Token History page (audit table with search, pagination)
+- Adaptive layout: horizontal run pills for <4 runs, full panel for 4+ runs
+- `run-validation.sh` local validation harness (Rust-only + Docker Compose modes)
+- CI: JSON API validation (required) + weekly Docker validation of all languages
+- Structured logging in all reference APIs (`LOG_LEVEL` env var, stderr output)
+- `.NET Framework 4.8` reference API (HttpListener, C# 5, validated on Azure Windows Server 2022)
+
+### Security
+- ReDoS prevention: user input escaped before regex compilation in all languages
+- Shell injection defense: `validate_shell_safe()` at all SSH command interpolation sites
+- SSRF protection in Chrome runner: blocks link-local IPs, rejects non-IP hostnames
+- Config temp file written with 0600 permissions (JWT token protection)
+- `#[cfg(unix)]` guard on platform-specific code for Windows CI compatibility
+
+---
+
 ## [0.18.0] - 2026-04-03
 
 ### Added
