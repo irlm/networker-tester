@@ -20,6 +20,7 @@ pub struct BenchmarkConfigRow {
     pub baseline_run_id: Option<Uuid>,
     pub worker_id: Option<String>,
     pub last_heartbeat: Option<DateTime<Utc>>,
+    pub benchmark_type: String,
 }
 
 fn row_to_config(r: &tokio_postgres::Row) -> BenchmarkConfigRow {
@@ -39,6 +40,7 @@ fn row_to_config(r: &tokio_postgres::Row) -> BenchmarkConfigRow {
         baseline_run_id: r.get("baseline_run_id"),
         worker_id: r.get("worker_id"),
         last_heartbeat: r.get("last_heartbeat"),
+        benchmark_type: r.get("benchmark_type"),
     }
 }
 
@@ -52,14 +54,15 @@ pub async fn create(
     created_by: Option<&Uuid>,
     max_duration_secs: i32,
     baseline_run_id: Option<&Uuid>,
+    benchmark_type: &str,
 ) -> anyhow::Result<Uuid> {
     let id = Uuid::new_v4();
     client
         .execute(
             "INSERT INTO benchmark_config
                 (config_id, project_id, name, template, config_json, created_by,
-                 max_duration_secs, baseline_run_id)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                 max_duration_secs, baseline_run_id, benchmark_type)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             &[
                 &id,
                 project_id,
@@ -69,6 +72,7 @@ pub async fn create(
                 &created_by,
                 &max_duration_secs,
                 &baseline_run_id,
+                &benchmark_type,
             ],
         )
         .await?;
@@ -80,7 +84,7 @@ pub async fn get(client: &Client, config_id: &Uuid) -> anyhow::Result<Option<Ben
         .query_opt(
             "SELECT config_id, project_id, name, template, status, created_by,
                     created_at, started_at, finished_at, config_json, error_message,
-                    max_duration_secs, baseline_run_id, worker_id, last_heartbeat
+                    max_duration_secs, baseline_run_id, worker_id, last_heartbeat, benchmark_type
              FROM benchmark_config WHERE config_id = $1",
             &[config_id],
         )
@@ -98,7 +102,7 @@ pub async fn list(
         .query(
             "SELECT config_id, project_id, name, template, status, created_by,
                     created_at, started_at, finished_at, config_json, error_message,
-                    max_duration_secs, baseline_run_id, worker_id, last_heartbeat
+                    max_duration_secs, baseline_run_id, worker_id, last_heartbeat, benchmark_type
              FROM benchmark_config WHERE project_id = $1
              ORDER BY created_at DESC LIMIT $2 OFFSET $3",
             &[project_id, &limit, &offset],
@@ -152,7 +156,7 @@ pub async fn claim_queued(
              )
              RETURNING config_id, project_id, name, template, status, created_by,
                        created_at, started_at, finished_at, config_json, error_message,
-                       max_duration_secs, baseline_run_id, worker_id, last_heartbeat",
+                       max_duration_secs, baseline_run_id, worker_id, last_heartbeat, benchmark_type",
             &[&worker_id],
         )
         .await?;
@@ -178,7 +182,7 @@ pub async fn find_stalled(
         .query(
             "SELECT config_id, project_id, name, template, status, created_by,
                     created_at, started_at, finished_at, config_json, error_message,
-                    max_duration_secs, baseline_run_id, worker_id, last_heartbeat
+                    max_duration_secs, baseline_run_id, worker_id, last_heartbeat, benchmark_type
              FROM benchmark_config
              WHERE status = 'running'
                AND last_heartbeat < now() - ($1::text || ' minutes')::interval",

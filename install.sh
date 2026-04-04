@@ -324,7 +324,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.17.0"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.18.0"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -436,6 +436,8 @@ CONFIG_FILE_PATH=""
 
 # ── Benchmark server mode ────────────────────────────────────────────────
 BENCHMARK_SERVER_LANG=""        # language to deploy as benchmark server (--benchmark-server)
+BENCHMARK_PROXY=""              # reverse proxy to deploy (--benchmark-proxy)
+BENCHMARK_PROXY_SWAP=""         # swap to this proxy (--benchmark-proxy-swap)
 
 # ── Deploy-config state ──────────────────────────────────────────────────
 DEPLOY_CONFIG_PATH=""           # path to deploy.json (--deploy flag)
@@ -565,6 +567,12 @@ parse_args() {
             # Benchmark server mode (used by orchestrator)
             --benchmark-server)
                 shift; BENCHMARK_SERVER_LANG="${1:-}"
+                AUTO_YES=1 ;;
+            --benchmark-proxy)
+                shift; BENCHMARK_PROXY="${1:-}"
+                AUTO_YES=1 ;;
+            --benchmark-proxy-swap)
+                shift; BENCHMARK_PROXY_SWAP="${1:-}"
                 AUTO_YES=1 ;;
             # Deploy config
             --deploy)
@@ -8971,6 +8979,323 @@ deploy_from_config() {
     _deploy_display_completion
 }
 
+# ── Chrome test harness deployment ─────────────────────────────────────────────
+# Installs Chrome + Node.js + puppeteer-core for Application mode benchmarking.
+
+deploy_chrome_harness() {
+    echo ">> Installing Chrome test harness"
+    local HARNESS_DIR="/opt/bench/chrome-harness"
+    sudo mkdir -p "$HARNESS_DIR"
+    sudo chown "$(whoami):$(whoami)" "$HARNESS_DIR"
+
+    # Install Chrome (if not present)
+    if ! command -v google-chrome &>/dev/null && ! command -v chromium-browser &>/dev/null; then
+        echo ">> Installing Chrome"
+        if [ -f /etc/debian_version ]; then
+            curl -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -o /tmp/chrome.deb < /dev/null
+            sudo apt-get install -y -qq /tmp/chrome.deb < /dev/null || sudo apt-get install -y -qq chromium-browser < /dev/null
+            rm -f /tmp/chrome.deb
+        fi
+    fi
+    echo ">> Chrome: $(google-chrome --version 2>/dev/null || chromium-browser --version 2>/dev/null || echo 'not found')"
+
+    # Install Node.js (if not present)
+    if ! command -v node &>/dev/null; then
+        echo ">> Installing Node.js"
+        if [ -f /etc/debian_version ]; then
+            curl -fsSL https://deb.nodesource.com/setup_20.x < /dev/null | sudo -E bash -
+            sudo apt-get install -y -qq nodejs < /dev/null
+        fi
+    fi
+    echo ">> Node.js: $(node --version 2>/dev/null || echo 'not found')"
+
+    # Deploy harness files from repo
+    local REPO_DIR="/tmp/nwk-repo"
+    if [ -d "$REPO_DIR/benchmarks/chrome-harness" ]; then
+        cp "$REPO_DIR/benchmarks/chrome-harness/package.json" "$HARNESS_DIR/"
+        cp "$REPO_DIR/benchmarks/chrome-harness/runner.js" "$HARNESS_DIR/"
+        cp "$REPO_DIR/benchmarks/chrome-harness/test-page.html" "$HARNESS_DIR/"
+    else
+        echo "WARNING: Chrome harness files not found in repo, using inline deployment"
+        # Fallback: the orchestrator will SCP the files directly
+    fi
+
+    # Install dependencies
+    cd "$HARNESS_DIR" && npm install --production --silent 2>/dev/null < /dev/null
+    echo ">> Chrome harness deployed at $HARNESS_DIR"
+}
+
+# ── Benchmark proxy deployment (Application mode) ─────────────────────────────
+# Deploys a reverse proxy on port 8443 forwarding to localhost:8080.
+# Used by the orchestrator via: --benchmark-proxy <proxy>
+
+BENCH_PROXY_PORT=8443
+BENCH_APP_PORT=8080
+BENCH_DIR="/opt/bench"
+
+stop_benchmark_proxy() {
+    echo ">> Stopping any running benchmark proxy..."
+    sudo systemctl stop nginx 2>/dev/null || true
+    sudo systemctl stop caddy 2>/dev/null || true
+    sudo systemctl stop traefik 2>/dev/null || true
+    sudo systemctl stop haproxy 2>/dev/null || true
+    sudo systemctl stop apache2 2>/dev/null || true
+    sudo systemctl stop httpd 2>/dev/null || true
+    # Kill any proxy on 8443
+    sudo fuser -k ${BENCH_PROXY_PORT}/tcp 2>/dev/null || true
+    sleep 1
+}
+
+deploy_benchmark_proxy() {
+    local proxy="$1"
+    local cert_pem="$BENCH_DIR/cert.pem"
+    local cert_key="$BENCH_DIR/key.pem"
+
+    echo "====================================="
+    echo "  Deploying reverse proxy: $proxy"
+    echo "  Proxy port: $BENCH_PROXY_PORT"
+    echo "  Upstream: localhost:$BENCH_APP_PORT"
+    echo "====================================="
+
+    # Ensure certs exist
+    sudo mkdir -p "$BENCH_DIR"
+    if [ ! -f "$cert_pem" ]; then
+        echo ">> Generating self-signed TLS certificate"
+        sudo openssl req -x509 -newkey rsa:2048 -keyout "$cert_key" \
+            -out "$cert_pem" -days 365 -nodes -subj '/CN=bench' 2>/dev/null
+    fi
+
+    case "$proxy" in
+        nginx)  _deploy_proxy_nginx "$cert_pem" "$cert_key" ;;
+        caddy)  _deploy_proxy_caddy "$cert_pem" "$cert_key" ;;
+        traefik) _deploy_proxy_traefik "$cert_pem" "$cert_key" ;;
+        haproxy) _deploy_proxy_haproxy "$cert_pem" "$cert_key" ;;
+        apache) _deploy_proxy_apache "$cert_pem" "$cert_key" ;;
+        iis)    _deploy_proxy_iis ;;
+        *)
+            echo "ERROR: Unknown proxy '$proxy'"
+            echo "Supported: nginx, caddy, traefik, haproxy, apache, iis"
+            return 1
+            ;;
+    esac
+
+    # Health check through proxy
+    echo ">> Waiting for health check on proxy port $BENCH_PROXY_PORT..."
+    local max_wait=60
+    local waited=0
+    while [ $waited -lt $max_wait ]; do
+        if curl -sk --max-time 2 "https://localhost:${BENCH_PROXY_PORT}/health" 2>/dev/null | grep -q '"status"'; then
+            echo ">> Proxy $proxy healthy on port $BENCH_PROXY_PORT"
+            echo ">> Reverse proxy deployment complete: $proxy -> localhost:$BENCH_APP_PORT"
+            return 0
+        fi
+        sleep 2
+        waited=$((waited + 2))
+    done
+    echo "WARNING: Proxy health check timed out after ${max_wait}s"
+    return 1
+}
+
+_deploy_proxy_nginx() {
+    local cert_pem="$1" cert_key="$2"
+    echo ">> Installing nginx mainline"
+    if ! nginx -v 2>&1 | grep -qE 'nginx/1\.2[5-9]|nginx/1\.[3-9]'; then
+        if [ -f /etc/debian_version ]; then
+            curl -fsSL https://nginx.org/keys/nginx_signing.key | sudo gpg --dearmor -o /usr/share/keyrings/nginx-archive-keyring.gpg 2>/dev/null || true
+            echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] http://nginx.org/packages/mainline/ubuntu $(lsb_release -cs) nginx" | sudo tee /etc/apt/sources.list.d/nginx.list > /dev/null
+            sudo apt-get update -qq < /dev/null && sudo apt-get install -y -qq nginx < /dev/null
+        fi
+    fi
+    echo ">> Configuring nginx as reverse proxy"
+    sudo tee /etc/nginx/nginx.conf > /dev/null <<NGINXEOF
+worker_processes auto;
+events { worker_connections 1024; }
+http {
+    access_log off;
+    server {
+        listen ${BENCH_PROXY_PORT} ssl;
+        listen ${BENCH_PROXY_PORT} quic reuseport;
+        http2 on;
+        http3 on;
+        server_name _;
+
+        ssl_certificate $cert_pem;
+        ssl_certificate_key $cert_key;
+
+        add_header Alt-Svc 'h3=":${BENCH_PROXY_PORT}"; ma=86400' always;
+        add_header Timing-Allow-Origin '*' always;
+
+        location / {
+            proxy_pass http://127.0.0.1:${BENCH_APP_PORT};
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$scheme;
+
+            # Proxy timing: upstream_response_time = time waiting for app
+            add_header Server-Timing 'proxy_total;dur=\$request_time, upstream;dur=\$upstream_response_time' always;
+        }
+    }
+}
+NGINXEOF
+    sudo nginx -t && sudo systemctl restart nginx
+}
+
+_deploy_proxy_caddy() {
+    local cert_pem="$1" cert_key="$2"
+    echo ">> Installing Caddy"
+    if ! command -v caddy &>/dev/null; then
+        sudo apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https < /dev/null
+        curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null || true
+        curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list > /dev/null
+        sudo apt-get update -qq < /dev/null && sudo apt-get install -y -qq caddy < /dev/null
+    fi
+    echo ">> Configuring Caddy as reverse proxy"
+    sudo mkdir -p /etc/caddy
+    sudo tee /etc/caddy/Caddyfile > /dev/null <<CADDYEOF
+{
+    auto_https disable_redirects
+}
+
+:${BENCH_PROXY_PORT} {
+    tls $cert_pem $cert_key
+    reverse_proxy localhost:${BENCH_APP_PORT} {
+        header_up X-Forwarded-Proto {scheme}
+    }
+    header Timing-Allow-Origin *
+    header Alt-Svc "h3=\":${BENCH_PROXY_PORT}\"; ma=86400"
+}
+CADDYEOF
+    sudo systemctl restart caddy
+}
+
+_deploy_proxy_traefik() {
+    local cert_pem="$1" cert_key="$2"
+    echo ">> Installing Traefik"
+    local traefik_ver="v3.2.3"
+    if ! command -v traefik &>/dev/null; then
+        curl -fsSL "https://github.com/traefik/traefik/releases/download/${traefik_ver}/traefik_${traefik_ver}_linux_amd64.tar.gz" | sudo tar xz -C /usr/local/bin traefik
+        sudo chmod +x /usr/local/bin/traefik
+    fi
+    echo ">> Configuring Traefik as reverse proxy"
+    sudo mkdir -p /etc/traefik
+    sudo tee /etc/traefik/traefik.yml > /dev/null <<TRAEFIKEOF
+entryPoints:
+  web:
+    address: ":${BENCH_PROXY_PORT}"
+    http3: {}
+    transport:
+      respondingTimeouts:
+        readTimeout: 30s
+        writeTimeout: 30s
+
+providers:
+  file:
+    filename: /etc/traefik/dynamic.yml
+
+log:
+  level: WARN
+
+accessLog: false
+TRAEFIKEOF
+    sudo tee /etc/traefik/dynamic.yml > /dev/null <<DYNEOF
+tls:
+  certificates:
+    - certFile: $cert_pem
+      keyFile: $cert_key
+
+http:
+  routers:
+    bench:
+      rule: "PathPrefix(\`/\`)"
+      entryPoints: [web]
+      tls: {}
+      service: bench-svc
+  services:
+    bench-svc:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:${BENCH_APP_PORT}"
+DYNEOF
+    # Create systemd service
+    sudo tee /etc/systemd/system/traefik.service > /dev/null <<SVCEOF
+[Unit]
+Description=Traefik
+After=network.target
+[Service]
+ExecStart=/usr/local/bin/traefik --configFile=/etc/traefik/traefik.yml
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+    sudo systemctl daemon-reload
+    sudo systemctl restart traefik
+}
+
+_deploy_proxy_haproxy() {
+    local cert_pem="$1" cert_key="$2"
+    echo ">> Installing HAProxy"
+    sudo apt-get install -y -qq haproxy < /dev/null
+    echo ">> Configuring HAProxy as reverse proxy"
+    # HAProxy needs combined cert+key for SSL
+    local combined="$BENCH_DIR/haproxy-combined.pem"
+    sudo cat "$cert_pem" "$cert_key" | sudo tee "$combined" > /dev/null
+    sudo tee /etc/haproxy/haproxy.cfg > /dev/null <<HAEOF
+global
+    log /dev/log local0
+    maxconn 4096
+
+defaults
+    mode http
+    timeout connect 5s
+    timeout client 30s
+    timeout server 30s
+    option httplog
+
+frontend bench_front
+    bind *:${BENCH_PROXY_PORT} ssl crt $combined
+    default_backend bench_back
+    http-response set-header Timing-Allow-Origin *
+
+backend bench_back
+    server app1 127.0.0.1:${BENCH_APP_PORT} check
+HAEOF
+    sudo systemctl restart haproxy
+}
+
+_deploy_proxy_apache() {
+    local cert_pem="$1" cert_key="$2"
+    echo ">> Installing Apache"
+    sudo apt-get install -y -qq apache2 < /dev/null
+    sudo a2enmod proxy proxy_http ssl headers rewrite 2>/dev/null || true
+    echo ">> Configuring Apache as reverse proxy"
+    sudo tee /etc/apache2/sites-available/bench-proxy.conf > /dev/null <<APEOF
+Listen ${BENCH_PROXY_PORT}
+<VirtualHost *:${BENCH_PROXY_PORT}>
+    SSLEngine on
+    SSLCertificateFile $cert_pem
+    SSLCertificateKeyFile $cert_key
+
+    ProxyPreserveHost On
+    ProxyPass / http://127.0.0.1:${BENCH_APP_PORT}/
+    ProxyPassReverse / http://127.0.0.1:${BENCH_APP_PORT}/
+
+    Header always set Timing-Allow-Origin "*"
+    Header always set Alt-Svc "h3=\":${BENCH_PROXY_PORT}\"; ma=86400"
+</VirtualHost>
+APEOF
+    sudo a2dissite 000-default 2>/dev/null || true
+    sudo a2ensite bench-proxy
+    sudo systemctl restart apache2
+}
+
+_deploy_proxy_iis() {
+    echo ">> IIS proxy deployment requires Windows — skipping on Linux"
+    echo ">> Use install.ps1 --benchmark-proxy iis on Windows Server"
+    return 1
+}
+
 # ── Benchmark server deployment ────────────────────────────────────────────────
 # Deploys a reference API server for language benchmarking on port 8443.
 # Used by the orchestrator via: curl | bash -s -- --benchmark-server <language>
@@ -8986,13 +9311,22 @@ deploy_benchmark_server() {
     local CERT_PEM="$BENCH_DIR/cert.pem"
     local RELEASE_BASE="https://github.com/irlm/networker-tester/releases/latest/download"
 
-    echo ">> Deploying benchmark server: $lang"
+    # Application mode: when --benchmark-proxy is set, bind plain HTTP on 8080
+    local BENCH_PORT=8443
+    local BENCH_USE_TLS=1
+    if [[ -n "$BENCHMARK_PROXY" ]]; then
+        BENCH_PORT=8080
+        BENCH_USE_TLS=0
+        echo ">> Deploying benchmark server: $lang (application mode: localhost:$BENCH_PORT, no TLS)"
+    else
+        echo ">> Deploying benchmark server: $lang (full-stack mode: port $BENCH_PORT, TLS)"
+    fi
 
     # ── Common setup: directory, TLS certs, clone repo ────────────────────
     sudo mkdir -p "$BENCH_DIR" /tmp/nginx_uploads
     sudo chown "$(whoami):$(whoami)" "$BENCH_DIR"
 
-    if [ ! -f "$CERT_PEM" ]; then
+    if [ "$BENCH_USE_TLS" = "1" ] && [ ! -f "$CERT_PEM" ]; then
         echo ">> Generating self-signed TLS certificate"
         openssl req -x509 -newkey rsa:2048 -keyout "$CERT_KEY" \
             -out "$CERT_PEM" -days 365 -nodes -subj '/CN=bench' 2>/dev/null
@@ -9009,8 +9343,8 @@ deploy_benchmark_server() {
 
     local API_DIR="$REPO_DIR/benchmarks/reference-apis"
 
-    # ── Kill any existing server on port 8443 ─────────────────────────────
-    sudo lsof -ti :8443 | xargs sudo kill -9 2>/dev/null || true
+    # ── Kill any existing server on the target port ────────────────────────
+    sudo lsof -ti :${BENCH_PORT} | xargs sudo kill -9 2>/dev/null || true
     sleep 1
 
     # ── Language-specific deployment ──────────────────────────────────────
@@ -9223,12 +9557,18 @@ deploy_benchmark_server() {
     esac
 
     # ── Health check ──────────────────────────────────────────────────────
-    echo ">> Waiting for health check on port 8443..."
+    local health_url
+    if [ "$BENCH_USE_TLS" = "1" ]; then
+        health_url="https://localhost:${BENCH_PORT}/health"
+    else
+        health_url="http://localhost:${BENCH_PORT}/health"
+    fi
+    echo ">> Waiting for health check on port $BENCH_PORT..."
     local max_wait=60
     local waited=0
     while [ $waited -lt $max_wait ]; do
-        if curl -sk --max-time 2 https://localhost:8443/health 2>/dev/null | grep -q '"status"'; then
-            echo ">> $lang server healthy on port 8443"
+        if curl -sk --max-time 2 "$health_url" 2>/dev/null | grep -q '"status"'; then
+            echo ">> $lang server healthy on port $BENCH_PORT"
             echo ">> Benchmark server deployment complete: $lang"
             return 0
         fi
@@ -9244,9 +9584,20 @@ main() {
     parse_args "$@"
     discover_system
 
+    # Proxy swap mode: stop current proxy, start new one, then exit
+    if [[ -n "$BENCHMARK_PROXY_SWAP" ]]; then
+        stop_benchmark_proxy
+        deploy_benchmark_proxy "$BENCHMARK_PROXY_SWAP"
+        return $?
+    fi
+
     # Benchmark server mode: deploy a reference API server, then exit
     if [[ -n "$BENCHMARK_SERVER_LANG" ]]; then
         deploy_benchmark_server "$BENCHMARK_SERVER_LANG"
+        # If a proxy was also specified, deploy it after the language server
+        if [[ -n "$BENCHMARK_PROXY" ]]; then
+            deploy_benchmark_proxy "$BENCHMARK_PROXY"
+        fi
         return $?
     fi
 

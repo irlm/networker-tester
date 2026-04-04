@@ -32,10 +32,16 @@ pub struct CreateBenchmarkConfigRequest {
     pub methodology: Option<serde_json::Value>,
     #[serde(default)]
     pub auto_teardown: Option<bool>,
+    #[serde(default = "default_benchmark_type")]
+    pub benchmark_type: String,
 }
 
 fn default_max_duration() -> i32 {
     14400
+}
+
+fn default_benchmark_type() -> String {
+    "fullstack".to_string()
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -49,10 +55,18 @@ pub struct TestbedInput {
     pub vm_size: Option<String>,
     pub existing_vm_ip: Option<String>,
     pub os: Option<String>,
+    #[serde(default)]
+    pub proxies: Vec<String>,
+    #[serde(default = "default_tester_os")]
+    pub tester_os: String,
 }
 
 fn default_topology() -> String {
     "loopback".to_string()
+}
+
+fn default_tester_os() -> String {
+    "server".to_string()
 }
 
 #[derive(Debug, Serialize)]
@@ -132,9 +146,68 @@ async fn create_config(
         return Err(StatusCode::BAD_REQUEST);
     }
 
+    // Validate benchmark_type
+    if !["fullstack", "application"].contains(&payload.benchmark_type.as_str()) {
+        tracing::warn!(benchmark_type = %payload.benchmark_type, "Invalid benchmark type");
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    // For application mode, each testbed must have at least one proxy
+    if payload.benchmark_type == "application" {
+        for testbed in &payload.testbeds {
+            if testbed.proxies.is_empty() {
+                tracing::warn!("Application benchmark testbed missing proxies");
+                return Err(StatusCode::BAD_REQUEST);
+            }
+        }
+    }
+
+    // Validate proxy names
+    const VALID_PROXIES: &[&str] = &["nginx", "iis", "caddy", "traefik", "haproxy", "apache"];
+    for testbed in &payload.testbeds {
+        for proxy in &testbed.proxies {
+            if !VALID_PROXIES.contains(&proxy.as_str()) {
+                tracing::warn!(proxy = %proxy, "Invalid proxy name");
+                return Err(StatusCode::BAD_REQUEST);
+            }
+        }
+    }
+
+    // Validate tester_os
+    const VALID_TESTER_OS: &[&str] = &["server", "desktop-linux", "desktop-windows"];
+    for testbed in &payload.testbeds {
+        if !VALID_TESTER_OS.contains(&testbed.tester_os.as_str()) {
+            tracing::warn!(tester_os = %testbed.tester_os, "Invalid tester OS");
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+
+    // Validate cloud provider
+    const VALID_CLOUDS: &[&str] = &["azure", "aws", "gcp"];
+    for testbed in &payload.testbeds {
+        if !VALID_CLOUDS.contains(&testbed.cloud.as_str()) {
+            tracing::warn!(cloud = %testbed.cloud, "Invalid cloud provider");
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+
+    // Validate region (alphanumeric + hyphens only)
+    for testbed in &payload.testbeds {
+        if testbed.region.is_empty()
+            || !testbed
+                .region
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        {
+            tracing::warn!(region = %testbed.region, "Invalid region format");
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+
     // Build config_json from top-level fields if not provided directly
     let config_json = payload.config_json.unwrap_or_else(|| {
         serde_json::json!({
+            "benchmark_type": payload.benchmark_type,
             "languages": payload.languages,
             "methodology": payload.methodology,
             "auto_teardown": payload.auto_teardown.unwrap_or(true),
@@ -146,6 +219,8 @@ async fn create_config(
                 "languages": t.languages,
                 "existing_vm_ip": t.existing_vm_ip,
                 "os": t.os,
+                "proxies": t.proxies,
+                "tester_os": t.tester_os,
             })).collect::<Vec<_>>(),
         })
     });
@@ -164,6 +239,7 @@ async fn create_config(
         Some(&user.user_id),
         payload.max_duration_secs,
         payload.baseline_run_id.as_ref(),
+        &payload.benchmark_type,
     )
     .await
     .map_err(|e| {
@@ -173,6 +249,7 @@ async fn create_config(
 
     let mut testbed_ids = Vec::new();
     for testbed in &payload.testbeds {
+        let proxies_json = serde_json::to_value(&testbed.proxies).unwrap_or_default();
         let testbed_id = crate::db::benchmark_testbeds::create(
             &client,
             &config_id,
@@ -182,6 +259,8 @@ async fn create_config(
             &testbed.languages,
             testbed.vm_size.as_deref(),
             testbed.os.as_deref().unwrap_or("linux"),
+            &proxies_json,
+            &testbed.tester_os,
         )
         .await
         .map_err(|e| {

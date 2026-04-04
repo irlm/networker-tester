@@ -41,7 +41,8 @@ export function Sidebar({ connectionDot }: SidebarProps) {
   ] : [];
 
   const benchItems: NavItem[] = pid ? [
-    { path: `/projects/${pid}/benchmarks`, label: 'Benchmarks', icon: '\u25A6' },
+    { path: `/projects/${pid}/benchmarks`, label: 'Full Stack', icon: '\u25A6' },
+    { path: `/projects/${pid}/app-benchmark-wizard`, label: 'Application', icon: '\u25A7' },
     { path: '/leaderboard', label: 'Leaderboard', icon: '\u2261' },
     ...(isOperator ? [{ path: `/projects/${pid}/benchmark-catalog`, label: 'VM Catalog', icon: '\u2395' }] : []),
     { path: `/projects/${pid}/benchmark-regressions`, label: 'Regressions', icon: '\u26A0' },

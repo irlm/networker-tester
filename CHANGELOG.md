@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.18.0] - 2026-04-03
+
+### Added
+- **Application Benchmark Mode**: new benchmark type that places reverse proxies in front of language servers and uses Chrome as the client to measure real-world API performance
+- Application Benchmark wizard in dashboard with proxy multi-select per testbed, tester OS selector, and 6 templates (Linux API Stack, Windows API Stack, Proxy Comparison, Validation Run, Low Noise, Custom)
+- Reverse proxy deploy functions in install.sh: nginx (HTTP/3), Caddy, Traefik, HAProxy, Apache
+- `--benchmark-proxy` and `--benchmark-proxy-swap` flags in install.sh for proxy deployment and hot-swapping
+- Chrome test harness: Puppeteer-based runner with determinism flags, HTTP version forcing (h1/h2/h3), warm/cold connection modes, CDP protocol validation
+- Test page fires 10 concurrent API calls per cycle, collects Resource Timing + Server-Timing decomposition (app/proxy/network)
+- Orchestrator application execution loop: proxy x language matrix with isolation protocol between swaps
+- V022 migration: `benchmark_type`, `proxies`, `tester_os` columns on benchmark tables
+- API validation for proxy names (nginx, iis, caddy, traefik, haproxy, apache) and tester OS (server, desktop-linux, desktop-windows)
+- Golden run validation invariants (positive + negative controls) for measurement correctness
+- Sidebar restructured: Benchmarks section with Full Stack and Application sub-items
+
+---
+
 ## [0.17.2] - 2026-04-03
 
 ### Added

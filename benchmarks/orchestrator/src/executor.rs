@@ -79,6 +79,236 @@ async fn stop_existing_server(vm: &VmInfo) {
     .await;
 }
 
+/// Deploy a reverse proxy on a VM. Uses install.sh --benchmark-proxy-swap.
+/// Validate a name is safe for shell interpolation (alphanumeric + dash/underscore/dot).
+fn validate_shell_safe(name: &str, label: &str) -> Result<()> {
+    anyhow::ensure!(
+        !name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.'),
+        "{label} name {name:?} contains unsafe characters for shell interpolation"
+    );
+    Ok(())
+}
+
+async fn deploy_proxy(vm: &VmInfo, proxy: &str) -> Result<()> {
+    validate_shell_safe(proxy, "proxy")?;
+    tracing::info!("Deploying proxy {} on {}", proxy, vm.ip);
+    let cmd = format!(
+        "curl -fsSL https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh | sudo bash -s -- --benchmark-proxy-swap {}",
+        proxy
+    );
+    ssh::ssh_exec(&vm.ip, &cmd)
+        .await
+        .with_context(|| format!("Failed to deploy proxy {proxy} on {}", vm.ip))?;
+
+    // Health check through proxy
+    for i in 0..30 {
+        if let Ok(out) = ssh::ssh_exec(
+            &vm.ip,
+            "curl -sk --max-time 2 https://localhost:8443/health 2>/dev/null",
+        )
+        .await
+        {
+            if out.contains("ok") || out.contains("status") {
+                tracing::info!("Proxy {} healthy on {}", proxy, vm.ip);
+                return Ok(());
+            }
+        }
+        if i < 29 {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+    }
+    anyhow::bail!(
+        "Proxy {} failed health check after 60s on {}",
+        proxy,
+        vm.ip
+    )
+}
+
+/// Stop the current proxy and flush connections (isolation protocol).
+async fn stop_proxy(vm: &VmInfo) {
+    tracing::info!("Stopping proxy on {}", vm.ip);
+    let _ = ssh::ssh_exec(
+        &vm.ip,
+        "sudo systemctl stop nginx caddy traefik haproxy apache2 httpd 2>/dev/null; sudo fuser -k 8443/tcp 2>/dev/null; sleep 2",
+    )
+    .await;
+}
+
+/// Deploy a language server in application mode (localhost:8080, no TLS).
+async fn deploy_app_language(vm: &VmInfo, language: &str, proxy: &str) -> Result<()> {
+    validate_shell_safe(language, "language")?;
+    validate_shell_safe(proxy, "proxy")?;
+    tracing::info!(
+        "Deploying {} in application mode on {}",
+        language,
+        vm.ip
+    );
+    let cmd = format!(
+        "curl -fsSL https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh | sudo bash -s -- --benchmark-server {} --benchmark-proxy {}",
+        language, proxy
+    );
+    ssh::ssh_exec(&vm.ip, &cmd)
+        .await
+        .with_context(|| format!("Failed to deploy {language} in application mode on {}", vm.ip))?;
+    Ok(())
+}
+
+/// Stop the language server on port 8080.
+async fn stop_app_language(vm: &VmInfo) {
+    let _ = ssh::ssh_exec(
+        &vm.ip,
+        "sudo lsof -ti :8080 | xargs sudo kill -9 2>/dev/null || true",
+    )
+    .await;
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+}
+
+/// Deploy the Chrome test harness to the VM.
+async fn deploy_chrome_harness(vm: &VmInfo) -> Result<()> {
+    tracing::info!("Deploying Chrome test harness on {}", vm.ip);
+    let setup_cmd = concat!(
+        "sudo mkdir -p /opt/bench/chrome-harness && ",
+        "sudo chown $(whoami):$(whoami) /opt/bench/chrome-harness && ",
+        // Install Chrome if missing
+        "if ! command -v google-chrome >/dev/null 2>&1 && ! command -v chromium-browser >/dev/null 2>&1; then ",
+        "  curl -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -o /tmp/chrome.deb < /dev/null && ",
+        "  sudo apt-get install -y -qq /tmp/chrome.deb < /dev/null || sudo apt-get install -y -qq chromium-browser < /dev/null; ",
+        "  rm -f /tmp/chrome.deb; ",
+        "fi && ",
+        // Install Node.js if missing
+        "if ! command -v node >/dev/null 2>&1; then ",
+        "  curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - < /dev/null && ",
+        "  sudo apt-get install -y -qq nodejs < /dev/null; ",
+        "fi",
+    );
+    ssh::ssh_exec(&vm.ip, setup_cmd)
+        .await
+        .with_context(|| format!("Failed to install Chrome/Node.js on {}", vm.ip))?;
+
+    // Deploy harness files via the repo (should already be cloned by deploy_benchmark_server)
+    let deploy_cmd = concat!(
+        "if [ -d /tmp/nwk-repo/benchmarks/chrome-harness ]; then ",
+        "  cp /tmp/nwk-repo/benchmarks/chrome-harness/package.json /opt/bench/chrome-harness/ && ",
+        "  cp /tmp/nwk-repo/benchmarks/chrome-harness/runner.js /opt/bench/chrome-harness/ && ",
+        "  cp /tmp/nwk-repo/benchmarks/chrome-harness/test-page.html /opt/bench/chrome-harness/ && ",
+        "  cd /opt/bench/chrome-harness && npm install --production --silent 2>/dev/null < /dev/null; ",
+        "fi",
+    );
+    ssh::ssh_exec(&vm.ip, deploy_cmd)
+        .await
+        .with_context(|| format!("Failed to deploy Chrome harness files on {}", vm.ip))?;
+
+    // Verify harness files were actually deployed
+    ssh::ssh_exec(
+        &vm.ip,
+        "test -f /opt/bench/chrome-harness/runner.js && test -f /opt/bench/chrome-harness/package.json",
+    )
+    .await
+    .context("Chrome harness files not found after deploy — repo may not have been cloned")?;
+
+    tracing::info!("Chrome harness deployed on {}", vm.ip);
+    Ok(())
+}
+
+/// Run the Chrome-based benchmark for a proxy+language combination.
+async fn run_chrome_benchmark(
+    vm: &VmInfo,
+    proxy: &str,
+    language: &str,
+    http_version: &str,
+    connection_mode: &str,
+    methodology: &MethodologyConfig,
+) -> Result<serde_json::Value> {
+    let cmd = format!(
+        "cd /opt/bench/chrome-harness && node runner.js \
+         --target https://localhost:8443 \
+         --warmup {} \
+         --measured {} \
+         --concurrency 10 \
+         --http-version {} \
+         --connection-mode {} \
+         --timeout {}",
+        methodology.warmup_runs,
+        methodology.min_measured,
+        http_version,
+        connection_mode,
+        methodology.timeout_secs,
+    );
+
+    tracing::info!(
+        "Running Chrome benchmark: {} behind {}, http={}, conn={}",
+        language, proxy, http_version, connection_mode,
+    );
+
+    let output = ssh::ssh_exec(&vm.ip, &cmd)
+        .await
+        .with_context(|| {
+            format!(
+                "Chrome benchmark failed for {language} behind {proxy} (http={http_version}, conn={connection_mode})"
+            )
+        })?;
+
+    // Parse JSON output
+    let result: serde_json::Value = serde_json::from_str(&output).with_context(|| {
+        format!(
+            "Failed to parse Chrome benchmark output for {language} behind {proxy}: {}",
+            &output[..output.len().min(200)]
+        )
+    })?;
+
+    // Check for error in results
+    if result.get("error").is_some() {
+        anyhow::bail!(
+            "Chrome benchmark returned error: {}",
+            result["error"].as_str().unwrap_or("unknown")
+        );
+    }
+
+    Ok(result)
+}
+
+/// In application mode, HTTP/3 support depends on the proxy, not the language.
+fn proxy_supports_http3(proxy: &str) -> bool {
+    matches!(proxy, "nginx" | "caddy" | "traefik" | "iis")
+}
+
+/// Convert methodology modes to HTTP version labels for Chrome harness.
+/// Maps http1→h1, http2→h2, http3→h3, filters by proxy capability.
+fn effective_http_versions_for_proxy(proxy: &str, modes: &[String]) -> Vec<String> {
+    modes
+        .iter()
+        .filter_map(|m| match m.as_str() {
+            "http1" => Some("h1".to_string()),
+            "http2" => Some("h2".to_string()),
+            "http3" if proxy_supports_http3(proxy) => Some("h3".to_string()),
+            "http3" => {
+                tracing::info!("Skipping http3 for proxy {} (no QUIC support)", proxy);
+                None
+            }
+            _ => None, // skip non-HTTP modes like download/upload
+        })
+        .collect()
+}
+
+fn effective_modes_for_proxy(proxy: &str, modes: &[String]) -> String {
+    if proxy_supports_http3(proxy) {
+        modes.join(",")
+    } else {
+        let filtered: Vec<&str> = modes
+            .iter()
+            .map(|s| s.as_str())
+            .filter(|m| *m != "http3")
+            .collect();
+        if filtered.len() < modes.len() {
+            tracing::info!("Skipping http3 for proxy {} (no QUIC support)", proxy);
+        }
+        filtered.join(",")
+    }
+}
+
 /// Outcome of a single testbed execution.
 #[allow(dead_code)]
 struct TestbedOutcome {
@@ -233,7 +463,15 @@ async fn execute_testbed(
     )
     .await;
 
-    // Step 2: Iterate over languages.
+    // Branch: application mode uses proxy × language matrix.
+    if config.benchmark_type == "application" {
+        return execute_testbed_application(
+            testbed, config, callback, cancel_rx, bench_dir, &vm, provisioned,
+        )
+        .await;
+    }
+
+    // Step 2: Iterate over languages (fullstack mode).
     for (lang_index, language) in testbed.languages.iter().enumerate() {
         let lang_index_u32 = lang_index as u32;
 
@@ -467,9 +705,312 @@ async fn execute_testbed(
     })
 }
 
+/// Execute application benchmark: proxy × language matrix.
+async fn execute_testbed_application(
+    testbed: &TestbedConfig,
+    config: &DashboardBenchmarkConfig,
+    callback: &Arc<CallbackClient>,
+    cancel_rx: &watch::Receiver<bool>,
+    _bench_dir: &Path,
+    vm: &VmInfo,
+    provisioned: bool,
+) -> Result<TestbedOutcome> {
+    let methodology = &config.methodology;
+    let mut languages_completed = 0u32;
+    let mut languages_failed = 0u32;
+    let total_combinations = (testbed.proxies.len() * testbed.languages.len()) as u32;
+    let mut combination_index = 0u32;
+
+    // Wall-clock deadline: timeout_secs per combination, capped by max_measured * timeout_secs
+    let deadline = Instant::now()
+        + std::time::Duration::from_secs(
+            methodology.timeout_secs as u64 * total_combinations.max(1) as u64,
+        );
+
+    // Deploy Chrome test harness on the VM
+    log_callback(
+        callback,
+        &testbed.testbed_id,
+        vec!["Installing Chrome test harness...".to_string()],
+    )
+    .await;
+
+    if let Err(e) = deploy_chrome_harness(vm).await {
+        tracing::error!(
+            "Chrome harness deploy failed on testbed {}: {:#}",
+            testbed.testbed_id,
+            e
+        );
+        log_callback(
+            callback,
+            &testbed.testbed_id,
+            vec![format!("Chrome harness deploy failed: {e:#}")],
+        )
+        .await;
+        return Ok(TestbedOutcome {
+            testbed_id: testbed.testbed_id.clone(),
+            languages_completed: 0,
+            languages_failed: total_combinations,
+            provisioned_vm: provisioned,
+        });
+    }
+
+    for proxy in &testbed.proxies {
+        // Check cancellation or deadline
+        if *cancel_rx.borrow() {
+            break;
+        }
+        if Instant::now() > deadline {
+            tracing::warn!(
+                "Application benchmark exceeded deadline on testbed {}, stopping",
+                testbed.testbed_id
+            );
+            log_callback(
+                callback,
+                &testbed.testbed_id,
+                vec!["Benchmark exceeded wall-clock deadline, stopping".to_string()],
+            )
+            .await;
+            break;
+        }
+
+        log_callback(
+            callback,
+            &testbed.testbed_id,
+            vec![format!("Deploying proxy: {}", proxy)],
+        )
+        .await;
+
+        // Deploy proxy
+        if let Err(e) = deploy_proxy(vm, proxy).await {
+            tracing::error!(
+                "Proxy deploy failed for {} on testbed {}: {:#}",
+                proxy,
+                testbed.testbed_id,
+                e
+            );
+            log_callback(
+                callback,
+                &testbed.testbed_id,
+                vec![format!("Proxy {} deploy failed: {e:#}", proxy)],
+            )
+            .await;
+            languages_failed += testbed.languages.len() as u32;
+            continue;
+        }
+
+        for language in &testbed.languages {
+            combination_index += 1;
+
+            if *cancel_rx.borrow() {
+                break;
+            }
+
+            tracing::info!(
+                "Application benchmark {}/{}: {} behind {} on testbed {}",
+                combination_index,
+                total_combinations,
+                language,
+                proxy,
+                testbed.testbed_id,
+            );
+
+            status_callback(
+                callback,
+                &testbed.testbed_id,
+                "running",
+                language,
+                combination_index,
+                total_combinations,
+                &format!(
+                    "{} behind {} ({}/{})",
+                    language, proxy, combination_index, total_combinations
+                ),
+            )
+            .await;
+
+            // Deploy language in application mode
+            log_callback(
+                callback,
+                &testbed.testbed_id,
+                vec![format!(
+                    "Deploying {} (application mode, behind {})...",
+                    language, proxy
+                )],
+            )
+            .await;
+
+            if let Err(e) = deploy_app_language(vm, language, proxy).await {
+                tracing::error!(
+                    "App deploy failed for {} behind {}: {:#}",
+                    language,
+                    proxy,
+                    e
+                );
+                log_callback(
+                    callback,
+                    &testbed.testbed_id,
+                    vec![format!(
+                        "Deploy failed for {} behind {}: {e:#}",
+                        language, proxy
+                    )],
+                )
+                .await;
+                languages_failed += 1;
+                continue;
+            }
+
+            // Run Chrome benchmark for each HTTP version the proxy supports
+            let http_versions = effective_http_versions_for_proxy(proxy, &methodology.modes);
+
+            log_callback(
+                callback,
+                &testbed.testbed_id,
+                vec![format!(
+                    "Running Chrome benchmark: {} behind {}, versions={:?}",
+                    language, proxy, http_versions,
+                )],
+            )
+            .await;
+
+            let mut lang_ok = true;
+            for http_ver in &http_versions {
+                // Run warm connection phase
+                match run_chrome_benchmark(vm, proxy, language, http_ver, "warm", methodology).await
+                {
+                    Ok(result) => {
+                        tracing::info!(
+                            "{} behind {} ({}:warm) complete",
+                            language,
+                            proxy,
+                            http_ver
+                        );
+
+                        // Wrap result with metadata for callback
+                        let artifact = serde_json::json!({
+                            "proxy": proxy,
+                            "http_version": http_ver,
+                            "connection_mode": "warm",
+                            "chrome_results": result,
+                        });
+
+                        if let Err(e) = callback
+                            .result(&testbed.testbed_id, language, artifact)
+                            .await
+                        {
+                            tracing::error!(
+                                "Failed to report result for {} behind {} ({}:warm): {e:#}",
+                                language,
+                                proxy,
+                                http_ver
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "{} behind {} ({}:warm) failed: {:#}",
+                            language,
+                            proxy,
+                            http_ver,
+                            e
+                        );
+                        log_callback(
+                            callback,
+                            &testbed.testbed_id,
+                            vec![format!(
+                                "{} behind {} ({}:warm) failed: {e:#}",
+                                language, proxy, http_ver
+                            )],
+                        )
+                        .await;
+                        lang_ok = false;
+                    }
+                }
+            }
+
+            if lang_ok {
+                languages_completed += 1;
+            } else {
+                languages_failed += 1;
+            }
+
+            // Stop language server before next language
+            stop_app_language(vm).await;
+        }
+
+        // Stop proxy before swap (isolation protocol)
+        stop_proxy(vm).await;
+    }
+
+    // Report testbed complete.
+    let testbed_status = if languages_failed == 0 && !*cancel_rx.borrow() {
+        "completed"
+    } else if *cancel_rx.borrow() {
+        "cancelled"
+    } else {
+        "completed_with_errors"
+    };
+
+    status_callback(
+        callback,
+        &testbed.testbed_id,
+        testbed_status,
+        "",
+        total_combinations,
+        total_combinations,
+        &format!(
+            "Testbed complete: {languages_completed} succeeded, {languages_failed} failed"
+        ),
+    )
+    .await;
+
+    Ok(TestbedOutcome {
+        testbed_id: testbed.testbed_id.clone(),
+        languages_completed,
+        languages_failed,
+        provisioned_vm: provisioned,
+    })
+}
+
+/// Validate an IPv4 address string: must be 4 octets 0-255, no shell metacharacters.
+/// For cloud-provisioned VMs, blocks link-local (169.254.x.x) and localhost (127.x.x.x).
+fn validate_ip(ip: &str, is_cloud: bool) -> Result<()> {
+    // Reject any shell metacharacters
+    if ip.chars().any(|c| !c.is_ascii_digit() && c != '.') {
+        anyhow::bail!("IP address contains invalid characters: {ip}");
+    }
+    let octets: Vec<&str> = ip.split('.').collect();
+    if octets.len() != 4 {
+        anyhow::bail!("IP address must have exactly 4 octets: {ip}");
+    }
+    for octet in &octets {
+        let val: u16 = octet
+            .parse()
+            .map_err(|_| anyhow::anyhow!("Invalid octet in IP address: {ip}"))?;
+        if val > 255 {
+            anyhow::bail!("Octet out of range in IP address: {ip}");
+        }
+    }
+    if is_cloud {
+        let first: u8 = octets[0].parse().unwrap();
+        let second: u8 = octets[1].parse().unwrap();
+        if first == 127 {
+            anyhow::bail!("Localhost address not allowed for cloud VMs: {ip}");
+        }
+        if first == 169 && second == 254 {
+            anyhow::bail!("Link-local address not allowed for cloud VMs: {ip}");
+        }
+    }
+    Ok(())
+}
+
 /// Resolve the VM for a testbed: use existing IP or provision a new one.
 async fn resolve_vm(testbed: &TestbedConfig) -> Result<(VmInfo, bool)> {
     if let Some(ip) = &testbed.existing_vm_ip {
+        let is_cloud = ["azure", "aws", "gcp"]
+            .contains(&testbed.cloud.to_lowercase().as_str());
+        validate_ip(ip, is_cloud)
+            .with_context(|| format!("Invalid existing_vm_ip for testbed {}", testbed.testbed_id))?;
         tracing::info!(
             "Using existing VM at {} for testbed {}",
             ip,

@@ -556,6 +556,19 @@ CREATE INDEX IF NOT EXISTS ix_brp_config
     ON benchmark_request_progress (config_id);
 "#;
 
+/// V022 migration: Application benchmark mode — add benchmark_type, proxies, tester_os columns.
+const V022_APPLICATION_BENCHMARK: &str = "
+    ALTER TABLE benchmark_config
+        ADD COLUMN IF NOT EXISTS benchmark_type TEXT NOT NULL DEFAULT 'fullstack';
+
+    ALTER TABLE benchmark_testbed
+        ADD COLUMN IF NOT EXISTS proxies JSONB NOT NULL DEFAULT '[]'::jsonb,
+        ADD COLUMN IF NOT EXISTS tester_os TEXT NOT NULL DEFAULT 'server';
+
+    CREATE INDEX IF NOT EXISTS ix_benchmark_config_type
+        ON benchmark_config (benchmark_type);
+";
+
 /// Run pending migrations.
 pub async fn run(client: &Client) -> anyhow::Result<()> {
     // Ensure migration tracking table exists
@@ -979,6 +992,23 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
             )
             .await?;
         tracing::info!("V021 migration complete");
+    }
+
+    // V022: Application benchmark mode — add benchmark_type, proxies, tester_os
+    let row = client
+        .query_opt("SELECT version FROM _migrations WHERE version = 22", &[])
+        .await?;
+
+    if row.is_none() {
+        tracing::info!("Applying V022 application benchmark migration...");
+        client.batch_execute(V022_APPLICATION_BENCHMARK).await?;
+        client
+            .execute(
+                "INSERT INTO _migrations (version) VALUES (22) ON CONFLICT DO NOTHING",
+                &[],
+            )
+            .await?;
+        tracing::info!("V022 migration complete");
     }
 
     Ok(())

@@ -263,6 +263,7 @@ async fn clone_and_queue_benchmark(
         template.created_by.as_ref(),
         template.max_duration_secs,
         template.baseline_run_id.as_ref(),
+        &template.benchmark_type,
     )
     .await?;
 
@@ -279,6 +280,8 @@ async fn clone_and_queue_benchmark(
             &testbed.languages,
             testbed.vm_size.as_deref(),
             testbed.os.as_str(),
+            &testbed.proxies,
+            &testbed.tester_os,
         )
         .await?;
     }

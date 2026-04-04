@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html>
+<head><title>Application Benchmark</title></head>
+<body>
+<pre id="status">Initializing...</pre>
+<script>
+// Parameters from URL query string
+const params = new URLSearchParams(location.search);
+const TARGET = params.get('target') || 'https://localhost:8443';
+const WARMUP = parseInt(params.get('warmup') || '5', 10);
+const MEASURED = parseInt(params.get('measured') || '10', 10);
+const CONCURRENCY = parseInt(params.get('concurrency') || '10', 10);
+
+// Benchmark endpoints (Application mode workload)
+const ENDPOINTS = [
+  () => ({ url: `${TARGET}/api/users?page=${rand(1,50)}&sort=${pick(['name','email','created'])}&order=${pick(['asc','desc'])}&_t=${Date.now()}`, method: 'GET' }),
+  () => ({ url: `${TARGET}/api/users?page=${rand(1,50)}&sort=${pick(['name','email','created'])}&order=${pick(['asc','desc'])}&_t=${Date.now()}`, method: 'GET' }),
+  () => ({ url: `${TARGET}/api/transform?_t=${Date.now()}`, method: 'POST', body: JSON.stringify({ seed: rand(1,99999), fields: ['a','b','c'], values: [rand(1,1000), rand(1,1000)] }) }),
+  () => ({ url: `${TARGET}/api/transform?_t=${Date.now()}`, method: 'POST', body: JSON.stringify({ seed: rand(1,99999), fields: ['x','y','z'], values: [rand(1,1000), rand(1,1000)] }) }),
+  () => ({ url: `${TARGET}/api/aggregate?range=${rand(1,100)},${rand(101,500)}&_t=${Date.now()}`, method: 'GET' }),
+  () => ({ url: `${TARGET}/api/aggregate?range=${rand(1,100)},${rand(101,500)}&_t=${Date.now()}`, method: 'GET' }),
+  () => ({ url: `${TARGET}/api/search?q=${pick(['test','bench','perf','data','user'])}&limit=${rand(5,50)}&_t=${Date.now()}`, method: 'GET' }),
+  () => ({ url: `${TARGET}/api/upload/process?_t=${Date.now()}`, method: 'POST', body: new Uint8Array(rand(256, 4096)) }),
+  () => ({ url: `${TARGET}/api/delayed?ms=${rand(5,20)}&work=light&_t=${Date.now()}`, method: 'GET' }),
+  () => ({ url: `${TARGET}/api/delayed?ms=${rand(5,20)}&work=light&_t=${Date.now()}`, method: 'GET' }),
+];
+
+function rand(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+
+// Collect per-request timing from Resource Timing API + Server-Timing
+function collectRequestTiming(entry) {
+  const serverTimings = {};
+  if (entry.serverTiming) {
+    for (const st of entry.serverTiming) {
+      serverTimings[st.name] = st.duration;
+    }
+  }
+  return {
+    url: entry.name,
+    total_ms: entry.responseEnd - entry.startTime,
+    dns_ms: entry.domainLookupEnd - entry.domainLookupStart,
+    tcp_ms: entry.connectEnd - entry.connectStart,
+    tls_ms: entry.secureConnectionStart > 0 ? entry.connectEnd - entry.secureConnectionStart : 0,
+    ttfb_ms: entry.responseStart - entry.requestStart,
+    download_ms: entry.responseEnd - entry.responseStart,
+    queue_ms: entry.requestStart > 0 ? entry.requestStart - entry.fetchStart : 0,
+    protocol: entry.nextHopProtocol || 'unknown',
+    connection_new: entry.connectStart > 0,
+    // Server-Timing decomposition
+    app_ms: serverTimings['app'] || null,
+    proxy_total_ms: serverTimings['proxy_total'] || null,
+    upstream_ms: serverTimings['upstream'] || null,
+    // Status
+    ok: true,
+  };
+}
+
+async function runCycle() {
+  // Clear performance entries
+  performance.clearResourceTimings();
+
+  const selected = ENDPOINTS.slice(0, CONCURRENCY);
+  const cycleStart = performance.now();
+  const fetchPromises = selected.map(gen => {
+    const req = gen();
+    const opts = { method: req.method, mode: 'cors' };
+    if (req.body) {
+      opts.body = req.body;
+      if (typeof req.body === 'string') {
+        opts.headers = { 'Content-Type': 'application/json' };
+      }
+    }
+    return fetch(req.url, opts)
+      .then(r => ({ ok: r.ok, status: r.status }))
+      .catch(e => ({ ok: false, status: 0, error: e.message }));
+  });
+
+  const responses = await Promise.all(fetchPromises);
+  const cycleDuration = performance.now() - cycleStart;
+
+  // Wait briefly for Resource Timing entries to appear
+  await new Promise(r => setTimeout(r, 50));
+
+  // Collect Resource Timing entries
+  const entries = performance.getEntriesByType('resource')
+    .filter(e => e.name.startsWith(TARGET))
+    .map(collectRequestTiming);
+
+  // Mark failed requests
+  const errorCount = responses.filter(r => !r.ok).length;
+
+  return {
+    cycle_duration_ms: cycleDuration,
+    request_count: selected.length,
+    error_count: errorCount,
+    requests: entries,
+    throughput_rps: (selected.length / cycleDuration) * 1000,
+  };
+}
+
+async function runBenchmark() {
+  const status = document.getElementById('status');
+  const results = { warmup: [], measured: [], meta: {} };
+
+  results.meta = {
+    target: TARGET,
+    warmup_cycles: WARMUP,
+    measured_cycles: MEASURED,
+    concurrency: CONCURRENCY,
+    user_agent: navigator.userAgent,
+    started_at: new Date().toISOString(),
+  };
+
+  // Warmup
+  for (let i = 0; i < WARMUP; i++) {
+    status.textContent = `Warmup ${i+1}/${WARMUP}...`;
+    const cycle = await runCycle();
+    results.warmup.push(cycle);
+    await new Promise(r => setTimeout(r, 100));
+  }
+
+  // Measured
+  for (let i = 0; i < MEASURED; i++) {
+    status.textContent = `Measured ${i+1}/${MEASURED}...`;
+    const cycle = await runCycle();
+    results.measured.push(cycle);
+    await new Promise(r => setTimeout(r, 100));
+  }
+
+  results.meta.finished_at = new Date().toISOString();
+
+  // Compute summary stats from measured cycles
+  const durations = results.measured.map(c => c.cycle_duration_ms);
+  durations.sort((a, b) => a - b);
+  results.summary = {
+    cycle_count: durations.length,
+    total_requests: results.measured.reduce((s, c) => s + c.request_count, 0),
+    total_errors: results.measured.reduce((s, c) => s + c.error_count, 0),
+    cycle_duration: {
+      mean: durations.reduce((s, v) => s + v, 0) / durations.length,
+      p50: durations[Math.floor(durations.length * 0.5)],
+      p95: durations[Math.floor(durations.length * 0.95)],
+      p99: durations[Math.floor(durations.length * 0.99)],
+      min: durations[0],
+      max: durations[durations.length - 1],
+    },
+    avg_throughput_rps: results.measured.reduce((s, c) => s + c.throughput_rps, 0) / results.measured.length,
+  };
+
+  // Aggregate per-request timing across measured cycles
+  const allRequests = results.measured.flatMap(c => c.requests);
+  if (allRequests.length > 0) {
+    const avg = (arr) => arr.reduce((s, v) => s + v, 0) / arr.length;
+    const pct = (arr, p) => { const s = [...arr].sort((a,b) => a-b); return s[Math.floor(s.length * p)] || 0; };
+    const totals = allRequests.map(r => r.total_ms);
+    const apps = allRequests.filter(r => r.app_ms != null).map(r => r.app_ms);
+    const proxyTotals = allRequests.filter(r => r.proxy_total_ms != null).map(r => r.proxy_total_ms);
+    const ttfbs = allRequests.map(r => r.ttfb_ms);
+
+    results.summary.request_timing = {
+      total: { mean: avg(totals), p50: pct(totals, 0.5), p95: pct(totals, 0.95) },
+      app: apps.length > 0 ? { mean: avg(apps), p50: pct(apps, 0.5), p95: pct(apps, 0.95) } : null,
+      proxy_total: proxyTotals.length > 0 ? { mean: avg(proxyTotals), p50: pct(proxyTotals, 0.5), p95: pct(proxyTotals, 0.95) } : null,
+      ttfb: { mean: avg(ttfbs), p50: pct(ttfbs, 0.5), p95: pct(ttfbs, 0.95) },
+    };
+
+    // Protocol distribution
+    const protocols = {};
+    for (const r of allRequests) {
+      protocols[r.protocol] = (protocols[r.protocol] || 0) + 1;
+    }
+    results.summary.protocols = protocols;
+  }
+
+  status.textContent = 'Done';
+  window.__benchResults = results;
+  return results;
+}
+
+runBenchmark().then(r => {
+  // Also write to DOM for --dump-dom fallback
+  document.getElementById('status').textContent = JSON.stringify(r);
+}).catch(e => {
+  document.getElementById('status').textContent = 'ERROR: ' + e.message;
+  window.__benchResults = { error: e.message };
+});
+</script>
+</body>
+</html>

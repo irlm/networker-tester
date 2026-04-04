@@ -50,6 +50,7 @@ const LeaderboardPage = lazyPage(() => import('./pages/LeaderboardPage'), 'Leade
 const BenchmarkCatalogPage = lazyPage(() => import('./pages/BenchmarkCatalogPage'), 'BenchmarkCatalogPage');
 const BenchmarkConfigResultsPage = lazyPage(() => import('./pages/BenchmarkConfigResultsPage'), 'BenchmarkConfigResultsPage');
 const BenchmarkRegressionsPage = lazyPage(() => import('./pages/BenchmarkRegressionsPage'), 'BenchmarkRegressionsPage');
+const AppBenchmarkWizardPage = lazyPage(() => import('./pages/AppBenchmarkWizardPage'), 'AppBenchmarkWizardPage');
 
 const statusColors: Record<ConnectionStatus, string> = {
   connected: 'bg-green-400',
@@ -153,6 +154,7 @@ function AuthenticatedApp() {
             <Route path="/projects/:projectId/runs/:runId" element={<RunDetailPage />} />
             <Route path="/projects/:projectId/benchmarks" element={<BenchmarksPage />} />
             <Route path="/projects/:projectId/benchmark-wizard" element={<BenchmarkWizardPage />} />
+            <Route path="/projects/:projectId/app-benchmark-wizard" element={<AppBenchmarkWizardPage />} />
             <Route path="/projects/:projectId/benchmark-progress/:configId" element={<BenchmarkProgressPage />} />
             <Route path="/projects/:projectId/benchmarks/compare" element={<BenchmarkComparePage />} />
             <Route path="/projects/:projectId/benchmarks/:runId" element={<BenchmarkDetailPage />} />
