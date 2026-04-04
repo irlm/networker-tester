@@ -80,13 +80,7 @@ async fn stop_existing_server(vm: &VmInfo) {
 }
 
 /// Deploy a reverse proxy on a VM. Uses install.sh --benchmark-proxy-swap.
-/// Generate a random API token for this test run (64 hex chars from OS randomness).
-fn generate_bench_token() -> String {
-    use rand::Rng;
-    let mut rng = rand::thread_rng();
-    let bytes: [u8; 32] = rng.gen();
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
+// Token generation moved to crate::token_manager
 
 /// Validate a name is safe for shell interpolation (alphanumeric + dash/underscore/dot).
 fn validate_shell_safe(name: &str, label: &str) -> Result<()> {
@@ -146,13 +140,9 @@ async fn stop_proxy(vm: &VmInfo) {
 }
 
 /// Deploy a language server in application mode (localhost:8080, no TLS).
-/// Sets BENCH_API_TOKEN env var on the VM so the server requires auth.
-async fn deploy_app_language(
-    vm: &VmInfo,
-    language: &str,
-    proxy: &str,
-    bench_token: &str,
-) -> Result<()> {
+/// Token is already on the VM at /opt/bench/.api-token (deployed via SCP).
+/// The language server reads the token from that file at startup.
+async fn deploy_app_language(vm: &VmInfo, language: &str, proxy: &str) -> Result<()> {
     validate_shell_safe(language, "language")?;
     validate_shell_safe(proxy, "proxy")?;
     tracing::info!(
@@ -160,9 +150,10 @@ async fn deploy_app_language(
         language,
         vm.ip
     );
+    // Server reads BENCH_API_TOKEN from /opt/bench/.api-token at startup
     let cmd = format!(
-        "export BENCH_API_TOKEN='{}' && curl -fsSL https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh | sudo -E bash -s -- --benchmark-server {} --benchmark-proxy {}",
-        bench_token, language, proxy
+        "export BENCH_API_TOKEN=$(cat /opt/bench/.api-token 2>/dev/null) && curl -fsSL https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh | sudo -E bash -s -- --benchmark-server {} --benchmark-proxy {}",
+        language, proxy
     );
     ssh::ssh_exec(&vm.ip, &cmd)
         .await
@@ -748,13 +739,41 @@ async fn execute_testbed_application(
             methodology.timeout_secs as u64 * total_combinations.max(1) as u64,
         );
 
-    // Generate a unique API token for this test run (rotated per testbed)
-    let bench_token = generate_bench_token();
+    // Generate a unique API token for this VM (isolated per testbed)
+    let bench_token = crate::token_manager::generate_token();
     tracing::info!(
         "Generated bench API token for testbed {} ({}...)",
         testbed.testbed_id,
         &bench_token[..8]
     );
+
+    // Store token in Key Vault (if configured) for audit trail + revocation
+    if let Err(e) = crate::token_manager::store_in_keyvault(
+        &config.config_id,
+        &testbed.testbed_id,
+        &bench_token,
+    )
+    .await
+    {
+        tracing::warn!("Key Vault store failed (non-fatal): {e:#}");
+    }
+
+    // Deploy token to VM via SCP (secure file, not command line)
+    if let Err(e) = crate::token_manager::deploy_to_vm(&vm.ip, &bench_token).await {
+        tracing::error!("Failed to deploy API token to VM: {e:#}");
+        log_callback(
+            callback,
+            &testbed.testbed_id,
+            vec![format!("Failed to deploy API token: {e:#}")],
+        )
+        .await;
+        return Ok(TestbedOutcome {
+            testbed_id: testbed.testbed_id.clone(),
+            languages_completed: 0,
+            languages_failed: total_combinations,
+            provisioned_vm: provisioned,
+        });
+    }
 
     // Deploy Chrome test harness on the VM
     log_callback(
@@ -869,7 +888,7 @@ async fn execute_testbed_application(
             )
             .await;
 
-            if let Err(e) = deploy_app_language(vm, language, proxy, &bench_token).await {
+            if let Err(e) = deploy_app_language(vm, language, proxy).await {
                 tracing::error!(
                     "App deploy failed for {} behind {}: {:#}",
                     language,
@@ -992,6 +1011,14 @@ async fn execute_testbed_application(
         ),
     )
     .await;
+
+    // Cleanup: delete token from VM and Key Vault
+    crate::token_manager::cleanup_vm(&vm.ip).await;
+    if let Err(e) =
+        crate::token_manager::cleanup_keyvault_vm(&config.config_id, &testbed.testbed_id).await
+    {
+        tracing::warn!("Key Vault cleanup failed (non-fatal): {e:#}");
+    }
 
     Ok(TestbedOutcome {
         testbed_id: testbed.testbed_id.clone(),
