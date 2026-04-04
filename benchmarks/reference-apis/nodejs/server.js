@@ -12,6 +12,7 @@ const zlib = require("node:zlib");
 // ---------------------------------------------------------------------------
 const CERT_DIR = process.env.BENCH_CERT_DIR || "/opt/bench";
 const PORT = parseInt(process.env.PORT || "8443", 10);
+const BENCH_API_TOKEN = process.env.BENCH_API_TOKEN || "";
 
 // ---------------------------------------------------------------------------
 // Structured stderr logger (LOG_LEVEL env var: error, warn, info, debug)
@@ -85,6 +86,18 @@ function jsonResponse(res, status, obj) {
     "content-length": Buffer.byteLength(body),
   });
   res.end(body);
+}
+
+// ---------------------------------------------------------------------------
+// Auth check: returns true if request is authorized, false if 401 was sent.
+// ---------------------------------------------------------------------------
+function checkAuth(urlPath, headers, respond401) {
+  if (!BENCH_API_TOKEN) return true;
+  if (urlPath === "/health") return true;
+  var auth = headers["authorization"] || headers["Authorization"] || "";
+  if (auth === "Bearer " + BENCH_API_TOKEN) return true;
+  respond401();
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -499,10 +512,6 @@ function handleApiSearch(parsedUrl, respond) {
 function handleApiUploadProcess(bodyBuf, respond) {
   const startHr = process.hrtime();
 
-  if (bodyBuf === null) {
-    return respond(413, { error: "body too large" }, startHr);
-  }
-
   const crcVal = crc32(bodyBuf);
   const sha = crypto.createHash("sha256").update(bodyBuf).digest("hex");
   const compressed = zlib.deflateSync(bodyBuf);
@@ -608,24 +617,13 @@ function handleApiValidate(parsedUrl, respond) {
 // Collect request body helper
 // ---------------------------------------------------------------------------
 
-var MAX_UPLOAD_PROCESS_BODY = 50 * 1024 * 1024; // 50 MiB
-
-function collectBody(readable, callback, maxBytes) {
+function collectBody(readable, callback) {
   const chunks = [];
-  var total = 0;
-  var aborted = false;
   readable.on("data", function (chunk) {
-    if (aborted) return;
-    total += chunk.length;
-    if (maxBytes && total > maxBytes) {
-      aborted = true;
-      callback(null, "body too large");
-      return;
-    }
     chunks.push(chunk);
   });
   readable.on("end", function () {
-    if (!aborted) callback(Buffer.concat(chunks));
+    callback(Buffer.concat(chunks));
   });
 }
 
@@ -634,6 +632,7 @@ function collectBody(readable, callback, maxBytes) {
 // ---------------------------------------------------------------------------
 
 function dispatchApi(method, urlPath, parsedUrl, getBody, respond) {
+  // getBody(callback) — collects full request body then calls callback(Buffer)
   if (method === "GET" && urlPath === "/api/users") {
     handleApiUsers(parsedUrl, respond);
     return true;
@@ -651,13 +650,9 @@ function dispatchApi(method, urlPath, parsedUrl, getBody, respond) {
     return true;
   }
   if (method === "POST" && urlPath === "/api/upload/process") {
-    getBody(function (buf, err) {
-      if (err) {
-        var startHr = process.hrtime();
-        return respond(413, { error: "body too large" }, startHr);
-      }
+    getBody(function (buf) {
       handleApiUploadProcess(buf, respond);
-    }, MAX_UPLOAD_PROCESS_BODY);
+    });
     return true;
   }
   if (method === "GET" && urlPath === "/api/delayed") {
@@ -680,6 +675,18 @@ function onStream(stream, headers) {
   const urlPath = rawPath.split("?")[0];
   const parsedUrl = url.parse(rawPath, true);
 
+  // Auth check for H2 streams
+  if (!checkAuth(urlPath, headers, function () {
+    var body = '{"error":"unauthorized"}';
+    stream.respond({
+      ":status": 401,
+      "content-type": "application/json",
+      "content-length": Buffer.byteLength(body),
+      "server-timing": "auth;dur=0.0",
+    });
+    stream.end(body);
+  })) return;
+
   if (method === "GET" && urlPath === "/health") {
     return handleHealthH2(stream);
   }
@@ -696,7 +703,7 @@ function onStream(stream, headers) {
   // JSON API endpoints
   const handled = dispatchApi(
     method, urlPath, parsedUrl,
-    function (cb, maxBytes) { collectBody(stream, cb, maxBytes); },
+    function (cb) { collectBody(stream, cb); },
     function (status, obj, startHr) { apiJsonResponseH2(stream, status, obj, startHr); }
   );
   if (handled) return;
@@ -714,6 +721,12 @@ function onRequest(req, res) {
   const rawUrl = req.url;
   const urlPath = rawUrl.split("?")[0];
   const parsedUrl = url.parse(rawUrl, true);
+
+  // Auth check for H1 requests
+  if (!checkAuth(urlPath, req.headers, function () {
+    res.writeHead(401, {"content-type": "application/json", "server-timing": "auth;dur=0.0"});
+    res.end('{"error":"unauthorized"}');
+  })) return;
 
   if (method === "GET" && urlPath === "/health") {
     return jsonResponse(res, 200, {
@@ -749,7 +762,7 @@ function onRequest(req, res) {
   // JSON API endpoints
   const handled = dispatchApi(
     method, urlPath, parsedUrl,
-    function (cb, maxBytes) { collectBody(req, cb, maxBytes); },
+    function (cb) { collectBody(req, cb); },
     function (status, obj, startHr) { apiJsonResponse(res, status, obj, startHr); }
   );
   if (handled) return;

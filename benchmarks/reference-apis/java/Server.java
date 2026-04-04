@@ -66,6 +66,7 @@ public class Server {
 
     private static final int PORT = 8443;
     private static final String CERT_DIR = System.getenv().getOrDefault("BENCH_CERT_DIR", "/opt/bench");
+    private static final String BENCH_TOKEN = System.getenv("BENCH_API_TOKEN");
 
     private static final Logger logger = Logger.getLogger("bench-api");
 
@@ -358,6 +359,28 @@ public class Server {
         logger.info(String.format("Java HTTPS server listening on :%d (Virtual Threads)", PORT));
     }
 
+    // ── Auth ─────────────────────────────────────────────────────────
+
+    /**
+     * Check bearer token auth. Returns true if authorized, false if 401 was sent.
+     * /health is always exempt. If BENCH_API_TOKEN is unset, auth is disabled.
+     */
+    static boolean checkAuth(HttpExchange exchange) throws IOException {
+        if (BENCH_TOKEN == null || BENCH_TOKEN.isEmpty()) return true;
+        String path = exchange.getRequestURI().getPath();
+        if ("/health".equals(path)) return true;
+        String auth = exchange.getRequestHeaders().getFirst("Authorization");
+        if (auth != null && auth.equals("Bearer " + BENCH_TOKEN)) return true;
+        exchange.getResponseHeaders().set("Content-Type", "application/json");
+        exchange.getResponseHeaders().set("Server-Timing", "auth;dur=0.0");
+        byte[] body = "{\"error\":\"unauthorized\"}".getBytes(StandardCharsets.UTF_8);
+        exchange.sendResponseHeaders(401, body.length);
+        try (OutputStream out = exchange.getResponseBody()) {
+            out.write(body);
+        }
+        return false;
+    }
+
     // ── Handlers ──────────────────────────────────────────────────────
 
     static class HealthHandler implements HttpHandler {
@@ -382,6 +405,7 @@ public class Server {
 
         @Override
         public void handle(HttpExchange ex) throws IOException {
+            if (!checkAuth(ex)) return;
             if (!"GET".equals(ex.getRequestMethod())) {
                 sendText(ex, 405, "{\"error\":\"method not allowed\"}");
                 return;
@@ -419,6 +443,7 @@ public class Server {
 
         @Override
         public void handle(HttpExchange ex) throws IOException {
+            if (!checkAuth(ex)) return;
             if (!"POST".equals(ex.getRequestMethod())) {
                 sendText(ex, 405, "{\"error\":\"method not allowed\"}");
                 return;
@@ -591,6 +616,7 @@ public class Server {
     static class APIUsersHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange ex) throws IOException {
+            if (!checkAuth(ex)) return;
             if (!"GET".equals(ex.getRequestMethod())) {
                 sendText(ex, 405, "{\"error\":\"method not allowed\"}");
                 return;
@@ -656,6 +682,7 @@ public class Server {
     static class APITransformHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange ex) throws IOException {
+            if (!checkAuth(ex)) return;
             if (!"POST".equals(ex.getRequestMethod())) {
                 sendText(ex, 405, "{\"error\":\"method not allowed\"}");
                 return;
@@ -777,6 +804,7 @@ public class Server {
     static class APIAggregateHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange ex) throws IOException {
+            if (!checkAuth(ex)) return;
             if (!"GET".equals(ex.getRequestMethod())) {
                 sendText(ex, 405, "{\"error\":\"method not allowed\"}");
                 return;
@@ -863,6 +891,7 @@ public class Server {
     static class APISearchHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange ex) throws IOException {
+            if (!checkAuth(ex)) return;
             if (!"GET".equals(ex.getRequestMethod())) {
                 sendText(ex, 405, "{\"error\":\"method not allowed\"}");
                 return;
@@ -940,28 +969,16 @@ public class Server {
     static class APIUploadProcessHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange ex) throws IOException {
+            if (!checkAuth(ex)) return;
             if (!"POST".equals(ex.getRequestMethod())) {
                 sendText(ex, 405, "{\"error\":\"method not allowed\"}");
                 return;
             }
             long start = setAPIHeaders(ex);
 
-            int maxBody = 50 * 1024 * 1024; // 50 MiB
             byte[] body;
             try (InputStream in = ex.getRequestBody()) {
-                ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                byte[] readBuf = new byte[8192];
-                int totalRead = 0;
-                int n;
-                while ((n = in.read(readBuf)) != -1) {
-                    totalRead += n;
-                    if (totalRead > maxBody) {
-                        sendText(ex, 413, "{\"error\":\"body too large\"}");
-                        return;
-                    }
-                    baos.write(readBuf, 0, n);
-                }
-                body = baos.toByteArray();
+                body = in.readAllBytes();
             }
 
             // CRC32
@@ -1003,6 +1020,7 @@ public class Server {
     static class APIDelayedHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange ex) throws IOException {
+            if (!checkAuth(ex)) return;
             if (!"GET".equals(ex.getRequestMethod())) {
                 sendText(ex, 405, "{\"error\":\"method not allowed\"}");
                 return;
@@ -1044,6 +1062,7 @@ public class Server {
     static class APIValidateHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange ex) throws IOException {
+            if (!checkAuth(ex)) return;
             if (!"GET".equals(ex.getRequestMethod())) {
                 sendText(ex, 405, "{\"error\":\"method not allowed\"}");
                 return;

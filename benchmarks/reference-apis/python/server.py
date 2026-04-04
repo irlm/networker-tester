@@ -59,6 +59,8 @@ def _load_bench_data() -> dict | None:
 
 BENCH_DATA: dict | None = _load_bench_data()
 
+BENCH_API_TOKEN: str = os.environ.get("BENCH_API_TOKEN", "")
+
 
 async def health(request: Request) -> JSONResponse:
     """GET /health -- runtime identity and version."""
@@ -314,13 +316,9 @@ async def api_search(request: Request) -> JSONResponse:
 async def api_upload_process(request: Request) -> JSONResponse:
     """POST /api/upload/process — CRC32 + SHA-256 + zlib compress body."""
     t0 = time.perf_counter()
-    max_body = 50 * 1024 * 1024  # 50 MiB
     body = b""
     async for chunk in request.stream():
         body += chunk
-        if len(body) > max_body:
-            duration_ms = (time.perf_counter() - t0) * 1000
-            return api_json({"error": "body too large"}, duration_ms, status_code=413)
 
     crc = zlib.crc32(body) & 0xFFFFFFFF
     sha = hashlib.sha256(body).hexdigest()
@@ -409,6 +407,39 @@ async def api_validate(request: Request) -> JSONResponse:
     }, duration_ms)
 
 
+class AuthMiddleware:
+    """Validate BENCH_API_TOKEN on all routes except /health."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and BENCH_API_TOKEN:
+            path = scope.get("path", "")
+            if path != "/health":
+                headers = dict(scope.get("headers", []))
+                auth = headers.get(b"authorization", b"").decode()
+                if not auth.startswith("Bearer ") or auth[7:] != BENCH_API_TOKEN:
+                    t0 = time.perf_counter()
+                    auth_dur = (time.perf_counter() - t0) * 1000
+                    body = b'{"error":"unauthorized"}'
+                    await send({
+                        "type": "http.response.start",
+                        "status": 401,
+                        "headers": [
+                            (b"content-type", b"application/json"),
+                            (b"content-length", str(len(body)).encode()),
+                            (b"server-timing", f"auth;dur={auth_dur:.1f}".encode()),
+                        ],
+                    })
+                    await send({
+                        "type": "http.response.body",
+                        "body": body,
+                    })
+                    return
+        await self.app(scope, receive, send)
+
+
 class AltSvcMiddleware:
     """Advertise HTTP/3 via Alt-Svc header on every HTTP response."""
 
@@ -433,7 +464,7 @@ class AltSvcMiddleware:
             await self.app(scope, receive, send)
 
 
-app = AltSvcMiddleware(
+app = AuthMiddleware(AltSvcMiddleware(
     Starlette(
         routes=[
             Route("/health", health, methods=["GET"]),
@@ -448,4 +479,4 @@ app = AltSvcMiddleware(
             Route("/api/validate", api_validate, methods=["GET"]),
         ],
     )
-)
+))

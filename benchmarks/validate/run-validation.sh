@@ -56,7 +56,7 @@ check() {
     local body="${4:-}"
     local expect_field="${5:-}"
 
-    local curl_args=(-sk --max-time 10 -X "$method" "${AUTH_ARGS[@]}")
+    local curl_args=(-sk --max-time 10 -X "$method" ${AUTH_ARGS[@]+${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"}})
     if [[ -n "$body" ]]; then
         curl_args+=(-H "Content-Type: application/json" -d "$body")
     fi
@@ -113,7 +113,7 @@ check_header() {
     local header="$3"
 
     local headers
-    headers=$(curl -sk --max-time 10 -I "${AUTH_ARGS[@]}" "$url" 2>/dev/null) || {
+    headers=$(curl -sk --max-time 10 -I ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} "$url" 2>/dev/null) || {
         printf "  ${RED}FAIL${NC} %-45s %s\n" "$label" "connection refused"
         FAIL=$((FAIL + 1))
         return 1
@@ -134,8 +134,8 @@ check_deterministic() {
     local url="$2"
 
     local r1 r2
-    r1=$(curl -sk --max-time 10 "${AUTH_ARGS[@]}" "$url" 2>/dev/null)
-    r2=$(curl -sk --max-time 10 "${AUTH_ARGS[@]}" "$url" 2>/dev/null)
+    r1=$(curl -sk --max-time 10 ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} "$url" 2>/dev/null)
+    r2=$(curl -sk --max-time 10 ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} "$url" 2>/dev/null)
 
     if [[ "$r1" == "$r2" ]]; then
         printf "  ${GREEN}PASS${NC} %-45s %s\n" "$label" "deterministic"
@@ -228,7 +228,7 @@ if [[ "$MODE" == "rust" ]]; then
     ENDPOINT_PID=$!
     trap "kill $ENDPOINT_PID 2>/dev/null; wait $ENDPOINT_PID 2>/dev/null || true" EXIT
 
-    sleep 2
+    sleep 4
     validate_server "Rust" "https://localhost:8443"
 
 elif [[ "$MODE" == "single" ]]; then

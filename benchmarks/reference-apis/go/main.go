@@ -73,6 +73,8 @@ func loadBenchData() {
 	slog.Warn("bench-data.json not found, falling back to per-language PRNG")
 }
 
+var benchToken = os.Getenv("BENCH_API_TOKEN")
+
 const (
 	defaultAddr    = ":8443"
 	defaultCertDir = "/opt/bench"
@@ -122,10 +124,29 @@ func main() {
 		MinVersion: tls.VersionTLS12,
 	}
 
+	// Auth middleware: validate BENCH_API_TOKEN on all routes except /health.
+	authHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authStart := time.Now()
+		if r.URL.Path != "/health" && benchToken != "" {
+			auth := r.Header.Get("Authorization")
+			if !strings.HasPrefix(auth, "Bearer ") || auth[7:] != benchToken {
+				dur := float64(time.Since(authStart).Microseconds()) / 1000.0
+				w.Header().Set("Server-Timing", fmt.Sprintf("auth;dur=%.1f", dur))
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(401)
+				w.Write([]byte(`{"error":"unauthorized"}`))
+				return
+			}
+		}
+		dur := float64(time.Since(authStart).Microseconds()) / 1000.0
+		w.Header().Set("X-Auth-Duration", fmt.Sprintf("%.1f", dur))
+		mux.ServeHTTP(w, r)
+	})
+
 	// Wrap handler to advertise HTTP/3 via Alt-Svc header.
 	altSvcHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Alt-Svc", fmt.Sprintf(`h3="%s"; ma=86400`, addr))
-		mux.ServeHTTP(w, r)
+		authHandler.ServeHTTP(w, r)
 	})
 
 	// HTTP/3 server (QUIC/UDP) — run in background goroutine.
@@ -216,9 +237,15 @@ func setAPIHeaders(w http.ResponseWriter) time.Time {
 }
 
 // writeServerTiming sets the Server-Timing header from elapsed duration.
+// If the auth middleware set X-Auth-Duration, append auth;dur=X.X.
 func writeServerTiming(w http.ResponseWriter, start time.Time) {
 	dur := float64(time.Since(start).Microseconds()) / 1000.0
-	w.Header().Set("Server-Timing", fmt.Sprintf("app;dur=%.1f", dur))
+	timing := fmt.Sprintf("app;dur=%.1f", dur)
+	if authDur := w.Header().Get("X-Auth-Duration"); authDur != "" {
+		timing += fmt.Sprintf(", auth;dur=%s", authDur)
+		w.Header().Del("X-Auth-Duration")
+	}
+	w.Header().Set("Server-Timing", timing)
 }
 
 // User represents a generated user for /api/users.
@@ -525,7 +552,6 @@ type UploadProcessResult struct {
 func handleAPIUploadProcess(w http.ResponseWriter, r *http.Request) {
 	start := setAPIHeaders(w)
 
-	r.Body = http.MaxBytesReader(w, r.Body, 50*1024*1024)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("read error: %v", err), http.StatusInternalServerError)
