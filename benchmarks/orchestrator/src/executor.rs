@@ -222,6 +222,12 @@ async fn run_chrome_benchmark(
     connection_mode: &str,
     methodology: &MethodologyConfig,
 ) -> Result<serde_json::Value> {
+    // Pass BENCH_API_TOKEN to Chrome runner if set
+    let token_arg = std::env::var("BENCH_API_TOKEN")
+        .ok()
+        .filter(|t| !t.is_empty())
+        .map(|t| format!(" --token {t}"))
+        .unwrap_or_default();
     let cmd = format!(
         "cd /opt/bench/chrome-harness && node runner.js \
          --target https://localhost:8443 \
@@ -230,12 +236,13 @@ async fn run_chrome_benchmark(
          --concurrency 10 \
          --http-version {} \
          --connection-mode {} \
-         --timeout {}",
+         --timeout {}{}",
         methodology.warmup_runs,
         methodology.min_measured,
         http_version,
         connection_mode,
         methodology.timeout_secs,
+        token_arg,
     );
 
     tracing::info!(

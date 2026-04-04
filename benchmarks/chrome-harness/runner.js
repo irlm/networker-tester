@@ -61,6 +61,7 @@ const CONCURRENCY = parseInt(args.concurrency || '10', 10);
 const HTTP_VERSION = args['http-version'] || 'h2'; // h1, h2, h3
 const CONNECTION_MODE = args['connection-mode'] || 'warm'; // cold, warm
 const TIMEOUT = parseInt(args.timeout || '120', 10) * 1000; // seconds -> ms
+const AUTH_TOKEN = args.token || process.env.BENCH_API_TOKEN || ''; // Bearer token for auth
 
 // Chrome determinism flags (from spec)
 const CHROME_FLAGS = [
@@ -122,7 +123,8 @@ async function run() {
   process.stderr.write(`Warmup: ${WARMUP}, Measured: ${MEASURED}, Concurrency: ${CONCURRENCY}\n`);
 
   const testPagePath = path.join(__dirname, 'test-page.html');
-  const testPageUrl = `file://${testPagePath}?target=${encodeURIComponent(TARGET)}&warmup=${WARMUP}&measured=${MEASURED}&concurrency=${CONCURRENCY}`;
+  const tokenParam = AUTH_TOKEN ? `&token=${encodeURIComponent(AUTH_TOKEN)}` : '';
+  const testPageUrl = `file://${testPagePath}?target=${encodeURIComponent(TARGET)}&warmup=${WARMUP}&measured=${MEASURED}&concurrency=${CONCURRENCY}${tokenParam}`;
 
   if (CONNECTION_MODE === 'cold') {
     // Cold mode: run each cycle in a fresh browser instance
