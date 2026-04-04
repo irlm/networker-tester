@@ -360,12 +360,7 @@ $server->on('request', function (
             }
         }
 
-        $pattern = '@' . str_replace('@', '\\@', $query) . '@i';
-        if (@preg_match($pattern, '') === false) {
-            $durationMs = (hrtime(true) - $t0) / 1e6;
-            api_json($response, ['error' => 'invalid regex'], $durationMs, 400);
-            return;
-        }
+        $pattern = '/' . preg_quote($query, '/') . '/i';
 
         $results = [];
         foreach ($corpus as $item) {
@@ -398,6 +393,12 @@ $server->on('request', function (
         $t0   = hrtime(true);
         $body = $request->rawContent();
         $body = $body !== false ? $body : '';
+        $maxBody = 50 * 1024 * 1024; // 50 MiB
+        if (strlen($body) > $maxBody) {
+            $durationMs = (hrtime(true) - $t0) / 1e6;
+            api_json($response, ['error' => 'body too large'], $durationMs, 413);
+            return;
+        }
 
         $crc        = crc32($body) & 0xFFFFFFFF;
         $sha        = hash('sha256', $body);

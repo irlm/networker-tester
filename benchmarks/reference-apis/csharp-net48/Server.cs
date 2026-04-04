@@ -566,9 +566,7 @@ namespace BenchmarkServer
                         words[rng.Next(words.Length)], words[rng.Next(words.Length)], rng.Next(1, 999)));
             }
 
-            Regex re;
-            try { re = new Regex(query); }
-            catch { re = new Regex(Regex.Escape(query)); }
+            Regex re = new Regex(Regex.Escape(query), RegexOptions.IgnoreCase);
 
             var scored = new List<Tuple<string, int>>();
             foreach (var item in corpus)
@@ -594,7 +592,10 @@ namespace BenchmarkServer
         // -- /api/upload/process ------------------------------------------
         static string HandleApiUploadProcess(HttpListenerRequest req)
         {
+            const int maxBody = 50 * 1024 * 1024; // 50 MiB
             var bodyBytes = ReadBodyBytes(req);
+            if (bodyBytes.Length > maxBody)
+                return "{\"error\":\"body too large\"}";
             int originalSize = bodyBytes.Length;
 
             // CRC32

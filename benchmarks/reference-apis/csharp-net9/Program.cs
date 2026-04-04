@@ -425,8 +425,15 @@ app.MapPost("/api/upload/process", async (HttpContext ctx) =>
 {
     var sw = SetAPIHeaders(ctx);
 
+    const int maxBody = 50 * 1024 * 1024; // 50 MiB
     using var ms = new MemoryStream();
     await ctx.Request.Body.CopyToAsync(ms);
+    if (ms.Length > maxBody)
+    {
+        ctx.Response.StatusCode = 413;
+        WriteServerTiming(ctx, sw);
+        return Results.Content("{\"error\":\"body too large\"}", "application/json");
+    }
     var body = ms.ToArray();
 
     // CRC32 (use System.IO.Hashing if available, otherwise manual)

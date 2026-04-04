@@ -469,12 +469,8 @@ function handleApiSearch(parsedUrl, respond) {
     }
   }
 
-  var pattern;
-  try {
-    pattern = new RegExp(query, "i");
-  } catch (_e) {
-    return respond(400, { error: "invalid regex" }, startHr);
-  }
+  var escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  var pattern = new RegExp(escaped, "i");
 
   const results = [];
   for (let i = 0; i < corpus.length; i++) {
@@ -502,6 +498,10 @@ function handleApiSearch(parsedUrl, respond) {
 
 function handleApiUploadProcess(bodyBuf, respond) {
   const startHr = process.hrtime();
+
+  if (bodyBuf === null) {
+    return respond(413, { error: "body too large" }, startHr);
+  }
 
   const crcVal = crc32(bodyBuf);
   const sha = crypto.createHash("sha256").update(bodyBuf).digest("hex");
@@ -608,10 +608,25 @@ function handleApiValidate(parsedUrl, respond) {
 // Collect request body helper
 // ---------------------------------------------------------------------------
 
-function collectBody(readable, callback) {
+var MAX_UPLOAD_PROCESS_BODY = 50 * 1024 * 1024; // 50 MiB
+
+function collectBody(readable, callback, maxBytes) {
   const chunks = [];
-  readable.on("data", function (chunk) { chunks.push(chunk); });
-  readable.on("end", function () { callback(Buffer.concat(chunks)); });
+  var total = 0;
+  var aborted = false;
+  readable.on("data", function (chunk) {
+    if (aborted) return;
+    total += chunk.length;
+    if (maxBytes && total > maxBytes) {
+      aborted = true;
+      callback(null, "body too large");
+      return;
+    }
+    chunks.push(chunk);
+  });
+  readable.on("end", function () {
+    if (!aborted) callback(Buffer.concat(chunks));
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -636,7 +651,13 @@ function dispatchApi(method, urlPath, parsedUrl, getBody, respond) {
     return true;
   }
   if (method === "POST" && urlPath === "/api/upload/process") {
-    getBody(function (buf) { handleApiUploadProcess(buf, respond); });
+    getBody(function (buf, err) {
+      if (err) {
+        var startHr = process.hrtime();
+        return respond(413, { error: "body too large" }, startHr);
+      }
+      handleApiUploadProcess(buf, respond);
+    }, MAX_UPLOAD_PROCESS_BODY);
     return true;
   }
   if (method === "GET" && urlPath === "/api/delayed") {
@@ -675,7 +696,7 @@ function onStream(stream, headers) {
   // JSON API endpoints
   const handled = dispatchApi(
     method, urlPath, parsedUrl,
-    function (cb) { collectBody(stream, cb); },
+    function (cb, maxBytes) { collectBody(stream, cb, maxBytes); },
     function (status, obj, startHr) { apiJsonResponseH2(stream, status, obj, startHr); }
   );
   if (handled) return;
@@ -728,7 +749,7 @@ function onRequest(req, res) {
   // JSON API endpoints
   const handled = dispatchApi(
     method, urlPath, parsedUrl,
-    function (cb) { collectBody(req, cb); },
+    function (cb, maxBytes) { collectBody(req, cb, maxBytes); },
     function (status, obj, startHr) { apiJsonResponse(res, status, obj, startHr); }
   );
   if (handled) return;

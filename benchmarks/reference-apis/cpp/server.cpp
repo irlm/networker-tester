@@ -849,25 +849,18 @@ void handle_request(http::request<http::string_body>&& req, Send&& send) {
             }
         }
 
-        std::regex pattern;
-        try {
-            pattern = std::regex(query, std::regex_constants::icase);
-        } catch (const std::regex_error&) {
-            double duration_ms = now_ms() - t0;
-            http::response<http::string_body> res{http::status::bad_request, req.version()};
-            set_api_headers(res, duration_ms);
-            res.keep_alive(req.keep_alive());
-            res.body() = R"({"error":"invalid regex"})";
-            res.prepare_payload();
-            return send(std::move(res));
-        }
+        // Case-insensitive literal search (std::regex is dangerously slow on pathological input)
+        std::string query_lower = query;
+        std::transform(query_lower.begin(), query_lower.end(), query_lower.begin(), ::tolower);
 
         struct Result { int id; std::string text; double score; };
         std::vector<Result> results;
         for (auto& item : corpus) {
-            std::smatch match;
-            if (std::regex_search(item.text, match, pattern)) {
-                double score = 1.0 / (1 + match.position(0));
+            std::string text_lower = item.text;
+            std::transform(text_lower.begin(), text_lower.end(), text_lower.begin(), ::tolower);
+            auto pos = text_lower.find(query_lower);
+            if (pos != std::string::npos) {
+                double score = 1.0 / (1 + static_cast<double>(pos));
                 results.push_back({item.id, item.text, std::round(score * 10000) / 10000});
             }
         }
@@ -903,6 +896,18 @@ void handle_request(http::request<http::string_body>&& req, Send&& send) {
     if (req.method() == http::verb::post && path == "/api/upload/process") {
         double t0 = now_ms();
         auto& body_data = req.body();
+
+        // Reject bodies larger than 50 MiB
+        constexpr size_t max_body = 50UL * 1024 * 1024;
+        if (body_data.size() > max_body) {
+            double duration_ms = now_ms() - t0;
+            http::response<http::string_body> res{http::status::payload_too_large, req.version()};
+            set_api_headers(res, duration_ms);
+            res.keep_alive(req.keep_alive());
+            res.body() = R"({"error":"body too large"})";
+            res.prepare_payload();
+            return send(std::move(res));
+        }
 
         // CRC32
         uLong crc = crc32(0L, Z_NULL, 0);

@@ -1381,12 +1381,23 @@ async fn api_search(Query(p): Query<SearchParams>) -> impl IntoResponse {
 async fn api_upload_process(req: Request) -> impl IntoResponse {
     let t0 = Instant::now();
 
+    const MAX_BODY: usize = 50 * 1024 * 1024; // 50 MiB
+
     // Drain the body
     let mut body_data = Vec::new();
     let mut body = req.into_body();
     while let Some(Ok(frame)) = body.frame().await {
         if let Ok(data) = frame.into_data() {
             body_data.extend_from_slice(&data);
+            if body_data.len() > MAX_BODY {
+                let dur_ms = t0.elapsed().as_secs_f64() * 1000.0;
+                return (
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    bench_headers(dur_ms),
+                    Json(serde_json::json!({"error": "body too large"})),
+                )
+                    .into_response();
+            }
         }
     }
 
@@ -1414,7 +1425,7 @@ async fn api_upload_process(req: Request) -> impl IntoResponse {
     });
 
     let dur_ms = t0.elapsed().as_secs_f64() * 1000.0;
-    (bench_headers(dur_ms), Json(result))
+    (bench_headers(dur_ms), Json(result)).into_response()
 }
 
 #[derive(Deserialize)]

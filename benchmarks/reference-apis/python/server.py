@@ -286,11 +286,7 @@ async def api_search(request: Request) -> JSONResponse:
             phrase = " ".join(rng.choices(words, k=rng.randint(3, 8)))
             corpus.append({"id": i + 1, "text": phrase})
 
-    try:
-        pattern = re.compile(query, re.IGNORECASE)
-    except re.error:
-        duration_ms = (time.perf_counter() - t0) * 1000
-        return api_json({"error": "invalid regex"}, duration_ms, status_code=400)
+    pattern = re.compile(re.escape(query), re.IGNORECASE)
 
     results = []
     for item in corpus:
@@ -318,9 +314,13 @@ async def api_search(request: Request) -> JSONResponse:
 async def api_upload_process(request: Request) -> JSONResponse:
     """POST /api/upload/process — CRC32 + SHA-256 + zlib compress body."""
     t0 = time.perf_counter()
+    max_body = 50 * 1024 * 1024  # 50 MiB
     body = b""
     async for chunk in request.stream():
         body += chunk
+        if len(body) > max_body:
+            duration_ms = (time.perf_counter() - t0) * 1000
+            return api_json({"error": "body too large"}, duration_ms, status_code=413)
 
     crc = zlib.crc32(body) & 0xFFFFFFFF
     sha = hashlib.sha256(body).hexdigest()

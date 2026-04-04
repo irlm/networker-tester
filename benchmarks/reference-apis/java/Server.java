@@ -946,9 +946,22 @@ public class Server {
             }
             long start = setAPIHeaders(ex);
 
+            int maxBody = 50 * 1024 * 1024; // 50 MiB
             byte[] body;
             try (InputStream in = ex.getRequestBody()) {
-                body = in.readAllBytes();
+                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                byte[] readBuf = new byte[8192];
+                int totalRead = 0;
+                int n;
+                while ((n = in.read(readBuf)) != -1) {
+                    totalRead += n;
+                    if (totalRead > maxBody) {
+                        sendText(ex, 413, "{\"error\":\"body too large\"}");
+                        return;
+                    }
+                    baos.write(readBuf, 0, n);
+                }
+                body = baos.toByteArray();
             }
 
             // CRC32

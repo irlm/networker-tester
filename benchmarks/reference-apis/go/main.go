@@ -525,6 +525,7 @@ type UploadProcessResult struct {
 func handleAPIUploadProcess(w http.ResponseWriter, r *http.Request) {
 	start := setAPIHeaders(w)
 
+	r.Body = http.MaxBytesReader(w, r.Body, 50*1024*1024)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("read error: %v", err), http.StatusInternalServerError)

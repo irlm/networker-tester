@@ -284,12 +284,7 @@ app = proc do |env|
       end
     end
 
-    begin
-      pattern = Regexp.new(query, Regexp::IGNORECASE)
-    rescue RegexpError
-      duration_ms = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0) * 1000
-      next api_json({ error: "invalid regex" }, duration_ms, "400")
-    end
+    pattern = Regexp.new(Regexp.escape(query), Regexp::IGNORECASE)
 
     results = []
     corpus.each do |item|
@@ -313,9 +308,21 @@ app = proc do |env|
 
   when ["POST", "/api/upload/process"]
     t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    max_body = 50 * 1024 * 1024 # 50 MiB
+    content_length = (env["CONTENT_LENGTH"] || "0").to_i
+    if content_length > max_body
+      duration_ms = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0) * 1000
+      next api_json({ error: "body too large" }, duration_ms, "413")
+    end
     input = env["rack.input"]
-    body = input.read || "".b
-    body = body.b
+    body = "".b
+    while (chunk = input.read(8192))
+      body << chunk
+      if body.bytesize > max_body
+        duration_ms = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0) * 1000
+        next api_json({ error: "body too large" }, duration_ms, "413")
+      end
+    end
 
     crc = Zlib.crc32(body) & 0xFFFFFFFF
     sha = Digest::SHA256.hexdigest(body)
