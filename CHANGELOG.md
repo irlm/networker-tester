@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.19.1] - 2026-04-05
+
+### Added
+- Change password link (lock icon) in sidebar user section
+
+### Fixed
+- Removed Local Tester from Settings page — all testers must be deployed VMs
+
+### Changed
+- Auto-deploy pipeline uses Azure service principal (`az vm run-command`) instead of SSH keys
+
+---
+
 ## [0.19.0] - 2026-04-04
 
 ### Added
