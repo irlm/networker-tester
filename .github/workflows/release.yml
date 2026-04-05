@@ -267,9 +267,9 @@ jobs:
               RELEASE_BASE='https://github.com/irlm/networker-tester/releases/download/v${VERSION}'
               echo '>> Downloading frontend...'
               curl -fsSL \"\${RELEASE_BASE}/dashboard-frontend.tar.gz\" -o /tmp/dashboard-frontend.tar.gz
-              mkdir -p /var/www/dashboard
-              tar xzf /tmp/dashboard-frontend.tar.gz -C /var/www/dashboard
-              chown -R www-data:www-data /var/www/dashboard 2>/dev/null || true
+              mkdir -p /opt/alethedash/dashboard/dist
+              rm -rf /opt/alethedash/dashboard/dist/*
+              tar xzf /tmp/dashboard-frontend.tar.gz -C /opt/alethedash/dashboard/dist
               rm -f /tmp/dashboard-frontend.tar.gz
               echo '>> Frontend deployed'
             " \
