@@ -24,7 +24,7 @@ export function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState<Record<string, boolean>>({});
   const [activeUpdateId, setActiveUpdateId] = useState<string | null>(null);
-  const [testerUpdating, setTesterUpdating] = useState(false);
+  // testerUpdating removed — local tester no longer shown; all testers are deployed VMs
   const [dashboardUpdating, setDashboardUpdating] = useState(false);
   const [inventory, setInventory] = useState<{ provider: string; name: string; region: string; status: string; public_ip: string | null; fqdn: string | null; vm_size: string | null; os: string | null; resource_group: string | null; managed: boolean }[]>([]);
   const [inventoryErrors, setInventoryErrors] = useState<string[]>([]);
@@ -90,7 +90,6 @@ export function SettingsPage() {
     const latest = events[events.length - 1];
     if (latest?.type === 'deploy_complete' && latest.deployment_id === activeUpdateId) {
       setUpdating(prev => ({ ...prev, [activeUpdateId]: false }));
-      setTesterUpdating(false);
       addToast(
         latest.status === 'completed' ? 'success' : 'error',
         latest.status === 'completed' ? 'Update completed' : 'Update failed'
@@ -209,48 +208,7 @@ export function SettingsPage() {
             );
           })()}
 
-          {/* Local Tester — only shown when detected */}
-          {versionInfo?.tester_version && (() => {
-            const testerOutdated = latestRelease && versionInfo.tester_version !== latestRelease;
-            return (
-              <div className="flex items-center justify-between py-2.5 border-t border-gray-800/30">
-                <div>
-                  <span className="text-sm text-gray-200">Local Tester</span>
-                  <span className="text-xs text-gray-600 ml-2">Probe executor</span>
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className={`text-xs font-mono ${
-                    versionInfo.tester_version === latestRelease ? 'text-green-400' : 'text-yellow-400'
-                  }`}>
-                    v{versionInfo.tester_version}
-                  </span>
-                  {testerOutdated && (
-                    <button
-                      onClick={async () => {
-                        setTesterUpdating(true);
-                        try {
-                          const result = await api.updateLocalTester();
-                          setActiveUpdateId(result.update_id);
-                          addToast('success', 'Tester update started');
-                        } catch {
-                          addToast('error', 'Failed to start tester update');
-                          setTesterUpdating(false);
-                        }
-                      }}
-                      disabled={testerUpdating}
-                      className={`text-xs px-3 py-1 rounded border transition-colors ${
-                        testerUpdating
-                          ? 'border-blue-500/30 text-blue-400 motion-safe:animate-pulse'
-                          : 'border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/10'
-                      } disabled:opacity-50`}
-                    >
-                      {testerUpdating ? 'Updating...' : `Update to v${latestRelease}`}
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          })()}
+          {/* Local Tester removed — all testers must be deployed VMs */}
 
           {/* Each endpoint */}
           {versionInfo?.endpoints.map(ep => {
