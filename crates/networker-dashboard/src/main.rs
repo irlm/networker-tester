@@ -14,6 +14,7 @@ mod ws;
 
 use anyhow::Context;
 use axum::http::{HeaderValue, Method};
+use axum::middleware::Next;
 use axum::Router;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -22,6 +23,28 @@ use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+
+/// Middleware that measures server processing time and exposes it
+/// via the standard `Server-Timing` header (readable from JS).
+async fn server_timing_middleware(
+    req: axum::extract::Request,
+    next: Next,
+) -> axum::response::Response {
+    let start = std::time::Instant::now();
+    let mut response = next.run(req).await;
+    let elapsed = start.elapsed();
+    let ms = elapsed.as_secs_f64() * 1000.0;
+
+    // Server-Timing header: standard, parsed natively by Chrome DevTools
+    // Also add X-Process-Time-Ms for easy programmatic access
+    if let Ok(v) = HeaderValue::from_str(&format!("server;dur={ms:.2}")) {
+        response.headers_mut().insert("server-timing", v);
+    }
+    if let Ok(v) = HeaderValue::from_str(&format!("{ms:.2}")) {
+        response.headers_mut().insert("x-process-time-ms", v);
+    }
+    response
+}
 use tracing_subscriber::EnvFilter;
 
 /// A short-lived SSO exchange code entry.
@@ -202,11 +225,16 @@ async fn main() -> anyhow::Result<()> {
                 axum::http::header::AUTHORIZATION,
                 axum::http::header::CONTENT_TYPE,
             ])
+            .expose_headers([
+                "server-timing".parse().unwrap(),
+                "x-process-time-ms".parse().unwrap(),
+            ])
     };
 
     let app = Router::new()
         .nest("/api", api::router(state.clone()))
         .merge(ws::router(state.clone()))
+        .layer(axum::middleware::from_fn(server_timing_middleware))
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .layer(cors);
 

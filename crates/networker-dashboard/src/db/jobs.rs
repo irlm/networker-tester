@@ -72,13 +72,26 @@ pub async fn list(
     limit: i64,
     offset: i64,
 ) -> anyhow::Result<Vec<JobRow>> {
-    list_filtered(client, project_id, status_filter, limit, offset, None).await
+    list_filtered(
+        client,
+        project_id,
+        status_filter,
+        None::<&Uuid>,
+        None::<&Uuid>,
+        limit,
+        offset,
+        None,
+    )
+    .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn list_filtered(
     client: &Client,
     project_id: &Uuid,
     status_filter: Option<&str>,
+    agent_id_filter: Option<&Uuid>,
+    created_by_filter: Option<&Uuid>,
     limit: i64,
     offset: i64,
     visible_ids: Option<&std::collections::HashSet<uuid::Uuid>>,
@@ -92,52 +105,61 @@ pub async fn list_filtered(
 
     let visible_vec: Option<Vec<Uuid>> = visible_ids.map(|ids| ids.iter().copied().collect());
 
-    let rows = match (status_filter, &visible_vec) {
-        (Some(status), Some(ids)) => {
-            client
-                .query(
-                    "SELECT job_id, project_id, tls_profile_run_id, definition_id, agent_id, status, config, created_by,
-                            created_at, started_at, finished_at, run_id, error_message
-                     FROM job WHERE project_id = $1 AND status = $2 AND job_id = ANY($3)
-                     ORDER BY created_at DESC LIMIT $4 OFFSET $5",
-                    &[project_id, &status, ids, &limit, &offset],
-                )
-                .await?
-        }
-        (Some(status), None) => {
-            client
-                .query(
-                    "SELECT job_id, project_id, tls_profile_run_id, definition_id, agent_id, status, config, created_by,
-                            created_at, started_at, finished_at, run_id, error_message
-                     FROM job WHERE project_id = $1 AND status = $2
-                     ORDER BY created_at DESC LIMIT $3 OFFSET $4",
-                    &[project_id, &status, &limit, &offset],
-                )
-                .await?
-        }
-        (None, Some(ids)) => {
-            client
-                .query(
-                    "SELECT job_id, project_id, tls_profile_run_id, definition_id, agent_id, status, config, created_by,
-                            created_at, started_at, finished_at, run_id, error_message
-                     FROM job WHERE project_id = $1 AND job_id = ANY($2)
-                     ORDER BY created_at DESC LIMIT $3 OFFSET $4",
-                    &[project_id, ids, &limit, &offset],
-                )
-                .await?
-        }
-        (None, None) => {
-            client
-                .query(
-                    "SELECT job_id, project_id, tls_profile_run_id, definition_id, agent_id, status, config, created_by,
-                            created_at, started_at, finished_at, run_id, error_message
-                     FROM job WHERE project_id = $1
-                     ORDER BY created_at DESC LIMIT $2 OFFSET $3",
-                    &[project_id, &limit, &offset],
-                )
-                .await?
-        }
+    // Build query dynamically to support flexible filter combinations
+    let base = "SELECT job_id, project_id, tls_profile_run_id, definition_id, agent_id, status, config, created_by,
+                       created_at, started_at, finished_at, run_id, error_message
+                FROM job WHERE project_id = $1";
+
+    let mut clauses = Vec::new();
+    let mut param_idx: usize = 2;
+
+    // We build the SQL string dynamically but use parameterised queries for values
+    if status_filter.is_some() {
+        clauses.push(format!("status = ${param_idx}"));
+        param_idx += 1;
+    }
+    if agent_id_filter.is_some() {
+        clauses.push(format!("agent_id = ${param_idx}"));
+        param_idx += 1;
+    }
+    if created_by_filter.is_some() {
+        clauses.push(format!("created_by = ${param_idx}"));
+        param_idx += 1;
+    }
+    if visible_vec.is_some() {
+        clauses.push(format!("job_id = ANY(${param_idx})"));
+        param_idx += 1;
+    }
+
+    let limit_clause = format!(
+        "ORDER BY created_at DESC LIMIT ${param_idx} OFFSET ${}",
+        param_idx + 1
+    );
+    let sql = if clauses.is_empty() {
+        format!("{base} {limit_clause}")
+    } else {
+        format!("{base} AND {} {limit_clause}", clauses.join(" AND "))
     };
+
+    // Build params vector dynamically
+    let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
+    params.push(project_id);
+    if let Some(status) = &status_filter {
+        params.push(status);
+    }
+    if let Some(aid) = &agent_id_filter {
+        params.push(aid);
+    }
+    if let Some(uid) = &created_by_filter {
+        params.push(uid);
+    }
+    if let Some(ref ids) = visible_vec {
+        params.push(ids);
+    }
+    params.push(&limit);
+    params.push(&offset);
+
+    let rows = client.query(&sql, &params).await?;
 
     Ok(rows
         .iter()

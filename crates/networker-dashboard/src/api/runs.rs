@@ -17,6 +17,7 @@ const MAX_LIMIT: i64 = 200;
 #[derive(Deserialize)]
 pub struct ListRunsQuery {
     pub target_host: Option<String>,
+    pub mode: Option<String>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
 }
@@ -138,6 +139,7 @@ async fn list_runs_scoped(
         &client,
         &ctx.project_id,
         q.target_host.as_deref(),
+        q.mode.as_deref(),
         q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT),
         q.offset.unwrap_or(0).max(0),
     )
@@ -165,6 +167,7 @@ mod tests {
     fn clamp_limit_caps_at_max() {
         let q = ListRunsQuery {
             target_host: None,
+            mode: None,
             limit: Some(9999),
             offset: Some(0),
         };
@@ -176,6 +179,7 @@ mod tests {
     fn clamp_limit_floors_at_one() {
         let q = ListRunsQuery {
             target_host: None,
+            mode: None,
             limit: Some(-5),
             offset: None,
         };
@@ -187,6 +191,7 @@ mod tests {
     fn clamp_limit_zero_becomes_one() {
         let q = ListRunsQuery {
             target_host: None,
+            mode: None,
             limit: Some(0),
             offset: None,
         };
@@ -198,6 +203,7 @@ mod tests {
     fn clamp_offset_negative_becomes_zero() {
         let q = ListRunsQuery {
             target_host: None,
+            mode: None,
             limit: None,
             offset: Some(-10),
         };
@@ -209,6 +215,7 @@ mod tests {
     fn defaults_when_none() {
         let q = ListRunsQuery {
             target_host: None,
+            mode: None,
             limit: None,
             offset: None,
         };

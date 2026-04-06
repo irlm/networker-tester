@@ -12,6 +12,7 @@ pub mod deployments;
 pub mod invites;
 pub mod jobs;
 pub mod migrations;
+pub mod perf_log;
 pub mod projects;
 pub mod runs;
 pub mod schedules;

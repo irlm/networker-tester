@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import type { BenchmarkRunSummary } from '../api/types';
+import { useDebounce } from '../hooks/useDebounce';
 import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useProject } from '../hooks/useProject';
@@ -74,6 +75,7 @@ export function BenchmarksPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [targetSearch, setTargetSearch] = useState('');
+  const debouncedTarget = useDebounce(targetSearch, 300);
   const [scenarioFilter, setScenarioFilter] = useState('');
   const [phaseModelFilter, setPhaseModelFilter] = useState('');
   const [serverRegionFilter, setServerRegionFilter] = useState('');
@@ -94,7 +96,7 @@ export function BenchmarksPage() {
   const loadBenchmarks = useCallback(() => {
     if (!projectId) return;
     const params: { target_host?: string; limit?: number } = { limit: 50 };
-    if (targetSearch.trim()) params.target_host = targetSearch.trim();
+    if (debouncedTarget.trim()) params.target_host = debouncedTarget.trim();
 
     api
       .getBenchmarks(projectId, params)
@@ -110,7 +112,7 @@ export function BenchmarksPage() {
         setError(String(err));
         setLoading(false);
       });
-  }, [projectId, targetSearch]);
+  }, [projectId, debouncedTarget]);
 
   usePolling(loadBenchmarks, 15000);
 

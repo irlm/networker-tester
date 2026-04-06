@@ -1,7 +1,10 @@
-import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, BenchmarkComparePreset, BenchmarkComparePresetInput, TlsProfileSummary, TlsProfileDetail, BenchmarkConfigSummary, BenchmarkVmCatalogEntry, BenchTokenInfo } from './types';
+import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, BenchmarkComparePreset, BenchmarkComparePresetInput, TlsProfileSummary, TlsProfileDetail, BenchmarkConfigSummary, BenchmarkVmCatalogEntry, BenchTokenInfo, PerfLogInput, PerfLogRow, PerfLogStats } from './types';
 
 export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, BenchmarkComparePreset, BenchmarkComparePresetInput, TlsProfileSummary, TlsProfileDetail, BenchmarkConfigSummary, BenchmarkVmCatalogEntry, BenchTokenInfo };
 export type { LiveAttempt } from './types';
+
+import { useApiLogStore } from '../stores/apiLogStore';
+import { getRequestSource } from '../lib/requestSource';
 
 const API_BASE = '/api';
 
@@ -12,43 +15,76 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
 
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers: { ...headers, ...(options?.headers as Record<string, string>) },
-  });
+  const method = (options?.method || 'GET').toUpperCase();
+  const source = getRequestSource();
+  const start = performance.now();
+  let status = 0;
+  let serverMs: number | null = null;
+  let errorMsg: string | null = null;
 
-  if (res.status === 401) {
-    localStorage.removeItem('token');
-    localStorage.removeItem('email');
-    localStorage.removeItem('role');
-    localStorage.removeItem('status');
-    localStorage.removeItem('mustChangePassword');
-    localStorage.removeItem('isPlatformAdmin');
-    localStorage.removeItem('activeProjectId');
-    localStorage.removeItem('activeProjectSlug');
-    localStorage.removeItem('activeProjectRole');
-    window.location.href = '/login';
-    throw new Error('Unauthorized');
-  }
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers: { ...headers, ...(options?.headers as Record<string, string>) },
+    });
 
-  if (res.status === 403) {
-    const body = await res.text();
-    if (body === 'pending_approval') {
-      // Update stored status and redirect to pending page
-      localStorage.setItem('status', 'pending');
-      if (window.location.pathname !== '/pending') {
-        window.location.href = '/pending';
-      }
-      throw new Error('pending_approval');
+    status = res.status;
+
+    // Extract server processing time from response header
+    const serverTime = res.headers.get('x-process-time-ms');
+    if (serverTime) serverMs = parseFloat(serverTime);
+
+    if (res.status === 401) {
+      localStorage.removeItem('token');
+      localStorage.removeItem('email');
+      localStorage.removeItem('role');
+      localStorage.removeItem('status');
+      localStorage.removeItem('mustChangePassword');
+      localStorage.removeItem('isPlatformAdmin');
+      localStorage.removeItem('activeProjectId');
+      localStorage.removeItem('activeProjectSlug');
+      localStorage.removeItem('activeProjectRole');
+      window.location.href = '/login';
+      throw new Error('Unauthorized');
     }
-    throw new Error(`API error: ${res.status} ${body}`);
-  }
 
-  if (!res.ok) {
-    throw new Error(`API error: ${res.status} ${res.statusText}`);
-  }
+    if (res.status === 403) {
+      const body = await res.text();
+      if (body === 'pending_approval') {
+        localStorage.setItem('status', 'pending');
+        if (window.location.pathname !== '/pending') {
+          window.location.href = '/pending';
+        }
+        throw new Error('pending_approval');
+      }
+      throw new Error(`API error: ${res.status} ${body}`);
+    }
 
-  return res.json();
+    if (!res.ok) {
+      throw new Error(`API error: ${res.status} ${res.statusText}`);
+    }
+
+    return res.json();
+  } catch (err) {
+    errorMsg = err instanceof Error ? err.message : String(err);
+    throw err;
+  } finally {
+    const totalMs = performance.now() - start;
+    const store = useApiLogStore.getState();
+    if (store.enabled) {
+      store.add({
+        timestamp: Date.now(),
+        method,
+        path,
+        status,
+        totalMs,
+        serverMs,
+        networkMs: serverMs !== null ? totalMs - serverMs : null,
+        error: errorMsg,
+        source,
+      });
+    }
+  }
 }
 
 function projectUrl(projectId: string, path: string): string {
@@ -224,9 +260,11 @@ export const api = {
       body: JSON.stringify(params),
     }),
 
-  getJobs: (projectId: string, params?: { status?: string; limit?: number; offset?: number }) => {
+  getJobs: (projectId: string, params?: { status?: string; agent_id?: string; created_by?: string; limit?: number; offset?: number }) => {
     const search = new URLSearchParams();
     if (params?.status) search.set('status', params.status);
+    if (params?.agent_id) search.set('agent_id', params.agent_id);
+    if (params?.created_by) search.set('created_by', params.created_by);
     if (params?.limit) search.set('limit', String(params.limit));
     if (params?.offset) search.set('offset', String(params.offset));
     const qs = search.toString();
@@ -244,9 +282,10 @@ export const api = {
   cancelJob: (projectId: string, jobId: string) =>
     request<{ status: string }>(projectUrl(projectId, `jobs/${jobId}/cancel`), { method: 'POST' }),
 
-  getRuns: (projectId: string, params?: { target_host?: string; limit?: number; offset?: number }) => {
+  getRuns: (projectId: string, params?: { target_host?: string; mode?: string; limit?: number; offset?: number }) => {
     const search = new URLSearchParams();
     if (params?.target_host) search.set('target_host', params.target_host);
+    if (params?.mode) search.set('mode', params.mode);
     if (params?.limit) search.set('limit', String(params.limit));
     if (params?.offset) search.set('offset', String(params.offset));
     const qs = search.toString();
@@ -375,8 +414,13 @@ export const api = {
     }>(projectUrl(projectId, 'inventory')),
 
   // Schedules
-  getSchedules: (projectId: string) =>
-    request<Schedule[]>(projectUrl(projectId, 'schedules')),
+  getSchedules: (projectId: string, params?: { agent_id?: string; enabled?: boolean }) => {
+    const search = new URLSearchParams();
+    if (params?.agent_id) search.set('agent_id', params.agent_id);
+    if (params?.enabled !== undefined) search.set('enabled', String(params.enabled));
+    const qs = search.toString();
+    return request<Schedule[]>(projectUrl(projectId, `schedules${qs ? `?${qs}` : ''}`));
+  },
 
   getSchedule: (projectId: string, scheduleId: string) =>
     request<{ schedule: Schedule; recent_jobs: Job[] }>(projectUrl(projectId, `schedules/${scheduleId}`)),
@@ -672,4 +716,25 @@ export const api = {
 
   revokeAllBenchTokens: () =>
     request<{ deleted: number }>('/bench-tokens', { method: 'DELETE' }),
+
+  // ── Performance Logs ──────────────────────────────────────────────
+  ingestPerfLogs: (sessionId: string, entries: PerfLogInput[]) =>
+    request<{ inserted: number }>('/perf-log', {
+      method: 'POST',
+      body: JSON.stringify({ session_id: sessionId, entries }),
+    }),
+
+  getPerfLogs: (params?: { kind?: string; path?: string; user_id?: string; limit?: number; offset?: number }) => {
+    const search = new URLSearchParams();
+    if (params?.kind) search.set('kind', params.kind);
+    if (params?.path) search.set('path', params.path);
+    if (params?.user_id) search.set('user_id', params.user_id);
+    if (params?.limit) search.set('limit', String(params.limit));
+    if (params?.offset) search.set('offset', String(params.offset));
+    const qs = search.toString();
+    return request<PerfLogRow[]>(`/perf-log${qs ? `?${qs}` : ''}`);
+  },
+
+  getPerfLogStats: () =>
+    request<PerfLogStats>('/perf-log/stats'),
 };

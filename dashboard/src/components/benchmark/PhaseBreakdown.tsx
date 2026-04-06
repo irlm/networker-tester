@@ -185,7 +185,7 @@ function computeDeltas(
   ];
 
   const rawDeltas: Record<string, number | null> = {};
-  for (const { key, dimmed: _dimmed } of phaseDeltaKeys) {
+  for (const { key } of phaseDeltaKeys) {
     const fv = faster[key];
     const sv = slower[key];
     if (fv === null || sv === null || fv === 0) {
@@ -233,7 +233,7 @@ function computeDeltas(
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export function PhaseBreakdown({ language: _language, color, modes, comparison }: PhaseBreakdownProps) {
+export function PhaseBreakdown({ color, modes, comparison }: PhaseBreakdownProps) {
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
 
   if (modes.length === 0) {

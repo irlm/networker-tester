@@ -1056,3 +1056,52 @@ export interface BenchTokenInfo {
   user: string | null;
   project_id: string | null;
 }
+
+// ── Performance Log ──────────────────────────────────────────────────
+
+export interface PerfLogInput {
+  kind: 'api' | 'render';
+  timestamp?: number;
+  method?: string;
+  path?: string;
+  status?: number;
+  total_ms?: number;
+  server_ms?: number;
+  network_ms?: number;
+  source?: string;
+  component?: string;
+  trigger?: string;
+  render_ms?: number;
+  item_count?: number;
+}
+
+export interface PerfLogRow {
+  id: number;
+  logged_at: string;
+  user_id: string | null;
+  session_id: string | null;
+  kind: string;
+  method: string | null;
+  path: string | null;
+  status: number | null;
+  total_ms: number | null;
+  server_ms: number | null;
+  network_ms: number | null;
+  source: string | null;
+  component: string | null;
+  trigger: string | null;
+  render_ms: number | null;
+  item_count: number | null;
+}
+
+export interface PerfLogStats {
+  api_count: number;
+  render_count: number;
+  avg_total_ms: number | null;
+  avg_server_ms: number | null;
+  avg_render_ms: number | null;
+  p95_total_ms: number | null;
+  p95_render_ms: number | null;
+  slow_api_count: number;
+  janky_render_count: number;
+}

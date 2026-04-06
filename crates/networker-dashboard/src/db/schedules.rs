@@ -98,12 +98,14 @@ pub async fn get(client: &Client, schedule_id: &Uuid) -> anyhow::Result<Option<S
 
 #[allow(dead_code)]
 pub async fn list(client: &Client, project_id: &Uuid) -> anyhow::Result<Vec<ScheduleRow>> {
-    list_filtered(client, project_id, None).await
+    list_filtered(client, project_id, None::<&Uuid>, None, None).await
 }
 
 pub async fn list_filtered(
     client: &Client,
     project_id: &Uuid,
+    agent_id_filter: Option<&Uuid>,
+    enabled_filter: Option<bool>,
     visible_ids: Option<&std::collections::HashSet<uuid::Uuid>>,
 ) -> anyhow::Result<Vec<ScheduleRow>> {
     if let Some(ids) = visible_ids {
@@ -112,29 +114,50 @@ pub async fn list_filtered(
         }
     }
 
-    let rows = if let Some(ids) = visible_ids {
-        let id_vec: Vec<Uuid> = ids.iter().copied().collect();
-        client
-            .query(
-                "SELECT schedule_id, name, definition_id, agent_id, deployment_id, cron_expr,
-                        enabled, config, auto_start_vm, auto_stop_vm, created_by,
-                        created_at, next_run_at, last_run_at, project_id
-                 FROM schedule WHERE project_id = $1 AND schedule_id = ANY($2)
-                 ORDER BY created_at DESC",
-                &[project_id, &id_vec],
-            )
-            .await?
+    let visible_vec: Option<Vec<Uuid>> = visible_ids.map(|ids| ids.iter().copied().collect());
+
+    let base = "SELECT schedule_id, name, definition_id, agent_id, deployment_id, cron_expr,
+                       enabled, config, auto_start_vm, auto_stop_vm, created_by,
+                       created_at, next_run_at, last_run_at, project_id, benchmark_config_id
+                FROM schedule WHERE project_id = $1";
+
+    let mut clauses = Vec::new();
+    let mut param_idx: usize = 2;
+
+    if agent_id_filter.is_some() {
+        clauses.push(format!("agent_id = ${param_idx}"));
+        param_idx += 1;
+    }
+    if enabled_filter.is_some() {
+        clauses.push(format!("enabled = ${param_idx}"));
+        param_idx += 1;
+    }
+    if visible_vec.is_some() {
+        clauses.push(format!("schedule_id = ANY(${param_idx})"));
+    }
+
+    let sql = if clauses.is_empty() {
+        format!("{base} ORDER BY created_at DESC")
     } else {
-        client
-            .query(
-                "SELECT schedule_id, name, definition_id, agent_id, deployment_id, cron_expr,
-                        enabled, config, auto_start_vm, auto_stop_vm, created_by,
-                        created_at, next_run_at, last_run_at, project_id
-                 FROM schedule WHERE project_id = $1 ORDER BY created_at DESC",
-                &[project_id],
-            )
-            .await?
+        format!(
+            "{base} AND {} ORDER BY created_at DESC",
+            clauses.join(" AND ")
+        )
     };
+
+    let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
+    params.push(project_id);
+    if let Some(aid) = &agent_id_filter {
+        params.push(aid);
+    }
+    if let Some(ref en) = enabled_filter {
+        params.push(en);
+    }
+    if let Some(ref ids) = visible_vec {
+        params.push(ids);
+    }
+
+    let rows = client.query(&sql, &params).await?;
     Ok(rows.iter().map(row_to_schedule).collect())
 }
 

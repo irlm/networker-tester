@@ -18,6 +18,7 @@ mod invites;
 mod jobs;
 mod leaderboard;
 mod modes;
+mod perf_log;
 mod project_members;
 mod projects;
 mod runs;
@@ -55,6 +56,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(events::router(state.clone()))
         .merge(admin::router(state.clone()))
         .merge(bench_tokens::router(state.clone()))
+        .merge(perf_log::router(state.clone()))
         .merge(leaderboard::protected_router(state.clone()))
         .layer(middleware::from_fn_with_state(
             state.clone(),

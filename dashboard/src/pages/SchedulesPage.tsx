@@ -1,12 +1,17 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
+import { stableSet } from '../lib/stableUpdate';
 import type { Schedule } from '../api/types';
 import { StatusBadge } from '../components/common/StatusBadge';
+import { FilterBar, FilterChip } from '../components/common/FilterBar';
 import { CreateScheduleDialog } from '../components/CreateScheduleDialog';
 import { useToast } from '../hooks/useToast';
 import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useProject } from '../hooks/useProject';
+
+const SCHEDULE_STATUS_OPTIONS = ['all', 'active', 'paused', 'overdue'] as const;
 
 function formatCron(expr: string): { label: string; raw: string } {
   const presets: Record<string, string> = {
@@ -75,20 +80,36 @@ function scheduleStatus(s: Schedule): { badge: string; label: string; detail: st
 }
 
 export function SchedulesPage() {
-  const { projectId } = useProject();
+  const { projectId, isOperator } = useProject();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [toggling, setToggling] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const addToast = useToast();
+  const schedulesFingerprint = useRef('');
+
+  const schedStatusFilter = searchParams.get('status') || 'all';
+  const nameSearch = searchParams.get('name') || '';
+
+  const setFilter = useCallback((key: string, value: string) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      if (!value || value === 'all') next.delete(key);
+      else next.set(key, value);
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
+
+  const clearAllFilters = useCallback(() => setSearchParams({}, { replace: true }), [setSearchParams]);
 
   usePageTitle('Schedules');
 
   const refresh = useCallback(() => {
     if (!projectId) return;
     api.getSchedules(projectId)
-      .then(s => { setSchedules(s); setLoading(false); })
+      .then(s => { stableSet(setSchedules, s, schedulesFingerprint); setLoading(false); })
       .catch(() => { addToast('error', 'Failed to load schedules'); setLoading(false); });
   }, [addToast, projectId]);
 
@@ -135,6 +156,42 @@ export function SchedulesPage() {
 
   const enabledCount = schedules.filter(s => s.enabled).length;
   const overdueCount = schedules.filter(s => s.enabled && s.next_run_at && new Date(s.next_run_at).getTime() < Date.now()).length;
+
+  // Client-side filtering
+  const filteredSchedules = useMemo(() => {
+    let list = schedules;
+    if (nameSearch.trim()) {
+      const q = nameSearch.toLowerCase();
+      list = list.filter(s =>
+        (s.name || '').toLowerCase().includes(q) ||
+        (s.config?.target || '').toLowerCase().includes(q)
+      );
+    }
+    if (schedStatusFilter === 'active') list = list.filter(s => s.enabled);
+    else if (schedStatusFilter === 'paused') list = list.filter(s => !s.enabled);
+    else if (schedStatusFilter === 'overdue') list = list.filter(s => s.enabled && s.next_run_at && new Date(s.next_run_at).getTime() < Date.now());
+    return list;
+  }, [schedules, schedStatusFilter, nameSearch]);
+
+  const schedFilterCount = [nameSearch, schedStatusFilter !== 'all'].filter(Boolean).length;
+
+  // Precompute expensive derived data once per data change (not per render)
+  const computedSchedules = useMemo(() =>
+    filteredSchedules.map(s => {
+      const target = s.config?.target || '—';
+      let targetShort = target;
+      try { targetShort = new URL(target).host; } catch { /* keep */ }
+      return {
+        ...s,
+        _cron: formatCron(s.cron_expr),
+        _status: scheduleStatus(s),
+        _name: s.name || 'Unnamed schedule',
+        _isPaused: !s.enabled,
+        _targetShort: targetShort,
+      };
+    }),
+    [filteredSchedules],
+  );
 
   if (loading && schedules.length === 0) {
     return (
@@ -188,33 +245,67 @@ export function SchedulesPage() {
             </span>
           )}
         </div>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="bg-cyan-600 hover:bg-cyan-500 text-white px-3 md:px-4 py-1.5 rounded text-sm transition-colors flex-shrink-0"
-        >
-          New Schedule
-        </button>
+        {isOperator && (
+          <button
+            onClick={() => setShowCreate(true)}
+            className="bg-cyan-600 hover:bg-cyan-500 text-white px-3 md:px-4 py-1.5 rounded text-sm transition-colors flex-shrink-0"
+          >
+            New Schedule
+          </button>
+        )}
       </div>
 
+      {/* ── Filter Bar ── */}
+      <FilterBar
+        activeCount={schedFilterCount}
+        onClearAll={clearAllFilters}
+        chips={
+          <>
+            {nameSearch && <FilterChip label="Search" value={nameSearch} onClear={() => setFilter('name', '')} />}
+            {schedStatusFilter !== 'all' && (
+              <FilterChip label="Status" value={schedStatusFilter} onClear={() => setFilter('status', 'all')} />
+            )}
+          </>
+        }
+      >
+        <input
+          type="search"
+          value={nameSearch}
+          onChange={(e) => setFilter('name', e.target.value)}
+          placeholder="Search schedules..."
+          aria-label="Search schedules by name"
+          className="bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-300 w-40 md:w-48 focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
+        />
+        <select
+          value={schedStatusFilter}
+          onChange={(e) => setFilter('status', e.target.value)}
+          aria-label="Filter by status"
+          className="bg-[var(--bg-base)] border border-gray-700 rounded px-2 md:px-3 py-1.5 text-sm text-gray-300 focus:outline-none focus:border-cyan-500"
+        >
+          {SCHEDULE_STATUS_OPTIONS.map(s => (
+            <option key={s} value={s}>
+              {s === 'all' ? 'All statuses' : s.charAt(0).toUpperCase() + s.slice(1)}
+            </option>
+          ))}
+        </select>
+      </FilterBar>
+
       {/* ── Mobile card layout (< md) ── */}
-      <div className="md:hidden space-y-2">
-        {schedules.length === 0 ? (
+      <div className="md:hidden space-y-2 mt-4">
+        {filteredSchedules.length === 0 ? (
           <div className="border border-gray-800 rounded p-8 text-center">
-            <p className="text-gray-500 text-sm">No scheduled tests yet</p>
+            <p className="text-gray-500 text-sm">{schedFilterCount > 0 ? 'No schedules match filters' : 'No scheduled tests yet'}</p>
             <button onClick={() => setShowCreate(true)} className="text-xs text-cyan-400 mt-2">
               Create a schedule
             </button>
           </div>
         ) : (
-          schedules.map((s) => {
-            const config = s.config;
-            const target = config?.target || '—';
-            const cron = formatCron(s.cron_expr);
-            const status = scheduleStatus(s);
-            const scheduleName = s.name || 'Unnamed schedule';
-            const isPaused = !s.enabled;
-            let targetShort = target;
-            try { targetShort = new URL(target).host; } catch { /* keep */ }
+          computedSchedules.map((s) => {
+            const cron = s._cron;
+            const status = s._status;
+            const scheduleName = s._name;
+            const isPaused = s._isPaused;
+            const targetShort = s._targetShort;
 
             return (
               <div
@@ -292,16 +383,13 @@ export function SchedulesPage() {
             </tr>
           </thead>
           <tbody>
-            {schedules.map((s) => {
-              const config = s.config;
-              const target = config?.target || '—';
-              const cron = formatCron(s.cron_expr);
-              const status = scheduleStatus(s);
-              const scheduleName = s.name || 'Unnamed schedule';
-              const isPaused = !s.enabled;
+            {computedSchedules.map((s) => {
+              const cron = s._cron;
+              const status = s._status;
+              const scheduleName = s._name;
+              const isPaused = s._isPaused;
               const isOverdue = status.label === 'overdue';
-              let targetShort = target;
-              try { targetShort = new URL(target).host; } catch { /* keep */ }
+              const targetShort = s._targetShort;
 
               return (
                 <tr
@@ -316,7 +404,7 @@ export function SchedulesPage() {
                       <span className="ml-2 text-xs text-purple-400 bg-purple-500/10 px-1.5 py-0.5 rounded">benchmark</span>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-gray-400 font-mono text-xs truncate max-w-40" title={target}>
+                  <td className="px-4 py-3 text-gray-400 font-mono text-xs truncate max-w-40" title={s.config?.target || ''}>
                     {targetShort}
                   </td>
                   <td className="px-4 py-3 text-xs" title={cron.raw}>
@@ -373,9 +461,9 @@ export function SchedulesPage() {
           </tbody>
         </table>
 
-        {schedules.length === 0 && (
+        {filteredSchedules.length === 0 && (
           <div className="py-10 text-center">
-            <p className="text-gray-500 text-sm">No scheduled tests yet</p>
+            <p className="text-gray-500 text-sm">{schedFilterCount > 0 ? 'No schedules match the current filters' : 'No scheduled tests yet'}</p>
             <p className="text-gray-700 text-xs mt-1">
               <button onClick={() => setShowCreate(true)} className="text-cyan-400 hover:text-cyan-300 transition-colors">
                 Create a schedule
