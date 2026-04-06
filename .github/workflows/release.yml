@@ -285,10 +285,11 @@ jobs:
               mkdir -p /opt/alethedash/tester
               cp /tmp/networker-agent /opt/alethedash/tester/networker-agent 2>/dev/null || true
               cp /tmp/networker-tester /opt/alethedash/tester/networker-tester 2>/dev/null || true
+              cp /tmp/networker-tester /usr/local/bin/networker-tester 2>/dev/null || true
               cp /tmp/alethabench /usr/local/bin/alethabench 2>/dev/null || true
               chmod +x /opt/alethedash/networker-dashboard /opt/alethedash/networker-endpoint \
                 /opt/alethedash/tester/networker-agent /opt/alethedash/tester/networker-tester \
-                /usr/local/bin/alethabench
+                /usr/local/bin/alethabench /usr/local/bin/networker-tester
               rm -f /tmp/networker-dashboard /tmp/networker-endpoint /tmp/networker-agent \
                 /tmp/networker-tester /tmp/alethabench
 
