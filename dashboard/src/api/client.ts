@@ -239,7 +239,7 @@ export const api = {
 
   createAgent: (projectId: string, params: {
     name: string;
-    location: 'local' | 'ssh';
+    location: 'ssh';
     region?: string;
     provider?: string;
     ssh_host?: string;

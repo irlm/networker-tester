@@ -1,69 +1,6 @@
-//! Agent provisioning: spawn local agents or deploy agents to remote machines via SSH.
+//! Agent provisioning: deploy agents to remote machines via SSH.
 
 use tokio::process::Command;
-
-/// Spawn a local tester process. Returns the PID if successful.
-pub async fn spawn_local_agent(api_key: &str, dashboard_url: &str) -> Option<u32> {
-    tracing::info!(dashboard_url, "Spawning local tester");
-
-    let agent_bin = find_agent_binary().await;
-
-    // Log tester output to a file for debugging
-    let log_path = std::env::temp_dir().join("networker-tester-agent.log");
-    let log_file = std::fs::File::create(&log_path).ok();
-    let stderr_out = match &log_file {
-        Some(f) => std::process::Stdio::from(
-            f.try_clone()
-                .unwrap_or_else(|_| std::fs::File::create("/dev/null").expect("/dev/null")),
-        ),
-        None => std::process::Stdio::null(),
-    };
-    if log_file.is_some() {
-        tracing::info!(path = %log_path.display(), "Tester output logging to file");
-    }
-
-    let result = match &agent_bin {
-        Some(bin) => {
-            tracing::info!(binary = %bin, "Starting local tester process");
-            Command::new(bin)
-                .env("AGENT_API_KEY", api_key)
-                .env("AGENT_DASHBOARD_URL", dashboard_url)
-                .current_dir(std::env::temp_dir())
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(stderr_out)
-                .spawn()
-        }
-        None => {
-            tracing::info!("Tester binary not found, trying cargo run");
-            Command::new("cargo")
-                .args(["run", "-p", "networker-agent", "--release"])
-                .env("AGENT_API_KEY", api_key)
-                .env("AGENT_DASHBOARD_URL", dashboard_url)
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-        }
-    };
-
-    match result {
-        Ok(child) => match child.id() {
-            Some(pid) => {
-                tracing::info!(pid, "Local tester process spawned");
-                Some(pid)
-            }
-            None => {
-                tracing::error!("Spawned tester but could not get PID — cannot track process");
-                None
-            }
-        },
-        Err(e) => {
-            tracing::error!(error = %e, "Failed to spawn local tester");
-            None
-        }
-    }
-}
 
 /// Deploy an agent to a remote machine via SSH.
 ///
@@ -226,11 +163,6 @@ async fn run_ssh(dest: &str, extra_args: &[String], command: &str) -> anyhow::Re
 /// Find the networker-tester binary (public, used by version check).
 pub async fn find_tester_binary_path() -> Option<String> {
     find_binary("networker-tester").await
-}
-
-/// Find the agent binary in common locations.
-async fn find_agent_binary() -> Option<String> {
-    find_binary("networker-agent").await
 }
 
 async fn find_binary(name: &str) -> Option<String> {

@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.20.3] - 2026-04-06
+
+### Removed
+- **Local tester support** — dashboard only supports remote testers via SSH; local agents stressed the dashboard VM and caused version mismatch issues
+
+### Fixed
+- Node.js 20 deprecation warnings in all CI workflows (opt-in to Node.js 24)
+
+---
+
 ## [0.20.2] - 2026-04-06
 
 ### Fixed
