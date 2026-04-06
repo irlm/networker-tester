@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Query, State},
+    extract::State,
     http::StatusCode,
     routing::{get, post},
     Json, Router,
@@ -67,11 +67,18 @@ async fn ingest(
     Ok(Json(serde_json::json!({ "inserted": inserted })))
 }
 
-/// GET /api/perf-log — list perf log entries with filters
+/// GET /api/perf-log — list perf log entries with filters (admin only)
 async fn list_logs(
     State(state): State<Arc<AppState>>,
-    Query(q): Query<ListQuery>,
+    req: axum::extract::Request,
 ) -> Result<Json<Vec<crate::db::perf_log::PerfLogRow>>, StatusCode> {
+    let user = req.extensions().get::<AuthUser>().cloned().ok_or(StatusCode::UNAUTHORIZED)?;
+    if !user.is_platform_admin {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let q: ListQuery = axum::extract::Query::try_from_uri(req.uri())
+        .map(|q| q.0)
+        .unwrap_or(ListQuery { kind: None, path: None, user_id: None, limit: None, offset: None });
     let client = state.db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error in perf_log list");
         StatusCode::INTERNAL_SERVER_ERROR
@@ -94,10 +101,15 @@ async fn list_logs(
     Ok(Json(logs))
 }
 
-/// GET /api/perf-log/stats — aggregate stats
+/// GET /api/perf-log/stats — aggregate stats (admin only)
 async fn get_stats(
     State(state): State<Arc<AppState>>,
+    req: axum::extract::Request,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    let user = req.extensions().get::<AuthUser>().cloned().ok_or(StatusCode::UNAUTHORIZED)?;
+    if !user.is_platform_admin {
+        return Err(StatusCode::FORBIDDEN);
+    }
     let client = state.db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error in perf_log stats");
         StatusCode::INTERNAL_SERVER_ERROR

@@ -11,6 +11,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.20.0] - 2026-04-05
+
+### Added
+- **Role-aware filtering** on Jobs, Runs, Schedules, and Deploy pages with URL-persisted filters, Combobox autocomplete, and shared FilterBar/FilterChip components
+- **Performance observability**: `perf_log` table, `POST/GET /api/perf-log`, `GET /api/perf-log/stats` with P95 aggregates, Server-Timing middleware (`X-Process-Time-Ms`), frontend ApiLogPanel with API/render timing breakdowns
+- **Dashboard setup checklist** for empty workspaces — numbered 4-step onboarding guide replaces scattered empty states
+- **PerfLog pagination** (50 rows/page) with navigation controls and UUID path shortening
+- Sidebar "ADMIN" section header for platform admin nav items
+- Skeleton loading rows for Runs page initial data load
+- `useDebounce`, `useRenderLog`, `stableSet` utility hooks for rendering performance
+
+### Fixed
+- Empty state styling normalized across Tests, Runs, Schedules pages (consistent `border-gray-800` + text CTA)
+- ApiLogPanel gated behind `isPlatformAdmin` (was visible to all users)
+- Dashboard layout: full-width when workspace empty (no redundant quick actions column)
+
+### Security
+- `GET /api/perf-log` and `GET /api/perf-log/stats` now require platform admin role (was accessible to any authenticated user)
+
+---
+
 ## [0.19.1] - 2026-04-05
 
 ### Added
