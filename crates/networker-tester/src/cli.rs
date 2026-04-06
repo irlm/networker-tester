@@ -2047,13 +2047,10 @@ mod tests {
 
     #[test]
     fn db_url_none_by_default() {
-        // Skip if NETWORKER_DB_URL is set so the env-var based test doesn't
-        // accidentally fail here.
-        if std::env::var("NETWORKER_DB_URL").is_ok() {
-            return;
-        }
-        let cfg = Cli::parse_from(["networker-tester"]).resolve(None);
-        assert!(cfg.db_url.is_none(), "--db-url should default to None");
+        with_env_var_cleared("NETWORKER_DB_URL", || {
+            let cfg = Cli::parse_from(["networker-tester"]).resolve(None);
+            assert!(cfg.db_url.is_none(), "--db-url should default to None");
+        });
     }
 
     // ── HttpStack::from_name() tests ──────────────────────────────────────────
