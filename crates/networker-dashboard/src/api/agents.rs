@@ -21,7 +21,7 @@ pub struct CreateAgentRequest {
     pub name: String,
     pub region: Option<String>,
     pub provider: Option<String>,
-    /// "local" = spawn on this machine, "ssh" = deploy via SSH
+    /// "ssh" = deploy via SSH (only remote agents supported)
     #[serde(default = "default_location")]
     pub location: String,
     /// SSH connection details (required when location = "ssh")
@@ -31,7 +31,7 @@ pub struct CreateAgentRequest {
 }
 
 fn default_location() -> String {
-    "local".into()
+    "ssh".into()
 }
 
 #[derive(Serialize)]
@@ -123,62 +123,36 @@ async fn create_agent_scoped(
 
     let dashboard_port = state.dashboard_port;
 
-    match create_req.location.as_str() {
-        "local" => {
-            let api_key_clone = api_key.clone();
-            let dashboard_url = format!("ws://127.0.0.1:{dashboard_port}/ws/agent");
-            let state_clone = state.clone();
-            tokio::spawn(async move {
-                if let Some(pid) = crate::deploy::agent_provisioner::spawn_local_agent(
-                    &api_key_clone,
-                    &dashboard_url,
-                )
-                .await
-                {
-                    state_clone
-                        .tester_processes
-                        .write()
-                        .await
-                        .insert(agent_id, pid);
-                }
-            });
+    if create_req.location == "ssh" {
+        let ssh_host = create_req.ssh_host.clone().unwrap_or_default();
+        let ssh_user = create_req.ssh_user.clone().unwrap_or_else(|| "root".into());
+        let ssh_port = create_req.ssh_port.unwrap_or(22);
+        if !is_valid_ssh_host(&ssh_host) || !is_valid_ssh_user(&ssh_user) || ssh_port == 0 {
+            return Err(StatusCode::BAD_REQUEST);
         }
-        "ssh" => {
-            let ssh_host = create_req.ssh_host.clone().unwrap_or_default();
-            let ssh_user = create_req.ssh_user.clone().unwrap_or_else(|| "root".into());
-            let ssh_port = create_req.ssh_port.unwrap_or(22);
-            if !is_valid_ssh_host(&ssh_host) || !is_valid_ssh_user(&ssh_user) || ssh_port == 0 {
-                return Err(StatusCode::BAD_REQUEST);
-            }
-            let api_key_clone = api_key.clone();
-            let name_clone = create_req.name.clone();
-            let dashboard_url = format!("ws://{{DASHBOARD_HOST}}:{dashboard_port}/ws/agent");
-            let events_tx = state.events_tx.clone();
-            tokio::spawn(async move {
-                crate::deploy::agent_provisioner::provision_remote_agent(
-                    &name_clone,
-                    &api_key_clone,
-                    &dashboard_url,
-                    &ssh_host,
-                    &ssh_user,
-                    ssh_port,
-                    events_tx,
-                )
-                .await;
-            });
-        }
-        _ => {}
+        let api_key_clone = api_key.clone();
+        let name_clone = create_req.name.clone();
+        let dashboard_url = format!("ws://{{DASHBOARD_HOST}}:{dashboard_port}/ws/agent");
+        let events_tx = state.events_tx.clone();
+        tokio::spawn(async move {
+            crate::deploy::agent_provisioner::provision_remote_agent(
+                &name_clone,
+                &api_key_clone,
+                &dashboard_url,
+                &ssh_host,
+                &ssh_user,
+                ssh_port,
+                events_tx,
+            )
+            .await;
+        });
     }
 
     Ok(Json(CreateAgentResponse {
         agent_id,
         api_key: api_key.clone(),
         name: create_req.name,
-        status: if create_req.location == "local" {
-            "starting".into()
-        } else {
-            "provisioning".into()
-        },
+        status: "provisioning".into(),
     }))
 }
 
