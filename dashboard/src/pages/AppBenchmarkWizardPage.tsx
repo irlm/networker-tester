@@ -474,7 +474,11 @@ export function AppBenchmarkWizardPage() {
       const payload = buildPayload();
       // Testbeds without existing_vm_ip will be auto-provisioned by the orchestrator
       const { config_id } = await api.createBenchmarkConfig(projectId, payload);
-      await api.launchBenchmarkConfig(projectId, config_id);
+      const result = await api.launchBenchmarkConfig(projectId, config_id);
+      if (result.error) {
+        setSubmitError(result.message ?? result.error);
+        return;
+      }
       navigate(`/projects/${projectId}/benchmark-progress/${config_id}`);
     } catch (err) {
       setSubmitError(String(err));

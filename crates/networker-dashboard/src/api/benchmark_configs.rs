@@ -382,6 +382,54 @@ async fn launch_config(
         return Err(StatusCode::CONFLICT);
     }
 
+    // Block launch if any online tester is running an outdated version
+    let dashboard_version = env!("CARGO_PKG_VERSION");
+    let agents = crate::db::agents::list(&client, &ctx.project_id)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to list agents for version check");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    let online_agents: Vec<_> = agents.iter().filter(|a| a.status == "online").collect();
+    if online_agents.is_empty() {
+        tracing::warn!("No online testers available for benchmark launch");
+        return Ok(Json(serde_json::json!({
+            "error": "no_testers",
+            "message": "No online testers available. Connect a tester before launching."
+        })));
+    }
+    let outdated: Vec<_> = online_agents
+        .iter()
+        .filter(|a| match &a.version {
+            Some(v) => v != dashboard_version,
+            None => true, // unknown version treated as outdated
+        })
+        .collect();
+    if !outdated.is_empty() {
+        let names: Vec<_> = outdated
+            .iter()
+            .map(|a| {
+                format!(
+                    "{} ({})",
+                    a.name,
+                    a.version.as_deref().unwrap_or("unknown")
+                )
+            })
+            .collect();
+        tracing::warn!(
+            dashboard_version,
+            outdated_testers = ?names,
+            "Benchmark launch blocked: tester version mismatch"
+        );
+        return Ok(Json(serde_json::json!({
+            "error": "version_mismatch",
+            "message": format!(
+                "Cannot launch: testers {} are not on dashboard version {dashboard_version}. Update testers first.",
+                names.join(", ")
+            )
+        })));
+    }
+
     crate::db::benchmark_configs::update_status(&client, &config_id, "queued", None)
         .await
         .map_err(|e| {

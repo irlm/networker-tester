@@ -678,7 +678,7 @@ export const api = {
     }),
 
   launchBenchmarkConfig: (projectId: string, configId: string) =>
-    request<{ status: string }>(projectUrl(projectId, `benchmark-configs/${configId}/launch`), { method: 'POST' }),
+    request<{ status: string; error?: string; message?: string }>(projectUrl(projectId, `benchmark-configs/${configId}/launch`), { method: 'POST' }),
 
   cancelBenchmarkConfig: (projectId: string, configId: string) =>
     request<{ status: string }>(projectUrl(projectId, `benchmark-configs/${configId}/cancel`), { method: 'POST' }),
