@@ -66,8 +66,12 @@ export function PerfLogPage() {
   }, [kindFilter, pathFilter]);
 
   const loadStats = useCallback(() => {
-    api.getPerfLogStats().then(data => {
-      stableSet(setStats, data, statsFingerprint);
+    api.getPerfLogStats().then((data: PerfLogStats) => {
+      const fp = JSON.stringify(data);
+      if (fp !== statsFingerprint.current) {
+        statsFingerprint.current = fp;
+        setStats(data);
+      }
     }).catch(() => {});
   }, []);
 

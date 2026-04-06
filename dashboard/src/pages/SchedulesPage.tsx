@@ -404,7 +404,7 @@ export function SchedulesPage() {
                       <span className="ml-2 text-xs text-purple-400 bg-purple-500/10 px-1.5 py-0.5 rounded">benchmark</span>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-gray-400 font-mono text-xs truncate max-w-40" title={target}>
+                  <td className="px-4 py-3 text-gray-400 font-mono text-xs truncate max-w-40" title={s.config?.target || ''}>
                     {targetShort}
                   </td>
                   <td className="px-4 py-3 text-xs" title={cron.raw}>
