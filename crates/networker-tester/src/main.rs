@@ -1434,7 +1434,6 @@ async fn run_for_target(
     Ok(run)
 }
 
-
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
@@ -1444,7 +1443,6 @@ mod tests {
         average_jitter_ms, baseline_from_environment_check, baseline_from_stability_check,
         classify_ip, classify_target, percentile,
     };
-    use networker_tester::dispatch::apply_impairment_target;
     use networker_tester::benchmark::{
         adaptive_case_id, benchmark_adaptive_criteria, benchmark_adaptive_status,
         benchmark_attempt_wall_time_ms, benchmark_pilot_criteria, bootstrap_median_interval,
@@ -1455,6 +1453,7 @@ mod tests {
     use networker_tester::cli::{
         ImpairmentProfile, ResolvedImpairmentConfig, ResolvedPacketCaptureConfig,
     };
+    use networker_tester::dispatch::apply_impairment_target;
     use networker_tester::metrics::{
         BenchmarkEnvironmentCheck, BenchmarkStabilityCheck, HttpResult, NetworkType,
     };

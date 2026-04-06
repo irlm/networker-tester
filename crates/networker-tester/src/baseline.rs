@@ -173,9 +173,7 @@ pub fn average_jitter_ms(samples: &[f64]) -> f64 {
         / (samples.len() - 1) as f64
 }
 
-pub fn baseline_from_stability_check(
-    stability_check: &BenchmarkStabilityCheck,
-) -> NetworkBaseline {
+pub fn baseline_from_stability_check(stability_check: &BenchmarkStabilityCheck) -> NetworkBaseline {
     NetworkBaseline {
         samples: stability_check.successful_samples,
         rtt_min_ms: stability_check.rtt_min_ms,

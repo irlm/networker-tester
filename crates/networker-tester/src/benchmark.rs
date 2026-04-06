@@ -1,5 +1,7 @@
 use crate::cli::ResolvedConfig;
-use crate::metrics::{attempt_payload_bytes, primary_metric_value, BenchmarkExecutionPlan, RequestAttempt};
+use crate::metrics::{
+    attempt_payload_bytes, primary_metric_value, BenchmarkExecutionPlan, RequestAttempt,
+};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
