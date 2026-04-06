@@ -22,7 +22,6 @@ export interface ComparisonData {
 }
 
 export interface PhaseBreakdownProps {
-  language: string;
   color: string;
   modes: PhaseData[];
   comparison?: ComparisonData;

@@ -1652,13 +1652,10 @@ mod tests {
 
     #[test]
     fn validate_save_to_sql_without_conn_string_fails() {
-        // Skip when NETWORKER_SQL_CONN is set: clap picks it up automatically,
-        // so validation would correctly pass — but the test expects an error.
-        if std::env::var("NETWORKER_SQL_CONN").is_ok() {
-            return;
-        }
-        let cli = Cli::parse_from(["networker-tester", "--save-to-sql"]);
-        assert!(cli.resolve(None).validate().is_err());
+        with_env_vars_cleared(&["NETWORKER_SQL_CONN", "NETWORKER_DB_URL"], || {
+            let cli = Cli::parse_from(["networker-tester", "--save-to-sql"]);
+            assert!(cli.resolve(None).validate().is_err());
+        });
     }
 
     #[test]
@@ -1750,20 +1747,28 @@ mod tests {
     }
 
     fn with_env_var_cleared<T>(key: &str, f: impl FnOnce() -> T) -> T {
+        with_env_vars_cleared(&[key], f)
+    }
+
+    fn with_env_vars_cleared<T>(keys: &[&str], f: impl FnOnce() -> T) -> T {
         use std::sync::{Mutex, OnceLock};
 
         static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         let _guard = ENV_LOCK
             .get_or_init(|| Mutex::new(()))
             .lock()
-            .expect("env lock poisoned");
+            .unwrap_or_else(|e| e.into_inner());
 
-        let saved = std::env::var(key).ok();
-        std::env::remove_var(key);
+        let saved: Vec<_> = keys.iter().map(|k| (*k, std::env::var(k).ok())).collect();
+        for k in keys {
+            std::env::remove_var(k);
+        }
         let result = f();
-        match saved {
-            Some(v) => std::env::set_var(key, v),
-            None => std::env::remove_var(key),
+        for (k, v) in &saved {
+            match v {
+                Some(val) => std::env::set_var(k, val),
+                None => std::env::remove_var(k),
+            }
         }
         result
     }
@@ -1858,21 +1863,14 @@ mod tests {
 
     #[test]
     fn validate_save_to_db_without_db_url_fails() {
-        // Skip if NETWORKER_DB_URL is set in the environment — clap picks it up
-        // automatically so validate() would correctly pass.
-        if std::env::var("NETWORKER_DB_URL").is_ok() {
-            return;
-        }
-        let cfg = Cli::parse_from(["networker-tester", "--save-to-db"]).resolve(None);
-        assert!(
-            cfg.validate().is_err(),
-            "--save-to-db without --db-url should fail validation"
-        );
-        let err = cfg.validate().unwrap_err();
-        assert!(
-            err.to_string().contains("--db-url"),
-            "error should mention --db-url"
-        );
+        with_env_vars_cleared(&["NETWORKER_DB_URL", "NETWORKER_SQL_CONN"], || {
+            let cfg = Cli::parse_from(["networker-tester", "--save-to-db"]).resolve(None);
+            let err = cfg.validate().unwrap_err();
+            assert!(
+                err.to_string().contains("--db-url"),
+                "error should mention --db-url"
+            );
+        });
     }
 
     #[test]
@@ -2047,13 +2045,11 @@ mod tests {
 
     #[test]
     fn db_url_none_by_default() {
-        // Skip if NETWORKER_DB_URL is set so the env-var based test doesn't
-        // accidentally fail here.
-        if std::env::var("NETWORKER_DB_URL").is_ok() {
-            return;
-        }
-        let cfg = Cli::parse_from(["networker-tester"]).resolve(None);
-        assert!(cfg.db_url.is_none(), "--db-url should default to None");
+        // Must clear both env vars: resolve() falls back from connection_string → db_url
+        with_env_vars_cleared(&["NETWORKER_DB_URL", "NETWORKER_SQL_CONN"], || {
+            let cfg = Cli::parse_from(["networker-tester"]).resolve(None);
+            assert!(cfg.db_url.is_none(), "--db-url should default to None");
+        });
     }
 
     // ── HttpStack::from_name() tests ──────────────────────────────────────────

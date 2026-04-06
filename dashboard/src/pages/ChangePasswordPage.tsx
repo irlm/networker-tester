@@ -64,7 +64,7 @@ export function ChangePasswordPage() {
         <form onSubmit={handleSubmit}>
           <div className="text-yellow-400 text-xs mb-6 flex items-center gap-2">
             <span className="text-yellow-500">warn</span>
-            <span>{mustChangePassword ? 'Set your password' : 'Change password'}</span>
+            <span>{mustChangePassword ? 'You must set a new password before continuing' : 'Change password'}</span>
           </div>
 
           {error && (
@@ -129,7 +129,7 @@ export function ChangePasswordPage() {
             disabled={loading}
             className="w-full bg-green-600 hover:bg-green-500 text-white py-2 rounded text-sm font-medium transition-colors disabled:opacity-50"
           >
-            {loading ? 'Updating...' : 'Set password'}
+            {loading ? 'Updating...' : mustChangePassword ? 'Set password' : 'Update password'}
           </button>
         </form>
       </div>
