@@ -107,11 +107,15 @@ pub async fn update_status(client: &Client, agent_id: &Uuid, status: &str) -> an
     Ok(())
 }
 
-pub async fn update_heartbeat(client: &Client, agent_id: &Uuid) -> anyhow::Result<()> {
+pub async fn update_heartbeat(
+    client: &Client,
+    agent_id: &Uuid,
+    version: Option<&str>,
+) -> anyhow::Result<()> {
     client
         .execute(
-            "UPDATE agent SET last_heartbeat = now() WHERE agent_id = $1",
-            &[agent_id],
+            "UPDATE agent SET last_heartbeat = now(), version = COALESCE($2, version) WHERE agent_id = $1",
+            &[agent_id, &version],
         )
         .await?;
     Ok(())

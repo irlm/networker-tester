@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.20.1] - 2026-04-06
+
+### Fixed
+- **Benchmark version guard** — block benchmark launch when online testers are running an outdated version; prevents silent orchestrator failures from config schema mismatches
+- **Agent heartbeat stores version** — dashboard now persists agent version from WebSocket heartbeat, enabling version-aware decisions
+
+---
+
 ## [0.20.0] - 2026-04-05
 
 ### Added

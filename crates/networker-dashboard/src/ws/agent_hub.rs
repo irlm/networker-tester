@@ -230,10 +230,11 @@ async fn handle_agent_socket(
 
 async fn handle_agent_message(state: &Arc<AppState>, agent_id: Uuid, msg: AgentMessage) {
     match msg {
-        AgentMessage::Heartbeat { .. } => {
-            tracing::trace!(agent_id = %agent_id, "Heartbeat received");
+        AgentMessage::Heartbeat { version, .. } => {
+            tracing::trace!(agent_id = %agent_id, ?version, "Heartbeat received");
             if let Ok(client) = state.db.get().await {
-                let _ = crate::db::agents::update_heartbeat(&client, &agent_id).await;
+                let _ = crate::db::agents::update_heartbeat(&client, &agent_id, version.as_deref())
+                    .await;
             }
         }
         AgentMessage::JobAck { job_id } => {
