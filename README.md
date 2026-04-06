@@ -6,6 +6,7 @@ HTTP/2, HTTP/3, UDP, page-load, throughput, TLS, and URL-diagnostic behavior.
 The repository includes:
 - `networker-tester`: the Rust CLI that runs probes and writes JSON, HTML, Excel, and DB output
 - `networker-endpoint`: the Rust server used as the diagnostic target
+- `networker-common`: shared WebSocket message types and protocol helpers for dashboard-agent communication
 - `networker-dashboard`: an axum + React control plane for agents, runs, deployments, and schedules
 - `networker-agent`: a worker that connects to the dashboard and runs tester jobs
 
@@ -130,16 +131,53 @@ Detailed documentation lives under [`docs/`](docs/):
 
 ```text
 crates/
-  networker-tester/
-  networker-endpoint/
-  networker-dashboard/
-  networker-agent/
-  networker-common/
-dashboard/              React SPA for the dashboard
+  networker-tester/     CLI probe engine and output writers
+  networker-endpoint/   HTTP/HTTPS/UDP diagnostic target server
+  networker-common/     Shared message types (dashboard <-> agent)
+  networker-dashboard/  REST API, WebSocket hubs, auth, scheduling
+  networker-agent/      Worker daemon that runs tester jobs
+dashboard/              React + TypeScript + Vite frontend (Tailwind dark theme)
 docs/                   Detailed documentation
 examples/configs/       Checked-in sample JSON configs
+scripts/                Deployment and maintenance scripts
 tests/                  Installer, endpoint, and integration tests
 ```
+
+## Dashboard Quick Start
+
+The dashboard requires PostgreSQL and a few environment variables:
+
+```bash
+# 1. Start PostgreSQL
+docker compose -f docker-compose.dashboard.yml up -d postgres
+
+# 2. Start the endpoint (test target)
+cargo run -p networker-endpoint
+
+# 3. Start the dashboard API (port 3000)
+DASHBOARD_JWT_SECRET=$(openssl rand -base64 32) \
+DASHBOARD_ADMIN_PASSWORD=admin \
+  cargo run -p networker-dashboard
+
+# 4. Start an agent (connects to dashboard)
+AGENT_API_KEY=dev-key cargo run -p networker-agent
+
+# 5. Start the frontend dev server (port 5173, proxies to dashboard)
+cd dashboard && npm install && npm run dev
+```
+
+Key environment variables:
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `DASHBOARD_DB_URL` | no | `postgres://networker:networker@localhost:5432/networker_dashboard` | PostgreSQL connection string |
+| `DASHBOARD_JWT_SECRET` | yes | -- | JWT signing secret (min 32 bytes) |
+| `DASHBOARD_ADMIN_PASSWORD` | no | prompted or generated | Initial admin password |
+| `DASHBOARD_PORT` | no | `3000` | API listen port |
+| `AGENT_DASHBOARD_URL` | no | `ws://localhost:3000/ws/agent` | Dashboard WebSocket URL for agents |
+| `AGENT_API_KEY` | yes | -- | Agent authentication key |
+
+See [`docs/setup-guide.md`](docs/setup-guide.md) for full production deployment.
 
 ## Development
 

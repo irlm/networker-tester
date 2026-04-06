@@ -271,8 +271,9 @@ async fn find_binary(name: &str) -> Option<String> {
         }
     }
 
-    // Try which
-    if let Ok(output) = Command::new("which").arg(name).output().await {
+    // Try PATH lookup
+    let lookup = if cfg!(windows) { "where" } else { "which" };
+    if let Ok(output) = Command::new(lookup).arg(name).output().await {
         if output.status.success() {
             let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !path.is_empty() {

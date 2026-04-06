@@ -81,10 +81,7 @@ impl tracing::field::Visit for MessageVisitor {
         if field.name() == "message" {
             self.message = format!("{:?}", value);
         } else if self.message.is_empty() {
-            // Fallback: use the first field as message
-            if !self.message.is_empty() {
-                self.message.push(' ');
-            }
+            // Fallback: use the first non-message field as the log message
             self.message = format!("{}={:?}", field.name(), value);
         }
     }

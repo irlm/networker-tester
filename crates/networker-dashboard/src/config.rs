@@ -162,17 +162,11 @@ fn atty_is_tty() -> bool {
 
 /// Generate a random temporary password (16 chars, alphanumeric).
 fn generate_temp_password() -> String {
-    use std::io::Read;
-    let mut bytes = [0u8; 24];
-    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
-        let _ = f.read_exact(&mut bytes);
-    }
-    // Base64-like encoding using only URL-safe chars
+    use rand::Rng;
     let charset = b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
-    bytes
-        .iter()
-        .take(16)
-        .map(|b| charset[(*b as usize) % charset.len()] as char)
+    let mut rng = rand::thread_rng();
+    (0..16)
+        .map(|_| charset[rng.gen_range(0..charset.len())] as char)
         .collect()
 }
 
