@@ -1,8 +1,9 @@
-import { useState, useCallback } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useState, useCallback, useMemo } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import type { Agent, Deployment } from '../api/types';
 import { StatusBadge } from '../components/common/StatusBadge';
+import { FilterBar, FilterChip } from '../components/common/FilterBar';
 import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { DeployWizard } from '../components/DeployWizard';
@@ -10,13 +11,24 @@ import { formatDuration } from '../lib/format';
 import { useProject } from '../hooks/useProject';
 
 export function DeployPage() {
-  const { projectId } = useProject();
+  const { projectId, isOperator } = useProject();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showWizard, setShowWizard] = useState(false);
   const navigate = useNavigate();
+
+  const infraSearch = searchParams.get('search') || '';
+  const setInfraSearch = useCallback((v: string) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      if (!v) next.delete('search');
+      else next.set('search', v);
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
 
   usePageTitle('Infrastructure');
 
@@ -39,8 +51,19 @@ export function DeployPage() {
 
   usePolling(loadData, 10000);
 
-  const completedDeps = deployments.filter(d => d.status === 'completed');
-  const activeDeps = deployments.filter(d => d.status === 'running' || d.status === 'pending');
+  // Apply search filter
+  const filtered = useMemo(() => {
+    if (!infraSearch.trim()) return deployments;
+    const q = infraSearch.toLowerCase();
+    return deployments.filter(d =>
+      d.name.toLowerCase().includes(q) ||
+      (d.provider_summary || '').toLowerCase().includes(q) ||
+      (d.endpoint_ips || []).some(ip => ip.includes(q))
+    );
+  }, [deployments, infraSearch]);
+
+  const completedDeps = filtered.filter(d => d.status === 'completed');
+  const activeDeps = filtered.filter(d => d.status === 'running' || d.status === 'pending');
   const testerVms = agents.filter(a => a.provider && a.provider !== 'local');
 
   return (
@@ -53,13 +76,31 @@ export function DeployPage() {
             Endpoints and testers deployed across cloud regions
           </p>
         </div>
-        <button
-          onClick={() => setShowWizard(true)}
-          className="bg-cyan-600 hover:bg-cyan-500 text-white px-3 md:px-4 py-2 rounded text-sm transition-colors flex-shrink-0"
-        >
-          New Endpoint
-        </button>
+        {isOperator && (
+          <button
+            onClick={() => setShowWizard(true)}
+            className="bg-cyan-600 hover:bg-cyan-500 text-white px-3 md:px-4 py-2 rounded text-sm transition-colors flex-shrink-0"
+          >
+            New Endpoint
+          </button>
+        )}
       </div>
+
+      {/* ── Search Bar ── */}
+      <FilterBar
+        activeCount={infraSearch ? 1 : 0}
+        onClearAll={() => setInfraSearch('')}
+        chips={infraSearch ? <FilterChip label="Search" value={infraSearch} onClear={() => setInfraSearch('')} /> : undefined}
+      >
+        <input
+          type="search"
+          value={infraSearch}
+          onChange={(e) => setInfraSearch(e.target.value)}
+          placeholder="Search by name, region, or IP..."
+          aria-label="Search infrastructure"
+          className="bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-300 w-48 md:w-64 focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
+        />
+      </FilterBar>
 
       {error && (
         <div className="bg-red-500/10 border border-red-500/30 rounded p-3 mb-4">

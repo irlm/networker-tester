@@ -22,34 +22,51 @@ pub async fn list(
     client: &Client,
     project_id: &Uuid,
     target_host: Option<&str>,
+    mode: Option<&str>,
     limit: i64,
     offset: i64,
 ) -> anyhow::Result<Vec<RunSummary>> {
-    let rows = if let Some(host) = target_host {
-        client
-            .query(
-                "SELECT r.RunId, r.StartedAt, r.FinishedAt, r.TargetUrl, r.TargetHost, r.Modes,
-                        r.TotalRuns, r.SuccessCount, r.FailureCount, r.ClientOs, r.ClientVersion
-                 FROM TestRun r
-                 JOIN job j ON j.run_id = r.RunId
-                 WHERE j.project_id = $1 AND r.TargetHost = $2
-                 ORDER BY r.StartedAt DESC LIMIT $3 OFFSET $4",
-                &[project_id, &host, &limit, &offset],
-            )
-            .await?
+    let base = "SELECT r.RunId, r.StartedAt, r.FinishedAt, r.TargetUrl, r.TargetHost, r.Modes,
+                       r.TotalRuns, r.SuccessCount, r.FailureCount, r.ClientOs, r.ClientVersion
+                FROM TestRun r
+                JOIN job j ON j.run_id = r.RunId
+                WHERE j.project_id = $1";
+
+    let mut clauses = Vec::new();
+    let mut param_idx: usize = 2;
+
+    if target_host.is_some() {
+        clauses.push(format!("r.TargetHost = ${param_idx}"));
+        param_idx += 1;
+    }
+    if mode.is_some() {
+        // Modes is stored as comma-separated string, use LIKE for partial match
+        clauses.push(format!("r.Modes ILIKE '%' || ${param_idx} || '%'"));
+        param_idx += 1;
+    }
+
+    let order = format!(
+        "ORDER BY r.StartedAt DESC LIMIT ${param_idx} OFFSET ${}",
+        param_idx + 1
+    );
+    let sql = if clauses.is_empty() {
+        format!("{base} {order}")
     } else {
-        client
-            .query(
-                "SELECT r.RunId, r.StartedAt, r.FinishedAt, r.TargetUrl, r.TargetHost, r.Modes,
-                        r.TotalRuns, r.SuccessCount, r.FailureCount, r.ClientOs, r.ClientVersion
-                 FROM TestRun r
-                 JOIN job j ON j.run_id = r.RunId
-                 WHERE j.project_id = $1
-                 ORDER BY r.StartedAt DESC LIMIT $2 OFFSET $3",
-                &[project_id, &limit, &offset],
-            )
-            .await?
+        format!("{base} AND {} {order}", clauses.join(" AND "))
     };
+
+    let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
+    params.push(project_id);
+    if let Some(host) = &target_host {
+        params.push(host);
+    }
+    if let Some(m) = &mode {
+        params.push(m);
+    }
+    params.push(&limit);
+    params.push(&offset);
+
+    let rows = client.query(&sql, &params).await?;
 
     Ok(rows
         .iter()

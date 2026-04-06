@@ -27,6 +27,8 @@ pub struct CreateJobResponse {
 #[derive(Deserialize)]
 pub struct ListJobsQuery {
     pub status: Option<String>,
+    pub agent_id: Option<Uuid>,
+    pub created_by: Option<Uuid>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
 }
@@ -91,10 +93,19 @@ async fn list_jobs_scoped(
         None
     };
 
+    // For viewers, auto-scope to their own jobs (created_by) unless visibility rules are set
+    let created_by_filter = if ctx.role == ProjectRole::Viewer && visible_ids.is_none() {
+        Some(user.user_id)
+    } else {
+        q.created_by
+    };
+
     let jobs = crate::db::jobs::list_filtered(
         &client,
         &ctx.project_id,
         q.status.as_deref(),
+        q.agent_id.as_ref(),
+        created_by_filter.as_ref(),
         q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT),
         q.offset.unwrap_or(0).max(0),
         visible_ids.as_ref(),
@@ -307,6 +318,8 @@ mod tests {
         fn clamp_limit_caps_at_max() {
             let q = ListJobsQuery {
                 status: None,
+                agent_id: None,
+                created_by: None,
                 limit: Some(9999),
                 offset: Some(0),
             };
@@ -318,6 +331,8 @@ mod tests {
         fn clamp_negative_limit_becomes_one() {
             let q = ListJobsQuery {
                 status: None,
+                agent_id: None,
+                created_by: None,
                 limit: Some(-5),
                 offset: None,
             };
@@ -329,6 +344,8 @@ mod tests {
         fn clamp_negative_offset_becomes_zero() {
             let q = ListJobsQuery {
                 status: None,
+                agent_id: None,
+                created_by: None,
                 limit: None,
                 offset: Some(-10),
             };

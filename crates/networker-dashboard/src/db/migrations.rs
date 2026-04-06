@@ -569,6 +569,40 @@ const V022_APPLICATION_BENCHMARK: &str = "
         ON benchmark_config (benchmark_type);
 ";
 
+/// V023 migration: Performance log table for API + render timing telemetry.
+const V023_PERF_LOG: &str = "
+    CREATE TABLE IF NOT EXISTS perf_log (
+        id              BIGSERIAL       PRIMARY KEY,
+        logged_at       TIMESTAMPTZ     NOT NULL DEFAULT now(),
+        user_id         UUID            REFERENCES dash_user(user_id),
+        session_id      VARCHAR(64),
+        kind            VARCHAR(10)     NOT NULL,
+
+        -- API fields
+        method          VARCHAR(10),
+        path            VARCHAR(500),
+        status          SMALLINT,
+        total_ms        REAL,
+        server_ms       REAL,
+        network_ms      REAL,
+        source          VARCHAR(10),
+
+        -- Render fields
+        component       VARCHAR(100),
+        trigger         VARCHAR(100),
+        render_ms       REAL,
+        item_count      INT,
+
+        -- Flexible extras
+        meta            JSONB
+    );
+
+    CREATE INDEX IF NOT EXISTS ix_perf_log_logged_at ON perf_log (logged_at DESC);
+    CREATE INDEX IF NOT EXISTS ix_perf_log_user      ON perf_log (user_id, logged_at DESC);
+    CREATE INDEX IF NOT EXISTS ix_perf_log_kind      ON perf_log (kind, logged_at DESC);
+    CREATE INDEX IF NOT EXISTS ix_perf_log_path      ON perf_log (path, logged_at DESC) WHERE kind = 'api';
+";
+
 /// Run pending migrations.
 pub async fn run(client: &Client) -> anyhow::Result<()> {
     // Ensure migration tracking table exists
@@ -1009,6 +1043,23 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
             )
             .await?;
         tracing::info!("V022 migration complete");
+    }
+
+    // V023: Performance log table
+    let row = client
+        .query_opt("SELECT version FROM _migrations WHERE version = 23", &[])
+        .await?;
+
+    if row.is_none() {
+        tracing::info!("Applying V023 perf_log migration...");
+        client.batch_execute(V023_PERF_LOG).await?;
+        client
+            .execute(
+                "INSERT INTO _migrations (version) VALUES (23) ON CONFLICT DO NOTHING",
+                &[],
+            )
+            .await?;
+        tracing::info!("V023 migration complete");
     }
 
     Ok(())

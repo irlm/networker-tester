@@ -55,6 +55,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
   if (isPlatformAdmin) {
     platformItems.push({ path: '/admin/system', label: 'System', icon: '\u2318' });
     platformItems.push({ path: '/bench-tokens', label: 'Tokens', icon: '\u26BF' });
+    platformItems.push({ path: '/admin/perf-log', label: 'Perf Log', icon: '\u23F1' });
   }
   if (isAdmin) {
     platformItems.push({ path: '/users', label: 'Users', icon: '\u265F' });
@@ -185,7 +186,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
           {renderSection('benchmarks', benchItems)}
 
           {/* Platform: admin tools */}
-          {renderSection('', platformItems)}
+          {renderSection('admin', platformItems)}
         </nav>
 
         {/* Help hint + Collapse toggle + user */}

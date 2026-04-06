@@ -8,6 +8,8 @@ import { useWebSocket, type ConnectionStatus } from './hooks/useWebSocket';
 import { useHotkey } from './hooks/useHotkey';
 import { Sidebar } from './components/layout/Sidebar';
 import { ToastContainer } from './components/common/Toast';
+import { ApiLogPanel } from './components/ApiLogPanel';
+import { usePerfLogFlush } from './hooks/usePerfLogFlush';
 
 const HelpPanel = lazy(() => import('./components/docs/HelpPanel'));
 const CommandPalette = lazy(() => import('./components/docs/CommandPalette'));
@@ -51,6 +53,7 @@ const ShareViewPage = lazyPage(() => import('./pages/ShareViewPage'), 'ShareView
 const AcceptInvitePage = lazyPage(() => import('./pages/AcceptInvitePage'), 'AcceptInvitePage');
 const CommandApprovalsPage = lazyPage(() => import('./pages/CommandApprovalsPage'), 'CommandApprovalsPage');
 const SystemDashboardPage = lazyPage(() => import('./pages/SystemDashboardPage'), 'SystemDashboardPage');
+const PerfLogPage = lazyPage(() => import('./pages/PerfLogPage'), 'PerfLogPage');
 const LeaderboardPage = lazyPage(() => import('./pages/LeaderboardPage'), 'LeaderboardPage');
 const BenchmarkCatalogPage = lazyPage(() => import('./pages/BenchmarkCatalogPage'), 'BenchmarkCatalogPage');
 const BenchmarkConfigResultsPage = lazyPage(() => import('./pages/BenchmarkConfigResultsPage'), 'BenchmarkConfigResultsPage');
@@ -125,6 +128,7 @@ function LazyCommandPalette() {
 }
 
 function AuthenticatedApp() {
+  usePerfLogFlush();
   const status = useWebSocket();
   const mustChangePassword = useAuthStore((s) => s.mustChangePassword);
   const userStatus = useAuthStore((s) => s.status);
@@ -169,6 +173,7 @@ function AuthenticatedApp() {
       <main className="flex-1 overflow-auto pt-12 md:pt-0">
         <ConnectionBanner status={status} />
         <ToastContainer />
+        {isPlatformAdmin && <ApiLogPanel />}
         <Suspense fallback={null}>
           <LazyHelpPanel />
           <LazyCommandPalette />
@@ -205,6 +210,7 @@ function AuthenticatedApp() {
             {/* Platform routes */}
             <Route path="/leaderboard" element={<LeaderboardPage />} />
             {isPlatformAdmin && <Route path="/admin/system" element={<SystemDashboardPage />} />}
+            {isPlatformAdmin && <Route path="/admin/perf-log" element={<PerfLogPage />} />}
             {isPlatformAdmin && <Route path="/bench-tokens" element={<BenchTokensPage />} />}
             {isPlatformAdmin && <Route path="/bench-tokens/history" element={<BenchTokenHistoryPage />} />}
             {isAdmin && <Route path="/users" element={<UsersPage />} />}

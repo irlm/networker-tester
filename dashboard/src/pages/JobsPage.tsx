@@ -1,15 +1,21 @@
-import { useState, useCallback } from 'react';
-import { Link } from 'react-router-dom';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { api, type Job, type Agent, type Deployment } from '../api/client';
+import type { ProjectMember } from '../api/types';
 import { StatusBadge } from '../components/common/StatusBadge';
+import { Combobox, type ComboboxOption } from '../components/common/Combobox';
+import { FilterBar, FilterChip, ScopeChip } from '../components/common/FilterBar';
 import { CreateJobDialog } from '../components/CreateJobDialog';
 import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
+import { useRenderLog } from '../hooks/useRenderLog';
 import { useToast } from '../hooks/useToast';
 import { formatDuration } from '../lib/format';
+import { stableSet } from '../lib/stableUpdate';
 import { useProject } from '../hooks/useProject';
 
 const STATUS_OPTIONS = ['all', 'pending', 'running', 'completed', 'failed', 'cancelled'] as const;
+const TYPE_OPTIONS = ['all', 'test', 'tls'] as const;
 
 function isTlsProfileJob(job: Job) {
   return Boolean(job.config?.tls_profile_url);
@@ -38,10 +44,12 @@ function jobResultLink(projectId: string, job: Job) {
 }
 
 export function JobsPage() {
-  const { projectId } = useProject();
+  const { projectId, isOperator } = useProject();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [testers, setTesters] = useState<Agent[]>([]);
   const [deployments, setDeployments] = useState<Deployment[]>([]);
+  const [members, setMembers] = useState<ProjectMember[]>([]);
   const [showCreate, setShowCreate] = useState(false);
   const [showAddTester, setShowAddTester] = useState(false);
   const [addTesterMode, setAddTesterMode] = useState<'cloud' | 'endpoint' | 'ssh'>('cloud');
@@ -55,36 +63,109 @@ export function JobsPage() {
   const [cloudVmSize, setCloudVmSize] = useState('Standard_B1s');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<string>('all');
   const [showTesters, setShowTesters] = useState(false);
   const addToast = useToast();
+  const jobsFingerprint = useRef('');
+  const testersFingerprint = useRef('');
+
+  // Filters — persisted to URL search params
+  const statusFilter = searchParams.get('status') || 'all';
+  const agentFilter = searchParams.get('agent') || '';
+  const createdByFilter = searchParams.get('created_by') || '';
+  const typeFilter = searchParams.get('type') || 'all';
+  const markRender = useRenderLog('JobsPage');
+
+  const setFilter = useCallback((key: string, value: string) => {
+    markRender(`filter:${key}`);
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      if (!value || value === 'all') {
+        next.delete(key);
+      } else {
+        next.set(key, value);
+      }
+      return next;
+    }, { replace: true });
+  }, [setSearchParams, markRender]);
+
+  const clearAllFilters = useCallback(() => {
+    setSearchParams({}, { replace: true });
+  }, [setSearchParams]);
 
   usePageTitle('Tests');
 
   const loadJobs = useCallback(() => {
     if (!projectId) return;
-    const params: { status?: string; limit?: number } = { limit: 20 };
+    const params: { status?: string; agent_id?: string; created_by?: string; limit?: number } = { limit: 20 };
     if (statusFilter !== 'all') params.status = statusFilter;
+    if (agentFilter) params.agent_id = agentFilter;
+    if (createdByFilter) params.created_by = createdByFilter;
     api.getJobs(projectId, params).then((data) => {
-      setJobs(data);
+      const changed = stableSet(setJobs, data, jobsFingerprint);
+      if (changed) markRender('api:jobs', data.length);
       setError(null);
       setLoading(false);
     }).catch((e) => {
       setError(String(e));
       setLoading(false);
     });
-  }, [statusFilter, projectId]);
+  }, [statusFilter, agentFilter, createdByFilter, projectId, markRender]);
 
   const loadTesters = useCallback(() => {
     if (!projectId) return;
-    api.getAgents(projectId).then(r => setTesters(r.agents)).catch(() => {});
+    api.getAgents(projectId).then(r => stableSet(setTesters, r.agents, testersFingerprint)).catch(() => {});
     api.getDeployments(projectId, { limit: 20 }).then(deps => {
       setDeployments(deps.filter(d => d.status === 'completed' && d.endpoint_ips && d.endpoint_ips.length > 0));
     }).catch(() => {});
   }, [projectId]);
 
+  // Load project members for "created by" filter (operator+ only)
+  useEffect(() => {
+    if (!projectId || !isOperator) return;
+    api.getProjectMembers(projectId).then(setMembers).catch(() => {});
+  }, [projectId, isOperator]);
+
   usePolling(loadJobs, 5000);
   usePolling(loadTesters, 10000);
+
+  // Build combobox options + tester name lookup map
+  const testerMap = useMemo(() =>
+    new Map(testers.map(t => [t.agent_id, t.name])),
+    [testers],
+  );
+
+  const agentOptions: ComboboxOption[] = useMemo(() =>
+    testers.map(t => ({
+      value: t.agent_id,
+      label: t.name,
+      detail: [t.region, t.status].filter(Boolean).join(' · '),
+      group: t.status === 'online' ? 'Online' : 'Offline',
+    })),
+    [testers],
+  );
+
+  const memberOptions: ComboboxOption[] = useMemo(() =>
+    members.map(m => ({
+      value: m.user_id,
+      label: m.display_name || m.email,
+      detail: m.role,
+    })),
+    [members],
+  );
+
+  // Client-side type filter (test vs tls)
+  const filteredJobs = useMemo(() => {
+    if (typeFilter === 'all') return jobs;
+    return jobs.filter(j => typeFilter === 'tls' ? isTlsProfileJob(j) : !isTlsProfileJob(j));
+  }, [jobs, typeFilter]);
+
+  // Active filter count for the chip bar
+  const activeFilterCount = [
+    statusFilter !== 'all',
+    agentFilter,
+    createdByFilter,
+    typeFilter !== 'all',
+  ].filter(Boolean).length;
 
   const handleAddTester = async () => {
     setAddingTester(true);
@@ -110,7 +191,6 @@ export function JobsPage() {
         addToast('success', `Tester "${result.name}" deploying via SSH...`);
       } else if (addTesterMode === 'endpoint') {
         if (!selectedEndpoint) { setAddingTester(false); return; }
-        // Deploy tester to an existing endpoint machine
         const dep = deployments.find(d =>
           d.endpoint_ips?.includes(selectedEndpoint)
         );
@@ -118,7 +198,7 @@ export function JobsPage() {
           name: testerName.trim() || `tester-${selectedEndpoint}`,
           location: 'ssh',
           ssh_host: selectedEndpoint,
-          ssh_user: 'azureuser', // Default for Azure VMs
+          ssh_user: 'azureuser',
           ssh_port: 22,
           region: dep?.provider_summary || undefined,
         });
@@ -183,6 +263,10 @@ export function JobsPage() {
 
   const onlineTesters = testers.filter(t => t.status === 'online');
 
+  // Resolve names for filter chips
+  const agentName = agentFilter ? (testers.find(t => t.agent_id === agentFilter)?.name || agentFilter.slice(0, 8)) : '';
+  const memberName = createdByFilter ? (members.find(m => m.user_id === createdByFilter)?.display_name || members.find(m => m.user_id === createdByFilter)?.email || createdByFilter.slice(0, 8)) : '';
+
   return (
     <div className="p-4 md:p-6">
       {/* Header */}
@@ -200,28 +284,92 @@ export function JobsPage() {
             <span className={`w-2 h-2 rounded-full ${onlineTesters.length > 0 ? 'bg-green-400' : 'bg-gray-500'}`} />
             <span className="hidden sm:inline">{testers.length} tester{testers.length !== 1 ? 's' : ''}</span> ({onlineTesters.length} online)
           </button>
-
-          <select
-            id="tests-status-filter"
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            aria-label="Filter by status"
-            className="bg-[var(--bg-base)] border border-gray-700 rounded px-2 md:px-3 py-1.5 text-sm text-gray-300 focus:outline-none focus:border-cyan-500"
-          >
-            {STATUS_OPTIONS.map((s) => (
-              <option key={s} value={s}>
-                {s === 'all' ? 'All' : s.charAt(0).toUpperCase() + s.slice(1)}
-              </option>
-            ))}
-          </select>
-          <button
-            onClick={() => setShowCreate(true)}
-            className="bg-cyan-600 hover:bg-cyan-500 text-white px-3 md:px-4 py-1.5 rounded text-sm transition-colors"
-          >
-            New Test
-          </button>
+          {isOperator && (
+            <button
+              onClick={() => setShowCreate(true)}
+              className="bg-cyan-600 hover:bg-cyan-500 text-white px-3 md:px-4 py-1.5 rounded text-sm transition-colors"
+            >
+              New Test
+            </button>
+          )}
         </div>
       </div>
+
+      {/* ── Filter Bar ── */}
+      <FilterBar
+        activeCount={activeFilterCount}
+        onClearAll={clearAllFilters}
+        chips={
+          <>
+            {!isOperator && <ScopeChip label="Showing: your tests only" />}
+            {statusFilter !== 'all' && (
+              <FilterChip label="Status" value={statusFilter} onClear={() => setFilter('status', 'all')} />
+            )}
+            {agentFilter && (
+              <FilterChip label="Tester" value={agentName} onClear={() => setFilter('agent', '')} />
+            )}
+            {createdByFilter && (
+              <FilterChip label="Created by" value={memberName} onClear={() => setFilter('created_by', '')} />
+            )}
+            {typeFilter !== 'all' && (
+              <FilterChip label="Type" value={typeFilter === 'tls' ? 'TLS Profile' : 'Test'} onClear={() => setFilter('type', 'all')} />
+            )}
+          </>
+        }
+      >
+        {/* Status dropdown */}
+        <select
+          id="tests-status-filter"
+          value={statusFilter}
+          onChange={(e) => setFilter('status', e.target.value)}
+          aria-label="Filter by status"
+          className="bg-[var(--bg-base)] border border-gray-700 rounded px-2 md:px-3 py-1.5 text-sm text-gray-300 focus:outline-none focus:border-cyan-500"
+        >
+          {STATUS_OPTIONS.map((s) => (
+            <option key={s} value={s}>
+              {s === 'all' ? 'All statuses' : s.charAt(0).toUpperCase() + s.slice(1)}
+            </option>
+          ))}
+        </select>
+
+        {/* Type dropdown */}
+        <select
+          value={typeFilter}
+          onChange={(e) => setFilter('type', e.target.value)}
+          aria-label="Filter by type"
+          className="bg-[var(--bg-base)] border border-gray-700 rounded px-2 md:px-3 py-1.5 text-sm text-gray-300 focus:outline-none focus:border-cyan-500"
+        >
+          {TYPE_OPTIONS.map(t => (
+            <option key={t} value={t}>
+              {t === 'all' ? 'All types' : t === 'tls' ? 'TLS Profile' : 'Test'}
+            </option>
+          ))}
+        </select>
+
+        {/* Agent/Tester combobox */}
+        <Combobox
+          value={agentFilter}
+          onChange={(v) => setFilter('agent', v)}
+          options={agentOptions}
+          placeholder="All testers"
+          ariaLabel="Filter by tester"
+          className="w-40 md:w-48"
+          compact
+        />
+
+        {/* Created By combobox — operator+ only */}
+        {isOperator && memberOptions.length > 0 && (
+          <Combobox
+            value={createdByFilter}
+            onChange={(v) => setFilter('created_by', v)}
+            options={memberOptions}
+            placeholder="All users"
+            ariaLabel="Filter by user"
+            className="w-40 md:w-48"
+            compact
+          />
+        )}
+      </FilterBar>
 
       {showCreate && (
         <CreateJobDialog projectId={projectId} onClose={() => setShowCreate(false)} onCreated={loadJobs} />
@@ -229,19 +377,21 @@ export function JobsPage() {
 
       {/* Testers Panel — flat list, no card wrapper */}
       {showTesters && (
-        <div className="border-b border-gray-800/50 pb-5 mb-6">
+        <div className="border-b border-gray-800/50 pb-5 mb-6 mt-4">
           <div className="flex items-center justify-between mb-3">
             <p className="text-xs text-gray-500 tracking-wider font-medium">testers</p>
-            <button
-              onClick={() => setShowAddTester(!showAddTester)}
-              className="text-xs text-cyan-400 hover:text-cyan-300"
-            >
-              {showAddTester ? 'Cancel' : '+ Add Tester'}
-            </button>
+            {isOperator && (
+              <button
+                onClick={() => setShowAddTester(!showAddTester)}
+                className="text-xs text-cyan-400 hover:text-cyan-300"
+              >
+                {showAddTester ? 'Cancel' : '+ Add Tester'}
+              </button>
+            )}
           </div>
 
           {/* Add Tester Form — inline with left accent */}
-          {showAddTester && (
+          {showAddTester && isOperator && (
             <div className="border-l-2 border-cyan-500/30 pl-3 mb-4">
               <div className="flex gap-2 mb-3">
                 {([
@@ -392,14 +542,16 @@ export function JobsPage() {
                       )}
                     </span>
                   </div>
-                  <button
-                    onClick={() => handleDeleteTester(t.agent_id, t.name)}
-                    className="text-xs text-gray-600 hover:text-red-400 transition-colors"
-                    title="Remove tester"
-                    aria-label={`Remove tester ${t.name}`}
-                  >
-                    &#x2715;
-                  </button>
+                  {isOperator && (
+                    <button
+                      onClick={() => handleDeleteTester(t.agent_id, t.name)}
+                      className="text-xs text-gray-600 hover:text-red-400 transition-colors"
+                      title="Remove tester"
+                      aria-label={`Remove tester ${t.name}`}
+                    >
+                      &#x2715;
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
@@ -414,26 +566,30 @@ export function JobsPage() {
       )}
 
       {/* ── Mobile card layout (< md) ── */}
-      <div className="md:hidden space-y-2">
-        {jobs.length === 0 ? (
+      <div className="md:hidden space-y-2 mt-4">
+        {filteredJobs.length === 0 ? (
           testers.length === 0 ? (
-            <div className="border border-cyan-500/20 rounded p-6 text-center">
-              <p className="text-gray-300 text-sm mb-2">No testers connected</p>
-              <p className="text-gray-600 text-xs mb-4">Deploy a tester on one of your endpoints to start running diagnostics.</p>
-              <button
-                onClick={() => { setShowTesters(true); setShowAddTester(true); }}
-                className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors"
-              >
-                Add Tester
-              </button>
+            <div className="border border-gray-800 rounded p-8 text-center">
+              <p className="text-gray-500 text-sm">No testers connected</p>
+              <p className="text-gray-700 text-xs mt-1">Deploy a tester on one of your endpoints to start running diagnostics.</p>
+              {isOperator && (
+                <button
+                  onClick={() => { setShowTesters(true); setShowAddTester(true); }}
+                  className="text-xs text-cyan-400 mt-2"
+                >
+                  Add Tester
+                </button>
+              )}
             </div>
           ) : (
             <div className="border border-gray-800 rounded p-8 text-center">
-              <p className="text-gray-500 text-sm">No tests yet</p>
-              <button onClick={() => setShowCreate(true)} className="text-xs text-cyan-400 mt-2">Run your first test</button>
+              <p className="text-gray-500 text-sm">{activeFilterCount > 0 ? 'No tests match filters' : 'No tests yet'}</p>
+              {isOperator && activeFilterCount === 0 && (
+                <button onClick={() => setShowCreate(true)} className="text-xs text-cyan-400 mt-2">Run your first test</button>
+              )}
             </div>
           )
-        ) : jobs.map((job) => {
+        ) : filteredJobs.map((job) => {
           const isActive = job.status === 'running' || job.status === 'assigned';
           const duration = job.started_at
             ? formatDuration(new Date(job.started_at), job.finished_at ? new Date(job.finished_at) : new Date())
@@ -467,7 +623,7 @@ export function JobsPage() {
       </div>
 
       {/* ── Desktop/iPad table (≥ md) ── */}
-      <div className="hidden md:block table-container">
+      <div className="hidden md:block table-container mt-4">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
@@ -483,7 +639,7 @@ export function JobsPage() {
             </tr>
           </thead>
           <tbody>
-            {jobs.map((job) => {
+            {filteredJobs.map((job) => {
               const isActive = job.status === 'running' || job.status === 'assigned';
               const duration = job.started_at
                 ? formatDuration(
@@ -491,8 +647,8 @@ export function JobsPage() {
                     job.finished_at ? new Date(job.finished_at) : new Date()
                   )
                 : '-';
-              const testerName = job.agent_id
-                ? testers.find(t => t.agent_id === job.agent_id)?.name || job.agent_id.slice(0, 8)
+              const tName = job.agent_id
+                ? testerMap.get(job.agent_id) || job.agent_id.slice(0, 8)
                 : '-';
               return (
                 <tr
@@ -517,7 +673,7 @@ export function JobsPage() {
                     {job.tls_profile_run_id && <div className="text-cyan-400 mt-1">Linked TLS result</div>}
                   </td>
                   <td className="px-4 py-3 text-gray-500 text-xs hidden lg:table-cell">{job.config?.runs ?? '-'}</td>
-                  <td className="px-4 py-3 text-gray-500 text-xs hidden lg:table-cell">{testerName}</td>
+                  <td className="px-4 py-3 text-gray-500 text-xs hidden lg:table-cell">{tName}</td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
                       <StatusBadge status={job.status} />
@@ -532,21 +688,25 @@ export function JobsPage() {
           </tbody>
         </table>
 
-        {jobs.length === 0 && (
+        {filteredJobs.length === 0 && (
           testers.length === 0 ? (
-            <div className="border border-cyan-500/20 rounded p-6 text-center my-6">
-              <p className="text-gray-300 text-sm mb-2">No testers connected</p>
-              <p className="text-gray-600 text-xs mb-4">Deploy a tester on one of your endpoints to start running diagnostics.</p>
-              <button
-                onClick={() => { setShowTesters(true); setShowAddTester(true); }}
-                className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors"
-              >
-                Add Tester
-              </button>
+            <div className="border border-gray-800 rounded p-8 text-center my-6">
+              <p className="text-gray-500 text-sm">No testers connected</p>
+              <p className="text-gray-700 text-xs mt-1">Deploy a tester on one of your endpoints to start running diagnostics.</p>
+              {isOperator && (
+                <button
+                  onClick={() => { setShowTesters(true); setShowAddTester(true); }}
+                  className="text-xs text-cyan-400 mt-2"
+                >
+                  Add Tester
+                </button>
+              )}
             </div>
           ) : (
             <div className="py-10 text-center">
-              <p className="text-gray-500 text-sm">No tests yet — click New Test to run your first diagnostic</p>
+              <p className="text-gray-500 text-sm">
+                {activeFilterCount > 0 ? 'No tests match the current filters' : 'No tests yet — click New Test to run your first diagnostic'}
+              </p>
             </div>
           )
         )}

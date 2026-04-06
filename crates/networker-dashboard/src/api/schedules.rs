@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     routing::{get, post},
     Json, Router,
@@ -42,8 +42,15 @@ fn compute_next_run(cron_expr: &str) -> Option<chrono::DateTime<chrono::Utc>> {
 
 // ── Project-scoped handlers ────────────────────────────────────────────
 
+#[derive(Deserialize)]
+pub struct ListSchedulesQuery {
+    pub agent_id: Option<Uuid>,
+    pub enabled: Option<bool>,
+}
+
 async fn list_schedules_scoped(
     State(state): State<Arc<AppState>>,
+    Query(q): Query<ListSchedulesQuery>,
     req: axum::extract::Request,
 ) -> Result<Json<Vec<crate::db::schedules::ScheduleRow>>, StatusCode> {
     let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
@@ -70,13 +77,18 @@ async fn list_schedules_scoped(
         None
     };
 
-    let schedules =
-        crate::db::schedules::list_filtered(&client, &ctx.project_id, visible_ids.as_ref())
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "Failed to list schedules");
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?;
+    let schedules = crate::db::schedules::list_filtered(
+        &client,
+        &ctx.project_id,
+        q.agent_id.as_ref(),
+        q.enabled,
+        visible_ids.as_ref(),
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, "Failed to list schedules");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     Ok(Json(schedules))
 }
 
