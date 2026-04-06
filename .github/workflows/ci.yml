@@ -15,31 +15,16 @@ env:
 
 jobs:
   # ──────────────────────────────────────────────────────────────────────────
-  # Fast format check (< 10s, gates everything)
+  # Fast checks: format + clippy (fails early, < 2 min)
   # ──────────────────────────────────────────────────────────────────────────
-  fmt:
-    name: Format
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
-          components: rustfmt
-      - run: cargo fmt --all -- --check
-
-  # ──────────────────────────────────────────────────────────────────────────
-  # Clippy + no-default-features check (runs in parallel with tests)
-  # ──────────────────────────────────────────────────────────────────────────
-  clippy:
-    name: Clippy
-    runs-on: ubuntu-latest
-    needs: fmt
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
-        with:
-          components: clippy
+          components: rustfmt, clippy
 
       - name: Cache cargo
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
@@ -51,6 +36,9 @@ jobs:
           key: lint-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: lint-cargo-
 
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
       - name: Clippy (default features)
         run: cargo clippy --all-targets -- -D warnings
 
@@ -58,16 +46,16 @@ jobs:
         run: cargo build -p networker-tester --no-default-features
 
   # ──────────────────────────────────────────────────────────────────────────
-  # Ubuntu tests
+  # Ubuntu tests: full feature set including browser
   # ──────────────────────────────────────────────────────────────────────────
   test-ubuntu:
     name: Test (ubuntu-latest)
     runs-on: ubuntu-latest
-    needs: fmt
-    timeout-minutes: 15
+    needs: lint  # skip if lint fails
 
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
 
       - name: Cache cargo
@@ -83,6 +71,9 @@ jobs:
       - name: Unit tests
         run: cargo test --workspace --lib
 
+      - name: Endpoint unit tests
+        run: cargo test -p networker-endpoint --lib
+
       - name: Integration tests
         run: cargo test --test integration -p networker-tester -- --test-threads=1
 
@@ -92,11 +83,11 @@ jobs:
   test-windows:
     name: Test (windows-latest)
     runs-on: windows-latest
-    needs: fmt
-    timeout-minutes: 20
+    needs: lint  # skip if lint fails
 
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
 
       - name: Cache cargo
@@ -111,8 +102,12 @@ jobs:
 
       # Build without browser feature (chromiumoxide adds ~10 min on Windows,
       # and there's no Chrome in the CI runner to test with anyway).
+      # All other features (http3, db-mssql) are included via defaults.
       - name: Unit tests (no browser)
         run: cargo test --workspace --lib --no-default-features --features http3,db-mssql
+
+      - name: Endpoint unit tests
+        run: cargo test -p networker-endpoint --lib
 
       - name: Integration tests
         run: cargo test --test integration -p networker-tester --no-default-features --features http3 -- --test-threads=1
@@ -123,6 +118,7 @@ jobs:
   frontend:
     name: Dashboard frontend
     runs-on: ubuntu-latest
+    needs: lint
     defaults:
       run:
         working-directory: dashboard
@@ -147,13 +143,10 @@ jobs:
       - run: npx tsc -b
 
   # ──────────────────────────────────────────────────────────────────────────
-  # Coverage (runs in parallel with test-ubuntu)
-  # ──────────────────────────────────────────────────────────────────────────
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
-    needs: fmt
-    timeout-minutes: 20
+    needs: test-ubuntu  # only run if tests pass
 
     services:
       mssql:
@@ -243,7 +236,7 @@ jobs:
   sql-integration:
     name: SQL Server integration
     runs-on: ubuntu-latest
-    needs: fmt
+    needs: lint
     timeout-minutes: 30
 
     services:
@@ -264,16 +257,6 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
 
-      - name: Cache cargo
-        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ubuntu-sql-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ubuntu-sql-cargo-
-
       - name: Run SQL tests
         env:
           NETWORKER_SQL_CONN: "Server=localhost;Database=master;User Id=sa;Password=NetworkerTest1!;TrustServerCertificate=true"
@@ -283,7 +266,7 @@ jobs:
   postgres-integration:
     name: PostgreSQL integration
     runs-on: ubuntu-latest
-    needs: fmt
+    needs: lint
     timeout-minutes: 20
 
     services:
