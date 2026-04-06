@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.20.2] - 2026-04-06
+
+### Fixed
+- **Auto-deploy pipeline** — merge to main now auto-tags and triggers Release workflow via `workflow_dispatch` (tags from `GITHUB_TOKEN` don't trigger workflows)
+- Release pipeline builds and deploys all 5 binaries (dashboard, endpoint, agent, tester, orchestrator)
+
+---
+
 ## [0.20.1] - 2026-04-06
 
 ### Fixed

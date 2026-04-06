@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -317,7 +318,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Check version and tag
+      - name: Check version and deploy
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
           TAG="v${VERSION}"
@@ -329,5 +332,8 @@ jobs:
             echo "New version detected — tagging ${TAG}"
             git tag "${TAG}"
             git push origin "${TAG}"
-            echo "Tagged ${TAG} — Release workflow will build and deploy"
+
+            echo "Triggering Release workflow..."
+            gh workflow run release.yml --field tag="${TAG}"
+            echo "Release workflow triggered for ${TAG}"
           fi

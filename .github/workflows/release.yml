@@ -14,9 +14,18 @@ on:
   push:
     tags:
       - 'v[0-9]*.[0-9]*.[0-9]*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Version tag to release (e.g. v0.20.1)'
+        required: true
 
 permissions:
   contents: write   # required to create releases and upload assets
+
+env:
+  # Resolve tag from either trigger type
+  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:
   # ── Build binaries for each supported platform ─────────────────────────────
@@ -49,6 +58,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -167,6 +178,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Download all build artifacts
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
@@ -181,7 +194,7 @@ jobs:
       - name: Extract release notes
         id: notes
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           NOTES=$(awk "
             /^## \[${VERSION}\]/ { found=1; next }
             found && /^## \[/    { exit }
@@ -199,8 +212,8 @@ jobs:
       - name: Create GitHub release
         run: |
           echo "$NOTES" > /tmp/release-notes.md
-          gh release create "${{ github.ref_name }}" \
-            --title "${{ github.ref_name }}" \
+          gh release create "${{ env.RELEASE_TAG }}" \
+            --title "${{ env.RELEASE_TAG }}" \
             --notes-file /tmp/release-notes.md \
             dist/*
         env:
@@ -219,6 +232,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Azure Login
         uses: azure/login@a65d910e8af852a8061c627c456678983e180302 # v2
@@ -227,7 +242,7 @@ jobs:
 
       - name: Deploy binaries and frontend
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           echo "Deploying v${VERSION} to alethedash-vm..."
 
           RESULT=$(az vm run-command invoke \
