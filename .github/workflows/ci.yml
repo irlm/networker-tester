@@ -7,7 +7,7 @@ on:
     branches: ["main"]
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -302,3 +302,35 @@ jobs:
         env:
           NETWORKER_DB_URL: "postgres://networker:networker@localhost/network_diagnostics"
         run: cargo test -p networker-tester --no-default-features --features db-postgres db_postgres_ -- --ignored --test-threads=1
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Auto-tag: if Cargo.toml version is new, create tag → triggers Release workflow
+  # ──────────────────────────────────────────────────────────────────────────
+  auto-tag:
+    name: Auto-tag & deploy
+    needs: [lint, test-ubuntu, test-windows, frontend]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0  # need tags
+
+      - name: Check version and tag
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          TAG="v${VERSION}"
+          echo "Cargo.toml version: ${VERSION}"
+          echo "Tag: ${TAG}"
+
+          if git tag -l "${TAG}" | grep -q "${TAG}"; then
+            echo "Tag ${TAG} already exists — skipping"
+            echo "SKIP=true" >> "$GITHUB_ENV"
+          else
+            echo "New version detected — creating tag ${TAG}"
+            git tag "${TAG}"
+            git push origin "${TAG}"
+            echo "SKIP=false" >> "$GITHUB_ENV"
+            echo "Tagged ${TAG} — Release workflow will build and deploy"
+          fi
