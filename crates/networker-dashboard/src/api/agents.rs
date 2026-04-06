@@ -21,7 +21,7 @@ pub struct CreateAgentRequest {
     pub name: String,
     pub region: Option<String>,
     pub provider: Option<String>,
-    /// "local" = spawn on this machine, "ssh" = deploy via SSH
+    /// "ssh" = deploy via SSH (only remote agents supported)
     #[serde(default = "default_location")]
     pub location: String,
     /// SSH connection details (required when location = "ssh")
@@ -31,7 +31,7 @@ pub struct CreateAgentRequest {
 }
 
 fn default_location() -> String {
-    "local".into()
+    "ssh".into()
 }
 
 #[derive(Serialize)]
@@ -124,25 +124,6 @@ async fn create_agent_scoped(
     let dashboard_port = state.dashboard_port;
 
     match create_req.location.as_str() {
-        "local" => {
-            let api_key_clone = api_key.clone();
-            let dashboard_url = format!("ws://127.0.0.1:{dashboard_port}/ws/agent");
-            let state_clone = state.clone();
-            tokio::spawn(async move {
-                if let Some(pid) = crate::deploy::agent_provisioner::spawn_local_agent(
-                    &api_key_clone,
-                    &dashboard_url,
-                )
-                .await
-                {
-                    state_clone
-                        .tester_processes
-                        .write()
-                        .await
-                        .insert(agent_id, pid);
-                }
-            });
-        }
         "ssh" => {
             let ssh_host = create_req.ssh_host.clone().unwrap_or_default();
             let ssh_user = create_req.ssh_user.clone().unwrap_or_else(|| "root".into());
