@@ -30,12 +30,24 @@ const DEFAULT_LIMIT: i64 = 100;
 const MAX_LIMIT: i64 = 500;
 const MAX_BATCH: usize = 200;
 
-/// POST /api/perf-log — ingest a batch of perf log entries
+// Field length limits matching the schema VARCHAR constraints
+const MAX_SESSION_ID: usize = 64;
+const MAX_METHOD: usize = 10;
+const MAX_PATH: usize = 500;
+const MAX_SOURCE: usize = 20;
+const MAX_COMPONENT: usize = 100;
+const MAX_TRIGGER: usize = 100;
+const MAX_KIND: usize = 10;
+
+/// POST /api/perf-log — ingest a batch of perf log entries (admin only)
 async fn ingest(
     State(state): State<Arc<AppState>>,
     req: axum::extract::Request,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let user = req.extensions().get::<AuthUser>().unwrap().clone();
+    let user = req.extensions().get::<AuthUser>().cloned().ok_or(StatusCode::UNAUTHORIZED)?;
+    if !user.is_platform_admin {
+        return Err(StatusCode::FORBIDDEN);
+    }
 
     let body = axum::body::to_bytes(req.into_body(), 1024 * 256)
         .await
@@ -47,13 +59,40 @@ async fn ingest(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    let client = state.db.get().await.map_err(|e| {
+    // Validate field lengths before touching the database
+    if let Some(ref sid) = payload.session_id {
+        if sid.len() > MAX_SESSION_ID {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+    for entry in &payload.entries {
+        if entry.kind.len() > MAX_KIND {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        if entry.method.as_ref().is_some_and(|v| v.len() > MAX_METHOD) {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        if entry.path.as_ref().is_some_and(|v| v.len() > MAX_PATH) {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        if entry.source.as_ref().is_some_and(|v| v.len() > MAX_SOURCE) {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        if entry.component.as_ref().is_some_and(|v| v.len() > MAX_COMPONENT) {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        if entry.trigger.as_ref().is_some_and(|v| v.len() > MAX_TRIGGER) {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+
+    let mut client = state.db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error in perf_log ingest");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
     let inserted = crate::db::perf_log::insert_batch(
-        &client,
+        &mut client,
         &user.user_id,
         payload.session_id.as_deref(),
         &payload.entries,

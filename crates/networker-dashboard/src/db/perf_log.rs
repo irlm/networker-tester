@@ -42,8 +42,13 @@ pub struct PerfLogInput {
     pub meta: Option<serde_json::Value>,
 }
 
+/// Escape SQL ILIKE wildcard characters (%, _) so they are treated as literals.
+fn escape_ilike(input: &str) -> String {
+    input.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+}
+
 pub async fn insert_batch(
-    client: &Client,
+    client: &mut deadpool_postgres::Object,
     user_id: &Uuid,
     session_id: Option<&str>,
     entries: &[PerfLogInput],
@@ -52,7 +57,9 @@ pub async fn insert_batch(
         return Ok(0);
     }
 
-    let stmt = client
+    let tx = client.transaction().await?;
+
+    let stmt = tx
         .prepare(
             "INSERT INTO perf_log (logged_at, user_id, session_id, kind, method, path, status,
                                    total_ms, server_ms, network_ms, source,
@@ -70,32 +77,32 @@ pub async fn insert_batch(
             .and_then(DateTime::from_timestamp_millis)
             .unwrap_or_else(Utc::now);
 
-        client
-            .execute(
-                &stmt,
-                &[
-                    &logged_at,
-                    user_id,
-                    &sess,
-                    &entry.kind,
-                    &entry.method,
-                    &entry.path,
-                    &entry.status,
-                    &entry.total_ms,
-                    &entry.server_ms,
-                    &entry.network_ms,
-                    &entry.source,
-                    &entry.component,
-                    &entry.trigger,
-                    &entry.render_ms,
-                    &entry.item_count,
-                    &entry.meta,
-                ],
-            )
-            .await?;
+        tx.execute(
+            &stmt,
+            &[
+                &logged_at,
+                user_id,
+                &sess,
+                &entry.kind,
+                &entry.method,
+                &entry.path,
+                &entry.status,
+                &entry.total_ms,
+                &entry.server_ms,
+                &entry.network_ms,
+                &entry.source,
+                &entry.component,
+                &entry.trigger,
+                &entry.render_ms,
+                &entry.item_count,
+                &entry.meta,
+            ],
+        )
+        .await?;
         count += 1;
     }
 
+    tx.commit().await?;
     Ok(count)
 }
 
@@ -119,8 +126,10 @@ pub async fn list(
         clauses.push(format!("kind = ${param_idx}"));
         param_idx += 1;
     }
-    if path_filter.is_some() {
-        clauses.push(format!("path ILIKE '%' || ${param_idx} || '%'"));
+    // Escape ILIKE wildcards so user input is treated literally
+    let escaped_path = path_filter.map(escape_ilike);
+    if escaped_path.is_some() {
+        clauses.push(format!("path ILIKE '%' || ${param_idx} || '%' ESCAPE '\\'"));
         param_idx += 1;
     }
     if user_id_filter.is_some() {
@@ -139,7 +148,7 @@ pub async fn list(
     if let Some(k) = &kind {
         params.push(k);
     }
-    if let Some(p) = &path_filter {
+    if let Some(p) = &escaped_path {
         params.push(p);
     }
     if let Some(u) = &user_id_filter {
@@ -173,6 +182,7 @@ pub async fn list(
         .collect())
 }
 
+/// Aggregate stats over the last 24 hours to avoid unbounded table scans.
 pub async fn stats(client: &Client) -> anyhow::Result<serde_json::Value> {
     let row = client
         .query_one(
@@ -186,7 +196,8 @@ pub async fn stats(client: &Client) -> anyhow::Result<serde_json::Value> {
                 PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY render_ms) FILTER (WHERE kind = 'render') AS p95_render_ms,
                 COUNT(*) FILTER (WHERE kind = 'api' AND total_ms > 200) AS slow_api_count,
                 COUNT(*) FILTER (WHERE kind = 'render' AND render_ms > 16) AS janky_render_count
-             FROM perf_log",
+             FROM perf_log
+             WHERE logged_at >= NOW() - INTERVAL '24 hours'",
             &[],
         )
         .await?;
