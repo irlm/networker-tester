@@ -123,43 +123,36 @@ async fn create_agent_scoped(
 
     let dashboard_port = state.dashboard_port;
 
-    match create_req.location.as_str() {
-        "ssh" => {
-            let ssh_host = create_req.ssh_host.clone().unwrap_or_default();
-            let ssh_user = create_req.ssh_user.clone().unwrap_or_else(|| "root".into());
-            let ssh_port = create_req.ssh_port.unwrap_or(22);
-            if !is_valid_ssh_host(&ssh_host) || !is_valid_ssh_user(&ssh_user) || ssh_port == 0 {
-                return Err(StatusCode::BAD_REQUEST);
-            }
-            let api_key_clone = api_key.clone();
-            let name_clone = create_req.name.clone();
-            let dashboard_url = format!("ws://{{DASHBOARD_HOST}}:{dashboard_port}/ws/agent");
-            let events_tx = state.events_tx.clone();
-            tokio::spawn(async move {
-                crate::deploy::agent_provisioner::provision_remote_agent(
-                    &name_clone,
-                    &api_key_clone,
-                    &dashboard_url,
-                    &ssh_host,
-                    &ssh_user,
-                    ssh_port,
-                    events_tx,
-                )
-                .await;
-            });
+    if create_req.location == "ssh" {
+        let ssh_host = create_req.ssh_host.clone().unwrap_or_default();
+        let ssh_user = create_req.ssh_user.clone().unwrap_or_else(|| "root".into());
+        let ssh_port = create_req.ssh_port.unwrap_or(22);
+        if !is_valid_ssh_host(&ssh_host) || !is_valid_ssh_user(&ssh_user) || ssh_port == 0 {
+            return Err(StatusCode::BAD_REQUEST);
         }
-        _ => {}
+        let api_key_clone = api_key.clone();
+        let name_clone = create_req.name.clone();
+        let dashboard_url = format!("ws://{{DASHBOARD_HOST}}:{dashboard_port}/ws/agent");
+        let events_tx = state.events_tx.clone();
+        tokio::spawn(async move {
+            crate::deploy::agent_provisioner::provision_remote_agent(
+                &name_clone,
+                &api_key_clone,
+                &dashboard_url,
+                &ssh_host,
+                &ssh_user,
+                ssh_port,
+                events_tx,
+            )
+            .await;
+        });
     }
 
     Ok(Json(CreateAgentResponse {
         agent_id,
         api_key: api_key.clone(),
         name: create_req.name,
-        status: if create_req.location == "local" {
-            "starting".into()
-        } else {
-            "provisioning".into()
-        },
+        status: "provisioning".into(),
     }))
 }
 
