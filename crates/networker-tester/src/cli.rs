@@ -1865,6 +1865,10 @@ mod tests {
     fn validate_save_to_db_without_db_url_fails() {
         with_env_vars_cleared(&["NETWORKER_DB_URL", "NETWORKER_SQL_CONN"], || {
             let cfg = Cli::parse_from(["networker-tester", "--save-to-db"]).resolve(None);
+            assert!(
+                cfg.validate().is_err(),
+                "--save-to-db without --db-url should fail validation"
+            );
             let err = cfg.validate().unwrap_err();
             assert!(
                 err.to_string().contains("--db-url"),
