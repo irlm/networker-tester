@@ -408,13 +408,7 @@ async fn launch_config(
     if !outdated.is_empty() {
         let names: Vec<_> = outdated
             .iter()
-            .map(|a| {
-                format!(
-                    "{} ({})",
-                    a.name,
-                    a.version.as_deref().unwrap_or("unknown")
-                )
-            })
+            .map(|a| format!("{} ({})", a.name, a.version.as_deref().unwrap_or("unknown")))
             .collect();
         tracing::warn!(
             dashboard_version,
