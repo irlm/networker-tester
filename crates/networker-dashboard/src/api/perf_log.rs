@@ -44,7 +44,11 @@ async fn ingest(
     State(state): State<Arc<AppState>>,
     req: axum::extract::Request,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let user = req.extensions().get::<AuthUser>().cloned().ok_or(StatusCode::UNAUTHORIZED)?;
+    let user = req
+        .extensions()
+        .get::<AuthUser>()
+        .cloned()
+        .ok_or(StatusCode::UNAUTHORIZED)?;
     if !user.is_platform_admin {
         return Err(StatusCode::FORBIDDEN);
     }
@@ -78,10 +82,18 @@ async fn ingest(
         if entry.source.as_ref().is_some_and(|v| v.len() > MAX_SOURCE) {
             return Err(StatusCode::BAD_REQUEST);
         }
-        if entry.component.as_ref().is_some_and(|v| v.len() > MAX_COMPONENT) {
+        if entry
+            .component
+            .as_ref()
+            .is_some_and(|v| v.len() > MAX_COMPONENT)
+        {
             return Err(StatusCode::BAD_REQUEST);
         }
-        if entry.trigger.as_ref().is_some_and(|v| v.len() > MAX_TRIGGER) {
+        if entry
+            .trigger
+            .as_ref()
+            .is_some_and(|v| v.len() > MAX_TRIGGER)
+        {
             return Err(StatusCode::BAD_REQUEST);
         }
     }
@@ -111,13 +123,23 @@ async fn list_logs(
     State(state): State<Arc<AppState>>,
     req: axum::extract::Request,
 ) -> Result<Json<Vec<crate::db::perf_log::PerfLogRow>>, StatusCode> {
-    let user = req.extensions().get::<AuthUser>().cloned().ok_or(StatusCode::UNAUTHORIZED)?;
+    let user = req
+        .extensions()
+        .get::<AuthUser>()
+        .cloned()
+        .ok_or(StatusCode::UNAUTHORIZED)?;
     if !user.is_platform_admin {
         return Err(StatusCode::FORBIDDEN);
     }
     let q: ListQuery = axum::extract::Query::try_from_uri(req.uri())
         .map(|q| q.0)
-        .unwrap_or(ListQuery { kind: None, path: None, user_id: None, limit: None, offset: None });
+        .unwrap_or(ListQuery {
+            kind: None,
+            path: None,
+            user_id: None,
+            limit: None,
+            offset: None,
+        });
     let client = state.db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error in perf_log list");
         StatusCode::INTERNAL_SERVER_ERROR
@@ -145,7 +167,11 @@ async fn get_stats(
     State(state): State<Arc<AppState>>,
     req: axum::extract::Request,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let user = req.extensions().get::<AuthUser>().cloned().ok_or(StatusCode::UNAUTHORIZED)?;
+    let user = req
+        .extensions()
+        .get::<AuthUser>()
+        .cloned()
+        .ok_or(StatusCode::UNAUTHORIZED)?;
     if !user.is_platform_admin {
         return Err(StatusCode::FORBIDDEN);
     }

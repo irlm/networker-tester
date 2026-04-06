@@ -44,7 +44,10 @@ pub struct PerfLogInput {
 
 /// Escape SQL ILIKE wildcard characters (%, _) so they are treated as literals.
 fn escape_ilike(input: &str) -> String {
-    input.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+    input
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
 }
 
 pub async fn insert_batch(
@@ -137,7 +140,10 @@ pub async fn list(
         param_idx += 1;
     }
 
-    let order = format!("ORDER BY logged_at DESC LIMIT ${param_idx} OFFSET ${}", param_idx + 1);
+    let order = format!(
+        "ORDER BY logged_at DESC LIMIT ${param_idx} OFFSET ${}",
+        param_idx + 1
+    );
     let sql = if clauses.is_empty() {
         format!("{base} {order}")
     } else {
