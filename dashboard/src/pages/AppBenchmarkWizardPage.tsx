@@ -438,7 +438,7 @@ export function AppBenchmarkWizardPage() {
   const buildPayload = () => {
     const catalogVms = catalog;
     const testbedConfigs: BenchmarkTestbedConfig[] = testbeds.map(tb => ({
-      cloud: tb.cloud,
+      cloud: tb.cloud.toLowerCase(),
       region: tb.region,
       topology: tb.topology,
       vm_size: tb.vmSize,

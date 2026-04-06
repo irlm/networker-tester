@@ -482,7 +482,6 @@ export function BenchmarkConfigResultsPage() {
                       </button>
                     </div>
                     <PhaseBreakdown
-                      language={lang}
                       color={color}
                       modes={modes}
                       comparison={comparison}

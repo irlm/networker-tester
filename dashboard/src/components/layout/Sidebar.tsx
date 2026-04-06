@@ -5,6 +5,7 @@ import { useProject } from '../../hooks/useProject';
 import { ProjectSwitcher } from '../ProjectSwitcher';
 import { NotificationBell } from '../NotificationBell';
 import { HelpHint } from '../docs/HelpHint';
+import { ChangePasswordDialog } from '../ChangePasswordDialog';
 import { api } from '../../api/client';
 
 interface NavItem {
@@ -27,6 +28,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('sidebar-collapsed') === '1');
   const [pendingCount, setPendingCount] = useState(0);
+  const [showPasswordDialog, setShowPasswordDialog] = useState(false);
 
   const pid = projectId;
   const isAdmin = role === 'admin' || isPlatformAdmin;
@@ -201,13 +203,13 @@ export function Sidebar({ connectionDot }: SidebarProps) {
                   {email?.split('@')[0] ?? ''}
                 </span>
                 <div className="flex items-center gap-1">
-                  <Link
-                    to="/change-password"
+                  <button
+                    onClick={() => setShowPasswordDialog(true)}
                     className="text-xs text-gray-600 hover:text-gray-400 transition-colors px-1.5 py-1 rounded hover:bg-gray-800/50"
                     title="Change password"
                   >
-                    {'\u26BF'}
-                  </Link>
+                    key
+                  </button>
                   <button
                     onClick={logout}
                     className="text-xs text-gray-500 hover:text-red-400 transition-colors px-2 py-1 rounded hover:bg-gray-800/50"
@@ -235,6 +237,10 @@ export function Sidebar({ connectionDot }: SidebarProps) {
           onClick={() => setMobileOpen(false)}
           aria-hidden="true"
         />
+      )}
+
+      {showPasswordDialog && (
+        <ChangePasswordDialog onClose={() => setShowPasswordDialog(false)} />
       )}
     </>
   );

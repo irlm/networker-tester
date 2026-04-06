@@ -23,9 +23,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `useDebounce`, `useRenderLog`, `stableSet` utility hooks for rendering performance
 
 ### Fixed
+- Application benchmark wizard 400 error — cloud name case mismatch (sent "Azure", backend expected "azure")
 - Empty state styling normalized across Tests, Runs, Schedules pages (consistent `border-gray-800` + text CTA)
 - ApiLogPanel gated behind `isPlatformAdmin` (was visible to all users)
 - Dashboard layout: full-width when workspace empty (no redundant quick actions column)
+
+### Changed
+- Change password is now an inline modal dialog instead of a full-page redirect
+- Sidebar icon uses "key" text label instead of obscure Unicode glyph
+- Forced password change page shows clearer messaging
 
 ### Security
 - `GET /api/perf-log` and `GET /api/perf-log/stats` now require platform admin role (was accessible to any authenticated user)
