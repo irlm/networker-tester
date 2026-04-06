@@ -69,12 +69,18 @@ jobs:
         if: contains(matrix.target, 'musl')
         run: sudo apt-get update -qq && sudo apt-get install -y musl-tools
 
-      - name: Build binaries
+      - name: Build workspace binaries
         run: >
           cargo build --release --locked
           --target ${{ matrix.target }}
           --features browser
           -p networker-tester -p networker-endpoint -p networker-dashboard -p networker-agent
+
+      - name: Build orchestrator
+        run: >
+          cargo build --release --locked
+          --target ${{ matrix.target }}
+          --manifest-path benchmarks/orchestrator/Cargo.toml
         env:
           # Static-link the VC++ runtime on Windows so binaries work on clean
           # Windows Server images (e.g. GCP) without installing vcredist.
@@ -97,6 +103,10 @@ jobs:
               -C "${SRC}" "networker-dashboard"
           tar czf "dist/networker-agent-${TARGET}.tar.gz" \
               -C "${SRC}" "networker-agent"
+
+          ORCH_SRC="benchmarks/orchestrator/target/${TARGET}/release"
+          tar czf "dist/alethabench-${TARGET}.tar.gz" \
+              -C "${ORCH_SRC}" "alethabench"
 
       # ── Package (Windows: .zip) ──────────────────────────────────────────
       - name: Package (zip)
@@ -122,6 +132,12 @@ jobs:
           Compress-Archive `
               -Path "$src\networker-agent.exe" `
               -DestinationPath "dist\networker-agent-$target.zip" `
+              -Force
+
+          $orchSrc = "benchmarks\orchestrator\target\$target\release"
+          Compress-Archive `
+              -Path "$orchSrc\alethabench.exe" `
+              -DestinationPath "dist\alethabench-$target.zip" `
               -Force
 
       # ── Build frontend (only once, on Linux) ─────────────────────────────
@@ -227,6 +243,8 @@ jobs:
               curl -fsSL \"\${RELEASE_BASE}/networker-dashboard-x86_64-unknown-linux-musl.tar.gz\" | tar xz -C /tmp/
               curl -fsSL \"\${RELEASE_BASE}/networker-endpoint-x86_64-unknown-linux-musl.tar.gz\" | tar xz -C /tmp/
               curl -fsSL \"\${RELEASE_BASE}/networker-agent-x86_64-unknown-linux-musl.tar.gz\" | tar xz -C /tmp/
+              curl -fsSL \"\${RELEASE_BASE}/networker-tester-x86_64-unknown-linux-musl.tar.gz\" | tar xz -C /tmp/
+              curl -fsSL \"\${RELEASE_BASE}/alethabench-x86_64-unknown-linux-musl.tar.gz\" | tar xz -C /tmp/
 
               echo '>> Downloading frontend...'
               curl -fsSL \"\${RELEASE_BASE}/dashboard-frontend.tar.gz\" -o /tmp/dashboard-frontend.tar.gz
@@ -250,8 +268,13 @@ jobs:
               cp /tmp/networker-endpoint /opt/alethedash/networker-endpoint
               mkdir -p /opt/alethedash/tester
               cp /tmp/networker-agent /opt/alethedash/tester/networker-agent 2>/dev/null || true
-              chmod +x /opt/alethedash/networker-dashboard /opt/alethedash/networker-endpoint /opt/alethedash/tester/networker-agent
-              rm -f /tmp/networker-dashboard /tmp/networker-endpoint /tmp/networker-agent
+              cp /tmp/networker-tester /opt/alethedash/tester/networker-tester 2>/dev/null || true
+              cp /tmp/alethabench /usr/local/bin/alethabench 2>/dev/null || true
+              chmod +x /opt/alethedash/networker-dashboard /opt/alethedash/networker-endpoint \
+                /opt/alethedash/tester/networker-agent /opt/alethedash/tester/networker-tester \
+                /usr/local/bin/alethabench
+              rm -f /tmp/networker-dashboard /tmp/networker-endpoint /tmp/networker-agent \
+                /tmp/networker-tester /tmp/alethabench
 
               # ── Install frontend ────────────────────────────────────────
               echo '>> Installing frontend...'
@@ -327,6 +350,10 @@ jobs:
               echo \"dashboard: \$(systemctl is-active networker-dashboard)\"
               echo \"endpoint:  \$(systemctl is-active networker-endpoint)\"
               echo \"agent:     \$(systemctl is-active networker-agent)\"
+
+              echo '=== Binary versions ==='
+              echo \"tester:       \$(/opt/alethedash/tester/networker-tester --version 2>/dev/null || echo 'missing')\"
+              echo \"orchestrator: \$(alethabench --version 2>/dev/null || echo 'missing')\"
 
               echo '=== Dashboard API check ==='
               HTTP_CODE=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://localhost:3000/api/auth/login -X POST -H 'Content-Type: application/json' -d '{\"email\":\"verify\",\"password\":\"probe\"}' 2>/dev/null || echo '000')
