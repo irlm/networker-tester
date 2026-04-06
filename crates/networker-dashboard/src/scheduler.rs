@@ -15,6 +15,7 @@ pub fn spawn(state: Arc<AppState>) {
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         tracing::info!("Scheduler background task started");
 
+        let mut last_invite_cleanup = std::time::Instant::now();
         let mut last_approval_cleanup = std::time::Instant::now();
         let mut last_inactivity_check: Option<std::time::Instant> = None;
 
@@ -26,7 +27,8 @@ pub fn spawn(state: Arc<AppState>) {
             }
 
             // Expire stale workspace invites hourly
-            if last_approval_cleanup.elapsed() > std::time::Duration::from_secs(3600) {
+            if last_invite_cleanup.elapsed() > std::time::Duration::from_secs(3600) {
+                last_invite_cleanup = std::time::Instant::now();
                 match state.db.get().await {
                     Ok(client) => match crate::db::invites::expire_stale_invites(&client).await {
                         Ok(count) if count > 0 => {

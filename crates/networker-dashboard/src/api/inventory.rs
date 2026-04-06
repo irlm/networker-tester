@@ -88,7 +88,8 @@ async fn scan_inventory(
 
 async fn scan_azure(managed_hosts: &[String]) -> Result<Vec<CloudVm>, String> {
     // Check if az CLI is available
-    let check = Command::new("which")
+    let lookup = if cfg!(windows) { "where" } else { "which" };
+    let check = Command::new(lookup)
         .arg("az")
         .stdin(std::process::Stdio::null())
         .output()
@@ -158,7 +159,8 @@ async fn scan_azure(managed_hosts: &[String]) -> Result<Vec<CloudVm>, String> {
 }
 
 async fn scan_aws(managed_hosts: &[String]) -> Result<Vec<CloudVm>, String> {
-    let check = Command::new("which")
+    let lookup = if cfg!(windows) { "where" } else { "which" };
+    let check = Command::new(lookup)
         .arg("aws")
         .stdin(std::process::Stdio::null())
         .output()
@@ -239,7 +241,8 @@ async fn scan_aws(managed_hosts: &[String]) -> Result<Vec<CloudVm>, String> {
 }
 
 async fn scan_gcp(managed_hosts: &[String]) -> Result<Vec<CloudVm>, String> {
-    let check = Command::new("which")
+    let lookup = if cfg!(windows) { "where" } else { "which" };
+    let check = Command::new(lookup)
         .arg("gcloud")
         .stdin(std::process::Stdio::null())
         .output()

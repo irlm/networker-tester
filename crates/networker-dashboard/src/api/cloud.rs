@@ -45,7 +45,8 @@ async fn check_command(cmd: &str, args: &[&str]) -> (bool, Option<String>) {
 }
 
 async fn command_exists(cmd: &str) -> bool {
-    tokio::process::Command::new("which")
+    let lookup = if cfg!(windows) { "where" } else { "which" };
+    tokio::process::Command::new(lookup)
         .arg(cmd)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())

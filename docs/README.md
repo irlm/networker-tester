@@ -13,6 +13,8 @@ points here for the detailed material.
 - [`testing.md`](testing.md): reproducible test plans and report interpretation
 - [`deploy-config.md`](deploy-config.md): full `--deploy` schema and execution flow
 - [`cloud-auth.md`](cloud-auth.md): Azure-to-AWS/GCP federation design
+- [`setup-guide.md`](setup-guide.md): full dashboard production deployment (infrastructure, SSO, cloud federation, email)
+- [`tls-endpoint-profile-design.md`](tls-endpoint-profile-design.md): TLS endpoint profiling feature design
 
 ## By Task
 
@@ -41,3 +43,7 @@ Read [`deploy-config.md`](deploy-config.md).
 ### Understand dashboard cloud identity setup
 
 Read [`cloud-auth.md`](cloud-auth.md).
+
+### Deploy the dashboard to production
+
+Read [`setup-guide.md`](setup-guide.md).

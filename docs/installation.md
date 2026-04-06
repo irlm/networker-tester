@@ -142,18 +142,36 @@ serving. It also runs DB migrations and may seed the first admin user.
 Typical local flow:
 
 ```bash
-docker compose -f docker-compose.db.yml up -d
+# Start PostgreSQL (use the dashboard compose file, not docker-compose.db.yml which is for MSSQL tests)
+docker compose -f docker-compose.dashboard.yml up -d postgres
 cd dashboard && npm install && npm run build && cd ..
-DASHBOARD_STATIC_DIR=./dashboard/dist cargo run -p networker-dashboard
+DASHBOARD_JWT_SECRET=$(openssl rand -base64 32) \
+DASHBOARD_ADMIN_PASSWORD=admin \
+  cargo run -p networker-dashboard
 ```
 
-Current auth seeding expects `DASHBOARD_ADMIN_EMAIL` and `DASHBOARD_ADMIN_PASSWORD` when creating
-the initial admin user.
+Required environment variables:
+- `DASHBOARD_JWT_SECRET`: signing key for JWT tokens (generate with `openssl rand -base64 32`)
+- `DASHBOARD_ADMIN_PASSWORD`: initial admin password (prompted interactively if unset)
+
+Optional:
+- `DASHBOARD_DB_URL`: PostgreSQL connection string (defaults to `postgres://networker:networker@localhost:5432/networker_dashboard`)
+- `DASHBOARD_PORT`: API listen port (defaults to 3000)
+- `DASHBOARD_ADMIN_EMAIL`: admin user email address
 
 ### `networker-agent`
 
 The agent connects back to the dashboard over WebSocket and runs tester jobs on that machine.
-In the current codebase, the dashboard can auto-spawn a local agent for convenience.
+
+```bash
+AGENT_API_KEY=dev-key cargo run -p networker-agent
+```
+
+Required environment variables:
+- `AGENT_API_KEY`: authentication key matching an agent record in the dashboard database
+
+Optional:
+- `AGENT_DASHBOARD_URL`: WebSocket URL (defaults to `ws://localhost:3000/ws/agent`)
 
 ## Config Files
 

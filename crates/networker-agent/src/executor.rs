@@ -616,8 +616,10 @@ fn is_private_ip(ip: &std::net::IpAddr) -> bool {
                 || v4.octets()[..2] == [169, 254]
         }
         std::net::IpAddr::V6(v6) => {
-            v6.is_loopback() || v6.is_unspecified() || v6.segments()[0] == 0xfe80
-            // link-local
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.segments()[0] == 0xfe80 // link-local
+                || (v6.segments()[0] & 0xfe00) == 0xfc00 // fc00::/7 unique local
         }
     }
 }
@@ -677,7 +679,8 @@ async fn find_tester_binary() -> Option<String> {
     }
 
     // Try PATH
-    if let Ok(output) = Command::new("which").arg("networker-tester").output().await {
+    let lookup = if cfg!(windows) { "where" } else { "which" };
+    if let Ok(output) = Command::new(lookup).arg("networker-tester").output().await {
         if output.status.success() {
             let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !path.is_empty() {
