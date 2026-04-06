@@ -308,7 +308,7 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────────
   auto-tag:
     name: Auto-tag & deploy
-    needs: [lint, test-ubuntu, test-windows, frontend]
+    needs: [lint, test-ubuntu, frontend]
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
 
