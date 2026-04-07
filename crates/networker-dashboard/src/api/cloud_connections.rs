@@ -29,7 +29,7 @@ pub struct UpdateRequest {
 async fn get_connection(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthUser>,
-    Path((_, id)): Path<(Uuid, Uuid)>,
+    Path((_, id)): Path<(String, Uuid)>,
 ) -> Result<Json<crate::db::cloud_connections::CloudConnectionRow>, StatusCode> {
     require_role(&user, Role::Admin)?;
     let client = state.db.get().await.map_err(|e| {
@@ -51,7 +51,7 @@ async fn get_connection(
 async fn update_connection(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthUser>,
-    Path((_, id)): Path<(Uuid, Uuid)>,
+    Path((_, id)): Path<(String, Uuid)>,
     Json(req): Json<UpdateRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     require_role(&user, Role::Admin)?;
@@ -75,7 +75,7 @@ async fn update_connection(
 async fn delete_connection(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthUser>,
-    Path((_, id)): Path<(Uuid, Uuid)>,
+    Path((_, id)): Path<(String, Uuid)>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     require_role(&user, Role::Admin)?;
     let client = state.db.get().await.map_err(|e| {
@@ -98,7 +98,7 @@ async fn delete_connection(
 async fn validate_connection(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthUser>,
-    Path((_, id)): Path<(Uuid, Uuid)>,
+    Path((_, id)): Path<(String, Uuid)>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     require_role(&user, Role::Admin)?;
     let client = state.db.get().await.map_err(|e| {

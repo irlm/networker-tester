@@ -22,7 +22,7 @@ pub trait DatabaseBackend: Send + Sync {
     async fn save_tls_profile(
         &self,
         run: &TlsEndpointProfile,
-        project_id: Option<&Uuid>,
+        project_id: Option<&str>,
     ) -> anyhow::Result<Uuid>;
 
     /// Lightweight connectivity check (`SELECT 1`).

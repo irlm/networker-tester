@@ -7,7 +7,7 @@ use uuid::Uuid;
 #[derive(Debug, Serialize)]
 pub struct VisibilityRuleRow {
     pub rule_id: Uuid,
-    pub project_id: Uuid,
+    pub project_id: String,
     pub user_id: Option<Uuid>,
     pub resource_type: String,
     pub resource_id: Uuid,
@@ -20,7 +20,7 @@ pub struct VisibilityRuleRow {
 
 pub async fn list_rules(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
 ) -> anyhow::Result<Vec<VisibilityRuleRow>> {
     let rows = client
         .query(
@@ -33,7 +33,7 @@ pub async fn list_rules(
              JOIN dash_user cb ON cb.user_id = r.created_by
              WHERE r.project_id = $1
              ORDER BY r.created_at DESC",
-            &[project_id],
+            &[&project_id],
         )
         .await?;
 
@@ -55,7 +55,7 @@ pub async fn list_rules(
 
 pub async fn add_rule(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
     user_id: Option<&Uuid>,
     resource_type: &str,
     resource_id: &Uuid,
@@ -66,17 +66,17 @@ pub async fn add_rule(
         .execute(
             "INSERT INTO test_visibility_rule (rule_id, project_id, user_id, resource_type, resource_id, created_by)
              VALUES ($1, $2, $3, $4, $5, $6)",
-            &[&id, project_id, &user_id, &resource_type, resource_id, created_by],
+            &[&id, &project_id, &user_id, &resource_type, resource_id, created_by],
         )
         .await?;
     Ok(id)
 }
 
-pub async fn remove_rule(client: &Client, rule_id: &Uuid, project_id: &Uuid) -> anyhow::Result<()> {
+pub async fn remove_rule(client: &Client, rule_id: &Uuid, project_id: &str) -> anyhow::Result<()> {
     client
         .execute(
             "DELETE FROM test_visibility_rule WHERE rule_id = $1 AND project_id = $2",
-            &[rule_id, project_id],
+            &[rule_id, &project_id],
         )
         .await?;
     Ok(())
@@ -90,7 +90,7 @@ pub async fn remove_rule(client: &Client, rule_id: &Uuid, project_id: &Uuid) -> 
 ///   `(user_id IS NULL OR user_id = $user_id) AND resource_type = $resource_type`.
 pub async fn visible_resources(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
     user_id: &Uuid,
     resource_type: &str,
 ) -> anyhow::Result<Option<HashSet<Uuid>>> {
@@ -98,7 +98,7 @@ pub async fn visible_resources(
     let row = client
         .query_opt(
             "SELECT settings FROM project WHERE project_id = $1",
-            &[project_id],
+            &[&project_id],
         )
         .await?;
 
@@ -123,7 +123,7 @@ pub async fn visible_resources(
              WHERE project_id = $1
                AND (user_id IS NULL OR user_id = $2)
                AND resource_type = $3",
-            &[project_id, user_id, &resource_type],
+            &[&project_id, user_id, &resource_type],
         )
         .await?;
 
@@ -140,7 +140,7 @@ mod tests {
     fn make_rule() -> VisibilityRuleRow {
         VisibilityRuleRow {
             rule_id: Uuid::new_v4(),
-            project_id: Uuid::new_v4(),
+            project_id: "test00000000x0".to_string(),
             user_id: None,
             resource_type: "job".to_string(),
             resource_id: Uuid::new_v4(),

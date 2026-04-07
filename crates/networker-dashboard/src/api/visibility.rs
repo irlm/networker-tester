@@ -79,7 +79,7 @@ async fn add_rule(
 
 async fn remove_rule(
     State(state): State<Arc<AppState>>,
-    Path((_, rule_id)): Path<(Uuid, Uuid)>,
+    Path((_, rule_id)): Path<(String, Uuid)>,
     req: axum::extract::Request,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();

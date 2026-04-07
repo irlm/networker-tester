@@ -6,7 +6,7 @@ use uuid::Uuid;
 #[derive(Debug, Serialize)]
 pub struct ApprovalRow {
     pub approval_id: Uuid,
-    pub project_id: Uuid,
+    pub project_id: String,
     pub agent_id: Uuid,
     pub command_type: String,
     pub command_detail: serde_json::Value,
@@ -43,7 +43,7 @@ fn row_to_approval(r: &tokio_postgres::Row) -> ApprovalRow {
 #[allow(dead_code)] // Will be called from agent command handlers in a later PR
 pub async fn create_approval(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
     agent_id: &Uuid,
     command_type: &str,
     command_detail: &serde_json::Value,
@@ -56,7 +56,7 @@ pub async fn create_approval(
             "INSERT INTO command_approval
                 (approval_id, project_id, agent_id, command_type, command_detail, requested_by, expires_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7)",
-            &[&id, project_id, agent_id, &command_type, command_detail, requested_by, expires_at],
+            &[&id, &project_id, agent_id, &command_type, command_detail, requested_by, expires_at],
         )
         .await?;
     Ok(id)
@@ -74,7 +74,7 @@ const SELECT_WITH_JOINS: &str = "
     LEFT JOIN dash_user dec ON dec.user_id = ca.decided_by
 ";
 
-pub async fn list_pending(client: &Client, project_id: &Uuid) -> anyhow::Result<Vec<ApprovalRow>> {
+pub async fn list_pending(client: &Client, project_id: &str) -> anyhow::Result<Vec<ApprovalRow>> {
     let rows = client
         .query(
             &format!(
@@ -82,18 +82,18 @@ pub async fn list_pending(client: &Client, project_id: &Uuid) -> anyhow::Result<
                  WHERE ca.project_id = $1 AND ca.status = 'pending' AND ca.expires_at > now()
                  ORDER BY ca.requested_at ASC"
             ),
-            &[project_id],
+            &[&project_id],
         )
         .await?;
     Ok(rows.iter().map(row_to_approval).collect())
 }
 
-pub async fn get_pending_count(client: &Client, project_id: &Uuid) -> anyhow::Result<i64> {
+pub async fn get_pending_count(client: &Client, project_id: &str) -> anyhow::Result<i64> {
     let row = client
         .query_one(
             "SELECT COUNT(*) FROM command_approval
              WHERE project_id = $1 AND status = 'pending' AND expires_at > now()",
-            &[project_id],
+            &[&project_id],
         )
         .await?;
     Ok(row.get(0))
@@ -102,7 +102,7 @@ pub async fn get_pending_count(client: &Client, project_id: &Uuid) -> anyhow::Re
 pub async fn get_approval(
     client: &Client,
     approval_id: &Uuid,
-    project_id: &Uuid,
+    project_id: &str,
 ) -> anyhow::Result<Option<ApprovalRow>> {
     let row = client
         .query_opt(
@@ -110,7 +110,7 @@ pub async fn get_approval(
                 "{SELECT_WITH_JOINS}
                  WHERE ca.approval_id = $1 AND ca.project_id = $2"
             ),
-            &[approval_id, project_id],
+            &[approval_id, &project_id],
         )
         .await?;
     Ok(row.as_ref().map(row_to_approval))
@@ -119,7 +119,7 @@ pub async fn get_approval(
 pub async fn decide(
     client: &Client,
     approval_id: &Uuid,
-    project_id: &Uuid,
+    project_id: &str,
     decided_by: &Uuid,
     approved: bool,
     reason: Option<&str>,
@@ -130,7 +130,7 @@ pub async fn decide(
             "UPDATE command_approval
              SET status = $1, decided_by = $2, decided_at = now(), reason = $3
              WHERE approval_id = $4 AND project_id = $5 AND status = 'pending'",
-            &[&status, decided_by, &reason, approval_id, project_id],
+            &[&status, decided_by, &reason, approval_id, &project_id],
         )
         .await?;
     Ok(())

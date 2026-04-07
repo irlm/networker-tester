@@ -5,11 +5,11 @@ use uuid::Uuid;
 
 #[cfg(test)]
 use crate::auth::default_project_id;
-use crate::auth::{ProjectRole, DEFAULT_PROJECT_UUID};
+use crate::auth::ProjectRole;
 
 #[derive(Debug, Serialize)]
 pub struct ProjectRow {
-    pub project_id: Uuid,
+    pub project_id: String,
     pub name: String,
     pub slug: String,
     pub description: Option<String>,
@@ -24,7 +24,7 @@ pub struct ProjectRow {
 /// Project with the requesting user's role included (for list endpoint).
 #[derive(Debug, Serialize)]
 pub struct ProjectWithRole {
-    pub project_id: Uuid,
+    pub project_id: String,
     pub name: String,
     pub slug: String,
     pub description: Option<String>,
@@ -34,7 +34,7 @@ pub struct ProjectWithRole {
 
 #[derive(Debug, Serialize)]
 pub struct ProjectMemberRow {
-    pub project_id: Uuid,
+    pub project_id: String,
     pub user_id: Uuid,
     pub role: String,
     pub joined_at: DateTime<Utc>,
@@ -90,13 +90,13 @@ pub async fn list_user_projects(
 }
 
 /// Get a single project by ID.
-pub async fn get_project(client: &Client, project_id: &Uuid) -> anyhow::Result<Option<ProjectRow>> {
+pub async fn get_project(client: &Client, project_id: &str) -> anyhow::Result<Option<ProjectRow>> {
     let row = client
         .query_opt(
             "SELECT project_id, name, slug, description, created_by, created_at, updated_at, settings, \
                     deleted_at, COALESCE(delete_protection, FALSE) AS delete_protection \
              FROM project WHERE project_id = $1",
-            &[project_id],
+            &[&project_id],
         )
         .await?;
 
@@ -122,7 +122,7 @@ pub async fn create_project(
     description: Option<&str>,
     created_by: &Uuid,
 ) -> anyhow::Result<ProjectRow> {
-    let project_id = Uuid::new_v4();
+    let project_id = crate::project_id::ProjectId::generate("us", "a20").to_string();
     let now = Utc::now();
     let settings = serde_json::json!({});
 
@@ -160,7 +160,7 @@ pub async fn create_project(
 /// Update a project's name, description, or settings.
 pub async fn update_project(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
     name: Option<&str>,
     description: Option<&str>,
     settings: Option<&serde_json::Value>,
@@ -181,7 +181,7 @@ pub async fn update_project(
         .execute(
             "UPDATE project SET name = $1, description = $2, settings = $3, updated_at = $4 \
              WHERE project_id = $5",
-            &[&new_name, &new_desc, new_settings, &now, project_id],
+            &[&new_name, &new_desc, new_settings, &now, &project_id],
         )
         .await?;
 
@@ -191,9 +191,9 @@ pub async fn update_project(
 /// Delete a project. The Default project cannot be deleted.
 pub async fn delete_project(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
 ) -> anyhow::Result<Result<(), &'static str>> {
-    if *project_id == DEFAULT_PROJECT_UUID {
+    if project_id == crate::auth::default_project_id() {
         return Ok(Err("Cannot delete the Default project"));
     }
 
@@ -201,12 +201,12 @@ pub async fn delete_project(
     client
         .execute(
             "DELETE FROM project_member WHERE project_id = $1",
-            &[project_id],
+            &[&project_id],
         )
         .await?;
 
     let n = client
-        .execute("DELETE FROM project WHERE project_id = $1", &[project_id])
+        .execute("DELETE FROM project WHERE project_id = $1", &[&project_id])
         .await?;
 
     if n > 0 {
@@ -219,13 +219,13 @@ pub async fn delete_project(
 /// Get a user's role within a project.
 pub async fn get_member_role(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
     user_id: &Uuid,
 ) -> anyhow::Result<Option<ProjectRole>> {
     let row = client
         .query_opt(
             "SELECT role FROM project_member WHERE project_id = $1 AND user_id = $2",
-            &[project_id, user_id],
+            &[&project_id, user_id],
         )
         .await?;
 
@@ -243,7 +243,7 @@ pub async fn get_member_role(
 /// List all members of a project, joined with dash_user for email/display_name.
 pub async fn list_members(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
 ) -> anyhow::Result<Vec<ProjectMemberRow>> {
     let rows = client
         .query(
@@ -253,7 +253,7 @@ pub async fn list_members(
              JOIN dash_user u ON u.user_id = pm.user_id \
              WHERE pm.project_id = $1 \
              ORDER BY pm.joined_at",
-            &[project_id],
+            &[&project_id],
         )
         .await?;
 
@@ -274,7 +274,7 @@ pub async fn list_members(
 /// Add a user to a project with the given role.
 pub async fn add_member(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
     user_id: &Uuid,
     role: &str,
     invited_by: &Uuid,
@@ -285,7 +285,7 @@ pub async fn add_member(
             "INSERT INTO project_member (project_id, user_id, role, joined_at, invited_by) \
              VALUES ($1, $2, $3, $4, $5) \
              ON CONFLICT (project_id, user_id) DO UPDATE SET role = $3",
-            &[project_id, user_id, &role, &now, invited_by],
+            &[&project_id, user_id, &role, &now, invited_by],
         )
         .await?;
     Ok(())
@@ -294,7 +294,7 @@ pub async fn add_member(
 /// Update a member's role within a project. Prevents demoting the last admin.
 pub async fn update_member_role(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
     user_id: &Uuid,
     role: &str,
 ) -> anyhow::Result<Result<bool, &'static str>> {
@@ -303,7 +303,7 @@ pub async fn update_member_role(
         let current_role = client
             .query_opt(
                 "SELECT role FROM project_member WHERE project_id = $1 AND user_id = $2",
-                &[project_id, user_id],
+                &[&project_id, user_id],
             )
             .await?;
         if let Some(row) = current_role {
@@ -312,7 +312,7 @@ pub async fn update_member_role(
                 let admin_count: i64 = client
                     .query_one(
                         "SELECT COUNT(*) FROM project_member WHERE project_id = $1 AND role = 'admin'",
-                        &[project_id],
+                        &[&project_id],
                     )
                     .await?
                     .get(0);
@@ -326,7 +326,7 @@ pub async fn update_member_role(
     let n = client
         .execute(
             "UPDATE project_member SET role = $1 WHERE project_id = $2 AND user_id = $3",
-            &[&role, project_id, user_id],
+            &[&role, &project_id, user_id],
         )
         .await?;
     Ok(Ok(n > 0))
@@ -335,14 +335,14 @@ pub async fn update_member_role(
 /// Remove a member from a project. Prevents removing the last admin.
 pub async fn remove_member(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
     user_id: &Uuid,
 ) -> anyhow::Result<Result<(), &'static str>> {
     // Check if this user is an admin
     let target_role = client
         .query_opt(
             "SELECT role FROM project_member WHERE project_id = $1 AND user_id = $2",
-            &[project_id, user_id],
+            &[&project_id, user_id],
         )
         .await?;
 
@@ -353,7 +353,7 @@ pub async fn remove_member(
             let admin_count: i64 = client
                 .query_one(
                     "SELECT COUNT(*) FROM project_member WHERE project_id = $1 AND role = 'admin'",
-                    &[project_id],
+                    &[&project_id],
                 )
                 .await?
                 .get(0);
@@ -368,7 +368,7 @@ pub async fn remove_member(
     client
         .execute(
             "DELETE FROM project_member WHERE project_id = $1 AND user_id = $2",
-            &[project_id, user_id],
+            &[&project_id, user_id],
         )
         .await?;
 
@@ -376,41 +376,41 @@ pub async fn remove_member(
 }
 
 /// Soft-delete a project by setting deleted_at to now.
-pub async fn suspend_project(client: &Client, project_id: &Uuid) -> anyhow::Result<()> {
+pub async fn suspend_project(client: &Client, project_id: &str) -> anyhow::Result<()> {
     client
         .execute(
             "UPDATE project SET deleted_at = now() WHERE project_id = $1 AND deleted_at IS NULL",
-            &[project_id],
+            &[&project_id],
         )
         .await?;
     Ok(())
 }
 
 /// Restore a soft-deleted project by clearing deleted_at and any warnings.
-pub async fn restore_project(client: &Client, project_id: &Uuid) -> anyhow::Result<()> {
+pub async fn restore_project(client: &Client, project_id: &str) -> anyhow::Result<()> {
     client
         .execute(
             "UPDATE project SET deleted_at = NULL WHERE project_id = $1",
-            &[project_id],
+            &[&project_id],
         )
         .await?;
     // Clear warnings
     client
         .execute(
             "DELETE FROM workspace_warning WHERE project_id = $1",
-            &[project_id],
+            &[&project_id],
         )
         .await?;
     Ok(())
 }
 
 /// Toggle delete_protection on a project. Returns the new value.
-pub async fn toggle_protection(client: &Client, project_id: &Uuid) -> anyhow::Result<bool> {
+pub async fn toggle_protection(client: &Client, project_id: &str) -> anyhow::Result<bool> {
     let row = client
         .query_one(
             "UPDATE project SET delete_protection = NOT COALESCE(delete_protection, FALSE) \
              WHERE project_id = $1 RETURNING delete_protection",
-            &[project_id],
+            &[&project_id],
         )
         .await?;
     Ok(row.get(0))
@@ -418,67 +418,67 @@ pub async fn toggle_protection(client: &Client, project_id: &Uuid) -> anyhow::Re
 
 /// Permanently delete a project and all associated data (cascade).
 /// The project must already be soft-deleted (deleted_at IS NOT NULL).
-pub async fn hard_delete_project(client: &Client, project_id: &Uuid) -> anyhow::Result<()> {
+pub async fn hard_delete_project(client: &Client, project_id: &str) -> anyhow::Result<()> {
     // Cascade delete in dependency order
     client
         .execute(
             "DELETE FROM workspace_warning WHERE project_id = $1",
-            &[project_id],
+            &[&project_id],
         )
         .await?;
     client
         .execute(
             "DELETE FROM workspace_invite WHERE project_id = $1",
-            &[project_id],
+            &[&project_id],
         )
         .await?;
     client
         .execute(
             "DELETE FROM test_visibility_rule WHERE project_id = $1",
-            &[project_id],
+            &[&project_id],
         )
         .await?;
     client
         .execute(
             "DELETE FROM command_approval WHERE project_id = $1",
-            &[project_id],
+            &[&project_id],
         )
         .await?;
     client
         .execute(
             "DELETE FROM share_link WHERE project_id = $1",
-            &[project_id],
+            &[&project_id],
         )
         .await?;
     client
         .execute(
             "DELETE FROM cloud_account WHERE project_id = $1",
-            &[project_id],
+            &[&project_id],
         )
         .await?;
     client
-        .execute("DELETE FROM schedule WHERE project_id = $1", &[project_id])
+        .execute("DELETE FROM schedule WHERE project_id = $1", &[&project_id])
         .await?;
     client
-        .execute("DELETE FROM job WHERE project_id = $1", &[project_id])
+        .execute("DELETE FROM job WHERE project_id = $1", &[&project_id])
         .await?;
     client
         .execute(
             "DELETE FROM deployment WHERE project_id = $1",
-            &[project_id],
+            &[&project_id],
         )
         .await?;
     client
-        .execute("DELETE FROM agent WHERE project_id = $1", &[project_id])
+        .execute("DELETE FROM agent WHERE project_id = $1", &[&project_id])
         .await?;
     client
         .execute(
             "DELETE FROM project_member WHERE project_id = $1",
-            &[project_id],
+            &[&project_id],
         )
         .await?;
     client
-        .execute("DELETE FROM project WHERE project_id = $1", &[project_id])
+        .execute("DELETE FROM project WHERE project_id = $1", &[&project_id])
         .await?;
     Ok(())
 }
@@ -616,7 +616,7 @@ mod tests {
     #[test]
     fn default_project_uuid_matches() {
         let expected: Uuid = "00000000-0000-0000-0000-000000000001".parse().unwrap();
-        assert_eq!(DEFAULT_PROJECT_UUID, expected);
+        assert_eq!(crate::auth::DEFAULT_PROJECT_UUID, expected);
     }
 
     #[test]

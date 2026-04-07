@@ -168,7 +168,7 @@ impl DatabaseBackend for MssqlBackend {
     async fn save_tls_profile(
         &self,
         _run: &TlsEndpointProfile,
-        _project_id: Option<&uuid::Uuid>,
+        _project_id: Option<&str>,
     ) -> anyhow::Result<uuid::Uuid> {
         anyhow::bail!("SQL Server TLS profile persistence not yet implemented")
     }

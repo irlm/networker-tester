@@ -20,7 +20,7 @@ pub struct RunSummary {
 
 pub async fn list(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
     target_host: Option<&str>,
     mode: Option<&str>,
     limit: i64,
@@ -56,7 +56,7 @@ pub async fn list(
     };
 
     let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
-    params.push(project_id);
+    params.push(&project_id);
     if let Some(host) = &target_host {
         params.push(host);
     }

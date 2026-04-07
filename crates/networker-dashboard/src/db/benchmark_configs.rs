@@ -6,7 +6,7 @@ use uuid::Uuid;
 #[derive(Debug, Serialize)]
 pub struct BenchmarkConfigRow {
     pub config_id: Uuid,
-    pub project_id: Uuid,
+    pub project_id: String,
     pub name: String,
     pub template: Option<String>,
     pub status: String,
@@ -47,7 +47,7 @@ fn row_to_config(r: &tokio_postgres::Row) -> BenchmarkConfigRow {
 #[allow(clippy::too_many_arguments)]
 pub async fn create(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
     name: &str,
     template: Option<&str>,
     config_json: &serde_json::Value,
@@ -65,7 +65,7 @@ pub async fn create(
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             &[
                 &id,
-                project_id,
+                &project_id,
                 &name,
                 &template,
                 config_json,
@@ -94,7 +94,7 @@ pub async fn get(client: &Client, config_id: &Uuid) -> anyhow::Result<Option<Ben
 
 pub async fn list(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
     limit: i64,
     offset: i64,
 ) -> anyhow::Result<Vec<BenchmarkConfigRow>> {
@@ -105,7 +105,7 @@ pub async fn list(
                     max_duration_secs, baseline_run_id, worker_id, last_heartbeat, benchmark_type
              FROM benchmark_config WHERE project_id = $1
              ORDER BY created_at DESC LIMIT $2 OFFSET $3",
-            &[project_id, &limit, &offset],
+            &[&project_id, &limit, &offset],
         )
         .await?;
     Ok(rows.iter().map(row_to_config).collect())

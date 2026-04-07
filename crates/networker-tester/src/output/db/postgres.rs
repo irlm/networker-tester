@@ -696,7 +696,7 @@ impl DatabaseBackend for PostgresBackend {
     async fn save_tls_profile(
         &self,
         run: &TlsEndpointProfile,
-        project_id: Option<&uuid::Uuid>,
+        project_id: Option<&str>,
     ) -> anyhow::Result<uuid::Uuid> {
         let client = self.client.lock().await;
         insert_tls_profile_run(run, project_id, &client).await
@@ -1248,7 +1248,7 @@ async fn insert_url_test_resource(
 
 async fn insert_tls_profile_run(
     run: &TlsEndpointProfile,
-    project_id: Option<&uuid::Uuid>,
+    project_id: Option<&str>,
     c: &PgClient,
 ) -> anyhow::Result<uuid::Uuid> {
     let id = uuid::Uuid::new_v4();

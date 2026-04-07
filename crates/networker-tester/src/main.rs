@@ -405,12 +405,7 @@ async fn run_tls_profile_cli(cfg: &ResolvedConfig) -> anyhow::Result<()> {
     };
 
     let profile = run_tls_endpoint_profile(req).await?;
-    let tls_profile_project_id = cfg
-        .tls_profile_project_id
-        .as_deref()
-        .map(str::parse::<uuid::Uuid>)
-        .transpose()
-        .context("invalid --tls-profile-project-id")?;
+    let tls_profile_project_id = cfg.tls_profile_project_id.clone();
     let out_dir = PathBuf::from(&cfg.output_dir);
     std::fs::create_dir_all(&out_dir).context("Cannot create output directory")?;
     let ts = Utc::now().format("%Y%m%d-%H%M%S");
@@ -430,7 +425,7 @@ async fn run_tls_profile_cli(cfg: &ResolvedConfig) -> anyhow::Result<()> {
             backend.migrate().await?;
         }
         backend
-            .save_tls_profile(&profile, tls_profile_project_id.as_ref())
+            .save_tls_profile(&profile, tls_profile_project_id.as_deref())
             .await?;
     }
 

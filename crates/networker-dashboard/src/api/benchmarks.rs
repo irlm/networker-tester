@@ -101,7 +101,7 @@ async fn save_benchmark_preset_scoped(
 
 async fn delete_benchmark_preset_scoped(
     State(state): State<Arc<AppState>>,
-    Path((_, preset_id)): Path<(Uuid, Uuid)>,
+    Path((_, preset_id)): Path<(String, Uuid)>,
     req: Request,
 ) -> Result<Json<Vec<crate::db::benchmark_presets::BenchmarkComparePreset>>, StatusCode> {
     let ctx = request_extension::<ProjectContext>(&req, "ProjectContext")?;
@@ -165,7 +165,7 @@ async fn list_benchmarks_scoped(
 
 async fn get_benchmark_scoped(
     State(state): State<Arc<AppState>>,
-    Path((_, run_id)): Path<(Uuid, Uuid)>,
+    Path((_, run_id)): Path<(String, Uuid)>,
     req: Request,
 ) -> Result<Json<networker_tester::output::json::BenchmarkArtifact>, StatusCode> {
     let ctx = request_extension::<ProjectContext>(&req, "ProjectContext")?;
@@ -400,7 +400,7 @@ mod tests {
     fn request_extension_clones_present_value() {
         let mut req = Request::builder().body(Body::empty()).unwrap();
         let expected = ProjectContext {
-            project_id: Uuid::new_v4(),
+            project_id: "test00000000x0".to_string(),
             project_slug: "demo".into(),
             role: ProjectRole::Viewer,
         };

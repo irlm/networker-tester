@@ -11,7 +11,8 @@ use uuid::Uuid;
 
 use crate::AppState;
 
-/// The Default project UUID (legacy V010 constant, kept for scheduler fallback).
+/// The Default project UUID (legacy V010 constant, kept for migration/tests).
+#[allow(dead_code)]
 pub const DEFAULT_PROJECT_UUID: Uuid = Uuid::from_bytes([
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
 ]);
@@ -76,7 +77,7 @@ impl ProjectRole {
 /// Context injected by `require_project` middleware.
 #[derive(Debug, Clone)]
 pub struct ProjectContext {
-    pub project_id: Uuid,
+    pub project_id: String,
     #[allow(dead_code)] // Used in later PRs for slug-based URL routing
     pub project_slug: String,
     pub role: ProjectRole,
@@ -339,13 +340,15 @@ pub async fn require_project(
     next.run(req).await
 }
 
-/// Extract the UUID segment that follows "projects/" in the request path.
-fn extract_project_id_from_path(path: &str) -> Option<Uuid> {
+/// Extract the project_id segment that follows "projects/" in the request path.
+fn extract_project_id_from_path(path: &str) -> Option<String> {
     let segments: Vec<&str> = path.split('/').collect();
     for (i, seg) in segments.iter().enumerate() {
         if *seg == "projects" {
             if let Some(next) = segments.get(i + 1) {
-                return next.parse::<Uuid>().ok();
+                if !next.is_empty() {
+                    return Some((*next).to_string());
+                }
             }
         }
     }
@@ -616,7 +619,7 @@ mod tests {
     #[test]
     fn require_project_role_respects_hierarchy() {
         let ctx = ProjectContext {
-            project_id: Uuid::new_v4(),
+            project_id: "test00000000x0".to_string(),
             project_slug: "test".into(),
             role: ProjectRole::Operator,
         };
@@ -629,9 +632,11 @@ mod tests {
 
     #[test]
     fn extract_project_id_valid_path() {
-        let id = Uuid::new_v4();
-        let path = format!("/api/projects/{id}/members");
-        assert_eq!(extract_project_id_from_path(&path), Some(id));
+        let path = "/api/projects/us12345abcde00/members";
+        assert_eq!(
+            extract_project_id_from_path(path),
+            Some("us12345abcde00".to_string())
+        );
     }
 
     #[test]
@@ -640,11 +645,8 @@ mod tests {
     }
 
     #[test]
-    fn extract_project_id_invalid_uuid() {
-        assert_eq!(
-            extract_project_id_from_path("/api/projects/not-a-uuid/members"),
-            None
-        );
+    fn extract_project_id_empty_segment() {
+        assert_eq!(extract_project_id_from_path("/api/projects//members"), None);
     }
 
     // ── is_platform_admin in JWT roundtrip ───────────────────────────────

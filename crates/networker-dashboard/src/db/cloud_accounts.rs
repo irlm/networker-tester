@@ -7,7 +7,7 @@ use uuid::Uuid;
 #[allow(dead_code)]
 pub struct CloudAccountRow {
     pub account_id: Uuid,
-    pub project_id: Uuid,
+    pub project_id: String,
     pub owner_id: Option<Uuid>,
     pub name: String,
     pub provider: String,
@@ -34,7 +34,7 @@ pub struct CloudAccountSummary {
 
 pub async fn list_accounts(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
     user_id: &Uuid,
 ) -> anyhow::Result<Vec<CloudAccountSummary>> {
     // Show project-shared accounts (owner_id IS NULL) + user's personal accounts
@@ -44,7 +44,7 @@ pub async fn list_accounts(
              FROM cloud_account \
              WHERE project_id = $1 AND (owner_id IS NULL OR owner_id = $2) \
              ORDER BY created_at",
-            &[project_id, user_id],
+            &[&project_id, user_id],
         )
         .await?;
 
@@ -68,7 +68,7 @@ pub async fn list_accounts(
 pub async fn get_account(
     client: &Client,
     account_id: &Uuid,
-    project_id: &Uuid,
+    project_id: &str,
 ) -> anyhow::Result<Option<CloudAccountRow>> {
     let row = client
         .query_opt(
@@ -76,7 +76,7 @@ pub async fn get_account(
                     credentials_enc, credentials_nonce, region_default, \
                     status, last_validated, validation_error, created_at, updated_at \
              FROM cloud_account WHERE account_id = $1 AND project_id = $2",
-            &[account_id, project_id],
+            &[account_id, &project_id],
         )
         .await?;
 
@@ -100,7 +100,7 @@ pub async fn get_account(
 #[allow(clippy::too_many_arguments)]
 pub async fn create_account(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
     owner_id: Option<&Uuid>,
     name: &str,
     provider: &str,
@@ -118,7 +118,7 @@ pub async fn create_account(
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', $9, $10)",
             &[
                 &account_id,
-                project_id,
+                &project_id,
                 &owner_id,
                 &name,
                 &provider,
@@ -152,12 +152,12 @@ pub async fn update_account(
 pub async fn delete_account(
     client: &Client,
     account_id: &Uuid,
-    project_id: &Uuid,
+    project_id: &str,
 ) -> anyhow::Result<bool> {
     let n = client
         .execute(
             "DELETE FROM cloud_account WHERE account_id = $1 AND project_id = $2",
-            &[account_id, project_id],
+            &[account_id, &project_id],
         )
         .await?;
     Ok(n > 0)

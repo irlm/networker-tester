@@ -44,14 +44,14 @@ pub async fn create(
     config: &serde_json::Value,
     provider_summary: Option<&str>,
     created_by: Option<&Uuid>,
-    project_id: &Uuid,
+    project_id: &str,
 ) -> anyhow::Result<Uuid> {
     let id = Uuid::new_v4();
     client
         .execute(
             "INSERT INTO deployment (deployment_id, name, status, config, provider_summary, created_by, project_id)
              VALUES ($1, $2, 'pending', $3, $4, $5, $6)",
-            &[&id, &name, config, &provider_summary, &created_by, project_id],
+            &[&id, &name, config, &provider_summary, &created_by, &project_id],
         )
         .await?;
     Ok(id)
@@ -73,7 +73,7 @@ pub async fn get(client: &Client, deployment_id: &Uuid) -> anyhow::Result<Option
 
 pub async fn list(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
     limit: i64,
     offset: i64,
 ) -> anyhow::Result<Vec<DeploymentRow>> {
@@ -83,7 +83,7 @@ pub async fn list(
                     created_at, started_at, finished_at, endpoint_ips, agent_id,
                     error_message, log
              FROM deployment WHERE project_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
-            &[project_id, &limit, &offset],
+            &[&project_id, &limit, &offset],
         )
         .await?;
 

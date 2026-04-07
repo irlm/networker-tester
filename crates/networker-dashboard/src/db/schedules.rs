@@ -19,7 +19,7 @@ pub struct ScheduleRow {
     pub created_at: DateTime<Utc>,
     pub next_run_at: Option<DateTime<Utc>>,
     pub last_run_at: Option<DateTime<Utc>>,
-    pub project_id: Option<Uuid>,
+    pub project_id: Option<String>,
     pub benchmark_config_id: Option<Uuid>,
 }
 
@@ -55,7 +55,7 @@ pub async fn create(
     auto_start_vm: bool,
     auto_stop_vm: bool,
     next_run_at: Option<DateTime<Utc>>,
-    project_id: &Uuid,
+    project_id: &str,
     benchmark_config_id: Option<&Uuid>,
 ) -> anyhow::Result<Uuid> {
     let id = Uuid::new_v4();
@@ -75,7 +75,7 @@ pub async fn create(
                 &auto_start_vm,
                 &auto_stop_vm,
                 &next_run_at,
-                project_id,
+                &project_id,
                 &benchmark_config_id,
             ],
         )
@@ -97,13 +97,13 @@ pub async fn get(client: &Client, schedule_id: &Uuid) -> anyhow::Result<Option<S
 }
 
 #[allow(dead_code)]
-pub async fn list(client: &Client, project_id: &Uuid) -> anyhow::Result<Vec<ScheduleRow>> {
+pub async fn list(client: &Client, project_id: &str) -> anyhow::Result<Vec<ScheduleRow>> {
     list_filtered(client, project_id, None::<&Uuid>, None, None).await
 }
 
 pub async fn list_filtered(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
     agent_id_filter: Option<&Uuid>,
     enabled_filter: Option<bool>,
     visible_ids: Option<&std::collections::HashSet<uuid::Uuid>>,
@@ -146,7 +146,7 @@ pub async fn list_filtered(
     };
 
     let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
-    params.push(project_id);
+    params.push(&project_id);
     if let Some(aid) = &agent_id_filter {
         params.push(aid);
     }
@@ -345,7 +345,7 @@ mod tests {
                 created_at: now,
                 next_run_at: Some(now + chrono::Duration::hours(22)),
                 last_run_at: Some(now - chrono::Duration::hours(2)),
-                project_id: Some(Uuid::new_v4()),
+                project_id: Some("test00000000x0".to_string()),
                 benchmark_config_id: None,
             };
 

@@ -115,7 +115,7 @@ async fn register_vm(
 /// DELETE /projects/:pid/benchmark-catalog/:vm_id
 async fn remove_vm(
     State(state): State<Arc<AppState>>,
-    Path((_, vm_id)): Path<(Uuid, Uuid)>,
+    Path((_, vm_id)): Path<(String, Uuid)>,
     req: Request,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let ctx = request_extension::<ProjectContext>(&req, "ProjectContext")?;
@@ -162,7 +162,7 @@ async fn remove_vm(
 /// SSH to the VM and detect which languages are deployed.
 async fn detect_languages(
     State(state): State<Arc<AppState>>,
-    Path((_, vm_id)): Path<(Uuid, Uuid)>,
+    Path((_, vm_id)): Path<(String, Uuid)>,
     req: Request,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let ctx = request_extension::<ProjectContext>(&req, "ProjectContext")?;

@@ -2,7 +2,6 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sysinfo::System;
 use tokio_postgres::Client;
-use uuid::Uuid;
 
 #[derive(Debug, Serialize)]
 pub struct SystemMetrics {
@@ -25,7 +24,7 @@ pub struct DbMetrics {
 
 #[derive(Debug, Serialize)]
 pub struct WorkspaceUsage {
-    pub project_id: Uuid,
+    pub project_id: String,
     pub name: String,
     pub slug: String,
     pub member_count: i64,

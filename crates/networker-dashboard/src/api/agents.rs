@@ -158,7 +158,7 @@ async fn create_agent_scoped(
 
 async fn delete_agent_scoped(
     State(state): State<Arc<AppState>>,
-    Path((_, agent_id)): Path<(Uuid, Uuid)>,
+    Path((_, agent_id)): Path<(String, Uuid)>,
     req: axum::extract::Request,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();

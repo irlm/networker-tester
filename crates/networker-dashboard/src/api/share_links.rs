@@ -166,7 +166,7 @@ struct UpdateShareLinkRequest {
 /// PUT /share-links/:lid — extend or revoke a share link
 async fn update_share_link(
     State(state): State<Arc<AppState>>,
-    Path((_, link_id)): Path<(Uuid, Uuid)>,
+    Path((_, link_id)): Path<(String, Uuid)>,
     req: axum::extract::Request,
 ) -> impl IntoResponse {
     let ctx = match req.extensions().get::<ProjectContext>() {
@@ -242,7 +242,7 @@ async fn update_share_link(
 /// DELETE /share-links/:lid — delete a share link
 async fn delete_share_link(
     State(state): State<Arc<AppState>>,
-    Path((_, link_id)): Path<(Uuid, Uuid)>,
+    Path((_, link_id)): Path<(String, Uuid)>,
     req: axum::extract::Request,
 ) -> impl IntoResponse {
     let ctx = match req.extensions().get::<ProjectContext>() {
