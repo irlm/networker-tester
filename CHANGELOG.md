@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.20.4] - 2026-04-06
+
+### Fixed
+- Benchmark launch no longer blocked by version guard — orchestrator provisions its own testers
+- Deploy pipeline copies tester to `/usr/local/bin` to prevent stale version detection
+
+---
+
 ## [0.20.3] - 2026-04-06
 
 ### Removed
