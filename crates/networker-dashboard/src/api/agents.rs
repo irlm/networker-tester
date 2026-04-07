@@ -295,10 +295,10 @@ mod tests {
         use super::super::CreateAgentRequest;
 
         #[test]
-        fn location_defaults_to_local() {
+        fn location_defaults_to_ssh() {
             let json = r#"{"name": "test-agent"}"#;
             let req: CreateAgentRequest = serde_json::from_str(json).unwrap();
-            assert_eq!(req.location, "local");
+            assert_eq!(req.location, "ssh");
         }
 
         #[test]
