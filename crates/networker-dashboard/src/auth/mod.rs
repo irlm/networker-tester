@@ -6,15 +6,36 @@ use axum::{
 };
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use uuid::Uuid;
 
 use crate::AppState;
 
-/// The Default project UUID (created by V010 migration).
-pub const DEFAULT_PROJECT_ID: Uuid = Uuid::from_bytes([
+/// The Default project UUID (legacy V010 constant, kept for scheduler fallback).
+pub const DEFAULT_PROJECT_UUID: Uuid = Uuid::from_bytes([
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
 ]);
+
+/// The default project's 14-char base36 ID, set during migration.
+/// Falls back to a deterministic generation if not yet set by the migration.
+static DEFAULT_PROJECT_ID_CELL: OnceLock<String> = OnceLock::new();
+
+/// Return the default project ID as a 14-char base36 string.
+#[allow(dead_code)]
+pub fn default_project_id() -> &'static str {
+    DEFAULT_PROJECT_ID_CELL.get_or_init(|| {
+        // 1767225600 = 2026-01-01T00:00:00Z (PROJECT_EPOCH), used as fallback
+        // for the Default project which was created at migration time.
+        crate::project_id::ProjectId::generate_deterministic("us", "a20", 1767225600)
+            .as_str()
+            .to_string()
+    })
+}
+
+/// Set the default project ID from the database (called during migration).
+pub fn set_default_project_id(id: String) {
+    let _ = DEFAULT_PROJECT_ID_CELL.set(id);
+}
 
 /// Role-based access control.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

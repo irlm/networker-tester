@@ -758,6 +758,286 @@ VALUES ('a20', 'us', 'alethedash-vm', 'https://alethedash.com', '20.42.8.158',
 ON CONFLICT DO NOTHING;
 "#;
 
+/// V024b migration: Convert project_id from UUID to 14-char base36.
+///
+/// This is a Rust-driven migration because the base36 encoding + Damm check
+/// digits can't be computed in pure SQL. It rewrites the PK on `project` and
+/// every FK column that references it.
+async fn migrate_project_ids(client: &Client) -> anyhow::Result<()> {
+    use crate::project_id::ProjectId;
+
+    // ── Step 1: Add temporary columns to the project table ──────────────
+    client
+        .batch_execute(
+            "ALTER TABLE project ADD COLUMN IF NOT EXISTS new_project_id CHAR(14);
+             ALTER TABLE project ADD COLUMN IF NOT EXISTS old_project_id UUID;",
+        )
+        .await?;
+
+    // ── Step 2: Generate new IDs for each existing project ──────────────
+    let projects = client
+        .query("SELECT project_id, created_at FROM project", &[])
+        .await?;
+
+    for row in &projects {
+        let old_id: uuid::Uuid = row.get("project_id");
+        let created_at: chrono::DateTime<chrono::Utc> = row.get("created_at");
+        let unix_secs = created_at.timestamp() as u64;
+
+        let new_id = ProjectId::generate_deterministic("us", "a20", unix_secs);
+        let new_id_str = new_id.as_str().to_string();
+
+        client
+            .execute(
+                "UPDATE project SET new_project_id = $1, old_project_id = $2 WHERE project_id = $3",
+                &[&new_id_str, &old_id, &old_id],
+            )
+            .await?;
+    }
+
+    tracing::info!(
+        count = projects.len(),
+        "Generated new base36 project IDs for all projects"
+    );
+
+    // ── Step 3: Add new_project_id to ALL FK tables ─────────────────────
+    // Tables with NOT NULL project_id
+    let not_null_fk_tables = [
+        "project_member",
+        "cloud_account",
+        "share_link",
+        "command_approval",
+        "test_visibility_rule",
+        "workspace_invite",
+        "workspace_warning",
+        "benchmark_compare_preset",
+        "benchmark_vm_catalog",
+        "benchmark_config",
+    ];
+    // Tables where project_id was nullable, then made NOT NULL by V011
+    let v011_not_null_tables = ["agent", "job", "schedule", "deployment"];
+    // Tables where project_id may still be nullable
+    let nullable_fk_tables = ["test_definition", "cloud_connection"];
+
+    // Add new_project_id column to all FK tables
+    for table in not_null_fk_tables
+        .iter()
+        .chain(v011_not_null_tables.iter())
+        .chain(nullable_fk_tables.iter())
+    {
+        let sql = format!("ALTER TABLE {table} ADD COLUMN IF NOT EXISTS new_project_id CHAR(14);");
+        client.batch_execute(&sql).await?;
+    }
+
+    // Also handle TlsProfileRun (mixed-case column name "ProjectId")
+    client
+        .batch_execute(
+            "ALTER TABLE tlsprofilerun ADD COLUMN IF NOT EXISTS new_project_id CHAR(14);",
+        )
+        .await?;
+
+    // ── Step 4: Populate new_project_id by joining on project ───────────
+    for table in not_null_fk_tables
+        .iter()
+        .chain(v011_not_null_tables.iter())
+        .chain(nullable_fk_tables.iter())
+    {
+        let sql = format!(
+            "UPDATE {table} t SET new_project_id = p.new_project_id \
+             FROM project p WHERE t.project_id = p.project_id AND t.new_project_id IS NULL"
+        );
+        client.batch_execute(&sql).await?;
+    }
+
+    // TlsProfileRun uses mixed-case "ProjectId"
+    client
+        .batch_execute(
+            "UPDATE tlsprofilerun t SET new_project_id = p.new_project_id \
+             FROM project p WHERE t.\"ProjectId\" = p.project_id AND t.new_project_id IS NULL",
+        )
+        .await?;
+
+    // ── Step 5: Drop old FK constraints ─────────────────────────────────
+    // Auto-generated FK names from ALTER TABLE ... ADD COLUMN ... REFERENCES
+    // are typically: {table}_{column}_fkey
+    // Tables from V010 section 7 (ALTER TABLE ADD COLUMN project_id UUID REFERENCES ...):
+    for table in &[
+        "agent",
+        "test_definition",
+        "job",
+        "schedule",
+        "deployment",
+        "cloud_connection",
+    ] {
+        let sql = format!("ALTER TABLE {table} DROP CONSTRAINT IF EXISTS {table}_project_id_fkey;");
+        client.batch_execute(&sql).await?;
+    }
+    // Tables created in V010 with inline REFERENCES (CREATE TABLE ... project_id UUID NOT NULL REFERENCES ...):
+    for table in &[
+        "project_member",
+        "cloud_account",
+        "share_link",
+        "command_approval",
+        "test_visibility_rule",
+    ] {
+        let sql = format!("ALTER TABLE {table} DROP CONSTRAINT IF EXISTS {table}_project_id_fkey;");
+        client.batch_execute(&sql).await?;
+    }
+    // V012 tables
+    for table in &["workspace_invite", "workspace_warning"] {
+        let sql = format!("ALTER TABLE {table} DROP CONSTRAINT IF EXISTS {table}_project_id_fkey;");
+        client.batch_execute(&sql).await?;
+    }
+    // V014, V016 tables
+    for table in &[
+        "benchmark_compare_preset",
+        "benchmark_vm_catalog",
+        "benchmark_config",
+    ] {
+        let sql = format!("ALTER TABLE {table} DROP CONSTRAINT IF EXISTS {table}_project_id_fkey;");
+        client.batch_execute(&sql).await?;
+    }
+    // TlsProfileRun (V015) — FK constraint name for mixed-case column
+    client
+        .batch_execute(
+            "ALTER TABLE tlsprofilerun DROP CONSTRAINT IF EXISTS \"TlsProfileRun_ProjectId_fkey\";
+             ALTER TABLE tlsprofilerun DROP CONSTRAINT IF EXISTS tlsprofilerun_projectid_fkey;",
+        )
+        .await?;
+
+    // ── Step 6: Drop the project PK ─────────────────────────────────────
+    client
+        .batch_execute("ALTER TABLE project DROP CONSTRAINT IF EXISTS project_pkey;")
+        .await?;
+
+    // ── Step 7: Drop old columns, rename new columns ────────────────────
+    // project table: drop old project_id, rename new_project_id → project_id
+    client
+        .batch_execute(
+            "ALTER TABLE project DROP COLUMN project_id;
+             ALTER TABLE project RENAME COLUMN new_project_id TO project_id;
+             ALTER TABLE project ALTER COLUMN project_id SET NOT NULL;
+             ALTER TABLE project ADD PRIMARY KEY (project_id);",
+        )
+        .await?;
+
+    // All FK tables: drop old project_id, rename new_project_id → project_id, set NOT NULL where required
+    for table in &not_null_fk_tables {
+        let sql = format!(
+            "ALTER TABLE {table} DROP COLUMN project_id; \
+             ALTER TABLE {table} RENAME COLUMN new_project_id TO project_id; \
+             ALTER TABLE {table} ALTER COLUMN project_id SET NOT NULL; \
+             ALTER TABLE {table} ADD CONSTRAINT {table}_project_id_fkey \
+                 FOREIGN KEY (project_id) REFERENCES project(project_id) ON DELETE CASCADE;"
+        );
+        client.batch_execute(&sql).await?;
+    }
+
+    for table in &v011_not_null_tables {
+        let sql = format!(
+            "ALTER TABLE {table} DROP COLUMN project_id; \
+             ALTER TABLE {table} RENAME COLUMN new_project_id TO project_id; \
+             ALTER TABLE {table} ALTER COLUMN project_id SET NOT NULL; \
+             ALTER TABLE {table} ADD CONSTRAINT {table}_project_id_fkey \
+                 FOREIGN KEY (project_id) REFERENCES project(project_id);"
+        );
+        client.batch_execute(&sql).await?;
+    }
+
+    for table in &nullable_fk_tables {
+        let sql = format!(
+            "ALTER TABLE {table} DROP COLUMN project_id; \
+             ALTER TABLE {table} RENAME COLUMN new_project_id TO project_id; \
+             ALTER TABLE {table} ADD CONSTRAINT {table}_project_id_fkey \
+                 FOREIGN KEY (project_id) REFERENCES project(project_id);"
+        );
+        client.batch_execute(&sql).await?;
+    }
+
+    // TlsProfileRun: drop old ProjectId, rename new_project_id → ProjectId
+    client
+        .batch_execute(
+            "ALTER TABLE tlsprofilerun DROP COLUMN \"ProjectId\";
+             ALTER TABLE tlsprofilerun RENAME COLUMN new_project_id TO \"ProjectId\";
+             ALTER TABLE tlsprofilerun ALTER COLUMN \"ProjectId\" SET NOT NULL;
+             ALTER TABLE tlsprofilerun ADD CONSTRAINT tlsprofilerun_projectid_fkey
+                 FOREIGN KEY (\"ProjectId\") REFERENCES project(project_id);",
+        )
+        .await?;
+
+    // Fix project_member composite PK (was (project_id UUID, user_id UUID))
+    client
+        .batch_execute(
+            "ALTER TABLE project_member DROP CONSTRAINT IF EXISTS project_member_pkey;
+             ALTER TABLE project_member ADD PRIMARY KEY (project_id, user_id);",
+        )
+        .await?;
+
+    // ── Step 8: Recreate indexes that referenced project_id ─────────────
+    client
+        .batch_execute(
+            "DROP INDEX IF EXISTS ix_agent_project;
+             CREATE INDEX IF NOT EXISTS ix_agent_project ON agent (project_id);
+             DROP INDEX IF EXISTS ix_test_def_project;
+             CREATE INDEX IF NOT EXISTS ix_test_def_project ON test_definition (project_id);
+             DROP INDEX IF EXISTS ix_job_project;
+             CREATE INDEX IF NOT EXISTS ix_job_project ON job (project_id, status, created_at DESC);
+             DROP INDEX IF EXISTS ix_schedule_project;
+             CREATE INDEX IF NOT EXISTS ix_schedule_project ON schedule (project_id) WHERE enabled = TRUE;
+             DROP INDEX IF EXISTS ix_deployment_project;
+             CREATE INDEX IF NOT EXISTS ix_deployment_project ON deployment (project_id, status, created_at DESC);
+             DROP INDEX IF EXISTS ix_cloud_account_project;
+             CREATE INDEX IF NOT EXISTS ix_cloud_account_project ON cloud_account (project_id);
+             DROP INDEX IF EXISTS ix_share_link_project;
+             CREATE INDEX IF NOT EXISTS ix_share_link_project ON share_link (project_id, resource_type);
+             DROP INDEX IF EXISTS ix_command_approval_pending;
+             CREATE INDEX IF NOT EXISTS ix_command_approval_pending ON command_approval (project_id, status) WHERE status = 'pending';
+             DROP INDEX IF EXISTS ix_visibility_project;
+             CREATE INDEX IF NOT EXISTS ix_visibility_project ON test_visibility_rule (project_id, user_id, resource_type);
+             DROP INDEX IF EXISTS ix_project_member_user;
+             CREATE INDEX IF NOT EXISTS ix_project_member_user ON project_member (user_id);
+             DROP INDEX IF EXISTS ix_workspace_invite_project;
+             CREATE INDEX IF NOT EXISTS ix_workspace_invite_project ON workspace_invite (project_id, status);
+             DROP INDEX IF EXISTS ix_workspace_warning_unique;
+             CREATE UNIQUE INDEX IF NOT EXISTS ix_workspace_warning_unique ON workspace_warning (project_id, warning_type);
+             DROP INDEX IF EXISTS ix_benchmark_compare_preset_name;
+             CREATE UNIQUE INDEX IF NOT EXISTS ix_benchmark_compare_preset_name ON benchmark_compare_preset (project_id, name_key);
+             DROP INDEX IF EXISTS ix_benchmark_compare_preset_project_updated;
+             CREATE INDEX IF NOT EXISTS ix_benchmark_compare_preset_project_updated ON benchmark_compare_preset (project_id, updated_at DESC);
+             DROP INDEX IF EXISTS ix_benchmark_vm_catalog_project;
+             CREATE INDEX IF NOT EXISTS ix_benchmark_vm_catalog_project ON benchmark_vm_catalog (project_id);
+             DROP INDEX IF EXISTS ix_benchmark_config_project;
+             CREATE INDEX IF NOT EXISTS ix_benchmark_config_project ON benchmark_config (project_id, created_at DESC);
+             DROP INDEX IF EXISTS ix_tlsprofilerun_project;
+             CREATE INDEX IF NOT EXISTS ix_tlsprofilerun_project ON tlsprofilerun (\"ProjectId\", \"StartedAt\" DESC);",
+        )
+        .await?;
+
+    // ── Step 9: Populate project_routing (all projects → us/us) ─────────
+    client
+        .batch_execute(
+            "INSERT INTO project_routing (project_id, home_zone, current_zone)
+             SELECT project_id, 'us', 'us' FROM project
+             ON CONFLICT DO NOTHING;",
+        )
+        .await?;
+
+    // ── Step 10: Zone-prefix index for routing lookups ───────────────────
+    client
+        .batch_execute(
+            "CREATE INDEX IF NOT EXISTS ix_project_zone_prefix ON project (substring(project_id from 1 for 2));",
+        )
+        .await?;
+
+    // ── Step 11: Clean up old_project_id helper column ──────────────────
+    client
+        .batch_execute("ALTER TABLE project DROP COLUMN IF EXISTS old_project_id;")
+        .await?;
+
+    tracing::info!("V024b project ID migration complete (UUID → CHAR(14))");
+    Ok(())
+}
+
 /// Run pending migrations.
 pub async fn run(client: &Client) -> anyhow::Result<()> {
     // Ensure migration tracking table exists
@@ -1233,6 +1513,36 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
             )
             .await?;
         tracing::info!("V024 migration complete");
+    }
+
+    // V025: Convert project_id from UUID to 14-char base36
+    let row = client
+        .query_opt("SELECT version FROM _migrations WHERE version = 25", &[])
+        .await?;
+
+    if row.is_none() {
+        tracing::info!("Applying V025 project ID migration (UUID → base36)...");
+        migrate_project_ids(client).await?;
+        client
+            .execute(
+                "INSERT INTO _migrations (version) VALUES (25) ON CONFLICT DO NOTHING",
+                &[],
+            )
+            .await?;
+
+        // Set default project ID from DB (the delete_protection=TRUE project)
+        if let Ok(Some(row)) = client
+            .query_opt(
+                "SELECT project_id FROM project WHERE delete_protection = TRUE LIMIT 1",
+                &[],
+            )
+            .await
+        {
+            let id: String = row.get("project_id");
+            crate::auth::set_default_project_id(id);
+        }
+
+        tracing::info!("V025 migration complete");
     }
 
     Ok(())

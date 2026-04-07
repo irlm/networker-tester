@@ -151,7 +151,7 @@ async fn tick(state: &Arc<AppState>) -> anyhow::Result<()> {
         // Create job from schedule config
         let project_id = schedule
             .project_id
-            .unwrap_or(crate::auth::DEFAULT_PROJECT_ID);
+            .unwrap_or(crate::auth::DEFAULT_PROJECT_UUID);
         let job_id = crate::db::jobs::create(
             &client,
             &config,

@@ -3,7 +3,9 @@ use serde::Serialize;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-use crate::auth::{ProjectRole, DEFAULT_PROJECT_ID};
+#[cfg(test)]
+use crate::auth::default_project_id;
+use crate::auth::{ProjectRole, DEFAULT_PROJECT_UUID};
 
 #[derive(Debug, Serialize)]
 pub struct ProjectRow {
@@ -191,7 +193,7 @@ pub async fn delete_project(
     client: &Client,
     project_id: &Uuid,
 ) -> anyhow::Result<Result<(), &'static str>> {
-    if *project_id == DEFAULT_PROJECT_ID {
+    if *project_id == DEFAULT_PROJECT_UUID {
         return Ok(Err("Cannot delete the Default project"));
     }
 
@@ -612,8 +614,18 @@ mod tests {
     }
 
     #[test]
-    fn default_project_id_matches() {
+    fn default_project_uuid_matches() {
         let expected: Uuid = "00000000-0000-0000-0000-000000000001".parse().unwrap();
-        assert_eq!(DEFAULT_PROJECT_ID, expected);
+        assert_eq!(DEFAULT_PROJECT_UUID, expected);
+    }
+
+    #[test]
+    fn default_project_id_is_14_chars() {
+        let id = default_project_id();
+        assert_eq!(id.len(), 14, "default project ID should be 14 chars: {id}");
+        assert!(
+            crate::project_id::ProjectId::validate(id),
+            "default project ID should be a valid ProjectId: {id}"
+        );
     }
 }
