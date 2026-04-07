@@ -9375,7 +9375,8 @@ deploy_benchmark_server() {
             if [ "$BENCH_USE_TLS" = "1" ]; then
                 nohup "$BENCH_DIR/rust-server" --https-port "$BENCH_PORT" > "$BENCH_DIR/rust-server.log" 2>&1 &
             else
-                nohup "$BENCH_DIR/rust-server" --http-port "$BENCH_PORT" > "$BENCH_DIR/rust-server.log" 2>&1 &
+                # App mode: HTTP only on $BENCH_PORT, disable HTTPS/UDP to avoid port conflicts with proxy
+                nohup "$BENCH_DIR/rust-server" --http-port "$BENCH_PORT" --https-port 0 --udp-port 0 --udp-throughput-port 0 > "$BENCH_DIR/rust-server.log" 2>&1 &
             fi
             ;;
 
