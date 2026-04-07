@@ -188,6 +188,7 @@ async fn deploy_chrome_harness(vm: &VmInfo) -> Result<()> {
 
     // Deploy harness files via the repo (should already be cloned by deploy_benchmark_server)
     let deploy_cmd = concat!(
+        "export PATH=/usr/bin:/usr/local/bin:$PATH && ",
         "if [ -d /tmp/nwk-repo/benchmarks/chrome-harness ]; then ",
         "  cp /tmp/nwk-repo/benchmarks/chrome-harness/package.json /opt/bench/chrome-harness/ && ",
         "  cp /tmp/nwk-repo/benchmarks/chrome-harness/runner.js /opt/bench/chrome-harness/ && ",
@@ -227,7 +228,7 @@ async fn run_chrome_benchmark(
         format!(" --token {bench_token}")
     };
     let cmd = format!(
-        "cd /opt/bench/chrome-harness && node runner.js \
+        "export PATH=/usr/bin:/usr/local/bin:$PATH && cd /opt/bench/chrome-harness && node runner.js \
          --target https://localhost:8443 \
          --warmup {} \
          --measured {} \
