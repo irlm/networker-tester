@@ -177,9 +177,8 @@ async fn deploy_chrome_harness(vm: &VmInfo) -> Result<()> {
         "  rm -f /tmp/chrome.deb; ",
         "fi && ",
         // Install Node.js if missing
-        "if ! command -v node >/dev/null 2>&1; then ",
-        "  curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - < /dev/null && ",
-        "  sudo apt-get install -y -qq nodejs < /dev/null; ",
+        "if ! command -v npm >/dev/null 2>&1; then ",
+        "  sudo apt-get install -y -qq nodejs npm < /dev/null; ",
         "fi",
     );
     ssh::ssh_exec(&vm.ip, setup_cmd)
