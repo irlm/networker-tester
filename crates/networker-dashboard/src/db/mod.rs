@@ -22,6 +22,7 @@ pub mod url_tests;
 pub mod users;
 pub mod visibility;
 pub mod workspace_warnings;
+pub mod zones;
 
 use deadpool_postgres::{Config, Pool, Runtime};
 use tokio_postgres::NoTls;
