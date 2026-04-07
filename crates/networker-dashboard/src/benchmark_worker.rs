@@ -260,7 +260,6 @@ async fn poll_and_run(
                                 .await;
                             }
                         } else {
-                            let err_msg = err_msg;
                             tracing::error!(
                                 config_id = %config_id,
                                 exit_code = ?status.code(),
