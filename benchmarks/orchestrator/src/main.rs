@@ -242,58 +242,59 @@ async fn cmd_run(
     callback_url: Option<String>,
     callback_token: Option<String>,
 ) -> Result<()> {
-    // If callback_url is set, try dashboard config format first (it doesn't have 'name' field)
+    // If callback_url is set, use dashboard config format (has config_id, no 'name' field)
     if let (Some(ref url), Some(ref token)) = (&callback_url, &callback_token) {
-        if let Ok(dashboard_config) = config::DashboardBenchmarkConfig::load(&config_path) {
-            tracing::info!(
-                "Dashboard benchmark config detected (config_id={}), using executor",
-                dashboard_config.config_id
-            );
+        let dashboard_config = config::DashboardBenchmarkConfig::load(&config_path)
+            .with_context(|| format!("loading config from {}", config_path.display()))?;
 
-            let callback_client = std::sync::Arc::new(callback::CallbackClient::new(
-                url,
-                token,
-                &dashboard_config.config_id,
-            ));
+        tracing::info!(
+            "Dashboard benchmark config detected (config_id={}), using executor",
+            dashboard_config.config_id
+        );
 
-            // PID file
-            let pid_path = format!("/tmp/alethabench-{}.pid", dashboard_config.config_id);
-            std::fs::write(&pid_path, std::process::id().to_string()).ok();
+        let callback_client = std::sync::Arc::new(callback::CallbackClient::new(
+            url,
+            token,
+            &dashboard_config.config_id,
+        ));
 
-            // Cancellation channel
-            let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+        // PID file
+        let pid_path = format!("/tmp/alethabench-{}.pid", dashboard_config.config_id);
+        std::fs::write(&pid_path, std::process::id().to_string()).ok();
 
-            // Spawn heartbeat with cancellation
-            let hb_client = callback_client.clone();
-            let hb_handle = tokio::spawn(async move {
-                let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
-                loop {
-                    interval.tick().await;
-                    let _ = hb_client.heartbeat().await;
-                    if hb_client.check_cancelled().await.unwrap_or(false) {
-                        let _ = cancel_tx.send(true);
-                        break;
-                    }
+        // Cancellation channel
+        let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+
+        // Spawn heartbeat with cancellation
+        let hb_client = callback_client.clone();
+        let hb_handle = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                let _ = hb_client.heartbeat().await;
+                if hb_client.check_cancelled().await.unwrap_or(false) {
+                    let _ = cancel_tx.send(true);
+                    break;
                 }
-            });
+            }
+        });
 
-            // Use the benchmarks directory as bench_dir
-            let bench_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
+        // Use the benchmarks directory as bench_dir
+        let bench_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
 
-            let result = crate::executor::execute_dashboard_benchmark(
-                &dashboard_config,
-                &callback_client,
-                &cancel_rx,
-                bench_dir,
-            )
-            .await;
+        let result = crate::executor::execute_dashboard_benchmark(
+            &dashboard_config,
+            &callback_client,
+            &cancel_rx,
+            bench_dir,
+        )
+        .await;
 
-            hb_handle.abort();
+        hb_handle.abort();
 
-            // Cleanup
-            std::fs::remove_file(&pid_path).ok();
-            return result;
-        }
+        // Cleanup
+        std::fs::remove_file(&pid_path).ok();
+        return result;
     }
 
     let mut cfg = config::BenchmarkConfig::load(&config_path)
@@ -480,17 +481,19 @@ async fn cmd_run(
     // When both --callback-url and --callback-token are provided, try to parse
     // the config as a DashboardBenchmarkConfig and run the cell-based executor.
     if let (Some(ref url), Some(ref token)) = (&callback_url, &callback_token) {
-        if let Ok(dashboard_config) = config::DashboardBenchmarkConfig::load(&config_path) {
-            tracing::info!(
-                "Dashboard benchmark config detected (config_id={}), using executor",
-                dashboard_config.config_id
-            );
+        let dashboard_config = config::DashboardBenchmarkConfig::load(&config_path)
+            .with_context(|| format!("loading config from {}", config_path.display()))?;
 
-            let callback_client = Arc::new(callback::CallbackClient::new(
-                url,
-                token,
-                &dashboard_config.config_id,
-            ));
+        tracing::info!(
+            "Dashboard benchmark config detected (config_id={}), using executor",
+            dashboard_config.config_id
+        );
+
+        let callback_client = Arc::new(callback::CallbackClient::new(
+            url,
+            token,
+            &dashboard_config.config_id,
+        ));
 
             // PID file
             let pid_path = PathBuf::from(format!(
@@ -536,16 +539,10 @@ async fn cmd_run(
             )
             .await;
 
-            heartbeat_handle.abort();
-            let _ = std::fs::remove_file(&pid_path);
+        heartbeat_handle.abort();
+        let _ = std::fs::remove_file(&pid_path);
 
-            return result;
-        }
-        // If parsing as DashboardBenchmarkConfig failed, fall through to the
-        // original orchestrator flow (the config is a BenchmarkConfig).
-        tracing::info!(
-            "Config is not a DashboardBenchmarkConfig, falling back to orchestrator flow"
-        );
+        return result;
     }
 
     // -- Original orchestrator flow (callback + heartbeat + PID) --
