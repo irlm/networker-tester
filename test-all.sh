@@ -104,6 +104,11 @@ if should_run apis; then
         run_suite "Python reference API tests" python3 benchmarks/reference-apis/python/test_app.py
     fi
 
+    # C# (.NET) — build all projects via solution
+    if command -v dotnet &>/dev/null && [ -f benchmarks/reference-apis/benchmarks.sln ]; then
+        run_suite "C# .NET build (all projects)" bash -c "cd benchmarks/reference-apis && dotnet build benchmarks.sln --nologo -v q"
+    fi
+
     # TODO: Add Ruby, PHP, Java tests when test files are created
 fi
 

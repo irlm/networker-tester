@@ -28,4 +28,5 @@ benchmarks/metrics-agent/target/
 benchmarks/reference-apis/*/publish/
 benchmarks/reference-apis/**/bin/
 benchmarks/reference-apis/**/obj/
-*.sln
+# Block .sln in root only (benchmarks/reference-apis/benchmarks.sln is tracked)
+/*.sln
