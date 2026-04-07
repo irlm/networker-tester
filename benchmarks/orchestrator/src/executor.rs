@@ -103,7 +103,7 @@ async fn deploy_proxy(vm: &VmInfo, proxy: &str) -> Result<()> {
     // may timeout because the upstream server isn't running yet — that's expected.
     // We run it in a subshell with || true, then verify nginx config separately.
     let cmd = format!(
-        "bash -c 'export DEBIAN_FRONTEND=noninteractive; curl -fsSL https://raw.githubusercontent.com/irlm/networker-tester/feat/project-id-base36/install.sh | sudo -E bash -s -- --benchmark-proxy-swap {} 2>&1; true' && sudo nginx -t 2>&1",
+        "bash -c 'export DEBIAN_FRONTEND=noninteractive; curl -fsSL https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh | sudo -E bash -s -- --benchmark-proxy-swap {} 2>&1; true' && sudo nginx -t 2>&1",
         proxy
     );
     ssh::ssh_exec(&vm.ip, &cmd)
@@ -138,7 +138,7 @@ async fn deploy_app_language(vm: &VmInfo, language: &str, proxy: &str) -> Result
     );
     // Server reads BENCH_API_TOKEN from /opt/bench/.api-token at startup
     let cmd = format!(
-        "export DEBIAN_FRONTEND=noninteractive BENCH_API_TOKEN=$(cat /opt/bench/.api-token 2>/dev/null) && curl -fsSL https://raw.githubusercontent.com/irlm/networker-tester/feat/project-id-base36/install.sh | sudo -E bash -s -- --benchmark-server {} --benchmark-proxy {} 2>&1",
+        "export DEBIAN_FRONTEND=noninteractive BENCH_API_TOKEN=$(cat /opt/bench/.api-token 2>/dev/null) && curl -fsSL https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh | sudo -E bash -s -- --benchmark-server {} --benchmark-proxy {} 2>&1",
         language, proxy
     );
     ssh::ssh_exec(&vm.ip, &cmd)
