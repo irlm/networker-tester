@@ -829,10 +829,14 @@ async fn migrate_project_ids(client: &Client) -> anyhow::Result<()> {
         client.batch_execute(&sql).await?;
     }
 
-    // Also handle TlsProfileRun (mixed-case column name "ProjectId")
+    // Also handle TlsProfileRun if it exists (mixed-case column name "ProjectId")
     client
         .batch_execute(
-            "ALTER TABLE tlsprofilerun ADD COLUMN IF NOT EXISTS new_project_id CHAR(14);",
+            "DO $$ BEGIN
+                IF EXISTS (SELECT 1 FROM pg_tables WHERE tablename = 'tlsprofilerun') THEN
+                    ALTER TABLE tlsprofilerun ADD COLUMN IF NOT EXISTS new_project_id CHAR(14);
+                END IF;
+            END $$;",
         )
         .await?;
 
@@ -849,11 +853,15 @@ async fn migrate_project_ids(client: &Client) -> anyhow::Result<()> {
         client.batch_execute(&sql).await?;
     }
 
-    // TlsProfileRun uses mixed-case "ProjectId"
+    // TlsProfileRun uses mixed-case "ProjectId" — only if table exists
     client
         .batch_execute(
-            "UPDATE tlsprofilerun t SET new_project_id = p.new_project_id \
-             FROM project p WHERE t.\"ProjectId\" = p.project_id AND t.new_project_id IS NULL",
+            "DO $$ BEGIN
+                IF EXISTS (SELECT 1 FROM pg_tables WHERE tablename = 'tlsprofilerun') THEN
+                    UPDATE tlsprofilerun t SET new_project_id = p.new_project_id
+                    FROM project p WHERE t.\"ProjectId\" = p.project_id AND t.new_project_id IS NULL;
+                END IF;
+            END $$;",
         )
         .await?;
 
@@ -897,11 +905,15 @@ async fn migrate_project_ids(client: &Client) -> anyhow::Result<()> {
         let sql = format!("ALTER TABLE {table} DROP CONSTRAINT IF EXISTS {table}_project_id_fkey;");
         client.batch_execute(&sql).await?;
     }
-    // TlsProfileRun (V015) — FK constraint name for mixed-case column
+    // TlsProfileRun (V015) — FK constraint name for mixed-case column — only if table exists
     client
         .batch_execute(
-            "ALTER TABLE tlsprofilerun DROP CONSTRAINT IF EXISTS \"TlsProfileRun_ProjectId_fkey\";
-             ALTER TABLE tlsprofilerun DROP CONSTRAINT IF EXISTS tlsprofilerun_projectid_fkey;",
+            "DO $$ BEGIN
+                IF EXISTS (SELECT 1 FROM pg_tables WHERE tablename = 'tlsprofilerun') THEN
+                    ALTER TABLE tlsprofilerun DROP CONSTRAINT IF EXISTS \"TlsProfileRun_ProjectId_fkey\";
+                    ALTER TABLE tlsprofilerun DROP CONSTRAINT IF EXISTS tlsprofilerun_projectid_fkey;
+                END IF;
+            END $$;",
         )
         .await?;
 
@@ -954,14 +966,18 @@ async fn migrate_project_ids(client: &Client) -> anyhow::Result<()> {
         client.batch_execute(&sql).await?;
     }
 
-    // TlsProfileRun: drop old ProjectId, rename new_project_id → ProjectId
+    // TlsProfileRun: drop old ProjectId, rename new_project_id → ProjectId — only if table exists
     client
         .batch_execute(
-            "ALTER TABLE tlsprofilerun DROP COLUMN \"ProjectId\";
-             ALTER TABLE tlsprofilerun RENAME COLUMN new_project_id TO \"ProjectId\";
-             ALTER TABLE tlsprofilerun ALTER COLUMN \"ProjectId\" SET NOT NULL;
-             ALTER TABLE tlsprofilerun ADD CONSTRAINT tlsprofilerun_projectid_fkey
-                 FOREIGN KEY (\"ProjectId\") REFERENCES project(project_id);",
+            "DO $$ BEGIN
+                IF EXISTS (SELECT 1 FROM pg_tables WHERE tablename = 'tlsprofilerun') THEN
+                    ALTER TABLE tlsprofilerun DROP COLUMN \"ProjectId\";
+                    ALTER TABLE tlsprofilerun RENAME COLUMN new_project_id TO \"ProjectId\";
+                    ALTER TABLE tlsprofilerun ALTER COLUMN \"ProjectId\" SET NOT NULL;
+                    ALTER TABLE tlsprofilerun ADD CONSTRAINT tlsprofilerun_projectid_fkey
+                        FOREIGN KEY (\"ProjectId\") REFERENCES project(project_id);
+                END IF;
+            END $$;",
         )
         .await?;
 
@@ -1008,8 +1024,19 @@ async fn migrate_project_ids(client: &Client) -> anyhow::Result<()> {
              CREATE INDEX IF NOT EXISTS ix_benchmark_vm_catalog_project ON benchmark_vm_catalog (project_id);
              DROP INDEX IF EXISTS ix_benchmark_config_project;
              CREATE INDEX IF NOT EXISTS ix_benchmark_config_project ON benchmark_config (project_id, created_at DESC);
-             DROP INDEX IF EXISTS ix_tlsprofilerun_project;
-             CREATE INDEX IF NOT EXISTS ix_tlsprofilerun_project ON tlsprofilerun (\"ProjectId\", \"StartedAt\" DESC);",
+",
+        )
+        .await?;
+
+    // TlsProfileRun index — only if table exists
+    client
+        .batch_execute(
+            "DO $$ BEGIN
+                IF EXISTS (SELECT 1 FROM pg_tables WHERE tablename = 'tlsprofilerun') THEN
+                    DROP INDEX IF EXISTS ix_tlsprofilerun_project;
+                    CREATE INDEX IF NOT EXISTS ix_tlsprofilerun_project ON tlsprofilerun (\"ProjectId\", \"StartedAt\" DESC);
+                END IF;
+            END $$;",
         )
         .await?;
 

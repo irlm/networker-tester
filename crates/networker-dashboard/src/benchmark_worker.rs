@@ -102,13 +102,35 @@ async fn poll_and_run(
                 .unwrap_or(serde_json::json!({}));
             if let Some(obj) = testbed.as_object_mut() {
                 obj.insert("testbed_id".to_string(), serde_json::json!(id_str));
-                // Ensure existing_vm_ip is present
+                // Merge all required fields from DB if not in config_json
+                if !obj.contains_key("cloud") {
+                    obj.insert("cloud".to_string(), serde_json::json!(db_testbed.cloud));
+                }
+                if !obj.contains_key("region") {
+                    obj.insert("region".to_string(), serde_json::json!(db_testbed.region));
+                }
+                if !obj.contains_key("topology") {
+                    obj.insert(
+                        "topology".to_string(),
+                        serde_json::json!(db_testbed.topology),
+                    );
+                }
+                if !obj.contains_key("vm_size") {
+                    if let Some(ref sz) = db_testbed.vm_size {
+                        obj.insert("vm_size".to_string(), serde_json::json!(sz));
+                    }
+                }
+                if !obj.contains_key("os") {
+                    obj.insert("os".to_string(), serde_json::json!(db_testbed.os));
+                }
+                if !obj.contains_key("languages") {
+                    obj.insert("languages".to_string(), db_testbed.languages.clone());
+                }
                 if !obj.contains_key("existing_vm_ip") {
                     if let Some(ip) = &db_testbed.endpoint_ip {
                         obj.insert("existing_vm_ip".to_string(), serde_json::json!(ip));
                     }
                 }
-                // Ensure proxies and tester_os from DB are present
                 if !obj.contains_key("proxies") {
                     obj.insert("proxies".to_string(), db_testbed.proxies.clone());
                 }
@@ -199,14 +221,35 @@ async fn poll_and_run(
 
             // Monitor the child process in a spawned task
             tokio::spawn(async move {
+                // Always capture stderr for debugging
+                let stderr_handle = child.stderr.take();
+                let stderr_task = tokio::spawn(async move {
+                    if let Some(mut stderr) = stderr_handle {
+                        let mut buf = String::new();
+                        use tokio::io::AsyncReadExt;
+                        let _ = stderr.read_to_string(&mut buf).await;
+                        buf
+                    } else {
+                        String::new()
+                    }
+                });
+
                 match child.wait().await {
                     Ok(status) => {
+                        let err_msg = stderr_task.await.unwrap_or_default();
+                        if !err_msg.is_empty() {
+                            tracing::info!(
+                                config_id = %config_id,
+                                stderr = %err_msg.chars().take(2000).collect::<String>(),
+                                "Benchmark orchestrator stderr output"
+                            );
+                        }
+
                         if status.success() {
                             tracing::info!(
                                 config_id = %config_id,
                                 "Benchmark orchestrator completed successfully"
                             );
-                            // Update status as fallback (callback may have already set it)
                             if let Ok(db) = db_pool.get().await {
                                 let _ = crate::db::benchmark_configs::update_status(
                                     &db,
@@ -217,15 +260,6 @@ async fn poll_and_run(
                                 .await;
                             }
                         } else {
-                            let stderr = child.stderr.take();
-                            let err_msg = if let Some(mut stderr) = stderr {
-                                let mut buf = String::new();
-                                use tokio::io::AsyncReadExt;
-                                let _ = stderr.read_to_string(&mut buf).await;
-                                buf
-                            } else {
-                                format!("exit code {:?}", status.code())
-                            };
                             tracing::error!(
                                 config_id = %config_id,
                                 exit_code = ?status.code(),
