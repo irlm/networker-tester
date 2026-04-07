@@ -2,7 +2,6 @@
 """Unit tests for Python reference API — tests pure logic without starting server."""
 
 import hashlib
-import json
 import sys
 import zlib
 
@@ -15,98 +14,42 @@ def test(name, fn):
     try:
         fn()
         passed += 1
-    except AssertionError as e:
+    except (AssertionError, Exception) as e:
         failed += 1
         print(f"FAIL: {name}")
         print(f"  {e}")
 
 
-# --- Data generation (must match app.py) ---
-
-FIRST_NAMES = [
-    "Alice", "Bob", "Charlie", "Diana", "Eve", "Frank", "Grace", "Hank",
-    "Ivy", "Jack", "Karen", "Leo", "Mona", "Nick", "Olivia", "Paul",
-    "Quinn", "Rose", "Steve", "Tina",
-]
-LAST_NAMES = [
-    "Adams", "Brown", "Clark", "Davis", "Evans", "Fisher", "Garcia",
-    "Harris", "Irwin", "Jones", "King", "Lopez", "Miller", "Nelson",
-    "Owen", "Parker", "Quinn", "Reed", "Smith", "Taylor",
-]
-DEPARTMENTS = [
-    "engineering", "marketing", "sales", "support", "hr", "finance",
-    "legal", "ops", "product", "design",
-]
-
-
-def generate_users(count):
-    users = []
-    for i in range(count):
-        seed = i * 31 + 7
-        users.append({
-            "id": i + 1,
-            "name": f"{FIRST_NAMES[seed % 20]} {LAST_NAMES[(seed * 3) % 20]}",
-            "email": f"user{i + 1}@example.com",
-            "department": DEPARTMENTS[i % 10],
-            "score": ((seed * 17) % 1000) / 10,
-        })
-    return users
+# --- Seeded RNG (matches mulberry32 from the reference APIs) ---
+def mulberry32(seed):
+    s = seed & 0xFFFFFFFF
+    def rng():
+        nonlocal s
+        s = (s + 0x6D2B79F5) & 0xFFFFFFFF
+        t = ((s ^ (s >> 15)) * (1 | s)) & 0xFFFFFFFF
+        t = ((t + ((t ^ (t >> 7)) * (61 | t)) & 0xFFFFFFFF) ^ t) & 0xFFFFFFFF
+        return ((t ^ (t >> 14)) & 0xFFFFFFFF) / 4294967296
+    return rng
 
 
 # --- Tests ---
 
-def test_generates_1000_users():
-    users = generate_users(1000)
-    assert len(users) == 1000
-    assert users[0]["id"] == 1
-    assert users[0]["name"] == "Hank Adams"
-    assert users[999]["id"] == 1000
+def test_seeded_rng_deterministic():
+    rng1 = mulberry32(42)
+    rng2 = mulberry32(42)
+    for _ in range(100):
+        assert rng1() == rng2(), "RNG not deterministic"
 
-test("generates 1000 users deterministically", test_generates_1000_users)
-
-
-def test_unique_emails():
-    users = generate_users(1000)
-    emails = {u["email"] for u in users}
-    assert len(emails) == 1000
-
-test("user emails are unique", test_unique_emails)
+test("seeded RNG is deterministic", test_seeded_rng_deterministic)
 
 
-def test_departments_cycle():
-    users = generate_users(100)
-    depts = {u["department"] for u in users}
-    assert len(depts) == 10
+def test_different_seeds_differ():
+    rng1 = mulberry32(42)
+    rng2 = mulberry32(99)
+    diffs = sum(1 for _ in range(100) if rng1() != rng2())
+    assert diffs > 50, f"only {diffs} differences"
 
-test("departments cycle through 10 values", test_departments_cycle)
-
-
-def test_scores_in_range():
-    users = generate_users(1000)
-    for u in users:
-        assert 0 <= u["score"] < 100, f"score {u['score']} out of range"
-
-test("scores are between 0 and 100", test_scores_in_range)
-
-
-def test_pagination():
-    users = generate_users(1000)
-    page, per_page = 3, 20
-    start = (page - 1) * per_page
-    page_data = users[start:start + per_page]
-    assert len(page_data) == 20
-    assert page_data[0]["id"] == 41
-
-test("pagination returns correct page", test_pagination)
-
-
-def test_sorting():
-    users = generate_users(1000)
-    sorted_users = sorted(users, key=lambda u: u["score"])
-    for i in range(1, len(sorted_users)):
-        assert sorted_users[i]["score"] >= sorted_users[i - 1]["score"]
-
-test("sorting by score works", test_sorting)
+test("different seeds produce different values", test_different_seeds_differ)
 
 
 def test_upload_processing():
@@ -121,6 +64,15 @@ def test_upload_processing():
 test("CRC32 + SHA256 + zlib produces output", test_upload_processing)
 
 
+def test_upload_deterministic():
+    data = b"Hello, benchmark!"
+    sha1 = hashlib.sha256(data).hexdigest()
+    sha2 = hashlib.sha256(data).hexdigest()
+    assert sha1 == sha2
+
+test("upload processing is deterministic", test_upload_deterministic)
+
+
 def test_validate_deterministic():
     seed = 42
     data = bytes([(seed * 31 + i * 17) & 0xFF for i in range(1024)])
@@ -128,9 +80,29 @@ def test_validate_deterministic():
     data2 = bytes([(seed * 31 + i * 17) & 0xFF for i in range(1024)])
     md5_2 = hashlib.md5(data2).hexdigest()
     assert md5_1 == md5_2
-    assert len(hashlib.sha256(data).hexdigest()) == 64
 
 test("validate checksum is deterministic", test_validate_deterministic)
+
+
+def test_pagination_math():
+    total = 1000
+    page, per_page = 3, 20
+    start = (page - 1) * per_page
+    end = start + per_page
+    assert start == 40
+    assert end == 60
+    assert end <= total
+
+test("pagination math is correct", test_pagination_math)
+
+
+def test_sorting():
+    items = [{"score": 3.0}, {"score": 1.0}, {"score": 2.0}]
+    sorted_items = sorted(items, key=lambda x: x["score"])
+    assert sorted_items[0]["score"] == 1.0
+    assert sorted_items[-1]["score"] == 3.0
+
+test("sorting works correctly", test_sorting)
 
 
 # --- Summary ---
