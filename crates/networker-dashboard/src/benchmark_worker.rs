@@ -102,13 +102,35 @@ async fn poll_and_run(
                 .unwrap_or(serde_json::json!({}));
             if let Some(obj) = testbed.as_object_mut() {
                 obj.insert("testbed_id".to_string(), serde_json::json!(id_str));
-                // Ensure existing_vm_ip is present
+                // Merge all required fields from DB if not in config_json
+                if !obj.contains_key("cloud") {
+                    obj.insert("cloud".to_string(), serde_json::json!(db_testbed.cloud));
+                }
+                if !obj.contains_key("region") {
+                    obj.insert("region".to_string(), serde_json::json!(db_testbed.region));
+                }
+                if !obj.contains_key("topology") {
+                    obj.insert(
+                        "topology".to_string(),
+                        serde_json::json!(db_testbed.topology),
+                    );
+                }
+                if !obj.contains_key("vm_size") {
+                    if let Some(ref sz) = db_testbed.vm_size {
+                        obj.insert("vm_size".to_string(), serde_json::json!(sz));
+                    }
+                }
+                if !obj.contains_key("os") {
+                    obj.insert("os".to_string(), serde_json::json!(db_testbed.os));
+                }
+                if !obj.contains_key("languages") {
+                    obj.insert("languages".to_string(), db_testbed.languages.clone());
+                }
                 if !obj.contains_key("existing_vm_ip") {
                     if let Some(ip) = &db_testbed.endpoint_ip {
                         obj.insert("existing_vm_ip".to_string(), serde_json::json!(ip));
                     }
                 }
-                // Ensure proxies and tester_os from DB are present
                 if !obj.contains_key("proxies") {
                     obj.insert("proxies".to_string(), db_testbed.proxies.clone());
                 }
