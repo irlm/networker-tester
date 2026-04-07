@@ -9372,7 +9372,11 @@ deploy_benchmark_server() {
                 cp target/release/networker-endpoint "$BENCH_DIR/rust-server"
             fi
             chmod +x "$BENCH_DIR/rust-server"
-            nohup "$BENCH_DIR/rust-server" --https-port 8443 > "$BENCH_DIR/rust-server.log" 2>&1 &
+            if [ "$BENCH_USE_TLS" = "1" ]; then
+                nohup "$BENCH_DIR/rust-server" --https-port "$BENCH_PORT" > "$BENCH_DIR/rust-server.log" 2>&1 &
+            else
+                nohup "$BENCH_DIR/rust-server" --http-port "$BENCH_PORT" > "$BENCH_DIR/rust-server.log" 2>&1 &
+            fi
             ;;
 
         nginx)
