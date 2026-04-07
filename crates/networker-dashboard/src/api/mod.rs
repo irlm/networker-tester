@@ -30,6 +30,7 @@ mod url_tests;
 mod users;
 mod version;
 mod visibility;
+mod zones;
 
 use axum::{middleware, Router};
 use std::sync::Arc;
@@ -58,6 +59,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(bench_tokens::router(state.clone()))
         .merge(perf_log::router(state.clone()))
         .merge(leaderboard::protected_router(state.clone()))
+        .merge(zones::router(state.clone()))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::require_auth,
