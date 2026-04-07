@@ -114,10 +114,10 @@ pub async fn deploy_to_vm(ip: &str, token: &str) -> Result<()> {
         .await
         .context("SCP token to VM failed")?;
 
-    // Move to final location with correct permissions
+    // Create target dir and move to final location with correct permissions
     ssh::ssh_exec(
         ip,
-        "sudo mv /tmp/.bench-api-token /opt/bench/.api-token && sudo chmod 600 /opt/bench/.api-token && sudo chown root:root /opt/bench/.api-token",
+        "sudo mkdir -p /opt/bench && sudo mv /tmp/.bench-api-token /opt/bench/.api-token && sudo chmod 600 /opt/bench/.api-token && sudo chown root:root /opt/bench/.api-token",
     )
     .await
     .context("Failed to set token file permissions")?;

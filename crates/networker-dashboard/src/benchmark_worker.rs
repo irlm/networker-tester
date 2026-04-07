@@ -221,14 +221,35 @@ async fn poll_and_run(
 
             // Monitor the child process in a spawned task
             tokio::spawn(async move {
+                // Always capture stderr for debugging
+                let stderr_handle = child.stderr.take();
+                let stderr_task = tokio::spawn(async move {
+                    if let Some(mut stderr) = stderr_handle {
+                        let mut buf = String::new();
+                        use tokio::io::AsyncReadExt;
+                        let _ = stderr.read_to_string(&mut buf).await;
+                        buf
+                    } else {
+                        String::new()
+                    }
+                });
+
                 match child.wait().await {
                     Ok(status) => {
+                        let err_msg = stderr_task.await.unwrap_or_default();
+                        if !err_msg.is_empty() {
+                            tracing::info!(
+                                config_id = %config_id,
+                                stderr = %err_msg.chars().take(2000).collect::<String>(),
+                                "Benchmark orchestrator stderr output"
+                            );
+                        }
+
                         if status.success() {
                             tracing::info!(
                                 config_id = %config_id,
                                 "Benchmark orchestrator completed successfully"
                             );
-                            // Update status as fallback (callback may have already set it)
                             if let Ok(db) = db_pool.get().await {
                                 let _ = crate::db::benchmark_configs::update_status(
                                     &db,
@@ -239,15 +260,7 @@ async fn poll_and_run(
                                 .await;
                             }
                         } else {
-                            let stderr = child.stderr.take();
-                            let err_msg = if let Some(mut stderr) = stderr {
-                                let mut buf = String::new();
-                                use tokio::io::AsyncReadExt;
-                                let _ = stderr.read_to_string(&mut buf).await;
-                                buf
-                            } else {
-                                format!("exit code {:?}", status.code())
-                            };
+                            let err_msg = err_msg;
                             tracing::error!(
                                 config_id = %config_id,
                                 exit_code = ?status.code(),
