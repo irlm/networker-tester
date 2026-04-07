@@ -79,7 +79,11 @@ if should_run install; then
     fi
     if command -v bats &>/dev/null; then
         NCPU=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
-        run_suite "bats installer tests (${NCPU} jobs)" bats --jobs "$NCPU" tests/installer.bats
+        if command -v parallel &>/dev/null; then
+            run_suite "bats installer tests (${NCPU} parallel)" bats --jobs "$NCPU" tests/installer.bats
+        else
+            run_suite "bats installer tests (sequential — install GNU parallel for speed)" bats tests/installer.bats
+        fi
     else
         printf "${YELLOW}▶ %-40s SKIP (bats not installed)${NC}\n" "bats"
     fi
