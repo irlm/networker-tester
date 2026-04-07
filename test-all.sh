@@ -78,7 +78,8 @@ if should_run install; then
         printf "${YELLOW}▶ %-40s SKIP (shellcheck not installed)${NC}\n" "shellcheck"
     fi
     if command -v bats &>/dev/null; then
-        run_suite "bats installer tests" bats tests/installer.bats
+        NCPU=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+        run_suite "bats installer tests (${NCPU} jobs)" bats --jobs "$NCPU" tests/installer.bats
     else
         printf "${YELLOW}▶ %-40s SKIP (bats not installed)${NC}\n" "bats"
     fi
