@@ -160,6 +160,12 @@ async fn stop_app_language(vm: &VmInfo) {
 /// Deploy the Chrome test harness to the VM.
 async fn deploy_chrome_harness(vm: &VmInfo) -> Result<()> {
     tracing::info!("Deploying Chrome test harness on {}", vm.ip);
+    // Clone repo first (needed for harness files)
+    ssh::ssh_exec(
+        &vm.ip,
+        "if [ ! -d /tmp/nwk-repo/.git ]; then git clone --depth 1 https://github.com/irlm/networker-tester.git /tmp/nwk-repo 2>/dev/null < /dev/null; fi",
+    ).await.ok(); // best-effort
+
     let setup_cmd = concat!(
         "sudo apt-get update -qq < /dev/null && ",
         "sudo mkdir -p /opt/bench/chrome-harness && ",
@@ -764,37 +770,32 @@ async fn execute_testbed_application(
         });
     }
 
-    // Deploy Chrome test harness only for desktop testers (not headless servers)
-    let needs_chrome = testbed.tester_os != "server";
-    if needs_chrome {
+    // Deploy test harness (Node.js HTTP client — not Chrome browser)
+    log_callback(
+        callback,
+        &testbed.testbed_id,
+        vec!["Installing test harness (Node.js)...".to_string()],
+    )
+    .await;
+
+    if let Err(e) = deploy_chrome_harness(vm).await {
+        tracing::error!(
+            "Test harness deploy failed on testbed {}: {:#}",
+            testbed.testbed_id,
+            e
+        );
         log_callback(
             callback,
             &testbed.testbed_id,
-            vec!["Installing Chrome test harness...".to_string()],
+            vec![format!("Test harness deploy failed: {e:#}")],
         )
         .await;
-
-        if let Err(e) = deploy_chrome_harness(vm).await {
-            tracing::error!(
-                "Chrome harness deploy failed on testbed {}: {:#}",
-                testbed.testbed_id,
-                e
-            );
-            log_callback(
-                callback,
-                &testbed.testbed_id,
-                vec![format!("Chrome harness deploy failed: {e:#}")],
-            )
-            .await;
-            return Ok(TestbedOutcome {
-                testbed_id: testbed.testbed_id.clone(),
-                languages_completed: 0,
-                languages_failed: total_combinations,
-                provisioned_vm: provisioned,
-            });
-        }
-    } else {
-        tracing::info!("Skipping Chrome harness (tester_os=server)");
+        return Ok(TestbedOutcome {
+            testbed_id: testbed.testbed_id.clone(),
+            languages_completed: 0,
+            languages_failed: total_combinations,
+            provisioned_vm: provisioned,
+        });
     }
 
     for proxy in &testbed.proxies {
