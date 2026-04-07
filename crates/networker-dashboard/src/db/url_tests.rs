@@ -211,7 +211,7 @@ pub struct UrlTestDetail {
 
 pub async fn list(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
     limit: i64,
     offset: i64,
 ) -> anyhow::Result<Vec<UrlTestSummary>> {
@@ -235,7 +235,7 @@ pub async fn list(
                  SELECT 1 FROM job j2 WHERE j2.run_id IN (SELECT RunId FROM TestRun WHERE RunId = u.Id)
              )
              ORDER BY u.StartedAt DESC LIMIT $2 OFFSET $3",
-            &[project_id, &limit, &offset],
+            &[&project_id, &limit, &offset],
         )
         .await
     {

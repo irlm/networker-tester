@@ -158,7 +158,7 @@ async fn create_agent_scoped(
 
 async fn delete_agent_scoped(
     State(state): State<Arc<AppState>>,
-    Path((_, agent_id)): Path<(Uuid, Uuid)>,
+    Path((_, agent_id)): Path<(String, Uuid)>,
     req: axum::extract::Request,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
@@ -295,10 +295,10 @@ mod tests {
         use super::super::CreateAgentRequest;
 
         #[test]
-        fn location_defaults_to_local() {
+        fn location_defaults_to_ssh() {
             let json = r#"{"name": "test-agent"}"#;
             let req: CreateAgentRequest = serde_json::from_str(json).unwrap();
-            assert_eq!(req.location, "local");
+            assert_eq!(req.location, "ssh");
         }
 
         #[test]

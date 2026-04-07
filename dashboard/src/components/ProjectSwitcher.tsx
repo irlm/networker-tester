@@ -9,6 +9,11 @@ interface ProjectSwitcherProps {
   connectionDot?: React.ReactNode;
 }
 
+function zoneLabel(projectId: string): string {
+  if (projectId.length < 2) return '';
+  return projectId.slice(0, 2).toUpperCase();
+}
+
 export function ProjectSwitcher({ collapsed, connectionDot }: ProjectSwitcherProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -81,7 +86,12 @@ export function ProjectSwitcher({ collapsed, connectionDot }: ProjectSwitcherPro
                 project.project_id === activeProjectId ? 'bg-gray-800/30' : ''
               }`}
             >
-              <span className="text-sm text-gray-200 truncate">{project.name}</span>
+              <div className="flex items-center gap-1 min-w-0">
+                <span className="text-sm text-gray-200 truncate">{project.name}</span>
+                <span className="text-[10px] text-gray-500 font-mono whitespace-nowrap">
+                  {zoneLabel(project.project_id)}
+                </span>
+              </div>
               <RoleBadge role={project.role} />
             </button>
           ))}

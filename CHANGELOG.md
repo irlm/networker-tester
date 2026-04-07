@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.21.0] - 2026-04-07
+
+### Added
+- **14-char base36 project IDs** with embedded sovereignty zone, timestamp, server ID, and Damm check digits — replaces UUID (36-char) project IDs
+- **32 sovereignty zones** seeded from day one — US, EU, Brasil, China, Japan, Korea, India, and 25 more, each with compliance metadata and fallback routing chains
+- **Server registry** table for multi-region routing (currently single server in US East)
+- **Project routing** table — maps projects to home/current zone, supports future zone migration
+- **Migration request + audit log** tables — infrastructure for admin-approved project zone migration
+- **Zone badge** in project switcher dropdown showing sovereignty zone code
+- `GET /api/zones` endpoint returning all sovereignty zones
+- `ProjectId` newtype with `FromStr`, `Display`, `Serialize`/`Deserialize` (with validation), base36 encoding, Damm check digit generation/verification
+
+### Changed
+- Project IDs in all URLs shortened from 36 chars to 14 chars
+- All backend types updated: `project_id: Uuid` → `project_id: String` across 47 files
+
+---
+
 ## [0.20.4] - 2026-04-06
 
 ### Fixed

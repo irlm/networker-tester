@@ -243,7 +243,7 @@ pub async fn list_for_config(client: &Client, config_id: &Uuid) -> Result<Vec<Re
 /// List all regressions for a project (across all configs).
 pub async fn list_for_project(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
     limit: i64,
     offset: i64,
 ) -> Result<Vec<RegressionWithConfig>> {
@@ -257,7 +257,7 @@ pub async fn list_for_project(
              WHERE c.project_id = $1
              ORDER BY r.detected_at DESC
              LIMIT $2 OFFSET $3",
-            &[project_id, &limit, &offset],
+            &[&project_id, &limit, &offset],
         )
         .await
         .context("Failed to list regressions for project")?;

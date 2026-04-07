@@ -6,7 +6,7 @@ use uuid::Uuid;
 #[derive(Debug, Serialize)]
 pub struct ShareLinkRow {
     pub link_id: Uuid,
-    pub project_id: Uuid,
+    pub project_id: String,
     pub token_hash: String,
     pub resource_type: String,
     pub resource_id: Option<Uuid>,
@@ -23,7 +23,7 @@ pub struct ShareLinkRow {
 #[allow(clippy::too_many_arguments)]
 pub async fn create_link(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
     token_hash: &str,
     resource_type: &str,
     resource_id: Option<&Uuid>,
@@ -38,7 +38,7 @@ pub async fn create_link(
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
             &[
                 &id,
-                project_id,
+                &project_id,
                 &token_hash,
                 &resource_type,
                 &resource_id,
@@ -51,7 +51,7 @@ pub async fn create_link(
     Ok(id)
 }
 
-pub async fn list_links(client: &Client, project_id: &Uuid) -> anyhow::Result<Vec<ShareLinkRow>> {
+pub async fn list_links(client: &Client, project_id: &str) -> anyhow::Result<Vec<ShareLinkRow>> {
     let rows = client
         .query(
             "SELECT s.link_id, s.project_id, s.token_hash, s.resource_type, s.resource_id,
@@ -62,7 +62,7 @@ pub async fn list_links(client: &Client, project_id: &Uuid) -> anyhow::Result<Ve
              LEFT JOIN dash_user u ON u.user_id = s.created_by
              WHERE s.project_id = $1
              ORDER BY s.created_at DESC",
-            &[project_id],
+            &[&project_id],
         )
         .await?;
 
@@ -136,21 +136,21 @@ pub async fn resolve_link(
     }
 }
 
-pub async fn revoke_link(client: &Client, link_id: &Uuid, project_id: &Uuid) -> anyhow::Result<()> {
+pub async fn revoke_link(client: &Client, link_id: &Uuid, project_id: &str) -> anyhow::Result<()> {
     client
         .execute(
             "UPDATE share_link SET revoked = TRUE WHERE link_id = $1 AND project_id = $2",
-            &[link_id, project_id],
+            &[link_id, &project_id],
         )
         .await?;
     Ok(())
 }
 
-pub async fn delete_link(client: &Client, link_id: &Uuid, project_id: &Uuid) -> anyhow::Result<()> {
+pub async fn delete_link(client: &Client, link_id: &Uuid, project_id: &str) -> anyhow::Result<()> {
     client
         .execute(
             "DELETE FROM share_link WHERE link_id = $1 AND project_id = $2",
-            &[link_id, project_id],
+            &[link_id, &project_id],
         )
         .await?;
     Ok(())

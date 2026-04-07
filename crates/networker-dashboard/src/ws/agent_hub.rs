@@ -415,7 +415,7 @@ async fn handle_agent_message(state: &Arc<AppState>, agent_id: Uuid, msg: AgentM
                         }
                         drop(migrated);
                         match backend
-                            .save_tls_profile(&profile, project_id.as_ref())
+                            .save_tls_profile(&profile, project_id.as_deref())
                             .await
                         {
                             Ok(tls_profile_run_id) => {

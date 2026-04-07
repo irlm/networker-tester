@@ -110,7 +110,7 @@ fn row_to_preset(row: &tokio_postgres::Row) -> BenchmarkComparePreset {
 
 pub async fn list(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
 ) -> anyhow::Result<Vec<BenchmarkComparePreset>> {
     let rows = client
         .query(
@@ -119,7 +119,7 @@ pub async fn list(
              FROM benchmark_compare_preset
              WHERE project_id = $1
              ORDER BY updated_at DESC, created_at DESC, name ASC",
-            &[project_id],
+            &[&project_id],
         )
         .await
         .context("list benchmark compare presets")?;
@@ -129,7 +129,7 @@ pub async fn list(
 
 pub async fn upsert(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
     created_by: &Uuid,
     input: BenchmarkComparePresetInput,
 ) -> anyhow::Result<BenchmarkComparePreset> {
@@ -161,7 +161,7 @@ pub async fn upsert(
                        target_search, scenario, phase_model, server_region, network_type",
             &[
                 &normalized.id,
-                project_id,
+                &project_id,
                 created_by,
                 &normalized.name,
                 &normalized.name_key,
@@ -180,12 +180,12 @@ pub async fn upsert(
     Ok(row_to_preset(&row))
 }
 
-pub async fn delete(client: &Client, project_id: &Uuid, preset_id: &Uuid) -> anyhow::Result<bool> {
+pub async fn delete(client: &Client, project_id: &str, preset_id: &Uuid) -> anyhow::Result<bool> {
     let n = client
         .execute(
             "DELETE FROM benchmark_compare_preset
              WHERE project_id = $1 AND preset_id = $2",
-            &[project_id, preset_id],
+            &[&project_id, preset_id],
         )
         .await
         .context("delete benchmark compare preset")?;

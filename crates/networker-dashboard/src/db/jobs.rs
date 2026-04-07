@@ -6,7 +6,7 @@ use uuid::Uuid;
 #[derive(Debug, Serialize)]
 pub struct JobRow {
     pub job_id: Uuid,
-    pub project_id: Option<Uuid>,
+    pub project_id: Option<String>,
     pub tls_profile_run_id: Option<Uuid>,
     pub definition_id: Option<Uuid>,
     pub agent_id: Option<Uuid>,
@@ -25,14 +25,14 @@ pub async fn create(
     config: &serde_json::Value,
     agent_id: Option<&Uuid>,
     created_by: Option<&Uuid>,
-    project_id: &Uuid,
+    project_id: &str,
 ) -> anyhow::Result<Uuid> {
     let id = Uuid::new_v4();
     client
         .execute(
             "INSERT INTO job (job_id, agent_id, status, config, created_by, project_id)
              VALUES ($1, $2, 'pending', $3, $4, $5)",
-            &[&id, &agent_id, config, &created_by, project_id],
+            &[&id, &agent_id, config, &created_by, &project_id],
         )
         .await?;
     Ok(id)
@@ -67,7 +67,7 @@ pub async fn get(client: &Client, job_id: &Uuid) -> anyhow::Result<Option<JobRow
 
 pub async fn list(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
     status_filter: Option<&str>,
     limit: i64,
     offset: i64,
@@ -88,7 +88,7 @@ pub async fn list(
 #[allow(clippy::too_many_arguments)]
 pub async fn list_filtered(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
     status_filter: Option<&str>,
     agent_id_filter: Option<&Uuid>,
     created_by_filter: Option<&Uuid>,
@@ -143,7 +143,7 @@ pub async fn list_filtered(
 
     // Build params vector dynamically
     let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
-    params.push(project_id);
+    params.push(&project_id);
     if let Some(status) = &status_filter {
         params.push(status);
     }
@@ -242,7 +242,7 @@ pub async fn set_tls_profile_run_id(
 
 pub async fn recent_tls_profile_job_count(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
     user_id: &Uuid,
     minutes: i32,
 ) -> anyhow::Result<i64> {
@@ -254,7 +254,7 @@ pub async fn recent_tls_profile_job_count(
                AND created_by = $2
                AND created_at >= now() - ($3::text || ' minutes')::interval
                AND config ? 'tls_profile_url'",
-            &[project_id, user_id, &minutes.to_string()],
+            &[&project_id, user_id, &minutes.to_string()],
         )
         .await?;
     Ok(row.get(0))

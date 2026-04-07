@@ -7,7 +7,7 @@ use uuid::Uuid;
 #[derive(Debug, Serialize)]
 pub struct InviteRow {
     pub invite_id: Uuid,
-    pub project_id: Uuid,
+    pub project_id: String,
     pub email: String,
     pub role: String,
     pub status: String,
@@ -21,7 +21,7 @@ pub struct InviteRow {
 #[derive(Debug, Serialize)]
 pub struct ResolvedInvite {
     pub invite_id: Uuid,
-    pub project_id: Uuid,
+    pub project_id: String,
     pub project_name: String,
     pub email: String,
     pub role: String,
@@ -39,7 +39,7 @@ pub fn hash_token(token: &str) -> String {
 /// Create a workspace invite.
 pub async fn create_invite(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
     email: &str,
     role: &str,
     token_hash: &str,
@@ -50,14 +50,14 @@ pub async fn create_invite(
         .query_one(
             "INSERT INTO workspace_invite (project_id, email, role, token_hash, invited_by, expires_at) \
              VALUES ($1, $2, $3, $4, $5, $6) RETURNING invite_id",
-            &[project_id, &email, &role, &token_hash, invited_by, expires_at],
+            &[&project_id, &email, &role, &token_hash, invited_by, expires_at],
         )
         .await?;
     Ok(row.get("invite_id"))
 }
 
 /// List invites for a project, with inviter email via JOIN.
-pub async fn list_invites(client: &Client, project_id: &Uuid) -> anyhow::Result<Vec<InviteRow>> {
+pub async fn list_invites(client: &Client, project_id: &str) -> anyhow::Result<Vec<InviteRow>> {
     let rows = client
         .query(
             "SELECT i.invite_id, i.project_id, i.email, i.role, i.status, \
@@ -67,7 +67,7 @@ pub async fn list_invites(client: &Client, project_id: &Uuid) -> anyhow::Result<
              JOIN dash_user u ON u.user_id = i.invited_by \
              WHERE i.project_id = $1 \
              ORDER BY i.created_at DESC",
-            &[project_id],
+            &[&project_id],
         )
         .await?;
 
@@ -148,13 +148,13 @@ pub async fn accept_invite(
 pub async fn revoke_invite(
     client: &Client,
     invite_id: &Uuid,
-    project_id: &Uuid,
+    project_id: &str,
 ) -> anyhow::Result<()> {
     client
         .execute(
             "UPDATE workspace_invite SET status = 'revoked' \
              WHERE invite_id = $1 AND project_id = $2 AND status = 'pending'",
-            &[invite_id, project_id],
+            &[invite_id, &project_id],
         )
         .await?;
     Ok(())

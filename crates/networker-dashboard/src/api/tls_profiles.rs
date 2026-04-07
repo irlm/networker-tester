@@ -41,7 +41,7 @@ async fn list_tls_profiles(
 
 async fn get_tls_profile(
     State(state): State<Arc<AppState>>,
-    Path((_, run_id)): Path<(Uuid, Uuid)>,
+    Path((_, run_id)): Path<(String, Uuid)>,
     req: axum::extract::Request,
 ) -> Result<Json<crate::db::tls_profiles::TlsProfileDetail>, StatusCode> {
     let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();

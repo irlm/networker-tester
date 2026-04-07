@@ -380,7 +380,7 @@ pub async fn finish_run(client: &Client, run_id: &Uuid) -> anyhow::Result<()> {
 #[allow(clippy::too_many_arguments)]
 pub async fn save_artifact(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
     config_id: &Uuid,
     testbed_id: Option<&Uuid>,
     language: &str,
@@ -726,7 +726,7 @@ pub struct ConfigTestbedResult {
 
 pub async fn list(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
     target_host: Option<&str>,
     limit: i64,
     offset: i64,
@@ -788,7 +788,7 @@ pub async fn list(
                AND ($2::VARCHAR IS NULL OR br.TargetHost = $2)
              ORDER BY br.GeneratedAt DESC
              LIMIT $3 OFFSET $4",
-            &[project_id, &target_host, &limit, &offset],
+            &[&project_id, &target_host, &limit, &offset],
         )
         .await
     {
@@ -830,7 +830,7 @@ pub async fn list(
 
 pub async fn get_artifact(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
     run_id: &Uuid,
 ) -> anyhow::Result<Option<BenchmarkArtifact>> {
     let run_row = match client
@@ -847,7 +847,7 @@ pub async fn get_artifact(
                    WHERE j.project_id = $2
                      AND j.run_id = br.BenchmarkRunId
                )",
-            &[run_id, project_id],
+            &[run_id, &project_id],
         )
         .await
     {
@@ -1027,7 +1027,7 @@ pub async fn get_artifact(
 
 pub async fn compare(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
     run_ids: &[Uuid],
     baseline_run_id: Option<Uuid>,
 ) -> anyhow::Result<BenchmarkComparisonReport> {

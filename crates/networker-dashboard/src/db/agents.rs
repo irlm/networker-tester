@@ -18,13 +18,13 @@ pub struct AgentRow {
     pub tags: Option<serde_json::Value>,
 }
 
-pub async fn list(client: &Client, project_id: &Uuid) -> anyhow::Result<Vec<AgentRow>> {
+pub async fn list(client: &Client, project_id: &str) -> anyhow::Result<Vec<AgentRow>> {
     let rows = client
         .query(
             "SELECT agent_id, name, region, provider, status, version, os, arch,
                     last_heartbeat, registered_at, tags
              FROM agent WHERE project_id = $1 ORDER BY name",
-            &[project_id],
+            &[&project_id],
         )
         .await?;
 
@@ -128,14 +128,14 @@ pub async fn create(
     api_key: &str,
     region: Option<&str>,
     provider: Option<&str>,
-    project_id: &Uuid,
+    project_id: &str,
 ) -> anyhow::Result<Uuid> {
     let id = Uuid::new_v4();
     client
         .execute(
             "INSERT INTO agent (agent_id, name, api_key, region, provider, project_id)
              VALUES ($1, $2, $3, $4, $5, $6)",
-            &[&id, &name, &api_key, &region, &provider, project_id],
+            &[&id, &name, &api_key, &region, &provider, &project_id],
         )
         .await?;
     Ok(id)

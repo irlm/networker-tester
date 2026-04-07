@@ -151,7 +151,7 @@ async fn tick(state: &Arc<AppState>) -> anyhow::Result<()> {
         // Create job from schedule config
         let project_id = schedule
             .project_id
-            .unwrap_or(crate::auth::DEFAULT_PROJECT_ID);
+            .unwrap_or_else(|| crate::auth::default_project_id().to_string());
         let job_id = crate::db::jobs::create(
             &client,
             &config,
@@ -178,7 +178,7 @@ async fn tick(state: &Arc<AppState>) -> anyhow::Result<()> {
             if let Ok(mut job_config) =
                 serde_json::from_value::<networker_common::messages::JobConfig>(config.clone())
             {
-                job_config.project_id = schedule.project_id;
+                job_config.project_id = Some(project_id.clone());
                 let msg = networker_common::messages::ControlMessage::JobAssign {
                     job_id,
                     config: Box::new(job_config),

@@ -38,7 +38,7 @@ pub struct TlsProfileDetail {
 
 pub async fn list(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
     limit: i64,
     offset: i64,
 ) -> anyhow::Result<Vec<TlsProfileSummaryRow>> {
@@ -49,7 +49,7 @@ pub async fn list(
              WHERE ProjectId = $1
              ORDER BY StartedAt DESC
              LIMIT $2 OFFSET $3",
-            &[project_id, &limit, &offset],
+            &[&project_id, &limit, &offset],
         )
         .await
     {
@@ -79,7 +79,7 @@ pub async fn list(
 
 pub async fn get(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
     id: &Uuid,
 ) -> anyhow::Result<Option<TlsProfileDetail>> {
     let row = match client
@@ -87,7 +87,7 @@ pub async fn get(
             "SELECT Id, StartedAt, Host, Port, TargetKind, CoverageLevel, SummaryStatus, SummaryScore, ProfileJson
              FROM TlsProfileRun
              WHERE ProjectId = $1 AND Id = $2",
-            &[project_id, id],
+            &[&project_id, id],
         )
         .await
     {

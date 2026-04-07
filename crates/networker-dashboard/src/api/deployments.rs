@@ -34,7 +34,7 @@ pub struct ListDeploymentsQuery {
 
 async fn get_deployment(
     State(state): State<Arc<AppState>>,
-    Path((_, deployment_id)): Path<(Uuid, Uuid)>,
+    Path((_, deployment_id)): Path<(String, Uuid)>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let client = state.db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error in get_deployment");
@@ -57,7 +57,7 @@ async fn get_deployment(
 async fn check_deployment(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthUser>,
-    Path((_, deployment_id)): Path<(Uuid, Uuid)>,
+    Path((_, deployment_id)): Path<(String, Uuid)>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     require_role(&user, Role::Operator)?;
     let client = state.db.get().await.map_err(|e| {
@@ -152,7 +152,7 @@ async fn check_deployment(
 async fn update_endpoint(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthUser>,
-    Path((_, deployment_id)): Path<(Uuid, Uuid)>,
+    Path((_, deployment_id)): Path<(String, Uuid)>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     require_role(&user, Role::Operator)?;
     let client = state.db.get().await.map_err(|e| {
@@ -304,7 +304,7 @@ async fn create_deployment_scoped(
 
 async fn delete_deployment_scoped(
     State(state): State<Arc<AppState>>,
-    Path((_, deployment_id)): Path<(Uuid, Uuid)>,
+    Path((_, deployment_id)): Path<(String, Uuid)>,
     req: axum::extract::Request,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
@@ -327,7 +327,7 @@ async fn delete_deployment_scoped(
 
 async fn stop_deployment_scoped(
     State(state): State<Arc<AppState>>,
-    Path((_, deployment_id)): Path<(Uuid, Uuid)>,
+    Path((_, deployment_id)): Path<(String, Uuid)>,
     req: axum::extract::Request,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();

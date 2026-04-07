@@ -172,7 +172,7 @@ async fn create_account(
 
 async fn get_account(
     State(state): State<Arc<AppState>>,
-    Path((_project_id, account_id)): Path<(Uuid, Uuid)>,
+    Path((_project_id, account_id)): Path<(String, Uuid)>,
     req: axum::extract::Request,
 ) -> Result<Json<AccountResponse>, (StatusCode, String)> {
     let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
@@ -212,7 +212,7 @@ async fn get_account(
 
 async fn update_account(
     State(state): State<Arc<AppState>>,
-    Path((_project_id, account_id)): Path<(Uuid, Uuid)>,
+    Path((_project_id, account_id)): Path<(String, Uuid)>,
     req: axum::extract::Request,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
@@ -290,7 +290,7 @@ async fn update_account(
 
 async fn delete_account(
     State(state): State<Arc<AppState>>,
-    Path((_project_id, account_id)): Path<(Uuid, Uuid)>,
+    Path((_project_id, account_id)): Path<(String, Uuid)>,
     req: axum::extract::Request,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
@@ -355,7 +355,7 @@ async fn delete_account(
 
 async fn validate_account(
     State(state): State<Arc<AppState>>,
-    Path((_project_id, account_id)): Path<(Uuid, Uuid)>,
+    Path((_project_id, account_id)): Path<(String, Uuid)>,
     req: axum::extract::Request,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();

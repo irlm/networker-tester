@@ -14,7 +14,7 @@ pub struct JobConfig {
     pub target: String,
     pub modes: Vec<String>,
     #[serde(default)]
-    pub project_id: Option<Uuid>,
+    pub project_id: Option<String>,
     #[serde(default)]
     pub tls_profile_url: Option<String>,
     #[serde(default)]

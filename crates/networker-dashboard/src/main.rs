@@ -7,6 +7,8 @@ mod db;
 mod deploy;
 mod email;
 mod log_buffer;
+#[allow(dead_code)]
+mod project_id;
 mod regression;
 mod scheduler;
 mod system_metrics;

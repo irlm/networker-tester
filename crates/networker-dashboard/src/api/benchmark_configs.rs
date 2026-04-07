@@ -328,7 +328,7 @@ async fn create_config(
 /// GET /projects/:pid/benchmark-configs/:id
 async fn get_config(
     State(state): State<Arc<AppState>>,
-    Path((_, config_id)): Path<(Uuid, Uuid)>,
+    Path((_, config_id)): Path<(String, Uuid)>,
     req: Request,
 ) -> Result<Json<BenchmarkConfigWithTestbeds>, StatusCode> {
     let _ctx = request_extension::<ProjectContext>(&req, "ProjectContext")?;
@@ -358,7 +358,7 @@ async fn get_config(
 /// POST /projects/:pid/benchmark-configs/:id/launch
 async fn launch_config(
     State(state): State<Arc<AppState>>,
-    Path((_, config_id)): Path<(Uuid, Uuid)>,
+    Path((_, config_id)): Path<(String, Uuid)>,
     req: Request,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let ctx = request_extension::<ProjectContext>(&req, "ProjectContext")?;
@@ -427,7 +427,7 @@ async fn launch_config(
 /// POST /projects/:pid/benchmark-configs/:id/cancel
 async fn cancel_config(
     State(state): State<Arc<AppState>>,
-    Path((_, config_id)): Path<(Uuid, Uuid)>,
+    Path((_, config_id)): Path<(String, Uuid)>,
     req: Request,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let ctx = request_extension::<ProjectContext>(&req, "ProjectContext")?;
@@ -481,7 +481,7 @@ pub struct BenchmarkConfigResults {
 /// GET /projects/:pid/benchmark-configs/:id/results
 async fn get_config_results(
     State(state): State<Arc<AppState>>,
-    Path((_, config_id)): Path<(Uuid, Uuid)>,
+    Path((_, config_id)): Path<(String, Uuid)>,
     req: Request,
 ) -> Result<Json<BenchmarkConfigResults>, StatusCode> {
     let _ctx = request_extension::<ProjectContext>(&req, "ProjectContext")?;
@@ -522,7 +522,7 @@ async fn get_config_results(
 /// GET /projects/:pid/benchmark-configs/:id/regressions
 async fn get_config_regressions(
     State(state): State<Arc<AppState>>,
-    Path((_, config_id)): Path<(Uuid, Uuid)>,
+    Path((_, config_id)): Path<(String, Uuid)>,
     req: Request,
 ) -> Result<Json<Vec<crate::regression::RegressionRow>>, StatusCode> {
     let _ctx = request_extension::<ProjectContext>(&req, "ProjectContext")?;
@@ -571,7 +571,7 @@ async fn list_project_regressions(
 /// GET /projects/:pid/benchmark-configs/:id/progress
 async fn get_benchmark_progress(
     State(state): State<Arc<AppState>>,
-    Path((_, config_id)): Path<(Uuid, Uuid)>,
+    Path((_, config_id)): Path<(String, Uuid)>,
     req: Request,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let _ctx = request_extension::<ProjectContext>(&req, "ProjectContext")?;

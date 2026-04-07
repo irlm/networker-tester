@@ -6,7 +6,7 @@ use uuid::Uuid;
 #[derive(Debug, Serialize)]
 pub struct VmCatalogRow {
     pub vm_id: Uuid,
-    pub project_id: Uuid,
+    pub project_id: String,
     pub name: String,
     pub cloud: String,
     pub region: String,
@@ -41,7 +41,7 @@ fn row_to_vm(r: &tokio_postgres::Row) -> VmCatalogRow {
 #[allow(clippy::too_many_arguments)]
 pub async fn create(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
     name: &str,
     cloud: &str,
     region: &str,
@@ -58,7 +58,7 @@ pub async fn create(
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             &[
                 &id,
-                project_id,
+                &project_id,
                 &name,
                 &cloud,
                 &region,
@@ -86,7 +86,7 @@ pub async fn get(client: &Client, vm_id: &Uuid) -> anyhow::Result<Option<VmCatal
 
 pub async fn list_for_project(
     client: &Client,
-    project_id: &Uuid,
+    project_id: &str,
 ) -> anyhow::Result<Vec<VmCatalogRow>> {
     let rows = client
         .query(
@@ -94,7 +94,7 @@ pub async fn list_for_project(
                     vm_size, status, last_health_check, created_by, created_at
              FROM benchmark_vm_catalog WHERE project_id = $1
              ORDER BY name",
-            &[project_id],
+            &[&project_id],
         )
         .await?;
     Ok(rows.iter().map(row_to_vm).collect())

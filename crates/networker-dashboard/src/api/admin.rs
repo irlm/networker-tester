@@ -7,7 +7,6 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use uuid::Uuid;
 
 use crate::auth::AuthUser;
 use crate::AppState;
@@ -115,7 +114,7 @@ async fn system_logs(
 
 async fn suspend_workspace(
     State(state): State<Arc<AppState>>,
-    Path(project_id): Path<Uuid>,
+    Path(project_id): Path<String>,
     req: axum::extract::Request,
 ) -> Result<StatusCode, StatusCode> {
     let user = extract_admin(&req)?;
@@ -137,7 +136,7 @@ async fn suspend_workspace(
 
 async fn restore_workspace(
     State(state): State<Arc<AppState>>,
-    Path(project_id): Path<Uuid>,
+    Path(project_id): Path<String>,
     req: axum::extract::Request,
 ) -> Result<StatusCode, StatusCode> {
     let user = extract_admin(&req)?;
@@ -164,7 +163,7 @@ struct ProtectResponse {
 
 async fn protect_workspace(
     State(state): State<Arc<AppState>>,
-    Path(project_id): Path<Uuid>,
+    Path(project_id): Path<String>,
     req: axum::extract::Request,
 ) -> Result<Json<ProtectResponse>, StatusCode> {
     let user = extract_admin(&req)?;
@@ -193,7 +192,7 @@ async fn protect_workspace(
 
 async fn hard_delete_workspace(
     State(state): State<Arc<AppState>>,
-    Path(project_id): Path<Uuid>,
+    Path(project_id): Path<String>,
     req: axum::extract::Request,
 ) -> Result<StatusCode, StatusCode> {
     let user = extract_admin(&req)?;

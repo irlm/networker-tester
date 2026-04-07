@@ -603,6 +603,441 @@ const V023_PERF_LOG: &str = "
     CREATE INDEX IF NOT EXISTS ix_perf_log_path      ON perf_log (path, logged_at DESC) WHERE kind = 'api';
 ";
 
+/// V024 migration: Sovereignty zones + server registry tables.
+const V024_SOVEREIGNTY_ZONES: &str = r#"
+CREATE TABLE IF NOT EXISTS sovereignty_zone (
+    code              CHAR(2)       NOT NULL PRIMARY KEY,
+    parent_code       CHAR(2),
+    name              VARCHAR(50)   NOT NULL UNIQUE,
+    display           VARCHAR(100)  NOT NULL,
+    legal_note        VARCHAR(255),
+    compliance_level  VARCHAR(100),
+    fallback_zone     CHAR(2),
+    auto_detect       JSONB         NOT NULL DEFAULT '{}',
+    requires_approval BOOLEAN       NOT NULL DEFAULT FALSE,
+    requires_mfa      BOOLEAN       NOT NULL DEFAULT FALSE,
+    status            VARCHAR(20)   NOT NULL DEFAULT 'active',
+    created_at        TIMESTAMPTZ   NOT NULL DEFAULT now(),
+    FOREIGN KEY (parent_code) REFERENCES sovereignty_zone(code),
+    FOREIGN KEY (fallback_zone) REFERENCES sovereignty_zone(code)
+);
+
+CREATE TABLE IF NOT EXISTS server_registry (
+    server_id   CHAR(3)       NOT NULL,
+    zone_code   CHAR(2)       NOT NULL,
+    hostname    VARCHAR(255)  NOT NULL,
+    endpoint    VARCHAR(255)  NOT NULL,
+    internal_ip VARCHAR(45),
+    db_url      VARCHAR(500),
+    status      VARCHAR(20)   NOT NULL DEFAULT 'active',
+    last_health TIMESTAMPTZ,
+    priority    INT           NOT NULL DEFAULT 0,
+    created_at  TIMESTAMPTZ   NOT NULL DEFAULT now(),
+    PRIMARY KEY (zone_code, server_id),
+    FOREIGN KEY (zone_code) REFERENCES sovereignty_zone(code)
+);
+CREATE INDEX IF NOT EXISTS ix_server_registry_status ON server_registry(zone_code, status);
+
+CREATE TABLE IF NOT EXISTS project_routing (
+    project_id   CHAR(14)    NOT NULL PRIMARY KEY,
+    home_zone    CHAR(2)     NOT NULL,
+    current_zone CHAR(2)     NOT NULL,
+    migrated_at  TIMESTAMPTZ,
+    migrated_by  UUID,
+    FOREIGN KEY (home_zone) REFERENCES sovereignty_zone(code),
+    FOREIGN KEY (current_zone) REFERENCES sovereignty_zone(code)
+);
+CREATE INDEX IF NOT EXISTS ix_project_routing_current ON project_routing(current_zone, home_zone);
+
+CREATE TABLE IF NOT EXISTS migration_request (
+    request_id   UUID        NOT NULL PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id   CHAR(14)    NOT NULL,
+    from_zone    CHAR(2)     NOT NULL,
+    to_zone      CHAR(2)     NOT NULL,
+    reason       TEXT        NOT NULL,
+    requested_by UUID        NOT NULL,
+    approved_by  UUID,
+    status       VARCHAR(20) NOT NULL DEFAULT 'pending',
+    scheduled_at TIMESTAMPTZ,
+    started_at   TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    data_size_mb BIGINT,
+    error_message TEXT,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    FOREIGN KEY (requested_by) REFERENCES dash_user(user_id),
+    FOREIGN KEY (approved_by) REFERENCES dash_user(user_id),
+    FOREIGN KEY (from_zone) REFERENCES sovereignty_zone(code),
+    FOREIGN KEY (to_zone) REFERENCES sovereignty_zone(code)
+);
+
+CREATE TABLE IF NOT EXISTS migration_audit_log (
+    log_id      UUID        NOT NULL PRIMARY KEY DEFAULT gen_random_uuid(),
+    request_id  UUID        NOT NULL,
+    step        VARCHAR(50) NOT NULL,
+    status      VARCHAR(20) NOT NULL,
+    details     JSONB,
+    checksum    VARCHAR(128),
+    duration_ms BIGINT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    FOREIGN KEY (request_id) REFERENCES migration_request(request_id)
+);
+CREATE INDEX IF NOT EXISTS ix_migration_audit_request ON migration_audit_log(request_id, created_at);
+"#;
+
+/// V024 seed: 32 sovereignty zones + current US East server.
+/// Rows with no fallback_zone dependency are inserted first (us, sg),
+/// then all others that reference them, using ON CONFLICT DO NOTHING for idempotency.
+const V024_SEED_ZONES: &str = r#"
+-- Insert root zones first (no fallback dependencies)
+INSERT INTO sovereignty_zone (code, name, display, fallback_zone, requires_approval, requires_mfa) VALUES
+  ('us', 'USA Commercial',           'USA Commercial',                     NULL, FALSE, FALSE),
+  ('sg', 'Singapore + ASEAN',        'Singapore + ASEAN',                  'us', FALSE, FALSE)
+ON CONFLICT DO NOTHING;
+
+-- Insert zones that depend only on us or sg
+INSERT INTO sovereignty_zone (code, name, display, fallback_zone, requires_approval, requires_mfa) VALUES
+  ('ug', 'USA GovCloud',             'USA GovCloud',                       'us', TRUE,  FALSE),
+  ('uh', 'USA Healthcare',           'USA Healthcare',                     'us', TRUE,  FALSE),
+  ('ca', 'Canada',                   'Canada',                             'us', FALSE, FALSE),
+  ('mx', 'Mexico + Central Am + Caribbean', 'Mexico, Central America & Caribbean', 'us', FALSE, FALSE),
+  ('sa', 'South America excl Brasil','South America (excl Brasil)',         'us', FALSE, FALSE),
+  ('br', 'Brasil',                   'Brasil',                             'us', FALSE, FALSE),
+  ('eu', 'Europe EU + EEA',          'Europe EU + EEA',                    'us', FALSE, FALSE),
+  ('uk', 'United Kingdom',           'United Kingdom',                     'eu', FALSE, FALSE),
+  ('jp', 'Japan',                    'Japan',                              'sg', FALSE, FALSE),
+  ('in', 'India',                    'India',                              'sg', FALSE, FALSE),
+  ('id', 'Indonesia',                'Indonesia',                          'sg', FALSE, FALSE),
+  ('vn', 'Vietnam',                  'Vietnam',                            'sg', FALSE, FALSE),
+  ('tw', 'Taiwan',                   'Taiwan',                             'sg', FALSE, FALSE),
+  ('hk', 'Hong Kong',                'Hong Kong',                          'sg', FALSE, FALSE),
+  ('ph', 'Philippines',              'Philippines',                        'sg', FALSE, FALSE),
+  ('au', 'Australia + NZ',           'Australia + New Zealand',            'sg', FALSE, FALSE),
+  ('af', 'Africa general',           'Africa',                             'eu', FALSE, FALSE),
+  ('me', 'Middle East UAE/Saudi',    'Middle East (UAE/Saudi)',             'eu', FALSE, FALSE),
+  ('il', 'Israel',                   'Israel',                             'eu', FALSE, FALSE),
+  ('gl', 'Global / no residency',    'Global (No Data Residency)',         'us', FALSE, FALSE)
+ON CONFLICT DO NOTHING;
+
+-- Insert zones that depend on ug (which depends on us)
+INSERT INTO sovereignty_zone (code, name, display, fallback_zone, requires_approval, requires_mfa) VALUES
+  ('ud', 'USA DoD',                  'USA DoD',                            'ug', TRUE,  TRUE)
+ON CONFLICT DO NOTHING;
+
+-- Insert zones that depend on eu
+INSERT INTO sovereignty_zone (code, name, display, fallback_zone, requires_approval, requires_mfa) VALUES
+  ('es', 'Europe Sovereign',         'Europe Sovereign',                   'eu', TRUE,  FALSE),
+  ('ru', 'Russia + CIS',             'Russia + CIS',                       'eu', TRUE,  FALSE),
+  ('cn', 'China Commercial',         'China Commercial',                   'sg', TRUE,  FALSE)
+ON CONFLICT DO NOTHING;
+
+-- Insert zones that depend on cn (which depends on sg)
+INSERT INTO sovereignty_zone (code, name, display, fallback_zone, requires_approval, requires_mfa) VALUES
+  ('cg', 'China Government',         'China Government',                   'cn', TRUE,  TRUE)
+ON CONFLICT DO NOTHING;
+
+-- Insert zones that depend on jp (which depends on sg)
+INSERT INTO sovereignty_zone (code, name, display, fallback_zone, requires_approval, requires_mfa) VALUES
+  ('kr', 'South Korea',              'South Korea',                        'jp', FALSE, FALSE)
+ON CONFLICT DO NOTHING;
+
+-- Insert zones that depend on af (which depends on eu)
+INSERT INTO sovereignty_zone (code, name, display, fallback_zone, requires_approval, requires_mfa) VALUES
+  ('ng', 'Nigeria',                  'Nigeria',                            'af', FALSE, FALSE),
+  ('za', 'South Africa',             'South Africa',                       'af', FALSE, FALSE)
+ON CONFLICT DO NOTHING;
+
+-- Insert zones that depend on me (which depends on eu)
+INSERT INTO sovereignty_zone (code, name, display, fallback_zone, requires_approval, requires_mfa) VALUES
+  ('qa', 'Qatar + Gulf',             'Qatar + Gulf',                       'me', FALSE, FALSE)
+ON CONFLICT DO NOTHING;
+
+-- Seed current US East server
+INSERT INTO server_registry (server_id, zone_code, hostname, endpoint, internal_ip, db_url, status)
+VALUES ('a20', 'us', 'alethedash-vm', 'https://alethedash.com', '20.42.8.158',
+        'postgres://alethedash:alethedash@127.0.0.1/alethedash', 'active')
+ON CONFLICT DO NOTHING;
+"#;
+
+/// V024b migration: Convert project_id from UUID to 14-char base36.
+///
+/// This is a Rust-driven migration because the base36 encoding + Damm check
+/// digits can't be computed in pure SQL. It rewrites the PK on `project` and
+/// every FK column that references it.
+async fn migrate_project_ids(client: &Client) -> anyhow::Result<()> {
+    use crate::project_id::ProjectId;
+
+    // ── Step 1: Add temporary columns to the project table ──────────────
+    client
+        .batch_execute(
+            "ALTER TABLE project ADD COLUMN IF NOT EXISTS new_project_id CHAR(14);
+             ALTER TABLE project ADD COLUMN IF NOT EXISTS old_project_id UUID;",
+        )
+        .await?;
+
+    // ── Step 2: Generate new IDs for each existing project ──────────────
+    let projects = client
+        .query("SELECT project_id, created_at FROM project", &[])
+        .await?;
+
+    for row in &projects {
+        let old_id: uuid::Uuid = row.get("project_id");
+        let created_at: chrono::DateTime<chrono::Utc> = row.get("created_at");
+        let unix_secs = created_at.timestamp() as u64;
+
+        let new_id = ProjectId::generate_deterministic("us", "a20", unix_secs);
+        let new_id_str = new_id.as_str().to_string();
+
+        client
+            .execute(
+                "UPDATE project SET new_project_id = $1, old_project_id = $2 WHERE project_id = $3",
+                &[&new_id_str, &old_id, &old_id],
+            )
+            .await?;
+    }
+
+    tracing::info!(
+        count = projects.len(),
+        "Generated new base36 project IDs for all projects"
+    );
+
+    // ── Step 3: Add new_project_id to ALL FK tables ─────────────────────
+    // Tables with NOT NULL project_id
+    let not_null_fk_tables = [
+        "project_member",
+        "cloud_account",
+        "share_link",
+        "command_approval",
+        "test_visibility_rule",
+        "workspace_invite",
+        "workspace_warning",
+        "benchmark_compare_preset",
+        "benchmark_vm_catalog",
+        "benchmark_config",
+    ];
+    // Tables where project_id was nullable, then made NOT NULL by V011
+    let v011_not_null_tables = ["agent", "job", "schedule", "deployment"];
+    // Tables where project_id may still be nullable
+    let nullable_fk_tables = ["test_definition", "cloud_connection"];
+
+    // Add new_project_id column to all FK tables
+    for table in not_null_fk_tables
+        .iter()
+        .chain(v011_not_null_tables.iter())
+        .chain(nullable_fk_tables.iter())
+    {
+        let sql = format!("ALTER TABLE {table} ADD COLUMN IF NOT EXISTS new_project_id CHAR(14);");
+        client.batch_execute(&sql).await?;
+    }
+
+    // Also handle TlsProfileRun (mixed-case column name "ProjectId")
+    client
+        .batch_execute(
+            "ALTER TABLE tlsprofilerun ADD COLUMN IF NOT EXISTS new_project_id CHAR(14);",
+        )
+        .await?;
+
+    // ── Step 4: Populate new_project_id by joining on project ───────────
+    for table in not_null_fk_tables
+        .iter()
+        .chain(v011_not_null_tables.iter())
+        .chain(nullable_fk_tables.iter())
+    {
+        let sql = format!(
+            "UPDATE {table} t SET new_project_id = p.new_project_id \
+             FROM project p WHERE t.project_id = p.project_id AND t.new_project_id IS NULL"
+        );
+        client.batch_execute(&sql).await?;
+    }
+
+    // TlsProfileRun uses mixed-case "ProjectId"
+    client
+        .batch_execute(
+            "UPDATE tlsprofilerun t SET new_project_id = p.new_project_id \
+             FROM project p WHERE t.\"ProjectId\" = p.project_id AND t.new_project_id IS NULL",
+        )
+        .await?;
+
+    // ── Step 5: Drop old FK constraints ─────────────────────────────────
+    // Auto-generated FK names from ALTER TABLE ... ADD COLUMN ... REFERENCES
+    // are typically: {table}_{column}_fkey
+    // Tables from V010 section 7 (ALTER TABLE ADD COLUMN project_id UUID REFERENCES ...):
+    for table in &[
+        "agent",
+        "test_definition",
+        "job",
+        "schedule",
+        "deployment",
+        "cloud_connection",
+    ] {
+        let sql = format!("ALTER TABLE {table} DROP CONSTRAINT IF EXISTS {table}_project_id_fkey;");
+        client.batch_execute(&sql).await?;
+    }
+    // Tables created in V010 with inline REFERENCES (CREATE TABLE ... project_id UUID NOT NULL REFERENCES ...):
+    for table in &[
+        "project_member",
+        "cloud_account",
+        "share_link",
+        "command_approval",
+        "test_visibility_rule",
+    ] {
+        let sql = format!("ALTER TABLE {table} DROP CONSTRAINT IF EXISTS {table}_project_id_fkey;");
+        client.batch_execute(&sql).await?;
+    }
+    // V012 tables
+    for table in &["workspace_invite", "workspace_warning"] {
+        let sql = format!("ALTER TABLE {table} DROP CONSTRAINT IF EXISTS {table}_project_id_fkey;");
+        client.batch_execute(&sql).await?;
+    }
+    // V014, V016 tables
+    for table in &[
+        "benchmark_compare_preset",
+        "benchmark_vm_catalog",
+        "benchmark_config",
+    ] {
+        let sql = format!("ALTER TABLE {table} DROP CONSTRAINT IF EXISTS {table}_project_id_fkey;");
+        client.batch_execute(&sql).await?;
+    }
+    // TlsProfileRun (V015) — FK constraint name for mixed-case column
+    client
+        .batch_execute(
+            "ALTER TABLE tlsprofilerun DROP CONSTRAINT IF EXISTS \"TlsProfileRun_ProjectId_fkey\";
+             ALTER TABLE tlsprofilerun DROP CONSTRAINT IF EXISTS tlsprofilerun_projectid_fkey;",
+        )
+        .await?;
+
+    // ── Step 6: Drop the project PK ─────────────────────────────────────
+    client
+        .batch_execute("ALTER TABLE project DROP CONSTRAINT IF EXISTS project_pkey;")
+        .await?;
+
+    // ── Step 7: Drop old columns, rename new columns ────────────────────
+    // project table: drop old project_id, rename new_project_id → project_id
+    client
+        .batch_execute(
+            "ALTER TABLE project DROP COLUMN project_id;
+             ALTER TABLE project RENAME COLUMN new_project_id TO project_id;
+             ALTER TABLE project ALTER COLUMN project_id SET NOT NULL;
+             ALTER TABLE project ADD PRIMARY KEY (project_id);",
+        )
+        .await?;
+
+    // All FK tables: drop old project_id, rename new_project_id → project_id, set NOT NULL where required
+    for table in &not_null_fk_tables {
+        let sql = format!(
+            "ALTER TABLE {table} DROP COLUMN project_id; \
+             ALTER TABLE {table} RENAME COLUMN new_project_id TO project_id; \
+             ALTER TABLE {table} ALTER COLUMN project_id SET NOT NULL; \
+             ALTER TABLE {table} ADD CONSTRAINT {table}_project_id_fkey \
+                 FOREIGN KEY (project_id) REFERENCES project(project_id) ON DELETE CASCADE;"
+        );
+        client.batch_execute(&sql).await?;
+    }
+
+    for table in &v011_not_null_tables {
+        let sql = format!(
+            "ALTER TABLE {table} DROP COLUMN project_id; \
+             ALTER TABLE {table} RENAME COLUMN new_project_id TO project_id; \
+             ALTER TABLE {table} ALTER COLUMN project_id SET NOT NULL; \
+             ALTER TABLE {table} ADD CONSTRAINT {table}_project_id_fkey \
+                 FOREIGN KEY (project_id) REFERENCES project(project_id);"
+        );
+        client.batch_execute(&sql).await?;
+    }
+
+    for table in &nullable_fk_tables {
+        let sql = format!(
+            "ALTER TABLE {table} DROP COLUMN project_id; \
+             ALTER TABLE {table} RENAME COLUMN new_project_id TO project_id; \
+             ALTER TABLE {table} ADD CONSTRAINT {table}_project_id_fkey \
+                 FOREIGN KEY (project_id) REFERENCES project(project_id);"
+        );
+        client.batch_execute(&sql).await?;
+    }
+
+    // TlsProfileRun: drop old ProjectId, rename new_project_id → ProjectId
+    client
+        .batch_execute(
+            "ALTER TABLE tlsprofilerun DROP COLUMN \"ProjectId\";
+             ALTER TABLE tlsprofilerun RENAME COLUMN new_project_id TO \"ProjectId\";
+             ALTER TABLE tlsprofilerun ALTER COLUMN \"ProjectId\" SET NOT NULL;
+             ALTER TABLE tlsprofilerun ADD CONSTRAINT tlsprofilerun_projectid_fkey
+                 FOREIGN KEY (\"ProjectId\") REFERENCES project(project_id);",
+        )
+        .await?;
+
+    // Fix project_member composite PK (was (project_id UUID, user_id UUID))
+    client
+        .batch_execute(
+            "ALTER TABLE project_member DROP CONSTRAINT IF EXISTS project_member_pkey;
+             ALTER TABLE project_member ADD PRIMARY KEY (project_id, user_id);",
+        )
+        .await?;
+
+    // ── Step 8: Recreate indexes that referenced project_id ─────────────
+    client
+        .batch_execute(
+            "DROP INDEX IF EXISTS ix_agent_project;
+             CREATE INDEX IF NOT EXISTS ix_agent_project ON agent (project_id);
+             DROP INDEX IF EXISTS ix_test_def_project;
+             CREATE INDEX IF NOT EXISTS ix_test_def_project ON test_definition (project_id);
+             DROP INDEX IF EXISTS ix_job_project;
+             CREATE INDEX IF NOT EXISTS ix_job_project ON job (project_id, status, created_at DESC);
+             DROP INDEX IF EXISTS ix_schedule_project;
+             CREATE INDEX IF NOT EXISTS ix_schedule_project ON schedule (project_id) WHERE enabled = TRUE;
+             DROP INDEX IF EXISTS ix_deployment_project;
+             CREATE INDEX IF NOT EXISTS ix_deployment_project ON deployment (project_id, status, created_at DESC);
+             DROP INDEX IF EXISTS ix_cloud_account_project;
+             CREATE INDEX IF NOT EXISTS ix_cloud_account_project ON cloud_account (project_id);
+             DROP INDEX IF EXISTS ix_share_link_project;
+             CREATE INDEX IF NOT EXISTS ix_share_link_project ON share_link (project_id, resource_type);
+             DROP INDEX IF EXISTS ix_command_approval_pending;
+             CREATE INDEX IF NOT EXISTS ix_command_approval_pending ON command_approval (project_id, status) WHERE status = 'pending';
+             DROP INDEX IF EXISTS ix_visibility_project;
+             CREATE INDEX IF NOT EXISTS ix_visibility_project ON test_visibility_rule (project_id, user_id, resource_type);
+             DROP INDEX IF EXISTS ix_project_member_user;
+             CREATE INDEX IF NOT EXISTS ix_project_member_user ON project_member (user_id);
+             DROP INDEX IF EXISTS ix_workspace_invite_project;
+             CREATE INDEX IF NOT EXISTS ix_workspace_invite_project ON workspace_invite (project_id, status);
+             DROP INDEX IF EXISTS ix_workspace_warning_unique;
+             CREATE UNIQUE INDEX IF NOT EXISTS ix_workspace_warning_unique ON workspace_warning (project_id, warning_type);
+             DROP INDEX IF EXISTS ix_benchmark_compare_preset_name;
+             CREATE UNIQUE INDEX IF NOT EXISTS ix_benchmark_compare_preset_name ON benchmark_compare_preset (project_id, name_key);
+             DROP INDEX IF EXISTS ix_benchmark_compare_preset_project_updated;
+             CREATE INDEX IF NOT EXISTS ix_benchmark_compare_preset_project_updated ON benchmark_compare_preset (project_id, updated_at DESC);
+             DROP INDEX IF EXISTS ix_benchmark_vm_catalog_project;
+             CREATE INDEX IF NOT EXISTS ix_benchmark_vm_catalog_project ON benchmark_vm_catalog (project_id);
+             DROP INDEX IF EXISTS ix_benchmark_config_project;
+             CREATE INDEX IF NOT EXISTS ix_benchmark_config_project ON benchmark_config (project_id, created_at DESC);
+             DROP INDEX IF EXISTS ix_tlsprofilerun_project;
+             CREATE INDEX IF NOT EXISTS ix_tlsprofilerun_project ON tlsprofilerun (\"ProjectId\", \"StartedAt\" DESC);",
+        )
+        .await?;
+
+    // ── Step 9: Populate project_routing (all projects → us/us) ─────────
+    client
+        .batch_execute(
+            "INSERT INTO project_routing (project_id, home_zone, current_zone)
+             SELECT project_id, 'us', 'us' FROM project
+             ON CONFLICT DO NOTHING;",
+        )
+        .await?;
+
+    // ── Step 10: Zone-prefix index for routing lookups ───────────────────
+    client
+        .batch_execute(
+            "CREATE INDEX IF NOT EXISTS ix_project_zone_prefix ON project (substring(project_id from 1 for 2));",
+        )
+        .await?;
+
+    // ── Step 11: Clean up old_project_id helper column ──────────────────
+    client
+        .batch_execute("ALTER TABLE project DROP COLUMN IF EXISTS old_project_id;")
+        .await?;
+
+    tracing::info!("V024b project ID migration complete (UUID → CHAR(14))");
+    Ok(())
+}
+
 /// Run pending migrations.
 pub async fn run(client: &Client) -> anyhow::Result<()> {
     // Ensure migration tracking table exists
@@ -1060,6 +1495,54 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
             )
             .await?;
         tracing::info!("V023 migration complete");
+    }
+
+    // V024: Sovereignty zones + server registry
+    let row = client
+        .query_opt("SELECT version FROM _migrations WHERE version = 24", &[])
+        .await?;
+
+    if row.is_none() {
+        tracing::info!("Applying V024 sovereignty_zones migration...");
+        client.batch_execute(V024_SOVEREIGNTY_ZONES).await?;
+        client.batch_execute(V024_SEED_ZONES).await?;
+        client
+            .execute(
+                "INSERT INTO _migrations (version) VALUES (24) ON CONFLICT DO NOTHING",
+                &[],
+            )
+            .await?;
+        tracing::info!("V024 migration complete");
+    }
+
+    // V025: Convert project_id from UUID to 14-char base36
+    let row = client
+        .query_opt("SELECT version FROM _migrations WHERE version = 25", &[])
+        .await?;
+
+    if row.is_none() {
+        tracing::info!("Applying V025 project ID migration (UUID → base36)...");
+        migrate_project_ids(client).await?;
+        client
+            .execute(
+                "INSERT INTO _migrations (version) VALUES (25) ON CONFLICT DO NOTHING",
+                &[],
+            )
+            .await?;
+
+        // Set default project ID from DB (the delete_protection=TRUE project)
+        if let Ok(Some(row)) = client
+            .query_opt(
+                "SELECT project_id FROM project WHERE delete_protection = TRUE LIMIT 1",
+                &[],
+            )
+            .await
+        {
+            let id: String = row.get("project_id");
+            crate::auth::set_default_project_id(id);
+        }
+
+        tracing::info!("V025 migration complete");
     }
 
     Ok(())

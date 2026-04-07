@@ -24,7 +24,7 @@ pub struct ListRunsQuery {
 
 async fn get_run_attempts(
     State(state): State<Arc<AppState>>,
-    Path((_, run_id)): Path<(Uuid, Uuid)>,
+    Path((_, run_id)): Path<(String, Uuid)>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let client = state.db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error in get_run_attempts");
@@ -41,7 +41,7 @@ async fn get_run_attempts(
 
 async fn get_run(
     State(state): State<Arc<AppState>>,
-    Path((_, run_id)): Path<(Uuid, Uuid)>,
+    Path((_, run_id)): Path<(String, Uuid)>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let client = state
         .db

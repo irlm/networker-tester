@@ -38,26 +38,26 @@ pub async fn create(
     provider: &str,
     config: &serde_json::Value,
     created_by: Option<&Uuid>,
-    project_id: &Uuid,
+    project_id: &str,
 ) -> anyhow::Result<Uuid> {
     let id = Uuid::new_v4();
     client
         .execute(
             "INSERT INTO cloud_connection (connection_id, name, provider, config, created_by, project_id)
              VALUES ($1, $2, $3, $4, $5, $6)",
-            &[&id, &name, &provider, config, &created_by, project_id],
+            &[&id, &name, &provider, config, &created_by, &project_id],
         )
         .await?;
     Ok(id)
 }
 
-pub async fn list(client: &Client, project_id: &Uuid) -> anyhow::Result<Vec<CloudConnectionRow>> {
+pub async fn list(client: &Client, project_id: &str) -> anyhow::Result<Vec<CloudConnectionRow>> {
     let rows = client
         .query(
             "SELECT connection_id, name, provider, config, status, last_validated,
                     validation_error, created_by, created_at, updated_at
              FROM cloud_connection WHERE project_id = $1 ORDER BY created_at",
-            &[project_id],
+            &[&project_id],
         )
         .await?;
     Ok(rows.iter().map(row_to_connection).collect())
