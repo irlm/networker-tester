@@ -28,3 +28,4 @@ benchmarks/metrics-agent/target/
 benchmarks/reference-apis/*/publish/
 benchmarks/reference-apis/**/bin/
 benchmarks/reference-apis/**/obj/
+*.sln

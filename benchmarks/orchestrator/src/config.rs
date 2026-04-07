@@ -596,6 +596,8 @@ mod tests {
             callback_url: None,
             callback_token: None,
             benchmark_type: "fullstack".into(),
+            created_by_email: None,
+            project_id: None,
         }
     }
 
