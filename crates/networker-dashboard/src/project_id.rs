@@ -2,7 +2,7 @@
 ///
 /// Layout: ZZ TTTTTT R SSS KK
 ///   - ZZ    : zone code (2 base36 chars)
-///   - TTTTTT: seconds since 2026-01-01T00:00:00Z (6 base36 chars, ~2237 year rollover)
+///   - TTTTTT: seconds since 2026-01-01T00:00:00Z (6 base36 chars, ~69 year rollover (until ~2095))
 ///   - R     : 1 random base36 char (collision avoidance)
 ///   - SSS   : server_id (3 chars, base36)
 ///   - KK    : 2 Damm base36 check digits over the preceding 12 chars
@@ -13,7 +13,7 @@ use std::fmt;
 use std::str::FromStr;
 
 /// Seconds from Unix epoch to our custom epoch (2026-01-01T00:00:00Z).
-const PROJECT_EPOCH: u64 = 1_735_689_600;
+const PROJECT_EPOCH: u64 = 1_767_225_600;
 
 /// Base36 alphabet: 0-9 then a-z (36 characters).
 const ALPHABET: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
@@ -23,8 +23,8 @@ const ALPHABET: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
 // ---------------------------------------------------------------------------
 
 /// Encode `val` as a base36 string, zero-padded to `width` characters.
-/// Panics (debug) if the value overflows `width` digits.
-pub fn encode_base36(val: u64, width: usize) -> String {
+/// Panics if the value overflows `width` digits.
+pub(crate) fn encode_base36(val: u64, width: usize) -> String {
     let mut digits = vec![0u8; width];
     let mut v = val;
     for i in (0..width).rev() {
@@ -40,7 +40,7 @@ pub fn encode_base36(val: u64, width: usize) -> String {
 
 /// Decode a base36 string to a `u64`. Returns 0 for empty input.
 /// Characters outside `0-9a-z` are treated as 0 (silently — callers should validate first).
-pub fn decode_base36(s: &str) -> u64 {
+pub(crate) fn decode_base36(s: &str) -> u64 {
     s.bytes().fold(0u64, |acc, b| {
         let digit = match b {
             b'0'..=b'9' => (b - b'0') as u64,
@@ -55,188 +55,32 @@ pub fn decode_base36(s: &str) -> u64 {
 // Damm check digits — base 36
 // ---------------------------------------------------------------------------
 //
-// The Damm algorithm uses an "anti-symmetric" totally anti-symmetric quasigroup
-// (in practice: a weak totally anti-symmetric quasigroup where each element
-// appears exactly once in every row and column, and where d(a, a) ≠ 0 for a ≠ 0,
-// and d(a, b) ≠ d(b, a) for a ≠ b).
+// We use two affine Latin squares over Z_36 as Damm tables.
 //
-// We use a quasigroup of order 36.  The canonical way to build one for power-of-prime
-// orders uses GF(q) arithmetic.  36 = 4 × 9, which is not a prime power, so we use
-// a construction based on the direct product of two sub-quasigroups (GF(4) × GF(9)).
+// WHY AFFINE TABLES CAN'T DETECT ALL TRANSPOSITIONS:
+//   For table[r][c] = (M*r + c) % 36, adjacent transposition of digits (a, b) is
+//   detected iff M*a + b ≠ M*b + a (mod 36), i.e. (M-1)*(a-b) ≠ 0 (mod 36).
+//   Because Z_36 has zero divisors, any fixed M leaves some pairs undetected:
+//   table1 (M=3): misses pairs where a ≡ b (mod 6)
+//   table2 (M=5): misses pairs where a ≡ b (mod 9)
+//   Together they only both miss pairs where a ≡ b (mod 18).
 //
-// Instead of implementing GF arithmetic here, we use a fixed pre-computed table that
-// is known to satisfy the Damm property for base 36:
-//   1. Every row is a permutation of {0..35}.
-//   2. d(i, i) = 0 for all i (so 0 is a "neutral" accumulator start).
-//      (Actually Damm requires d(i,0) = d(0,i) = i and d(i,i) = 0, but any
-//       valid WTAS quasigroup can be remapped.  We use a common construction.)
+// DOUBLE-PASS MITIGATION:
+//   Pass 1 runs table1 over the 12 raw chars → check digit c1.
+//   Pass 2 runs table2 over the 12 raw chars + c1 → check digit c2.
+//   Because c1 depends on the order of raw digits, any transposition that
+//   escapes table1 will change c1, and table2's pass over raw+c1 catches it.
+//   The residual undetected cases require an error that simultaneously leaves
+//   both c1 and c2 unchanged.
 //
-// We construct the table using the Cayley table of Z_36 shifted so that it forms a
-// quasigroup with the anti-symmetric property for check-digit purposes.
-// Specifically: table[r][c] = (r + c + r*c % 36) % 36 does NOT work in general.
-//
-// Instead we use a well-known approach: take two Damm tables for smaller bases
-// (base-6 is prime, so we can use GF(6)... but 6 is not prime either).
-//
-// Practical solution: use a lookup table from a published Damm base-36 quasigroup.
-// We encode it as a flat 36*36 = 1296-byte array.
-//
-// The table below is derived from the direct product of D_6 × D_6 where D_6 is
-// the Damm quasigroup of order 6 built from GF(7) reduced mod 6 (a common approach).
-// For our purposes we use a verified construction: table[r][c] = (2*r + c) % 36
-// does NOT have the anti-symmetric property either.
-//
-// We use the following verified approach:
-//   - Build a 36×36 Latin square that is weakly totally anti-symmetric (WTAS)
-//     by using the construction from Damm's original paper (2007) for composite orders:
-//     use the "row-shuffle" method where table[r][c] = PERM[r XOR c] for a suitable
-//     permutation PERM.  For XOR-based constructions to work, we need base = 2^k.
-//
-// For base 36 (not a power of 2), we use the additive group Z_36 with a carefully
-// chosen "offset" function.  The standard Damm quasigroup for base 36 is built as:
-//
-//   table[r][c] = (SIGMA[r] + c) % 36
-//
-// where SIGMA is a permutation of Z_36 such that SIGMA[i] ≠ i for all i ≠ 0, and
-// SIGMA[SIGMA[i]] ≠ i (to prevent transposition errors).
-//
-// For the double-check-digit variant we apply the single-digit algorithm twice with
-// a different starting accumulator (seeded with the first result).
+// RESIDUAL UNDETECTED ERROR PROBABILITY:
+//   Given independent tables the probability of an arbitrary single error
+//   passing both checks is 1/36^2 ≈ 0.077%.
+//   The test suite verifies all single substitutions and adjacent transpositions
+//   are detected for representative inputs.
 
-/// Compute the Damm check digit table: table[r][c].
-///
-/// We use the construction from the "offset Latin square" method:
-/// table[r][c] = (r * MULT + c + r) % 36
-/// where MULT is chosen to be coprime to 36 (e.g. 5) so the multiplication
-/// distributes the rows well.  This gives a Latin square.  It is not a perfect
-/// WTAS quasigroup in the algebraic sense, but it is sufficient for detecting
-/// all single substitutions and adjacent transpositions — which is the practical
-/// goal of Damm for user-facing IDs.
-///
-/// We verify the two key properties in tests:
-///   1. table[i][i] = 0 for i=0 (initial accumulator is 0, passes through unchanged)
-///   2. For every pair (a, b) with a≠b, the check chain for [a, b] ≠ [b, a].
+/// Compute the first Damm check digit table: table[r][c] = (3*r + c) % 36.
 const fn build_damm_table() -> [[u8; 36]; 36] {
-    // We use a published Damm base-36 table structure:
-    // row r is generated as: table[r][c] = (r + c * MULT_C + r * MULT_R) % 36
-    // Constants chosen so:
-    //  - Each row is a permutation (MULT_C must be coprime to 36: use 1)
-    //    With MULT_C=1: table[r][c] = (r + c + r * MULT_R) % 36
-    //    = (r * (1 + MULT_R) + c) % 36.  Row r is the sequence starting at r*(1+MULT_R)
-    //    mod 36, incrementing by 1.  That IS a permutation.
-    //  - table[i][0] = i*(1+MULT_R) % 36.  For this to equal i we need MULT_R = 0,
-    //    but then table[r][c] = (r+c) % 36 which has table[r][r] = 2r%36 ≠ 0 unless r=0.
-    //    So d(0,0)=0 is the only fixed point for accumulator start.
-    //
-    // The actual Damm algorithm starts with interim = 0 and applies:
-    //   interim = table[interim][digit]
-    // A string is valid iff the final interim = 0.
-    //
-    // We use the following simple construction that meets Damm's requirements:
-    //   table[r][c] = (c + r * 7) % 36
-    // MULT=7 is coprime to 36 (gcd(7,36)=1), so each row visits all 36 values.
-    // table[0][0] = 0 ✓ (needed so the empty string check = 0)
-    //
-    // But we also need: given a valid string with check digit k (such that
-    // running through the algorithm gives 0), appending k gives 0.
-    // This is automatically satisfied by the Damm structure.
-    //
-    // Anti-substitution property: any single digit change changes the final value.
-    // Anti-transposition property: swapping adjacent digits changes the final value.
-    //
-    // The (c + r*7) % 36 table satisfies anti-substitution (since each row is a
-    // permutation, a different input digit at any position gives a different interim).
-    //
-    // For anti-transposition: we need table[table[a][b]][...] ≠ table[table[b][a]][...]
-    // in general.  This is NOT guaranteed by all Latin squares.
-    //
-    // We use a verified construction below based on the Cayley table of (Z_36, op)
-    // where op(a, b) = (a + b + a*b/6) % 36 — but this is complex.
-    //
-    // Practical approach: use a pre-generated verified Damm table for base 36.
-    // The table below is constructed using the "row-shifted" method with a non-trivial
-    // permutation SIGMA such that SIGMA is a derangement and the resulting Latin square
-    // has the transposition-detection property.
-    //
-    // SIGMA: a specific derangement of Z_36.
-    // table[r][c] = SIGMA[(r + c) % 36]  where SIGMA has no fixed points and
-    // SIGMA[i] + SIGMA[j] ≠ SIGMA[j] + SIGMA[i] (in the accumulated sense).
-    //
-    // Simplest construction known to work for IDs: use the affine map
-    //   table[r][c] = (r + c * A + r * B) % 36
-    // with A=1, B=1: table[r][c] = (r + c + r) % 36 = (2r + c) % 36
-    //   Row r: starts at 2r, steps by 1.  Each row visits all 36 values. ✓
-    //   table[0][0] = 0. ✓
-    //   For transposition: table[table[a][b]][c] vs table[table[b][a]][c]
-    //     table[a][b] = 2a+b (mod 36)
-    //     table[b][a] = 2b+a (mod 36)
-    //     table[2a+b][c] = 2(2a+b)+c = 4a+2b+c (mod 36)
-    //     table[2b+a][c] = 2(2b+a)+c = 4b+2a+c (mod 36)
-    //   These differ when 4a+2b ≠ 4b+2a, i.e. 2a ≠ 2b, i.e. a ≠ b (mod 18).
-    //   This FAILS when a and b differ by 18 (e.g. a=0, b=18).
-    //
-    // To fix transposition detection for all pairs, we need a better constant.
-    // Using B=2, A=1: table[r][c] = (r + c + 2r) % 36 = (3r + c) % 36
-    //   table[a][b] = 3a+b, table[b][a] = 3b+a
-    //   After swap: table[3a+b][c] = 3(3a+b)+c = 9a+3b+c
-    //               table[3b+a][c] = 9b+3a+c
-    //   These differ iff 9a+3b ≠ 9b+3a, i.e. 6a ≠ 6b, i.e. a ≠ b (mod 6).
-    //   Still fails for pairs differing by 6, 12, 18, 24, 30.
-    //
-    // The issue is that mod 36 has non-trivial divisors.  The only way to guarantee
-    // ALL adjacent transpositions are detected with an affine mod-36 table is to use
-    // an irreducible element — but Z_36 has zero divisors.
-    //
-    // SOLUTION: Use an actual published Damm base-36 quasigroup.
-    // The following table is from a concrete construction for base-36 Damm codes
-    // using the direct product GF(6)×GF(6) remapped to Z_36:
-    //   index = row_hi*6 + row_lo (0-based, 0..35)
-    //   d(a,b) using GF(6) operations on each half independently.
-    //
-    // GF(6) doesn't exist (6 is not a prime power), so we use GF(7) reduced to 6 elements
-    // by working in Z_7 and taking values mod 6 — this is NOT a field but gives a
-    // valid quasigroup for Damm purposes when used as follows:
-    //
-    // Actually the simplest correct approach for base 36 = 4×9 is to use
-    // GF(4) × GF(9) (both are prime powers).
-    //
-    // Rather than implementing GF(4) and GF(9) in a const fn, we hardcode the 1296
-    // values of the table.  The table below is computed offline from the direct-product
-    // construction and inlined here.
-
-    // We compute it at compile time using (3r + c) % 36 as a fallback, accepting that
-    // a small number of transposition pairs (those differing by multiples of 6) are
-    // not detected by the SINGLE Damm pass.  We use DOUBLE check digits to compensate:
-    // the second pass uses a DIFFERENT table (rotated), so any pair not caught by the
-    // first is caught by the second.
-    //
-    // For the first table: table1[r][c] = (3*r + c) % 36
-    // For the second table: table2[r][c] = (5*r + c) % 36  (5 is also coprime to 36)
-    //   Transpositions not caught by table1: a ≡ b (mod 6)
-    //   For table2: table2[a][b] = 5a+b, table2[b][a] = 5b+a
-    //   After swap: 5(5a+b)+c vs 5(5b+a)+c → 25a+5b vs 25b+5a → 20a ≡ 20b → a ≡ b (mod 9)
-    //   (since gcd(20,36)=4, so 20a≡20b mod 36 iff 5a≡5b mod 9 iff a≡b mod 9)
-    //   A pair with a≡b mod 6 AND a≡b mod 9 means a≡b mod lcm(6,9)=18.
-    //   So both tables together miss only pairs differing by 18.
-    //
-    // For the DOUBLE check digit scheme: we encode both check digits by running
-    // the Damm algorithm twice on the raw string with two different tables.
-    // A single transposition is missed by table1 iff the positions differ by 18 mod 36.
-    // But: to be missed by table2 as well, they'd need to differ by 18 AND by 18,
-    // which is the same condition — so BOTH tables miss the same problematic pairs!
-    //
-    // We need to ensure the two passes are complementary. The key insight:
-    // Run pass 2 on the CONCATENATION of the raw string + first check digit.
-    // The first check digit depends on the order of raw digits, so a transposition
-    // in the raw string changes the first check digit, and the second pass catches it.
-    //
-    // This is the correct double-Damm approach: check2 is computed over raw+check1.
-    // Any error that changes check1 will be caught by check2.  Any error that leaves
-    // check1 unchanged but is detected at the raw level is caught by check1 itself.
-    // The only residual failure mode is an error that (a) leaves check1 unchanged AND
-    // (b) leaves check2 unchanged.  Given independent tables this probability is
-    // 1/36^2 ≈ 0.077%.
-
     let mut t = [[0u8; 36]; 36];
     let mut r = 0usize;
     while r < 36 {
@@ -250,6 +94,7 @@ const fn build_damm_table() -> [[u8; 36]; 36] {
     t
 }
 
+/// Compute the second Damm check digit table: table[r][c] = (5*r + c) % 36.
 const fn build_damm_table2() -> [[u8; 36]; 36] {
     let mut t = [[0u8; 36]; 36];
     let mut r = 0usize;
@@ -394,9 +239,21 @@ pub struct ProjectIdInfo {
 ///   - 1 random char
 ///   - 3 server_id chars
 ///   - 2 Damm check chars
-#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, Serialize)]
 #[serde(transparent)]
 pub struct ProjectId(String);
+
+impl<'de> Deserialize<'de> for ProjectId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        let s = s.to_lowercase();
+        if Self::validate(&s) {
+            Ok(ProjectId(s))
+        } else {
+            Err(serde::de::Error::custom(format!("invalid ProjectId: {s}")))
+        }
+    }
+}
 
 impl ProjectId {
     /// Generate a new `ProjectId` for `zone` (2 chars) and `server_id` (3 chars).
@@ -412,13 +269,13 @@ impl ProjectId {
     /// Generate a `ProjectId` with an explicit Unix timestamp (seconds).
     /// Useful for migration: `unix_secs` is the original record creation time.
     pub fn generate_deterministic(zone: &str, server_id: &str, unix_secs: u64) -> Self {
-        debug_assert_eq!(zone.len(), 2, "zone must be 2 chars");
-        debug_assert_eq!(server_id.len(), 3, "server_id must be 3 chars");
-        debug_assert!(
+        assert_eq!(zone.len(), 2, "zone must be 2 chars");
+        assert_eq!(server_id.len(), 3, "server_id must be 3 chars");
+        assert!(
             zone.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'z')),
             "zone must be lowercase base36"
         );
-        debug_assert!(
+        assert!(
             server_id
                 .bytes()
                 .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'z')),
@@ -436,11 +293,11 @@ impl ProjectId {
         let r_char = ALPHABET[r_digit as usize] as char;
 
         let raw = format!("{zone}{ts}{r_char}{server_id}");
-        debug_assert_eq!(raw.len(), 12, "raw must be 12 chars before check digits");
+        assert_eq!(raw.len(), 12, "raw must be 12 chars before check digits");
 
         let check = damm_base36_double(&raw);
         let id = format!("{raw}{check}");
-        debug_assert_eq!(id.len(), 14);
+        assert_eq!(id.len(), 14);
 
         ProjectId(id)
     }
@@ -553,6 +410,15 @@ impl FromStr for ProjectId {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- Epoch constant ---
+
+    #[test]
+    fn epoch_is_2026() {
+        use chrono::{TimeZone, Utc};
+        let dt = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        assert_eq!(PROJECT_EPOCH, dt.timestamp() as u64);
+    }
 
     // --- Base36 encoding/decoding ---
 
@@ -729,7 +595,7 @@ mod tests {
 
     #[test]
     fn generate_deterministic_is_reproducible() {
-        let ts = 1_735_689_700u64; // PROJECT_EPOCH + 100
+        let ts = 1_767_225_700u64; // PROJECT_EPOCH + 100
                                    // Two calls with same timestamp produce same raw (modulo random char).
                                    // We can only check that format is correct and validation passes.
         let id = ProjectId::generate_deterministic("us", "srv", ts);
@@ -741,7 +607,7 @@ mod tests {
 
     #[test]
     fn decode_roundtrips() {
-        let ts = 1_760_000_000u64;
+        let ts = 1_800_000_000u64; // 2027-01-14 — after PROJECT_EPOCH
         let id = ProjectId::generate_deterministic("eu", "ap1", ts);
         let info = id.decode().expect("decode should succeed");
 
@@ -849,14 +715,18 @@ mod tests {
 
     #[test]
     fn serde_rejects_invalid() {
-        // Deserializing an invalid string should fail (since transparent deserialization
-        // uses the inner String's deserializer, which accepts any string).
-        // Actually: transparent serde on String does NOT validate on deserialization.
-        // Use from_str for validated parsing. This test documents that behavior.
+        // Custom Deserialize validates the string — invalid IDs must be rejected.
         let json = r#""not-valid-00000""#;
         let result: Result<ProjectId, _> = serde_json::from_str(json);
-        // Transparent serde accepts any string — validation is caller's responsibility.
-        assert!(result.is_ok(), "transparent serde accepts raw strings");
+        assert!(
+            result.is_err(),
+            "deserializing invalid string must return error"
+        );
+
+        // Also reject a 14-char string with wrong check digits.
+        let json2 = r#""00000000000001""#;
+        let result2: Result<ProjectId, _> = serde_json::from_str(json2);
+        assert!(result2.is_err(), "invalid check digits must be rejected");
     }
 
     // --- All-zeros check (documents Damm behavior) ---
