@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.21.1] - 2026-04-07
+
+### Fixed
+- **Benchmark pipeline end-to-end** — VM provisioning, proxy deploy, language deploy, and benchmark execution all working
+- Merge all testbed fields from DB into orchestrator config JSON
+- Create `/opt/bench` on fresh VMs before token deploy
+- Defer proxy health check until backend starts (no upstream during proxy deploy)
+- Rust endpoint uses `--http-port 8080 --https-port 0` in app mode (avoids port conflict with nginx)
+- Install `npm` alongside `nodejs` (system packages, skip flaky NodeSource)
+- Add `PATH` for non-interactive SSH sessions
+- Increase SSH timeout to 10min (Chrome+Node install takes 5-7min)
+- Guard `tlsprofilerun` references in V025 migration
+- `DEBIAN_FRONTEND=noninteractive` for all apt-get installs
+
+---
+
 ## [0.21.0] - 2026-04-07
 
 ### Added
