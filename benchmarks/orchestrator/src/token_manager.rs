@@ -11,7 +11,7 @@
 //! and deployed via SCP but without the central audit trail.
 
 use anyhow::{Context, Result};
-use rand::Rng;
+use rand::RngExt;
 
 use crate::ssh;
 
@@ -24,8 +24,8 @@ fn keyvault_name() -> Option<String> {
 
 /// Generate a cryptographically random 64-character hex token.
 pub fn generate_token() -> String {
-    let mut rng = rand::thread_rng();
-    let bytes: [u8; 32] = rng.gen();
+    let mut rng = rand::rng();
+    let bytes: [u8; 32] = rng.random();
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
