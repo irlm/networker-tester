@@ -728,9 +728,29 @@ async fn execute_testbed_application(
     provisioned: bool,
 ) -> Result<TestbedOutcome> {
     let methodology = &config.methodology;
+
+    // Filter out OS-incompatible languages (e.g. csharp-net48 on Linux).
+    let languages: Vec<String> = testbed
+        .languages
+        .iter()
+        .filter(|lang| {
+            let needs_windows = matches!(lang.as_str(), "csharp-net48");
+            if needs_windows && testbed.os != "windows" {
+                tracing::warn!(
+                    "Skipping {} on {} testbed {} (requires Windows)",
+                    lang, testbed.os, testbed.testbed_id
+                );
+                false
+            } else {
+                true
+            }
+        })
+        .cloned()
+        .collect();
+
     let mut languages_completed = 0u32;
     let mut languages_failed = 0u32;
-    let total_combinations = (testbed.proxies.len() * testbed.languages.len()) as u32;
+    let total_combinations = (testbed.proxies.len() * languages.len()) as u32;
     let mut combination_index = 0u32;
 
     // NOTE: deadline is set AFTER setup (token deploy + harness install) completes,
@@ -813,7 +833,7 @@ async fn execute_testbed_application(
     tracing::info!(
         testbed_id = %testbed.testbed_id,
         proxies = ?testbed.proxies,
-        languages = ?testbed.languages,
+        languages = ?languages,
         total_combinations,
         deadline_secs = methodology.timeout_secs as u64 * total_combinations.max(1) as u64,
         "Starting application benchmark proxy/language matrix"
@@ -863,7 +883,7 @@ async fn execute_testbed_application(
             continue;
         }
 
-        for language in &testbed.languages {
+        for language in &languages {
             combination_index += 1;
 
             if *cancel_rx.borrow() {
@@ -1022,7 +1042,7 @@ async fn execute_testbed_application(
             testbed_id = %testbed.testbed_id,
             total_combinations,
             proxies = ?testbed.proxies,
-            languages = ?testbed.languages,
+            languages = ?languages,
             "Application benchmark produced 0 completed and 0 failed — \
              proxy/language loops may not have executed"
         );
@@ -1031,7 +1051,7 @@ async fn execute_testbed_application(
             &testbed.testbed_id,
             vec![format!(
                 "BUG: 0 completed + 0 failed with {} combinations (proxies={:?}, languages={:?})",
-                total_combinations, testbed.proxies, testbed.languages,
+                total_combinations, testbed.proxies, languages,
             )],
         )
         .await;
