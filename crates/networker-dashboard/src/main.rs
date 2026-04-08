@@ -171,6 +171,22 @@ async fn main() -> anyhow::Result<()> {
         db::migrations::run(&client).await?;
     }
 
+    // Run log-specific migrations on logs database
+    {
+        let logs_client = logs_pool
+            .get()
+            .await
+            .context("db connection for logs migration")?;
+        // Ensure _migrations table exists in logs DB
+        logs_client
+            .batch_execute(
+                "CREATE TABLE IF NOT EXISTS _migrations \
+                 (version INT PRIMARY KEY, applied_at TIMESTAMPTZ DEFAULT now())",
+            )
+            .await?;
+        db::migrations::run_logs(&logs_client).await?;
+    }
+
     // Check if setup is needed: no users and no DASHBOARD_ADMIN_EMAIL
     let needs_setup = {
         let client = db_pool.get().await?;

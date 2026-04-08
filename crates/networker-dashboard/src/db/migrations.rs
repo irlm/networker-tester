@@ -758,6 +758,18 @@ VALUES ('a20', 'us', 'alethedash-vm', 'https://alethedash.com', '20.42.8.158',
 ON CONFLICT DO NOTHING;
 "#;
 
+/// V027: Benchmark log persistence table (stored in logs database via app routing).
+const V027_BENCHMARK_LOG: &str = r#"
+CREATE TABLE IF NOT EXISTS benchmark_log (
+    id          BIGSERIAL     NOT NULL PRIMARY KEY,
+    config_id   UUID          NOT NULL,
+    testbed_id  UUID,
+    line        TEXT          NOT NULL,
+    logged_at   TIMESTAMPTZ   NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_benchmark_log_config ON benchmark_log(config_id, logged_at);
+"#;
+
 /// V026: System health tracking table.
 const V026_SYSTEM_HEALTH: &str = r#"
 CREATE TABLE IF NOT EXISTS system_health (
@@ -1604,5 +1616,40 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
         tracing::info!("V026 migration complete");
     }
 
+    // V027: Benchmark log table (core DB copy — canonical copy lives in logs DB via run_logs)
+    let row = client
+        .query_opt("SELECT version FROM _migrations WHERE version = 27", &[])
+        .await?;
+    if row.is_none() {
+        tracing::info!("Applying V027: benchmark_log table...");
+        client.batch_execute(V027_BENCHMARK_LOG).await?;
+        client
+            .execute(
+                "INSERT INTO _migrations (version) VALUES (27) ON CONFLICT DO NOTHING",
+                &[],
+            )
+            .await?;
+        tracing::info!("V027 migration complete");
+    }
+
+    Ok(())
+}
+
+/// Run migrations for the logs database (only log-specific tables).
+pub async fn run_logs(client: &Client) -> anyhow::Result<()> {
+    let row = client
+        .query_opt("SELECT version FROM _migrations WHERE version = 27", &[])
+        .await?;
+    if row.is_none() {
+        tracing::info!("Applying V027 to logs DB: benchmark_log table...");
+        client.batch_execute(V027_BENCHMARK_LOG).await?;
+        client
+            .execute(
+                "INSERT INTO _migrations (version) VALUES (27) ON CONFLICT DO NOTHING",
+                &[],
+            )
+            .await?;
+        tracing::info!("V027 logs migration complete");
+    }
     Ok(())
 }

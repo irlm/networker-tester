@@ -42,7 +42,6 @@ pub struct StatusPayload {
 #[derive(Debug, Deserialize)]
 pub struct LogPayload {
     pub config_id: Uuid,
-    #[allow(dead_code)]
     pub testbed_id: Option<Uuid>,
     pub lines: Vec<String>,
 }
@@ -142,6 +141,22 @@ async fn callback_log(
     Json(payload): Json<LogPayload>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let _claims = extract_callback_token(&headers, &state.jwt_secret)?;
+
+    // Persist log lines to logs database
+    let client = state.logs_db.get().await.map_err(|e| {
+        tracing::error!(error = %e, "Logs DB pool error in callback_log");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    if let Err(e) = crate::db::benchmark_log::insert_batch(
+        &client,
+        &payload.config_id,
+        payload.testbed_id.as_ref(),
+        &payload.lines,
+    )
+    .await
+    {
+        tracing::error!(error = %e, "Failed to persist benchmark log lines");
+    }
 
     // Broadcast log lines to dashboard WebSocket clients
     let _ = state.events_tx.send(

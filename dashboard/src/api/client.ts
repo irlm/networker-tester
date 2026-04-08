@@ -691,6 +691,11 @@ export const api = {
       projectUrl(projectId, `benchmark-configs/${configId}/progress`)
     ),
 
+  getBenchmarkLogs: (projectId: string, configId: string) =>
+    request<{ lines: string[] }>(
+      projectUrl(projectId, `benchmark-configs/${configId}/logs`)
+    ),
+
   getGroupedLeaderboard: async (group?: string): Promise<import('./types').GroupedLeaderboard> => {
     const params = group ? `?group=${encodeURIComponent(group)}` : '';
     return request<import('./types').GroupedLeaderboard>(`/leaderboard/grouped${params}`);

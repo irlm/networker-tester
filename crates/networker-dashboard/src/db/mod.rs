@@ -1,5 +1,6 @@
 pub mod agents;
 pub mod benchmark_configs;
+pub mod benchmark_log;
 pub mod benchmark_presets;
 pub mod benchmark_progress;
 pub mod benchmark_testbeds;
