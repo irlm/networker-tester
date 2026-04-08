@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.22.3] - 2026-04-08
+
+### Fixed
+
+- **Axum route panic**: 10 route registrations still used axum 0.7 `:param` syntax after the 0.8 upgrade, causing a panic at startup on `/benchmarks/callback/cancelled/:config_id`
+
+---
+
 ## [0.22.2] - 2026-04-08
 
 ### Fixed

@@ -312,7 +312,7 @@ pub fn project_router(state: Arc<AppState>) -> Router {
         .route("/benchmarks/presets", get(list_benchmark_presets_scoped))
         .route("/benchmarks/presets", post(save_benchmark_preset_scoped))
         .route(
-            "/benchmarks/presets/:preset_id",
+            "/benchmarks/presets/{preset_id}",
             axum::routing::delete(delete_benchmark_preset_scoped),
         )
         .with_state(state)
