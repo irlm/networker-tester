@@ -1942,6 +1942,7 @@ mod tests {
             progress_config_id: None,
             progress_testbed_id: None,
             benchmark_language: None,
+            log_db_url: None,
         }
     }
 

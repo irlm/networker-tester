@@ -40,7 +40,7 @@ async fn batch_writer_inserts_to_db() {
         let entry = networker_log::LogEntry::new(
             "batch-test",
             networker_log::Level::Info,
-            &format!("Test entry {i}"),
+            format!("Test entry {i}"),
         );
         handle
             .sender()
