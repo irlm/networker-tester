@@ -148,7 +148,22 @@ async fn main() -> anyhow::Result<()> {
 
     let cfg = config::DashboardConfig::from_env()?;
     let db_pool = db::create_pool(&cfg.database_url).await?;
-    let logs_pool = db::create_logs_pool(&cfg.logs_database_url).await?;
+
+    // Try to connect to separate logs database; fall back to core pool if unavailable.
+    // This allows running before the database split migration (migrate-to-split.sh).
+    let logs_pool = match db::create_logs_pool(&cfg.logs_database_url).await {
+        Ok(pool) => {
+            tracing::info!("Using separate logs database");
+            pool
+        }
+        Err(e) => {
+            tracing::warn!(
+                "Logs database unavailable ({e:#}), using core database for logs. \
+                 Run scripts/migrate-to-split.sh to enable database separation."
+            );
+            db::create_logs_pool(&cfg.database_url).await?
+        }
+    };
 
     // Run migrations
     {
