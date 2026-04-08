@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.22.2] - 2026-04-08
+
+### Fixed
+
+- **Logs database fallback**: Dashboard now falls back to the main database if the separate `networker_logs` database is unavailable, instead of crashing at startup. This allows deployment without running the migration script first.
+
+---
+
 ## [0.22.1] - 2026-04-08
 
 ### Changed
