@@ -5,6 +5,7 @@ use std::io::Write;
 /// DASHBOARD_JWT_SECRET is required — startup fails with a helpful message if unset.
 pub struct DashboardConfig {
     pub database_url: String,
+    pub logs_database_url: String,
     pub jwt_secret: String,
     pub admin_password: String,
     pub admin_email: Option<String>,
@@ -107,10 +108,21 @@ impl DashboardConfig {
             .and_then(|s| hex::decode(&s).ok())
             .and_then(|v| <[u8; 32]>::try_from(v).ok());
 
+        let database_url = std::env::var("DASHBOARD_DB_URL").unwrap_or_else(|_| {
+            "postgres://networker:networker@localhost:5432/networker_core".into()
+        });
+
+        let logs_database_url = std::env::var("DASHBOARD_LOGS_DB_URL").unwrap_or_else(|_| {
+            if let Some(pos) = database_url.rfind('/') {
+                format!("{}/networker_logs", &database_url[..pos])
+            } else {
+                database_url.replace("networker_core", "networker_logs")
+            }
+        });
+
         Ok(Self {
-            database_url: std::env::var("DASHBOARD_DB_URL").unwrap_or_else(|_| {
-                "postgres://networker:networker@localhost:5432/networker_dashboard".into()
-            }),
+            database_url,
+            logs_database_url,
             jwt_secret,
             admin_password,
             admin_email,
