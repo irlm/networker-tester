@@ -2158,6 +2158,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "networker-log"
+version = "0.22.4"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "deadpool-postgres",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-postgres",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "networker-tester"
 version = "0.22.4"
 dependencies = [

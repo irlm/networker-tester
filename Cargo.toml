@@ -5,6 +5,7 @@ members = [
     "crates/networker-common",
     "crates/networker-dashboard",
     "crates/networker-agent",
+    "crates/networker-log",
 ]
 resolver = "2"
 exclude = ["benchmarks/orchestrator", "benchmarks/metrics-agent"]
