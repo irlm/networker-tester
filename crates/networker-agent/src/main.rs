@@ -3,13 +3,12 @@ mod executor;
 mod heartbeat;
 mod ws_client;
 
-use tracing_subscriber::EnvFilter;
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
-        .init();
+    let _log_guard = networker_log::LogBuilder::new("agent")
+        .with_console(networker_log::Stream::Stderr)
+        .init()
+        .await?;
 
     // Install rustls crypto provider before any TLS operations
     let _ = rustls::crypto::ring::default_provider().install_default();
