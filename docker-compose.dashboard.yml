@@ -4,15 +4,16 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: networker_dashboard
+      POSTGRES_DB: networker_core
       POSTGRES_USER: networker
       POSTGRES_PASSWORD: networker
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./scripts/init-logs-db.sql:/docker-entrypoint-initdb.d/01-logs-db.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U networker -d networker_dashboard"]
+      test: ["CMD-SHELL", "pg_isready -U networker -d networker_core"]
       interval: 5s
       timeout: 5s
       retries: 5
