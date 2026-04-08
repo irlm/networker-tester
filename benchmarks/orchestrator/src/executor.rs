@@ -136,10 +136,11 @@ async fn deploy_app_language(vm: &VmInfo, language: &str, proxy: &str) -> Result
         language,
         vm.ip
     );
-    // Server reads BENCH_API_TOKEN from /opt/bench/.api-token at startup
+    // Server reads BENCH_API_TOKEN from /opt/bench/.api-token at startup.
+    // LOG_FORMAT=json enables structured JSON logging on the server process.
     let cmd = format!(
-        "export DEBIAN_FRONTEND=noninteractive BENCH_API_TOKEN=$(cat /opt/bench/.api-token 2>/dev/null) && curl -fsSL https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh | sudo -E bash -s -- --benchmark-server {} --benchmark-proxy {} 2>&1",
-        language, proxy
+        "export DEBIAN_FRONTEND=noninteractive LOG_FORMAT=json LOG_SERVICE={} BENCH_API_TOKEN=$(cat /opt/bench/.api-token 2>/dev/null) && curl -fsSL https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh | sudo -E bash -s -- --benchmark-server {} --benchmark-proxy {} 2>&1",
+        language, language, proxy
     );
     ssh::ssh_exec(&vm.ip, &cmd)
         .await
@@ -1028,6 +1029,9 @@ async fn execute_testbed_application(
                 languages_failed += 1;
             }
 
+            // Collect server logs before stopping
+            collect_server_logs(vm, language, callback, &testbed.testbed_id).await;
+
             // Stop language server before next language
             stop_app_language(vm).await;
         }
@@ -1387,6 +1391,41 @@ async fn teardown_testbed(testbed: &TestbedConfig, callback: &Arc<CallbackClient
         }
         Err(e) => {
             tracing::warn!("Failed to look up VM {} for teardown: {e}", vm_name);
+        }
+    }
+}
+
+/// Collect recent log output from the benchmark server on the VM.
+/// Reads the last 100 lines from the server process output and forwards
+/// them via the log callback so they appear in the dashboard live log.
+async fn collect_server_logs(
+    vm: &VmInfo,
+    language: &str,
+    callback: &CallbackClient,
+    testbed_id: &str,
+) {
+    // Read last 100 lines from systemd journal or log file
+    let cmd = "journalctl -u bench-server --no-pager -n 100 --output=cat 2>/dev/null || \
+               tail -100 /opt/bench/server.log 2>/dev/null || \
+               echo '(no server logs found)'";
+    match ssh::ssh_exec(&vm.ip, cmd).await {
+        Ok(output) => {
+            let lines: Vec<String> = output
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .map(|l| format!("[{language}] {l}"))
+                .collect();
+            if !lines.is_empty() {
+                tracing::info!(
+                    language,
+                    line_count = lines.len(),
+                    "Collected server logs from VM"
+                );
+                log_callback(callback, testbed_id, lines).await;
+            }
+        }
+        Err(e) => {
+            tracing::debug!("Failed to collect server logs for {language}: {e:#}");
         }
     }
 }

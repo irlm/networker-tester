@@ -109,8 +109,8 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or(9998);
     let log_level = cli.log_level.or(f.log_level);
 
-    let mut builder = networker_log::LogBuilder::new("endpoint")
-        .with_console(networker_log::Stream::Stderr);
+    let mut builder =
+        networker_log::LogBuilder::new("endpoint").with_console(networker_log::Stream::Stderr);
     if let Some(ref filter) = log_level {
         builder = builder.with_filter(filter);
     }

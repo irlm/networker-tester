@@ -64,8 +64,8 @@ async fn main() -> anyhow::Result<()> {
     cfg.validate()?;
 
     // Always write logs to stderr to keep stdout clean for JSON output
-    let mut builder = networker_log::LogBuilder::new("tester")
-        .with_console(networker_log::Stream::Stderr);
+    let mut builder =
+        networker_log::LogBuilder::new("tester").with_console(networker_log::Stream::Stderr);
     if let Some(ref filter) = cfg.log_level {
         builder = builder.with_filter(filter);
     }

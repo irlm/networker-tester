@@ -70,12 +70,33 @@ public class Server {
 
     private static final Logger logger = Logger.getLogger("bench-api");
 
+    static class JsonFormatter extends java.util.logging.Formatter {
+        @Override
+        public String format(java.util.logging.LogRecord record) {
+            String level = record.getLevel().getName().toLowerCase();
+            if ("severe".equals(level)) level = "error";
+            if ("warning".equals(level)) level = "warn";
+            return String.format(
+                "{\"ts\":\"%s\",\"service\":\"java\",\"level\":\"%s\",\"message\":\"%s\"}\n",
+                java.time.Instant.ofEpochMilli(record.getMillis()).toString(),
+                level,
+                record.getMessage().replace("\"", "\\\"")
+            );
+        }
+    }
+
     static {
         // Direct all logging to stderr with configurable level via LOG_LEVEL env var.
         Logger rootLogger = Logger.getLogger("");
         for (var h : rootLogger.getHandlers()) rootLogger.removeHandler(h);
         ConsoleHandler handler = new ConsoleHandler(); // writes to stderr by default
         handler.setLevel(Level.ALL);
+
+        String logFormat = System.getenv("LOG_FORMAT");
+        if ("json".equals(logFormat)) {
+            handler.setFormatter(new JsonFormatter());
+        }
+
         rootLogger.addHandler(handler);
 
         String envLevel = System.getenv("LOG_LEVEL");

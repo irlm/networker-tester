@@ -15,16 +15,33 @@ const PORT = parseInt(process.env.PORT || "8443", 10);
 const BENCH_API_TOKEN = process.env.BENCH_API_TOKEN || "";
 
 // ---------------------------------------------------------------------------
-// Structured stderr logger (LOG_LEVEL env var: error, warn, info, debug)
+// Structured stderr logger (LOG_LEVEL, LOG_FORMAT env vars)
+// LOG_FORMAT=json  → structured JSON lines matching bench schema
+// LOG_FORMAT unset → human-readable text prefixed with timestamp + level
 // ---------------------------------------------------------------------------
 const LOG_LEVEL = (process.env.LOG_LEVEL || "info").toLowerCase();
+const LOG_FORMAT = (process.env.LOG_FORMAT || "text").toLowerCase();
+const LOG_SERVICE = process.env.LOG_SERVICE || "nodejs";
 const LOG_LEVELS = { error: 0, warn: 1, info: 2, debug: 3 };
 const currentLogLevel = LOG_LEVELS[LOG_LEVEL] !== undefined ? LOG_LEVELS[LOG_LEVEL] : 2;
+
+function _logWrite(level, message, fields) {
+  if (LOG_FORMAT === "json") {
+    var entry = { ts: new Date().toISOString(), service: LOG_SERVICE, level: level, message: message };
+    if (fields && Object.keys(fields).length > 0) entry.fields = fields;
+    process.stderr.write(JSON.stringify(entry) + "\n");
+  } else {
+    var prefix = "[" + new Date().toISOString() + "] " + level.toUpperCase();
+    var extra = (fields && Object.keys(fields).length > 0) ? " " + JSON.stringify(fields) : "";
+    process.stderr.write(prefix + " " + message + extra + "\n");
+  }
+}
+
 const log = {
-  error: function () { if (currentLogLevel >= 0) process.stderr.write(JSON.stringify({ level: "error", ts: new Date().toISOString(), msg: Array.prototype.join.call(arguments, " ") }) + "\n"); },
-  warn:  function () { if (currentLogLevel >= 1) process.stderr.write(JSON.stringify({ level: "warn",  ts: new Date().toISOString(), msg: Array.prototype.join.call(arguments, " ") }) + "\n"); },
-  info:  function () { if (currentLogLevel >= 2) process.stderr.write(JSON.stringify({ level: "info",  ts: new Date().toISOString(), msg: Array.prototype.join.call(arguments, " ") }) + "\n"); },
-  debug: function () { if (currentLogLevel >= 3) process.stderr.write(JSON.stringify({ level: "debug", ts: new Date().toISOString(), msg: Array.prototype.join.call(arguments, " ") }) + "\n"); },
+  error: function (msg, fields) { if (currentLogLevel >= 0) _logWrite("error", msg, fields); },
+  warn:  function (msg, fields) { if (currentLogLevel >= 1) _logWrite("warn",  msg, fields); },
+  info:  function (msg, fields) { if (currentLogLevel >= 2) _logWrite("info",  msg, fields); },
+  debug: function (msg, fields) { if (currentLogLevel >= 3) _logWrite("debug", msg, fields); },
 };
 
 // ---------------------------------------------------------------------------
@@ -44,19 +61,19 @@ function loadBenchData() {
     try {
       const raw = fs.readFileSync(candidates[i], "utf8");
       BENCH_DATA = JSON.parse(raw);
-      log.info(
-        "Loaded bench-data.json from " + candidates[i] +
-        " (version " + BENCH_DATA._version +
-        ", " + (BENCH_DATA.users || []).length + " users" +
-        ", " + (BENCH_DATA.search_corpus || []).length + " corpus" +
-        ", " + (BENCH_DATA.timeseries || []).length + " timeseries)"
-      );
+      log.info("Loaded bench-data.json", {
+        path: candidates[i],
+        version: BENCH_DATA._version,
+        users: (BENCH_DATA.users || []).length,
+        corpus: (BENCH_DATA.search_corpus || []).length,
+        timeseries: (BENCH_DATA.timeseries || []).length,
+      });
       return;
     } catch (_e) {
       // try next path
     }
   }
-  log.warn("bench-data.json not found, falling back to per-language PRNG");
+  log.warn("bench-data.json not found, falling back to per-language PRNG", {});
 }
 
 loadBenchData();
@@ -779,9 +796,9 @@ server.on("stream", onStream);
 server.on("request", onRequest);
 
 server.on("error", (err) => {
-  log.error("server error:", err.message);
+  log.error("Server error", { error: err.message });
 });
 
 server.listen(PORT, () => {
-  log.info("nodejs reference-api listening on https://0.0.0.0:" + PORT);
+  log.info("nodejs reference-api listening", { addr: "https://0.0.0.0:" + PORT });
 });

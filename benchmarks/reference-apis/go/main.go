@@ -93,7 +93,14 @@ func main() {
 	case "error":
 		logLevel = slog.LevelError
 	}
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})))
+	if strings.ToLower(os.Getenv("LOG_FORMAT")) == "json" {
+		slog.SetDefault(slog.New(
+			slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel}).
+				WithAttrs([]slog.Attr{slog.String("service", "go")}),
+		))
+	} else {
+		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})))
+	}
 
 	loadBenchData()
 
