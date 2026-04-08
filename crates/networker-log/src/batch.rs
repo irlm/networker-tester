@@ -121,11 +121,7 @@ async fn writer_loop(
 // ── Flush helpers ─────────────────────────────────────────────────────────────
 
 /// Flush `buffer` to the database, update metrics, and clear the buffer.
-async fn flush(
-    buffer: &mut Vec<LogEntry>,
-    pool: &Pool,
-    metrics: &Arc<LogPipelineMetrics>,
-) {
+async fn flush(buffer: &mut Vec<LogEntry>, pool: &Pool, metrics: &Arc<LogPipelineMetrics>) {
     if buffer.is_empty() {
         return;
     }

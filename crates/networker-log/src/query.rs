@@ -85,10 +85,7 @@ pub async fn list(
     // ── Build dynamic WHERE clause ────────────────────────────────────────────
     // $1 = from, $2 = to are always present.
     let mut conditions: Vec<String> = vec!["ts >= $1".into(), "ts <= $2".into()];
-    let mut params: Vec<Box<dyn ToSql + Sync + Send>> = vec![
-        Box::new(q.from),
-        Box::new(q.to),
-    ];
+    let mut params: Vec<Box<dyn ToSql + Sync + Send>> = vec![Box::new(q.from), Box::new(q.to)];
 
     // Helper: next positional placeholder
     let mut next_idx = 3usize;
@@ -150,8 +147,10 @@ pub async fn list(
 
     // ── COUNT(*) ──────────────────────────────────────────────────────────────
     let count_sql = format!("SELECT COUNT(*) FROM service_log WHERE {where_clause}");
-    let param_refs: Vec<&(dyn ToSql + Sync)> =
-        params.iter().map(|p| p.as_ref() as &(dyn ToSql + Sync)).collect();
+    let param_refs: Vec<&(dyn ToSql + Sync)> = params
+        .iter()
+        .map(|p| p.as_ref() as &(dyn ToSql + Sync))
+        .collect();
 
     let count_row = client
         .query_one(&count_sql, &param_refs)
@@ -170,8 +169,10 @@ pub async fn list(
     params.push(Box::new(q.limit));
     params.push(Box::new(q.offset));
 
-    let param_refs: Vec<&(dyn ToSql + Sync)> =
-        params.iter().map(|p| p.as_ref() as &(dyn ToSql + Sync)).collect();
+    let param_refs: Vec<&(dyn ToSql + Sync)> = params
+        .iter()
+        .map(|p| p.as_ref() as &(dyn ToSql + Sync))
+        .collect();
 
     let rows = client
         .query(&select_sql, &param_refs)

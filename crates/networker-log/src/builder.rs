@@ -25,9 +25,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context as _;
-use deadpool_postgres::{Config as PoolConfig, ManagerConfig, Pool, RecyclingMethod, Runtime};
 use deadpool_postgres::PoolConfig as DpPoolConfig;
 use deadpool_postgres::Timeouts;
+use deadpool_postgres::{Config as PoolConfig, ManagerConfig, Pool, RecyclingMethod, Runtime};
 use tokio_postgres::NoTls;
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::util::SubscriberInitExt as _;
@@ -137,14 +137,10 @@ impl LogBuilder {
     /// printed to stderr and the builder falls back to console-only logging.
     pub async fn init(self) -> anyhow::Result<LogGuard> {
         // ── 1. EnvFilter ──────────────────────────────────────────────────────
-        let default_directive = self
-            .env_filter
-            .as_deref()
-            .unwrap_or("info")
-            .to_owned();
+        let default_directive = self.env_filter.as_deref().unwrap_or("info").to_owned();
 
-        let filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new(default_directive));
+        let filter =
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_directive));
 
         // ── 2. Metrics ────────────────────────────────────────────────────────
         let metrics: Arc<LogPipelineMetrics> = Arc::new(LogPipelineMetrics::default());
@@ -153,7 +149,14 @@ impl LogBuilder {
         let mut batch_handle: Option<BatchHandle> = None;
 
         let db_layer: Option<DbLayer> = if let Some(ref url) = self.db_url {
-            match setup_db(url, &self.service, Arc::clone(&metrics), self.context.clone()).await {
+            match setup_db(
+                url,
+                &self.service,
+                Arc::clone(&metrics),
+                self.context.clone(),
+            )
+            .await
+            {
                 Ok((layer, handle)) => {
                     batch_handle = Some(handle);
                     Some(layer)
@@ -208,17 +211,14 @@ async fn setup_db(
     context: HashMap<String, String>,
 ) -> anyhow::Result<(DbLayer, BatchHandle)> {
     // ── Build pool ────────────────────────────────────────────────────────────
-    let pg_config: tokio_postgres::Config = url
-        .parse()
-        .context("invalid PostgreSQL connection URL")?;
+    let pg_config: tokio_postgres::Config =
+        url.parse().context("invalid PostgreSQL connection URL")?;
 
     let mut pool_cfg = PoolConfig::new();
     pool_cfg.host = pg_config.get_hosts().first().and_then(|h| match h {
         tokio_postgres::config::Host::Tcp(host) => Some(host.clone()),
         #[cfg(unix)]
-        tokio_postgres::config::Host::Unix(path) => {
-            path.to_str().map(str::to_owned)
-        }
+        tokio_postgres::config::Host::Unix(path) => path.to_str().map(str::to_owned),
     });
     pool_cfg.port = pg_config.get_ports().first().copied();
     pool_cfg.user = pg_config.get_user().map(str::to_owned);

@@ -92,9 +92,7 @@ pub async fn ensure_hypertable(client: &Client) -> Result<(), tokio_postgres::Er
         .await;
 
     if let Err(ref e) = result {
-        eprintln!(
-            "networker-log: create_hypertable warning (may already exist): {e}"
-        );
+        eprintln!("networker-log: create_hypertable warning (may already exist): {e}");
     }
 
     // Add a 7-day retention policy (idempotent via if_not_exists).
@@ -107,9 +105,7 @@ pub async fn ensure_hypertable(client: &Client) -> Result<(), tokio_postgres::Er
         .await;
 
     if let Err(ref e) = retention {
-        eprintln!(
-            "networker-log: add_retention_policy warning: {e}"
-        );
+        eprintln!("networker-log: add_retention_policy warning: {e}");
     }
 
     Ok(())

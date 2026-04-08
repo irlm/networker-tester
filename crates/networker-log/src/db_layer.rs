@@ -150,15 +150,11 @@ where
             });
 
         // project_id
-        let project_id: Option<String> = self
-            .context
-            .get("project_id")
-            .cloned()
-            .or_else(|| {
-                extra_fields
-                    .remove("project_id")
-                    .and_then(|v| v.as_str().map(str::to_owned))
-            });
+        let project_id: Option<String> = self.context.get("project_id").cloned().or_else(|| {
+            extra_fields
+                .remove("project_id")
+                .and_then(|v| v.as_str().map(str::to_owned))
+        });
 
         // trace_id
         let trace_id: Option<Uuid> = self
@@ -193,9 +189,7 @@ where
         match self.tx.try_send(entry) {
             Ok(()) => {}
             Err(mpsc::error::TrySendError::Full(_)) => {
-                self.metrics
-                    .entries_dropped
-                    .fetch_add(1, Ordering::Relaxed);
+                self.metrics.entries_dropped.fetch_add(1, Ordering::Relaxed);
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
                 // Channel gone — silently discard.
