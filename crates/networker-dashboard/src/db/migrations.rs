@@ -111,8 +111,13 @@ ALTER TABLE dash_user ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT 
 "#;
 
 /// V005 migration: Add packet_capture_json column to TestRun for tshark capture summaries.
+/// Guarded with DO $$ block — TestRun may not exist on fresh dashboard-only installs.
 const V005_PACKET_CAPTURE: &str = r#"
-ALTER TABLE TestRun ADD COLUMN IF NOT EXISTS packet_capture_json JSONB;
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'testrun') THEN
+    ALTER TABLE TestRun ADD COLUMN IF NOT EXISTS packet_capture_json JSONB;
+  END IF;
+END $$;
 "#;
 
 /// V006 migration: Extend schedule table for scheduler feature.
@@ -1325,27 +1330,16 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
             .batch_execute(
                 "ALTER TABLE job ADD COLUMN IF NOT EXISTS tls_profile_run_id UUID;
 
-                 CREATE TABLE IF NOT EXISTS TlsProfileRun (
-                     Id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                     ProjectId UUID NOT NULL REFERENCES project(project_id),
-                     JobId UUID REFERENCES job(job_id),
-                     Host VARCHAR(255) NOT NULL,
-                     Port INT NOT NULL DEFAULT 443,
-                     TargetKind VARCHAR(50) NOT NULL DEFAULT 'external',
-                     CoverageLevel VARCHAR(50) NOT NULL DEFAULT 'standard',
-                     SummaryStatus VARCHAR(50) NOT NULL DEFAULT 'pending',
-                     SummaryScore INT,
-                     ProfileJson JSONB,
-                     StartedAt TIMESTAMPTZ NOT NULL DEFAULT now(),
-                     FinishedAt TIMESTAMPTZ,
-                     CreatedBy UUID REFERENCES dash_user(user_id)
-                 );
+                 -- TlsProfileRun is created by the tester crate when TLS profiles
+                 -- are used. Skip creation here to avoid FK conflicts with V025
+                 -- project_id migration on fresh dashboard-only installs.
 
-                 CREATE INDEX IF NOT EXISTS ix_tlsprofilerun_project
-                     ON TlsProfileRun (ProjectId, StartedAt DESC);
-
-                 ALTER TABLE testrun ADD COLUMN IF NOT EXISTS concurrency INTEGER NOT NULL DEFAULT 1;
-                 ALTER TABLE testrun ADD COLUMN IF NOT EXISTS timeoutms BIGINT NOT NULL DEFAULT 30000;",
+                 DO $$ BEGIN
+                   IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'testrun') THEN
+                     ALTER TABLE testrun ADD COLUMN IF NOT EXISTS concurrency INTEGER NOT NULL DEFAULT 1;
+                     ALTER TABLE testrun ADD COLUMN IF NOT EXISTS timeoutms BIGINT NOT NULL DEFAULT 30000;
+                   END IF;
+                 END $$;",
             )
             .await?;
         client
@@ -1421,8 +1415,14 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
         tracing::info!("Applying V019 drop benchmark pipeline FK constraints...");
         client
             .batch_execute(
-                "ALTER TABLE benchmarkrun DROP CONSTRAINT IF EXISTS fk_benchmarkrun_testrun;
-                 ALTER TABLE benchmarksample DROP CONSTRAINT IF EXISTS fk_benchmarksample_attempt;",
+                "DO $$ BEGIN
+                   IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'benchmarkrun') THEN
+                     ALTER TABLE benchmarkrun DROP CONSTRAINT IF EXISTS fk_benchmarkrun_testrun;
+                   END IF;
+                   IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'benchmarksample') THEN
+                     ALTER TABLE benchmarksample DROP CONSTRAINT IF EXISTS fk_benchmarksample_attempt;
+                   END IF;
+                 END $$;",
             )
             .await?;
         client
