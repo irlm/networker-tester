@@ -76,8 +76,8 @@ async fn list_url_tests_scoped(
 pub fn project_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/url-tests", get(list_url_tests_scoped))
-        .route("/url-tests/:run_id", get(get_url_test))
-        .route("/url-tests/:run_id/sections", get(get_url_test_sections))
+        .route("/url-tests/{run_id}", get(get_url_test))
+        .route("/url-tests/{run_id}/sections", get(get_url_test_sections))
         .with_state(state)
 }
 

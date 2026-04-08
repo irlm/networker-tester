@@ -27,12 +27,10 @@ pub async fn run(cfg: &AgentConfig) -> anyhow::Result<()> {
 
     // Large test runs (many modes × runs) produce multi-MB JSON in JobComplete.
     // Default tungstenite limits (64KB frame, 64KB message) silently drop these.
-    let ws_config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig {
-        max_message_size: Some(64 * 1024 * 1024), // 64 MB receive
-        max_frame_size: Some(64 * 1024 * 1024),   // 64 MB frame
-        max_write_buffer_size: 64 * 1024 * 1024,  // 64 MB write buffer
-        ..Default::default()
-    };
+    let mut ws_config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default();
+    ws_config.max_message_size = Some(64 * 1024 * 1024); // 64 MB receive
+    ws_config.max_frame_size = Some(64 * 1024 * 1024); // 64 MB frame
+    ws_config.max_write_buffer_size = 64 * 1024 * 1024; // 64 MB write buffer
     let (ws_stream, _) =
         tokio_tungstenite::connect_async_with_config(&url, Some(ws_config), false).await?;
     tracing::info!("Connected to dashboard");
@@ -51,7 +49,7 @@ pub async fn run(cfg: &AgentConfig) -> anyhow::Result<()> {
     // Forward outbound messages to WebSocket
     let sink_handle = tokio::spawn(async move {
         while let Some(text) = rx.recv().await {
-            if ws_sink.send(Message::Text(text)).await.is_err() {
+            if ws_sink.send(Message::Text(text.into())).await.is_err() {
                 break;
             }
         }

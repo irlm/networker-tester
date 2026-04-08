@@ -42,7 +42,7 @@ tokio-native-tls = { version = "0.3", optional = true }
 
 # --- Headless browser (optional feature) ---
 chromiumoxide = { version = "0.9", optional = true }
-sha2          = { version = "0.10" }
+sha2          = { version = "0.11" }
 base64        = { version = "0.22", optional = true }
 
 # --- SQL Server (optional) ---
@@ -79,7 +79,7 @@ cpu-time.workspace = true
 # --- utilities ---
 futures  = "0.3"
 libc     = "0.2"
-reqwest  = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest  = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 
 [features]
 default = ["http3", "db-mssql", "browser"]

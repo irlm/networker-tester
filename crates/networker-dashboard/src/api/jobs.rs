@@ -263,8 +263,8 @@ async fn cancel_job_scoped(
 pub fn project_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/jobs", get(list_jobs_scoped).post(create_job_scoped))
-        .route("/jobs/:job_id", get(get_job))
-        .route("/jobs/:job_id/cancel", post(cancel_job_scoped))
+        .route("/jobs/{job_id}", get(get_job))
+        .route("/jobs/{job_id}/cancel", post(cancel_job_scoped))
         .with_state(state)
 }
 

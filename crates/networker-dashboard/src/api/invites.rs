@@ -6,6 +6,7 @@ use axum::{
     Json, Router,
 };
 use chrono::{Duration, Utc};
+use rand::RngExt;
 use serde::Deserialize;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -66,7 +67,7 @@ async fn create_invite(
 
     // Generate 32 random bytes as base64url token
     let mut raw_bytes = [0u8; 32];
-    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut raw_bytes);
+    rand::rng().fill(&mut raw_bytes);
     let raw_token =
         base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, raw_bytes);
 
@@ -199,7 +200,7 @@ async fn revoke_invite(
 pub fn project_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/invites", get(list_invites).post(create_invite))
-        .route("/invites/:invite_id", delete(revoke_invite))
+        .route("/invites/{invite_id}", delete(revoke_invite))
         .with_state(state)
 }
 
@@ -241,7 +242,7 @@ struct AcceptInviteRequest {
     current_password: Option<String>,
 }
 
-/// POST /invite/:token/accept — accept an invite
+/// POST /invite/{token}/accept — accept an invite
 async fn accept_invite(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
@@ -442,7 +443,7 @@ async fn accept_invite(
 /// Public router for invite resolution and acceptance (no auth).
 pub fn public_router(state: Arc<AppState>) -> Router {
     Router::new()
-        .route("/invite/:token", get(resolve_invite))
-        .route("/invite/:token/accept", post(accept_invite))
+        .route("/invite/{token}", get(resolve_invite))
+        .route("/invite/{token}/accept", post(accept_invite))
         .with_state(state)
 }

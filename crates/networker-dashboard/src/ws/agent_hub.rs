@@ -169,13 +169,13 @@ async fn handle_agent_socket(
         agent_name,
     };
     if let Ok(text) = protocol::encode(&welcome) {
-        let _ = ws_sink.send(ws::Message::Text(text)).await;
+        let _ = ws_sink.send(ws::Message::Text(text.into())).await;
     }
 
     // Forward outbound messages (control → agent)
     let sink_task = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
-            if ws_sink.send(ws::Message::Text(msg)).await.is_err() {
+            if ws_sink.send(ws::Message::Text(msg.into())).await.is_err() {
                 break;
             }
         }

@@ -369,11 +369,11 @@ pub fn project_router(state: Arc<AppState>) -> Router {
             get(get_deployment).delete(delete_deployment_scoped),
         )
         .route(
-            "/deployments/:deployment_id/stop",
+            "/deployments/{deployment_id}/stop",
             post(stop_deployment_scoped),
         )
-        .route("/deployments/:deployment_id/check", post(check_deployment))
-        .route("/deployments/:deployment_id/update", post(update_endpoint))
+        .route("/deployments/{deployment_id}/check", post(check_deployment))
+        .route("/deployments/{deployment_id}/update", post(update_endpoint))
         .with_state(state)
 }
 
