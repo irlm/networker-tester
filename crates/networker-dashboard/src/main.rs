@@ -88,6 +88,8 @@ pub struct AppState {
     pub log_metrics: std::sync::Arc<networker_log::LogPipelineMetrics>,
     // Run tester-side TLS profile migrations only once per dashboard process.
     pub tls_profile_db_migrated: Mutex<bool>,
+    /// PostgreSQL URL for the logs database (passed to orchestrator workers).
+    pub logs_database_url: String,
 }
 
 #[tokio::main]
@@ -223,6 +225,7 @@ async fn main() -> anyhow::Result<()> {
         invite_expiry_days: cfg.invite_expiry_days,
         log_metrics: _log_guard.metrics().clone(),
         tls_profile_db_migrated: Mutex::new(false),
+        logs_database_url: cfg.logs_database_url.clone(),
     });
 
     let cors = {

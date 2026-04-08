@@ -25,6 +25,9 @@ pub struct DashboardBenchmarkConfig {
     /// Callback token for authentication.
     #[serde(default)]
     pub callback_token: Option<String>,
+    /// PostgreSQL URL for the logs database (enables structured log shipping).
+    #[serde(default)]
+    pub logs_db_url: Option<String>,
     /// Benchmark type: "fullstack" (raw) or "application" (reverse proxy).
     #[serde(default = "default_benchmark_type")]
     pub benchmark_type: String,

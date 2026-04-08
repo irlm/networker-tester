@@ -170,6 +170,7 @@ async fn poll_and_run(
         "callback_token": callback_token,
         "created_by_email": config.created_by.map(|u| u.to_string()),
         "project_id": config.project_id.to_string(),
+        "logs_db_url": state.logs_database_url,
     });
     // RR-009: Write with restricted permissions (0600) — config contains callback JWT
     {
