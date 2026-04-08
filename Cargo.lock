@@ -2100,6 +2100,7 @@ dependencies = [
  "jsonwebtoken",
  "libc",
  "networker-common",
+ "networker-log",
  "networker-tester",
  "rand 0.10.0",
  "regex",

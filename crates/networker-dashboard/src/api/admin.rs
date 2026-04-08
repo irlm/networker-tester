@@ -1,7 +1,6 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    response::IntoResponse,
     routing::{delete, get, post},
     Json, Router,
 };
@@ -83,18 +82,14 @@ async fn workspace_usage(
 struct LogsQuery {
     level: Option<String>,
     search: Option<String>,
-    limit: Option<usize>,
+    limit: Option<i64>,
 }
 
 async fn system_logs(
     State(state): State<Arc<AppState>>,
     req: axum::extract::Request,
-) -> impl IntoResponse {
-    let user = match extract_admin(&req) {
-        Ok(u) => u,
-        Err(s) => return Err(s),
-    };
-    let _ = user;
+) -> Result<Json<networker_log::query::LogQueryResponse>, StatusCode> {
+    extract_admin(&req)?;
 
     let params: LogsQuery = Query::try_from_uri(req.uri())
         .map(|Query(q)| q)
@@ -104,12 +99,38 @@ async fn system_logs(
             limit: None,
         });
 
-    let limit = params.limit.unwrap_or(200);
-    let entries = state
-        .log_buffer
-        .recent(limit, params.level.as_deref(), params.search.as_deref());
+    let client = state.logs_db.get().await.map_err(|e| {
+        tracing::error!(error = %e, "DB pool error in system_logs");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
-    Ok(Json(entries))
+    let to = chrono::Utc::now();
+    let from = to - chrono::Duration::hours(1);
+
+    let min_level = params
+        .level
+        .as_deref()
+        .and_then(|l| l.parse::<networker_log::Level>().ok())
+        .map(|lv| lv.as_db());
+
+    let q = networker_log::query::LogQuery {
+        service: None,
+        min_level,
+        config_id: None,
+        project_id: None,
+        search: params.search.clone(),
+        from,
+        to,
+        limit: params.limit.unwrap_or(200),
+        offset: 0,
+    };
+
+    let result = networker_log::query::list(&client, &q).await.map_err(|e| {
+        tracing::error!(error = %e, "Failed to query logs");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    Ok(Json(result))
 }
 
 async fn suspend_workspace(
