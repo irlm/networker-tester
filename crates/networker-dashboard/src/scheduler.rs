@@ -18,6 +18,7 @@ pub fn spawn(state: Arc<AppState>) {
         let mut last_invite_cleanup = std::time::Instant::now();
         let mut last_approval_cleanup = std::time::Instant::now();
         let mut last_inactivity_check: Option<std::time::Instant> = None;
+        let mut last_health_check = std::time::Instant::now();
 
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
@@ -72,6 +73,12 @@ pub fn spawn(state: Arc<AppState>) {
             if should_check_inactivity {
                 check_workspace_inactivity(&state).await;
                 last_inactivity_check = Some(std::time::Instant::now());
+            }
+
+            // Hourly system health checks
+            if last_health_check.elapsed() > std::time::Duration::from_secs(3600) {
+                last_health_check = std::time::Instant::now();
+                run_health_checks(&state).await;
             }
         }
     });
@@ -597,6 +604,153 @@ async fn check_workspace_inactivity(state: &crate::AppState) {
     match crate::db::command_approvals::expire_stale(&client).await {
         Ok(n) if n > 0 => tracing::info!("Expired {n} stale command approvals"),
         _ => {}
+    }
+}
+
+async fn run_health_checks(state: &Arc<AppState>) {
+    // Check core DB connectivity
+    let core_status = match state.db.get().await {
+        Ok(client) => match client.query_one("SELECT 1 as ok", &[]).await {
+            Ok(_) => ("green", None::<String>),
+            Err(e) => ("red", Some(format!("Query failed: {e}"))),
+        },
+        Err(e) => ("red", Some(format!("Pool error: {e}"))),
+    };
+
+    // Check logs DB connectivity
+    let logs_status = match state.logs_db.get().await {
+        Ok(client) => match client.query_one("SELECT 1 as ok", &[]).await {
+            Ok(_) => ("green", None::<String>),
+            Err(e) => ("red", Some(format!("Query failed: {e}"))),
+        },
+        Err(e) => ("red", Some(format!("Pool error: {e}"))),
+    };
+
+    // Check core DB size
+    let core_size: (&str, Option<String>, Option<String>) = match state.db.get().await {
+        Ok(client) => {
+            match client
+                .query_one("SELECT pg_database_size(current_database()) as size", &[])
+                .await
+            {
+                Ok(row) => {
+                    let bytes: i64 = row.get("size");
+                    let gb = bytes as f64 / 1_073_741_824.0;
+                    let status = if gb > 5.0 {
+                        "red"
+                    } else if gb > 3.0 {
+                        "yellow"
+                    } else {
+                        "green"
+                    };
+                    (status, Some(format!("{gb:.2} GB")), None)
+                }
+                Err(e) => ("red", None, Some(format!("Query failed: {e}"))),
+            }
+        }
+        Err(e) => ("red", None, Some(format!("Pool error: {e}"))),
+    };
+
+    // Check logs DB size
+    let logs_size: (&str, Option<String>, Option<String>) = match state.logs_db.get().await {
+        Ok(client) => {
+            match client
+                .query_one("SELECT pg_database_size(current_database()) as size", &[])
+                .await
+            {
+                Ok(row) => {
+                    let bytes: i64 = row.get("size");
+                    let gb = bytes as f64 / 1_073_741_824.0;
+                    let status = if gb > 2.0 {
+                        "red"
+                    } else if gb > 1.0 {
+                        "yellow"
+                    } else {
+                        "green"
+                    };
+                    (status, Some(format!("{gb:.2} GB")), None)
+                }
+                Err(e) => ("red", None, Some(format!("Query failed: {e}"))),
+            }
+        }
+        Err(e) => ("red", None, Some(format!("Pool error: {e}"))),
+    };
+
+    // Check logs retention (oldest row in perf_log)
+    let retention_status: (&str, Option<String>, Option<String>) = match state.logs_db.get().await {
+        Ok(client) => {
+            match client
+                .query_opt("SELECT MIN(logged_at) as oldest FROM perf_log", &[])
+                .await
+            {
+                Ok(Some(row)) => {
+                    let oldest: Option<chrono::DateTime<chrono::Utc>> = row.get("oldest");
+                    match oldest {
+                        Some(ts) => {
+                            let age_days = (chrono::Utc::now() - ts).num_days();
+                            let status = if age_days > 8 {
+                                "red"
+                            } else if age_days > 7 {
+                                "yellow"
+                            } else {
+                                "green"
+                            };
+                            (status, Some(format!("{age_days} days")), None)
+                        }
+                        None => ("green", Some("empty".into()), None),
+                    }
+                }
+                Ok(None) => ("green", Some("empty".into()), None),
+                Err(e) => ("red", None, Some(format!("Query failed: {e}"))),
+            }
+        }
+        Err(e) => ("red", None, Some(format!("Pool error: {e}"))),
+    };
+
+    // Persist results to core DB
+    if let Ok(client) = state.db.get().await {
+        let checks: Vec<(&str, &str, Option<&str>, Option<&str>)> = vec![
+            ("core_db", core_status.0, None, core_status.1.as_deref()),
+            ("logs_db", logs_status.0, None, logs_status.1.as_deref()),
+            (
+                "core_db_size",
+                core_size.0,
+                core_size.1.as_deref(),
+                core_size.2.as_deref(),
+            ),
+            (
+                "logs_db_size",
+                logs_size.0,
+                logs_size.1.as_deref(),
+                logs_size.2.as_deref(),
+            ),
+            (
+                "logs_retention",
+                retention_status.0,
+                retention_status.1.as_deref(),
+                retention_status.2.as_deref(),
+            ),
+        ];
+
+        for (name, status, value, message) in &checks {
+            if let Err(e) =
+                crate::db::system_health::insert(&client, name, status, *value, *message, None)
+                    .await
+            {
+                tracing::error!(error = %e, check = name, "Failed to persist health check");
+            }
+        }
+
+        if let Err(e) = crate::db::system_health::cleanup(&client).await {
+            tracing::error!(error = %e, "Failed to cleanup old health records");
+        }
+    }
+
+    if core_status.0 == "red" {
+        tracing::warn!("Health check FAILED: core_db — {:?}", core_status.1);
+    }
+    if logs_status.0 == "red" {
+        tracing::warn!("Health check FAILED: logs_db — {:?}", logs_status.1);
     }
 }
 
