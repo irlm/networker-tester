@@ -132,6 +132,9 @@ mod tests {
         let version = env!("CARGO_PKG_VERSION");
         assert!(!version.is_empty(), "CARGO_PKG_VERSION must not be empty");
         // Version should look like semver (at least one dot)
-        assert!(version.contains('.'), "version should be semver-like: {version}");
+        assert!(
+            version.contains('.'),
+            "version should be semver-like: {version}"
+        );
     }
 }

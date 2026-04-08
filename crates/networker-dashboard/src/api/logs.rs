@@ -78,10 +78,7 @@ async fn query_logs(
         .from
         .unwrap_or_else(|| to - chrono::Duration::hours(1));
 
-    let limit = params
-        .limit
-        .unwrap_or(DEFAULT_LIMIT)
-        .clamp(1, MAX_LIMIT);
+    let limit = params.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let offset = params.offset.unwrap_or(0).max(0);
 
     let min_level = params
@@ -229,7 +226,11 @@ mod tests {
 
         // `from` must be approximately 1 hour before `to`
         let delta = to - from;
-        assert_eq!(delta.num_seconds(), 3600, "from should be exactly 1h before to");
+        assert_eq!(
+            delta.num_seconds(),
+            3600,
+            "from should be exactly 1h before to"
+        );
     }
 
     // ── Test 2: limit clamped to MAX_LIMIT ───────────────────────────────────

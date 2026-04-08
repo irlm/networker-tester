@@ -15,14 +15,8 @@ use crate::AppState;
 #[derive(Serialize)]
 #[serde(untagged)]
 enum SmokeTestResponse {
-    Ok {
-        ok: bool,
-        roundtrip_ms: u64,
-    },
-    Err {
-        ok: bool,
-        error: String,
-    },
+    Ok { ok: bool, roundtrip_ms: u64 },
+    Err { ok: bool, error: String },
 }
 
 /// POST /api/admin/smoke-test — platform admin only.
@@ -69,10 +63,7 @@ async fn smoke_test(
 
     // Always attempt cleanup
     let _ = client
-        .execute(
-            "DELETE FROM service_log WHERE message = $1",
-            &[&marker],
-        )
+        .execute("DELETE FROM service_log WHERE message = $1", &[&marker])
         .await;
 
     let roundtrip_ms = started.elapsed().as_millis() as u64;
