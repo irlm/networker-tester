@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.22.4] - 2026-04-08
+
+### Fixed
+
+- **Windows-only language filtering**: `csharp-net48` no longer sent to Linux testbeds (frontend + orchestrator safety net)
+- **Orchestrator stderr visibility**: stderr now persisted to config `error_message` and logged in message format (not structured fields)
+
+---
+
 ## [0.22.3] - 2026-04-08
 
 ### Fixed
