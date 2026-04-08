@@ -181,3 +181,121 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/logs/pipeline-status", get(pipeline_status))
         .with_state(state)
 }
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use networker_log::{LogPipelineMetrics, MetricsSnapshot};
+    use std::sync::atomic::Ordering;
+
+    // ── Test 1: LogsQueryParams defaults ─────────────────────────────────────
+
+    /// Verify that when all optional fields are absent, the handler logic
+    /// computes the expected defaults: limit=200, offset=0, from=~1h ago, to=~now.
+    #[test]
+    fn test_default_query_params() {
+        let params = LogsQueryParams {
+            service: None,
+            level: None,
+            config_id: None,
+            project_id: None,
+            search: None,
+            from: None,
+            to: None,
+            limit: None,
+            offset: None,
+        };
+
+        // Replicate the handler's default-resolution logic
+        let before = Utc::now();
+        let to = params.to.unwrap_or_else(Utc::now);
+        let from = params
+            .from
+            .unwrap_or_else(|| to - chrono::Duration::hours(1));
+        let after = Utc::now();
+
+        let limit = params.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+        let offset = params.offset.unwrap_or(0).max(0);
+
+        assert_eq!(limit, 200);
+        assert_eq!(offset, 0);
+
+        // `to` must be between the two timestamps captured around the call
+        assert!(to >= before, "to should be >= before");
+        assert!(to <= after, "to should be <= after");
+
+        // `from` must be approximately 1 hour before `to`
+        let delta = to - from;
+        assert_eq!(delta.num_seconds(), 3600, "from should be exactly 1h before to");
+    }
+
+    // ── Test 2: limit clamped to MAX_LIMIT ───────────────────────────────────
+
+    /// Verify that a limit value larger than MAX_LIMIT is clamped to 1000.
+    #[test]
+    fn test_limit_clamped_to_max() {
+        let oversized: i64 = 99_999;
+        let clamped = oversized.clamp(1, MAX_LIMIT);
+        assert_eq!(clamped, MAX_LIMIT);
+        assert_eq!(MAX_LIMIT, 1000);
+
+        // Also verify that a value of exactly MAX_LIMIT passes through unchanged
+        let exact = MAX_LIMIT.clamp(1, MAX_LIMIT);
+        assert_eq!(exact, MAX_LIMIT);
+
+        // And that a value below the floor is clamped to 1
+        let zero: i64 = 0;
+        let clamped_low = zero.clamp(1, MAX_LIMIT);
+        assert_eq!(clamped_low, 1);
+    }
+
+    // ── Test 3: PipelineStatusResponse shape from a LogPipelineMetrics ───────
+
+    /// Build a `LogPipelineMetrics`, set some values, take a snapshot, map it
+    /// to `PipelineStatusResponse`, and verify the JSON shape + status field.
+    #[test]
+    fn test_pipeline_status_response_shape() {
+        let metrics = LogPipelineMetrics::default();
+        metrics.entries_written.store(500, Ordering::Relaxed);
+        metrics.entries_dropped.store(2, Ordering::Relaxed);
+        metrics.flush_count.store(20, Ordering::Relaxed);
+        metrics.flush_errors.store(0, Ordering::Relaxed);
+        metrics.last_flush_ms.store(150, Ordering::Relaxed);
+        metrics.queue_depth.store(3, Ordering::Relaxed);
+
+        let snap: MetricsSnapshot = metrics.snapshot();
+        let status = snap.status();
+
+        // drop_ratio = 2/502 ≈ 0.4 % — below 1 % degraded threshold
+        assert_eq!(status, "healthy");
+
+        // Build the response the same way the handler does
+        let resp = PipelineStatusResponse {
+            entries_written: snap.entries_written,
+            entries_dropped: snap.entries_dropped,
+            flush_count: snap.flush_count,
+            flush_errors: snap.flush_errors,
+            last_flush_ms: snap.last_flush_ms,
+            queue_depth: snap.queue_depth,
+            status,
+        };
+
+        assert_eq!(resp.entries_written, 500);
+        assert_eq!(resp.entries_dropped, 2);
+        assert_eq!(resp.flush_count, 20);
+        assert_eq!(resp.flush_errors, 0);
+        assert_eq!(resp.last_flush_ms, 150);
+        assert_eq!(resp.queue_depth, 3);
+        assert_eq!(resp.status, "healthy");
+
+        // Verify JSON serialisation contains expected keys and values
+        let json = serde_json::to_string(&resp).expect("serialise PipelineStatusResponse");
+        assert!(json.contains("\"entries_written\":500"), "json: {json}");
+        assert!(json.contains("\"entries_dropped\":2"), "json: {json}");
+        assert!(json.contains("\"status\":\"healthy\""), "json: {json}");
+        assert!(json.contains("\"queue_depth\":3"), "json: {json}");
+    }
+}
