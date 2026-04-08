@@ -575,7 +575,7 @@ async fn get_benchmark_progress(
     req: Request,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let _ctx = request_extension::<ProjectContext>(&req, "ProjectContext")?;
-    let client = state.db.get().await.map_err(|e| {
+    let client = state.logs_db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error in get_benchmark_progress");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
