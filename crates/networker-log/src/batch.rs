@@ -148,9 +148,7 @@ async fn flush(buffer: &mut Vec<LogEntry>, pool: &Pool, metrics: &Arc<LogPipelin
                     metrics.last_flush_ms.store(elapsed, Ordering::Relaxed);
                 }
                 Err(e) => {
-                    eprintln!(
-                        "networker-log: flush retry failed ({count} entries dropped): {e}"
-                    );
+                    eprintln!("networker-log: flush retry failed ({count} entries dropped): {e}");
                     metrics.entries_dropped.fetch_add(count, Ordering::Relaxed);
                     metrics.flush_errors.fetch_add(1, Ordering::Relaxed);
                 }

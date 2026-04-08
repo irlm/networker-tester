@@ -135,7 +135,10 @@ pub async fn list(
     }
 
     if let Some(ref search) = q.search {
-        let escaped = search.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+        let escaped = search
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
         push_param(
             &mut params,
             &mut conditions,
