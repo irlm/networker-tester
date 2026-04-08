@@ -368,7 +368,7 @@ pub fn project_router(state: Arc<AppState>) -> Router {
             get(list_share_links).post(create_share_link),
         )
         .route(
-            "/share-links/:link_id",
+            "/share-links/{link_id}",
             put(update_share_link).delete(delete_share_link),
         )
         .with_state(state)

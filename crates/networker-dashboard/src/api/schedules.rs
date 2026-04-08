@@ -340,7 +340,7 @@ pub fn project_router(state: Arc<AppState>) -> Router {
             get(list_schedules_scoped).post(create_schedule_scoped),
         )
         .route(
-            "/schedules/:schedule_id",
+            "/schedules/{schedule_id}",
             get(get_schedule_scoped)
                 .put(update_schedule_scoped)
                 .delete(delete_schedule_scoped),

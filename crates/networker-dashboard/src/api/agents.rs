@@ -217,7 +217,7 @@ pub fn project_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/agents", get(list_agents_scoped).post(create_agent_scoped))
         .route(
-            "/agents/:agent_id",
+            "/agents/{agent_id}",
             get(delete_agent_scoped).delete(delete_agent_scoped),
         )
         .with_state(state)

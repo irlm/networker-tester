@@ -235,7 +235,7 @@ pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/members", get(list_members).post(add_member))
         .route(
-            "/members/:member_id",
+            "/members/{member_id}",
             put(update_member_role).delete(remove_member),
         )
         .with_state(state)
