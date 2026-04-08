@@ -82,6 +82,9 @@ export function BenchmarkProgressPage() {
   // Per-mode progress from progress endpoint
   const [langProgress, setLangProgress] = useState<BenchmarkLanguageProgress[]>([]);
 
+  // Persisted logs fetched from API (survives page reload)
+  const [savedLogs, setSavedLogs] = useState<string[]>([]);
+
   // Live data from WebSocket
   const live = useLiveStore(
     useCallback((s) => (configId ? s.benchmarks[configId] : undefined) ?? EMPTY_LIVE, [configId])
@@ -142,6 +145,18 @@ export function BenchmarkProgressPage() {
     return () => clearInterval(interval);
   }, [configId, projectId]);
 
+  // Fetch persisted logs from API on mount (handles page reload — WS logs are ephemeral)
+  useEffect(() => {
+    if (!configId || !projectId) return;
+    api.getBenchmarkLogs(projectId, configId)
+      .then((data: { lines?: string[] }) => {
+        if (data.lines && data.lines.length > 0) {
+          setSavedLogs(data.lines);
+        }
+      })
+      .catch(() => {});
+  }, [configId, projectId]);
+
   // Elapsed time timer
   useEffect(() => {
     const isActive = config?.status === 'running' || config?.status === 'provisioning' || config?.status === 'deploying';
@@ -153,12 +168,23 @@ export function BenchmarkProgressPage() {
     return () => clearInterval(interval);
   }, [config?.status, config?.started_at]);
 
+  // Combine persisted logs (loaded on mount) with live WS logs (streamed during session)
+  const allLogs = useMemo(() => {
+    if (savedLogs.length === 0) return live.logs;
+    if (live.logs.length === 0) return savedLogs;
+    // Saved logs are the base; live logs may overlap, so deduplicate by skipping
+    // live lines that match the tail of saved logs
+    const savedSet = new Set(savedLogs.slice(-live.logs.length));
+    const newLive = live.logs.filter(l => !savedSet.has(l));
+    return [...savedLogs, ...newLive];
+  }, [savedLogs, live.logs]);
+
   // Auto-scroll log container
   useEffect(() => {
     if (autoScroll && logContainerRef.current) {
       logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
     }
-  }, [live.logs, autoScroll]);
+  }, [allLogs, autoScroll]);
 
   const handleLogScroll = () => {
     if (!logContainerRef.current) return;
@@ -182,15 +208,16 @@ export function BenchmarkProgressPage() {
   const isActive = ['running', 'provisioning', 'deploying', 'pending'].includes(effectiveStatus);
   const isDone = ['completed', 'failed', 'cancelled'].includes(effectiveStatus);
 
-  // Poll per-mode progress while benchmark is active
+  // Fetch per-mode progress: once on mount (for completed benchmarks), poll while active
   useEffect(() => {
-    if (!configId || !projectId || !isActive) return;
+    if (!configId || !projectId) return;
     const fetchProgress = () => {
       api.getBenchmarkProgress(projectId, configId)
         .then(data => setLangProgress(data.progress ?? []))
         .catch(() => {});
     };
     fetchProgress();
+    if (!isActive) return; // completed: fetch once, no polling
     const interval = setInterval(fetchProgress, 5000);
     return () => clearInterval(interval);
   }, [configId, projectId, isActive]);
@@ -421,7 +448,7 @@ export function BenchmarkProgressPage() {
       )}
 
       {/* Activity indicator — shown when running but no logs streaming */}
-      {isActive && effectiveStatus === 'running' && live.logs.length === 0 && savedResults.length === 0 && (
+      {isActive && effectiveStatus === 'running' && allLogs.length === 0 && savedResults.length === 0 && (
         <div className="mb-6 border border-gray-800/50 rounded p-3 bg-gray-900/20">
           <div className="flex items-center gap-2 text-xs text-gray-500">
             <span className="inline-block w-1.5 h-1.5 rounded-full bg-cyan-500 animate-pulse" />
@@ -681,7 +708,7 @@ export function BenchmarkProgressPage() {
           onScroll={handleLogScroll}
           className="bg-[var(--bg-base)] border border-gray-800 rounded-lg p-4 h-[400px] overflow-y-auto font-mono text-xs leading-5"
         >
-          {live.logs.length === 0 ? (
+          {allLogs.length === 0 ? (
             <div className="text-gray-600 space-y-2">
               {isActive ? (
                 <>
@@ -708,7 +735,7 @@ export function BenchmarkProgressPage() {
               )}
             </div>
           ) : (
-            live.logs.map((line, i) => (
+            allLogs.map((line, i) => (
               <div key={i} className="text-gray-300 whitespace-pre-wrap break-all">
                 {line}
               </div>
