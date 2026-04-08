@@ -758,6 +758,21 @@ VALUES ('a20', 'us', 'alethedash-vm', 'https://alethedash.com', '20.42.8.158',
 ON CONFLICT DO NOTHING;
 "#;
 
+/// V026: System health tracking table.
+const V026_SYSTEM_HEALTH: &str = r#"
+CREATE TABLE IF NOT EXISTS system_health (
+    id            BIGSERIAL     NOT NULL PRIMARY KEY,
+    checked_at    TIMESTAMPTZ   NOT NULL DEFAULT now(),
+    check_name    VARCHAR(50)   NOT NULL,
+    status        VARCHAR(10)   NOT NULL,
+    value         TEXT,
+    message       TEXT,
+    details       JSONB
+);
+CREATE INDEX IF NOT EXISTS ix_system_health_checked_at ON system_health(checked_at DESC);
+CREATE INDEX IF NOT EXISTS ix_system_health_name ON system_health(check_name, checked_at DESC);
+"#;
+
 /// V024b migration: Convert project_id from UUID to 14-char base36.
 ///
 /// This is a Rust-driven migration because the base36 encoding + Damm check
@@ -1570,6 +1585,23 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
         }
 
         tracing::info!("V025 migration complete");
+    }
+
+    // V026: System health table
+    let row = client
+        .query_opt("SELECT version FROM _migrations WHERE version = 26", &[])
+        .await?;
+
+    if row.is_none() {
+        tracing::info!("Applying V026: system_health table...");
+        client.batch_execute(V026_SYSTEM_HEALTH).await?;
+        client
+            .execute(
+                "INSERT INTO _migrations (version) VALUES (26) ON CONFLICT DO NOTHING",
+                &[],
+            )
+            .await?;
+        tracing::info!("V026 migration complete");
     }
 
     Ok(())
