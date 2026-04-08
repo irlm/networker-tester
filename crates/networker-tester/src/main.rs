@@ -63,21 +63,17 @@ async fn main() -> anyhow::Result<()> {
     let cfg = cli.resolve(config_file);
     cfg.validate()?;
 
-    let log_filter = if let Some(ref level) = cfg.log_level {
-        tracing_subscriber::EnvFilter::new(level)
-    } else {
-        tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
-    };
-    if cfg.json_stdout {
-        // When outputting JSON to stdout, send logs to stderr so stdout is clean
-        tracing_subscriber::fmt()
-            .with_env_filter(log_filter)
-            .with_writer(std::io::stderr)
-            .init();
-    } else {
-        tracing_subscriber::fmt().with_env_filter(log_filter).init();
+    // Always write logs to stderr to keep stdout clean for JSON output
+    let mut builder = networker_log::LogBuilder::new("tester")
+        .with_console(networker_log::Stream::Stderr);
+    if let Some(ref filter) = cfg.log_level {
+        builder = builder.with_filter(filter);
     }
+    // Optional DB logging (used when orchestrator passes --log-db-url)
+    if let Some(ref url) = cfg.log_db_url {
+        builder = builder.with_db(url);
+    }
+    let _log_guard = builder.init().await?;
 
     if cfg.url_test_url.is_some() {
         return run_url_test_cli(&cfg).await;

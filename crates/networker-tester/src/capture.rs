@@ -810,6 +810,7 @@ mod tests {
             save_to_sql: false,
             connection_string: None,
             log_level: None,
+            log_db_url: None,
             page_asset_sizes: vec![],
             page_preset_name: None,
             http_stacks: vec![],

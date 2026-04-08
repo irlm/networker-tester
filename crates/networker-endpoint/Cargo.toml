@@ -49,6 +49,9 @@ clap.workspace        = true
 anyhow.workspace      = true
 tracing.workspace     = true
 tracing-subscriber.workspace = true
+
+# --- structured logging ---
+networker-log = { path = "../networker-log" }
 chrono.workspace      = true
 bytes.workspace       = true
 
