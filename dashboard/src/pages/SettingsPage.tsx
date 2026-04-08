@@ -6,6 +6,7 @@ import { useToast } from '../hooks/useToast';
 import { useLiveStore } from '../stores/liveStore';
 import { useProject } from '../hooks/useProject';
 import { SettingsTabs } from '../components/common/SettingsTabs';
+import SystemHealthPanel from '../components/SystemHealthPanel';
 
 interface VersionInfo {
   dashboard_version: string;
@@ -151,6 +152,10 @@ export function SettingsPage() {
       </div>
 
       <SettingsTabs />
+
+      <div className="mb-8">
+        <SystemHealthPanel />
+      </div>
 
       {/* System Versions */}
       <div className="mb-8">

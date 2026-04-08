@@ -24,6 +24,7 @@ mod projects;
 mod runs;
 mod schedules;
 mod share_links;
+mod system_health;
 mod tls_profiles;
 mod update;
 mod url_tests;
@@ -56,6 +57,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(projects::router(state.clone()))
         .merge(events::router(state.clone()))
         .merge(admin::router(state.clone()))
+        .merge(system_health::router(state.clone()))
         .merge(bench_tokens::router(state.clone()))
         .merge(perf_log::router(state.clone()))
         .merge(leaderboard::protected_router(state.clone()))

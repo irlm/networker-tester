@@ -98,7 +98,7 @@ async fn ingest(
         }
     }
 
-    let mut client = state.db.get().await.map_err(|e| {
+    let mut client = state.logs_db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error in perf_log ingest");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
@@ -140,7 +140,7 @@ async fn list_logs(
             limit: None,
             offset: None,
         });
-    let client = state.db.get().await.map_err(|e| {
+    let client = state.logs_db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error in perf_log list");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
@@ -175,7 +175,7 @@ async fn get_stats(
     if !user.is_platform_admin {
         return Err(StatusCode::FORBIDDEN);
     }
-    let client = state.db.get().await.map_err(|e| {
+    let client = state.logs_db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error in perf_log stats");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;

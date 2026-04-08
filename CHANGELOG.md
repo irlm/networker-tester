@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.22.0] - 2026-04-07
+
+### Added
+- **Database separation**: split into `networker_core` (permanent, backed up) and `networker_logs` (7-day retention)
+- **Dual connection pools**: `DASHBOARD_DB_URL` for core, `DASHBOARD_LOGS_DB_URL` for logs
+- **System health monitoring**: `/api/system/health` endpoint, hourly automated checks, Settings page health panel
+- **V026 migration**: `system_health` table for tracking DB connectivity, size, retention, backup status
+- **Production migration script**: `scripts/migrate-to-split.sh` — one-time split from `networker_dashboard`
+- **Daily backup script**: `scripts/backup-daily.sh` — pg_dump to Azure Blob with GFS retention (30 daily, 12 monthly)
+- **Log retention script**: `scripts/retention-cleanup.sh` — batched 7-day cleanup for logs DB
+- **DR CLI**: `scripts/infra.sh` — restore production, create/destroy sandboxes with anonymized data
+- **Data anonymization**: `scripts/anonymize.sql` for sandbox environments
+- **Docker dual-database**: `docker-compose.dashboard.yml` now creates both `networker_core` and `networker_logs`
+
+---
+
 ## [0.21.1] - 2026-04-07
 
 ### Fixed

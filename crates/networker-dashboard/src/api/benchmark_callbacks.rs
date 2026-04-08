@@ -476,7 +476,7 @@ async fn callback_request_progress(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let _claims = extract_callback_token(&headers, &state.jwt_secret)?;
 
-    let client = state.db.get().await.map_err(|e| {
+    let client = state.logs_db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error in callback_request_progress");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
