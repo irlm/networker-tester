@@ -63,6 +63,17 @@ impl Level {
         self as i16
     }
 
+    /// Convert from a [`tracing::Level`] reference.
+    pub fn from_tracing(level: &tracing::Level) -> Self {
+        match *level {
+            tracing::Level::TRACE => Self::Trace,
+            tracing::Level::DEBUG => Self::Debug,
+            tracing::Level::INFO => Self::Info,
+            tracing::Level::WARN => Self::Warn,
+            tracing::Level::ERROR => Self::Error,
+        }
+    }
+
     /// Convert to the corresponding [`tracing::Level`].
     pub fn to_tracing(self) -> tracing::Level {
         match self {
