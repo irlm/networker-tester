@@ -30,7 +30,7 @@ tokio-postgres = { version = "0.7", features = ["with-chrono-0_4", "with-uuid-1"
 deadpool-postgres = { version = "0.14", features = ["serde"] }
 
 # Auth
-jsonwebtoken = "10"
+jsonwebtoken = { version = "10", features = ["rust_crypto"] }
 bcrypt       = "0.19"
 
 # HTTP client (for endpoint health checks / info fetches)
