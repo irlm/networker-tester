@@ -533,7 +533,7 @@ pub fn public_router(state: Arc<AppState>) -> Router {
             post(callback_request_progress),
         )
         .route(
-            "/benchmarks/callback/cancelled/:config_id",
+            "/benchmarks/callback/cancelled/{config_id}",
             get(callback_cancelled),
         )
         .with_state(state)

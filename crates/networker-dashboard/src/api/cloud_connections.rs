@@ -356,7 +356,7 @@ pub fn project_router(state: Arc<AppState>) -> Router {
             get(list_connections_scoped).post(create_connection_scoped),
         )
         .route(
-            "/cloud-connections/:id",
+            "/cloud-connections/{id}",
             get(get_connection)
                 .put(update_connection)
                 .delete(delete_connection),
