@@ -130,30 +130,54 @@ async fn flush(buffer: &mut Vec<LogEntry>, pool: &Pool, metrics: &Arc<LogPipelin
     let start = Instant::now();
     metrics.flush_count.fetch_add(1, Ordering::Relaxed);
 
-    match pool.get().await {
-        Ok(client) => match insert_batch(&client, buffer).await {
-            Ok(()) => {
-                let elapsed = start.elapsed().as_millis() as u64;
-                metrics.entries_written.fetch_add(count, Ordering::Relaxed);
-                metrics.last_flush_ms.store(elapsed, Ordering::Relaxed);
+    // Try to flush; on failure wait 100 ms and retry once before dropping.
+    let result = try_flush_once(pool, buffer).await;
+    match result {
+        Ok(()) => {
+            let elapsed = start.elapsed().as_millis() as u64;
+            metrics.entries_written.fetch_add(count, Ordering::Relaxed);
+            metrics.last_flush_ms.store(elapsed, Ordering::Relaxed);
+        }
+        Err(first_err) => {
+            eprintln!("networker-log: flush failed (will retry in 100 ms): {first_err}");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            match try_flush_once(pool, buffer).await {
+                Ok(()) => {
+                    let elapsed = start.elapsed().as_millis() as u64;
+                    metrics.entries_written.fetch_add(count, Ordering::Relaxed);
+                    metrics.last_flush_ms.store(elapsed, Ordering::Relaxed);
+                }
+                Err(e) => {
+                    eprintln!(
+                        "networker-log: flush retry failed ({count} entries dropped): {e}"
+                    );
+                    metrics.entries_dropped.fetch_add(count, Ordering::Relaxed);
+                    metrics.flush_errors.fetch_add(1, Ordering::Relaxed);
+                }
             }
-            Err(e) => {
-                eprintln!("networker-log: insert_batch failed ({count} entries dropped): {e}");
-                metrics.entries_dropped.fetch_add(count, Ordering::Relaxed);
-                metrics.flush_errors.fetch_add(1, Ordering::Relaxed);
-            }
-        },
-        Err(e) => {
-            eprintln!(
-                "networker-log: failed to acquire DB connection ({count} entries dropped): {e}"
-            );
-            metrics.entries_dropped.fetch_add(count, Ordering::Relaxed);
-            metrics.flush_errors.fetch_add(1, Ordering::Relaxed);
         }
     }
 
     metrics.queue_depth.store(0, Ordering::Relaxed);
     buffer.clear();
+}
+
+/// Attempt a single flush — acquire a connection and call [`insert_batch`].
+///
+/// Returns `Ok(())` on success, or the underlying error without touching metrics
+/// so the caller can decide whether to retry.
+async fn try_flush_once(
+    pool: &Pool,
+    buffer: &[LogEntry],
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let client = pool
+        .get()
+        .await
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+    insert_batch(&client, buffer)
+        .await
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+    Ok(())
 }
 
 /// Build and execute a single multi-row INSERT for all entries in `batch`.

@@ -135,18 +135,23 @@ pub async fn list(
     }
 
     if let Some(ref search) = q.search {
+        let escaped = search.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
         push_param(
             &mut params,
             &mut conditions,
             "message ILIKE {}",
-            Box::new(format!("%{}%", search)),
+            Box::new(format!("%{escaped}%")),
         );
     }
 
     let where_clause = conditions.join(" AND ");
 
     // ── COUNT(*) ──────────────────────────────────────────────────────────────
-    let count_sql = format!("SELECT COUNT(*) FROM service_log WHERE {where_clause}");
+    // Cap the scan at 10,001 rows so that large tables don't incur a full seq-scan.
+    // The truncated flag is set when total > 10,000.
+    let count_sql = format!(
+        "SELECT COUNT(*) FROM (SELECT 1 FROM service_log WHERE {where_clause} LIMIT 10001) sub"
+    );
     let param_refs: Vec<&(dyn ToSql + Sync)> = params
         .iter()
         .map(|p| p.as_ref() as &(dyn ToSql + Sync))

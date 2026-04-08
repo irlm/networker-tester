@@ -63,7 +63,10 @@ async fn smoke_test(
 
     // Always attempt cleanup
     let _ = client
-        .execute("DELETE FROM service_log WHERE message = $1", &[&marker])
+        .execute(
+            "DELETE FROM service_log WHERE message = $1 AND ts > now() - interval '1 minute'",
+            &[&marker],
+        )
         .await;
 
     let roundtrip_ms = started.elapsed().as_millis() as u64;

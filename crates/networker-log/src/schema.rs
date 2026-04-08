@@ -34,6 +34,17 @@ const CREATE_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS service_log_project_id_ts_idx
          ON service_log (project_id, ts DESC)
          WHERE project_id IS NOT NULL;",
+    "CREATE INDEX IF NOT EXISTS ix_service_log_trace
+         ON service_log (trace_id, ts DESC)
+         WHERE trace_id IS NOT NULL;",
+    // Best-effort: create a trigram index for fast ILIKE searches if pg_trgm is available.
+    "DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'pg_trgm') THEN
+    CREATE EXTENSION IF NOT EXISTS pg_trgm;
+    CREATE INDEX IF NOT EXISTS ix_service_log_message_trgm
+        ON service_log USING GIN (message gin_trgm_ops);
+  END IF;
+END $$;",
 ];
 
 /// Ensure the `service_log` table and all supporting indexes exist.
