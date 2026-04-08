@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use rand::RngExt;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tokio_postgres::Client;
@@ -116,7 +117,7 @@ pub async fn disable_user(client: &Client, user_id: &Uuid) -> anyhow::Result<boo
 fn hash_token(token: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(token.as_bytes());
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 /// Seed the admin user if no users exist.
@@ -278,9 +279,8 @@ pub async fn create_reset_token(
     let user_email: String = row.get("email");
 
     // Generate secure random token
-    use rand::Rng;
-    let token: String = rand::thread_rng()
-        .sample_iter(&rand::distributions::Alphanumeric)
+    let token: String = rand::rng()
+        .sample_iter(&rand::distr::Alphanumeric)
         .take(64)
         .map(char::from)
         .collect();
@@ -373,9 +373,8 @@ pub async fn invite_user(
     let user_id = Uuid::new_v4();
 
     // Generate setup token (stored hashed, 24h expiry)
-    use rand::Rng;
-    let token: String = rand::thread_rng()
-        .sample_iter(&rand::distributions::Alphanumeric)
+    let token: String = rand::rng()
+        .sample_iter(&rand::distr::Alphanumeric)
         .take(64)
         .map(char::from)
         .collect();

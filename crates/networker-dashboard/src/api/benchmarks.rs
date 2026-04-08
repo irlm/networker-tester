@@ -308,7 +308,7 @@ pub fn project_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/benchmarks", get(list_benchmarks_scoped))
         .route("/benchmarks/compare", post(compare_benchmarks_scoped))
-        .route("/benchmarks/:run_id", get(get_benchmark_scoped))
+        .route("/benchmarks/{run_id}", get(get_benchmark_scoped))
         .route("/benchmarks/presets", get(list_benchmark_presets_scoped))
         .route("/benchmarks/presets", post(save_benchmark_preset_scoped))
         .route(

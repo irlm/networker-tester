@@ -36,7 +36,7 @@ where
     })
 }
 
-/// GET /projects/:pid/benchmark-catalog
+/// GET /projects/{pid}/benchmark-catalog
 async fn list_catalog(
     State(state): State<Arc<AppState>>,
     req: Request,
@@ -57,7 +57,7 @@ async fn list_catalog(
     Ok(Json(vms))
 }
 
-/// POST /projects/:pid/benchmark-catalog
+/// POST /projects/{pid}/benchmark-catalog
 async fn register_vm(
     State(state): State<Arc<AppState>>,
     req: Request,
@@ -112,7 +112,7 @@ async fn register_vm(
     Ok(Json(serde_json::json!({"vm_id": vm_id})))
 }
 
-/// DELETE /projects/:pid/benchmark-catalog/:vm_id
+/// DELETE /projects/{pid}/benchmark-catalog/:vm_id
 async fn remove_vm(
     State(state): State<Arc<AppState>>,
     Path((_, vm_id)): Path<(String, Uuid)>,
@@ -158,7 +158,7 @@ async fn remove_vm(
     Ok(Json(serde_json::json!({"ok": true})))
 }
 
-/// POST /projects/:pid/benchmark-catalog/:vm_id/detect
+/// POST /projects/{pid}/benchmark-catalog/{vm_id}/detect
 /// SSH to the VM and detect which languages are deployed.
 async fn detect_languages(
     State(state): State<Arc<AppState>>,
@@ -294,7 +294,7 @@ async fn ssh_detect_languages(ip: &str, ssh_user: &str) -> Vec<String> {
 pub fn project_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/benchmark-catalog", get(list_catalog).post(register_vm))
-        .route("/benchmark-catalog/:vm_id", delete(remove_vm))
-        .route("/benchmark-catalog/:vm_id/detect", post(detect_languages))
+        .route("/benchmark-catalog/{vm_id}", delete(remove_vm))
+        .route("/benchmark-catalog/{vm_id}/detect", post(detect_languages))
         .with_state(state)
 }

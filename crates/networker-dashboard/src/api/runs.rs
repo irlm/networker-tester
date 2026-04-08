@@ -154,8 +154,8 @@ async fn list_runs_scoped(
 pub fn project_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/runs", get(list_runs_scoped))
-        .route("/runs/:run_id", get(get_run))
-        .route("/runs/:run_id/attempts", get(get_run_attempts))
+        .route("/runs/{run_id}", get(get_run))
+        .route("/runs/{run_id}/attempts", get(get_run_attempts))
         .with_state(state)
 }
 

@@ -104,6 +104,6 @@ async fn remove_rule(
 pub fn project_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/visibility-rules", get(list_rules).post(add_rule))
-        .route("/visibility-rules/:rule_id", delete(remove_rule))
+        .route("/visibility-rules/{rule_id}", delete(remove_rule))
         .with_state(state)
 }

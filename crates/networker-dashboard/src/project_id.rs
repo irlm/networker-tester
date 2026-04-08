@@ -287,8 +287,8 @@ impl ProjectId {
 
         // 1 random base36 char
         let r_digit: u8 = {
-            use rand::Rng;
-            rand::thread_rng().gen_range(0..36u8)
+            use rand::RngExt;
+            rand::rng().random_range(0..36u8)
         };
         let r_char = ALPHABET[r_digit as usize] as char;
 

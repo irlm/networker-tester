@@ -5,6 +5,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -275,9 +276,8 @@ async fn sso_init(
     };
 
     // Generate CSRF state token
-    use rand::Rng;
-    let state_value: String = rand::thread_rng()
-        .sample_iter(&rand::distributions::Alphanumeric)
+    let state_value: String = rand::rng()
+        .sample_iter(&rand::distr::Alphanumeric)
         .take(32)
         .map(char::from)
         .collect();
@@ -582,9 +582,8 @@ async fn sso_callback(
 
     // Generate a short-lived exchange code that the frontend can use to get a JWT.
     // This avoids putting the JWT in a URL query parameter.
-    use rand::Rng;
-    let exchange_code: String = rand::thread_rng()
-        .sample_iter(&rand::distributions::Alphanumeric)
+    let exchange_code: String = rand::rng()
+        .sample_iter(&rand::distr::Alphanumeric)
         .take(48)
         .map(char::from)
         .collect();

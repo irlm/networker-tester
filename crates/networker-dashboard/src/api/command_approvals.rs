@@ -177,6 +177,6 @@ pub fn project_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/command-approvals", get(list_pending))
         .route("/command-approvals/count", get(pending_count))
-        .route("/command-approvals/:aid", post(decide_approval))
+        .route("/command-approvals/{aid}", post(decide_approval))
         .with_state(state)
 }

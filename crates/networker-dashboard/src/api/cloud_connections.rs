@@ -361,7 +361,10 @@ pub fn project_router(state: Arc<AppState>) -> Router {
                 .put(update_connection)
                 .delete(delete_connection),
         )
-        .route("/cloud-connections/:id/validate", post(validate_connection))
+        .route(
+            "/cloud-connections/{id}/validate",
+            post(validate_connection),
+        )
         .with_state(state)
 }
 
