@@ -32,6 +32,14 @@ LOGS_DB_NAME="${LOGS_DB_NAME:-networker_logs}"
 RETAIN_DAYS="${RETAIN_DAYS:-7}"
 BATCH_SIZE="${BATCH_SIZE:-10000}"
 
+# Validate numeric inputs to prevent SQL injection
+case "$RETAIN_DAYS" in
+    ''|*[!0-9]*) echo "ERROR: RETAIN_DAYS must be a positive integer, got '$RETAIN_DAYS'"; exit 1 ;;
+esac
+case "$BATCH_SIZE" in
+    ''|*[!0-9]*) echo "ERROR: BATCH_SIZE must be a positive integer, got '$BATCH_SIZE'"; exit 1 ;;
+esac
+
 NOW_UTC=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 log() { echo "[$NOW_UTC] $*"; }
 

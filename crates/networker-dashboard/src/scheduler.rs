@@ -612,18 +612,30 @@ async fn run_health_checks(state: &Arc<AppState>) {
     let core_status = match state.db.get().await {
         Ok(client) => match client.query_one("SELECT 1 as ok", &[]).await {
             Ok(_) => ("green", None::<String>),
-            Err(e) => ("red", Some(format!("Query failed: {e}"))),
+            Err(e) => {
+                tracing::error!(error = %e, "Health check: core DB query failed");
+                ("red", Some("Connection error".into()))
+            }
         },
-        Err(e) => ("red", Some(format!("Pool error: {e}"))),
+        Err(e) => {
+            tracing::error!(error = %e, "Health check: core DB pool error");
+            ("red", Some("Pool unavailable".into()))
+        }
     };
 
     // Check logs DB connectivity
     let logs_status = match state.logs_db.get().await {
         Ok(client) => match client.query_one("SELECT 1 as ok", &[]).await {
             Ok(_) => ("green", None::<String>),
-            Err(e) => ("red", Some(format!("Query failed: {e}"))),
+            Err(e) => {
+                tracing::error!(error = %e, "Health check: logs DB query failed");
+                ("red", Some("Connection error".into()))
+            }
         },
-        Err(e) => ("red", Some(format!("Pool error: {e}"))),
+        Err(e) => {
+            tracing::error!(error = %e, "Health check: logs DB pool error");
+            ("red", Some("Pool unavailable".into()))
+        }
     };
 
     // Check core DB size
@@ -645,10 +657,16 @@ async fn run_health_checks(state: &Arc<AppState>) {
                     };
                     (status, Some(format!("{gb:.2} GB")), None)
                 }
-                Err(e) => ("red", None, Some(format!("Query failed: {e}"))),
+                Err(e) => {
+                    tracing::error!(error = %e, "Health check: DB query failed");
+                    ("red", None, Some("Query error".into()))
+                }
             }
         }
-        Err(e) => ("red", None, Some(format!("Pool error: {e}"))),
+        Err(e) => {
+            tracing::error!(error = %e, "Health check: DB pool error");
+            ("red", None, Some("Pool unavailable".into()))
+        }
     };
 
     // Check logs DB size
@@ -670,10 +688,16 @@ async fn run_health_checks(state: &Arc<AppState>) {
                     };
                     (status, Some(format!("{gb:.2} GB")), None)
                 }
-                Err(e) => ("red", None, Some(format!("Query failed: {e}"))),
+                Err(e) => {
+                    tracing::error!(error = %e, "Health check: DB query failed");
+                    ("red", None, Some("Query error".into()))
+                }
             }
         }
-        Err(e) => ("red", None, Some(format!("Pool error: {e}"))),
+        Err(e) => {
+            tracing::error!(error = %e, "Health check: DB pool error");
+            ("red", None, Some("Pool unavailable".into()))
+        }
     };
 
     // Check logs retention (oldest row in perf_log)
@@ -701,10 +725,16 @@ async fn run_health_checks(state: &Arc<AppState>) {
                     }
                 }
                 Ok(None) => ("green", Some("empty".into()), None),
-                Err(e) => ("red", None, Some(format!("Query failed: {e}"))),
+                Err(e) => {
+                    tracing::error!(error = %e, "Health check: DB query failed");
+                    ("red", None, Some("Query error".into()))
+                }
             }
         }
-        Err(e) => ("red", None, Some(format!("Pool error: {e}"))),
+        Err(e) => {
+            tracing::error!(error = %e, "Health check: DB pool error");
+            ("red", None, Some("Pool unavailable".into()))
+        }
     };
 
     // Persist results to core DB

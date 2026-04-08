@@ -157,14 +157,20 @@ cmd_restore() {
         --output-type none < /dev/null
 
     local backup_file
-    backup_file="$(grep -o '"file":"[^"]*"' "${tmp_dir}/last_backup.json" | cut -d'"' -f4)"
-    [ -n "$backup_file" ] || die "Could not parse backup filename from last_backup.json"
+    backup_file="$(grep -o '"blob_path":"[^"]*"' "${tmp_dir}/last_backup.json" | cut -d'"' -f4)"
+    [ -n "$backup_file" ] || die "Could not parse blob_path from last_backup.json"
+    # Sanitize: strip path traversal, validate filename format
+    backup_file="$(basename "$backup_file")"
+    case "$backup_file" in
+        *.sql.gz) ;; # valid
+        *) die "Invalid backup filename: $backup_file (expected *.sql.gz)" ;;
+    esac
     log "Latest backup: $backup_file"
 
     local dump_path="${tmp_dir}/${backup_file}"
     log "Downloading backup dump ..."
     azcopy copy \
-        "${BACKUP_BLOB_URL}/${backup_file}" \
+        "${BACKUP_BLOB_URL}/daily/${backup_file}" \
         "$dump_path" \
         --output-type none < /dev/null
 
@@ -421,13 +427,18 @@ cmd_sandbox() {
         --output-type none < /dev/null
 
     local backup_file
-    backup_file="$(grep -o '"file":"[^"]*"' "${tmp_dir}/last_backup.json" | cut -d'"' -f4)"
-    [ -n "$backup_file" ] || die "Could not parse backup filename from last_backup.json"
+    backup_file="$(grep -o '"blob_path":"[^"]*"' "${tmp_dir}/last_backup.json" | cut -d'"' -f4)"
+    [ -n "$backup_file" ] || die "Could not parse blob_path from last_backup.json"
+    backup_file="$(basename "$backup_file")"
+    case "$backup_file" in
+        *.sql.gz) ;; # valid
+        *) die "Invalid backup filename: $backup_file (expected *.sql.gz)" ;;
+    esac
 
     local dump_path="${tmp_dir}/${backup_file}"
     log "Downloading backup dump: $backup_file ..."
     azcopy copy \
-        "${BACKUP_BLOB_URL}/${backup_file}" \
+        "${BACKUP_BLOB_URL}/daily/${backup_file}" \
         "$dump_path" \
         --output-type none < /dev/null
 

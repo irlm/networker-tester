@@ -46,6 +46,21 @@ done
 log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*"; }
 die() { echo "ERROR: $*" >&2; exit 1; }
 
+# Validate identifiers to prevent SQL injection (alphanumeric + underscore only)
+validate_identifier() {
+    case "$1" in
+        *[!a-zA-Z0-9_]*) die "$2 contains invalid characters: '$1' (only a-z, 0-9, _ allowed)" ;;
+        '') die "$2 must not be empty" ;;
+    esac
+}
+validate_identifier "$DB_USER" "DB_USER"
+validate_identifier "$SOURCE_DB" "SOURCE_DB"
+validate_identifier "$CORE_DB" "CORE_DB"
+validate_identifier "$LOGS_DB" "LOGS_DB"
+case "$DB_PORT" in
+    ''|*[!0-9]*) die "DB_PORT must be a positive integer, got '$DB_PORT'" ;;
+esac
+
 # ── Wrapper functions (avoid unquoted command-string variables) ───────────────
 run_psql() {
     psql -h "$DB_HOST" -U "$DB_USER" -p "$DB_PORT" "$@" < /dev/null

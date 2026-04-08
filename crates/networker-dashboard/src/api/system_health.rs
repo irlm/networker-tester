@@ -1,6 +1,7 @@
 use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
 use std::sync::Arc;
 
+use crate::auth::AuthUser;
 use crate::AppState;
 
 pub fn router(state: Arc<AppState>) -> Router {
@@ -9,9 +10,20 @@ pub fn router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
+/// GET /api/system/health — admin-only system health overview.
 async fn get_health(
     State(state): State<Arc<AppState>>,
+    req: axum::extract::Request,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Admin-only: prevent information disclosure to non-admin users
+    let user = req
+        .extensions()
+        .get::<AuthUser>()
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    if !user.is_platform_admin {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
     let client = state.db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error in system health");
         StatusCode::INTERNAL_SERVER_ERROR
