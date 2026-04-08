@@ -2,6 +2,7 @@ pub mod batch;
 pub mod builder;
 pub mod db_layer;
 pub mod metrics;
+pub mod query;
 pub mod schema;
 pub mod types;
 
