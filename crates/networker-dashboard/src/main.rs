@@ -148,7 +148,16 @@ async fn main() -> anyhow::Result<()> {
 
     let cfg = config::DashboardConfig::from_env()?;
     let db_pool = db::create_pool(&cfg.database_url).await?;
-    let logs_pool = db::create_logs_pool(&cfg.logs_database_url).await?;
+    let logs_pool = match db::create_logs_pool(&cfg.logs_database_url).await {
+        Ok(pool) => pool,
+        Err(e) => {
+            tracing::warn!(
+                "Logs database unavailable ({e:#}), falling back to main database. \
+                 Run scripts/migrate-to-split.sh to create the logs database."
+            );
+            db::create_logs_pool(&cfg.database_url).await?
+        }
+    };
 
     // Run migrations
     {
