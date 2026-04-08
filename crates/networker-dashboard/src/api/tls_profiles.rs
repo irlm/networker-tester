@@ -60,7 +60,7 @@ async fn get_tls_profile(
 pub fn project_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/tls-profiles", get(list_tls_profiles))
-        .route("/tls-profiles/:run_id", get(get_tls_profile))
+        .route("/tls-profiles/{run_id}", get(get_tls_profile))
         .with_state(state)
 }
 

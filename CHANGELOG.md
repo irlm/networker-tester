@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.22.1] - 2026-04-08
+
+### Changed
+- **Dependency upgrades**: axum 0.8, reqwest 0.13, sha2 0.11, rand 0.10, jsonwebtoken 10, cron 0.16, hmac 0.13, sysinfo 0.38, tokio-tungstenite 0.29, rust_xlsxwriter 0.94, axum-server 0.8
+
+---
+
 ## [0.22.0] - 2026-04-07
 
 ### Added

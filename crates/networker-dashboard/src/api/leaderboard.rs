@@ -171,7 +171,7 @@ pub fn public_router(state: Arc<AppState>) -> Router {
         .route("/leaderboard", get(leaderboard))
         .route("/leaderboard/grouped", get(grouped_leaderboard))
         .route("/leaderboard/runs", get(list_runs))
-        .route("/leaderboard/runs/:run_id", get(get_run))
+        .route("/leaderboard/runs/{run_id}", get(get_run))
         .with_state(state)
 }
 

@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::auth::{AuthUser, ProjectContext, ProjectRole};
 use crate::AppState;
 
-/// GET /api/projects/:pid/members — list project members (project admin).
+/// GET /api/projects/{pid}/members — list project members (project admin).
 async fn list_members(
     State(state): State<Arc<AppState>>,
     req: axum::extract::Request,
@@ -51,7 +51,7 @@ pub struct AddMemberRequest {
     role: String,
 }
 
-/// POST /api/projects/:pid/members — add a member (project admin).
+/// POST /api/projects/{pid}/members — add a member (project admin).
 async fn add_member(
     State(state): State<Arc<AppState>>,
     req: axum::extract::Request,
@@ -135,7 +135,7 @@ pub struct UpdateMemberRoleRequest {
     role: String,
 }
 
-/// PUT /api/projects/:pid/members/:uid — update member role (project admin).
+/// PUT /api/projects/{pid}/members/:uid — update member role (project admin).
 async fn update_member_role(
     State(state): State<Arc<AppState>>,
     Path((_, member_id)): Path<(String, Uuid)>,
@@ -195,7 +195,7 @@ async fn update_member_role(
     }
 }
 
-/// DELETE /api/projects/:pid/members/:uid — remove member (project admin).
+/// DELETE /api/projects/{pid}/members/:uid — remove member (project admin).
 async fn remove_member(
     State(state): State<Arc<AppState>>,
     Path((_, member_id)): Path<(String, Uuid)>,

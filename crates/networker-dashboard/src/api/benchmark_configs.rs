@@ -98,7 +98,7 @@ where
     })
 }
 
-/// GET /projects/:pid/benchmark-configs
+/// GET /projects/{pid}/benchmark-configs
 async fn list_configs(
     State(state): State<Arc<AppState>>,
     Query(q): Query<ListQuery>,
@@ -125,7 +125,7 @@ async fn list_configs(
     Ok(Json(configs))
 }
 
-/// POST /projects/:pid/benchmark-configs
+/// POST /projects/{pid}/benchmark-configs
 async fn create_config(
     State(state): State<Arc<AppState>>,
     req: Request,
@@ -325,7 +325,7 @@ async fn create_config(
     }))
 }
 
-/// GET /projects/:pid/benchmark-configs/:id
+/// GET /projects/{pid}/benchmark-configs/:id
 async fn get_config(
     State(state): State<Arc<AppState>>,
     Path((_, config_id)): Path<(String, Uuid)>,
@@ -355,7 +355,7 @@ async fn get_config(
     Ok(Json(BenchmarkConfigWithTestbeds { config, testbeds }))
 }
 
-/// POST /projects/:pid/benchmark-configs/:id/launch
+/// POST /projects/{pid}/benchmark-configs/{id}/launch
 async fn launch_config(
     State(state): State<Arc<AppState>>,
     Path((_, config_id)): Path<(String, Uuid)>,
@@ -424,7 +424,7 @@ async fn launch_config(
     Ok(Json(serde_json::json!({"status": "queued"})))
 }
 
-/// POST /projects/:pid/benchmark-configs/:id/cancel
+/// POST /projects/{pid}/benchmark-configs/{id}/cancel
 async fn cancel_config(
     State(state): State<Arc<AppState>>,
     Path((_, config_id)): Path<(String, Uuid)>,
@@ -478,7 +478,7 @@ pub struct BenchmarkConfigResults {
     pub results: Vec<crate::db::benchmarks::ConfigTestbedResult>,
 }
 
-/// GET /projects/:pid/benchmark-configs/:id/results
+/// GET /projects/{pid}/benchmark-configs/{id}/results
 async fn get_config_results(
     State(state): State<Arc<AppState>>,
     Path((_, config_id)): Path<(String, Uuid)>,
@@ -519,7 +519,7 @@ async fn get_config_results(
     }))
 }
 
-/// GET /projects/:pid/benchmark-configs/:id/regressions
+/// GET /projects/{pid}/benchmark-configs/{id}/regressions
 async fn get_config_regressions(
     State(state): State<Arc<AppState>>,
     Path((_, config_id)): Path<(String, Uuid)>,
@@ -541,7 +541,7 @@ async fn get_config_regressions(
     Ok(Json(regressions))
 }
 
-/// GET /projects/:pid/benchmark-regressions
+/// GET /projects/{pid}/benchmark-regressions
 async fn list_project_regressions(
     State(state): State<Arc<AppState>>,
     Query(q): Query<ListQuery>,
@@ -568,7 +568,7 @@ async fn list_project_regressions(
     Ok(Json(regressions))
 }
 
-/// GET /projects/:pid/benchmark-configs/:id/progress
+/// GET /projects/{pid}/benchmark-configs/{id}/progress
 async fn get_benchmark_progress(
     State(state): State<Arc<AppState>>,
     Path((_, config_id)): Path<(String, Uuid)>,
@@ -593,19 +593,19 @@ async fn get_benchmark_progress(
 pub fn project_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/benchmark-configs", get(list_configs).post(create_config))
-        .route("/benchmark-configs/:config_id", get(get_config))
-        .route("/benchmark-configs/:config_id/launch", post(launch_config))
-        .route("/benchmark-configs/:config_id/cancel", post(cancel_config))
+        .route("/benchmark-configs/{config_id}", get(get_config))
+        .route("/benchmark-configs/{config_id}/launch", post(launch_config))
+        .route("/benchmark-configs/{config_id}/cancel", post(cancel_config))
         .route(
-            "/benchmark-configs/:config_id/results",
+            "/benchmark-configs/{config_id}/results",
             get(get_config_results),
         )
         .route(
-            "/benchmark-configs/:config_id/progress",
+            "/benchmark-configs/{config_id}/progress",
             get(get_benchmark_progress),
         )
         .route(
-            "/benchmark-configs/:config_id/regressions",
+            "/benchmark-configs/{config_id}/regressions",
             get(get_config_regressions),
         )
         .route("/benchmark-regressions", get(list_project_regressions))

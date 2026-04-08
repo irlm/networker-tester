@@ -454,7 +454,7 @@ pub fn project_router(state: Arc<AppState>) -> Router {
             "/cloud-accounts/:aid",
             get(get_account).put(update_account).delete(delete_account),
         )
-        .route("/cloud-accounts/:aid/validate", post(validate_account))
+        .route("/cloud-accounts/{aid}/validate", post(validate_account))
         .with_state(state)
 }
 

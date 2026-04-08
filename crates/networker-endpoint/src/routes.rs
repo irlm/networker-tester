@@ -14,7 +14,7 @@ use flate2::write::ZlibEncoder;
 use flate2::Compression;
 use http_body_util::BodyExt;
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -369,7 +369,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/upload", post(upload))
         .route("/delay", get(delay))
         .route("/headers", get(headers_echo))
-        .route("/status/:code", get(status_code))
+        .route("/status/{code}", get(status_code))
         .route("/http-version", get(http_version))
         .route("/info", get(server_info))
         .route("/page", get(page_manifest))
@@ -1155,13 +1155,13 @@ const DOMAINS: &[&str] = &[
 ];
 
 fn gen_user(rng: &mut StdRng, id: u64) -> serde_json::Value {
-    let first = FIRST_NAMES[rng.gen_range(0..FIRST_NAMES.len())];
-    let last = LAST_NAMES[rng.gen_range(0..LAST_NAMES.len())];
-    let domain = DOMAINS[rng.gen_range(0..DOMAINS.len())];
-    let score: f64 = (rng.gen::<f64>() * 10000.0).round() / 100.0;
-    let day = rng.gen_range(1u32..29);
-    let month = rng.gen_range(1u32..13);
-    let year = rng.gen_range(2018u32..2026);
+    let first = FIRST_NAMES[rng.random_range(0..FIRST_NAMES.len())];
+    let last = LAST_NAMES[rng.random_range(0..LAST_NAMES.len())];
+    let domain = DOMAINS[rng.random_range(0..DOMAINS.len())];
+    let score: f64 = (rng.random::<f64>() * 10000.0).round() / 100.0;
+    let day = rng.random_range(1u32..29);
+    let month = rng.random_range(1u32..13);
+    let year = rng.random_range(2018u32..2026);
     serde_json::json!({
         "id": id,
         "name": format!("{first} {last}"),
@@ -1266,7 +1266,7 @@ async fn api_transform(Json(body): Json<TransformBody>) -> impl IntoResponse {
         .map(|f| {
             let mut hasher = Sha256::new();
             hasher.update(f.as_bytes());
-            format!("{:x}", hasher.finalize())
+            hex::encode(hasher.finalize())
         })
         .collect();
 
@@ -1310,7 +1310,7 @@ async fn api_aggregate(Query(p): Query<AggregateParams>) -> impl IntoResponse {
             .collect()
     } else {
         let mut rng = StdRng::seed_from_u64(start);
-        (0..10_000).map(|_| rng.gen::<f64>() * 1000.0).collect()
+        (0..10_000).map(|_| rng.random::<f64>() * 1000.0).collect()
     };
     values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
@@ -1397,9 +1397,9 @@ async fn api_search(Query(p): Query<SearchParams>) -> impl IntoResponse {
         ];
         (0..1_000)
             .map(|_| {
-                let w1 = words[rng.gen_range(0..words.len())];
-                let w2 = words[rng.gen_range(0..words.len())];
-                let n: u32 = rng.gen_range(1..1000);
+                let w1 = words[rng.random_range(0..words.len())];
+                let w2 = words[rng.random_range(0..words.len())];
+                let n: u32 = rng.random_range(1..1000);
                 format!("{w1}-{w2}-{n}")
             })
             .collect()
@@ -1468,7 +1468,7 @@ async fn api_upload_process(req: Request) -> impl IntoResponse {
     // SHA-256
     let mut hasher = Sha256::new();
     hasher.update(&body_data);
-    let sha = format!("{:x}", hasher.finalize());
+    let sha = hex::encode(hasher.finalize());
 
     // Zlib compress
     let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
@@ -1536,20 +1536,20 @@ async fn api_validate(Query(p): Query<ValidateParams>) -> impl IntoResponse {
             .map(|i| gen_user(&mut rng, (seed - 1) * 100 + i + 1))
             .collect();
         let users_json = serde_json::to_string(&users).unwrap_or_default();
-        let users_hash = format!("{:x}", Sha256::digest(users_json.as_bytes()));
+        let users_hash = hex::encode(Sha256::digest(users_json.as_bytes()));
 
         // Aggregate: generate 10k points from seed, hash the stats
         let mut rng2 = StdRng::seed_from_u64(seed);
-        let mut values: Vec<f64> = (0..10_000).map(|_| rng2.gen::<f64>() * 1000.0).collect();
+        let mut values: Vec<f64> = (0..10_000).map(|_| rng2.random::<f64>() * 1000.0).collect();
         values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let sum: f64 = values.iter().sum();
         let mean = sum / values.len() as f64;
         let agg_str = format!("{:.6}", mean);
-        let aggregate_hash = format!("{:x}", Sha256::digest(agg_str.as_bytes()));
+        let aggregate_hash = hex::encode(Sha256::digest(agg_str.as_bytes()));
 
         // Transform: hash of SHA-256("test")
-        let transform_check = format!("{:x}", Sha256::digest(b"test"));
-        let transform_hash = format!("{:x}", Sha256::digest(transform_check.as_bytes()));
+        let transform_check = hex::encode(Sha256::digest(b"test"));
+        let transform_hash = hex::encode(Sha256::digest(transform_check.as_bytes()));
 
         // Search: hash the item list (seed=42 always)
         let mut rng3 = StdRng::seed_from_u64(42);
@@ -1582,14 +1582,14 @@ async fn api_validate(Query(p): Query<ValidateParams>) -> impl IntoResponse {
         ];
         let items: Vec<String> = (0..1_000)
             .map(|_| {
-                let w1 = words[rng3.gen_range(0..words.len())];
-                let w2 = words[rng3.gen_range(0..words.len())];
-                let n: u32 = rng3.gen_range(1..1000);
+                let w1 = words[rng3.random_range(0..words.len())];
+                let w2 = words[rng3.random_range(0..words.len())];
+                let n: u32 = rng3.random_range(1..1000);
                 format!("{w1}-{w2}-{n}")
             })
             .collect();
         let search_json = serde_json::to_string(&items).unwrap_or_default();
-        let search_hash = format!("{:x}", Sha256::digest(search_json.as_bytes()));
+        let search_hash = hex::encode(Sha256::digest(search_json.as_bytes()));
 
         serde_json::json!({
             "seed": seed,

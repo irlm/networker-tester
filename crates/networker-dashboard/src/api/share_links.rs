@@ -6,6 +6,7 @@ use axum::{
     Json, Router,
 };
 use chrono::{Duration, Utc};
+use rand::RngExt;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -76,7 +77,7 @@ async fn create_share_link(
 
     // Generate 32 random bytes, encode as URL-safe base64 (43 chars)
     let mut raw_bytes = [0u8; 32];
-    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut raw_bytes);
+    rand::rng().fill(&mut raw_bytes);
     let raw_token =
         base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, raw_bytes);
 
@@ -376,6 +377,6 @@ pub fn project_router(state: Arc<AppState>) -> Router {
 /// Public router for share link resolution (no auth).
 pub fn public_router(state: Arc<AppState>) -> Router {
     Router::new()
-        .route("/share/:token", get(resolve_share_link))
+        .route("/share/{token}", get(resolve_share_link))
         .with_state(state)
 }

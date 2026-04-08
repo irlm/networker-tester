@@ -346,11 +346,11 @@ pub fn project_router(state: Arc<AppState>) -> Router {
                 .delete(delete_schedule_scoped),
         )
         .route(
-            "/schedules/:schedule_id/toggle",
+            "/schedules/{schedule_id}/toggle",
             post(toggle_schedule_scoped),
         )
         .route(
-            "/schedules/:schedule_id/trigger",
+            "/schedules/{schedule_id}/trigger",
             post(trigger_schedule_scoped),
         )
         .with_state(state)

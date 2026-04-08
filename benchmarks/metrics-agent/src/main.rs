@@ -210,7 +210,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/metrics", get(system_metrics))
-        .route("/metrics/process/:pid", get(process_metrics))
+        .route("/metrics/process/{pid}", get(process_metrics))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
@@ -253,7 +253,7 @@ mod tests {
     fn app(state: SharedState) -> Router {
         Router::new()
             .route("/metrics", get(system_metrics))
-            .route("/metrics/process/:pid", get(process_metrics))
+            .route("/metrics/process/{pid}", get(process_metrics))
             .with_state(state)
     }
 

@@ -174,11 +174,11 @@ fn atty_is_tty() -> bool {
 
 /// Generate a random temporary password (16 chars, alphanumeric).
 fn generate_temp_password() -> String {
-    use rand::Rng;
+    use rand::RngExt;
     let charset = b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     (0..16)
-        .map(|_| charset[rng.gen_range(0..charset.len())] as char)
+        .map(|_| charset[rng.random_range(0..charset.len())] as char)
         .collect()
 }
 

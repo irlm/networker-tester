@@ -244,10 +244,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/users", get(list_users))
         .route("/users/pending", get(list_pending))
         .route("/users/invite", post(invite_user))
-        .route("/users/:user_id/approve", post(approve_user))
-        .route("/users/:user_id/deny", post(deny_user))
-        .route("/users/:user_id/role", put(set_role))
-        .route("/users/:user_id/disable", post(disable_user))
+        .route("/users/{user_id}/approve", post(approve_user))
+        .route("/users/{user_id}/deny", post(deny_user))
+        .route("/users/{user_id}/role", put(set_role))
+        .route("/users/{user_id}/disable", post(disable_user))
         .with_state(state)
 }
 
