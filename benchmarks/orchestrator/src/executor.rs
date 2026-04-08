@@ -653,9 +653,16 @@ async fn execute_testbed(
                     .await
                 {
                     tracing::error!("Failed to report result for {}: {e:#}", language);
+                    log_callback(
+                        callback,
+                        &testbed.testbed_id,
+                        vec![format!("Result callback failed for {}: {e:#}", language)],
+                    )
+                    .await;
+                    languages_failed += 1;
+                } else {
+                    languages_completed += 1;
                 }
-
-                languages_completed += 1;
             }
             Err(e) => {
                 tracing::error!(
@@ -683,7 +690,7 @@ async fn execute_testbed(
     }
 
     // Report testbed complete.
-    let testbed_status = if languages_failed == 0 && !*cancel_rx.borrow() {
+    let testbed_status = if languages_completed > 0 && languages_failed == 0 && !*cancel_rx.borrow() {
         "completed"
     } else if *cancel_rx.borrow() {
         "cancelled"
@@ -726,11 +733,9 @@ async fn execute_testbed_application(
     let total_combinations = (testbed.proxies.len() * testbed.languages.len()) as u32;
     let mut combination_index = 0u32;
 
-    // Wall-clock deadline: timeout_secs per combination, capped by max_measured * timeout_secs
-    let deadline = Instant::now()
-        + std::time::Duration::from_secs(
-            methodology.timeout_secs as u64 * total_combinations.max(1) as u64,
-        );
+    // NOTE: deadline is set AFTER setup (token deploy + harness install) completes,
+    // not at function entry. Setup can take several minutes and shouldn't count
+    // against the benchmark execution time budget.
 
     // Generate a unique API token for this VM (isolated per testbed)
     let bench_token = crate::token_manager::generate_token();
@@ -797,6 +802,22 @@ async fn execute_testbed_application(
             provisioned_vm: provisioned,
         });
     }
+
+    // Set deadline AFTER setup completes — setup (token deploy, harness install)
+    // can take several minutes and must not count against benchmark time.
+    let deadline = Instant::now()
+        + std::time::Duration::from_secs(
+            methodology.timeout_secs as u64 * total_combinations.max(1) as u64,
+        );
+
+    tracing::info!(
+        testbed_id = %testbed.testbed_id,
+        proxies = ?testbed.proxies,
+        languages = ?testbed.languages,
+        total_combinations,
+        deadline_secs = methodology.timeout_secs as u64 * total_combinations.max(1) as u64,
+        "Starting application benchmark proxy/language matrix"
+    );
 
     for proxy in &testbed.proxies {
         // Check cancellation or deadline
@@ -947,6 +968,16 @@ async fn execute_testbed_application(
                                 proxy,
                                 http_ver
                             );
+                            log_callback(
+                                callback,
+                                &testbed.testbed_id,
+                                vec![format!(
+                                    "Result callback failed for {} behind {} ({}:warm): {e:#}",
+                                    language, proxy, http_ver
+                                )],
+                            )
+                            .await;
+                            lang_ok = false;
                         }
                     }
                     Err(e) => {
@@ -985,8 +1016,29 @@ async fn execute_testbed_application(
         stop_proxy(vm).await;
     }
 
+    // Detect anomaly: 0 completed + 0 failed means loops didn't execute
+    if languages_completed == 0 && languages_failed == 0 {
+        tracing::error!(
+            testbed_id = %testbed.testbed_id,
+            total_combinations,
+            proxies = ?testbed.proxies,
+            languages = ?testbed.languages,
+            "Application benchmark produced 0 completed and 0 failed — \
+             proxy/language loops may not have executed"
+        );
+        log_callback(
+            callback,
+            &testbed.testbed_id,
+            vec![format!(
+                "BUG: 0 completed + 0 failed with {} combinations (proxies={:?}, languages={:?})",
+                total_combinations, testbed.proxies, testbed.languages,
+            )],
+        )
+        .await;
+    }
+
     // Report testbed complete.
-    let testbed_status = if languages_failed == 0 && !*cancel_rx.borrow() {
+    let testbed_status = if languages_completed > 0 && languages_failed == 0 && !*cancel_rx.borrow() {
         "completed"
     } else if *cancel_rx.borrow() {
         "cancelled"

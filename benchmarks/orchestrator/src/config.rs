@@ -669,4 +669,56 @@ mod tests {
         assert_eq!(cfg.testbeds[0].topology, "loopback");
         assert!(cfg.testbeds[0].existing_vm_ip.is_none());
     }
+
+    /// Reproduce the exact JSON the dashboard worker writes for an application benchmark.
+    /// This is the format that failed silently in production (0 results).
+    #[test]
+    fn dashboard_worker_application_config_deserializes() {
+        let json = r#"{
+            "config_id": "8eb49b39-d91a-4979-ba02-765077b09a0c",
+            "benchmark_type": "application",
+            "testbeds": [{
+                "testbed_id": "edcb1bb2-a0ba-4d68-bffa-2b097eec260d",
+                "cloud": "azure",
+                "region": "eastus",
+                "topology": "Loopback",
+                "vm_size": "Medium",
+                "os": "linux",
+                "languages": ["rust", "python"],
+                "proxies": ["nginx"],
+                "tester_os": "server",
+                "existing_vm_ip": null
+            }],
+            "methodology": {
+                "measured_runs": 10,
+                "modes": ["http2", "http3"],
+                "preset": "quick",
+                "target_error_percent": null,
+                "warmup_runs": 5
+            },
+            "auto_teardown": true,
+            "callback_url": "https://alethedash.com",
+            "callback_token": "test-token",
+            "created_by_email": "dae64df9-f6bc-4ab4-83c3-46ac5f33ee4e",
+            "project_id": "us049x9psa20iw"
+        }"#;
+
+        let config: DashboardBenchmarkConfig =
+            serde_json::from_str(json).expect("deserialization failed");
+
+        assert_eq!(config.config_id, "8eb49b39-d91a-4979-ba02-765077b09a0c");
+        assert_eq!(config.benchmark_type, "application");
+        assert_eq!(config.testbeds.len(), 1);
+
+        let tb = &config.testbeds[0];
+        assert_eq!(tb.proxies, vec!["nginx"]);
+        assert_eq!(tb.languages, vec!["rust", "python"]);
+        assert_eq!(tb.tester_os, "server");
+        assert_eq!(tb.os, "linux");
+
+        assert_eq!(config.methodology.modes, vec!["http2", "http3"]);
+        assert_eq!(config.methodology.min_measured, 10);
+        assert_eq!(config.methodology.warmup_runs, 5);
+        assert_eq!(config.methodology.timeout_secs, 30); // default
+    }
 }

@@ -221,8 +221,9 @@ async fn poll_and_run(
 
             // Monitor the child process in a spawned task
             tokio::spawn(async move {
-                // Always capture stderr for debugging
+                // Capture both stdout and stderr for debugging
                 let stderr_handle = child.stderr.take();
+                let stdout_handle = child.stdout.take();
                 let stderr_task = tokio::spawn(async move {
                     if let Some(mut stderr) = stderr_handle {
                         let mut buf = String::new();
@@ -233,14 +234,39 @@ async fn poll_and_run(
                         String::new()
                     }
                 });
+                let stdout_task = tokio::spawn(async move {
+                    if let Some(mut stdout) = stdout_handle {
+                        let mut buf = String::new();
+                        use tokio::io::AsyncReadExt;
+                        let _ = stdout.read_to_string(&mut buf).await;
+                        buf
+                    } else {
+                        String::new()
+                    }
+                });
 
                 match child.wait().await {
                     Ok(status) => {
                         let err_msg = stderr_task.await.unwrap_or_default();
+                        let out_msg = stdout_task.await.unwrap_or_default();
+                        // Always log stderr/stdout sizes for diagnostics
+                        tracing::info!(
+                            config_id = %config_id,
+                            stderr_bytes = err_msg.len(),
+                            stdout_bytes = out_msg.len(),
+                            exit_code = ?status.code(),
+                            "Benchmark orchestrator finished"
+                        );
                         if !err_msg.is_empty() {
+                            // Log last 4000 chars of stderr (most recent output)
+                            let tail: String = if err_msg.len() > 4000 {
+                                err_msg[err_msg.len() - 4000..].chars().collect()
+                            } else {
+                                err_msg.clone()
+                            };
                             tracing::info!(
                                 config_id = %config_id,
-                                stderr = %err_msg.chars().take(2000).collect::<String>(),
+                                stderr = %tail,
                                 "Benchmark orchestrator stderr output"
                             );
                         }
@@ -250,14 +276,45 @@ async fn poll_and_run(
                                 config_id = %config_id,
                                 "Benchmark orchestrator completed successfully"
                             );
+                            // Don't overwrite status here — the orchestrator already
+                            // reported the correct status via callback.complete() which
+                            // may be "completed_with_errors". Only update if the config
+                            // is still in "running" state (callback.complete() failed).
                             if let Ok(db) = db_pool.get().await {
-                                let _ = crate::db::benchmark_configs::update_status(
-                                    &db,
-                                    &config_id,
-                                    "completed",
-                                    None,
-                                )
-                                .await;
+                                let current =
+                                    crate::db::benchmark_configs::get(&db, &config_id).await;
+                                if let Ok(Some(cfg)) = current {
+                                    if cfg.status == "running" {
+                                        tracing::warn!(
+                                            config_id = %config_id,
+                                            "Config still in running state after orchestrator exit — \
+                                             callback.complete() may have failed, marking completed"
+                                        );
+                                        let _ = crate::db::benchmark_configs::update_status(
+                                            &db,
+                                            &config_id,
+                                            "completed",
+                                            None,
+                                        )
+                                        .await;
+                                    }
+                                }
+                                // Persist orchestrator stderr to config for API
+                                // visibility when diagnosing empty results.
+                                if !err_msg.is_empty() {
+                                    let diag: String = err_msg
+                                        .chars()
+                                        .rev()
+                                        .take(2000)
+                                        .collect::<Vec<_>>()
+                                        .into_iter()
+                                        .rev()
+                                        .collect();
+                                    let _ = db.execute(
+                                        "UPDATE benchmark_config SET error_message = $1 WHERE config_id = $2 AND error_message IS NULL",
+                                        &[&diag, &config_id],
+                                    ).await;
+                                }
                             }
                         } else {
                             tracing::error!(
