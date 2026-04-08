@@ -10,6 +10,114 @@ use std::sync::Arc;
 use crate::auth::AuthUser;
 use crate::AppState;
 
+// ── Smoke test ────────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum SmokeTestResponse {
+    Ok {
+        ok: bool,
+        roundtrip_ms: u64,
+    },
+    Err {
+        ok: bool,
+        error: String,
+    },
+}
+
+/// POST /api/admin/smoke-test — platform admin only.
+///
+/// Inserts a unique marker into `service_log`, reads it back, then deletes it.
+/// Returns `{ ok: true, roundtrip_ms: N }` or `{ ok: false, error: "..." }`.
+async fn smoke_test(
+    State(state): State<Arc<AppState>>,
+    req: axum::extract::Request,
+) -> Result<Json<SmokeTestResponse>, StatusCode> {
+    extract_admin(&req)?;
+
+    let marker = format!("__smoke_test_{}__", uuid::Uuid::new_v4());
+    let started = std::time::Instant::now();
+
+    let client = state.logs_db.get().await.map_err(|e| {
+        tracing::error!(error = %e, "DB pool error in smoke_test");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    // Insert marker
+    if let Err(e) = client
+        .execute(
+            "INSERT INTO service_log (service, level, message) VALUES ('smoke-test', 3, $1)",
+            &[&marker],
+        )
+        .await
+    {
+        return Ok(Json(SmokeTestResponse::Err {
+            ok: false,
+            error: format!("insert failed: {e}"),
+        }));
+    }
+
+    // Read it back (within last 10 seconds)
+    let found = client
+        .query_opt(
+            "SELECT 1 FROM service_log WHERE message = $1 AND ts > now() - interval '10 seconds'",
+            &[&marker],
+        )
+        .await;
+
+    let read_ok = matches!(found, Ok(Some(_)));
+
+    // Always attempt cleanup
+    let _ = client
+        .execute(
+            "DELETE FROM service_log WHERE message = $1",
+            &[&marker],
+        )
+        .await;
+
+    let roundtrip_ms = started.elapsed().as_millis() as u64;
+
+    if read_ok {
+        Ok(Json(SmokeTestResponse::Ok {
+            ok: true,
+            roundtrip_ms,
+        }))
+    } else {
+        let err = match found {
+            Err(e) => format!("read failed: {e}"),
+            Ok(None) => "marker not found after insert".to_string(),
+            Ok(Some(_)) => unreachable!(),
+        };
+        Ok(Json(SmokeTestResponse::Err {
+            ok: false,
+            error: err,
+        }))
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_smoke_test_marker_format() {
+        let id = uuid::Uuid::new_v4();
+        let marker = format!("__smoke_test_{id}__");
+        assert!(marker.starts_with("__smoke_test_"), "marker prefix");
+        assert!(marker.ends_with("__"), "marker suffix");
+        // UUID portion should be parseable
+        let inner = marker
+            .strip_prefix("__smoke_test_")
+            .unwrap()
+            .strip_suffix("__")
+            .unwrap();
+        assert!(
+            uuid::Uuid::parse_str(inner).is_ok(),
+            "inner UUID should be valid: {inner}"
+        );
+    }
+}
+
 /// Extract AuthUser from request extensions and require platform admin.
 fn extract_admin(req: &axum::extract::Request) -> Result<AuthUser, StatusCode> {
     let user = req
@@ -218,5 +326,6 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/admin/workspaces/{project_id}",
             delete(hard_delete_workspace),
         )
+        .route("/admin/smoke-test", post(smoke_test))
         .with_state(state)
 }

@@ -46,7 +46,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(share_links::public_router(state.clone()))
         .merge(invites::public_router(state.clone()))
         .merge(leaderboard::public_router(state.clone()))
-        .merge(benchmark_callbacks::public_router(state.clone()));
+        .merge(benchmark_callbacks::public_router(state.clone()))
+        .merge(system_health::public_router(state.clone()));
 
     // Protected flat routes (require valid JWT, global/platform resources only)
     let protected_flat = Router::new()

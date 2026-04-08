@@ -278,6 +278,10 @@ jobs:
               done
               sleep 1
 
+              # ── Backup current dashboard binary ────────────────────────
+              echo '>> Backing up current dashboard binary...'
+              cp /opt/alethedash/networker-dashboard /opt/alethedash/networker-dashboard.bak 2>/dev/null || true
+
               # ── Install binaries ────────────────────────────────────────
               echo '>> Installing new binaries...'
               cp /tmp/networker-dashboard /opt/alethedash/networker-dashboard
@@ -287,10 +291,10 @@ jobs:
               cp /tmp/networker-tester /opt/alethedash/tester/networker-tester 2>/dev/null || true
               cp /tmp/networker-tester /usr/local/bin/networker-tester 2>/dev/null || true
               cp /tmp/alethabench /usr/local/bin/alethabench 2>/dev/null || true
-              chmod +x /opt/alethedash/networker-dashboard /opt/alethedash/networker-endpoint \
-                /opt/alethedash/tester/networker-agent /opt/alethedash/tester/networker-tester \
+              chmod +x /opt/alethedash/networker-dashboard /opt/alethedash/networker-endpoint \\
+                /opt/alethedash/tester/networker-agent /opt/alethedash/tester/networker-tester \\
                 /usr/local/bin/alethabench /usr/local/bin/networker-tester
-              rm -f /tmp/networker-dashboard /tmp/networker-endpoint /tmp/networker-agent \
+              rm -f /tmp/networker-dashboard /tmp/networker-endpoint /tmp/networker-agent \\
                 /tmp/networker-tester /tmp/alethabench
 
               # ── Install frontend ────────────────────────────────────────
@@ -307,26 +311,33 @@ jobs:
               sleep 3
               systemctl start networker-agent
 
-              # ── Health check ────────────────────────────────────────────
-              echo '>> Waiting for dashboard health check...'
-              HEALTHY=0
-              for i in \$(seq 1 15); do
-                HTTP_CODE=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 http://localhost:3000/api/auth/login -X POST -H 'Content-Type: application/json' -d '{\"email\":\"healthcheck\",\"password\":\"probe\"}' 2>/dev/null || echo '000')
-                if [ \"\${HTTP_CODE}\" = '401' ]; then
-                  HEALTHY=1
-                  echo \">> Dashboard healthy (HTTP \${HTTP_CODE} on attempt \${i})\"
+              # ── Health check (max 30s) with rollback on failure ─────────
+              echo '>> Health check...'
+              HEALTHY=false
+              for i in \$(seq 1 30); do
+                if curl -sf http://localhost:3000/api/health | grep -q '\"status\":\"ok\"'; then
+                  HEALTHY=true
+                  echo \"Health check passed (attempt \${i})\"
                   break
                 fi
-                echo \"   attempt \${i}: HTTP \${HTTP_CODE}\"
-                sleep 2
+                sleep 1
               done
 
-              if [ \"\${HEALTHY}\" -ne 1 ]; then
-                echo '>> DEPLOY_FAILED: Dashboard not responding after 30s'
+              if [ \"\${HEALTHY}\" != \"true\" ]; then
+                echo '>> DEPLOY_FAILED: Health check failed after 30s — rolling back'
                 systemctl --no-pager status networker-dashboard || true
                 tail -10 /opt/alethedash/dashboard.log || true
+                if [ -f /opt/alethedash/networker-dashboard.bak ]; then
+                  cp /opt/alethedash/networker-dashboard.bak /opt/alethedash/networker-dashboard
+                  systemctl restart networker-dashboard
+                  sleep 5
+                  echo '>> Rollback complete'
+                fi
                 exit 1
               fi
+
+              # ── Cleanup backup on success ───────────────────────────────
+              rm -f /opt/alethedash/networker-dashboard.bak
 
               # ── Service status summary ──────────────────────────────────
               echo '>> Service status:'

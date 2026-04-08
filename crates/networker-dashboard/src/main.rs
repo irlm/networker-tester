@@ -90,6 +90,8 @@ pub struct AppState {
     pub tls_profile_db_migrated: Mutex<bool>,
     /// PostgreSQL URL for the logs database (passed to orchestrator workers).
     pub logs_database_url: String,
+    /// Instant at which the dashboard process started (used for uptime reporting).
+    pub started_at: std::time::Instant,
 }
 
 #[tokio::main]
@@ -226,6 +228,7 @@ async fn main() -> anyhow::Result<()> {
         log_metrics: _log_guard.metrics().clone(),
         tls_profile_db_migrated: Mutex::new(false),
         logs_database_url: cfg.logs_database_url.clone(),
+        started_at: std::time::Instant::now(),
     });
 
     let cors = {
