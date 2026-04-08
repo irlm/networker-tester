@@ -444,7 +444,10 @@ export function AppBenchmarkWizardPage() {
       vm_size: tb.vmSize,
       os: tb.os,
       existing_vm_ip: tb.useExisting ? (catalogVms.find(v => v.vm_id === tb.existingVmId)?.ip ?? null) : null,
-      languages: Array.from(selectedLangs),
+      // Filter out Windows-only languages from Linux testbeds
+      languages: Array.from(selectedLangs).filter(lang =>
+        tb.os === 'windows' || !WINDOWS_ONLY_LANGS.has(lang)
+      ),
       proxies: tb.proxies,
       tester_os: tb.testerOs,
     }));
