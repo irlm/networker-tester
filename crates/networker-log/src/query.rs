@@ -211,21 +211,38 @@ pub async fn list(
 // ── stats ─────────────────────────────────────────────────────────────────────
 
 /// Compute per-service level-bucket counts over the given time window.
+///
+/// When `project_id` is supplied only entries for that project are included,
+/// ensuring non-admin callers cannot see another project's data.
 pub async fn stats(
     client: &tokio_postgres::Client,
     from: DateTime<Utc>,
     to: DateTime<Utc>,
+    project_id: Option<&str>,
 ) -> anyhow::Result<LogStats> {
-    let rows = client
-        .query(
-            "SELECT service, level, COUNT(*) \
-             FROM service_log \
-             WHERE ts >= $1 AND ts <= $2 \
-             GROUP BY service, level",
-            &[&from, &to],
-        )
-        .await
-        .map_err(|e| anyhow::anyhow!("stats query failed: {e}"))?;
+    let rows = if let Some(pid) = project_id {
+        client
+            .query(
+                "SELECT service, level, COUNT(*) \
+                 FROM service_log \
+                 WHERE ts >= $1 AND ts <= $2 AND project_id = $3 \
+                 GROUP BY service, level",
+                &[&from, &to, &pid],
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("stats query failed: {e}"))?
+    } else {
+        client
+            .query(
+                "SELECT service, level, COUNT(*) \
+                 FROM service_log \
+                 WHERE ts >= $1 AND ts <= $2 \
+                 GROUP BY service, level",
+                &[&from, &to],
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("stats query failed: {e}"))?
+    };
 
     let mut by_service: HashMap<String, ServiceStats> = HashMap::new();
     let mut grand_total: i64 = 0;

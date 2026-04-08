@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
 use serde_json::{Map, Value};
@@ -22,11 +22,15 @@ use crate::types::{Level, LogEntry};
 
 // ── DbLayer ───────────────────────────────────────────────────────────────────
 
+/// Shared sender slot — wrapped so `LogGuard::shutdown` can clear it before
+/// dropping its own copy, ensuring the channel is closed exactly once.
+pub type SharedSender = Arc<Mutex<Option<mpsc::Sender<LogEntry>>>>;
+
 /// A [`tracing_subscriber::Layer`] that serialises tracing events into
 /// [`LogEntry`] structs and sends them to the async batch writer via an
 /// `mpsc` channel.
 pub struct DbLayer {
-    tx: mpsc::Sender<LogEntry>,
+    tx: SharedSender,
     service: String,
     metrics: Arc<LogPipelineMetrics>,
     /// Process-wide context injected into every entry.
@@ -36,7 +40,7 @@ pub struct DbLayer {
 
 impl DbLayer {
     pub fn new(
-        tx: mpsc::Sender<LogEntry>,
+        tx: SharedSender,
         service: &str,
         metrics: Arc<LogPipelineMetrics>,
         context: HashMap<String, String>,
@@ -47,6 +51,14 @@ impl DbLayer {
             metrics,
             context,
         }
+    }
+
+    /// Close this layer's sender slot so no more entries are forwarded.
+    ///
+    /// Called by [`LogGuard::shutdown`] before dropping its own `BatchHandle`
+    /// sender copy, guaranteeing the channel closes and the writer exits.
+    pub fn close(&self) {
+        let _ = self.tx.lock().unwrap().take();
     }
 }
 
@@ -168,10 +180,17 @@ where
             });
 
         // --- Build the entry --------------------------------------------------
+        // M3: truncate oversized JSONB fields to 64 KB.
         let fields = if extra_fields.is_empty() {
             None
         } else {
-            Some(Value::Object(extra_fields))
+            let val = Value::Object(extra_fields);
+            let serialized = serde_json::to_string(&val).unwrap_or_default();
+            if serialized.len() > 65536 {
+                Some(serde_json::json!({"_truncated": true, "_size": serialized.len()}))
+            } else {
+                Some(val)
+            }
         };
 
         let entry = LogEntry {
@@ -186,13 +205,21 @@ where
         };
 
         // --- Send (non-blocking) ---------------------------------------------
-        match self.tx.try_send(entry) {
-            Ok(()) => {}
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                self.metrics.entries_dropped.fetch_add(1, Ordering::Relaxed);
-            }
-            Err(mpsc::error::TrySendError::Closed(_)) => {
-                // Channel gone — silently discard.
+        // Lock the shared sender; if it has already been cleared by shutdown,
+        // silently discard the entry.
+        let guard = self.tx.lock().unwrap();
+        match guard.as_ref() {
+            Some(tx) => match tx.try_send(entry) {
+                Ok(()) => {}
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    self.metrics.entries_dropped.fetch_add(1, Ordering::Relaxed);
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    // Channel gone — silently discard.
+                }
+            },
+            None => {
+                // Sender cleared by shutdown — silently discard.
             }
         }
     }

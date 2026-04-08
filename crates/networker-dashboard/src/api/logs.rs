@@ -34,6 +34,7 @@ pub struct LogsQueryParams {
 pub struct StatsQueryParams {
     pub from: Option<DateTime<Utc>>,
     pub to: Option<DateTime<Utc>>,
+    pub project_id: Option<String>,
 }
 
 // ── Pipeline status response ──────────────────────────────────────────────────
@@ -78,8 +79,19 @@ async fn query_logs(
         .from
         .unwrap_or_else(|| to - chrono::Duration::hours(1));
 
+    // H4: require at least one narrowing filter when a search term is present.
+    if params.search.is_some()
+        && params.service.is_none()
+        && params.level.is_none()
+        && params.config_id.is_none()
+        && params.project_id.is_none()
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
     let limit = params.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
-    let offset = params.offset.unwrap_or(0).max(0);
+    // H3: cap offset to prevent deep-pagination scans.
+    let offset = params.offset.unwrap_or(0).clamp(0, 10_000);
 
     let min_level = params
         .level
@@ -113,16 +125,25 @@ async fn query_logs(
 }
 
 /// GET /api/logs/stats — per-service level-bucket counts over a time window.
+///
+/// Non-admin users have `project_id` forced from their auth context, mirroring
+/// the same project-scoping enforced in `query_logs`.
 async fn query_logs_stats(
     State(state): State<Arc<AppState>>,
-    Query(params): Query<StatsQueryParams>,
+    Query(mut params): Query<StatsQueryParams>,
     req: axum::extract::Request,
 ) -> Result<Json<networker_log::query::LogStats>, StatusCode> {
-    let _user = req
+    let user = req
         .extensions()
         .get::<AuthUser>()
         .cloned()
         .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    // Non-admins: force project_id from the ProjectContext injected by middleware.
+    if !user.is_platform_admin {
+        let ctx = req.extensions().get::<ProjectContext>().cloned();
+        params.project_id = ctx.map(|c| c.project_id);
+    }
 
     let to = params.to.unwrap_or_else(Utc::now);
     let from = params
@@ -134,7 +155,7 @@ async fn query_logs_stats(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    let stats = networker_log::query::stats(&client, from, to)
+    let stats = networker_log::query::stats(&client, from, to, params.project_id.as_deref())
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "Failed to compute log stats");

@@ -24,6 +24,10 @@ use crate::types::LogEntry;
 /// Maximum number of entries accumulated before an automatic flush.
 const BATCH_SIZE: usize = 100;
 
+/// Compile-time guard: each entry occupies 8 parameters and PostgreSQL limits
+/// a query to 65 535 parameters ($1…$65535).
+const _: () = assert!(BATCH_SIZE * 8 <= 65535);
+
 /// Maximum time between flushes even when the batch is not full.
 const FLUSH_INTERVAL: Duration = Duration::from_millis(500);
 

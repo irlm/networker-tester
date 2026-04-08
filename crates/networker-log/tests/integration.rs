@@ -157,6 +157,7 @@ async fn log_builder_end_to_end() {
         .await
         .unwrap();
 
-    // Note: don't call guard.shutdown() — it hangs because DbLayer holds a tx clone.
-    // The batch writer will flush on process exit.
+    // Shutdown the log pipeline cleanly (DbLayer sender cleared first, then
+    // BatchHandle dropped, ensuring the channel closes and the writer exits).
+    guard.shutdown().await;
 }

@@ -21,7 +21,7 @@
 //! ```
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Context as _;
@@ -34,7 +34,7 @@ use tracing_subscriber::util::SubscriberInitExt as _;
 use tracing_subscriber::{EnvFilter, Layer};
 
 use crate::batch::{spawn_batch_writer, BatchHandle};
-use crate::db_layer::DbLayer;
+use crate::db_layer::{DbLayer, SharedSender};
 use crate::metrics::LogPipelineMetrics;
 use crate::schema;
 
@@ -56,6 +56,10 @@ pub enum Stream {
 /// buffered log entries to the database before the process exits.
 pub struct LogGuard {
     batch_handle: Option<BatchHandle>,
+    /// Shared sender slot owned by the `DbLayer`.  Cleared during shutdown so
+    /// that the tracing layer stops forwarding events before we drop the
+    /// `BatchHandle` sender, allowing the channel to close cleanly.
+    db_layer_tx: Option<SharedSender>,
     metrics: Arc<LogPipelineMetrics>,
 }
 
@@ -68,7 +72,18 @@ impl LogGuard {
     /// Gracefully shut down the batch writer, flushing all remaining entries.
     ///
     /// Must be called explicitly — `Drop` cannot perform async work.
+    ///
+    /// Shutdown order:
+    /// 1. Clear the `DbLayer`'s sender slot so the tracing layer stops
+    ///    forwarding new events.
+    /// 2. Drop the `BatchHandle`'s sender, closing the channel.
+    /// 3. Await the writer task so all buffered entries are flushed.
     pub async fn shutdown(self) {
+        // Step 1: close the DbLayer's copy of the sender.
+        if let Some(shared) = self.db_layer_tx {
+            let _ = shared.lock().unwrap().take();
+        }
+        // Steps 2 + 3: drop BatchHandle sender and wait for writer.
         if let Some(handle) = self.batch_handle {
             handle.shutdown().await;
         }
@@ -148,6 +163,8 @@ impl LogBuilder {
         // ── 3. Optional DB layer ──────────────────────────────────────────────
         let mut batch_handle: Option<BatchHandle> = None;
 
+        let mut db_layer_tx: Option<SharedSender> = None;
+
         let db_layer: Option<DbLayer> = if let Some(ref url) = self.db_url {
             match setup_db(
                 url,
@@ -157,8 +174,9 @@ impl LogBuilder {
             )
             .await
             {
-                Ok((layer, handle)) => {
+                Ok((layer, handle, shared_tx)) => {
                     batch_handle = Some(handle);
+                    db_layer_tx = Some(shared_tx);
                     Some(layer)
                 }
                 Err(e) => {
@@ -194,6 +212,7 @@ impl LogBuilder {
 
         Ok(LogGuard {
             batch_handle,
+            db_layer_tx,
             metrics,
         })
     }
@@ -202,14 +221,14 @@ impl LogBuilder {
 // ── setup_db ──────────────────────────────────────────────────────────────────
 
 /// Attempt to connect to the database, run schema migrations, and start the
-/// batch writer.  Returns both a [`DbLayer`] and the [`BatchHandle`] so that
-/// the caller can shut the writer down gracefully.
+/// batch writer.  Returns the [`DbLayer`], the [`BatchHandle`], and the
+/// [`SharedSender`] so that the caller can shut the writer down gracefully.
 async fn setup_db(
     url: &str,
     service: &str,
     metrics: Arc<LogPipelineMetrics>,
     context: HashMap<String, String>,
-) -> anyhow::Result<(DbLayer, BatchHandle)> {
+) -> anyhow::Result<(DbLayer, BatchHandle, SharedSender)> {
     // ── Build pool ────────────────────────────────────────────────────────────
     let pg_config: tokio_postgres::Config =
         url.parse().context("invalid PostgreSQL connection URL")?;
@@ -264,8 +283,10 @@ async fn setup_db(
 
     // ── Batch writer ──────────────────────────────────────────────────────────
     let handle = spawn_batch_writer(pool, Arc::clone(&metrics));
-    let tx = handle.sender();
-    let layer = DbLayer::new(tx, service, metrics, context);
+    // Wrap the sender in a shared slot so LogGuard can clear it on shutdown,
+    // preventing the DbLayer from holding the channel open indefinitely.
+    let shared_tx: SharedSender = Arc::new(Mutex::new(Some(handle.sender())));
+    let layer = DbLayer::new(Arc::clone(&shared_tx), service, metrics, context);
 
-    Ok((layer, handle))
+    Ok((layer, handle, shared_tx))
 }
