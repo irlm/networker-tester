@@ -601,6 +601,7 @@ mod tests {
             benchmark_type: "fullstack".into(),
             created_by_email: None,
             project_id: None,
+            logs_db_url: None,
         }
     }
 
