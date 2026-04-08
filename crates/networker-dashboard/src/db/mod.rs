@@ -45,3 +45,22 @@ pub async fn create_pool(database_url: &str) -> anyhow::Result<Pool> {
     tracing::info!("Connected to PostgreSQL");
     Ok(pool)
 }
+
+/// Create a connection pool for the logs database (smaller pool, same timeouts).
+pub async fn create_logs_pool(database_url: &str) -> anyhow::Result<Pool> {
+    let mut cfg = Config::new();
+    cfg.url = Some(database_url.into());
+    cfg.pool = Some(deadpool_postgres::PoolConfig {
+        max_size: 8,
+        timeouts: deadpool_postgres::Timeouts {
+            wait: Some(std::time::Duration::from_secs(5)),
+            create: Some(std::time::Duration::from_secs(5)),
+            recycle: Some(std::time::Duration::from_secs(5)),
+        },
+        ..Default::default()
+    });
+    let pool = cfg.create_pool(Some(Runtime::Tokio1), NoTls)?;
+    let _client = pool.get().await?;
+    tracing::info!("Connected to logs PostgreSQL");
+    Ok(pool)
+}
