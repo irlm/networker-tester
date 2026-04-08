@@ -7,14 +7,14 @@ use crate::AppState;
 
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
-        .route("/api/system/health", get(get_health))
+        .route("/system/health", get(get_health))
         .with_state(state)
 }
 
 /// Router for public (no-auth) health endpoint.
 pub fn public_router(state: Arc<AppState>) -> Router {
     Router::new()
-        .route("/api/health", get(health_check))
+        .route("/health", get(health_check))
         .with_state(state)
 }
 
