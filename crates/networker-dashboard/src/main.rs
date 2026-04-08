@@ -59,6 +59,7 @@ pub struct SsoCodeEntry {
 
 pub struct AppState {
     pub db: deadpool_postgres::Pool,
+    pub logs_db: deadpool_postgres::Pool,
     pub database_url: String,
     pub jwt_secret: String,
     pub dashboard_port: u16,
@@ -110,7 +111,7 @@ async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(|s| s.as_str()) == Some("setup") {
         let db_url = std::env::var("DASHBOARD_DB_URL").unwrap_or_else(|_| {
-            "postgres://networker:networker@localhost:5432/networker_dashboard".into()
+            "postgres://networker:networker@localhost:5432/networker_core".into()
         });
 
         let pool = db::create_pool(&db_url).await?;
@@ -147,6 +148,7 @@ async fn main() -> anyhow::Result<()> {
 
     let cfg = config::DashboardConfig::from_env()?;
     let db_pool = db::create_pool(&cfg.database_url).await?;
+    let logs_pool = db::create_logs_pool(&cfg.logs_database_url).await?;
 
     // Run migrations
     {
@@ -188,6 +190,7 @@ async fn main() -> anyhow::Result<()> {
 
     let state = Arc::new(AppState {
         db: db_pool,
+        logs_db: logs_pool,
         database_url: cfg.database_url.clone(),
         jwt_secret: cfg.jwt_secret.clone(),
         dashboard_port: cfg.port,
