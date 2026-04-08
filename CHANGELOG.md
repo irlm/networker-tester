@@ -13,10 +13,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.22.4] - 2026-04-08
 
+### Added
+
+- **`networker-log` crate**: Unified logging with TimescaleDB persistence. LogBuilder API, batched DB writes, pipeline health metrics, structured field capture.
+- **TimescaleDB support**: Docker switched to `timescale/timescaledb-ha:pg16.6-ts2.17.2`, `service_log` hypertable with 7-day auto-retention.
+- **Dashboard logging**: Replaced in-memory LogBuffer with TimescaleDB queries. Admin logs page now reads from DB.
+- **Orchestrator logging**: Writes to TimescaleDB when `logs_db_url` is provided by dashboard worker.
+- **Agent logging**: Integrated with `networker-log` (console-only for now).
+
 ### Fixed
 
 - **Windows-only language filtering**: `csharp-net48` no longer sent to Linux testbeds (frontend + orchestrator safety net)
-- **Orchestrator stderr visibility**: stderr now persisted to config `error_message` and logged in message format (not structured fields)
+- **Orchestrator stderr visibility**: tracing output now goes to stderr (was stdout), persisted to config `error_message`
+- **Migration guards**: V005, V015, V019 guarded for missing tester tables on fresh dashboard-only installs
 
 ---
 
