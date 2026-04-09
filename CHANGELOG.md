@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.23.4] - 2026-04-09
+
+### Fixed
+
+- **Chrome harness**: Properly wait for dpkg lock (up to 2 min), download Chrome .deb separately, install deps in one apt session.
+
+---
+
 ## [0.23.3] - 2026-04-09
 
 ### Fixed

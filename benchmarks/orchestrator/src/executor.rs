@@ -167,23 +167,24 @@ async fn deploy_chrome_harness(vm: &VmInfo) -> Result<()> {
         "if [ ! -d /tmp/nwk-repo/.git ]; then git clone --depth 1 https://github.com/irlm/networker-tester.git /tmp/nwk-repo 2>/dev/null < /dev/null; fi",
     ).await.ok(); // best-effort
 
-    // Step 1: Kill unattended-upgrades and wait for dpkg lock
+    // Step 1: Wait for dpkg lock and run apt-get update
+    // Fresh Azure VMs run unattended-upgrades for 1-2 min after boot.
+    // We wait up to 2 min for the lock, then force-release if needed.
     ssh::ssh_exec(
         &vm.ip,
-        "sudo systemctl stop unattended-upgrades 2>/dev/null; \
-         sudo pkill -9 -f unattended-upgr 2>/dev/null; \
-         sleep 3; \
-         sudo rm -f /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock 2>/dev/null; \
+        "export DEBIAN_FRONTEND=noninteractive && \
+         echo 'Waiting for apt lock...' && \
+         for i in $(seq 1 60); do \
+           if sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || \
+              sudo fuser /var/lib/apt/lists/lock >/dev/null 2>&1; then \
+             [ $((i % 10)) -eq 0 ] && echo \"Still locked (${i}s)...\"; \
+             sleep 2; \
+           else break; fi; \
+         done && \
          sudo dpkg --configure -a 2>/dev/null; \
-         echo dpkg-ok",
-    )
-    .await
-    .ok(); // best-effort
-
-    // Step 2: apt-get update
-    ssh::ssh_exec(
-        &vm.ip,
-        "export DEBIAN_FRONTEND=noninteractive && sudo apt-get update -qq < /dev/null",
+         echo 'Running apt-get update...' && \
+         sudo apt-get update -qq < /dev/null && \
+         echo 'apt-get update done'",
     )
     .await
     .with_context(|| format!("apt-get update failed on {}", vm.ip))?;
@@ -196,34 +197,32 @@ async fn deploy_chrome_harness(vm: &VmInfo) -> Result<()> {
     .await
     .with_context(|| format!("Failed to create harness dir on {}", vm.ip))?;
 
-    // Step 4: Install Chrome via direct .deb download (faster than snap/apt)
+    // Step 4: Download Chrome .deb (fast — just a download)
     ssh::ssh_exec(
         &vm.ip,
-        "command -v google-chrome >/dev/null 2>&1 || command -v chromium-browser >/dev/null 2>&1 || \
-         command -v chromium >/dev/null 2>&1 || { \
-           export DEBIAN_FRONTEND=noninteractive && \
-           echo 'Downloading Google Chrome...' && \
+        "command -v google-chrome >/dev/null 2>&1 || { \
+           echo 'Downloading Chrome...' && \
            curl -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
-             -o /tmp/chrome.deb < /dev/null && \
-           echo 'Installing Chrome...' && \
-           sudo apt-get install -y -qq -f /tmp/chrome.deb < /dev/null && \
-           rm -f /tmp/chrome.deb && \
-           echo 'Chrome installed'; }",
+             -o /tmp/chrome.deb < /dev/null && echo 'Downloaded'; }",
     )
     .await
-    .with_context(|| format!("Failed to install Chrome on {}", vm.ip))?;
+    .with_context(|| format!("Failed to download Chrome on {}", vm.ip))?;
 
-    // Step 5: Install Node.js if missing
+    // Step 5: Install Chrome .deb + deps + Node.js (one apt-get session)
     ssh::ssh_exec(
         &vm.ip,
-        "command -v npm >/dev/null 2>&1 || { \
+        "command -v google-chrome >/dev/null 2>&1 || { \
            export DEBIAN_FRONTEND=noninteractive && \
-           echo 'Installing Node.js...' && \
+           echo 'Installing Chrome + Node.js...' && \
+           sudo dpkg -i /tmp/chrome.deb 2>/dev/null; \
+           sudo apt-get install -y -qq -f < /dev/null && \
            sudo apt-get install -y -qq nodejs npm < /dev/null && \
-           echo 'Node.js installed'; }",
+           rm -f /tmp/chrome.deb && echo 'Installed'; } || { \
+           command -v npm >/dev/null 2>&1 || { \
+             sudo apt-get install -y -qq nodejs npm < /dev/null; }; }",
     )
     .await
-    .with_context(|| format!("Failed to install Node.js on {}", vm.ip))?;
+    .with_context(|| format!("Failed to install Chrome/Node.js on {}", vm.ip))?;
 
     // Deploy harness files via the repo (should already be cloned by deploy_benchmark_server)
     let deploy_cmd = concat!(
