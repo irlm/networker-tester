@@ -216,7 +216,7 @@ export function BenchmarkProgressPage() {
   const effectiveStatus = (() => {
     if (rawStatus !== 'running') return rawStatus;
     // Refine "running" based on testbed statuses
-    const tbStatuses = (testbeds || []).map((tb: Record<string, unknown>) => tb.status as string);
+    const tbStatuses = (testbeds || []).map((tb) => tb.status);
     if (tbStatuses.length === 0) return 'queued';
     if (tbStatuses.every(s => s === 'pending')) return 'queued';
     if (tbStatuses.some(s => s === 'provisioning')) return 'provisioning';
