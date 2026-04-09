@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.22.5] - 2026-04-09
+
+### Fixed
+
+- **Cloud status**: Deploy wizard now checks project cloud accounts instead of server CLI tools
+
+---
+
 ## [0.22.4] - 2026-04-08
 
 ### Added
