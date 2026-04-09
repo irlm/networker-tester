@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use std::time::Duration;
 
 const SSH_CONNECT_TIMEOUT: &str = "15";
-const SSH_COMMAND_TIMEOUT: Duration = Duration::from_secs(600);
+const SSH_COMMAND_TIMEOUT: Duration = Duration::from_secs(1200); // 20 min — Chrome install on fresh VMs needs apt-get update + 50+ deps
 const SSH_CONTROL_DIR: &str = "/tmp/ssh-bench-ctl";
 
 /// Get SSH args that enable ControlMaster multiplexing.

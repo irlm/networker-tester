@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.23.5] - 2026-04-09
+
+### Fixed
+
+- **SSH timeout**: Increased from 10 min to 20 min for Chrome harness install on fresh Azure VMs (apt-get update + deps)
+
+---
+
 ## [0.23.4] - 2026-04-09
 
 ### Fixed
