@@ -17,6 +17,7 @@ mod inventory;
 mod invites;
 mod jobs;
 mod leaderboard;
+mod logs;
 mod modes;
 mod perf_log;
 mod project_members;
@@ -45,7 +46,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(share_links::public_router(state.clone()))
         .merge(invites::public_router(state.clone()))
         .merge(leaderboard::public_router(state.clone()))
-        .merge(benchmark_callbacks::public_router(state.clone()));
+        .merge(benchmark_callbacks::public_router(state.clone()))
+        .merge(system_health::public_router(state.clone()));
 
     // Protected flat routes (require valid JWT, global/platform resources only)
     let protected_flat = Router::new()
@@ -60,6 +62,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(system_health::router(state.clone()))
         .merge(bench_tokens::router(state.clone()))
         .merge(perf_log::router(state.clone()))
+        .merge(logs::router(state.clone()))
         .merge(leaderboard::protected_router(state.clone()))
         .merge(zones::router(state.clone()))
         .layer(middleware::from_fn_with_state(

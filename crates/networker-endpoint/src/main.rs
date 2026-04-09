@@ -3,7 +3,6 @@ use clap::{Parser, Subcommand};
 use networker_endpoint::{generate_static_site, run, ServerConfig};
 use serde::Deserialize;
 use std::path::PathBuf;
-use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Default, Deserialize)]
 struct ConfigFile {
@@ -53,6 +52,10 @@ struct Cli {
     /// Log level e.g. "debug", "info,tower_http=debug". Overrides RUST_LOG.
     #[arg(long)]
     log_level: Option<String>,
+
+    /// Optional: persist logs to this PostgreSQL URL (TimescaleDB)
+    #[arg(long)]
+    log_db_url: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -81,9 +84,11 @@ async fn main() -> anyhow::Result<()> {
     // Handle subcommands first
     if let Some(Command::GenerateSite { dir, preset, stack }) = cli.command {
         // Minimal logging for generate-site
-        tracing_subscriber::fmt()
-            .with_env_filter(EnvFilter::new("info"))
-            .init();
+        let _log_guard = networker_log::LogBuilder::new("endpoint")
+            .with_console(networker_log::Stream::Stderr)
+            .with_filter("info")
+            .init()
+            .await?;
         return generate_static_site(&dir, &preset, &stack);
     }
 
@@ -104,12 +109,15 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or(9998);
     let log_level = cli.log_level.or(f.log_level);
 
-    let log_filter = if let Some(ref level) = log_level {
-        EnvFilter::new(level)
-    } else {
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"))
-    };
-    tracing_subscriber::fmt().with_env_filter(log_filter).init();
+    let mut builder =
+        networker_log::LogBuilder::new("endpoint").with_console(networker_log::Stream::Stderr);
+    if let Some(ref filter) = log_level {
+        builder = builder.with_filter(filter);
+    }
+    if let Some(ref url) = cli.log_db_url {
+        builder = builder.with_db(url);
+    }
+    let _log_guard = builder.init().await?;
 
     let cfg = ServerConfig {
         http_port,

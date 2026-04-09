@@ -390,6 +390,10 @@ pub struct Cli {
     /// Log level e.g. "debug", "info,tower_http=debug". Overrides --verbose and RUST_LOG.
     #[arg(long)]
     pub log_level: Option<String>,
+
+    /// Optional: persist logs to this PostgreSQL URL (TimescaleDB)
+    #[arg(long)]
+    pub log_db_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, ValueEnum)]
@@ -522,6 +526,7 @@ pub struct ConfigFile {
     pub save_to_sql: Option<bool>,
     pub connection_string: Option<String>,
     pub log_level: Option<String>,
+    pub log_db_url: Option<String>,
     pub page_assets: Option<usize>,
     pub page_asset_size: Option<String>,
     pub page_preset: Option<String>,
@@ -608,6 +613,7 @@ pub struct ResolvedConfig {
     pub save_to_sql: bool,
     pub connection_string: Option<String>,
     pub log_level: Option<String>,
+    pub log_db_url: Option<String>,
     /// One entry per asset; value = byte count for that asset.
     pub page_asset_sizes: Vec<usize>,
     /// Display name of the active preset, if any (e.g. "mixed").
@@ -871,6 +877,7 @@ impl Cli {
                 .log_level
                 .or(f.log_level)
                 .or_else(|| verbose.then(|| "debug".into())),
+            log_db_url: self.log_db_url.or(f.log_db_url),
             page_asset_sizes,
             page_preset_name,
             http_stacks: {

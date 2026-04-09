@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import json as json_lib
 import logging
 import os
 import re
@@ -11,11 +12,38 @@ import sys
 import time
 import zlib
 
-logging.basicConfig(
-    level=getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO),
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    stream=sys.stderr,
-)
+_log_level = getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO)
+_log_format = os.environ.get("LOG_FORMAT", "text").lower()
+
+
+class _JsonFormatter(logging.Formatter):
+    """Emit log records as single-line JSON matching the bench log schema."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        # Format the timestamp as ISO 8601 (UTC-style, no microseconds).
+        ts = self.formatTime(record, "%Y-%m-%dT%H:%M:%SZ")
+        entry: dict = {
+            "ts": ts,
+            "service": "python",
+            "level": record.levelname.lower(),
+            "message": record.getMessage(),
+        }
+        if hasattr(record, "fields"):
+            entry["fields"] = record.fields  # type: ignore[attr-defined]
+        return json_lib.dumps(entry)
+
+
+if _log_format == "json":
+    _handler = logging.StreamHandler(sys.stderr)
+    _handler.setFormatter(_JsonFormatter())
+    logging.basicConfig(handlers=[_handler], level=_log_level)
+else:
+    logging.basicConfig(
+        level=_log_level,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        stream=sys.stderr,
+    )
+
 logger = logging.getLogger("bench-api")
 
 from starlette.applications import Starlette

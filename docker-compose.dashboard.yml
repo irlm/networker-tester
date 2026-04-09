@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   postgres:
-    image: postgres:16-alpine
+    image: timescale/timescaledb-ha:pg16.6-ts2.17.2
     environment:
       POSTGRES_DB: networker_core
       POSTGRES_USER: networker

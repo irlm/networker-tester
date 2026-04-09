@@ -1,15 +1,116 @@
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::StatusCode,
-    response::IntoResponse,
     routing::{delete, get, post},
     Json, Router,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::sync::Arc;
 
 use crate::auth::AuthUser;
 use crate::AppState;
+
+// ── Smoke test ────────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum SmokeTestResponse {
+    Ok { ok: bool, roundtrip_ms: u64 },
+    Err { ok: bool, error: String },
+}
+
+/// POST /api/admin/smoke-test — platform admin only.
+///
+/// Inserts a unique marker into `service_log`, reads it back, then deletes it.
+/// Returns `{ ok: true, roundtrip_ms: N }` or `{ ok: false, error: "..." }`.
+async fn smoke_test(
+    State(state): State<Arc<AppState>>,
+    req: axum::extract::Request,
+) -> Result<Json<SmokeTestResponse>, StatusCode> {
+    extract_admin(&req)?;
+
+    let marker = format!("__smoke_test_{}__", uuid::Uuid::new_v4());
+    let started = std::time::Instant::now();
+
+    let client = state.logs_db.get().await.map_err(|e| {
+        tracing::error!(error = %e, "DB pool error in smoke_test");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    // Insert marker
+    if let Err(e) = client
+        .execute(
+            "INSERT INTO service_log (service, level, message) VALUES ('smoke-test', 3, $1)",
+            &[&marker],
+        )
+        .await
+    {
+        return Ok(Json(SmokeTestResponse::Err {
+            ok: false,
+            error: format!("insert failed: {e}"),
+        }));
+    }
+
+    // Read it back (within last 10 seconds)
+    let found = client
+        .query_opt(
+            "SELECT 1 FROM service_log WHERE message = $1 AND ts > now() - interval '10 seconds'",
+            &[&marker],
+        )
+        .await;
+
+    let read_ok = matches!(found, Ok(Some(_)));
+
+    // Always attempt cleanup
+    let _ = client
+        .execute(
+            "DELETE FROM service_log WHERE message = $1 AND ts > now() - interval '1 minute'",
+            &[&marker],
+        )
+        .await;
+
+    let roundtrip_ms = started.elapsed().as_millis() as u64;
+
+    if read_ok {
+        Ok(Json(SmokeTestResponse::Ok {
+            ok: true,
+            roundtrip_ms,
+        }))
+    } else {
+        let err = match found {
+            Err(e) => format!("read failed: {e}"),
+            Ok(None) => "marker not found after insert".to_string(),
+            Ok(Some(_)) => unreachable!(),
+        };
+        Ok(Json(SmokeTestResponse::Err {
+            ok: false,
+            error: err,
+        }))
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_smoke_test_marker_format() {
+        let id = uuid::Uuid::new_v4();
+        let marker = format!("__smoke_test_{id}__");
+        assert!(marker.starts_with("__smoke_test_"), "marker prefix");
+        assert!(marker.ends_with("__"), "marker suffix");
+        // UUID portion should be parseable
+        let inner = marker
+            .strip_prefix("__smoke_test_")
+            .unwrap()
+            .strip_suffix("__")
+            .unwrap();
+        assert!(
+            uuid::Uuid::parse_str(inner).is_ok(),
+            "inner UUID should be valid: {inner}"
+        );
+    }
+}
 
 /// Extract AuthUser from request extensions and require platform admin.
 fn extract_admin(req: &axum::extract::Request) -> Result<AuthUser, StatusCode> {
@@ -77,39 +178,6 @@ async fn workspace_usage(
         })?;
 
     Ok(Json(usage))
-}
-
-#[derive(Deserialize)]
-struct LogsQuery {
-    level: Option<String>,
-    search: Option<String>,
-    limit: Option<usize>,
-}
-
-async fn system_logs(
-    State(state): State<Arc<AppState>>,
-    req: axum::extract::Request,
-) -> impl IntoResponse {
-    let user = match extract_admin(&req) {
-        Ok(u) => u,
-        Err(s) => return Err(s),
-    };
-    let _ = user;
-
-    let params: LogsQuery = Query::try_from_uri(req.uri())
-        .map(|Query(q)| q)
-        .unwrap_or(LogsQuery {
-            level: None,
-            search: None,
-            limit: None,
-        });
-
-    let limit = params.limit.unwrap_or(200);
-    let entries = state
-        .log_buffer
-        .recent(limit, params.level.as_deref(), params.search.as_deref());
-
-    Ok(Json(entries))
 }
 
 async fn suspend_workspace(
@@ -236,7 +304,6 @@ pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/admin/metrics", get(system_metrics))
         .route("/admin/workspaces", get(workspace_usage))
-        .route("/admin/logs", get(system_logs))
         .route(
             "/admin/workspaces/{project_id}/suspend",
             post(suspend_workspace),
@@ -253,5 +320,6 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/admin/workspaces/{project_id}",
             delete(hard_delete_workspace),
         )
+        .route("/admin/smoke-test", post(smoke_test))
         .with_state(state)
 }

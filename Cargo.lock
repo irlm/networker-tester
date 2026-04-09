@@ -2053,12 +2053,13 @@ dependencies = [
 
 [[package]]
 name = "networker-agent"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "anyhow",
  "chrono",
  "futures",
  "networker-common",
+ "networker-log",
  "networker-tester",
  "rustls 0.23.37",
  "serde_json",
@@ -2072,7 +2073,7 @@ dependencies = [
 
 [[package]]
 name = "networker-common"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "chrono",
  "networker-tester",
@@ -2083,7 +2084,7 @@ dependencies = [
 
 [[package]]
 name = "networker-dashboard"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2100,6 +2101,7 @@ dependencies = [
  "jsonwebtoken",
  "libc",
  "networker-common",
+ "networker-log",
  "networker-tester",
  "rand 0.10.0",
  "regex",
@@ -2122,7 +2124,7 @@ dependencies = [
 
 [[package]]
 name = "networker-endpoint"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "anyhow",
  "axum",
@@ -2139,6 +2141,7 @@ dependencies = [
  "http",
  "http-body-util",
  "libc",
+ "networker-log",
  "quinn",
  "rand 0.10.0",
  "rcgen",
@@ -2158,8 +2161,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "networker-log"
+version = "0.22.4"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "deadpool-postgres",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-postgres",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "networker-tester"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2180,6 +2199,7 @@ dependencies = [
  "libc",
  "native-tls",
  "networker-endpoint",
+ "networker-log",
  "quinn",
  "rcgen",
  "reqwest",

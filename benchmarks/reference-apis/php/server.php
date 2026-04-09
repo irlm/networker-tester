@@ -11,11 +11,26 @@ $LOG_LEVEL = strtolower(getenv('LOG_LEVEL') ?: 'info');
 $LOG_LEVELS = ['error' => 0, 'warn' => 1, 'info' => 2, 'debug' => 3];
 $CURRENT_LEVEL = $LOG_LEVELS[$LOG_LEVEL] ?? 2;
 
-function bench_log(string $level, string $msg): void
+function bench_log(string $level, string $msg, array $fields = []): void
 {
     global $CURRENT_LEVEL, $LOG_LEVELS;
     if (($LOG_LEVELS[$level] ?? 0) <= $CURRENT_LEVEL) {
-        fwrite(STDERR, json_encode(['level' => $level, 'ts' => date('c'), 'msg' => $msg]) . "\n");
+        $format = getenv('LOG_FORMAT') ?: 'text';
+        if ($format === 'json') {
+            $entry = [
+                'ts'      => gmdate('Y-m-d\TH:i:s\Z'),
+                'service' => 'php',
+                'level'   => $level,
+                'message' => $msg,
+            ];
+            if (!empty($fields)) {
+                $entry['fields'] = $fields;
+            }
+            fwrite(STDERR, json_encode($entry) . "\n");
+        } else {
+            $ts = date('Y-m-d H:i:s');
+            fwrite(STDERR, "[$ts] " . strtoupper($level) . " $msg\n");
+        }
     }
 }
 

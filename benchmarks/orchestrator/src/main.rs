@@ -157,14 +157,25 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
-
     let cli = Cli::parse();
+
+    // For the Run subcommand, peek at the config file for logs_db_url before
+    // initialising tracing so we can enable DB log shipping from the start.
+    let logs_db_url = if let Command::Run { ref config, .. } = cli.command {
+        std::fs::read_to_string(config)
+            .ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|v| v.get("logs_db_url")?.as_str().map(String::from))
+    } else {
+        None
+    };
+
+    let mut builder = networker_log::LogBuilder::new("orchestrator")
+        .with_console(networker_log::Stream::Stderr);
+    if let Some(ref url) = logs_db_url {
+        builder = builder.with_db(url);
+    }
+    let _log_guard = builder.init().await?;
 
     match cli.command {
         Command::Run {

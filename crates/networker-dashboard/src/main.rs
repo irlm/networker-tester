@@ -6,7 +6,6 @@ mod crypto;
 mod db;
 mod deploy;
 mod email;
-mod log_buffer;
 #[allow(dead_code)]
 mod project_id;
 mod regression;
@@ -23,8 +22,6 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex, RwLock};
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
 
 /// Middleware that measures server processing time and exposes it
 /// via the standard `Server-Timing` header (readable from JS).
@@ -47,7 +44,6 @@ async fn server_timing_middleware(
     }
     response
 }
-use tracing_subscriber::EnvFilter;
 
 /// A short-lived SSO exchange code entry.
 pub struct SsoCodeEntry {
@@ -88,10 +84,14 @@ pub struct AppState {
     pub approval_tx: broadcast::Sender<String>,
     // Workspace invite expiry
     pub invite_expiry_days: u32,
-    // In-memory log buffer for admin log viewer
-    pub log_buffer: std::sync::Arc<log_buffer::LogBuffer>,
+    // Log pipeline metrics (TimescaleDB-backed via networker-log)
+    pub log_metrics: std::sync::Arc<networker_log::LogPipelineMetrics>,
     // Run tester-side TLS profile migrations only once per dashboard process.
     pub tls_profile_db_migrated: Mutex<bool>,
+    /// PostgreSQL URL for the logs database (passed to orchestrator workers).
+    pub logs_database_url: String,
+    /// Instant at which the dashboard process started (used for uptime reporting).
+    pub started_at: std::time::Instant,
 }
 
 #[tokio::main]
@@ -99,17 +99,14 @@ async fn main() -> anyhow::Result<()> {
     // Install ring as the default TLS crypto provider (required by reqwest/rustls).
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let log_buf = log_buffer::LogBuffer::new(1000);
-
-    tracing_subscriber::registry()
-        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
-        .with(tracing_subscriber::fmt::layer())
-        .with(log_buffer::LogBufferLayer::new(log_buf.clone()))
-        .init();
-
     // CLI setup subcommand: `networker-dashboard setup`
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(|s| s.as_str()) == Some("setup") {
+        // Console-only logging for the interactive setup wizard (exits before server starts).
+        let _setup_log_guard = networker_log::LogBuilder::new("dashboard")
+            .with_console(networker_log::Stream::Stderr)
+            .init()
+            .await?;
         let db_url = std::env::var("DASHBOARD_DB_URL").unwrap_or_else(|_| {
             "postgres://networker:networker@localhost:5432/networker_core".into()
         });
@@ -147,6 +144,15 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let cfg = config::DashboardConfig::from_env()?;
+
+    // Initialize tracing with console + TimescaleDB backend.
+    // The guard must live for the duration of the process to keep the batch writer alive.
+    let _log_guard = networker_log::LogBuilder::new("dashboard")
+        .with_console(networker_log::Stream::Stderr)
+        .with_db(&cfg.logs_database_url)
+        .init()
+        .await?;
+
     let db_pool = db::create_pool(&cfg.database_url).await?;
     let logs_pool = match db::create_logs_pool(&cfg.logs_database_url).await {
         Ok(pool) => pool,
@@ -219,8 +225,10 @@ async fn main() -> anyhow::Result<()> {
         share_max_days: cfg.share_max_days,
         approval_tx,
         invite_expiry_days: cfg.invite_expiry_days,
-        log_buffer: log_buf,
+        log_metrics: _log_guard.metrics().clone(),
         tls_profile_db_migrated: Mutex::new(false),
+        logs_database_url: cfg.logs_database_url.clone(),
+        started_at: std::time::Instant::now(),
     });
 
     let cors = {

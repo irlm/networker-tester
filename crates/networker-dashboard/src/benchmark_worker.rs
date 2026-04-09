@@ -170,6 +170,7 @@ async fn poll_and_run(
         "callback_token": callback_token,
         "created_by_email": config.created_by.map(|u| u.to_string()),
         "project_id": config.project_id.to_string(),
+        "logs_db_url": state.logs_database_url,
     });
     // RR-009: Write with restricted permissions (0600) — config contains callback JWT
     {
@@ -249,26 +250,20 @@ async fn poll_and_run(
                     Ok(status) => {
                         let err_msg = stderr_task.await.unwrap_or_default();
                         let out_msg = stdout_task.await.unwrap_or_default();
-                        // Always log stderr/stdout sizes for diagnostics
+                        // Always log stderr/stdout sizes in the message itself
+                        // (structured fields aren't captured by the log buffer)
                         tracing::info!(
-                            config_id = %config_id,
-                            stderr_bytes = err_msg.len(),
-                            stdout_bytes = out_msg.len(),
-                            exit_code = ?status.code(),
-                            "Benchmark orchestrator finished"
+                            "Benchmark orchestrator finished: exit={:?} stderr={}B stdout={}B config={}",
+                            status.code(), err_msg.len(), out_msg.len(), config_id
                         );
                         if !err_msg.is_empty() {
-                            // Log last 4000 chars of stderr (most recent output)
+                            // Log last 4000 chars of stderr in the message
                             let tail: String = if err_msg.len() > 4000 {
                                 err_msg[err_msg.len() - 4000..].chars().collect()
                             } else {
                                 err_msg.clone()
                             };
-                            tracing::info!(
-                                config_id = %config_id,
-                                stderr = %tail,
-                                "Benchmark orchestrator stderr output"
-                            );
+                            tracing::info!("Orchestrator stderr (config={}):\n{}", config_id, tail);
                         }
 
                         if status.success() {
@@ -299,8 +294,9 @@ async fn poll_and_run(
                                         .await;
                                     }
                                 }
-                                // Persist orchestrator stderr to config for API
-                                // visibility when diagnosing empty results.
+                                // Persist orchestrator stderr to config for API visibility.
+                                // Append to existing error_message so we don't lose
+                                // the orchestrator's own error report.
                                 if !err_msg.is_empty() {
                                     let diag: String = err_msg
                                         .chars()
@@ -311,7 +307,7 @@ async fn poll_and_run(
                                         .rev()
                                         .collect();
                                     let _ = db.execute(
-                                        "UPDATE benchmark_config SET error_message = $1 WHERE config_id = $2 AND error_message IS NULL",
+                                        "UPDATE benchmark_config SET error_message = COALESCE(error_message || E'\\n---\\nOrchestrator stderr:\\n', 'Orchestrator stderr:\\n') || $1 WHERE config_id = $2",
                                         &[&diag, &config_id],
                                     ).await;
                                 }

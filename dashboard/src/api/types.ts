@@ -840,10 +840,20 @@ export interface WorkspaceUsage {
 }
 
 export interface LogEntry {
-  timestamp: string;
-  level: string;
-  target: string;
+  ts: string;
+  level: number;
+  service: string;
   message: string;
+  config_id?: string | null;
+  project_id?: string | null;
+  trace_id?: string | null;
+  fields?: Record<string, unknown> | null;
+}
+
+export interface LogsResponse {
+  entries: LogEntry[];
+  total: number;
+  truncated: boolean;
 }
 
 // Benchmark types

@@ -18,5 +18,5 @@ chrono       = { version = "0.4", features = ["serde"] }
 uuid         = { version = "1", features = ["v4", "serde"] }
 rand         = "0.10"
 tracing      = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+networker-log      = { path = "../../crates/networker-log" }
 reqwest            = { version = "0.13", features = ["rustls", "json", "http2"], default-features = false }

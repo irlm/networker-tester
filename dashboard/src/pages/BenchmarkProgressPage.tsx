@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
-import type { BenchmarkConfigSummary, BenchmarkLanguageProgress } from '../api/types';
+import type { BenchmarkConfigSummary, BenchmarkLanguageProgress, LogEntry } from '../api/types';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { useLiveStore } from '../stores/liveStore';
 import type { BenchmarkLive } from '../stores/liveStore';
@@ -39,6 +39,25 @@ const STATUS_COLORS: Record<string, string> = {
   pending: 'text-gray-500',
 };
 
+function levelToString(level: number): string {
+  switch (level) {
+    case 1: return 'ERROR';
+    case 2: return 'WARN';
+    case 3: return 'INFO';
+    case 4: return 'DEBUG';
+    case 5: return 'TRACE';
+    default: return `L${level}`;
+  }
+}
+
+function logLevelColor(level: number): string {
+  switch (level) {
+    case 1: return 'text-red-400';
+    case 2: return 'text-yellow-400';
+    default: return 'text-gray-400';
+  }
+}
+
 interface TestbedDetail {
   testbed_id: string;
   cloud: string;
@@ -75,6 +94,9 @@ export function BenchmarkProgressPage() {
   // Log viewer state
   const logContainerRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
+
+  // Historical logs from /api/logs (visible after benchmark finishes)
+  const [historicalLogs, setHistoricalLogs] = useState<LogEntry[]>([]);
 
   // Already-completed results fetched from API (survives page reload)
   const [savedResults, setSavedResults] = useState<Array<{ language: string; run_id: string; started_at?: string | null; finished_at?: string | null }>>([]);
@@ -181,6 +203,20 @@ export function BenchmarkProgressPage() {
   const effectiveStatus = live.configStatus || config?.status || 'pending';
   const isActive = ['running', 'provisioning', 'deploying', 'pending'].includes(effectiveStatus);
   const isDone = ['completed', 'failed', 'cancelled'].includes(effectiveStatus);
+
+  // Fetch historical orchestrator logs for this config (fallback when WS logs are empty)
+  useEffect(() => {
+    if (!configId) return;
+    const fetchHistoricalLogs = () => {
+      api.getSystemLogs({ config_id: configId, service: 'orchestrator', limit: 500 })
+        .then(data => setHistoricalLogs(data.entries))
+        .catch(() => {});
+    };
+    fetchHistoricalLogs();
+    // Poll while active, stop when done
+    const interval = isActive ? setInterval(fetchHistoricalLogs, 10000) : null;
+    return () => { if (interval) clearInterval(interval); };
+  }, [configId, isActive]);
 
   // Poll per-mode progress while benchmark is active
   useEffect(() => {
@@ -661,7 +697,14 @@ export function BenchmarkProgressPage() {
       {/* Live Log Viewer */}
       <div className="mb-6">
         <div className="flex items-center justify-between mb-2">
-          <p className="text-xs text-gray-500 tracking-wider font-medium">live log</p>
+          <div className="flex items-center gap-2">
+            <p className="text-xs text-gray-500 tracking-wider font-medium">
+              {live.logs.length > 0 ? 'live log' : historicalLogs.length > 0 ? 'orchestrator log' : 'live log'}
+            </p>
+            {live.logs.length === 0 && historicalLogs.length > 0 && (
+              <span className="text-[10px] text-gray-600 font-mono">(historical — queried from /api/logs)</span>
+            )}
+          </div>
           {!autoScroll && (
             <button
               onClick={() => {
@@ -681,7 +724,27 @@ export function BenchmarkProgressPage() {
           onScroll={handleLogScroll}
           className="bg-[var(--bg-base)] border border-gray-800 rounded-lg p-4 h-[400px] overflow-y-auto font-mono text-xs leading-5"
         >
-          {live.logs.length === 0 ? (
+          {live.logs.length > 0 ? (
+            live.logs.map((line, i) => (
+              <div key={i} className="text-gray-300 whitespace-pre-wrap break-all">
+                {line}
+              </div>
+            ))
+          ) : historicalLogs.length > 0 ? (
+            historicalLogs.map((entry, i) => {
+              const levelStr = levelToString(entry.level);
+              const ts = (() => {
+                try { return new Date(entry.ts).toTimeString().slice(0, 8); } catch { return entry.ts; }
+              })();
+              return (
+                <div key={i} className={logLevelColor(entry.level)}>
+                  <span className="text-gray-600">[{ts}]</span>{' '}
+                  <span className="font-bold">{levelStr.padEnd(5)}</span>{' '}
+                  &mdash; {entry.message}
+                </div>
+              );
+            })
+          ) : (
             <div className="text-gray-600 space-y-2">
               {isActive ? (
                 <>
@@ -707,12 +770,6 @@ export function BenchmarkProgressPage() {
                 <p>No log output was captured for this benchmark.</p>
               )}
             </div>
-          ) : (
-            live.logs.map((line, i) => (
-              <div key={i} className="text-gray-300 whitespace-pre-wrap break-all">
-                {line}
-              </div>
-            ))
           )}
         </div>
       </div>

@@ -1,5 +1,18 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { api, type SystemMetrics, type DbMetrics, type WorkspaceUsage, type LogEntry } from '../api/client';
+
+// ── Log helpers ─────────────────────────────────────────────────────────
+
+function levelToString(level: number): string {
+  switch (level) {
+    case 1: return 'ERROR';
+    case 2: return 'WARN';
+    case 3: return 'INFO';
+    case 4: return 'DEBUG';
+    case 5: return 'TRACE';
+    default: return `L${level}`;
+  }
+}
 import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useToast } from '../hooks/useToast';
@@ -288,25 +301,31 @@ function UsageTab({ workspaces, onRefresh }: { workspaces: WorkspaceUsage[]; onR
 
 // ── Logs Tab ───────────────────────────────────────────────────────────
 
+const SERVICES = ['dashboard', 'orchestrator', 'agent', 'tester', 'endpoint'] as const;
+
 function LogsTab() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [level, setLevel] = useState('');
+  const [service, setService] = useState('');
   const [search, setSearch] = useState('');
   const [paused, setPaused] = useState(false);
+  const [truncated, setTruncated] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const fetchLogs = useCallback(async () => {
     try {
       const data = await api.getSystemLogs({
         level: level || undefined,
+        service: service || undefined,
         search: search || undefined,
         limit: 500,
       });
-      setLogs(data);
+      setLogs(data.entries);
+      setTruncated(data.truncated);
     } catch {
       // retry on next poll
     }
-  }, [level, search]);
+  }, [level, service, search]);
 
   usePolling(fetchLogs, 5000);
 
@@ -317,10 +336,12 @@ function LogsTab() {
     }
   }, [logs, paused]);
 
-  const levelColor = (l: string) => {
-    switch (l.toUpperCase()) {
-      case 'ERROR': return 'text-red-400';
-      case 'WARN': return 'text-yellow-400';
+  const levelColor = (l: number) => {
+    switch (l) {
+      case 1: return 'text-red-400';
+      case 2: return 'text-yellow-400';
+      case 4: return 'text-gray-500';
+      case 5: return 'text-gray-600';
       default: return 'text-gray-400';
     }
   };
@@ -342,10 +363,22 @@ function LogsTab() {
           onChange={(e) => setLevel(e.target.value)}
           className="text-xs bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-gray-300"
         >
-          <option value="">All</option>
-          <option value="INFO">INFO</option>
-          <option value="WARN">WARN</option>
-          <option value="ERROR">ERROR</option>
+          <option value="">All levels</option>
+          <option value="error">ERROR</option>
+          <option value="warn">WARN</option>
+          <option value="info">INFO</option>
+          <option value="debug">DEBUG</option>
+          <option value="trace">TRACE</option>
+        </select>
+        <select
+          value={service}
+          onChange={(e) => setService(e.target.value)}
+          className="text-xs bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-gray-300"
+        >
+          <option value="">All services</option>
+          {SERVICES.map(s => (
+            <option key={s} value={s}>{s}</option>
+          ))}
         </select>
         <input
           type="text"
@@ -365,6 +398,9 @@ function LogsTab() {
           {paused ? 'Paused' : 'Pause'}
         </button>
       </div>
+      {truncated && (
+        <p className="text-xs text-yellow-500/70 mb-2">Showing latest 500 entries — results truncated</p>
+      )}
       <div
         ref={containerRef}
         className="max-h-[600px] overflow-y-auto border border-gray-800 rounded bg-[var(--bg-card)] p-3 font-mono text-xs leading-relaxed"
@@ -372,14 +408,17 @@ function LogsTab() {
         {logs.length === 0 && (
           <p className="text-gray-600 text-center py-4">No log entries</p>
         )}
-        {logs.map((entry, i) => (
-          <div key={i} className={levelColor(entry.level)}>
-            <span className="text-gray-600">[{formatTime(entry.timestamp)}]</span>{' '}
-            <span className="font-bold">{entry.level.padEnd(5)}</span>{' '}
-            <span className="text-gray-500">{entry.target}</span>{' '}
-            &mdash; {entry.message}
-          </div>
-        ))}
+        {logs.map((entry, i) => {
+          const levelStr = levelToString(entry.level);
+          return (
+            <div key={i} className={levelColor(entry.level)}>
+              <span className="text-gray-600">[{formatTime(entry.ts)}]</span>{' '}
+              <span className="font-bold">{levelStr.padEnd(5)}</span>{' '}
+              <span className="text-gray-500">{entry.service}</span>{' '}
+              &mdash; {entry.message}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
