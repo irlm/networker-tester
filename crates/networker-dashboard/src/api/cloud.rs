@@ -2,6 +2,7 @@ use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
 use serde::Serialize;
 use std::sync::Arc;
 
+use crate::auth::ProjectContext;
 use crate::AppState;
 
 #[derive(Serialize)]
@@ -19,124 +20,78 @@ pub struct CloudStatus {
     pub ssh: ProviderStatus,
 }
 
-async fn check_command(cmd: &str, args: &[&str]) -> (bool, Option<String>) {
-    match tokio::process::Command::new(cmd)
-        .args(args)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .await
-    {
-        Ok(output) if output.status.success() => {
-            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            (
-                true,
-                if stdout.is_empty() {
-                    None
-                } else {
-                    Some(stdout)
-                },
-            )
-        }
-        Ok(_) => (false, None),
-        Err(_) => (false, None),
-    }
-}
-
-async fn command_exists(cmd: &str) -> bool {
-    let lookup = if cfg!(windows) { "where" } else { "which" };
-    tokio::process::Command::new(lookup)
-        .arg(cmd)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .await
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
-async fn check_azure() -> ProviderStatus {
-    let available = command_exists("az").await;
-    if !available {
-        return ProviderStatus {
-            available: false,
-            authenticated: false,
-            account: None,
-        };
-    }
-
-    let (authenticated, output) =
-        check_command("az", &["account", "show", "--query", "name", "-o", "tsv"]).await;
-    ProviderStatus {
-        available: true,
-        authenticated,
-        account: output,
-    }
-}
-
-async fn check_aws() -> ProviderStatus {
-    let available = command_exists("aws").await;
-    if !available {
-        return ProviderStatus {
-            available: false,
-            authenticated: false,
-            account: None,
-        };
-    }
-
-    let (authenticated, output) = check_command(
-        "aws",
-        &[
-            "sts",
-            "get-caller-identity",
-            "--query",
-            "Account",
-            "--output",
-            "text",
-        ],
-    )
-    .await;
-    ProviderStatus {
-        available: true,
-        authenticated,
-        account: output,
-    }
-}
-
-async fn check_gcp() -> ProviderStatus {
-    let available = command_exists("gcloud").await;
-    if !available {
-        return ProviderStatus {
-            available: false,
-            authenticated: false,
-            account: None,
-        };
-    }
-
-    let (authenticated, output) =
-        check_command("gcloud", &["config", "get-value", "project"]).await;
-    ProviderStatus {
-        available: true,
-        authenticated: authenticated && output.is_some(),
-        account: output,
-    }
-}
-
-async fn check_ssh() -> ProviderStatus {
-    let available = command_exists("ssh").await;
-    ProviderStatus {
-        available,
-        authenticated: available, // SSH is always "authenticated" if available
-        account: None,
-    }
-}
-
+/// Check cloud provider status by querying the project's cloud_account table.
+/// No server-side CLI checks — the dashboard should be decoupled from host tools.
 async fn cloud_status(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
+    req: axum::extract::Request,
 ) -> Result<Json<CloudStatus>, StatusCode> {
-    let (azure, aws, gcp, ssh) = tokio::join!(check_azure(), check_aws(), check_gcp(), check_ssh());
+    let ctx = req
+        .extensions()
+        .get::<ProjectContext>()
+        .cloned()
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    let client = state.db.get().await.map_err(|e| {
+        tracing::error!(error = %e, "DB pool error in cloud_status");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    // Query cloud accounts for this project, grouped by provider
+    let rows = client
+        .query(
+            "SELECT provider, name, status, last_validated, validation_error \
+             FROM cloud_account WHERE project_id = $1 ORDER BY provider, name",
+            &[&ctx.project_id],
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to query cloud accounts");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    let mut azure = ProviderStatus {
+        available: false,
+        authenticated: false,
+        account: None,
+    };
+    let mut aws = ProviderStatus {
+        available: false,
+        authenticated: false,
+        account: None,
+    };
+    let mut gcp = ProviderStatus {
+        available: false,
+        authenticated: false,
+        account: None,
+    };
+
+    for row in &rows {
+        let provider: String = row.get("provider");
+        let name: String = row.get("name");
+        let status: String = row.get("status");
+        let is_active = status == "active";
+
+        let ps = ProviderStatus {
+            available: true,
+            authenticated: is_active,
+            account: Some(name),
+        };
+
+        match provider.to_lowercase().as_str() {
+            "azure" => azure = ps,
+            "aws" => aws = ps,
+            "gcp" => gcp = ps,
+            _ => {}
+        }
+    }
+
+    // SSH/LAN is always available (no cloud account needed)
+    let ssh = ProviderStatus {
+        available: true,
+        authenticated: true,
+        account: None,
+    };
 
     Ok(Json(CloudStatus {
         azure,
@@ -146,7 +101,7 @@ async fn cloud_status(
     }))
 }
 
-/// Project-scoped cloud status (pass-through — cloud status is global).
+/// Project-scoped cloud status — checks cloud_account table for the active project.
 pub fn project_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/cloud/status", get(cloud_status))
