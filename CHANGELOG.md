@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.23.1] - 2026-04-09
+
+### Fixed
+
+- **Chrome harness deploy**: Split single large SSH command into 5 smaller steps to avoid SSH buffer/encoding issues on fresh VMs
+
+---
+
 ## [0.23.0] - 2026-04-09
 
 ### Fixed

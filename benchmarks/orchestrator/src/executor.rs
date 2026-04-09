@@ -167,29 +167,58 @@ async fn deploy_chrome_harness(vm: &VmInfo) -> Result<()> {
         "if [ ! -d /tmp/nwk-repo/.git ]; then git clone --depth 1 https://github.com/irlm/networker-tester.git /tmp/nwk-repo 2>/dev/null < /dev/null; fi",
     ).await.ok(); // best-effort
 
-    let setup_cmd = concat!(
-        // Kill unattended-upgrades and wait for dpkg lock (fresh Azure VMs run auto-updates)
-        "export DEBIAN_FRONTEND=noninteractive && ",
-        "sudo systemctl stop unattended-upgrades 2>/dev/null; ",
-        "sudo pkill -9 -f 'apt|dpkg' 2>/dev/null; sleep 2; ",
-        "for i in $(seq 1 30); do sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || break; sleep 2; done && ",
-        "sudo apt-get update -qq < /dev/null && ",
-        "sudo mkdir -p /opt/bench/chrome-harness && ",
-        "sudo chown $(whoami):$(whoami) /opt/bench/chrome-harness && ",
-        // Install Chrome if missing
-        "if ! command -v google-chrome >/dev/null 2>&1 && ! command -v chromium-browser >/dev/null 2>&1; then ",
-        "  curl -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -o /tmp/chrome.deb < /dev/null && ",
-        "  sudo apt-get install -y -qq /tmp/chrome.deb < /dev/null || sudo apt-get install -y -qq chromium-browser < /dev/null; ",
-        "  rm -f /tmp/chrome.deb; ",
-        "fi && ",
-        // Install Node.js if missing
-        "if ! command -v npm >/dev/null 2>&1; then ",
-        "  sudo apt-get install -y -qq nodejs npm < /dev/null; ",
-        "fi",
-    );
-    ssh::ssh_exec(&vm.ip, setup_cmd)
-        .await
-        .with_context(|| format!("Failed to install Chrome/Node.js on {}", vm.ip))?;
+    // Step 1: Kill unattended-upgrades and wait for dpkg lock
+    ssh::ssh_exec(
+        &vm.ip,
+        "sudo systemctl stop unattended-upgrades 2>/dev/null; \
+         sudo pkill -9 -f unattended-upgr 2>/dev/null; \
+         sleep 3; \
+         sudo rm -f /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock 2>/dev/null; \
+         sudo dpkg --configure -a 2>/dev/null; \
+         echo dpkg-ok",
+    )
+    .await
+    .ok(); // best-effort
+
+    // Step 2: apt-get update
+    ssh::ssh_exec(
+        &vm.ip,
+        "export DEBIAN_FRONTEND=noninteractive && sudo apt-get update -qq < /dev/null",
+    )
+    .await
+    .with_context(|| format!("apt-get update failed on {}", vm.ip))?;
+
+    // Step 3: Create harness directory
+    ssh::ssh_exec(
+        &vm.ip,
+        "sudo mkdir -p /opt/bench/chrome-harness && sudo chown $(whoami):$(whoami) /opt/bench/chrome-harness",
+    )
+    .await
+    .with_context(|| format!("Failed to create harness dir on {}", vm.ip))?;
+
+    // Step 4: Install Chrome if missing
+    ssh::ssh_exec(
+        &vm.ip,
+        "export DEBIAN_FRONTEND=noninteractive && \
+         command -v google-chrome >/dev/null 2>&1 || command -v chromium-browser >/dev/null 2>&1 || { \
+           curl -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -o /tmp/chrome.deb < /dev/null && \
+           sudo apt-get install -y -qq /tmp/chrome.deb < /dev/null || \
+           sudo apt-get install -y -qq chromium-browser < /dev/null; \
+           rm -f /tmp/chrome.deb; \
+         }",
+    )
+    .await
+    .with_context(|| format!("Failed to install Chrome on {}", vm.ip))?;
+
+    // Step 5: Install Node.js if missing
+    ssh::ssh_exec(
+        &vm.ip,
+        "export DEBIAN_FRONTEND=noninteractive && \
+         command -v npm >/dev/null 2>&1 || \
+         sudo apt-get install -y -qq nodejs npm < /dev/null",
+    )
+    .await
+    .with_context(|| format!("Failed to install Node.js on {}", vm.ip))?;
 
     // Deploy harness files via the repo (should already be cloned by deploy_benchmark_server)
     let deploy_cmd = concat!(
