@@ -47,12 +47,10 @@ builder.WebHost.ConfigureKestrel(options =>
     });
 });
 
-var logFormat = Environment.GetEnvironmentVariable("LOG_FORMAT") ?? "text";
-if (logFormat == "json") {
+if (Environment.GetEnvironmentVariable("LOG_FORMAT") == "json")
+{
     builder.Logging.ClearProviders();
-    builder.Logging.AddJsonConsole(options => {
-        options.JsonWriterOptions = new System.Text.Json.JsonWriterOptions { Indented = false };
-    });
+    builder.Logging.AddJsonConsole();
 }
 
 var app = builder.Build();

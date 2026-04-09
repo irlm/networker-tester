@@ -265,21 +265,26 @@ async fn run_chrome_benchmark(
     } else {
         format!(" --token {bench_token}")
     };
+    // Write output to a file to avoid SSH stdout buffer limits (64KB).
+    // Then read the file back separately.
+    let output_file = "/tmp/bench-chrome-result.json";
     let cmd = format!(
-        "export PATH=/usr/bin:/usr/local/bin:$PATH && cd /opt/bench/chrome-harness && node runner.js \
+        "export PATH=/usr/bin:/usr/local/bin:$PATH && cd /opt/bench/chrome-harness && \
+         node runner.js \
          --target https://localhost:8443 \
          --warmup {} \
          --measured {} \
          --concurrency 10 \
          --http-version {} \
          --connection-mode {} \
-         --timeout {}{}",
+         --timeout {}{} > {} 2>/dev/null",
         methodology.warmup_runs,
         methodology.min_measured,
         http_version,
         connection_mode,
         methodology.timeout_secs,
         token_arg,
+        output_file,
     );
 
     tracing::info!(
@@ -287,13 +292,18 @@ async fn run_chrome_benchmark(
         language, proxy, http_version, connection_mode,
     );
 
-    let output = ssh::ssh_exec(&vm.ip, &cmd)
+    ssh::ssh_exec(&vm.ip, &cmd)
         .await
         .with_context(|| {
             format!(
                 "Chrome benchmark failed for {language} behind {proxy} (http={http_version}, conn={connection_mode})"
             )
         })?;
+
+    // Read the result file
+    let output = ssh::ssh_exec(&vm.ip, &format!("cat {output_file}"))
+        .await
+        .with_context(|| format!("Failed to read Chrome benchmark output from {}", vm.ip))?;
 
     // Parse JSON output
     let result: serde_json::Value = serde_json::from_str(&output).with_context(|| {

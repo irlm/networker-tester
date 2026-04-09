@@ -1,15 +1,13 @@
 {
   "version": 2,
-  "dgSpecHash": "uYYZQdN/oU8=",
+  "dgSpecHash": "b2cF6AWUTug=",
   "success": true,
-  "projectFilePath": "/Users/irlm/Projects/Rust/Network/benchmarks/reference-apis/csharp-net8/csharp-net8.csproj",
+  "projectFilePath": "/Users/irlm/Projects/GitHub/networker-tester/benchmarks/reference-apis/csharp-net8/csharp-net8.csproj",
   "expectedPackageFiles": [
     "/Users/irlm/.nuget/packages/microsoft.net.illink.tasks/8.0.22/microsoft.net.illink.tasks.8.0.22.nupkg.sha512",
     "/Users/irlm/.nuget/packages/microsoft.netcore.app.ref/8.0.22/microsoft.netcore.app.ref.8.0.22.nupkg.sha512",
-    "/Users/irlm/.nuget/packages/microsoft.netcore.app.runtime.linux-x64/8.0.22/microsoft.netcore.app.runtime.linux-x64.8.0.22.nupkg.sha512",
     "/Users/irlm/.nuget/packages/microsoft.aspnetcore.app.ref/8.0.22/microsoft.aspnetcore.app.ref.8.0.22.nupkg.sha512",
-    "/Users/irlm/.nuget/packages/microsoft.aspnetcore.app.runtime.linux-x64/8.0.22/microsoft.aspnetcore.app.runtime.linux-x64.8.0.22.nupkg.sha512",
-    "/Users/irlm/.nuget/packages/microsoft.netcore.app.host.linux-x64/8.0.22/microsoft.netcore.app.host.linux-x64.8.0.22.nupkg.sha512"
+    "/Users/irlm/.nuget/packages/microsoft.netcore.app.host.osx-arm64/8.0.22/microsoft.netcore.app.host.osx-arm64.8.0.22.nupkg.sha512"
   ],
   "logs": []
 }

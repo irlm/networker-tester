@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.23.7] - 2026-04-09
+
+### Fixed
+
+- **Chrome benchmark output**: Write to file on VM then read back, avoids SSH 64KB stdout truncation
+- **C# logging**: Simplified AddJsonConsole call to fix top-level statement compatibility
+- **SSH timeout message**: Corrected from "5min" to "20min"
+
+---
+
 ## [0.23.6] - 2026-04-09
 
 ### Fixed

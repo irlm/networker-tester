@@ -45,7 +45,7 @@ pub async fn ssh_exec(ip: &str, cmd: &str) -> Result<String> {
 
     let output = tokio::time::timeout(SSH_COMMAND_TIMEOUT, fut)
         .await
-        .context("SSH command timed out (5min limit)")?
+        .context("SSH command timed out (20min limit)")?
         .context("failed to execute ssh")?;
 
     if !output.status.success() {
