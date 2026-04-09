@@ -159,21 +159,31 @@ enum Command {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // For the Run subcommand, peek at the config file for logs_db_url before
-    // initialising tracing so we can enable DB log shipping from the start.
-    let logs_db_url = if let Command::Run { ref config, .. } = cli.command {
-        std::fs::read_to_string(config)
+    // For the Run subcommand, peek at the config file for logs_db_url and
+    // config_id before initialising tracing so we can enable DB log shipping
+    // and attach the benchmark config_id to every log entry.
+    let (logs_db_url, peek_config_id) = if let Command::Run { ref config, .. } = cli.command {
+        let parsed = std::fs::read_to_string(config)
             .ok()
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-            .and_then(|v| v.get("logs_db_url")?.as_str().map(String::from))
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+        let db_url = parsed
+            .as_ref()
+            .and_then(|v| v.get("logs_db_url")?.as_str().map(String::from));
+        let cfg_id = parsed
+            .as_ref()
+            .and_then(|v| v.get("config_id")?.as_str().map(String::from));
+        (db_url, cfg_id)
     } else {
-        None
+        (None, None)
     };
 
     let mut builder = networker_log::LogBuilder::new("orchestrator")
         .with_console(networker_log::Stream::Stderr);
     if let Some(ref url) = logs_db_url {
         builder = builder.with_db(url);
+    }
+    if let Some(ref cid) = peek_config_id {
+        builder = builder.with_context("config_id", cid);
     }
     let _log_guard = builder.init().await?;
 

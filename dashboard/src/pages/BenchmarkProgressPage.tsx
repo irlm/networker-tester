@@ -207,10 +207,18 @@ export function BenchmarkProgressPage() {
   // Fetch historical orchestrator logs for this config (fallback when WS logs are empty)
   useEffect(() => {
     if (!configId) return;
-    const fetchHistoricalLogs = () => {
-      api.getSystemLogs({ config_id: configId, service: 'orchestrator', limit: 500 })
-        .then(data => setHistoricalLogs(data.entries))
-        .catch(() => {});
+    const fetchHistoricalLogs = async () => {
+      try {
+        // Try with config_id first (new orchestrator versions set it)
+        const data = await api.getSystemLogs({ config_id: configId, service: 'orchestrator', limit: 500 });
+        if (data.entries.length > 0) {
+          setHistoricalLogs(data.entries);
+        } else {
+          // Fallback: get recent orchestrator logs without config_id filter
+          const fallback = await api.getSystemLogs({ service: 'orchestrator', limit: 100 });
+          setHistoricalLogs(fallback.entries);
+        }
+      } catch { /* ignore */ }
     };
     fetchHistoricalLogs();
     // Poll while active, stop when done

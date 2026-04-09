@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.22.8] - 2026-04-09
+
+### Fixed
+
+- **Orchestrator config_id in logs**: Orchestrator now sets config_id context from benchmark config so logs are queryable by benchmark
+- **Progress page log fallback**: Falls back to recent orchestrator logs when config_id filter returns empty
+
+---
+
 ## [0.22.7] - 2026-04-09
 
 ### Fixed
