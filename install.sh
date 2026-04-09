@@ -324,7 +324,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.23.7"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.23.8"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -9395,16 +9395,36 @@ deploy_benchmark_server() {
                 sudo apt-get update -qq < /dev/null
                 sudo apt-get install -y -qq nginx < /dev/null
             fi
-            # Deploy config + download files
-            if [ -f "$API_DIR/nginx/nginx.conf" ]; then
-                sudo cp "$API_DIR/nginx/nginx.conf" /etc/nginx/nginx.conf
-            fi
+            # Generate download files
             sudo mkdir -p "$BENCH_DIR/download"
             sudo chown www-data:www-data /tmp/nginx_uploads 2>/dev/null || true
             if [ -f "$API_DIR/nginx/generate-download-files.sh" ]; then
                 bash "$API_DIR/nginx/generate-download-files.sh" "$BENCH_DIR/download"
             fi
-            sudo nginx -t && sudo systemctl restart nginx
+            if [ "$BENCH_USE_TLS" = "0" ]; then
+                # Application mode: nginx serves as a plain HTTP static server on BENCH_PORT (8080)
+                # behind the reverse proxy. DON'T replace the proxy's nginx.conf.
+                echo ">> Configuring nginx as static backend on port $BENCH_PORT (application mode)"
+                sudo tee /etc/nginx/conf.d/bench-static.conf > /dev/null <<NGINX_APP_EOF
+server {
+    listen ${BENCH_PORT};
+    server_name _;
+    root $BENCH_DIR/download;
+    location /health { return 200 '{"status":"ok","server":"nginx-static"}'; add_header Content-Type application/json; }
+    location /download/ { alias $BENCH_DIR/download/; }
+    location /upload { client_max_body_size 100m; proxy_pass http://127.0.0.1:${BENCH_PORT}; }
+}
+NGINX_APP_EOF
+                # Remove default server on 80 to avoid conflicts
+                sudo rm -f /etc/nginx/conf.d/default.conf 2>/dev/null
+                sudo nginx -t && sudo systemctl reload nginx
+            else
+                # Fullstack mode: nginx serves directly on 8443 with TLS
+                if [ -f "$API_DIR/nginx/nginx.conf" ]; then
+                    sudo cp "$API_DIR/nginx/nginx.conf" /etc/nginx/nginx.conf
+                fi
+                sudo nginx -t && sudo systemctl restart nginx
+            fi
             ;;
 
         go)
@@ -9414,7 +9434,7 @@ deploy_benchmark_server() {
             }
             cd "$API_DIR/go" && go build -o "$BENCH_DIR/go-server" . 2>/dev/null < /dev/null
             chmod +x "$BENCH_DIR/go-server"
-            BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT=8443 \
+            BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT="$BENCH_PORT" \
                 nohup "$BENCH_DIR/go-server" > "$BENCH_DIR/go-server.log" 2>&1 &
             ;;
 
@@ -9425,7 +9445,7 @@ deploy_benchmark_server() {
                 sudo apt-get install -y -qq nodejs npm < /dev/null
             }
             cd "$API_DIR/nodejs" && npm install --quiet 2>/dev/null < /dev/null
-            BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT=8443 \
+            BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT="$BENCH_PORT" \
                 nohup node "$API_DIR/nodejs/server.js" > "$BENCH_DIR/nodejs.log" 2>&1 &
             ;;
 
@@ -9436,13 +9456,21 @@ deploy_benchmark_server() {
             cd "$API_DIR/python"
             python3 -m venv "$BENCH_DIR/pyenv" < /dev/null
             "$BENCH_DIR/pyenv/bin/pip" install --quiet -r requirements.txt < /dev/null
-            BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT=8443 \
-                nohup "$BENCH_DIR/pyenv/bin/hypercorn" server:app \
-                    --bind "0.0.0.0:8443" \
-                    --certfile "$CERT_PEM" --keyfile "$CERT_KEY" \
-                    --quic-bind "0.0.0.0:8443" \
-                    --access-log - \
-                    > "$BENCH_DIR/python.log" 2>&1 &
+            if [ "$BENCH_USE_TLS" = "1" ]; then
+                BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT="$BENCH_PORT" \
+                    nohup "$BENCH_DIR/pyenv/bin/hypercorn" server:app \
+                        --bind "0.0.0.0:${BENCH_PORT}" \
+                        --certfile "$CERT_PEM" --keyfile "$CERT_KEY" \
+                        --quic-bind "0.0.0.0:${BENCH_PORT}" \
+                        --access-log - \
+                        > "$BENCH_DIR/python.log" 2>&1 &
+            else
+                BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT="$BENCH_PORT" \
+                    nohup "$BENCH_DIR/pyenv/bin/hypercorn" server:app \
+                        --bind "0.0.0.0:${BENCH_PORT}" \
+                        --access-log - \
+                        > "$BENCH_DIR/python.log" 2>&1 &
+            fi
             ;;
 
         java)
@@ -9457,7 +9485,7 @@ deploy_benchmark_server() {
                 javac -d "$BENCH_DIR/java-build" *.java 2>/dev/null < /dev/null
             }
             cd "$BENCH_DIR/java-build"
-            BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT=8443 \
+            BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT="$BENCH_PORT" \
                 nohup java Server > "$BENCH_DIR/java.log" 2>&1 &
             ;;
 
@@ -9471,7 +9499,7 @@ deploy_benchmark_server() {
             make -j"$(nproc)" < /dev/null 2>/dev/null
             cp server "$BENCH_DIR/cpp-server" 2>/dev/null || cp bench-server "$BENCH_DIR/cpp-server" 2>/dev/null
             chmod +x "$BENCH_DIR/cpp-server"
-            BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT=8443 \
+            BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT="$BENCH_PORT" \
                 nohup "$BENCH_DIR/cpp-server" > "$BENCH_DIR/cpp.log" 2>&1 &
             ;;
 
@@ -9482,7 +9510,7 @@ deploy_benchmark_server() {
             cd "$API_DIR/ruby"
             sudo gem install bundler --quiet < /dev/null
             bundle install --quiet < /dev/null
-            BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT=8443 \
+            BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT="$BENCH_PORT" \
                 nohup bundle exec puma -C puma.rb > "$BENCH_DIR/ruby.log" 2>&1 &
             ;;
 
@@ -9494,7 +9522,7 @@ deploy_benchmark_server() {
                 sudo pecl install swoole < /dev/null
                 echo 'extension=swoole.so' | sudo tee /etc/php/*/cli/conf.d/20-swoole.ini
             }
-            BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT=8443 \
+            BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT="$BENCH_PORT" \
                 nohup php "$API_DIR/php/server.php" > "$BENCH_DIR/php.log" 2>&1 &
             ;;
 
@@ -9538,7 +9566,7 @@ deploy_benchmark_server() {
                     dotnet publish -c Release -o "$BENCH_DIR/$lang" < /dev/null 2>/dev/null
                 fi
                 chmod +x "$BENCH_DIR/$lang/$lang" 2>/dev/null || true
-                BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT=8443 \
+                BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT="$BENCH_PORT" \
                     nohup "$BENCH_DIR/$lang/$lang" > "$BENCH_DIR/$lang.log" 2>&1 &
             else
                 echo "ERROR: No reference API found for $lang at $csharp_dir"
@@ -9556,10 +9584,10 @@ deploy_benchmark_server() {
             fi
             cd "$lang_dir"
             if [ -f deploy.sh ]; then
-                BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT=8443 bash deploy.sh
+                BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT="$BENCH_PORT" bash deploy.sh
             elif [ -f build.sh ]; then
                 bash build.sh < /dev/null
-                BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT=8443 bash start.sh
+                BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT="$BENCH_PORT" bash start.sh
             else
                 echo "ERROR: No deploy.sh or build.sh found for $lang"
                 return 1

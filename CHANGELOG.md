@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.23.8] - 2026-04-09
+
+### Fixed
+
+- **Language server ports**: All servers (Go, Node.js, Python, Java, C++, Ruby, PHP, C#) now use $BENCH_PORT variable instead of hardcoded 8443. In application mode (behind proxy), servers correctly bind to port 8080.
+- **Python TLS**: Python server only uses TLS certs in fullstack mode, not in application mode (behind proxy)
+- **nginx as language**: In application mode, nginx serves as plain HTTP static backend on port 8080 instead of replacing the proxy config
+
+---
+
 ## [0.23.7] - 2026-04-09
 
 ### Fixed
