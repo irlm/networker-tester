@@ -17,16 +17,17 @@ pub fn generate_json(run: &BenchmarkRun, output: &Path) -> Result<()> {
 
 /// Classify a result as cold or warm based on total_requests threshold.
 fn is_cold(r: &BenchmarkResult) -> bool {
-    r.network.total_requests <= 100
+    r.phase == "cold" || r.network.total_requests <= 100
 }
 
-/// Aggregate results per language: pick the best warm result (highest RPS)
-/// and the corresponding cold result for each language.
+/// Aggregate results per language using warm/cold repeat sets rather than
+/// cherry-picking the single best run.
 struct LangSummary {
     language: String,
     runtime: String,
     warm: BenchmarkResult,
     cold: Option<BenchmarkResult>,
+    repeat_count: usize,
 }
 
 fn summarise_by_language(run: &BenchmarkRun) -> Vec<LangSummary> {
@@ -46,46 +47,96 @@ fn summarise_by_language(run: &BenchmarkRun) -> Vec<LangSummary> {
     let mut summaries: Vec<LangSummary> = Vec::new();
 
     for (lang, warm_results) in &warm_map {
-        let best_warm = warm_results
-            .iter()
-            .max_by(|a, b| a.network.rps.partial_cmp(&b.network.rps).unwrap())
-            .unwrap();
+        let aggregate_warm = aggregate_results(warm_results);
 
-        let best_cold = cold_map
+        let aggregate_cold = cold_map
             .get(lang)
-            .and_then(|cs| {
-                cs.iter()
-                    .max_by(|a, b| a.network.rps.partial_cmp(&b.network.rps).unwrap())
-            })
-            .cloned();
+            .map(|cs| aggregate_results(cs));
 
         summaries.push(LangSummary {
             language: lang.clone(),
-            runtime: best_warm.runtime.clone(),
-            warm: (*best_warm).clone(),
-            cold: best_cold.cloned(),
+            runtime: aggregate_warm.runtime.clone(),
+            warm: aggregate_warm,
+            cold: aggregate_cold,
+            repeat_count: warm_results.len(),
         });
     }
 
     // Include languages that only have cold results
     for (lang, cold_results) in &cold_map {
         if !warm_map.contains_key(lang) {
-            let best_cold = cold_results
-                .iter()
-                .max_by(|a, b| a.network.rps.partial_cmp(&b.network.rps).unwrap())
-                .unwrap();
+            let aggregate_cold = aggregate_results(cold_results);
             summaries.push(LangSummary {
                 language: lang.clone(),
-                runtime: best_cold.runtime.clone(),
-                warm: (*best_cold).clone(),
-                cold: Some((*best_cold).clone()),
+                runtime: aggregate_cold.runtime.clone(),
+                warm: aggregate_cold.clone(),
+                cold: Some(aggregate_cold),
+                repeat_count: cold_results.len(),
             });
         }
     }
 
-    // Sort by warm RPS descending
+    // Sort by aggregate warm RPS descending
     summaries.sort_by(|a, b| b.warm.network.rps.partial_cmp(&a.warm.network.rps).unwrap());
     summaries
+}
+
+fn aggregate_results(results: &[&BenchmarkResult]) -> BenchmarkResult {
+    let first = (*results[0]).clone();
+    let n = results.len() as f64;
+
+    let sum = |f: fn(&BenchmarkResult) -> f64| results.iter().map(|r| f(r)).sum::<f64>();
+    let sum_u64 = |f: fn(&BenchmarkResult) -> u64| results.iter().map(|r| f(r)).sum::<u64>();
+
+    let mut aggregated = first.clone();
+    aggregated.network.rps = sum(|r| r.network.rps) / n;
+    aggregated.network.latency_mean_ms = sum(|r| r.network.latency_mean_ms) / n;
+    aggregated.network.latency_p50_ms = sum(|r| r.network.latency_p50_ms) / n;
+    aggregated.network.latency_p99_ms = sum(|r| r.network.latency_p99_ms) / n;
+    aggregated.network.latency_p999_ms = sum(|r| r.network.latency_p999_ms) / n;
+    aggregated.network.latency_max_ms = results
+        .iter()
+        .map(|r| r.network.latency_max_ms)
+        .fold(0.0_f64, f64::max);
+    aggregated.network.bytes_transferred = sum_u64(|r| r.network.bytes_transferred) / results.len() as u64;
+    aggregated.network.error_count = sum_u64(|r| r.network.error_count);
+    aggregated.network.total_requests = sum_u64(|r| r.network.total_requests);
+
+    aggregated.resources.peak_rss_bytes = results
+        .iter()
+        .map(|r| r.resources.peak_rss_bytes)
+        .max()
+        .unwrap_or(0);
+    aggregated.resources.avg_cpu_fraction = sum(|r| r.resources.avg_cpu_fraction) / n;
+    aggregated.resources.peak_cpu_fraction = results
+        .iter()
+        .map(|r| r.resources.peak_cpu_fraction)
+        .fold(0.0_f64, f64::max);
+    aggregated.resources.peak_open_fds = results
+        .iter()
+        .map(|r| r.resources.peak_open_fds)
+        .max()
+        .unwrap_or(0);
+
+    aggregated.startup.time_to_first_response_ms = sum(|r| r.startup.time_to_first_response_ms) / n;
+    aggregated.startup.time_to_ready_ms = sum(|r| r.startup.time_to_ready_ms) / n;
+
+    aggregated.result_validity.state = if results.iter().any(|r| r.result_validity.state == crate::types::ValidityState::Invalid) {
+        crate::types::ValidityState::Invalid
+    } else if results.iter().any(|r| r.result_validity.state == crate::types::ValidityState::Degraded) {
+        crate::types::ValidityState::Degraded
+    } else {
+        crate::types::ValidityState::Valid
+    };
+    aggregated.result_validity.is_valid = aggregated.result_validity.state == crate::types::ValidityState::Valid;
+    let mut warnings: Vec<String> = results
+        .iter()
+        .flat_map(|r| r.result_validity.warnings.clone())
+        .collect();
+    warnings.sort();
+    warnings.dedup();
+    aggregated.result_validity.warnings = warnings;
+    aggregated
 }
 
 fn format_bytes(bytes: u64) -> String {
@@ -319,7 +370,7 @@ fn svg_latency_chart(summaries: &[LangSummary]) -> String {
         let gx = margin_l + i as f64 * group_w + group_w / 2.0;
         let vals = [
             s.warm.network.latency_p50_ms,
-            s.warm.network.latency_p999_ms, // using p999 as p95 proxy
+            (s.warm.network.latency_p50_ms + s.warm.network.latency_p99_ms) / 2.0,
             s.warm.network.latency_p99_ms,
         ];
         let labels = ["p50", "p95", "p99"];
@@ -709,6 +760,62 @@ fn write_methodology(html: &mut String, run: &BenchmarkRun) {
     );
     let _ = write!(
         html,
+        "<dt>Run purpose</dt><dd><code>{:?}</code></dd>\n",
+        run.run_purpose
+    );
+    let _ = write!(
+        html,
+        "<dt>Benchmark family</dt><dd><code>{:?}</code></dd>\n",
+        run.benchmark_family
+    );
+    let _ = write!(
+        html,
+        "<dt>Benchmark intent</dt><dd><code>{:?}</code></dd>\n",
+        run.benchmark_intent
+    );
+    let _ = write!(
+        html,
+        "<dt>Scenario</dt><dd>connection=<code>{:?}</code>, browser=<code>{:?}</code>, load=<code>{:?}</code>, model=<code>{:?}</code>, topology=<code>{:?}</code></dd>\n",
+        run.scenario.connection_state,
+        run.scenario.browser_view,
+        run.scenario.load_state,
+        run.scenario.load_model,
+        run.scenario.topology_class
+    );
+    let _ = write!(
+        html,
+        "<dt>Workload</dt><dd>request=<code>{}</code>, response=<code>{}</code>, reuse=<code>{}</code>, arrival=<code>{}</code>, think_time_ms={}</dd>\n",
+        escape_html(&run.workload_profile.request_size_bytes),
+        escape_html(&run.workload_profile.response_size_bytes),
+        escape_html(&run.workload_profile.connection_reuse),
+        escape_html(&run.workload_profile.arrival_pattern),
+        run.workload_profile.think_time_ms
+    );
+    if let Some(template) = &run.workload_template {
+        let _ = write!(
+            html,
+            "<dt>Workload template</dt><dd><code>{}:{}</code></dd>\n",
+            escape_html(&template.name),
+            escape_html(&template.version)
+        );
+    }
+    if let Some(offered) = &run.offered_load {
+        if let Some(qps) = offered.qps {
+            let _ = write!(html, "<dt>Offered load</dt><dd>{:.2} qps</dd>\n", qps);
+        }
+    }
+    let _ = write!(
+        html,
+        "<dt>Validity</dt><dd>env=<code>{:?}</code>, protocol_verified={}, client_risk=<code>{:?}</code>, topology=<code>{:?}</code>, sample_size={}, method=<code>{}</code></dd>\n",
+        run.validity_manifest.environment_stability,
+        run.validity_manifest.protocol_verified,
+        run.validity_manifest.client_saturation_risk,
+        run.validity_manifest.topology_control,
+        run.validity_manifest.sample_size,
+        escape_html(&run.validity_manifest.measurement_method)
+    );
+    let _ = write!(
+        html,
         "<dt>Started</dt><dd>{}</dd>\n",
         run.started_at.format("%Y-%m-%d %H:%M:%S UTC")
     );
@@ -747,6 +854,20 @@ fn write_methodology(html: &mut String, run: &BenchmarkRun) {
     );
 
     html.push_str("</dl>\n</section>\n\n");
+
+    html.push_str("<section class=\"card\">\n<h2>Methodology Caveats</h2>\n<ul>");
+    html.push_str("<li>No automatic cross-family composite score is used in this report.</li>");
+    html.push_str("<li>Only runs with compatible family, intent, workload, and scenario should be compared side-by-side.</li>");
+    if !run.validity_manifest.protocol_verified {
+        html.push_str("<li>Protocol verification is not marked complete, so protocol-specific claims should be treated cautiously.</li>");
+    }
+    if run.validity_manifest.sample_size < 5 {
+        html.push_str("<li>Sample size is below the spec baseline for stronger comparative claims.</li>");
+    }
+    if run.scenario.protocol_negotiated.is_none() {
+        html.push_str("<li>Negotiated protocol was not persisted by the runner for this run.</li>");
+    }
+    html.push_str("</ul>\n</section>\n\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -1030,6 +1151,7 @@ mod tests {
             runtime: runtime.into(),
             concurrency: 10,
             repeat_index: 0,
+            phase: if cold { "cold".into() } else { "warm".into() },
             network: NetworkMetrics {
                 rps,
                 latency_mean_ms: 1.0 / rps * 1000.0,
@@ -1056,6 +1178,13 @@ mod tests {
                 compressed_size_bytes: 3_000_000,
                 docker_image_bytes: None,
             },
+            fairness: Default::default(),
+            result_validity: crate::types::ResultValidity {
+                state: crate::types::ValidityState::Valid,
+                is_valid: true,
+                warnings: vec![],
+            },
+            diagnostics: crate::types::BenchmarkDiagnostics::default(),
         }
     }
 
@@ -1065,6 +1194,43 @@ mod tests {
             started_at: Utc::now() - chrono::Duration::minutes(30),
             finished_at: Some(Utc::now()),
             config_path: "benchmarks/config.json".into(),
+            run_purpose: crate::types::RunPurpose::Benchmark,
+            benchmark_family: crate::types::BenchmarkFamily::RuntimeEfficiency,
+            benchmark_intent: crate::types::BenchmarkIntent::RuntimeEfficiencyUnderLoad,
+            scenario: crate::types::ScenarioState {
+                connection_state: crate::types::ConnectionState::Pooled,
+                browser_view: crate::types::BrowserView::NotApplicable,
+                load_state: crate::types::LoadState::Loaded,
+                load_model: crate::types::LoadModel::ClosedLoop,
+                topology_class: crate::types::TopologyClass::WanLowRtt,
+                protocol_expected: Some("http2".into()),
+                protocol_negotiated: Some("http2".into()),
+            },
+            workload_profile: crate::types::WorkloadProfile {
+                request_size_bytes: "small_json".into(),
+                response_size_bytes: "small_json".into(),
+                concurrency_limit: Some(100),
+                connection_reuse: "pooled".into(),
+                arrival_pattern: "completion_driven".into(),
+                burstiness: "none".into(),
+                think_time_ms: 0,
+                object_count: None,
+            },
+            workload_template: Some(crate::types::WorkloadTemplateRef {
+                name: "api_small_payload".into(),
+                version: "v1".into(),
+            }),
+            offered_load: None,
+            validity_manifest: crate::types::ValidityManifest {
+                environment_stability: crate::types::StabilityGrade::Medium,
+                protocol_verified: false,
+                client_saturation_risk: crate::types::StabilityGrade::Medium,
+                topology_control: crate::types::TopologyControl::SemiControlled,
+                sample_size: 3,
+                warm_state_certainty: crate::types::StabilityGrade::Medium,
+                measurement_method: "closed_loop_basic".into(),
+            },
+            reproducibility: crate::types::ReproducibilityMetadata::default(),
             results: vec![
                 sample_result("rust", "axum", 85000.0, true),
                 sample_result("rust", "axum", 120000.0, false),
@@ -1168,6 +1334,40 @@ mod tests {
             started_at: Utc::now(),
             finished_at: Some(Utc::now()),
             config_path: "empty.json".into(),
+            run_purpose: crate::types::RunPurpose::Benchmark,
+            benchmark_family: crate::types::BenchmarkFamily::RuntimeEfficiency,
+            benchmark_intent: crate::types::BenchmarkIntent::RuntimeEfficiencyUnderLoad,
+            scenario: crate::types::ScenarioState {
+                connection_state: crate::types::ConnectionState::Pooled,
+                browser_view: crate::types::BrowserView::NotApplicable,
+                load_state: crate::types::LoadState::Loaded,
+                load_model: crate::types::LoadModel::ClosedLoop,
+                topology_class: crate::types::TopologyClass::WanLowRtt,
+                protocol_expected: Some("http2".into()),
+                protocol_negotiated: None,
+            },
+            workload_profile: crate::types::WorkloadProfile {
+                request_size_bytes: "small_json".into(),
+                response_size_bytes: "small_json".into(),
+                concurrency_limit: None,
+                connection_reuse: "pooled".into(),
+                arrival_pattern: "completion_driven".into(),
+                burstiness: "none".into(),
+                think_time_ms: 0,
+                object_count: None,
+            },
+            workload_template: None,
+            offered_load: None,
+            validity_manifest: crate::types::ValidityManifest {
+                environment_stability: crate::types::StabilityGrade::Medium,
+                protocol_verified: false,
+                client_saturation_risk: crate::types::StabilityGrade::Medium,
+                topology_control: crate::types::TopologyControl::SemiControlled,
+                sample_size: 1,
+                warm_state_certainty: crate::types::StabilityGrade::Medium,
+                measurement_method: "closed_loop_basic".into(),
+            },
+            reproducibility: crate::types::ReproducibilityMetadata::default(),
             results: vec![],
         };
         let dir = std::env::temp_dir();
