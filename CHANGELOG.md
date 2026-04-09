@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.22.9] - 2026-04-09
+
+### Fixed
+
+- **Chrome harness deploy**: Kill unattended-upgrades and wait for dpkg lock before apt-get on fresh Azure VMs
+
+---
+
 ## [0.22.8] - 2026-04-09
 
 ### Fixed

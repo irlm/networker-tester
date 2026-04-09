@@ -168,6 +168,11 @@ async fn deploy_chrome_harness(vm: &VmInfo) -> Result<()> {
     ).await.ok(); // best-effort
 
     let setup_cmd = concat!(
+        // Kill unattended-upgrades and wait for dpkg lock (fresh Azure VMs run auto-updates)
+        "export DEBIAN_FRONTEND=noninteractive && ",
+        "sudo systemctl stop unattended-upgrades 2>/dev/null; ",
+        "sudo pkill -9 -f 'apt|dpkg' 2>/dev/null; sleep 2; ",
+        "for i in $(seq 1 30); do sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || break; sleep 2; done && ",
         "sudo apt-get update -qq < /dev/null && ",
         "sudo mkdir -p /opt/bench/chrome-harness && ",
         "sudo chown $(whoami):$(whoami) /opt/bench/chrome-harness && ",
