@@ -125,13 +125,12 @@ export function BenchmarkProgressPage() {
 
   usePolling(loadConfig, 5000, !!configId);
 
-  // Load testbed details on mount
-  useEffect(() => {
+  // Load config + testbed details on mount and poll while active
+  const fetchConfig = useCallback(() => {
     if (!configId || !projectId) return;
     api.getBenchmarkConfig(projectId, configId)
       .then((data) => {
         setConfig(data);
-        // Extract testbed details from config
         const configData = data as unknown as Record<string, unknown>;
         const rawTestbeds = (configData.testbeds ?? configData.testbed_configs ?? []) as TestbedDetail[];
         if (Array.isArray(rawTestbeds)) {
@@ -141,6 +140,17 @@ export function BenchmarkProgressPage() {
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [configId, projectId]);
+
+  useEffect(() => {
+    fetchConfig();
+  }, [fetchConfig]);
+
+  // Poll config + testbed status while benchmark is active
+  useEffect(() => {
+    if (!isActive) return;
+    const interval = setInterval(fetchConfig, 5000);
+    return () => clearInterval(interval);
+  }, [isActive, fetchConfig]);
 
   // Fetch saved results from API (handles page reload — WS results are ephemeral)
   useEffect(() => {
@@ -199,10 +209,22 @@ export function BenchmarkProgressPage() {
     }
   };
 
-  // Derive effective status from WS or polled config
-  const effectiveStatus = live.configStatus || config?.status || 'pending';
-  const isActive = ['running', 'provisioning', 'deploying', 'pending'].includes(effectiveStatus);
-  const isDone = ['completed', 'failed', 'cancelled'].includes(effectiveStatus);
+  // Derive effective status from WS or polled config, refined by testbed phase.
+  // When config says "running" but testbeds are still provisioning/deploying,
+  // show the actual phase so the user knows what's happening.
+  const rawStatus = live.configStatus || config?.status || 'pending';
+  const effectiveStatus = (() => {
+    if (rawStatus !== 'running') return rawStatus;
+    // Refine "running" based on testbed statuses
+    const tbStatuses = (testbeds || []).map((tb: Record<string, unknown>) => tb.status as string);
+    if (tbStatuses.length === 0) return 'queued';
+    if (tbStatuses.every(s => s === 'pending')) return 'queued';
+    if (tbStatuses.some(s => s === 'provisioning')) return 'provisioning';
+    if (tbStatuses.some(s => s === 'deploying')) return 'deploying';
+    return 'running';
+  })();
+  const isActive = ['running', 'provisioning', 'deploying', 'pending', 'queued'].includes(effectiveStatus);
+  const isDone = ['completed', 'failed', 'cancelled', 'completed_with_errors'].includes(effectiveStatus);
 
   // Fetch historical orchestrator logs for this config (fallback when WS logs are empty)
   useEffect(() => {

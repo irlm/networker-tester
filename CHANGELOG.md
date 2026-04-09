@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.23.6] - 2026-04-09
+
+### Fixed
+
+- **Progress page**: Top status bar now shows actual phase (provisioning/deploying/running) based on testbed statuses, with 5s polling
+
+---
+
 ## [0.23.5] - 2026-04-09
 
 ### Fixed
