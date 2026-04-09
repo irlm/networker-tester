@@ -65,6 +65,7 @@ interface TestbedDetail {
   os?: string;
   topology: string;
   languages: string[];
+  status?: string;
 }
 
 const EMPTY_LIVE: BenchmarkLive = {
@@ -146,11 +147,13 @@ export function BenchmarkProgressPage() {
   }, [fetchConfig]);
 
   // Poll config + testbed status while benchmark is active
+  const configStatus = config?.status || 'pending';
+  const stillRunning = ['running', 'provisioning', 'deploying', 'pending', 'queued'].includes(configStatus);
   useEffect(() => {
-    if (!isActive) return;
+    if (!stillRunning) return;
     const interval = setInterval(fetchConfig, 5000);
     return () => clearInterval(interval);
-  }, [isActive, fetchConfig]);
+  }, [stillRunning, fetchConfig]);
 
   // Fetch saved results from API (handles page reload — WS results are ephemeral)
   useEffect(() => {
