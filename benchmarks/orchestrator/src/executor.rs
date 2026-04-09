@@ -196,29 +196,25 @@ async fn deploy_chrome_harness(vm: &VmInfo) -> Result<()> {
     .await
     .with_context(|| format!("Failed to create harness dir on {}", vm.ip))?;
 
-    // Step 4: Install Chrome if missing
+    // Step 4: Install Chrome + Node.js using the same approach as install.sh
+    // Uses heredoc via SSH to avoid command encoding issues
     ssh::ssh_exec(
         &vm.ip,
-        "export DEBIAN_FRONTEND=noninteractive && \
-         command -v google-chrome >/dev/null 2>&1 || command -v chromium-browser >/dev/null 2>&1 || { \
-           curl -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -o /tmp/chrome.deb < /dev/null && \
-           sudo apt-get install -y -qq /tmp/chrome.deb < /dev/null || \
-           sudo apt-get install -y -qq chromium-browser < /dev/null; \
-           rm -f /tmp/chrome.deb; \
-         }",
+        "bash -c 'export DEBIAN_FRONTEND=noninteractive; \
+         for cmd in google-chrome chromium-browser chromium; do command -v $cmd >/dev/null 2>&1 && echo \"Chrome found: $cmd\" && CHROME_OK=1 && break; done; \
+         if [ -z \"$CHROME_OK\" ]; then \
+           echo \"Installing Chromium...\"; \
+           sudo apt-get install -y -qq chromium-browser < /dev/null 2>/dev/null || \
+           sudo apt-get install -y -qq chromium < /dev/null 2>/dev/null || \
+           sudo snap install chromium 2>/dev/null || \
+           { curl -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -o /tmp/chrome.deb < /dev/null && \
+             sudo apt-get install -y -qq /tmp/chrome.deb < /dev/null; rm -f /tmp/chrome.deb; }; \
+         fi; \
+         command -v npm >/dev/null 2>&1 || { echo \"Installing Node.js...\"; sudo apt-get install -y -qq nodejs npm < /dev/null; }; \
+         echo \"Setup complete\"'",
     )
     .await
-    .with_context(|| format!("Failed to install Chrome on {}", vm.ip))?;
-
-    // Step 5: Install Node.js if missing
-    ssh::ssh_exec(
-        &vm.ip,
-        "export DEBIAN_FRONTEND=noninteractive && \
-         command -v npm >/dev/null 2>&1 || \
-         sudo apt-get install -y -qq nodejs npm < /dev/null",
-    )
-    .await
-    .with_context(|| format!("Failed to install Node.js on {}", vm.ip))?;
+    .with_context(|| format!("Failed to install Chrome/Node.js on {}", vm.ip))?;
 
     // Deploy harness files via the repo (should already be cloned by deploy_benchmark_server)
     let deploy_cmd = concat!(

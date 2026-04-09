@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.23.2] - 2026-04-09
+
+### Fixed
+
+- **Chrome harness install**: Try chromium-browser/chromium/snap before falling back to Google Chrome .deb download. Matches install.sh approach. Single bash -c command avoids SSH encoding issues.
+
+---
+
 ## [0.23.1] - 2026-04-09
 
 ### Fixed
