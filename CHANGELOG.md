@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.23.3] - 2026-04-09
+
+### Fixed
+
+- **Chrome install**: Download .deb directly instead of apt chromium (which triggers 200MB snap download on Ubuntu 24.04). Separate Chrome and Node.js into individual SSH steps.
+
+---
+
 ## [0.23.2] - 2026-04-09
 
 ### Fixed
