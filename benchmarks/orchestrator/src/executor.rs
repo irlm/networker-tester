@@ -464,6 +464,36 @@ async fn execute_testbed(
         .await
         .with_context(|| format!("resolving VM for testbed {}", testbed.testbed_id))?;
 
+    // Wait for SSH to become available (fresh VMs need 30-60s after creation)
+    if provisioned {
+        tracing::info!("Waiting for SSH on {}...", vm.ip);
+        log_callback(
+            callback,
+            &testbed.testbed_id,
+            vec![format!("Waiting for SSH on {}...", vm.ip)],
+        )
+        .await;
+        let mut ssh_ready = false;
+        for attempt in 1..=30 {
+            match ssh::ssh_exec(&vm.ip, "echo ok").await {
+                Ok(_) => {
+                    tracing::info!("SSH ready on {} (attempt {})", vm.ip, attempt);
+                    ssh_ready = true;
+                    break;
+                }
+                Err(_) => {
+                    if attempt % 5 == 0 {
+                        tracing::info!("SSH not ready on {} (attempt {}/30)", vm.ip, attempt);
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                }
+            }
+        }
+        if !ssh_ready {
+            anyhow::bail!("SSH not available on {} after 5 minutes", vm.ip);
+        }
+    }
+
     log_callback(
         callback,
         &testbed.testbed_id,

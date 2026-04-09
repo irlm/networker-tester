@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.23.0] - 2026-04-09
+
+### Fixed
+
+- **SSH wait-for-ready**: After provisioning a new Azure VM, wait up to 5 min for SSH to become available before deploying. Prevents "exit code 255" failures on fresh VMs.
+
+---
+
 ## [0.22.9] - 2026-04-09
 
 ### Fixed
