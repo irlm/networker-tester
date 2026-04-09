@@ -274,8 +274,8 @@ async fn cmd_run(
         });
 
     // -- Execute benchmark --
-    let mut run = types::BenchmarkRun::new(&config_path.to_string_lossy());
-    let total_steps = cfg.languages.len() * cfg.concurrency_levels.len();
+    let mut run = types::BenchmarkRun::new(&config_path.to_string_lossy(), cfg.benchmark_metadata());
+    let total_steps = cfg.languages.len() * cfg.concurrency_levels.len() * cfg.repeat as usize;
     let progress = progress::ProgressReporter::new(total_steps as u32);
 
     // Group test cases by language to share a VM per language
@@ -301,7 +301,19 @@ async fn cmd_run(
                     provisioner::start_vm(&existing).await?;
                     provisioner::refresh_ip(&mut existing).await?;
                 }
+                if let Err(e) = deployer::ssh_ready(&existing.ip).await {
+                    tracing::warn!(
+                        "Existing VM {} at {} is not SSH-ready ({e}); reprovisioning",
+                        existing.name,
+                        existing.ip
+                    );
+                    let _ = provisioner::destroy_vm(&existing).await;
+                    provisioner::provision_vm("azure", &os, &vm_size, &vm_name)
+                        .await
+                        .with_context(|| format!("reprovisioning VM for {}", lang.name))?
+                } else {
                 existing
+                }
             }
             None => provisioner::provision_vm("azure", &os, &vm_size, &vm_name)
                 .await
@@ -334,10 +346,14 @@ async fn cmd_run(
             warmup_requests: cfg.warmup_requests,
             benchmark_requests: cfg.total_requests,
             timeout_secs: cfg.timeout_secs,
+            load_model: cfg.scenario.load_model.clone(),
+            offered_qps: cfg.offered_load.as_ref().and_then(|l| l.qps),
+            connection_reuse_requested: cfg.workload_profile.connection_reuse == "pooled",
         };
 
         for &conc in &cfg.concurrency_levels {
-            let step_label = format!("{label_prefix} c={conc}");
+            for rep in 0..cfg.repeat {
+            let step_label = format!("{label_prefix} c={conc} r={}", rep + 1);
 
             match runner::run_cold_warm_cycle(&vm, &test_params, conc, &lang.name, &lang.runtime)
                 .await
@@ -356,14 +372,44 @@ async fn cmd_run(
                         warm.resources = agg;
                     }
 
+                    let mut cold = cold;
+                    let mut warm = warm;
+                    cold.repeat_index = rep;
+                    warm.repeat_index = rep;
+
+                    if warm.network.error_count > 0 {
+                        warm.result_validity.state = types::ValidityState::Degraded;
+                        warm.result_validity.warnings.push("request_errors_observed".into());
+                    }
+                    if !run.validity_manifest.protocol_verified {
+                        warm.result_validity.warnings.push("protocol_not_verified".into());
+                        cold.result_validity.warnings.push("protocol_not_verified".into());
+                    }
+                    if run.validity_manifest.sample_size < 5 {
+                        warm.result_validity.warnings.push("low_sample_size".into());
+                        cold.result_validity.warnings.push("low_sample_size".into());
+                    }
+
                     run.results.push(cold);
                     run.results.push(warm);
                     progress.tick(&step_label);
                 }
                 Err(e) => {
                     tracing::error!("Benchmark failed for {step_label}: {e:#}");
+                    match collector::capture_failure_diagnostics(&vm, &lang.name).await {
+                        Ok(diag) => tracing::warn!(
+                            "Failure diagnostics for {step_label} on {}:\n{}",
+                            vm.name,
+                            diag
+                        ),
+                        Err(diag_err) => tracing::warn!(
+                            "Could not capture failure diagnostics for {step_label} on {}: {diag_err:#}",
+                            vm.name
+                        ),
+                    }
                     progress.fail(&step_label, &e);
                 }
+            }
             }
         }
 
@@ -378,6 +424,11 @@ async fn cmd_run(
 
     run.finish();
     progress.finish();
+
+    anyhow::ensure!(
+        !run.results.is_empty(),
+        "benchmark completed without any results; inspect deploy/validation failures in the logs"
+    );
 
     // -- Write results --
     let output_dir = config_path
@@ -412,15 +463,10 @@ async fn cmd_run(
         );
         println!("{}", "-".repeat(62));
         for r in &run.results {
-            let phase = if r.network.total_requests <= 100 {
-                "cold"
-            } else {
-                "warm"
-            };
             println!(
                 "{:<16} {:<12} {:>10.1} {:>10.2} {:>10.2}",
                 r.language,
-                phase,
+                r.phase,
                 r.network.rps,
                 r.network.latency_p50_ms,
                 r.network.latency_p99_ms
