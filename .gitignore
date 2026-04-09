@@ -28,3 +28,10 @@ benchmarks/metrics-agent/target/
 benchmarks/reference-apis/*/publish/
 benchmarks/reference-apis/*/bin/
 benchmarks/reference-apis/*/obj/
+benchmarks/results-*.json
+benchmarks/results-*.html
+benchmarks/artifacts/
+benchmarks/reference-apis/*/output/
+benchmarks/reference-apis/*/server
+benchmarks/reference-apis/*/build/
+id_ed25519.pub
