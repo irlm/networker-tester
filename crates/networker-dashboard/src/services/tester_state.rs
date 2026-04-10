@@ -162,6 +162,9 @@ mod tests {
             "allocation='idle'",
             "allocation= 'idle'",
             "allocation ='idle'",
+            "allocation  = 'idle'",
+            "allocation =  'idle'",
+            "allocation\t=\t'idle'",
         ];
 
         let mut offenders: Vec<String> = Vec::new();
@@ -206,6 +209,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn concurrent_acquires_only_one_wins() -> anyhow::Result<()> {
+        use crate::project_id::ProjectId;
         use tokio_postgres::NoTls;
 
         let url =
@@ -225,9 +229,12 @@ mod tests {
             .await?;
         let created_by: Uuid = user_row.get(0);
 
-        // Unique project so parallel runs don't collide.
-        let project_id = Uuid::new_v4();
-        let suffix = project_id.simple().to_string();
+        // Unique project so parallel runs don't collide. Since V024b,
+        // project.project_id is CHAR(14) populated by the base36 ProjectId
+        // generator; binding a Uuid here would fail the pg type check.
+        let project_id = ProjectId::generate("us", "tst");
+        let project_id_str: &str = project_id.as_str();
+        let suffix = Uuid::new_v4().simple().to_string();
         let project_name = format!("tester-state-race-{}", &suffix[..8]);
         let project_slug = format!("tester-state-race-{}", &suffix[..8]);
 
@@ -235,13 +242,9 @@ mod tests {
             .execute(
                 "INSERT INTO project (project_id, name, slug, created_by) \
                  VALUES ($1, $2, $3, $4)",
-                &[&project_id, &project_name, &project_slug, &created_by],
+                &[&project_id_str, &project_name, &project_slug, &created_by],
             )
             .await?;
-
-        // NOTE: project_tester.project_id is declared TEXT in V027, so we pass
-        // the UUID as its canonical hyphenated string.
-        let project_id_text = project_id.to_string();
 
         let tester_row = setup
             .query_one(
@@ -251,7 +254,7 @@ mod tests {
                 VALUES ($1, $2, 'azure', 'eastus', 'running', 'idle', $3)
                 RETURNING tester_id
                 "#,
-                &[&project_id_text, &"race-1", &created_by],
+                &[&project_id_str, &"race-1", &created_by],
             )
             .await?;
         let tester_id: Uuid = tester_row.get(0);
@@ -266,7 +269,7 @@ mod tests {
                     "INSERT INTO benchmark_config \
                      (config_id, project_id, name, status, created_by) \
                      VALUES ($1, $2, $3, 'draft', $4)",
-                    &[cfg, &project_id, &name, &created_by],
+                    &[cfg, &project_id_str, &name, &created_by],
                 )
                 .await?;
         }
@@ -302,17 +305,20 @@ mod tests {
         setup
             .execute(
                 "DELETE FROM benchmark_config WHERE project_id = $1",
-                &[&project_id],
+                &[&project_id_str],
             )
             .await?;
         setup
             .execute(
                 "DELETE FROM project_tester WHERE project_id = $1",
-                &[&project_id_text],
+                &[&project_id_str],
             )
             .await?;
         setup
-            .execute("DELETE FROM project WHERE project_id = $1", &[&project_id])
+            .execute(
+                "DELETE FROM project WHERE project_id = $1",
+                &[&project_id_str],
+            )
             .await?;
 
         assert_eq!(
