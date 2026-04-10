@@ -1,4 +1,5 @@
 pub mod messages;
+pub mod phase;
 pub mod protocol;
 
 // Re-export core types from networker-tester for convenience.
