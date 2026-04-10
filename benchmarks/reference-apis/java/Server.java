@@ -64,7 +64,7 @@ import java.util.zip.Deflater;
  */
 public class Server {
 
-    private static final int PORT = 8443;
+    private static final int PORT = Integer.parseInt(System.getenv().getOrDefault("BENCH_PORT", "8443"));
     private static final String CERT_DIR = System.getenv().getOrDefault("BENCH_CERT_DIR", "/opt/bench");
     private static final String BENCH_TOKEN = System.getenv("BENCH_API_TOKEN");
 
@@ -349,19 +349,29 @@ public class Server {
 
     public static void main(String[] args) throws Exception {
         loadBenchData();
-        SSLContext sslContext = buildSslContext(
-                Path.of(CERT_DIR, "cert.pem"),
-                Path.of(CERT_DIR, "key.pem")
-        );
 
-        HttpsServer server = HttpsServer.create(new InetSocketAddress(PORT), 0);
-        server.setHttpsConfigurator(new HttpsConfigurator(sslContext) {
-            @Override
-            public void configure(HttpsParameters params) {
-                SSLParameters sslParams = sslContext.getDefaultSSLParameters();
-                params.setSSLParameters(sslParams);
-            }
-        });
+        // Check if TLS certs exist — if not, run plain HTTP (application mode)
+        boolean useTls = java.nio.file.Files.exists(Path.of(CERT_DIR, "cert.pem"))
+                      && java.nio.file.Files.exists(Path.of(CERT_DIR, "key.pem"));
+
+        com.sun.net.httpserver.HttpServer server;
+        if (useTls) {
+            SSLContext sslContext = buildSslContext(
+                    Path.of(CERT_DIR, "cert.pem"),
+                    Path.of(CERT_DIR, "key.pem")
+            );
+            HttpsServer httpsServer = HttpsServer.create(new InetSocketAddress(PORT), 0);
+            httpsServer.setHttpsConfigurator(new HttpsConfigurator(sslContext) {
+                @Override
+                public void configure(HttpsParameters params) {
+                    SSLParameters sslParams = sslContext.getDefaultSSLParameters();
+                    params.setSSLParameters(sslParams);
+                }
+            });
+            server = httpsServer;
+        } else {
+            server = com.sun.net.httpserver.HttpServer.create(new InetSocketAddress(PORT), 0);
+        }
 
         server.createContext("/health", new HealthHandler());
         server.createContext("/download/", new DownloadHandler());
@@ -377,7 +387,7 @@ public class Server {
         server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
         server.start();
 
-        logger.info(String.format("Java HTTPS server listening on :%d (Virtual Threads)", PORT));
+        logger.info(String.format("Java %s server listening on :%d (Virtual Threads)", useTls ? "HTTPS" : "HTTP", PORT));
     }
 
     // ── Auth ─────────────────────────────────────────────────────────

@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.23.9] - 2026-04-10
+
+### Fixed
+
+- **Go server**: Read BENCH_PORT env var, skip TLS when no certs (application mode serves plain HTTP)
+- **Node.js server**: Read BENCH_PORT env var (fallback to PORT), skip TLS when no certs
+- **Java server**: Read BENCH_PORT env var, use plain HTTP HttpServer when no certs
+
+---
+
 ## [0.23.8] - 2026-04-09
 
 ### Fixed

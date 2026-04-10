@@ -1,5 +1,6 @@
 "use strict";
 
+const http = require("node:http");
 const http2 = require("node:http2");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
@@ -11,7 +12,7 @@ const zlib = require("node:zlib");
 // Configuration
 // ---------------------------------------------------------------------------
 const CERT_DIR = process.env.BENCH_CERT_DIR || "/opt/bench";
-const PORT = parseInt(process.env.PORT || "8443", 10);
+const PORT = parseInt(process.env.BENCH_PORT || process.env.PORT || "8443", 10);
 const BENCH_API_TOKEN = process.env.BENCH_API_TOKEN || "";
 
 // ---------------------------------------------------------------------------
@@ -85,12 +86,15 @@ const CHUNK = Buffer.alloc(8192, 0x42);
 // ---------------------------------------------------------------------------
 // TLS credentials
 // ---------------------------------------------------------------------------
-const tlsOptions = {
-  cert: fs.readFileSync(path.join(CERT_DIR, "cert.pem")),
-  key: fs.readFileSync(path.join(CERT_DIR, "key.pem")),
+const certPath = path.join(CERT_DIR, "cert.pem");
+const keyPath = path.join(CERT_DIR, "key.pem");
+const USE_TLS = fs.existsSync(certPath) && fs.existsSync(keyPath);
+const tlsOptions = USE_TLS ? {
+  cert: fs.readFileSync(certPath),
+  key: fs.readFileSync(keyPath),
   allowHTTP1: true,
-  ALPNProtocols: ["h2", "http/1.1"], // accept both HTTP/1.1 and HTTP/2
-};
+  ALPNProtocols: ["h2", "http/1.1"],
+} : null;
 
 // ---------------------------------------------------------------------------
 // Shared response helpers (work with both HTTP/2 streams and HTTP/1.1 res)
@@ -790,15 +794,21 @@ function onRequest(req, res) {
 // ---------------------------------------------------------------------------
 // Server — handles both HTTP/2 (stream event) and HTTP/1.1 (request event)
 // ---------------------------------------------------------------------------
-const server = http2.createSecureServer(tlsOptions);
-
-server.on("stream", onStream);
-server.on("request", onRequest);
+let server;
+if (USE_TLS) {
+  server = http2.createSecureServer(tlsOptions);
+  server.on("stream", onStream);
+  server.on("request", onRequest);
+} else {
+  // Plain HTTP mode (application mode behind reverse proxy)
+  server = http.createServer(onRequest);
+}
 
 server.on("error", (err) => {
   log.error("Server error", { error: err.message });
 });
 
 server.listen(PORT, () => {
-  log.info("nodejs reference-api listening", { addr: "https://0.0.0.0:" + PORT });
+  const proto = USE_TLS ? "https" : "http";
+  log.info("nodejs reference-api listening", { addr: `${proto}://0.0.0.0:${PORT}`, tls: USE_TLS });
 });

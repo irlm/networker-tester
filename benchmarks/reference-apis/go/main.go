@@ -106,7 +106,11 @@ func main() {
 
 	addr := os.Getenv("LISTEN_ADDR")
 	if addr == "" {
-		addr = defaultAddr
+		if port := os.Getenv("BENCH_PORT"); port != "" {
+			addr = ":" + port
+		} else {
+			addr = defaultAddr
+		}
 	}
 	certDir := os.Getenv("BENCH_CERT_DIR")
 	if certDir == "" {
@@ -156,26 +160,40 @@ func main() {
 		authHandler.ServeHTTP(w, r)
 	})
 
-	// HTTP/3 server (QUIC/UDP) — run in background goroutine.
-	h3srv := &http3.Server{Addr: addr, Handler: altSvcHandler}
-	go func() {
-		slog.Info("HTTP/3 (QUIC) listening", "addr", addr)
-		if err := h3srv.ListenAndServeTLS(certPath, keyPath); err != nil {
-			slog.Error("HTTP/3 server error", "error", err)
+	// Check if TLS certs exist — if not, run plain HTTP (application mode behind proxy)
+	_, certErr := os.Stat(certPath)
+	_, keyErr := os.Stat(keyPath)
+	useTLS := certErr == nil && keyErr == nil
+
+	if useTLS {
+		// HTTP/3 server (QUIC/UDP) — run in background goroutine.
+		h3srv := &http3.Server{Addr: addr, Handler: altSvcHandler}
+		go func() {
+			slog.Info("HTTP/3 (QUIC) listening", "addr", addr)
+			if err := h3srv.ListenAndServeTLS(certPath, keyPath); err != nil {
+				slog.Error("HTTP/3 server error", "error", err)
+			}
+		}()
+
+		// TCP server (HTTP/1.1 + HTTP/2) with TLS.
+		tcpSrv := &http.Server{
+			Addr:      addr,
+			Handler:   altSvcHandler,
+			TLSConfig: tlsCfg,
 		}
-	}()
-
-	// TCP server (HTTP/1.1 + HTTP/2) — blocks on main goroutine.
-	tcpSrv := &http.Server{
-		Addr:      addr,
-		Handler:   altSvcHandler,
-		TLSConfig: tlsCfg,
-	}
-
-	slog.Info("AletheBench Go reference API listening", "addr", addr, "tls", true, "quic", true)
-	if err := tcpSrv.ListenAndServeTLS(certPath, keyPath); err != nil {
-		slog.Error("Server failed to start", "error", err)
-		os.Exit(1)
+		slog.Info("AletheBench Go reference API listening", "addr", addr, "tls", true, "quic", true)
+		if err := tcpSrv.ListenAndServeTLS(certPath, keyPath); err != nil {
+			slog.Error("Server failed to start", "error", err)
+			os.Exit(1)
+		}
+	} else {
+		// Plain HTTP mode (application mode behind reverse proxy)
+		srv := &http.Server{Addr: addr, Handler: authHandler}
+		slog.Info("AletheBench Go reference API listening", "addr", addr, "tls", false, "mode", "application")
+		if err := srv.ListenAndServe(); err != nil {
+			slog.Error("Server failed to start", "error", err)
+			os.Exit(1)
+		}
 	}
 }
 
