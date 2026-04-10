@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.24.1] - 2026-04-10
+
+### Fixed
+
+- **install.sh diagnostics**: Health check failure now dumps processes, listening ports, all bench logs, and curl verbose output for debugging language server failures
+- **Build error visibility**: Removed stderr suppression on `go build`, `npm install`, and `javac` so compile/install errors surface in logs
+
+---
+
 ## [0.24.0] - 2026-04-10
 
 ### Fixed

@@ -324,7 +324,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.24.0"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.24.1"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -9428,7 +9428,7 @@ NGINX_APP_EOF
             command -v go >/dev/null 2>&1 || {
                 sudo snap install go --classic < /dev/null
             }
-            cd "$API_DIR/go" && go build -o "$BENCH_DIR/go-server" . 2>/dev/null < /dev/null
+            cd "$API_DIR/go" && go build -o "$BENCH_DIR/go-server" . < /dev/null
             chmod +x "$BENCH_DIR/go-server"
             BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT="$BENCH_PORT" \
                 nohup "$BENCH_DIR/go-server" > "$BENCH_DIR/go-server.log" 2>&1 &
@@ -9440,7 +9440,7 @@ NGINX_APP_EOF
                 sudo apt-get update -qq < /dev/null
                 sudo apt-get install -y -qq nodejs npm < /dev/null
             }
-            cd "$API_DIR/nodejs" && npm install --quiet 2>/dev/null < /dev/null
+            cd "$API_DIR/nodejs" && npm install --quiet < /dev/null
             BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT="$BENCH_PORT" \
                 nohup node "$API_DIR/nodejs/server.js" > "$BENCH_DIR/nodejs.log" 2>&1 &
             ;;
@@ -9477,10 +9477,8 @@ NGINX_APP_EOF
                 sudo -E apt-get install -y -qq default-jdk-headless < /dev/null
             }
             cd "$API_DIR/java"
-            javac -d "$BENCH_DIR/java-build" Server.java 2>/dev/null < /dev/null || {
-                mkdir -p "$BENCH_DIR/java-build"
-                javac -d "$BENCH_DIR/java-build" *.java 2>/dev/null < /dev/null
-            }
+            mkdir -p "$BENCH_DIR/java-build"
+            javac -d "$BENCH_DIR/java-build" *.java < /dev/null
             cd "$BENCH_DIR/java-build"
             BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT="$BENCH_PORT" \
                 nohup java Server > "$BENCH_DIR/java.log" 2>&1 &
@@ -9612,6 +9610,18 @@ NGINX_APP_EOF
         waited=$((waited + 2))
     done
     echo "ERROR: $lang server failed health check after ${max_wait}s"
+    echo "=== DIAGNOSTIC: recent processes ==="
+    ps aux | grep -Ei "$lang|bench" | grep -v grep || true
+    echo "=== DIAGNOSTIC: listening ports ==="
+    sudo ss -tlnp 2>/dev/null | head -20 || sudo netstat -tlnp 2>/dev/null | head -20 || true
+    echo "=== DIAGNOSTIC: last 50 lines of each bench log ==="
+    for logf in "$BENCH_DIR"/*.log; do
+        [ -f "$logf" ] || continue
+        echo "--- $logf ---"
+        tail -n 50 "$logf" 2>/dev/null || true
+    done
+    echo "=== DIAGNOSTIC: curl to health ==="
+    curl -skv --max-time 2 "$health_url" 2>&1 | head -20 || true
     return 1
 }
 
