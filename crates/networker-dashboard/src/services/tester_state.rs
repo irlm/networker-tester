@@ -137,3 +137,188 @@ pub async fn force_release(client: &Client, tester_id: &Uuid) -> anyhow::Result<
         .await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Grep guard: only `tester_state.rs` is allowed to write the unlock pair
+    /// `allocation='idle'` + `locked_by_config_id=NULL`. Any other file in the
+    /// services tree that contains a literal `allocation = 'idle'` is breaking
+    /// the invariant and must route through `release`/`force_release`.
+    #[test]
+    fn release_is_only_writer_of_idle_unlock() {
+        use std::fs;
+        use std::path::PathBuf;
+
+        let services_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/services");
+        assert!(
+            services_dir.is_dir(),
+            "services dir not found: {services_dir:?}"
+        );
+
+        let needles = [
+            "allocation = 'idle'",
+            "allocation='idle'",
+            "allocation= 'idle'",
+            "allocation ='idle'",
+        ];
+
+        let mut offenders: Vec<String> = Vec::new();
+
+        fn visit(dir: &std::path::Path, offenders: &mut Vec<String>, needles: &[&str]) {
+            for entry in fs::read_dir(dir).expect("read_dir services") {
+                let entry = entry.expect("dir entry");
+                let path = entry.path();
+                if path.is_dir() {
+                    visit(&path, offenders, needles);
+                    continue;
+                }
+                if path.extension().and_then(|s| s.to_str()) != Some("rs") {
+                    continue;
+                }
+                // Skip tester_state.rs itself — it is the authorised writer.
+                if path.file_name().and_then(|s| s.to_str()) == Some("tester_state.rs") {
+                    continue;
+                }
+                let body = fs::read_to_string(&path).expect("read file");
+                for needle in needles {
+                    if body.contains(needle) {
+                        offenders.push(format!("{}: contains {:?}", path.display(), needle));
+                    }
+                }
+            }
+        }
+
+        visit(&services_dir, &mut offenders, &needles);
+
+        assert!(
+            offenders.is_empty(),
+            "Only tester_state.rs may write `allocation='idle'`. Offenders:\n{}",
+            offenders.join("\n")
+        );
+    }
+
+    /// Race test: two concurrent `try_acquire` calls against the same tester
+    /// must result in exactly one `Acquired` outcome. Gated by `#[ignore]`
+    /// because it requires a live Postgres instance reachable via
+    /// `DASHBOARD_DB_URL` with the V027 schema applied.
+    #[tokio::test]
+    #[ignore]
+    async fn concurrent_acquires_only_one_wins() -> anyhow::Result<()> {
+        use tokio_postgres::NoTls;
+
+        let url =
+            std::env::var("DASHBOARD_DB_URL").expect("DASHBOARD_DB_URL must be set for this test");
+
+        let (setup, setup_conn) = tokio_postgres::connect(&url, NoTls).await?;
+        tokio::spawn(async move {
+            let _ = setup_conn.await;
+        });
+
+        // Pick an existing user so the FK on created_by resolves.
+        let user_row = setup
+            .query_one(
+                "SELECT user_id FROM dash_user ORDER BY created_at LIMIT 1",
+                &[],
+            )
+            .await?;
+        let created_by: Uuid = user_row.get(0);
+
+        // Unique project so parallel runs don't collide.
+        let project_id = Uuid::new_v4();
+        let suffix = project_id.simple().to_string();
+        let project_name = format!("tester-state-race-{}", &suffix[..8]);
+        let project_slug = format!("tester-state-race-{}", &suffix[..8]);
+
+        setup
+            .execute(
+                "INSERT INTO project (project_id, name, slug, created_by) \
+                 VALUES ($1, $2, $3, $4)",
+                &[&project_id, &project_name, &project_slug, &created_by],
+            )
+            .await?;
+
+        // NOTE: project_tester.project_id is declared TEXT in V027, so we pass
+        // the UUID as its canonical hyphenated string.
+        let project_id_text = project_id.to_string();
+
+        let tester_row = setup
+            .query_one(
+                r#"
+                INSERT INTO project_tester
+                    (project_id, name, cloud, region, power_state, allocation, created_by)
+                VALUES ($1, $2, 'azure', 'eastus', 'running', 'idle', $3)
+                RETURNING tester_id
+                "#,
+                &[&project_id_text, &"race-1", &created_by],
+            )
+            .await?;
+        let tester_id: Uuid = tester_row.get(0);
+
+        // Two distinct config ids so we can tell which racer won.
+        let config_a = Uuid::new_v4();
+        let config_b = Uuid::new_v4();
+
+        for (cfg, name) in [(&config_a, "race-cfg-a"), (&config_b, "race-cfg-b")] {
+            setup
+                .execute(
+                    "INSERT INTO benchmark_config \
+                     (config_id, project_id, name, status, created_by) \
+                     VALUES ($1, $2, $3, 'draft', $4)",
+                    &[cfg, &project_id, &name, &created_by],
+                )
+                .await?;
+        }
+
+        // Each racer gets its own connection so the UPDATEs contend in PG.
+        let (client_a, conn_a) = tokio_postgres::connect(&url, NoTls).await?;
+        tokio::spawn(async move {
+            let _ = conn_a.await;
+        });
+        let (client_b, conn_b) = tokio_postgres::connect(&url, NoTls).await?;
+        tokio::spawn(async move {
+            let _ = conn_b.await;
+        });
+
+        let (a, b) = tokio::join!(
+            try_acquire(&client_a, &tester_id, &config_a),
+            try_acquire(&client_b, &tester_id, &config_b),
+        );
+        let a = a?;
+        let b = b?;
+
+        let acquired_count = [&a, &b]
+            .iter()
+            .filter(|o| matches!(o, AcquireOutcome::Acquired))
+            .count();
+
+        // Cleanup: release whichever won, then delete the rows we created.
+        if matches!(a, AcquireOutcome::Acquired) {
+            release(&setup, &tester_id, &config_a).await?;
+        } else if matches!(b, AcquireOutcome::Acquired) {
+            release(&setup, &tester_id, &config_b).await?;
+        }
+        setup
+            .execute(
+                "DELETE FROM benchmark_config WHERE project_id = $1",
+                &[&project_id],
+            )
+            .await?;
+        setup
+            .execute(
+                "DELETE FROM project_tester WHERE project_id = $1",
+                &[&project_id_text],
+            )
+            .await?;
+        setup
+            .execute("DELETE FROM project WHERE project_id = $1", &[&project_id])
+            .await?;
+
+        assert_eq!(
+            acquired_count, 1,
+            "expected exactly one racer to win, got a={a:?} b={b:?}"
+        );
+        Ok(())
+    }
+}
