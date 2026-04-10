@@ -324,7 +324,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.24.0"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.24.1"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -9312,8 +9312,8 @@ deploy_benchmark_server() {
     local RELEASE_BASE="https://github.com/irlm/networker-tester/releases/latest/download"
 
     # Application mode: when --benchmark-proxy is set, bind plain HTTP on 8080
-    local BENCH_PORT=8443
-    local BENCH_USE_TLS=1
+    BENCH_PORT=8443
+    BENCH_USE_TLS=1
     if [[ -n "$BENCHMARK_PROXY" ]]; then
         BENCH_PORT=8080
         BENCH_USE_TLS=0
@@ -9321,6 +9321,8 @@ deploy_benchmark_server() {
     else
         echo ">> Deploying benchmark server: $lang (full-stack mode: port $BENCH_PORT, TLS)"
     fi
+    export BENCH_PORT BENCH_USE_TLS
+    export BENCH_CERT_DIR="$BENCH_DIR"
 
     # ── Common setup: directory, TLS certs, clone repo ────────────────────
     sudo mkdir -p "$BENCH_DIR" /tmp/nginx_uploads
@@ -9428,10 +9430,9 @@ NGINX_APP_EOF
             command -v go >/dev/null 2>&1 || {
                 sudo snap install go --classic < /dev/null
             }
-            cd "$API_DIR/go" && go build -o "$BENCH_DIR/go-server" . 2>/dev/null < /dev/null
+            cd "$API_DIR/go" && go build -o "$BENCH_DIR/go-server" . < /dev/null
             chmod +x "$BENCH_DIR/go-server"
-            BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT="$BENCH_PORT" \
-                nohup "$BENCH_DIR/go-server" > "$BENCH_DIR/go-server.log" 2>&1 &
+            nohup "$BENCH_DIR/go-server" > "$BENCH_DIR/go-server.log" 2>&1 &
             ;;
 
         nodejs)
@@ -9440,9 +9441,8 @@ NGINX_APP_EOF
                 sudo apt-get update -qq < /dev/null
                 sudo apt-get install -y -qq nodejs npm < /dev/null
             }
-            cd "$API_DIR/nodejs" && npm install --quiet 2>/dev/null < /dev/null
-            BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT="$BENCH_PORT" \
-                nohup node "$API_DIR/nodejs/server.js" > "$BENCH_DIR/nodejs.log" 2>&1 &
+            cd "$API_DIR/nodejs" && npm install --quiet < /dev/null
+            nohup node "$API_DIR/nodejs/server.js" > "$BENCH_DIR/nodejs.log" 2>&1 &
             ;;
 
         python)
@@ -9453,19 +9453,17 @@ NGINX_APP_EOF
             python3 -m venv "$BENCH_DIR/pyenv" < /dev/null
             "$BENCH_DIR/pyenv/bin/pip" install --quiet -r requirements.txt < /dev/null
             if [ "$BENCH_USE_TLS" = "1" ]; then
-                BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT="$BENCH_PORT" \
-                    nohup "$BENCH_DIR/pyenv/bin/hypercorn" server:app \
-                        --bind "0.0.0.0:${BENCH_PORT}" \
-                        --certfile "$CERT_PEM" --keyfile "$CERT_KEY" \
-                        --quic-bind "0.0.0.0:${BENCH_PORT}" \
-                        --access-log - \
-                        > "$BENCH_DIR/python.log" 2>&1 &
+                nohup "$BENCH_DIR/pyenv/bin/hypercorn" server:app \
+                    --bind "0.0.0.0:${BENCH_PORT}" \
+                    --certfile "$CERT_PEM" --keyfile "$CERT_KEY" \
+                    --quic-bind "0.0.0.0:${BENCH_PORT}" \
+                    --access-log - \
+                    > "$BENCH_DIR/python.log" 2>&1 &
             else
-                BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT="$BENCH_PORT" \
-                    nohup "$BENCH_DIR/pyenv/bin/hypercorn" server:app \
-                        --bind "0.0.0.0:${BENCH_PORT}" \
-                        --access-log - \
-                        > "$BENCH_DIR/python.log" 2>&1 &
+                nohup "$BENCH_DIR/pyenv/bin/hypercorn" server:app \
+                    --bind "0.0.0.0:${BENCH_PORT}" \
+                    --access-log - \
+                    > "$BENCH_DIR/python.log" 2>&1 &
             fi
             ;;
 
@@ -9477,13 +9475,10 @@ NGINX_APP_EOF
                 sudo -E apt-get install -y -qq default-jdk-headless < /dev/null
             }
             cd "$API_DIR/java"
-            javac -d "$BENCH_DIR/java-build" Server.java 2>/dev/null < /dev/null || {
-                mkdir -p "$BENCH_DIR/java-build"
-                javac -d "$BENCH_DIR/java-build" *.java 2>/dev/null < /dev/null
-            }
+            mkdir -p "$BENCH_DIR/java-build"
+            javac -d "$BENCH_DIR/java-build" *.java < /dev/null
             cd "$BENCH_DIR/java-build"
-            BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT="$BENCH_PORT" \
-                nohup java Server > "$BENCH_DIR/java.log" 2>&1 &
+            nohup java Server > "$BENCH_DIR/java.log" 2>&1 &
             ;;
 
         cpp)
@@ -9496,8 +9491,7 @@ NGINX_APP_EOF
             make -j"$(nproc)" < /dev/null 2>/dev/null
             cp server "$BENCH_DIR/cpp-server" 2>/dev/null || cp bench-server "$BENCH_DIR/cpp-server" 2>/dev/null
             chmod +x "$BENCH_DIR/cpp-server"
-            BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT="$BENCH_PORT" \
-                nohup "$BENCH_DIR/cpp-server" > "$BENCH_DIR/cpp.log" 2>&1 &
+            nohup "$BENCH_DIR/cpp-server" > "$BENCH_DIR/cpp.log" 2>&1 &
             ;;
 
         ruby)
@@ -9507,8 +9501,7 @@ NGINX_APP_EOF
             cd "$API_DIR/ruby"
             sudo gem install bundler --quiet < /dev/null
             bundle install --quiet < /dev/null
-            BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT="$BENCH_PORT" \
-                nohup bundle exec puma -C puma.rb > "$BENCH_DIR/ruby.log" 2>&1 &
+            nohup bundle exec puma -C puma.rb > "$BENCH_DIR/ruby.log" 2>&1 &
             ;;
 
         php)
@@ -9519,8 +9512,7 @@ NGINX_APP_EOF
                 sudo pecl install swoole < /dev/null
                 echo 'extension=swoole.so' | sudo tee /etc/php/*/cli/conf.d/20-swoole.ini
             }
-            BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT="$BENCH_PORT" \
-                nohup php "$API_DIR/php/server.php" > "$BENCH_DIR/php.log" 2>&1 &
+            nohup php "$API_DIR/php/server.php" > "$BENCH_DIR/php.log" 2>&1 &
             ;;
 
         csharp-net48)
@@ -9563,8 +9555,7 @@ NGINX_APP_EOF
                     dotnet publish -c Release -o "$BENCH_DIR/$lang" < /dev/null 2>/dev/null
                 fi
                 chmod +x "$BENCH_DIR/$lang/$lang" 2>/dev/null || true
-                BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT="$BENCH_PORT" \
-                    nohup "$BENCH_DIR/$lang/$lang" > "$BENCH_DIR/$lang.log" 2>&1 &
+                nohup "$BENCH_DIR/$lang/$lang" > "$BENCH_DIR/$lang.log" 2>&1 &
             else
                 echo "ERROR: No reference API found for $lang at $csharp_dir"
                 return 1
@@ -9581,10 +9572,10 @@ NGINX_APP_EOF
             fi
             cd "$lang_dir"
             if [ -f deploy.sh ]; then
-                BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT="$BENCH_PORT" bash deploy.sh
+                bash deploy.sh
             elif [ -f build.sh ]; then
                 bash build.sh < /dev/null
-                BENCH_CERT_DIR="$BENCH_DIR" BENCH_PORT="$BENCH_PORT" bash start.sh
+                bash start.sh
             else
                 echo "ERROR: No deploy.sh or build.sh found for $lang"
                 return 1
@@ -9612,6 +9603,18 @@ NGINX_APP_EOF
         waited=$((waited + 2))
     done
     echo "ERROR: $lang server failed health check after ${max_wait}s"
+    echo "=== DIAGNOSTIC: recent processes ==="
+    ps aux | grep -Ei "$lang|bench" | grep -v grep || true
+    echo "=== DIAGNOSTIC: listening ports ==="
+    sudo ss -tlnp 2>/dev/null | head -20 || sudo netstat -tlnp 2>/dev/null | head -20 || true
+    echo "=== DIAGNOSTIC: last 50 lines of each bench log ==="
+    for logf in "$BENCH_DIR"/*.log; do
+        [ -f "$logf" ] || continue
+        echo "--- $logf ---"
+        tail -n 50 "$logf" 2>/dev/null || true
+    done
+    echo "=== DIAGNOSTIC: curl to health ==="
+    curl -skv --max-time 2 "$health_url" 2>&1 | head -20 || true
     return 1
 }
 

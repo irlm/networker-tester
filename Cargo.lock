@@ -423,9 +423,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.2.59"
+version = "1.2.60"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7a4d3ec6524d28a329fc53654bbadc9bdd7b0431f5d65f1a56ffb28a1ee5283"
+checksum = "43c5703da9466b66a946814e1adf53ea2c90f10063b86290cc9eb67ce3478a20"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -2053,7 +2053,7 @@ dependencies = [
 
 [[package]]
 name = "networker-agent"
-version = "0.24.0"
+version = "0.24.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2073,7 +2073,7 @@ dependencies = [
 
 [[package]]
 name = "networker-common"
-version = "0.24.0"
+version = "0.24.1"
 dependencies = [
  "chrono",
  "networker-tester",
@@ -2084,7 +2084,7 @@ dependencies = [
 
 [[package]]
 name = "networker-dashboard"
-version = "0.24.0"
+version = "0.24.1"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2124,7 +2124,7 @@ dependencies = [
 
 [[package]]
 name = "networker-endpoint"
-version = "0.24.0"
+version = "0.24.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -2162,7 +2162,7 @@ dependencies = [
 
 [[package]]
 name = "networker-log"
-version = "0.24.0"
+version = "0.24.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2178,7 +2178,7 @@ dependencies = [
 
 [[package]]
 name = "networker-tester"
-version = "0.24.0"
+version = "0.24.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3085,7 +3085,7 @@ dependencies = [
  "once_cell",
  "ring",
  "rustls-pki-types",
- "rustls-webpki 0.103.10",
+ "rustls-webpki 0.103.11",
  "subtle",
  "zeroize",
 ]
@@ -3156,7 +3156,7 @@ dependencies = [
  "rustls 0.23.37",
  "rustls-native-certs 0.8.3",
  "rustls-platform-verifier-android",
- "rustls-webpki 0.103.10",
+ "rustls-webpki 0.103.11",
  "security-framework 3.7.0",
  "security-framework-sys",
  "webpki-root-certs",
@@ -3181,9 +3181,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.10"
+version = "0.103.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df33b2b81ac578cabaf06b89b0631153a3f416b0a886e8a7a1707fb51abbd1ef"
+checksum = "20a6af516fea4b20eccceaf166e8aa666ac996208e8a644ce3ef5aa783bc7cd4"
 dependencies = [
  "aws-lc-rs",
  "ring",
