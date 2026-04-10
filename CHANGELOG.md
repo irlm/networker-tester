@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.24.2] - 2026-04-10
+
+### Fixed
+
+- **Orchestrator lockfile**: Regenerated `benchmarks/orchestrator/Cargo.lock` so the Release workflow's `--locked` build succeeds for v0.24.2.
+
+---
+
 ## [0.24.1] - 2026-04-10
 
 ### Fixed
