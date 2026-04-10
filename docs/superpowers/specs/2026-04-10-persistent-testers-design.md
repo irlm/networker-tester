@@ -40,7 +40,7 @@ A new domain object — `project_tester` — owns the lifecycle of a long-lived 
 
 ### Key components
 
-- `project_tester` table — the new domain object, with status state machine, version tracking, schedule, lock holder
+- `project_tester` table — the new domain object, with **two orthogonal state axes** (`power_state` for VM lifecycle, `allocation` for benchmark reservation), version tracking, schedule, lock holder
 - `services/tester_state.rs` — atomic lock acquire/release/transition helpers
 - `services/tester_dispatcher.rs` — promote next queued benchmark when a tester frees
 - `services/tester_scheduler.rs` — auto-shutdown loop (defers if queue not empty)
@@ -77,11 +77,26 @@ CREATE TABLE project_tester (
     public_ip           INET,           -- assigned by Azure on first start
     ssh_user            TEXT NOT NULL DEFAULT 'azureuser',
 
-    -- lifecycle state
-    status              TEXT NOT NULL DEFAULT 'provisioning',
-                        -- provisioning | idle | starting | running | stopping | stopped | upgrading | error
+    -- ── Lifecycle state — split into two orthogonal axes ─────────────────
+    -- Power state describes what the underlying VM is doing.
+    -- Allocation describes whether the tester is reserved by a benchmark.
+    -- These are NEVER folded into a single column because they answer
+    -- different questions and can change independently.
+    power_state         TEXT NOT NULL DEFAULT 'provisioning',
+                        -- provisioning | starting | running | stopping | stopped | upgrading | error
+                        -- Reflects the Azure VM's state, not benchmark activity.
+    allocation          TEXT NOT NULL DEFAULT 'idle',
+                        -- idle | locked | upgrading
+                        -- 'idle' = available for a benchmark to acquire
+                        -- 'locked' = exclusively held by exactly one benchmark
+                        -- 'upgrading' = install.sh re-running; new acquisitions blocked
     status_message      TEXT,
-    locked_by_config_id UUID REFERENCES benchmark_config(config_id) ON DELETE SET NULL,
+    locked_by_config_id UUID REFERENCES benchmark_config(config_id) ON DELETE RESTRICT,
+                        -- ON DELETE RESTRICT (NOT SET NULL): the FK must never silently
+                        -- clear the lock, because that would leave allocation='locked'
+                        -- with locked_by_config_id=NULL, violating the invariant below.
+                        -- A benchmark_config row holding a lock cannot be deleted until
+                        -- the lock is released through the orchestrator's release() path.
 
     -- version tracking
     installer_version   TEXT,                          -- e.g. 'v0.24.2'; NULL until first install
@@ -112,54 +127,155 @@ CREATE TABLE project_tester (
     UNIQUE (project_id, name)
 );
 
-CREATE INDEX idx_project_tester_project  ON project_tester(project_id);
-CREATE INDEX idx_project_tester_status   ON project_tester(status) WHERE status IN ('idle','running','stopped');
-CREATE INDEX idx_project_tester_shutdown ON project_tester(next_shutdown_at) WHERE auto_shutdown_enabled = TRUE;
-CREATE INDEX idx_project_tester_last_used ON project_tester(project_id, last_used_at DESC NULLS LAST);
+-- Integrity invariants enforced at the database level
+ALTER TABLE project_tester
+    ADD CONSTRAINT lock_holder_implies_locked
+    CHECK ((allocation = 'locked' AND locked_by_config_id IS NOT NULL)
+        OR (allocation != 'locked' AND locked_by_config_id IS NULL));
+
+ALTER TABLE project_tester
+    ADD CONSTRAINT lock_requires_running_vm
+    CHECK (allocation != 'locked' OR power_state = 'running');
+
+CREATE INDEX idx_project_tester_project    ON project_tester(project_id);
+CREATE INDEX idx_project_tester_power      ON project_tester(power_state)  WHERE power_state IN ('running','stopped');
+CREATE INDEX idx_project_tester_alloc      ON project_tester(allocation)   WHERE allocation IN ('idle','locked');
+CREATE INDEX idx_project_tester_shutdown   ON project_tester(next_shutdown_at) WHERE auto_shutdown_enabled = TRUE;
+CREATE INDEX idx_project_tester_last_used  ON project_tester(project_id, last_used_at DESC NULLS LAST);
 ```
 
-**Status state machine:**
+### Two orthogonal state axes
+
+`power_state` and `allocation` describe different things and must never be conflated:
+
+- **`power_state`** answers "what is the VM doing right now?" Driven entirely by Azure operations (`vm_create`, `vm_start`, `vm_deallocate`). Examples of legal transitions: `provisioning → running`, `running → stopping → stopped`, `stopped → starting → running`, `running → upgrading → running`. Any state can transition to `error` if the underlying Azure operation fails.
+- **`allocation`** answers "is this tester reserved by a benchmark right now?" Driven entirely by orchestrator operations (`try_acquire`, `release`). Three values:
+  - `idle` — available; the next benchmark can acquire it
+  - `locked` — exclusively held by exactly one benchmark (`locked_by_config_id` is non-NULL)
+  - `upgrading` — install.sh is re-running on the VM; new acquisitions are blocked
+
+A tester whose VM is `running` may be either `idle` (available) or `locked` (busy). A tester whose VM is `stopped` is always `idle` (you cannot lock a powered-off tester). A tester whose VM is `upgrading` has `allocation='upgrading'` to match.
 
 ```
-   provisioning ──┬─→ idle ──┬─→ starting ──→ running ──→ idle (release)
-                  │          │      │             │
-                  │          │      └────────→ error ←─┘
-                  │          │
-                  │          ├─→ stopping ──→ stopped ──→ starting
-                  │          │      │           │
-                  │          │      └────────→ error
-                  │          │
-                  │          └─→ upgrading ──→ idle
-                  │                  │
-                  │                  └─→ error
-                  │
-                  └─→ error
+   power_state        allocation       human-readable label in UI
+   ─────────────       ──────────       ────────────────────────────
+   provisioning       idle             "Provisioning…"
+   running            idle             "Idle"
+   running            locked           "Running benchmark X"
+   running            upgrading        "Updating…"
+   stopping           idle             "Stopping…"
+   stopped            idle             "Stopped"
+   starting           idle             "Starting…"
+   upgrading          upgrading        "Updating…"
+   error              idle             "Error"
 ```
 
-**Lock semantics — single source of truth.** "Tester in use" is defined precisely as:
+(Combinations not in this table — e.g. `power_state=stopped` with `allocation=locked` — are forbidden by the `lock_requires_running_vm` CHECK constraint.)
+
+### Lock invariant — enforced in three places
+
+The single authoritative answer to "is the tester busy?" is:
 
 ```
-status = 'running' AND locked_by_config_id IS NOT NULL
+allocation = 'locked'   AND   locked_by_config_id IS NOT NULL
 ```
 
-This pair is the **single authoritative answer** to "is the tester busy?" — every API response, UI label, scheduler check, dispatcher decision, and audit log entry uses this exact condition. The orchestrator transitions in via `try_acquire` (atomic conditional UPDATE — race-free) and out via `release` (which clears both fields together). No code path may touch `status='running'` without also setting/clearing `locked_by_config_id`.
+This invariant is protected by three independent layers:
+
+1. **CHECK constraint** `lock_holder_implies_locked` makes the database reject any row where `allocation='locked'` but the holder is NULL, or where the holder is non-NULL but the allocation is something else. The two columns can never disagree at rest.
+2. **`ON DELETE RESTRICT`** on `locked_by_config_id` prevents Postgres from clearing the holder when a benchmark_config row is deleted. The previous design used `ON DELETE SET NULL`, which had a hole: deleting a config could leave the tester in the forbidden state. Now you cannot delete a benchmark_config that holds a lock — you must release it first via the orchestrator's `release()` path, which is the only code path allowed to mutate `allocation` from `locked` back to `idle`.
+3. **`release()` is the sole writer** of the `(allocation, locked_by_config_id)` pair on the way out of `locked`. No other function in the codebase touches these columns when transitioning out of `locked`. A unit test enforces this with a grep-style assertion against the source tree.
+
+The orchestrator enters the locked state via `try_acquire` (atomic conditional UPDATE) and exits via `release`. There is no other path.
 
 ### Modifications to `benchmark_config`
 
 ```sql
 ALTER TABLE benchmark_config
-    ADD COLUMN tester_id     UUID REFERENCES project_tester(tester_id) ON DELETE RESTRICT,
+    -- Live FK to the tester. Nullable so a tester deletion doesn't block
+    -- removal of historical benchmark rows. ON DELETE SET NULL clears the
+    -- live link; the snapshot columns below preserve historical identity.
+    ADD COLUMN tester_id          UUID REFERENCES project_tester(tester_id) ON DELETE SET NULL,
+
+    -- Denormalized snapshot of the tester at launch time. Populated when the
+    -- benchmark is created and never updated afterwards. This is what the UI
+    -- displays for historical runs even after the tester row is gone.
+    ADD COLUMN tester_name_snapshot      TEXT,
+    ADD COLUMN tester_region_snapshot    TEXT,
+    ADD COLUMN tester_cloud_snapshot     TEXT,
+    ADD COLUMN tester_vm_size_snapshot   TEXT,
+    ADD COLUMN tester_version_snapshot   TEXT,         -- installer_version at the moment of launch
+
     ADD COLUMN queued_at     TIMESTAMPTZ,
     ADD COLUMN current_phase TEXT,                     -- queued | starting | deploy | running | collect | done
-    ADD COLUMN outcome       TEXT;                     -- success | partial | failure | cancelled (only when phase='done')
+    ADD COLUMN outcome       TEXT;                     -- success | partial | failure | cancelled (set when phase='done')
 
--- Application benchmarks REQUIRE a tester (SQL-level enforcement)
+-- Application benchmarks REQUIRE either a live tester reference OR a snapshot.
+-- The snapshot is mandatory at launch; tester_id may be cleared later via SET NULL,
+-- but the snapshot proves the benchmark was launched against a real tester.
 ALTER TABLE benchmark_config
     ADD CONSTRAINT app_configs_need_tester
-    CHECK (benchmark_type != 'application' OR tester_id IS NOT NULL);
+    CHECK (
+        benchmark_type != 'application'
+        OR (tester_id IS NOT NULL OR tester_name_snapshot IS NOT NULL)
+    );
 ```
 
-**Queue semantics:** when a benchmark is launched against a busy tester, the row gets `status='queued'`, `tester_id=<chosen>`, `queued_at=NOW()`. The dispatcher promotes the oldest queued benchmark when the tester frees.
+### Authoritative orchestration state — `benchmark_config.status` only
+
+`benchmark_config.status` is the **single source of truth for orchestration decisions**. Every dispatcher promotion, every drain check, every queue ordering, every cancel — all read and write `status`.
+
+`current_phase` is **purely presentational**. It is read by the UI to drive the `<PhaseBar />` component and by audit logs to record what stage of work was happening. **No orchestration logic ever reads `current_phase`** — not the scheduler, not the dispatcher, not the recovery loop. If you find yourself writing a query that joins `status` and `current_phase` for a control flow decision, you are doing it wrong.
+
+To enforce this rule, the SQL queries used by the schedulers and dispatcher are reviewed in the implementation plan and a code-level check (clippy lint or unit test) ensures `current_phase` never appears in a `WHERE` clause inside the `services/tester_*` modules.
+
+The auto-shutdown drain check therefore reads `status` only:
+
+```sql
+AND NOT EXISTS (
+    SELECT 1 FROM benchmark_config c
+     WHERE c.tester_id = t.tester_id
+       AND c.status IN ('queued','pending','running')
+)
+```
+
+### Status state machine for `benchmark_config`
+
+```
+       (created via wizard)
+              │
+              ↓
+          pending ──┐         (launched immediately, tester was idle)
+              │     │
+              │     └─→ running ──┬─→ completed
+              │                   ├─→ completed_with_errors
+              │                   ├─→ failed
+              │                   └─→ cancelled
+              │
+              └─→ queued (tester was busy at launch time)
+                    │
+                    └─→ pending (promoted by dispatcher when tester freed)
+                          ↓
+                       running → ...
+```
+
+Terminal statuses: `completed`, `completed_with_errors`, `failed`, `cancelled`.
+
+**Queue semantics:** when a benchmark is launched against a busy tester, the row gets `status='queued'`, `tester_id=<chosen>`, `queued_at=NOW()`. The dispatcher promotes the oldest queued benchmark to `pending` when the tester frees; the orchestrator then picks up `pending` and runs it. `current_phase` follows along for display purposes only.
+
+### Tester deletion semantics
+
+A tester can be deleted only when:
+- `power_state IN ('stopped', 'idle', 'error')` AND `allocation = 'idle'`
+- No benchmark_config row references this tester with `status IN ('queued','pending','running')`
+
+The API endpoint enforces both checks before issuing the Azure resource delete. On successful delete:
+- Azure resources (VM, NIC, public IP, NSG, OS disk) are destroyed
+- The `project_tester` row is deleted
+- All historical `benchmark_config` rows that referenced this tester have their `tester_id` cleared by `ON DELETE SET NULL`, but the `tester_*_snapshot` columns retain the historical identity
+- The UI for historical benchmarks shows the snapshot (e.g. *"eastus-1 · azure/eastus · v0.24.2 · (deleted 2026-04-15)"*) so users can still understand what the run was against
+
+This means tester deletion is non-blocking on history while preserving full provenance.
 
 ### Phase columns on other entities
 
@@ -209,20 +325,25 @@ GET    /api/projects/{pid}/testers/{tid}/queue   — running + queued benchmarks
 ```
 POST   /api/projects/{pid}/testers
        Body: { name, cloud, region, vm_size?, auto_shutdown_local_hour?, auto_probe_enabled? }
-       Returns immediately with tester in 'provisioning' status; background task does the actual install.
+       Returns immediately with tester in power_state='provisioning'; background task does the actual install.
 
-POST   /api/projects/{pid}/testers/{tid}/start    — stopped → starting → idle (auto-start before benchmark or manual)
-POST   /api/projects/{pid}/testers/{tid}/stop     — idle → stopping → stopped
-                                                  — refuses 409 if status='running'
+POST   /api/projects/{pid}/testers/{tid}/start    — power_state stopped → starting → running
+                                                  — refuses 409 if power_state is already running, starting, or in any other transient state
+POST   /api/projects/{pid}/testers/{tid}/stop     — power_state running → stopping → stopped
+                                                  — refuses 409 if allocation='locked' (cannot stop a tester running a benchmark)
                                                   — refuses 409 if any benchmark is in queued/pending status for this tester
-POST   /api/projects/{pid}/testers/{tid}/upgrade  — re-run install.sh on the existing VM; idle → upgrading → idle
-                                                  — refuses 409 if status != 'idle'
+POST   /api/projects/{pid}/testers/{tid}/upgrade  — re-run install.sh on the existing VM
+                                                  — transitions: power_state stays 'running', allocation idle → upgrading → idle
+                                                  — refuses 409 if allocation != 'idle' (can't upgrade a busy tester)
                                                   — refuses 409 if any benchmark is queued, pending, or running for this tester
                                                   — body: { confirm: true } required to proceed
-DELETE /api/projects/{pid}/testers/{tid}          — destroys Azure resources
-                                                  — refuses 409 if status='running' or 'provisioning' or 'starting' or 'stopping' or 'upgrading'
+DELETE /api/projects/{pid}/testers/{tid}          — destroys Azure resources and clears the row
+                                                  — refuses 409 if allocation != 'idle'
+                                                  — refuses 409 if power_state IN ('provisioning','starting','stopping','upgrading')
                                                   — refuses 409 if any benchmark queued/pending/running for this tester
                                                   — refusing on transient states prevents orphaned Azure resources
+                                                  — historical benchmark rows referencing this tester have tester_id cleared
+                                                    by ON DELETE SET NULL; the tester_*_snapshot columns preserve identity
 ```
 
 ### Schedule control
@@ -233,6 +354,34 @@ PATCH  /api/projects/{pid}/testers/{tid}/schedule
 
 POST   /api/projects/{pid}/testers/{tid}/postpone
        Body: { until?: ISO8601 } | { add_hours?: int } | { skip_tonight?: true }
+```
+
+### Recovery actions
+
+```
+POST   /api/projects/{pid}/testers/{tid}/probe
+       Queries Azure for the current VM state and resyncs the tester row.
+       Allowed in any power_state. Returns the updated tester row.
+       Transitions on completion:
+         Azure VM Running       → power_state='running', allocation='idle'  (if harness sanity check passes)
+                                → power_state='error',   status_message='harness missing or broken'
+         Azure VM Deallocated   → power_state='stopped', allocation='idle'
+         Azure VM Starting      → power_state='starting', recheck after 15s
+         Azure VM Stopping      → power_state='stopping', recheck after 15s
+         Azure VM Unknown       → power_state='error',   status_message='unknown Azure state'
+       Refuses 409 if allocation='locked' or allocation='upgrading' (don't probe a busy tester).
+
+POST   /api/projects/{pid}/testers/{tid}/force-stop
+       Forces the tester row to power_state='stopped', allocation='idle' WITHOUT
+       running any Azure operation. Used by the "Force to stopped" recovery action
+       on the error-state drawer when the user has externally verified the VM is
+       deallocated.
+       Body: { confirm: true, reason: "..." }
+       Allowed in any power_state EXCEPT 'running' AND 'allocation=locked'
+       (cannot force-stop a tester that is actively running a benchmark).
+       The next benchmark launch will exercise vm_start + SSH wait + harness check,
+       providing real validation that the tester is healthy.
+       Audit-logged with the actor user and the reason.
 ```
 
 ### Auxiliary endpoints
@@ -299,15 +448,17 @@ execute_testbed_application(config, ...)
 
   // 2. Acquire exclusive lock (or queue)
   match tester_state::try_acquire(tester.id, config.id):
-    Acquired               → proceed
-    AlreadyLockedByOther   → enqueue, return Queued status
-    NotIdle(curr_status)   →
-      if curr_status == 'stopped':            start_tester(tester); retry acquire
-      if curr_status == 'starting'|'upgrading': enqueue, return Queued
-      if curr_status == 'error':              fail benchmark
+    Acquired                    → proceed
+    NeedsStart                  → start_tester(tester); retry acquire
+    Transient(power_state)      → enqueue, return Queued status
+                                  // power_state was provisioning|starting|stopping
+    Upgrading                   → enqueue, return Queued status
+    AlreadyLockedBy(other_cfg)  → enqueue, return Queued status
+    Errored                     → fail benchmark with "tester is in error state, fix it first"
 
   // 3. Ensure tester is awake and reachable
-  ensure_tester_running(tester)             ← deallocate→start, wait for SSH (~60s), only if needed
+  // (only runs if try_acquire returned NeedsStart and the retry succeeded —
+  //  by this point allocation='locked' and power_state='running')
   refresh_bench_token(tester)               ← per-run token, scp'd to VM
 
   // 4. For each (proxy, language): deploy + run + collect
@@ -317,7 +468,9 @@ execute_testbed_application(config, ...)
     run_chrome_benchmark(tester.ip, ...)
   }
 
-  // 5. Release lock — tester returns to 'idle', NEVER destroyed
+  // 5. Release lock — tester transitions allocation locked → idle
+  //    power_state stays 'running'; the auto-shutdown scheduler will deallocate
+  //    later if appropriate. The orchestrator NEVER destroys the tester.
   tester_state::release(tester.id)
 
   // 6. Notify dispatcher so any queued benchmark starts immediately
@@ -333,22 +486,23 @@ Wall-clock comparison for a 6-language application benchmark:
 
 ```rust
 pub async fn try_acquire(client: &PgClient, tester_id: Uuid, config_id: Uuid) -> Result<AcquireOutcome> {
-    // The conditional UPDATE is the only operation that can flip the tester
-    // to 'running' — Postgres serialises it, so two concurrent acquire calls
-    // can never both succeed. The follow-up SELECT below is intentionally a
-    // separate statement (not RETURNING more columns) for clarity: if the
-    // UPDATE failed, we want to know *why* and the diagnostic logic is easier
-    // to read in two steps. The cost is one extra round-trip on the
-    // contention path, which is rare and not performance-critical.
+    // The conditional UPDATE is the only operation that can flip allocation
+    // from 'idle' to 'locked'. Postgres serialises it, so two concurrent
+    // acquire calls can never both succeed. The follow-up SELECT below is
+    // intentionally a separate statement (not RETURNING more columns) for
+    // clarity: if the UPDATE failed, we want to know *why* and the diagnostic
+    // logic is easier to read in two steps. The cost is one extra round-trip
+    // on the contention path, which is rare and not performance-critical.
     let row = client.query_opt(
         r#"
         UPDATE project_tester
-           SET status = 'running',
+           SET allocation          = 'locked',
                locked_by_config_id = $2,
-               last_used_at = NOW(),
-               updated_at = NOW()
-         WHERE tester_id = $1
-           AND status = 'idle'
+               last_used_at        = NOW(),
+               updated_at          = NOW()
+         WHERE tester_id    = $1
+           AND power_state  = 'running'
+           AND allocation   = 'idle'
            AND locked_by_config_id IS NULL
          RETURNING tester_id
         "#,
@@ -359,18 +513,49 @@ pub async fn try_acquire(client: &PgClient, tester_id: Uuid, config_id: Uuid) ->
 
     // Didn't get it — figure out why
     let cur = client.query_one(
-        "SELECT status, locked_by_config_id FROM project_tester WHERE tester_id = $1",
+        "SELECT power_state, allocation, locked_by_config_id FROM project_tester WHERE tester_id = $1",
         &[&tester_id],
     ).await?;
-    let status: String = cur.get(0);
-    let locker: Option<Uuid> = cur.get(1);
-    match status.as_str() {
-        "stopped"            => Ok(AcquireOutcome::NeedsStart),
-        "running" if locker.is_some() => Ok(AcquireOutcome::AlreadyLockedBy(locker.unwrap())),
-        other                => Ok(AcquireOutcome::NotIdle(other.to_string())),
+    let power: String = cur.get(0);
+    let alloc: String = cur.get(1);
+    let locker: Option<Uuid> = cur.get(2);
+
+    match (power.as_str(), alloc.as_str()) {
+        ("stopped", _)              => Ok(AcquireOutcome::NeedsStart),
+        ("starting", _)             => Ok(AcquireOutcome::Transient(power)),
+        ("stopping" | "provisioning", _) => Ok(AcquireOutcome::Transient(power)),
+        ("running",  "locked")      => Ok(AcquireOutcome::AlreadyLockedBy(locker.unwrap())),
+        ("running",  "upgrading")   => Ok(AcquireOutcome::Upgrading),
+        ("error", _)                => Ok(AcquireOutcome::Errored),
+        _                           => Ok(AcquireOutcome::NotIdle(format!("{}/{}", power, alloc))),
     }
 }
 ```
+
+The `release()` function is the **only** writer that clears `(allocation, locked_by_config_id)` together:
+
+```rust
+pub async fn release(client: &PgClient, tester_id: Uuid, config_id: Uuid) -> Result<()> {
+    // Defensive: only release if WE hold it. Prevents accidental release
+    // by buggy callers that don't actually own the lock.
+    client.execute(
+        r#"
+        UPDATE project_tester
+           SET allocation          = 'idle',
+               locked_by_config_id = NULL,
+               updated_at          = NOW()
+         WHERE tester_id           = $1
+           AND locked_by_config_id = $2
+        "#,
+        &[&tester_id, &config_id],
+    ).await?;
+    Ok(())
+}
+```
+
+This is the only function in the entire codebase that flips `allocation` from `locked` back to `idle`. Enforced by:
+- A unit test that greps the source tree for any other `SET allocation = 'idle'` outside this file
+- The `lock_holder_implies_locked` CHECK constraint catches any code path that tries to clear the holder without also clearing the allocation
 
 ### SSH wait timeout — configurable
 
@@ -514,12 +699,14 @@ Sections inside the drawer:
 - **Recent activity** (audit log, last 10 entries with link to full history)
 - **Danger zone** (Stop tester, Delete tester — refused while running, queued, or in any transient state)
 
-When the tester is in `error` state, the drawer's status section shows a prominent **"Fix tester first"** panel with three actions:
-- **Run probe now** — calls `POST /testers/{tid}/probe` to query Azure for the current state and resync
-- **Mark as healthy** — manual override; transitions error → idle after the user has verified externally
-- **Delete tester** — destroys the broken tester so a fresh one can be created
+When the tester is in `power_state='error'`, the drawer's status section shows a prominent **"Fix tester first"** panel with four actions, ordered from least to most invasive:
 
-This makes the recovery path obvious without forcing users to dig through admin tools.
+- **Run probe** — calls `POST /testers/{tid}/probe` to query Azure for the actual VM state. If Azure reports the VM is healthy and the probe finds the harness intact, the tester transitions back to `power_state='running', allocation='idle'`. If the probe finds the VM in some other state, the row is resynced to match (e.g. `Deallocated → power_state='stopped'`).
+- **Reinstall tester** — calls `POST /testers/{tid}/upgrade` which re-runs the full install.sh on the existing VM. This is the supported recovery for "the harness got into a bad state but the VM is fine". On success the tester ends in `power_state='running', allocation='idle'`.
+- **Force to stopped** — calls `POST /testers/{tid}/force-stop`. Marks the tester as `power_state='stopped', allocation='idle'` without running any Azure operation. The user is expected to use this only when they have externally verified that the VM is actually deallocated. Subsequent benchmark launches will go through the normal `ensure_tester_running` path, which exercises `vm_start` + SSH wait + harness sanity check, providing real validation.
+- **Delete tester** — destroys the broken tester so a fresh one can be created.
+
+There is **no "Mark as healthy" action**. A direct `error → idle` transition without verification is unsafe — it could reintroduce a tester whose VM is unreachable, whose harness is missing, or whose public IP has changed. Every recovery path either runs an actual probe (safe), re-runs install.sh (safe), or forces the tester back to a state that requires the next `ensure_tester_running` to validate it (safe). The user can never bypass validation; they can only choose how heavyweight the validation is.
 
 ## Background schedulers
 
@@ -534,20 +721,18 @@ SELECT t.*
   FROM project_tester t
  WHERE t.auto_shutdown_enabled = TRUE
    AND t.next_shutdown_at < NOW()
-   AND t.status = 'idle'
+   AND t.power_state = 'running'
+   AND t.allocation  = 'idle'
    AND NOT EXISTS (
        SELECT 1 FROM benchmark_config c
         WHERE c.tester_id = t.tester_id
-          AND (
-              c.status IN ('queued','pending','running')
-              OR c.current_phase IN ('queued','starting','deploy','running','collect')
-          )
+          AND c.status IN ('queued','pending','running')
    );
 ```
 
-The drain check considers **both** `benchmark_config.status` AND `current_phase`. A benchmark mid-deploy on the tester (`status='running'`, `current_phase='deploy'`) blocks shutdown just as effectively as one in the queue. The two checks are redundant in the happy path but defend against any race where one column lags the other.
+The drain check reads `benchmark_config.status` only — `current_phase` is purely presentational and never consulted by orchestration. The `(power_state='running' AND allocation='idle')` filter is the precondition for safe deallocation: the VM is currently up but no benchmark holds it.
 
-**Hard rule:** a tester is shut down only if it is completely drained — `status='idle'` AND zero benchmarks in any non-terminal state. If the queue is non-empty, the shutdown is deferred 5 minutes, `shutdown_deferral_count` is incremented, and re-tried. The shutdown task re-validates the drain check inside the per-tester task to catch races (a benchmark queued between SELECT and shutdown). Two layers ensure no surprise shutdowns.
+**Hard rule:** a tester is shut down only if it is completely drained — VM running, allocation idle, AND zero benchmarks in any non-terminal status. If the queue is non-empty, the shutdown is deferred 5 minutes, `shutdown_deferral_count` is incremented, and re-tried. The shutdown task re-validates the drain check inside the per-tester task to catch races (a benchmark queued between SELECT and shutdown). Two layers ensure no surprise shutdowns.
 
 **Shutdown action.** When a tester is eligible to shut down, the orchestrator runs `az vm deallocate` (NOT `az vm stop`). Deallocation releases the compute resources and stops billing for CPU/RAM immediately; the disk is preserved at standard storage rates (~$5/month for a Standard_D2s_v3's OS disk). This is the only "stop" mode that achieves the cost-savings intent of the schedule — `az vm stop` keeps the VM allocated and billing continues at the full hourly rate.
 
@@ -575,10 +760,10 @@ The recovery task waits **5 minutes after dashboard startup** before scanning, g
 
 After the grace period:
 
-1. **Force-release stuck locks**: testers in `running` status whose `locked_by_config_id` points at a benchmark in a terminal state get their lock released and the dispatcher fired for the tester.
-2. **Handle stuck transient states**: testers in `starting`/`stopping`/`upgrading` whose `updated_at` is older than 30 min:
-   - If `auto_probe_enabled = TRUE` (opt-in): query Azure for the actual VM state and resync (`Running → idle`, `Deallocated → stopped`, etc.). If the probe itself fails, mark as `error` with reason.
-   - If `auto_probe_enabled = FALSE` (default): mark as `error` with a message instructing manual recovery.
+1. **Force-release stuck locks**: testers with `allocation='locked'` whose `locked_by_config_id` points at a benchmark in a terminal status get their lock released via `release()` and the dispatcher fired for the tester. The release path is the only code allowed to clear `(allocation, locked_by_config_id)`, even from the recovery loop.
+2. **Handle stuck transient power states**: testers whose `power_state IN ('starting','stopping','upgrading','provisioning')` AND `updated_at` is older than 30 min:
+   - If `auto_probe_enabled = TRUE` (opt-in): query Azure for the actual VM state and resync `power_state` to match (`Running → power_state='running'`, `Deallocated → power_state='stopped'`, etc.). If the probe itself fails, set `power_state='error'` with reason.
+   - If `auto_probe_enabled = FALSE` (default): set `power_state='error'` with a message instructing manual recovery via the drawer's "Fix tester first" panel.
 
 The 5-minute grace + 30-min staleness threshold means: a normal restart in the middle of an install never triggers recovery, but a restart that left a tester abandoned for half an hour does.
 
@@ -645,15 +830,17 @@ Server → Client: Phase update (used for ALL benchmarks, probe jobs, scheduled 
 
 ### Sequence numbers and reconnect handling
 
-Every push message includes a monotonic `seq` field, scoped per (`tester_id`) for queue messages and per (`entity_id`) for phase messages. The server keeps an in-memory counter that increments on each emitted update. Clients track the highest `seq` they've seen for each entity.
+Every push message includes a monotonic `seq` field, scoped per (`tester_id`) for queue messages and per (`entity_id`) for phase messages. The server keeps an **in-memory** counter that increments on each emitted update. Clients track the highest `seq` they've seen for each entity.
+
+**Important durability caveat:** `seq` is monotonic **only within a single dashboard process lifetime**. It is not persisted to the database and resets to 1 on every dashboard restart. This is an intentional simplification — the snapshot mechanism on reconnect provides the actual correctness guarantee, and `seq` is only used as a fast in-process duplicate-detection hint. Clients must NOT treat a lower `seq` after a reconnect as an error — it just means the dashboard restarted, and the snapshot they receive on reconnect is the authoritative state. If we ever need cross-restart durability for `seq`, the path forward is a per-entity counter column on the database row (out of scope for this spec).
 
 **Reconnect flow:**
-1. Client reconnects after a network blip and re-subscribes with its `tester_ids` list.
-2. Server sends a fresh `tester_queue_snapshot` with the *current* `seq`.
-3. Client compares against its locally-stored last-seen `seq`. If the snapshot's `seq` is higher, the client knows it missed events between the disconnect and now and the snapshot is the source of truth; the UI re-renders from snapshot. If equal, no events were missed.
+1. Client reconnects after a network blip OR a dashboard restart and re-subscribes with its `tester_ids` list.
+2. Server sends a fresh `tester_queue_snapshot` containing the *current authoritative state* and the *current process-lifetime `seq`*.
+3. Client **always trusts the snapshot** as the new source of truth. Its locally-stored `seq` is reset to the snapshot's value. The UI re-renders from snapshot.
 4. Subsequent updates resume normally with `seq` continuing from the snapshot.
 
-**Out-of-order or duplicate handling:** if a message arrives with `seq <= last_seen_seq`, the client drops it. This is unusual under normal operation but possible during reconnect race windows.
+**Out-of-order or duplicate handling within a single connection:** if a message arrives with `seq <= last_seen_seq` *during the same connection*, the client drops it as a duplicate. After a reconnect, this rule does not apply — the snapshot resets the baseline.
 
 ### Subscription limits and rate limiting
 
@@ -725,54 +912,100 @@ Visual rules: exactly one stage active at a time, earlier stages "complete" (cya
 
 ### Reset migration
 
-The deploy is treated as a fresh install. The migration is destructive and bootstraps from zero:
+The schema changes are split across **two distinct artifacts** with different lifecycles, to prevent the destructive reset from being mistaken for a normal upgrade step:
+
+#### 1. The schema migration (regular, repeatable, idempotent)
+
+A normal application migration that any environment runs at startup. This is the only schema-changing artifact in the regular migration chain. It is non-destructive and safe to run against any database, populated or empty.
 
 ```sql
--- crates/networker-dashboard/migrations/NNNN_persistent_testers_reset.sql
+-- crates/networker-dashboard/migrations/NNNN_persistent_testers_schema.sql
+
+-- New tester table with the full schema from the data model section
+CREATE TABLE IF NOT EXISTS project_tester ( /* full schema */ );
+
+CREATE INDEX IF NOT EXISTS idx_project_tester_project   ON project_tester(project_id);
+CREATE INDEX IF NOT EXISTS idx_project_tester_power     ON project_tester(power_state) WHERE power_state IN ('running','stopped');
+CREATE INDEX IF NOT EXISTS idx_project_tester_alloc     ON project_tester(allocation)  WHERE allocation IN ('idle','locked');
+CREATE INDEX IF NOT EXISTS idx_project_tester_shutdown  ON project_tester(next_shutdown_at) WHERE auto_shutdown_enabled = TRUE;
+CREATE INDEX IF NOT EXISTS idx_project_tester_last_used ON project_tester(project_id, last_used_at DESC NULLS LAST);
+
+-- benchmark_config additions
+ALTER TABLE benchmark_config ADD COLUMN IF NOT EXISTS tester_id              UUID REFERENCES project_tester(tester_id) ON DELETE SET NULL;
+ALTER TABLE benchmark_config ADD COLUMN IF NOT EXISTS tester_name_snapshot   TEXT;
+ALTER TABLE benchmark_config ADD COLUMN IF NOT EXISTS tester_region_snapshot TEXT;
+ALTER TABLE benchmark_config ADD COLUMN IF NOT EXISTS tester_cloud_snapshot  TEXT;
+ALTER TABLE benchmark_config ADD COLUMN IF NOT EXISTS tester_vm_size_snapshot TEXT;
+ALTER TABLE benchmark_config ADD COLUMN IF NOT EXISTS tester_version_snapshot TEXT;
+ALTER TABLE benchmark_config ADD COLUMN IF NOT EXISTS queued_at     TIMESTAMPTZ;
+ALTER TABLE benchmark_config ADD COLUMN IF NOT EXISTS current_phase TEXT;
+ALTER TABLE benchmark_config ADD COLUMN IF NOT EXISTS outcome       TEXT;
+
+-- Add the constraint only if it doesn't exist (idempotent)
+DO $$ BEGIN
+    ALTER TABLE benchmark_config ADD CONSTRAINT app_configs_need_tester
+        CHECK (
+            benchmark_type != 'application'
+            OR (tester_id IS NOT NULL OR tester_name_snapshot IS NOT NULL)
+        );
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- Phase/outcome columns on other progress-tracking tables
+ALTER TABLE probe_job    ADD COLUMN IF NOT EXISTS current_phase TEXT;
+ALTER TABLE probe_job    ADD COLUMN IF NOT EXISTS outcome       TEXT;
+ALTER TABLE schedule_run ADD COLUMN IF NOT EXISTS current_phase TEXT;
+ALTER TABLE schedule_run ADD COLUMN IF NOT EXISTS outcome       TEXT;
+```
+
+This migration runs every time the dashboard starts. It is idempotent (safe to re-run) and non-destructive (no `TRUNCATE`, no `DROP`).
+
+#### 2. The destructive bootstrap reset (one-time, environment-guarded, NOT in the migration chain)
+
+A separate SQL script that lives outside the regular migration directory and is **never** run automatically. It exists only because this is a pre-prod environment that needs a clean slate, and operating on it requires an explicit environment variable plus a CLI command.
+
+```sql
+-- crates/networker-dashboard/bootstrap/reset-pre-prod.sql
+--
+-- ⚠️  DESTRUCTIVE — wipes ALL data in ALL tables.
+-- This is a one-time pre-production reset, NOT a regular migration.
+-- It will NEVER run automatically. To execute:
+--
+--    DASHBOARD_ALLOW_DESTRUCTIVE_RESET=true \
+--    cargo run -p networker-dashboard --bin reset-pre-prod
+--
+-- The binary refuses to run unless the environment variable is set,
+-- and refuses to run against any database whose `project` table contains
+-- more than 0 rows tagged 'production' in cloud_account.
+--
+-- Outside the regular migration chain. Reviewers must understand this
+-- before approving any PR that touches it.
+
 BEGIN;
 
--- 1. Drop any tables from prior experiments that no longer exist in the new schema
+-- Drop any tables from prior experiments that no longer exist in the new schema
 DROP TABLE IF EXISTS old_ephemeral_vm_state CASCADE;
 DROP TABLE IF EXISTS old_benchmark_vm_pool CASCADE;
--- (Add other obsolete table names here if discovered during implementation)
 
--- 2. Wipe everything in the active schema — pre-prod reset, no data to preserve
+-- Wipe everything in the active schema
 TRUNCATE TABLE benchmark_config, benchmark_testbed, benchmark_run, probe_job,
                schedule_run, schedule, project_member, cloud_account,
-               share_link, deploy, app_user, project
+               share_link, deploy, app_user, project, project_tester
    RESTART IDENTITY CASCADE;
-
--- 3. New tester table with the full schema from the data model section
-CREATE TABLE project_tester ( /* full schema */ );
-CREATE INDEX idx_project_tester_project    ON project_tester(project_id);
-CREATE INDEX idx_project_tester_status     ON project_tester(status) WHERE status IN ('idle','running','stopped');
-CREATE INDEX idx_project_tester_shutdown   ON project_tester(next_shutdown_at) WHERE auto_shutdown_enabled = TRUE;
-CREATE INDEX idx_project_tester_last_used  ON project_tester(project_id, last_used_at DESC NULLS LAST);
-
--- 4. New columns on benchmark_config
-ALTER TABLE benchmark_config
-    ADD COLUMN tester_id     UUID REFERENCES project_tester(tester_id) ON DELETE RESTRICT,
-    ADD COLUMN queued_at     TIMESTAMPTZ,
-    ADD COLUMN current_phase TEXT,
-    ADD COLUMN outcome       TEXT;
-
-ALTER TABLE benchmark_config ADD CONSTRAINT app_configs_need_tester
-    CHECK (benchmark_type != 'application' OR tester_id IS NOT NULL);
-
-ALTER TABLE probe_job    ADD COLUMN current_phase TEXT, ADD COLUMN outcome TEXT;
-ALTER TABLE schedule_run ADD COLUMN current_phase TEXT, ADD COLUMN outcome TEXT;
 
 COMMIT;
 
--- 5. Reclaim disk space and refresh statistics after the bulk wipe.
--- Done outside the transaction because VACUUM cannot run inside one.
+-- VACUUM outside the transaction
 VACUUM FULL benchmark_config, benchmark_testbed, benchmark_run, probe_job,
             schedule_run, schedule, project_member, cloud_account,
             share_link, deploy, app_user, project, project_tester;
 ANALYZE;
 ```
 
-The dashboard's existing `bootstrap_admin_user_from_env` path creates the first admin from `DASHBOARD_ADMIN_PASSWORD` after the wipe so the first request after deploy can log in.
+A small Rust binary `reset-pre-prod` lives at `crates/networker-dashboard/src/bin/reset_pre_prod.rs` and gates the script behind `DASHBOARD_ALLOW_DESTRUCTIVE_RESET=true`. The binary refuses to run if the environment variable is unset OR if any project in the `project` table has a non-test cloud_account configured (best-effort production guard).
+
+After the reset, the dashboard's existing `bootstrap_admin_user_from_env` path creates the first admin from `DASHBOARD_ADMIN_PASSWORD` so the first HTTP request can log in.
+
+**The two artifacts are kept separate** so that the destructive script can never accidentally end up in the regular migration chain via a copy-paste error or a sloppy refactor.
 
 ### Single PR
 
@@ -801,9 +1034,9 @@ One submission containing backend + migration + frontend + smoke tests. Two logi
 6. Navigation entry in `ProjectNav`
 7. CHANGELOG entry, version bump
 
-### CLI smoke test — hard pre-merge gate
+### CLI smoke test suite
 
-The `networker-tester` crate is the original product. It must keep working as a standalone CLI even though we're rewriting the orchestrator. A new script `tests/cli_smoke.sh` runs eight scenarios in order:
+The `networker-tester` crate is the original product. It must keep working as a standalone CLI even though we're rewriting the orchestrator. A new script `tests/cli_smoke.sh` exists and runs eight scenarios in order:
 
 1. **Local HTTP/2 probe** against a local `networker-endpoint` instance
 2. **HTTP/3 probe** with QUIC
@@ -811,27 +1044,22 @@ The `networker-tester` crate is the original product. It must keep working as a 
 4. **All modes against a real public endpoint** (`https://www.cloudflare.com`)
 5. **Database persistence** with the SQLite feature
 6. **Cargo workspace builds** including `--no-default-features` and `--all-features`, plus `cargo clippy --all-targets -- -D warnings` and `cargo test --workspace --lib`
-7. **CLI reports to dashboard** — verifies the new `Phase` enum is wired correctly when the CLI talks to a locally-running dashboard. The CLI must send `phase=running` on first contact, then `phase=collect` when results are being persisted, then `phase=done` with the appropriate outcome
-8. **End-to-end persistent-tester flow** — creates a tester via API on a local mock cloud (or against a real Azure VM if `SMOKE_TEST_AZURE=1` is set), launches an application benchmark against it, verifies the lock acquire/release cycle and that the tester ends in `idle` status. This is the integration test for the new orchestrator path; it must pass before the PR is mergeable.
+7. **CLI reports to dashboard** — verifies the new `Phase` enum is wired correctly when the CLI talks to a locally-running dashboard. The CLI sends `phase=running` on first contact, then `phase=collect` when results are being persisted, then `phase=done` with the appropriate outcome
+8. **End-to-end persistent-tester flow** — creates a tester via API on a local mock cloud (or against a real Azure VM if `SMOKE_TEST_AZURE=1` is set), launches an application benchmark against it, verifies the lock acquire/release cycle and that the tester ends in `power_state='running', allocation='idle'`
 
-These run as the **first action** when implementation starts (baseline check) and after every meaningful commit. Any failure reverts the offending commit before continuing.
+The script returns a non-zero exit code on any failure and prints a summary of which scenarios passed and failed. The implementation playbook (a separate artifact, not this design document) decides when and how often the script is run.
 
-### Post-deploy validation via Chrome MCP
+### End-to-end validation surfaces
 
-After the release ships and the database is reset, the user logs in with the `DASHBOARD_ADMIN_PASSWORD` temp password and changes it. Then I (Claude) drive the new flows via Chrome MCP to verify end-to-end:
+The dashboard exposes the following user-facing surfaces that must be reachable and functional after deploy:
 
-1. Create a project + cloud_account configuration
-2. Create the first tester in eastus (the long path — ~10 min for Chrome install)
-3. Verify the management page shows `provisioning → idle` transitions live
-4. Launch a multi-language application benchmark against the new tester
-5. Verify all 6 languages produce results
-6. Verify the tester returns to `idle` and is NOT destroyed
-7. Launch a second benchmark — verify it's much faster (no Chrome reinstall)
-8. Queue a third benchmark while the second is running — verify queue position display + auto-promote
-9. Verify auto-shutdown defers when a benchmark is queued
-10. Verify the unified phase bar updates live across the wizard, progress page, and management page
+- **Tester Management page** — list, create, detail drawer with all sections, delete
+- **Wizard Tester step** — list available testers, create inline, queue position display
+- **Benchmark Progress page** — `<PhaseBar />` updates live via WebSocket, shows queue position when applicable
+- **Project navigation** — Testers entry visible to project members
+- **Logs page** — `tester_action`-tagged events queryable
 
-If any step fails, I fix forward; we don't ship a half-working tester pool.
+The implementation playbook owns the test plan for exercising these surfaces post-deploy; this design document does not prescribe how that testing happens.
 
 ## Edge cases
 
