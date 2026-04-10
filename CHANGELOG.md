@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.24.0] - 2026-04-10
+
+### Fixed
+
+- **Repo clone**: Always fresh clone (rm + clone) instead of shallow pull — ensures latest server code
+- **Java debconf**: Export DEBIAN_FRONTEND=noninteractive for JDK install
+
+---
+
 ## [0.23.9] - 2026-04-10
 
 ### Fixed

@@ -324,7 +324,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.23.9"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.24.0"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -9332,14 +9332,10 @@ deploy_benchmark_server() {
             -out "$CERT_PEM" -days 365 -nodes -subj '/CN=bench' 2>/dev/null
     fi
 
-    if [ ! -d "$REPO_DIR/.git" ]; then
-        echo ">> Cloning reference APIs"
-        rm -rf "$REPO_DIR"
-        git clone --depth 1 "$REPO" "$REPO_DIR" 2>/dev/null < /dev/null
-    else
-        echo ">> Updating reference APIs"
-        cd "$REPO_DIR" && git pull --quiet 2>/dev/null < /dev/null
-    fi
+    # Always fresh clone to ensure latest code (shallow clones + git pull can be unreliable)
+    echo ">> Fetching latest reference APIs"
+    rm -rf "$REPO_DIR"
+    git clone --depth 1 "$REPO" "$REPO_DIR" 2>/dev/null < /dev/null
 
     local API_DIR="$REPO_DIR/benchmarks/reference-apis"
 
@@ -9476,8 +9472,9 @@ NGINX_APP_EOF
         java)
             echo ">> Installing Java server"
             command -v javac >/dev/null 2>&1 || {
+                export DEBIAN_FRONTEND=noninteractive
                 sudo apt-get update -qq < /dev/null
-                sudo apt-get install -y -qq default-jdk-headless < /dev/null
+                sudo -E apt-get install -y -qq default-jdk-headless < /dev/null
             }
             cd "$API_DIR/java"
             javac -d "$BENCH_DIR/java-build" Server.java 2>/dev/null < /dev/null || {
