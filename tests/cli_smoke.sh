@@ -40,15 +40,14 @@ UDP_PORT="${SMOKE_ENDPOINT_UDP_PORT:-19999}"
 UDP_TP_PORT="${SMOKE_ENDPOINT_UDP_TP_PORT:-19998}"
 PROFILE="${SMOKE_CARGO_PROFILE:-debug}"
 
-CARGO_BUILD_FLAG=""
+CARGO_BUILD_FLAGS=()
 if [ "$PROFILE" = "release" ]; then
-    CARGO_BUILD_FLAG="--release"
+    CARGO_BUILD_FLAGS=(--release)
 fi
 
 SMOKE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/networker_cli_smoke.XXXXXX")"
 ENDPOINT_LOG="$SMOKE_DIR/endpoint.log"
 ENDPOINT_PID=""
-SQLITE_DB="$SMOKE_DIR/cli_smoke.db"
 
 RESULTS=()   # lines of "PASS|FAIL|SKIP\t<scenario>\t<detail>"
 FAILS=0
@@ -64,8 +63,6 @@ cleanup() {
         sleep 0.5
         kill -9 "$ENDPOINT_PID" 2>/dev/null || true
     fi
-    # Also clean any stray networker-endpoint we may have accidentally orphaned
-    # (only processes bound to our ports — be conservative).
     rm -rf "$SMOKE_DIR" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
@@ -77,19 +74,19 @@ hr()  { printf -- '─%.0s' $(seq 1 72); printf '\n'; }
 
 record_pass() {
     PASSES=$((PASSES + 1))
-    RESULTS+=("PASS	$1	$2")
+    RESULTS+=("PASS"$'\t'"$1"$'\t'"$2")
     log "PASS  $1 — $2"
 }
 
 record_fail() {
     FAILS=$((FAILS + 1))
-    RESULTS+=("FAIL	$1	$2")
+    RESULTS+=("FAIL"$'\t'"$1"$'\t'"$2")
     log "FAIL  $1 — $2"
 }
 
 record_skip() {
     SKIPS=$((SKIPS + 1))
-    RESULTS+=("SKIP	$1	$2")
+    RESULTS+=("SKIP"$'\t'"$1"$'\t'"$2")
     log "SKIP  $1 — $2"
 }
 
@@ -113,7 +110,7 @@ wait_for_port() {
 run_tester() {
     local logfile="$1"
     shift
-    cargo run $CARGO_BUILD_FLAG --quiet -p networker-tester -- "$@" \
+    cargo run ${CARGO_BUILD_FLAGS[@]+"${CARGO_BUILD_FLAGS[@]}"} --quiet -p networker-tester -- "$@" \
         >"$logfile" 2>&1
     return $?
 }
@@ -121,7 +118,7 @@ run_tester() {
 start_endpoint() {
     log "Starting networker-endpoint on http=$HTTP_PORT https=$HTTPS_PORT udp=$UDP_PORT"
     (
-        cargo run $CARGO_BUILD_FLAG --quiet -p networker-endpoint -- \
+        cargo run ${CARGO_BUILD_FLAGS[@]+"${CARGO_BUILD_FLAGS[@]}"} --quiet -p networker-endpoint -- \
             --http-port "$HTTP_PORT" \
             --https-port "$HTTPS_PORT" \
             --udp-port "$UDP_PORT" \
@@ -241,8 +238,6 @@ scenario_5_file_persistence() {
         record_fail "s5-file-persistence" "see $out"
         tail -n 20 "$out" >&2 || true
     fi
-    # Also make sure the sqlite db path the plan referenced is clean.
-    rm -f "$SQLITE_DB"
 }
 
 scenario_6_workspace_builds() {
@@ -306,17 +301,21 @@ hr
 # meaningless anyway.
 scenario_6_workspace_builds
 
-if ! start_endpoint; then
-    record_fail "endpoint-boot" "networker-endpoint failed to start; scenarios 1,2,5 will fail"
-fi
+if [ "$FAILS" -gt 0 ]; then
+    log "Workspace build gate failed — skipping endpoint-based scenarios."
+else
+    if ! start_endpoint; then
+        record_fail "endpoint-boot" "networker-endpoint failed to start; scenarios 1,2,5 will fail"
+    fi
 
-scenario_1_local_http2
-scenario_2_local_http3
-scenario_3_public_dns
-scenario_4_all_modes_public
-scenario_5_file_persistence
-scenario_7_dashboard_phases
-scenario_8_e2e_persistent_tester
+    scenario_1_local_http2
+    scenario_2_local_http3
+    scenario_3_public_dns
+    scenario_4_all_modes_public
+    scenario_5_file_persistence
+    scenario_7_dashboard_phases
+    scenario_8_e2e_persistent_tester
+fi
 
 # ─── Summary ─────────────────────────────────────────────────────────────────
 
