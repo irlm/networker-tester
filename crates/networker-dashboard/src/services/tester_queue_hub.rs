@@ -5,7 +5,7 @@
 //! `(project_id, tester_id)`. Subscribers are WebSocket handlers (Task 21) that
 //! hold a `tokio::sync::mpsc::Sender<TesterMessage>`.
 
-#![allow(dead_code)] // wired in Task 21 + 34
+#![allow(dead_code)] // publishers wired in Task 34
 
 use std::collections::HashMap;
 use std::sync::Arc;

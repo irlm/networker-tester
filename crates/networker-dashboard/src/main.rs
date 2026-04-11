@@ -64,6 +64,9 @@ pub struct AppState {
     pub events_tx: broadcast::Sender<networker_common::messages::DashboardEvent>,
     /// Connected agents registry.
     pub agents: ws::agent_hub::AgentHub,
+    /// In-process pub/sub for tester queue updates (publishers: dispatcher/
+    /// scheduler; subscribers: `/ws/testers` connections).
+    pub tester_queue_hub: Arc<networker_dashboard::services::tester_queue_hub::TesterQueueHub>,
     /// Spawned tester processes: agent_id → PID (so we can kill them on delete).
     pub tester_processes: RwLock<HashMap<uuid::Uuid, u32>>,
     // SSO config
@@ -212,6 +215,9 @@ async fn main() -> anyhow::Result<()> {
         public_url: cfg.public_url.clone(),
         events_tx,
         agents: ws::agent_hub::AgentHub::new(),
+        tester_queue_hub: Arc::new(
+            networker_dashboard::services::tester_queue_hub::TesterQueueHub::new(),
+        ),
         tester_processes: RwLock::new(HashMap::new()),
         microsoft_client_id: cfg.microsoft_client_id.clone(),
         microsoft_client_secret: cfg.microsoft_client_secret.clone(),
