@@ -63,6 +63,11 @@ cleanup() {
         sleep 0.5
         kill -9 "$ENDPOINT_PID" 2>/dev/null || true
     fi
+    if [ -n "${DASHBOARD_PID:-}" ] && kill -0 "$DASHBOARD_PID" 2>/dev/null; then
+        kill "$DASHBOARD_PID" 2>/dev/null || true
+        sleep 0.5
+        kill -9 "$DASHBOARD_PID" 2>/dev/null || true
+    fi
     rm -rf "$SMOKE_DIR" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
@@ -267,24 +272,332 @@ scenario_6_workspace_builds() {
     fi
 }
 
+# ── Dashboard helpers (shared by scenarios 7 + 8) ───────────────────────────
+
+DASHBOARD_PID=""
+DASHBOARD_PORT_USED="3000"
+DASHBOARD_ADMIN_EMAIL_USED="admin@example.com"
+DASHBOARD_ADMIN_PASSWORD_USED="smokesmoke1!"
+DASHBOARD_TOKEN=""
+
+stop_dashboard() {
+    if [ -n "$DASHBOARD_PID" ] && kill -0 "$DASHBOARD_PID" 2>/dev/null; then
+        log "Stopping dashboard (pid=$DASHBOARD_PID)"
+        kill "$DASHBOARD_PID" 2>/dev/null || true
+        sleep 0.5
+        kill -9 "$DASHBOARD_PID" 2>/dev/null || true
+    fi
+    DASHBOARD_PID=""
+}
+
+# Verify postgres (docker-compose.dashboard.yml) is up on 127.0.0.1:5432.
+# Returns 0 if reachable, 1 otherwise. Does NOT start it — operator-owned.
+check_postgres_up() {
+    wait_for_port 127.0.0.1 5432 4
+}
+
+# Start dashboard in background. Assumes postgres is reachable.
+# On success: $DASHBOARD_PID is set, port 3000 is listening.
+start_dashboard() {
+    local log_file="$SMOKE_DIR/dashboard.log"
+    log "Starting networker-dashboard on port $DASHBOARD_PORT_USED (log: $log_file)"
+    (
+        DASHBOARD_DB_URL="postgres://networker:networker@127.0.0.1:5432/networker_core" \
+        DASHBOARD_ADMIN_EMAIL="$DASHBOARD_ADMIN_EMAIL_USED" \
+        DASHBOARD_ADMIN_PASSWORD="$DASHBOARD_ADMIN_PASSWORD_USED" \
+        DASHBOARD_JWT_SECRET="smoke-test-secret-not-for-production-use-only" \
+        DASHBOARD_PORT="$DASHBOARD_PORT_USED" \
+        cargo run ${CARGO_BUILD_FLAGS[@]+"${CARGO_BUILD_FLAGS[@]}"} --quiet -p networker-dashboard \
+            >"$log_file" 2>&1 \
+            </dev/null
+    ) &
+    DASHBOARD_PID=$!
+
+    if ! wait_for_port 127.0.0.1 "$DASHBOARD_PORT_USED" 480; then
+        log "dashboard failed to bind :$DASHBOARD_PORT_USED"
+        log "---- dashboard log (tail) ----"
+        tail -n 60 "$log_file" 2>/dev/null || true
+        log "------------------------------"
+        return 1
+    fi
+    return 0
+}
+
+# POST /auth/login; sets $DASHBOARD_TOKEN on success.
+dashboard_login() {
+    local resp="$SMOKE_DIR/login.json"
+    local payload
+    payload=$(printf '{"email":"%s","password":"%s"}' \
+        "$DASHBOARD_ADMIN_EMAIL_USED" "$DASHBOARD_ADMIN_PASSWORD_USED")
+    if ! curl -fsS -X POST \
+        -H 'Content-Type: application/json' \
+        -d "$payload" \
+        "http://127.0.0.1:$DASHBOARD_PORT_USED/api/auth/login" \
+        -o "$resp" 2>>"$SMOKE_DIR/dashboard.log"; then
+        log "login failed (see $resp and dashboard.log)"
+        return 1
+    fi
+    DASHBOARD_TOKEN=$(python3 -c \
+        'import json,sys; print(json.load(open(sys.argv[1]))["token"])' \
+        "$resp" 2>/dev/null || true)
+    if [ -z "$DASHBOARD_TOKEN" ]; then
+        log "login response did not contain a token: $(cat "$resp")"
+        return 1
+    fi
+    return 0
+}
+
 scenario_7_dashboard_phases() {
     hr
     log "Scenario 7: CLI reports phases to dashboard"
     if [ "${SMOKE_TEST_DASHBOARD:-0}" != "1" ]; then
-        record_skip "s7-dashboard-phases" "deferred to Task 35 (set SMOKE_TEST_DASHBOARD=1 to enable)"
+        record_skip "s7-dashboard-phases" "gated (set SMOKE_TEST_DASHBOARD=1 to enable)"
         return
     fi
-    record_skip "s7-dashboard-phases" "implementation deferred to Task 35"
+
+    if ! command -v curl >/dev/null 2>&1; then
+        record_skip "s7-dashboard-phases" "curl not available"
+        return
+    fi
+    if ! command -v python3 >/dev/null 2>&1; then
+        record_skip "s7-dashboard-phases" "python3 not available (needed for JSON parsing)"
+        return
+    fi
+
+    if ! check_postgres_up; then
+        record_skip "s7-dashboard-phases" \
+            "postgres :5432 unreachable — run: docker compose -f docker-compose.dashboard.yml up -d postgres"
+        return
+    fi
+
+    if ! start_dashboard; then
+        record_fail "s7-dashboard-phases" "dashboard failed to start"
+        stop_dashboard
+        return
+    fi
+
+    if ! dashboard_login; then
+        record_fail "s7-dashboard-phases" "failed to obtain JWT via /api/auth/login"
+        stop_dashboard
+        return
+    fi
+    log "Obtained JWT (len=${#DASHBOARD_TOKEN})"
+
+    # The CLI does not currently expose --dashboard-url / --dashboard-token
+    # flags (verified in crates/networker-tester/src/cli.rs as of commit
+    # c74a2ab). Once added, this scenario should:
+    #   1. Run:
+    #        cargo run -p networker-tester -- \
+    #          --target http://127.0.0.1:$HTTP_PORT \
+    #          --modes http1 --runs 1 \
+    #          --dashboard-url http://127.0.0.1:$DASHBOARD_PORT_USED \
+    #          --dashboard-token "$DASHBOARD_TOKEN"
+    #   2. Query benchmark_config and assert
+    #        current_phase='done' AND outcome='success'
+    #
+    # For now we exercise the dashboard+login boot path and record a skip
+    # for the verification half so the reason is actionable.
+    stop_dashboard
+    record_skip "s7-dashboard-phases" \
+        "TODO: networker-tester CLI lacks --dashboard-url/--dashboard-token flags; boot + login paths verified"
 }
 
 scenario_8_e2e_persistent_tester() {
     hr
     log "Scenario 8: E2E persistent-tester flow"
     if [ "${SMOKE_TEST_AZURE:-0}" != "1" ]; then
-        record_skip "s8-e2e-persistent-tester" "deferred to Task 35 (set SMOKE_TEST_AZURE=1 to enable)"
+        record_skip "s8-e2e-persistent-tester" "gated (set SMOKE_TEST_AZURE=1 to enable)"
         return
     fi
-    record_skip "s8-e2e-persistent-tester" "implementation deferred to Task 35"
+
+    if ! command -v curl >/dev/null 2>&1; then
+        record_skip "s8-e2e-persistent-tester" "curl not available"
+        return
+    fi
+    if ! command -v python3 >/dev/null 2>&1; then
+        record_skip "s8-e2e-persistent-tester" "python3 not available"
+        return
+    fi
+    if ! command -v az >/dev/null 2>&1; then
+        record_skip "s8-e2e-persistent-tester" "az CLI not installed"
+        return
+    fi
+    if ! az account show >/dev/null 2>&1; then
+        record_skip "s8-e2e-persistent-tester" "az account show failed — not logged in"
+        return
+    fi
+    if ! check_postgres_up; then
+        record_skip "s8-e2e-persistent-tester" \
+            "postgres :5432 unreachable — run: docker compose -f docker-compose.dashboard.yml up -d postgres"
+        return
+    fi
+
+    if ! start_dashboard; then
+        record_fail "s8-e2e-persistent-tester" "dashboard failed to start"
+        stop_dashboard
+        return
+    fi
+    if ! dashboard_login; then
+        record_fail "s8-e2e-persistent-tester" "failed to obtain JWT"
+        stop_dashboard
+        return
+    fi
+
+    local api_base="http://127.0.0.1:$DASHBOARD_PORT_USED/api"
+    # The smoke run assumes a default project slug exists. An operator with a
+    # non-default setup can override with SMOKE_PROJECT_ID.
+    local pid="${SMOKE_PROJECT_ID:-default}"
+    local auth_header="Authorization: Bearer $DASHBOARD_TOKEN"
+    local ct_header="Content-Type: application/json"
+
+    # 1) Create a persistent tester.
+    local create_body='{"name":"smoke-s8","cloud":"azure","region":"eastus","auto_probe_enabled":false}'
+    local create_resp="$SMOKE_DIR/s8_create.json"
+    if ! curl -fsS -X POST \
+        -H "$auth_header" -H "$ct_header" \
+        -d "$create_body" \
+        "$api_base/projects/$pid/testers" \
+        -o "$create_resp"; then
+        record_fail "s8-e2e-persistent-tester" "POST /projects/$pid/testers failed"
+        stop_dashboard
+        return
+    fi
+    local tid
+    tid=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "$create_resp" 2>/dev/null || true)
+    if [ -z "$tid" ]; then
+        record_fail "s8-e2e-persistent-tester" "no id in create-tester response"
+        stop_dashboard
+        return
+    fi
+    log "Created tester id=$tid"
+
+    # 2) Poll until power_state='running' AND allocation='idle' (15 min max).
+    local deadline=$(( $(date +%s) + 900 ))
+    local tester_json="$SMOKE_DIR/s8_tester.json"
+    local power_state="" allocation=""
+    while :; do
+        if [ "$(date +%s)" -gt "$deadline" ]; then
+            record_fail "s8-e2e-persistent-tester" "tester did not reach running+idle within 15m"
+            curl -fsS -X DELETE -H "$auth_header" "$api_base/projects/$pid/testers/$tid" >/dev/null 2>&1 || true
+            stop_dashboard
+            return
+        fi
+        if curl -fsS -H "$auth_header" "$api_base/projects/$pid/testers/$tid" -o "$tester_json"; then
+            power_state=$(python3 -c \
+                'import json,sys; print(json.load(open(sys.argv[1])).get("power_state",""))' \
+                "$tester_json" 2>/dev/null || true)
+            allocation=$(python3 -c \
+                'import json,sys; print(json.load(open(sys.argv[1])).get("allocation",""))' \
+                "$tester_json" 2>/dev/null || true)
+            log "tester state: power=$power_state alloc=$allocation"
+            if [ "$power_state" = "running" ] && [ "$allocation" = "idle" ]; then
+                break
+            fi
+        fi
+        sleep 10
+    done
+
+    # 3) Create a benchmark_config bound to this tester.
+    local cfg_body
+    cfg_body=$(printf '{"name":"smoke-s8","benchmark_type":"application","tester_id":"%s","testbeds":[{"cloud":"azure","region":"eastus","proxies":["nginx"]}]}' "$tid")
+    local cfg_resp="$SMOKE_DIR/s8_cfg.json"
+    if ! curl -fsS -X POST \
+        -H "$auth_header" -H "$ct_header" \
+        -d "$cfg_body" \
+        "$api_base/projects/$pid/benchmark-configs" \
+        -o "$cfg_resp"; then
+        record_fail "s8-e2e-persistent-tester" "POST benchmark-configs failed: $(cat "$cfg_resp" 2>/dev/null)"
+        curl -fsS -X DELETE -H "$auth_header" "$api_base/projects/$pid/testers/$tid" >/dev/null 2>&1 || true
+        stop_dashboard
+        return
+    fi
+    local cid
+    cid=$(python3 -c \
+        'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("config_id") or d.get("id",""))' \
+        "$cfg_resp" 2>/dev/null || true)
+    if [ -z "$cid" ]; then
+        record_fail "s8-e2e-persistent-tester" "no config_id in create-config response"
+        curl -fsS -X DELETE -H "$auth_header" "$api_base/projects/$pid/testers/$tid" >/dev/null 2>&1 || true
+        stop_dashboard
+        return
+    fi
+    log "Created benchmark_config id=$cid"
+
+    # 4) Launch it.
+    if ! curl -fsS -X POST \
+        -H "$auth_header" -H "$ct_header" \
+        -d '{}' \
+        "$api_base/projects/$pid/benchmark-configs/$cid/launch" \
+        -o "$SMOKE_DIR/s8_launch.json"; then
+        record_fail "s8-e2e-persistent-tester" "POST benchmark-configs/$cid/launch failed"
+        curl -fsS -X DELETE -H "$auth_header" "$api_base/projects/$pid/testers/$tid" >/dev/null 2>&1 || true
+        stop_dashboard
+        return
+    fi
+    log "Launched benchmark_config id=$cid"
+
+    # 5) Poll benchmark_config status (20 min max).
+    deadline=$(( $(date +%s) + 1200 ))
+    local cfg_status=""
+    local cfg_state_json="$SMOKE_DIR/s8_cfg_state.json"
+    while :; do
+        if [ "$(date +%s)" -gt "$deadline" ]; then
+            record_fail "s8-e2e-persistent-tester" "benchmark did not reach terminal state within 20m"
+            curl -fsS -X DELETE -H "$auth_header" "$api_base/projects/$pid/testers/$tid" >/dev/null 2>&1 || true
+            stop_dashboard
+            return
+        fi
+        if curl -fsS -H "$auth_header" \
+            "$api_base/projects/$pid/benchmark-configs/$cid" \
+            -o "$cfg_state_json"; then
+            cfg_status=$(python3 -c \
+                'import json,sys; d=json.load(open(sys.argv[1])); c=d.get("config",d); print(c.get("status",""))' \
+                "$cfg_state_json" 2>/dev/null || true)
+            log "benchmark status: $cfg_status"
+            case "$cfg_status" in
+                completed|completed_with_errors|failed|cancelled)
+                    break
+                    ;;
+            esac
+        fi
+        sleep 15
+    done
+
+    if [ "$cfg_status" != "completed" ] && [ "$cfg_status" != "completed_with_errors" ]; then
+        record_fail "s8-e2e-persistent-tester" "benchmark terminal status=$cfg_status (expected completed*)"
+        curl -fsS -X DELETE -H "$auth_header" "$api_base/projects/$pid/testers/$tid" >/dev/null 2>&1 || true
+        stop_dashboard
+        return
+    fi
+
+    # 6) Tester persistence check: it should still exist and be idle again.
+    if ! curl -fsS -H "$auth_header" \
+        "$api_base/projects/$pid/testers/$tid" -o "$tester_json"; then
+        record_fail "s8-e2e-persistent-tester" "tester GET after benchmark failed (tester destroyed?)"
+        stop_dashboard
+        return
+    fi
+    allocation=$(python3 -c \
+        'import json,sys; print(json.load(open(sys.argv[1])).get("allocation",""))' \
+        "$tester_json" 2>/dev/null || true)
+    if [ "$allocation" != "idle" ]; then
+        record_fail "s8-e2e-persistent-tester" "tester allocation after benchmark=$allocation (expected idle)"
+        curl -fsS -X DELETE -H "$auth_header" "$api_base/projects/$pid/testers/$tid" >/dev/null 2>&1 || true
+        stop_dashboard
+        return
+    fi
+
+    # 7) Cleanup — destroy the VM so we don't bleed Azure cost.
+    log "Cleaning up Azure tester $tid"
+    if ! curl -fsS -X DELETE -H "$auth_header" \
+        "$api_base/projects/$pid/testers/$tid" -o /dev/null; then
+        record_fail "s8-e2e-persistent-tester" "DELETE tester failed — MANUAL CLEANUP REQUIRED for tid=$tid"
+        stop_dashboard
+        return
+    fi
+
+    stop_dashboard
+    record_pass "s8-e2e-persistent-tester" "persistent tester round-trip ok (status=$cfg_status)"
 }
 
 # ─── Driver ──────────────────────────────────────────────────────────────────
