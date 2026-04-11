@@ -452,98 +452,6 @@ async fn stop_app_language(vm: &VmInfo) {
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 }
 
-/// Deploy the Chrome test harness to the VM.
-async fn deploy_chrome_harness(vm: &VmInfo) -> Result<()> {
-    tracing::info!("Deploying Chrome test harness on {}", vm.ip);
-    // Clone repo first (needed for harness files)
-    ssh::ssh_exec(
-        &vm.ip,
-        "if [ ! -d /tmp/nwk-repo/.git ]; then git clone --depth 1 https://github.com/irlm/networker-tester.git /tmp/nwk-repo 2>/dev/null < /dev/null; fi",
-    ).await.ok(); // best-effort
-
-    // Step 1: Wait for dpkg lock and run apt-get update
-    // Fresh Azure VMs run unattended-upgrades for 1-2 min after boot.
-    // We wait up to 2 min for the lock, then force-release if needed.
-    ssh::ssh_exec(
-        &vm.ip,
-        "export DEBIAN_FRONTEND=noninteractive && \
-         echo 'Waiting for apt lock...' && \
-         for i in $(seq 1 60); do \
-           if sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || \
-              sudo fuser /var/lib/apt/lists/lock >/dev/null 2>&1; then \
-             [ $((i % 10)) -eq 0 ] && echo \"Still locked (${i}s)...\"; \
-             sleep 2; \
-           else break; fi; \
-         done && \
-         sudo dpkg --configure -a 2>/dev/null; \
-         echo 'Running apt-get update...' && \
-         sudo apt-get update -qq < /dev/null && \
-         echo 'apt-get update done'",
-    )
-    .await
-    .with_context(|| format!("apt-get update failed on {}", vm.ip))?;
-
-    // Step 3: Create harness directory
-    ssh::ssh_exec(
-        &vm.ip,
-        "sudo mkdir -p /opt/bench/chrome-harness && sudo chown $(whoami):$(whoami) /opt/bench/chrome-harness",
-    )
-    .await
-    .with_context(|| format!("Failed to create harness dir on {}", vm.ip))?;
-
-    // Step 4: Download Chrome .deb (fast — just a download)
-    ssh::ssh_exec(
-        &vm.ip,
-        "command -v google-chrome >/dev/null 2>&1 || { \
-           echo 'Downloading Chrome...' && \
-           curl -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
-             -o /tmp/chrome.deb < /dev/null && echo 'Downloaded'; }",
-    )
-    .await
-    .with_context(|| format!("Failed to download Chrome on {}", vm.ip))?;
-
-    // Step 5: Install Chrome .deb + deps + Node.js (one apt-get session)
-    ssh::ssh_exec(
-        &vm.ip,
-        "command -v google-chrome >/dev/null 2>&1 || { \
-           export DEBIAN_FRONTEND=noninteractive && \
-           echo 'Installing Chrome + Node.js...' && \
-           sudo dpkg -i /tmp/chrome.deb 2>/dev/null; \
-           sudo apt-get install -y -qq -f < /dev/null && \
-           sudo apt-get install -y -qq nodejs npm < /dev/null && \
-           rm -f /tmp/chrome.deb && echo 'Installed'; } || { \
-           command -v npm >/dev/null 2>&1 || { \
-             sudo apt-get install -y -qq nodejs npm < /dev/null; }; }",
-    )
-    .await
-    .with_context(|| format!("Failed to install Chrome/Node.js on {}", vm.ip))?;
-
-    // Deploy harness files via the repo (should already be cloned by deploy_benchmark_server)
-    let deploy_cmd = concat!(
-        "export PATH=/usr/bin:/usr/local/bin:$PATH && ",
-        "if [ -d /tmp/nwk-repo/benchmarks/chrome-harness ]; then ",
-        "  cp /tmp/nwk-repo/benchmarks/chrome-harness/package.json /opt/bench/chrome-harness/ && ",
-        "  cp /tmp/nwk-repo/benchmarks/chrome-harness/runner.js /opt/bench/chrome-harness/ && ",
-        "  cp /tmp/nwk-repo/benchmarks/chrome-harness/test-page.html /opt/bench/chrome-harness/ && ",
-        "  cd /opt/bench/chrome-harness && npm install --production --silent 2>/dev/null < /dev/null; ",
-        "fi",
-    );
-    ssh::ssh_exec(&vm.ip, deploy_cmd)
-        .await
-        .with_context(|| format!("Failed to deploy Chrome harness files on {}", vm.ip))?;
-
-    // Verify harness files were actually deployed
-    ssh::ssh_exec(
-        &vm.ip,
-        "test -f /opt/bench/chrome-harness/runner.js && test -f /opt/bench/chrome-harness/package.json",
-    )
-    .await
-    .context("Chrome harness files not found after deploy — repo may not have been cloned")?;
-
-    tracing::info!("Chrome harness deployed on {}", vm.ip);
-    Ok(())
-}
-
 /// Run the Chrome-based benchmark for a proxy+language combination.
 async fn run_chrome_benchmark(
     vm: &VmInfo,
@@ -1099,10 +1007,6 @@ async fn execute_testbed(
 /// releases and notifies the queue dispatcher. Queued-class outcomes short
 /// circuit with `benchmark_config.status='queued'` so the dashboard
 /// dispatcher can promote the next waiter.
-///
-/// Note: the existing `deploy_chrome_harness` call is retained for now; Task
-/// 24 removes the per-benchmark chrome harness install once the persistent
-/// tester installs it at provision time.
 async fn execute_testbed_application(
     testbed: &TestbedConfig,
     config: &DashboardBenchmarkConfig,
