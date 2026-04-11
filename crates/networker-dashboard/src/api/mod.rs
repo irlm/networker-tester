@@ -25,7 +25,11 @@ mod projects;
 mod runs;
 mod schedules;
 mod share_links;
+// Task 14: tester REST handlers land here. Wiring into `project_scoped`
+// is deferred to Task 18; for now we declare the module so it compiles
+// and its unit tests run.
 mod system_health;
+mod testers;
 mod tls_profiles;
 mod update;
 mod url_tests;
