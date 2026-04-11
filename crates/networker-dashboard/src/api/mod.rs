@@ -96,6 +96,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(invites::project_router(state.clone()))
         .merge(benchmark_configs::project_router(state.clone()))
         .merge(benchmark_catalog::project_router(state.clone()))
+        .merge(testers::project_router(state.clone()))
         .merge(projects::detail_router(state.clone()))
         .layer(middleware::from_fn_with_state(
             state.clone(),
