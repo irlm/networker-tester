@@ -1370,25 +1370,7 @@ async fn run_application_matrix(
     )
     .await;
 
-    if let Err(e) = deploy_chrome_harness(vm).await {
-        tracing::error!(
-            "Test harness deploy failed on testbed {}: {:#}",
-            testbed.testbed_id,
-            e
-        );
-        log_callback(
-            callback,
-            &testbed.testbed_id,
-            vec![format!("Test harness deploy failed: {e:#}")],
-        )
-        .await;
-        return Ok(TestbedOutcome {
-            testbed_id: testbed.testbed_id.clone(),
-            languages_completed: 0,
-            languages_failed: total_combinations,
-            provisioned_vm: provisioned,
-        });
-    }
+    // Chrome harness is installed once at tester creation (services::tester_install); no per-benchmark install.
 
     // Set deadline AFTER setup completes — setup (token deploy, harness install)
     // can take several minutes and must not count against benchmark time.
