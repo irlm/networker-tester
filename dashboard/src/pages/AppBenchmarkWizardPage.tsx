@@ -1,13 +1,14 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
-import type { BenchmarkTestbedConfig, BenchmarkVmCatalogEntry } from '../api/types';
+import type { BenchmarkTestbedConfig } from '../api/types';
 import { useProject } from '../hooks/useProject';
 import { usePageTitle } from '../hooks/usePageTitle';
+import { TesterStep } from '../components/wizard/TesterStep';
 
 // ── Constants ────────────────────────────────────────────────────────────
 
-const STEP_LABELS = ['Template', 'Testbeds', 'Languages', 'Methodology', 'Review'] as const;
+const STEP_LABELS = ['Template', 'Testbeds', 'Tester', 'Languages', 'Methodology', 'Review'] as const;
 
 interface TemplateOption {
   id: string;
@@ -196,8 +197,6 @@ interface TestbedState {
   topology: string;
   vmSize: string;
   os: 'linux' | 'windows';
-  useExisting: boolean;
-  existingVmId: string;
   proxies: string[];
   testerOs: string;
 }
@@ -211,8 +210,6 @@ function makeTestbed(key: number, cloud?: string, os?: 'linux' | 'windows', prox
     topology: 'Loopback',
     vmSize: 'Medium',
     os: os ?? 'linux',
-    useExisting: false,
-    existingVmId: '',
     proxies: proxies ?? [],
     testerOs: 'server',
   };
@@ -245,41 +242,16 @@ export function AppBenchmarkWizardPage() {
   const [selectedModes, setSelectedModes] = useState<Set<string>>(new Set(DEFAULT_MODES));
   const [showAdvanced, setShowAdvanced] = useState(false);
 
+  // Step 3 (new): Tester
+  const [testerId, setTesterId] = useState<string | null>(null);
+
   // Step 5: Review
-  const [autoTeardown, setAutoTeardown] = useState(true);
   const [benchmarkName, setBenchmarkName] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  // Catalog (loaded lazily for step 2)
-  const [catalog, setCatalog] = useState<BenchmarkVmCatalogEntry[]>([]);
-  const [catalogLoaded, setCatalogLoaded] = useState(false);
-
   // Proxy validation warning
   const [proxyWarning, setProxyWarning] = useState(false);
-
-  const loadCatalog = useCallback(() => {
-    if (catalogLoaded || !projectId) return;
-    api.listBenchmarkCatalog(projectId)
-      .then(data => {
-        setCatalog(data);
-        setCatalogLoaded(true);
-        // If testbed has useExisting checked, auto-select the first matching VM
-        setTestbeds(prev => prev.map(testbed => {
-          if (testbed.useExisting && !testbed.existingVmId) {
-            const matches = data.filter(vm =>
-              vm.cloud.toLowerCase() === testbed.cloud.toLowerCase() &&
-              vm.region.toLowerCase() === testbed.region.toLowerCase()
-            );
-            if (matches.length >= 1) {
-              return { ...testbed, existingVmId: matches[0].vm_id };
-            }
-          }
-          return testbed;
-        }));
-      })
-      .catch(() => { setCatalogLoaded(true); });
-  }, [projectId, catalogLoaded]);
 
   // ── Template selection ─────────────────────────────────────────────────
 
@@ -317,7 +289,6 @@ export function AppBenchmarkWizardPage() {
     }
 
     setProxyWarning(false);
-    loadCatalog();
     setStep(1);
   };
 
@@ -395,11 +366,12 @@ export function AppBenchmarkWizardPage() {
 
   const canNext = useMemo(() => {
     if (step === 0) return selectedTemplate !== null;
-    if (step === 1) return testbeds.length > 0 && testbeds.every(c => (!c.useExisting || c.existingVmId !== '') && c.proxies.length > 0);
-    if (step === 2) return selectedLangs.size > 0;
-    if (step === 3) return warmup > 0 && measured > 0 && selectedModes.size > 0;
+    if (step === 1) return testbeds.length > 0 && testbeds.every(c => c.proxies.length > 0);
+    if (step === 2) return testerId !== null;
+    if (step === 3) return selectedLangs.size > 0;
+    if (step === 4) return warmup > 0 && measured > 0 && selectedModes.size > 0;
     return true;
-  }, [step, selectedTemplate, testbeds, selectedLangs.size, warmup, measured, selectedModes.size]);
+  }, [step, selectedTemplate, testbeds, testerId, selectedLangs.size, warmup, measured, selectedModes.size]);
 
   const goNext = () => {
     if (step === 0 && selectedTemplate === null) return;
@@ -413,7 +385,7 @@ export function AppBenchmarkWizardPage() {
       setProxyWarning(false);
     }
     // Auto-switch single Linux testbed to Windows when .NET 4.8 is selected
-    if (step === 2 && requiresWindows(selectedLangs)) {
+    if (step === 3 && requiresWindows(selectedLangs)) {
       setTestbeds(prev => prev.map(tb => {
         if (tb.os === 'linux' && prev.length === 1) {
           const validProxies = (WINDOWS_PROXIES as readonly string[]);
@@ -423,9 +395,7 @@ export function AppBenchmarkWizardPage() {
       }));
     }
     if (step < STEP_LABELS.length - 1) {
-      const next = step + 1;
-      if (next === 1) loadCatalog();
-      setStep(next);
+      setStep(step + 1);
     }
   };
 
@@ -436,14 +406,13 @@ export function AppBenchmarkWizardPage() {
   // ── Submit ─────────────────────────────────────────────────────────────
 
   const buildPayload = () => {
-    const catalogVms = catalog;
     const testbedConfigs: BenchmarkTestbedConfig[] = testbeds.map(tb => ({
       cloud: tb.cloud.toLowerCase(),
       region: tb.region,
       topology: tb.topology,
       vm_size: tb.vmSize,
       os: tb.os,
-      existing_vm_ip: tb.useExisting ? (catalogVms.find(v => v.vm_id === tb.existingVmId)?.ip ?? null) : null,
+      existing_vm_ip: null,
       // Filter out Windows-only languages from Linux testbeds
       languages: Array.from(selectedLangs).filter(lang =>
         tb.os === 'windows' || !WINDOWS_ONLY_LANGS.has(lang)
@@ -456,6 +425,7 @@ export function AppBenchmarkWizardPage() {
       name: benchmarkName.trim() || `Application benchmark ${new Date().toISOString().slice(0, 10)}`,
       template: selectedTemplate,
       benchmark_type: 'application' as const,
+      tester_id: testerId as string,
       testbeds: testbedConfigs,
       languages: Array.from(selectedLangs),
       methodology: {
@@ -465,12 +435,15 @@ export function AppBenchmarkWizardPage() {
         target_error_percent: targetError,
         modes: Array.from(selectedModes),
       },
-      auto_teardown: autoTeardown,
     };
   };
 
   const handleLaunch = async () => {
     if (!projectId) return;
+    if (!testerId) {
+      setSubmitError('A tester is required. Go back to the Tester step and select one.');
+      return;
+    }
     setSubmitting(true);
     setSubmitError(null);
     try {
@@ -492,8 +465,6 @@ export function AppBenchmarkWizardPage() {
 
   // ── Total estimates ────────────────────────────────────────────────────
 
-  const totalVMs = testbeds.filter(c => !c.useExisting).length;
-  const totalExisting = testbeds.filter(c => c.useExisting).length;
   const totalLanguages = selectedLangs.size;
   const totalProxies = new Set(testbeds.flatMap(tb => tb.proxies)).size;
   const totalCombinations = testbeds.length * totalLanguages * (totalProxies || 1);
@@ -675,44 +646,13 @@ export function AppBenchmarkWizardPage() {
                     {VM_SIZES.map(s => <option key={s} value={s}>{s}</option>)}
                   </select>
 
-                  {/* Existing VM toggle */}
-                  <label className="flex items-center gap-1.5 text-[11px] text-gray-500 cursor-pointer ml-auto">
-                    <input
-                      type="checkbox"
-                      checked={testbed.useExisting}
-                      onChange={e => updateTestbed(testbed.key, { useExisting: e.target.checked })}
-                      className="accent-cyan-400"
-                    />
-                    existing
-                  </label>
-
                   <button
                     onClick={() => removeTestbed(testbed.key)}
-                    className="text-[11px] text-gray-600 hover:text-red-400 transition-colors"
+                    className="text-[11px] text-gray-600 hover:text-red-400 transition-colors ml-auto"
                   >
                     remove
                   </button>
                 </div>
-
-                {/* Row 2: Existing VM selector (conditional) */}
-                {testbed.useExisting && (
-                  <div className="mt-2 ml-5">
-                    <select
-                      value={testbed.existingVmId}
-                      onChange={e => updateTestbed(testbed.key, { existingVmId: e.target.value })}
-                      className="bg-[var(--bg-base)] border border-gray-700 px-2 py-1 text-xs font-mono text-gray-300 focus:outline-none focus:border-cyan-500"
-                    >
-                      <option value="">Select VM...</option>
-                      {catalog
-                        .filter(vm => vm.cloud.toLowerCase() === testbed.cloud.toLowerCase() && vm.region.toLowerCase() === testbed.region.toLowerCase())
-                        .map(vm => (
-                          <option key={vm.vm_id} value={vm.vm_id}>
-                            {vm.name} ({vm.ip}) - {vm.status}
-                          </option>
-                        ))}
-                    </select>
-                  </div>
-                )}
 
                 {/* Proxies */}
                 <div className="mt-3">
@@ -770,8 +710,19 @@ export function AppBenchmarkWizardPage() {
         </div>
       )}
 
-      {/* ── Step 2: Languages ── */}
-      {step === 2 && (
+      {/* ── Step 2: Tester ── */}
+      {step === 2 && projectId && testbeds[0] && (
+        <TesterStep
+          projectId={projectId}
+          cloud={testbeds[0].cloud}
+          region={testbeds[0].region}
+          value={testerId}
+          onChange={setTesterId}
+        />
+      )}
+
+      {/* ── Step 3: Languages ── */}
+      {step === 3 && (
         <div>
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-sm font-semibold text-gray-200">Select Languages</h3>
@@ -859,8 +810,8 @@ export function AppBenchmarkWizardPage() {
         </div>
       )}
 
-      {/* ── Step 3: Methodology ── */}
-      {step === 3 && (
+      {/* ── Step 4: Methodology ── */}
+      {step === 4 && (
         <div>
           <h3 className="text-sm font-semibold text-gray-200 mb-4">Methodology</h3>
 
@@ -960,8 +911,8 @@ export function AppBenchmarkWizardPage() {
         </div>
       )}
 
-      {/* ── Step 4: Review ── */}
-      {step === 4 && (
+      {/* ── Step 5: Review ── */}
+      {step === 5 && (
         <div>
           <h3 className="text-sm font-semibold text-gray-200 mb-4">Review & Launch</h3>
 
@@ -979,7 +930,7 @@ export function AppBenchmarkWizardPage() {
 
           {/* Summary line */}
           <div className="text-xs font-mono text-gray-400 mb-4">
-            {testbeds.length} testbed{testbeds.length !== 1 ? 's' : ''} / {totalLanguages} languages / {totalProxies} prox{totalProxies !== 1 ? 'ies' : 'y'} / {totalCombinations} combinations / {totalVMs} new VM{totalVMs !== 1 ? 's' : ''}{totalExisting > 0 ? ` + ${totalExisting} existing` : ''}
+            {testbeds.length} testbed{testbeds.length !== 1 ? 's' : ''} / {totalLanguages} languages / {totalProxies} prox{totalProxies !== 1 ? 'ies' : 'y'} / {totalCombinations} combinations
           </div>
 
           {/* Testbeds */}
@@ -999,7 +950,6 @@ export function AppBenchmarkWizardPage() {
                   </span>
                   <span className="text-gray-600">{testbed.vmSize}</span>
                   <span className="text-gray-700">{testbed.topology}</span>
-                  {testbed.useExisting && <span className="text-yellow-600">existing</span>}
                   <span className="text-cyan-500/70">{testbed.proxies.map(p => PROXY_LABELS[p] ?? p).join(', ')}</span>
                   <span className="text-gray-600">{TESTER_OS_OPTIONS.find(o => o.id === testbed.testerOs)?.label ?? testbed.testerOs}</span>
                 </div>
@@ -1025,17 +975,6 @@ export function AppBenchmarkWizardPage() {
               }).join(', ')}
             </div>
           </div>
-
-          {/* Auto-teardown */}
-          <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer mb-6">
-            <input
-              type="checkbox"
-              checked={autoTeardown}
-              onChange={e => setAutoTeardown(e.target.checked)}
-              className="accent-cyan-400"
-            />
-            Auto-teardown VMs after benchmark completes
-          </label>
 
           {submitError && (
             <div className="bg-red-500/10 border border-red-500/30 rounded p-3 mb-4 text-red-400 text-sm">
