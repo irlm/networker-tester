@@ -95,6 +95,10 @@ pub struct AppState {
     pub logs_database_url: String,
     /// Instant at which the dashboard process started (used for uptime reporting).
     pub started_at: std::time::Instant,
+    /// Shared cache for the latest networker-tester GitHub release version.
+    /// Populated by `services::version_refresh::refresh_latest_version_loop`
+    /// and read by the manual refresh handler in `api::testers`.
+    pub latest_version_cache: Arc<RwLock<String>>,
 }
 
 #[tokio::main]
@@ -235,7 +239,52 @@ async fn main() -> anyhow::Result<()> {
         tls_profile_db_migrated: Mutex::new(false),
         logs_database_url: cfg.logs_database_url.clone(),
         started_at: std::time::Instant::now(),
+        latest_version_cache: Arc::new(RwLock::new(env!("CARGO_PKG_VERSION").to_string())),
     });
+
+    // ── Tester persistent-lifecycle background services ──────────────────
+    //
+    // These loops each take an owned `Arc<tokio_postgres::Client>`. The
+    // dashboard uses `deadpool-postgres` for request-scoped pool checkouts,
+    // which auto-return the connection on drop and therefore cannot back
+    // long-lived services. Instead, open a single dedicated connection here
+    // and share it (Arc) across the three DB-bound loops.
+    let (tester_svc_client, tester_svc_conn) =
+        tokio_postgres::connect(&cfg.database_url, tokio_postgres::NoTls)
+            .await
+            .context("connect dedicated tester-service DB client")?;
+    tokio::spawn(async move {
+        if let Err(e) = tester_svc_conn.await {
+            tracing::error!(error = ?e, "tester-service DB connection died");
+        }
+    });
+    let tester_svc_client = Arc::new(tester_svc_client);
+
+    tracing::info!("spawning tester_scheduler::auto_shutdown_loop");
+    tokio::spawn(
+        networker_dashboard::services::tester_scheduler::auto_shutdown_loop(
+            tester_svc_client.clone(),
+        ),
+    );
+
+    tracing::info!("spawning tester_dispatcher::sweep_loop");
+    tokio::spawn(
+        networker_dashboard::services::tester_dispatcher::sweep_loop(tester_svc_client.clone()),
+    );
+
+    tracing::info!("spawning tester_recovery::recover_on_startup");
+    tokio::spawn(
+        networker_dashboard::services::tester_recovery::recover_on_startup(
+            tester_svc_client.clone(),
+        ),
+    );
+
+    tracing::info!("spawning version_refresh::refresh_latest_version_loop");
+    tokio::spawn(
+        networker_dashboard::services::version_refresh::refresh_latest_version_loop(
+            state.latest_version_cache.clone(),
+        ),
+    );
 
     let cors = {
         let origin = cfg

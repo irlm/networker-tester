@@ -35,7 +35,6 @@ use axum::{
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, ProjectContext, ProjectRole};
@@ -1258,11 +1257,9 @@ struct RefreshLatestVersionResponse {
 
 /// Admin-only manual trigger for the GitHub releases latest-version fetch.
 ///
-/// TODO(Task 34): plumb a shared `latest_version_cache` on `AppState` so
-/// the background loop in `services::version_refresh::refresh_latest_version_loop`
-/// and this handler share a single cache. For now we spin up a fresh
-/// cache per call — the cost is one HTTP GET to GitHub, which is what
-/// the user asked for anyway.
+/// Uses the shared `latest_version_cache` on `AppState` which the background
+/// loop `services::version_refresh::refresh_latest_version_loop` also updates,
+/// so a manual refresh immediately benefits future reads.
 async fn refresh_latest_version(
     State(state): State<Arc<AppState>>,
     req: axum::extract::Request,
@@ -1272,14 +1269,15 @@ async fn refresh_latest_version(
     crate::auth::require_project_role(&ctx, ProjectRole::Admin)
         .map_err(|s| (s, "Admin role required".to_string()))?;
 
-    let cache = Arc::new(RwLock::new(env!("CARGO_PKG_VERSION").to_string()));
-    let resolved = version_refresh::refresh_now(cache).await.map_err(|e| {
-        tracing::warn!(error = ?e, "manual version refresh failed");
-        (
-            StatusCode::BAD_GATEWAY,
-            format!("latest-version refresh failed: {e}"),
-        )
-    })?;
+    let resolved = version_refresh::refresh_now(state.latest_version_cache.clone())
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = ?e, "manual version refresh failed");
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("latest-version refresh failed: {e}"),
+            )
+        })?;
 
     audit_tester_action(
         &state,
