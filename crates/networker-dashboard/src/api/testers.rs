@@ -19,8 +19,11 @@
 //! a background `tokio::task` that drives the Azure CLI + updates the
 //! row's `power_state` / `allocation` / `status_message`.
 //!
-//! TODO (Task 17): replace the `tracing::info!` audit stubs with real
-//! `audit_tester_action` calls once that helper lands.
+//! Task 17 wired `audit_tester_action` into each mutating endpoint — the
+//! helper currently emits structured `tracing` events only (there is no
+//! `service_log` table yet; see Task 11 retrospective). A follow-up task
+//! can upgrade the sink to a real audit table without changing the call
+//! sites.
 #![allow(dead_code)]
 
 use axum::{
@@ -32,14 +35,48 @@ use axum::{
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, ProjectContext, ProjectRole};
 use crate::db::project_testers::{CreateTesterInput, ProjectTesterRow};
 use crate::AppState;
 use networker_dashboard::services::{
-    azure_regions, azure_vm, tester_install, tester_recovery, tester_state,
+    azure_regions, azure_vm, tester_install, tester_recovery, tester_state, version_refresh,
 };
+
+// ── Audit helper ──────────────────────────────────────────────────────────
+
+/// Record a tester action for audit purposes.
+///
+/// Currently emits a structured `tracing` event at the `tester_action`
+/// target — there is no `service_log` table in the dashboard schema yet
+/// (confirmed in Task 11). When one lands, this helper is the single
+/// sink all call sites already go through, so the upgrade is local.
+///
+/// `outcome` is typically one of `"requested"` (async task spawned),
+/// `"success"` (synchronous completion), or `"failed"`.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn audit_tester_action(
+    _state: &AppState,
+    project_id: &str,
+    tester_id: Uuid,
+    actor_user_id: Option<Uuid>,
+    action: &str,
+    outcome: &str,
+    message: Option<&str>,
+) {
+    tracing::info!(
+        target: "tester_action",
+        %project_id,
+        %tester_id,
+        ?actor_user_id,
+        action,
+        outcome,
+        message,
+        "tester action audited"
+    );
+}
 
 /// Fallback region list when no Azure cloud account is registered for the
 /// project, or when the account has no `region_default` set. The
@@ -457,7 +494,6 @@ async fn create_tester(
         .await
         .map_err(|e| db_error("create_tester insert", e))?;
 
-    // TODO(Task 17): audit_tester_action(state, ctx, user, "create", row.tester_id, ...)
     tracing::info!(
         tester_id = %row.tester_id,
         project_id = %ctx.project_id,
@@ -465,6 +501,15 @@ async fn create_tester(
         region = %row.region,
         vm_size = %row.vm_size,
         "tester created (provisioning in background)"
+    );
+    audit_tester_action(
+        &state,
+        &ctx.project_id,
+        row.tester_id,
+        Some(user.user_id),
+        "tester_created",
+        "requested",
+        Some(&format!("region={} vm_size={}", row.region, row.vm_size)),
     );
 
     // Drop the client before spawning; the background task acquires its own.
@@ -512,7 +557,15 @@ async fn start_tester(
         triggered_by = %user.email,
         "tester start requested"
     );
-    // TODO(Task 17): audit hook.
+    audit_tester_action(
+        &state,
+        &ctx.project_id,
+        tester_id,
+        Some(user.user_id),
+        "tester_start_requested",
+        "requested",
+        None,
+    );
 
     spawn_start_tester_task(state.clone(), tester.clone());
     Ok((StatusCode::ACCEPTED, Json(tester)))
@@ -580,7 +633,15 @@ async fn stop_tester(
         triggered_by = %user.email,
         "tester stop requested"
     );
-    // TODO(Task 17): audit hook.
+    audit_tester_action(
+        &state,
+        &ctx.project_id,
+        tester_id,
+        Some(user.user_id),
+        "tester_stop_requested",
+        "requested",
+        None,
+    );
 
     spawn_stop_tester_task(state.clone(), tester.clone());
     Ok((StatusCode::ACCEPTED, Json(tester)))
@@ -663,7 +724,15 @@ async fn upgrade_tester(
         triggered_by = %user.email,
         "tester upgrade requested"
     );
-    // TODO(Task 17): audit hook.
+    audit_tester_action(
+        &state,
+        &ctx.project_id,
+        tester_id,
+        Some(user.user_id),
+        "tester_upgrade_requested",
+        "requested",
+        None,
+    );
 
     spawn_upgrade_tester_task(state.clone(), tester.clone());
     Ok((StatusCode::ACCEPTED, Json(tester)))
@@ -766,7 +835,15 @@ async fn delete_tester(
         deleted_by = %user.email,
         "tester deleted"
     );
-    // TODO(Task 17): audit hook.
+    audit_tester_action(
+        &state,
+        &ctx.project_id,
+        tester_id,
+        Some(user.user_id),
+        "tester_deleted",
+        "success",
+        None,
+    );
 
     Ok(Json(serde_json::json!({ "deleted": true })))
 }
@@ -878,7 +955,6 @@ async fn update_schedule(
         .map_err(|e| db_error("update_schedule reload", e))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Tester not found".into()))?;
 
-    // TODO(Task 17): audit hook.
     tracing::info!(
         %tester_id,
         project_id = %ctx.project_id,
@@ -886,6 +962,17 @@ async fn update_schedule(
         auto_shutdown_enabled = new_enabled,
         auto_shutdown_local_hour = new_hour,
         "tester schedule updated"
+    );
+    audit_tester_action(
+        &state,
+        &ctx.project_id,
+        tester_id,
+        Some(user.user_id),
+        "tester_schedule_changed",
+        "success",
+        Some(&format!(
+            "auto_shutdown_enabled={new_enabled} auto_shutdown_local_hour={new_hour}"
+        )),
     );
 
     Ok(Json(updated))
@@ -938,13 +1025,21 @@ async fn postpone_shutdown(
         .map_err(|e| db_error("postpone reload", e))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Tester not found".into()))?;
 
-    // TODO(Task 17): audit hook.
     tracing::info!(
         %tester_id,
         project_id = %ctx.project_id,
         actor = %user.email,
         next_shutdown_at = %new_next,
         "tester shutdown postponed"
+    );
+    audit_tester_action(
+        &state,
+        &ctx.project_id,
+        tester_id,
+        Some(user.user_id),
+        "tester_postponed",
+        "success",
+        Some(&format!("next_shutdown_at={new_next}")),
     );
 
     Ok(Json(updated))
@@ -1043,7 +1138,6 @@ async fn probe_tester(
         .map_err(|e| db_error("probe_tester reload", e))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Tester not found".into()))?;
 
-    // TODO(Task 17): audit hook.
     tracing::info!(
         %tester_id,
         project_id = %ctx.project_id,
@@ -1051,6 +1145,15 @@ async fn probe_tester(
         azure_state = %azure_state,
         resolved = %new_power,
         "tester probed"
+    );
+    audit_tester_action(
+        &state,
+        &ctx.project_id,
+        tester_id,
+        Some(user.user_id),
+        "tester_probed",
+        "success",
+        Some(&format!("azure_state={azure_state} resolved={new_power}")),
     );
 
     Ok(Json(updated))
@@ -1124,8 +1227,7 @@ async fn force_stop_tester(
         .map_err(|e| db_error("force_stop reload", e))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Tester not found".into()))?;
 
-    // TODO(Task 17): audit hook — force-stop is a high-impact admin action
-    // and MUST be written to the audit log alongside the actor + reason.
+    // Force-stop is a high-impact admin action; audit record is mandatory.
     tracing::warn!(
         target: "tester_force_stop",
         %tester_id,
@@ -1134,8 +1236,64 @@ async fn force_stop_tester(
         reason = %body.reason,
         "tester force-stopped (admin override)"
     );
+    audit_tester_action(
+        &state,
+        &ctx.project_id,
+        tester_id,
+        Some(user.user_id),
+        "tester_force_stopped",
+        "success",
+        Some(&format!("reason={}", body.reason)),
+    );
 
     Ok(Json(updated))
+}
+
+// ── Refresh latest version handler ────────────────────────────────────────
+
+#[derive(Serialize)]
+struct RefreshLatestVersionResponse {
+    latest_version: String,
+}
+
+/// Admin-only manual trigger for the GitHub releases latest-version fetch.
+///
+/// TODO(Task 34): plumb a shared `latest_version_cache` on `AppState` so
+/// the background loop in `services::version_refresh::refresh_latest_version_loop`
+/// and this handler share a single cache. For now we spin up a fresh
+/// cache per call — the cost is one HTTP GET to GitHub, which is what
+/// the user asked for anyway.
+async fn refresh_latest_version(
+    State(state): State<Arc<AppState>>,
+    req: axum::extract::Request,
+) -> Result<Json<RefreshLatestVersionResponse>, (StatusCode, String)> {
+    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
+    let user = req.extensions().get::<AuthUser>().unwrap().clone();
+    crate::auth::require_project_role(&ctx, ProjectRole::Admin)
+        .map_err(|s| (s, "Admin role required".to_string()))?;
+
+    let cache = Arc::new(RwLock::new(env!("CARGO_PKG_VERSION").to_string()));
+    let resolved = version_refresh::refresh_now(cache).await.map_err(|e| {
+        tracing::warn!(error = ?e, "manual version refresh failed");
+        (
+            StatusCode::BAD_GATEWAY,
+            format!("latest-version refresh failed: {e}"),
+        )
+    })?;
+
+    audit_tester_action(
+        &state,
+        &ctx.project_id,
+        Uuid::nil(),
+        Some(user.user_id),
+        "tester_latest_version_refreshed",
+        "success",
+        Some(&format!("latest_version={resolved}")),
+    );
+
+    Ok(Json(RefreshLatestVersionResponse {
+        latest_version: resolved,
+    }))
 }
 
 // ── Background task helpers ───────────────────────────────────────────────
@@ -1473,6 +1631,10 @@ pub fn project_router(state: Arc<AppState>) -> Router {
         .route("/testers", get(list_testers).post(create_tester))
         .route("/testers/regions", get(list_regions))
         .route(
+            "/testers/refresh-latest-version",
+            post(refresh_latest_version),
+        )
+        .route(
             "/testers/{tester_id}",
             get(get_tester).delete(delete_tester),
         )
@@ -1744,6 +1906,16 @@ mod tests {
         let b: ScheduleBody = serde_json::from_str(r#"{"auto_shutdown_local_hour":22}"#).unwrap();
         assert_eq!(b.auto_shutdown_local_hour, Some(22));
         assert!(b.auto_shutdown_enabled.is_none());
+    }
+
+    /// Compile-level guard: if any argument type or ordering drifts, this
+    /// test fails to build, catching accidental signature changes to the
+    /// audit helper before they break every call site.
+    #[test]
+    #[allow(clippy::type_complexity)]
+    fn audit_tester_action_signature_stable() {
+        type AuditFn = fn(&AppState, &str, Uuid, Option<Uuid>, &str, &str, Option<&str>);
+        let _: AuditFn = audit_tester_action;
     }
 
     #[test]
