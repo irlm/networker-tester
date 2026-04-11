@@ -161,7 +161,10 @@ async fn handle_stuck_transients(client: &Client) -> anyhow::Result<usize> {
     Ok(count)
 }
 
-async fn probe_azure_state(
+/// Probe Azure for the current power state of a VM. Returns the raw
+/// `displayStatus` string (e.g. "VM running", "VM deallocated"). Used by
+/// crash recovery and the `POST /testers/{tid}/probe` REST endpoint.
+pub async fn probe_azure_state(
     resource_id: &Option<String>,
     vm_name: &Option<String>,
 ) -> anyhow::Result<String> {
@@ -189,7 +192,9 @@ async fn probe_azure_state(
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-fn azure_power_to_row(azure_state: &str) -> String {
+/// Map an Azure `displayStatus` string onto a `project_tester.power_state`
+/// value. Public so REST handlers can reuse it.
+pub fn azure_power_to_row(azure_state: &str) -> String {
     // Azure states: "VM running", "VM stopped", "VM deallocated", "VM starting", "VM stopping"
     let lower = azure_state.to_ascii_lowercase();
     if lower.contains("running") {

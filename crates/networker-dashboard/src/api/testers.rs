@@ -26,7 +26,7 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    routing::{get, post},
+    routing::{get, patch, post},
     Json, Router,
 };
 use chrono::{DateTime, Duration, Utc};
@@ -37,7 +37,9 @@ use uuid::Uuid;
 use crate::auth::{AuthUser, ProjectContext, ProjectRole};
 use crate::db::project_testers::{CreateTesterInput, ProjectTesterRow};
 use crate::AppState;
-use networker_dashboard::services::{azure_vm, tester_install, tester_state};
+use networker_dashboard::services::{
+    azure_regions, azure_vm, tester_install, tester_recovery, tester_state,
+};
 
 /// Fallback region list when no Azure cloud account is registered for the
 /// project, or when the account has no `region_default` set. The
@@ -769,6 +771,373 @@ async fn delete_tester(
     Ok(Json(serde_json::json!({ "deleted": true })))
 }
 
+// ── Schedule + recovery handlers (Task 16) ────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct ScheduleBody {
+    #[serde(default)]
+    auto_shutdown_enabled: Option<bool>,
+    #[serde(default)]
+    auto_shutdown_local_hour: Option<i16>,
+}
+
+/// Body for `POST /testers/{tid}/postpone`. The three variants are
+/// mutually exclusive — exactly one shape must be supplied.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum PostponeBody {
+    Until { until: DateTime<Utc> },
+    AddHours { add_hours: i64 },
+    SkipTonight { skip_tonight: bool },
+}
+
+#[derive(Debug, Deserialize)]
+struct ForceStopBody {
+    #[serde(default)]
+    confirm: bool,
+    #[serde(default)]
+    reason: String,
+}
+
+async fn update_schedule(
+    State(state): State<Arc<AppState>>,
+    Path((_project_id, tester_id)): Path<(String, Uuid)>,
+    req: axum::extract::Request,
+) -> Result<Json<ProjectTesterRow>, (StatusCode, String)> {
+    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
+    let user = req.extensions().get::<AuthUser>().unwrap().clone();
+    crate::auth::require_project_role(&ctx, ProjectRole::Admin)
+        .map_err(|s| (s, "Admin role required".to_string()))?;
+
+    let body_bytes = axum::body::to_bytes(req.into_body(), 1024 * 4)
+        .await
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid request body".to_string()))?;
+    let body: ScheduleBody = serde_json::from_slice(&body_bytes)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+
+    if let Some(h) = body.auto_shutdown_local_hour {
+        if !(0..=23).contains(&h) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "auto_shutdown_local_hour must be 0..=23".into(),
+            ));
+        }
+    }
+    if body.auto_shutdown_enabled.is_none() && body.auto_shutdown_local_hour.is_none() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "at least one of auto_shutdown_enabled or auto_shutdown_local_hour required".into(),
+        ));
+    }
+
+    let client = state
+        .db
+        .get()
+        .await
+        .map_err(|e| db_error("update_schedule pool", e))?;
+    let tester = crate::db::project_testers::get(&client, &ctx.project_id, &tester_id)
+        .await
+        .map_err(|e| db_error("update_schedule lookup", e))?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Tester not found".into()))?;
+
+    // Merge proposed values with existing row to decide the new schedule.
+    let new_enabled = body
+        .auto_shutdown_enabled
+        .unwrap_or(tester.auto_shutdown_enabled);
+    let new_hour = body
+        .auto_shutdown_local_hour
+        .unwrap_or(tester.auto_shutdown_local_hour);
+
+    // Recompute next_shutdown_at. If disabled, clear it; otherwise compute
+    // the next UTC instant for the region + hour pair.
+    let next_shutdown: Option<DateTime<Utc>> = if new_enabled {
+        Some(azure_regions::next_shutdown_at(
+            &tester.region,
+            new_hour,
+            Utc::now(),
+        ))
+    } else {
+        None
+    };
+
+    client
+        .execute(
+            "UPDATE project_tester \
+             SET auto_shutdown_enabled = $2, \
+                 auto_shutdown_local_hour = $3, \
+                 next_shutdown_at = $4, \
+                 updated_at = NOW() \
+             WHERE tester_id = $1",
+            &[&tester_id, &new_enabled, &new_hour, &next_shutdown],
+        )
+        .await
+        .map_err(|e| db_error("update_schedule update", e))?;
+
+    let updated = crate::db::project_testers::get(&client, &ctx.project_id, &tester_id)
+        .await
+        .map_err(|e| db_error("update_schedule reload", e))?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Tester not found".into()))?;
+
+    // TODO(Task 17): audit hook.
+    tracing::info!(
+        %tester_id,
+        project_id = %ctx.project_id,
+        actor = %user.email,
+        auto_shutdown_enabled = new_enabled,
+        auto_shutdown_local_hour = new_hour,
+        "tester schedule updated"
+    );
+
+    Ok(Json(updated))
+}
+
+async fn postpone_shutdown(
+    State(state): State<Arc<AppState>>,
+    Path((_project_id, tester_id)): Path<(String, Uuid)>,
+    req: axum::extract::Request,
+) -> Result<Json<ProjectTesterRow>, (StatusCode, String)> {
+    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
+    let user = req.extensions().get::<AuthUser>().unwrap().clone();
+    crate::auth::require_project_role(&ctx, ProjectRole::Admin)
+        .map_err(|s| (s, "Admin role required".to_string()))?;
+
+    let body_bytes = axum::body::to_bytes(req.into_body(), 1024 * 4)
+        .await
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid request body".to_string()))?;
+    let body: PostponeBody = serde_json::from_slice(&body_bytes)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+
+    let client = state
+        .db
+        .get()
+        .await
+        .map_err(|e| db_error("postpone pool", e))?;
+    let tester = crate::db::project_testers::get(&client, &ctx.project_id, &tester_id)
+        .await
+        .map_err(|e| db_error("postpone lookup", e))?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Tester not found".into()))?;
+
+    let now = Utc::now();
+    let new_next =
+        compute_postpone(&body, &tester, now).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+
+    client
+        .execute(
+            "UPDATE project_tester \
+             SET next_shutdown_at = $2, \
+                 shutdown_deferral_count = shutdown_deferral_count + 1, \
+                 updated_at = NOW() \
+             WHERE tester_id = $1",
+            &[&tester_id, &new_next],
+        )
+        .await
+        .map_err(|e| db_error("postpone update", e))?;
+
+    let updated = crate::db::project_testers::get(&client, &ctx.project_id, &tester_id)
+        .await
+        .map_err(|e| db_error("postpone reload", e))?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Tester not found".into()))?;
+
+    // TODO(Task 17): audit hook.
+    tracing::info!(
+        %tester_id,
+        project_id = %ctx.project_id,
+        actor = %user.email,
+        next_shutdown_at = %new_next,
+        "tester shutdown postponed"
+    );
+
+    Ok(Json(updated))
+}
+
+/// Pure postpone computation, extracted so it can be unit-tested without a
+/// DB. Returns `Err(msg)` for illegal shapes (past `until`, zero hours, etc).
+fn compute_postpone(
+    body: &PostponeBody,
+    tester: &ProjectTesterRow,
+    now: DateTime<Utc>,
+) -> Result<DateTime<Utc>, String> {
+    match body {
+        PostponeBody::Until { until } => {
+            if *until <= now {
+                return Err("until must be in the future".into());
+            }
+            Ok(*until)
+        }
+        PostponeBody::AddHours { add_hours } => {
+            if *add_hours <= 0 {
+                return Err("add_hours must be positive".into());
+            }
+            let base = tester.next_shutdown_at.unwrap_or(now);
+            Ok(base + Duration::hours(*add_hours))
+        }
+        PostponeBody::SkipTonight { skip_tonight } => {
+            if !*skip_tonight {
+                return Err("skip_tonight must be true".into());
+            }
+            // Recompute tomorrow's slot by asking azure_regions for the next
+            // slot starting from (now + 24h) — this rolls forward one day.
+            Ok(azure_regions::next_shutdown_at(
+                &tester.region,
+                tester.auto_shutdown_local_hour,
+                now + Duration::hours(24),
+            ))
+        }
+    }
+}
+
+async fn probe_tester(
+    State(state): State<Arc<AppState>>,
+    Path((_project_id, tester_id)): Path<(String, Uuid)>,
+    req: axum::extract::Request,
+) -> Result<Json<ProjectTesterRow>, (StatusCode, String)> {
+    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
+    let user = req.extensions().get::<AuthUser>().unwrap().clone();
+    crate::auth::require_project_role(&ctx, ProjectRole::Admin)
+        .map_err(|s| (s, "Admin role required".to_string()))?;
+
+    let client = state
+        .db
+        .get()
+        .await
+        .map_err(|e| db_error("probe_tester pool", e))?;
+    let tester = crate::db::project_testers::get(&client, &ctx.project_id, &tester_id)
+        .await
+        .map_err(|e| db_error("probe_tester lookup", e))?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Tester not found".into()))?;
+
+    if matches!(tester.allocation.as_str(), "locked" | "upgrading") {
+        return Err((
+            StatusCode::CONFLICT,
+            format!(
+                "cannot probe tester with allocation={}; retry once idle",
+                tester.allocation
+            ),
+        ));
+    }
+
+    let azure_state = tester_recovery::probe_azure_state(&tester.vm_resource_id, &tester.vm_name)
+        .await
+        .map_err(|e| {
+            tracing::warn!(%tester_id, error = ?e, "probe_azure_state failed");
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("az vm get-instance-view failed: {e}"),
+            )
+        })?;
+    let new_power = tester_recovery::azure_power_to_row(&azure_state);
+    let status = format!("Manual probe: Azure reported {azure_state}");
+
+    client
+        .execute(
+            "UPDATE project_tester \
+             SET power_state = $2, status_message = $3, updated_at = NOW() \
+             WHERE tester_id = $1",
+            &[&tester_id, &new_power, &status],
+        )
+        .await
+        .map_err(|e| db_error("probe_tester update", e))?;
+
+    let updated = crate::db::project_testers::get(&client, &ctx.project_id, &tester_id)
+        .await
+        .map_err(|e| db_error("probe_tester reload", e))?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Tester not found".into()))?;
+
+    // TODO(Task 17): audit hook.
+    tracing::info!(
+        %tester_id,
+        project_id = %ctx.project_id,
+        actor = %user.email,
+        azure_state = %azure_state,
+        resolved = %new_power,
+        "tester probed"
+    );
+
+    Ok(Json(updated))
+}
+
+async fn force_stop_tester(
+    State(state): State<Arc<AppState>>,
+    Path((_project_id, tester_id)): Path<(String, Uuid)>,
+    req: axum::extract::Request,
+) -> Result<Json<ProjectTesterRow>, (StatusCode, String)> {
+    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
+    let user = req.extensions().get::<AuthUser>().unwrap().clone();
+    crate::auth::require_project_role(&ctx, ProjectRole::Admin)
+        .map_err(|s| (s, "Admin role required".to_string()))?;
+
+    let body_bytes = axum::body::to_bytes(req.into_body(), 1024 * 4)
+        .await
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid request body".to_string()))?;
+    let body: ForceStopBody = serde_json::from_slice(&body_bytes)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    if !body.confirm {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "force-stop requires {\"confirm\": true, \"reason\": \"...\"}".into(),
+        ));
+    }
+    if body.reason.trim().is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "reason must not be empty".into()));
+    }
+
+    let client = state
+        .db
+        .get()
+        .await
+        .map_err(|e| db_error("force_stop pool", e))?;
+    let tester = crate::db::project_testers::get(&client, &ctx.project_id, &tester_id)
+        .await
+        .map_err(|e| db_error("force_stop lookup", e))?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Tester not found".into()))?;
+
+    // Refuse 409 if the tester is actively running a benchmark — the user
+    // should cancel the benchmark first (which unlocks via the dispatcher).
+    if tester.power_state == "running" && tester.allocation == "locked" {
+        return Err((
+            StatusCode::CONFLICT,
+            "cannot force-stop tester while a benchmark is actively running; cancel the benchmark first".into(),
+        ));
+    }
+
+    // Two-step to keep the grep-guard invariant clean: route the allocation
+    // clear through `tester_state::force_release` (the only sanctioned
+    // writer of `allocation='idle'`), then issue a follow-up UPDATE that
+    // ONLY touches `power_state` + `status_message`.
+    tester_state::force_release(&client, &tester_id)
+        .await
+        .map_err(|e| db_error("force_stop release", e))?;
+
+    let status = format!("Force-stopped: {}", body.reason);
+    client
+        .execute(
+            "UPDATE project_tester \
+             SET power_state = 'stopped', status_message = $2, updated_at = NOW() \
+             WHERE tester_id = $1",
+            &[&tester_id, &status],
+        )
+        .await
+        .map_err(|e| db_error("force_stop update", e))?;
+
+    let updated = crate::db::project_testers::get(&client, &ctx.project_id, &tester_id)
+        .await
+        .map_err(|e| db_error("force_stop reload", e))?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Tester not found".into()))?;
+
+    // TODO(Task 17): audit hook — force-stop is a high-impact admin action
+    // and MUST be written to the audit log alongside the actor + reason.
+    tracing::warn!(
+        target: "tester_force_stop",
+        %tester_id,
+        project_id = %ctx.project_id,
+        actor = %user.email,
+        reason = %body.reason,
+        "tester force-stopped (admin override)"
+    );
+
+    Ok(Json(updated))
+}
+
 // ── Background task helpers ───────────────────────────────────────────────
 
 fn spawn_create_tester_task(
@@ -1112,6 +1481,10 @@ pub fn project_router(state: Arc<AppState>) -> Router {
         .route("/testers/{tester_id}/start", post(start_tester))
         .route("/testers/{tester_id}/stop", post(stop_tester))
         .route("/testers/{tester_id}/upgrade", post(upgrade_tester))
+        .route("/testers/{tester_id}/schedule", patch(update_schedule))
+        .route("/testers/{tester_id}/postpone", post(postpone_shutdown))
+        .route("/testers/{tester_id}/probe", post(probe_tester))
+        .route("/testers/{tester_id}/force-stop", post(force_stop_tester))
         .with_state(state)
 }
 
@@ -1222,5 +1595,166 @@ mod tests {
     fn fallback_regions_non_empty() {
         assert!(!FALLBACK_AZURE_REGIONS.is_empty());
         assert!(FALLBACK_AZURE_REGIONS.contains(&"eastus"));
+    }
+
+    // ── Task 16: postpone + schedule deserializers ────────────────────
+
+    fn fixture_row() -> ProjectTesterRow {
+        let now = Utc::now();
+        ProjectTesterRow {
+            tester_id: Uuid::nil(),
+            project_id: "proj".into(),
+            name: "t".into(),
+            cloud: "azure".into(),
+            region: "eastus".into(),
+            vm_size: "Standard_D2s_v3".into(),
+            vm_name: Some("vm-x".into()),
+            vm_resource_id: Some("/subscriptions/x/vm-x".into()),
+            public_ip: Some("1.2.3.4".into()),
+            ssh_user: "azureuser".into(),
+            power_state: "running".into(),
+            allocation: "idle".into(),
+            status_message: None,
+            locked_by_config_id: None,
+            installer_version: None,
+            last_installed_at: None,
+            auto_shutdown_enabled: true,
+            auto_shutdown_local_hour: 23,
+            next_shutdown_at: Some(now + Duration::hours(5)),
+            shutdown_deferral_count: 0,
+            auto_probe_enabled: true,
+            last_used_at: None,
+            avg_benchmark_duration_seconds: None,
+            benchmark_run_count: 0,
+            created_by: Uuid::nil(),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn postpone_body_until_deserializes() {
+        let json = r#"{"until":"2030-01-01T00:00:00Z"}"#;
+        let body: PostponeBody = serde_json::from_str(json).unwrap();
+        match body {
+            PostponeBody::Until { until } => {
+                assert_eq!(until.to_rfc3339(), "2030-01-01T00:00:00+00:00");
+            }
+            _ => panic!("expected Until"),
+        }
+    }
+
+    #[test]
+    fn postpone_body_add_hours_deserializes() {
+        let body: PostponeBody = serde_json::from_str(r#"{"add_hours":4}"#).unwrap();
+        match body {
+            PostponeBody::AddHours { add_hours } => assert_eq!(add_hours, 4),
+            _ => panic!("expected AddHours"),
+        }
+    }
+
+    #[test]
+    fn postpone_body_skip_tonight_deserializes() {
+        let body: PostponeBody = serde_json::from_str(r#"{"skip_tonight":true}"#).unwrap();
+        match body {
+            PostponeBody::SkipTonight { skip_tonight } => assert!(skip_tonight),
+            _ => panic!("expected SkipTonight"),
+        }
+    }
+
+    #[test]
+    fn compute_postpone_until_future_ok() {
+        let row = fixture_row();
+        let now = Utc::now();
+        let target = now + Duration::hours(10);
+        let body = PostponeBody::Until { until: target };
+        assert_eq!(compute_postpone(&body, &row, now).unwrap(), target);
+    }
+
+    #[test]
+    fn compute_postpone_until_past_rejected() {
+        let row = fixture_row();
+        let now = Utc::now();
+        let body = PostponeBody::Until {
+            until: now - Duration::hours(1),
+        };
+        assert!(compute_postpone(&body, &row, now).is_err());
+    }
+
+    #[test]
+    fn compute_postpone_add_hours_ok() {
+        let row = fixture_row();
+        let now = Utc::now();
+        let base = row.next_shutdown_at.unwrap();
+        let body = PostponeBody::AddHours { add_hours: 3 };
+        let out = compute_postpone(&body, &row, now).unwrap();
+        assert_eq!(out, base + Duration::hours(3));
+    }
+
+    #[test]
+    fn compute_postpone_add_hours_without_schedule_uses_now() {
+        let mut row = fixture_row();
+        row.next_shutdown_at = None;
+        let now = Utc::now();
+        let body = PostponeBody::AddHours { add_hours: 2 };
+        let out = compute_postpone(&body, &row, now).unwrap();
+        assert_eq!(out, now + Duration::hours(2));
+    }
+
+    #[test]
+    fn compute_postpone_add_hours_zero_rejected() {
+        let row = fixture_row();
+        let body = PostponeBody::AddHours { add_hours: 0 };
+        assert!(compute_postpone(&body, &row, Utc::now()).is_err());
+    }
+
+    #[test]
+    fn compute_postpone_add_hours_negative_rejected() {
+        let row = fixture_row();
+        let body = PostponeBody::AddHours { add_hours: -5 };
+        assert!(compute_postpone(&body, &row, Utc::now()).is_err());
+    }
+
+    #[test]
+    fn compute_postpone_skip_tonight_rolls_forward() {
+        let row = fixture_row();
+        let now = Utc::now();
+        let body = PostponeBody::SkipTonight { skip_tonight: true };
+        let out = compute_postpone(&body, &row, now).unwrap();
+        // Skipping tonight must move next_shutdown_at strictly more than
+        // the current `now`; typically well into the next day.
+        assert!(out > now + Duration::hours(20));
+    }
+
+    #[test]
+    fn compute_postpone_skip_tonight_false_rejected() {
+        let row = fixture_row();
+        let body = PostponeBody::SkipTonight {
+            skip_tonight: false,
+        };
+        assert!(compute_postpone(&body, &row, Utc::now()).is_err());
+    }
+
+    #[test]
+    fn schedule_body_partial_fields() {
+        let b: ScheduleBody = serde_json::from_str(r#"{"auto_shutdown_enabled":false}"#).unwrap();
+        assert_eq!(b.auto_shutdown_enabled, Some(false));
+        assert!(b.auto_shutdown_local_hour.is_none());
+
+        let b: ScheduleBody = serde_json::from_str(r#"{"auto_shutdown_local_hour":22}"#).unwrap();
+        assert_eq!(b.auto_shutdown_local_hour, Some(22));
+        assert!(b.auto_shutdown_enabled.is_none());
+    }
+
+    #[test]
+    fn force_stop_body_requires_confirm_and_reason() {
+        let b: ForceStopBody =
+            serde_json::from_str(r#"{"confirm":true,"reason":"wedged"}"#).unwrap();
+        assert!(b.confirm);
+        assert_eq!(b.reason, "wedged");
+
+        let b: ForceStopBody = serde_json::from_str(r#"{}"#).unwrap();
+        assert!(!b.confirm);
+        assert!(b.reason.is_empty());
     }
 }

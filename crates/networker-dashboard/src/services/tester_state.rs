@@ -181,9 +181,9 @@ mod tests {
             let where_pos = prefix_upper.rfind("WHERE ");
 
             match (set_pos, where_pos) {
-                (Some(s), Some(w)) => s > w,   // SET is more recent → write
-                (Some(_), None) => true,        // only SET → write
-                (None, _) => false,             // only WHERE (or neither) → read
+                (Some(s), Some(w)) => s > w, // SET is more recent → write
+                (Some(_), None) => true,     // only SET → write
+                (None, _) => false,          // only WHERE (or neither) → read
             }
         }
 
