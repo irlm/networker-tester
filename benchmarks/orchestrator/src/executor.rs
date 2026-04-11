@@ -9,6 +9,91 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::watch;
+use uuid::Uuid;
+
+/// Subset of the dashboard's `project_tester` row that the orchestrator needs
+/// when executing an application benchmark against a persistent tester.
+///
+/// This is defined locally (rather than imported from `networker-dashboard`)
+/// because the orchestrator is a standalone crate that talks to Postgres
+/// directly via tokio-postgres. Only the columns consumed by the executor
+/// are included — extend as needed.
+///
+/// `dead_code` is allowed because Task 23 (the `execute_testbed_application`
+/// rewrite) is the first caller; this helper is committed independently so
+/// Task 23 lands as a pure swap.
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct ProjectTesterRow {
+    pub tester_id: Uuid,
+    pub project_id: String,
+    pub name: String,
+    pub public_ip: Option<String>,
+    pub ssh_user: String,
+    pub vm_name: Option<String>,
+    pub vm_resource_id: Option<String>,
+    pub power_state: String,
+    pub allocation: String,
+    pub installer_version: Option<String>,
+}
+
+/// Look up the persistent tester associated with a given benchmark config.
+///
+/// Joins `benchmark_config` and `project_tester` on `benchmark_config.tester_id`.
+/// Returns an error if the config has no tester (`tester_id IS NULL`) — for
+/// application-mode benchmarks the V027 SQL CHECK constraint should make this
+/// impossible, but we defend against it so a malformed row fails loudly
+/// instead of silently skipping the tester-lock flow.
+///
+/// Task 23 (`execute_testbed_application` rewrite) is the primary caller.
+#[allow(dead_code)]
+pub async fn lookup_tester(
+    client: &tokio_postgres::Client,
+    config_id: &Uuid,
+) -> Result<ProjectTesterRow> {
+    // `public_ip::text` casts INET → TEXT so tokio-postgres can decode it
+    // as `Option<String>` without needing the `with-cidr` feature.
+    let row = client
+        .query_opt(
+            r#"
+            SELECT t.tester_id,
+                   t.project_id,
+                   t.name,
+                   t.public_ip::text,
+                   t.ssh_user,
+                   t.vm_name,
+                   t.vm_resource_id,
+                   t.power_state,
+                   t.allocation,
+                   t.installer_version
+              FROM benchmark_config c
+              JOIN project_tester   t ON t.tester_id = c.tester_id
+             WHERE c.config_id = $1
+            "#,
+            &[config_id],
+        )
+        .await
+        .with_context(|| format!("lookup_tester query failed for config {config_id}"))?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "benchmark_config {} has no tester_id (or the referenced tester no longer exists)",
+                config_id
+            )
+        })?;
+
+    Ok(ProjectTesterRow {
+        tester_id: row.get(0),
+        project_id: row.get(1),
+        name: row.get(2),
+        public_ip: row.get::<_, Option<String>>(3),
+        ssh_user: row.get(4),
+        vm_name: row.get(5),
+        vm_resource_id: row.get(6),
+        power_state: row.get(7),
+        allocation: row.get(8),
+        installer_version: row.get(9),
+    })
+}
 
 /// Start a pre-deployed language server on an existing VM.
 async fn start_existing_server(vm: &VmInfo, language: &str) -> Result<()> {
