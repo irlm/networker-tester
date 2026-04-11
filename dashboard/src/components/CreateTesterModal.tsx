@@ -1,0 +1,387 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { testersApi, type TesterRow } from '../api/testers';
+
+interface CreateTesterModalProps {
+  projectId: string;
+  defaultCloud?: string;
+  defaultRegion?: string;
+  defaultName?: string;
+  defaultVmSize?: string;
+  defaultAutoShutdownEnabled?: boolean;
+  defaultAutoShutdownHour?: number;
+  onCreated: (testerId: string) => void;
+  onClose: () => void;
+}
+
+const VM_SIZE_PRESETS: { value: string; label: string }[] = [
+  { value: 'Standard_D2s_v3', label: 'Standard_D2s_v3 (2 vCPU, 8 GB)' },
+  { value: 'Standard_D4s_v3', label: 'Standard_D4s_v3 (4 vCPU, 16 GB)' },
+  { value: 'Standard_D8s_v3', label: 'Standard_D8s_v3 (8 vCPU, 32 GB)' },
+];
+
+const HOURS = Array.from({ length: 24 }, (_, h) => h);
+
+type Stage = 'form' | 'creating' | 'error';
+
+export function CreateTesterModal({
+  projectId,
+  defaultCloud = 'azure',
+  defaultRegion = '',
+  defaultName = '',
+  defaultVmSize = 'Standard_D2s_v3',
+  defaultAutoShutdownEnabled = true,
+  defaultAutoShutdownHour = 23,
+  onCreated,
+  onClose,
+}: CreateTesterModalProps) {
+  const [cloud, setCloud] = useState(defaultCloud);
+  const [region, setRegion] = useState(defaultRegion);
+  const [name, setName] = useState(defaultName);
+  const [vmSize, setVmSize] = useState(defaultVmSize);
+  const [autoShutdownEnabled, setAutoShutdownEnabled] = useState(
+    defaultAutoShutdownEnabled,
+  );
+  const [autoShutdownHour, setAutoShutdownHour] = useState(
+    defaultAutoShutdownHour,
+  );
+  const [autoProbeEnabled, setAutoProbeEnabled] = useState(false);
+
+  const [regions, setRegions] = useState<string[]>([]);
+  const [regionsLoading, setRegionsLoading] = useState(false);
+  const [stage, setStage] = useState<Stage>('form');
+  const [error, setError] = useState<string | null>(null);
+  const [createdTester, setCreatedTester] = useState<TesterRow | null>(null);
+
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const firstInputRef = useRef<HTMLInputElement>(null);
+  const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    firstInputRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setRegionsLoading(true);
+    testersApi
+      .getRegions(projectId)
+      .then((list) => {
+        if (cancelled) return;
+        setRegions(list);
+        if (!region && list.length > 0) {
+          setRegion(defaultRegion && list.includes(defaultRegion) ? defaultRegion : list[0]);
+        }
+      })
+      .catch(() => {
+        // non-fatal — user can still type a region if the select is empty
+      })
+      .finally(() => {
+        if (!cancelled) setRegionsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Intentional: we only want to fetch regions on mount for this projectId.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
+  const handleKeyDown = useCallback(
+    (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && stage !== 'creating') onClose();
+    },
+    [onClose, stage],
+  );
+
+  useEffect(() => {
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [handleKeyDown]);
+
+  // Poll every 2s while the tester is provisioning/starting so we can show
+  // status_message updates. Simpler than opening a WS for this one-shot flow.
+  useEffect(() => {
+    if (stage !== 'creating' || !createdTester) return;
+    let cancelled = false;
+
+    const poll = async () => {
+      try {
+        const row = await testersApi.getTester(projectId, createdTester.tester_id);
+        if (cancelled) return;
+        setCreatedTester(row);
+        if (row.power_state === 'running' && row.allocation === 'idle') {
+          onCreated(row.tester_id);
+          return;
+        }
+        if (row.power_state === 'error') {
+          setError(row.status_message ?? 'Tester failed to provision');
+          setStage('error');
+          return;
+        }
+        pollTimer.current = setTimeout(poll, 2000);
+      } catch (e) {
+        if (cancelled) return;
+        setError(e instanceof Error ? e.message : 'Status poll failed');
+        setStage('error');
+      }
+    };
+
+    pollTimer.current = setTimeout(poll, 2000);
+    return () => {
+      cancelled = true;
+      if (pollTimer.current) clearTimeout(pollTimer.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stage, createdTester?.tester_id]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!cloud || !region || !name || !vmSize) {
+      setError('All fields are required');
+      return;
+    }
+    setError(null);
+    setStage('creating');
+    try {
+      const row = await testersApi.createTester(projectId, {
+        cloud,
+        region,
+        name,
+        vm_size: vmSize,
+        auto_shutdown_local_hour: autoShutdownEnabled
+          ? autoShutdownHour
+          : undefined,
+        auto_probe_enabled: autoProbeEnabled,
+      });
+      setCreatedTester(row);
+      // If backend replied with a terminal state already (unlikely but possible),
+      // short-circuit the poll.
+      if (row.power_state === 'running' && row.allocation === 'idle') {
+        onCreated(row.tester_id);
+      } else if (row.power_state === 'error') {
+        setError(row.status_message ?? 'Tester failed to provision');
+        setStage('error');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create tester');
+      setStage('error');
+    }
+  };
+
+  const titleId = 'create-tester-modal-title';
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end" data-testid="create-tester-modal">
+      <div
+        className="absolute inset-0 bg-black/40 slide-over-backdrop"
+        onClick={stage === 'creating' ? undefined : onClose}
+        aria-hidden="true"
+      />
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className="relative w-full md:w-[520px] md:max-w-[90vw] bg-[var(--bg-base)] md:border-l border-gray-800 h-full overflow-y-auto slide-over-panel"
+      >
+        <div className="p-4 md:p-6">
+          <div className="flex items-center justify-between mb-6">
+            <h3 id={titleId} className="text-lg font-bold text-gray-100">
+              Create Tester
+            </h3>
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={stage === 'creating'}
+              className="text-gray-500 hover:text-gray-300 text-sm disabled:opacity-50"
+              aria-label="Close"
+            >
+              &#x2715;
+            </button>
+          </div>
+
+          {error && (
+            <div
+              role="alert"
+              className="bg-red-500/10 border border-red-500/30 rounded p-2 mb-4"
+            >
+              <p className="text-red-400 text-sm">{error}</p>
+            </div>
+          )}
+
+          {stage === 'creating' && createdTester ? (
+            <div className="space-y-4" data-testid="creating-state">
+              <p className="text-sm text-gray-300">
+                Provisioning <span className="font-mono">{createdTester.name}</span> in{' '}
+                <span className="font-mono">{createdTester.region}</span>…
+              </p>
+              <div className="bg-gray-900/40 border border-gray-800 rounded p-3 font-mono text-xs text-cyan-400">
+                <div>power_state: {createdTester.power_state}</div>
+                <div>allocation: {createdTester.allocation}</div>
+                {createdTester.status_message && (
+                  <div className="text-gray-400 mt-1">
+                    {createdTester.status_message}
+                  </div>
+                )}
+              </div>
+              <p className="text-xs text-gray-500">
+                This usually takes 2-4 minutes. You can close this dialog; the
+                tester will continue provisioning in the background.
+              </p>
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="px-4 py-1.5 text-sm text-gray-400 hover:text-gray-200"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          ) : (
+            <form onSubmit={handleSubmit} className="space-y-4">
+              {/* Cloud */}
+              <div>
+                <label htmlFor="tester-cloud" className="block text-xs text-gray-400 mb-1">
+                  Cloud
+                </label>
+                <select
+                  id="tester-cloud"
+                  value={cloud}
+                  onChange={(e) => setCloud(e.target.value)}
+                  className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                >
+                  <option value="azure">Azure</option>
+                </select>
+              </div>
+
+              {/* Region */}
+              <div>
+                <label htmlFor="tester-region" className="block text-xs text-gray-400 mb-1">
+                  Region {regionsLoading && <span className="text-gray-600">(loading…)</span>}
+                </label>
+                <select
+                  id="tester-region"
+                  value={region}
+                  onChange={(e) => setRegion(e.target.value)}
+                  className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                >
+                  {regions.length === 0 && <option value="">(no regions)</option>}
+                  {regions.map((r) => (
+                    <option key={r} value={r}>
+                      {r}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Name */}
+              <div>
+                <label htmlFor="tester-name" className="block text-xs text-gray-400 mb-1">
+                  Name
+                </label>
+                <input
+                  ref={firstInputRef}
+                  id="tester-name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="eastus-1"
+                  className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                />
+              </div>
+
+              {/* VM size */}
+              <div>
+                <label htmlFor="tester-vmsize" className="block text-xs text-gray-400 mb-1">
+                  VM size
+                </label>
+                <select
+                  id="tester-vmsize"
+                  value={vmSize}
+                  onChange={(e) => setVmSize(e.target.value)}
+                  className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                >
+                  {VM_SIZE_PRESETS.map((p) => (
+                    <option key={p.value} value={p.value}>
+                      {p.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Auto-shutdown */}
+              <div className="border border-gray-800 rounded p-3 space-y-2">
+                <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={autoShutdownEnabled}
+                    onChange={(e) => setAutoShutdownEnabled(e.target.checked)}
+                    className="accent-cyan-500"
+                  />
+                  Auto-shutdown enabled
+                </label>
+                <div>
+                  <label htmlFor="tester-shutdown-hour" className="block text-xs text-gray-400 mb-1">
+                    Local shutdown hour (0-23)
+                  </label>
+                  <select
+                    id="tester-shutdown-hour"
+                    value={autoShutdownHour}
+                    disabled={!autoShutdownEnabled}
+                    onChange={(e) => setAutoShutdownHour(Number(e.target.value))}
+                    className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500 disabled:opacity-50"
+                  >
+                    {HOURS.map((h) => (
+                      <option key={h} value={h}>
+                        {String(h).padStart(2, '0')}:00
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <p className="text-xs text-gray-500">
+                  Tester stops automatically each day at this local time
+                  (region timezone). Costs drop by roughly 2/3 with an overnight
+                  schedule.
+                </p>
+              </div>
+
+              {/* Auto-probe */}
+              <div className="border border-gray-800 rounded p-3">
+                <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={autoProbeEnabled}
+                    onChange={(e) => setAutoProbeEnabled(e.target.checked)}
+                    className="accent-cyan-500"
+                  />
+                  Auto-probe on error
+                </label>
+                <p className="text-xs text-gray-500 mt-1" title="When enabled, the dashboard probes this tester's SSH port on a short interval whenever it enters the error state and auto-clears transient faults.">
+                  When enabled, the dashboard probes this tester automatically if
+                  it enters an error state. Off by default — you'll be asked to
+                  run a probe manually from the detail drawer.
+                </p>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-4 border-t border-gray-800/50 mt-6">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="px-4 py-1.5 text-sm text-gray-400 hover:text-gray-200"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={stage === 'creating' || !name || !region}
+                  className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors disabled:opacity-50"
+                >
+                  Create Tester
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
