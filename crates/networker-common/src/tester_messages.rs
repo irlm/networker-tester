@@ -128,7 +128,12 @@ mod tests {
             phase: Phase::Running,
             outcome: Some(Outcome::Success),
             message: Some("all good".into()),
-            applied_stages: vec![Phase::Queued, Phase::Starting, Phase::Deploy, Phase::Running],
+            applied_stages: vec![
+                Phase::Queued,
+                Phase::Starting,
+                Phase::Deploy,
+                Phase::Running,
+            ],
         };
         assert_eq!(rt(&m), m);
     }

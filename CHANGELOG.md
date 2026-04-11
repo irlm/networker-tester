@@ -11,6 +11,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.25.0] - 2026-04-10
+
+### Added
+
+- **Persistent tester architecture**: Benchmarks now run against long-lived testers instead of provisioning a fresh VM per run. The orchestrator's application path resolves a tester by reference and executes the job on the existing host, dramatically reducing startup latency and cloud churn.
+- **Tester management page**: New dashboard view lists testers grouped by region in an accordion, with row-level status, live phase progress, version, uptime, and per-tester detail drawer. A `CreateTesterModal` drives provisioning from the UI.
+- **Auto-shutdown scheduler**: Each tester has a configurable shutdown window backed by a per-region timezone map (`chrono-tz`) and a deferral cap so long-running jobs can extend the window without racing the scheduler. Recovery logic reconciles tester state across dashboard restarts.
+- **Queue dispatcher with FIFO ordering**: A new `promote_next` + sweep loop serialises jobs per tester, exposes queue depth, and publishes queue-change events over WebSocket.
+- **Push-based phase + queue updates**: `networker-common` gains `Phase` / `Outcome` enums and WebSocket message types; the dashboard exposes a subscription hub and React hooks so the frontend receives live phase and queue updates without polling.
+- **Unified `PhaseBar` component**: Single React component renders phase progress and outcome state for benchmarks, testers, and the results wizard. Navigation, banners, and the results page all adopt it.
+- **Wizard tester picker**: The benchmark wizard now has a required `TesterStep` (replacing the removed ephemeral-provisioning path) so every run targets an explicit persistent tester.
+- **Version refresh service + endpoint**: New service and REST endpoint refresh a tester's reported version on demand, with audit-log integration.
+- **CLI smoke test gate**: `tests/cli_smoke.sh` exercises the tester lifecycle end-to-end (baseline + scenarios 3-8) and is wired in as a quality gate.
+- **Reset bootstrap binary**: `reset_pre_prod` bootstrap binary wipes and reseeds the pre-prod dashboard database for clean tester test runs.
+- **V027 schema migration**: New migration adds the `project_tester_rows` table, lock primitives, schedule/recovery columns, and supporting indices.
+
+### Changed
+
+- **Orchestrator**: `execute_testbed_application` rewritten to look up a persistent tester, push work through the queue dispatcher, and stream phases rather than provisioning ephemeral VMs.
+- **Dashboard nav + banner**: Top-level navigation exposes the Testers page and the ambient status banner adopts `PhaseBar` for consistency.
+
+### Removed
+
+- **Ephemeral VM provisioning**: Deleted the per-benchmark VM provisioning code paths, Chrome harness install step, and associated dead modules. Benchmarks without a tester reference no longer work on the application path.
+
+### Breaking
+
+- Benchmark configs that relied on the old ephemeral-VM application path must be updated to reference a persistent tester. There is no automatic fallback — the previous ephemeral code has been removed.
+
+---
+
 ## [0.24.2] - 2026-04-10
 
 ### Fixed
