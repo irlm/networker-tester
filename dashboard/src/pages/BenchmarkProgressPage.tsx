@@ -9,6 +9,43 @@ import { useToast } from '../hooks/useToast';
 import { useProject } from '../hooks/useProject';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { usePolling } from '../hooks/usePolling';
+import { PhaseBar } from '../components/PhaseBar';
+
+// TODO(persistent-testers): wire usePhaseSubscription(projectId, testerId, 'benchmark', configId)
+// once the benchmark config response reliably includes the tester id that owns
+// the run. Today the progress page derives phase from HTTP polling + the live
+// store, which predates the tester_queue WebSocket. Until then, PhaseBar is
+// driven from `effectiveStatus` so the UI stays consistent with the rest of
+// the persistent-testers work.
+const DEFAULT_STAGES = ['queued', 'starting', 'deploy', 'running', 'collect', 'done'] as const;
+type PhaseStage = typeof DEFAULT_STAGES[number];
+type PhaseOutcome = 'success' | 'partial_success' | 'failure' | 'cancelled';
+
+function mapEffectiveStatusToPhase(status: string): { phase: PhaseStage; outcome: PhaseOutcome | null } {
+  switch (status) {
+    case 'pending':
+    case 'queued':
+      return { phase: 'queued', outcome: null };
+    case 'provisioning':
+      return { phase: 'starting', outcome: null };
+    case 'deploying':
+      return { phase: 'deploy', outcome: null };
+    case 'running':
+      return { phase: 'running', outcome: null };
+    case 'collecting':
+      return { phase: 'collect', outcome: null };
+    case 'completed':
+      return { phase: 'done', outcome: 'success' };
+    case 'completed_with_errors':
+      return { phase: 'done', outcome: 'partial_success' };
+    case 'failed':
+      return { phase: 'done', outcome: 'failure' };
+    case 'cancelled':
+      return { phase: 'done', outcome: 'cancelled' };
+    default:
+      return { phase: 'queued', outcome: null };
+  }
+}
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -413,34 +450,13 @@ export function BenchmarkProgressPage() {
       </div>
 
       {/* Pipeline Indicator */}
-      {isActive && (
+      {(isActive || isDone) && (
         <div className="mb-6 border border-gray-800 rounded p-4 bg-[var(--bg-card)]">
-          <div className="flex items-center gap-1 mb-3">
-            {['queued', 'provisioning', 'deploying', 'running', 'collecting', 'done'].map((phase, i) => {
-              const phases = ['queued', 'provisioning', 'deploying', 'running', 'collecting', 'done'];
-              const currentIdx = phases.indexOf(effectiveStatus === 'pending' ? 'queued' : effectiveStatus === 'completed' ? 'done' : effectiveStatus);
-              const isCurrentPhase = i === currentIdx;
-              const isPast = i < currentIdx;
-              return (
-                <div key={phase} className="flex items-center gap-1 flex-1">
-                  <div className={`h-1.5 flex-1 rounded-full transition-colors ${
-                    isPast ? 'bg-cyan-500' :
-                    isCurrentPhase ? 'bg-cyan-500 animate-pulse' :
-                    'bg-gray-800'
-                  }`} />
-                  {i < phases.length - 1 && <span className="text-gray-700 text-[8px]">{'\u25B8'}</span>}
-                </div>
-              );
-            })}
-          </div>
-          <div className="flex items-center justify-between text-[10px] text-gray-600 font-mono">
-            <span>queued</span>
-            <span>provision</span>
-            <span>deploy</span>
-            <span className={effectiveStatus === 'running' ? 'text-cyan-400' : ''}>running</span>
-            <span>collect</span>
-            <span>done</span>
-          </div>
+          <PhaseBar
+            phase={mapEffectiveStatusToPhase(effectiveStatus).phase}
+            outcome={mapEffectiveStatusToPhase(effectiveStatus).outcome}
+            appliedStages={[...DEFAULT_STAGES]}
+          />
         </div>
       )}
 

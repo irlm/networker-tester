@@ -67,6 +67,45 @@ function collectBenchmarkOptions(
   ).sort((left, right) => left.localeCompare(right));
 }
 
+const PERSISTENT_TESTERS_BANNER_KEY = 'banner-persistent-testers-dismissed';
+
+function PersistentTestersBanner({ projectId }: { projectId: string | null | undefined }) {
+  const [dismissed, setDismissed] = useState<boolean>(
+    () => localStorage.getItem(PERSISTENT_TESTERS_BANNER_KEY) === '1',
+  );
+  if (dismissed || !projectId) return null;
+  const onDismiss = () => {
+    localStorage.setItem(PERSISTENT_TESTERS_BANNER_KEY, '1');
+    setDismissed(true);
+  };
+  return (
+    <div
+      role="note"
+      className="mb-4 flex items-start gap-3 border border-purple-500/30 bg-purple-500/10 px-3 py-2 rounded text-sm text-gray-200"
+    >
+      <span className="text-purple-400 font-mono text-xs mt-0.5">NEW</span>
+      <div className="flex-1">
+        Persistent testers are now available &mdash;{' '}
+        <Link
+          to={`/projects/${projectId}/testers`}
+          className="text-cyan-400 hover:text-cyan-300 underline underline-offset-2"
+        >
+          create one
+        </Link>{' '}
+        to make benchmarks 4&times; faster on subsequent runs.
+      </div>
+      <button
+        type="button"
+        onClick={onDismiss}
+        aria-label="Dismiss persistent testers banner"
+        className="text-gray-500 hover:text-gray-300 transition-colors text-xs font-mono px-1"
+      >
+        {'\u2715'}
+      </button>
+    </div>
+  );
+}
+
 export function BenchmarksPage() {
   const { projectId } = useProject();
   const navigate = useNavigate();
@@ -321,6 +360,7 @@ export function BenchmarksPage() {
 
   return (
     <div className="p-4 md:p-6">
+      <PersistentTestersBanner projectId={projectId} />
       {/* Running / Recent Benchmark Configs */}
       {configs.length > 0 && (
         <div className="mb-6">
