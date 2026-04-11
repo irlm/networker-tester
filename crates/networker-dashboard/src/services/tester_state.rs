@@ -144,8 +144,9 @@ mod tests {
 
     /// Grep guard: only `tester_state.rs` is allowed to write the unlock pair
     /// `allocation='idle'` + `locked_by_config_id=NULL`. Any other file in the
-    /// services tree that contains a literal `allocation = 'idle'` is breaking
-    /// the invariant and must route through `release`/`force_release`.
+    /// services tree that contains a literal `allocation = 'idle'` in a WRITE context
+    /// (i.e., after SET) is breaking the invariant and must route through
+    /// `release`/`force_release`. Legitimate reads (in WHERE or SELECT) are allowed.
     #[test]
     fn release_is_only_writer_of_idle_unlock() {
         use std::fs;
@@ -167,6 +168,25 @@ mod tests {
             "allocation\t=\t'idle'",
         ];
 
+        /// Check if a needle at the given byte position is in a write context
+        /// (preceded by SET) rather than a read context (preceded by WHERE/SELECT).
+        fn is_write_context(body: &str, needle_start: usize) -> bool {
+            // Look back up to 200 chars for the most recent SET or WHERE.
+            let window_start = needle_start.saturating_sub(200);
+            let prefix = &body[window_start..needle_start];
+
+            // Find the LAST occurrence of "SET " or "WHERE " in the prefix (case-insensitive).
+            let prefix_upper = prefix.to_ascii_uppercase();
+            let set_pos = prefix_upper.rfind("SET ");
+            let where_pos = prefix_upper.rfind("WHERE ");
+
+            match (set_pos, where_pos) {
+                (Some(s), Some(w)) => s > w,   // SET is more recent → write
+                (Some(_), None) => true,        // only SET → write
+                (None, _) => false,             // only WHERE (or neither) → read
+            }
+        }
+
         let mut offenders: Vec<String> = Vec::new();
 
         fn visit(dir: &std::path::Path, offenders: &mut Vec<String>, needles: &[&str]) {
@@ -186,8 +206,19 @@ mod tests {
                 }
                 let body = fs::read_to_string(&path).expect("read file");
                 for needle in needles {
-                    if body.contains(needle) {
-                        offenders.push(format!("{}: contains {:?}", path.display(), needle));
+                    let mut search_start = 0;
+                    while let Some(pos) = body[search_start..].find(needle) {
+                        let abs_pos = search_start + pos;
+                        // Check if this occurrence is in a write context
+                        if is_write_context(&body, abs_pos) {
+                            offenders.push(format!(
+                                "{}: contains {:?} in write context (line approx. {})",
+                                path.display(),
+                                needle,
+                                body[..abs_pos].matches('\n').count() + 1
+                            ));
+                        }
+                        search_start = abs_pos + needle.len();
                     }
                 }
             }
