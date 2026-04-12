@@ -56,8 +56,7 @@ pub async fn list_all(client: &Client) -> anyhow::Result<Vec<SsoProviderRow>> {
 }
 
 /// List only enabled SSO providers, ordered by display_order then created_at.
-/// Used by the SSO login flow (Task 3).
-#[allow(dead_code)]
+/// Used by the SSO login flow and provider cache.
 pub async fn list_enabled(client: &Client) -> anyhow::Result<Vec<SsoProviderRow>> {
     let rows = client
         .query(

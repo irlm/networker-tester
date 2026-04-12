@@ -127,13 +127,20 @@ pub struct AppState {
     /// Spawned tester processes: agent_id → PID (so we can kill them on delete).
     pub tester_processes: RwLock<HashMap<uuid::Uuid, u32>>,
     // SSO config
+    // DEPRECATED: used only for env-var-to-DB migration
     pub microsoft_client_id: Option<String>,
+    // DEPRECATED: used only for env-var-to-DB migration
     pub microsoft_client_secret: Option<String>,
+    // DEPRECATED: used only for env-var-to-DB migration
     pub microsoft_tenant_id: String,
+    // DEPRECATED: used only for env-var-to-DB migration
     pub google_client_id: Option<String>,
+    // DEPRECATED: used only for env-var-to-DB migration
     pub google_client_secret: Option<String>,
     /// Temporary SSO exchange codes: code → SsoCodeEntry
     pub sso_codes: std::sync::Mutex<HashMap<String, SsoCodeEntry>>,
+    /// Cached enabled SSO providers (loaded from DB, refreshed on CRUD ops).
+    pub sso_provider_cache: tokio::sync::RwLock<Vec<crate::db::sso_providers::SsoProviderRow>>,
     // Cloud account credential encryption
     pub credential_key: Option<[u8; 32]>,
     pub credential_key_old: Option<[u8; 32]>,
@@ -156,6 +163,16 @@ pub struct AppState {
     /// Populated by `services::version_refresh::refresh_latest_version_loop`
     /// and read by the manual refresh handler in `api::testers`.
     pub latest_version_cache: Arc<RwLock<String>>,
+}
+
+/// Refresh the in-memory SSO provider cache from the database.
+/// Called on startup and after every SSO admin CRUD operation.
+pub async fn refresh_sso_cache(state: &AppState) -> anyhow::Result<()> {
+    let client = state.db.get().await?;
+    let providers = crate::db::sso_providers::list_enabled(&client).await?;
+    let mut cache = state.sso_provider_cache.write().await;
+    *cache = providers;
+    Ok(())
 }
 
 #[tokio::main]
@@ -264,6 +281,78 @@ async fn main() -> anyhow::Result<()> {
         db::users::seed_admin(&client, email, &cfg.admin_password).await?;
     }
 
+    // ── Auto-migrate SSO env vars to DB (one-time) ────────────────────────
+    {
+        let client = db_pool
+            .get()
+            .await
+            .context("db connection for SSO migration")?;
+        if let Some(ref ms_client_id) = cfg.microsoft_client_id {
+            let existing = client
+                .query_opt(
+                    "SELECT provider_id FROM sso_provider WHERE provider_type = 'microsoft'",
+                    &[],
+                )
+                .await
+                .ok()
+                .flatten();
+            if existing.is_none() {
+                if let (Some(ref ms_secret), Some(ref cred_key)) =
+                    (&cfg.microsoft_client_secret, &cfg.credential_key)
+                {
+                    let (enc, nonce) = crate::crypto::encrypt(ms_secret.as_bytes(), cred_key)?;
+                    client
+                        .execute(
+                            "INSERT INTO sso_provider \
+                             (provider_id, name, provider_type, client_id, \
+                              client_secret_enc, client_secret_nonce, tenant_id) \
+                             VALUES (gen_random_uuid(), 'Microsoft Entra ID', 'microsoft', $1, $2, $3, $4)",
+                            &[ms_client_id, &enc, &nonce.to_vec(), &cfg.microsoft_tenant_id],
+                        )
+                        .await
+                        .ok();
+                    tracing::info!("Migrated Microsoft SSO config from env vars to database");
+                }
+            }
+        }
+        if let Some(ref g_client_id) = cfg.google_client_id {
+            let existing = client
+                .query_opt(
+                    "SELECT provider_id FROM sso_provider WHERE provider_type = 'google'",
+                    &[],
+                )
+                .await
+                .ok()
+                .flatten();
+            if existing.is_none() {
+                if let (Some(ref g_secret), Some(ref cred_key)) =
+                    (&cfg.google_client_secret, &cfg.credential_key)
+                {
+                    let (enc, nonce) = crate::crypto::encrypt(g_secret.as_bytes(), cred_key)?;
+                    client
+                        .execute(
+                            "INSERT INTO sso_provider \
+                             (provider_id, name, provider_type, client_id, \
+                              client_secret_enc, client_secret_nonce) \
+                             VALUES (gen_random_uuid(), 'Google', 'google', $1, $2, $3)",
+                            &[g_client_id, &enc, &nonce.to_vec()],
+                        )
+                        .await
+                        .ok();
+                    tracing::info!("Migrated Google SSO config from env vars to database");
+                }
+            }
+        }
+    }
+
+    // Load SSO provider cache from DB
+    let sso_providers = {
+        let client = db_pool.get().await.context("db connection for SSO cache")?;
+        crate::db::sso_providers::list_enabled(&client)
+            .await
+            .unwrap_or_default()
+    };
+
     let (events_tx, _) = broadcast::channel(1024);
     let (approval_tx, _) = broadcast::channel(100);
 
@@ -286,6 +375,7 @@ async fn main() -> anyhow::Result<()> {
         google_client_id: cfg.google_client_id.clone(),
         google_client_secret: cfg.google_client_secret.clone(),
         sso_codes: std::sync::Mutex::new(HashMap::new()),
+        sso_provider_cache: tokio::sync::RwLock::new(sso_providers),
         credential_key: cfg.credential_key,
         credential_key_old: cfg.credential_key_old,
         share_base_url: cfg.share_base_url.clone(),

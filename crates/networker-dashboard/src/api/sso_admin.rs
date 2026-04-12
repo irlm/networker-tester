@@ -117,10 +117,7 @@ fn extract_admin(req: &axum::extract::Request) -> Result<AuthUser, (StatusCode, 
         .cloned()
         .ok_or((StatusCode::UNAUTHORIZED, "Not authenticated".to_string()))?;
     if !user.is_platform_admin {
-        return Err((
-            StatusCode::FORBIDDEN,
-            "Platform admin required".to_string(),
-        ));
+        return Err((StatusCode::FORBIDDEN, "Platform admin required".to_string()));
     }
     Ok(user)
 }
@@ -151,7 +148,9 @@ async fn list_providers(
             )
         })?;
 
-    Ok(Json(rows.into_iter().map(SsoProviderResponse::from).collect()))
+    Ok(Json(
+        rows.into_iter().map(SsoProviderResponse::from).collect(),
+    ))
 }
 
 async fn create_provider(
@@ -175,7 +174,10 @@ async fn create_provider(
 
     // Validate required fields
     if create.name.trim().is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "name must be non-empty".to_string()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "name must be non-empty".to_string(),
+        ));
     }
     if create.client_id.trim().is_empty() {
         return Err((
@@ -198,8 +200,8 @@ async fn create_provider(
     .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
 
     // Encrypt the client secret
-    let (ciphertext, nonce) =
-        crate::crypto::encrypt(create.client_secret.as_bytes(), key).map_err(|e| {
+    let (ciphertext, nonce) = crate::crypto::encrypt(create.client_secret.as_bytes(), key)
+        .map_err(|e| {
             tracing::error!(error = %e, "Failed to encrypt client secret");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -226,7 +228,9 @@ async fn create_provider(
         &nonce,
         create.issuer_url.as_deref(),
         create.tenant_id.as_deref(),
-        &create.extra_config.unwrap_or(serde_json::Value::Object(Default::default())),
+        &create
+            .extra_config
+            .unwrap_or(serde_json::Value::Object(Default::default())),
         create.enabled.unwrap_or(true),
         create.display_order.unwrap_or(0),
         Some(&user.user_id),
@@ -246,6 +250,10 @@ async fn create_provider(
         created_by = %user.email,
         "SSO provider created"
     );
+
+    if let Err(e) = crate::refresh_sso_cache(&state).await {
+        tracing::warn!(error = ?e, "Failed to refresh SSO provider cache");
+    }
 
     Ok((StatusCode::CREATED, Json(SsoProviderResponse::from(row))))
 }
@@ -293,7 +301,10 @@ async fn update_provider(
     // Validate non-empty fields if provided
     if let Some(ref name) = upd.name {
         if name.trim().is_empty() {
-            return Err((StatusCode::BAD_REQUEST, "name must be non-empty".to_string()));
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "name must be non-empty".to_string(),
+            ));
         }
     }
     if let Some(ref cid) = upd.client_id {
@@ -306,7 +317,10 @@ async fn update_provider(
     }
 
     // Merged values for cross-field validation
-    let eff_type = upd.provider_type.as_deref().unwrap_or(&existing.provider_type);
+    let eff_type = upd
+        .provider_type
+        .as_deref()
+        .unwrap_or(&existing.provider_type);
     let eff_issuer = match &upd.issuer_url {
         Some(v) => v.as_deref(),
         None => existing.issuer_url.as_deref(),
@@ -346,12 +360,8 @@ async fn update_provider(
         upd.client_id.as_deref(),
         secret_enc.as_deref(),
         secret_nonce.as_deref(),
-        upd.issuer_url
-            .as_ref()
-            .map(|v| v.as_deref()),
-        upd.tenant_id
-            .as_ref()
-            .map(|v| v.as_deref()),
+        upd.issuer_url.as_ref().map(|v| v.as_deref()),
+        upd.tenant_id.as_ref().map(|v| v.as_deref()),
         upd.extra_config.as_ref(),
         upd.enabled,
         upd.display_order,
@@ -371,6 +381,10 @@ async fn update_provider(
         updated_by = %user.email,
         "SSO provider updated"
     );
+
+    if let Err(e) = crate::refresh_sso_cache(&state).await {
+        tracing::warn!(error = ?e, "Failed to refresh SSO provider cache");
+    }
 
     Ok(Json(SsoProviderResponse::from(row)))
 }
@@ -409,6 +423,10 @@ async fn delete_provider(
         deleted_by = %user.email,
         "SSO provider deleted"
     );
+
+    if let Err(e) = crate::refresh_sso_cache(&state).await {
+        tracing::warn!(error = ?e, "Failed to refresh SSO provider cache");
+    }
 
     Ok(Json(serde_json::json!({ "deleted": true })))
 }
@@ -469,8 +487,7 @@ mod tests {
 
     #[test]
     fn validation_accepts_valid_microsoft_config() {
-        let result =
-            validate_provider_config("microsoft", None, Some("contoso.onmicrosoft.com"));
+        let result = validate_provider_config("microsoft", None, Some("contoso.onmicrosoft.com"));
         assert!(result.is_ok());
     }
 
