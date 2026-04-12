@@ -880,6 +880,10 @@ DO $$ BEGIN
         FOREIGN KEY (locked_by_config_id) REFERENCES benchmark_config(config_id) ON DELETE RESTRICT;
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
+-- Backfill legacy application benchmarks so the CHECK constraint passes.
+UPDATE benchmark_config SET tester_name_snapshot = 'legacy-ephemeral-vm'
+WHERE benchmark_type = 'application' AND tester_name_snapshot IS NULL;
+
 -- Idempotent CHECK: application benchmarks need a tester link or snapshot
 DO $$ BEGIN
     ALTER TABLE benchmark_config
