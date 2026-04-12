@@ -1179,15 +1179,23 @@ async fn probe_tester(
         ));
     }
 
-    let azure_state = tester_recovery::probe_azure_state(&tester.vm_resource_id, &tester.vm_name)
-        .await
-        .map_err(|e| {
-            tracing::warn!(%tester_id, error = ?e, "probe_azure_state failed");
-            (
-                StatusCode::BAD_GATEWAY,
-                format!("az vm get-instance-view failed: {e}"),
-            )
-        })?;
+    let provider = provider_for_tester(&client, &tester).await.map_err(|e| {
+        tracing::warn!(%tester_id, error = ?e, "provider_for_tester failed");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to load cloud provider: {e}"),
+        )
+    })?;
+    let azure_state =
+        tester_recovery::probe_azure_state(&provider, &tester.vm_resource_id, &tester.vm_name)
+            .await
+            .map_err(|e| {
+                tracing::warn!(%tester_id, error = ?e, "probe_azure_state failed");
+                (
+                    StatusCode::BAD_GATEWAY,
+                    format!("az vm get-instance-view failed: {e}"),
+                )
+            })?;
     let new_power = tester_recovery::azure_power_to_row(&azure_state);
     let status = format!("Manual probe: Azure reported {azure_state}");
 

@@ -70,9 +70,7 @@ async fn write_phase(client: &PgClient, config_id: &Uuid, phase: &str) {
 async fn connect_orchestrator_db() -> Result<Arc<PgClient>> {
     let url = std::env::var("ORCHESTRATOR_DB_URL")
         .or_else(|_| std::env::var("DASHBOARD_DB_URL"))
-        .context(
-            "ORCHESTRATOR_DB_URL (or DASHBOARD_DB_URL) must be set for tester-lock flow",
-        )?;
+        .context("ORCHESTRATOR_DB_URL (or DASHBOARD_DB_URL) must be set for tester-lock flow")?;
     let (client, conn) = tokio_postgres::connect(&url, NoTls)
         .await
         .context("connecting to Postgres for tester-lock flow")?;
@@ -100,11 +98,7 @@ async fn set_phase(client: &PgClient, config_id: &Uuid, phase: &str) -> Result<(
 
 /// Update `benchmark_config.status`. When transitioning into `queued`, also
 /// stamp `queued_at = NOW()` so the dispatcher's fairness ordering is correct.
-async fn set_benchmark_status(
-    client: &PgClient,
-    config_id: &Uuid,
-    status: &str,
-) -> Result<()> {
+async fn set_benchmark_status(client: &PgClient, config_id: &Uuid, status: &str) -> Result<()> {
     if status == "queued" {
         client
             .execute(
@@ -167,8 +161,7 @@ impl ReleaseGuard {
             return;
         }
         self.released = true;
-        if let Err(e) = tester_state::release(&self.client, &self.tester_id, &self.config_id)
-            .await
+        if let Err(e) = tester_state::release(&self.client, &self.tester_id, &self.config_id).await
         {
             tracing::error!(
                 tester_id = %self.tester_id,
@@ -208,9 +201,15 @@ impl Drop for ReleaseGuard {
     }
 }
 
-/// Invoke `az vm start --ids <resource_id>` via `tokio::process::Command`
-/// (execvp, no shell) and wait for SSH to come up.
-async fn ensure_running_via_azure(tester: &ProjectTesterRow) -> Result<()> {
+/// Start a stopped tester VM via the cloud provider and wait for SSH to come up.
+///
+/// Uses `OrchestratorCloudProvider` (Option A per FIC plan) -- a minimal
+/// duplicate of the dashboard's `CloudProvider`. A future PR can extract
+/// both into `networker-common`.
+async fn ensure_running_via_azure(
+    tester: &ProjectTesterRow,
+    db: &tokio_postgres::Client,
+) -> Result<()> {
     let resource_id = tester
         .vm_resource_id
         .as_deref()
@@ -223,23 +222,11 @@ async fn ensure_running_via_azure(tester: &ProjectTesterRow) -> Result<()> {
     tracing::info!(
         tester_id = %tester.tester_id,
         %resource_id,
-        "starting stopped tester VM via az vm start"
+        "starting stopped tester VM via cloud provider"
     );
-    let out = tokio::process::Command::new("az")
-        .arg("vm")
-        .arg("start")
-        .arg("--ids")
-        .arg(resource_id)
-        .output()
-        .await
-        .context("spawning az vm start")?;
-    if !out.status.success() {
-        anyhow::bail!(
-            "az vm start failed (status={:?}): {}",
-            out.status.code(),
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
+
+    let provider = load_cloud_provider(db, &tester.cloud_connection_id).await?;
+    provider.start_vm(resource_id).await?;
 
     // Poll SSH up to ~5 minutes.
     for attempt in 1..=30u32 {
@@ -254,6 +241,99 @@ async fn ensure_running_via_azure(tester: &ProjectTesterRow) -> Result<()> {
         }
     }
     anyhow::bail!("SSH not available on {ip} within 5 minutes after VM start")
+}
+
+// ── Minimal cloud provider (Option A duplication) ─────────────────────────
+
+/// Minimal cloud provider for the orchestrator -- duplicated from the dashboard
+/// crate's `CloudProvider` (Option A per FIC plan). A future PR can extract a
+/// shared crate. Currently only supports Azure `az` CLI operations.
+#[derive(Debug, Clone)]
+struct OrchestratorCloudProvider {
+    subscription_id: String,
+    resource_group: String,
+}
+
+impl OrchestratorCloudProvider {
+    /// Parse the JSONB `config` column from `cloud_connection`.
+    fn from_config(config: &serde_json::Value) -> Result<Self> {
+        let subscription_id = config
+            .get("subscription_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("azure config: missing subscription_id"))?
+            .to_string();
+        let resource_group = config
+            .get("resource_group")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("azure config: missing resource_group"))?
+            .to_string();
+        Ok(Self {
+            subscription_id,
+            resource_group,
+        })
+    }
+
+    /// Build from legacy env vars (testers without a `cloud_connection_id`).
+    fn legacy_fallback() -> Result<Self> {
+        let sub = std::env::var("AZURE_SUBSCRIPTION_ID")
+            .or_else(|_| std::env::var("DASHBOARD_AZURE_SUBSCRIPTION"))
+            .unwrap_or_default();
+        let rg =
+            std::env::var("DASHBOARD_AZURE_RG").unwrap_or_else(|_| "networker-testers".to_string());
+        Ok(Self {
+            subscription_id: sub,
+            resource_group: rg,
+        })
+    }
+
+    /// Start a stopped (deallocated) VM via `az vm start`.
+    async fn start_vm(&self, resource_id: &str) -> Result<()> {
+        let output = tokio::process::Command::new("az")
+            .arg("vm")
+            .arg("start")
+            .arg("--subscription")
+            .arg(&self.subscription_id)
+            .arg("--resource-group")
+            .arg(&self.resource_group)
+            .arg("--ids")
+            .arg(resource_id)
+            .output()
+            .await
+            .context("failed to spawn `az vm start`")?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "az vm start failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Load the cloud provider for a tester. If the tester has a
+/// `cloud_connection_id`, fetch the connection row and construct from its
+/// config. Otherwise fall back to legacy env vars.
+async fn load_cloud_provider(
+    client: &tokio_postgres::Client,
+    cloud_connection_id: &Option<Uuid>,
+) -> Result<OrchestratorCloudProvider> {
+    if let Some(conn_id) = cloud_connection_id {
+        let row = client
+            .query_one(
+                "SELECT provider, config FROM cloud_connection WHERE connection_id = $1",
+                &[conn_id],
+            )
+            .await
+            .with_context(|| format!("loading cloud_connection {conn_id}"))?;
+        let provider: String = row.get("provider");
+        if provider != "azure" {
+            anyhow::bail!("orchestrator only supports azure provider, got: {provider}");
+        }
+        let config: serde_json::Value = row.get("config");
+        OrchestratorCloudProvider::from_config(&config)
+    } else {
+        OrchestratorCloudProvider::legacy_fallback()
+    }
 }
 
 /// Subset of the dashboard's `project_tester` row that the orchestrator needs
@@ -280,6 +360,7 @@ pub struct ProjectTesterRow {
     pub power_state: String,
     pub allocation: String,
     pub installer_version: Option<String>,
+    pub cloud_connection_id: Option<Uuid>,
 }
 
 /// Look up the persistent tester associated with a given benchmark config.
@@ -310,7 +391,8 @@ pub async fn lookup_tester(
                    t.vm_resource_id,
                    t.power_state,
                    t.allocation,
-                   t.installer_version
+                   t.installer_version,
+                   t.cloud_connection_id
               FROM benchmark_config c
               JOIN project_tester   t ON t.tester_id = c.tester_id
              WHERE c.config_id = $1
@@ -337,6 +419,7 @@ pub async fn lookup_tester(
         power_state: row.get(7),
         allocation: row.get(8),
         installer_version: row.get(9),
+        cloud_connection_id: row.get(10),
     })
 }
 
@@ -439,7 +522,10 @@ async fn deploy_proxy(vm: &VmInfo, proxy: &str) -> Result<()> {
     ssh::ssh_exec(&vm.ip, &cmd)
         .await
         .with_context(|| format!("Failed to deploy proxy {proxy} on {}", vm.ip))?;
-    tracing::info!("Proxy {} deployed successfully (health check deferred until backend starts)", proxy);
+    tracing::info!(
+        "Proxy {} deployed successfully (health check deferred until backend starts)",
+        proxy
+    );
     // Health check is deferred — in application mode, the backend (language server)
     // starts AFTER the proxy. The proxy will respond once the backend is running.
     Ok(())
@@ -461,20 +547,19 @@ async fn stop_proxy(vm: &VmInfo) {
 async fn deploy_app_language(vm: &VmInfo, language: &str, proxy: &str) -> Result<()> {
     validate_shell_safe(language, "language")?;
     validate_shell_safe(proxy, "proxy")?;
-    tracing::info!(
-        "Deploying {} in application mode on {}",
-        language,
-        vm.ip
-    );
+    tracing::info!("Deploying {} in application mode on {}", language, vm.ip);
     // Server reads BENCH_API_TOKEN from /opt/bench/.api-token at startup.
     // LOG_FORMAT=json enables structured JSON logging on the server process.
     let cmd = format!(
         "export DEBIAN_FRONTEND=noninteractive LOG_FORMAT=json LOG_SERVICE={} BENCH_API_TOKEN=$(cat /opt/bench/.api-token 2>/dev/null) && curl -fsSL https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh | sudo -E bash -s -- --benchmark-server {} --benchmark-proxy {} 2>&1",
         language, language, proxy
     );
-    ssh::ssh_exec(&vm.ip, &cmd)
-        .await
-        .with_context(|| format!("Failed to deploy {language} in application mode on {}", vm.ip))?;
+    ssh::ssh_exec(&vm.ip, &cmd).await.with_context(|| {
+        format!(
+            "Failed to deploy {language} in application mode on {}",
+            vm.ip
+        )
+    })?;
     Ok(())
 }
 
@@ -527,7 +612,10 @@ async fn run_chrome_benchmark(
 
     tracing::info!(
         "Running Chrome benchmark: {} behind {}, http={}, conn={}",
-        language, proxy, http_version, connection_mode,
+        language,
+        proxy,
+        http_version,
+        connection_mode,
     );
 
     ssh::ssh_exec(&vm.ip, &cmd)
@@ -788,7 +876,13 @@ async fn execute_testbed(
     // Branch: application mode uses proxy × language matrix.
     if config.benchmark_type == "application" {
         return execute_testbed_application(
-            testbed, config, callback, cancel_rx, bench_dir, &vm, provisioned,
+            testbed,
+            config,
+            callback,
+            cancel_rx,
+            bench_dir,
+            &vm,
+            provisioned,
         )
         .await;
     }
@@ -1007,7 +1101,8 @@ async fn execute_testbed(
     }
 
     // Report testbed complete.
-    let testbed_status = if languages_completed > 0 && languages_failed == 0 && !*cancel_rx.borrow() {
+    let testbed_status = if languages_completed > 0 && languages_failed == 0 && !*cancel_rx.borrow()
+    {
         "completed"
     } else if *cancel_rx.borrow() {
         "cancelled"
@@ -1115,7 +1210,7 @@ async fn execute_testbed_application(
                     tester_id = %tester.tester_id,
                     "tester stopped — starting VM before retrying acquire"
                 );
-                if let Err(e) = ensure_running_via_azure(&tester).await {
+                if let Err(e) = ensure_running_via_azure(&tester, &db).await {
                     tracing::error!(
                         tester_id = %tester.tester_id,
                         "ensure_running_via_azure failed: {e:#}"
@@ -1298,7 +1393,9 @@ async fn run_application_matrix(
             if needs_windows && testbed.os != "windows" {
                 tracing::warn!(
                     "Skipping {} on {} testbed {} (requires Windows)",
-                    lang, testbed.os, testbed.testbed_id
+                    lang,
+                    testbed.os,
+                    testbed.testbed_id
                 );
                 false
             } else {
@@ -1504,7 +1601,16 @@ async fn run_application_matrix(
             let mut lang_ok = true;
             for http_ver in &http_versions {
                 // Run warm connection phase
-                match run_chrome_benchmark(vm, proxy, language, http_ver, "warm", methodology, &bench_token).await
+                match run_chrome_benchmark(
+                    vm,
+                    proxy,
+                    language,
+                    http_ver,
+                    "warm",
+                    methodology,
+                    &bench_token,
+                )
+                .await
                 {
                     Ok(result) => {
                         tracing::info!(
@@ -1607,7 +1713,8 @@ async fn run_application_matrix(
     write_phase(db, config_uuid, "collect").await;
 
     // Report testbed complete.
-    let testbed_status = if languages_completed > 0 && languages_failed == 0 && !*cancel_rx.borrow() {
+    let testbed_status = if languages_completed > 0 && languages_failed == 0 && !*cancel_rx.borrow()
+    {
         "completed"
     } else if *cancel_rx.borrow() {
         "cancelled"
@@ -1622,9 +1729,7 @@ async fn run_application_matrix(
         "",
         total_combinations,
         total_combinations,
-        &format!(
-            "Testbed complete: {languages_completed} succeeded, {languages_failed} failed"
-        ),
+        &format!("Testbed complete: {languages_completed} succeeded, {languages_failed} failed"),
     )
     .await;
 
@@ -1691,10 +1796,10 @@ fn validate_ip(ip: &str, is_cloud: bool) -> Result<()> {
 /// Resolve the VM for a testbed: use existing IP or provision a new one.
 async fn resolve_vm(testbed: &TestbedConfig) -> Result<(VmInfo, bool)> {
     if let Some(ip) = &testbed.existing_vm_ip {
-        let is_cloud = ["azure", "aws", "gcp"]
-            .contains(&testbed.cloud.to_lowercase().as_str());
-        validate_ip(ip, is_cloud)
-            .with_context(|| format!("Invalid existing_vm_ip for testbed {}", testbed.testbed_id))?;
+        let is_cloud = ["azure", "aws", "gcp"].contains(&testbed.cloud.to_lowercase().as_str());
+        validate_ip(ip, is_cloud).with_context(|| {
+            format!("Invalid existing_vm_ip for testbed {}", testbed.testbed_id)
+        })?;
         tracing::info!(
             "Using existing VM at {} for testbed {}",
             ip,
