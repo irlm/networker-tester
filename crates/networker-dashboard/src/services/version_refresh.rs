@@ -3,21 +3,50 @@
 
 #![allow(dead_code)] // wired in Task 17 + 34
 
+use rand::RngExt;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 
-const REFRESH_INTERVAL: Duration = Duration::from_secs(6 * 3600);
+const REFRESH_BASE: Duration = Duration::from_secs(6 * 3600);
+const REFRESH_JITTER_MAX_SECS: u64 = 30 * 60;
 const GITHUB_LATEST: &str = "https://api.github.com/repos/irlm/networker-tester/releases/latest";
 
+/// Error returned by `fetch_github_latest` when GitHub responds with a
+/// rate-limit status (403 or 429). Used by the loop to silently fall
+/// back to the cache floor instead of logging a warning (RR-011).
+#[derive(Debug)]
+struct RateLimited;
+
+impl std::fmt::Display for RateLimited {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "github rate limited")
+    }
+}
+
+impl std::error::Error for RateLimited {}
+
 pub async fn refresh_latest_version_loop(cache: Arc<RwLock<String>>) {
-    let mut ticker = tokio::time::interval(REFRESH_INTERVAL);
-    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
-        ticker.tick().await;
+        // RR-011: each sleep is base + rand(0..30min) so multi-dashboard
+        // deploys don't all hit api.github.com at the same 6h mark.
+        let jitter_secs = rand::rng().random_range(0..=REFRESH_JITTER_MAX_SECS);
+        let sleep = REFRESH_BASE + Duration::from_secs(jitter_secs);
+        tokio::time::sleep(sleep).await;
         match refresh_now(cache.clone()).await {
             Ok(v) => tracing::info!(version = %v, "latest-version refresh succeeded"),
-            Err(e) => tracing::warn!(error = ?e, "latest-version refresh failed"),
+            Err(e) => {
+                // Rate-limit responses fall back to the cache floor
+                // silently (debug level) — we expect these when a shared
+                // NAT exhausts the unauthenticated GitHub quota.
+                if e.downcast_ref::<RateLimited>().is_some() {
+                    tracing::debug!(
+                        "latest-version refresh rate limited; using CARGO_PKG_VERSION floor"
+                    );
+                } else {
+                    tracing::warn!(error = ?e, "latest-version refresh failed");
+                }
+            }
         }
     }
 }
@@ -41,8 +70,14 @@ async fn fetch_github_latest() -> anyhow::Result<String> {
         .timeout(Duration::from_secs(15))
         .build()?;
     let resp = client.get(GITHUB_LATEST).send().await?;
-    if !resp.status().is_success() {
-        anyhow::bail!("github latest returned {}", resp.status());
+    let status = resp.status();
+    // RR-011: surface rate limits via a typed error so the loop can
+    // downgrade the log level.
+    if status.as_u16() == 403 || status.as_u16() == 429 {
+        return Err(anyhow::Error::new(RateLimited));
+    }
+    if !status.is_success() {
+        anyhow::bail!("github latest returned {}", status);
     }
     let body: serde_json::Value = resp.json().await?;
     let tag = body
