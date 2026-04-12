@@ -18,6 +18,7 @@ pub mod projects;
 pub mod runs;
 pub mod schedules;
 pub mod share_links;
+pub mod sso_providers;
 pub mod system_health;
 pub mod tls_profiles;
 pub mod url_tests;

@@ -18,13 +18,16 @@ mod invites;
 mod jobs;
 mod leaderboard;
 mod logs;
+mod member_import;
 mod modes;
+mod pending_projects;
 mod perf_log;
 mod project_members;
 mod projects;
 mod runs;
 mod schedules;
 mod share_links;
+mod sso_admin;
 // Task 14: tester REST handlers land here. Wiring into `project_scoped`
 // is deferred to Task 18; for now we declare the module so it compiles
 // and its unit tests run.
@@ -63,12 +66,15 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(projects::router(state.clone()))
         .merge(events::router(state.clone()))
         .merge(admin::router(state.clone()))
+        .merge(sso_admin::router(state.clone()))
         .merge(system_health::router(state.clone()))
         .merge(bench_tokens::router(state.clone()))
         .merge(perf_log::router(state.clone()))
         .merge(logs::router(state.clone()))
         .merge(leaderboard::protected_router(state.clone()))
         .merge(zones::router(state.clone()))
+        .merge(pending_projects::me_router(state.clone()))
+        .merge(pending_projects::project_router(state.clone()))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::require_auth,
@@ -89,6 +95,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(inventory::project_router(state.clone()))
         .merge(url_tests::project_router(state.clone()))
         .merge(tls_profiles::project_router(state.clone()))
+        .merge(member_import::project_router(state.clone()))
         .merge(project_members::router(state.clone()))
         .merge(share_links::project_router(state.clone()))
         .merge(command_approvals::project_router(state.clone()))

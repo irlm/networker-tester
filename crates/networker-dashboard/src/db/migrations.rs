@@ -799,6 +799,42 @@ CREATE INDEX IF NOT EXISTS idx_project_tester_cloud_conn
   WHERE cloud_connection_id IS NOT NULL;
 "#;
 
+/// V030: Dynamic SSO providers, system config, and project member status.
+const V030_SSO_AND_MEMBER_STATUS: &str = r#"
+-- V030: Dynamic SSO providers, system config, and project member status.
+
+-- 1. SSO providers (replaces env-var SSO config)
+CREATE TABLE IF NOT EXISTS sso_provider (
+    provider_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name                 VARCHAR(200) NOT NULL,
+    provider_type        VARCHAR(30)  NOT NULL,
+    client_id            TEXT         NOT NULL,
+    client_secret_enc    BYTEA        NOT NULL,
+    client_secret_nonce  BYTEA        NOT NULL,
+    issuer_url           TEXT,
+    tenant_id            TEXT,
+    extra_config         JSONB        NOT NULL DEFAULT '{}',
+    enabled              BOOLEAN      NOT NULL DEFAULT TRUE,
+    display_order        SMALLINT     NOT NULL DEFAULT 0,
+    created_by           UUID         REFERENCES dash_user(user_id),
+    created_at           TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at           TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+-- 2. Platform-level system config (public_url, etc.)
+CREATE TABLE IF NOT EXISTS system_config (
+    key         VARCHAR(100) PRIMARY KEY,
+    value       TEXT         NOT NULL,
+    updated_by  UUID         REFERENCES dash_user(user_id),
+    updated_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+-- 3. Project member status + invite tracking
+ALTER TABLE project_member
+  ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'active',
+  ADD COLUMN IF NOT EXISTS invite_sent_at TIMESTAMPTZ;
+"#;
+
 /// V027: Persistent testers — project_tester table, benchmark_config tester link,
 /// phase columns on progress-tracking tables.
 const V027_PERSISTENT_TESTERS: &str = r#"
@@ -1788,6 +1824,23 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
             )
             .await?;
         tracing::info!("V029 migration complete");
+    }
+
+    // V030: Dynamic SSO providers, system config, member status
+    let row = client
+        .query_opt("SELECT version FROM _migrations WHERE version = 30", &[])
+        .await?;
+
+    if row.is_none() {
+        tracing::info!("Applying V030: SSO providers + system config + member status...");
+        client.batch_execute(V030_SSO_AND_MEMBER_STATUS).await?;
+        client
+            .execute(
+                "INSERT INTO _migrations (version) VALUES (30) ON CONFLICT DO NOTHING",
+                &[],
+            )
+            .await?;
+        tracing::info!("V030 migration complete");
     }
 
     Ok(())

@@ -222,13 +222,18 @@ async fn reset_password(
 
 /// Return SSO provider configuration to the frontend.
 async fn sso_providers(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    let mut providers = Vec::new();
-    if state.microsoft_client_id.is_some() {
-        providers.push("microsoft");
-    }
-    if state.google_client_id.is_some() {
-        providers.push("google");
-    }
+    let cache = state.sso_provider_cache.read().await;
+    let providers: Vec<serde_json::Value> = cache
+        .iter()
+        .filter(|p| p.enabled)
+        .map(|p| {
+            serde_json::json!({
+                "id": p.provider_id.to_string(),
+                "name": p.name,
+                "type": p.provider_type,
+            })
+        })
+        .collect();
     Json(serde_json::json!({ "providers": providers }))
 }
 
@@ -239,40 +244,55 @@ pub struct SsoInitQuery {
 
 /// Redirect user to the SSO provider's authorization endpoint.
 /// Sets an `sso_state` cookie for CSRF protection.
+///
+/// Query parameter `provider` is now a provider_id (UUID string) referencing a
+/// row in the `sso_provider` table, loaded from the in-memory cache.
 async fn sso_init(
     State(state): State<Arc<AppState>>,
     Query(query): Query<SsoInitQuery>,
 ) -> impl IntoResponse {
-    let provider = &query.provider;
+    let provider_id = match uuid::Uuid::parse_str(&query.provider) {
+        Ok(id) => id,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid provider ID").into_response(),
+    };
 
-    let (auth_url, client_id) = match provider.as_str() {
+    let cache = state.sso_provider_cache.read().await;
+    let provider = match cache
+        .iter()
+        .find(|p| p.provider_id == provider_id && p.enabled)
+    {
+        Some(p) => p.clone(),
+        None => return (StatusCode::NOT_FOUND, "SSO provider not found").into_response(),
+    };
+    drop(cache);
+
+    let (auth_url, scope) = match provider.provider_type.as_str() {
         "microsoft" => {
-            let cid = match &state.microsoft_client_id {
-                Some(c) => c.clone(),
-                None => {
-                    return (StatusCode::BAD_REQUEST, "Microsoft SSO not configured")
-                        .into_response()
-                }
-            };
-            let url = format!(
-                "https://login.microsoftonline.com/{}/oauth2/v2.0/authorize",
-                state.microsoft_tenant_id
-            );
-            (url, cid)
-        }
-        "google" => {
-            let cid = match &state.google_client_id {
-                Some(c) => c.clone(),
-                None => {
-                    return (StatusCode::BAD_REQUEST, "Google SSO not configured").into_response()
-                }
-            };
+            let tenant = provider.tenant_id.as_deref().unwrap_or("common");
             (
-                "https://accounts.google.com/o/oauth2/v2/auth".to_string(),
-                cid,
+                format!("https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize"),
+                "openid email profile",
             )
         }
-        _ => return (StatusCode::BAD_REQUEST, "Unknown SSO provider").into_response(),
+        "google" => (
+            "https://accounts.google.com/o/oauth2/v2/auth".to_string(),
+            "openid email profile",
+        ),
+        "oidc_generic" => {
+            let issuer = match &provider.issuer_url {
+                Some(u) => u,
+                None => return (StatusCode::BAD_REQUEST, "Missing issuer_url").into_response(),
+            };
+            let discovery_url = format!("{issuer}/.well-known/openid-configuration");
+            match discover_oidc_endpoint(&discovery_url, "authorization_endpoint").await {
+                Ok(url) => (url, "openid email profile"),
+                Err(e) => {
+                    tracing::error!(error = %e, "OIDC discovery failed");
+                    return (StatusCode::BAD_GATEWAY, "OIDC discovery failed").into_response();
+                }
+            }
+        }
+        _ => return (StatusCode::BAD_REQUEST, "Unsupported provider type").into_response(),
     };
 
     // Generate CSRF state token
@@ -283,17 +303,11 @@ async fn sso_init(
         .collect();
 
     let redirect_uri = format!("{}/api/auth/sso/callback", state.public_url);
-    let scope = match provider.as_str() {
-        "microsoft" => "openid email profile",
-        "google" => "openid email profile",
-        _ => "openid email",
-    };
-
-    let full_state = format!("{provider}:{state_value}");
+    let full_state = format!("{}:{state_value}", provider.provider_id);
 
     let redirect_url = format!(
         "{auth_url}?response_type=code&client_id={}&redirect_uri={}&scope={}&state={}",
-        urlencoding::encode(&client_id),
+        urlencoding::encode(&provider.client_id),
         urlencoding::encode(&redirect_uri),
         urlencoding::encode(scope),
         urlencoding::encode(&full_state),
@@ -359,35 +373,60 @@ async fn sso_callback(
         return redirect_to_login_with_error(&state.public_url, "state_mismatch");
     }
 
-    // Parse provider from state (format: "provider:random")
-    let provider = callback_state.split(':').next().unwrap_or("").to_string();
+    // Parse provider_id (UUID) from state (format: "provider_id:random")
+    let provider_id_str = callback_state.split(':').next().unwrap_or("");
+    let provider_id = match uuid::Uuid::parse_str(provider_id_str) {
+        Ok(id) => id,
+        Err(_) => return redirect_to_login_with_error(&state.public_url, "invalid_state"),
+    };
 
-    let (client_id, client_secret, token_url) = match provider.as_str() {
-        "microsoft" => {
-            let cid = match &state.microsoft_client_id {
-                Some(c) => c.clone(),
-                None => return redirect_to_login_with_error(&state.public_url, "not_configured"),
-            };
-            let csec = match &state.microsoft_client_secret {
-                Some(s) => s.clone(),
-                None => return redirect_to_login_with_error(&state.public_url, "not_configured"),
-            };
-            let url = format!(
-                "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
-                state.microsoft_tenant_id
-            );
-            (cid, csec, url)
+    let cache = state.sso_provider_cache.read().await;
+    let provider = match cache.iter().find(|p| p.provider_id == provider_id) {
+        Some(p) => p.clone(),
+        None => return redirect_to_login_with_error(&state.public_url, "unknown_provider"),
+    };
+    drop(cache);
+
+    // Decrypt client secret
+    let cred_key = match &state.credential_key {
+        Some(k) => k,
+        None => return redirect_to_login_with_error(&state.public_url, "not_configured"),
+    };
+    let nonce_arr: [u8; 12] = match provider.client_secret_nonce.as_slice().try_into() {
+        Ok(n) => n,
+        Err(_) => {
+            tracing::error!(provider_id = %provider_id, "Invalid nonce length for SSO provider secret");
+            return redirect_to_login_with_error(&state.public_url, "internal_error");
         }
-        "google" => {
-            let cid = match &state.google_client_id {
-                Some(c) => c.clone(),
-                None => return redirect_to_login_with_error(&state.public_url, "not_configured"),
-            };
-            let csec = match &state.google_client_secret {
-                Some(s) => s.clone(),
-                None => return redirect_to_login_with_error(&state.public_url, "not_configured"),
-            };
-            (cid, csec, "https://oauth2.googleapis.com/token".to_string())
+    };
+    let client_secret_bytes =
+        match crate::crypto::decrypt(&provider.client_secret_enc, &nonce_arr, cred_key) {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to decrypt SSO client secret");
+                return redirect_to_login_with_error(&state.public_url, "internal_error");
+            }
+        };
+    let client_secret = String::from_utf8_lossy(&client_secret_bytes).to_string();
+    let client_id = provider.client_id.clone();
+
+    // Build token URL based on provider type
+    let token_url = match provider.provider_type.as_str() {
+        "microsoft" => {
+            let tenant = provider.tenant_id.as_deref().unwrap_or("common");
+            format!("https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token")
+        }
+        "google" => "https://oauth2.googleapis.com/token".to_string(),
+        "oidc_generic" => {
+            let issuer = provider.issuer_url.as_deref().unwrap_or("");
+            let discovery_url = format!("{issuer}/.well-known/openid-configuration");
+            match discover_oidc_endpoint(&discovery_url, "token_endpoint").await {
+                Ok(url) => url,
+                Err(e) => {
+                    tracing::error!(error = %e, "OIDC token endpoint discovery failed");
+                    return redirect_to_login_with_error(&state.public_url, "internal_error");
+                }
+            }
         }
         _ => return redirect_to_login_with_error(&state.public_url, "unknown_provider"),
     };
@@ -438,7 +477,7 @@ async fn sso_callback(
                 .as_object()
                 .map(|o| o.keys().collect())
                 .unwrap_or_default();
-            tracing::error!(provider = %provider, ?keys, "No id_token in SSO token response");
+            tracing::error!(provider_type = %provider.provider_type, ?keys, "No id_token in SSO token response");
             return redirect_to_login_with_error(&state.public_url, "no_id_token");
         }
     };
@@ -458,7 +497,7 @@ async fn sso_callback(
     let issuer = claims.get("iss").and_then(|i| i.as_str()).unwrap_or("");
     let audience = claims.get("aud").and_then(|a| a.as_str()).unwrap_or("");
 
-    match provider.as_str() {
+    match provider.provider_type.as_str() {
         "microsoft" => {
             if !issuer.starts_with("https://login.microsoftonline.com/") || audience != client_id {
                 tracing::error!(
@@ -473,6 +512,16 @@ async fn sso_callback(
                 tracing::error!(
                     %issuer, %audience, expected_aud = %client_id,
                     "Google ID token iss/aud mismatch"
+                );
+                return redirect_to_login_with_error(&state.public_url, "id_token_invalid");
+            }
+        }
+        "oidc_generic" => {
+            // For generic OIDC, validate audience matches client_id
+            if audience != client_id {
+                tracing::error!(
+                    %issuer, %audience, expected_aud = %client_id,
+                    "OIDC ID token audience mismatch"
                 );
                 return redirect_to_login_with_error(&state.public_url, "id_token_invalid");
             }
@@ -522,7 +571,7 @@ async fn sso_callback(
             if existing.role == "admin" {
                 tracing::warn!(
                     email = %email,
-                    provider = %provider,
+                    provider_type = %provider.provider_type,
                     "Refusing to auto-link admin account to SSO — manual linking required"
                 );
                 return redirect_to_login_with_error(&state.public_url, "admin_link_blocked");
@@ -532,7 +581,7 @@ async fn sso_callback(
             if let Err(e) = crate::db::users::link_sso_to_local(
                 &client,
                 &existing.user_id,
-                &provider,
+                &provider.provider_type,
                 &subject_id,
                 display_name.as_deref(),
             )
@@ -541,7 +590,7 @@ async fn sso_callback(
                 tracing::error!(error = %e, "Failed to link SSO to local account");
                 return redirect_to_login_with_error(&state.public_url, "internal_error");
             }
-            tracing::info!(email = %email, provider = %provider, "Linked SSO to existing local account");
+            tracing::info!(email = %email, provider_type = %provider.provider_type, "Linked SSO to existing local account");
             (existing.user_id, existing.role, existing.status)
         } else {
             // Existing SSO user — update last login
@@ -559,14 +608,14 @@ async fn sso_callback(
         match crate::db::users::create_sso_user(
             &client,
             &email,
-            &provider,
+            &provider.provider_type,
             &subject_id,
             display_name.as_deref(),
         )
         .await
         {
             Ok((uid, role)) => {
-                tracing::info!(email = %email, provider = %provider, "Created new SSO user (pending approval)");
+                tracing::info!(email = %email, provider_type = %provider.provider_type, "Created new SSO user (pending approval)");
                 (uid, role, "pending".to_string())
             }
             Err(e) => {
@@ -699,6 +748,21 @@ async fn sso_exchange(
         status,
         must_change_password: false,
     }))
+}
+
+/// Fetch a field from an OIDC discovery document (`.well-known/openid-configuration`).
+async fn discover_oidc_endpoint(discovery_url: &str, key: &str) -> anyhow::Result<String> {
+    let resp = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?
+        .get(discovery_url)
+        .send()
+        .await?;
+    let json: serde_json::Value = resp.json().await?;
+    json.get(key)
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| anyhow::anyhow!("missing {key} in OIDC discovery"))
 }
 
 /// Decode the payload section of a JWT without verifying the signature.

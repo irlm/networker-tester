@@ -1,16 +1,34 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
+import type { PendingProject } from '../api/client';
 import { useAuthStore } from '../stores/authStore';
 import { useProjectStore } from '../stores/projectStore';
+import { PendingProjectsModal } from '../components/PendingProjectsModal';
 
 export function SSOCompletePage() {
   const [searchParams] = useSearchParams();
   const code = searchParams.get('code');
   const [error, setError] = useState(() => code ? '' : 'Missing SSO exchange code');
+  const [pendingProjects, setPendingProjects] = useState<PendingProject[]>([]);
   const login = useAuthStore((s) => s.login);
   const navigate = useNavigate();
   const exchanged = useRef(false);
+
+  const navigateToProject = async () => {
+    try {
+      const projects = await api.getProjects();
+      useProjectStore.getState().setProjects(projects);
+      if (projects.length === 1) {
+        useProjectStore.getState().setActiveProject(projects[0]);
+        navigate(`/projects/${projects[0].project_id}`, { replace: true });
+      } else {
+        navigate('/projects', { replace: true });
+      }
+    } catch {
+      navigate('/', { replace: true });
+    }
+  };
 
   useEffect(() => {
     if (!code || exchanged.current) return;
@@ -29,18 +47,15 @@ export function SSOCompletePage() {
         } else if (res.status === 'pending') {
           navigate('/pending', { replace: true });
         } else {
+          // Check for pending project invitations before navigating
           try {
-            const projects = await api.getProjects();
-            useProjectStore.getState().setProjects(projects);
-            if (projects.length === 1) {
-              useProjectStore.getState().setActiveProject(projects[0]);
-              navigate(`/projects/${projects[0].project_id}`, { replace: true });
-            } else {
-              navigate('/projects', { replace: true });
+            const { pending } = await api.getPendingProjects();
+            if (pending.length > 0) {
+              if (!cancelled) setPendingProjects(pending);
+              return; // Show modal — navigation happens in onComplete
             }
-          } catch {
-            navigate('/', { replace: true });
-          }
+          } catch { /* ignore — proceed to navigate */ }
+          await navigateToProject();
         }
       })
       .catch((err) => {
@@ -49,7 +64,20 @@ export function SSOCompletePage() {
       });
 
     return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code, login, navigate]);
+
+  if (pendingProjects.length > 0) {
+    return (
+      <PendingProjectsModal
+        projects={pendingProjects}
+        onComplete={() => {
+          setPendingProjects([]);
+          navigateToProject();
+        }}
+      />
+    );
+  }
 
   if (error) {
     return (

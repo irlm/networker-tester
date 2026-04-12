@@ -417,6 +417,26 @@ pub async fn create_local_user(
     Ok(user_id)
 }
 
+/// Create a placeholder user account for CSV import.
+/// If a user with the given email already exists, returns their user_id.
+/// Otherwise creates a new active user with no password (SSO-pending style).
+pub async fn create_placeholder_user(client: &Client, email: &str) -> anyhow::Result<Uuid> {
+    // Check if user already exists
+    if let Some(existing) = find_by_email(client, email).await? {
+        return Ok(existing.user_id);
+    }
+
+    let user_id = Uuid::new_v4();
+    client
+        .execute(
+            "INSERT INTO dash_user (user_id, email, status, must_change_password) \
+             VALUES ($1, $2, 'active', FALSE)",
+            &[&user_id, &email],
+        )
+        .await?;
+    Ok(user_id)
+}
+
 /// Find a user by email (for SSO account lookup).
 pub async fn find_by_email(client: &Client, email: &str) -> anyhow::Result<Option<UserRow>> {
     let row = client

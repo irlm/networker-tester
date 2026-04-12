@@ -803,10 +803,39 @@ export interface ProjectMember {
   project_id: string;
   user_id: string;
   role: string;
+  status: string;
   joined_at: string;
   invited_by: string | null;
+  invite_sent_at: string | null;
   email: string;
   display_name: string | null;
+}
+
+export interface ImportDetail {
+  email: string;
+  result: string;
+  message: string;
+}
+
+export interface ImportResult {
+  imported: number;
+  skipped: number;
+  errors: number;
+  details: ImportDetail[];
+}
+
+export interface SendInviteDetail {
+  user_id: string;
+  result: string;
+  invite_url?: string;
+}
+
+export interface SendInviteResult {
+  sent: number;
+  skipped: number;
+  errors: number;
+  email_configured: boolean;
+  details: SendInviteDetail[];
 }
 
 export interface SystemMetrics {

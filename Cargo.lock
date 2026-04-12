@@ -261,6 +261,7 @@ dependencies = [
  "matchit",
  "memchr",
  "mime",
+ "multer",
  "percent-encoding",
  "pin-project-lite",
  "serde_core",
@@ -2044,6 +2045,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "multer"
+version = "3.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83e87776546dc87511aa5ee218730c92b666d7264ab6ed41f9d215af9cd5224b"
+dependencies = [
+ "bytes",
+ "encoding_rs",
+ "futures-util",
+ "http",
+ "httparse",
+ "memchr",
+ "mime",
+ "spin",
+ "version_check",
+]
+
+[[package]]
 name = "native-tls"
 version = "0.2.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2062,7 +2080,7 @@ dependencies = [
 
 [[package]]
 name = "networker-agent"
-version = "0.26.2"
+version = "0.27.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2082,7 +2100,7 @@ dependencies = [
 
 [[package]]
 name = "networker-common"
-version = "0.26.2"
+version = "0.27.0"
 dependencies = [
  "chrono",
  "networker-tester",
@@ -2093,7 +2111,7 @@ dependencies = [
 
 [[package]]
 name = "networker-dashboard"
-version = "0.26.2"
+version = "0.27.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2134,7 +2152,7 @@ dependencies = [
 
 [[package]]
 name = "networker-endpoint"
-version = "0.26.2"
+version = "0.27.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2172,7 +2190,7 @@ dependencies = [
 
 [[package]]
 name = "networker-log"
-version = "0.26.2"
+version = "0.27.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2188,7 +2206,7 @@ dependencies = [
 
 [[package]]
 name = "networker-tester"
-version = "0.26.2"
+version = "0.27.0"
 dependencies = [
  "anyhow",
  "async-trait",

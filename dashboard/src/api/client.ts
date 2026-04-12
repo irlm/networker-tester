@@ -1,6 +1,6 @@
-import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, LogsResponse, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, BenchmarkComparePreset, BenchmarkComparePresetInput, TlsProfileSummary, TlsProfileDetail, BenchmarkConfigSummary, BenchmarkVmCatalogEntry, BenchTokenInfo, PerfLogInput, PerfLogRow, PerfLogStats } from './types';
+import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, LogsResponse, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, BenchmarkComparePreset, BenchmarkComparePresetInput, TlsProfileSummary, TlsProfileDetail, BenchmarkConfigSummary, BenchmarkVmCatalogEntry, BenchTokenInfo, PerfLogInput, PerfLogRow, PerfLogStats, ImportResult, SendInviteResult } from './types';
 
-export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, LogsResponse, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, BenchmarkComparePreset, BenchmarkComparePresetInput, TlsProfileSummary, TlsProfileDetail, BenchmarkConfigSummary, BenchmarkVmCatalogEntry, BenchTokenInfo };
+export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, LogsResponse, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, BenchmarkComparePreset, BenchmarkComparePresetInput, TlsProfileSummary, TlsProfileDetail, BenchmarkConfigSummary, BenchmarkVmCatalogEntry, BenchTokenInfo, ImportResult, SendInviteResult };
 export type { LiveAttempt } from './types';
 
 import { useApiLogStore } from '../stores/apiLogStore';
@@ -92,6 +92,46 @@ function projectUrl(projectId: string, path: string): string {
   return `/projects/${projectId}/${path}`;
 }
 
+// ── SSO types ──────────────────────────────────────────────────────────────
+
+export interface SsoProviderInfo {
+  id: string;
+  name: string;
+  type: string;
+}
+
+export interface SsoProvider {
+  provider_id: string;
+  name: string;
+  provider_type: string;
+  client_id: string;
+  has_client_secret: boolean;
+  issuer_url: string | null;
+  tenant_id: string | null;
+  extra_config: Record<string, unknown>;
+  enabled: boolean;
+  display_order: number;
+}
+
+export interface CreateSsoProvider {
+  name: string;
+  provider_type: string;
+  client_id: string;
+  client_secret: string;
+  issuer_url?: string;
+  tenant_id?: string;
+  enabled?: boolean;
+  display_order?: number;
+}
+
+export interface PendingProject {
+  project_id: string;
+  project_name: string;
+  role: string;
+  invited_by_email: string | null;
+  invited_at: string;
+}
+
 export const api = {
   // ── Auth (NOT project-scoped) ─────────────────────────────────────────
   login: (email: string, password: string) =>
@@ -134,7 +174,7 @@ export const api = {
 
   // SSO
   getProviders: () =>
-    request<{ providers: string[] }>('/auth/sso/providers'),
+    request<{ providers: SsoProviderInfo[] }>('/auth/sso/providers'),
 
   checkEmail: (email: string) =>
     request<{ provider: string | null }>('/auth/sso/check-email', {
@@ -151,6 +191,16 @@ export const api = {
       if (!r.ok) throw new Error(await r.text());
       return r.json() as Promise<{ token: string; email: string; role: string; status: string }>;
     }),
+
+  // ── Pending project invitations ──────────────────────────────────────
+  getPendingProjects: () =>
+    request<{ pending: PendingProject[] }>('/me/pending-projects'),
+
+  acceptProject: (projectId: string) =>
+    request<void>(`/projects/${projectId}/members/me/accept`, { method: 'PUT' }),
+
+  denyProject: (projectId: string) =>
+    request<void>(`/projects/${projectId}/members/me/deny`, { method: 'PUT' }),
 
   // ── Projects ──────────────────────────────────────────────────────────
   getProjects: () =>
@@ -191,6 +241,26 @@ export const api = {
 
   removeProjectMember: (projectId: string, userId: string) =>
     request<{ removed: boolean }>(`/projects/${projectId}/members/${userId}`, { method: 'DELETE' }),
+
+  importMembers: (projectId: string, file: File) => {
+    const token = localStorage.getItem('token');
+    const fd = new FormData();
+    fd.append('file', file);
+    return fetch(`${API_BASE}/projects/${projectId}/members/import`, {
+      method: 'POST',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: fd,
+    }).then(async r => {
+      if (!r.ok) throw new Error(`API error: ${r.status} ${r.statusText}`);
+      return r.json() as Promise<ImportResult>;
+    });
+  },
+
+  sendInvites: (projectId: string, userIds: string[]) =>
+    request<SendInviteResult>(`/projects/${projectId}/members/send-invites`, {
+      method: 'POST',
+      body: JSON.stringify({ user_ids: userIds }),
+    }),
 
   // ── Project Invites (project-scoped, admin only) ────────────────────
   getInvites: (projectId: string) =>
@@ -634,6 +704,26 @@ export const api = {
 
   hardDeleteWorkspace: (projectId: string) =>
     request<void>(`/admin/workspaces/${projectId}`, { method: 'DELETE' }),
+
+  // SSO provider admin CRUD
+  getSsoProviders: () =>
+    request<SsoProvider[]>('/admin/sso-providers'),
+
+  createSsoProvider: (data: CreateSsoProvider) =>
+    request<SsoProvider>('/admin/sso-providers', { method: 'POST', body: JSON.stringify(data) }),
+
+  updateSsoProvider: (id: string, data: Partial<CreateSsoProvider>) =>
+    request<SsoProvider>(`/admin/sso-providers/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+
+  deleteSsoProvider: (id: string) =>
+    request<void>(`/admin/sso-providers/${id}`, { method: 'DELETE' }),
+
+  // System config
+  getSystemConfig: (key: string) =>
+    request<{ key: string; value: string }>(`/admin/system-config/${key}`).catch(() => null),
+
+  setSystemConfig: (key: string, value: string) =>
+    request<void>(`/admin/system-config/${key}`, { method: 'PUT', body: JSON.stringify({ value }) }),
 
   // Leaderboard (simple benchmark routes)
   getLeaderboard: () =>
