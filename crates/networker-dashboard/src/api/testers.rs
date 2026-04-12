@@ -206,12 +206,42 @@ async fn list_regions(
         .await
         .map_err(|e| db_error("list_regions pool", e))?;
 
-    // The `cloud_account` table does not store a regions array. If the
-    // project has an Azure account with a `region_default`, surface that as
-    // the first entry; otherwise return the fallback list unchanged.
-    //
-    // TODO: once cloud_account learns a `regions JSONB` column (or we
-    // query Azure Resource Manager directly), replace this with a real fetch.
+    // If the project has active cloud_connections, derive the region list
+    // from the connected provider(s). Otherwise fall back to the legacy
+    // cloud_account + hardcoded Azure list.
+    let conn_rows = client
+        .query(
+            "SELECT provider FROM cloud_connection \
+             WHERE project_id = $1 AND status = 'active' \
+             ORDER BY created_at ASC",
+            &[&ctx.project_id],
+        )
+        .await
+        .map_err(|e| db_error("list_regions cloud_connection query", e))?;
+
+    if !conn_rows.is_empty() {
+        // Collect unique providers.
+        let mut seen = std::collections::HashSet::new();
+        let mut regions: Vec<String> = Vec::new();
+        for row in &conn_rows {
+            let provider: String = row.get("provider");
+            if seen.insert(provider.clone()) {
+                regions.extend(
+                    azure_regions::regions_for_cloud(&provider)
+                        .iter()
+                        .map(|s| s.to_string()),
+                );
+            }
+        }
+        if regions.is_empty() {
+            // Graceful degradation: if no regions resolved, fall through
+            // to the hardcoded list below.
+        } else {
+            return Ok(Json(RegionsResponse { regions }));
+        }
+    }
+
+    // Legacy path: cloud_account + hardcoded Azure regions.
     let row = client
         .query_opt(
             "SELECT region_default FROM cloud_account \
@@ -413,6 +443,8 @@ struct CreateTesterBody {
     auto_shutdown_local_hour: Option<i16>,
     #[serde(default)]
     auto_probe_enabled: Option<bool>,
+    #[serde(default)]
+    cloud_connection_id: Option<Uuid>,
 }
 
 impl From<CreateTesterBody> for CreateTesterInput {
@@ -424,6 +456,7 @@ impl From<CreateTesterBody> for CreateTesterInput {
             vm_size: b.vm_size,
             auto_shutdown_local_hour: b.auto_shutdown_local_hour,
             auto_probe_enabled: b.auto_probe_enabled,
+            cloud_connection_id: b.cloud_connection_id,
         }
     }
 }
@@ -481,6 +514,41 @@ async fn create_tester(
 
     if let Err(msg) = check_rate_limit(total, last_hour) {
         return Err((StatusCode::TOO_MANY_REQUESTS, msg));
+    }
+
+    // Validate cloud_connection if provided.
+    if let Some(conn_id) = body.cloud_connection_id {
+        let conn_row = client
+            .query_opt(
+                "SELECT provider, config, status FROM cloud_connection \
+                 WHERE connection_id = $1 AND project_id = $2",
+                &[&conn_id, &ctx.project_id],
+            )
+            .await
+            .map_err(|e| db_error("create_tester cloud_connection lookup", e))?;
+        let conn_row = conn_row.ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                format!("cloud_connection {conn_id} not found in this project"),
+            )
+        })?;
+        let status: String = conn_row.get("status");
+        if status != "active" {
+            return Err((
+                StatusCode::CONFLICT,
+                format!("cloud_connection {conn_id} status is '{status}', expected 'active'"),
+            ));
+        }
+        let provider_str: String = conn_row.get("provider");
+        let config_val: serde_json::Value = conn_row.get("config");
+        cloud_provider::CloudProvider::from_connection(&provider_str, &config_val).map_err(
+            |e| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    format!("unsupported cloud provider: {e}"),
+                )
+            },
+        )?;
     }
 
     let input: CreateTesterInput = body.into();
@@ -795,7 +863,7 @@ async fn delete_tester(
     // delete fails we refuse to delete the row so the user can retry
     // (otherwise we'd leak Azure resources).
     if let Some(resource_id) = tester.vm_resource_id.as_deref() {
-        let delete_result = match cloud_provider::legacy_azure_provider() {
+        let delete_result = match provider_for_tester(&client, &tester).await {
             Ok(p) => p.delete_vm(resource_id).await,
             Err(e) => Err(e),
         };
@@ -1295,6 +1363,31 @@ async fn refresh_latest_version(
     }))
 }
 
+// ── Cloud provider loader ────────────────────────────────────────────────
+
+/// Load the [`CloudProvider`] for a tester. If the tester has a
+/// `cloud_connection_id`, we fetch the connection's `provider` + `config`
+/// from the DB and build the provider from that. Otherwise we fall back to
+/// the legacy env-var-based Azure provider.
+async fn provider_for_tester(
+    client: &tokio_postgres::Client,
+    tester: &ProjectTesterRow,
+) -> anyhow::Result<cloud_provider::CloudProvider> {
+    if let Some(conn_id) = tester.cloud_connection_id {
+        let row = client
+            .query_one(
+                "SELECT provider, config FROM cloud_connection WHERE connection_id = $1",
+                &[&conn_id],
+            )
+            .await?;
+        let provider: String = row.get("provider");
+        let config: serde_json::Value = row.get("config");
+        cloud_provider::CloudProvider::from_connection(&provider, &config)
+    } else {
+        cloud_provider::legacy_azure_provider()
+    }
+}
+
 // ── Background task helpers ───────────────────────────────────────────────
 
 fn spawn_create_tester_task(
@@ -1337,8 +1430,19 @@ async fn run_create_tester(
     let vm_size: String = row.get("vm_size");
 
     // Step 2: provision the VM via CloudProvider.
-    tester_state::set_status_message(&client, &tester_id, "creating Azure VM").await?;
-    let provider = cloud_provider::legacy_azure_provider()?;
+    // Load the full tester row so we can resolve the provider from cloud_connection_id.
+    let tester_row = client
+        .query_one(
+            &format!(
+                "SELECT {columns} FROM project_tester WHERE tester_id = $1",
+                columns = crate::db::project_testers::SELECT_COLUMNS
+            ),
+            &[&tester_id],
+        )
+        .await
+        .map(|r| ProjectTesterRow::from_row(&r))?;
+    tester_state::set_status_message(&client, &tester_id, "creating VM").await?;
+    let provider = provider_for_tester(&client, &tester_row).await?;
     let vm_name = cloud_provider::generate_vm_name(&region);
     let vm_config = cloud_provider::VmConfig {
         name: vm_name.clone(),
@@ -1454,7 +1558,10 @@ async fn run_start_tester(state: Arc<AppState>, tester: ProjectTesterRow) -> any
         .vm_resource_id
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("tester has no vm_resource_id"))?;
-    cloud_provider::legacy_azure_provider()?.start_vm(resource_id).await?;
+    provider_for_tester(&client, &tester)
+        .await?
+        .start_vm(resource_id)
+        .await?;
 
     // Wait for SSH to come back up.
     if let Some(ip) = tester.public_ip.as_deref() {
@@ -1545,7 +1652,10 @@ async fn run_stop_tester(state: Arc<AppState>, tester: ProjectTesterRow) -> anyh
         .vm_resource_id
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("tester has no vm_resource_id"))?;
-    cloud_provider::legacy_azure_provider()?.stop_vm(resource_id).await?;
+    provider_for_tester(&client, &tester)
+        .await?
+        .stop_vm(resource_id)
+        .await?;
 
     let moved =
         tester_state::try_power_transition(&client, &tester.tester_id, "stopping", "stopped")
@@ -1799,6 +1909,7 @@ mod tests {
             created_by: Uuid::nil(),
             created_at: now,
             updated_at: now,
+            cloud_connection_id: None,
         }
     }
 

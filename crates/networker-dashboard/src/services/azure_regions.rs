@@ -186,11 +186,67 @@ pub fn next_shutdown_at_for_provider(
             0,
         )
         .earliest()
-        .unwrap_or_else(|| {
-            (now_utc + chrono::Duration::hours(24)).with_timezone(&tz)
-        });
+        .unwrap_or_else(|| (now_utc + chrono::Duration::hours(24)).with_timezone(&tz));
 
     tomorrow_target.with_timezone(&Utc)
+}
+
+/// Return a list of commonly-available region identifiers for a given cloud
+/// provider. Used by the tester regions endpoint when the project has
+/// active `cloud_connection` rows. The lists are static — a real
+/// implementation would query the provider's API for the subscription's
+/// available regions, but this is sufficient for the MVP.
+pub fn regions_for_cloud(provider: &str) -> &'static [&'static str] {
+    match provider {
+        "azure" => &[
+            "eastus",
+            "eastus2",
+            "westus2",
+            "westus3",
+            "centralus",
+            "southcentralus",
+            "northeurope",
+            "westeurope",
+            "uksouth",
+            "francecentral",
+            "germanywestcentral",
+            "japaneast",
+            "koreacentral",
+            "southeastasia",
+            "australiaeast",
+            "brazilsouth",
+            "canadacentral",
+        ],
+        "aws" => &[
+            "us-east-1",
+            "us-east-2",
+            "us-west-1",
+            "us-west-2",
+            "eu-west-1",
+            "eu-west-2",
+            "eu-central-1",
+            "ap-northeast-1",
+            "ap-southeast-1",
+            "ap-southeast-2",
+            "sa-east-1",
+        ],
+        "gcp" => &[
+            "us-central1",
+            "us-east1",
+            "us-east4",
+            "us-west1",
+            "us-west2",
+            "europe-west1",
+            "europe-west2",
+            "europe-west3",
+            "europe-west4",
+            "asia-east1",
+            "asia-northeast1",
+            "asia-southeast1",
+            "australia-southeast1",
+        ],
+        _ => &[],
+    }
 }
 
 #[cfg(test)]
@@ -234,11 +290,26 @@ mod tests {
         assert_eq!(aws_region_timezone("us-west-2"), chrono_tz::US::Pacific);
         assert_eq!(aws_region_timezone("eu-west-1"), chrono_tz::Europe::Dublin);
         assert_eq!(aws_region_timezone("eu-west-2"), chrono_tz::Europe::London);
-        assert_eq!(aws_region_timezone("eu-central-1"), chrono_tz::Europe::Berlin);
-        assert_eq!(aws_region_timezone("ap-northeast-1"), chrono_tz::Asia::Tokyo);
-        assert_eq!(aws_region_timezone("ap-southeast-1"), chrono_tz::Asia::Singapore);
-        assert_eq!(aws_region_timezone("ap-southeast-2"), chrono_tz::Australia::Sydney);
-        assert_eq!(aws_region_timezone("sa-east-1"), chrono_tz::America::Sao_Paulo);
+        assert_eq!(
+            aws_region_timezone("eu-central-1"),
+            chrono_tz::Europe::Berlin
+        );
+        assert_eq!(
+            aws_region_timezone("ap-northeast-1"),
+            chrono_tz::Asia::Tokyo
+        );
+        assert_eq!(
+            aws_region_timezone("ap-southeast-1"),
+            chrono_tz::Asia::Singapore
+        );
+        assert_eq!(
+            aws_region_timezone("ap-southeast-2"),
+            chrono_tz::Australia::Sydney
+        );
+        assert_eq!(
+            aws_region_timezone("sa-east-1"),
+            chrono_tz::America::Sao_Paulo
+        );
         assert_eq!(aws_region_timezone("unknown-region"), chrono_tz::UTC);
     }
 
@@ -250,15 +321,36 @@ mod tests {
         assert_eq!(gcp_region_timezone("us-west1"), chrono_tz::US::Pacific);
         assert_eq!(gcp_region_timezone("us-west2"), chrono_tz::US::Pacific);
         assert_eq!(gcp_region_timezone("us-west4"), chrono_tz::US::Pacific);
-        assert_eq!(gcp_region_timezone("europe-west1"), chrono_tz::Europe::Amsterdam);
-        assert_eq!(gcp_region_timezone("europe-west4"), chrono_tz::Europe::Amsterdam);
-        assert_eq!(gcp_region_timezone("europe-west2"), chrono_tz::Europe::London);
-        assert_eq!(gcp_region_timezone("europe-west3"), chrono_tz::Europe::Berlin);
+        assert_eq!(
+            gcp_region_timezone("europe-west1"),
+            chrono_tz::Europe::Amsterdam
+        );
+        assert_eq!(
+            gcp_region_timezone("europe-west4"),
+            chrono_tz::Europe::Amsterdam
+        );
+        assert_eq!(
+            gcp_region_timezone("europe-west2"),
+            chrono_tz::Europe::London
+        );
+        assert_eq!(
+            gcp_region_timezone("europe-west3"),
+            chrono_tz::Europe::Berlin
+        );
         assert_eq!(gcp_region_timezone("asia-east1"), chrono_tz::Asia::Taipei);
         assert_eq!(gcp_region_timezone("asia-east2"), chrono_tz::Asia::Taipei);
-        assert_eq!(gcp_region_timezone("asia-northeast1"), chrono_tz::Asia::Tokyo);
-        assert_eq!(gcp_region_timezone("asia-southeast1"), chrono_tz::Asia::Singapore);
-        assert_eq!(gcp_region_timezone("australia-southeast1"), chrono_tz::Australia::Sydney);
+        assert_eq!(
+            gcp_region_timezone("asia-northeast1"),
+            chrono_tz::Asia::Tokyo
+        );
+        assert_eq!(
+            gcp_region_timezone("asia-southeast1"),
+            chrono_tz::Asia::Singapore
+        );
+        assert_eq!(
+            gcp_region_timezone("australia-southeast1"),
+            chrono_tz::Australia::Sydney
+        );
         assert_eq!(gcp_region_timezone("unknown-region"), chrono_tz::UTC);
     }
 

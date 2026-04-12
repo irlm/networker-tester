@@ -22,7 +22,8 @@ pub const SELECT_COLUMNS: &str = "tester_id, project_id, name, cloud, region, vm
     auto_shutdown_enabled, auto_shutdown_local_hour, next_shutdown_at, shutdown_deferral_count, \
     auto_probe_enabled, \
     last_used_at, avg_benchmark_duration_seconds, benchmark_run_count, \
-    created_by, created_at, updated_at";
+    created_by, created_at, updated_at, \
+    cloud_connection_id";
 
 /// A single row from the `project_tester` table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,6 +56,7 @@ pub struct ProjectTesterRow {
     pub created_by: Uuid,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub cloud_connection_id: Option<Uuid>,
 }
 
 impl ProjectTesterRow {
@@ -92,6 +94,7 @@ impl ProjectTesterRow {
             created_by: row.get("created_by"),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
+            cloud_connection_id: row.get("cloud_connection_id"),
         }
     }
 }
@@ -109,6 +112,8 @@ pub struct CreateTesterInput {
     pub auto_shutdown_local_hour: Option<i16>,
     #[serde(default)]
     pub auto_probe_enabled: Option<bool>,
+    #[serde(default)]
+    pub cloud_connection_id: Option<Uuid>,
 }
 
 /// List all testers belonging to a project, newest first.
@@ -156,13 +161,15 @@ pub async fn insert(
              vm_size, \
              auto_shutdown_local_hour, \
              auto_probe_enabled, \
-             created_by \
+             created_by, \
+             cloud_connection_id \
          ) VALUES ( \
              $1, $2, $3, $4, \
              COALESCE($5, 'Standard_D2s_v3'), \
              COALESCE($6, 23::smallint), \
              COALESCE($7, FALSE), \
-             $8 \
+             $8, \
+             $9 \
          ) \
          RETURNING {SELECT_COLUMNS}"
     );
@@ -179,6 +186,7 @@ pub async fn insert(
                 &input.auto_shutdown_local_hour,
                 &input.auto_probe_enabled,
                 created_by,
+                &input.cloud_connection_id,
             ],
         )
         .await?;

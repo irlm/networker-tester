@@ -332,9 +332,7 @@ async fn vm_deallocate(
             anyhow::anyhow!("tester has no vm_resource_id or vm_name; cannot deallocate")
         })?;
 
-    cloud_provider::legacy_azure_provider()?
-        .stop_vm(id)
-        .await
+    cloud_provider::legacy_azure_provider()?.stop_vm(id).await
 }
 
 #[cfg(test)]

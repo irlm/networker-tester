@@ -49,7 +49,9 @@ impl CloudProvider {
         conn_config: &serde_json::Value,
     ) -> anyhow::Result<Self> {
         match conn_provider {
-            "azure" => Ok(CloudProvider::Azure(AzureProvider::from_config(conn_config)?)),
+            "azure" => Ok(CloudProvider::Azure(AzureProvider::from_config(
+                conn_config,
+            )?)),
             other => Err(anyhow!("unsupported cloud provider: {other}")),
         }
     }
@@ -386,8 +388,8 @@ pub fn legacy_azure_provider() -> anyhow::Result<CloudProvider> {
     let sub = std::env::var("AZURE_SUBSCRIPTION_ID")
         .or_else(|_| std::env::var("DASHBOARD_AZURE_SUBSCRIPTION"))
         .unwrap_or_default();
-    let rg = std::env::var("DASHBOARD_AZURE_RG")
-        .unwrap_or_else(|_| "networker-testers".to_string());
+    let rg =
+        std::env::var("DASHBOARD_AZURE_RG").unwrap_or_else(|_| "networker-testers".to_string());
     let config = serde_json::json!({
         "tenant_id": "",
         "subscription_id": sub,
@@ -426,7 +428,10 @@ mod tests {
         });
 
         let provider = AzureProvider::from_config(&config).unwrap();
-        assert_eq!(provider.subscription_id, "11111111-2222-3333-4444-555555555555");
+        assert_eq!(
+            provider.subscription_id,
+            "11111111-2222-3333-4444-555555555555"
+        );
         assert_eq!(provider.resource_group, "my-rg");
         assert_eq!(provider.identity_type, "managed_identity");
     }
