@@ -926,7 +926,8 @@ async fn update_schedule(
     // Recompute next_shutdown_at. If disabled, clear it; otherwise compute
     // the next UTC instant for the region + hour pair.
     let next_shutdown: Option<DateTime<Utc>> = if new_enabled {
-        Some(azure_regions::next_shutdown_at(
+        Some(azure_regions::next_shutdown_at_for_provider(
+            &tester.cloud,
             &tester.region,
             new_hour,
             Utc::now(),
@@ -1070,7 +1071,8 @@ fn compute_postpone(
             }
             // Recompute tomorrow's slot by asking azure_regions for the next
             // slot starting from (now + 24h) — this rolls forward one day.
-            Ok(azure_regions::next_shutdown_at(
+            Ok(azure_regions::next_shutdown_at_for_provider(
+                &tester.cloud,
                 &tester.region,
                 tester.auto_shutdown_local_hour,
                 now + Duration::hours(24),

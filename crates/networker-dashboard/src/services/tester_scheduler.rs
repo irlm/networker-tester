@@ -45,7 +45,7 @@ async fn sweep(client: &Client) -> anyhow::Result<()> {
     let rows = client
         .query(
             r#"
-            SELECT t.tester_id, t.project_id, t.name, t.region,
+            SELECT t.tester_id, t.project_id, t.name, t.cloud, t.region,
                    t.auto_shutdown_local_hour, t.shutdown_deferral_count,
                    t.vm_name, t.vm_resource_id
               FROM project_tester t
@@ -73,11 +73,12 @@ async fn sweep(client: &Client) -> anyhow::Result<()> {
             tester_id: row.get(0),
             project_id: row.get::<_, String>(1),
             name: row.get::<_, String>(2),
-            region: row.get::<_, String>(3),
-            local_hour: row.get::<_, i16>(4),
-            deferral_count: row.get::<_, i16>(5),
-            vm_name: row.get::<_, Option<String>>(6),
-            vm_resource_id: row.get::<_, Option<String>>(7),
+            cloud: row.get::<_, String>(3),
+            region: row.get::<_, String>(4),
+            local_hour: row.get::<_, i16>(5),
+            deferral_count: row.get::<_, i16>(6),
+            vm_name: row.get::<_, Option<String>>(7),
+            vm_resource_id: row.get::<_, Option<String>>(8),
         };
         if let Err(e) = handle_due_tester(client, &due).await {
             tracing::warn!(
@@ -95,6 +96,7 @@ struct DueTester {
     tester_id: Uuid,
     project_id: String,
     name: String,
+    cloud: String,
     region: String,
     local_hour: i16,
     deferral_count: i16,
@@ -138,7 +140,12 @@ async fn handle_due_tester(client: &Client, due: &DueTester) -> anyhow::Result<(
     // Deallocate the VM via az CLI.
     match vm_deallocate(&due.vm_resource_id, &due.vm_name).await {
         Ok(()) => {
-            let next = azure_regions::next_shutdown_at(&due.region, due.local_hour, Utc::now());
+            let next = azure_regions::next_shutdown_at_for_provider(
+                &due.cloud,
+                &due.region,
+                due.local_hour,
+                Utc::now(),
+            );
             // Azure said OK. Now sync dashboard state. If the UPDATE itself
             // fails (connection blip, deadlock), we retry with short backoff
             // before falling back to `power_state='error'` so the recovery
