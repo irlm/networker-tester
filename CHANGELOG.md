@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.25.1] - 2026-04-12
+
+### Fixed
+
+- **V027 migration**: Backfill legacy application `benchmark_config` rows with `tester_name_snapshot='legacy-ephemeral-vm'` before adding `app_configs_need_tester` CHECK constraint, preventing upgrade failures on databases with pre-persistent-tester data.
+- **Production deployment**: Grant table ownership to app DB role during migration (documented in deploy runbook).
+
+---
+
 ## [0.25.0] - 2026-04-10
 
 ### Added
