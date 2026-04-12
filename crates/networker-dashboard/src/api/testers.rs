@@ -41,7 +41,7 @@ use crate::auth::{AuthUser, ProjectContext, ProjectRole};
 use crate::db::project_testers::{CreateTesterInput, ProjectTesterRow};
 use crate::AppState;
 use networker_dashboard::services::{
-    azure_regions, azure_vm, tester_install, tester_recovery, tester_state, version_refresh,
+    azure_regions, cloud_provider, tester_install, tester_recovery, tester_state, version_refresh,
 };
 
 // ── Audit helper ──────────────────────────────────────────────────────────
@@ -795,7 +795,11 @@ async fn delete_tester(
     // delete fails we refuse to delete the row so the user can retry
     // (otherwise we'd leak Azure resources).
     if let Some(resource_id) = tester.vm_resource_id.as_deref() {
-        if let Err(e) = azure_vm::az_vm_delete(resource_id).await {
+        let delete_result = match cloud_provider::legacy_azure_provider() {
+            Ok(p) => p.delete_vm(resource_id).await,
+            Err(e) => Err(e),
+        };
+        if let Err(e) = delete_result {
             tracing::error!(
                 %tester_id,
                 error = %e,
@@ -1330,10 +1334,19 @@ async fn run_create_tester(
     let region: String = row.get("region");
     let vm_size: String = row.get("vm_size");
 
-    // Step 2: provision the VM via `az vm create`.
+    // Step 2: provision the VM via CloudProvider.
     tester_state::set_status_message(&client, &tester_id, "creating Azure VM").await?;
-    let vm_name = azure_vm::generate_vm_name(&region);
-    let created = azure_vm::az_vm_create(&vm_name, &region, &vm_size).await?;
+    let provider = cloud_provider::legacy_azure_provider()?;
+    let vm_name = cloud_provider::generate_vm_name(&region);
+    let vm_config = cloud_provider::VmConfig {
+        name: vm_name.clone(),
+        region: region.clone(),
+        vm_size: vm_size.clone(),
+        ssh_user: "azureuser".to_string(),
+        image: "Ubuntu2204".to_string(),
+        tags: std::collections::HashMap::new(),
+    };
+    let created = provider.create_vm(&vm_config).await?;
 
     // Step 3: persist identity fields so the next stages can find the host.
     client
@@ -1347,7 +1360,7 @@ async fn run_create_tester(
                 &created.vm_name,
                 &created.resource_id,
                 &created.public_ip,
-                &created.admin_username,
+                &vm_config.ssh_user,
             ],
         )
         .await?;
@@ -1370,7 +1383,7 @@ async fn run_create_tester(
     let target = tester_install::TesterTarget {
         tester_id,
         public_ip: Some(created.public_ip.clone()),
-        ssh_user: created.admin_username.clone(),
+        ssh_user: vm_config.ssh_user.clone(),
     };
     tester_install::install_tester(&target, progress).await?;
 
@@ -1439,7 +1452,7 @@ async fn run_start_tester(state: Arc<AppState>, tester: ProjectTesterRow) -> any
         .vm_resource_id
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("tester has no vm_resource_id"))?;
-    azure_vm::az_vm_start(resource_id).await?;
+    cloud_provider::legacy_azure_provider()?.start_vm(resource_id).await?;
 
     // Wait for SSH to come back up.
     if let Some(ip) = tester.public_ip.as_deref() {
@@ -1530,7 +1543,7 @@ async fn run_stop_tester(state: Arc<AppState>, tester: ProjectTesterRow) -> anyh
         .vm_resource_id
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("tester has no vm_resource_id"))?;
-    azure_vm::az_vm_deallocate(resource_id).await?;
+    cloud_provider::legacy_azure_provider()?.stop_vm(resource_id).await?;
 
     let moved =
         tester_state::try_power_transition(&client, &tester.tester_id, "stopping", "stopped")

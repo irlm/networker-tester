@@ -9,7 +9,7 @@ use std::time::Duration;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-use crate::services::{tester_dispatcher, tester_state};
+use crate::services::{cloud_provider, tester_dispatcher, tester_state};
 
 const STARTUP_GRACE: Duration = Duration::from_secs(5 * 60);
 const SWEEP_INTERVAL: Duration = Duration::from_secs(10 * 60);
@@ -184,7 +184,7 @@ async fn handle_stuck_transients(client: &Client) -> anyhow::Result<usize> {
 }
 
 /// Probe Azure for the current power state of a VM. Returns the raw
-/// `displayStatus` string (e.g. "VM running", "VM deallocated"). Used by
+/// `powerState` string (e.g. "VM running", "VM deallocated"). Used by
 /// crash recovery and the `POST /testers/{tid}/probe` REST endpoint.
 pub async fn probe_azure_state(
     resource_id: &Option<String>,
@@ -194,24 +194,9 @@ pub async fn probe_azure_state(
         .as_deref()
         .or(vm_name.as_deref())
         .ok_or_else(|| anyhow::anyhow!("no vm_resource_id or vm_name to probe"))?;
-    let output = tokio::process::Command::new("az")
-        .arg("vm")
-        .arg("get-instance-view")
-        .arg("--ids")
-        .arg(id)
-        .arg("--query")
-        .arg("instanceView.statuses[?starts_with(code,'PowerState/')].displayStatus | [0]")
-        .arg("-o")
-        .arg("tsv")
-        .output()
-        .await?;
-    if !output.status.success() {
-        anyhow::bail!(
-            "az vm get-instance-view failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    let provider = cloud_provider::legacy_azure_provider()?;
+    let info = provider.get_vm_state(id).await?;
+    Ok(info.power_state)
 }
 
 /// Map an Azure `displayStatus` string onto a `project_tester.power_state`

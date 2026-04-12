@@ -22,7 +22,7 @@ use chrono::Utc;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-use crate::services::{azure_regions, tester_state};
+use crate::services::{azure_regions, cloud_provider, tester_state};
 
 const TICK: Duration = Duration::from_secs(60);
 const DEFERRAL_CAP: i16 = 3;
@@ -325,22 +325,9 @@ async fn vm_deallocate(
             anyhow::anyhow!("tester has no vm_resource_id or vm_name; cannot deallocate")
         })?;
 
-    let output = tokio::process::Command::new("az")
-        .arg("vm")
-        .arg("deallocate")
-        .arg("--ids")
-        .arg(id)
-        .arg("--no-wait")
-        .output()
-        .await?;
-
-    if !output.status.success() {
-        anyhow::bail!(
-            "az vm deallocate failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    Ok(())
+    cloud_provider::legacy_azure_provider()?
+        .stop_vm(id)
+        .await
 }
 
 #[cfg(test)]

@@ -8,8 +8,6 @@
 //! All Azure operations shell out to the `az` CLI with explicit
 //! `--subscription` and `--resource-group` flags — no ambient defaults.
 
-#![allow(dead_code)] // wired in by later tasks
-
 use anyhow::{anyhow, Context};
 use std::collections::HashMap;
 
@@ -376,6 +374,27 @@ impl AzureProvider {
         }
         Ok(())
     }
+}
+
+// ── Legacy fallback ────────────────────────────────────────────────────────
+
+/// Build a `CloudProvider::Azure` from the legacy env-var convention used by
+/// testers created before `cloud_connection_id` was added to `project_tester`.
+/// This keeps existing v0.25.x testers working until the migration (Task 4)
+/// backfills the FK and the API (Task 5) requires it on creation.
+pub fn legacy_azure_provider() -> anyhow::Result<CloudProvider> {
+    let sub = std::env::var("AZURE_SUBSCRIPTION_ID")
+        .or_else(|_| std::env::var("DASHBOARD_AZURE_SUBSCRIPTION"))
+        .unwrap_or_default();
+    let rg = std::env::var("DASHBOARD_AZURE_RG")
+        .unwrap_or_else(|_| "networker-testers".to_string());
+    let config = serde_json::json!({
+        "tenant_id": "",
+        "subscription_id": sub,
+        "resource_group": rg,
+        "identity_type": "managed_identity"
+    });
+    CloudProvider::from_connection("azure", &config)
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
