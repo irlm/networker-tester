@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { api, type SystemMetrics, type DbMetrics, type WorkspaceUsage, type LogEntry } from '../api/client';
+import { api, type SystemMetrics, type DbMetrics, type WorkspaceUsage, type LogEntry, type SsoProvider, type CreateSsoProvider } from '../api/client';
 
 // ── Log helpers ─────────────────────────────────────────────────────────
 
@@ -17,7 +17,7 @@ import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useToast } from '../hooks/useToast';
 
-type Tab = 'overview' | 'usage' | 'logs';
+type Tab = 'overview' | 'usage' | 'logs' | 'auth';
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -424,6 +424,368 @@ function LogsTab() {
   );
 }
 
+// ── Auth Tab ──────────────────────────────────────────────────────────
+
+interface FieldDef {
+  key: string;
+  label: string;
+  required?: boolean;
+  secret?: boolean;
+  help?: string;
+}
+
+const PROVIDER_TYPES: { value: string; label: string }[] = [
+  { value: 'microsoft', label: 'Microsoft Entra ID' },
+  { value: 'google', label: 'Google' },
+  { value: 'oidc_generic', label: 'Generic OIDC' },
+];
+
+const PROVIDER_FIELDS: Record<string, FieldDef[]> = {
+  microsoft: [
+    { key: 'client_id', label: 'Application (client) ID', required: true },
+    { key: 'client_secret', label: 'Client Secret', required: true, secret: true },
+    { key: 'tenant_id', label: 'Directory (tenant) ID', required: true, help: 'Azure Portal \u2192 App Registrations \u2192 Overview' },
+  ],
+  google: [
+    { key: 'client_id', label: 'Client ID', required: true },
+    { key: 'client_secret', label: 'Client Secret', required: true, secret: true, help: 'Google Cloud Console \u2192 APIs & Services \u2192 Credentials' },
+  ],
+  oidc_generic: [
+    { key: 'client_id', label: 'Client ID', required: true },
+    { key: 'client_secret', label: 'Client Secret', required: true, secret: true },
+    { key: 'issuer_url', label: 'Issuer URL', required: true, help: 'Must support .well-known/openid-configuration' },
+  ],
+};
+
+const DEFAULT_NAMES: Record<string, string> = {
+  microsoft: 'Microsoft Entra ID',
+  google: 'Google',
+  oidc_generic: 'SSO',
+};
+
+function AuthTab() {
+  const [providers, setProviders] = useState<SsoProvider[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [publicUrl, setPublicUrl] = useState('');
+  const [publicUrlSaving, setPublicUrlSaving] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [formType, setFormType] = useState('microsoft');
+  const [formName, setFormName] = useState('');
+  const [formFields, setFormFields] = useState<Record<string, string>>({});
+  const [formEnabled, setFormEnabled] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const toast = useToast();
+
+  const loadData = useCallback(async () => {
+    try {
+      const [provs, config] = await Promise.all([
+        api.getSsoProviders(),
+        api.getSystemConfig('public_url'),
+      ]);
+      setProviders(provs);
+      if (config) setPublicUrl(config.value);
+    } catch {
+      toast('error', 'Failed to load auth settings');
+    } finally {
+      setLoading(false);
+    }
+  }, [toast]);
+
+  useEffect(() => { loadData(); }, [loadData]);
+
+  const resetForm = () => {
+    setShowForm(false);
+    setEditingId(null);
+    setFormType('microsoft');
+    setFormName('');
+    setFormFields({});
+    setFormEnabled(true);
+  };
+
+  const openCreate = () => {
+    resetForm();
+    setFormName(DEFAULT_NAMES['microsoft']);
+    setShowForm(true);
+  };
+
+  const openEdit = (p: SsoProvider) => {
+    setEditingId(p.provider_id);
+    setFormType(p.provider_type);
+    setFormName(p.name);
+    setFormEnabled(p.enabled);
+    const fields: Record<string, string> = { client_id: p.client_id };
+    if (p.tenant_id) fields.tenant_id = p.tenant_id;
+    if (p.issuer_url) fields.issuer_url = p.issuer_url;
+    setFormFields(fields);
+    setShowForm(true);
+  };
+
+  const handleTypeChange = (type: string) => {
+    setFormType(type);
+    if (!editingId) {
+      setFormName(DEFAULT_NAMES[type] || 'SSO');
+      setFormFields({});
+    }
+  };
+
+  const handleSave = async () => {
+    const fields = PROVIDER_FIELDS[formType] || [];
+    for (const f of fields) {
+      if (f.required && !f.secret && !formFields[f.key]?.trim()) {
+        toast('error', `${f.label} is required`);
+        return;
+      }
+    }
+    if (!editingId) {
+      // Create: secret is required
+      if (!formFields['client_secret']?.trim()) {
+        toast('error', 'Client Secret is required');
+        return;
+      }
+    }
+
+    setSaving(true);
+    try {
+      const data: Partial<CreateSsoProvider> = {
+        name: formName.trim(),
+        provider_type: formType,
+        client_id: formFields['client_id']?.trim(),
+        enabled: formEnabled,
+      };
+      if (formFields['tenant_id']) data.tenant_id = formFields['tenant_id'].trim();
+      if (formFields['issuer_url']) data.issuer_url = formFields['issuer_url'].trim();
+      if (formFields['client_secret']?.trim()) data.client_secret = formFields['client_secret'].trim();
+
+      if (editingId) {
+        await api.updateSsoProvider(editingId, data);
+        toast('success', 'Provider updated');
+      } else {
+        await api.createSsoProvider(data as CreateSsoProvider);
+        toast('success', 'Provider created');
+      }
+      resetForm();
+      await loadData();
+    } catch {
+      toast('error', 'Failed to save provider');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    try {
+      await api.deleteSsoProvider(id);
+      toast('success', 'Provider deleted');
+      setConfirmDelete(null);
+      await loadData();
+    } catch {
+      toast('error', 'Failed to delete provider');
+    }
+  };
+
+  const handlePublicUrlSave = async () => {
+    setPublicUrlSaving(true);
+    try {
+      await api.setSystemConfig('public_url', publicUrl.trim());
+      toast('success', 'Public URL saved');
+    } catch {
+      toast('error', 'Failed to save public URL');
+    } finally {
+      setPublicUrlSaving(false);
+    }
+  };
+
+  if (loading) return <p className="text-sm text-gray-600">Loading...</p>;
+
+  return (
+    <div className="space-y-6">
+      {/* Public URL */}
+      <div className="border border-gray-800 rounded bg-[var(--bg-card)] p-4">
+        <div className="text-xs text-gray-500 tracking-wider font-medium mb-3">PUBLIC URL</div>
+        <p className="text-xs text-gray-500 mb-2">
+          Base URL for SSO redirect callbacks (e.g. https://dash.example.com).
+        </p>
+        <div className="flex items-center gap-2">
+          <input
+            type="url"
+            value={publicUrl}
+            onChange={e => setPublicUrl(e.target.value)}
+            placeholder="https://dash.example.com"
+            className="flex-1 bg-transparent border-b border-gray-700 focus:border-cyan-500/50 py-1.5 text-sm text-gray-200 focus:outline-none placeholder:text-gray-700 font-mono"
+          />
+          <button
+            onClick={handlePublicUrlSave}
+            disabled={publicUrlSaving}
+            className="px-3 py-1.5 text-xs rounded border border-gray-700 text-gray-300 hover:text-gray-100 hover:border-gray-600 transition-colors disabled:opacity-50"
+          >
+            {publicUrlSaving ? 'Saving...' : 'Save'}
+          </button>
+        </div>
+      </div>
+
+      {/* Providers */}
+      <div className="border border-gray-800 rounded bg-[var(--bg-card)] p-4">
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-xs text-gray-500 tracking-wider font-medium">SSO PROVIDERS</div>
+          <button
+            onClick={openCreate}
+            className="px-3 py-1.5 text-xs rounded border border-cyan-700 text-cyan-400 hover:bg-cyan-500/10 transition-colors"
+          >
+            + Add Provider
+          </button>
+        </div>
+
+        {providers.length === 0 && !showForm && (
+          <p className="text-sm text-gray-600 py-4 text-center">No SSO providers configured</p>
+        )}
+
+        {providers.length > 0 && (
+          <table className="w-full text-sm mb-4">
+            <thead>
+              <tr className="text-left text-xs text-gray-500 border-b border-gray-800">
+                <th className="pb-2 pr-3 font-medium">Name</th>
+                <th className="pb-2 pr-3 font-medium">Type</th>
+                <th className="pb-2 pr-3 font-medium">Client ID</th>
+                <th className="pb-2 pr-3 font-medium">Status</th>
+                <th className="pb-2 font-medium">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {providers.map(p => (
+                <tr key={p.provider_id} className="border-b border-gray-800/50 hover:bg-gray-800/20">
+                  <td className="py-2 pr-3 text-gray-200 font-mono text-xs">{p.name}</td>
+                  <td className="py-2 pr-3 text-gray-400 text-xs">{p.provider_type}</td>
+                  <td className="py-2 pr-3 text-gray-500 font-mono text-xs truncate max-w-[200px]">{p.client_id}</td>
+                  <td className="py-2 pr-3">
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                      p.enabled ? 'bg-green-500/20 text-green-400' : 'bg-gray-500/20 text-gray-400'
+                    }`}>
+                      {p.enabled ? 'enabled' : 'disabled'}
+                    </span>
+                  </td>
+                  <td className="py-2">
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => openEdit(p)}
+                        className="px-2 py-1 text-xs rounded text-cyan-400 hover:bg-cyan-500/20 transition-colors"
+                      >
+                        Edit
+                      </button>
+                      {confirmDelete === p.provider_id ? (
+                        <>
+                          <button
+                            onClick={() => handleDelete(p.provider_id)}
+                            className="px-2 py-1 text-xs rounded text-red-400 hover:bg-red-500/20 transition-colors"
+                          >
+                            Confirm
+                          </button>
+                          <button
+                            onClick={() => setConfirmDelete(null)}
+                            className="px-2 py-1 text-xs rounded text-gray-500 hover:text-gray-300 transition-colors"
+                          >
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => setConfirmDelete(p.provider_id)}
+                          className="px-2 py-1 text-xs rounded text-red-400 hover:bg-red-500/20 transition-colors"
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        {/* Create/Edit form */}
+        {showForm && (
+          <div className="border border-gray-700 rounded p-4 bg-[var(--bg-surface)]">
+            <div className="text-xs text-gray-400 font-medium mb-3">
+              {editingId ? 'Edit Provider' : 'New Provider'}
+            </div>
+
+            <div className="grid grid-cols-2 gap-4 mb-4">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Provider Type</label>
+                <select
+                  value={formType}
+                  onChange={e => handleTypeChange(e.target.value)}
+                  disabled={!!editingId}
+                  className="w-full text-xs bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-gray-300 disabled:opacity-50"
+                >
+                  {PROVIDER_TYPES.map(t => (
+                    <option key={t.value} value={t.value}>{t.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Display Name</label>
+                <input
+                  value={formName}
+                  onChange={e => setFormName(e.target.value)}
+                  className="w-full bg-transparent border-b border-gray-700 focus:border-cyan-500/50 py-1.5 text-sm text-gray-200 focus:outline-none font-mono"
+                />
+              </div>
+            </div>
+
+            {(PROVIDER_FIELDS[formType] || []).map(f => (
+              <div key={f.key} className="mb-3">
+                <label className="block text-xs text-gray-500 mb-1">
+                  {f.label}
+                  {f.required && <span className="text-red-400 ml-0.5">*</span>}
+                </label>
+                <input
+                  type={f.secret ? 'password' : 'text'}
+                  value={formFields[f.key] || ''}
+                  onChange={e => setFormFields(prev => ({ ...prev, [f.key]: e.target.value }))}
+                  placeholder={f.secret && editingId ? '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (leave empty to keep)' : ''}
+                  className="w-full bg-transparent border-b border-gray-700 focus:border-cyan-500/50 py-1.5 text-sm text-gray-200 focus:outline-none font-mono"
+                />
+                {f.help && <p className="text-[10px] text-gray-600 mt-0.5">{f.help}</p>}
+              </div>
+            ))}
+
+            <div className="flex items-center gap-2 mb-4">
+              <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={formEnabled}
+                  onChange={e => setFormEnabled(e.target.checked)}
+                  className="accent-cyan-500"
+                />
+                Enabled
+              </label>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleSave}
+                disabled={saving}
+                className="px-4 py-1.5 text-xs rounded bg-cyan-600 hover:bg-cyan-500 text-white transition-colors disabled:opacity-50"
+              >
+                {saving ? 'Saving...' : editingId ? 'Update' : 'Create'}
+              </button>
+              <button
+                onClick={resetForm}
+                className="px-4 py-1.5 text-xs rounded border border-gray-700 text-gray-400 hover:text-gray-200 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Main Page ──────────────────────────────────────────────────────────
 
 export function SystemDashboardPage() {
@@ -479,6 +841,7 @@ export function SystemDashboardPage() {
         <button onClick={() => setTab('overview')} className={tabCls('overview')}>Overview</button>
         <button onClick={() => setTab('usage')} className={tabCls('usage')}>Usage</button>
         <button onClick={() => setTab('logs')} className={tabCls('logs')}>Logs</button>
+        <button onClick={() => setTab('auth')} className={tabCls('auth')}>Auth</button>
       </div>
 
       {tab === 'overview' && (
@@ -496,6 +859,8 @@ export function SystemDashboardPage() {
       )}
 
       {tab === 'logs' && <LogsTab />}
+
+      {tab === 'auth' && <AuthTab />}
     </div>
   );
 }

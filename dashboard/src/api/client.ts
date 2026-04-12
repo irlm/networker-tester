@@ -91,6 +91,38 @@ function projectUrl(projectId: string, path: string): string {
   return `/projects/${projectId}/${path}`;
 }
 
+// ── SSO types ──────────────────────────────────────────────────────────────
+
+export interface SsoProviderInfo {
+  id: string;
+  name: string;
+  type: string;
+}
+
+export interface SsoProvider {
+  provider_id: string;
+  name: string;
+  provider_type: string;
+  client_id: string;
+  has_client_secret: boolean;
+  issuer_url: string | null;
+  tenant_id: string | null;
+  extra_config: Record<string, unknown>;
+  enabled: boolean;
+  display_order: number;
+}
+
+export interface CreateSsoProvider {
+  name: string;
+  provider_type: string;
+  client_id: string;
+  client_secret: string;
+  issuer_url?: string;
+  tenant_id?: string;
+  enabled?: boolean;
+  display_order?: number;
+}
+
 export const api = {
   // ── Auth (NOT project-scoped) ─────────────────────────────────────────
   login: (email: string, password: string) =>
@@ -133,7 +165,7 @@ export const api = {
 
   // SSO
   getProviders: () =>
-    request<{ providers: string[] }>('/auth/sso/providers'),
+    request<{ providers: SsoProviderInfo[] }>('/auth/sso/providers'),
 
   checkEmail: (email: string) =>
     request<{ provider: string | null }>('/auth/sso/check-email', {
@@ -633,6 +665,26 @@ export const api = {
 
   hardDeleteWorkspace: (projectId: string) =>
     request<void>(`/admin/workspaces/${projectId}`, { method: 'DELETE' }),
+
+  // SSO provider admin CRUD
+  getSsoProviders: () =>
+    request<SsoProvider[]>('/admin/sso-providers'),
+
+  createSsoProvider: (data: CreateSsoProvider) =>
+    request<SsoProvider>('/admin/sso-providers', { method: 'POST', body: JSON.stringify(data) }),
+
+  updateSsoProvider: (id: string, data: Partial<CreateSsoProvider>) =>
+    request<SsoProvider>(`/admin/sso-providers/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+
+  deleteSsoProvider: (id: string) =>
+    request<void>(`/admin/sso-providers/${id}`, { method: 'DELETE' }),
+
+  // System config
+  getSystemConfig: (key: string) =>
+    request<{ key: string; value: string }>(`/admin/system-config/${key}`).catch(() => null),
+
+  setSystemConfig: (key: string, value: string) =>
+    request<void>(`/admin/system-config/${key}`, { method: 'PUT', body: JSON.stringify({ value }) }),
 
   // Leaderboard (simple benchmark routes)
   getLeaderboard: () =>

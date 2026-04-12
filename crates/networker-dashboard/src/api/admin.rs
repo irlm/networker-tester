@@ -4,7 +4,7 @@ use axum::{
     routing::{delete, get, post},
     Json, Router,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::auth::AuthUser;
@@ -300,6 +300,100 @@ async fn hard_delete_workspace(
     Ok(StatusCode::OK)
 }
 
+// ── System Config ─────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct SystemConfigResponse {
+    key: String,
+    value: String,
+}
+
+#[derive(Deserialize)]
+struct SystemConfigBody {
+    value: String,
+}
+
+/// GET /api/admin/system-config/{key} — read a single system_config value.
+async fn get_system_config(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    req: axum::extract::Request,
+) -> Result<Json<SystemConfigResponse>, StatusCode> {
+    extract_admin(&req)?;
+
+    let client = state.db.get().await.map_err(|e| {
+        tracing::error!(error = %e, "DB pool error in get_system_config");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let row = client
+        .query_opt(
+            "SELECT value FROM system_config WHERE key = $1",
+            &[&key],
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to read system_config");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    match row {
+        Some(r) => Ok(Json(SystemConfigResponse {
+            key,
+            value: r.get(0),
+        })),
+        None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
+/// PUT /api/admin/system-config/{key} — upsert a system_config value.
+async fn set_system_config(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    req: axum::extract::Request,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let user = extract_admin_with_msg(&req)?;
+
+    let body = axum::body::to_bytes(req.into_body(), 1024 * 16)
+        .await
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid request body".to_string()))?;
+    let parsed: SystemConfigBody =
+        serde_json::from_slice(&body).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+
+    let client = state.db.get().await.map_err(|e| {
+        tracing::error!(error = %e, "DB pool error in set_system_config");
+        (StatusCode::INTERNAL_SERVER_ERROR, "Database error".to_string())
+    })?;
+
+    client
+        .execute(
+            "INSERT INTO system_config (key, value, updated_by) VALUES ($1, $2, $3) \
+             ON CONFLICT (key) DO UPDATE SET value = $2, updated_by = $3, updated_at = now()",
+            &[&key, &parsed.value, &user.user_id],
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to upsert system_config");
+            (StatusCode::INTERNAL_SERVER_ERROR, "Database error".to_string())
+        })?;
+
+    tracing::info!(key = %key, admin = %user.email, "system_config updated");
+    Ok(StatusCode::OK)
+}
+
+/// Like `extract_admin` but returns `(StatusCode, String)` for handlers that need it.
+fn extract_admin_with_msg(req: &axum::extract::Request) -> Result<AuthUser, (StatusCode, String)> {
+    let user = req
+        .extensions()
+        .get::<AuthUser>()
+        .cloned()
+        .ok_or((StatusCode::UNAUTHORIZED, "Unauthorized".to_string()))?;
+    if !user.is_platform_admin {
+        return Err((StatusCode::FORBIDDEN, "Forbidden".to_string()));
+    }
+    Ok(user)
+}
+
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/admin/metrics", get(system_metrics))
@@ -321,5 +415,9 @@ pub fn router(state: Arc<AppState>) -> Router {
             delete(hard_delete_workspace),
         )
         .route("/admin/smoke-test", post(smoke_test))
+        .route(
+            "/admin/system-config/{key}",
+            get(get_system_config).put(set_system_config),
+        )
         .with_state(state)
 }
