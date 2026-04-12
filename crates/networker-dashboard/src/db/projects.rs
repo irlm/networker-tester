@@ -41,6 +41,16 @@ pub struct ProjectMemberRow {
     pub invited_by: Option<Uuid>,
     pub email: String,
     pub display_name: Option<String>,
+    pub status: String,
+    pub invite_sent_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Serialize)]
+pub enum AddMemberResult {
+    Added,
+    AlreadyMember,
+    AlreadyPending,
+    ReInvited,
 }
 
 /// List projects visible to a user, including the user's role in each.
@@ -248,7 +258,7 @@ pub async fn list_members(
     let rows = client
         .query(
             "SELECT pm.project_id, pm.user_id, pm.role, pm.joined_at, pm.invited_by, \
-                    u.email, u.display_name \
+                    u.email, u.display_name, pm.status, pm.invite_sent_at \
              FROM project_member pm \
              JOIN dash_user u ON u.user_id = pm.user_id \
              WHERE pm.project_id = $1 \
@@ -267,6 +277,8 @@ pub async fn list_members(
             invited_by: r.get("invited_by"),
             email: r.get("email"),
             display_name: r.get("display_name"),
+            status: r.get("status"),
+            invite_sent_at: r.get("invite_sent_at"),
         })
         .collect())
 }
@@ -559,6 +571,76 @@ pub async fn find_suspended_older_than(
             delete_protection: r.get("delete_protection"),
         })
         .collect())
+}
+
+/// Add a user to a project as pending (invitation).
+/// Handles existing membership: active → AlreadyMember, pending → AlreadyPending,
+/// denied → re-invite to pending.
+pub async fn add_pending_member(
+    client: &Client,
+    project_id: &str,
+    user_id: &Uuid,
+    role: &str,
+    invited_by: &Uuid,
+) -> anyhow::Result<AddMemberResult> {
+    let existing = client
+        .query_opt(
+            "SELECT status FROM project_member WHERE project_id = $1 AND user_id = $2",
+            &[&project_id, user_id],
+        )
+        .await?;
+
+    match existing {
+        Some(row) => {
+            let status: String = row.get("status");
+            match status.as_str() {
+                "active" => Ok(AddMemberResult::AlreadyMember),
+                "pending_acceptance" => Ok(AddMemberResult::AlreadyPending),
+                "denied" => {
+                    // Re-invite: reset to pending
+                    client
+                        .execute(
+                            "UPDATE project_member SET status = 'pending_acceptance', role = $3, \
+                             invited_by = $4, joined_at = NOW() \
+                             WHERE project_id = $1 AND user_id = $2",
+                            &[&project_id, user_id, &role, invited_by],
+                        )
+                        .await?;
+                    Ok(AddMemberResult::ReInvited)
+                }
+                _ => Ok(AddMemberResult::AlreadyMember),
+            }
+        }
+        None => {
+            client
+                .execute(
+                    "INSERT INTO project_member (project_id, user_id, role, invited_by, status) \
+                     VALUES ($1, $2, $3, $4, 'pending_acceptance')",
+                    &[&project_id, user_id, &role, invited_by],
+                )
+                .await?;
+            Ok(AddMemberResult::Added)
+        }
+    }
+}
+
+/// Update a pending member's status (accept or deny).
+/// Only transitions from 'pending_acceptance' to the given status.
+#[allow(dead_code)] // Used by acceptance flow (Task 8)
+pub async fn update_member_status(
+    client: &Client,
+    project_id: &str,
+    user_id: &Uuid,
+    new_status: &str,
+) -> anyhow::Result<bool> {
+    let rows = client
+        .execute(
+            "UPDATE project_member SET status = $3 \
+             WHERE project_id = $1 AND user_id = $2 AND status = 'pending_acceptance'",
+            &[&project_id, user_id, &new_status],
+        )
+        .await?;
+    Ok(rows > 0)
 }
 
 /// Convert a project name to a URL-safe slug.

@@ -18,6 +18,7 @@ mod invites;
 mod jobs;
 mod leaderboard;
 mod logs;
+mod member_import;
 mod modes;
 mod perf_log;
 mod project_members;
@@ -91,6 +92,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(inventory::project_router(state.clone()))
         .merge(url_tests::project_router(state.clone()))
         .merge(tls_profiles::project_router(state.clone()))
+        .merge(member_import::project_router(state.clone()))
         .merge(project_members::router(state.clone()))
         .merge(share_links::project_router(state.clone()))
         .merge(command_approvals::project_router(state.clone()))

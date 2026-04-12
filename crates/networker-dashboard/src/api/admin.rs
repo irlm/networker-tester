@@ -327,10 +327,7 @@ async fn get_system_config(
     })?;
 
     let row = client
-        .query_opt(
-            "SELECT value FROM system_config WHERE key = $1",
-            &[&key],
-        )
+        .query_opt("SELECT value FROM system_config WHERE key = $1", &[&key])
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "Failed to read system_config");
@@ -362,7 +359,10 @@ async fn set_system_config(
 
     let client = state.db.get().await.map_err(|e| {
         tracing::error!(error = %e, "DB pool error in set_system_config");
-        (StatusCode::INTERNAL_SERVER_ERROR, "Database error".to_string())
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Database error".to_string(),
+        )
     })?;
 
     client
@@ -374,7 +374,10 @@ async fn set_system_config(
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "Failed to upsert system_config");
-            (StatusCode::INTERNAL_SERVER_ERROR, "Database error".to_string())
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Database error".to_string(),
+            )
         })?;
 
     tracing::info!(key = %key, admin = %user.email, "system_config updated");
