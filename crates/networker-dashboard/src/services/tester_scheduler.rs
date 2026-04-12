@@ -139,28 +139,63 @@ async fn handle_due_tester(client: &Client, due: &DueTester) -> anyhow::Result<(
     match vm_deallocate(&due.vm_resource_id, &due.vm_name).await {
         Ok(()) => {
             let next = azure_regions::next_shutdown_at(&due.region, due.local_hour, Utc::now());
-            client
-                .execute(
-                    r#"
-                    UPDATE project_tester
-                       SET power_state             = 'stopped',
-                           next_shutdown_at        = $2,
-                           shutdown_deferral_count = 0,
-                           updated_at              = NOW()
-                     WHERE tester_id = $1
-                    "#,
-                    &[&due.tester_id, &next],
-                )
-                .await?;
-            tracing::info!(
-                target: "tester_auto_shutdown_completed",
-                tester_id = %due.tester_id,
-                tester_name = %due.name,
-                project_id = %due.project_id,
-                region = %due.region,
-                next_shutdown_at = %next,
-                "auto-shutdown completed"
-            );
+            // Azure said OK. Now sync dashboard state. If the UPDATE itself
+            // fails (connection blip, deadlock), we retry with short backoff
+            // before falling back to `power_state='error'` so the recovery
+            // loop (or a human) can reconcile. Without this retry the
+            // tester is left permanently in 'stopping'.
+            match sync_stopped_with_retry(client, &due.tester_id, &next).await {
+                Ok(()) => {
+                    tracing::info!(
+                        target: "tester_auto_shutdown_completed",
+                        tester_id = %due.tester_id,
+                        tester_name = %due.name,
+                        project_id = %due.project_id,
+                        region = %due.region,
+                        next_shutdown_at = %next,
+                        "auto-shutdown completed"
+                    );
+                }
+                Err(e) => {
+                    let msg = format!(
+                        "Azure deallocated but dashboard failed to sync: {e}"
+                    );
+                    // Best-effort mark error. If even this fails there's
+                    // nothing more we can do — log loudly.
+                    if let Err(e2) = client
+                        .execute(
+                            r#"
+                            UPDATE project_tester
+                               SET power_state    = 'error',
+                                   status_message = $2,
+                                   updated_at     = NOW()
+                             WHERE tester_id = $1
+                            "#,
+                            &[&due.tester_id, &msg],
+                        )
+                        .await
+                    {
+                        tracing::error!(
+                            target: "tester_auto_shutdown_sync_failed",
+                            tester_id = %due.tester_id,
+                            tester_name = %due.name,
+                            project_id = %due.project_id,
+                            error = ?e,
+                            fallback_error = ?e2,
+                            "auto-shutdown sync failed AND error-fallback UPDATE failed"
+                        );
+                    } else {
+                        tracing::error!(
+                            target: "tester_auto_shutdown_sync_failed",
+                            tester_id = %due.tester_id,
+                            tester_name = %due.name,
+                            project_id = %due.project_id,
+                            error = ?e,
+                            "auto-shutdown sync failed after retries; marked error"
+                        );
+                    }
+                }
+            }
         }
         Err(e) => {
             tracing::warn!(
@@ -238,6 +273,47 @@ async fn defer_shutdown(client: &Client, due: &DueTester) -> anyhow::Result<()> 
     Ok(())
 }
 
+/// Sync `power_state='stopped'` for a tester whose Azure VM has just been
+/// deallocated. Retries up to 3 times with exponential backoff (100ms,
+/// 500ms, 2s). Returns the last error if all attempts fail.
+async fn sync_stopped_with_retry(
+    client: &Client,
+    tester_id: &Uuid,
+    next: &chrono::DateTime<Utc>,
+) -> anyhow::Result<()> {
+    const BACKOFFS_MS: [u64; 3] = [100, 500, 2000];
+    let mut last_err: Option<anyhow::Error> = None;
+    for (attempt, delay_ms) in BACKOFFS_MS.iter().enumerate() {
+        match client
+            .execute(
+                r#"
+                UPDATE project_tester
+                   SET power_state             = 'stopped',
+                       next_shutdown_at        = $2,
+                       shutdown_deferral_count = 0,
+                       updated_at              = NOW()
+                 WHERE tester_id = $1
+                "#,
+                &[tester_id, next],
+            )
+            .await
+        {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                tracing::warn!(
+                    %tester_id,
+                    attempt = attempt + 1,
+                    error = ?e,
+                    "deallocate sync UPDATE failed; retrying"
+                );
+                last_err = Some(e.into());
+                tokio::time::sleep(Duration::from_millis(*delay_ms)).await;
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("sync_stopped_with_retry: unknown failure")))
+}
+
 async fn vm_deallocate(
     resource_id: &Option<String>,
     vm_name: &Option<String>,
@@ -292,5 +368,18 @@ mod tests {
     #[allow(dead_code)]
     async fn _auto_shutdown_loop_signature_compile_check(c: Arc<Client>) {
         auto_shutdown_loop(c).await;
+    }
+
+    /// RR-006 compile-level guard: `sync_stopped_with_retry` exists with
+    /// the expected signature so that refactors can't silently remove
+    /// the retry path. A real end-to-end test requires a mock PG client;
+    /// this guards the API surface instead.
+    #[allow(dead_code)]
+    async fn _deallocate_sync_retries_on_update_failure(
+        client: &Client,
+        tester_id: &Uuid,
+        next: &chrono::DateTime<Utc>,
+    ) -> anyhow::Result<()> {
+        sync_stopped_with_retry(client, tester_id, next).await
     }
 }
