@@ -45,6 +45,63 @@ async fn server_timing_middleware(
     response
 }
 
+/// Supervise a long-running DB-bound background loop (RR-003).
+///
+/// Each outer iteration:
+///   1. Opens a fresh `tokio_postgres::Client` for the loop.
+///   2. Spawns the connection driver task.
+///   3. Spawns the loop future itself.
+///   4. Uses `tokio::select!` to detect whichever side ends first — if the
+///      connection dies, the loop future is aborted; if the loop returns on
+///      its own, the connection task is dropped.
+///   5. Backs off 5s, then reconnects.
+///
+/// The existing loops (`auto_shutdown_loop`, `sweep_loop`) are `async fn` that
+/// return `()` and are intended to run forever, so in practice supervision
+/// only fires when the connection driver task terminates (e.g. PG restart).
+async fn spawn_supervised_loop<F, Fut>(name: &'static str, db_url: String, loop_fn: F)
+where
+    F: Fn(Arc<tokio_postgres::Client>) -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    loop {
+        tracing::info!(supervised_loop = name, "connecting DB client");
+        match tokio_postgres::connect(&db_url, tokio_postgres::NoTls).await {
+            Ok((client, conn)) => {
+                let client = Arc::new(client);
+                let conn_task = tokio::spawn(async move {
+                    if let Err(e) = conn.await {
+                        tracing::warn!(error = ?e, "supervised DB connection driver exited");
+                    }
+                });
+                let mut loop_task = tokio::spawn(loop_fn(client));
+                tokio::select! {
+                    r = conn_task => {
+                        tracing::warn!(
+                            supervised_loop = name,
+                            join = ?r,
+                            "DB connection dropped; aborting loop and reconnecting"
+                        );
+                        loop_task.abort();
+                        let _ = (&mut loop_task).await;
+                    }
+                    r = &mut loop_task => {
+                        tracing::warn!(
+                            supervised_loop = name,
+                            join = ?r,
+                            "loop task returned; reconnecting"
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::error!(supervised_loop = name, error = ?e, "DB connect failed");
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    }
+}
+
 /// A short-lived SSO exchange code entry.
 pub struct SsoCodeEntry {
     pub email: String,
@@ -244,41 +301,56 @@ async fn main() -> anyhow::Result<()> {
 
     // ── Tester persistent-lifecycle background services ──────────────────
     //
-    // These loops each take an owned `Arc<tokio_postgres::Client>`. The
-    // dashboard uses `deadpool-postgres` for request-scoped pool checkouts,
-    // which auto-return the connection on drop and therefore cannot back
-    // long-lived services. Instead, open a single dedicated connection here
-    // and share it (Arc) across the three DB-bound loops.
-    let (tester_svc_client, tester_svc_conn) =
-        tokio_postgres::connect(&cfg.database_url, tokio_postgres::NoTls)
-            .await
-            .context("connect dedicated tester-service DB client")?;
-    tokio::spawn(async move {
-        if let Err(e) = tester_svc_conn.await {
-            tracing::error!(error = ?e, "tester-service DB connection died");
-        }
-    });
-    let tester_svc_client = Arc::new(tester_svc_client);
+    // Each DB-bound loop runs under a per-task supervisor (`spawn_supervised_loop`)
+    // that owns its own dedicated `tokio_postgres::Client`. If the connection
+    // driver dies (network blip, PG restart), the supervisor logs and
+    // reconnects after a short backoff instead of the loop silently running
+    // against a dead handle. See RR-003.
+    tracing::info!("spawning supervised tester_scheduler::auto_shutdown_loop");
+    tokio::spawn(spawn_supervised_loop(
+        "tester_scheduler",
+        cfg.database_url.clone(),
+        networker_dashboard::services::tester_scheduler::auto_shutdown_loop,
+    ));
 
-    tracing::info!("spawning tester_scheduler::auto_shutdown_loop");
-    tokio::spawn(
-        networker_dashboard::services::tester_scheduler::auto_shutdown_loop(
-            tester_svc_client.clone(),
-        ),
-    );
+    tracing::info!("spawning supervised tester_dispatcher::sweep_loop");
+    tokio::spawn(spawn_supervised_loop(
+        "tester_dispatcher",
+        cfg.database_url.clone(),
+        networker_dashboard::services::tester_dispatcher::sweep_loop,
+    ));
 
-    tracing::info!("spawning tester_dispatcher::sweep_loop");
-    tokio::spawn(
-        networker_dashboard::services::tester_dispatcher::sweep_loop(tester_svc_client.clone()),
-    );
+    // `recover_on_startup` is a one-shot that sleeps 5min then runs a single
+    // scan and returns. Putting it under `spawn_supervised_loop` would cause
+    // it to re-run on every reconnect, which is not what we want. Instead we
+    // spawn it once with its own dedicated client; if the connection dies
+    // before the scan completes, the recovery simply doesn't happen (best
+    // effort — the next dashboard restart retries).
+    tracing::info!("spawning tester_recovery::recover_on_startup (one-shot)");
+    {
+        let db_url = cfg.database_url.clone();
+        tokio::spawn(async move {
+            match tokio_postgres::connect(&db_url, tokio_postgres::NoTls).await {
+                Ok((client, conn)) => {
+                    tokio::spawn(async move {
+                        if let Err(e) = conn.await {
+                            tracing::warn!(error = ?e, "recovery DB connection dropped");
+                        }
+                    });
+                    networker_dashboard::services::tester_recovery::recover_on_startup(Arc::new(
+                        client,
+                    ))
+                    .await;
+                }
+                Err(e) => {
+                    tracing::error!(error = ?e, "failed to connect for recover_on_startup");
+                }
+            }
+        });
+    }
 
-    tracing::info!("spawning tester_recovery::recover_on_startup");
-    tokio::spawn(
-        networker_dashboard::services::tester_recovery::recover_on_startup(
-            tester_svc_client.clone(),
-        ),
-    );
-
+    // `refresh_latest_version_loop` doesn't touch the DB — it polls GitHub
+    // and updates an in-memory RwLock cache. No supervision needed.
     tracing::info!("spawning version_refresh::refresh_latest_version_loop");
     tokio::spawn(
         networker_dashboard::services::version_refresh::refresh_latest_version_loop(
