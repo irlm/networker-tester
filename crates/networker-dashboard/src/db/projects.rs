@@ -624,6 +624,21 @@ pub async fn add_pending_member(
     }
 }
 
+/// Update invite_sent_at for a project member to NOW().
+pub async fn update_invite_sent_at(
+    client: &Client,
+    project_id: &str,
+    user_id: &Uuid,
+) -> anyhow::Result<()> {
+    client
+        .execute(
+            "UPDATE project_member SET invite_sent_at = NOW() WHERE project_id = $1 AND user_id = $2",
+            &[&project_id, user_id],
+        )
+        .await?;
+    Ok(())
+}
+
 /// Update a pending member's status (accept or deny).
 /// Only transitions from 'pending_acceptance' to the given status.
 #[allow(dead_code)] // Used by acceptance flow (Task 8)
