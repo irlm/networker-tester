@@ -41,6 +41,7 @@ CREATE TABLE sso_provider (
     client_secret_nonce  BYTEA        NOT NULL,
     issuer_url           TEXT,                    -- required for oidc_generic
     tenant_id            TEXT,                    -- microsoft-specific
+    extra_config         JSONB        NOT NULL DEFAULT '{}',
     enabled              BOOLEAN      NOT NULL DEFAULT TRUE,
     display_order        SMALLINT     NOT NULL DEFAULT 0,
     created_by           UUID         REFERENCES dash_user(user_id),
@@ -109,15 +110,34 @@ Content:
 - **SSO Providers** section:
   - Table listing configured providers: name, type, enabled status, actions (edit/delete)
   - "+ Add Provider" button opens a form:
-    - Provider type dropdown (Microsoft Entra ID / Google / Generic OIDC)
+    - **Step 1:** Provider type dropdown (Microsoft Entra ID / Google / Generic OIDC)
+    - **Step 2:** Type-specific fields appear based on selection (see field map below)
     - Name (auto-filled based on type, editable)
-    - Client ID (text)
-    - Client Secret (password field)
-    - Tenant ID (shown for Microsoft)
-    - Issuer URL (shown for Generic OIDC)
     - Enabled toggle
   - Edit opens the same form pre-filled (client secret shown as "••••••••", submit without changing keeps existing)
   - Drag handle or order field for display_order (controls button order on login page)
+
+**Provider field map (frontend-driven):**
+
+| Provider Type | Fields | Help Text |
+|--------------|--------|-----------|
+| Microsoft Entra ID | Client ID, Client Secret, Tenant ID | "Found in Azure Portal > App Registrations > Overview" |
+| Google | Client ID, Client Secret | "Found in Google Cloud Console > APIs & Services > Credentials" |
+| Generic OIDC | Client ID, Client Secret, Issuer URL | "Must support .well-known/openid-configuration discovery" |
+
+The field definitions live in a frontend config map (`PROVIDER_FIELDS`). Adding a new provider type requires:
+1. Add an entry to the field map (frontend)
+2. Add discovery/endpoint logic (backend)
+3. No database schema changes — provider-specific values use existing columns (`tenant_id`, `issuer_url`) or overflow into a `extra_config JSONB` column for future exotic fields
+
+**Extra config column** for future extensibility:
+
+```sql
+-- Already in the sso_provider table definition:
+extra_config  JSONB  DEFAULT '{}'
+```
+
+This avoids schema migrations when adding providers with unique fields (e.g. GitHub needs `scope: "user:email"`, SAML would need `entity_id`).
 
 ### 1.5 System Config Table
 
