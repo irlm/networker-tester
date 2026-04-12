@@ -778,6 +778,15 @@ CREATE INDEX IF NOT EXISTS ix_system_health_checked_at ON system_health(checked_
 CREATE INDEX IF NOT EXISTS ix_system_health_name ON system_health(check_name, checked_at DESC);
 "#;
 
+/// V028: Partial index for dispatcher sweep query — dramatically speeds up
+/// `SELECT ... WHERE status = 'queued' ORDER BY queued_at` when most rows
+/// have long since reached a terminal state.
+const V028_DISPATCHER_INDEX: &str = r#"
+CREATE INDEX IF NOT EXISTS idx_benchmark_config_queued
+    ON benchmark_config (tester_id, queued_at NULLS LAST)
+    WHERE status = 'queued';
+"#;
+
 /// V027: Persistent testers — project_tester table, benchmark_config tester link,
 /// phase columns on progress-tracking tables.
 const V027_PERSISTENT_TESTERS: &str = r#"
@@ -1729,6 +1738,23 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
             )
             .await?;
         tracing::info!("V027 migration complete");
+    }
+
+    // V028: Dispatcher sweep partial index
+    let row = client
+        .query_opt("SELECT version FROM _migrations WHERE version = 28", &[])
+        .await?;
+
+    if row.is_none() {
+        tracing::info!("Applying V028: dispatcher queued partial index...");
+        client.batch_execute(V028_DISPATCHER_INDEX).await?;
+        client
+            .execute(
+                "INSERT INTO _migrations (version) VALUES (28) ON CONFLICT DO NOTHING",
+                &[],
+            )
+            .await?;
+        tracing::info!("V028 migration complete");
     }
 
     Ok(())

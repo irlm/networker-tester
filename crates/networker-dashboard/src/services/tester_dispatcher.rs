@@ -22,16 +22,22 @@ use uuid::Uuid;
 /// `queued` → `pending`. Returns the promoted `config_id`, or `None` if
 /// the queue was empty (or lost a race to a concurrent sweep).
 pub async fn promote_next(client: &Client, tester_id: &Uuid) -> anyhow::Result<Option<Uuid>> {
+    // IMPORTANT: preserve `queued_at` on promotion. If the orchestrator
+    // subsequently loses the `try_acquire` race (another orchestrator grabs
+    // the tester first), it re-queues the config via `set_benchmark_status
+    // ('queued')`. If we zeroed `queued_at` here, that re-queue would stamp
+    // a fresh NOW() timestamp and the row would lose its FIFO position,
+    // causing starvation under congestion. Leaving `queued_at` alone means
+    // re-queued rows keep their original ordering.
     let row = client
         .query_opt(
             r#"
             UPDATE benchmark_config
-               SET status    = 'pending',
-                   queued_at = NULL
+               SET status = 'pending'
              WHERE config_id = (
                  SELECT config_id FROM benchmark_config
                   WHERE tester_id = $1 AND status = 'queued'
-                  ORDER BY queued_at ASC
+                  ORDER BY queued_at ASC NULLS LAST
                   LIMIT 1
                   FOR UPDATE SKIP LOCKED
              )
@@ -47,6 +53,11 @@ pub async fn promote_next(client: &Client, tester_id: &Uuid) -> anyhow::Result<O
 /// One sweep pass: find every `running`+`idle` tester with at least one
 /// `queued` benchmark and call `promote_next` on it.
 async fn sweep_tick(client: &Client) -> anyhow::Result<()> {
+    // LIMIT 100: bound the sweep. 100 promotions per 30s tick is plenty for
+    // any realistic queue depth; further backlog is handled on the next
+    // tick. Combined with the partial index on
+    // (tester_id, queued_at) WHERE status='queued' (migration V028), this
+    // keeps the sweep query O(candidates) instead of O(benchmark_config).
     let rows = client
         .query(
             r#"
@@ -56,6 +67,7 @@ async fn sweep_tick(client: &Client) -> anyhow::Result<()> {
              WHERE t.power_state = 'running'
                AND t.allocation  = 'idle'
                AND b.status      = 'queued'
+             LIMIT 100
             "#,
             &[],
         )
@@ -126,6 +138,32 @@ mod tests {
         tester_id: &Uuid,
     ) -> anyhow::Result<Option<Uuid>> {
         promote_next(client, tester_id).await
+    }
+
+    /// RR-005 guard: the promote_next SQL must NOT clear `queued_at`.
+    /// This is a source-level check — we assert the module source does not
+    /// contain `queued_at = NULL` in the UPDATE set-clause. If a future
+    /// refactor reintroduces that pattern, this test fails loudly.
+    #[test]
+    fn promote_next_preserves_queued_at() {
+        let src = include_str!("tester_dispatcher.rs");
+        // Extract just the promote_next function body up to the RETURNING clause.
+        let start = src
+            .find("pub async fn promote_next")
+            .expect("promote_next not found");
+        let end = src[start..]
+            .find("RETURNING config_id")
+            .expect("RETURNING marker not found")
+            + start;
+        let body = &src[start..end];
+        assert!(
+            !body.contains("queued_at = NULL"),
+            "promote_next must not clear queued_at (RR-005)"
+        );
+        assert!(
+            !body.contains("queued_at=NULL"),
+            "promote_next must not clear queued_at (RR-005)"
+        );
     }
 
     #[tokio::test]
