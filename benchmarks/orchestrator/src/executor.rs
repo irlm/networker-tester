@@ -6,6 +6,8 @@ use crate::runner;
 use crate::ssh;
 use crate::tester_state::{self, AcquireOutcome};
 use anyhow::{Context, Result};
+use futures::FutureExt;
+use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -1154,12 +1156,17 @@ async fn execute_testbed_application(
         }
     }
 
+    // ---------------------------------------------------------------
+    // RR-002: we now hold the lock. The matrix must run inside a panic
+    // boundary so that a panic in deploy/runner code cannot skip
+    // `release_now().await`. Drop is a defensive backstop only — Drop
+    // spawns release as a detached task, which can be cancelled by
+    // runtime shutdown, leaking the lock.
+    // ---------------------------------------------------------------
     let guard = ReleaseGuard::new(db.clone(), tester.tester_id, config_uuid);
     set_phase(&db, &config_uuid, "deploy").await.ok();
 
-    // Run the matrix work inside a helper closure so we can always reach
-    // the release + dispatcher-notify path regardless of outcome.
-    let matrix_result = run_application_matrix(
+    let matrix_result = AssertUnwindSafe(run_application_matrix(
         testbed,
         config,
         callback,
@@ -1168,31 +1175,68 @@ async fn execute_testbed_application(
         provisioned,
         &db,
         &config_uuid,
-    )
+    ))
+    .catch_unwind()
     .await;
 
-    // Explicit release: preferred path, awaited synchronously so the
+    // Synchronous release, awaited before any terminal status write so the
     // dispatcher notification below observes an idle row.
     guard.release_now().await;
     notify_queue_dispatcher(&tester.tester_id).await;
 
-    let outcome = matrix_result?;
-
-    // Final status based on matrix outcome.
-    let final_status = if outcome.languages_completed > 0 && outcome.languages_failed == 0 {
-        "completed"
-    } else if outcome.languages_completed == 0 && outcome.languages_failed == 0 {
-        // No work ran (cancel before loop body). Leave as completed.
-        "completed"
-    } else if outcome.languages_completed == 0 {
-        "failed"
-    } else {
-        "completed_with_errors"
-    };
-    set_benchmark_status(&db, &config_uuid, final_status).await.ok();
-    set_phase(&db, &config_uuid, "done").await.ok();
-
-    Ok(outcome)
+    match matrix_result {
+        Ok(Ok(outcome)) => {
+            // Happy path — final status based on matrix outcome.
+            let final_status = if outcome.languages_completed > 0 && outcome.languages_failed == 0 {
+                "completed"
+            } else if outcome.languages_completed == 0 && outcome.languages_failed == 0 {
+                // No work ran (cancel before loop body). Leave as completed.
+                "completed"
+            } else if outcome.languages_completed == 0 {
+                "failed"
+            } else {
+                "completed_with_errors"
+            };
+            set_benchmark_status(&db, &config_uuid, final_status).await.ok();
+            set_phase(&db, &config_uuid, "done").await.ok();
+            Ok(outcome)
+        }
+        Ok(Err(e)) => {
+            // Matrix returned Err — record failed, surface the error.
+            tracing::error!(
+                config_id = %config_uuid,
+                "application matrix returned error: {e:#}"
+            );
+            set_benchmark_status(&db, &config_uuid, "failed").await.ok();
+            set_phase(&db, &config_uuid, "done").await.ok();
+            Err(e)
+        }
+        Err(panic_payload) => {
+            // Matrix panicked — lock already released above, now record a
+            // terminal failed status and surface a synthesised error.
+            let panic_msg = if let Some(s) = panic_payload.downcast_ref::<&'static str>() {
+                (*s).to_string()
+            } else if let Some(s) = panic_payload.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "unknown panic payload".to_string()
+            };
+            tracing::error!(
+                target: "orchestrator_matrix_panic",
+                config_id = %config_uuid,
+                tester_id = %tester.tester_id,
+                panic = %panic_msg,
+                "application matrix panicked — released lock, recording failed status"
+            );
+            set_benchmark_status(&db, &config_uuid, "failed").await.ok();
+            set_phase(&db, &config_uuid, "done").await.ok();
+            Err(anyhow::anyhow!(
+                "application matrix panicked for config {}: {}",
+                config_uuid,
+                panic_msg
+            ))
+        }
+    }
 }
 
 /// Pre-Task-23 body of `execute_testbed_application`. Extracted verbatim so
