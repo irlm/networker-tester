@@ -319,8 +319,7 @@ async fn send_invites(
         // 2. Generate token + create workspace_invite row.
         let mut raw_bytes = [0u8; 32];
         rand::rng().fill(&mut raw_bytes);
-        let raw_token =
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw_bytes);
+        let raw_token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw_bytes);
         let token_hash = crate::db::invites::hash_token(&raw_token);
 
         if let Err(e) = crate::db::invites::create_invite(

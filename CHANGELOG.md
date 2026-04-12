@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.27.0] — 2026-04-12
+
+### Added
+- **Dynamic SSO provider management**: Configure Microsoft, Google, and generic OIDC
+  providers from the System Admin UI. No env vars or restarts needed.
+- **Batch CSV user import**: Project admins import users by email + role via CSV upload.
+  Imported users see pending project invitations on login.
+- **Post-login project acceptance**: Users with pending project memberships see an
+  accept/deny/ignore prompt after login.
+- V030 migration: `sso_provider`, `system_config` tables; `status` column on `project_member`.
+
+### Changed
+- SSO configuration moved from env vars to database (backwards compatible — existing
+  env vars auto-migrate to DB on first startup).
+- Login page SSO buttons rendered dynamically from configured providers.
+
+---
+
 ## [0.26.1] — 2026-04-12
 
 ### Fixed

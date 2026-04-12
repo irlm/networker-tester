@@ -85,10 +85,7 @@ async fn accept_membership(
             })?;
 
     if !accepted {
-        return Err((
-            StatusCode::NOT_FOUND,
-            "No pending membership found".into(),
-        ));
+        return Err((StatusCode::NOT_FOUND, "No pending membership found".into()));
     }
 
     tracing::info!(
@@ -119,10 +116,7 @@ async fn deny_membership(
             })?;
 
     if !denied {
-        return Err((
-            StatusCode::NOT_FOUND,
-            "No pending membership found".into(),
-        ));
+        return Err((StatusCode::NOT_FOUND, "No pending membership found".into()));
     }
 
     tracing::info!(
