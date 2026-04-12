@@ -11,6 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.26.0] — 2026-04-12
+
+### Added
+- **FIC-compliant cloud provisioning**: Provider-agnostic VM lifecycle abstraction
+  replacing hardcoded Azure calls. Azure v1.0 via managed identity (secretless).
+- `CloudProvider` trait with `AzureProvider` implementation — all `az` CLI commands
+  include explicit `--subscription` and `--resource-group` flags.
+- Multi-provider region → timezone dispatch (AWS + GCP stub maps).
+- V029 migration: `cloud_connection_id` FK on `project_tester`.
+- Tester API validates `cloud_connection` on creation, constructs provider from it.
+- Background services (scheduler, recovery) and orchestrator use `CloudProvider`.
+- `install.sh`: secretless Azure identity configuration via IMDS detection.
+- Security grep guard test enforcing zero-credential provisioning code.
+
+### Removed
+- `services/azure_vm.rs` — replaced by `services/cloud_provider.rs`.
+
+---
+
+
 ## [0.25.1] - 2026-04-12
 
 ### Fixed

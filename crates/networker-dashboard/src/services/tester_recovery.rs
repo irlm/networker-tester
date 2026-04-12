@@ -9,7 +9,7 @@ use std::time::Duration;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-use crate::services::{tester_dispatcher, tester_state};
+use crate::services::{cloud_provider, tester_dispatcher, tester_state};
 
 const STARTUP_GRACE: Duration = Duration::from_secs(5 * 60);
 const SWEEP_INTERVAL: Duration = Duration::from_secs(10 * 60);
@@ -103,7 +103,7 @@ async fn handle_stuck_transients(client: &Client) -> anyhow::Result<usize> {
         .query(
             r#"
             SELECT tester_id, project_id, name, power_state, auto_probe_enabled,
-                   vm_name, vm_resource_id
+                   vm_name, vm_resource_id, cloud_connection_id
               FROM project_tester
              WHERE power_state IN ('starting','stopping','upgrading','provisioning')
                AND updated_at < NOW() - INTERVAL '30 minutes'
@@ -121,9 +121,29 @@ async fn handle_stuck_transients(client: &Client) -> anyhow::Result<usize> {
         let auto_probe: bool = row.get(4);
         let vm_name: Option<String> = row.get(5);
         let vm_resource_id: Option<String> = row.get(6);
+        let cloud_connection_id: Option<Uuid> = row.get(7);
 
         if auto_probe {
-            match probe_azure_state(&vm_resource_id, &vm_name).await {
+            let provider = match provider_from_connection(client, &cloud_connection_id).await {
+                Ok(p) => p,
+                Err(e) => {
+                    client
+                        .execute(
+                            "UPDATE project_tester SET power_state = 'error', status_message = $2, updated_at = NOW() WHERE tester_id = $1",
+                            &[&tester_id, &format!("Failed to load cloud provider: {e}")],
+                        )
+                        .await?;
+                    tracing::warn!(
+                        target: "crash_recovery_auto_probed",
+                        %tester_id,
+                        error = ?e,
+                        "failed to load cloud provider; marked error"
+                    );
+                    count += 1;
+                    continue;
+                }
+            };
+            match probe_azure_state(&provider, &vm_resource_id, &vm_name).await {
                 Ok(azure_state) => {
                     let new_state = azure_power_to_row(&azure_state);
                     client
@@ -183,10 +203,11 @@ async fn handle_stuck_transients(client: &Client) -> anyhow::Result<usize> {
     Ok(count)
 }
 
-/// Probe Azure for the current power state of a VM. Returns the raw
-/// `displayStatus` string (e.g. "VM running", "VM deallocated"). Used by
+/// Probe a cloud provider for the current power state of a VM. Returns the raw
+/// `powerState` string (e.g. "VM running", "VM deallocated"). Used by
 /// crash recovery and the `POST /testers/{tid}/probe` REST endpoint.
 pub async fn probe_azure_state(
+    provider: &cloud_provider::CloudProvider,
     resource_id: &Option<String>,
     vm_name: &Option<String>,
 ) -> anyhow::Result<String> {
@@ -194,24 +215,8 @@ pub async fn probe_azure_state(
         .as_deref()
         .or(vm_name.as_deref())
         .ok_or_else(|| anyhow::anyhow!("no vm_resource_id or vm_name to probe"))?;
-    let output = tokio::process::Command::new("az")
-        .arg("vm")
-        .arg("get-instance-view")
-        .arg("--ids")
-        .arg(id)
-        .arg("--query")
-        .arg("instanceView.statuses[?starts_with(code,'PowerState/')].displayStatus | [0]")
-        .arg("-o")
-        .arg("tsv")
-        .output()
-        .await?;
-    if !output.status.success() {
-        anyhow::bail!(
-            "az vm get-instance-view failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    let info = provider.get_vm_state(id).await?;
+    Ok(info.power_state)
 }
 
 /// Map an Azure `displayStatus` string onto a `project_tester.power_state`
@@ -229,6 +234,27 @@ pub fn azure_power_to_row(azure_state: &str) -> String {
         "stopping".to_string()
     } else {
         "error".to_string()
+    }
+}
+
+/// Load a [`CloudProvider`] from a `cloud_connection` row if available,
+/// otherwise fall back to the legacy env-var-based Azure provider.
+async fn provider_from_connection(
+    client: &Client,
+    cloud_connection_id: &Option<Uuid>,
+) -> anyhow::Result<cloud_provider::CloudProvider> {
+    if let Some(conn_id) = cloud_connection_id {
+        let row = client
+            .query_one(
+                "SELECT provider, config FROM cloud_connection WHERE connection_id = $1",
+                &[conn_id],
+            )
+            .await?;
+        let provider: String = row.get("provider");
+        let config: serde_json::Value = row.get("config");
+        cloud_provider::CloudProvider::from_connection(&provider, &config)
+    } else {
+        cloud_provider::legacy_azure_provider()
     }
 }
 

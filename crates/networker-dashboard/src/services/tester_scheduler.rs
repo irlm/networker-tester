@@ -22,7 +22,7 @@ use chrono::Utc;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-use crate::services::{azure_regions, tester_state};
+use crate::services::{azure_regions, cloud_provider, tester_state};
 
 const TICK: Duration = Duration::from_secs(60);
 const DEFERRAL_CAP: i16 = 3;
@@ -45,9 +45,9 @@ async fn sweep(client: &Client) -> anyhow::Result<()> {
     let rows = client
         .query(
             r#"
-            SELECT t.tester_id, t.project_id, t.name, t.region,
+            SELECT t.tester_id, t.project_id, t.name, t.cloud, t.region,
                    t.auto_shutdown_local_hour, t.shutdown_deferral_count,
-                   t.vm_name, t.vm_resource_id
+                   t.vm_name, t.vm_resource_id, t.cloud_connection_id
               FROM project_tester t
              WHERE t.auto_shutdown_enabled = TRUE
                AND t.next_shutdown_at < NOW()
@@ -73,11 +73,13 @@ async fn sweep(client: &Client) -> anyhow::Result<()> {
             tester_id: row.get(0),
             project_id: row.get::<_, String>(1),
             name: row.get::<_, String>(2),
-            region: row.get::<_, String>(3),
-            local_hour: row.get::<_, i16>(4),
-            deferral_count: row.get::<_, i16>(5),
-            vm_name: row.get::<_, Option<String>>(6),
-            vm_resource_id: row.get::<_, Option<String>>(7),
+            cloud: row.get::<_, String>(3),
+            region: row.get::<_, String>(4),
+            local_hour: row.get::<_, i16>(5),
+            deferral_count: row.get::<_, i16>(6),
+            vm_name: row.get::<_, Option<String>>(7),
+            vm_resource_id: row.get::<_, Option<String>>(8),
+            cloud_connection_id: row.get::<_, Option<Uuid>>(9),
         };
         if let Err(e) = handle_due_tester(client, &due).await {
             tracing::warn!(
@@ -95,11 +97,13 @@ struct DueTester {
     tester_id: Uuid,
     project_id: String,
     name: String,
+    cloud: String,
     region: String,
     local_hour: i16,
     deferral_count: i16,
     vm_name: Option<String>,
     vm_resource_id: Option<String>,
+    cloud_connection_id: Option<Uuid>,
 }
 
 async fn handle_due_tester(client: &Client, due: &DueTester) -> anyhow::Result<()> {
@@ -136,9 +140,21 @@ async fn handle_due_tester(client: &Client, due: &DueTester) -> anyhow::Result<(
     }
 
     // Deallocate the VM via az CLI.
-    match vm_deallocate(&due.vm_resource_id, &due.vm_name).await {
+    match vm_deallocate(
+        client,
+        &due.vm_resource_id,
+        &due.vm_name,
+        &due.cloud_connection_id,
+    )
+    .await
+    {
         Ok(()) => {
-            let next = azure_regions::next_shutdown_at(&due.region, due.local_hour, Utc::now());
+            let next = azure_regions::next_shutdown_at_for_provider(
+                &due.cloud,
+                &due.region,
+                due.local_hour,
+                Utc::now(),
+            );
             // Azure said OK. Now sync dashboard state. If the UPDATE itself
             // fails (connection blip, deadlock), we retry with short backoff
             // before falling back to `power_state='error'` so the recovery
@@ -313,8 +329,10 @@ async fn sync_stopped_with_retry(
 }
 
 async fn vm_deallocate(
+    client: &Client,
     resource_id: &Option<String>,
     vm_name: &Option<String>,
+    cloud_connection_id: &Option<Uuid>,
 ) -> anyhow::Result<()> {
     // Prefer the fully-qualified ARM resource id; fall back to a bare vm name
     // (rare — really only useful in single-RG dev setups).
@@ -325,22 +343,29 @@ async fn vm_deallocate(
             anyhow::anyhow!("tester has no vm_resource_id or vm_name; cannot deallocate")
         })?;
 
-    let output = tokio::process::Command::new("az")
-        .arg("vm")
-        .arg("deallocate")
-        .arg("--ids")
-        .arg(id)
-        .arg("--no-wait")
-        .output()
-        .await?;
+    let provider = provider_from_connection(client, cloud_connection_id).await?;
+    provider.stop_vm(id).await
+}
 
-    if !output.status.success() {
-        anyhow::bail!(
-            "az vm deallocate failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+/// Load a [`CloudProvider`] from a `cloud_connection` row if available,
+/// otherwise fall back to the legacy env-var-based Azure provider.
+async fn provider_from_connection(
+    client: &Client,
+    cloud_connection_id: &Option<Uuid>,
+) -> anyhow::Result<cloud_provider::CloudProvider> {
+    if let Some(conn_id) = cloud_connection_id {
+        let row = client
+            .query_one(
+                "SELECT provider, config FROM cloud_connection WHERE connection_id = $1",
+                &[conn_id],
+            )
+            .await?;
+        let provider: String = row.get("provider");
+        let config: serde_json::Value = row.get("config");
+        cloud_provider::CloudProvider::from_connection(&provider, &config)
+    } else {
+        cloud_provider::legacy_azure_provider()
     }
-    Ok(())
 }
 
 #[cfg(test)]
