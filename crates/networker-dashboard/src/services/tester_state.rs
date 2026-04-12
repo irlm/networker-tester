@@ -18,6 +18,10 @@ pub enum AcquireOutcome {
     AlreadyLockedBy(Uuid),
     Errored,
     NotIdle(String),
+    /// The tester row no longer exists (e.g. deleted mid-acquire by
+    /// `DELETE /testers/{tid}`). Callers must treat this as a terminal
+    /// failure for the benchmark — there is nothing to queue against.
+    Gone,
 }
 
 pub async fn try_acquire(
@@ -47,13 +51,21 @@ pub async fn try_acquire(
         return Ok(AcquireOutcome::Acquired);
     }
 
+    // RR-007: the tester row may have been DELETEd between our UPDATE above
+    // and this classifier SELECT. Use `query_opt` + explicit `Gone` so a
+    // racing `DELETE /testers/{tid}` does not crash the benchmark with
+    // "query returned 0 rows, expected 1".
     let cur = client
-        .query_one(
+        .query_opt(
             "SELECT power_state, allocation, locked_by_config_id \
              FROM project_tester WHERE tester_id = $1",
             &[tester_id],
         )
         .await?;
+    let cur = match cur {
+        Some(row) => row,
+        None => return Ok(AcquireOutcome::Gone),
+    };
     let power: String = cur.get(0);
     let alloc: String = cur.get(1);
     let locker: Option<Uuid> = cur.get(2);

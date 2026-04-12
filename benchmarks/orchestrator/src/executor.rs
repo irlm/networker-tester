@@ -1126,6 +1126,17 @@ async fn execute_testbed_application(
                     tester.tester_id
                 );
             }
+            AcquireOutcome::Gone => {
+                // RR-007: tester row was deleted during acquire. Treat as
+                // terminal failure — there is nothing to queue against.
+                tracing::error!(
+                    tester_id = %tester.tester_id,
+                    config_id = %config_uuid,
+                    "tester deleted during acquire — failing benchmark"
+                );
+                set_benchmark_status(&db, &config_uuid, "failed").await.ok();
+                anyhow::bail!("tester {} deleted during acquire", tester.tester_id);
+            }
             AcquireOutcome::NotIdle(state) => {
                 tracing::warn!(
                     tester_id = %tester.tester_id,
