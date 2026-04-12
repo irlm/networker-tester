@@ -61,7 +61,8 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     }
 
     if (!res.ok) {
-      throw new Error(`API error: ${res.status} ${res.statusText}`);
+      const body = await res.text();
+      throw new Error(body || `API error: ${res.status} ${res.statusText}`);
     }
 
     return res.json();

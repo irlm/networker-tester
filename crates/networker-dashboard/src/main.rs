@@ -299,6 +299,13 @@ async fn main() -> anyhow::Result<()> {
         latest_version_cache: Arc::new(RwLock::new(env!("CARGO_PKG_VERSION").to_string())),
     });
 
+    if cfg.credential_key.is_none() {
+        tracing::warn!(
+            "DASHBOARD_CREDENTIAL_KEY is not set — cloud account management is disabled. \
+             Set a 64-character hex key to enable encrypted credential storage."
+        );
+    }
+
     // ── Tester persistent-lifecycle background services ──────────────────
     //
     // Each DB-bound loop runs under a per-task supervisor (`spawn_supervised_loop`)
