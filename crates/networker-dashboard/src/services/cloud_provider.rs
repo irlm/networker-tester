@@ -474,6 +474,58 @@ mod tests {
         assert!(name.len() > "tester-eastus-".len());
     }
 
+    /// Recursively collect all `.rs` files under a directory.
+    fn collect_rs_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    collect_rs_files(&path, out);
+                } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                    out.push(path);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cloud_provider_never_touches_stored_credentials() {
+        // Walk services/ and api/testers.rs, fail if any file references
+        // credential encryption/nonce columns or imports the decrypt helper.
+        // This enforces the FIC principle: tester provisioning is secretless.
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        // Build patterns at runtime so this test file doesn't match itself.
+        let forbidden = [
+            format!("credentials{}", "_enc"),
+            format!("credentials{}", "_nonce"),
+            format!("crypto::{}", "decrypt"),
+        ];
+        let mut violations = Vec::new();
+
+        let mut files = Vec::new();
+        collect_rs_files(&root.join("services"), &mut files);
+
+        let testers_api = root.join("api/testers.rs");
+        if testers_api.exists() {
+            files.push(testers_api);
+        }
+
+        for path in &files {
+            let content = std::fs::read_to_string(path).unwrap();
+            for pattern in &forbidden {
+                if content.contains(pattern.as_str()) {
+                    violations.push(format!("{}:{}", path.display(), pattern));
+                }
+            }
+        }
+
+        assert!(
+            violations.is_empty(),
+            "FIC violation: tester provisioning code references stored credentials: {:?}",
+            violations
+        );
+    }
+
     #[test]
     fn azure_provider_defaults_identity_type() {
         let config = serde_json::json!({
