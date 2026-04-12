@@ -3913,6 +3913,125 @@ GCPREPO
 
 }
 
+# ── Configure cloud identity (secretless) ─────────────────────────────────────
+# Collects non-sensitive Azure identity config for the dashboard's CloudProvider.
+# No secrets are stored — authentication is via managed identity (IMDS).
+step_configure_cloud_identity() {
+    next_step "Configure cloud identity (secretless)"
+
+    local config_dir="/etc/networker"
+    local config_file="${config_dir}/cloud-identity.json"
+
+    # Skip if already configured
+    if [[ -f "$config_file" ]]; then
+        print_info "Cloud identity config already exists: $config_file"
+        if ! ask_yn "Overwrite existing config?" "n"; then
+            return 0
+        fi
+    fi
+
+    # Detect Azure managed identity via IMDS
+    local imds_available=0
+    local imds_sub=""
+    local imds_tenant=""
+    if curl -sf -H "Metadata:true" \
+        "http://169.254.169.254/metadata/instance/compute?api-version=2021-02-01" \
+        -o /tmp/imds_metadata.json --connect-timeout 2 < /dev/null 2>/dev/null; then
+        imds_available=1
+        imds_sub="$(jq -r '.subscriptionId // empty' /tmp/imds_metadata.json 2>/dev/null || echo "")"
+        imds_tenant="$(jq -r '.tenantId // empty' /tmp/imds_metadata.json 2>/dev/null || echo "")"
+        rm -f /tmp/imds_metadata.json
+    fi
+
+    local tenant_id=""
+    local subscription_id=""
+    local resource_group=""
+
+    if [[ $imds_available -eq 1 && -n "$imds_sub" ]]; then
+        print_ok "Azure managed identity detected (IMDS)"
+        tenant_id="$imds_tenant"
+        subscription_id="$imds_sub"
+        print_info "Subscription: $subscription_id"
+        print_info "Tenant: $tenant_id"
+    else
+        print_info "No Azure managed identity detected — manual configuration"
+        echo ""
+
+        # Try az CLI first
+        if [[ $AZURE_CLI_AVAILABLE -eq 1 && $AZURE_LOGGED_IN -eq 1 ]]; then
+            local az_sub az_tenant
+            az_sub="$(az account show --query 'id' -o tsv 2>/dev/null < /dev/null || echo "")"
+            az_tenant="$(az account show --query 'tenantId' -o tsv 2>/dev/null < /dev/null || echo "")"
+            if [[ -n "$az_sub" ]]; then
+                subscription_id="$az_sub"
+                tenant_id="$az_tenant"
+                print_info "Using az CLI subscription: $subscription_id"
+            fi
+        fi
+
+        if [[ -z "$subscription_id" ]]; then
+            printf "  Azure subscription ID: "
+            local sub_ans
+            read -r sub_ans </dev/tty || true
+            subscription_id="$sub_ans"
+            if [[ -z "$subscription_id" ]]; then
+                print_warn "Skipping cloud identity configuration (no subscription ID)"
+                return 0
+            fi
+        fi
+
+        if [[ -z "$tenant_id" ]]; then
+            printf "  Azure tenant ID (optional): "
+            local tenant_ans
+            read -r tenant_ans </dev/tty || true
+            tenant_id="$tenant_ans"
+        fi
+    fi
+
+    # Resource group for tester VMs
+    printf "  Resource group for tester VMs [networker-testers]: "
+    local rg_ans
+    read -r rg_ans </dev/tty || true
+    resource_group="${rg_ans:-networker-testers}"
+
+    # Validate access
+    print_info "Validating subscription access…"
+    if az account show --subscription "$subscription_id" -o none < /dev/null 2>/dev/null; then
+        print_ok "Subscription access validated"
+    else
+        print_warn "Could not validate subscription access — ensure managed identity or az login is configured"
+    fi
+
+    # Write config
+    sudo mkdir -p "$config_dir"
+    local json
+    json=$(cat <<ENDJSON
+{
+  "provider": "azure",
+  "identity_type": "managed_identity",
+  "tenant_id": "${tenant_id}",
+  "subscription_id": "${subscription_id}",
+  "resource_group": "${resource_group}"
+}
+ENDJSON
+)
+    echo "$json" | sudo tee "$config_file" > /dev/null
+    sudo chmod 644 "$config_file"
+
+    print_ok "Cloud identity config written to $config_file"
+    echo ""
+    echo "    ${BOLD}RBAC requirement:${RESET}"
+    echo "    Ensure the managed identity has ${BOLD}Virtual Machine Contributor${RESET}"
+    echo "    on resource group ${BOLD}${resource_group}${RESET}"
+    echo ""
+    echo "    To assign the role:"
+    echo "    ${DIM}az role assignment create \\"
+    echo "      --assignee-object-id \$(az vm show --name \$(hostname) --resource-group <dashboard-rg> --query identity.principalId -o tsv) \\"
+    echo "      --role 'Virtual Machine Contributor' \\"
+    echo "      --scope /subscriptions/${subscription_id}/resourceGroups/${resource_group}${RESET}"
+    echo ""
+}
+
 # Build the React frontend and copy to /opt/networker/dashboard.
 step_build_frontend() {
     next_step "Build dashboard frontend"
@@ -8925,6 +9044,7 @@ deploy_from_config() {
         step_install_postgresql
         step_install_nodejs
         step_install_cloud_clis
+        step_configure_cloud_identity
 
         if [[ "$INSTALL_METHOD" == "release" ]]; then
             mkdir -p "$INSTALL_DIR"
@@ -9749,6 +9869,7 @@ main() {
         step_install_postgresql
         step_install_nodejs
         step_install_cloud_clis
+        step_configure_cloud_identity
 
         if [[ "$INSTALL_METHOD" == "release" ]]; then
             mkdir -p "$INSTALL_DIR"
