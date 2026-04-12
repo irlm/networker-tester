@@ -12,17 +12,35 @@ use uuid::Uuid;
 use crate::services::{tester_dispatcher, tester_state};
 
 const STARTUP_GRACE: Duration = Duration::from_secs(5 * 60);
+const SWEEP_INTERVAL: Duration = Duration::from_secs(10 * 60);
 const STUCK_THRESHOLD_MINUTES: i64 = 30;
 
+/// Periodic crash-recovery loop. Waits `STARTUP_GRACE` after dashboard
+/// boot, then scans every `SWEEP_INTERVAL` forever. Named
+/// `recover_on_startup` for backwards compatibility with `main.rs`,
+/// which spawns it in its own (non-supervised) task because this
+/// function manages its own pacing.
+///
+/// RR-017: previously this was a one-shot scan — any lock leak that
+/// developed during normal operation would never heal until the next
+/// dashboard restart. Making it periodic means the dashboard self-heals
+/// on its own cadence.
 pub async fn recover_on_startup(client: Arc<Client>) {
     tokio::time::sleep(STARTUP_GRACE).await;
-    match scan(&client).await {
-        Ok((locks, stucks)) => tracing::info!(
-            locks_released = locks,
-            transients_handled = stucks,
-            "tester crash recovery scan complete"
-        ),
-        Err(e) => tracing::warn!(error = ?e, "tester crash recovery scan failed"),
+    let mut interval = tokio::time::interval(SWEEP_INTERVAL);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // First tick fires immediately after `interval` is created, giving
+    // us the post-grace initial scan we want.
+    loop {
+        interval.tick().await;
+        match scan(&client).await {
+            Ok((locks, stucks)) => tracing::info!(
+                locks_released = locks,
+                transients_handled = stucks,
+                "tester crash recovery scan complete"
+            ),
+            Err(e) => tracing::warn!(error = ?e, "tester crash recovery scan failed"),
+        }
     }
 }
 
@@ -227,6 +245,7 @@ mod tests {
     #[test]
     fn constants_sane() {
         assert_eq!(STARTUP_GRACE, Duration::from_secs(300));
+        assert_eq!(SWEEP_INTERVAL, Duration::from_secs(600));
         assert_eq!(STUCK_THRESHOLD_MINUTES, 30);
     }
 }
