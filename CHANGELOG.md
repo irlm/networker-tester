@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.26.1] — 2026-04-12
+
+### Fixed
+- Regenerate orchestrator `Cargo.lock` for v0.26.0 workspace version bump.
+
+---
+
 ## [0.26.0] — 2026-04-12
 
 ### Added
