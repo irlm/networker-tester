@@ -21,6 +21,7 @@ mod logs;
 mod member_import;
 mod modes;
 mod perf_log;
+mod pending_projects;
 mod project_members;
 mod projects;
 mod runs;
@@ -72,6 +73,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(logs::router(state.clone()))
         .merge(leaderboard::protected_router(state.clone()))
         .merge(zones::router(state.clone()))
+        .merge(pending_projects::me_router(state.clone()))
+        .merge(pending_projects::project_router(state.clone()))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::require_auth,
