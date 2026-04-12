@@ -102,6 +102,7 @@ IP_NAME="${DOMAIN_SLUG}-ip"
 DB_PASSWORD="${DB_PASSWORD:-$(openssl rand -base64 18)}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-$(openssl rand -base64 12)}"
 JWT_SECRET="$(openssl rand -base64 32)"
+CREDENTIAL_KEY="$(openssl rand -hex 32)"
 
 # Resolve release tag
 if [[ "$RELEASE" == "latest" ]]; then
@@ -373,6 +374,7 @@ RestartSec=5
 
 Environment=DASHBOARD_DB_URL=postgres://dashboard:${DB_PASSWORD}@localhost:5432/dashboard
 Environment=DASHBOARD_JWT_SECRET=${JWT_SECRET}
+Environment=DASHBOARD_CREDENTIAL_KEY=${CREDENTIAL_KEY}
 Environment=DASHBOARD_ADMIN_EMAIL=${ADMIN_EMAIL}
 Environment=DASHBOARD_ADMIN_PASSWORD=${ADMIN_PASSWORD}
 Environment=DASHBOARD_PORT=3000

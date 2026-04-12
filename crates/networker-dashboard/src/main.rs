@@ -300,9 +300,10 @@ async fn main() -> anyhow::Result<()> {
     });
 
     if cfg.credential_key.is_none() {
-        tracing::warn!(
-            "DASHBOARD_CREDENTIAL_KEY is not set — cloud account management is disabled. \
-             Set a 64-character hex key to enable encrypted credential storage."
+        tracing::error!(
+            "DASHBOARD_CREDENTIAL_KEY could not be loaded or auto-generated — \
+             cloud account management is disabled. Check file permissions on \
+             /var/lib/networker/credential.key or set DASHBOARD_CREDENTIAL_KEY env var."
         );
     }
 
