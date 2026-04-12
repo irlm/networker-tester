@@ -123,6 +123,14 @@ export interface CreateSsoProvider {
   display_order?: number;
 }
 
+export interface PendingProject {
+  project_id: string;
+  project_name: string;
+  role: string;
+  invited_by_email: string | null;
+  invited_at: string;
+}
+
 export const api = {
   // ── Auth (NOT project-scoped) ─────────────────────────────────────────
   login: (email: string, password: string) =>
@@ -182,6 +190,16 @@ export const api = {
       if (!r.ok) throw new Error(await r.text());
       return r.json() as Promise<{ token: string; email: string; role: string; status: string }>;
     }),
+
+  // ── Pending project invitations ──────────────────────────────────────
+  getPendingProjects: () =>
+    request<{ pending: PendingProject[] }>('/me/pending-projects'),
+
+  acceptProject: (projectId: string) =>
+    request<void>(`/projects/${projectId}/members/me/accept`, { method: 'PUT' }),
+
+  denyProject: (projectId: string) =>
+    request<void>(`/projects/${projectId}/members/me/deny`, { method: 'PUT' }),
 
   // ── Projects ──────────────────────────────────────────────────────────
   getProjects: () =>

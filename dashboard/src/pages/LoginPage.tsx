@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
-import type { SsoProviderInfo } from '../api/client';
+import type { SsoProviderInfo, PendingProject } from '../api/client';
 import { useAuthStore } from '../stores/authStore';
 import { useProjectStore } from '../stores/projectStore';
+import { PendingProjectsModal } from '../components/PendingProjectsModal';
 
 const SSO_ERRORS: Record<string, string> = {
   sso_misconfigured: 'SSO is not properly configured. Contact your admin.',
@@ -50,6 +51,7 @@ export function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [checking, setChecking] = useState(false);
   const [providers, setProviders] = useState<SsoProviderInfo[]>([]);
+  const [pendingProjects, setPendingProjects] = useState<PendingProject[]>([]);
   const login = useAuthStore((s) => s.login);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -88,6 +90,21 @@ export function LoginPage() {
     }
   };
 
+  const navigateToProject = async () => {
+    try {
+      const projects = await api.getProjects();
+      useProjectStore.getState().setProjects(projects);
+      if (projects.length === 1) {
+        useProjectStore.getState().setActiveProject(projects[0]);
+        navigate(`/projects/${projects[0].project_id}`);
+      } else {
+        navigate('/projects');
+      }
+    } catch {
+      navigate('/');
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!showPassword) {
@@ -105,19 +122,15 @@ export function LoginPage() {
       } else if (res.must_change_password) {
         navigate('/change-password');
       } else {
-        // Fetch projects and navigate appropriately
+        // Check for pending project invitations before navigating
         try {
-          const projects = await api.getProjects();
-          useProjectStore.getState().setProjects(projects);
-          if (projects.length === 1) {
-            useProjectStore.getState().setActiveProject(projects[0]);
-            navigate(`/projects/${projects[0].project_id}`);
-          } else {
-            navigate('/projects');
+          const { pending } = await api.getPendingProjects();
+          if (pending.length > 0) {
+            setPendingProjects(pending);
+            return; // Show modal — navigation happens in onComplete
           }
-        } catch {
-          navigate('/');
-        }
+        } catch { /* ignore — proceed to navigate */ }
+        await navigateToProject();
       }
     } catch {
       setError('Wrong email or password');
@@ -129,6 +142,16 @@ export function LoginPage() {
   const hasSso = providers.length > 0;
 
   return (
+    <>
+    {pendingProjects.length > 0 && (
+      <PendingProjectsModal
+        projects={pendingProjects}
+        onComplete={() => {
+          setPendingProjects([]);
+          navigateToProject();
+        }}
+      />
+    )}
     <div className="min-h-screen bg-[var(--bg-base)] flex flex-col items-center pt-[15vh] p-4">
       <div className="w-full max-w-xs">
         {/* Brand */}
@@ -230,5 +253,6 @@ export function LoginPage() {
         </div>
       </div>
     </div>
+    </>
   );
 }
