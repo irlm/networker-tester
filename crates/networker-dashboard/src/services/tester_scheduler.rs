@@ -157,9 +157,7 @@ async fn handle_due_tester(client: &Client, due: &DueTester) -> anyhow::Result<(
                     );
                 }
                 Err(e) => {
-                    let msg = format!(
-                        "Azure deallocated but dashboard failed to sync: {e}"
-                    );
+                    let msg = format!("Azure deallocated but dashboard failed to sync: {e}");
                     // Best-effort mark error. If even this fails there's
                     // nothing more we can do — log loudly.
                     if let Err(e2) = client

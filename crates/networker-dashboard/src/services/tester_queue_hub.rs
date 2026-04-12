@@ -108,7 +108,20 @@ impl TesterQueueHub {
     }
 
     /// Publish a queue update to all subscribers of (project_id, tester_id).
-    /// Bumps the tester's seq counter. Silently prunes closed senders.
+    /// Bumps the tester's seq counter.
+    ///
+    /// RR-018: the sender list is snapshot-cloned under the lock, the lock
+    /// is released, and then we iterate and call `try_send` without the
+    /// lock held. The previous implementation held a write lock across
+    /// every try_send, meaning a single slow subscriber could block every
+    /// other publisher on the hub.
+    ///
+    /// RR-010: a subscriber whose channel is `Full` is now treated as
+    /// dead. We drop its sender (which closes the channel from the
+    /// receiver's side on next poll) and increment a dropped-slow
+    /// counter via a tracing event. The WS handler will observe the
+    /// closed channel, detect the seq gap on reconnect, and request a
+    /// snapshot replay.
     pub async fn notify(
         &self,
         project_id: &str,
@@ -117,52 +130,83 @@ impl TesterQueueHub {
         running: Option<QueueEntry>,
         queued: Vec<QueueEntry>,
     ) {
-        let mut g = self.inner.write().await;
-        let seq_ref = g.seq.entry(tester_id.to_string()).or_insert(0);
-        *seq_ref += 1;
-        let new_seq = *seq_ref;
-
-        let message = TesterMessage::TesterQueueUpdate {
-            project_id: project_id.to_string(),
-            tester_id: tester_id.to_string(),
-            seq: new_seq,
-            trigger: trigger.to_string(),
-            running,
-            queued,
-        };
-
         let key = (project_id.to_string(), tester_id.to_string());
-        let mut dead: Vec<u64> = Vec::new();
-        let mut list_empty_after = false;
-        {
-            let Some(list) = g.subscribers.get_mut(&key) else {
-                return;
+
+        // Phase 1: under the lock, bump seq, clone the sender list, drop lock.
+        let (message, senders_snapshot) = {
+            let mut g = self.inner.write().await;
+            let seq_ref = g.seq.entry(tester_id.to_string()).or_insert(0);
+            *seq_ref += 1;
+            let new_seq = *seq_ref;
+
+            let message = TesterMessage::TesterQueueUpdate {
+                project_id: project_id.to_string(),
+                tester_id: tester_id.to_string(),
+                seq: new_seq,
+                trigger: trigger.to_string(),
+                running,
+                queued,
             };
 
-            // try_send to every subscriber; prune closed/full.
-            for (id, sender) in list.iter() {
-                match sender.try_send(message.clone()) {
-                    Ok(()) => {}
-                    Err(mpsc::error::TrySendError::Closed(_)) => dead.push(*id),
-                    Err(mpsc::error::TrySendError::Full(_)) => {
-                        tracing::warn!(
-                            sub_id = id,
-                            "tester queue hub dropped update: slow subscriber"
-                        );
-                    }
+            let senders: Vec<SubEntry> = g.subscribers.get(&key).cloned().unwrap_or_default();
+            (message, senders)
+        };
+
+        if senders_snapshot.is_empty() {
+            return;
+        }
+
+        // Phase 2: try_send outside the lock. Collect dead ids for pruning.
+        let mut dead: Vec<u64> = Vec::new();
+        let mut dropped_slow = 0usize;
+        for (id, sender) in &senders_snapshot {
+            match sender.try_send(message.clone()) {
+                Ok(()) => {}
+                Err(mpsc::error::TrySendError::Closed(_)) => dead.push(*id),
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    tracing::warn!(
+                        target: "tester_queue_hub_slow_subscriber",
+                        sub_id = id,
+                        project_id = project_id,
+                        tester_id = tester_id,
+                        "dropping slow subscriber — will force snapshot replay on reconnect"
+                    );
+                    dropped_slow += 1;
+                    dead.push(*id);
                 }
             }
-            if !dead.is_empty() {
-                list.retain(|(id, _)| !dead.contains(id));
-                list_empty_after = list.is_empty();
+        }
+
+        if dropped_slow > 0 {
+            tracing::warn!(
+                target: "tester_queue_hub_dropped_slow",
+                project_id = project_id,
+                tester_id = tester_id,
+                dropped = dropped_slow,
+                "tester queue hub dropped {dropped_slow} slow subscribers"
+            );
+        }
+
+        if dead.is_empty() {
+            return;
+        }
+
+        // Phase 3: re-acquire lock briefly to prune dead subscribers. Note
+        // that another task may have unsubscribed or modified the list
+        // between phases 1 and 3; we tolerate that via `retain`.
+        let mut g = self.inner.write().await;
+        let mut pruned = 0usize;
+        if let Some(list) = g.subscribers.get_mut(&key) {
+            let before = list.len();
+            list.retain(|(id, _)| !dead.contains(id));
+            pruned = before - list.len();
+            if list.is_empty() {
+                g.subscribers.remove(&key);
             }
         }
-        if !dead.is_empty() {
+        if pruned > 0 {
             if let Some(c) = g.project_sub_counts.get_mut(project_id) {
-                *c = c.saturating_sub(dead.len());
-            }
-            if list_empty_after {
-                g.subscribers.remove(&key);
+                *c = c.saturating_sub(pruned);
             }
         }
     }
