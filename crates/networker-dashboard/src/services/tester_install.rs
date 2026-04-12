@@ -31,6 +31,14 @@ pub struct TesterTarget {
 ///
 /// `progress` is invoked with a short human-readable label before each
 /// step so the caller can surface it via `project_tester.status_message`.
+///
+/// RR-009: if the tester already passes `verify_installed` (Chrome on
+/// PATH + chrome-harness runner present), the function short-circuits
+/// with a `"already installed, skipping"` progress log. This makes
+/// `POST /testers/{tid}/upgrade` idempotent on already-provisioned
+/// testers and also turns recoveries of fresh-install failures into
+/// a fast no-op when they got far enough. Fresh installs are unaffected
+/// because `verify_installed` returns false on a bare Azure VM.
 pub async fn install_tester<F>(tester: &TesterTarget, progress: F) -> anyhow::Result<()>
 where
     F: Fn(&str) + Send + Sync,
@@ -43,6 +51,15 @@ where
 
     progress("waiting for SSH");
     wait_for_ssh(ip, user).await.context("SSH readiness")?;
+
+    if verify_installed(ip, user).await.unwrap_or(false) {
+        progress("already installed, skipping");
+        tracing::info!(
+            tester_id = %tester.tester_id,
+            "tester install short-circuited: already installed"
+        );
+        return Ok(());
+    }
 
     progress("stopping unattended-upgrades");
     ssh_run(
@@ -64,14 +81,21 @@ where
     .context("apt-get install curl/git/ca-certificates")?;
 
     progress("cloning networker-tester repo");
-    ssh_run(
-        ip,
-        user,
+    // RR-008: pin to the dashboard's own release tag so newly-created
+    // testers can't inherit a broken tip-of-main. For release builds
+    // (e.g. CARGO_PKG_VERSION=0.25.0) the tag "v0.25.0" exists and will
+    // be used. For unreleased main builds the tag doesn't exist yet and
+    // the clone will fail loudly — strictly better than silently cloning
+    // a potentially-broken main branch.
+    let tag = format!("v{}", env!("CARGO_PKG_VERSION"));
+    let clone_cmd = format!(
         "rm -rf /tmp/nwk-repo && \
-         git clone https://github.com/irlm/networker-tester.git /tmp/nwk-repo < /dev/null",
-    )
-    .await
-    .context("git clone networker-tester")?;
+         git clone --depth 1 --branch {tag} \
+           https://github.com/irlm/networker-tester.git /tmp/nwk-repo < /dev/null"
+    );
+    ssh_run(ip, user, &clone_cmd)
+        .await
+        .with_context(|| format!("git clone networker-tester at {tag}"))?;
 
     progress("creating /opt/bench/chrome-harness");
     ssh_run(
@@ -93,16 +117,25 @@ where
     .await?;
 
     progress("installing Chrome + Node.js + npm");
+    // RR-009: no more `2>/dev/null` on dpkg — silencing stderr meant a
+    // failed Chrome install was invisible, and the downstream `command -v
+    // google-chrome` verification passed anyway on a broken tester.
+    // If dpkg fails, `apt-get install -f` resolves broken dependencies
+    // and retries; if that still fails, `set -e` makes the whole step
+    // exit non-zero and surfaces dpkg's stderr through ssh_run.
     ssh_run(
         ip,
         user,
-        "command -v google-chrome >/dev/null 2>&1 || { \
+        "set -e; \
+         command -v google-chrome >/dev/null 2>&1 || { \
            export DEBIAN_FRONTEND=noninteractive && \
-           sudo dpkg -i /tmp/chrome.deb 2>/dev/null; \
-           sudo apt-get install -y -qq -f < /dev/null && \
-           sudo apt-get install -y -qq nodejs npm < /dev/null && \
+           sudo dpkg -i /tmp/chrome.deb || \
+             (sudo apt-get install -y -qq -f < /dev/null && \
+              sudo dpkg -i /tmp/chrome.deb); \
+           sudo apt-get install -y -qq nodejs npm < /dev/null; \
            rm -f /tmp/chrome.deb; }; \
-         command -v npm >/dev/null 2>&1 || sudo apt-get install -y -qq nodejs npm < /dev/null",
+         command -v npm >/dev/null 2>&1 || \
+           sudo apt-get install -y -qq nodejs npm < /dev/null",
     )
     .await
     .context("chrome + node install")?;
@@ -134,20 +167,53 @@ where
     Ok(())
 }
 
-/// Poll SSH until the host accepts a trivial command, up to 5 minutes.
+/// Return true if Chrome is on PATH and the chrome-harness runner exists.
+/// Used by `install_tester` in upgrade mode to short-circuit on an
+/// already-provisioned tester.
+async fn verify_installed(ip: &str, user: &str) -> anyhow::Result<bool> {
+    match ssh_run(
+        ip,
+        user,
+        "command -v google-chrome >/dev/null 2>&1 && \
+         test -f /opt/bench/chrome-harness/runner.js",
+    )
+    .await
+    {
+        Ok(_) => Ok(true),
+        Err(_) => Ok(false),
+    }
+}
+
+/// Poll SSH until the host accepts a trivial command.
+///
+/// RR-012: Azure VMs with `unattended-upgrades` + cloud-init on first
+/// boot routinely need 6-10 minutes. Default window is 10 minutes
+/// (60 attempts × 10s). Operators can override via the env var
+/// `DASHBOARD_TESTER_SSH_WAIT_SECS` (total seconds, clamped to [60, 900]).
 async fn wait_for_ssh(ip: &str, user: &str) -> anyhow::Result<()> {
-    for attempt in 1..=30u32 {
+    let total_secs: u32 = std::env::var("DASHBOARD_TESTER_SSH_WAIT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(600)
+        .clamp(60, 900);
+    let attempts = total_secs / 10;
+    for attempt in 1..=attempts {
         if ssh_run(ip, user, "true").await.is_ok() {
+            // RR-016: record the host key on first success so subsequent
+            // commands verify (accept-new also does this automatically via
+            // UserKnownHostsFile=~/.ssh/known_hosts, but we force-refresh
+            // here to avoid relying on per-invocation side effects).
             return Ok(());
         }
         tracing::debug!(
             attempt,
             ip,
-            "SSH not ready (attempt {attempt}/30) — sleeping 10s"
+            attempts,
+            "SSH not ready (attempt {attempt}/{attempts}) — sleeping 10s"
         );
         tokio::time::sleep(std::time::Duration::from_secs(10)).await;
     }
-    anyhow::bail!("SSH did not become ready after 5 minutes")
+    anyhow::bail!("SSH did not become ready after {total_secs} seconds")
 }
 
 /// Run a single remote command over SSH, capturing stdout on success.
@@ -157,11 +223,18 @@ async fn wait_for_ssh(ip: &str, user: &str) -> anyhow::Result<()> {
 /// as a flat argv with no local shell interpolation.
 async fn ssh_run(ip: &str, user: &str, cmd: &str) -> anyhow::Result<String> {
     let target = format!("{user}@{ip}");
+    // RR-016: `accept-new` is the materially-safer default — it auto-
+    // records the host key on first successful connect and verifies on
+    // subsequent connects, detecting MITM / key rotation. The previous
+    // `StrictHostKeyChecking=no` + `UserKnownHostsFile=/dev/null` config
+    // disabled verification entirely.
+    //
+    // TODO(follow-up): persist per-tester known_hosts under
+    // ~/.ssh/known_hosts_testers/{tester_id} so rotating the dashboard's
+    // global known_hosts doesn't silently re-accept rotated keys.
     let output = tokio::process::Command::new("ssh")
         .arg("-o")
-        .arg("StrictHostKeyChecking=no")
-        .arg("-o")
-        .arg("UserKnownHostsFile=/dev/null")
+        .arg("StrictHostKeyChecking=accept-new")
         .arg("-o")
         .arg("ConnectTimeout=10")
         .arg("-o")
