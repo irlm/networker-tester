@@ -673,7 +673,7 @@ export const api = {
   getBenchmarkConfig: (projectId: string, configId: string) =>
     request<BenchmarkConfigSummary>(projectUrl(projectId, `benchmark-configs/${configId}`)),
 
-  createBenchmarkConfig: (projectId: string, payload: { name: string; template: string | null; testbeds: import('./types').BenchmarkTestbedConfig[]; languages: string[]; methodology: Record<string, unknown>; auto_teardown: boolean; benchmark_type?: string }) =>
+  createBenchmarkConfig: (projectId: string, payload: { name: string; template: string | null; testbeds: import('./types').BenchmarkTestbedConfig[]; languages: string[]; methodology: Record<string, unknown>; benchmark_type?: string; tester_id?: string; auto_teardown?: boolean }) =>
     request<{ config_id: string }>(projectUrl(projectId, 'benchmark-configs'), {
       method: 'POST',
       body: JSON.stringify(payload),

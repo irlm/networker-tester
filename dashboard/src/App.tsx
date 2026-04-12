@@ -41,6 +41,7 @@ const BenchmarkComparePage = lazyPage(() => import('./pages/BenchmarkComparePage
 const DeployPage = lazyPage(() => import('./pages/DeployPage'), 'DeployPage');
 const DeployDetailPage = lazyPage(() => import('./pages/DeployDetailPage'), 'DeployDetailPage');
 const SchedulesPage = lazyPage(() => import('./pages/SchedulesPage'), 'SchedulesPage');
+const TestersPage = lazyPage(() => import('./pages/TestersPage'), 'TestersPage');
 const SettingsPage = lazyPage(() => import('./pages/SettingsPage'), 'SettingsPage');
 const UsersPage = lazyPage(() => import('./pages/UsersPage'), 'UsersPage');
 const PendingPage = lazyPage(() => import('./pages/PendingPage'), 'PendingPage');
@@ -198,6 +199,7 @@ function AuthenticatedApp() {
             <Route path="/projects/:projectId/deploy" element={<DeployPage />} />
             <Route path="/projects/:projectId/deploy/:deploymentId" element={<DeployDetailPage />} />
             <Route path="/projects/:projectId/schedules" element={<SchedulesPage />} />
+            <Route path="/projects/:projectId/testers" element={<TestersPage />} />
             <Route path="/projects/:projectId/settings" element={<SettingsPage />} />
             <Route path="/projects/:projectId/members" element={<ProjectMembersPage />} />
             <Route path="/projects/:projectId/cloud-accounts" element={<CloudAccountsPage />} />

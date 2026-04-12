@@ -10,6 +10,7 @@ mod provisioner;
 mod reporter;
 mod runner;
 pub mod ssh;
+mod tester_state;
 mod token_manager;
 mod types;
 mod validator;

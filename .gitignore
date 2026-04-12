@@ -23,6 +23,7 @@
 .claude/
 CLAUDE.md
 .superpowers/
+.worktrees/
 benchmarks/orchestrator/target/
 benchmarks/metrics-agent/target/
 benchmarks/reference-apis/*/publish/

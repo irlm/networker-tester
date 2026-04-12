@@ -40,6 +40,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
     { path: `/projects/${pid}/deploy`, label: 'Infra', icon: '\u25A3' },
     { path: `/projects/${pid}/tests`, label: 'Tests', icon: '\u25B6' },
     { path: `/projects/${pid}/schedules`, label: 'Schedules', icon: '\u21BB' },
+    { path: `/projects/${pid}/testers`, label: 'Testers', icon: '\u25C7' },
     { path: `/projects/${pid}/runs`, label: 'Runs', icon: '\u25F7' },
   ] : [];
 

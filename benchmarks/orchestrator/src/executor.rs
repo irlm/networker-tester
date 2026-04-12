@@ -4,11 +4,341 @@ use crate::deployer;
 use crate::provisioner::{self, VmInfo};
 use crate::runner;
 use crate::ssh;
+use crate::tester_state::{self, AcquireOutcome};
 use anyhow::{Context, Result};
+use futures::FutureExt;
+use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::watch;
+use tokio_postgres::{Client as PgClient, NoTls};
+use uuid::Uuid;
+
+/// RR-004: persist a terminal `benchmark_config.status` write, logging a
+/// structured `error`-level event (target=`orchestrator_terminal_status_write_failed`)
+/// on failure. Recovery logic (dashboard's `tester_recovery` periodic sweep)
+/// keys on terminal status writes landing in the DB — silently dropping the
+/// error leaks the tester lock indefinitely. We cannot retry from here (no
+/// queue) but making the failure visible is far better than continuing
+/// silently.
+async fn write_terminal_status(client: &PgClient, config_id: &Uuid, status: &str) {
+    if let Err(e) = set_benchmark_status(client, config_id, status).await {
+        tracing::error!(
+            target: "orchestrator_terminal_status_write_failed",
+            config_id = %config_id,
+            status = %status,
+            error = ?e,
+            "CRITICAL: failed to persist terminal status; tester may become stuck"
+        );
+    }
+}
+
+/// RR-004: phase writes are advisory, but we still want visibility when
+/// they fail so an operator can correlate missing phase markers with
+/// DB connectivity incidents.
+async fn write_phase(client: &PgClient, config_id: &Uuid, phase: &str) {
+    if let Err(e) = set_phase(client, config_id, phase).await {
+        tracing::error!(
+            target: "orchestrator_phase_write_failed",
+            config_id = %config_id,
+            phase = %phase,
+            error = ?e,
+            "failed to persist benchmark phase marker"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DB plumbing helpers for the persistent-tester lock flow.
+//
+// The orchestrator historically had no direct DB access — it only spoke to
+// the dashboard via HTTP callbacks. Task 23 introduces direct Postgres access
+// so the orchestrator can participate in the tester-lock protocol without a
+// round-trip-heavy callback API.
+//
+// For MVP we lazily construct a single short-lived connection inside
+// `execute_testbed_application` by reading `ORCHESTRATOR_DB_URL` (fallback
+// `DASHBOARD_DB_URL`). A top-down `Arc<Client>` is the cleaner end state but
+// would touch far more files; see the persistent-testers plan for the
+// follow-up refactor.
+// ---------------------------------------------------------------------------
+
+/// Lazily connect to Postgres using `ORCHESTRATOR_DB_URL` or `DASHBOARD_DB_URL`.
+/// The spawned background task drives the connection to completion; callers
+/// keep the returned `Client` for the duration of the work.
+async fn connect_orchestrator_db() -> Result<Arc<PgClient>> {
+    let url = std::env::var("ORCHESTRATOR_DB_URL")
+        .or_else(|_| std::env::var("DASHBOARD_DB_URL"))
+        .context(
+            "ORCHESTRATOR_DB_URL (or DASHBOARD_DB_URL) must be set for tester-lock flow",
+        )?;
+    let (client, conn) = tokio_postgres::connect(&url, NoTls)
+        .await
+        .context("connecting to Postgres for tester-lock flow")?;
+    tokio::spawn(async move {
+        if let Err(e) = conn.await {
+            tracing::error!("orchestrator Postgres connection error: {e:#}");
+        }
+    });
+    Ok(Arc::new(client))
+}
+
+/// Update `benchmark_config.current_phase` — a lightweight progress marker
+/// consumed by the dashboard's phase-update WebSocket hub (future task).
+async fn set_phase(client: &PgClient, config_id: &Uuid, phase: &str) -> Result<()> {
+    client
+        .execute(
+            "UPDATE benchmark_config SET current_phase = $2, updated_at = NOW() \
+             WHERE config_id = $1",
+            &[config_id, &phase],
+        )
+        .await
+        .with_context(|| format!("set_phase({phase}) for config {config_id} failed"))?;
+    Ok(())
+}
+
+/// Update `benchmark_config.status`. When transitioning into `queued`, also
+/// stamp `queued_at = NOW()` so the dispatcher's fairness ordering is correct.
+async fn set_benchmark_status(
+    client: &PgClient,
+    config_id: &Uuid,
+    status: &str,
+) -> Result<()> {
+    if status == "queued" {
+        client
+            .execute(
+                "UPDATE benchmark_config \
+                    SET status = 'queued', queued_at = NOW(), updated_at = NOW() \
+                  WHERE config_id = $1",
+                &[config_id],
+            )
+            .await
+            .with_context(|| format!("set status=queued for config {config_id}"))?;
+    } else {
+        client
+            .execute(
+                "UPDATE benchmark_config SET status = $2, updated_at = NOW() \
+                 WHERE config_id = $1",
+                &[config_id, &status],
+            )
+            .await
+            .with_context(|| format!("set status={status} for config {config_id}"))?;
+    }
+    Ok(())
+}
+
+/// TODO(Task 10 integration): push a `promote_next` event to the tester
+/// dispatcher (a separate dashboard process). For MVP this is a tracing-only
+/// stub — the dispatcher's periodic sweep (every 30s) will notice any dropped
+/// events and still make forward progress.
+async fn notify_queue_dispatcher(tester_id: &Uuid) {
+    tracing::info!(
+        tester_id = %tester_id,
+        "notify_queue_dispatcher stub — dispatcher sweep will promote next queued config"
+    );
+}
+
+/// Drop-safe guard that releases the tester lock on scope exit. The preferred
+/// path is `release_now().await` which synchronously releases and marks the
+/// guard as consumed. If a panic or early `return` skips that call, the `Drop`
+/// impl spawns a background task to release the lock — best-effort; if the
+/// tokio runtime is shutting down the release may be lost and the dashboard's
+/// crash-recovery sweep (Task 12) will reclaim the lock.
+struct ReleaseGuard {
+    client: Arc<PgClient>,
+    tester_id: Uuid,
+    config_id: Uuid,
+    released: bool,
+}
+
+impl ReleaseGuard {
+    fn new(client: Arc<PgClient>, tester_id: Uuid, config_id: Uuid) -> Self {
+        Self {
+            client,
+            tester_id,
+            config_id,
+            released: false,
+        }
+    }
+
+    async fn release_now(mut self) {
+        if self.released {
+            return;
+        }
+        self.released = true;
+        if let Err(e) = tester_state::release(&self.client, &self.tester_id, &self.config_id)
+            .await
+        {
+            tracing::error!(
+                tester_id = %self.tester_id,
+                config_id = %self.config_id,
+                "failed to release tester lock: {e:#}"
+            );
+        }
+    }
+}
+
+impl Drop for ReleaseGuard {
+    fn drop(&mut self) {
+        if self.released {
+            return;
+        }
+        let client = self.client.clone();
+        let tid = self.tester_id;
+        let cid = self.config_id;
+        // Best-effort: spawn on the current runtime if one is available.
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                if let Err(e) = tester_state::release(&client, &tid, &cid).await {
+                    tracing::error!(
+                        tester_id = %tid,
+                        config_id = %cid,
+                        "Drop release failed: {e:#}"
+                    );
+                }
+            });
+        } else {
+            tracing::warn!(
+                tester_id = %tid,
+                config_id = %cid,
+                "ReleaseGuard dropped without tokio runtime — crash recovery must reclaim lock"
+            );
+        }
+    }
+}
+
+/// Invoke `az vm start --ids <resource_id>` via `tokio::process::Command`
+/// (execvp, no shell) and wait for SSH to come up.
+async fn ensure_running_via_azure(tester: &ProjectTesterRow) -> Result<()> {
+    let resource_id = tester
+        .vm_resource_id
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("tester {} has no vm_resource_id", tester.tester_id))?;
+    let ip = tester
+        .public_ip
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("tester {} has no public_ip", tester.tester_id))?;
+
+    tracing::info!(
+        tester_id = %tester.tester_id,
+        %resource_id,
+        "starting stopped tester VM via az vm start"
+    );
+    let out = tokio::process::Command::new("az")
+        .arg("vm")
+        .arg("start")
+        .arg("--ids")
+        .arg(resource_id)
+        .output()
+        .await
+        .context("spawning az vm start")?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "az vm start failed (status={:?}): {}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    // Poll SSH up to ~5 minutes.
+    for attempt in 1..=30u32 {
+        match ssh::ssh_exec(ip, "echo ok").await {
+            Ok(_) => {
+                tracing::info!(tester_id = %tester.tester_id, attempt, "SSH ready after VM start");
+                return Ok(());
+            }
+            Err(_) => {
+                tokio::time::sleep(Duration::from_secs(10)).await;
+            }
+        }
+    }
+    anyhow::bail!("SSH not available on {ip} within 5 minutes after VM start")
+}
+
+/// Subset of the dashboard's `project_tester` row that the orchestrator needs
+/// when executing an application benchmark against a persistent tester.
+///
+/// This is defined locally (rather than imported from `networker-dashboard`)
+/// because the orchestrator is a standalone crate that talks to Postgres
+/// directly via tokio-postgres. Only the columns consumed by the executor
+/// are included — extend as needed.
+///
+/// `dead_code` is allowed because Task 23 (the `execute_testbed_application`
+/// rewrite) is the first caller; this helper is committed independently so
+/// Task 23 lands as a pure swap.
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct ProjectTesterRow {
+    pub tester_id: Uuid,
+    pub project_id: String,
+    pub name: String,
+    pub public_ip: Option<String>,
+    pub ssh_user: String,
+    pub vm_name: Option<String>,
+    pub vm_resource_id: Option<String>,
+    pub power_state: String,
+    pub allocation: String,
+    pub installer_version: Option<String>,
+}
+
+/// Look up the persistent tester associated with a given benchmark config.
+///
+/// Joins `benchmark_config` and `project_tester` on `benchmark_config.tester_id`.
+/// Returns an error if the config has no tester (`tester_id IS NULL`) — for
+/// application-mode benchmarks the V027 SQL CHECK constraint should make this
+/// impossible, but we defend against it so a malformed row fails loudly
+/// instead of silently skipping the tester-lock flow.
+///
+/// Task 23 (`execute_testbed_application` rewrite) is the primary caller.
+#[allow(dead_code)]
+pub async fn lookup_tester(
+    client: &tokio_postgres::Client,
+    config_id: &Uuid,
+) -> Result<ProjectTesterRow> {
+    // `public_ip::text` casts INET → TEXT so tokio-postgres can decode it
+    // as `Option<String>` without needing the `with-cidr` feature.
+    let row = client
+        .query_opt(
+            r#"
+            SELECT t.tester_id,
+                   t.project_id,
+                   t.name,
+                   t.public_ip::text,
+                   t.ssh_user,
+                   t.vm_name,
+                   t.vm_resource_id,
+                   t.power_state,
+                   t.allocation,
+                   t.installer_version
+              FROM benchmark_config c
+              JOIN project_tester   t ON t.tester_id = c.tester_id
+             WHERE c.config_id = $1
+            "#,
+            &[config_id],
+        )
+        .await
+        .with_context(|| format!("lookup_tester query failed for config {config_id}"))?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "benchmark_config {} has no tester_id (or the referenced tester no longer exists)",
+                config_id
+            )
+        })?;
+
+    Ok(ProjectTesterRow {
+        tester_id: row.get(0),
+        project_id: row.get(1),
+        name: row.get(2),
+        public_ip: row.get::<_, Option<String>>(3),
+        ssh_user: row.get(4),
+        vm_name: row.get(5),
+        vm_resource_id: row.get(6),
+        power_state: row.get(7),
+        allocation: row.get(8),
+        installer_version: row.get(9),
+    })
+}
 
 /// Start a pre-deployed language server on an existing VM.
 async fn start_existing_server(vm: &VmInfo, language: &str) -> Result<()> {
@@ -156,98 +486,6 @@ async fn stop_app_language(vm: &VmInfo) {
     )
     .await;
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-}
-
-/// Deploy the Chrome test harness to the VM.
-async fn deploy_chrome_harness(vm: &VmInfo) -> Result<()> {
-    tracing::info!("Deploying Chrome test harness on {}", vm.ip);
-    // Clone repo first (needed for harness files)
-    ssh::ssh_exec(
-        &vm.ip,
-        "if [ ! -d /tmp/nwk-repo/.git ]; then git clone --depth 1 https://github.com/irlm/networker-tester.git /tmp/nwk-repo 2>/dev/null < /dev/null; fi",
-    ).await.ok(); // best-effort
-
-    // Step 1: Wait for dpkg lock and run apt-get update
-    // Fresh Azure VMs run unattended-upgrades for 1-2 min after boot.
-    // We wait up to 2 min for the lock, then force-release if needed.
-    ssh::ssh_exec(
-        &vm.ip,
-        "export DEBIAN_FRONTEND=noninteractive && \
-         echo 'Waiting for apt lock...' && \
-         for i in $(seq 1 60); do \
-           if sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || \
-              sudo fuser /var/lib/apt/lists/lock >/dev/null 2>&1; then \
-             [ $((i % 10)) -eq 0 ] && echo \"Still locked (${i}s)...\"; \
-             sleep 2; \
-           else break; fi; \
-         done && \
-         sudo dpkg --configure -a 2>/dev/null; \
-         echo 'Running apt-get update...' && \
-         sudo apt-get update -qq < /dev/null && \
-         echo 'apt-get update done'",
-    )
-    .await
-    .with_context(|| format!("apt-get update failed on {}", vm.ip))?;
-
-    // Step 3: Create harness directory
-    ssh::ssh_exec(
-        &vm.ip,
-        "sudo mkdir -p /opt/bench/chrome-harness && sudo chown $(whoami):$(whoami) /opt/bench/chrome-harness",
-    )
-    .await
-    .with_context(|| format!("Failed to create harness dir on {}", vm.ip))?;
-
-    // Step 4: Download Chrome .deb (fast — just a download)
-    ssh::ssh_exec(
-        &vm.ip,
-        "command -v google-chrome >/dev/null 2>&1 || { \
-           echo 'Downloading Chrome...' && \
-           curl -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
-             -o /tmp/chrome.deb < /dev/null && echo 'Downloaded'; }",
-    )
-    .await
-    .with_context(|| format!("Failed to download Chrome on {}", vm.ip))?;
-
-    // Step 5: Install Chrome .deb + deps + Node.js (one apt-get session)
-    ssh::ssh_exec(
-        &vm.ip,
-        "command -v google-chrome >/dev/null 2>&1 || { \
-           export DEBIAN_FRONTEND=noninteractive && \
-           echo 'Installing Chrome + Node.js...' && \
-           sudo dpkg -i /tmp/chrome.deb 2>/dev/null; \
-           sudo apt-get install -y -qq -f < /dev/null && \
-           sudo apt-get install -y -qq nodejs npm < /dev/null && \
-           rm -f /tmp/chrome.deb && echo 'Installed'; } || { \
-           command -v npm >/dev/null 2>&1 || { \
-             sudo apt-get install -y -qq nodejs npm < /dev/null; }; }",
-    )
-    .await
-    .with_context(|| format!("Failed to install Chrome/Node.js on {}", vm.ip))?;
-
-    // Deploy harness files via the repo (should already be cloned by deploy_benchmark_server)
-    let deploy_cmd = concat!(
-        "export PATH=/usr/bin:/usr/local/bin:$PATH && ",
-        "if [ -d /tmp/nwk-repo/benchmarks/chrome-harness ]; then ",
-        "  cp /tmp/nwk-repo/benchmarks/chrome-harness/package.json /opt/bench/chrome-harness/ && ",
-        "  cp /tmp/nwk-repo/benchmarks/chrome-harness/runner.js /opt/bench/chrome-harness/ && ",
-        "  cp /tmp/nwk-repo/benchmarks/chrome-harness/test-page.html /opt/bench/chrome-harness/ && ",
-        "  cd /opt/bench/chrome-harness && npm install --production --silent 2>/dev/null < /dev/null; ",
-        "fi",
-    );
-    ssh::ssh_exec(&vm.ip, deploy_cmd)
-        .await
-        .with_context(|| format!("Failed to deploy Chrome harness files on {}", vm.ip))?;
-
-    // Verify harness files were actually deployed
-    ssh::ssh_exec(
-        &vm.ip,
-        "test -f /opt/bench/chrome-harness/runner.js && test -f /opt/bench/chrome-harness/package.json",
-    )
-    .await
-    .context("Chrome harness files not found after deploy — repo may not have been cloned")?;
-
-    tracing::info!("Chrome harness deployed on {}", vm.ip);
-    Ok(())
 }
 
 /// Run the Chrome-based benchmark for a proxy+language combination.
@@ -796,7 +1034,15 @@ async fn execute_testbed(
     })
 }
 
-/// Execute application benchmark: proxy × language matrix.
+/// Execute application benchmark: proxy × language matrix, guarded by the
+/// persistent-tester lock flow.
+///
+/// Task 23 rewrite: this function now looks up the `project_tester` row bound
+/// to the benchmark config, acquires its lock via `tester_state::try_acquire`,
+/// runs the existing proxy × language matrix under a `ReleaseGuard`, then
+/// releases and notifies the queue dispatcher. Queued-class outcomes short
+/// circuit with `benchmark_config.status='queued'` so the dashboard
+/// dispatcher can promote the next waiter.
 async fn execute_testbed_application(
     testbed: &TestbedConfig,
     config: &DashboardBenchmarkConfig,
@@ -805,6 +1051,241 @@ async fn execute_testbed_application(
     _bench_dir: &Path,
     vm: &VmInfo,
     provisioned: bool,
+) -> Result<TestbedOutcome> {
+    // ---------------------------------------------------------------
+    // Persistent-tester lock flow
+    // ---------------------------------------------------------------
+    let config_uuid = Uuid::parse_str(&config.config_id)
+        .with_context(|| format!("config_id {:?} is not a valid UUID", config.config_id))?;
+
+    let db = connect_orchestrator_db().await?;
+    let tester = lookup_tester(&db, &config_uuid).await?;
+    tracing::info!(
+        tester_id = %tester.tester_id,
+        tester_name = %tester.name,
+        power_state = %tester.power_state,
+        allocation = %tester.allocation,
+        "resolved persistent tester for config"
+    );
+
+    write_phase(&db, &config_uuid, "starting").await;
+
+    // Helper: queued-class outcomes short-circuit with a `queued` status.
+    // Centralising the TestbedOutcome shape keeps the acquire-loop arms tidy.
+    let queued_outcome = || TestbedOutcome {
+        testbed_id: testbed.testbed_id.clone(),
+        languages_completed: 0,
+        languages_failed: 0,
+        provisioned_vm: provisioned,
+    };
+
+    // Acquire loop: bounded retries with a small backoff so a stuck
+    // transient state never spins hot. NeedsStart is the one outcome where
+    // the orchestrator actively drives the VM back to running; everything
+    // else either retries briefly, queues, or bails.
+    let max_attempts = 20u32;
+    let mut attempt = 0u32;
+    loop {
+        attempt += 1;
+        if attempt > max_attempts {
+            // No guard held yet; record a terminal failed status before bailing.
+            write_terminal_status(&db, &config_uuid, "failed").await;
+            anyhow::bail!(
+                "could not acquire tester {} after {} attempts",
+                tester.tester_id,
+                max_attempts
+            );
+        }
+
+        let outcome = match tester_state::try_acquire(&db, &tester.tester_id, &config_uuid).await {
+            Ok(o) => o,
+            Err(e) => {
+                // No guard yet; failing to even issue the acquire UPDATE is
+                // terminal for this benchmark attempt.
+                write_terminal_status(&db, &config_uuid, "failed").await;
+                return Err(e);
+            }
+        };
+        match outcome {
+            AcquireOutcome::Acquired => {
+                break;
+            }
+            AcquireOutcome::NeedsStart => {
+                tracing::info!(
+                    tester_id = %tester.tester_id,
+                    "tester stopped — starting VM before retrying acquire"
+                );
+                if let Err(e) = ensure_running_via_azure(&tester).await {
+                    tracing::error!(
+                        tester_id = %tester.tester_id,
+                        "ensure_running_via_azure failed: {e:#}"
+                    );
+                    write_terminal_status(&db, &config_uuid, "failed").await;
+                    anyhow::bail!("failed to start tester {}: {e:#}", tester.tester_id);
+                }
+                // Nudge power_state forward; best-effort, dispatcher also reconciles.
+                let _ = tester_state::try_power_transition(
+                    &db,
+                    &tester.tester_id,
+                    "stopped",
+                    "running",
+                )
+                .await;
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+            AcquireOutcome::Transient(state) => {
+                tracing::info!(
+                    tester_id = %tester.tester_id,
+                    state,
+                    "tester in transient state — queuing"
+                );
+                // No guard yet; record queued and return Ok (short-circuit).
+                write_terminal_status(&db, &config_uuid, "queued").await;
+                return Ok(queued_outcome());
+            }
+            AcquireOutcome::Upgrading => {
+                tracing::info!(
+                    tester_id = %tester.tester_id,
+                    "tester upgrading — queuing"
+                );
+                write_terminal_status(&db, &config_uuid, "queued").await;
+                return Ok(queued_outcome());
+            }
+            AcquireOutcome::AlreadyLockedBy(other) => {
+                tracing::info!(
+                    tester_id = %tester.tester_id,
+                    locked_by = %other,
+                    "tester already locked by another config — queuing"
+                );
+                write_terminal_status(&db, &config_uuid, "queued").await;
+                return Ok(queued_outcome());
+            }
+            AcquireOutcome::Errored => {
+                write_terminal_status(&db, &config_uuid, "failed").await;
+                anyhow::bail!(
+                    "tester {} is in error state — cannot run benchmark",
+                    tester.tester_id
+                );
+            }
+            AcquireOutcome::Gone => {
+                // RR-007: tester row was deleted during acquire. Treat as
+                // terminal failure — there is nothing to queue against.
+                tracing::error!(
+                    tester_id = %tester.tester_id,
+                    config_id = %config_uuid,
+                    "tester deleted during acquire — failing benchmark"
+                );
+                write_terminal_status(&db, &config_uuid, "failed").await;
+                anyhow::bail!("tester {} deleted during acquire", tester.tester_id);
+            }
+            AcquireOutcome::NotIdle(state) => {
+                tracing::warn!(
+                    tester_id = %tester.tester_id,
+                    state,
+                    "tester in unexpected state — queuing"
+                );
+                write_terminal_status(&db, &config_uuid, "queued").await;
+                return Ok(queued_outcome());
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // RR-002: we now hold the lock. The matrix must run inside a panic
+    // boundary so that a panic in deploy/runner code cannot skip
+    // `release_now().await`. Drop is a defensive backstop only — Drop
+    // spawns release as a detached task, which can be cancelled by
+    // runtime shutdown, leaking the lock.
+    // ---------------------------------------------------------------
+    let guard = ReleaseGuard::new(db.clone(), tester.tester_id, config_uuid);
+    write_phase(&db, &config_uuid, "deploy").await;
+
+    let matrix_result = AssertUnwindSafe(run_application_matrix(
+        testbed,
+        config,
+        callback,
+        cancel_rx,
+        vm,
+        provisioned,
+        &db,
+        &config_uuid,
+    ))
+    .catch_unwind()
+    .await;
+
+    // Synchronous release, awaited before any terminal status write so the
+    // dispatcher notification below observes an idle row.
+    guard.release_now().await;
+    notify_queue_dispatcher(&tester.tester_id).await;
+
+    match matrix_result {
+        Ok(Ok(outcome)) => {
+            // Happy path — final status based on matrix outcome.
+            let final_status = if outcome.languages_completed > 0 && outcome.languages_failed == 0 {
+                "completed"
+            } else if outcome.languages_completed == 0 && outcome.languages_failed == 0 {
+                // No work ran (cancel before loop body). Leave as completed.
+                "completed"
+            } else if outcome.languages_completed == 0 {
+                "failed"
+            } else {
+                "completed_with_errors"
+            };
+            write_terminal_status(&db, &config_uuid, final_status).await;
+            write_phase(&db, &config_uuid, "done").await;
+            Ok(outcome)
+        }
+        Ok(Err(e)) => {
+            // Matrix returned Err — record failed, surface the error.
+            tracing::error!(
+                config_id = %config_uuid,
+                "application matrix returned error: {e:#}"
+            );
+            write_terminal_status(&db, &config_uuid, "failed").await;
+            write_phase(&db, &config_uuid, "done").await;
+            Err(e)
+        }
+        Err(panic_payload) => {
+            // Matrix panicked — lock already released above, now record
+            // a terminal failed status and surface a synthesised error.
+            let panic_msg = if let Some(s) = panic_payload.downcast_ref::<&'static str>() {
+                (*s).to_string()
+            } else if let Some(s) = panic_payload.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "unknown panic payload".to_string()
+            };
+            tracing::error!(
+                target: "orchestrator_matrix_panic",
+                config_id = %config_uuid,
+                tester_id = %tester.tester_id,
+                panic = %panic_msg,
+                "application matrix panicked — released lock, recording failed status"
+            );
+            write_terminal_status(&db, &config_uuid, "failed").await;
+            write_phase(&db, &config_uuid, "done").await;
+            Err(anyhow::anyhow!(
+                "application matrix panicked for config {}: {}",
+                config_uuid,
+                panic_msg
+            ))
+        }
+    }
+}
+
+/// Pre-Task-23 body of `execute_testbed_application`. Extracted verbatim so
+/// the lock flow can wrap it in a `ReleaseGuard` without reshuffling the
+/// proxy × language loop. Task 24 will prune the dead chrome-harness deploy.
+#[allow(clippy::too_many_arguments)]
+async fn run_application_matrix(
+    testbed: &TestbedConfig,
+    config: &DashboardBenchmarkConfig,
+    callback: &Arc<CallbackClient>,
+    cancel_rx: &watch::Receiver<bool>,
+    vm: &VmInfo,
+    provisioned: bool,
+    db: &PgClient,
+    config_uuid: &Uuid,
 ) -> Result<TestbedOutcome> {
     let methodology = &config.methodology;
 
@@ -882,25 +1363,7 @@ async fn execute_testbed_application(
     )
     .await;
 
-    if let Err(e) = deploy_chrome_harness(vm).await {
-        tracing::error!(
-            "Test harness deploy failed on testbed {}: {:#}",
-            testbed.testbed_id,
-            e
-        );
-        log_callback(
-            callback,
-            &testbed.testbed_id,
-            vec![format!("Test harness deploy failed: {e:#}")],
-        )
-        .await;
-        return Ok(TestbedOutcome {
-            testbed_id: testbed.testbed_id.clone(),
-            languages_completed: 0,
-            languages_failed: total_combinations,
-            provisioned_vm: provisioned,
-        });
-    }
+    // Chrome harness is installed once at tester creation (services::tester_install); no per-benchmark install.
 
     // Set deadline AFTER setup completes — setup (token deploy, harness install)
     // can take several minutes and must not count against benchmark time.
@@ -917,6 +1380,8 @@ async fn execute_testbed_application(
         deadline_secs = methodology.timeout_secs as u64 * total_combinations.max(1) as u64,
         "Starting application benchmark proxy/language matrix"
     );
+
+    write_phase(db, config_uuid, "running").await;
 
     for proxy in &testbed.proxies {
         // Check cancellation or deadline
@@ -1138,6 +1603,8 @@ async fn execute_testbed_application(
         )
         .await;
     }
+
+    write_phase(db, config_uuid, "collect").await;
 
     // Report testbed complete.
     let testbed_status = if languages_completed > 0 && languages_failed == 0 && !*cancel_rx.borrow() {

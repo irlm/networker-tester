@@ -1,3 +1,10 @@
+# Standalone workspace marker: the orchestrator is excluded from the root
+# workspace in `../../Cargo.toml`, but git worktrees can place it at a path
+# that doesn't match the root's relative `exclude` entry. An empty
+# `[workspace]` table here stops cargo's upward manifest walk so the crate
+# builds identically from both the main checkout and any worktree.
+[workspace]
+
 [package]
 name = "alethabench-orchestrator"
 version = "0.1.0"
@@ -20,3 +27,5 @@ rand         = "0.10"
 tracing      = "0.1"
 networker-log      = { path = "../../crates/networker-log" }
 reqwest            = { version = "0.13", features = ["rustls", "json", "http2"], default-features = false }
+tokio-postgres     = { version = "0.7", features = ["with-chrono-0_4", "with-uuid-1", "with-serde_json-1"] }
+futures            = "0.3"
