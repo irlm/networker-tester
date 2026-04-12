@@ -5,8 +5,11 @@
 -- crates/networker-dashboard/src/db/migrations.rs (through V027).
 -- The _migrations bookkeeping table is intentionally excluded so the
 -- schema version tracking is preserved.
-
-BEGIN;
+--
+-- Note: the binary `reset_pre_prod` wraps this file inside an explicit
+-- transaction (so partial TRUNCATE failures leave the DB untouched) and
+-- runs `VACUUM FULL ANALYZE` separately afterwards, since VACUUM cannot
+-- execute inside a transaction block.
 
 -- TRUNCATE every application table in one statement; CASCADE handles FK order.
 TRUNCATE TABLE
@@ -42,8 +45,3 @@ TRUNCATE TABLE
     agent,
     dash_user
 RESTART IDENTITY CASCADE;
-
-COMMIT;
-
--- VACUUM is not transactional -- must run outside the BEGIN/COMMIT block.
-VACUUM FULL ANALYZE;
