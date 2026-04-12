@@ -324,7 +324,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.26.1"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.26.2"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -4088,11 +4088,15 @@ step_write_dashboard_env() {
     local jwt_secret
     jwt_secret="$(head -c 32 /dev/urandom | base64 | tr -d '=/+' | head -c 32)"
 
+    local credential_key
+    credential_key="$(head -c 32 /dev/urandom | xxd -p | tr -d '\n' | head -c 64)"
+
     local db_pw="${DASHBOARD_DB_PASSWORD:-networker}"
     sudo tee /etc/networker-dashboard.env > /dev/null <<ENVFILE
 DASHBOARD_DB_URL=postgres://networker:${db_pw}@127.0.0.1:5432/networker_dashboard
 DASHBOARD_ADMIN_PASSWORD=${admin_pw}
 DASHBOARD_JWT_SECRET=${jwt_secret}
+DASHBOARD_CREDENTIAL_KEY=${credential_key}
 DASHBOARD_PORT=${dashboard_port}
 DASHBOARD_BIND_ADDR=127.0.0.1
 DASHBOARD_STATIC_DIR=/opt/networker/dashboard

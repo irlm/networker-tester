@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.26.2] — 2026-04-12
+
+### Fixed
+- **Cloud account errors now visible in UI**: API client reads response body for all
+  error responses; all cloud account catch blocks surface the actual server message
+  instead of generic "Failed to create cloud account" toasts.
+- **Auto-generate `DASHBOARD_CREDENTIAL_KEY`**: Fresh deploys failed to add cloud
+  accounts because the encryption key was never generated. Now self-heals at three
+  levels: install.sh/deploy-dashboard.sh generate the key on deploy; config.rs
+  auto-generates and persists to `/var/lib/networker/credential.key` on startup if
+  missing. Existing deploys self-heal on next restart.
+- Removed silent error swallowing in `CloudAccountSelector` component.
+
+---
+
 ## [0.26.1] — 2026-04-12
 
 ### Fixed

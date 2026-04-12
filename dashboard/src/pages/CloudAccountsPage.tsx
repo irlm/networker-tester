@@ -62,8 +62,9 @@ export function CloudAccountsPage() {
     try {
       const data = await api.getCloudAccounts(projectId);
       setAccounts(data);
-    } catch {
-      addToast('error', 'Failed to load cloud accounts');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      addToast('error', `Failed to load cloud accounts: ${msg}`);
     } finally {
       setLoading(false);
     }
@@ -99,8 +100,9 @@ export function CloudAccountsPage() {
       addToast('success', `Cloud account "${newName.trim()}" created`);
       resetForm();
       loadAccounts();
-    } catch {
-      addToast('error', 'Failed to create cloud account');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      addToast('error', `Failed to create cloud account: ${msg}`);
     } finally {
       setAdding(false);
     }
@@ -117,8 +119,9 @@ export function CloudAccountsPage() {
         addToast('error', result.validation_error || 'Validation failed');
       }
       loadAccounts();
-    } catch {
-      addToast('error', 'Validation request failed');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      addToast('error', `Validation request failed: ${msg}`);
     } finally {
       setValidating(null);
     }
@@ -131,8 +134,9 @@ export function CloudAccountsPage() {
       await api.deleteCloudAccount(projectId, accountId);
       addToast('success', `Deleted "${name}"`);
       loadAccounts();
-    } catch {
-      addToast('error', 'Failed to delete cloud account');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      addToast('error', `Failed to delete cloud account: ${msg}`);
     }
   };
 
