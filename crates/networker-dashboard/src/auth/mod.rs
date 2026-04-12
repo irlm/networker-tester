@@ -83,6 +83,30 @@ pub struct ProjectContext {
     pub role: ProjectRole,
 }
 
+/// Typed extractor for `ProjectContext` (RR-015).
+///
+/// Handlers declare `ctx: ProjectContext` in their signature instead of
+/// reaching into `req.extensions()` and panicking on missing values. If a
+/// handler is ever mounted outside the project-scoped router (where
+/// `require_project` middleware injects this), the extractor rejects with
+/// 500 instead of panicking the request task.
+impl<S> axum::extract::FromRequestParts<S> for ProjectContext
+where
+    S: Send + Sync,
+{
+    type Rejection = (StatusCode, &'static str);
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        parts.extensions.get::<ProjectContext>().cloned().ok_or((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "ProjectContext missing — handler mounted outside project-scoped router",
+        ))
+    }
+}
+
 /// Check that the authenticated user's role meets the required level.
 /// Returns `Ok(())` if permitted, `Err(FORBIDDEN)` otherwise.
 pub fn require_role(user: &AuthUser, required: Role) -> Result<(), StatusCode> {

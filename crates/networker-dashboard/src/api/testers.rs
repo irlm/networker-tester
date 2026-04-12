@@ -177,9 +177,8 @@ fn db_error(stage: &'static str, err: impl std::fmt::Display) -> (StatusCode, St
 
 async fn list_testers(
     State(state): State<Arc<AppState>>,
-    req: axum::extract::Request,
+    ctx: ProjectContext,
 ) -> Result<Json<Vec<ProjectTesterRow>>, (StatusCode, String)> {
-    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
     crate::auth::require_project_role(&ctx, ProjectRole::Viewer)
         .map_err(|s| (s, "Insufficient permissions".to_string()))?;
 
@@ -196,9 +195,8 @@ async fn list_testers(
 
 async fn list_regions(
     State(state): State<Arc<AppState>>,
-    req: axum::extract::Request,
+    ctx: ProjectContext,
 ) -> Result<Json<RegionsResponse>, (StatusCode, String)> {
-    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
     crate::auth::require_project_role(&ctx, ProjectRole::Viewer)
         .map_err(|s| (s, "Insufficient permissions".to_string()))?;
 
@@ -243,10 +241,9 @@ async fn list_regions(
 
 async fn get_tester(
     State(state): State<Arc<AppState>>,
+    ctx: ProjectContext,
     Path((_project_id, tester_id)): Path<(String, Uuid)>,
-    req: axum::extract::Request,
 ) -> Result<Json<ProjectTesterRow>, (StatusCode, String)> {
-    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
     crate::auth::require_project_role(&ctx, ProjectRole::Viewer)
         .map_err(|s| (s, "Insufficient permissions".to_string()))?;
 
@@ -270,10 +267,9 @@ async fn get_tester(
 
 async fn get_queue(
     State(state): State<Arc<AppState>>,
+    ctx: ProjectContext,
     Path((_project_id, tester_id)): Path<(String, Uuid)>,
-    req: axum::extract::Request,
 ) -> Result<Json<QueueResponse>, (StatusCode, String)> {
-    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
     crate::auth::require_project_role(&ctx, ProjectRole::Viewer)
         .map_err(|s| (s, "Insufficient permissions".to_string()))?;
 
@@ -351,10 +347,9 @@ async fn get_queue(
 
 async fn get_cost_estimate(
     State(state): State<Arc<AppState>>,
+    ctx: ProjectContext,
     Path((_project_id, tester_id)): Path<(String, Uuid)>,
-    req: axum::extract::Request,
 ) -> Result<Json<CostEstimateResponse>, (StatusCode, String)> {
-    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
     crate::auth::require_project_role(&ctx, ProjectRole::Viewer)
         .map_err(|s| (s, "Insufficient permissions".to_string()))?;
 
@@ -441,9 +436,9 @@ struct UpgradeBody {
 
 async fn create_tester(
     State(state): State<Arc<AppState>>,
+    ctx: ProjectContext,
     req: axum::extract::Request,
 ) -> Result<(StatusCode, Json<ProjectTesterRow>), (StatusCode, String)> {
-    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
     let user = req.extensions().get::<AuthUser>().unwrap().clone();
     crate::auth::require_project_role(&ctx, ProjectRole::Operator)
         .map_err(|s| (s, "Operator role required".to_string()))?;
@@ -521,10 +516,10 @@ async fn create_tester(
 
 async fn start_tester(
     State(state): State<Arc<AppState>>,
+    ctx: ProjectContext,
     Path((_project_id, tester_id)): Path<(String, Uuid)>,
     req: axum::extract::Request,
 ) -> Result<(StatusCode, Json<ProjectTesterRow>), (StatusCode, String)> {
-    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
     let user = req.extensions().get::<AuthUser>().unwrap().clone();
     crate::auth::require_project_role(&ctx, ProjectRole::Operator)
         .map_err(|s| (s, "Operator role required".to_string()))?;
@@ -572,10 +567,10 @@ async fn start_tester(
 
 async fn stop_tester(
     State(state): State<Arc<AppState>>,
+    ctx: ProjectContext,
     Path((_project_id, tester_id)): Path<(String, Uuid)>,
     req: axum::extract::Request,
 ) -> Result<(StatusCode, Json<ProjectTesterRow>), (StatusCode, String)> {
-    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
     let user = req.extensions().get::<AuthUser>().unwrap().clone();
     crate::auth::require_project_role(&ctx, ProjectRole::Operator)
         .map_err(|s| (s, "Operator role required".to_string()))?;
@@ -648,10 +643,10 @@ async fn stop_tester(
 
 async fn upgrade_tester(
     State(state): State<Arc<AppState>>,
+    ctx: ProjectContext,
     Path((_project_id, tester_id)): Path<(String, Uuid)>,
     req: axum::extract::Request,
 ) -> Result<(StatusCode, Json<ProjectTesterRow>), (StatusCode, String)> {
-    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
     let user = req.extensions().get::<AuthUser>().unwrap().clone();
     crate::auth::require_project_role(&ctx, ProjectRole::Admin)
         .map_err(|s| (s, "Admin role required".to_string()))?;
@@ -739,10 +734,10 @@ async fn upgrade_tester(
 
 async fn delete_tester(
     State(state): State<Arc<AppState>>,
+    ctx: ProjectContext,
     Path((_project_id, tester_id)): Path<(String, Uuid)>,
     req: axum::extract::Request,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
     let user = req.extensions().get::<AuthUser>().unwrap().clone();
     crate::auth::require_project_role(&ctx, ProjectRole::Admin)
         .map_err(|s| (s, "Admin role required".to_string()))?;
@@ -877,10 +872,10 @@ struct ForceStopBody {
 
 async fn update_schedule(
     State(state): State<Arc<AppState>>,
+    ctx: ProjectContext,
     Path((_project_id, tester_id)): Path<(String, Uuid)>,
     req: axum::extract::Request,
 ) -> Result<Json<ProjectTesterRow>, (StatusCode, String)> {
-    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
     let user = req.extensions().get::<AuthUser>().unwrap().clone();
     crate::auth::require_project_role(&ctx, ProjectRole::Admin)
         .map_err(|s| (s, "Admin role required".to_string()))?;
@@ -979,10 +974,10 @@ async fn update_schedule(
 
 async fn postpone_shutdown(
     State(state): State<Arc<AppState>>,
+    ctx: ProjectContext,
     Path((_project_id, tester_id)): Path<(String, Uuid)>,
     req: axum::extract::Request,
 ) -> Result<Json<ProjectTesterRow>, (StatusCode, String)> {
-    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
     let user = req.extensions().get::<AuthUser>().unwrap().clone();
     crate::auth::require_project_role(&ctx, ProjectRole::Admin)
         .map_err(|s| (s, "Admin role required".to_string()))?;
@@ -1082,10 +1077,10 @@ fn compute_postpone(
 
 async fn probe_tester(
     State(state): State<Arc<AppState>>,
+    ctx: ProjectContext,
     Path((_project_id, tester_id)): Path<(String, Uuid)>,
     req: axum::extract::Request,
 ) -> Result<Json<ProjectTesterRow>, (StatusCode, String)> {
-    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
     let user = req.extensions().get::<AuthUser>().unwrap().clone();
     crate::auth::require_project_role(&ctx, ProjectRole::Admin)
         .map_err(|s| (s, "Admin role required".to_string()))?;
@@ -1160,10 +1155,10 @@ async fn probe_tester(
 
 async fn force_stop_tester(
     State(state): State<Arc<AppState>>,
+    ctx: ProjectContext,
     Path((_project_id, tester_id)): Path<(String, Uuid)>,
     req: axum::extract::Request,
 ) -> Result<Json<ProjectTesterRow>, (StatusCode, String)> {
-    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
     let user = req.extensions().get::<AuthUser>().unwrap().clone();
     crate::auth::require_project_role(&ctx, ProjectRole::Admin)
         .map_err(|s| (s, "Admin role required".to_string()))?;
@@ -1262,9 +1257,9 @@ struct RefreshLatestVersionResponse {
 /// so a manual refresh immediately benefits future reads.
 async fn refresh_latest_version(
     State(state): State<Arc<AppState>>,
+    ctx: ProjectContext,
     req: axum::extract::Request,
 ) -> Result<Json<RefreshLatestVersionResponse>, (StatusCode, String)> {
-    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
     let user = req.extensions().get::<AuthUser>().unwrap().clone();
     crate::auth::require_project_role(&ctx, ProjectRole::Admin)
         .map_err(|s| (s, "Admin role required".to_string()))?;
