@@ -787,6 +787,18 @@ CREATE INDEX IF NOT EXISTS idx_benchmark_config_queued
     WHERE status = 'queued';
 "#;
 
+/// V029: Link project_tester to cloud_connection for secretless provisioning.
+const V029_TESTER_CLOUD_CONN: &str = r#"
+-- V029: Link testers to cloud_connections for secretless provisioning.
+ALTER TABLE project_tester
+  ADD COLUMN IF NOT EXISTS cloud_connection_id UUID
+    REFERENCES cloud_connection(connection_id) ON DELETE RESTRICT;
+
+CREATE INDEX IF NOT EXISTS idx_project_tester_cloud_conn
+  ON project_tester(cloud_connection_id)
+  WHERE cloud_connection_id IS NOT NULL;
+"#;
+
 /// V027: Persistent testers — project_tester table, benchmark_config tester link,
 /// phase columns on progress-tracking tables.
 const V027_PERSISTENT_TESTERS: &str = r#"
@@ -1759,6 +1771,23 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
             )
             .await?;
         tracing::info!("V028 migration complete");
+    }
+
+    // V029: Link project_tester to cloud_connection
+    let row = client
+        .query_opt("SELECT version FROM _migrations WHERE version = 29", &[])
+        .await?;
+
+    if row.is_none() {
+        tracing::info!("Applying V029: link project_tester to cloud_connection...");
+        client.batch_execute(V029_TESTER_CLOUD_CONN).await?;
+        client
+            .execute(
+                "INSERT INTO _migrations (version) VALUES (29) ON CONFLICT DO NOTHING",
+                &[],
+            )
+            .await?;
+        tracing::info!("V029 migration complete");
     }
 
     Ok(())
