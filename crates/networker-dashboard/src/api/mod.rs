@@ -25,6 +25,7 @@ mod projects;
 mod runs;
 mod schedules;
 mod share_links;
+mod sso_admin;
 // Task 14: tester REST handlers land here. Wiring into `project_scoped`
 // is deferred to Task 18; for now we declare the module so it compiles
 // and its unit tests run.
@@ -63,6 +64,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(projects::router(state.clone()))
         .merge(events::router(state.clone()))
         .merge(admin::router(state.clone()))
+        .merge(sso_admin::router(state.clone()))
         .merge(system_health::router(state.clone()))
         .merge(bench_tokens::router(state.clone()))
         .merge(perf_log::router(state.clone()))
