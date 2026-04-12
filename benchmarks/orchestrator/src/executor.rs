@@ -15,6 +15,40 @@ use tokio::sync::watch;
 use tokio_postgres::{Client as PgClient, NoTls};
 use uuid::Uuid;
 
+/// RR-004: persist a terminal `benchmark_config.status` write, logging a
+/// structured `error`-level event (target=`orchestrator_terminal_status_write_failed`)
+/// on failure. Recovery logic (dashboard's `tester_recovery` periodic sweep)
+/// keys on terminal status writes landing in the DB — silently dropping the
+/// error leaks the tester lock indefinitely. We cannot retry from here (no
+/// queue) but making the failure visible is far better than continuing
+/// silently.
+async fn write_terminal_status(client: &PgClient, config_id: &Uuid, status: &str) {
+    if let Err(e) = set_benchmark_status(client, config_id, status).await {
+        tracing::error!(
+            target: "orchestrator_terminal_status_write_failed",
+            config_id = %config_id,
+            status = %status,
+            error = ?e,
+            "CRITICAL: failed to persist terminal status; tester may become stuck"
+        );
+    }
+}
+
+/// RR-004: phase writes are advisory, but we still want visibility when
+/// they fail so an operator can correlate missing phase markers with
+/// DB connectivity incidents.
+async fn write_phase(client: &PgClient, config_id: &Uuid, phase: &str) {
+    if let Err(e) = set_phase(client, config_id, phase).await {
+        tracing::error!(
+            target: "orchestrator_phase_write_failed",
+            config_id = %config_id,
+            phase = %phase,
+            error = ?e,
+            "failed to persist benchmark phase marker"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // DB plumbing helpers for the persistent-tester lock flow.
 //
@@ -1034,7 +1068,16 @@ async fn execute_testbed_application(
         "resolved persistent tester for config"
     );
 
-    set_phase(&db, &config_uuid, "starting").await.ok();
+    write_phase(&db, &config_uuid, "starting").await;
+
+    // Helper: queued-class outcomes short-circuit with a `queued` status.
+    // Centralising the TestbedOutcome shape keeps the acquire-loop arms tidy.
+    let queued_outcome = || TestbedOutcome {
+        testbed_id: testbed.testbed_id.clone(),
+        languages_completed: 0,
+        languages_failed: 0,
+        provisioned_vm: provisioned,
+    };
 
     // Acquire loop: bounded retries with a small backoff so a stuck
     // transient state never spins hot. NeedsStart is the one outcome where
@@ -1045,6 +1088,8 @@ async fn execute_testbed_application(
     loop {
         attempt += 1;
         if attempt > max_attempts {
+            // No guard held yet; record a terminal failed status before bailing.
+            write_terminal_status(&db, &config_uuid, "failed").await;
             anyhow::bail!(
                 "could not acquire tester {} after {} attempts",
                 tester.tester_id,
@@ -1052,7 +1097,15 @@ async fn execute_testbed_application(
             );
         }
 
-        let outcome = tester_state::try_acquire(&db, &tester.tester_id, &config_uuid).await?;
+        let outcome = match tester_state::try_acquire(&db, &tester.tester_id, &config_uuid).await {
+            Ok(o) => o,
+            Err(e) => {
+                // No guard yet; failing to even issue the acquire UPDATE is
+                // terminal for this benchmark attempt.
+                write_terminal_status(&db, &config_uuid, "failed").await;
+                return Err(e);
+            }
+        };
         match outcome {
             AcquireOutcome::Acquired => {
                 break;
@@ -1067,7 +1120,7 @@ async fn execute_testbed_application(
                         tester_id = %tester.tester_id,
                         "ensure_running_via_azure failed: {e:#}"
                     );
-                    set_benchmark_status(&db, &config_uuid, "failed").await.ok();
+                    write_terminal_status(&db, &config_uuid, "failed").await;
                     anyhow::bail!("failed to start tester {}: {e:#}", tester.tester_id);
                 }
                 // Nudge power_state forward; best-effort, dispatcher also reconciles.
@@ -1086,26 +1139,17 @@ async fn execute_testbed_application(
                     state,
                     "tester in transient state — queuing"
                 );
-                set_benchmark_status(&db, &config_uuid, "queued").await.ok();
-                return Ok(TestbedOutcome {
-                    testbed_id: testbed.testbed_id.clone(),
-                    languages_completed: 0,
-                    languages_failed: 0,
-                    provisioned_vm: provisioned,
-                });
+                // No guard yet; record queued and return Ok (short-circuit).
+                write_terminal_status(&db, &config_uuid, "queued").await;
+                return Ok(queued_outcome());
             }
             AcquireOutcome::Upgrading => {
                 tracing::info!(
                     tester_id = %tester.tester_id,
                     "tester upgrading — queuing"
                 );
-                set_benchmark_status(&db, &config_uuid, "queued").await.ok();
-                return Ok(TestbedOutcome {
-                    testbed_id: testbed.testbed_id.clone(),
-                    languages_completed: 0,
-                    languages_failed: 0,
-                    provisioned_vm: provisioned,
-                });
+                write_terminal_status(&db, &config_uuid, "queued").await;
+                return Ok(queued_outcome());
             }
             AcquireOutcome::AlreadyLockedBy(other) => {
                 tracing::info!(
@@ -1113,16 +1157,11 @@ async fn execute_testbed_application(
                     locked_by = %other,
                     "tester already locked by another config — queuing"
                 );
-                set_benchmark_status(&db, &config_uuid, "queued").await.ok();
-                return Ok(TestbedOutcome {
-                    testbed_id: testbed.testbed_id.clone(),
-                    languages_completed: 0,
-                    languages_failed: 0,
-                    provisioned_vm: provisioned,
-                });
+                write_terminal_status(&db, &config_uuid, "queued").await;
+                return Ok(queued_outcome());
             }
             AcquireOutcome::Errored => {
-                set_benchmark_status(&db, &config_uuid, "failed").await.ok();
+                write_terminal_status(&db, &config_uuid, "failed").await;
                 anyhow::bail!(
                     "tester {} is in error state — cannot run benchmark",
                     tester.tester_id
@@ -1136,7 +1175,7 @@ async fn execute_testbed_application(
                     config_id = %config_uuid,
                     "tester deleted during acquire — failing benchmark"
                 );
-                set_benchmark_status(&db, &config_uuid, "failed").await.ok();
+                write_terminal_status(&db, &config_uuid, "failed").await;
                 anyhow::bail!("tester {} deleted during acquire", tester.tester_id);
             }
             AcquireOutcome::NotIdle(state) => {
@@ -1145,13 +1184,8 @@ async fn execute_testbed_application(
                     state,
                     "tester in unexpected state — queuing"
                 );
-                set_benchmark_status(&db, &config_uuid, "queued").await.ok();
-                return Ok(TestbedOutcome {
-                    testbed_id: testbed.testbed_id.clone(),
-                    languages_completed: 0,
-                    languages_failed: 0,
-                    provisioned_vm: provisioned,
-                });
+                write_terminal_status(&db, &config_uuid, "queued").await;
+                return Ok(queued_outcome());
             }
         }
     }
@@ -1164,7 +1198,7 @@ async fn execute_testbed_application(
     // runtime shutdown, leaking the lock.
     // ---------------------------------------------------------------
     let guard = ReleaseGuard::new(db.clone(), tester.tester_id, config_uuid);
-    set_phase(&db, &config_uuid, "deploy").await.ok();
+    write_phase(&db, &config_uuid, "deploy").await;
 
     let matrix_result = AssertUnwindSafe(run_application_matrix(
         testbed,
@@ -1197,8 +1231,8 @@ async fn execute_testbed_application(
             } else {
                 "completed_with_errors"
             };
-            set_benchmark_status(&db, &config_uuid, final_status).await.ok();
-            set_phase(&db, &config_uuid, "done").await.ok();
+            write_terminal_status(&db, &config_uuid, final_status).await;
+            write_phase(&db, &config_uuid, "done").await;
             Ok(outcome)
         }
         Ok(Err(e)) => {
@@ -1207,13 +1241,13 @@ async fn execute_testbed_application(
                 config_id = %config_uuid,
                 "application matrix returned error: {e:#}"
             );
-            set_benchmark_status(&db, &config_uuid, "failed").await.ok();
-            set_phase(&db, &config_uuid, "done").await.ok();
+            write_terminal_status(&db, &config_uuid, "failed").await;
+            write_phase(&db, &config_uuid, "done").await;
             Err(e)
         }
         Err(panic_payload) => {
-            // Matrix panicked — lock already released above, now record a
-            // terminal failed status and surface a synthesised error.
+            // Matrix panicked — lock already released above, now record
+            // a terminal failed status and surface a synthesised error.
             let panic_msg = if let Some(s) = panic_payload.downcast_ref::<&'static str>() {
                 (*s).to_string()
             } else if let Some(s) = panic_payload.downcast_ref::<String>() {
@@ -1228,8 +1262,8 @@ async fn execute_testbed_application(
                 panic = %panic_msg,
                 "application matrix panicked — released lock, recording failed status"
             );
-            set_benchmark_status(&db, &config_uuid, "failed").await.ok();
-            set_phase(&db, &config_uuid, "done").await.ok();
+            write_terminal_status(&db, &config_uuid, "failed").await;
+            write_phase(&db, &config_uuid, "done").await;
             Err(anyhow::anyhow!(
                 "application matrix panicked for config {}: {}",
                 config_uuid,
@@ -1347,7 +1381,7 @@ async fn run_application_matrix(
         "Starting application benchmark proxy/language matrix"
     );
 
-    set_phase(db, config_uuid, "running").await.ok();
+    write_phase(db, config_uuid, "running").await;
 
     for proxy in &testbed.proxies {
         // Check cancellation or deadline
@@ -1570,7 +1604,7 @@ async fn run_application_matrix(
         .await;
     }
 
-    set_phase(db, config_uuid, "collect").await.ok();
+    write_phase(db, config_uuid, "collect").await;
 
     // Report testbed complete.
     let testbed_status = if languages_completed > 0 && languages_failed == 0 && !*cancel_rx.borrow() {

@@ -51,6 +51,10 @@ async fn scan(client: &Client) -> anyhow::Result<(usize, usize)> {
 }
 
 async fn force_release_stuck_locks(client: &Client) -> anyhow::Result<usize> {
+    // TODO(RR-002 followup): consider reclaiming locks where the config hasn't
+    // been updated in >2h, even if its status isn't terminal, as a belt-and-
+    // suspenders for orchestrator hard-crashes. Requires distinguishing
+    // "in-progress and healthy" from "stuck" — out of scope for this PR.
     // Identify testers whose lock holder is in a terminal state.
     let rows = client
         .query(
