@@ -389,6 +389,14 @@ async fn main() -> anyhow::Result<()> {
         latest_version_cache: Arc::new(RwLock::new(env!("CARGO_PKG_VERSION").to_string())),
     });
 
+    if cfg.credential_key.is_none() {
+        tracing::error!(
+            "DASHBOARD_CREDENTIAL_KEY could not be loaded or auto-generated — \
+             cloud account management is disabled. Check file permissions on \
+             /var/lib/networker/credential.key or set DASHBOARD_CREDENTIAL_KEY env var."
+        );
+    }
+
     // ── Tester persistent-lifecycle background services ──────────────────
     //
     // Each DB-bound loop runs under a per-task supervisor (`spawn_supervised_loop`)

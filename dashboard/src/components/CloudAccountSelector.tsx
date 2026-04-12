@@ -36,8 +36,8 @@ export function CloudAccountSelector({ projectId, provider, selectedAccountId, o
         const active = filtered.find(a => a.status === 'active');
         if (active) onSelect(active.account_id);
       }
-    } catch {
-      // silent
+    } catch (err) {
+      console.error('Failed to load cloud accounts:', err);
     } finally {
       setLoading(false);
     }
@@ -66,8 +66,9 @@ export function CloudAccountSelector({ projectId, provider, selectedAccountId, o
       setCredentials({});
       await loadAccounts();
       onSelect(result.account_id);
-    } catch {
-      addToast('error', 'Failed to create account');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      addToast('error', `Failed to create account: ${msg}`);
     } finally {
       setAdding(false);
     }
