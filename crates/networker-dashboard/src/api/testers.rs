@@ -1433,9 +1433,14 @@ async fn provider_for_tester(
         // AND client_id, client_secret, tenant_id (for SP auth).
         let config = match tester.cloud.as_str() {
             "azure" => {
+                let rg = creds
+                    .get("resource_group")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("networker-testers");
                 serde_json::json!({
                     "subscription_id": creds.get("subscription_id").and_then(|v| v.as_str()).unwrap_or(""),
-                    "resource_group": creds.get("resource_group").and_then(|v| v.as_str()).unwrap_or("networker-testers"),
+                    "resource_group": rg,
                     "tenant_id": creds.get("tenant_id").and_then(|v| v.as_str()).unwrap_or(""),
                     "client_id": creds.get("client_id").and_then(|v| v.as_str()).unwrap_or(""),
                     "client_secret": creds.get("client_secret").and_then(|v| v.as_str()).unwrap_or(""),
@@ -1512,27 +1517,50 @@ async fn run_create_tester(
         region: region.clone(),
         vm_size: vm_size.clone(),
         ssh_user: "azureuser".to_string(),
-        image: "Ubuntu2204".to_string(),
+        image: "Canonical:ubuntu-24_04-lts:server:latest".to_string(),
         tags: std::collections::HashMap::new(),
     };
     let created = provider.create_vm(&vm_config).await?;
 
     // Step 3: persist identity fields so the next stages can find the host.
-    client
-        .execute(
-            "UPDATE project_tester \
-             SET vm_name = $2, vm_resource_id = $3, public_ip = $4::inet, \
-                 ssh_user = $5, updated_at = NOW() \
-             WHERE tester_id = $1",
-            &[
-                &tester_id,
-                &created.vm_name,
-                &created.resource_id,
-                &created.public_ip,
-                &vm_config.ssh_user,
-            ],
-        )
-        .await?;
+    if created.public_ip.is_empty() {
+        client
+            .execute(
+                "UPDATE project_tester \
+                 SET vm_name = $2, vm_resource_id = $3, \
+                     ssh_user = $4, updated_at = NOW() \
+                 WHERE tester_id = $1",
+                &[
+                    &tester_id,
+                    &created.vm_name,
+                    &created.resource_id,
+                    &vm_config.ssh_user,
+                ],
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("DB update (no IP): {e}"))?;
+    } else {
+        let ip: std::net::IpAddr = created
+            .public_ip
+            .parse()
+            .map_err(|e| anyhow::anyhow!("invalid public_ip '{}': {e}", created.public_ip))?;
+        client
+            .execute(
+                "UPDATE project_tester \
+                 SET vm_name = $2, vm_resource_id = $3, public_ip = $4, \
+                     ssh_user = $5, updated_at = NOW() \
+                 WHERE tester_id = $1",
+                &[
+                    &tester_id,
+                    &created.vm_name,
+                    &created.resource_id,
+                    &ip,
+                    &vm_config.ssh_user,
+                ],
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("DB update (with IP): {e}"))?;
+    }
 
     // Step 4: run the installer. Progress closure captures an Arc<Pool> so
     // each step writes back to `status_message`.

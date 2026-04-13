@@ -173,15 +173,29 @@ impl AzureProvider {
     /// az CLI config dir. Returns the config dir path (set as AZURE_CONFIG_DIR
     /// on subsequent commands). Returns None for managed identity (uses ambient session).
     async fn ensure_sp_login(&self) -> anyhow::Result<Option<String>> {
+        let az = Self::az_bin();
         let (cid, csec, tid) = match (&self.client_id, &self.client_secret, &self.tenant_id) {
-            (Some(c), Some(s), Some(t)) if self.identity_type == "service_principal" => (c, s, t),
-            _ => return Ok(None),
+            (Some(c), Some(s), Some(t)) if self.identity_type == "service_principal" => {
+                tracing::info!(az_bin = %az, "SP login: using service principal credentials");
+                (c, s, t)
+            }
+            _ => {
+                tracing::info!(
+                    az_bin = %az,
+                    identity_type = %self.identity_type,
+                    has_client_id = self.client_id.is_some(),
+                    has_client_secret = self.client_secret.is_some(),
+                    has_tenant_id = self.tenant_id.is_some(),
+                    "SP login: skipping (no SP credentials or wrong identity_type)"
+                );
+                return Ok(None);
+            }
         };
 
         let config_dir = format!("/tmp/az-sp-{}", uuid::Uuid::new_v4().simple());
         std::fs::create_dir_all(&config_dir).ok();
 
-        let output = tokio::process::Command::new("az")
+        let output = tokio::process::Command::new(Self::az_bin())
             .arg("login")
             .arg("--service-principal")
             .arg("-u")
@@ -208,11 +222,30 @@ impl AzureProvider {
         Ok(Some(config_dir))
     }
 
+    /// Resolve the `az` binary path. Checks (in order):
+    /// 1. `AZ_CMD` env var
+    /// 2. `/tmp/az-cmd-override` file (for dev — contains a path)
+    /// 3. Default: `az` on PATH
+    fn az_bin() -> String {
+        if let Ok(v) = std::env::var("AZ_CMD") {
+            if !v.is_empty() {
+                return v;
+            }
+        }
+        if let Ok(path) = std::fs::read_to_string("/tmp/az-cmd-override") {
+            let path = path.trim();
+            if !path.is_empty() && std::path::Path::new(path).exists() {
+                return path.to_string();
+            }
+        }
+        "az".to_string()
+    }
+
     /// Build an `az` command with the correct auth context.
     /// Sets PYTHONWARNINGS=ignore to suppress Python SyntaxWarnings that
     /// pollute stderr/stdout and break JSON parsing.
     async fn az_cmd(&self, config_dir: &Option<String>) -> tokio::process::Command {
-        let mut cmd = tokio::process::Command::new("az");
+        let mut cmd = tokio::process::Command::new(Self::az_bin());
         cmd.env("PYTHONWARNINGS", "ignore");
         if let Some(dir) = config_dir {
             cmd.env("AZURE_CONFIG_DIR", dir);
