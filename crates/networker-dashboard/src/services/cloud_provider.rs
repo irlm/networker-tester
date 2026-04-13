@@ -108,6 +108,10 @@ pub struct AzureProvider {
     pub subscription_id: String,
     pub resource_group: String,
     pub identity_type: String,
+    /// Service principal credentials (used when identity_type == "service_principal")
+    pub client_id: Option<String>,
+    pub client_secret: Option<String>,
+    pub tenant_id: Option<String>,
 }
 
 impl AzureProvider {
@@ -139,16 +143,91 @@ impl AzureProvider {
             .unwrap_or("managed_identity")
             .to_string();
 
+        let client_id = config
+            .get("client_id")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        let client_secret = config
+            .get("client_secret")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        let tenant_id_opt = config
+            .get("tenant_id")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+
         Ok(Self {
             subscription_id,
             resource_group,
             identity_type,
+            client_id,
+            client_secret,
+            tenant_id: tenant_id_opt,
         })
+    }
+
+    /// If service principal credentials are available, login to an isolated
+    /// az CLI config dir. Returns the config dir path (set as AZURE_CONFIG_DIR
+    /// on subsequent commands). Returns None for managed identity (uses ambient session).
+    async fn ensure_sp_login(&self) -> anyhow::Result<Option<String>> {
+        let (cid, csec, tid) = match (&self.client_id, &self.client_secret, &self.tenant_id) {
+            (Some(c), Some(s), Some(t)) if self.identity_type == "service_principal" => (c, s, t),
+            _ => return Ok(None),
+        };
+
+        let config_dir = format!("/tmp/az-sp-{}", uuid::Uuid::new_v4().simple());
+        std::fs::create_dir_all(&config_dir).ok();
+
+        let output = tokio::process::Command::new("az")
+            .arg("login")
+            .arg("--service-principal")
+            .arg("-u")
+            .arg(cid)
+            .arg("-p")
+            .arg(csec)
+            .arg("--tenant")
+            .arg(tid)
+            .arg("--output")
+            .arg("none")
+            .env("AZURE_CONFIG_DIR", &config_dir)
+            .output()
+            .await
+            .context("failed to spawn az login")?;
+
+        if !output.status.success() {
+            let _ = std::fs::remove_dir_all(&config_dir);
+            anyhow::bail!(
+                "az login --service-principal failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        Ok(Some(config_dir))
+    }
+
+    /// Build an `az` command with the correct auth context.
+    async fn az_cmd(&self, config_dir: &Option<String>) -> tokio::process::Command {
+        let mut cmd = tokio::process::Command::new("az");
+        if let Some(dir) = config_dir {
+            cmd.env("AZURE_CONFIG_DIR", dir);
+        }
+        cmd
+    }
+
+    /// Clean up the SP login session.
+    fn cleanup_sp_session(config_dir: &Option<String>) {
+        if let Some(dir) = config_dir {
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 
     /// Create a new Azure VM via `az vm create`.
     pub async fn create_vm(&self, config: &VmConfig) -> anyhow::Result<VmInfo> {
-        let mut cmd = tokio::process::Command::new("az");
+        let sp_dir = self.ensure_sp_login().await?;
+        let mut cmd = self.az_cmd(&sp_dir).await;
         cmd.arg("vm")
             .arg("create")
             .arg("--subscription")
@@ -183,6 +262,7 @@ impl AzureProvider {
             .output()
             .await
             .context("failed to spawn `az vm create`")?;
+        Self::cleanup_sp_session(&sp_dir);
 
         if !output.status.success() {
             anyhow::bail!(
@@ -215,7 +295,10 @@ impl AzureProvider {
 
     /// Start a stopped (deallocated) VM.
     pub async fn start_vm(&self, resource_id: &str) -> anyhow::Result<()> {
-        let output = tokio::process::Command::new("az")
+        let sp_dir = self.ensure_sp_login().await?;
+        let output = self
+            .az_cmd(&sp_dir)
+            .await
             .arg("vm")
             .arg("start")
             .arg("--subscription")
@@ -227,6 +310,7 @@ impl AzureProvider {
             .output()
             .await
             .context("failed to spawn `az vm start`")?;
+        Self::cleanup_sp_session(&sp_dir);
         if !output.status.success() {
             anyhow::bail!(
                 "az vm start failed: {}",
@@ -238,7 +322,10 @@ impl AzureProvider {
 
     /// Deallocate (stop-billing) a running VM.
     pub async fn stop_vm(&self, resource_id: &str) -> anyhow::Result<()> {
-        let output = tokio::process::Command::new("az")
+        let sp_dir = self.ensure_sp_login().await?;
+        let output = self
+            .az_cmd(&sp_dir)
+            .await
             .arg("vm")
             .arg("deallocate")
             .arg("--subscription")
@@ -250,6 +337,7 @@ impl AzureProvider {
             .output()
             .await
             .context("failed to spawn `az vm deallocate`")?;
+        Self::cleanup_sp_session(&sp_dir);
         if !output.status.success() {
             anyhow::bail!(
                 "az vm deallocate failed: {}",
@@ -261,7 +349,10 @@ impl AzureProvider {
 
     /// Permanently delete a VM and its associated resources.
     pub async fn delete_vm(&self, resource_id: &str) -> anyhow::Result<()> {
-        let output = tokio::process::Command::new("az")
+        let sp_dir = self.ensure_sp_login().await?;
+        let output = self
+            .az_cmd(&sp_dir)
+            .await
             .arg("vm")
             .arg("delete")
             .arg("--subscription")
@@ -274,6 +365,7 @@ impl AzureProvider {
             .output()
             .await
             .context("failed to spawn `az vm delete`")?;
+        Self::cleanup_sp_session(&sp_dir);
         if !output.status.success() {
             anyhow::bail!(
                 "az vm delete failed: {}",
@@ -285,7 +377,10 @@ impl AzureProvider {
 
     /// Query the current power state and public IP of a VM.
     pub async fn get_vm_state(&self, resource_id: &str) -> anyhow::Result<VmInfo> {
-        let output = tokio::process::Command::new("az")
+        let sp_dir = self.ensure_sp_login().await?;
+        let output = self
+            .az_cmd(&sp_dir)
+            .await
             .arg("vm")
             .arg("show")
             .arg("--subscription")
@@ -300,6 +395,7 @@ impl AzureProvider {
             .output()
             .await
             .context("failed to spawn `az vm show`")?;
+        Self::cleanup_sp_session(&sp_dir);
 
         if !output.status.success() {
             anyhow::bail!(
@@ -350,7 +446,8 @@ impl AzureProvider {
             return Ok(());
         }
 
-        let mut cmd = tokio::process::Command::new("az");
+        let sp_dir = self.ensure_sp_login().await?;
+        let mut cmd = self.az_cmd(&sp_dir).await;
         cmd.arg("resource")
             .arg("tag")
             .arg("--subscription")
@@ -368,6 +465,7 @@ impl AzureProvider {
             .output()
             .await
             .context("failed to spawn `az resource tag`")?;
+        Self::cleanup_sp_session(&sp_dir);
         if !output.status.success() {
             anyhow::bail!(
                 "az resource tag failed: {}",
