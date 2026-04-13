@@ -28,18 +28,19 @@ const STATUS_STYLES: Record<string, string> = {
 const CLOUD_SETUP_GUIDES: Record<string, { steps: string[]; fieldHelp: Record<string, string> }> = {
   azure: {
     steps: [
-      '1. Go to portal.azure.com \u2192 Microsoft Entra ID \u2192 App registrations \u2192 New registration',
-      '2. Name: "AletheDash VM Manager", Single tenant',
-      '3. After creation, go to Certificates & secrets \u2192 New client secret \u2192 copy the Value immediately',
-      '4. Copy the Application (client) ID and Directory (tenant) ID from the Overview page',
-      '5. Go to the Resource Group where testers will be created \u2192 Access control (IAM)',
-      '6. Add role assignment \u2192 Role: "Virtual Machine Contributor" \u2192 Assign to your app registration',
-      '7. Also assign "Network Contributor" if testers need public IPs',
+      '1. portal.azure.com \u2192 Microsoft Entra ID \u2192 App registrations \u2192 New registration',
+      '2. Name: "AletheDash VM Manager", Supported account types: "Single tenant"',
+      '3. Overview page: copy Application (client) ID and Directory (tenant) ID',
+      '4. Certificates & secrets \u2192 New client secret \u2192 copy the Value immediately (shown once!)',
+      '5. Subscriptions \u2192 your subscription \u2192 Access control (IAM) \u2192 Add role assignment',
+      '   \u2192 Role: "Virtual Machine Contributor" \u2192 Members: select your app \u2192 Review + assign',
+      '6. If testers need public IPs, also assign "Network Contributor" on the same subscription',
+      '7. Paste the three values below: Tenant ID, Client ID, Client Secret',
     ],
     fieldHelp: {
-      tenant_id: 'Overview page \u2192 Directory (tenant) ID. Not a secret \u2014 visible to all users.',
-      client_id: 'Overview page \u2192 Application (client) ID. Not a secret.',
-      client_secret: 'Certificates & secrets \u2192 Value column. Only shown once after creation.',
+      tenant_id: 'App registrations \u2192 your app \u2192 Overview \u2192 Directory (tenant) ID',
+      client_id: 'Same Overview page \u2192 Application (client) ID',
+      client_secret: 'Certificates & secrets \u2192 Client secrets \u2192 Value (shown once after creation)',
     },
   },
   aws: {
