@@ -25,6 +25,47 @@ const STATUS_STYLES: Record<string, string> = {
   error: 'bg-red-500/10 text-red-400 border-red-500/30',
 };
 
+const CLOUD_SETUP_GUIDES: Record<string, { steps: string[]; fieldHelp: Record<string, string> }> = {
+  azure: {
+    steps: [
+      '1. Go to portal.azure.com \u2192 Microsoft Entra ID \u2192 App registrations \u2192 New registration',
+      '2. Name: "AletheDash Cloud", Supported account types: Single tenant',
+      '3. After creation, copy Application (client) ID and Directory (tenant) ID from Overview',
+      '4. Certificates & secrets \u2192 New client secret \u2192 copy the Value immediately',
+      '5. Assign the "Virtual Machine Contributor" role on your resource group (IAM \u2192 Add role assignment)',
+    ],
+    fieldHelp: {
+      tenant_id: 'Overview page \u2192 Directory (tenant) ID',
+      client_id: 'Overview page \u2192 Application (client) ID',
+      client_secret: 'Certificates & secrets \u2192 Client secrets \u2192 Value (shown only once after creation)',
+    },
+  },
+  aws: {
+    steps: [
+      '1. Go to AWS Console \u2192 IAM \u2192 Users \u2192 Create user',
+      '2. Attach policy: AmazonEC2FullAccess (or a custom policy scoped to your VPC)',
+      '3. Security credentials tab \u2192 Create access key \u2192 choose "Application running outside AWS"',
+      '4. Copy the Access key ID and Secret access key immediately',
+    ],
+    fieldHelp: {
+      access_key_id: 'IAM \u2192 Users \u2192 your user \u2192 Security credentials \u2192 Access keys',
+      secret_access_key: 'Shown only once when creating the access key. If lost, create a new key.',
+    },
+  },
+  gcp: {
+    steps: [
+      '1. Go to console.cloud.google.com \u2192 IAM & Admin \u2192 Service Accounts',
+      '2. Create Service Account \u2192 Name: "alethedash-cloud"',
+      '3. Grant role: Compute Admin (or a custom role with compute.instances.*)',
+      '4. Keys tab \u2192 Add key \u2192 Create new key \u2192 JSON',
+      '5. Paste the entire JSON content into the field below',
+    ],
+    fieldHelp: {
+      json_key: 'The full JSON key file downloaded from Google Cloud Console. Contains project_id, private_key, etc.',
+    },
+  },
+};
+
 interface CredentialFields {
   azure: { tenant_id: string; client_id: string; client_secret: string };
   aws: { access_key_id: string; secret_access_key: string };
@@ -193,6 +234,18 @@ export function CloudAccountsPage() {
             </div>
           </div>
 
+          {/* Setup guide */}
+          {CLOUD_SETUP_GUIDES[newProvider] && (
+            <div className="mb-3 bg-gray-900/40 border border-gray-800 rounded p-3">
+              <div className="text-[10px] text-cyan-400/80 font-medium uppercase tracking-wider mb-1.5">Setup Guide</div>
+              <ol className="text-[11px] text-gray-400 space-y-0.5 list-none pl-0">
+                {CLOUD_SETUP_GUIDES[newProvider].steps.map((step, i) => (
+                  <li key={i} className="font-mono">{step}</li>
+                ))}
+              </ol>
+            </div>
+          )}
+
           {/* Provider-specific credential fields */}
           {newProvider === 'azure' && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
@@ -204,6 +257,7 @@ export function CloudAccountsPage() {
                   onChange={e => setCredentials(prev => ({ ...prev, azure: { ...prev.azure, tenant_id: e.target.value } }))}
                   className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 />
+                <p className="text-[10px] text-gray-600 mt-0.5">{CLOUD_SETUP_GUIDES.azure.fieldHelp.tenant_id}</p>
               </div>
               <div>
                 <label className="block text-xs text-gray-400 mb-1">Client ID</label>
@@ -213,6 +267,7 @@ export function CloudAccountsPage() {
                   onChange={e => setCredentials(prev => ({ ...prev, azure: { ...prev.azure, client_id: e.target.value } }))}
                   className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 />
+                <p className="text-[10px] text-gray-600 mt-0.5">{CLOUD_SETUP_GUIDES.azure.fieldHelp.client_id}</p>
               </div>
               <div>
                 <label className="block text-xs text-gray-400 mb-1">Client Secret</label>
@@ -222,6 +277,7 @@ export function CloudAccountsPage() {
                   onChange={e => setCredentials(prev => ({ ...prev, azure: { ...prev.azure, client_secret: e.target.value } }))}
                   className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 />
+                <p className="text-[10px] text-gray-600 mt-0.5">{CLOUD_SETUP_GUIDES.azure.fieldHelp.client_secret}</p>
               </div>
             </div>
           )}
@@ -235,6 +291,7 @@ export function CloudAccountsPage() {
                   onChange={e => setCredentials(prev => ({ ...prev, aws: { ...prev.aws, access_key_id: e.target.value } }))}
                   className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 />
+                <p className="text-[10px] text-gray-600 mt-0.5">{CLOUD_SETUP_GUIDES.aws.fieldHelp.access_key_id}</p>
               </div>
               <div>
                 <label className="block text-xs text-gray-400 mb-1">Secret Access Key</label>
@@ -244,6 +301,7 @@ export function CloudAccountsPage() {
                   onChange={e => setCredentials(prev => ({ ...prev, aws: { ...prev.aws, secret_access_key: e.target.value } }))}
                   className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 />
+                <p className="text-[10px] text-gray-600 mt-0.5">{CLOUD_SETUP_GUIDES.aws.fieldHelp.secret_access_key}</p>
               </div>
             </div>
           )}
@@ -257,6 +315,7 @@ export function CloudAccountsPage() {
                 className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500 font-mono"
                 style={{ WebkitTextSecurity: 'disc' } as React.CSSProperties}
               />
+              <p className="text-[10px] text-gray-600 mt-0.5">{CLOUD_SETUP_GUIDES.gcp.fieldHelp.json_key}</p>
             </div>
           )}
 
