@@ -595,6 +595,213 @@ impl AwsProvider {
         cmd
     }
 
+    /// Ensure a key pair named `alethedash-tester` exists in the region.
+    /// If the local ~/.ssh/id_rsa.pub exists, imports it. Otherwise creates
+    /// a new key and saves the private key to ~/.ssh/alethedash-tester.pem.
+    async fn ensure_key_pair(&self, region: &str) -> anyhow::Result<String> {
+        let key_name = "alethedash-tester";
+
+        // Check if key pair exists
+        let check = self
+            .aws_cmd()
+            .arg("ec2")
+            .arg("describe-key-pairs")
+            .arg("--key-names")
+            .arg(key_name)
+            .arg("--region")
+            .arg(region)
+            .arg("--output")
+            .arg("json")
+            .output()
+            .await
+            .context("failed to spawn aws ec2 describe-key-pairs")?;
+
+        if check.status.success() {
+            tracing::info!(key_name, "Key pair already exists");
+            return Ok(key_name.to_string());
+        }
+
+        // Try to import local public key
+        let home = std::env::var("HOME").unwrap_or_default();
+        let pub_key_path = format!("{home}/.ssh/id_rsa.pub");
+        if std::path::Path::new(&pub_key_path).exists() {
+            tracing::info!(key_name, %pub_key_path, "Importing local SSH public key");
+            let pub_key = std::fs::read_to_string(&pub_key_path)?;
+            let import = self
+                .aws_cmd()
+                .arg("ec2")
+                .arg("import-key-pair")
+                .arg("--key-name")
+                .arg(key_name)
+                .arg("--public-key-material")
+                .arg(format!("fileb://{pub_key_path}"))
+                .arg("--region")
+                .arg(region)
+                .output()
+                .await
+                .context("failed to spawn aws ec2 import-key-pair")?;
+            if import.status.success() {
+                tracing::info!(key_name, "Key pair imported");
+                return Ok(key_name.to_string());
+            }
+            tracing::warn!(
+                stderr = %String::from_utf8_lossy(&import.stderr),
+                "Key import failed, will try create-key-pair"
+            );
+            drop(pub_key);
+        }
+
+        // Create new key pair
+        let create = self
+            .aws_cmd()
+            .arg("ec2")
+            .arg("create-key-pair")
+            .arg("--key-name")
+            .arg(key_name)
+            .arg("--query")
+            .arg("KeyMaterial")
+            .arg("--region")
+            .arg(region)
+            .arg("--output")
+            .arg("text")
+            .output()
+            .await
+            .context("failed to spawn aws ec2 create-key-pair")?;
+
+        if !create.status.success() {
+            anyhow::bail!(
+                "create-key-pair failed: {}",
+                String::from_utf8_lossy(&create.stderr)
+            );
+        }
+        let pem_path = format!("{home}/.ssh/{key_name}.pem");
+        std::fs::write(&pem_path, create.stdout)?;
+        let _ = std::fs::set_permissions(
+            &pem_path,
+            std::os::unix::fs::PermissionsExt::from_mode(0o600),
+        );
+        tracing::info!(key_name, %pem_path, "Created new key pair");
+        Ok(key_name.to_string())
+    }
+
+    /// Ensure a security group named `alethedash-tester` exists allowing
+    /// SSH (22), networker-endpoint (8080/8443), and probe ports (8443 UDP, 9998-9999 UDP).
+    async fn ensure_security_group(&self, region: &str) -> anyhow::Result<String> {
+        let sg_name = "alethedash-tester";
+
+        // Check if SG exists
+        let check = self
+            .aws_cmd()
+            .arg("ec2")
+            .arg("describe-security-groups")
+            .arg("--group-names")
+            .arg(sg_name)
+            .arg("--query")
+            .arg("SecurityGroups[0].GroupId")
+            .arg("--region")
+            .arg(region)
+            .arg("--output")
+            .arg("text")
+            .output()
+            .await
+            .context("failed to spawn aws ec2 describe-security-groups")?;
+
+        if check.status.success() {
+            let sg_id = String::from_utf8_lossy(&check.stdout).trim().to_string();
+            if !sg_id.is_empty() && sg_id != "None" {
+                tracing::info!(%sg_id, "Security group already exists");
+                return Ok(sg_id);
+            }
+        }
+
+        // Create the security group
+        let create = self
+            .aws_cmd()
+            .arg("ec2")
+            .arg("create-security-group")
+            .arg("--group-name")
+            .arg(sg_name)
+            .arg("--description")
+            .arg("AletheDash tester (SSH + diagnostic ports)")
+            .arg("--query")
+            .arg("GroupId")
+            .arg("--region")
+            .arg(region)
+            .arg("--output")
+            .arg("text")
+            .output()
+            .await
+            .context("failed to spawn aws ec2 create-security-group")?;
+
+        if !create.status.success() {
+            anyhow::bail!(
+                "create-security-group failed: {}",
+                String::from_utf8_lossy(&create.stderr)
+            );
+        }
+        let sg_id = String::from_utf8_lossy(&create.stdout).trim().to_string();
+
+        // Add ingress rules: SSH (22), HTTP/S diagnostic ports (8080, 8443), UDP probes (8443, 9998, 9999)
+        for (proto, port) in &[
+            ("tcp", "22"),
+            ("tcp", "8080"),
+            ("tcp", "8443"),
+            ("udp", "8443"),
+            ("udp", "9998"),
+            ("udp", "9999"),
+        ] {
+            let _ = self
+                .aws_cmd()
+                .arg("ec2")
+                .arg("authorize-security-group-ingress")
+                .arg("--group-id")
+                .arg(&sg_id)
+                .arg("--protocol")
+                .arg(proto)
+                .arg("--port")
+                .arg(port)
+                .arg("--cidr")
+                .arg("0.0.0.0/0")
+                .arg("--region")
+                .arg(region)
+                .output()
+                .await;
+        }
+
+        tracing::info!(%sg_id, "Created security group with ingress rules");
+        Ok(sg_id)
+    }
+
+    /// Poll for the instance's public IP for up to 60s.
+    async fn wait_for_public_ip(&self, instance_id: &str, region: &str) -> anyhow::Result<String> {
+        for _ in 0..30u32 {
+            let output = self
+                .aws_cmd()
+                .arg("ec2")
+                .arg("describe-instances")
+                .arg("--instance-ids")
+                .arg(instance_id)
+                .arg("--query")
+                .arg("Reservations[0].Instances[0].PublicIpAddress")
+                .arg("--region")
+                .arg(region)
+                .arg("--output")
+                .arg("text")
+                .output()
+                .await
+                .context("failed to spawn aws ec2 describe-instances")?;
+            if output.status.success() {
+                let ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !ip.is_empty() && ip != "None" {
+                    tracing::info!(%instance_id, %ip, "Public IP assigned");
+                    return Ok(ip);
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+        anyhow::bail!("Public IP not assigned to {instance_id} after 60s")
+    }
+
     pub async fn create_vm(&self, config: &VmConfig) -> anyhow::Result<VmInfo> {
         tracing::info!(
             region = %self.region,
@@ -637,6 +844,12 @@ impl AwsProvider {
         }
         tracing::info!(ami_id = %ami_id, "Found Ubuntu AMI");
 
+        // Ensure key pair exists (uses local ~/.ssh/id_rsa.pub if available, else creates new)
+        let key_name = self.ensure_key_pair(&config.region).await?;
+
+        // Ensure security group exists with SSH + dashboard ports open
+        let sg_id = self.ensure_security_group(&config.region).await?;
+
         // Create the instance
         let output = self
             .aws_cmd()
@@ -648,6 +861,11 @@ impl AwsProvider {
             .arg(&config.vm_size)
             .arg("--region")
             .arg(&config.region)
+            .arg("--key-name")
+            .arg(&key_name)
+            .arg("--security-group-ids")
+            .arg(&sg_id)
+            .arg("--associate-public-ip-address")
             .arg("--tag-specifications")
             .arg(format!(
                 "ResourceType=instance,Tags=[{{Key=Name,Value={}}}]",
@@ -677,12 +895,11 @@ impl AwsProvider {
             .ok_or_else(|| anyhow!("missing InstanceId"))?
             .to_string();
 
-        // Wait for public IP (may take a moment)
-        let public_ip = v
-            .get("PublicIpAddress")
-            .and_then(|s| s.as_str())
-            .unwrap_or("")
-            .to_string();
+        // Public IP isn't available immediately — poll for up to 60s
+        let public_ip = self
+            .wait_for_public_ip(&instance_id, &config.region)
+            .await
+            .unwrap_or_default();
 
         Ok(VmInfo {
             resource_id: instance_id,

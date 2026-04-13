@@ -1523,11 +1523,18 @@ async fn run_create_tester(
     tester_state::set_status_message(&client, &tester_id, "creating VM").await?;
     let provider = provider_for_tester(&client, &tester_row, &state).await?;
     let vm_name = cloud_provider::generate_vm_name(&region);
+    // Per-cloud SSH user defaults
+    let ssh_user = match tester_row.cloud.as_str() {
+        "azure" => "azureuser",
+        "aws" => "ubuntu",
+        "gcp" => "ubuntu",
+        _ => "ubuntu",
+    };
     let vm_config = cloud_provider::VmConfig {
         name: vm_name.clone(),
         region: region.clone(),
         vm_size: vm_size.clone(),
-        ssh_user: "azureuser".to_string(),
+        ssh_user: ssh_user.to_string(),
         image: "Canonical:ubuntu-24_04-lts:server:latest".to_string(),
         tags: std::collections::HashMap::new(),
     };
