@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.27.2] — 2026-04-13
+
+### Fixed
+- Tester creation: cloud dropdown loads from project cloud connections (not hardcoded Azure).
+- Provider-specific VM size presets (Azure, AWS, GCP).
+
+### Added
+- Setup guides with step-by-step instructions when adding SSO providers or cloud accounts.
+- Per-field help text explaining where to find each credential value.
+
+---
+
 ## [0.27.1] — 2026-04-12
 
 ### Fixed

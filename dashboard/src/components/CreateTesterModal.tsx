@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { testersApi, type TesterRow } from '../api/testers';
+import { api } from '../api/client';
 
 interface CreateTesterModalProps {
   projectId: string;
@@ -13,11 +14,32 @@ interface CreateTesterModalProps {
   onClose: () => void;
 }
 
-const VM_SIZE_PRESETS: { value: string; label: string }[] = [
-  { value: 'Standard_D2s_v3', label: 'Standard_D2s_v3 (2 vCPU, 8 GB)' },
-  { value: 'Standard_D4s_v3', label: 'Standard_D4s_v3 (4 vCPU, 16 GB)' },
-  { value: 'Standard_D8s_v3', label: 'Standard_D8s_v3 (8 vCPU, 32 GB)' },
-];
+const VM_SIZE_PRESETS: Record<string, { value: string; label: string }[]> = {
+  azure: [
+    { value: 'Standard_D2s_v3', label: 'Standard_D2s_v3 (2 vCPU, 8 GB)' },
+    { value: 'Standard_D4s_v3', label: 'Standard_D4s_v3 (4 vCPU, 16 GB)' },
+    { value: 'Standard_D8s_v3', label: 'Standard_D8s_v3 (8 vCPU, 32 GB)' },
+  ],
+  aws: [
+    { value: 't3.small', label: 't3.small (2 vCPU, 2 GB)' },
+    { value: 't3.medium', label: 't3.medium (2 vCPU, 4 GB)' },
+    { value: 't3.large', label: 't3.large (2 vCPU, 8 GB)' },
+    { value: 'm5.large', label: 'm5.large (2 vCPU, 8 GB)' },
+    { value: 'm5.xlarge', label: 'm5.xlarge (4 vCPU, 16 GB)' },
+  ],
+  gcp: [
+    { value: 'e2-small', label: 'e2-small (2 vCPU, 2 GB)' },
+    { value: 'e2-medium', label: 'e2-medium (2 vCPU, 4 GB)' },
+    { value: 'e2-standard-2', label: 'e2-standard-2 (2 vCPU, 8 GB)' },
+    { value: 'e2-standard-4', label: 'e2-standard-4 (4 vCPU, 16 GB)' },
+  ],
+};
+
+const DEFAULT_VM_SIZE: Record<string, string> = {
+  azure: 'Standard_D2s_v3',
+  aws: 't3.small',
+  gcp: 'e2-small',
+};
 
 const HOURS = Array.from({ length: 24 }, (_, h) => h);
 
@@ -46,6 +68,7 @@ export function CreateTesterModal({
   );
   const [autoProbeEnabled, setAutoProbeEnabled] = useState(false);
 
+  const [availableClouds, setAvailableClouds] = useState<string[]>([]);
   const [regions, setRegions] = useState<string[]>([]);
   const [regionsLoading, setRegionsLoading] = useState(false);
   const [stage, setStage] = useState<Stage>('form');
@@ -60,6 +83,32 @@ export function CreateTesterModal({
     firstInputRef.current?.focus();
   }, []);
 
+  // Load available clouds from project's cloud connections
+  useEffect(() => {
+    let cancelled = false;
+    api.getCloudConnections(projectId)
+      .then((conns) => {
+        if (cancelled) return;
+        const providers = [...new Set(
+          conns
+            .filter((c: { status: string }) => c.status === 'active')
+            .map((c: { provider: string }) => c.provider),
+        )];
+        setAvailableClouds(providers.length > 0 ? providers : ['azure']);
+        // If current cloud not in available list, switch to first available
+        if (providers.length > 0 && !providers.includes(cloud)) {
+          setCloud(providers[0]);
+          setVmSize(DEFAULT_VM_SIZE[providers[0]] || providers[0]);
+        }
+      })
+      .catch(() => {
+        setAvailableClouds(['azure']);
+      });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
+  // Load regions when cloud changes
   useEffect(() => {
     let cancelled = false;
     setRegionsLoading(true);
@@ -81,9 +130,8 @@ export function CreateTesterModal({
     return () => {
       cancelled = true;
     };
-    // Intentional: we only want to fetch regions on mount for this projectId.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
+  }, [projectId, cloud]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
@@ -247,10 +295,19 @@ export function CreateTesterModal({
                 <select
                   id="tester-cloud"
                   value={cloud}
-                  onChange={(e) => setCloud(e.target.value)}
+                  onChange={(e) => {
+                    const newCloud = e.target.value;
+                    setCloud(newCloud);
+                    setVmSize(DEFAULT_VM_SIZE[newCloud] || '');
+                    setRegion('');
+                  }}
                   className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 >
-                  <option value="azure">Azure</option>
+                  {availableClouds.map((c) => (
+                    <option key={c} value={c}>
+                      {c === 'azure' ? 'Azure' : c === 'aws' ? 'AWS' : c === 'gcp' ? 'GCP' : c}
+                    </option>
+                  ))}
                 </select>
               </div>
 
@@ -292,7 +349,7 @@ export function CreateTesterModal({
               {/* VM size */}
               <div>
                 <label htmlFor="tester-vmsize" className="block text-xs text-gray-400 mb-1">
-                  VM size
+                  {cloud === 'aws' ? 'Instance type' : cloud === 'gcp' ? 'Machine type' : 'VM size'}
                 </label>
                 <select
                   id="tester-vmsize"
@@ -300,7 +357,7 @@ export function CreateTesterModal({
                   onChange={(e) => setVmSize(e.target.value)}
                   className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 >
-                  {VM_SIZE_PRESETS.map((p) => (
+                  {(VM_SIZE_PRESETS[cloud] || VM_SIZE_PRESETS.azure).map((p) => (
                     <option key={p.value} value={p.value}>
                       {p.label}
                     </option>
