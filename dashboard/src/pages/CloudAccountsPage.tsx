@@ -29,39 +29,41 @@ const CLOUD_SETUP_GUIDES: Record<string, { steps: string[]; fieldHelp: Record<st
   azure: {
     steps: [
       '1. Go to portal.azure.com \u2192 Microsoft Entra ID \u2192 App registrations \u2192 New registration',
-      '2. Name: "AletheDash Cloud", Supported account types: Single tenant',
-      '3. After creation, copy Application (client) ID and Directory (tenant) ID from Overview',
-      '4. Certificates & secrets \u2192 New client secret \u2192 copy the Value immediately',
-      '5. Assign the "Virtual Machine Contributor" role on your resource group (IAM \u2192 Add role assignment)',
+      '2. Name: "AletheDash VM Manager", Single tenant',
+      '3. After creation, go to Certificates & secrets \u2192 New client secret \u2192 copy the Value immediately',
+      '4. Copy the Application (client) ID and Directory (tenant) ID from the Overview page',
+      '5. Go to the Resource Group where testers will be created \u2192 Access control (IAM)',
+      '6. Add role assignment \u2192 Role: "Virtual Machine Contributor" \u2192 Assign to your app registration',
+      '7. Also assign "Network Contributor" if testers need public IPs',
     ],
     fieldHelp: {
-      tenant_id: 'Overview page \u2192 Directory (tenant) ID',
-      client_id: 'Overview page \u2192 Application (client) ID',
-      client_secret: 'Certificates & secrets \u2192 Client secrets \u2192 Value (shown only once after creation)',
+      tenant_id: 'Overview page \u2192 Directory (tenant) ID. Not a secret \u2014 visible to all users.',
+      client_id: 'Overview page \u2192 Application (client) ID. Not a secret.',
+      client_secret: 'Certificates & secrets \u2192 Value column. Only shown once after creation.',
     },
   },
   aws: {
     steps: [
-      '1. Go to AWS Console \u2192 IAM \u2192 Users \u2192 Create user',
-      '2. Attach policy: AmazonEC2FullAccess (or a custom policy scoped to your VPC)',
-      '3. Security credentials tab \u2192 Create access key \u2192 choose "Application running outside AWS"',
-      '4. Copy the Access key ID and Secret access key immediately',
+      '1. Go to AWS Console \u2192 IAM \u2192 Users \u2192 Create user (or use existing)',
+      '2. Attach policy: AmazonEC2FullAccess (or custom policy scoped to your VPC/region)',
+      '3. Go to Security credentials tab \u2192 Create access key',
+      '4. Select "Application running outside AWS" \u2192 copy both values immediately',
     ],
     fieldHelp: {
-      access_key_id: 'IAM \u2192 Users \u2192 your user \u2192 Security credentials \u2192 Access keys',
-      secret_access_key: 'Shown only once when creating the access key. If lost, create a new key.',
+      access_key_id: 'Starts with "AKIA...". Identifies the IAM user \u2014 not a secret by itself.',
+      secret_access_key: 'Shown only once when creating the key. If lost, create a new one.',
     },
   },
   gcp: {
     steps: [
       '1. Go to console.cloud.google.com \u2192 IAM & Admin \u2192 Service Accounts',
-      '2. Create Service Account \u2192 Name: "alethedash-cloud"',
-      '3. Grant role: Compute Admin (or a custom role with compute.instances.*)',
-      '4. Keys tab \u2192 Add key \u2192 Create new key \u2192 JSON',
-      '5. Paste the entire JSON content into the field below',
+      '2. Create Service Account \u2192 Name: "alethedash-vms"',
+      '3. Grant role: Compute Admin (roles/compute.admin)',
+      '4. Click the service account \u2192 Keys tab \u2192 Add key \u2192 Create new key \u2192 JSON',
+      '5. Download the JSON file and paste its entire contents below',
     ],
     fieldHelp: {
-      json_key: 'The full JSON key file downloaded from Google Cloud Console. Contains project_id, private_key, etc.',
+      json_key: 'The full JSON key file. Contains project_id, client_email, private_key, etc.',
     },
   },
 };
@@ -84,16 +86,21 @@ export function CloudAccountsPage() {
   const { projectId, isOperator, isProjectAdmin } = useProject();
   const [accounts, setAccounts] = useState<CloudAccountSummary[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showAdd, setShowAdd] = useState(false);
-  const [adding, setAdding] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [validating, setValidating] = useState<string | null>(null);
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const [justCreatedId, setJustCreatedId] = useState<string | null>(null);
 
-  // Add form state
-  const [newName, setNewName] = useState('');
-  const [newProvider, setNewProvider] = useState<string>('azure');
-  const [newRegion, setNewRegion] = useState('');
-  const [newPersonal, setNewPersonal] = useState(false);
+  // Form state
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [formName, setFormName] = useState('');
+  const [formProvider, setFormProvider] = useState<string>('azure');
+  const [formRegion, setFormRegion] = useState('');
+  const [formPersonal, setFormPersonal] = useState(false);
   const [credentials, setCredentials] = useState<CredentialFields>(emptyCredentials());
+
+  const isEditing = editingId !== null;
 
   const addToast = useToast();
   usePageTitle('Settings');
@@ -114,38 +121,94 @@ export function CloudAccountsPage() {
   useEffect(() => { loadAccounts(); }, [loadAccounts]);
 
   const resetForm = () => {
-    setShowAdd(false);
-    setNewName('');
-    setNewProvider('azure');
-    setNewRegion('');
-    setNewPersonal(false);
+    setShowForm(false);
+    setEditingId(null);
+    setFormName('');
+    setFormProvider('azure');
+    setFormRegion('');
+    setFormPersonal(false);
     setCredentials(emptyCredentials());
+    setValidationError(null);
+    setJustCreatedId(null);
   };
 
-  const handleAdd = async () => {
-    if (!projectId || !newName.trim()) return;
-    setAdding(true);
-    try {
-      const creds: Record<string, string> =
-        newProvider === 'azure' ? { ...credentials.azure } :
-        newProvider === 'aws' ? { ...credentials.aws } :
-        { ...credentials.gcp };
+  const openEditForm = (acct: CloudAccountSummary) => {
+    setEditingId(acct.account_id);
+    setFormName(acct.name);
+    setFormProvider(acct.provider);
+    setFormRegion(acct.region_default || '');
+    setFormPersonal(acct.personal);
+    setCredentials(emptyCredentials());
+    setValidationError(null);
+    setJustCreatedId(null);
+    setShowForm(true);
+  };
 
-      await api.createCloudAccount(projectId, {
-        name: newName.trim(),
-        provider: newProvider,
-        credentials: creds,
-        region_default: newRegion.trim() || undefined,
-        personal: newPersonal,
-      });
-      addToast('success', `Cloud account "${newName.trim()}" created`);
+  const handleSave = async () => {
+    if (!projectId || !formName.trim()) return;
+    setSaving(true);
+    setValidationError(null);
+    setJustCreatedId(null);
+
+    try {
+      if (isEditing) {
+        // Edit mode: update name/region only
+        await api.updateCloudAccount(projectId, editingId, {
+          name: formName.trim(),
+          region_default: formRegion.trim() || undefined,
+        });
+        addToast('success', `Cloud account "${formName.trim()}" updated`);
+        resetForm();
+        loadAccounts();
+      } else {
+        // Create mode: create then validate
+        const creds: Record<string, string> =
+          formProvider === 'azure' ? { ...credentials.azure } :
+          formProvider === 'aws' ? { ...credentials.aws } :
+          { ...credentials.gcp };
+
+        const { account_id } = await api.createCloudAccount(projectId, {
+          name: formName.trim(),
+          provider: formProvider,
+          credentials: creds,
+          region_default: formRegion.trim() || undefined,
+          personal: formPersonal,
+        });
+
+        // Immediately validate
+        setJustCreatedId(account_id);
+        try {
+          const result = await api.validateCloudAccount(projectId, account_id);
+          if (result.status === 'active') {
+            addToast('success', `Cloud account "${formName.trim()}" created and validated`);
+            resetForm();
+          } else {
+            setValidationError(result.validation_error || 'Validation failed -- check your credentials and provider setup.');
+          }
+        } catch (valErr) {
+          const msg = valErr instanceof Error ? valErr.message : 'Unknown error';
+          setValidationError(`Validation request failed: ${msg}`);
+        }
+        loadAccounts();
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      addToast('error', `Failed to ${isEditing ? 'update' : 'create'} cloud account: ${msg}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteJustCreated = async () => {
+    if (!projectId || !justCreatedId) return;
+    try {
+      await api.deleteCloudAccount(projectId, justCreatedId);
+      addToast('success', 'Draft account deleted');
       resetForm();
       loadAccounts();
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
-      addToast('error', `Failed to create cloud account: ${msg}`);
-    } finally {
-      setAdding(false);
+      addToast('error', `Failed to delete: ${msg}`);
     }
   };
 
@@ -197,7 +260,7 @@ export function CloudAccountsPage() {
         <h2 className="text-xl font-bold text-gray-100">Settings</h2>
         {isOperator && (
           <button
-            onClick={() => setShowAdd(true)}
+            onClick={() => { resetForm(); setShowForm(true); }}
             className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-2 rounded text-sm transition-colors"
           >
             Add Account
@@ -206,16 +269,19 @@ export function CloudAccountsPage() {
       </div>
       <SettingsTabs />
 
-      {showAdd && (
+      {showForm && (
         <div className="border border-gray-800 rounded p-4 mb-6">
-          <h3 className="text-sm text-gray-200 font-medium mb-3">Add Cloud Account</h3>
+          <h3 className="text-sm text-gray-200 font-medium mb-3">
+            {isEditing ? 'Edit Cloud Account' : 'Add Cloud Account'}
+          </h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
             <div>
               <label className="block text-xs text-gray-400 mb-1">Provider</label>
               <select
-                value={newProvider}
-                onChange={e => setNewProvider(e.target.value)}
-                className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                value={formProvider}
+                onChange={e => setFormProvider(e.target.value)}
+                disabled={isEditing}
+                className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500 disabled:opacity-50"
               >
                 {PROVIDERS.map(p => (
                   <option key={p} value={p}>{PROVIDER_LABELS[p]}</option>
@@ -225,8 +291,8 @@ export function CloudAccountsPage() {
             <div>
               <label className="block text-xs text-gray-400 mb-1">Name</label>
               <input
-                value={newName}
-                onChange={e => setNewName(e.target.value)}
+                value={formName}
+                onChange={e => setFormName(e.target.value)}
                 placeholder="My Azure Account"
                 className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 autoFocus
@@ -234,25 +300,25 @@ export function CloudAccountsPage() {
             </div>
           </div>
 
-          {/* Setup guide */}
-          {CLOUD_SETUP_GUIDES[newProvider] && (
+          {/* Setup guide (only for new accounts) */}
+          {!isEditing && CLOUD_SETUP_GUIDES[formProvider] && (
             <div className="mb-3 bg-gray-900/40 border border-gray-800 rounded p-3">
               <div className="text-[10px] text-cyan-400/80 font-medium uppercase tracking-wider mb-1.5">Setup Guide</div>
               <ol className="text-[11px] text-gray-400 space-y-0.5 list-none pl-0">
-                {CLOUD_SETUP_GUIDES[newProvider].steps.map((step, i) => (
+                {CLOUD_SETUP_GUIDES[formProvider].steps.map((step, i) => (
                   <li key={i} className="font-mono">{step}</li>
                 ))}
               </ol>
             </div>
           )}
 
-          {/* Provider-specific credential fields */}
-          {newProvider === 'azure' && (
+          {/* Provider-specific credential fields (only for new accounts) */}
+          {!isEditing && formProvider === 'azure' && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
               <div>
                 <label className="block text-xs text-gray-400 mb-1">Tenant ID</label>
                 <input
-                  type="password"
+                  type="text"
                   value={credentials.azure.tenant_id}
                   onChange={e => setCredentials(prev => ({ ...prev, azure: { ...prev.azure, tenant_id: e.target.value } }))}
                   className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
@@ -262,7 +328,7 @@ export function CloudAccountsPage() {
               <div>
                 <label className="block text-xs text-gray-400 mb-1">Client ID</label>
                 <input
-                  type="password"
+                  type="text"
                   value={credentials.azure.client_id}
                   onChange={e => setCredentials(prev => ({ ...prev, azure: { ...prev.azure, client_id: e.target.value } }))}
                   className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
@@ -281,12 +347,12 @@ export function CloudAccountsPage() {
               </div>
             </div>
           )}
-          {newProvider === 'aws' && (
+          {!isEditing && formProvider === 'aws' && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
               <div>
                 <label className="block text-xs text-gray-400 mb-1">Access Key ID</label>
                 <input
-                  type="password"
+                  type="text"
                   value={credentials.aws.access_key_id}
                   onChange={e => setCredentials(prev => ({ ...prev, aws: { ...prev.aws, access_key_id: e.target.value } }))}
                   className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
@@ -305,7 +371,7 @@ export function CloudAccountsPage() {
               </div>
             </div>
           )}
-          {newProvider === 'gcp' && (
+          {!isEditing && formProvider === 'gcp' && (
             <div className="mb-3">
               <label className="block text-xs text-gray-400 mb-1">Service Account JSON Key</label>
               <textarea
@@ -319,40 +385,74 @@ export function CloudAccountsPage() {
             </div>
           )}
 
+          {isEditing && (
+            <p className="text-xs text-gray-600 mb-3">
+              To change credentials, delete this account and create a new one.
+            </p>
+          )}
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
             <div>
               <label className="block text-xs text-gray-400 mb-1">Default Region (optional)</label>
               <input
-                value={newRegion}
-                onChange={e => setNewRegion(e.target.value)}
+                value={formRegion}
+                onChange={e => setFormRegion(e.target.value)}
                 placeholder="us-east-1"
                 className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
               />
             </div>
-            <div className="flex items-end pb-1">
-              <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={newPersonal}
-                  onChange={e => setNewPersonal(e.target.checked)}
-                  className="accent-cyan-500"
-                  disabled={!isProjectAdmin && !newPersonal}
-                />
-                Personal account
-                {!isProjectAdmin && (
-                  <span className="text-xs text-gray-600">(shared requires admin)</span>
-                )}
-              </label>
-            </div>
+            {!isEditing && (
+              <div className="flex items-end pb-1">
+                <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formPersonal}
+                    onChange={e => setFormPersonal(e.target.checked)}
+                    className="accent-cyan-500"
+                    disabled={!isProjectAdmin && !formPersonal}
+                  />
+                  Personal account
+                  {!isProjectAdmin && (
+                    <span className="text-xs text-gray-600">(shared requires admin)</span>
+                  )}
+                </label>
+              </div>
+            )}
           </div>
+
+          {/* Validation error after create */}
+          {validationError && (
+            <div className="mb-3 border border-red-500/30 bg-red-500/10 rounded p-3">
+              <p className="text-sm text-red-400 mb-2">Validation failed: {validationError}</p>
+              <p className="text-xs text-gray-500 mb-2">
+                The account was created but credentials could not be verified. You can keep it as a draft and fix your provider setup, or delete it.
+              </p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => { resetForm(); }}
+                  className="text-xs text-cyan-400 hover:text-cyan-300 transition-colors"
+                >
+                  Keep as draft
+                </button>
+                <button
+                  onClick={handleDeleteJustCreated}
+                  className="text-xs text-red-400 hover:text-red-300 transition-colors"
+                >
+                  Delete account
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="flex gap-3">
             <button
-              onClick={handleAdd}
-              disabled={adding || !newName.trim()}
+              onClick={handleSave}
+              disabled={saving || !formName.trim() || !!validationError}
               className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors disabled:opacity-50"
             >
-              {adding ? 'Creating...' : 'Create Account'}
+              {saving
+                ? (isEditing ? 'Saving...' : 'Saving & Validating...')
+                : (isEditing ? 'Save' : 'Save & Validate')}
             </button>
             <button
               onClick={resetForm}
@@ -408,6 +508,14 @@ export function CloudAccountsPage() {
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex gap-3">
+                      {isOperator && (
+                        <button
+                          onClick={() => openEditForm(acct)}
+                          className="text-xs text-gray-400 hover:text-cyan-300 transition-colors"
+                        >
+                          Edit
+                        </button>
+                      )}
                       <button
                         onClick={() => handleValidate(acct.account_id)}
                         disabled={validating === acct.account_id}
