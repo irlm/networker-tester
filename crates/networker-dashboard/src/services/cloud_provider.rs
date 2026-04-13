@@ -40,6 +40,7 @@ pub struct VmInfo {
 pub enum CloudProvider {
     Azure(AzureProvider),
     Aws(AwsProvider),
+    Gcp(GcpProvider),
 }
 
 impl CloudProvider {
@@ -54,6 +55,7 @@ impl CloudProvider {
                 conn_config,
             )?)),
             "aws" => Ok(CloudProvider::Aws(AwsProvider::from_config(conn_config)?)),
+            "gcp" => Ok(CloudProvider::Gcp(GcpProvider::from_config(conn_config)?)),
             other => Err(anyhow!("unsupported cloud provider: {other}")),
         }
     }
@@ -62,6 +64,7 @@ impl CloudProvider {
         match self {
             CloudProvider::Azure(az) => az.create_vm(config).await,
             CloudProvider::Aws(aws) => aws.create_vm(config).await,
+            CloudProvider::Gcp(gcp) => gcp.create_vm(config).await,
         }
     }
 
@@ -69,6 +72,7 @@ impl CloudProvider {
         match self {
             CloudProvider::Azure(az) => az.start_vm(resource_id).await,
             CloudProvider::Aws(aws) => aws.start_vm(resource_id).await,
+            CloudProvider::Gcp(gcp) => gcp.start_vm(resource_id).await,
         }
     }
 
@@ -76,6 +80,7 @@ impl CloudProvider {
         match self {
             CloudProvider::Azure(az) => az.stop_vm(resource_id).await,
             CloudProvider::Aws(aws) => aws.stop_vm(resource_id).await,
+            CloudProvider::Gcp(gcp) => gcp.stop_vm(resource_id).await,
         }
     }
 
@@ -83,6 +88,7 @@ impl CloudProvider {
         match self {
             CloudProvider::Azure(az) => az.delete_vm(resource_id).await,
             CloudProvider::Aws(aws) => aws.delete_vm(resource_id).await,
+            CloudProvider::Gcp(gcp) => gcp.delete_vm(resource_id).await,
         }
     }
 
@@ -90,6 +96,7 @@ impl CloudProvider {
         match self {
             CloudProvider::Azure(az) => az.get_vm_state(resource_id).await,
             CloudProvider::Aws(aws) => aws.get_vm_state(resource_id).await,
+            CloudProvider::Gcp(gcp) => gcp.get_vm_state(resource_id).await,
         }
     }
 
@@ -101,6 +108,7 @@ impl CloudProvider {
         match self {
             CloudProvider::Azure(az) => az.tag_vm(resource_id, tags).await,
             CloudProvider::Aws(aws) => aws.tag_vm(resource_id, tags).await,
+            CloudProvider::Gcp(gcp) => gcp.tag_vm(resource_id, tags).await,
         }
     }
 }
@@ -1056,6 +1064,288 @@ impl AwsProvider {
     }
 }
 
+// ── GCP provider ───────────────────────────────────────────────────────────
+
+/// GCP Compute Engine VM lifecycle backed by the `gcloud` CLI.
+#[derive(Debug, Clone)]
+pub struct GcpProvider {
+    /// Service account JSON key (full file content)
+    pub service_account_json: String,
+    pub project_id: String,
+    pub region: String,
+}
+
+impl GcpProvider {
+    pub fn from_config(config: &serde_json::Value) -> anyhow::Result<Self> {
+        let json_key = config
+            .get("json_key")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("gcp config: missing json_key"))?
+            .to_string();
+
+        // Parse the JSON key to extract project_id
+        let key_parsed: serde_json::Value =
+            serde_json::from_str(&json_key).context("gcp config: json_key is not valid JSON")?;
+        let project_id = key_parsed
+            .get("project_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("gcp json_key: missing project_id"))?
+            .to_string();
+
+        let region = config
+            .get("region")
+            .and_then(|v| v.as_str())
+            .unwrap_or("us-central1")
+            .to_string();
+
+        Ok(Self {
+            service_account_json: json_key,
+            project_id,
+            region,
+        })
+    }
+
+    /// Write the service account JSON to a temp file and return the path.
+    /// Caller should delete the file after use.
+    fn write_key_file(&self) -> anyhow::Result<String> {
+        let path = format!("/tmp/gcp-key-{}.json", uuid::Uuid::new_v4().simple());
+        std::fs::write(&path, &self.service_account_json)?;
+        Ok(path)
+    }
+
+    fn gcloud_cmd(&self, key_file: &str) -> tokio::process::Command {
+        let mut cmd = tokio::process::Command::new("gcloud");
+        cmd.env("GOOGLE_APPLICATION_CREDENTIALS", key_file)
+            .env("CLOUDSDK_CORE_PROJECT", &self.project_id);
+        cmd
+    }
+
+    pub async fn create_vm(&self, config: &VmConfig) -> anyhow::Result<VmInfo> {
+        tracing::info!(
+            project = %self.project_id,
+            region = %self.region,
+            vm_name = %config.name,
+            vm_size = %config.vm_size,
+            "GcpProvider::create_vm"
+        );
+
+        let key_file = self.write_key_file()?;
+
+        // GCP needs a zone, not just a region. Use the first zone in the region.
+        let zone = format!("{}-a", config.region);
+
+        let output = self
+            .gcloud_cmd(&key_file)
+            .arg("compute")
+            .arg("instances")
+            .arg("create")
+            .arg(&config.name)
+            .arg("--zone")
+            .arg(&zone)
+            .arg("--machine-type")
+            .arg(&config.vm_size)
+            .arg("--image-family")
+            .arg("ubuntu-2404-lts-amd64")
+            .arg("--image-project")
+            .arg("ubuntu-os-cloud")
+            .arg("--tags")
+            .arg("alethedash-tester")
+            .arg("--format")
+            .arg("json")
+            .output()
+            .await
+            .context("failed to spawn gcloud compute instances create")?;
+
+        let _ = std::fs::remove_file(&key_file);
+
+        if !output.status.success() {
+            anyhow::bail!(
+                "gcloud compute instances create failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        let v: serde_json::Value = serde_json::from_slice(&output.stdout)
+            .context("gcloud create produced non-JSON output")?;
+
+        // GCP returns an array
+        let inst = v.as_array().and_then(|a| a.first()).unwrap_or(&v);
+        let resource_id = inst
+            .get("selfLink")
+            .and_then(|s| s.as_str())
+            .or_else(|| inst.get("id").and_then(|s| s.as_str()))
+            .ok_or_else(|| anyhow!("missing instance id/selfLink"))?
+            .to_string();
+
+        let public_ip = inst
+            .get("networkInterfaces")
+            .and_then(|n| n.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|n| n.get("accessConfigs"))
+            .and_then(|a| a.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|c| c.get("natIP"))
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        Ok(VmInfo {
+            resource_id,
+            public_ip,
+            vm_name: config.name.clone(),
+            power_state: "running".to_string(),
+        })
+    }
+
+    pub async fn start_vm(&self, resource_id: &str) -> anyhow::Result<()> {
+        let key_file = self.write_key_file()?;
+        let (name, zone) = parse_gcp_resource_id(resource_id);
+        let output = self
+            .gcloud_cmd(&key_file)
+            .arg("compute")
+            .arg("instances")
+            .arg("start")
+            .arg(&name)
+            .arg("--zone")
+            .arg(&zone)
+            .output()
+            .await
+            .context("failed to spawn gcloud start")?;
+        let _ = std::fs::remove_file(&key_file);
+        if !output.status.success() {
+            anyhow::bail!(
+                "gcloud start failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        Ok(())
+    }
+
+    pub async fn stop_vm(&self, resource_id: &str) -> anyhow::Result<()> {
+        let key_file = self.write_key_file()?;
+        let (name, zone) = parse_gcp_resource_id(resource_id);
+        let output = self
+            .gcloud_cmd(&key_file)
+            .arg("compute")
+            .arg("instances")
+            .arg("stop")
+            .arg(&name)
+            .arg("--zone")
+            .arg(&zone)
+            .output()
+            .await
+            .context("failed to spawn gcloud stop")?;
+        let _ = std::fs::remove_file(&key_file);
+        if !output.status.success() {
+            anyhow::bail!(
+                "gcloud stop failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        Ok(())
+    }
+
+    pub async fn delete_vm(&self, resource_id: &str) -> anyhow::Result<()> {
+        let key_file = self.write_key_file()?;
+        let (name, zone) = parse_gcp_resource_id(resource_id);
+        let output = self
+            .gcloud_cmd(&key_file)
+            .arg("compute")
+            .arg("instances")
+            .arg("delete")
+            .arg(&name)
+            .arg("--zone")
+            .arg(&zone)
+            .arg("--quiet")
+            .output()
+            .await
+            .context("failed to spawn gcloud delete")?;
+        let _ = std::fs::remove_file(&key_file);
+        if !output.status.success() {
+            anyhow::bail!(
+                "gcloud delete failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        Ok(())
+    }
+
+    pub async fn get_vm_state(&self, resource_id: &str) -> anyhow::Result<VmInfo> {
+        let key_file = self.write_key_file()?;
+        let (name, zone) = parse_gcp_resource_id(resource_id);
+        let output = self
+            .gcloud_cmd(&key_file)
+            .arg("compute")
+            .arg("instances")
+            .arg("describe")
+            .arg(&name)
+            .arg("--zone")
+            .arg(&zone)
+            .arg("--format")
+            .arg("json")
+            .output()
+            .await
+            .context("failed to spawn gcloud describe")?;
+        let _ = std::fs::remove_file(&key_file);
+        if !output.status.success() {
+            anyhow::bail!(
+                "gcloud describe failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        let v: serde_json::Value =
+            serde_json::from_slice(&output.stdout).context("gcloud describe non-JSON")?;
+
+        let status = v
+            .get("status")
+            .and_then(|s| s.as_str())
+            .map(|s| s.to_lowercase())
+            .unwrap_or_else(|| "unknown".to_string());
+        let public_ip = v
+            .get("networkInterfaces")
+            .and_then(|n| n.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|n| n.get("accessConfigs"))
+            .and_then(|a| a.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|c| c.get("natIP"))
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        Ok(VmInfo {
+            resource_id: resource_id.to_string(),
+            public_ip,
+            vm_name: name,
+            power_state: status,
+        })
+    }
+
+    pub async fn tag_vm(
+        &self,
+        _resource_id: &str,
+        _tags: &HashMap<String, String>,
+    ) -> anyhow::Result<()> {
+        // GCP uses "labels" instead of tags. Implement if needed.
+        Ok(())
+    }
+}
+
+/// Parse a GCP resource ID (selfLink) into (name, zone).
+/// Format: https://www.googleapis.com/compute/v1/projects/PROJECT/zones/ZONE/instances/NAME
+fn parse_gcp_resource_id(resource_id: &str) -> (String, String) {
+    let parts: Vec<&str> = resource_id.split('/').collect();
+    let name = parts.last().unwrap_or(&"").to_string();
+    let zone = parts
+        .iter()
+        .position(|&p| p == "zones")
+        .and_then(|i| parts.get(i + 1))
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+    (name, zone)
+}
+
 // ── Legacy fallback ────────────────────────────────────────────────────────
 
 /// Build a `CloudProvider::Azure` from the legacy env-var convention used by
@@ -1140,17 +1430,79 @@ mod tests {
     fn from_connection_rejects_unknown_provider() {
         let config = serde_json::json!({});
 
-        let err = CloudProvider::from_connection("aws", &config).unwrap_err();
+        let err = CloudProvider::from_connection("digitalocean", &config).unwrap_err();
         assert!(
             err.to_string().contains("unsupported cloud provider"),
             "expected 'unsupported cloud provider', got: {err}"
         );
 
-        let err = CloudProvider::from_connection("gcp", &config).unwrap_err();
+        let err = CloudProvider::from_connection("oracle", &config).unwrap_err();
         assert!(
             err.to_string().contains("unsupported cloud provider"),
             "expected 'unsupported cloud provider', got: {err}"
         );
+    }
+
+    #[test]
+    fn aws_provider_from_valid_config() {
+        let config = serde_json::json!({
+            "access_key_id": "AKIA1234567890",
+            "secret_access_key": "secret123",
+            "region": "us-east-1"
+        });
+        let provider = AwsProvider::from_config(&config).unwrap();
+        assert_eq!(provider.access_key_id, "AKIA1234567890");
+        assert_eq!(provider.region, "us-east-1");
+        assert!(provider.session_token.is_none());
+    }
+
+    #[test]
+    fn aws_provider_with_session_token() {
+        let config = serde_json::json!({
+            "access_key_id": "ASIA123",
+            "secret_access_key": "secret",
+            "session_token": "token123",
+            "region": "eu-west-1"
+        });
+        let provider = AwsProvider::from_config(&config).unwrap();
+        assert_eq!(provider.session_token.as_deref(), Some("token123"));
+    }
+
+    #[test]
+    fn aws_provider_rejects_missing_keys() {
+        let config = serde_json::json!({"region": "us-east-1"});
+        assert!(AwsProvider::from_config(&config).is_err());
+    }
+
+    #[test]
+    fn gcp_provider_from_valid_config() {
+        let json_key = serde_json::json!({
+            "type": "service_account",
+            "project_id": "my-project-123",
+            "private_key": "-----BEGIN PRIVATE KEY-----\nMIIE...\n-----END PRIVATE KEY-----",
+            "client_email": "sa@my-project.iam.gserviceaccount.com"
+        });
+        let config = serde_json::json!({
+            "json_key": json_key.to_string(),
+            "region": "us-central1"
+        });
+        let provider = GcpProvider::from_config(&config).unwrap();
+        assert_eq!(provider.project_id, "my-project-123");
+        assert_eq!(provider.region, "us-central1");
+    }
+
+    #[test]
+    fn gcp_provider_rejects_invalid_key() {
+        let config = serde_json::json!({"json_key": "not json"});
+        assert!(GcpProvider::from_config(&config).is_err());
+    }
+
+    #[test]
+    fn parse_gcp_resource_id_extracts_name_and_zone() {
+        let id = "https://www.googleapis.com/compute/v1/projects/my-proj/zones/us-central1-a/instances/test-vm";
+        let (name, zone) = parse_gcp_resource_id(id);
+        assert_eq!(name, "test-vm");
+        assert_eq!(zone, "us-central1-a");
     }
 
     #[test]
