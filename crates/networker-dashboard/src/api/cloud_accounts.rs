@@ -477,35 +477,51 @@ async fn validate_azure_account(creds: &serde_json::Value) -> (String, Option<St
         );
     }
 
+    // Validate credentials by requesting an access token using env vars.
+    // This avoids `az login`/`az logout` which would pollute the server's
+    // az CLI session (the dashboard VM may use managed identity).
     let output = tokio::process::Command::new("az")
-        .arg("login")
-        .arg("--service-principal")
-        .arg("-u")
-        .arg(client_id)
-        .arg("-p")
-        .arg(client_secret)
+        .arg("account")
+        .arg("get-access-token")
+        .arg("--resource")
+        .arg("https://management.azure.com")
         .arg("--tenant")
         .arg(tenant_id)
         .arg("--output")
         .arg("none")
+        .env("AZURE_CLIENT_ID", client_id)
+        .env("AZURE_CLIENT_SECRET", client_secret)
+        .env("AZURE_TENANT_ID", tenant_id)
+        // Clear any ambient login so we only test these specific credentials
+        .env("AZURE_CONFIG_DIR", "/tmp/az-validate-ephemeral")
         .output()
         .await;
 
     match output {
-        Ok(out) if out.status.success() => {
-            // Logout to clean up session state
-            let _ = tokio::process::Command::new("az")
-                .arg("logout")
-                .output()
-                .await;
-            ("active".to_string(), None)
-        }
+        Ok(out) if out.status.success() => ("active".to_string(), None),
         Ok(out) => {
             let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-            (
-                "error".to_string(),
-                Some(format!("Azure login failed: {}", stderr.trim())),
-            )
+            // Provide a helpful message for common errors
+            let msg = if stderr.contains("No subscriptions found") {
+                format!(
+                    "Credentials are valid but the service principal has no subscription access. \
+                     Assign at least 'Reader' role on your subscription:\n\
+                     az role assignment create --assignee {} --role Reader --scope /subscriptions/YOUR_SUBSCRIPTION_ID",
+                    client_id
+                )
+            } else if stderr.contains("AADSTS7000215") || stderr.contains("invalid_client") {
+                "Invalid client secret. Generate a new one in Azure Portal → App registrations → Certificates & secrets.".to_string()
+            } else if stderr.contains("AADSTS700016")
+                || stderr.contains("not found in the directory")
+            {
+                format!(
+                    "Application {} not found in tenant {}. Check the Client ID and Tenant ID.",
+                    client_id, tenant_id
+                )
+            } else {
+                format!("Azure validation failed: {}", stderr.trim())
+            };
+            ("error".to_string(), Some(msg))
         }
         Err(e) => (
             "error".to_string(),
