@@ -1447,6 +1447,17 @@ async fn provider_for_tester(
                     "identity_type": "service_principal",
                 })
             }
+            "aws" => {
+                // Merge region from tester into the credentials config
+                let mut config = creds.clone();
+                if let Some(obj) = config.as_object_mut() {
+                    obj.insert(
+                        "region".to_string(),
+                        serde_json::Value::String(tester.region.clone()),
+                    );
+                }
+                config
+            }
             _ => creds.clone(),
         };
         return cloud_provider::CloudProvider::from_connection(&tester.cloud, &config);

@@ -39,6 +39,7 @@ pub struct VmInfo {
 #[derive(Debug, Clone)]
 pub enum CloudProvider {
     Azure(AzureProvider),
+    Aws(AwsProvider),
 }
 
 impl CloudProvider {
@@ -52,6 +53,7 @@ impl CloudProvider {
             "azure" => Ok(CloudProvider::Azure(AzureProvider::from_config(
                 conn_config,
             )?)),
+            "aws" => Ok(CloudProvider::Aws(AwsProvider::from_config(conn_config)?)),
             other => Err(anyhow!("unsupported cloud provider: {other}")),
         }
     }
@@ -59,30 +61,35 @@ impl CloudProvider {
     pub async fn create_vm(&self, config: &VmConfig) -> anyhow::Result<VmInfo> {
         match self {
             CloudProvider::Azure(az) => az.create_vm(config).await,
+            CloudProvider::Aws(aws) => aws.create_vm(config).await,
         }
     }
 
     pub async fn start_vm(&self, resource_id: &str) -> anyhow::Result<()> {
         match self {
             CloudProvider::Azure(az) => az.start_vm(resource_id).await,
+            CloudProvider::Aws(aws) => aws.start_vm(resource_id).await,
         }
     }
 
     pub async fn stop_vm(&self, resource_id: &str) -> anyhow::Result<()> {
         match self {
             CloudProvider::Azure(az) => az.stop_vm(resource_id).await,
+            CloudProvider::Aws(aws) => aws.stop_vm(resource_id).await,
         }
     }
 
     pub async fn delete_vm(&self, resource_id: &str) -> anyhow::Result<()> {
         match self {
             CloudProvider::Azure(az) => az.delete_vm(resource_id).await,
+            CloudProvider::Aws(aws) => aws.delete_vm(resource_id).await,
         }
     }
 
     pub async fn get_vm_state(&self, resource_id: &str) -> anyhow::Result<VmInfo> {
         match self {
             CloudProvider::Azure(az) => az.get_vm_state(resource_id).await,
+            CloudProvider::Aws(aws) => aws.get_vm_state(resource_id).await,
         }
     }
 
@@ -93,6 +100,7 @@ impl CloudProvider {
     ) -> anyhow::Result<()> {
         match self {
             CloudProvider::Azure(az) => az.tag_vm(resource_id, tags).await,
+            CloudProvider::Aws(aws) => aws.tag_vm(resource_id, tags).await,
         }
     }
 }
@@ -523,6 +531,307 @@ impl AzureProvider {
         if !output.status.success() {
             anyhow::bail!(
                 "az resource tag failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        Ok(())
+    }
+}
+
+// ── AWS provider ───────────────────────────────────────────────────────────
+
+/// AWS EC2 VM lifecycle backed by the `aws` CLI.
+#[derive(Debug, Clone)]
+pub struct AwsProvider {
+    pub access_key_id: String,
+    pub secret_access_key: String,
+    pub session_token: Option<String>,
+    pub region: String,
+}
+
+impl AwsProvider {
+    pub fn from_config(config: &serde_json::Value) -> anyhow::Result<Self> {
+        let access_key_id = config
+            .get("access_key_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let secret_access_key = config
+            .get("secret_access_key")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let session_token = config
+            .get("session_token")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        let region = config
+            .get("region")
+            .and_then(|v| v.as_str())
+            .unwrap_or("us-east-1")
+            .to_string();
+
+        if access_key_id.is_empty() || secret_access_key.is_empty() {
+            anyhow::bail!("aws config: missing access_key_id or secret_access_key");
+        }
+
+        Ok(Self {
+            access_key_id,
+            secret_access_key,
+            session_token,
+            region,
+        })
+    }
+
+    fn aws_cmd(&self) -> tokio::process::Command {
+        let mut cmd = tokio::process::Command::new("aws");
+        cmd.env("AWS_ACCESS_KEY_ID", &self.access_key_id)
+            .env("AWS_SECRET_ACCESS_KEY", &self.secret_access_key)
+            .env("AWS_DEFAULT_REGION", &self.region);
+        if let Some(ref token) = self.session_token {
+            cmd.env("AWS_SESSION_TOKEN", token);
+        }
+        cmd
+    }
+
+    pub async fn create_vm(&self, config: &VmConfig) -> anyhow::Result<VmInfo> {
+        tracing::info!(
+            region = %self.region,
+            vm_size = %config.vm_size,
+            vm_name = %config.name,
+            "AwsProvider::create_vm"
+        );
+
+        // Find latest Ubuntu 24.04 AMI
+        let ami_output = self
+            .aws_cmd()
+            .arg("ec2")
+            .arg("describe-images")
+            .arg("--owners")
+            .arg("099720109477") // Canonical
+            .arg("--filters")
+            .arg("Name=name,Values=ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*")
+            .arg("Name=state,Values=available")
+            .arg("--query")
+            .arg("sort_by(Images, &CreationDate)[-1].ImageId")
+            .arg("--region")
+            .arg(&config.region)
+            .arg("--output")
+            .arg("text")
+            .output()
+            .await
+            .context("failed to spawn aws ec2 describe-images")?;
+
+        if !ami_output.status.success() {
+            anyhow::bail!(
+                "aws ec2 describe-images failed: {}",
+                String::from_utf8_lossy(&ami_output.stderr)
+            );
+        }
+        let ami_id = String::from_utf8_lossy(&ami_output.stdout)
+            .trim()
+            .to_string();
+        if ami_id.is_empty() || ami_id == "None" {
+            anyhow::bail!("No Ubuntu 24.04 AMI found in region {}", config.region);
+        }
+        tracing::info!(ami_id = %ami_id, "Found Ubuntu AMI");
+
+        // Create the instance
+        let output = self
+            .aws_cmd()
+            .arg("ec2")
+            .arg("run-instances")
+            .arg("--image-id")
+            .arg(&ami_id)
+            .arg("--instance-type")
+            .arg(&config.vm_size)
+            .arg("--region")
+            .arg(&config.region)
+            .arg("--tag-specifications")
+            .arg(format!(
+                "ResourceType=instance,Tags=[{{Key=Name,Value={}}}]",
+                config.name
+            ))
+            .arg("--query")
+            .arg("Instances[0]")
+            .arg("--output")
+            .arg("json")
+            .output()
+            .await
+            .context("failed to spawn aws ec2 run-instances")?;
+
+        if !output.status.success() {
+            anyhow::bail!(
+                "aws ec2 run-instances failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        let v: serde_json::Value = serde_json::from_slice(&output.stdout)
+            .context("aws ec2 run-instances produced non-JSON output")?;
+
+        let instance_id = v
+            .get("InstanceId")
+            .and_then(|s| s.as_str())
+            .ok_or_else(|| anyhow!("missing InstanceId"))?
+            .to_string();
+
+        // Wait for public IP (may take a moment)
+        let public_ip = v
+            .get("PublicIpAddress")
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        Ok(VmInfo {
+            resource_id: instance_id,
+            public_ip,
+            vm_name: config.name.clone(),
+            power_state: "running".to_string(),
+        })
+    }
+
+    pub async fn start_vm(&self, resource_id: &str) -> anyhow::Result<()> {
+        let output = self
+            .aws_cmd()
+            .arg("ec2")
+            .arg("start-instances")
+            .arg("--instance-ids")
+            .arg(resource_id)
+            .output()
+            .await
+            .context("failed to spawn aws ec2 start-instances")?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "aws ec2 start-instances failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        Ok(())
+    }
+
+    pub async fn stop_vm(&self, resource_id: &str) -> anyhow::Result<()> {
+        let output = self
+            .aws_cmd()
+            .arg("ec2")
+            .arg("stop-instances")
+            .arg("--instance-ids")
+            .arg(resource_id)
+            .output()
+            .await
+            .context("failed to spawn aws ec2 stop-instances")?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "aws ec2 stop-instances failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        Ok(())
+    }
+
+    pub async fn delete_vm(&self, resource_id: &str) -> anyhow::Result<()> {
+        let output = self
+            .aws_cmd()
+            .arg("ec2")
+            .arg("terminate-instances")
+            .arg("--instance-ids")
+            .arg(resource_id)
+            .output()
+            .await
+            .context("failed to spawn aws ec2 terminate-instances")?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "aws ec2 terminate-instances failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        Ok(())
+    }
+
+    pub async fn get_vm_state(&self, resource_id: &str) -> anyhow::Result<VmInfo> {
+        let output = self
+            .aws_cmd()
+            .arg("ec2")
+            .arg("describe-instances")
+            .arg("--instance-ids")
+            .arg(resource_id)
+            .arg("--query")
+            .arg("Reservations[0].Instances[0]")
+            .arg("--output")
+            .arg("json")
+            .output()
+            .await
+            .context("failed to spawn aws ec2 describe-instances")?;
+
+        if !output.status.success() {
+            anyhow::bail!(
+                "aws ec2 describe-instances failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        let v: serde_json::Value = serde_json::from_slice(&output.stdout)
+            .context("aws ec2 describe-instances non-JSON")?;
+
+        let state = v
+            .get("State")
+            .and_then(|s| s.get("Name"))
+            .and_then(|s| s.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let public_ip = v
+            .get("PublicIpAddress")
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string();
+        let name = v
+            .get("Tags")
+            .and_then(|t| t.as_array())
+            .and_then(|tags| {
+                tags.iter()
+                    .find(|t| t.get("Key").and_then(|k| k.as_str()) == Some("Name"))
+                    .and_then(|t| t.get("Value").and_then(|v| v.as_str()))
+            })
+            .unwrap_or("")
+            .to_string();
+
+        Ok(VmInfo {
+            resource_id: resource_id.to_string(),
+            public_ip,
+            vm_name: name,
+            power_state: state,
+        })
+    }
+
+    pub async fn tag_vm(
+        &self,
+        resource_id: &str,
+        tags: &HashMap<String, String>,
+    ) -> anyhow::Result<()> {
+        if tags.is_empty() {
+            return Ok(());
+        }
+        let tag_args: Vec<String> = tags
+            .iter()
+            .map(|(k, v)| format!("Key={k},Value={v}"))
+            .collect();
+        let mut cmd = self.aws_cmd();
+        cmd.arg("ec2")
+            .arg("create-tags")
+            .arg("--resources")
+            .arg(resource_id)
+            .arg("--tags");
+        for t in &tag_args {
+            cmd.arg(t);
+        }
+        let output = cmd
+            .output()
+            .await
+            .context("failed to spawn aws ec2 create-tags")?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "aws ec2 create-tags failed: {}",
                 String::from_utf8_lossy(&output.stderr)
             );
         }

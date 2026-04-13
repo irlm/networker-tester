@@ -282,18 +282,49 @@ async fn update_account(
         return Err((StatusCode::NOT_FOUND, "Account not found".to_string()));
     }
 
-    // If new credentials provided, encrypt and update them
-    if let Some(ref creds) = update_req.credentials {
-        if !creds.is_empty() {
+    // If new credentials provided, merge with existing and re-encrypt
+    if let Some(ref new_creds) = update_req.credentials {
+        if !new_creds.is_empty() {
             let key = state.credential_key.as_ref().ok_or_else(|| {
                 (
                     StatusCode::SERVICE_UNAVAILABLE,
                     "DASHBOARD_CREDENTIAL_KEY required".to_string(),
                 )
             })?;
-            let creds_json = serde_json::to_vec(creds)
+
+            // Decrypt existing credentials and merge new values on top
+            let nonce_arr: [u8; 12] =
+                acct.credentials_nonce.as_slice().try_into().map_err(|_| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Invalid stored nonce".to_string(),
+                    )
+                })?;
+            let existing_plain = crate::crypto::decrypt_with_fallback(
+                &acct.credentials_enc,
+                &nonce_arr,
+                key,
+                state.credential_key_old.as_ref(),
+            )
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to decrypt existing credentials: {e}"),
+                )
+            })?;
+            let mut merged: serde_json::Map<String, serde_json::Value> =
+                serde_json::from_slice(&existing_plain).unwrap_or_default();
+
+            // Only overwrite fields that have non-empty values
+            for (k, v) in new_creds {
+                if !v.is_empty() {
+                    merged.insert(k.clone(), serde_json::Value::String(v.clone()));
+                }
+            }
+
+            let merged_json = serde_json::to_vec(&merged)
                 .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid credentials: {e}")))?;
-            let (enc, nonce) = crate::crypto::encrypt(&creds_json, key).map_err(|e| {
+            let (enc, nonce) = crate::crypto::encrypt(&merged_json, key).map_err(|e| {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     format!("Encryption failed: {e}"),
@@ -596,6 +627,11 @@ async fn validate_aws_account(creds: &serde_json::Value) -> (String, Option<Stri
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
+    let session_token = creds
+        .get("session_token")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
     if access_key.is_empty() || secret_key.is_empty() {
         return (
             "error".to_string(),
@@ -603,13 +639,15 @@ async fn validate_aws_account(creds: &serde_json::Value) -> (String, Option<Stri
         );
     }
 
-    let output = tokio::process::Command::new("aws")
-        .arg("sts")
+    let mut cmd = tokio::process::Command::new("aws");
+    cmd.arg("sts")
         .arg("get-caller-identity")
         .env("AWS_ACCESS_KEY_ID", access_key)
-        .env("AWS_SECRET_ACCESS_KEY", secret_key)
-        .output()
-        .await;
+        .env("AWS_SECRET_ACCESS_KEY", secret_key);
+    if !session_token.is_empty() {
+        cmd.env("AWS_SESSION_TOKEN", session_token);
+    }
+    let output = cmd.output().await;
 
     match output {
         Ok(out) if out.status.success() => ("active".to_string(), None),

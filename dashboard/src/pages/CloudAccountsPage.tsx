@@ -45,14 +45,21 @@ const CLOUD_SETUP_GUIDES: Record<string, { steps: string[]; fieldHelp: Record<st
   },
   aws: {
     steps: [
-      '1. Go to AWS Console \u2192 IAM \u2192 Users \u2192 Create user (or use existing)',
-      '2. Attach policy: AmazonEC2FullAccess (or custom policy scoped to your VPC/region)',
-      '3. Go to Security credentials tab \u2192 Create access key',
-      '4. Select "Application running outside AWS" \u2192 copy both values immediately',
+      'Option A \u2014 IAM User (permanent keys, no session token):',
+      '  1. AWS Console \u2192 IAM \u2192 Users \u2192 Create user',
+      '  2. Attach policy: AmazonEC2FullAccess',
+      '  3. Security credentials \u2192 Create access key \u2192 "Application running outside AWS"',
+      '  4. Copy Access Key ID + Secret Access Key. Leave Session Token empty.',
+      '',
+      'Option B \u2014 SSO / Temporary credentials (requires session token):',
+      '  1. Run: aws sso login',
+      '  2. Run: aws configure export-credentials --format env',
+      '  3. Copy all three values: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN',
+      '  4. Note: temporary credentials expire. You will need to update them periodically.',
     ],
     fieldHelp: {
-      access_key_id: 'Starts with "AKIA...". Identifies the IAM user \u2014 not a secret by itself.',
-      secret_access_key: 'Shown only once when creating the key. If lost, create a new one.',
+      access_key_id: 'Starts with "AKIA" (permanent) or "ASIA" (temporary/SSO).',
+      secret_access_key: 'Paired with the access key. Shown only once for IAM users.',
     },
   },
   gcp: {
@@ -71,14 +78,14 @@ const CLOUD_SETUP_GUIDES: Record<string, { steps: string[]; fieldHelp: Record<st
 
 interface CredentialFields {
   azure: { tenant_id: string; subscription_id: string; resource_group: string; client_id: string; client_secret: string };
-  aws: { access_key_id: string; secret_access_key: string };
+  aws: { access_key_id: string; secret_access_key: string; session_token: string };
   gcp: { json_key: string };
 }
 
 function emptyCredentials(): CredentialFields {
   return {
     azure: { tenant_id: '', subscription_id: '', resource_group: '', client_id: '', client_secret: '' },
-    aws: { access_key_id: '', secret_access_key: '' },
+    aws: { access_key_id: '', secret_access_key: '', session_token: '' },
     gcp: { json_key: '' },
   };
 }
@@ -306,7 +313,12 @@ export function CloudAccountsPage() {
               <label className="block text-xs text-gray-400 mb-1">Provider</label>
               <select
                 value={formProvider}
-                onChange={e => setFormProvider(e.target.value)}
+                onChange={e => {
+                  const p = e.target.value;
+                  setFormProvider(p);
+                  setFormName(`My ${PROVIDER_LABELS[p] || p} Account`);
+                  setCredentials(emptyCredentials());
+                }}
                 disabled={isEditing}
                 className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500 disabled:opacity-50"
               >
@@ -320,7 +332,7 @@ export function CloudAccountsPage() {
               <input
                 value={formName}
                 onChange={e => setFormName(e.target.value)}
-                placeholder="My Azure Account"
+                placeholder={`My ${PROVIDER_LABELS[formProvider] || formProvider} Account`}
                 className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 autoFocus
               />
@@ -403,28 +415,46 @@ export function CloudAccountsPage() {
             </div>
           )}
           {formProvider === 'aws' && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
-              <div>
-                <label className="block text-xs text-gray-400 mb-1">Access Key ID</label>
-                <input
-                  type="text"
-                  value={credentials.aws.access_key_id}
-                  onChange={e => setCredentials(prev => ({ ...prev, aws: { ...prev.aws, access_key_id: e.target.value } }))}
-                  placeholder={isEditing ? 'leave empty to keep existing' : undefined}
-                  className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
-                />
-                <p className="text-[10px] text-gray-600 mt-0.5">{CLOUD_SETUP_GUIDES.aws.fieldHelp.access_key_id}</p>
+            <div className="space-y-3 mb-3">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">Access Key ID</label>
+                  <input
+                    type="text"
+                    value={credentials.aws.access_key_id}
+                    onChange={e => setCredentials(prev => ({ ...prev, aws: { ...prev.aws, access_key_id: e.target.value } }))}
+                    placeholder={isEditing ? 'leave empty to keep existing' : 'AKIA...'}
+                    className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                  />
+                  <p className="text-[10px] text-gray-600 mt-0.5">{CLOUD_SETUP_GUIDES.aws.fieldHelp.access_key_id}</p>
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">Secret Access Key</label>
+                  <input
+                    type="password"
+                    value={credentials.aws.secret_access_key}
+                    onChange={e => setCredentials(prev => ({ ...prev, aws: { ...prev.aws, secret_access_key: e.target.value } }))}
+                    placeholder={isEditing ? 'leave empty to keep existing' : undefined}
+                    className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                  />
+                  <p className="text-[10px] text-gray-600 mt-0.5">{CLOUD_SETUP_GUIDES.aws.fieldHelp.secret_access_key}</p>
+                </div>
               </div>
               <div>
-                <label className="block text-xs text-gray-400 mb-1">Secret Access Key</label>
+                <label className="block text-xs text-gray-400 mb-1">
+                  Session Token <span className="text-gray-600">(optional — only for temporary/SSO credentials)</span>
+                </label>
                 <input
                   type="password"
-                  value={credentials.aws.secret_access_key}
-                  onChange={e => setCredentials(prev => ({ ...prev, aws: { ...prev.aws, secret_access_key: e.target.value } }))}
+                  value={credentials.aws.session_token}
+                  onChange={e => setCredentials(prev => ({ ...prev, aws: { ...prev.aws, session_token: e.target.value } }))}
                   placeholder={isEditing ? 'leave empty to keep existing' : undefined}
                   className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 />
-                <p className="text-[10px] text-gray-600 mt-0.5">{CLOUD_SETUP_GUIDES.aws.fieldHelp.secret_access_key}</p>
+                <p className="text-[10px] text-gray-600 mt-0.5">
+                  Required if using <span className="text-gray-400">aws sso login</span> or <span className="text-gray-400">aws sts assume-role</span>.
+                  Not needed for permanent IAM user keys. Get all three values with: <span className="text-gray-400 font-mono">aws configure export-credentials --format env</span>
+                </p>
               </div>
             </div>
           )}
