@@ -209,8 +209,10 @@ impl AzureProvider {
     }
 
     /// Build an `az` command with the correct auth context.
+    /// Includes `--only-show-errors` to suppress warnings that break JSON parsing.
     async fn az_cmd(&self, config_dir: &Option<String>) -> tokio::process::Command {
         let mut cmd = tokio::process::Command::new("az");
+        cmd.arg("--only-show-errors");
         if let Some(dir) = config_dir {
             cmd.env("AZURE_CONFIG_DIR", dir);
         }
