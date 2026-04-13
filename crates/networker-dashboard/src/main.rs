@@ -180,8 +180,78 @@ async fn main() -> anyhow::Result<()> {
     // Install ring as the default TLS crypto provider (required by reqwest/rustls).
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    // CLI setup subcommand: `networker-dashboard setup`
+    // CLI subcommands (run locally on the server, then exit)
     let args: Vec<String> = std::env::args().collect();
+
+    // `networker-dashboard reset-password` — reset a user's password
+    if args.get(1).map(|s| s.as_str()) == Some("reset-password") {
+        let _log_guard = networker_log::LogBuilder::new("dashboard")
+            .with_console(networker_log::Stream::Stderr)
+            .init()
+            .await?;
+        let db_url = std::env::var("DASHBOARD_DB_URL").unwrap_or_else(|_| {
+            "postgres://networker:networker@localhost:5432/networker_core".into()
+        });
+        let pool = db::create_pool(&db_url).await?;
+        let client = pool.get().await?;
+
+        // Email: from arg or prompt
+        let email = if let Some(e) = args.get(2) {
+            e.clone()
+        } else {
+            eprint!("Email: ");
+            std::io::Write::flush(&mut std::io::stderr())?;
+            let mut buf = String::new();
+            std::io::stdin().read_line(&mut buf)?;
+            buf.trim().to_string()
+        };
+
+        // Verify user exists
+        let row = client
+            .query_opt(
+                "SELECT user_id, status, is_platform_admin FROM dash_user WHERE email = $1",
+                &[&email],
+            )
+            .await?;
+        let row = match row {
+            Some(r) => r,
+            None => {
+                eprintln!("No user found with email: {email}");
+                std::process::exit(1);
+            }
+        };
+        let status: String = row.get("status");
+        let is_admin: Option<bool> = row.get("is_platform_admin");
+        eprintln!(
+            "User: {email}  status={status}  platform_admin={}",
+            is_admin.unwrap_or(false)
+        );
+
+        // Prompt for new password
+        let password = rpassword::prompt_password("New password: ")?;
+        let confirm = rpassword::prompt_password("Confirm password: ")?;
+        if password != confirm {
+            eprintln!("Passwords do not match");
+            std::process::exit(1);
+        }
+        if password.len() < 8 {
+            eprintln!("Password must be at least 8 characters");
+            std::process::exit(1);
+        }
+
+        let hash =
+            bcrypt::hash(&password, bcrypt::DEFAULT_COST).map_err(|e| anyhow::anyhow!("{e}"))?;
+        client
+            .execute(
+                "UPDATE dash_user SET password_hash = $1, must_change_password = FALSE WHERE email = $2",
+                &[&hash, &email],
+            )
+            .await?;
+        eprintln!("Password reset for {email}");
+        return Ok(());
+    }
+
+    // `networker-dashboard setup` — initial admin creation
     if args.get(1).map(|s| s.as_str()) == Some("setup") {
         // Console-only logging for the interactive setup wizard (exits before server starts).
         let _setup_log_guard = networker_log::LogBuilder::new("dashboard")
