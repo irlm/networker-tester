@@ -1427,13 +1427,18 @@ async fn provider_for_tester(
         )?;
         let creds: serde_json::Value = serde_json::from_slice(&plaintext)?;
 
-        // Build provider config from cloud_account credentials
+        // Build provider config from cloud_account credentials.
+        // The config must include ALL fields AzureProvider::from_config needs:
+        // subscription_id, resource_group (for --subscription/--resource-group flags)
+        // AND client_id, client_secret, tenant_id (for SP auth).
         let config = match tester.cloud.as_str() {
             "azure" => {
                 serde_json::json!({
                     "subscription_id": creds.get("subscription_id").and_then(|v| v.as_str()).unwrap_or(""),
                     "resource_group": creds.get("resource_group").and_then(|v| v.as_str()).unwrap_or("networker-testers"),
                     "tenant_id": creds.get("tenant_id").and_then(|v| v.as_str()).unwrap_or(""),
+                    "client_id": creds.get("client_id").and_then(|v| v.as_str()).unwrap_or(""),
+                    "client_secret": creds.get("client_secret").and_then(|v| v.as_str()).unwrap_or(""),
                     "identity_type": "service_principal",
                 })
             }
