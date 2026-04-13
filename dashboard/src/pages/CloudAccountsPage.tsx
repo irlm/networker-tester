@@ -153,12 +153,38 @@ export function CloudAccountsPage() {
 
     try {
       if (isEditing) {
-        // Edit mode: update name/region only
+        // Build credentials payload: only include if any field is filled
+        const creds: Record<string, string> =
+          formProvider === 'azure' ? { ...credentials.azure } :
+          formProvider === 'aws' ? { ...credentials.aws } :
+          { ...credentials.gcp };
+        const filledCreds = Object.fromEntries(
+          Object.entries(creds).filter(([, v]) => v.trim() !== '')
+        );
+        const hasNewCreds = Object.keys(filledCreds).length > 0;
+
         await api.updateCloudAccount(projectId, editingId, {
           name: formName.trim(),
           region_default: formRegion.trim() || undefined,
+          credentials: hasNewCreds ? filledCreds : undefined,
         });
-        addToast('success', `Cloud account "${formName.trim()}" updated`);
+
+        // If credentials were updated, auto-validate
+        if (hasNewCreds) {
+          try {
+            const result = await api.validateCloudAccount(projectId, editingId);
+            if (result.status === 'active') {
+              addToast('success', `Cloud account "${formName.trim()}" updated and validated`);
+            } else {
+              addToast('error', result.validation_error || 'Credentials updated but validation failed');
+            }
+          } catch (valErr) {
+            const vmsg = valErr instanceof Error ? valErr.message : 'Unknown error';
+            addToast('error', `Credentials updated but validation failed: ${vmsg}`);
+          }
+        } else {
+          addToast('success', `Cloud account "${formName.trim()}" updated`);
+        }
         resetForm();
         loadAccounts();
       } else {
@@ -313,8 +339,11 @@ export function CloudAccountsPage() {
             </div>
           )}
 
-          {/* Provider-specific credential fields (only for new accounts) */}
-          {!isEditing && formProvider === 'azure' && (
+          {/* Provider-specific credential fields */}
+          {isEditing && (
+            <p className="text-xs text-gray-500 mb-2">Leave credential fields empty to keep existing values.</p>
+          )}
+          {formProvider === 'azure' && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
               <div>
                 <label className="block text-xs text-gray-400 mb-1">Tenant ID</label>
@@ -322,6 +351,7 @@ export function CloudAccountsPage() {
                   type="text"
                   value={credentials.azure.tenant_id}
                   onChange={e => setCredentials(prev => ({ ...prev, azure: { ...prev.azure, tenant_id: e.target.value } }))}
+                  placeholder={isEditing ? 'leave empty to keep existing' : undefined}
                   className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 />
                 <p className="text-[10px] text-gray-600 mt-0.5">{CLOUD_SETUP_GUIDES.azure.fieldHelp.tenant_id}</p>
@@ -332,6 +362,7 @@ export function CloudAccountsPage() {
                   type="text"
                   value={credentials.azure.client_id}
                   onChange={e => setCredentials(prev => ({ ...prev, azure: { ...prev.azure, client_id: e.target.value } }))}
+                  placeholder={isEditing ? 'leave empty to keep existing' : undefined}
                   className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 />
                 <p className="text-[10px] text-gray-600 mt-0.5">{CLOUD_SETUP_GUIDES.azure.fieldHelp.client_id}</p>
@@ -342,13 +373,14 @@ export function CloudAccountsPage() {
                   type="password"
                   value={credentials.azure.client_secret}
                   onChange={e => setCredentials(prev => ({ ...prev, azure: { ...prev.azure, client_secret: e.target.value } }))}
+                  placeholder={isEditing ? 'leave empty to keep existing' : undefined}
                   className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 />
                 <p className="text-[10px] text-gray-600 mt-0.5">{CLOUD_SETUP_GUIDES.azure.fieldHelp.client_secret}</p>
               </div>
             </div>
           )}
-          {!isEditing && formProvider === 'aws' && (
+          {formProvider === 'aws' && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
               <div>
                 <label className="block text-xs text-gray-400 mb-1">Access Key ID</label>
@@ -356,6 +388,7 @@ export function CloudAccountsPage() {
                   type="text"
                   value={credentials.aws.access_key_id}
                   onChange={e => setCredentials(prev => ({ ...prev, aws: { ...prev.aws, access_key_id: e.target.value } }))}
+                  placeholder={isEditing ? 'leave empty to keep existing' : undefined}
                   className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 />
                 <p className="text-[10px] text-gray-600 mt-0.5">{CLOUD_SETUP_GUIDES.aws.fieldHelp.access_key_id}</p>
@@ -366,30 +399,26 @@ export function CloudAccountsPage() {
                   type="password"
                   value={credentials.aws.secret_access_key}
                   onChange={e => setCredentials(prev => ({ ...prev, aws: { ...prev.aws, secret_access_key: e.target.value } }))}
+                  placeholder={isEditing ? 'leave empty to keep existing' : undefined}
                   className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 />
                 <p className="text-[10px] text-gray-600 mt-0.5">{CLOUD_SETUP_GUIDES.aws.fieldHelp.secret_access_key}</p>
               </div>
             </div>
           )}
-          {!isEditing && formProvider === 'gcp' && (
+          {formProvider === 'gcp' && (
             <div className="mb-3">
               <label className="block text-xs text-gray-400 mb-1">Service Account JSON Key</label>
               <textarea
                 value={credentials.gcp.json_key}
                 onChange={e => setCredentials(prev => ({ ...prev, gcp: { ...prev.gcp, json_key: e.target.value } }))}
                 rows={4}
+                placeholder={isEditing ? 'leave empty to keep existing' : undefined}
                 className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500 font-mono"
                 style={{ WebkitTextSecurity: 'disc' } as React.CSSProperties}
               />
               <p className="text-[10px] text-gray-600 mt-0.5">{CLOUD_SETUP_GUIDES.gcp.fieldHelp.json_key}</p>
             </div>
-          )}
-
-          {isEditing && (
-            <p className="text-xs text-gray-600 mb-3">
-              To change credentials, delete this account and create a new one.
-            </p>
           )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">

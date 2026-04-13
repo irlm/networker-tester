@@ -607,7 +607,7 @@ export const api = {
       body: JSON.stringify(params),
     }),
 
-  updateCloudAccount: (projectId: string, accountId: string, params: { name: string; region_default?: string }) =>
+  updateCloudAccount: (projectId: string, accountId: string, params: { name: string; region_default?: string; credentials?: Record<string, string> }) =>
     request<void>(projectUrl(projectId, `cloud-accounts/${accountId}`), {
       method: 'PUT',
       body: JSON.stringify(params),

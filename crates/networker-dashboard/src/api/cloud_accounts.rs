@@ -27,6 +27,8 @@ pub struct CreateAccountRequest {
 pub struct UpdateAccountRequest {
     pub name: String,
     pub region_default: Option<String>,
+    #[serde(default)]
+    pub credentials: Option<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Serialize)]
@@ -278,6 +280,44 @@ async fn update_account(
 
     if !updated {
         return Err((StatusCode::NOT_FOUND, "Account not found".to_string()));
+    }
+
+    // If new credentials provided, encrypt and update them
+    if let Some(ref creds) = update_req.credentials {
+        if !creds.is_empty() {
+            let key = state.credential_key.as_ref().ok_or_else(|| {
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "DASHBOARD_CREDENTIAL_KEY required".to_string(),
+                )
+            })?;
+            let creds_json = serde_json::to_vec(creds)
+                .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid credentials: {e}")))?;
+            let (enc, nonce) = crate::crypto::encrypt(&creds_json, key).map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Encryption failed: {e}"),
+                )
+            })?;
+            crate::db::cloud_accounts::update_credentials(
+                &client,
+                &account_id,
+                &enc,
+                nonce.as_ref(),
+            )
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "Failed to update credentials");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Failed to update credentials".to_string(),
+                )
+            })?;
+            // Reset status since credentials changed
+            crate::db::cloud_accounts::update_validation(&client, &account_id, "pending", None)
+                .await
+                .ok();
+        }
     }
 
     tracing::info!(
@@ -687,5 +727,15 @@ mod tests {
         let req: UpdateAccountRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.name, "Updated Name");
         assert_eq!(req.region_default.as_deref(), Some("eu-west-1"));
+        assert!(req.credentials.is_none());
+    }
+
+    #[test]
+    fn update_request_with_credentials() {
+        let json = r#"{"name": "Updated", "credentials": {"client_secret": "new-secret"}}"#;
+        let req: UpdateAccountRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.name, "Updated");
+        let creds = req.credentials.unwrap();
+        assert_eq!(creds.get("client_secret").unwrap(), "new-secret");
     }
 }
