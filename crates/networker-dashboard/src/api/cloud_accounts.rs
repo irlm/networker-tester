@@ -477,55 +477,71 @@ async fn validate_azure_account(creds: &serde_json::Value) -> (String, Option<St
         );
     }
 
-    // Validate credentials by requesting an access token using env vars.
-    // This avoids `az login`/`az logout` which would pollute the server's
-    // az CLI session (the dashboard VM may use managed identity).
-    let output = tokio::process::Command::new("az")
-        .arg("account")
-        .arg("get-access-token")
-        .arg("--resource")
-        .arg("https://management.azure.com")
-        .arg("--tenant")
-        .arg(tenant_id)
-        .arg("--output")
-        .arg("none")
-        .env("AZURE_CLIENT_ID", client_id)
-        .env("AZURE_CLIENT_SECRET", client_secret)
-        .env("AZURE_TENANT_ID", tenant_id)
-        // Clear any ambient login so we only test these specific credentials
-        .env("AZURE_CONFIG_DIR", "/tmp/az-validate-ephemeral")
-        .output()
+    // Validate by requesting an OAuth token directly from Azure AD via HTTP.
+    // This avoids the az CLI entirely — no session pollution, no dependencies.
+    let token_url = format!(
+        "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
+        tenant_id
+    );
+    let http_client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => return ("error".to_string(), Some(format!("HTTP client error: {e}"))),
+    };
+
+    let resp = http_client
+        .post(&token_url)
+        .form(&[
+            ("grant_type", "client_credentials"),
+            ("client_id", client_id),
+            ("client_secret", client_secret),
+            ("scope", "https://management.azure.com/.default"),
+        ])
+        .send()
         .await;
 
-    match output {
-        Ok(out) if out.status.success() => ("active".to_string(), None),
-        Ok(out) => {
-            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-            // Provide a helpful message for common errors
-            let msg = if stderr.contains("No subscriptions found") {
-                format!(
-                    "Credentials are valid but the service principal has no subscription access. \
-                     Assign at least 'Reader' role on your subscription:\n\
-                     az role assignment create --assignee {} --role Reader --scope /subscriptions/YOUR_SUBSCRIPTION_ID",
-                    client_id
-                )
-            } else if stderr.contains("AADSTS7000215") || stderr.contains("invalid_client") {
-                "Invalid client secret. Generate a new one in Azure Portal → App registrations → Certificates & secrets.".to_string()
-            } else if stderr.contains("AADSTS700016")
-                || stderr.contains("not found in the directory")
-            {
-                format!(
-                    "Application {} not found in tenant {}. Check the Client ID and Tenant ID.",
-                    client_id, tenant_id
-                )
+    match resp {
+        Ok(r) => {
+            let status_code = r.status();
+            let body: serde_json::Value = r.json().await.unwrap_or_default();
+
+            if status_code.is_success() && body.get("access_token").is_some() {
+                ("active".to_string(), None)
             } else {
-                format!("Azure validation failed: {}", stderr.trim())
-            };
-            ("error".to_string(), Some(msg))
+                let error_desc = body
+                    .get("error_description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let error_code = body.get("error").and_then(|v| v.as_str()).unwrap_or("");
+
+                let msg = if error_code == "invalid_client" || error_desc.contains("AADSTS7000215")
+                {
+                    "Invalid client secret. Generate a new one: Azure Portal → App registrations → Certificates & secrets.".to_string()
+                } else if error_desc.contains("AADSTS700016")
+                    || error_desc.contains("not found in the directory")
+                {
+                    format!(
+                        "Application {} not found in tenant {}. Check the Client ID and Tenant ID.",
+                        client_id, tenant_id
+                    )
+                } else if error_desc.contains("AADSTS90002") || error_desc.contains("not found") {
+                    format!("Tenant '{}' not found. Check the Tenant ID.", tenant_id)
+                } else if !error_desc.is_empty() {
+                    format!(
+                        "Azure: {}",
+                        error_desc.split('\r').next().unwrap_or(error_desc)
+                    )
+                } else {
+                    format!("Azure token request failed (HTTP {})", status_code)
+                };
+                ("error".to_string(), Some(msg))
+            }
         }
         Err(e) => (
             "error".to_string(),
-            Some(format!("az CLI not available: {e}")),
+            Some(format!("Could not reach Azure AD: {e}")),
         ),
     }
 }
