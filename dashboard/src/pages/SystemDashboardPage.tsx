@@ -442,18 +442,50 @@ const PROVIDER_TYPES: { value: string; label: string }[] = [
 
 const PROVIDER_FIELDS: Record<string, FieldDef[]> = {
   microsoft: [
-    { key: 'client_id', label: 'Application (client) ID', required: true },
-    { key: 'client_secret', label: 'Client Secret', required: true, secret: true },
-    { key: 'tenant_id', label: 'Directory (tenant) ID', required: true, help: 'Azure Portal \u2192 App Registrations \u2192 Overview' },
+    { key: 'client_id', label: 'Application (client) ID', required: true,
+      help: 'Entra admin center \u2192 App registrations \u2192 your app \u2192 Overview \u2192 Application (client) ID' },
+    { key: 'client_secret', label: 'Client Secret', required: true, secret: true,
+      help: 'Same app \u2192 Certificates & secrets \u2192 New client secret. Copy the Value immediately \u2014 it won\'t be shown again.' },
+    { key: 'tenant_id', label: 'Directory (tenant) ID', required: true,
+      help: 'Same Overview page \u2192 Directory (tenant) ID. Use "common" to allow any Microsoft account.' },
   ],
   google: [
-    { key: 'client_id', label: 'Client ID', required: true },
-    { key: 'client_secret', label: 'Client Secret', required: true, secret: true, help: 'Google Cloud Console \u2192 APIs & Services \u2192 Credentials' },
+    { key: 'client_id', label: 'Client ID', required: true,
+      help: 'Google Cloud Console \u2192 APIs & Services \u2192 Credentials \u2192 your OAuth 2.0 Client ID' },
+    { key: 'client_secret', label: 'Client Secret', required: true, secret: true,
+      help: 'Same credentials page \u2192 click the client \u2192 Client secret on the right.' },
   ],
   oidc_generic: [
-    { key: 'client_id', label: 'Client ID', required: true },
-    { key: 'client_secret', label: 'Client Secret', required: true, secret: true },
-    { key: 'issuer_url', label: 'Issuer URL', required: true, help: 'Must support .well-known/openid-configuration' },
+    { key: 'client_id', label: 'Client ID', required: true,
+      help: 'Found in your identity provider\'s app settings (e.g. Okta: Applications \u2192 your app \u2192 General \u2192 Client ID)' },
+    { key: 'client_secret', label: 'Client Secret', required: true, secret: true,
+      help: 'Same app settings page. For Okta: General tab \u2192 Client Credentials section.' },
+    { key: 'issuer_url', label: 'Issuer URL', required: true,
+      help: 'Base URL of your provider (e.g. https://your-domain.okta.com). Must serve /.well-known/openid-configuration' },
+  ],
+};
+
+const PROVIDER_SETUP_GUIDES: Record<string, string[]> = {
+  microsoft: [
+    '1. Go to entra.microsoft.com \u2192 App registrations \u2192 New registration',
+    '2. Name: "AletheDash SSO", choose your tenant scope',
+    '3. Redirect URI (Web): {public_url}/api/auth/sso/callback',
+    '4. Copy Application (client) ID and Directory (tenant) ID from Overview',
+    '5. Certificates & secrets \u2192 New client secret \u2192 copy the Value immediately',
+  ],
+  google: [
+    '1. Go to console.cloud.google.com \u2192 APIs & Services \u2192 Credentials',
+    '2. Create Credentials \u2192 OAuth client ID \u2192 Web application',
+    '3. Authorized redirect URI: {public_url}/api/auth/sso/callback',
+    '4. Copy Client ID and Client secret shown after creation',
+    '5. Enable the Google People API (APIs & Services \u2192 Library)',
+  ],
+  oidc_generic: [
+    '1. In your identity provider (Okta, Auth0, Keycloak, etc.), create a new OIDC app',
+    '2. Set redirect/callback URI: {public_url}/api/auth/sso/callback',
+    '3. Copy the Client ID and Client Secret from app settings',
+    '4. Find the Issuer URL (e.g. https://your-domain.okta.com)',
+    '5. Verify: {issuer_url}/.well-known/openid-configuration returns JSON',
   ],
 };
 
@@ -734,6 +766,20 @@ function AuthTab() {
                 />
               </div>
             </div>
+
+            {/* Setup guide */}
+            {!editingId && PROVIDER_SETUP_GUIDES[formType] && (
+              <div className="mb-4 bg-gray-900/40 border border-gray-800 rounded p-3">
+                <div className="text-[10px] text-cyan-400/80 font-medium uppercase tracking-wider mb-1.5">Setup Guide</div>
+                <ol className="text-[11px] text-gray-400 space-y-0.5 list-none pl-0">
+                  {PROVIDER_SETUP_GUIDES[formType].map((step, i) => (
+                    <li key={i} className="font-mono">
+                      {step.replace(/\{public_url\}/g, publicUrl || 'https://your-dashboard-url')}
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            )}
 
             {(PROVIDER_FIELDS[formType] || []).map(f => (
               <div key={f.key} className="mb-3">
