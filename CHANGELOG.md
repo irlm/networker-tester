@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.27.5] — 2026-04-13
+
+### Added
+- `networker-dashboard reset-password [email]` CLI subcommand for local password reset.
+
+---
+
 ## [0.27.4] — 2026-04-13
 
 ### Fixed
