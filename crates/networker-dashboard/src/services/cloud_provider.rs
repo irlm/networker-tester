@@ -229,6 +229,16 @@ impl AzureProvider {
 
     /// Create a new Azure VM via `az vm create`.
     pub async fn create_vm(&self, config: &VmConfig) -> anyhow::Result<VmInfo> {
+        tracing::info!(
+            subscription = %self.subscription_id,
+            resource_group = %self.resource_group,
+            identity_type = %self.identity_type,
+            has_client_id = self.client_id.is_some(),
+            vm_name = %config.name,
+            region = %config.region,
+            vm_size = %config.vm_size,
+            "AzureProvider::create_vm"
+        );
         let sp_dir = self.ensure_sp_login().await?;
         let mut cmd = self.az_cmd(&sp_dir).await;
         cmd.arg("vm")
@@ -268,13 +278,21 @@ impl AzureProvider {
         Self::cleanup_sp_session(&sp_dir);
 
         if !output.status.success() {
-            anyhow::bail!(
-                "az vm create failed: {}",
-                String::from_utf8_lossy(&output.stderr)
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            tracing::error!(
+                %stderr,
+                %stdout,
+                status = ?output.status.code(),
+                "az vm create failed"
             );
+            anyhow::bail!("az vm create failed: {stderr}");
         }
 
-        let v: serde_json::Value = serde_json::from_slice(&output.stdout)
+        // Strip any non-JSON prefix (az CLI may print warnings before JSON)
+        let stdout_str = String::from_utf8_lossy(&output.stdout);
+        let json_start = stdout_str.find('{').unwrap_or(0);
+        let v: serde_json::Value = serde_json::from_str(&stdout_str[json_start..])
             .context("az vm create produced non-JSON output")?;
 
         let public_ip = v
