@@ -438,20 +438,15 @@ async fn validate_account(
         ),
     };
 
-    crate::db::cloud_accounts::update_validation(
-        &client,
-        &account_id,
-        &status,
-        error.as_deref(),
-    )
-    .await
-    .map_err(|e| {
-        tracing::error!(error = %e, "Failed to update validation status");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Failed to update validation".to_string(),
-        )
-    })?;
+    crate::db::cloud_accounts::update_validation(&client, &account_id, &status, error.as_deref())
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to update validation status");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to update validation".to_string(),
+            )
+        })?;
 
     Ok(Json(serde_json::json!({
         "status": status,
@@ -561,16 +556,10 @@ async fn validate_aws_account(creds: &serde_json::Value) -> (String, Option<Stri
 }
 
 async fn validate_gcp_account(creds: &serde_json::Value) -> (String, Option<String>) {
-    let json_key = creds
-        .get("json_key")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let json_key = creds.get("json_key").and_then(|v| v.as_str()).unwrap_or("");
 
     if json_key.is_empty() {
-        return (
-            "error".to_string(),
-            Some("Missing json_key".to_string()),
-        );
+        return ("error".to_string(), Some("Missing json_key".to_string()));
     }
 
     // Write key to temp file for gcloud CLI
