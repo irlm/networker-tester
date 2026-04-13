@@ -863,7 +863,7 @@ async fn delete_tester(
     // delete fails we refuse to delete the row so the user can retry
     // (otherwise we'd leak Azure resources).
     if let Some(resource_id) = tester.vm_resource_id.as_deref() {
-        let delete_result = match provider_for_tester(&client, &tester).await {
+        let delete_result = match provider_for_tester(&client, &tester, &state).await {
             Ok(p) => p.delete_vm(resource_id).await,
             Err(e) => Err(e),
         };
@@ -1179,13 +1179,15 @@ async fn probe_tester(
         ));
     }
 
-    let provider = provider_for_tester(&client, &tester).await.map_err(|e| {
-        tracing::warn!(%tester_id, error = ?e, "provider_for_tester failed");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to load cloud provider: {e}"),
-        )
-    })?;
+    let provider = provider_for_tester(&client, &tester, &state)
+        .await
+        .map_err(|e| {
+            tracing::warn!(%tester_id, error = ?e, "provider_for_tester failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to load cloud provider: {e}"),
+            )
+        })?;
     let azure_state =
         tester_recovery::probe_azure_state(&provider, &tester.vm_resource_id, &tester.vm_name)
             .await
@@ -1373,14 +1375,16 @@ async fn refresh_latest_version(
 
 // ── Cloud provider loader ────────────────────────────────────────────────
 
-/// Load the [`CloudProvider`] for a tester. If the tester has a
-/// `cloud_connection_id`, we fetch the connection's `provider` + `config`
-/// from the DB and build the provider from that. Otherwise we fall back to
-/// the legacy env-var-based Azure provider.
+/// Load the [`CloudProvider`] for a tester. Checks three sources in order:
+/// 1. `cloud_connection` (FIC/secretless) if `cloud_connection_id` is set
+/// 2. `cloud_account` (encrypted credentials) for this project + cloud provider
+/// 3. Legacy env-var fallback
 async fn provider_for_tester(
     client: &tokio_postgres::Client,
     tester: &ProjectTesterRow,
+    state: &AppState,
 ) -> anyhow::Result<cloud_provider::CloudProvider> {
+    // 1. Cloud connection (FIC/secretless)
     if let Some(conn_id) = tester.cloud_connection_id {
         let row = client
             .query_one(
@@ -1390,10 +1394,56 @@ async fn provider_for_tester(
             .await?;
         let provider: String = row.get("provider");
         let config: serde_json::Value = row.get("config");
-        cloud_provider::CloudProvider::from_connection(&provider, &config)
-    } else {
-        cloud_provider::legacy_azure_provider()
+        return cloud_provider::CloudProvider::from_connection(&provider, &config);
     }
+
+    // 2. Cloud account (encrypted credentials) for this project + provider
+    let acct_row = client
+        .query_opt(
+            "SELECT credentials_enc, credentials_nonce FROM cloud_account \
+             WHERE project_id = $1 AND provider = $2 AND status = 'active' \
+             ORDER BY created_at ASC LIMIT 1",
+            &[&tester.project_id, &tester.cloud],
+        )
+        .await?;
+
+    if let Some(row) = acct_row {
+        let cred_key = state.credential_key.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "DASHBOARD_CREDENTIAL_KEY not set — cannot use cloud account credentials"
+            )
+        })?;
+        let enc: Vec<u8> = row.get("credentials_enc");
+        let nonce_bytes: Vec<u8> = row.get("credentials_nonce");
+        let nonce: [u8; 12] = nonce_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("invalid nonce in cloud_account"))?;
+        let plaintext = crate::crypto::decrypt_with_fallback(
+            &enc,
+            &nonce,
+            cred_key,
+            state.credential_key_old.as_ref(),
+        )?;
+        let creds: serde_json::Value = serde_json::from_slice(&plaintext)?;
+
+        // Build provider config from cloud_account credentials
+        let config = match tester.cloud.as_str() {
+            "azure" => {
+                serde_json::json!({
+                    "subscription_id": creds.get("subscription_id").and_then(|v| v.as_str()).unwrap_or(""),
+                    "resource_group": creds.get("resource_group").and_then(|v| v.as_str()).unwrap_or("networker-testers"),
+                    "tenant_id": creds.get("tenant_id").and_then(|v| v.as_str()).unwrap_or(""),
+                    "identity_type": "service_principal",
+                })
+            }
+            _ => creds.clone(),
+        };
+        return cloud_provider::CloudProvider::from_connection(&tester.cloud, &config);
+    }
+
+    // 3. Legacy env var fallback
+    cloud_provider::legacy_azure_provider()
 }
 
 // ── Background task helpers ───────────────────────────────────────────────
@@ -1450,7 +1500,7 @@ async fn run_create_tester(
         .await
         .map(|r| ProjectTesterRow::from_row(&r))?;
     tester_state::set_status_message(&client, &tester_id, "creating VM").await?;
-    let provider = provider_for_tester(&client, &tester_row).await?;
+    let provider = provider_for_tester(&client, &tester_row, &state).await?;
     let vm_name = cloud_provider::generate_vm_name(&region);
     let vm_config = cloud_provider::VmConfig {
         name: vm_name.clone(),
@@ -1566,7 +1616,7 @@ async fn run_start_tester(state: Arc<AppState>, tester: ProjectTesterRow) -> any
         .vm_resource_id
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("tester has no vm_resource_id"))?;
-    provider_for_tester(&client, &tester)
+    provider_for_tester(&client, &tester, &state)
         .await?
         .start_vm(resource_id)
         .await?;
@@ -1660,7 +1710,7 @@ async fn run_stop_tester(state: Arc<AppState>, tester: ProjectTesterRow) -> anyh
         .vm_resource_id
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("tester has no vm_resource_id"))?;
-    provider_for_tester(&client, &tester)
+    provider_for_tester(&client, &tester, &state)
         .await?
         .stop_vm(resource_id)
         .await?;

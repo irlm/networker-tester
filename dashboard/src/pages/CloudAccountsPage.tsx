@@ -70,14 +70,14 @@ const CLOUD_SETUP_GUIDES: Record<string, { steps: string[]; fieldHelp: Record<st
 };
 
 interface CredentialFields {
-  azure: { tenant_id: string; client_id: string; client_secret: string };
+  azure: { tenant_id: string; subscription_id: string; resource_group: string; client_id: string; client_secret: string };
   aws: { access_key_id: string; secret_access_key: string };
   gcp: { json_key: string };
 }
 
 function emptyCredentials(): CredentialFields {
   return {
-    azure: { tenant_id: '', client_id: '', client_secret: '' },
+    azure: { tenant_id: '', subscription_id: '', resource_group: '', client_id: '', client_secret: '' },
     aws: { access_key_id: '', secret_access_key: '' },
     gcp: { json_key: '' },
   };
@@ -345,6 +345,28 @@ export function CloudAccountsPage() {
           )}
           {formProvider === 'azure' && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">Subscription ID</label>
+                <input
+                  type="text"
+                  value={credentials.azure.subscription_id}
+                  onChange={e => setCredentials(prev => ({ ...prev, azure: { ...prev.azure, subscription_id: e.target.value } }))}
+                  placeholder={isEditing ? 'leave empty to keep existing' : 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'}
+                  className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                />
+                <p className="text-[10px] text-gray-600 mt-0.5">Subscriptions page → your subscription → Overview → Subscription ID</p>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">Resource Group</label>
+                <input
+                  type="text"
+                  value={credentials.azure.resource_group}
+                  onChange={e => setCredentials(prev => ({ ...prev, azure: { ...prev.azure, resource_group: e.target.value } }))}
+                  placeholder={isEditing ? 'leave empty to keep existing' : 'networker-testers'}
+                  className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                />
+                <p className="text-[10px] text-gray-600 mt-0.5">Resource group where tester VMs will be created. Must exist beforehand.</p>
+              </div>
               <div>
                 <label className="block text-xs text-gray-400 mb-1">Tenant ID</label>
                 <input
