@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.27.4] — 2026-04-13
+
+### Fixed
+- Cloud account validation now calls provider CLIs (az/aws/gcloud) instead of always passing.
+- Tester creation fails with clear error when no Azure subscription is configured.
+- Create Tester modal loads providers from both cloud connections and cloud accounts.
+
+---
+
 ## [0.27.3] — 2026-04-13
 
 ### Fixed

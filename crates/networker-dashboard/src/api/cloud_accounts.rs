@@ -412,7 +412,7 @@ async fn validate_account(
         )
     })?;
 
-    let _credentials: serde_json::Value = serde_json::from_slice(&plaintext).map_err(|e| {
+    let credentials: serde_json::Value = serde_json::from_slice(&plaintext).map_err(|e| {
         tracing::error!(error = %e, account_id = %account_id, "Decrypted credentials are not valid JSON");
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -427,11 +427,18 @@ async fn validate_account(
         "Validating cloud account credentials"
     );
 
-    // For now, mark as validated if decryption succeeded.
-    // Actual provider-specific validation (az account show, aws sts, gcloud) can be added later.
-    let (status, error): (&str, Option<&str>) = ("active", None);
+    // Actually validate credentials against the provider CLI
+    let (status, error) = match acct.provider.as_str() {
+        "azure" => validate_azure_account(&credentials).await,
+        "aws" => validate_aws_account(&credentials).await,
+        "gcp" => validate_gcp_account(&credentials).await,
+        _ => (
+            "error".to_string(),
+            Some(format!("Unknown provider: {}", acct.provider)),
+        ),
+    };
 
-    crate::db::cloud_accounts::update_validation(&client, &account_id, status, error)
+    crate::db::cloud_accounts::update_validation(&client, &account_id, &status, error.as_deref())
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "Failed to update validation status");
@@ -445,6 +452,150 @@ async fn validate_account(
         "status": status,
         "validation_error": error,
     })))
+}
+
+// ── Provider-specific credential validators ──────────────────────────────
+
+async fn validate_azure_account(creds: &serde_json::Value) -> (String, Option<String>) {
+    let client_id = creds
+        .get("client_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let client_secret = creds
+        .get("client_secret")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let tenant_id = creds
+        .get("tenant_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    if client_id.is_empty() || client_secret.is_empty() || tenant_id.is_empty() {
+        return (
+            "error".to_string(),
+            Some("Missing client_id, client_secret, or tenant_id".to_string()),
+        );
+    }
+
+    let output = tokio::process::Command::new("az")
+        .arg("login")
+        .arg("--service-principal")
+        .arg("-u")
+        .arg(client_id)
+        .arg("-p")
+        .arg(client_secret)
+        .arg("--tenant")
+        .arg(tenant_id)
+        .arg("--output")
+        .arg("none")
+        .output()
+        .await;
+
+    match output {
+        Ok(out) if out.status.success() => {
+            // Logout to clean up session state
+            let _ = tokio::process::Command::new("az")
+                .arg("logout")
+                .output()
+                .await;
+            ("active".to_string(), None)
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            (
+                "error".to_string(),
+                Some(format!("Azure login failed: {}", stderr.trim())),
+            )
+        }
+        Err(e) => (
+            "error".to_string(),
+            Some(format!("az CLI not available: {e}")),
+        ),
+    }
+}
+
+async fn validate_aws_account(creds: &serde_json::Value) -> (String, Option<String>) {
+    let access_key = creds
+        .get("access_key_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let secret_key = creds
+        .get("secret_access_key")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    if access_key.is_empty() || secret_key.is_empty() {
+        return (
+            "error".to_string(),
+            Some("Missing access_key_id or secret_access_key".to_string()),
+        );
+    }
+
+    let output = tokio::process::Command::new("aws")
+        .arg("sts")
+        .arg("get-caller-identity")
+        .env("AWS_ACCESS_KEY_ID", access_key)
+        .env("AWS_SECRET_ACCESS_KEY", secret_key)
+        .output()
+        .await;
+
+    match output {
+        Ok(out) if out.status.success() => ("active".to_string(), None),
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            (
+                "error".to_string(),
+                Some(format!("AWS validation failed: {}", stderr.trim())),
+            )
+        }
+        Err(e) => (
+            "error".to_string(),
+            Some(format!("aws CLI not available: {e}")),
+        ),
+    }
+}
+
+async fn validate_gcp_account(creds: &serde_json::Value) -> (String, Option<String>) {
+    let json_key = creds.get("json_key").and_then(|v| v.as_str()).unwrap_or("");
+
+    if json_key.is_empty() {
+        return ("error".to_string(), Some("Missing json_key".to_string()));
+    }
+
+    // Write key to temp file for gcloud CLI
+    let tmp_path = format!("/tmp/gcp-validate-{}.json", Uuid::new_v4());
+    if let Err(e) = tokio::fs::write(&tmp_path, json_key).await {
+        return (
+            "error".to_string(),
+            Some(format!("Failed to write temp key file: {e}")),
+        );
+    }
+
+    let output = tokio::process::Command::new("gcloud")
+        .arg("auth")
+        .arg("activate-service-account")
+        .arg("--key-file")
+        .arg(&tmp_path)
+        .output()
+        .await;
+
+    // Clean up temp file regardless of outcome
+    let _ = tokio::fs::remove_file(&tmp_path).await;
+
+    match output {
+        Ok(out) if out.status.success() => ("active".to_string(), None),
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            (
+                "error".to_string(),
+                Some(format!("GCP validation failed: {}", stderr.trim())),
+            )
+        }
+        Err(e) => (
+            "error".to_string(),
+            Some(format!("gcloud CLI not available: {e}")),
+        ),
+    }
 }
 
 pub fn project_router(state: Arc<AppState>) -> Router {
