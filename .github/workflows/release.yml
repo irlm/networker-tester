@@ -88,6 +88,9 @@ jobs:
           --features browser
           -p networker-tester -p networker-endpoint -p networker-dashboard -p networker-agent
 
+      - name: Sync orchestrator lockfile
+        run: cargo generate-lockfile --manifest-path benchmarks/orchestrator/Cargo.toml
+
       - name: Build orchestrator
         run: >
           cargo build --release --locked
