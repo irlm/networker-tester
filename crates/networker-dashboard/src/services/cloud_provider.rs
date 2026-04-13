@@ -388,6 +388,14 @@ pub fn legacy_azure_provider() -> anyhow::Result<CloudProvider> {
     let sub = std::env::var("AZURE_SUBSCRIPTION_ID")
         .or_else(|_| std::env::var("DASHBOARD_AZURE_SUBSCRIPTION"))
         .unwrap_or_default();
+    if sub.is_empty() {
+        anyhow::bail!(
+            "No Azure subscription configured. Either:\n\
+             1. Add a Cloud Account (Settings > Cloud > Add Account) with Azure credentials, or\n\
+             2. Add a Cloud Connection (Settings > Cloud Connections) with managed identity config, or\n\
+             3. Set AZURE_SUBSCRIPTION_ID environment variable on the dashboard"
+        );
+    }
     let rg =
         std::env::var("DASHBOARD_AZURE_RG").unwrap_or_else(|_| "networker-testers".to_string());
     let config = serde_json::json!({

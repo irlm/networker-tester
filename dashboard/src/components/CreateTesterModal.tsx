@@ -83,27 +83,28 @@ export function CreateTesterModal({
     firstInputRef.current?.focus();
   }, []);
 
-  // Load available clouds from project's cloud connections
+  // Load available clouds from project's cloud connections AND cloud accounts
   useEffect(() => {
     let cancelled = false;
-    api.getCloudConnections(projectId)
-      .then((conns) => {
-        if (cancelled) return;
-        const providers = [...new Set(
-          conns
-            .filter((c: { status: string }) => c.status === 'active')
-            .map((c: { provider: string }) => c.provider),
-        )];
-        setAvailableClouds(providers.length > 0 ? providers : ['azure']);
-        // If current cloud not in available list, switch to first available
-        if (providers.length > 0 && !providers.includes(cloud)) {
-          setCloud(providers[0]);
-          setVmSize(DEFAULT_VM_SIZE[providers[0]] || providers[0]);
-        }
-      })
-      .catch(() => {
-        setAvailableClouds(['azure']);
-      });
+    Promise.all([
+      api.getCloudConnections(projectId).catch(() => []),
+      api.getCloudAccounts(projectId).catch(() => []),
+    ]).then(([conns, accts]) => {
+      if (cancelled) return;
+      const fromConns = conns
+        .filter((c: { status: string }) => c.status === 'active')
+        .map((c: { provider: string }) => c.provider);
+      const fromAccts = accts
+        .filter((a: { status: string }) => a.status === 'active')
+        .map((a: { provider: string }) => a.provider);
+      const providers = [...new Set([...fromConns, ...fromAccts])] as string[];
+      setAvailableClouds(providers.length > 0 ? providers : ['azure']);
+      // If current cloud not in available list, switch to first available
+      if (providers.length > 0 && !providers.includes(cloud)) {
+        setCloud(providers[0]);
+        setVmSize(DEFAULT_VM_SIZE[providers[0]] || providers[0]);
+      }
+    });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
