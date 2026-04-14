@@ -1762,9 +1762,12 @@ async fn run_create_tester_cloud_init(
 
     let target_triple = target_triple_for(requested_os);
     let is_windows = requested_os.starts_with("windows");
+    // The agent connects via WebSocket, not HTTP — convert the dashboard's
+    // public URL (https://host) into the WS URL the agent's tungstenite
+    // client expects (wss://host/ws/agent).
+    let agent_ws = cloud_init::agent_ws_url(&state.public_url);
     let bootstrap = if is_windows {
-        let raw =
-            cloud_init::render_windows_bootstrap(&state.public_url, &agent_api_key, target_triple)?;
+        let raw = cloud_init::render_windows_bootstrap(&agent_ws, &agent_api_key, target_triple)?;
         // AWS user-data convention: wrap PowerShell scripts in
         // <powershell>...</powershell>. Azure/GCP take the raw .ps1.
         if tester_row.cloud.eq_ignore_ascii_case("aws") {
@@ -1773,7 +1776,7 @@ async fn run_create_tester_cloud_init(
             raw
         }
     } else {
-        cloud_init::render_linux_bootstrap(&state.public_url, &agent_api_key, target_triple)?
+        cloud_init::render_linux_bootstrap(&agent_ws, &agent_api_key, target_triple)?
     };
 
     tracing::info!(
@@ -1843,8 +1846,12 @@ async fn run_create_tester_cloud_init(
     tester_state::set_status_message(&client, &tester_id, "waiting for agent to come online")
         .await?;
 
-    // Step 4: poll for the agent reporting online.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
+    // Step 4: poll for the agent reporting online. Windows takes much longer
+    // (chocolatey + npcap + wireshark before the agent itself is downloaded);
+    // give it 15 minutes. Linux usually finishes in 60-120s but cap at 6 min
+    // to absorb slow apt mirrors.
+    let timeout_secs: u64 = if is_windows { 900 } else { 360 };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
     let mut observed_online = false;
     loop {
         let poll_client = state.db.get().await?;
@@ -1871,19 +1878,17 @@ async fn run_create_tester_cloud_init(
     }
 
     if !observed_online {
+        let msg = format!("agent did not come online within {timeout_secs}s");
         client
             .execute(
                 "UPDATE project_tester \
                  SET power_state='error', \
                      status_message=$2, updated_at=NOW() \
                  WHERE tester_id=$1",
-                &[
-                    &tester_id,
-                    &"agent did not come online within 180s".to_string(),
-                ],
+                &[&tester_id, &msg],
             )
             .await?;
-        anyhow::bail!("agent did not come online within 180s");
+        anyhow::bail!("{msg}");
     }
 
     // Step 5: provisioning → running + stamp installer_version + shutdown.

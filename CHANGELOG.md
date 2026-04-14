@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.27.10] — 2026-04-14
+
+### Fixed
+- **Cloud-init agents could never connect.** The bootstrap baked the dashboard's HTTP public URL (`https://alethedash.com`) into `AGENT_DASHBOARD_URL`, but the agent's tungstenite client expects a WebSocket URL. New `cloud_init::agent_ws_url()` helper converts `https://host[/x]` → `wss://host/ws/agent` (and `http://` → `ws://`). The cloud-init bootstrap renderer's URL validator now also accepts `ws`/`wss` schemes.
+- **Agent-online poll timeout was too short for Windows.** Bumped from 180s flat to 360s (Linux) / 900s (Windows). Windows installs Chocolatey + Npcap + Wireshark before the agent is even downloaded.
+- **GCP Cloud Accounts setup wizard** now lists the required `iam.serviceAccountUser` role on the default Compute Engine service account, with the exact gcloud command.
+
+---
+
 ## [0.27.9] — 2026-04-14
 
 ### Added
