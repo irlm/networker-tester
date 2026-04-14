@@ -365,6 +365,77 @@ impl AzureProvider {
         }
     }
 
+    /// Build the argv for `az vm create` from a `VmConfig` plus the resolved
+    /// subscription/resource-group, optional `admin_password` (Windows), and
+    /// optional `custom_data_path` for a bootstrap script. Pure (no IO).
+    ///
+    /// When `custom_data_path` is `Some(path)`, appends `--custom-data @<path>`
+    /// so the `az` CLI reads the file contents and uploads them as the VM's
+    /// custom-data blob. The provider forwards raw bytes; the cloud_init
+    /// module is responsible for any encoding decisions (e.g. base64 for
+    /// Windows). No double-encoding happens here.
+    pub fn build_vm_create_args(
+        config: &VmConfig,
+        subscription_id: &str,
+        resource_group: &str,
+        admin_password: Option<&str>,
+        custom_data_path: Option<&std::path::Path>,
+    ) -> Vec<String> {
+        let is_windows = config.image.to_lowercase().contains("windows");
+        let mut args: Vec<String> = vec![
+            "vm".into(),
+            "create".into(),
+            "--subscription".into(),
+            subscription_id.to_string(),
+            "--resource-group".into(),
+            resource_group.to_string(),
+            "--name".into(),
+            config.name.clone(),
+            "--location".into(),
+            config.region.clone(),
+            "--image".into(),
+            config.image.clone(),
+            "--size".into(),
+            config.vm_size.clone(),
+            "--public-ip-sku".into(),
+            "Standard".into(),
+            "--admin-username".into(),
+            config.ssh_user.clone(),
+        ];
+
+        if is_windows {
+            let safe = azure_windows_computer_name(&config.name);
+            args.push("--computer-name".into());
+            args.push(safe);
+        }
+
+        if is_windows {
+            if let Some(pw) = admin_password {
+                args.push("--admin-password".into());
+                args.push(pw.to_string());
+            }
+        } else {
+            args.push("--generate-ssh-keys".into());
+        }
+
+        args.push("--output".into());
+        args.push("json".into());
+
+        if !config.tags.is_empty() {
+            args.push("--tags".into());
+            for (k, v) in &config.tags {
+                args.push(format!("{k}={v}"));
+            }
+        }
+
+        if let Some(path) = custom_data_path {
+            args.push("--custom-data".into());
+            args.push(format!("@{}", path.display()));
+        }
+
+        args
+    }
+
     /// Create a new Azure VM via `az vm create`.
     pub async fn create_vm(&self, config: &VmConfig) -> anyhow::Result<VmInfo> {
         tracing::info!(
@@ -379,65 +450,55 @@ impl AzureProvider {
         );
         let sp_dir = self.ensure_sp_login().await?;
         let is_windows = config.image.to_lowercase().contains("windows");
-        let mut cmd = self.az_cmd(&sp_dir).await;
-        cmd.arg("vm")
-            .arg("create")
-            .arg("--subscription")
-            .arg(&self.subscription_id)
-            .arg("--resource-group")
-            .arg(&self.resource_group)
-            .arg("--name")
-            .arg(&config.name)
-            .arg("--location")
-            .arg(&config.region)
-            .arg("--image")
-            .arg(&config.image)
-            .arg("--size")
-            .arg(&config.vm_size)
-            .arg("--public-ip-sku")
-            .arg("Standard")
-            .arg("--admin-username")
-            .arg(&config.ssh_user);
 
-        // Windows NetBIOS computer name is limited to 15 chars and may not be
-        // all-numeric or contain punctuation besides `-`. The Azure resource
-        // name (config.name) can stay descriptive; only the OS-level computer
-        // name is constrained. Derive a safe 15-char slug for Windows.
-        if is_windows {
-            let safe = azure_windows_computer_name(&config.name);
-            cmd.arg("--computer-name").arg(&safe);
-        }
-
-        // Windows VMs require a password; Linux VMs use SSH keys.
+        // Windows VMs require a password; Linux VMs use SSH keys. Generate
+        // the password up-front so the pure arg-builder stays IO-free.
         let win_password = if is_windows {
             // Azure password rules: 12-72 chars, 3 of {upper, lower, digit, special}
-            let pw = format!(
+            Some(format!(
                 "Nx!{}{}aZ9",
                 uuid::Uuid::new_v4().simple(),
                 &config.name.chars().take(4).collect::<String>()
-            );
-            cmd.arg("--admin-password").arg(&pw);
-            Some(pw)
+            ))
         } else {
-            cmd.arg("--generate-ssh-keys");
             None
         };
-        let _ = win_password; // currently not surfaced; logged below for ops.
+        let _ = &win_password; // currently not surfaced; logged below for ops.
 
-        cmd.arg("--output").arg("json");
+        // If a bootstrap script is requested, write it to a tempfile and pass
+        // `--custom-data @<path>`. The NamedTempFile is kept alive for the
+        // duration of the az call, then dropped (auto-deleted) on return.
+        // The provider forwards raw bytes — cloud_init is responsible for any
+        // encoding decisions (e.g. base64 for Windows).
+        let custom_data_tmp = if let Some(script) = config.bootstrap_script.as_deref() {
+            use std::io::Write;
+            let mut tmp = tempfile::NamedTempFile::new()
+                .context("failed to create tempfile for custom-data")?;
+            tmp.write_all(script.as_bytes())
+                .context("failed to write custom-data to tempfile")?;
+            tmp.flush().ok();
+            Some(tmp)
+        } else {
+            None
+        };
 
-        // Append tags as `key=value` pairs.
-        if !config.tags.is_empty() {
-            cmd.arg("--tags");
-            for (k, v) in &config.tags {
-                cmd.arg(format!("{k}={v}"));
-            }
-        }
+        let args = Self::build_vm_create_args(
+            config,
+            &self.subscription_id,
+            &self.resource_group,
+            win_password.as_deref(),
+            custom_data_tmp.as_ref().map(|t| t.path()),
+        );
+
+        let mut cmd = self.az_cmd(&sp_dir).await;
+        cmd.args(&args);
 
         let output = cmd
             .output()
             .await
             .context("failed to spawn `az vm create`")?;
+        // Keep tempfile alive until after the az invocation completed.
+        drop(custom_data_tmp);
         Self::cleanup_sp_session(&sp_dir);
 
         if !output.status.success() {
@@ -1775,6 +1836,133 @@ mod tests {
         assert!(
             !args.iter().any(|a| a == "--user-data"),
             "no --user-data flag when bootstrap_script is None; got args = {args:?}"
+        );
+    }
+
+    fn azure_vm_config_fixture(bootstrap: Option<&str>, windows: bool) -> VmConfig {
+        VmConfig {
+            name: "bm-azure-test".to_string(),
+            region: "eastus".to_string(),
+            vm_size: "Standard_B2s".to_string(),
+            ssh_user: "azureuser".to_string(),
+            image: if windows {
+                "MicrosoftWindowsServer:WindowsServer:2022-datacenter:latest".to_string()
+            } else {
+                "Canonical:0001-com-ubuntu-server-jammy:22_04-lts:latest".to_string()
+            },
+            tags: HashMap::new(),
+            bootstrap_script: bootstrap.map(|s| s.to_string()),
+        }
+    }
+
+    #[test]
+    fn azure_create_vm_args_include_custom_data_when_bootstrap_set() {
+        use std::io::Write;
+
+        let config = azure_vm_config_fixture(Some("#!/bin/bash\necho hello-azure\n"), false);
+
+        // Write the script to a real tempfile (matching the runtime path).
+        let mut tmp = tempfile::NamedTempFile::new().expect("create tempfile for custom-data");
+        tmp.write_all(config.bootstrap_script.as_deref().unwrap().as_bytes())
+            .expect("write custom-data");
+        tmp.flush().ok();
+
+        let args =
+            AzureProvider::build_vm_create_args(&config, "sub-id", "rg", None, Some(tmp.path()));
+
+        let idx = args
+            .iter()
+            .position(|a| a == "--custom-data")
+            .expect("--custom-data arg present");
+        let val = args
+            .get(idx + 1)
+            .expect("value arg after --custom-data")
+            .clone();
+        assert!(
+            val.starts_with('@'),
+            "custom-data value should start with @ (az CLI file syntax), got {val}"
+        );
+
+        // The referenced file should contain the script body we wrote.
+        let path = val.trim_start_matches('@');
+        let contents = std::fs::read_to_string(path).expect("read back tempfile");
+        assert!(
+            contents.contains("echo hello-azure"),
+            "tempfile should contain bootstrap script body, got: {contents}"
+        );
+    }
+
+    #[test]
+    fn azure_create_vm_args_omit_custom_data_when_bootstrap_none() {
+        let config = azure_vm_config_fixture(None, false);
+        let args = AzureProvider::build_vm_create_args(&config, "sub-id", "rg", None, None);
+        assert!(
+            !args.iter().any(|a| a == "--custom-data"),
+            "no --custom-data flag when bootstrap_script is None; got args = {args:?}"
+        );
+    }
+
+    #[test]
+    fn azure_create_vm_args_windows_include_custom_data_when_bootstrap_set() {
+        use std::io::Write;
+
+        let config = azure_vm_config_fixture(Some("# PowerShell bootstrap\nWrite-Host hi\n"), true);
+
+        let mut tmp =
+            tempfile::NamedTempFile::new().expect("create tempfile for windows custom-data");
+        tmp.write_all(config.bootstrap_script.as_deref().unwrap().as_bytes())
+            .expect("write windows custom-data");
+        tmp.flush().ok();
+
+        let args = AzureProvider::build_vm_create_args(
+            &config,
+            "sub-id",
+            "rg",
+            Some("Nx!dummyPw!1aZ9"),
+            Some(tmp.path()),
+        );
+
+        // --admin-password must be present (Windows), --generate-ssh-keys absent.
+        assert!(
+            args.iter().any(|a| a == "--admin-password"),
+            "Windows path should include --admin-password"
+        );
+        assert!(
+            !args.iter().any(|a| a == "--generate-ssh-keys"),
+            "Windows path should not include --generate-ssh-keys"
+        );
+
+        let idx = args
+            .iter()
+            .position(|a| a == "--custom-data")
+            .expect("--custom-data arg present for Windows");
+        let val = args
+            .get(idx + 1)
+            .expect("value after --custom-data")
+            .clone();
+        assert!(
+            val.starts_with('@'),
+            "custom-data value should start with @, got {val}"
+        );
+    }
+
+    #[test]
+    fn azure_create_vm_args_windows_omit_custom_data_when_bootstrap_none() {
+        let config = azure_vm_config_fixture(None, true);
+        let args = AzureProvider::build_vm_create_args(
+            &config,
+            "sub-id",
+            "rg",
+            Some("Nx!dummyPw!1aZ9"),
+            None,
+        );
+        assert!(
+            !args.iter().any(|a| a == "--custom-data"),
+            "no --custom-data on Windows when bootstrap_script is None; got args = {args:?}"
+        );
+        assert!(
+            args.iter().any(|a| a == "--computer-name"),
+            "Windows path should include --computer-name"
         );
     }
 
