@@ -11,6 +11,10 @@ use uuid::Uuid;
 
 use crate::AppState;
 
+pub mod commands;
+#[allow(unused_imports)]
+pub use commands::{mint_command_token, validate_command_token, CommandAuthError, CommandClaims};
+
 /// The Default project UUID (legacy V010 constant, kept for migration/tests).
 #[allow(dead_code)]
 pub const DEFAULT_PROJECT_UUID: Uuid = Uuid::from_bytes([
