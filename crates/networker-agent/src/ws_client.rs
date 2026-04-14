@@ -134,5 +134,19 @@ async fn handle_control_message(
                 handle.abort();
             }
         }
+        ControlMessage::Command(cmd) => {
+            // Command execution lands in a later task of the orchestration plan.
+            tracing::debug!(
+                command_id = %cmd.command_id,
+                verb = %cmd.verb,
+                "Ignoring Command message (handler not yet implemented)"
+            );
+        }
+        ControlMessage::Cancel(cancel) => {
+            tracing::debug!(
+                command_id = %cancel.command_id,
+                "Ignoring command Cancel message (handler not yet implemented)"
+            );
+        }
     }
 }
