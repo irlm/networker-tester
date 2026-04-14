@@ -158,7 +158,32 @@ fn target_triple_re() -> &'static Regex {
 
 fn dashboard_url_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^https?://[A-Za-z0-9.\-:]+(/[A-Za-z0-9._\-/]*)?$").unwrap())
+    RE.get_or_init(|| {
+        Regex::new(r"^(https?|wss?)://[A-Za-z0-9.\-:]+(/[A-Za-z0-9._\-/]*)?$").unwrap()
+    })
+}
+
+/// Convert the dashboard's HTTP public URL into the WebSocket URL the agent
+/// must connect to. `https://host[/x]` → `wss://host/ws/agent`.
+/// Already-`ws`/`wss` URLs are returned with `/ws/agent` appended (if missing).
+pub fn agent_ws_url(public_url: &str) -> String {
+    let stripped = public_url.trim_end_matches('/');
+    let ws_base = if let Some(rest) = stripped.strip_prefix("https://") {
+        format!("wss://{rest}")
+    } else if let Some(rest) = stripped.strip_prefix("http://") {
+        format!("ws://{rest}")
+    } else {
+        stripped.to_string()
+    };
+    // Drop any path the public URL carried — agents always hit /ws/agent.
+    let host_only = if let Some(scheme_end) = ws_base.find("://") {
+        let after = &ws_base[scheme_end + 3..];
+        let host = after.split('/').next().unwrap_or(after);
+        format!("{}://{}", &ws_base[..scheme_end], host)
+    } else {
+        ws_base
+    };
+    format!("{host_only}/ws/agent")
 }
 
 fn api_key_re() -> &'static Regex {
@@ -231,14 +256,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn agent_ws_url_converts_https_to_wss_with_path() {
+        assert_eq!(
+            agent_ws_url("https://alethedash.com"),
+            "wss://alethedash.com/ws/agent"
+        );
+        assert_eq!(
+            agent_ws_url("http://localhost:3000"),
+            "ws://localhost:3000/ws/agent"
+        );
+        assert_eq!(
+            agent_ws_url("https://alethedash.com/"),
+            "wss://alethedash.com/ws/agent"
+        );
+        // Stale path on the public URL is dropped.
+        assert_eq!(
+            agent_ws_url("https://alethedash.com/api"),
+            "wss://alethedash.com/ws/agent"
+        );
+        // Already-WS URL: keep scheme, replace path.
+        assert_eq!(
+            agent_ws_url("wss://alethedash.com/ws/agent"),
+            "wss://alethedash.com/ws/agent"
+        );
+    }
+
+    #[test]
     fn linux_bootstrap_renders_with_substitutions() {
         let s = render_linux_bootstrap(
-            "https://alethedash.com",
+            "wss://alethedash.com/ws/agent",
             "abc123def456ghi789jkl012mno345pqr678",
             "x86_64-unknown-linux-musl",
         )
         .unwrap();
-        assert!(s.contains("AGENT_DASHBOARD_URL=https://alethedash.com"));
+        assert!(s.contains("AGENT_DASHBOARD_URL=wss://alethedash.com/ws/agent"));
         assert!(s.contains("AGENT_API_KEY=abc123def456"));
         assert!(s.contains("networker-tester-x86_64-unknown-linux-musl.tar.gz"));
         assert!(s.contains("networker-agent-x86_64-unknown-linux-musl.tar.gz"));
