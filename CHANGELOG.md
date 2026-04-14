@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.27.8] — 2026-04-14
+
+### Fixed
+- Create Tester: Region dropdown shows provider-specific regions (no more Azure regions when AWS selected).
+- Create Tester: Auto-suggests a unique name based on cloud+region, appends -01/-02/... if exists.
+
+---
+
 ## [0.27.7] — 2026-04-14
 
 ### Fixed
