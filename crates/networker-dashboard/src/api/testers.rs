@@ -41,7 +41,8 @@ use crate::auth::{AuthUser, ProjectContext, ProjectRole};
 use crate::db::project_testers::{CreateTesterInput, ProjectTesterRow};
 use crate::AppState;
 use networker_dashboard::services::{
-    azure_regions, cloud_provider, tester_install, tester_recovery, tester_state, version_refresh,
+    azure_regions, cloud_init, cloud_provider, tester_install, tester_recovery, tester_state,
+    version_refresh,
 };
 
 // ── Audit helper ──────────────────────────────────────────────────────────
@@ -482,6 +483,20 @@ async fn create_tester(
     crate::auth::require_project_role(&ctx, ProjectRole::Operator)
         .map_err(|s| (s, "Operator role required".to_string()))?;
 
+    // Extract ?ssh_bootstrap=1 (default cloud-init).
+    let use_ssh_bootstrap = req
+        .uri()
+        .query()
+        .map(|q| {
+            q.split('&').any(|pair| {
+                matches!(
+                    pair,
+                    "ssh_bootstrap=1" | "ssh_bootstrap=true" | "ssh_bootstrap"
+                )
+            })
+        })
+        .unwrap_or(false);
+
     let body_bytes = axum::body::to_bytes(req.into_body(), 1024 * 64)
         .await
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid request body".to_string()))?;
@@ -583,7 +598,13 @@ async fn create_tester(
     // Drop the client before spawning; the background task acquires its own.
     drop(client);
 
-    spawn_create_tester_task(state.clone(), ctx.project_id.clone(), row.tester_id, input);
+    spawn_create_tester_task(
+        state.clone(),
+        ctx.project_id.clone(),
+        row.tester_id,
+        input,
+        use_ssh_bootstrap,
+    );
 
     Ok((StatusCode::ACCEPTED, Json(row)))
 }
@@ -1480,9 +1501,15 @@ fn spawn_create_tester_task(
     project_id: String,
     tester_id: Uuid,
     input: CreateTesterInput,
+    use_ssh_bootstrap: bool,
 ) {
     tokio::spawn(async move {
-        if let Err(e) = run_create_tester(state.clone(), project_id, tester_id, input).await {
+        let result = if use_ssh_bootstrap {
+            run_create_tester_ssh(state.clone(), project_id, tester_id, input).await
+        } else {
+            run_create_tester_cloud_init(state.clone(), project_id, tester_id, input).await
+        };
+        if let Err(e) = result {
             tracing::error!(%tester_id, error = ?e, "tester create background task failed");
             if let Ok(client) = state.db.get().await {
                 let _ = client
@@ -1497,7 +1524,19 @@ fn spawn_create_tester_task(
     });
 }
 
-async fn run_create_tester(
+/// Map a `requested_os` string to a Rust target triple used by the cloud-init
+/// bootstrap script to pick the right release asset. At tester-create time we
+/// do not yet have SSH OS detection results, so we derive from the requested
+/// OS family alone. This assumes x86_64 hosts (matching our current VM sizes).
+fn target_triple_for(requested_os: &str) -> &'static str {
+    if requested_os.starts_with("windows") {
+        "x86_64-pc-windows-msvc"
+    } else {
+        "x86_64-unknown-linux-musl"
+    }
+}
+
+async fn run_create_tester_ssh(
     state: Arc<AppState>,
     _project_id: String,
     tester_id: Uuid,
@@ -1669,6 +1708,214 @@ async fn run_create_tester(
         .await?;
 
     tracing::info!(%tester_id, "tester provisioning complete");
+    Ok(())
+}
+
+/// Cloud-init provisioning path: mint the agent api_key BEFORE VM create,
+/// bake it into a cloud-init / user-data bootstrap script, pass that via
+/// `VmConfig.bootstrap_script`, then poll for the agent registering itself
+/// as `online`. No SSH is performed from the dashboard.
+async fn run_create_tester_cloud_init(
+    state: Arc<AppState>,
+    _project_id: String,
+    tester_id: Uuid,
+    _input: CreateTesterInput,
+) -> anyhow::Result<()> {
+    let client = state.db.get().await?;
+
+    // Load the full tester row up front.
+    let tester_row = client
+        .query_one(
+            &format!(
+                "SELECT {columns} FROM project_tester WHERE tester_id = $1",
+                columns = crate::db::project_testers::SELECT_COLUMNS
+            ),
+            &[&tester_id],
+        )
+        .await
+        .map(|r| ProjectTesterRow::from_row(&r))?;
+    let region = tester_row.region.clone();
+    let vm_size = tester_row.vm_size.clone();
+
+    tester_state::set_status_message(&client, &tester_id, "minting agent key").await?;
+
+    let vm_name_preview = cloud_provider::generate_vm_name(&region);
+
+    // Step 1: mint the agent api_key BEFORE VM create so we can bake it into
+    // the bootstrap script.
+    let agent_api_key = provision_agent_for_tester(
+        &client,
+        &tester_id,
+        &tester_row.project_id,
+        &vm_name_preview,
+        &tester_row.cloud,
+        &region,
+    )
+    .await?;
+
+    // Step 2: resolve image + build bootstrap script.
+    let provider = provider_for_tester(&client, &tester_row, &state).await?;
+    let requested_os = tester_row.requested_os.as_deref().unwrap_or("ubuntu-24.04");
+    let requested_variant = tester_row.requested_variant.as_deref().unwrap_or("server");
+    let image = cloud_provider::resolve_image(&tester_row.cloud, requested_os, requested_variant);
+    let ssh_user = cloud_provider::default_ssh_user(&tester_row.cloud, requested_os);
+
+    let target_triple = target_triple_for(requested_os);
+    let is_windows = requested_os.starts_with("windows");
+    let bootstrap = if is_windows {
+        let raw =
+            cloud_init::render_windows_bootstrap(&state.public_url, &agent_api_key, target_triple)?;
+        // AWS user-data convention: wrap PowerShell scripts in
+        // <powershell>...</powershell>. Azure/GCP take the raw .ps1.
+        if tester_row.cloud.eq_ignore_ascii_case("aws") {
+            format!("<powershell>\n{raw}\n</powershell>")
+        } else {
+            raw
+        }
+    } else {
+        cloud_init::render_linux_bootstrap(&state.public_url, &agent_api_key, target_triple)?
+    };
+
+    tracing::info!(
+        cloud = %tester_row.cloud,
+        os = %requested_os,
+        variant = %requested_variant,
+        image = %image,
+        ssh_user,
+        target_triple,
+        bootstrap_bytes = bootstrap.len(),
+        "Resolved OS image + bootstrap script (cloud-init path)"
+    );
+
+    tester_state::set_status_message(&client, &tester_id, "creating VM (cloud-init)").await?;
+
+    let vm_config = cloud_provider::VmConfig {
+        name: vm_name_preview.clone(),
+        region: region.clone(),
+        vm_size: vm_size.clone(),
+        ssh_user: ssh_user.to_string(),
+        image,
+        tags: std::collections::HashMap::new(),
+        bootstrap_script: Some(bootstrap),
+    };
+    let created = provider.create_vm(&vm_config).await?;
+
+    // Step 3: persist identity fields.
+    if created.public_ip.is_empty() {
+        client
+            .execute(
+                "UPDATE project_tester \
+                 SET vm_name = $2, vm_resource_id = $3, \
+                     ssh_user = $4, updated_at = NOW() \
+                 WHERE tester_id = $1",
+                &[
+                    &tester_id,
+                    &created.vm_name,
+                    &created.resource_id,
+                    &vm_config.ssh_user,
+                ],
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("DB update (no IP): {e}"))?;
+    } else {
+        let ip: std::net::IpAddr = created
+            .public_ip
+            .parse()
+            .map_err(|e| anyhow::anyhow!("invalid public_ip '{}': {e}", created.public_ip))?;
+        client
+            .execute(
+                "UPDATE project_tester \
+                 SET vm_name = $2, vm_resource_id = $3, public_ip = $4, \
+                     ssh_user = $5, updated_at = NOW() \
+                 WHERE tester_id = $1",
+                &[
+                    &tester_id,
+                    &created.vm_name,
+                    &created.resource_id,
+                    &ip,
+                    &vm_config.ssh_user,
+                ],
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("DB update (with IP): {e}"))?;
+    }
+
+    tester_state::set_status_message(&client, &tester_id, "waiting for agent to come online")
+        .await?;
+
+    // Step 4: poll for the agent reporting online.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
+    let mut observed_online = false;
+    loop {
+        let poll_client = state.db.get().await?;
+        let row_opt = poll_client
+            .query_opt(
+                "SELECT a.status \
+                 FROM agent a \
+                 WHERE a.tester_id = $1 \
+                 LIMIT 1",
+                &[&tester_id],
+            )
+            .await?;
+        if let Some(r) = row_opt {
+            let status: String = r.get("status");
+            if status == "online" {
+                observed_online = true;
+                break;
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    }
+
+    if !observed_online {
+        client
+            .execute(
+                "UPDATE project_tester \
+                 SET power_state='error', \
+                     status_message=$2, updated_at=NOW() \
+                 WHERE tester_id=$1",
+                &[
+                    &tester_id,
+                    &"agent did not come online within 180s".to_string(),
+                ],
+            )
+            .await?;
+        anyhow::bail!("agent did not come online within 180s");
+    }
+
+    // Step 5: provisioning → running + stamp installer_version + shutdown.
+    // OS info columns remain NULL on this path; they only get populated by
+    // the SSH-driven probe (re-install via /upgrade, or ?ssh_bootstrap=1).
+    let installer_version = env!("CARGO_PKG_VERSION");
+    let moved =
+        tester_state::try_power_transition(&client, &tester_id, "provisioning", "running").await?;
+    if !moved {
+        tracing::warn!(%tester_id, "power_state was not 'provisioning' at end of cloud-init wait");
+    }
+    client
+        .execute(
+            "UPDATE project_tester \
+             SET installer_version = $2, last_installed_at = NOW(), \
+                 status_message = NULL, \
+                 updated_at = NOW() \
+             WHERE tester_id = $1",
+            &[&tester_id, &installer_version],
+        )
+        .await?;
+
+    client
+        .execute(
+            "UPDATE project_tester \
+             SET next_shutdown_at = NOW() + INTERVAL '15 hours' \
+             WHERE tester_id = $1 AND auto_shutdown_enabled = TRUE",
+            &[&tester_id],
+        )
+        .await?;
+
+    tracing::info!(%tester_id, "tester provisioning complete (cloud-init)");
     Ok(())
 }
 
@@ -1995,6 +2242,21 @@ pub fn project_router(state: Arc<AppState>) -> Router {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn target_triple_for_maps_os_family() {
+        assert_eq!(
+            target_triple_for("ubuntu-24.04"),
+            "x86_64-unknown-linux-musl"
+        );
+        assert_eq!(target_triple_for("rhel-9"), "x86_64-unknown-linux-musl");
+        assert_eq!(target_triple_for("debian-12"), "x86_64-unknown-linux-musl");
+        assert_eq!(target_triple_for("windows-2022"), "x86_64-pc-windows-msvc");
+        assert_eq!(
+            target_triple_for("windows-server-2019"),
+            "x86_64-pc-windows-msvc"
+        );
+    }
 
     #[test]
     fn hourly_usd_known_sizes() {
