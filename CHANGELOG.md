@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.27.9] — 2026-04-14
+
+### Added
+- **Cloud-init bootstrap for new testers (no SSH).** AWS `--user-data`, GCP `--metadata-from-file startup-script=`, Azure `--custom-data` all accept a generated bash/PowerShell script that installs networker-agent on first boot. Tester `power_state` flips to `running` once the agent registers (poll, 180s timeout). Legacy SSH path remains behind `?ssh_bootstrap=1`.
+- **Command-based agent dispatch (Phase 1).** Dashboard ↔ agent now supports a `Command/CommandLog/CommandResult` protocol over the existing WebSocket, with V033 `agent_command` table, short-lived JWT command tokens, and `POST /agents/{aid}/commands` + SSE log stream. Initial verb: `health`. Foundation for replacing all SSH-based orchestration in Phase 2.
+- **Tester pre-flight checks (`/testers/precheck`).** Verifies cloud account capacity + permissions and auto-cleans unattached Azure Public IPs before tester creation.
+
+### Changed
+- Transitional fixes across orchestrator + benchmark + tester install paths to align with the new schema and Windows tester behavior (Azure password + computer-name handling, agent linger / auto-start, existing_vm_ip persistence).
+
+---
+
 ## [0.27.8] — 2026-04-14
 
 ### Changed
