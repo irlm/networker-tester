@@ -1860,6 +1860,40 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
         tracing::info!("V031 migration complete");
     }
 
+    // V032: link agent to project_tester so persistent testers surface as agents
+    let row = client
+        .query_opt("SELECT version FROM _migrations WHERE version = 32", &[])
+        .await?;
+
+    if row.is_none() {
+        tracing::info!("Applying V032: agent.tester_id FK + index...");
+        client.batch_execute(V032_AGENT_TESTER_LINK).await?;
+        client
+            .execute(
+                "INSERT INTO _migrations (version) VALUES (32) ON CONFLICT DO NOTHING",
+                &[],
+            )
+            .await?;
+        tracing::info!("V032 migration complete");
+    }
+
+    // V033: agent_command table
+    let row = client
+        .query_opt("SELECT version FROM _migrations WHERE version = 33", &[])
+        .await?;
+
+    if row.is_none() {
+        tracing::info!("Applying V033: agent_command table...");
+        client.batch_execute(V033_AGENT_COMMAND).await?;
+        client
+            .execute(
+                "INSERT INTO _migrations (version) VALUES (33) ON CONFLICT DO NOTHING",
+                &[],
+            )
+            .await?;
+        tracing::info!("V033 migration complete");
+    }
+
     Ok(())
 }
 
@@ -1874,4 +1908,36 @@ ALTER TABLE project_tester
     ADD COLUMN IF NOT EXISTS os_variant  VARCHAR(20),
     ADD COLUMN IF NOT EXISTS os_arch     VARCHAR(20),
     ADD COLUMN IF NOT EXISTS os_kernel   VARCHAR(100);
+"#;
+
+/// V032: Link `agent` to `project_tester` so persistent testers surface as
+/// agents when their installed networker-agent registers. Nullable so existing
+/// standalone agents keep working.
+const V032_AGENT_TESTER_LINK: &str = r#"
+ALTER TABLE agent
+    ADD COLUMN IF NOT EXISTS tester_id UUID
+        REFERENCES project_tester(tester_id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_agent_tester ON agent(tester_id) WHERE tester_id IS NOT NULL;
+"#;
+
+/// V033: agent_command table. Tracks every dashboard->agent command
+/// (dispatched, running, completed). Logs live in service_log with
+/// service='agent-command' and the command_id in context.
+const V033_AGENT_COMMAND: &str = r#"
+CREATE TABLE IF NOT EXISTS agent_command (
+  command_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  agent_id       UUID NOT NULL REFERENCES agent(agent_id) ON DELETE CASCADE,
+  config_id      UUID,
+  verb           TEXT NOT NULL,
+  args           JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status         TEXT NOT NULL DEFAULT 'pending',
+  result         JSONB,
+  error_message  TEXT,
+  created_by     UUID REFERENCES dash_user(user_id),
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  started_at     TIMESTAMPTZ,
+  finished_at    TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_agent_command_agent  ON agent_command(agent_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_command_config ON agent_command(config_id) WHERE config_id IS NOT NULL;
 "#;
