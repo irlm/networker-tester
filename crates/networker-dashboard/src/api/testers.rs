@@ -1600,9 +1600,9 @@ async fn run_create_tester(
         public_ip: Some(created.public_ip.clone()),
         ssh_user: vm_config.ssh_user.clone(),
     };
-    tester_install::install_tester(&target, progress).await?;
+    let os_info = tester_install::install_tester(&target, progress).await?;
 
-    // Step 5: provisioning → running + stamp installer_version + next_shutdown_at.
+    // Step 5: provisioning → running + stamp installer_version + OS info + next_shutdown_at.
     let installer_version = env!("CARGO_PKG_VERSION");
     let moved =
         tester_state::try_power_transition(&client, &tester_id, "provisioning", "running").await?;
@@ -1613,9 +1613,19 @@ async fn run_create_tester(
         .execute(
             "UPDATE project_tester \
              SET installer_version = $2, last_installed_at = NOW(), \
-                 status_message = NULL, updated_at = NOW() \
+                 status_message = NULL, \
+                 os_distro = $3, os_version = $4, os_variant = $5, os_arch = $6, os_kernel = $7, \
+                 updated_at = NOW() \
              WHERE tester_id = $1",
-            &[&tester_id, &installer_version],
+            &[
+                &tester_id,
+                &installer_version,
+                &os_info.distro,
+                &os_info.version,
+                &os_info.variant,
+                &os_info.arch,
+                &os_info.kernel,
+            ],
         )
         .await?;
 
@@ -1831,7 +1841,7 @@ async fn run_upgrade_tester(state: Arc<AppState>, tester: ProjectTesterRow) -> a
         public_ip: tester.public_ip.clone(),
         ssh_user: tester.ssh_user.clone(),
     };
-    tester_install::install_tester(&target, progress).await?;
+    let _os_info = tester_install::install_tester(&target, progress).await?;
 
     // Success — release the upgrading lock, stamp installer_version.
     let installer_version = env!("CARGO_PKG_VERSION");
@@ -2019,6 +2029,11 @@ mod tests {
             created_at: now,
             updated_at: now,
             cloud_connection_id: None,
+            os_distro: None,
+            os_version: None,
+            os_variant: None,
+            os_arch: None,
+            os_kernel: None,
         }
     }
 

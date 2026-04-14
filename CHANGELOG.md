@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.27.8] — 2026-04-14
+
+### Changed
+- **Tester install: pre-built binaries instead of source compile.** Previously took 20+ minutes (apt nodejs/npm + npm install puppeteer). Now downloads networker-tester + networker-agent from GitHub releases — ~30-60 seconds.
+- **OS/arch detection:** Tester VMs are now inspected for distro, version, variant (desktop/server), arch, kernel. Stored in `project_tester` so UI can show "Ubuntu 24.04 Server (x86_64)".
+- **Cheaper VM defaults:** Azure default is now `Standard_B2s` (2 vCPU, 4 GB) instead of `D2s_v3` (2 vCPU, 8 GB). Added `B1s`/`t3.micro`/`e2-micro` for cheapest option.
+- **Chrome/Node install is now optional** — only when running browser benchmarks (saves 5+ minutes on tester creation).
+
+### Added
+- V031 migration: `os_distro`, `os_version`, `os_variant`, `os_arch`, `os_kernel` columns on `project_tester`.
+
+### Fixed
+- Apt lock contention: waits up to 60s for unattended-upgrades instead of failing.
+
+---
+
 ## [0.27.7] — 2026-04-14
 
 ### Fixed

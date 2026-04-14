@@ -23,7 +23,8 @@ pub const SELECT_COLUMNS: &str = "tester_id, project_id, name, cloud, region, vm
     auto_probe_enabled, \
     last_used_at, avg_benchmark_duration_seconds, benchmark_run_count, \
     created_by, created_at, updated_at, \
-    cloud_connection_id";
+    cloud_connection_id, \
+    os_distro, os_version, os_variant, os_arch, os_kernel";
 
 /// A single row from the `project_tester` table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +58,11 @@ pub struct ProjectTesterRow {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub cloud_connection_id: Option<Uuid>,
+    pub os_distro: Option<String>,
+    pub os_version: Option<String>,
+    pub os_variant: Option<String>,
+    pub os_arch: Option<String>,
+    pub os_kernel: Option<String>,
 }
 
 impl ProjectTesterRow {
@@ -95,6 +101,11 @@ impl ProjectTesterRow {
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
             cloud_connection_id: row.get("cloud_connection_id"),
+            os_distro: row.get("os_distro"),
+            os_version: row.get("os_version"),
+            os_variant: row.get("os_variant"),
+            os_arch: row.get("os_arch"),
+            os_kernel: row.get("os_kernel"),
         }
     }
 }

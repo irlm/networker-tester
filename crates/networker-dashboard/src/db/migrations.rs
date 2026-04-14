@@ -1843,5 +1843,33 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
         tracing::info!("V030 migration complete");
     }
 
+    // V031: tester OS/arch info
+    let row = client
+        .query_opt("SELECT version FROM _migrations WHERE version = 31", &[])
+        .await?;
+
+    if row.is_none() {
+        tracing::info!("Applying V031: tester OS + arch columns...");
+        client.batch_execute(V031_TESTER_OS_INFO).await?;
+        client
+            .execute(
+                "INSERT INTO _migrations (version) VALUES (31) ON CONFLICT DO NOTHING",
+                &[],
+            )
+            .await?;
+        tracing::info!("V031 migration complete");
+    }
+
     Ok(())
 }
+
+/// V031: Add OS/arch/kernel info to project_tester so the UI can show what
+/// distro/version the tester VM is running.
+const V031_TESTER_OS_INFO: &str = r#"
+ALTER TABLE project_tester
+    ADD COLUMN IF NOT EXISTS os_distro   VARCHAR(50),
+    ADD COLUMN IF NOT EXISTS os_version  VARCHAR(50),
+    ADD COLUMN IF NOT EXISTS os_variant  VARCHAR(20),
+    ADD COLUMN IF NOT EXISTS os_arch     VARCHAR(20),
+    ADD COLUMN IF NOT EXISTS os_kernel   VARCHAR(100);
+"#;

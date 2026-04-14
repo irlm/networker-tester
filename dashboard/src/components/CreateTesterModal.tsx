@@ -16,27 +16,32 @@ interface CreateTesterModalProps {
 
 const VM_SIZE_PRESETS: Record<string, { value: string; label: string }[]> = {
   azure: [
+    { value: 'Standard_B1s', label: 'Standard_B1s (1 vCPU, 1 GB) — cheapest' },
+    { value: 'Standard_B2s', label: 'Standard_B2s (2 vCPU, 4 GB) — recommended' },
     { value: 'Standard_D2s_v3', label: 'Standard_D2s_v3 (2 vCPU, 8 GB)' },
     { value: 'Standard_D4s_v3', label: 'Standard_D4s_v3 (4 vCPU, 16 GB)' },
     { value: 'Standard_D8s_v3', label: 'Standard_D8s_v3 (8 vCPU, 32 GB)' },
   ],
   aws: [
-    { value: 't3.small', label: 't3.small (2 vCPU, 2 GB)' },
+    { value: 't3.micro', label: 't3.micro (2 vCPU, 1 GB) — cheapest' },
+    { value: 't3.small', label: 't3.small (2 vCPU, 2 GB) — recommended' },
     { value: 't3.medium', label: 't3.medium (2 vCPU, 4 GB)' },
     { value: 't3.large', label: 't3.large (2 vCPU, 8 GB)' },
     { value: 'm5.large', label: 'm5.large (2 vCPU, 8 GB)' },
     { value: 'm5.xlarge', label: 'm5.xlarge (4 vCPU, 16 GB)' },
   ],
   gcp: [
-    { value: 'e2-small', label: 'e2-small (2 vCPU, 2 GB)' },
+    { value: 'e2-micro', label: 'e2-micro (2 vCPU, 1 GB) — cheapest' },
+    { value: 'e2-small', label: 'e2-small (2 vCPU, 2 GB) — recommended' },
     { value: 'e2-medium', label: 'e2-medium (2 vCPU, 4 GB)' },
     { value: 'e2-standard-2', label: 'e2-standard-2 (2 vCPU, 8 GB)' },
     { value: 'e2-standard-4', label: 'e2-standard-4 (4 vCPU, 16 GB)' },
   ],
 };
 
+// Recommended default: 2 vCPU / 2-4 GB RAM is plenty for HTTP/TLS/DNS probes
 const DEFAULT_VM_SIZE: Record<string, string> = {
-  azure: 'Standard_D2s_v3',
+  azure: 'Standard_B2s',
   aws: 't3.small',
   gcp: 'e2-small',
 };
