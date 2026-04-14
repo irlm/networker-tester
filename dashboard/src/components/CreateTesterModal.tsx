@@ -41,6 +41,27 @@ const DEFAULT_VM_SIZE: Record<string, string> = {
   gcp: 'e2-small',
 };
 
+const REGIONS_BY_CLOUD: Record<string, string[]> = {
+  azure: [
+    'eastus', 'eastus2', 'westus2', 'westus3', 'centralus',
+    'northeurope', 'westeurope', 'uksouth', 'francecentral', 'germanywestcentral',
+    'japaneast', 'koreacentral', 'southeastasia', 'australiaeast',
+    'brazilsouth', 'canadacentral',
+  ],
+  aws: [
+    'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2',
+    'eu-west-1', 'eu-west-2', 'eu-central-1',
+    'ap-northeast-1', 'ap-southeast-1', 'ap-southeast-2',
+    'sa-east-1', 'ca-central-1',
+  ],
+  gcp: [
+    'us-central1', 'us-east1', 'us-east4', 'us-west1', 'us-west2', 'us-west4',
+    'europe-west1', 'europe-west2', 'europe-west3', 'europe-west4',
+    'asia-east1', 'asia-northeast1', 'asia-southeast1',
+    'australia-southeast1',
+  ],
+};
+
 const HOURS = Array.from({ length: 24 }, (_, h) => h);
 
 type Stage = 'form' | 'creating' | 'error';
@@ -69,8 +90,8 @@ export function CreateTesterModal({
   const [autoProbeEnabled, setAutoProbeEnabled] = useState(false);
 
   const [availableClouds, setAvailableClouds] = useState<string[]>([]);
+  const [existingNames, setExistingNames] = useState<Set<string>>(new Set());
   const [regions, setRegions] = useState<string[]>([]);
-  const [regionsLoading, setRegionsLoading] = useState(false);
   const [stage, setStage] = useState<Stage>('form');
   const [error, setError] = useState<string | null>(null);
   const [createdTester, setCreatedTester] = useState<TesterRow | null>(null);
@@ -84,12 +105,14 @@ export function CreateTesterModal({
   }, []);
 
   // Load available clouds from project's cloud connections AND cloud accounts
+  // Also load existing tester names for unique-name suggestion
   useEffect(() => {
     let cancelled = false;
     Promise.all([
       api.getCloudConnections(projectId).catch(() => []),
       api.getCloudAccounts(projectId).catch(() => []),
-    ]).then(([conns, accts]) => {
+      testersApi.listTesters(projectId).catch(() => []),
+    ]).then(([conns, accts, testers]) => {
       if (cancelled) return;
       const fromConns = conns
         .filter((c: { status: string }) => c.status === 'active')
@@ -99,6 +122,7 @@ export function CreateTesterModal({
         .map((a: { provider: string }) => a.provider);
       const providers = [...new Set([...fromConns, ...fromAccts])] as string[];
       setAvailableClouds(providers.length > 0 ? providers : ['azure']);
+      setExistingNames(new Set(testers.map((t: { name: string }) => t.name)));
       // If current cloud not in available list, switch to first available
       if (providers.length > 0 && !providers.includes(cloud)) {
         setCloud(providers[0]);
@@ -109,30 +133,36 @@ export function CreateTesterModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
-  // Load regions when cloud changes
+  // Suggest a unique tester name based on cloud + region
   useEffect(() => {
-    let cancelled = false;
-    setRegionsLoading(true);
-    testersApi
-      .getRegions(projectId)
-      .then((list) => {
-        if (cancelled) return;
-        setRegions(list);
-        if (!region && list.length > 0) {
-          setRegion(defaultRegion && list.includes(defaultRegion) ? defaultRegion : list[0]);
-        }
-      })
-      .catch(() => {
-        // non-fatal — user can still type a region if the select is empty
-      })
-      .finally(() => {
-        if (!cancelled) setRegionsLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
+    if (name) return; // don't override user input
+    if (existingNames.size === 0 && !availableClouds.length) return;
+    const base = `${cloud}-${region || 'tester'}`;
+    if (!existingNames.has(base)) {
+      setName(base);
+      return;
+    }
+    // Find the next available -NN suffix
+    for (let i = 1; i <= 99; i++) {
+      const candidate = `${base}-${String(i).padStart(2, '0')}`;
+      if (!existingNames.has(candidate)) {
+        setName(candidate);
+        return;
+      }
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, cloud]);
+  }, [cloud, region, existingNames, availableClouds]);
+
+  // Load regions when cloud changes (per-cloud static list)
+  useEffect(() => {
+    const list = REGIONS_BY_CLOUD[cloud] || [];
+    setRegions(list);
+    // If current region is not valid for this cloud, reset to first available
+    if (list.length > 0 && !list.includes(region)) {
+      setRegion(defaultRegion && list.includes(defaultRegion) ? defaultRegion : list[0]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cloud]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
@@ -315,7 +345,7 @@ export function CreateTesterModal({
               {/* Region */}
               <div>
                 <label htmlFor="tester-region" className="block text-xs text-gray-400 mb-1">
-                  Region {regionsLoading && <span className="text-gray-600">(loading…)</span>}
+                  Region
                 </label>
                 <select
                   id="tester-region"
