@@ -53,6 +53,12 @@ describe('CreateTesterModal', () => {
       if (url.includes('/testers/regions')) {
         return mockFetchOnce({ regions: ['eastus', 'westus'] });
       }
+      if (url.includes('/cloud-connections') || url.includes('/cloud-accounts')) {
+        return mockFetchOnce([]);
+      }
+      if (/\/testers(\?|$)/.test(url)) {
+        return mockFetchOnce([]);
+      }
       return mockFetchOnce({});
     });
     vi.stubGlobal('fetch', fetchMock);

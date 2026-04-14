@@ -521,7 +521,7 @@ pub async fn measure_startup_time(vm: &VmInfo) -> Result<f64> {
             "ConnectTimeout=10",
             "-o",
             "BatchMode=yes",
-            &format!("azureuser@{}", vm.ip),
+            &format!("{}@{}", vm.ssh_user, vm.ip),
             restart_cmd,
         ])
         .output()

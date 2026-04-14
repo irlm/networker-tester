@@ -11,6 +11,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.27.9] — 2026-04-14
+
+### Added
+- **Cloud-init bootstrap for new testers (no SSH).** AWS `--user-data`, GCP `--metadata-from-file startup-script=`, Azure `--custom-data` all accept a generated bash/PowerShell script that installs networker-agent on first boot. Tester `power_state` flips to `running` once the agent registers (poll, 180s timeout). Legacy SSH path remains behind `?ssh_bootstrap=1`.
+- **Command-based agent dispatch (Phase 1).** Dashboard ↔ agent now supports a `Command/CommandLog/CommandResult` protocol over the existing WebSocket, with V033 `agent_command` table, short-lived JWT command tokens, and `POST /agents/{aid}/commands` + SSE log stream. Initial verb: `health`. Foundation for replacing all SSH-based orchestration in Phase 2.
+- **Tester pre-flight checks (`/testers/precheck`).** Verifies cloud account capacity + permissions and auto-cleans unattached Azure Public IPs before tester creation.
+- **Per-cloud region picker** in the Create Tester modal (Azure / AWS / GCP each get their own validated list) and an automatic unique-name suggestion based on `cloud-region[-NN]`.
+
+### Changed
+- Transitional fixes across orchestrator + benchmark + tester install paths to align with the new schema and Windows tester behavior (Azure password + computer-name handling, agent linger / auto-start, existing_vm_ip persistence).
+
+---
+
+## [0.27.8] — 2026-04-14
+
+### Changed
+- **Tester install: pre-built binaries instead of source compile.** Previously took 20+ minutes (apt nodejs/npm + npm install puppeteer). Now downloads networker-tester + networker-agent from GitHub releases — ~30-60 seconds.
+- **OS/arch detection:** Tester VMs are now inspected for distro, version, variant (desktop/server), arch, kernel. Stored in `project_tester` so UI can show "Ubuntu 24.04 Server (x86_64)".
+- **Cheaper VM defaults:** Azure default is now `Standard_B2s` (2 vCPU, 4 GB) instead of `D2s_v3` (2 vCPU, 8 GB). Added `B1s`/`t3.micro`/`e2-micro` for cheapest option.
+- **Chrome/Node install is now optional** — only when running browser benchmarks (saves 5+ minutes on tester creation).
+
+### Added
+- V031 migration: `os_distro`, `os_version`, `os_variant`, `os_arch`, `os_kernel` columns on `project_tester`.
+
+### Fixed
+- Apt lock contention: waits up to 60s for unattended-upgrades instead of failing.
+
+---
+
 ## [0.27.7] — 2026-04-14
 
 ### Fixed

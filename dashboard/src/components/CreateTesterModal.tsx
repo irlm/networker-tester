@@ -16,29 +16,78 @@ interface CreateTesterModalProps {
 
 const VM_SIZE_PRESETS: Record<string, { value: string; label: string }[]> = {
   azure: [
+    { value: 'Standard_B1s', label: 'Standard_B1s (1 vCPU, 1 GB) — cheapest' },
+    { value: 'Standard_B2s', label: 'Standard_B2s (2 vCPU, 4 GB) — recommended' },
     { value: 'Standard_D2s_v3', label: 'Standard_D2s_v3 (2 vCPU, 8 GB)' },
     { value: 'Standard_D4s_v3', label: 'Standard_D4s_v3 (4 vCPU, 16 GB)' },
     { value: 'Standard_D8s_v3', label: 'Standard_D8s_v3 (8 vCPU, 32 GB)' },
   ],
   aws: [
-    { value: 't3.small', label: 't3.small (2 vCPU, 2 GB)' },
+    { value: 't3.micro', label: 't3.micro (2 vCPU, 1 GB) — cheapest' },
+    { value: 't3.small', label: 't3.small (2 vCPU, 2 GB) — recommended' },
     { value: 't3.medium', label: 't3.medium (2 vCPU, 4 GB)' },
     { value: 't3.large', label: 't3.large (2 vCPU, 8 GB)' },
     { value: 'm5.large', label: 'm5.large (2 vCPU, 8 GB)' },
     { value: 'm5.xlarge', label: 'm5.xlarge (4 vCPU, 16 GB)' },
   ],
   gcp: [
-    { value: 'e2-small', label: 'e2-small (2 vCPU, 2 GB)' },
+    { value: 'e2-micro', label: 'e2-micro (2 vCPU, 1 GB) — cheapest' },
+    { value: 'e2-small', label: 'e2-small (2 vCPU, 2 GB) — recommended' },
     { value: 'e2-medium', label: 'e2-medium (2 vCPU, 4 GB)' },
     { value: 'e2-standard-2', label: 'e2-standard-2 (2 vCPU, 8 GB)' },
     { value: 'e2-standard-4', label: 'e2-standard-4 (4 vCPU, 16 GB)' },
   ],
 };
 
+// Recommended default: 2 vCPU / 2-4 GB RAM is plenty for HTTP/TLS/DNS probes
 const DEFAULT_VM_SIZE: Record<string, string> = {
-  azure: 'Standard_D2s_v3',
+  azure: 'Standard_B2s',
   aws: 't3.small',
   gcp: 'e2-small',
+};
+
+// OS options per cloud per variant. "--" means not supported.
+const OS_OPTIONS: Record<string, { value: string; label: string; variants: string[] }[]> = {
+  azure: [
+    { value: 'ubuntu-24.04', label: 'Ubuntu 24.04 LTS', variants: ['server', 'desktop'] },
+    { value: 'ubuntu-22.04', label: 'Ubuntu 22.04 LTS', variants: ['server'] },
+    { value: 'debian-12',    label: 'Debian 12',         variants: ['server'] },
+    { value: 'windows-2022', label: 'Windows Server 2022', variants: ['server'] },
+    { value: 'windows-11',   label: 'Windows 11',        variants: ['desktop'] },
+  ],
+  aws: [
+    { value: 'ubuntu-24.04', label: 'Ubuntu 24.04 LTS', variants: ['server'] },
+    { value: 'ubuntu-22.04', label: 'Ubuntu 22.04 LTS', variants: ['server'] },
+    { value: 'debian-12',    label: 'Debian 12',         variants: ['server'] },
+    { value: 'windows-2022', label: 'Windows Server 2022', variants: ['server'] },
+  ],
+  gcp: [
+    { value: 'ubuntu-24.04', label: 'Ubuntu 24.04 LTS', variants: ['server'] },
+    { value: 'ubuntu-22.04', label: 'Ubuntu 22.04 LTS', variants: ['server'] },
+    { value: 'debian-12',    label: 'Debian 12',         variants: ['server'] },
+    { value: 'windows-2022', label: 'Windows Server 2022', variants: ['server'] },
+  ],
+};
+
+const REGIONS_BY_CLOUD: Record<string, string[]> = {
+  azure: [
+    'eastus', 'eastus2', 'westus2', 'westus3', 'centralus',
+    'northeurope', 'westeurope', 'uksouth', 'francecentral', 'germanywestcentral',
+    'japaneast', 'koreacentral', 'southeastasia', 'australiaeast',
+    'brazilsouth', 'canadacentral',
+  ],
+  aws: [
+    'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2',
+    'eu-west-1', 'eu-west-2', 'eu-central-1',
+    'ap-northeast-1', 'ap-southeast-1', 'ap-southeast-2',
+    'sa-east-1', 'ca-central-1',
+  ],
+  gcp: [
+    'us-central1', 'us-east1', 'us-east4', 'us-west1', 'us-west2', 'us-west4',
+    'europe-west1', 'europe-west2', 'europe-west3', 'europe-west4',
+    'asia-east1', 'asia-northeast1', 'asia-southeast1',
+    'australia-southeast1',
+  ],
 };
 
 const HOURS = Array.from({ length: 24 }, (_, h) => h);
@@ -60,6 +109,8 @@ export function CreateTesterModal({
   const [region, setRegion] = useState(defaultRegion);
   const [name, setName] = useState(defaultName);
   const [vmSize, setVmSize] = useState(defaultVmSize);
+  const [requestedOs, setRequestedOs] = useState('ubuntu-24.04');
+  const [requestedVariant, setRequestedVariant] = useState('server');
   const [autoShutdownEnabled, setAutoShutdownEnabled] = useState(
     defaultAutoShutdownEnabled,
   );
@@ -69,8 +120,8 @@ export function CreateTesterModal({
   const [autoProbeEnabled, setAutoProbeEnabled] = useState(false);
 
   const [availableClouds, setAvailableClouds] = useState<string[]>([]);
+  const [existingNames, setExistingNames] = useState<Set<string>>(new Set());
   const [regions, setRegions] = useState<string[]>([]);
-  const [regionsLoading, setRegionsLoading] = useState(false);
   const [stage, setStage] = useState<Stage>('form');
   const [error, setError] = useState<string | null>(null);
   const [createdTester, setCreatedTester] = useState<TesterRow | null>(null);
@@ -84,21 +135,27 @@ export function CreateTesterModal({
   }, []);
 
   // Load available clouds from project's cloud connections AND cloud accounts
+  // Also load existing tester names for unique-name suggestion
   useEffect(() => {
     let cancelled = false;
     Promise.all([
       api.getCloudConnections(projectId).catch(() => []),
       api.getCloudAccounts(projectId).catch(() => []),
-    ]).then(([conns, accts]) => {
+      testersApi.listTesters(projectId).catch(() => []),
+    ]).then(([conns, accts, testers]) => {
       if (cancelled) return;
-      const fromConns = conns
+      const connsArr = Array.isArray(conns) ? conns : [];
+      const acctsArr = Array.isArray(accts) ? accts : [];
+      const testersArr = Array.isArray(testers) ? testers : [];
+      const fromConns = connsArr
         .filter((c: { status: string }) => c.status === 'active')
         .map((c: { provider: string }) => c.provider);
-      const fromAccts = accts
+      const fromAccts = acctsArr
         .filter((a: { status: string }) => a.status === 'active')
         .map((a: { provider: string }) => a.provider);
       const providers = [...new Set([...fromConns, ...fromAccts])] as string[];
       setAvailableClouds(providers.length > 0 ? providers : ['azure']);
+      setExistingNames(new Set(testersArr.map((t: { name: string }) => t.name)));
       // If current cloud not in available list, switch to first available
       if (providers.length > 0 && !providers.includes(cloud)) {
         setCloud(providers[0]);
@@ -109,30 +166,36 @@ export function CreateTesterModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
-  // Load regions when cloud changes
+  // Suggest a unique tester name based on cloud + region
   useEffect(() => {
-    let cancelled = false;
-    setRegionsLoading(true);
-    testersApi
-      .getRegions(projectId)
-      .then((list) => {
-        if (cancelled) return;
-        setRegions(list);
-        if (!region && list.length > 0) {
-          setRegion(defaultRegion && list.includes(defaultRegion) ? defaultRegion : list[0]);
-        }
-      })
-      .catch(() => {
-        // non-fatal — user can still type a region if the select is empty
-      })
-      .finally(() => {
-        if (!cancelled) setRegionsLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
+    if (name) return; // don't override user input
+    if (existingNames.size === 0 && !availableClouds.length) return;
+    const base = `${cloud}-${region || 'tester'}`;
+    if (!existingNames.has(base)) {
+      setName(base);
+      return;
+    }
+    // Find the next available -NN suffix
+    for (let i = 1; i <= 99; i++) {
+      const candidate = `${base}-${String(i).padStart(2, '0')}`;
+      if (!existingNames.has(candidate)) {
+        setName(candidate);
+        return;
+      }
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, cloud]);
+  }, [cloud, region, existingNames, availableClouds]);
+
+  // Load regions when cloud changes (per-cloud static list)
+  useEffect(() => {
+    const list = REGIONS_BY_CLOUD[cloud] || [];
+    setRegions(list);
+    // If current region is not valid for this cloud, reset to first available
+    if (list.length > 0 && !list.includes(region)) {
+      setRegion(defaultRegion && list.includes(defaultRegion) ? defaultRegion : list[0]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cloud]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
@@ -200,6 +263,8 @@ export function CreateTesterModal({
           ? autoShutdownHour
           : undefined,
         auto_probe_enabled: autoProbeEnabled,
+        requested_os: requestedOs,
+        requested_variant: requestedVariant,
       });
       setCreatedTester(row);
       // If backend replied with a terminal state already (unlikely but possible),
@@ -315,7 +380,7 @@ export function CreateTesterModal({
               {/* Region */}
               <div>
                 <label htmlFor="tester-region" className="block text-xs text-gray-400 mb-1">
-                  Region {regionsLoading && <span className="text-gray-600">(loading…)</span>}
+                  Region
                 </label>
                 <select
                   id="tester-region"
@@ -345,6 +410,52 @@ export function CreateTesterModal({
                   placeholder="eastus-1"
                   className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 />
+              </div>
+
+              {/* OS */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label htmlFor="tester-os" className="block text-xs text-gray-400 mb-1">
+                    Operating System
+                  </label>
+                  <select
+                    id="tester-os"
+                    value={requestedOs}
+                    onChange={(e) => {
+                      const newOs = e.target.value;
+                      setRequestedOs(newOs);
+                      const opts = OS_OPTIONS[cloud] || [];
+                      const osDef = opts.find((o) => o.value === newOs);
+                      if (osDef && !osDef.variants.includes(requestedVariant)) {
+                        setRequestedVariant(osDef.variants[0]);
+                      }
+                    }}
+                    className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                  >
+                    {(OS_OPTIONS[cloud] || []).map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="tester-variant" className="block text-xs text-gray-400 mb-1">
+                    Variant
+                  </label>
+                  <select
+                    id="tester-variant"
+                    value={requestedVariant}
+                    onChange={(e) => setRequestedVariant(e.target.value)}
+                    className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                  >
+                    {((OS_OPTIONS[cloud] || []).find((o) => o.value === requestedOs)?.variants ?? ['server']).map((v) => (
+                      <option key={v} value={v}>
+                        {v === 'server' ? 'Server' : v === 'desktop' ? 'Desktop' : v}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
               {/* VM size */}

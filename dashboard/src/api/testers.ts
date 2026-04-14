@@ -86,6 +86,8 @@ export type CreateTesterBody = {
   vm_size?: string;
   auto_shutdown_local_hour?: number;
   auto_probe_enabled?: boolean;
+  requested_os?: string;
+  requested_variant?: string;
 };
 
 export type ScheduleBody = {

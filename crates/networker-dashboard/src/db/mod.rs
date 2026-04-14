@@ -1,3 +1,4 @@
+pub mod agent_commands;
 pub mod agents;
 pub mod benchmark_configs;
 pub mod benchmark_presets;

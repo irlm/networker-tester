@@ -53,16 +53,17 @@ pub async fn create(
     os: &str,
     proxies: &serde_json::Value,
     tester_os: &str,
+    endpoint_ip: Option<&str>,
 ) -> anyhow::Result<Uuid> {
     let id = Uuid::new_v4();
     client
         .execute(
             "INSERT INTO benchmark_testbed
-                (testbed_id, config_id, cloud, region, topology, languages, vm_size, os, proxies, tester_os)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+                (testbed_id, config_id, cloud, region, topology, languages, vm_size, os, proxies, tester_os, endpoint_ip)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
             &[
                 &id, config_id, &cloud, &region, &topology, languages, &vm_size, &os,
-                proxies, &tester_os,
+                proxies, &tester_os, &endpoint_ip,
             ],
         )
         .await?;

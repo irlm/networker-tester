@@ -1,4 +1,5 @@
 mod admin;
+mod agent_commands;
 mod agents;
 mod auth;
 mod bench_tokens;
@@ -32,6 +33,7 @@ mod sso_admin;
 // is deferred to Task 18; for now we declare the module so it compiles
 // and its unit tests run.
 mod system_health;
+mod tester_precheck;
 mod testers;
 mod tls_profiles;
 mod update;
@@ -83,6 +85,7 @@ pub fn router(state: Arc<AppState>) -> Router {
     // Project-scoped routes (require auth + project membership)
     let project_scoped = Router::new()
         .merge(agents::project_router(state.clone()))
+        .merge(agent_commands::project_router(state.clone()))
         .merge(benchmarks::project_router(state.clone()))
         .merge(jobs::project_router(state.clone()))
         .merge(runs::project_router(state.clone()))
@@ -104,6 +107,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(benchmark_configs::project_router(state.clone()))
         .merge(benchmark_catalog::project_router(state.clone()))
         .merge(testers::project_router(state.clone()))
+        .merge(tester_precheck::project_router(state.clone()))
         .merge(projects::detail_router(state.clone()))
         .layer(middleware::from_fn_with_state(
             state.clone(),

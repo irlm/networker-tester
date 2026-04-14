@@ -489,6 +489,28 @@ async fn handle_agent_message(state: &Arc<AppState>, agent_id: Uuid, msg: AgentM
                 finished_at: Some(chrono::Utc::now()),
             });
         }
+        AgentMessage::CommandLog(log) => {
+            let command_id = log.command_id;
+            if let Err(e) = crate::agent_dispatch::handle_command_log(state, log).await {
+                tracing::error!(
+                    agent_id = %agent_id,
+                    command_id = %command_id,
+                    error = %e,
+                    "failed to ingest command log"
+                );
+            }
+        }
+        AgentMessage::CommandResult(result) => {
+            let command_id = result.command_id;
+            if let Err(e) = crate::agent_dispatch::handle_command_result(state, result).await {
+                tracing::error!(
+                    agent_id = %agent_id,
+                    command_id = %command_id,
+                    error = %e,
+                    "failed to ingest command result"
+                );
+            }
+        }
     }
 }
 

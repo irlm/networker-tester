@@ -22,6 +22,95 @@ pub struct VmConfig {
     pub ssh_user: String,
     pub image: String,
     pub tags: HashMap<String, String>,
+    /// Optional cloud-init / user-data script that the provider should inject
+    /// at instance creation time. For AWS this maps to `--user-data`; for GCP
+    /// to `--metadata-from-file startup-script=`; for Azure to `--custom-data`.
+    pub bootstrap_script: Option<String>,
+}
+
+/// Resolve the image reference for a given (cloud, os, variant) triple.
+/// Returns the provider-specific image reference to pass as VmConfig.image.
+pub fn resolve_image(cloud: &str, os: &str, variant: &str) -> String {
+    match (cloud, os, variant) {
+        // Azure — URN format: Publisher:Offer:Sku:Version
+        // Note: Azure Ubuntu Desktop is not a published image; fall back to server.
+        ("azure", "ubuntu-24.04", "server" | "desktop") => {
+            "Canonical:ubuntu-24_04-lts:server:latest".into()
+        }
+        ("azure", "ubuntu-22.04", "server") => {
+            "Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:latest".into()
+        }
+        ("azure", "windows-2022", "server") => {
+            "MicrosoftWindowsServer:WindowsServer:2022-datacenter-azure-edition:latest".into()
+        }
+        ("azure", "windows-11", "desktop") => {
+            "MicrosoftWindowsDesktop:windows-11:win11-24h2-pro:latest".into()
+        }
+        ("azure", "debian-12", "server") => "Debian:debian-12:12:latest".into(),
+
+        // AWS — pass a marker; create_vm will query SSM/describe-images
+        ("aws", "ubuntu-24.04", "server") => "aws:ubuntu-24.04-server".into(),
+        ("aws", "ubuntu-22.04", "server") => "aws:ubuntu-22.04-server".into(),
+        ("aws", "windows-2022", "server") => "aws:windows-2022-server".into(),
+        ("aws", "debian-12", "server") => "aws:debian-12-server".into(),
+
+        // GCP — image family
+        ("gcp", "ubuntu-24.04", "server") => "ubuntu-2404-lts-amd64".into(),
+        ("gcp", "ubuntu-22.04", "server") => "ubuntu-2204-lts".into(),
+        ("gcp", "debian-12", "server") => "debian-12".into(),
+        ("gcp", "windows-2022", "server") => "windows-2022".into(),
+
+        // Fallback: Ubuntu 24.04 Server
+        ("azure", _, _) => "Canonical:ubuntu-24_04-lts:server:latest".into(),
+        ("aws", _, _) => "aws:ubuntu-24.04-server".into(),
+        ("gcp", _, _) => "ubuntu-2404-lts-amd64".into(),
+        _ => "ubuntu-24.04-server".into(),
+    }
+}
+
+/// Derive a Windows-safe NetBIOS computer name from a descriptive VM name.
+/// - Max 15 chars
+/// - Only letters, digits, hyphens; punctuation → hyphens
+/// - Must not be entirely numeric (prefixed with "w" if it would be)
+/// - Trailing hyphens stripped
+pub fn azure_windows_computer_name(name: &str) -> String {
+    let mut s: String = name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    while s.contains("--") {
+        s = s.replace("--", "-");
+    }
+    if s.len() > 15 {
+        s.truncate(15);
+    }
+    while s.ends_with('-') {
+        s.pop();
+    }
+    if s.is_empty() || s.chars().all(|c| c.is_ascii_digit()) {
+        s = format!("w{s}");
+        if s.len() > 15 {
+            s.truncate(15);
+        }
+    }
+    s
+}
+
+/// Default SSH user for a given OS.
+pub fn default_ssh_user(cloud: &str, os: &str) -> &'static str {
+    if os.starts_with("windows") {
+        return "azureadmin"; // "Administrator" is reserved on Azure Windows images
+    }
+    match (cloud, os) {
+        // Azure disallows "admin" as username — use "azureuser" for all Azure Linux
+        ("azure", _) => "azureuser",
+        // AWS/GCP Debian uses "admin", Ubuntu uses "ubuntu"
+        ("aws", "debian-12") => "admin",
+        ("gcp", "debian-12") => "admin",
+        ("aws", _) => "ubuntu",
+        ("gcp", _) => "ubuntu",
+        _ => "ubuntu",
+    }
 }
 
 /// Information about an existing VM.
@@ -276,6 +365,77 @@ impl AzureProvider {
         }
     }
 
+    /// Build the argv for `az vm create` from a `VmConfig` plus the resolved
+    /// subscription/resource-group, optional `admin_password` (Windows), and
+    /// optional `custom_data_path` for a bootstrap script. Pure (no IO).
+    ///
+    /// When `custom_data_path` is `Some(path)`, appends `--custom-data @<path>`
+    /// so the `az` CLI reads the file contents and uploads them as the VM's
+    /// custom-data blob. The provider forwards raw bytes; the cloud_init
+    /// module is responsible for any encoding decisions (e.g. base64 for
+    /// Windows). No double-encoding happens here.
+    pub fn build_vm_create_args(
+        config: &VmConfig,
+        subscription_id: &str,
+        resource_group: &str,
+        admin_password: Option<&str>,
+        custom_data_path: Option<&std::path::Path>,
+    ) -> Vec<String> {
+        let is_windows = config.image.to_lowercase().contains("windows");
+        let mut args: Vec<String> = vec![
+            "vm".into(),
+            "create".into(),
+            "--subscription".into(),
+            subscription_id.to_string(),
+            "--resource-group".into(),
+            resource_group.to_string(),
+            "--name".into(),
+            config.name.clone(),
+            "--location".into(),
+            config.region.clone(),
+            "--image".into(),
+            config.image.clone(),
+            "--size".into(),
+            config.vm_size.clone(),
+            "--public-ip-sku".into(),
+            "Standard".into(),
+            "--admin-username".into(),
+            config.ssh_user.clone(),
+        ];
+
+        if is_windows {
+            let safe = azure_windows_computer_name(&config.name);
+            args.push("--computer-name".into());
+            args.push(safe);
+        }
+
+        if is_windows {
+            if let Some(pw) = admin_password {
+                args.push("--admin-password".into());
+                args.push(pw.to_string());
+            }
+        } else {
+            args.push("--generate-ssh-keys".into());
+        }
+
+        args.push("--output".into());
+        args.push("json".into());
+
+        if !config.tags.is_empty() {
+            args.push("--tags".into());
+            for (k, v) in &config.tags {
+                args.push(format!("{k}={v}"));
+            }
+        }
+
+        if let Some(path) = custom_data_path {
+            args.push("--custom-data".into());
+            args.push(format!("@{}", path.display()));
+        }
+
+        args
+    }
+
     /// Create a new Azure VM via `az vm create`.
     pub async fn create_vm(&self, config: &VmConfig) -> anyhow::Result<VmInfo> {
         tracing::info!(
@@ -289,41 +449,56 @@ impl AzureProvider {
             "AzureProvider::create_vm"
         );
         let sp_dir = self.ensure_sp_login().await?;
-        let mut cmd = self.az_cmd(&sp_dir).await;
-        cmd.arg("vm")
-            .arg("create")
-            .arg("--subscription")
-            .arg(&self.subscription_id)
-            .arg("--resource-group")
-            .arg(&self.resource_group)
-            .arg("--name")
-            .arg(&config.name)
-            .arg("--location")
-            .arg(&config.region)
-            .arg("--image")
-            .arg(&config.image)
-            .arg("--size")
-            .arg(&config.vm_size)
-            .arg("--public-ip-sku")
-            .arg("Standard")
-            .arg("--admin-username")
-            .arg(&config.ssh_user)
-            .arg("--generate-ssh-keys")
-            .arg("--output")
-            .arg("json");
+        let is_windows = config.image.to_lowercase().contains("windows");
 
-        // Append tags as `key=value` pairs.
-        if !config.tags.is_empty() {
-            cmd.arg("--tags");
-            for (k, v) in &config.tags {
-                cmd.arg(format!("{k}={v}"));
-            }
-        }
+        // Windows VMs require a password; Linux VMs use SSH keys. Generate
+        // the password up-front so the pure arg-builder stays IO-free.
+        let win_password = if is_windows {
+            // Azure password rules: 12-72 chars, 3 of {upper, lower, digit, special}
+            Some(format!(
+                "Nx!{}{}aZ9",
+                uuid::Uuid::new_v4().simple(),
+                &config.name.chars().take(4).collect::<String>()
+            ))
+        } else {
+            None
+        };
+        let _ = &win_password; // currently not surfaced; logged below for ops.
+
+        // If a bootstrap script is requested, write it to a tempfile and pass
+        // `--custom-data @<path>`. The NamedTempFile is kept alive for the
+        // duration of the az call, then dropped (auto-deleted) on return.
+        // The provider forwards raw bytes — cloud_init is responsible for any
+        // encoding decisions (e.g. base64 for Windows).
+        let custom_data_tmp = if let Some(script) = config.bootstrap_script.as_deref() {
+            use std::io::Write;
+            let mut tmp = tempfile::NamedTempFile::new()
+                .context("failed to create tempfile for custom-data")?;
+            tmp.write_all(script.as_bytes())
+                .context("failed to write custom-data to tempfile")?;
+            tmp.flush().ok();
+            Some(tmp)
+        } else {
+            None
+        };
+
+        let args = Self::build_vm_create_args(
+            config,
+            &self.subscription_id,
+            &self.resource_group,
+            win_password.as_deref(),
+            custom_data_tmp.as_ref().map(|t| t.path()),
+        );
+
+        let mut cmd = self.az_cmd(&sp_dir).await;
+        cmd.args(&args);
 
         let output = cmd
             .output()
             .await
             .context("failed to spawn `az vm create`")?;
+        // Keep tempfile alive until after the az invocation completed.
+        drop(custom_data_tmp);
         Self::cleanup_sp_session(&sp_dir);
 
         if !output.status.success() {
@@ -437,10 +612,13 @@ impl AzureProvider {
             .context("failed to spawn `az vm delete`")?;
         Self::cleanup_sp_session(&sp_dir);
         if !output.status.success() {
-            anyhow::bail!(
-                "az vm delete failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            // Idempotent: VM already gone is the desired end-state.
+            if stderr.contains("ResourceNotFound") || stderr.contains("could not be found") {
+                tracing::info!(resource_id, "Azure VM already deleted; treating as success");
+                return Ok(());
+            }
+            anyhow::bail!("az vm delete failed: {stderr}");
         }
         Ok(())
     }
@@ -781,6 +959,56 @@ impl AwsProvider {
         Ok(sg_id)
     }
 
+    /// Resolve a marker like "aws:ubuntu-24.04-server" into an AMI ID for the given region.
+    async fn resolve_ami(&self, marker: &str, region: &str) -> anyhow::Result<String> {
+        let (owner, name_filter) = match marker.strip_prefix("aws:").unwrap_or(marker) {
+            "ubuntu-24.04-server" => (
+                "099720109477",
+                "ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*",
+            ),
+            "ubuntu-22.04-server" => (
+                "099720109477",
+                "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*",
+            ),
+            "debian-12-server" => ("136693071363", "debian-12-amd64-*"),
+            "windows-2022-server" => ("801119661308", "Windows_Server-2022-English-Full-Base-*"),
+            _ => (
+                "099720109477",
+                "ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*",
+            ),
+        };
+
+        let output = self
+            .aws_cmd()
+            .arg("ec2")
+            .arg("describe-images")
+            .arg("--owners")
+            .arg(owner)
+            .arg("--filters")
+            .arg(format!("Name=name,Values={name_filter}"))
+            .arg("Name=state,Values=available")
+            .arg("--query")
+            .arg("sort_by(Images, &CreationDate)[-1].ImageId")
+            .arg("--region")
+            .arg(region)
+            .arg("--output")
+            .arg("text")
+            .output()
+            .await
+            .context("aws ec2 describe-images")?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "aws ec2 describe-images failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let ami = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if ami.is_empty() || ami == "None" {
+            anyhow::bail!("No AMI found for '{marker}' in region {region}");
+        }
+        Ok(ami)
+    }
+
     /// Poll for the instance's public IP for up to 60s.
     async fn wait_for_public_ip(&self, instance_id: &str, region: &str) -> anyhow::Result<String> {
         for _ in 0..30u32 {
@@ -811,6 +1039,49 @@ impl AwsProvider {
         anyhow::bail!("Public IP not assigned to {instance_id} after 60s")
     }
 
+    /// Build the argv for `aws ec2 run-instances` from a `VmConfig` plus
+    /// already-resolved `ami_id`, `key_name`, and `sg_id`. Pure (no IO).
+    ///
+    /// When `user_data_path` is `Some(path)`, appends `--user-data file://<path>`
+    /// so cloud-init runs on first boot.
+    pub fn build_run_instances_args(
+        config: &VmConfig,
+        ami_id: &str,
+        key_name: &str,
+        sg_id: &str,
+        user_data_path: Option<&std::path::Path>,
+    ) -> Vec<String> {
+        let mut args: Vec<String> = vec![
+            "ec2".into(),
+            "run-instances".into(),
+            "--image-id".into(),
+            ami_id.to_string(),
+            "--instance-type".into(),
+            config.vm_size.clone(),
+            "--region".into(),
+            config.region.clone(),
+            "--key-name".into(),
+            key_name.to_string(),
+            "--security-group-ids".into(),
+            sg_id.to_string(),
+            "--associate-public-ip-address".into(),
+            "--tag-specifications".into(),
+            format!(
+                "ResourceType=instance,Tags=[{{Key=Name,Value={}}}]",
+                config.name
+            ),
+            "--query".into(),
+            "Instances[0]".into(),
+            "--output".into(),
+            "json".into(),
+        ];
+        if let Some(path) = user_data_path {
+            args.push("--user-data".into());
+            args.push(format!("file://{}", path.display()));
+        }
+        args
+    }
+
     pub async fn create_vm(&self, config: &VmConfig) -> anyhow::Result<VmInfo> {
         tracing::info!(
             region = %self.region,
@@ -819,39 +1090,9 @@ impl AwsProvider {
             "AwsProvider::create_vm"
         );
 
-        // Find latest Ubuntu 24.04 AMI
-        let ami_output = self
-            .aws_cmd()
-            .arg("ec2")
-            .arg("describe-images")
-            .arg("--owners")
-            .arg("099720109477") // Canonical
-            .arg("--filters")
-            .arg("Name=name,Values=ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*")
-            .arg("Name=state,Values=available")
-            .arg("--query")
-            .arg("sort_by(Images, &CreationDate)[-1].ImageId")
-            .arg("--region")
-            .arg(&config.region)
-            .arg("--output")
-            .arg("text")
-            .output()
-            .await
-            .context("failed to spawn aws ec2 describe-images")?;
-
-        if !ami_output.status.success() {
-            anyhow::bail!(
-                "aws ec2 describe-images failed: {}",
-                String::from_utf8_lossy(&ami_output.stderr)
-            );
-        }
-        let ami_id = String::from_utf8_lossy(&ami_output.stdout)
-            .trim()
-            .to_string();
-        if ami_id.is_empty() || ami_id == "None" {
-            anyhow::bail!("No Ubuntu 24.04 AMI found in region {}", config.region);
-        }
-        tracing::info!(ami_id = %ami_id, "Found Ubuntu AMI");
+        // Resolve AMI by marker (image field is "aws:<os-variant>")
+        let ami_id = self.resolve_ami(&config.image, &config.region).await?;
+        tracing::info!(ami_id = %ami_id, image_marker = %config.image, "Resolved AMI");
 
         // Ensure key pair exists (uses local ~/.ssh/id_rsa.pub if available, else creates new)
         let key_name = self.ensure_key_pair(&config.region).await?;
@@ -859,34 +1100,37 @@ impl AwsProvider {
         // Ensure security group exists with SSH + dashboard ports open
         let sg_id = self.ensure_security_group(&config.region).await?;
 
-        // Create the instance
+        // If a bootstrap script is requested, write it to a tempfile and pass
+        // `--user-data file://<path>`. The NamedTempFile is kept alive for the
+        // duration of the aws call, then dropped (auto-deleted) on return.
+        let user_data_tmp = if let Some(script) = config.bootstrap_script.as_deref() {
+            use std::io::Write;
+            let mut tmp = tempfile::NamedTempFile::new()
+                .context("failed to create tempfile for --user-data")?;
+            tmp.write_all(script.as_bytes())
+                .context("failed to write --user-data script to tempfile")?;
+            tmp.flush().ok();
+            Some(tmp)
+        } else {
+            None
+        };
+
+        let args = Self::build_run_instances_args(
+            config,
+            &ami_id,
+            &key_name,
+            &sg_id,
+            user_data_tmp.as_ref().map(|t| t.path()),
+        );
+
         let output = self
             .aws_cmd()
-            .arg("ec2")
-            .arg("run-instances")
-            .arg("--image-id")
-            .arg(&ami_id)
-            .arg("--instance-type")
-            .arg(&config.vm_size)
-            .arg("--region")
-            .arg(&config.region)
-            .arg("--key-name")
-            .arg(&key_name)
-            .arg("--security-group-ids")
-            .arg(&sg_id)
-            .arg("--associate-public-ip-address")
-            .arg("--tag-specifications")
-            .arg(format!(
-                "ResourceType=instance,Tags=[{{Key=Name,Value={}}}]",
-                config.name
-            ))
-            .arg("--query")
-            .arg("Instances[0]")
-            .arg("--output")
-            .arg("json")
+            .args(&args)
             .output()
             .await
             .context("failed to spawn aws ec2 run-instances")?;
+        // Keep tempfile alive until after the aws invocation completed.
+        drop(user_data_tmp);
 
         if !output.status.success() {
             anyhow::bail!(
@@ -967,10 +1211,16 @@ impl AwsProvider {
             .await
             .context("failed to spawn aws ec2 terminate-instances")?;
         if !output.status.success() {
-            anyhow::bail!(
-                "aws ec2 terminate-instances failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            // Idempotent: instance already gone is the desired end-state.
+            if stderr.contains("InvalidInstanceID.NotFound") || stderr.contains("does not exist") {
+                tracing::info!(
+                    resource_id,
+                    "AWS instance already terminated; treating as success"
+                );
+                return Ok(());
+            }
+            anyhow::bail!("aws ec2 terminate-instances failed: {stderr}");
         }
         Ok(())
     }
@@ -1121,6 +1371,59 @@ impl GcpProvider {
         cmd
     }
 
+    /// Build the argv for `gcloud compute instances create` from a `VmConfig`
+    /// plus already-computed `zone`, optional `ssh_metadata_path` (for the
+    /// `ssh-keys=` metadata file), and optional `startup_script_path`. Pure
+    /// (no IO).
+    ///
+    /// When `startup_script_path` is `Some(path)`, appends
+    /// `--metadata-from-file startup-script=<path>` so cloud-init-style
+    /// bootstrap runs on first boot.
+    pub fn build_create_args(
+        config: &VmConfig,
+        zone: &str,
+        ssh_metadata_path: Option<&std::path::Path>,
+        startup_script_path: Option<&std::path::Path>,
+    ) -> Vec<String> {
+        let image_project = match config.image.as_str() {
+            s if s.starts_with("ubuntu") => "ubuntu-os-cloud",
+            s if s.starts_with("debian") => "debian-cloud",
+            s if s.starts_with("windows") => "windows-cloud",
+            _ => "ubuntu-os-cloud",
+        };
+
+        let mut args: Vec<String> = vec![
+            "compute".into(),
+            "instances".into(),
+            "create".into(),
+            config.name.clone(),
+            "--zone".into(),
+            zone.to_string(),
+            "--machine-type".into(),
+            config.vm_size.clone(),
+            "--image-family".into(),
+            config.image.clone(),
+            "--image-project".into(),
+            image_project.to_string(),
+            "--tags".into(),
+            "alethedash-tester".into(),
+            "--format".into(),
+            "json".into(),
+        ];
+
+        if let Some(md) = ssh_metadata_path {
+            args.push("--metadata-from-file".into());
+            args.push(format!("ssh-keys={}", md.display()));
+        }
+
+        if let Some(path) = startup_script_path {
+            args.push("--metadata-from-file".into());
+            args.push(format!("startup-script={}", path.display()));
+        }
+
+        args
+    }
+
     pub async fn create_vm(&self, config: &VmConfig) -> anyhow::Result<VmInfo> {
         tracing::info!(
             project = %self.project_id,
@@ -1135,27 +1438,58 @@ impl GcpProvider {
         // GCP needs a zone, not just a region. Use the first zone in the region.
         let zone = format!("{}-a", config.region);
 
+        // Inject SSH public key so the dashboard can SSH in after creation.
+        // GCP uses instance metadata `ssh-keys=user:pubkey` for this.
+        // Read the dashboard's local ~/.ssh/id_rsa.pub.
+        let home = std::env::var("HOME").unwrap_or_default();
+        let pub_key_path = format!("{home}/.ssh/id_rsa.pub");
+        let ssh_metadata_file = if std::path::Path::new(&pub_key_path).exists() {
+            let pub_key = std::fs::read_to_string(&pub_key_path)?;
+            let user = &config.ssh_user;
+            let metadata_path = format!("/tmp/gcp-ssh-keys-{}.txt", uuid::Uuid::new_v4().simple());
+            std::fs::write(&metadata_path, format!("{user}:{}", pub_key.trim()))?;
+            Some(metadata_path)
+        } else {
+            tracing::warn!("No ~/.ssh/id_rsa.pub found — GCP SSH may not work");
+            None
+        };
+
+        // If a bootstrap script is requested, write it to a tempfile and pass
+        // `--metadata-from-file startup-script=<path>`. The NamedTempFile is
+        // kept alive for the duration of the gcloud call, then dropped
+        // (auto-deleted) on return.
+        let startup_script_tmp = if let Some(script) = config.bootstrap_script.as_deref() {
+            use std::io::Write;
+            let mut tmp = tempfile::NamedTempFile::new()
+                .context("failed to create tempfile for startup-script")?;
+            tmp.write_all(script.as_bytes())
+                .context("failed to write startup-script to tempfile")?;
+            tmp.flush().ok();
+            Some(tmp)
+        } else {
+            None
+        };
+
+        let ssh_metadata_path = ssh_metadata_file.as_ref().map(std::path::Path::new);
+        let args = Self::build_create_args(
+            config,
+            &zone,
+            ssh_metadata_path,
+            startup_script_tmp.as_ref().map(|t| t.path()),
+        );
+
         let output = self
             .gcloud_cmd(&key_file)
-            .arg("compute")
-            .arg("instances")
-            .arg("create")
-            .arg(&config.name)
-            .arg("--zone")
-            .arg(&zone)
-            .arg("--machine-type")
-            .arg(&config.vm_size)
-            .arg("--image-family")
-            .arg("ubuntu-2404-lts-amd64")
-            .arg("--image-project")
-            .arg("ubuntu-os-cloud")
-            .arg("--tags")
-            .arg("alethedash-tester")
-            .arg("--format")
-            .arg("json")
+            .args(&args)
             .output()
             .await
             .context("failed to spawn gcloud compute instances create")?;
+        // Keep tempfile alive until after the gcloud invocation completed.
+        drop(startup_script_tmp);
+
+        if let Some(md) = &ssh_metadata_file {
+            let _ = std::fs::remove_file(md);
+        }
 
         let _ = std::fs::remove_file(&key_file);
 
@@ -1263,10 +1597,15 @@ impl GcpProvider {
             .context("failed to spawn gcloud delete")?;
         let _ = std::fs::remove_file(&key_file);
         if !output.status.success() {
-            anyhow::bail!(
-                "gcloud delete failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            // Treat "already gone" as success — the desired end-state is the
+            // same. Lets the dashboard reap orphan rows whose cloud resource
+            // was removed out-of-band.
+            if stderr.contains("was not found") || stderr.contains("404") {
+                tracing::info!(%name, %zone, "GCP VM already deleted; treating as success");
+                return Ok(());
+            }
+            anyhow::bail!("gcloud delete failed: {stderr}");
         }
         Ok(())
     }
@@ -1396,6 +1735,238 @@ mod tests {
     use super::*;
 
     #[test]
+    fn windows_computer_name_truncates_long_names() {
+        assert_eq!(
+            azure_windows_computer_name("bm-azure-windows-2022"),
+            "bm-azure-window"
+        );
+        assert_eq!(
+            azure_windows_computer_name("bm-azure-win11"),
+            "bm-azure-win11"
+        );
+    }
+
+    #[test]
+    fn windows_computer_name_replaces_invalid_chars_and_trims_hyphens() {
+        assert_eq!(
+            azure_windows_computer_name("bm_azure.win 11"),
+            "bm-azure-win-11"
+        );
+        assert_eq!(azure_windows_computer_name("bm-azure-"), "bm-azure");
+        assert_eq!(
+            azure_windows_computer_name("bm--azure---win"),
+            "bm-azure-win"
+        );
+    }
+
+    #[test]
+    fn windows_computer_name_rejects_all_numeric() {
+        assert_eq!(azure_windows_computer_name("2022"), "w2022");
+        assert_eq!(
+            azure_windows_computer_name("12345678901234567890"),
+            "w12345678901234"
+        );
+    }
+
+    fn aws_vm_config_fixture(bootstrap: Option<&str>) -> VmConfig {
+        VmConfig {
+            name: "bm-aws-test".to_string(),
+            region: "us-east-1".to_string(),
+            vm_size: "t3.small".to_string(),
+            ssh_user: "ubuntu".to_string(),
+            image: "aws:ubuntu-24.04-server".to_string(),
+            tags: HashMap::new(),
+            bootstrap_script: bootstrap.map(|s| s.to_string()),
+        }
+    }
+
+    #[test]
+    fn aws_create_vm_args_include_user_data_when_bootstrap_set() {
+        use std::io::Write;
+
+        let config = aws_vm_config_fixture(Some("#!/bin/bash\necho hi\n"));
+
+        // Write the script to a real tempfile (matching the runtime path).
+        let mut tmp = tempfile::NamedTempFile::new().expect("create tempfile for bootstrap script");
+        tmp.write_all(config.bootstrap_script.as_deref().unwrap().as_bytes())
+            .expect("write bootstrap script");
+        tmp.flush().ok();
+
+        let args = AwsProvider::build_run_instances_args(
+            &config,
+            "ami-123456",
+            "alethedash-tester",
+            "sg-abcdef",
+            Some(tmp.path()),
+        );
+
+        // --user-data must be present and followed by a file:// reference.
+        let idx = args
+            .iter()
+            .position(|a| a == "--user-data")
+            .expect("--user-data arg present");
+        let val = args
+            .get(idx + 1)
+            .expect("value arg after --user-data")
+            .clone();
+        assert!(
+            val.starts_with("file://"),
+            "user-data value should be file:// reference, got {val}"
+        );
+
+        // The referenced file should contain the script body we wrote.
+        let path = val.trim_start_matches("file://");
+        let contents = std::fs::read_to_string(path).expect("read back tempfile");
+        assert!(
+            contents.contains("echo hi"),
+            "tempfile should contain bootstrap script body, got: {contents}"
+        );
+    }
+
+    #[test]
+    fn aws_create_vm_args_omit_user_data_when_bootstrap_none() {
+        let config = aws_vm_config_fixture(None);
+        let args = AwsProvider::build_run_instances_args(
+            &config,
+            "ami-123456",
+            "alethedash-tester",
+            "sg-abcdef",
+            None,
+        );
+        assert!(
+            !args.iter().any(|a| a == "--user-data"),
+            "no --user-data flag when bootstrap_script is None; got args = {args:?}"
+        );
+    }
+
+    fn azure_vm_config_fixture(bootstrap: Option<&str>, windows: bool) -> VmConfig {
+        VmConfig {
+            name: "bm-azure-test".to_string(),
+            region: "eastus".to_string(),
+            vm_size: "Standard_B2s".to_string(),
+            ssh_user: "azureuser".to_string(),
+            image: if windows {
+                "MicrosoftWindowsServer:WindowsServer:2022-datacenter:latest".to_string()
+            } else {
+                "Canonical:0001-com-ubuntu-server-jammy:22_04-lts:latest".to_string()
+            },
+            tags: HashMap::new(),
+            bootstrap_script: bootstrap.map(|s| s.to_string()),
+        }
+    }
+
+    #[test]
+    fn azure_create_vm_args_include_custom_data_when_bootstrap_set() {
+        use std::io::Write;
+
+        let config = azure_vm_config_fixture(Some("#!/bin/bash\necho hello-azure\n"), false);
+
+        // Write the script to a real tempfile (matching the runtime path).
+        let mut tmp = tempfile::NamedTempFile::new().expect("create tempfile for custom-data");
+        tmp.write_all(config.bootstrap_script.as_deref().unwrap().as_bytes())
+            .expect("write custom-data");
+        tmp.flush().ok();
+
+        let args =
+            AzureProvider::build_vm_create_args(&config, "sub-id", "rg", None, Some(tmp.path()));
+
+        let idx = args
+            .iter()
+            .position(|a| a == "--custom-data")
+            .expect("--custom-data arg present");
+        let val = args
+            .get(idx + 1)
+            .expect("value arg after --custom-data")
+            .clone();
+        assert!(
+            val.starts_with('@'),
+            "custom-data value should start with @ (az CLI file syntax), got {val}"
+        );
+
+        // The referenced file should contain the script body we wrote.
+        let path = val.trim_start_matches('@');
+        let contents = std::fs::read_to_string(path).expect("read back tempfile");
+        assert!(
+            contents.contains("echo hello-azure"),
+            "tempfile should contain bootstrap script body, got: {contents}"
+        );
+    }
+
+    #[test]
+    fn azure_create_vm_args_omit_custom_data_when_bootstrap_none() {
+        let config = azure_vm_config_fixture(None, false);
+        let args = AzureProvider::build_vm_create_args(&config, "sub-id", "rg", None, None);
+        assert!(
+            !args.iter().any(|a| a == "--custom-data"),
+            "no --custom-data flag when bootstrap_script is None; got args = {args:?}"
+        );
+    }
+
+    #[test]
+    fn azure_create_vm_args_windows_include_custom_data_when_bootstrap_set() {
+        use std::io::Write;
+
+        let config = azure_vm_config_fixture(Some("# PowerShell bootstrap\nWrite-Host hi\n"), true);
+
+        let mut tmp =
+            tempfile::NamedTempFile::new().expect("create tempfile for windows custom-data");
+        tmp.write_all(config.bootstrap_script.as_deref().unwrap().as_bytes())
+            .expect("write windows custom-data");
+        tmp.flush().ok();
+
+        let args = AzureProvider::build_vm_create_args(
+            &config,
+            "sub-id",
+            "rg",
+            Some("Nx!dummyPw!1aZ9"),
+            Some(tmp.path()),
+        );
+
+        // --admin-password must be present (Windows), --generate-ssh-keys absent.
+        assert!(
+            args.iter().any(|a| a == "--admin-password"),
+            "Windows path should include --admin-password"
+        );
+        assert!(
+            !args.iter().any(|a| a == "--generate-ssh-keys"),
+            "Windows path should not include --generate-ssh-keys"
+        );
+
+        let idx = args
+            .iter()
+            .position(|a| a == "--custom-data")
+            .expect("--custom-data arg present for Windows");
+        let val = args
+            .get(idx + 1)
+            .expect("value after --custom-data")
+            .clone();
+        assert!(
+            val.starts_with('@'),
+            "custom-data value should start with @, got {val}"
+        );
+    }
+
+    #[test]
+    fn azure_create_vm_args_windows_omit_custom_data_when_bootstrap_none() {
+        let config = azure_vm_config_fixture(None, true);
+        let args = AzureProvider::build_vm_create_args(
+            &config,
+            "sub-id",
+            "rg",
+            Some("Nx!dummyPw!1aZ9"),
+            None,
+        );
+        assert!(
+            !args.iter().any(|a| a == "--custom-data"),
+            "no --custom-data on Windows when bootstrap_script is None; got args = {args:?}"
+        );
+        assert!(
+            args.iter().any(|a| a == "--computer-name"),
+            "Windows path should include --computer-name"
+        );
+    }
+
+    #[test]
     fn azure_provider_from_valid_config() {
         let config = serde_json::json!({
             "tenant_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
@@ -1496,6 +2067,64 @@ mod tests {
     fn gcp_provider_rejects_invalid_key() {
         let config = serde_json::json!({"json_key": "not json"});
         assert!(GcpProvider::from_config(&config).is_err());
+    }
+
+    fn gcp_vm_config_fixture(bootstrap: Option<&str>) -> VmConfig {
+        VmConfig {
+            name: "bm-gcp-test".to_string(),
+            region: "us-central1".to_string(),
+            vm_size: "e2-small".to_string(),
+            ssh_user: "ubuntu".to_string(),
+            image: "ubuntu-2404-lts".to_string(),
+            tags: HashMap::new(),
+            bootstrap_script: bootstrap.map(|s| s.to_string()),
+        }
+    }
+
+    #[test]
+    fn gcp_create_vm_args_include_startup_script_when_bootstrap_set() {
+        use std::io::Write;
+
+        let config = gcp_vm_config_fixture(Some("#!/bin/bash\necho hello-gcp\n"));
+
+        // Write the script to a real tempfile (matching the runtime path).
+        let mut tmp = tempfile::NamedTempFile::new().expect("create tempfile for startup-script");
+        tmp.write_all(config.bootstrap_script.as_deref().unwrap().as_bytes())
+            .expect("write startup-script");
+        tmp.flush().ok();
+
+        let args = GcpProvider::build_create_args(&config, "us-central1-a", None, Some(tmp.path()));
+
+        // Find a --metadata-from-file flag whose following arg is the
+        // startup-script= reference.
+        let mut found_startup = None;
+        for (i, a) in args.iter().enumerate() {
+            if a == "--metadata-from-file" {
+                if let Some(next) = args.get(i + 1) {
+                    if next.starts_with("startup-script=") {
+                        found_startup = Some(next.clone());
+                        break;
+                    }
+                }
+            }
+        }
+        let val = found_startup.expect("startup-script metadata-from-file arg present");
+        let path = val.trim_start_matches("startup-script=");
+        let contents = std::fs::read_to_string(path).expect("read back tempfile");
+        assert!(
+            contents.contains("echo hello-gcp"),
+            "tempfile should contain bootstrap script body, got: {contents}"
+        );
+    }
+
+    #[test]
+    fn gcp_create_vm_args_omit_startup_script_when_bootstrap_none() {
+        let config = gcp_vm_config_fixture(None);
+        let args = GcpProvider::build_create_args(&config, "us-central1-a", None, None);
+        assert!(
+            !args.iter().any(|a| a.starts_with("startup-script=")),
+            "no startup-script metadata when bootstrap_script is None; got args = {args:?}"
+        );
     }
 
     #[test]

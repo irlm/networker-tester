@@ -1,4 +1,5 @@
 pub mod azure_regions;
+pub mod cloud_init;
 pub mod cloud_provider;
 pub mod tester_dispatcher;
 pub mod tester_install;

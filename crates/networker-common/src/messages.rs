@@ -107,6 +107,10 @@ pub enum AgentMessage {
         line: String,
         level: String,
     },
+    /// Streamed log line from a running command.
+    CommandLog(AgentCommandLog),
+    /// Final result of a command execution.
+    CommandResult(AgentCommandResult),
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -126,6 +130,10 @@ pub enum ControlMessage {
     JobCancel { job_id: Uuid },
     /// Acknowledge agent registration / reconnection.
     Welcome { agent_id: Uuid, agent_name: String },
+    /// Dispatch a typed command envelope to the agent.
+    Command(AgentCommand),
+    /// Cancel an in-flight command.
+    Cancel(AgentCommandCancel),
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -209,4 +217,233 @@ pub enum BrowserCommand {
     UnsubscribeJob { job_id: Uuid },
     /// Subscribe to all dashboard events (agent status, new jobs).
     SubscribeAll,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Typed command envelope (dashboard → agent orchestration)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A command dispatched from the dashboard to an agent.
+///
+/// The `token` field carries a short-lived JWT that the agent validates
+/// before executing the command. It is opaque at this layer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentCommand {
+    pub command_id: Uuid,
+    #[serde(default)]
+    pub config_id: Option<Uuid>,
+    pub token: String,
+    pub verb: String,
+    #[serde(default)]
+    pub args: serde_json::Value,
+    pub timeout_secs: u64,
+}
+
+/// Stream identifier for command log lines.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum LogStream {
+    Stdout,
+    Stderr,
+}
+
+/// A log line emitted while a command executes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentCommandLog {
+    pub command_id: Uuid,
+    pub stream: LogStream,
+    pub line: String,
+}
+
+/// Terminal status for a command execution.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CommandStatus {
+    Ok,
+    Error,
+    Timeout,
+    Cancelled,
+}
+
+/// Result of a command execution reported back to the dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentCommandResult {
+    pub command_id: Uuid,
+    pub status: CommandStatus,
+    #[serde(default)]
+    pub result: Option<serde_json::Value>,
+    #[serde(default)]
+    pub error: Option<String>,
+    pub duration_ms: u64,
+}
+
+/// Request to cancel an in-flight command.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentCommandCancel {
+    pub command_id: Uuid,
+}
+
+#[cfg(test)]
+mod command_tests {
+    use super::*;
+
+    fn sample_command() -> AgentCommand {
+        AgentCommand {
+            command_id: Uuid::new_v4(),
+            config_id: Some(Uuid::new_v4()),
+            token: "opaque.jwt.token".to_string(),
+            verb: "run_benchmark".to_string(),
+            args: serde_json::json!({ "target": "example.com", "runs": 3 }),
+            timeout_secs: 120,
+        }
+    }
+
+    #[test]
+    fn command_envelope_round_trips_as_json() {
+        let cmd = sample_command();
+        let json = serde_json::to_string(&cmd).unwrap();
+        let back: AgentCommand = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.command_id, cmd.command_id);
+        assert_eq!(back.config_id, cmd.config_id);
+        assert_eq!(back.token, cmd.token);
+        assert_eq!(back.verb, cmd.verb);
+        assert_eq!(back.args, cmd.args);
+        assert_eq!(back.timeout_secs, cmd.timeout_secs);
+    }
+
+    #[test]
+    fn command_envelope_config_id_optional() {
+        // Missing config_id should deserialize to None.
+        let json = r#"{
+            "command_id": "00000000-0000-0000-0000-000000000001",
+            "token": "t",
+            "verb": "noop",
+            "timeout_secs": 5
+        }"#;
+        let cmd: AgentCommand = serde_json::from_str(json).unwrap();
+        assert!(cmd.config_id.is_none());
+        assert_eq!(cmd.args, serde_json::Value::Null);
+    }
+
+    #[test]
+    fn command_result_handles_error_variant() {
+        let result = AgentCommandResult {
+            command_id: Uuid::new_v4(),
+            status: CommandStatus::Error,
+            result: None,
+            error: Some("something exploded".to_string()),
+            duration_ms: 42,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"status\":\"error\""));
+        let back: AgentCommandResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.status, CommandStatus::Error);
+        assert_eq!(back.error.as_deref(), Some("something exploded"));
+        assert_eq!(back.duration_ms, 42);
+        assert!(back.result.is_none());
+    }
+
+    #[test]
+    fn command_status_serializes_lowercase() {
+        assert_eq!(serde_json::to_string(&CommandStatus::Ok).unwrap(), "\"ok\"");
+        assert_eq!(
+            serde_json::to_string(&CommandStatus::Timeout).unwrap(),
+            "\"timeout\""
+        );
+        assert_eq!(
+            serde_json::to_string(&CommandStatus::Cancelled).unwrap(),
+            "\"cancelled\""
+        );
+    }
+
+    #[test]
+    fn command_log_enum_serializes_lowercase() {
+        let log = AgentCommandLog {
+            command_id: Uuid::new_v4(),
+            stream: LogStream::Stdout,
+            line: "hello".to_string(),
+        };
+        let json = serde_json::to_string(&log).unwrap();
+        assert!(json.contains("\"stream\":\"stdout\""));
+
+        let err_log = AgentCommandLog {
+            command_id: Uuid::new_v4(),
+            stream: LogStream::Stderr,
+            line: "boom".to_string(),
+        };
+        let json_err = serde_json::to_string(&err_log).unwrap();
+        assert!(json_err.contains("\"stream\":\"stderr\""));
+
+        let back: AgentCommandLog = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.stream, LogStream::Stdout);
+        assert_eq!(back.line, "hello");
+    }
+
+    #[test]
+    fn control_message_command_variant_round_trips() {
+        let cmd = sample_command();
+        let msg = ControlMessage::Command(cmd.clone());
+        let json = serde_json::to_string(&msg).unwrap();
+        // snake_case external tag = "command"
+        assert!(json.contains("\"type\":\"command\""));
+        let back: ControlMessage = serde_json::from_str(&json).unwrap();
+        match back {
+            ControlMessage::Command(c) => {
+                assert_eq!(c.command_id, cmd.command_id);
+                assert_eq!(c.verb, cmd.verb);
+            }
+            other => panic!("expected Command variant, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn control_message_cancel_variant_round_trips() {
+        let cancel = AgentCommandCancel {
+            command_id: Uuid::new_v4(),
+        };
+        let msg = ControlMessage::Cancel(cancel.clone());
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"cancel\""));
+        let back: ControlMessage = serde_json::from_str(&json).unwrap();
+        match back {
+            ControlMessage::Cancel(c) => assert_eq!(c.command_id, cancel.command_id),
+            other => panic!("expected Cancel variant, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn control_message_existing_variants_unchanged() {
+        // Ensure new variants did not break existing Welcome serialization.
+        let msg = ControlMessage::Welcome {
+            agent_id: Uuid::nil(),
+            agent_name: "a".to_string(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"welcome\""));
+    }
+
+    #[test]
+    fn agent_message_command_log_and_result_round_trip() {
+        let log_msg = AgentMessage::CommandLog(AgentCommandLog {
+            command_id: Uuid::new_v4(),
+            stream: LogStream::Stderr,
+            line: "warn".to_string(),
+        });
+        let json = serde_json::to_string(&log_msg).unwrap();
+        assert!(json.contains("\"type\":\"command_log\""));
+        let back: AgentMessage = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, AgentMessage::CommandLog(_)));
+
+        let result_msg = AgentMessage::CommandResult(AgentCommandResult {
+            command_id: Uuid::new_v4(),
+            status: CommandStatus::Ok,
+            result: Some(serde_json::json!({ "ok": true })),
+            error: None,
+            duration_ms: 10,
+        });
+        let json = serde_json::to_string(&result_msg).unwrap();
+        assert!(json.contains("\"type\":\"command_result\""));
+        let back: AgentMessage = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, AgentMessage::CommandResult(_)));
+    }
 }

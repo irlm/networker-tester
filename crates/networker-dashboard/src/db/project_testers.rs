@@ -23,7 +23,9 @@ pub const SELECT_COLUMNS: &str = "tester_id, project_id, name, cloud, region, vm
     auto_probe_enabled, \
     last_used_at, avg_benchmark_duration_seconds, benchmark_run_count, \
     created_by, created_at, updated_at, \
-    cloud_connection_id";
+    cloud_connection_id, \
+    requested_os, requested_variant, \
+    os_distro, os_version, os_variant, os_arch, os_kernel";
 
 /// A single row from the `project_tester` table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +59,13 @@ pub struct ProjectTesterRow {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub cloud_connection_id: Option<Uuid>,
+    pub requested_os: Option<String>,
+    pub requested_variant: Option<String>,
+    pub os_distro: Option<String>,
+    pub os_version: Option<String>,
+    pub os_variant: Option<String>,
+    pub os_arch: Option<String>,
+    pub os_kernel: Option<String>,
 }
 
 impl ProjectTesterRow {
@@ -95,6 +104,13 @@ impl ProjectTesterRow {
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
             cloud_connection_id: row.get("cloud_connection_id"),
+            requested_os: row.get("requested_os"),
+            requested_variant: row.get("requested_variant"),
+            os_distro: row.get("os_distro"),
+            os_version: row.get("os_version"),
+            os_variant: row.get("os_variant"),
+            os_arch: row.get("os_arch"),
+            os_kernel: row.get("os_kernel"),
         }
     }
 }
@@ -114,6 +130,12 @@ pub struct CreateTesterInput {
     pub auto_probe_enabled: Option<bool>,
     #[serde(default)]
     pub cloud_connection_id: Option<Uuid>,
+    /// e.g. "ubuntu-24.04", "ubuntu-22.04", "debian-12", "windows-2022", "windows-11"
+    #[serde(default)]
+    pub requested_os: Option<String>,
+    /// e.g. "server", "desktop"
+    #[serde(default)]
+    pub requested_variant: Option<String>,
 }
 
 /// List all testers belonging to a project, newest first.
@@ -162,14 +184,18 @@ pub async fn insert(
              auto_shutdown_local_hour, \
              auto_probe_enabled, \
              created_by, \
-             cloud_connection_id \
+             cloud_connection_id, \
+             requested_os, \
+             requested_variant \
          ) VALUES ( \
              $1, $2, $3, $4, \
-             COALESCE($5, 'Standard_D2s_v3'), \
+             COALESCE($5, 'Standard_B2s'), \
              COALESCE($6, 23::smallint), \
              COALESCE($7, FALSE), \
              $8, \
-             $9 \
+             $9, \
+             COALESCE($10, 'ubuntu-24.04'), \
+             COALESCE($11, 'server') \
          ) \
          RETURNING {SELECT_COLUMNS}"
     );
@@ -187,6 +213,8 @@ pub async fn insert(
                 &input.auto_probe_enabled,
                 created_by,
                 &input.cloud_connection_id,
+                &input.requested_os,
+                &input.requested_variant,
             ],
         )
         .await?;

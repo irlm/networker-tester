@@ -88,6 +88,10 @@ pub async fn list_for_project(
     client: &Client,
     project_id: &str,
 ) -> anyhow::Result<Vec<VmCatalogRow>> {
+    // Only legacy benchmark_vm_catalog entries here. Persistent testers are a
+    // DIFFERENT concept — they are the *client* that originates probes, not a
+    // server endpoint under test. They are selected separately in the wizard's
+    // client-tester step, not here.
     let rows = client
         .query(
             "SELECT vm_id, project_id, name, cloud, region, ip, ssh_user, languages,

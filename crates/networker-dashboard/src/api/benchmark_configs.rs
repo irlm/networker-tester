@@ -300,6 +300,7 @@ async fn create_config(
             testbed.os.as_deref().unwrap_or("linux"),
             &proxies_json,
             &testbed.tester_os,
+            testbed.existing_vm_ip.as_deref(),
         )
         .await
         .map_err(|e| {
