@@ -1,3 +1,4 @@
+mod agent_dispatch;
 mod api;
 mod auth;
 mod benchmark_worker;

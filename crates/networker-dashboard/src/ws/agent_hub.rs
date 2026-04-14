@@ -490,19 +490,26 @@ async fn handle_agent_message(state: &Arc<AppState>, agent_id: Uuid, msg: AgentM
             });
         }
         AgentMessage::CommandLog(log) => {
-            // Command orchestration handler lands in a later task of the plan.
-            tracing::debug!(
-                agent_id = %agent_id,
-                command_id = %log.command_id,
-                "Received CommandLog (handler not yet implemented)"
-            );
+            let command_id = log.command_id;
+            if let Err(e) = crate::agent_dispatch::handle_command_log(state, log).await {
+                tracing::error!(
+                    agent_id = %agent_id,
+                    command_id = %command_id,
+                    error = %e,
+                    "failed to ingest command log"
+                );
+            }
         }
         AgentMessage::CommandResult(result) => {
-            tracing::debug!(
-                agent_id = %agent_id,
-                command_id = %result.command_id,
-                "Received CommandResult (handler not yet implemented)"
-            );
+            let command_id = result.command_id;
+            if let Err(e) = crate::agent_dispatch::handle_command_result(state, result).await {
+                tracing::error!(
+                    agent_id = %agent_id,
+                    command_id = %command_id,
+                    error = %e,
+                    "failed to ingest command result"
+                );
+            }
         }
     }
 }
