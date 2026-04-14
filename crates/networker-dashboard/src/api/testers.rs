@@ -409,7 +409,7 @@ async fn get_cost_estimate(
 const MAX_TESTERS_PER_PROJECT: i64 = 10;
 
 /// Hourly create-burst cap per project.
-const MAX_TESTERS_PER_HOUR: i64 = 5;
+const MAX_TESTERS_PER_HOUR: i64 = 20;
 
 /// Decision helper for rate-limit gating — pure so it's unit-testable.
 /// Returns `Err(message)` if either cap is violated.
@@ -445,6 +445,10 @@ struct CreateTesterBody {
     auto_probe_enabled: Option<bool>,
     #[serde(default)]
     cloud_connection_id: Option<Uuid>,
+    #[serde(default)]
+    requested_os: Option<String>,
+    #[serde(default)]
+    requested_variant: Option<String>,
 }
 
 impl From<CreateTesterBody> for CreateTesterInput {
@@ -457,6 +461,8 @@ impl From<CreateTesterBody> for CreateTesterInput {
             auto_shutdown_local_hour: b.auto_shutdown_local_hour,
             auto_probe_enabled: b.auto_probe_enabled,
             cloud_connection_id: b.cloud_connection_id,
+            requested_os: b.requested_os,
+            requested_variant: b.requested_variant,
         }
     }
 }
@@ -1523,19 +1529,25 @@ async fn run_create_tester(
     tester_state::set_status_message(&client, &tester_id, "creating VM").await?;
     let provider = provider_for_tester(&client, &tester_row, &state).await?;
     let vm_name = cloud_provider::generate_vm_name(&region);
-    // Per-cloud SSH user defaults
-    let ssh_user = match tester_row.cloud.as_str() {
-        "azure" => "azureuser",
-        "aws" => "ubuntu",
-        "gcp" => "ubuntu",
-        _ => "ubuntu",
-    };
+    // Resolve requested OS + variant
+    let requested_os = tester_row.requested_os.as_deref().unwrap_or("ubuntu-24.04");
+    let requested_variant = tester_row.requested_variant.as_deref().unwrap_or("server");
+    let image = cloud_provider::resolve_image(&tester_row.cloud, requested_os, requested_variant);
+    let ssh_user = cloud_provider::default_ssh_user(&tester_row.cloud, requested_os);
+    tracing::info!(
+        cloud = %tester_row.cloud,
+        os = %requested_os,
+        variant = %requested_variant,
+        image = %image,
+        ssh_user,
+        "Resolved OS image"
+    );
     let vm_config = cloud_provider::VmConfig {
         name: vm_name.clone(),
         region: region.clone(),
         vm_size: vm_size.clone(),
         ssh_user: ssh_user.to_string(),
-        image: "Canonical:ubuntu-24_04-lts:server:latest".to_string(),
+        image,
         tags: std::collections::HashMap::new(),
     };
     let created = provider.create_vm(&vm_config).await?;
@@ -2029,6 +2041,8 @@ mod tests {
             created_at: now,
             updated_at: now,
             cloud_connection_id: None,
+            requested_os: Some("ubuntu-24.04".into()),
+            requested_variant: Some("server".into()),
             os_distro: None,
             os_version: None,
             os_variant: None,

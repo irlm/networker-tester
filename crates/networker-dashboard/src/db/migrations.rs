@@ -1867,6 +1867,8 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
 /// distro/version the tester VM is running.
 const V031_TESTER_OS_INFO: &str = r#"
 ALTER TABLE project_tester
+    ADD COLUMN IF NOT EXISTS requested_os       VARCHAR(50) DEFAULT 'ubuntu-24.04',
+    ADD COLUMN IF NOT EXISTS requested_variant  VARCHAR(20) DEFAULT 'server',
     ADD COLUMN IF NOT EXISTS os_distro   VARCHAR(50),
     ADD COLUMN IF NOT EXISTS os_version  VARCHAR(50),
     ADD COLUMN IF NOT EXISTS os_variant  VARCHAR(20),

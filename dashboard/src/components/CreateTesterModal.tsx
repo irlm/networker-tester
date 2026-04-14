@@ -46,6 +46,29 @@ const DEFAULT_VM_SIZE: Record<string, string> = {
   gcp: 'e2-small',
 };
 
+// OS options per cloud per variant. "--" means not supported.
+const OS_OPTIONS: Record<string, { value: string; label: string; variants: string[] }[]> = {
+  azure: [
+    { value: 'ubuntu-24.04', label: 'Ubuntu 24.04 LTS', variants: ['server', 'desktop'] },
+    { value: 'ubuntu-22.04', label: 'Ubuntu 22.04 LTS', variants: ['server'] },
+    { value: 'debian-12',    label: 'Debian 12',         variants: ['server'] },
+    { value: 'windows-2022', label: 'Windows Server 2022', variants: ['server'] },
+    { value: 'windows-11',   label: 'Windows 11',        variants: ['desktop'] },
+  ],
+  aws: [
+    { value: 'ubuntu-24.04', label: 'Ubuntu 24.04 LTS', variants: ['server'] },
+    { value: 'ubuntu-22.04', label: 'Ubuntu 22.04 LTS', variants: ['server'] },
+    { value: 'debian-12',    label: 'Debian 12',         variants: ['server'] },
+    { value: 'windows-2022', label: 'Windows Server 2022', variants: ['server'] },
+  ],
+  gcp: [
+    { value: 'ubuntu-24.04', label: 'Ubuntu 24.04 LTS', variants: ['server'] },
+    { value: 'ubuntu-22.04', label: 'Ubuntu 22.04 LTS', variants: ['server'] },
+    { value: 'debian-12',    label: 'Debian 12',         variants: ['server'] },
+    { value: 'windows-2022', label: 'Windows Server 2022', variants: ['server'] },
+  ],
+};
+
 const HOURS = Array.from({ length: 24 }, (_, h) => h);
 
 type Stage = 'form' | 'creating' | 'error';
@@ -65,6 +88,8 @@ export function CreateTesterModal({
   const [region, setRegion] = useState(defaultRegion);
   const [name, setName] = useState(defaultName);
   const [vmSize, setVmSize] = useState(defaultVmSize);
+  const [requestedOs, setRequestedOs] = useState('ubuntu-24.04');
+  const [requestedVariant, setRequestedVariant] = useState('server');
   const [autoShutdownEnabled, setAutoShutdownEnabled] = useState(
     defaultAutoShutdownEnabled,
   );
@@ -205,6 +230,8 @@ export function CreateTesterModal({
           ? autoShutdownHour
           : undefined,
         auto_probe_enabled: autoProbeEnabled,
+        requested_os: requestedOs,
+        requested_variant: requestedVariant,
       });
       setCreatedTester(row);
       // If backend replied with a terminal state already (unlikely but possible),
@@ -350,6 +377,52 @@ export function CreateTesterModal({
                   placeholder="eastus-1"
                   className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 />
+              </div>
+
+              {/* OS */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label htmlFor="tester-os" className="block text-xs text-gray-400 mb-1">
+                    Operating System
+                  </label>
+                  <select
+                    id="tester-os"
+                    value={requestedOs}
+                    onChange={(e) => {
+                      const newOs = e.target.value;
+                      setRequestedOs(newOs);
+                      const opts = OS_OPTIONS[cloud] || [];
+                      const osDef = opts.find((o) => o.value === newOs);
+                      if (osDef && !osDef.variants.includes(requestedVariant)) {
+                        setRequestedVariant(osDef.variants[0]);
+                      }
+                    }}
+                    className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                  >
+                    {(OS_OPTIONS[cloud] || []).map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="tester-variant" className="block text-xs text-gray-400 mb-1">
+                    Variant
+                  </label>
+                  <select
+                    id="tester-variant"
+                    value={requestedVariant}
+                    onChange={(e) => setRequestedVariant(e.target.value)}
+                    className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                  >
+                    {((OS_OPTIONS[cloud] || []).find((o) => o.value === requestedOs)?.variants ?? ['server']).map((v) => (
+                      <option key={v} value={v}>
+                        {v === 'server' ? 'Server' : v === 'desktop' ? 'Desktop' : v}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
               {/* VM size */}

@@ -24,6 +24,58 @@ pub struct VmConfig {
     pub tags: HashMap<String, String>,
 }
 
+/// Resolve the image reference for a given (cloud, os, variant) triple.
+/// Returns the provider-specific image reference to pass as VmConfig.image.
+pub fn resolve_image(cloud: &str, os: &str, variant: &str) -> String {
+    match (cloud, os, variant) {
+        // Azure — URN format: Publisher:Offer:Sku:Version
+        ("azure", "ubuntu-24.04", "server") => "Canonical:ubuntu-24_04-lts:server:latest".into(),
+        ("azure", "ubuntu-24.04", "desktop") => "Canonical:ubuntu-24_04-lts:desktop:latest".into(),
+        ("azure", "ubuntu-22.04", "server") => {
+            "Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:latest".into()
+        }
+        ("azure", "windows-2022", "server") => {
+            "MicrosoftWindowsServer:WindowsServer:2022-datacenter-azure-edition:latest".into()
+        }
+        ("azure", "windows-11", "desktop") => {
+            "MicrosoftWindowsDesktop:windows-11:win11-24h2-pro:latest".into()
+        }
+        ("azure", "debian-12", "server") => "Debian:debian-12:12:latest".into(),
+
+        // AWS — pass a marker; create_vm will query SSM/describe-images
+        ("aws", "ubuntu-24.04", "server") => "aws:ubuntu-24.04-server".into(),
+        ("aws", "ubuntu-22.04", "server") => "aws:ubuntu-22.04-server".into(),
+        ("aws", "windows-2022", "server") => "aws:windows-2022-server".into(),
+        ("aws", "debian-12", "server") => "aws:debian-12-server".into(),
+
+        // GCP — image family
+        ("gcp", "ubuntu-24.04", "server") => "ubuntu-2404-lts-amd64".into(),
+        ("gcp", "ubuntu-22.04", "server") => "ubuntu-2204-lts".into(),
+        ("gcp", "debian-12", "server") => "debian-12".into(),
+        ("gcp", "windows-2022", "server") => "windows-2022".into(),
+
+        // Fallback: Ubuntu 24.04 Server
+        ("azure", _, _) => "Canonical:ubuntu-24_04-lts:server:latest".into(),
+        ("aws", _, _) => "aws:ubuntu-24.04-server".into(),
+        ("gcp", _, _) => "ubuntu-2404-lts-amd64".into(),
+        _ => "ubuntu-24.04-server".into(),
+    }
+}
+
+/// Default SSH user for a given OS.
+pub fn default_ssh_user(cloud: &str, os: &str) -> &'static str {
+    if os.starts_with("windows") {
+        return "azureadmin"; // "Administrator" is reserved on Azure Windows images
+    }
+    match (cloud, os) {
+        (_, "debian-12") => "admin",
+        ("azure", _) => "azureuser",
+        ("aws", _) => "ubuntu",
+        ("gcp", _) => "ubuntu",
+        _ => "ubuntu",
+    }
+}
+
 /// Information about an existing VM.
 #[derive(Debug, Clone)]
 pub struct VmInfo {
@@ -781,6 +833,56 @@ impl AwsProvider {
         Ok(sg_id)
     }
 
+    /// Resolve a marker like "aws:ubuntu-24.04-server" into an AMI ID for the given region.
+    async fn resolve_ami(&self, marker: &str, region: &str) -> anyhow::Result<String> {
+        let (owner, name_filter) = match marker.strip_prefix("aws:").unwrap_or(marker) {
+            "ubuntu-24.04-server" => (
+                "099720109477",
+                "ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*",
+            ),
+            "ubuntu-22.04-server" => (
+                "099720109477",
+                "ubuntu/images/hvm-ssd-gp2/ubuntu-jammy-22.04-amd64-server-*",
+            ),
+            "debian-12-server" => ("136693071363", "debian-12-amd64-*"),
+            "windows-2022-server" => ("801119661308", "Windows_Server-2022-English-Full-Base-*"),
+            _ => (
+                "099720109477",
+                "ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*",
+            ),
+        };
+
+        let output = self
+            .aws_cmd()
+            .arg("ec2")
+            .arg("describe-images")
+            .arg("--owners")
+            .arg(owner)
+            .arg("--filters")
+            .arg(format!("Name=name,Values={name_filter}"))
+            .arg("Name=state,Values=available")
+            .arg("--query")
+            .arg("sort_by(Images, &CreationDate)[-1].ImageId")
+            .arg("--region")
+            .arg(region)
+            .arg("--output")
+            .arg("text")
+            .output()
+            .await
+            .context("aws ec2 describe-images")?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "aws ec2 describe-images failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let ami = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if ami.is_empty() || ami == "None" {
+            anyhow::bail!("No AMI found for '{marker}' in region {region}");
+        }
+        Ok(ami)
+    }
+
     /// Poll for the instance's public IP for up to 60s.
     async fn wait_for_public_ip(&self, instance_id: &str, region: &str) -> anyhow::Result<String> {
         for _ in 0..30u32 {
@@ -819,39 +921,9 @@ impl AwsProvider {
             "AwsProvider::create_vm"
         );
 
-        // Find latest Ubuntu 24.04 AMI
-        let ami_output = self
-            .aws_cmd()
-            .arg("ec2")
-            .arg("describe-images")
-            .arg("--owners")
-            .arg("099720109477") // Canonical
-            .arg("--filters")
-            .arg("Name=name,Values=ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*")
-            .arg("Name=state,Values=available")
-            .arg("--query")
-            .arg("sort_by(Images, &CreationDate)[-1].ImageId")
-            .arg("--region")
-            .arg(&config.region)
-            .arg("--output")
-            .arg("text")
-            .output()
-            .await
-            .context("failed to spawn aws ec2 describe-images")?;
-
-        if !ami_output.status.success() {
-            anyhow::bail!(
-                "aws ec2 describe-images failed: {}",
-                String::from_utf8_lossy(&ami_output.stderr)
-            );
-        }
-        let ami_id = String::from_utf8_lossy(&ami_output.stdout)
-            .trim()
-            .to_string();
-        if ami_id.is_empty() || ami_id == "None" {
-            anyhow::bail!("No Ubuntu 24.04 AMI found in region {}", config.region);
-        }
-        tracing::info!(ami_id = %ami_id, "Found Ubuntu AMI");
+        // Resolve AMI by marker (image field is "aws:<os-variant>")
+        let ami_id = self.resolve_ami(&config.image, &config.region).await?;
+        tracing::info!(ami_id = %ami_id, image_marker = %config.image, "Resolved AMI");
 
         // Ensure key pair exists (uses local ~/.ssh/id_rsa.pub if available, else creates new)
         let key_name = self.ensure_key_pair(&config.region).await?;
@@ -1146,9 +1218,14 @@ impl GcpProvider {
             .arg("--machine-type")
             .arg(&config.vm_size)
             .arg("--image-family")
-            .arg("ubuntu-2404-lts-amd64")
+            .arg(&config.image)
             .arg("--image-project")
-            .arg("ubuntu-os-cloud")
+            .arg(match config.image.as_str() {
+                s if s.starts_with("ubuntu") => "ubuntu-os-cloud",
+                s if s.starts_with("debian") => "debian-cloud",
+                s if s.starts_with("windows") => "windows-cloud",
+                _ => "ubuntu-os-cloud",
+            })
             .arg("--tags")
             .arg("alethedash-tester")
             .arg("--format")
