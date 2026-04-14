@@ -1310,6 +1310,59 @@ impl GcpProvider {
         cmd
     }
 
+    /// Build the argv for `gcloud compute instances create` from a `VmConfig`
+    /// plus already-computed `zone`, optional `ssh_metadata_path` (for the
+    /// `ssh-keys=` metadata file), and optional `startup_script_path`. Pure
+    /// (no IO).
+    ///
+    /// When `startup_script_path` is `Some(path)`, appends
+    /// `--metadata-from-file startup-script=<path>` so cloud-init-style
+    /// bootstrap runs on first boot.
+    pub fn build_create_args(
+        config: &VmConfig,
+        zone: &str,
+        ssh_metadata_path: Option<&std::path::Path>,
+        startup_script_path: Option<&std::path::Path>,
+    ) -> Vec<String> {
+        let image_project = match config.image.as_str() {
+            s if s.starts_with("ubuntu") => "ubuntu-os-cloud",
+            s if s.starts_with("debian") => "debian-cloud",
+            s if s.starts_with("windows") => "windows-cloud",
+            _ => "ubuntu-os-cloud",
+        };
+
+        let mut args: Vec<String> = vec![
+            "compute".into(),
+            "instances".into(),
+            "create".into(),
+            config.name.clone(),
+            "--zone".into(),
+            zone.to_string(),
+            "--machine-type".into(),
+            config.vm_size.clone(),
+            "--image-family".into(),
+            config.image.clone(),
+            "--image-project".into(),
+            image_project.to_string(),
+            "--tags".into(),
+            "alethedash-tester".into(),
+            "--format".into(),
+            "json".into(),
+        ];
+
+        if let Some(md) = ssh_metadata_path {
+            args.push("--metadata-from-file".into());
+            args.push(format!("ssh-keys={}", md.display()));
+        }
+
+        if let Some(path) = startup_script_path {
+            args.push("--metadata-from-file".into());
+            args.push(format!("startup-script={}", path.display()));
+        }
+
+        args
+    }
+
     pub async fn create_vm(&self, config: &VmConfig) -> anyhow::Result<VmInfo> {
         tracing::info!(
             project = %self.project_id,
@@ -1340,38 +1393,38 @@ impl GcpProvider {
             None
         };
 
-        let mut cmd = self.gcloud_cmd(&key_file);
-        cmd.arg("compute")
-            .arg("instances")
-            .arg("create")
-            .arg(&config.name)
-            .arg("--zone")
-            .arg(&zone)
-            .arg("--machine-type")
-            .arg(&config.vm_size)
-            .arg("--image-family")
-            .arg(&config.image)
-            .arg("--image-project")
-            .arg(match config.image.as_str() {
-                s if s.starts_with("ubuntu") => "ubuntu-os-cloud",
-                s if s.starts_with("debian") => "debian-cloud",
-                s if s.starts_with("windows") => "windows-cloud",
-                _ => "ubuntu-os-cloud",
-            })
-            .arg("--tags")
-            .arg("alethedash-tester")
-            .arg("--format")
-            .arg("json");
+        // If a bootstrap script is requested, write it to a tempfile and pass
+        // `--metadata-from-file startup-script=<path>`. The NamedTempFile is
+        // kept alive for the duration of the gcloud call, then dropped
+        // (auto-deleted) on return.
+        let startup_script_tmp = if let Some(script) = config.bootstrap_script.as_deref() {
+            use std::io::Write;
+            let mut tmp = tempfile::NamedTempFile::new()
+                .context("failed to create tempfile for startup-script")?;
+            tmp.write_all(script.as_bytes())
+                .context("failed to write startup-script to tempfile")?;
+            tmp.flush().ok();
+            Some(tmp)
+        } else {
+            None
+        };
 
-        if let Some(ref md) = ssh_metadata_file {
-            cmd.arg("--metadata-from-file")
-                .arg(format!("ssh-keys={md}"));
-        }
+        let ssh_metadata_path = ssh_metadata_file.as_ref().map(std::path::Path::new);
+        let args = Self::build_create_args(
+            config,
+            &zone,
+            ssh_metadata_path,
+            startup_script_tmp.as_ref().map(|t| t.path()),
+        );
 
-        let output = cmd
+        let output = self
+            .gcloud_cmd(&key_file)
+            .args(&args)
             .output()
             .await
             .context("failed to spawn gcloud compute instances create")?;
+        // Keep tempfile alive until after the gcloud invocation completed.
+        drop(startup_script_tmp);
 
         if let Some(md) = &ssh_metadata_file {
             let _ = std::fs::remove_file(md);
@@ -1826,6 +1879,64 @@ mod tests {
     fn gcp_provider_rejects_invalid_key() {
         let config = serde_json::json!({"json_key": "not json"});
         assert!(GcpProvider::from_config(&config).is_err());
+    }
+
+    fn gcp_vm_config_fixture(bootstrap: Option<&str>) -> VmConfig {
+        VmConfig {
+            name: "bm-gcp-test".to_string(),
+            region: "us-central1".to_string(),
+            vm_size: "e2-small".to_string(),
+            ssh_user: "ubuntu".to_string(),
+            image: "ubuntu-2404-lts".to_string(),
+            tags: HashMap::new(),
+            bootstrap_script: bootstrap.map(|s| s.to_string()),
+        }
+    }
+
+    #[test]
+    fn gcp_create_vm_args_include_startup_script_when_bootstrap_set() {
+        use std::io::Write;
+
+        let config = gcp_vm_config_fixture(Some("#!/bin/bash\necho hello-gcp\n"));
+
+        // Write the script to a real tempfile (matching the runtime path).
+        let mut tmp = tempfile::NamedTempFile::new().expect("create tempfile for startup-script");
+        tmp.write_all(config.bootstrap_script.as_deref().unwrap().as_bytes())
+            .expect("write startup-script");
+        tmp.flush().ok();
+
+        let args = GcpProvider::build_create_args(&config, "us-central1-a", None, Some(tmp.path()));
+
+        // Find a --metadata-from-file flag whose following arg is the
+        // startup-script= reference.
+        let mut found_startup = None;
+        for (i, a) in args.iter().enumerate() {
+            if a == "--metadata-from-file" {
+                if let Some(next) = args.get(i + 1) {
+                    if next.starts_with("startup-script=") {
+                        found_startup = Some(next.clone());
+                        break;
+                    }
+                }
+            }
+        }
+        let val = found_startup.expect("startup-script metadata-from-file arg present");
+        let path = val.trim_start_matches("startup-script=");
+        let contents = std::fs::read_to_string(path).expect("read back tempfile");
+        assert!(
+            contents.contains("echo hello-gcp"),
+            "tempfile should contain bootstrap script body, got: {contents}"
+        );
+    }
+
+    #[test]
+    fn gcp_create_vm_args_omit_startup_script_when_bootstrap_none() {
+        let config = gcp_vm_config_fixture(None);
+        let args = GcpProvider::build_create_args(&config, "us-central1-a", None, None);
+        assert!(
+            !args.iter().any(|a| a.starts_with("startup-script=")),
+            "no startup-script metadata when bootstrap_script is None; got args = {args:?}"
+        );
     }
 
     #[test]
