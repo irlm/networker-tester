@@ -406,7 +406,7 @@ async fn get_cost_estimate(
 // ── Rate-limit helper (Task 15) ───────────────────────────────────────────
 
 /// Total-tester cap per project.
-const MAX_TESTERS_PER_PROJECT: i64 = 10;
+const MAX_TESTERS_PER_PROJECT: i64 = 20;
 
 /// Hourly create-burst cap per project.
 const MAX_TESTERS_PER_HOUR: i64 = 20;
@@ -1549,6 +1549,7 @@ async fn run_create_tester(
         ssh_user: ssh_user.to_string(),
         image,
         tags: std::collections::HashMap::new(),
+        bootstrap_script: None,
     };
     let created = provider.create_vm(&vm_config).await?;
 
@@ -1607,10 +1608,24 @@ async fn run_create_tester(
             }
         });
     };
+    // Ensure an `agent` row exists for this tester so the installed
+    // networker-agent can register and appear as an online agent. Tester
+    // name is unique per project; use it as the agent name too.
+    let agent_api_key = provision_agent_for_tester(
+        &client,
+        &tester_id,
+        &tester_row.project_id,
+        &created.vm_name,
+        &tester_row.cloud,
+        &region,
+    )
+    .await?;
     let target = tester_install::TesterTarget {
         tester_id,
         public_ip: Some(created.public_ip.clone()),
         ssh_user: vm_config.ssh_user.clone(),
+        agent_api_key: Some(agent_api_key),
+        agent_dashboard_url: Some(state.public_url.clone()),
     };
     let os_info = tester_install::install_tester(&target, progress).await?;
 
@@ -1700,6 +1715,8 @@ async fn run_start_tester(state: Arc<AppState>, tester: ProjectTesterRow) -> any
             tester_id: tester.tester_id,
             public_ip: Some(ip.to_string()),
             ssh_user: tester.ssh_user.clone(),
+            agent_api_key: None,
+            agent_dashboard_url: None,
         };
         // `install_tester` is too heavy; use a minimal SSH readiness poll by
         // invoking `install_tester` with a short-circuit? No — just poll
@@ -1848,10 +1865,23 @@ async fn run_upgrade_tester(state: Arc<AppState>, tester: ProjectTesterRow) -> a
         });
     };
 
+    // Upgrade keeps the same agent row; re-fetch its api_key so the
+    // refreshed systemd unit keeps working.
+    let agent_api_key = fetch_or_provision_agent_api_key(
+        &client,
+        &tester.tester_id,
+        &tester.project_id,
+        tester.vm_name.as_deref().unwrap_or("tester"),
+        &tester.cloud,
+        &tester.region,
+    )
+    .await?;
     let target = tester_install::TesterTarget {
         tester_id,
         public_ip: tester.public_ip.clone(),
         ssh_user: tester.ssh_user.clone(),
+        agent_api_key: Some(agent_api_key),
+        agent_dashboard_url: Some(state.public_url.clone()),
     };
     let _os_info = tester_install::install_tester(&target, progress).await?;
 
@@ -1869,6 +1899,69 @@ async fn run_upgrade_tester(state: Arc<AppState>, tester: ProjectTesterRow) -> a
         .await?;
     tracing::info!(%tester_id, "tester upgrade complete");
     Ok(())
+}
+
+// ── Agent provisioning ────────────────────────────────────────────────────
+
+/// Create an `agent` row for a freshly provisioned tester and return the
+/// random api_key. Keeps the link via `agent.tester_id` (V032).
+async fn provision_agent_for_tester(
+    client: &tokio_postgres::Client,
+    tester_id: &Uuid,
+    project_id: &str,
+    name: &str,
+    cloud: &str,
+    region: &str,
+) -> Result<String, anyhow::Error> {
+    let api_key = generate_agent_api_key();
+    let agent_id = Uuid::new_v4();
+    client
+        .execute(
+            "INSERT INTO agent \
+               (agent_id, name, api_key, region, provider, project_id, tester_id) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7)",
+            &[
+                &agent_id,
+                &name,
+                &api_key,
+                &region,
+                &cloud,
+                &project_id,
+                tester_id,
+            ],
+        )
+        .await?;
+    tracing::info!(%tester_id, %agent_id, "Linked new agent row to persistent tester");
+    Ok(api_key)
+}
+
+/// Look up an existing agent's api_key for this tester, or provision a new
+/// agent row if one doesn't exist yet (e.g. tester created before V032).
+async fn fetch_or_provision_agent_api_key(
+    client: &tokio_postgres::Client,
+    tester_id: &Uuid,
+    project_id: &str,
+    name: &str,
+    cloud: &str,
+    region: &str,
+) -> Result<String, anyhow::Error> {
+    if let Some(row) = client
+        .query_opt(
+            "SELECT api_key FROM agent WHERE tester_id = $1 LIMIT 1",
+            &[tester_id],
+        )
+        .await?
+    {
+        return Ok(row.get::<_, String>("api_key"));
+    }
+    provision_agent_for_tester(client, tester_id, project_id, name, cloud, region).await
+}
+
+/// 48-char url-safe random string. Not secret-level entropy (128 bits) —
+/// it's a service credential for a single agent, rotated on re-provision.
+fn generate_agent_api_key() -> String {
+    use rand::distr::SampleString;
+    rand::distr::Alphanumeric.sample_string(&mut rand::rng(), 48)
 }
 
 // ── Router ────────────────────────────────────────────────────────────────

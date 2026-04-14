@@ -22,6 +22,10 @@ pub struct VmConfig {
     pub ssh_user: String,
     pub image: String,
     pub tags: HashMap<String, String>,
+    /// Optional cloud-init / user-data script that the provider should inject
+    /// at instance creation time. For AWS this maps to `--user-data`; for GCP
+    /// to `--metadata-from-file startup-script=`; for Azure to `--custom-data`.
+    pub bootstrap_script: Option<String>,
 }
 
 /// Resolve the image reference for a given (cloud, os, variant) triple.
@@ -974,6 +978,49 @@ impl AwsProvider {
         anyhow::bail!("Public IP not assigned to {instance_id} after 60s")
     }
 
+    /// Build the argv for `aws ec2 run-instances` from a `VmConfig` plus
+    /// already-resolved `ami_id`, `key_name`, and `sg_id`. Pure (no IO).
+    ///
+    /// When `user_data_path` is `Some(path)`, appends `--user-data file://<path>`
+    /// so cloud-init runs on first boot.
+    pub fn build_run_instances_args(
+        config: &VmConfig,
+        ami_id: &str,
+        key_name: &str,
+        sg_id: &str,
+        user_data_path: Option<&std::path::Path>,
+    ) -> Vec<String> {
+        let mut args: Vec<String> = vec![
+            "ec2".into(),
+            "run-instances".into(),
+            "--image-id".into(),
+            ami_id.to_string(),
+            "--instance-type".into(),
+            config.vm_size.clone(),
+            "--region".into(),
+            config.region.clone(),
+            "--key-name".into(),
+            key_name.to_string(),
+            "--security-group-ids".into(),
+            sg_id.to_string(),
+            "--associate-public-ip-address".into(),
+            "--tag-specifications".into(),
+            format!(
+                "ResourceType=instance,Tags=[{{Key=Name,Value={}}}]",
+                config.name
+            ),
+            "--query".into(),
+            "Instances[0]".into(),
+            "--output".into(),
+            "json".into(),
+        ];
+        if let Some(path) = user_data_path {
+            args.push("--user-data".into());
+            args.push(format!("file://{}", path.display()));
+        }
+        args
+    }
+
     pub async fn create_vm(&self, config: &VmConfig) -> anyhow::Result<VmInfo> {
         tracing::info!(
             region = %self.region,
@@ -992,34 +1039,37 @@ impl AwsProvider {
         // Ensure security group exists with SSH + dashboard ports open
         let sg_id = self.ensure_security_group(&config.region).await?;
 
-        // Create the instance
+        // If a bootstrap script is requested, write it to a tempfile and pass
+        // `--user-data file://<path>`. The NamedTempFile is kept alive for the
+        // duration of the aws call, then dropped (auto-deleted) on return.
+        let user_data_tmp = if let Some(script) = config.bootstrap_script.as_deref() {
+            use std::io::Write;
+            let mut tmp = tempfile::NamedTempFile::new()
+                .context("failed to create tempfile for --user-data")?;
+            tmp.write_all(script.as_bytes())
+                .context("failed to write --user-data script to tempfile")?;
+            tmp.flush().ok();
+            Some(tmp)
+        } else {
+            None
+        };
+
+        let args = Self::build_run_instances_args(
+            config,
+            &ami_id,
+            &key_name,
+            &sg_id,
+            user_data_tmp.as_ref().map(|t| t.path()),
+        );
+
         let output = self
             .aws_cmd()
-            .arg("ec2")
-            .arg("run-instances")
-            .arg("--image-id")
-            .arg(&ami_id)
-            .arg("--instance-type")
-            .arg(&config.vm_size)
-            .arg("--region")
-            .arg(&config.region)
-            .arg("--key-name")
-            .arg(&key_name)
-            .arg("--security-group-ids")
-            .arg(&sg_id)
-            .arg("--associate-public-ip-address")
-            .arg("--tag-specifications")
-            .arg(format!(
-                "ResourceType=instance,Tags=[{{Key=Name,Value={}}}]",
-                config.name
-            ))
-            .arg("--query")
-            .arg("Instances[0]")
-            .arg("--output")
-            .arg("json")
+            .args(&args)
             .output()
             .await
             .context("failed to spawn aws ec2 run-instances")?;
+        // Keep tempfile alive until after the aws invocation completed.
+        drop(user_data_tmp);
 
         if !output.status.success() {
             anyhow::bail!(
@@ -1103,7 +1153,10 @@ impl AwsProvider {
             let stderr = String::from_utf8_lossy(&output.stderr);
             // Idempotent: instance already gone is the desired end-state.
             if stderr.contains("InvalidInstanceID.NotFound") || stderr.contains("does not exist") {
-                tracing::info!(resource_id, "AWS instance already terminated; treating as success");
+                tracing::info!(
+                    resource_id,
+                    "AWS instance already terminated; treating as success"
+                );
                 return Ok(());
             }
             anyhow::bail!("aws ec2 terminate-instances failed: {stderr}");
@@ -1598,6 +1651,77 @@ mod tests {
         assert_eq!(
             azure_windows_computer_name("12345678901234567890"),
             "w12345678901234"
+        );
+    }
+
+    fn aws_vm_config_fixture(bootstrap: Option<&str>) -> VmConfig {
+        VmConfig {
+            name: "bm-aws-test".to_string(),
+            region: "us-east-1".to_string(),
+            vm_size: "t3.small".to_string(),
+            ssh_user: "ubuntu".to_string(),
+            image: "aws:ubuntu-24.04-server".to_string(),
+            tags: HashMap::new(),
+            bootstrap_script: bootstrap.map(|s| s.to_string()),
+        }
+    }
+
+    #[test]
+    fn aws_create_vm_args_include_user_data_when_bootstrap_set() {
+        use std::io::Write;
+
+        let config = aws_vm_config_fixture(Some("#!/bin/bash\necho hi\n"));
+
+        // Write the script to a real tempfile (matching the runtime path).
+        let mut tmp = tempfile::NamedTempFile::new().expect("create tempfile for bootstrap script");
+        tmp.write_all(config.bootstrap_script.as_deref().unwrap().as_bytes())
+            .expect("write bootstrap script");
+        tmp.flush().ok();
+
+        let args = AwsProvider::build_run_instances_args(
+            &config,
+            "ami-123456",
+            "alethedash-tester",
+            "sg-abcdef",
+            Some(tmp.path()),
+        );
+
+        // --user-data must be present and followed by a file:// reference.
+        let idx = args
+            .iter()
+            .position(|a| a == "--user-data")
+            .expect("--user-data arg present");
+        let val = args
+            .get(idx + 1)
+            .expect("value arg after --user-data")
+            .clone();
+        assert!(
+            val.starts_with("file://"),
+            "user-data value should be file:// reference, got {val}"
+        );
+
+        // The referenced file should contain the script body we wrote.
+        let path = val.trim_start_matches("file://");
+        let contents = std::fs::read_to_string(path).expect("read back tempfile");
+        assert!(
+            contents.contains("echo hi"),
+            "tempfile should contain bootstrap script body, got: {contents}"
+        );
+    }
+
+    #[test]
+    fn aws_create_vm_args_omit_user_data_when_bootstrap_none() {
+        let config = aws_vm_config_fixture(None);
+        let args = AwsProvider::build_run_instances_args(
+            &config,
+            "ami-123456",
+            "alethedash-tester",
+            "sg-abcdef",
+            None,
+        );
+        assert!(
+            !args.iter().any(|a| a == "--user-data"),
+            "no --user-data flag when bootstrap_script is None; got args = {args:?}"
         );
     }
 
