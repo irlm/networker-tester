@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.27.7] — 2026-04-14
+
+### Fixed
+- Windows build failure: gate `std::os::unix::fs` SSH key permission setting behind `#[cfg(unix)]`.
+- Earlier v0.27.6 release was broken on Windows due to this issue.
+
+### Added (from v0.27.6)
+- AWS provider with auto key pair, security group, public IP wait
+- GCP provider via service account JSON + gcloud CLI
+- Multi-cloud tester creation (Azure/AWS/GCP)
+
+---
+
 ## [0.27.6] — 2026-04-13
 
 ### Fixed

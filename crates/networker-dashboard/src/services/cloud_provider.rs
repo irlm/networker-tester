@@ -684,10 +684,11 @@ impl AwsProvider {
         }
         let pem_path = format!("{home}/.ssh/{key_name}.pem");
         std::fs::write(&pem_path, create.stdout)?;
-        let _ = std::fs::set_permissions(
-            &pem_path,
-            std::os::unix::fs::PermissionsExt::from_mode(0o600),
-        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&pem_path, std::fs::Permissions::from_mode(0o600));
+        }
         tracing::info!(key_name, %pem_path, "Created new key pair");
         Ok(key_name.to_string())
     }
