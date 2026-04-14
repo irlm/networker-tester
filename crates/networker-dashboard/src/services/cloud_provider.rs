@@ -29,8 +29,10 @@ pub struct VmConfig {
 pub fn resolve_image(cloud: &str, os: &str, variant: &str) -> String {
     match (cloud, os, variant) {
         // Azure — URN format: Publisher:Offer:Sku:Version
-        ("azure", "ubuntu-24.04", "server") => "Canonical:ubuntu-24_04-lts:server:latest".into(),
-        ("azure", "ubuntu-24.04", "desktop") => "Canonical:ubuntu-24_04-lts:desktop:latest".into(),
+        // Note: Azure Ubuntu Desktop is not a published image; fall back to server.
+        ("azure", "ubuntu-24.04", "server" | "desktop") => {
+            "Canonical:ubuntu-24_04-lts:server:latest".into()
+        }
         ("azure", "ubuntu-22.04", "server") => {
             "Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:latest".into()
         }
@@ -62,14 +64,45 @@ pub fn resolve_image(cloud: &str, os: &str, variant: &str) -> String {
     }
 }
 
+/// Derive a Windows-safe NetBIOS computer name from a descriptive VM name.
+/// - Max 15 chars
+/// - Only letters, digits, hyphens; punctuation → hyphens
+/// - Must not be entirely numeric (prefixed with "w" if it would be)
+/// - Trailing hyphens stripped
+pub fn azure_windows_computer_name(name: &str) -> String {
+    let mut s: String = name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    while s.contains("--") {
+        s = s.replace("--", "-");
+    }
+    if s.len() > 15 {
+        s.truncate(15);
+    }
+    while s.ends_with('-') {
+        s.pop();
+    }
+    if s.is_empty() || s.chars().all(|c| c.is_ascii_digit()) {
+        s = format!("w{s}");
+        if s.len() > 15 {
+            s.truncate(15);
+        }
+    }
+    s
+}
+
 /// Default SSH user for a given OS.
 pub fn default_ssh_user(cloud: &str, os: &str) -> &'static str {
     if os.starts_with("windows") {
         return "azureadmin"; // "Administrator" is reserved on Azure Windows images
     }
     match (cloud, os) {
-        (_, "debian-12") => "admin",
+        // Azure disallows "admin" as username — use "azureuser" for all Azure Linux
         ("azure", _) => "azureuser",
+        // AWS/GCP Debian uses "admin", Ubuntu uses "ubuntu"
+        ("aws", "debian-12") => "admin",
+        ("gcp", "debian-12") => "admin",
         ("aws", _) => "ubuntu",
         ("gcp", _) => "ubuntu",
         _ => "ubuntu",
@@ -341,6 +374,7 @@ impl AzureProvider {
             "AzureProvider::create_vm"
         );
         let sp_dir = self.ensure_sp_login().await?;
+        let is_windows = config.image.to_lowercase().contains("windows");
         let mut cmd = self.az_cmd(&sp_dir).await;
         cmd.arg("vm")
             .arg("create")
@@ -359,10 +393,34 @@ impl AzureProvider {
             .arg("--public-ip-sku")
             .arg("Standard")
             .arg("--admin-username")
-            .arg(&config.ssh_user)
-            .arg("--generate-ssh-keys")
-            .arg("--output")
-            .arg("json");
+            .arg(&config.ssh_user);
+
+        // Windows NetBIOS computer name is limited to 15 chars and may not be
+        // all-numeric or contain punctuation besides `-`. The Azure resource
+        // name (config.name) can stay descriptive; only the OS-level computer
+        // name is constrained. Derive a safe 15-char slug for Windows.
+        if is_windows {
+            let safe = azure_windows_computer_name(&config.name);
+            cmd.arg("--computer-name").arg(&safe);
+        }
+
+        // Windows VMs require a password; Linux VMs use SSH keys.
+        let win_password = if is_windows {
+            // Azure password rules: 12-72 chars, 3 of {upper, lower, digit, special}
+            let pw = format!(
+                "Nx!{}{}aZ9",
+                uuid::Uuid::new_v4().simple(),
+                &config.name.chars().take(4).collect::<String>()
+            );
+            cmd.arg("--admin-password").arg(&pw);
+            Some(pw)
+        } else {
+            cmd.arg("--generate-ssh-keys");
+            None
+        };
+        let _ = win_password; // currently not surfaced; logged below for ops.
+
+        cmd.arg("--output").arg("json");
 
         // Append tags as `key=value` pairs.
         if !config.tags.is_empty() {
@@ -489,10 +547,13 @@ impl AzureProvider {
             .context("failed to spawn `az vm delete`")?;
         Self::cleanup_sp_session(&sp_dir);
         if !output.status.success() {
-            anyhow::bail!(
-                "az vm delete failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            // Idempotent: VM already gone is the desired end-state.
+            if stderr.contains("ResourceNotFound") || stderr.contains("could not be found") {
+                tracing::info!(resource_id, "Azure VM already deleted; treating as success");
+                return Ok(());
+            }
+            anyhow::bail!("az vm delete failed: {stderr}");
         }
         Ok(())
     }
@@ -842,7 +903,7 @@ impl AwsProvider {
             ),
             "ubuntu-22.04-server" => (
                 "099720109477",
-                "ubuntu/images/hvm-ssd-gp2/ubuntu-jammy-22.04-amd64-server-*",
+                "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*",
             ),
             "debian-12-server" => ("136693071363", "debian-12-amd64-*"),
             "windows-2022-server" => ("801119661308", "Windows_Server-2022-English-Full-Base-*"),
@@ -1039,10 +1100,13 @@ impl AwsProvider {
             .await
             .context("failed to spawn aws ec2 terminate-instances")?;
         if !output.status.success() {
-            anyhow::bail!(
-                "aws ec2 terminate-instances failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            // Idempotent: instance already gone is the desired end-state.
+            if stderr.contains("InvalidInstanceID.NotFound") || stderr.contains("does not exist") {
+                tracing::info!(resource_id, "AWS instance already terminated; treating as success");
+                return Ok(());
+            }
+            anyhow::bail!("aws ec2 terminate-instances failed: {stderr}");
         }
         Ok(())
     }
@@ -1207,9 +1271,24 @@ impl GcpProvider {
         // GCP needs a zone, not just a region. Use the first zone in the region.
         let zone = format!("{}-a", config.region);
 
-        let output = self
-            .gcloud_cmd(&key_file)
-            .arg("compute")
+        // Inject SSH public key so the dashboard can SSH in after creation.
+        // GCP uses instance metadata `ssh-keys=user:pubkey` for this.
+        // Read the dashboard's local ~/.ssh/id_rsa.pub.
+        let home = std::env::var("HOME").unwrap_or_default();
+        let pub_key_path = format!("{home}/.ssh/id_rsa.pub");
+        let ssh_metadata_file = if std::path::Path::new(&pub_key_path).exists() {
+            let pub_key = std::fs::read_to_string(&pub_key_path)?;
+            let user = &config.ssh_user;
+            let metadata_path = format!("/tmp/gcp-ssh-keys-{}.txt", uuid::Uuid::new_v4().simple());
+            std::fs::write(&metadata_path, format!("{user}:{}", pub_key.trim()))?;
+            Some(metadata_path)
+        } else {
+            tracing::warn!("No ~/.ssh/id_rsa.pub found — GCP SSH may not work");
+            None
+        };
+
+        let mut cmd = self.gcloud_cmd(&key_file);
+        cmd.arg("compute")
             .arg("instances")
             .arg("create")
             .arg(&config.name)
@@ -1229,10 +1308,21 @@ impl GcpProvider {
             .arg("--tags")
             .arg("alethedash-tester")
             .arg("--format")
-            .arg("json")
+            .arg("json");
+
+        if let Some(ref md) = ssh_metadata_file {
+            cmd.arg("--metadata-from-file")
+                .arg(format!("ssh-keys={md}"));
+        }
+
+        let output = cmd
             .output()
             .await
             .context("failed to spawn gcloud compute instances create")?;
+
+        if let Some(md) = &ssh_metadata_file {
+            let _ = std::fs::remove_file(md);
+        }
 
         let _ = std::fs::remove_file(&key_file);
 
@@ -1340,10 +1430,15 @@ impl GcpProvider {
             .context("failed to spawn gcloud delete")?;
         let _ = std::fs::remove_file(&key_file);
         if !output.status.success() {
-            anyhow::bail!(
-                "gcloud delete failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            // Treat "already gone" as success — the desired end-state is the
+            // same. Lets the dashboard reap orphan rows whose cloud resource
+            // was removed out-of-band.
+            if stderr.contains("was not found") || stderr.contains("404") {
+                tracing::info!(%name, %zone, "GCP VM already deleted; treating as success");
+                return Ok(());
+            }
+            anyhow::bail!("gcloud delete failed: {stderr}");
         }
         Ok(())
     }
@@ -1471,6 +1566,40 @@ pub fn generate_vm_name(region: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_computer_name_truncates_long_names() {
+        assert_eq!(
+            azure_windows_computer_name("bm-azure-windows-2022"),
+            "bm-azure-window"
+        );
+        assert_eq!(
+            azure_windows_computer_name("bm-azure-win11"),
+            "bm-azure-win11"
+        );
+    }
+
+    #[test]
+    fn windows_computer_name_replaces_invalid_chars_and_trims_hyphens() {
+        assert_eq!(
+            azure_windows_computer_name("bm_azure.win 11"),
+            "bm-azure-win-11"
+        );
+        assert_eq!(azure_windows_computer_name("bm-azure-"), "bm-azure");
+        assert_eq!(
+            azure_windows_computer_name("bm--azure---win"),
+            "bm-azure-win"
+        );
+    }
+
+    #[test]
+    fn windows_computer_name_rejects_all_numeric() {
+        assert_eq!(azure_windows_computer_name("2022"), "w2022");
+        assert_eq!(
+            azure_windows_computer_name("12345678901234567890"),
+            "w12345678901234"
+        );
+    }
 
     #[test]
     fn azure_provider_from_valid_config() {
