@@ -66,9 +66,12 @@ const CLOUD_SETUP_GUIDES: Record<string, { steps: string[]; fieldHelp: Record<st
     steps: [
       '1. Go to console.cloud.google.com \u2192 IAM & Admin \u2192 Service Accounts',
       '2. Create Service Account \u2192 Name: "alethedash-vms"',
-      '3. Grant role: Compute Admin (roles/compute.admin)',
-      '4. Click the service account \u2192 Keys tab \u2192 Add key \u2192 Create new key \u2192 JSON',
-      '5. Download the JSON file and paste its entire contents below',
+      '3. Grant roles to alethedash-vms: Compute Admin (roles/compute.admin) AND Service Account User (roles/iam.serviceAccountUser)',
+      '4. Grant alethedash-vms the Service Account User role ON the Compute Engine default service account (PROJECT_NUMBER-compute@developer.gserviceaccount.com) \u2014 required so it can attach the default SA when creating VMs',
+      '5. Click the alethedash-vms service account \u2192 Keys tab \u2192 Add key \u2192 Create new key \u2192 JSON',
+      '6. Download the JSON file and paste its entire contents below',
+      '',
+      'Quick CLI for step 4: gcloud iam service-accounts add-iam-policy-binding PROJECT_NUMBER-compute@developer.gserviceaccount.com --member=serviceAccount:alethedash-vms@PROJECT_ID.iam.gserviceaccount.com --role=roles/iam.serviceAccountUser --project=PROJECT_ID',
     ],
     fieldHelp: {
       json_key: 'The full JSON key file. Contains project_id, client_email, private_key, etc.',
