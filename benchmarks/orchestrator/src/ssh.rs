@@ -5,16 +5,42 @@ const SSH_CONNECT_TIMEOUT: &str = "15";
 const SSH_COMMAND_TIMEOUT: Duration = Duration::from_secs(1200); // 20 min — Chrome install on fresh VMs needs apt-get update + 50+ deps
 const SSH_CONTROL_DIR: &str = "/tmp/ssh-bench-ctl";
 
+/// Resolve the SSH private key path. Overridable via `ORCH_SSH_KEY`; otherwise
+/// picks whichever of `$HOME/.ssh/id_ed25519`, `$HOME/.ssh/id_rsa`,
+/// `/root/.ssh/id_ed25519`, `/root/.ssh/id_rsa` exists first. Returns the
+/// legacy `/root/.ssh/id_rsa` path when nothing exists (preserves prior
+/// behavior so error messages don't change).
+fn ssh_key_path() -> String {
+    if let Ok(p) = std::env::var("ORCH_SSH_KEY") {
+        return p;
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    let candidates = [
+        format!("{home}/.ssh/id_ed25519"),
+        format!("{home}/.ssh/id_rsa"),
+        "/root/.ssh/id_ed25519".to_string(),
+        "/root/.ssh/id_rsa".to_string(),
+    ];
+    for c in &candidates {
+        if !c.is_empty() && std::path::Path::new(c).exists() {
+            return c.clone();
+        }
+    }
+    "/root/.ssh/id_rsa".to_string()
+}
+
+/// Resolve the SSH username. Overridable via `ORCH_SSH_USER`; defaults to
+/// `azureuser` to preserve prior behavior on Azure-only deployments.
+fn ssh_user() -> String {
+    std::env::var("ORCH_SSH_USER").unwrap_or_else(|_| "azureuser".to_string())
+}
+
 /// Get SSH args that enable ControlMaster multiplexing.
 /// All SSH/SCP connections to the same host reuse one TCP connection.
 fn ssh_control_args(ip: &str) -> Vec<String> {
     let _ = std::fs::create_dir_all(SSH_CONTROL_DIR);
     let socket = format!("{SSH_CONTROL_DIR}/ssh-{ip}");
-    let key_path = if std::path::Path::new("/root/.ssh/id_ed25519").exists() {
-        "/root/.ssh/id_ed25519".to_string()
-    } else {
-        "/root/.ssh/id_rsa".to_string()
-    };
+    let key_path = ssh_key_path();
     vec![
         "-i".to_string(),
         key_path,
@@ -39,7 +65,7 @@ fn ssh_control_args(ip: &str) -> Vec<String> {
 pub async fn ssh_exec(ip: &str, cmd: &str) -> Result<String> {
     tracing::debug!(target_ip = ip, command = cmd, "SSH exec");
     let mut args = ssh_control_args(ip);
-    args.push(format!("azureuser@{ip}"));
+    args.push(format!("{}@{ip}", ssh_user()));
     args.push(cmd.to_string());
     let fut = tokio::process::Command::new("ssh").args(&args).output();
 
@@ -79,7 +105,7 @@ pub async fn scp_to(ip: &str, local: &str, remote: &str) -> Result<()> {
     );
     let mut args = ssh_control_args(ip);
     args.push(local.to_string());
-    args.push(format!("azureuser@{ip}:{remote}"));
+    args.push(format!("{}@{ip}:{remote}", ssh_user()));
     let fut = tokio::process::Command::new("scp").args(&args).output();
 
     let output = tokio::time::timeout(SSH_COMMAND_TIMEOUT, fut)
@@ -119,7 +145,7 @@ pub async fn scp_dir_to(ip: &str, local_dir: &str, remote_dir: &str) -> Result<(
             "PasswordAuthentication=no",
         ])
         .arg(format!("{local_dir}/."))
-        .arg(format!("azureuser@{ip}:{remote_dir}/"))
+        .arg(format!("{}@{ip}:{remote_dir}/", ssh_user()))
         .output();
 
     let output = tokio::time::timeout(SSH_COMMAND_TIMEOUT, fut)

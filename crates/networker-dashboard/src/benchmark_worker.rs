@@ -198,20 +198,40 @@ async fn poll_and_run(
         }
     }
 
+    // Pick an ssh user for the orchestrator that matches the primary testbed's
+    // cloud. The orchestrator's ssh helpers honor ORCH_SSH_USER (defaults to
+    // "azureuser"). For mixed-cloud benchmarks this picks the first testbed's
+    // cloud; per-testbed users would require a deeper orchestrator change.
+    let orch_ssh_user = merged_testbeds
+        .first()
+        .and_then(|t| t.get("cloud").and_then(|v| v.as_str()))
+        .map(|cloud| match cloud.to_lowercase().as_str() {
+            "azure" => "azureuser",
+            "aws" | "gcp" => "ubuntu",
+            _ => "azureuser",
+        })
+        .unwrap_or("azureuser");
+
     // Spawn alethabench as a child process.
     // Pass callback token via env var to avoid leaking in /proc/PID/cmdline.
-    let child_result = tokio::process::Command::new("alethabench")
-        .args([
-            "run",
-            "--config",
-            &config_path,
-            "--callback-url",
-            &callback_url,
-        ])
-        .env("BENCH_CALLBACK_TOKEN", &callback_token)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn();
+    let mut cmd = tokio::process::Command::new("alethabench");
+    cmd.args([
+        "run",
+        "--config",
+        &config_path,
+        "--callback-url",
+        &callback_url,
+    ])
+    .env("BENCH_CALLBACK_TOKEN", &callback_token)
+    .env("ORCH_SSH_USER", orch_ssh_user)
+    .stdout(std::process::Stdio::piped())
+    .stderr(std::process::Stdio::piped());
+    // Inherit an explicit ORCH_SSH_KEY when set so operators can override
+    // the default ~/.ssh/id_ed25519 → id_rsa lookup.
+    if let Ok(k) = std::env::var("ORCH_SSH_KEY") {
+        cmd.env("ORCH_SSH_KEY", k);
+    }
+    let child_result = cmd.spawn();
 
     match child_result {
         Ok(mut child) => {

@@ -480,14 +480,34 @@ export function TesterDetailDrawer({
               Danger zone
             </h4>
             <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                disabled={isBusy || isRunningOrQueued}
-                onClick={() => run(() => testersApi.stopTester(projectId, tester.tester_id))}
-                className="px-3 py-1 text-xs rounded border border-amber-500/50 text-amber-400 hover:bg-amber-500/10 disabled:opacity-50"
-              >
-                Stop tester
-              </button>
+              {tester.power_state === 'stopped' ? (
+                <button
+                  type="button"
+                  disabled={isBusy}
+                  onClick={() => run(() => testersApi.startTester(projectId, tester.tester_id))}
+                  className="px-3 py-1 text-xs rounded border border-emerald-500/50 text-emerald-400 hover:bg-emerald-500/10 disabled:opacity-50"
+                >
+                  Start tester
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled={
+                    isBusy ||
+                    isRunningOrQueued ||
+                    tester.power_state !== 'running'
+                  }
+                  onClick={() => run(() => testersApi.stopTester(projectId, tester.tester_id))}
+                  className="px-3 py-1 text-xs rounded border border-amber-500/50 text-amber-400 hover:bg-amber-500/10 disabled:opacity-50"
+                  title={
+                    tester.power_state !== 'running'
+                      ? `Cannot stop in power_state=${tester.power_state}`
+                      : undefined
+                  }
+                >
+                  Stop tester
+                </button>
+              )}
               <button
                 type="button"
                 disabled={isBusy || isRunningOrQueued}

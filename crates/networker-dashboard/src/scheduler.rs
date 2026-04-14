@@ -291,6 +291,7 @@ async fn clone_and_queue_benchmark(
             testbed.os.as_str(),
             &testbed.proxies,
             &testbed.tester_os,
+            testbed.endpoint_ip.as_deref(),
         )
         .await?;
     }

@@ -10,6 +10,7 @@
 #![allow(dead_code)]
 
 use anyhow::{anyhow, Context};
+use tokio::sync::OnceCell;
 use uuid::Uuid;
 
 /// Minimal view of a persistent tester needed to run the install.
@@ -18,12 +19,90 @@ pub struct TesterTarget {
     pub tester_id: Uuid,
     pub public_ip: Option<String>,
     pub ssh_user: String,
+    /// API key for the agent to register with the dashboard. When `None`,
+    /// the agent will be installed but not auto-started (legacy behavior).
+    pub agent_api_key: Option<String>,
+    /// Dashboard URL the agent should connect to, e.g. `https://alethedash.com`.
+    /// When `None`, the agent will be installed but not auto-started.
+    pub agent_dashboard_url: Option<String>,
 }
 
-/// Release version to install. Uses the dashboard's own version so testers
-/// match the dashboard that provisioned them.
-fn release_tag() -> String {
+/// Release version compiled into the dashboard binary — used as the primary
+/// (preferred) tag when trying to download the tester binary.
+fn preferred_release_tag() -> String {
     format!("v{}", env!("CARGO_PKG_VERSION"))
+}
+
+/// Cached list of release tags published on GitHub, newest-first. Populated
+/// lazily on first install; subsequent installs reuse the list.
+static RELEASE_TAGS: OnceCell<Vec<String>> = OnceCell::const_new();
+
+/// Fetch the list of release tags from GitHub, newest-first. Cached process-wide.
+///
+/// If the GitHub API is unreachable, returns a vec containing just the
+/// dashboard's compile-time tag so installs can still proceed.
+async fn fetch_release_tags() -> Vec<String> {
+    RELEASE_TAGS
+        .get_or_init(|| async {
+            let url = "https://api.github.com/repos/irlm/networker-tester/releases?per_page=30";
+            let client = match reqwest::Client::builder()
+                .user_agent("networker-dashboard")
+                .build()
+            {
+                Ok(c) => c,
+                Err(_) => return vec![preferred_release_tag()],
+            };
+            let tags: Vec<String> = match client
+                .get(url)
+                .header("Accept", "application/vnd.github+json")
+                .send()
+                .await
+            {
+                Ok(resp) => match resp.json::<serde_json::Value>().await {
+                    Ok(serde_json::Value::Array(arr)) => arr
+                        .into_iter()
+                        .filter_map(|r| {
+                            let tag = r.get("tag_name")?.as_str()?.to_string();
+                            let draft = r.get("draft").and_then(|v| v.as_bool()).unwrap_or(false);
+                            if draft {
+                                None
+                            } else {
+                                Some(tag)
+                            }
+                        })
+                        .collect(),
+                    _ => vec![],
+                },
+                Err(e) => {
+                    tracing::warn!(%e, "Failed to list GitHub releases; falling back to compile-time tag");
+                    vec![]
+                }
+            };
+            if tags.is_empty() {
+                vec![preferred_release_tag()]
+            } else {
+                tags
+            }
+        })
+        .await
+        .clone()
+}
+
+/// Build the ordered candidate-tag list for a download attempt:
+/// 1. The dashboard's compile-time tag (first choice — keeps dashboard/tester in sync).
+/// 2. All other GitHub release tags, newest-first, with the compile-time tag de-duped.
+///
+/// This lets the installer try the latest known version, then fall back to
+/// older releases if assets for the preferred tag are missing (e.g. a release
+/// hasn't been published yet, or a specific target triple failed to build).
+async fn candidate_release_tags() -> Vec<String> {
+    let preferred = preferred_release_tag();
+    let mut all = fetch_release_tags().await;
+    all.retain(|t| t != &preferred);
+    let mut out = Vec::with_capacity(all.len() + 1);
+    out.push(preferred);
+    out.extend(all);
+    out
 }
 
 /// Detected tester OS info.
@@ -73,12 +152,22 @@ impl TesterOsInfo {
 /// Perform the install on a freshly-provisioned tester VM.
 ///
 /// Fast path: downloads pre-built binaries from GitHub releases instead of
-/// compiling from source. Typical runtime: 30-60 seconds.
+/// compiling from source. Typical runtime: 30-60 seconds for probe binaries;
+/// adds ~2-4 minutes for Chrome + harness.
+///
+/// Testers are long-lived *clients* that must be able to run every test type
+/// the dashboard offers — including browser page-load benchmarks that need
+/// Chrome + chrome-harness. Chrome install is therefore default-on here.
+/// Override with `DASHBOARD_TESTER_SKIP_CHROME=1` for Linux-server-only hosts
+/// that will never run browser probes.
 pub async fn install_tester<F>(tester: &TesterTarget, progress: F) -> anyhow::Result<TesterOsInfo>
 where
     F: Fn(&str) + Send + Sync,
 {
-    install_tester_with_options(tester, false, progress).await
+    let install_chrome = std::env::var("DASHBOARD_TESTER_SKIP_CHROME")
+        .map(|v| v == "0" || v.eq_ignore_ascii_case("false"))
+        .unwrap_or(true);
+    install_tester_with_options(tester, install_chrome, progress).await
 }
 
 /// Install with optional Chrome + chrome-harness for browser benchmarks.
@@ -117,13 +206,33 @@ where
     install_prereqs(ip, user, &os_info).await?;
 
     progress("downloading networker-tester binary");
-    download_binary(ip, user, "networker-tester", &os_info).await?;
+    let tester_tag = download_binary(ip, user, "networker-tester", &os_info).await?;
 
     progress("downloading networker-agent binary");
-    download_binary(ip, user, "networker-agent", &os_info).await?;
+    let agent_tag = download_binary(ip, user, "networker-agent", &os_info).await?;
+
+    if tester_tag != agent_tag {
+        tracing::warn!(
+            %tester_tag, %agent_tag,
+            "tester and agent binaries installed from different release tags"
+        );
+    }
+    if tester_tag != preferred_release_tag() {
+        tracing::warn!(
+            preferred = %preferred_release_tag(),
+            resolved = %tester_tag,
+            "Installed fallback release tag (preferred was unavailable)"
+        );
+    }
 
     progress("installing systemd service");
-    install_systemd_service(ip, user).await?;
+    install_systemd_service(
+        ip,
+        user,
+        tester.agent_api_key.as_deref(),
+        tester.agent_dashboard_url.as_deref(),
+    )
+    .await?;
 
     // Chrome harness is optional — only for browser benchmarks
     if install_chrome_harness {
@@ -220,33 +329,101 @@ async fn install_prereqs(ip: &str, user: &str, os: &TesterOsInfo) -> anyhow::Res
 }
 
 /// Download a pre-built binary from GitHub releases, extract, install to /usr/local/bin.
+///
+/// Tries the dashboard's compile-time tag first, then falls back to older
+/// published tags (newest-first) if the preferred tag's asset is missing.
+/// Returns the tag that succeeded.
 async fn download_binary(
     ip: &str,
     user: &str,
     binary: &str,
     os: &TesterOsInfo,
-) -> anyhow::Result<()> {
-    let tag = release_tag();
+) -> anyhow::Result<String> {
     let target = os.release_target();
-    let url = format!(
-        "https://github.com/irlm/networker-tester/releases/download/{tag}/{binary}-{target}.tar.gz"
-    );
-    let cmd = format!(
-        "set -e; \
-         curl -fsSL --retry 3 --retry-delay 2 {url} -o /tmp/{binary}.tar.gz < /dev/null && \
-         tar xzf /tmp/{binary}.tar.gz -C /tmp && \
-         sudo install -m 0755 /tmp/{binary} /usr/local/bin/{binary} && \
-         rm -f /tmp/{binary}.tar.gz /tmp/{binary}"
-    );
-    ssh_run(ip, user, &cmd)
-        .await
-        .with_context(|| format!("download {binary} from {url}"))?;
-    Ok(())
+    let candidates = candidate_release_tags().await;
+    let mut last_err: Option<anyhow::Error> = None;
+
+    for tag in &candidates {
+        let url = format!(
+            "https://github.com/irlm/networker-tester/releases/download/{tag}/{binary}-{target}.tar.gz"
+        );
+        // -f makes curl fail on HTTP errors (404 for missing asset) so we can
+        // walk to the next candidate. --retry 2 handles transient network blips.
+        let cmd = format!(
+            "set -e; \
+             curl -fsSL --retry 2 --retry-delay 2 --max-time 120 {url} \
+               -o /tmp/{binary}.tar.gz < /dev/null && \
+             tar xzf /tmp/{binary}.tar.gz -C /tmp && \
+             sudo install -m 0755 /tmp/{binary} /usr/local/bin/{binary} && \
+             rm -f /tmp/{binary}.tar.gz /tmp/{binary}"
+        );
+        match ssh_run(ip, user, &cmd).await {
+            Ok(_) => {
+                tracing::info!(%binary, %tag, target, "Installed binary from release");
+                return Ok(tag.clone());
+            }
+            Err(e) => {
+                tracing::warn!(%binary, %tag, target, %e, "Release asset unavailable; trying older tag");
+                last_err = Some(e);
+            }
+        }
+    }
+
+    Err(last_err
+        .unwrap_or_else(|| {
+            anyhow!(
+                "no release candidates available for {binary} on {target} (tried {} tag(s))",
+                candidates.len()
+            )
+        })
+        .context(format!(
+            "could not download {binary} for {target} from any of {} release tag(s)",
+            candidates.len()
+        )))
 }
 
-async fn install_systemd_service(ip: &str, user: &str) -> anyhow::Result<()> {
-    // Create a systemd user service for networker-agent (runs as regular user)
-    let service = "[Unit]
+async fn install_systemd_service(
+    ip: &str,
+    user: &str,
+    agent_api_key: Option<&str>,
+    agent_dashboard_url: Option<&str>,
+) -> anyhow::Result<()> {
+    // Only auto-start the agent when we have full registration context.
+    // Otherwise install the unit file idle so a later step can wire it up.
+    let (env_lines, start_cmds) = match (agent_api_key, agent_dashboard_url) {
+        (Some(k), Some(url)) => {
+            // Sanity: ban anything weird that could break the systemd unit
+            // or escape shell escaping below.
+            let safe = |s: &str| {
+                s.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "-_.:/".contains(c))
+            };
+            if !safe(k) || !safe(url) {
+                return Err(anyhow!(
+                    "agent_api_key or agent_dashboard_url contains unsafe characters"
+                ));
+            }
+            (
+                format!("Environment=AGENT_API_KEY={k}\nEnvironment=AGENT_DASHBOARD_URL={url}\n"),
+                // enable + start, and enable linger so the user service
+                // survives SSH disconnect / reboot without a login.
+                "sudo loginctl enable-linger $(whoami) 2>/dev/null || true; \
+                 systemctl --user daemon-reload && \
+                 systemctl --user enable --now networker-agent.service 2>&1 | tail -5"
+                    .to_string(),
+            )
+        }
+        _ => (
+            String::new(),
+            // Install the unit but don't start — missing config would just crash-loop.
+            "systemctl --user daemon-reload && \
+             systemctl --user enable networker-agent.service 2>/dev/null || true"
+                .to_string(),
+        ),
+    };
+
+    let service = format!(
+        "[Unit]
 Description=Networker Agent
 After=network.target
 
@@ -256,17 +433,17 @@ ExecStart=/usr/local/bin/networker-agent
 Restart=on-failure
 RestartSec=5
 Environment=RUST_LOG=info
-
+{env_lines}
 [Install]
 WantedBy=default.target
-";
+"
+    );
     let cmd = format!(
         "mkdir -p ~/.config/systemd/user && \
          cat > ~/.config/systemd/user/networker-agent.service <<'EOF'
 {service}
 EOF
-         systemctl --user daemon-reload && \
-         systemctl --user enable networker-agent.service 2>/dev/null || true"
+         {start_cmds}"
     );
     ssh_run(ip, user, &cmd)
         .await
@@ -275,7 +452,28 @@ EOF
 }
 
 async fn install_browser_harness(ip: &str, user: &str) -> anyhow::Result<()> {
-    let tag = release_tag();
+    // Browser harness ships inside the source archive; follow the same
+    // fallback order as the binary download.
+    let candidates = candidate_release_tags().await;
+    let mut last_err: Option<anyhow::Error> = None;
+    for tag in &candidates {
+        match install_browser_harness_at_tag(ip, user, tag).await {
+            Ok(_) => {
+                tracing::info!(%tag, "Installed browser harness from release");
+                return Ok(());
+            }
+            Err(e) => {
+                tracing::warn!(%tag, %e, "Browser-harness tag unavailable; trying older");
+                last_err = Some(e);
+            }
+        }
+    }
+    Err(last_err
+        .unwrap_or_else(|| anyhow!("no release candidates for browser harness"))
+        .context("could not install browser harness from any release tag"))
+}
+
+async fn install_browser_harness_at_tag(ip: &str, user: &str, tag: &str) -> anyhow::Result<()> {
     // Install Chrome + use NodeSource for Node.js 20 (Ubuntu default is too old)
     let cmd = format!(
         "set -e; \

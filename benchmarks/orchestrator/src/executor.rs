@@ -1805,6 +1805,15 @@ async fn resolve_vm(testbed: &TestbedConfig) -> Result<(VmInfo, bool)> {
             ip,
             testbed.testbed_id
         );
+        // SSH user differs by cloud: azure=azureuser (or root on some images),
+        // aws/gcp Ubuntu=ubuntu, aws/gcp Debian=admin. Default based on cloud
+        // since we don't know the OS distro for existing VMs without probing.
+        let ssh_user = match testbed.cloud.to_lowercase().as_str() {
+            "azure" => "azureuser",
+            "aws" | "gcp" => "ubuntu",
+            _ => "ubuntu",
+        }
+        .to_string();
         let vm = VmInfo {
             name: format!(
                 "existing-{}",
@@ -1816,7 +1825,7 @@ async fn resolve_vm(testbed: &TestbedConfig) -> Result<(VmInfo, bool)> {
             os: "ubuntu".to_string(),
             vm_size: testbed.vm_size.clone(),
             resource_group: String::new(),
-            ssh_user: "azureuser".to_string(),
+            ssh_user,
         };
         Ok((vm, false))
     } else {
