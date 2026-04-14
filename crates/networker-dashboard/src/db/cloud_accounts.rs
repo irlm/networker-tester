@@ -149,6 +149,22 @@ pub async fn update_account(
     Ok(n > 0)
 }
 
+pub async fn update_credentials(
+    client: &Client,
+    account_id: &Uuid,
+    credentials_enc: &[u8],
+    credentials_nonce: &[u8],
+) -> anyhow::Result<bool> {
+    let n = client
+        .execute(
+            "UPDATE cloud_account SET credentials_enc = $1, credentials_nonce = $2, \
+             status = 'pending', updated_at = now() WHERE account_id = $3",
+            &[&credentials_enc, &credentials_nonce, account_id],
+        )
+        .await?;
+    Ok(n > 0)
+}
+
 pub async fn delete_account(
     client: &Client,
     account_id: &Uuid,

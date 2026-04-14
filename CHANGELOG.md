@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.27.6] — 2026-04-13
+
+### Fixed
+- Azure cloud account validation uses direct HTTP token request (not az CLI).
+- Cloud account edit supports updating credentials (not just name/region).
+- Better error messages for invalid secret, app not found, tenant not found.
+- Clearer setup guides for Azure, AWS, GCP cloud accounts.
+
+---
+
 ## [0.27.5] — 2026-04-13
 
 ### Added

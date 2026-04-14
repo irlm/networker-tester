@@ -27,6 +27,8 @@ pub struct CreateAccountRequest {
 pub struct UpdateAccountRequest {
     pub name: String,
     pub region_default: Option<String>,
+    #[serde(default)]
+    pub credentials: Option<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Serialize)]
@@ -280,6 +282,75 @@ async fn update_account(
         return Err((StatusCode::NOT_FOUND, "Account not found".to_string()));
     }
 
+    // If new credentials provided, merge with existing and re-encrypt
+    if let Some(ref new_creds) = update_req.credentials {
+        if !new_creds.is_empty() {
+            let key = state.credential_key.as_ref().ok_or_else(|| {
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "DASHBOARD_CREDENTIAL_KEY required".to_string(),
+                )
+            })?;
+
+            // Decrypt existing credentials and merge new values on top
+            let nonce_arr: [u8; 12] =
+                acct.credentials_nonce.as_slice().try_into().map_err(|_| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Invalid stored nonce".to_string(),
+                    )
+                })?;
+            let existing_plain = crate::crypto::decrypt_with_fallback(
+                &acct.credentials_enc,
+                &nonce_arr,
+                key,
+                state.credential_key_old.as_ref(),
+            )
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to decrypt existing credentials: {e}"),
+                )
+            })?;
+            let mut merged: serde_json::Map<String, serde_json::Value> =
+                serde_json::from_slice(&existing_plain).unwrap_or_default();
+
+            // Only overwrite fields that have non-empty values
+            for (k, v) in new_creds {
+                if !v.is_empty() {
+                    merged.insert(k.clone(), serde_json::Value::String(v.clone()));
+                }
+            }
+
+            let merged_json = serde_json::to_vec(&merged)
+                .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid credentials: {e}")))?;
+            let (enc, nonce) = crate::crypto::encrypt(&merged_json, key).map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Encryption failed: {e}"),
+                )
+            })?;
+            crate::db::cloud_accounts::update_credentials(
+                &client,
+                &account_id,
+                &enc,
+                nonce.as_ref(),
+            )
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "Failed to update credentials");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Failed to update credentials".to_string(),
+                )
+            })?;
+            // Reset status since credentials changed
+            crate::db::cloud_accounts::update_validation(&client, &account_id, "pending", None)
+                .await
+                .ok();
+        }
+    }
+
     tracing::info!(
         account_id = %account_id,
         updated_by = %user.email,
@@ -477,39 +548,71 @@ async fn validate_azure_account(creds: &serde_json::Value) -> (String, Option<St
         );
     }
 
-    let output = tokio::process::Command::new("az")
-        .arg("login")
-        .arg("--service-principal")
-        .arg("-u")
-        .arg(client_id)
-        .arg("-p")
-        .arg(client_secret)
-        .arg("--tenant")
-        .arg(tenant_id)
-        .arg("--output")
-        .arg("none")
-        .output()
+    // Validate by requesting an OAuth token directly from Azure AD via HTTP.
+    // This avoids the az CLI entirely — no session pollution, no dependencies.
+    let token_url = format!(
+        "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
+        tenant_id
+    );
+    let http_client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => return ("error".to_string(), Some(format!("HTTP client error: {e}"))),
+    };
+
+    let resp = http_client
+        .post(&token_url)
+        .form(&[
+            ("grant_type", "client_credentials"),
+            ("client_id", client_id),
+            ("client_secret", client_secret),
+            ("scope", "https://management.azure.com/.default"),
+        ])
+        .send()
         .await;
 
-    match output {
-        Ok(out) if out.status.success() => {
-            // Logout to clean up session state
-            let _ = tokio::process::Command::new("az")
-                .arg("logout")
-                .output()
-                .await;
-            ("active".to_string(), None)
-        }
-        Ok(out) => {
-            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-            (
-                "error".to_string(),
-                Some(format!("Azure login failed: {}", stderr.trim())),
-            )
+    match resp {
+        Ok(r) => {
+            let status_code = r.status();
+            let body: serde_json::Value = r.json().await.unwrap_or_default();
+
+            if status_code.is_success() && body.get("access_token").is_some() {
+                ("active".to_string(), None)
+            } else {
+                let error_desc = body
+                    .get("error_description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let error_code = body.get("error").and_then(|v| v.as_str()).unwrap_or("");
+
+                let msg = if error_code == "invalid_client" || error_desc.contains("AADSTS7000215")
+                {
+                    "Invalid client secret. Generate a new one: Azure Portal → App registrations → Certificates & secrets.".to_string()
+                } else if error_desc.contains("AADSTS700016")
+                    || error_desc.contains("not found in the directory")
+                {
+                    format!(
+                        "Application {} not found in tenant {}. Check the Client ID and Tenant ID.",
+                        client_id, tenant_id
+                    )
+                } else if error_desc.contains("AADSTS90002") || error_desc.contains("not found") {
+                    format!("Tenant '{}' not found. Check the Tenant ID.", tenant_id)
+                } else if !error_desc.is_empty() {
+                    format!(
+                        "Azure: {}",
+                        error_desc.split('\r').next().unwrap_or(error_desc)
+                    )
+                } else {
+                    format!("Azure token request failed (HTTP {})", status_code)
+                };
+                ("error".to_string(), Some(msg))
+            }
         }
         Err(e) => (
             "error".to_string(),
-            Some(format!("az CLI not available: {e}")),
+            Some(format!("Could not reach Azure AD: {e}")),
         ),
     }
 }
@@ -524,6 +627,11 @@ async fn validate_aws_account(creds: &serde_json::Value) -> (String, Option<Stri
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
+    let session_token = creds
+        .get("session_token")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
     if access_key.is_empty() || secret_key.is_empty() {
         return (
             "error".to_string(),
@@ -531,13 +639,15 @@ async fn validate_aws_account(creds: &serde_json::Value) -> (String, Option<Stri
         );
     }
 
-    let output = tokio::process::Command::new("aws")
-        .arg("sts")
+    let mut cmd = tokio::process::Command::new("aws");
+    cmd.arg("sts")
         .arg("get-caller-identity")
         .env("AWS_ACCESS_KEY_ID", access_key)
-        .env("AWS_SECRET_ACCESS_KEY", secret_key)
-        .output()
-        .await;
+        .env("AWS_SECRET_ACCESS_KEY", secret_key);
+    if !session_token.is_empty() {
+        cmd.env("AWS_SESSION_TOKEN", session_token);
+    }
+    let output = cmd.output().await;
 
     match output {
         Ok(out) if out.status.success() => ("active".to_string(), None),
@@ -655,5 +765,15 @@ mod tests {
         let req: UpdateAccountRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.name, "Updated Name");
         assert_eq!(req.region_default.as_deref(), Some("eu-west-1"));
+        assert!(req.credentials.is_none());
+    }
+
+    #[test]
+    fn update_request_with_credentials() {
+        let json = r#"{"name": "Updated", "credentials": {"client_secret": "new-secret"}}"#;
+        let req: UpdateAccountRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.name, "Updated");
+        let creds = req.credentials.unwrap();
+        assert_eq!(creds.get("client_secret").unwrap(), "new-secret");
     }
 }

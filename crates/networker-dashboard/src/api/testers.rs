@@ -863,7 +863,7 @@ async fn delete_tester(
     // delete fails we refuse to delete the row so the user can retry
     // (otherwise we'd leak Azure resources).
     if let Some(resource_id) = tester.vm_resource_id.as_deref() {
-        let delete_result = match provider_for_tester(&client, &tester).await {
+        let delete_result = match provider_for_tester(&client, &tester, &state).await {
             Ok(p) => p.delete_vm(resource_id).await,
             Err(e) => Err(e),
         };
@@ -1179,13 +1179,15 @@ async fn probe_tester(
         ));
     }
 
-    let provider = provider_for_tester(&client, &tester).await.map_err(|e| {
-        tracing::warn!(%tester_id, error = ?e, "provider_for_tester failed");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to load cloud provider: {e}"),
-        )
-    })?;
+    let provider = provider_for_tester(&client, &tester, &state)
+        .await
+        .map_err(|e| {
+            tracing::warn!(%tester_id, error = ?e, "provider_for_tester failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to load cloud provider: {e}"),
+            )
+        })?;
     let azure_state =
         tester_recovery::probe_azure_state(&provider, &tester.vm_resource_id, &tester.vm_name)
             .await
@@ -1373,14 +1375,16 @@ async fn refresh_latest_version(
 
 // ── Cloud provider loader ────────────────────────────────────────────────
 
-/// Load the [`CloudProvider`] for a tester. If the tester has a
-/// `cloud_connection_id`, we fetch the connection's `provider` + `config`
-/// from the DB and build the provider from that. Otherwise we fall back to
-/// the legacy env-var-based Azure provider.
+/// Load the [`CloudProvider`] for a tester. Checks three sources in order:
+/// 1. `cloud_connection` (FIC/secretless) if `cloud_connection_id` is set
+/// 2. `cloud_account` (encrypted credentials) for this project + cloud provider
+/// 3. Legacy env-var fallback
 async fn provider_for_tester(
     client: &tokio_postgres::Client,
     tester: &ProjectTesterRow,
+    state: &AppState,
 ) -> anyhow::Result<cloud_provider::CloudProvider> {
+    // 1. Cloud connection (FIC/secretless)
     if let Some(conn_id) = tester.cloud_connection_id {
         let row = client
             .query_one(
@@ -1390,10 +1394,77 @@ async fn provider_for_tester(
             .await?;
         let provider: String = row.get("provider");
         let config: serde_json::Value = row.get("config");
-        cloud_provider::CloudProvider::from_connection(&provider, &config)
-    } else {
-        cloud_provider::legacy_azure_provider()
+        return cloud_provider::CloudProvider::from_connection(&provider, &config);
     }
+
+    // 2. Cloud account (encrypted credentials) for this project + provider
+    let acct_row = client
+        .query_opt(
+            "SELECT credentials_enc, credentials_nonce FROM cloud_account \
+             WHERE project_id = $1 AND provider = $2 AND status = 'active' \
+             ORDER BY created_at ASC LIMIT 1",
+            &[&tester.project_id, &tester.cloud],
+        )
+        .await?;
+
+    if let Some(row) = acct_row {
+        let cred_key = state.credential_key.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "DASHBOARD_CREDENTIAL_KEY not set — cannot use cloud account credentials"
+            )
+        })?;
+        let enc: Vec<u8> = row.get("credentials_enc");
+        let nonce_bytes: Vec<u8> = row.get("credentials_nonce");
+        let nonce: [u8; 12] = nonce_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("invalid nonce in cloud_account"))?;
+        let plaintext = crate::crypto::decrypt_with_fallback(
+            &enc,
+            &nonce,
+            cred_key,
+            state.credential_key_old.as_ref(),
+        )?;
+        let creds: serde_json::Value = serde_json::from_slice(&plaintext)?;
+
+        // Build provider config from cloud_account credentials.
+        // The config must include ALL fields AzureProvider::from_config needs:
+        // subscription_id, resource_group (for --subscription/--resource-group flags)
+        // AND client_id, client_secret, tenant_id (for SP auth).
+        let config = match tester.cloud.as_str() {
+            "azure" => {
+                let rg = creds
+                    .get("resource_group")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("networker-testers");
+                serde_json::json!({
+                    "subscription_id": creds.get("subscription_id").and_then(|v| v.as_str()).unwrap_or(""),
+                    "resource_group": rg,
+                    "tenant_id": creds.get("tenant_id").and_then(|v| v.as_str()).unwrap_or(""),
+                    "client_id": creds.get("client_id").and_then(|v| v.as_str()).unwrap_or(""),
+                    "client_secret": creds.get("client_secret").and_then(|v| v.as_str()).unwrap_or(""),
+                    "identity_type": "service_principal",
+                })
+            }
+            "aws" | "gcp" => {
+                // Merge region from tester into the credentials config
+                let mut config = creds.clone();
+                if let Some(obj) = config.as_object_mut() {
+                    obj.insert(
+                        "region".to_string(),
+                        serde_json::Value::String(tester.region.clone()),
+                    );
+                }
+                config
+            }
+            _ => creds.clone(),
+        };
+        return cloud_provider::CloudProvider::from_connection(&tester.cloud, &config);
+    }
+
+    // 3. Legacy env var fallback
+    cloud_provider::legacy_azure_provider()
 }
 
 // ── Background task helpers ───────────────────────────────────────────────
@@ -1450,34 +1521,64 @@ async fn run_create_tester(
         .await
         .map(|r| ProjectTesterRow::from_row(&r))?;
     tester_state::set_status_message(&client, &tester_id, "creating VM").await?;
-    let provider = provider_for_tester(&client, &tester_row).await?;
+    let provider = provider_for_tester(&client, &tester_row, &state).await?;
     let vm_name = cloud_provider::generate_vm_name(&region);
+    // Per-cloud SSH user defaults
+    let ssh_user = match tester_row.cloud.as_str() {
+        "azure" => "azureuser",
+        "aws" => "ubuntu",
+        "gcp" => "ubuntu",
+        _ => "ubuntu",
+    };
     let vm_config = cloud_provider::VmConfig {
         name: vm_name.clone(),
         region: region.clone(),
         vm_size: vm_size.clone(),
-        ssh_user: "azureuser".to_string(),
-        image: "Ubuntu2204".to_string(),
+        ssh_user: ssh_user.to_string(),
+        image: "Canonical:ubuntu-24_04-lts:server:latest".to_string(),
         tags: std::collections::HashMap::new(),
     };
     let created = provider.create_vm(&vm_config).await?;
 
     // Step 3: persist identity fields so the next stages can find the host.
-    client
-        .execute(
-            "UPDATE project_tester \
-             SET vm_name = $2, vm_resource_id = $3, public_ip = $4::inet, \
-                 ssh_user = $5, updated_at = NOW() \
-             WHERE tester_id = $1",
-            &[
-                &tester_id,
-                &created.vm_name,
-                &created.resource_id,
-                &created.public_ip,
-                &vm_config.ssh_user,
-            ],
-        )
-        .await?;
+    if created.public_ip.is_empty() {
+        client
+            .execute(
+                "UPDATE project_tester \
+                 SET vm_name = $2, vm_resource_id = $3, \
+                     ssh_user = $4, updated_at = NOW() \
+                 WHERE tester_id = $1",
+                &[
+                    &tester_id,
+                    &created.vm_name,
+                    &created.resource_id,
+                    &vm_config.ssh_user,
+                ],
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("DB update (no IP): {e}"))?;
+    } else {
+        let ip: std::net::IpAddr = created
+            .public_ip
+            .parse()
+            .map_err(|e| anyhow::anyhow!("invalid public_ip '{}': {e}", created.public_ip))?;
+        client
+            .execute(
+                "UPDATE project_tester \
+                 SET vm_name = $2, vm_resource_id = $3, public_ip = $4, \
+                     ssh_user = $5, updated_at = NOW() \
+                 WHERE tester_id = $1",
+                &[
+                    &tester_id,
+                    &created.vm_name,
+                    &created.resource_id,
+                    &ip,
+                    &vm_config.ssh_user,
+                ],
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("DB update (with IP): {e}"))?;
+    }
 
     // Step 4: run the installer. Progress closure captures an Arc<Pool> so
     // each step writes back to `status_message`.
@@ -1566,7 +1667,7 @@ async fn run_start_tester(state: Arc<AppState>, tester: ProjectTesterRow) -> any
         .vm_resource_id
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("tester has no vm_resource_id"))?;
-    provider_for_tester(&client, &tester)
+    provider_for_tester(&client, &tester, &state)
         .await?
         .start_vm(resource_id)
         .await?;
@@ -1660,7 +1761,7 @@ async fn run_stop_tester(state: Arc<AppState>, tester: ProjectTesterRow) -> anyh
         .vm_resource_id
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("tester has no vm_resource_id"))?;
-    provider_for_tester(&client, &tester)
+    provider_for_tester(&client, &tester, &state)
         .await?
         .stop_vm(resource_id)
         .await?;

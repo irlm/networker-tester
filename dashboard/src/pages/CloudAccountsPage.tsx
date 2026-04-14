@@ -28,30 +28,38 @@ const STATUS_STYLES: Record<string, string> = {
 const CLOUD_SETUP_GUIDES: Record<string, { steps: string[]; fieldHelp: Record<string, string> }> = {
   azure: {
     steps: [
-      '1. Go to portal.azure.com \u2192 Microsoft Entra ID \u2192 App registrations \u2192 New registration',
-      '2. Name: "AletheDash VM Manager", Single tenant',
-      '3. After creation, go to Certificates & secrets \u2192 New client secret \u2192 copy the Value immediately',
-      '4. Copy the Application (client) ID and Directory (tenant) ID from the Overview page',
-      '5. Go to the Resource Group where testers will be created \u2192 Access control (IAM)',
-      '6. Add role assignment \u2192 Role: "Virtual Machine Contributor" \u2192 Assign to your app registration',
-      '7. Also assign "Network Contributor" if testers need public IPs',
+      '1. portal.azure.com \u2192 Microsoft Entra ID \u2192 App registrations \u2192 New registration',
+      '2. Name: "AletheDash VM Manager", Supported account types: "Single tenant"',
+      '3. Overview page: copy Application (client) ID and Directory (tenant) ID',
+      '4. Certificates & secrets \u2192 New client secret \u2192 copy the Value immediately (shown once!)',
+      '5. Subscriptions \u2192 your subscription \u2192 Access control (IAM) \u2192 Add role assignment',
+      '   \u2192 Role: "Virtual Machine Contributor" \u2192 Members: select your app \u2192 Review + assign',
+      '6. If testers need public IPs, also assign "Network Contributor" on the same subscription',
+      '7. Paste the three values below: Tenant ID, Client ID, Client Secret',
     ],
     fieldHelp: {
-      tenant_id: 'Overview page \u2192 Directory (tenant) ID. Not a secret \u2014 visible to all users.',
-      client_id: 'Overview page \u2192 Application (client) ID. Not a secret.',
-      client_secret: 'Certificates & secrets \u2192 Value column. Only shown once after creation.',
+      tenant_id: 'App registrations \u2192 your app \u2192 Overview \u2192 Directory (tenant) ID',
+      client_id: 'Same Overview page \u2192 Application (client) ID',
+      client_secret: 'Certificates & secrets \u2192 Client secrets \u2192 Value (shown once after creation)',
     },
   },
   aws: {
     steps: [
-      '1. Go to AWS Console \u2192 IAM \u2192 Users \u2192 Create user (or use existing)',
-      '2. Attach policy: AmazonEC2FullAccess (or custom policy scoped to your VPC/region)',
-      '3. Go to Security credentials tab \u2192 Create access key',
-      '4. Select "Application running outside AWS" \u2192 copy both values immediately',
+      'Option A \u2014 IAM User (permanent keys, no session token):',
+      '  1. AWS Console \u2192 IAM \u2192 Users \u2192 Create user',
+      '  2. Attach policy: AmazonEC2FullAccess',
+      '  3. Security credentials \u2192 Create access key \u2192 "Application running outside AWS"',
+      '  4. Copy Access Key ID + Secret Access Key. Leave Session Token empty.',
+      '',
+      'Option B \u2014 SSO / Temporary credentials (requires session token):',
+      '  1. Run: aws sso login',
+      '  2. Run: aws configure export-credentials --format env',
+      '  3. Copy all three values: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN',
+      '  4. Note: temporary credentials expire. You will need to update them periodically.',
     ],
     fieldHelp: {
-      access_key_id: 'Starts with "AKIA...". Identifies the IAM user \u2014 not a secret by itself.',
-      secret_access_key: 'Shown only once when creating the key. If lost, create a new one.',
+      access_key_id: 'Starts with "AKIA" (permanent) or "ASIA" (temporary/SSO).',
+      secret_access_key: 'Paired with the access key. Shown only once for IAM users.',
     },
   },
   gcp: {
@@ -69,15 +77,15 @@ const CLOUD_SETUP_GUIDES: Record<string, { steps: string[]; fieldHelp: Record<st
 };
 
 interface CredentialFields {
-  azure: { tenant_id: string; client_id: string; client_secret: string };
-  aws: { access_key_id: string; secret_access_key: string };
+  azure: { tenant_id: string; subscription_id: string; resource_group: string; client_id: string; client_secret: string };
+  aws: { access_key_id: string; secret_access_key: string; session_token: string };
   gcp: { json_key: string };
 }
 
 function emptyCredentials(): CredentialFields {
   return {
-    azure: { tenant_id: '', client_id: '', client_secret: '' },
-    aws: { access_key_id: '', secret_access_key: '' },
+    azure: { tenant_id: '', subscription_id: '', resource_group: '', client_id: '', client_secret: '' },
+    aws: { access_key_id: '', secret_access_key: '', session_token: '' },
     gcp: { json_key: '' },
   };
 }
@@ -152,12 +160,38 @@ export function CloudAccountsPage() {
 
     try {
       if (isEditing) {
-        // Edit mode: update name/region only
+        // Build credentials payload: only include if any field is filled
+        const creds: Record<string, string> =
+          formProvider === 'azure' ? { ...credentials.azure } :
+          formProvider === 'aws' ? { ...credentials.aws } :
+          { ...credentials.gcp };
+        const filledCreds = Object.fromEntries(
+          Object.entries(creds).filter(([, v]) => v.trim() !== '')
+        );
+        const hasNewCreds = Object.keys(filledCreds).length > 0;
+
         await api.updateCloudAccount(projectId, editingId, {
           name: formName.trim(),
           region_default: formRegion.trim() || undefined,
+          credentials: hasNewCreds ? filledCreds : undefined,
         });
-        addToast('success', `Cloud account "${formName.trim()}" updated`);
+
+        // If credentials were updated, auto-validate
+        if (hasNewCreds) {
+          try {
+            const result = await api.validateCloudAccount(projectId, editingId);
+            if (result.status === 'active') {
+              addToast('success', `Cloud account "${formName.trim()}" updated and validated`);
+            } else {
+              addToast('error', result.validation_error || 'Credentials updated but validation failed');
+            }
+          } catch (valErr) {
+            const vmsg = valErr instanceof Error ? valErr.message : 'Unknown error';
+            addToast('error', `Credentials updated but validation failed: ${vmsg}`);
+          }
+        } else {
+          addToast('success', `Cloud account "${formName.trim()}" updated`);
+        }
         resetForm();
         loadAccounts();
       } else {
@@ -279,7 +313,12 @@ export function CloudAccountsPage() {
               <label className="block text-xs text-gray-400 mb-1">Provider</label>
               <select
                 value={formProvider}
-                onChange={e => setFormProvider(e.target.value)}
+                onChange={e => {
+                  const p = e.target.value;
+                  setFormProvider(p);
+                  setFormName(`My ${PROVIDER_LABELS[p] || p} Account`);
+                  setCredentials(emptyCredentials());
+                }}
                 disabled={isEditing}
                 className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500 disabled:opacity-50"
               >
@@ -293,7 +332,7 @@ export function CloudAccountsPage() {
               <input
                 value={formName}
                 onChange={e => setFormName(e.target.value)}
-                placeholder="My Azure Account"
+                placeholder={`My ${PROVIDER_LABELS[formProvider] || formProvider} Account`}
                 className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 autoFocus
               />
@@ -312,15 +351,41 @@ export function CloudAccountsPage() {
             </div>
           )}
 
-          {/* Provider-specific credential fields (only for new accounts) */}
-          {!isEditing && formProvider === 'azure' && (
+          {/* Provider-specific credential fields */}
+          {isEditing && (
+            <p className="text-xs text-gray-500 mb-2">Leave credential fields empty to keep existing values.</p>
+          )}
+          {formProvider === 'azure' && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">Subscription ID</label>
+                <input
+                  type="text"
+                  value={credentials.azure.subscription_id}
+                  onChange={e => setCredentials(prev => ({ ...prev, azure: { ...prev.azure, subscription_id: e.target.value } }))}
+                  placeholder={isEditing ? 'leave empty to keep existing' : 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'}
+                  className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                />
+                <p className="text-[10px] text-gray-600 mt-0.5">Subscriptions page → your subscription → Overview → Subscription ID</p>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">Resource Group</label>
+                <input
+                  type="text"
+                  value={credentials.azure.resource_group}
+                  onChange={e => setCredentials(prev => ({ ...prev, azure: { ...prev.azure, resource_group: e.target.value } }))}
+                  placeholder={isEditing ? 'leave empty to keep existing' : 'networker-testers'}
+                  className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                />
+                <p className="text-[10px] text-gray-600 mt-0.5">Resource group where tester VMs will be created. Must exist beforehand.</p>
+              </div>
               <div>
                 <label className="block text-xs text-gray-400 mb-1">Tenant ID</label>
                 <input
                   type="text"
                   value={credentials.azure.tenant_id}
                   onChange={e => setCredentials(prev => ({ ...prev, azure: { ...prev.azure, tenant_id: e.target.value } }))}
+                  placeholder={isEditing ? 'leave empty to keep existing' : undefined}
                   className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 />
                 <p className="text-[10px] text-gray-600 mt-0.5">{CLOUD_SETUP_GUIDES.azure.fieldHelp.tenant_id}</p>
@@ -331,6 +396,7 @@ export function CloudAccountsPage() {
                   type="text"
                   value={credentials.azure.client_id}
                   onChange={e => setCredentials(prev => ({ ...prev, azure: { ...prev.azure, client_id: e.target.value } }))}
+                  placeholder={isEditing ? 'leave empty to keep existing' : undefined}
                   className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 />
                 <p className="text-[10px] text-gray-600 mt-0.5">{CLOUD_SETUP_GUIDES.azure.fieldHelp.client_id}</p>
@@ -341,54 +407,70 @@ export function CloudAccountsPage() {
                   type="password"
                   value={credentials.azure.client_secret}
                   onChange={e => setCredentials(prev => ({ ...prev, azure: { ...prev.azure, client_secret: e.target.value } }))}
+                  placeholder={isEditing ? 'leave empty to keep existing' : undefined}
                   className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 />
                 <p className="text-[10px] text-gray-600 mt-0.5">{CLOUD_SETUP_GUIDES.azure.fieldHelp.client_secret}</p>
               </div>
             </div>
           )}
-          {!isEditing && formProvider === 'aws' && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
-              <div>
-                <label className="block text-xs text-gray-400 mb-1">Access Key ID</label>
-                <input
-                  type="text"
-                  value={credentials.aws.access_key_id}
-                  onChange={e => setCredentials(prev => ({ ...prev, aws: { ...prev.aws, access_key_id: e.target.value } }))}
-                  className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
-                />
-                <p className="text-[10px] text-gray-600 mt-0.5">{CLOUD_SETUP_GUIDES.aws.fieldHelp.access_key_id}</p>
+          {formProvider === 'aws' && (
+            <div className="space-y-3 mb-3">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">Access Key ID</label>
+                  <input
+                    type="text"
+                    value={credentials.aws.access_key_id}
+                    onChange={e => setCredentials(prev => ({ ...prev, aws: { ...prev.aws, access_key_id: e.target.value } }))}
+                    placeholder={isEditing ? 'leave empty to keep existing' : 'AKIA...'}
+                    className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                  />
+                  <p className="text-[10px] text-gray-600 mt-0.5">{CLOUD_SETUP_GUIDES.aws.fieldHelp.access_key_id}</p>
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">Secret Access Key</label>
+                  <input
+                    type="password"
+                    value={credentials.aws.secret_access_key}
+                    onChange={e => setCredentials(prev => ({ ...prev, aws: { ...prev.aws, secret_access_key: e.target.value } }))}
+                    placeholder={isEditing ? 'leave empty to keep existing' : undefined}
+                    className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                  />
+                  <p className="text-[10px] text-gray-600 mt-0.5">{CLOUD_SETUP_GUIDES.aws.fieldHelp.secret_access_key}</p>
+                </div>
               </div>
               <div>
-                <label className="block text-xs text-gray-400 mb-1">Secret Access Key</label>
+                <label className="block text-xs text-gray-400 mb-1">
+                  Session Token <span className="text-gray-600">(optional — only for temporary/SSO credentials)</span>
+                </label>
                 <input
                   type="password"
-                  value={credentials.aws.secret_access_key}
-                  onChange={e => setCredentials(prev => ({ ...prev, aws: { ...prev.aws, secret_access_key: e.target.value } }))}
+                  value={credentials.aws.session_token}
+                  onChange={e => setCredentials(prev => ({ ...prev, aws: { ...prev.aws, session_token: e.target.value } }))}
+                  placeholder={isEditing ? 'leave empty to keep existing' : undefined}
                   className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 />
-                <p className="text-[10px] text-gray-600 mt-0.5">{CLOUD_SETUP_GUIDES.aws.fieldHelp.secret_access_key}</p>
+                <p className="text-[10px] text-gray-600 mt-0.5">
+                  Required if using <span className="text-gray-400">aws sso login</span> or <span className="text-gray-400">aws sts assume-role</span>.
+                  Not needed for permanent IAM user keys. Get all three values with: <span className="text-gray-400 font-mono">aws configure export-credentials --format env</span>
+                </p>
               </div>
             </div>
           )}
-          {!isEditing && formProvider === 'gcp' && (
+          {formProvider === 'gcp' && (
             <div className="mb-3">
               <label className="block text-xs text-gray-400 mb-1">Service Account JSON Key</label>
               <textarea
                 value={credentials.gcp.json_key}
                 onChange={e => setCredentials(prev => ({ ...prev, gcp: { ...prev.gcp, json_key: e.target.value } }))}
                 rows={4}
+                placeholder={isEditing ? 'leave empty to keep existing' : undefined}
                 className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500 font-mono"
                 style={{ WebkitTextSecurity: 'disc' } as React.CSSProperties}
               />
               <p className="text-[10px] text-gray-600 mt-0.5">{CLOUD_SETUP_GUIDES.gcp.fieldHelp.json_key}</p>
             </div>
-          )}
-
-          {isEditing && (
-            <p className="text-xs text-gray-600 mb-3">
-              To change credentials, delete this account and create a new one.
-            </p>
           )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
