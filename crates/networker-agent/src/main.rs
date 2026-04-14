@@ -1,3 +1,4 @@
+mod commands;
 mod config;
 mod executor;
 mod heartbeat;

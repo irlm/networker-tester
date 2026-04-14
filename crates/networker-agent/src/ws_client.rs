@@ -10,7 +10,7 @@ use tracing::Instrument;
 use uuid::Uuid;
 
 use crate::config::AgentConfig;
-use networker_common::messages::ControlMessage;
+use networker_common::messages::{AgentCommandLog, AgentMessage, ControlMessage};
 use networker_common::protocol;
 
 /// Maximum number of probe jobs that can run concurrently.
@@ -92,6 +92,29 @@ pub async fn run(cfg: &AgentConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Build an `mpsc::Sender<AgentCommandLog>` whose output is forwarded —
+/// encoded as `AgentMessage::CommandLog` JSON — onto the outbound WebSocket
+/// channel. A dedicated forwarder task is spawned per command so that verbs
+/// can stream logs without knowing about the wire format.
+fn build_log_tx(out: mpsc::Sender<String>) -> mpsc::Sender<AgentCommandLog> {
+    let (tx, mut rx) = mpsc::channel::<AgentCommandLog>(64);
+    tokio::spawn(async move {
+        while let Some(log) = rx.recv().await {
+            match protocol::encode(&AgentMessage::CommandLog(log)) {
+                Ok(text) => {
+                    if out.send(text).await.is_err() {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to encode CommandLog: {e}");
+                }
+            }
+        }
+    });
+    tx
+}
+
 async fn handle_control_message(
     msg: ControlMessage,
     tx: &mpsc::Sender<String>,
@@ -135,17 +158,42 @@ async fn handle_control_message(
             }
         }
         ControlMessage::Command(cmd) => {
-            // Command execution lands in a later task of the orchestration plan.
-            tracing::debug!(
+            tracing::info!(
                 command_id = %cmd.command_id,
                 verb = %cmd.verb,
-                "Ignoring Command message (handler not yet implemented)"
+                "Received command"
             );
+            // Spawn an isolated task per command. Health is fast; concurrency
+            // caps can be added when longer-running verbs land.
+            let out_tx = tx.clone();
+            let log_tx = build_log_tx(out_tx.clone());
+            let command_id = cmd.command_id;
+            tokio::spawn(async move {
+                let result = crate::commands::run_command(cmd, log_tx).await;
+                match protocol::encode(&AgentMessage::CommandResult(result)) {
+                    Ok(text) => {
+                        if out_tx.send(text).await.is_err() {
+                            tracing::warn!(
+                                command_id = %command_id,
+                                "Failed to send command result: outbound channel closed"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            command_id = %command_id,
+                            "Failed to encode CommandResult: {e}"
+                        );
+                    }
+                }
+            });
         }
         ControlMessage::Cancel(cancel) => {
+            // TODO: once long-lived command verbs exist, track their
+            // JoinHandles (mirroring `running_jobs`) and abort on cancel.
             tracing::debug!(
                 command_id = %cancel.command_id,
-                "Ignoring command Cancel message (handler not yet implemented)"
+                "Received Cancel for command; no in-flight commands are cancellable yet"
             );
         }
     }
