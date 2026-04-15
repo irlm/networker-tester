@@ -716,6 +716,7 @@ export function AppBenchmarkWizardPage() {
           projectId={projectId}
           cloud={testbeds[0].cloud}
           region={testbeds[0].region}
+          testerOs={testbeds[0].testerOs as 'server' | 'desktop-linux' | 'desktop-windows'}
           value={testerId}
           onChange={setTesterId}
         />
