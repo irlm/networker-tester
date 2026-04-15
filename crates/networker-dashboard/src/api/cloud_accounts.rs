@@ -716,7 +716,215 @@ pub fn project_router(state: Arc<AppState>) -> Router {
             get(get_account).put(update_account).delete(delete_account),
         )
         .route("/cloud-accounts/{aid}/validate", post(validate_account))
+        .route(
+            "/cloud-accounts/{aid}/clean-orphans",
+            post(clean_orphans_account),
+        )
         .with_state(state)
+}
+
+// ── Clean orphans ─────────────────────────────────────────────────────────
+
+/// `POST /api/projects/{pid}/cloud-accounts/{aid}/clean-orphans`
+///
+/// Destructive: lists cloud resources in this account's scope and deletes
+/// any that aren't referenced by our database. Admin role required.
+async fn clean_orphans_account(
+    State(state): State<Arc<AppState>>,
+    Path((_project_id, account_id)): Path<(String, Uuid)>,
+    req: axum::extract::Request,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
+    let user = req.extensions().get::<AuthUser>().unwrap().clone();
+    crate::auth::require_project_role(&ctx, ProjectRole::Admin).map_err(|s| {
+        (
+            s,
+            "Admin role required for destructive orphan cleanup".to_string(),
+        )
+    })?;
+
+    let key = state.credential_key.as_ref().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DASHBOARD_CREDENTIAL_KEY required".to_string(),
+        )
+    })?;
+
+    let client = state.db.get().await.map_err(|e| {
+        tracing::error!(error = %e, "DB pool error in clean_orphans_account");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Database error".to_string(),
+        )
+    })?;
+
+    let acct = crate::db::cloud_accounts::get_account(&client, &account_id, &ctx.project_id)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to load cloud account for clean-orphans");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Database error".to_string(),
+            )
+        })?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Account not found".to_string()))?;
+
+    // Decrypt credentials.
+    let nonce: [u8; 12] = acct.credentials_nonce.as_slice().try_into().map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Invalid stored nonce".to_string(),
+        )
+    })?;
+    let plaintext = crate::crypto::decrypt_with_fallback(
+        &acct.credentials_enc,
+        &nonce,
+        key,
+        state.credential_key_old.as_ref(),
+    )
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to decrypt credentials: {e}"),
+        )
+    })?;
+    let creds: serde_json::Value = serde_json::from_slice(&plaintext).map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Corrupted credentials".to_string(),
+        )
+    })?;
+
+    // Build provider.
+    let provider_cfg = match acct.provider.as_str() {
+        "azure" => {
+            let rg = creds
+                .get("resource_group")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .unwrap_or("networker-testers");
+            serde_json::json!({
+                "subscription_id": creds.get("subscription_id").and_then(|v| v.as_str()).unwrap_or(""),
+                "resource_group": rg,
+                "tenant_id": creds.get("tenant_id").and_then(|v| v.as_str()).unwrap_or(""),
+                "client_id": creds.get("client_id").and_then(|v| v.as_str()).unwrap_or(""),
+                "client_secret": creds.get("client_secret").and_then(|v| v.as_str()).unwrap_or(""),
+                "identity_type": "service_principal",
+            })
+        }
+        _ => creds.clone(),
+    };
+    let provider = networker_dashboard::services::cloud_provider::CloudProvider::from_connection(
+        &acct.provider,
+        &provider_cfg,
+    )
+    .map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Provider config invalid: {e}"),
+        )
+    })?;
+
+    // Collect known resource IDs from project_tester + benchmark_config.config_json.
+    let mut known: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if let Ok(rows) = client
+        .query(
+            "SELECT vm_resource_id FROM project_tester \
+             WHERE project_id = $1 AND vm_resource_id IS NOT NULL",
+            &[&ctx.project_id],
+        )
+        .await
+    {
+        for r in rows {
+            if let Ok(Some(s)) = r.try_get::<_, Option<String>>("vm_resource_id") {
+                if !s.is_empty() {
+                    known.insert(s);
+                }
+            }
+        }
+    }
+    // benchmark_config.config_json may hold { "testbeds": [{"vm_resource_id": "..."}], "tester_vm_resource_id": "..." }
+    // We defensively scan the whole JSON blob for any string field ending in
+    // "resource_id" and add its value to the known set.
+    if let Ok(rows) = client
+        .query(
+            "SELECT config_json FROM benchmark_config WHERE project_id::text = $1",
+            &[&ctx.project_id],
+        )
+        .await
+    {
+        for r in rows {
+            let v: serde_json::Value = r.get("config_json");
+            collect_resource_ids(&v, &mut known);
+        }
+    }
+
+    tracing::info!(
+        project_id = %ctx.project_id,
+        account_id = %account_id,
+        provider = %acct.provider,
+        known_count = known.len(),
+        requested_by = %user.email,
+        "Starting orphan reaper"
+    );
+
+    let orphans =
+        match networker_dashboard::services::cloud_orphan_reaper::list_orphans(&provider, &known)
+            .await
+        {
+            Ok(list) => list,
+            Err(e) => {
+                tracing::warn!(error = %e, "list_orphans failed");
+                return Err((
+                    StatusCode::BAD_GATEWAY,
+                    format!("Failed to list cloud resources: {e}"),
+                ));
+            }
+        };
+    let report =
+        networker_dashboard::services::cloud_orphan_reaper::delete_orphans(&provider, &orphans)
+            .await;
+
+    tracing::info!(
+        account_id = %account_id,
+        requested_by = %user.email,
+        orphans_found = orphans.len(),
+        deleted = report.deleted.len(),
+        failed = report.failed.len(),
+        "Orphan reaper finished"
+    );
+
+    Ok(Json(serde_json::json!({
+        "orphans_found": orphans.len(),
+        "deleted": report.deleted,
+        "failed": report.failed,
+    })))
+}
+
+/// Walk a JSON value and collect any string field whose key ends with
+/// `resource_id` into `out`. Defensive — benchmark configs are free-form and
+/// we don't want to miss anything.
+fn collect_resource_ids(v: &serde_json::Value, out: &mut std::collections::HashSet<String>) {
+    match v {
+        serde_json::Value::Object(m) => {
+            for (k, vv) in m {
+                if k.ends_with("resource_id") {
+                    if let Some(s) = vv.as_str() {
+                        if !s.is_empty() {
+                            out.insert(s.to_string());
+                        }
+                    }
+                }
+                collect_resource_ids(vv, out);
+            }
+        }
+        serde_json::Value::Array(a) => {
+            for vv in a {
+                collect_resource_ids(vv, out);
+            }
+        }
+        _ => {}
+    }
 }
 
 #[cfg(test)]
