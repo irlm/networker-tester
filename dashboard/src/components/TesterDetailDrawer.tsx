@@ -557,6 +557,10 @@ export function TesterDetailDrawer({
             setConfirmDelete(false);
             run(async () => {
               await testersApi.deleteTester(projectId, tester.tester_id);
+              // Tell the parent list to refresh before we close — otherwise
+              // the just-deleted row stays visible until the next manual
+              // refresh or navigation.
+              onChanged();
               onClose();
             });
           }}

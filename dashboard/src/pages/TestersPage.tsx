@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { usePolling } from '../hooks/usePolling';
 import { PageHeader } from '../components/common/PageHeader';
 import { CreateTesterModal } from '../components/CreateTesterModal';
 import { TesterDetailDrawer } from '../components/TesterDetailDrawer';
@@ -76,6 +77,14 @@ export function TestersPage() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // Tester state changes server-side (provisioning -> running, running ->
+  // error, idle -> running benchmark) don't push to the Testers list via WS,
+  // so we poll on a 10s cadence to surface fresh power_state / allocation /
+  // installer_version without forcing the user to reload. Quiet enough on
+  // bandwidth (~1 small JSON per 10s) and avoids the "page looks stuck on
+  // provisioning" problem when a tester eventually finishes bootstrapping.
+  usePolling(() => void refresh(), 10000, !!projectId);
 
   const grouped = useMemo(() => groupByRegion(rows), [rows]);
   const testerIds = useMemo(() => rows.map((r) => r.tester_id), [rows]);
