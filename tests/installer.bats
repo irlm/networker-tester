@@ -1370,3 +1370,77 @@ JSON
     [[ "$output" == *"UDP"* ]]
     [[ "$output" == *"8445"* ]]
 }
+
+# ── Regression: AWS Windows deployment not yet supported (fix v0.27.25) ───────
+# Prior to this fix, a multi-endpoint config with an AWS Windows endpoint would
+# silently fall through to the Ubuntu code path (Ubuntu AMI, SSH as "ubuntu",
+# nginx install). Preflight/validation now rejects aws+windows up front.
+
+@test "_deploy_validate_config: rejects AWS Windows endpoint (unsupported)" {
+    local cfg="$TEST_TMPDIR/val-aws-win-endpoint.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{
+    "provider": "aws",
+    "aws": { "os": "windows", "region": "us-east-1", "instance_name": "nwk-ep-win-1" }
+  }]
+}
+JSON
+    _deploy_validate_config "$cfg"
+    [ "$DEPLOY_VALIDATE_ERRORS" -gt 0 ]
+}
+
+@test "_deploy_validate_config: rejects AWS Windows tester (unsupported)" {
+    local cfg="$TEST_TMPDIR/val-aws-win-tester.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": {
+    "provider": "aws",
+    "aws": { "os": "windows", "region": "us-east-1", "instance_name": "nwk-tst-w1" }
+  },
+  "endpoints": [{ "provider": "local" }]
+}
+JSON
+    _deploy_validate_config "$cfg"
+    [ "$DEPLOY_VALIDATE_ERRORS" -gt 0 ]
+}
+
+@test "_deploy_validate_config: still accepts AWS Linux endpoint" {
+    local cfg="$TEST_TMPDIR/val-aws-linux-endpoint.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{
+    "provider": "aws",
+    "aws": { "os": "linux", "region": "us-east-1" }
+  }]
+}
+JSON
+    _deploy_validate_config "$cfg"
+    [ "$DEPLOY_VALIDATE_ERRORS" -eq 0 ]
+}
+
+@test "_deploy_validate_config: multi-endpoint with AWS Windows in mix is rejected" {
+    # This is the exact shape from deploy 646fcbef that silently deployed Ubuntu.
+    local cfg="$TEST_TMPDIR/val-multi-aws-win.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [
+    { "provider": "aws",   "aws":   { "os": "windows", "region": "us-east-1",    "instance_name": "nwk-ep-win-1" } },
+    { "provider": "azure", "azure": { "os": "windows", "region": "eastus",       "vm_name": "nwk-ep-az-win" } },
+    { "provider": "gcp",   "gcp":   { "os": "linux",   "region": "us-central1" } },
+    { "provider": "gcp",   "gcp":   { "os": "windows", "region": "us-central1",  "instance_name": "nwk-ep-gcp-win" } }
+  ]
+}
+JSON
+    _deploy_validate_config "$cfg"
+    [ "$DEPLOY_VALIDATE_ERRORS" -gt 0 ]
+    # Error message should name AWS specifically
+    [[ "$(_deploy_validate_config "$cfg" 2>&1)" == *"AWS Windows"* ]]
+}

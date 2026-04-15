@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.27.25] — 2026-04-15
+
+### Fixed
+- **GCP tester VMs intermittently stuck with `"agent did not come online within 360s"`.** The Linux cloud-init bootstrap template ran `set -euo pipefail` + `curl ... | grep '"tag_name":' | head -1 | cut`. When `head -1` closed its read end before `grep` finished writing, `grep` took `SIGPIPE` (exit 141), `pipefail` propagated that, and the whole bootstrap aborted with an empty `$TAG` — the VM booted, serial console showed nothing useful, and the agent never started. Hit GCP `us-central1` disproportionately because shared egress IPs occasionally get GitHub-API-rate-limited on the unauthenticated `/releases/latest` call, amplifying the race. Replaced `grep | head -1` with `grep -m1` (no pipe-close race), wrapped the GitHub API call in a 5-attempt retry with exponential backoff, dropped top-level `set -e` so a single transient apt/curl hiccup no longer kills the whole bootstrap, added `exec > >(tee /var/log/networker-bootstrap.log | logger ...)` so failures now leave a post-mortem trail on the serial console + journald, and installed an `EXIT` trap that prints the failing line number. Regression-guarded by `linux_bootstrap_avoids_sigpipe_and_retries_github_api` in `services/cloud_init.rs`.
+- **Cloud-init Linux timeout bumped 360s → 600s.** 6 minutes was already tight for slow apt mirrors + Chromium install; the GitHub-API retry loop above could add another 20-30s on rate-limited regions. 10 minutes absorbs both without being generous enough to mask real bugs. Windows stays at 15 minutes (chocolatey + npcap is the bottleneck, not network).
+
+---
+
 ## [0.27.24] — 2026-04-15
 
 ### Fixed

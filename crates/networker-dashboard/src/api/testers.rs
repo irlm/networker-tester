@@ -2072,9 +2072,13 @@ async fn run_create_tester_cloud_init(
 
     // Step 4: poll for the agent reporting online. Windows takes much longer
     // (chocolatey + npcap + wireshark before the agent itself is downloaded);
-    // give it 15 minutes. Linux usually finishes in 60-120s but cap at 6 min
-    // to absorb slow apt mirrors.
-    let timeout_secs: u64 = if is_windows { 900 } else { 360 };
+    // give it 15 minutes. Linux usually finishes in 60-120s but cap at 10 min
+    // to absorb slow apt mirrors, Chromium package install, and GCP shared-
+    // egress GitHub-API rate-limit retries. 6 min was too tight for GCP
+    // us-central1 where shared egress occasionally triggers 5 sequential
+    // rate-limit retries before the release tag resolves (`status_message =
+    // "create failed: agent did not come online within 360s"`).
+    let timeout_secs: u64 = if is_windows { 900 } else { 600 };
     let started_at = std::time::Instant::now();
     let deadline = started_at + std::time::Duration::from_secs(timeout_secs);
     let mut observed_online = false;

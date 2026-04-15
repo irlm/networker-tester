@@ -324,7 +324,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.27.24"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.27.25"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -6258,6 +6258,11 @@ _aws_launch_instance() {
 }
 
 step_aws_deploy_tester() {
+    if [[ "${AWS_TESTER_OS:-linux}" == "windows" ]]; then
+        print_err "AWS Windows tester deployment is not yet supported."
+        print_info "Workaround: use Azure or GCP for Windows, or pick Linux for the AWS tester."
+        exit 1
+    fi
     step_check_aws_prereqs
     _aws_ensure_keypair
     _aws_find_ubuntu_ami
@@ -6278,6 +6283,15 @@ step_aws_deploy_tester() {
 }
 
 step_aws_deploy_endpoint() {
+    # AWS Windows endpoint deployment is not yet implemented — the AMI lookup,
+    # SSH user, nginx setup, and service install are all Linux-specific. Refusing
+    # here prevents silently deploying Ubuntu when the user asked for Windows
+    # (see regression fixed in v0.27.25).
+    if [[ "${AWS_ENDPOINT_OS:-linux}" == "windows" ]]; then
+        print_err "AWS Windows endpoint deployment is not yet supported (endpoint: ${AWS_ENDPOINT_NAME:-unnamed})."
+        print_info "Workaround: use Azure or GCP for Windows endpoints, or pick Linux for AWS."
+        exit 1
+    fi
     # Only check prereqs once
     if [[ "$TESTER_LOCATION" != "aws" || -z "$AWS_TESTER_IP" ]]; then
         step_check_aws_prereqs
@@ -7759,6 +7773,11 @@ _deploy_validate_config() {
         # Windows computer name limit for tester too
         local t_os; t_os="$(jq -r ".tester.${t_provider}.os // empty" "$cfg")"
         if [[ "$t_os" == "windows" ]]; then
+            # AWS Windows tester deployment is not yet implemented.
+            if [[ "$t_provider" == "aws" ]]; then
+                print_err "tester: AWS Windows tester is not yet supported (use Azure or GCP for Windows)"
+                errors=$((errors + 1))
+            fi
             local t_vm=""
             case "$t_provider" in
                 azure) t_vm="$(jq -r '.tester.azure.vm_name // empty' "$cfg")" ;;
@@ -7798,6 +7817,12 @@ _deploy_validate_config() {
                 # Windows computer name limit (15 chars) — applies to Azure, AWS, GCP
                 local ep_os; ep_os="$(jq -r ".endpoints[$i].${ep_prov}.os // empty" "$cfg")"
                 if [[ "$ep_os" == "windows" ]]; then
+                    # AWS Windows endpoint deployment is not yet implemented —
+                    # reject early instead of silently deploying Ubuntu.
+                    if [[ "$ep_prov" == "aws" ]]; then
+                        print_err "endpoints[$i]: AWS Windows endpoints are not yet supported (use Azure or GCP for Windows)"
+                        errors=$((errors + 1))
+                    fi
                     local vm_name=""
                     case "$ep_prov" in
                         azure) vm_name="$(jq -r ".endpoints[$i].azure.vm_name // empty" "$cfg")" ;;
