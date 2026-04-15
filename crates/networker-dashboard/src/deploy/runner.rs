@@ -3,7 +3,6 @@
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
-use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use networker_common::messages::DashboardEvent;
@@ -14,7 +13,7 @@ use networker_common::messages::DashboardEvent;
 pub async fn run_deployment(
     deployment_id: Uuid,
     deploy_json: &serde_json::Value,
-    events_tx: broadcast::Sender<DashboardEvent>,
+    events_tx: networker_dashboard::services::event_bus::EventBus,
     db_pool: Arc<deadpool_postgres::Pool>,
 ) -> anyhow::Result<Vec<String>> {
     let deploy_dir = std::env::temp_dir();
@@ -198,7 +197,7 @@ impl DeployOutput {
     fn process_line(
         &mut self,
         text: &str,
-        events_tx: &broadcast::Sender<DashboardEvent>,
+        events_tx: &networker_dashboard::services::event_bus::EventBus,
         deployment_id: Uuid,
         stream: &str,
     ) {

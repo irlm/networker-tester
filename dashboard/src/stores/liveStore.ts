@@ -2,6 +2,11 @@ import { create } from 'zustand';
 import type { LiveAttempt } from '../api/types';
 
 export interface DashboardEvent {
+  // Monotonic sequence number assigned by the server EventBus. Present on
+  // every live event since v0.27.14; omitted on events synthesised locally
+  // (initial REST-loaded state, optimistic UI updates). The WS hook uses
+  // this to request replay on reconnect (`?since=<seq>`).
+  seq?: number;
   type: string;
   job_id?: string;
   status?: string;
@@ -29,8 +34,10 @@ const MAX_DEPLOY_LINES = 5000;
 const MAX_JOB_LOGS = 2000;
 const MAX_BENCHMARK_LOGS = 5000;
 // Batch rapid attempt_result events to avoid re-rendering on every probe.
-// Attempts are buffered and flushed at most every FLUSH_INTERVAL_MS.
-const FLUSH_INTERVAL_MS = 500;
+// Attempts are buffered and flushed at most every FLUSH_INTERVAL_MS. 100ms
+// feels instant to users (below the 200ms action-response threshold) while
+// still coalescing bursts from testers firing many probes in the same tick.
+const FLUSH_INTERVAL_MS = 100;
 
 interface JobLogLine {
   line: string;

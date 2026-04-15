@@ -14,7 +14,7 @@ pub async fn provision_remote_agent(
     ssh_host: &str,
     ssh_user: &str,
     ssh_port: u16,
-    events_tx: tokio::sync::broadcast::Sender<networker_common::messages::DashboardEvent>,
+    events_tx: networker_dashboard::services::event_bus::EventBus,
 ) {
     tracing::info!(
         name,
