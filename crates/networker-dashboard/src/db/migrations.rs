@@ -1894,6 +1894,25 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
         tracing::info!("V033 migration complete");
     }
 
+    // V034: vm_lifecycle + cost_rate tables for VM usage history.
+    // Design: docs/superpowers/specs/2026-04-15-vm-usage-history-design.md
+    let row = client
+        .query_opt("SELECT version FROM _migrations WHERE version = 34", &[])
+        .await?;
+
+    if row.is_none() {
+        tracing::info!("Applying V034: vm_lifecycle + cost_rate tables...");
+        client.batch_execute(V034_VM_LIFECYCLE).await?;
+        client.batch_execute(V034_COST_RATE_SEED).await?;
+        client
+            .execute(
+                "INSERT INTO _migrations (version) VALUES (34) ON CONFLICT DO NOTHING",
+                &[],
+            )
+            .await?;
+        tracing::info!("V034 migration complete");
+    }
+
     Ok(())
 }
 
@@ -1940,4 +1959,116 @@ CREATE TABLE IF NOT EXISTS agent_command (
 );
 CREATE INDEX IF NOT EXISTS idx_agent_command_agent  ON agent_command(agent_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_agent_command_config ON agent_command(config_id) WHERE config_id IS NOT NULL;
+"#;
+
+/// V034: VM usage history and cost tracking tables.
+///
+/// `vm_lifecycle` is an append-only log of every VM create/start/stop/delete
+/// event. All cloud-connection-dependent columns are snapshotted as strings
+/// so the history survives rename, soft-delete, or even hard-delete of the
+/// source `cloud_connection` row. Design doc:
+/// `docs/superpowers/specs/2026-04-15-vm-usage-history-design.md`.
+///
+/// `cost_rate` is a versioned per-cloud / per-vm-size rate table. Past
+/// events price against the row whose `[effective_from, effective_to)`
+/// window covers the event time, so rates can change going forward without
+/// retroactively rewriting historical cost estimates.
+const V034_VM_LIFECYCLE: &str = r#"
+CREATE TABLE IF NOT EXISTS vm_lifecycle (
+    event_id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id                   VARCHAR(20) NOT NULL REFERENCES project(project_id) ON DELETE CASCADE,
+
+    resource_type                TEXT NOT NULL,
+    resource_id                  UUID NOT NULL,
+    resource_name                TEXT,
+
+    cloud                        TEXT NOT NULL,
+    region                       TEXT,
+    vm_size                      TEXT,
+    vm_name                      TEXT,
+    vm_resource_id               TEXT,
+
+    cloud_connection_id          UUID,
+    cloud_account_name_at_event  TEXT,
+    provider_account_id          TEXT,
+
+    event_type                   TEXT NOT NULL,
+    event_time                   TIMESTAMPTZ NOT NULL,
+    triggered_by                 UUID REFERENCES dash_user(user_id) ON DELETE SET NULL,
+    metadata                     JSONB,
+
+    created_at                   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT vm_lifecycle_event_type_valid CHECK (
+        event_type IN ('created', 'started', 'stopped', 'deleted', 'auto_shutdown', 'error')
+    ),
+    CONSTRAINT vm_lifecycle_resource_type_valid CHECK (
+        resource_type IN ('tester', 'endpoint', 'benchmark')
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_vm_lifecycle_project_time
+    ON vm_lifecycle(project_id, event_time DESC);
+CREATE INDEX IF NOT EXISTS idx_vm_lifecycle_resource
+    ON vm_lifecycle(resource_type, resource_id, event_time DESC);
+CREATE INDEX IF NOT EXISTS idx_vm_lifecycle_account
+    ON vm_lifecycle(provider_account_id, event_time DESC)
+    WHERE provider_account_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS cost_rate (
+    cost_rate_id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    cloud                TEXT NOT NULL,
+    vm_size              TEXT NOT NULL,
+    region               TEXT,
+    rate_per_hour_usd    NUMERIC(12, 6) NOT NULL,
+    effective_from       TIMESTAMPTZ NOT NULL,
+    effective_to         TIMESTAMPTZ,
+    source               TEXT NOT NULL,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT cost_rate_cloud_valid CHECK (cloud IN ('aws', 'azure', 'gcp')),
+    CONSTRAINT cost_rate_rate_non_negative CHECK (rate_per_hour_usd >= 0),
+    CONSTRAINT cost_rate_window_ordered CHECK (effective_to IS NULL OR effective_to > effective_from)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cost_rate_lookup
+    ON cost_rate(cloud, vm_size, region, effective_from DESC);
+"#;
+
+/// V034 seed: static USD-per-hour rates for the VM sizes we actually create
+/// in the cloud providers today. Sourced from each cloud's public pricing
+/// page as of 2026-04-15 (`source = 'static-v1'`). Region is left NULL for
+/// a flat rate; regional overrides can be inserted later with a specific
+/// `region` value and the lookup picks the more specific row first.
+///
+/// Kept deliberately small — just the sizes `cloud_provider.rs` actually
+/// uses. Extend by adding rows with a newer `effective_from`; the old rows
+/// keep pricing historical events.
+const V034_COST_RATE_SEED: &str = r#"
+INSERT INTO cost_rate (cloud, vm_size, region, rate_per_hour_usd, effective_from, source) VALUES
+    -- AWS EC2 on-demand (us-east-1 baseline, flat across regions for v1)
+    ('aws',   't3.nano',           NULL, 0.0052,  '2026-04-15T00:00:00Z', 'static-v1'),
+    ('aws',   't3.micro',          NULL, 0.0104,  '2026-04-15T00:00:00Z', 'static-v1'),
+    ('aws',   't3.small',          NULL, 0.0208,  '2026-04-15T00:00:00Z', 'static-v1'),
+    ('aws',   't3.medium',         NULL, 0.0416,  '2026-04-15T00:00:00Z', 'static-v1'),
+    ('aws',   't3.large',          NULL, 0.0832,  '2026-04-15T00:00:00Z', 'static-v1'),
+    ('aws',   'm5.large',          NULL, 0.0960,  '2026-04-15T00:00:00Z', 'static-v1'),
+    ('aws',   'm5.xlarge',         NULL, 0.1920,  '2026-04-15T00:00:00Z', 'static-v1'),
+
+    -- Azure (eastus baseline, pay-as-you-go; Windows variants carry the
+    -- per-core Windows license surcharge vs. the Linux list rate)
+    ('azure', 'Standard_B2s',      NULL, 0.0416,  '2026-04-15T00:00:00Z', 'static-v1'),
+    ('azure', 'Standard_B2ms',     NULL, 0.0832,  '2026-04-15T00:00:00Z', 'static-v1'),
+    ('azure', 'Standard_D2s_v3',   NULL, 0.0960,  '2026-04-15T00:00:00Z', 'static-v1'),
+    ('azure', 'Standard_D4s_v3',   NULL, 0.1920,  '2026-04-15T00:00:00Z', 'static-v1'),
+    ('azure', 'Standard_D2s_v5',   NULL, 0.0960,  '2026-04-15T00:00:00Z', 'static-v1'),
+
+    -- GCP Compute Engine (us-central1 baseline, sustained-use discount not
+    -- applied; actual billing will reconcile to a lower effective rate)
+    ('gcp',   'e2-micro',          NULL, 0.0094,  '2026-04-15T00:00:00Z', 'static-v1'),
+    ('gcp',   'e2-small',          NULL, 0.0188,  '2026-04-15T00:00:00Z', 'static-v1'),
+    ('gcp',   'e2-medium',         NULL, 0.0335,  '2026-04-15T00:00:00Z', 'static-v1'),
+    ('gcp',   'e2-standard-2',     NULL, 0.0670,  '2026-04-15T00:00:00Z', 'static-v1'),
+    ('gcp',   'n2-standard-2',     NULL, 0.0971,  '2026-04-15T00:00:00Z', 'static-v1')
+ON CONFLICT DO NOTHING;
 "#;
