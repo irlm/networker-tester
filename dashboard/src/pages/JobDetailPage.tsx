@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { useParams, Link } from 'react-router-dom';
 import { api, type Job } from '../api/client';
 import type { LiveAttempt, PacketCaptureSummary } from '../api/types';
@@ -55,6 +56,124 @@ function jobSummary(job: Job | null) {
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 const EMPTY_ATTEMPTS: LiveAttempt[] = [];
 const EMPTY_LOGS: { line: string; level: string }[] = [];
+
+/**
+ * Virtualised "all probes" table. Long runs can exceed the 2000-attempt cap
+ * in liveStore; rendering every `<tr>` eagerly is a 2-3× slowdown on scroll
+ * and push-back on incoming events. `useVirtualizer` keeps DOM node count
+ * bounded (~ window-height / row-height + overscan) so the table stays smooth
+ * regardless of attempt count.
+ *
+ * Implemented as a spacer-row virtualised `<tbody>`: top and bottom spacer
+ * rows absorb the off-screen range, with only the visible window rendered as
+ * real rows. The native `<table>` layout is preserved so column widths still
+ * align with the header.
+ */
+function ProbeTable({ attempts }: { attempts: LiveAttempt[] }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const rowVirtualizer = useVirtualizer({
+    count: attempts.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 28,
+    overscan: 12,
+  });
+
+  const virtualItems = rowVirtualizer.getVirtualItems();
+  const totalSize = rowVirtualizer.getTotalSize();
+  const paddingTop = virtualItems.length > 0 ? virtualItems[0].start : 0;
+  const paddingBottom =
+    virtualItems.length > 0
+      ? totalSize - virtualItems[virtualItems.length - 1].end
+      : 0;
+
+  return (
+    <div className="table-container mb-6">
+      <h3 className="px-4 py-2.5 text-xs text-gray-500 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
+        all probes ({attempts.length})
+      </h3>
+      <div ref={scrollRef} className="max-h-72 overflow-y-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-gray-500 border-b border-gray-800">
+              <th className="px-3 py-2 text-left">#</th>
+              <th className="px-3 py-2 text-left">Protocol</th>
+              <th className="px-3 py-2 text-left">Status</th>
+              <th className="px-3 py-2 text-right">DNS</th>
+              <th className="px-3 py-2 text-right">TCP</th>
+              <th className="px-3 py-2 text-right">TLS</th>
+              <th className="px-3 py-2 text-right">TTFB</th>
+              <th className="px-3 py-2 text-right">Total</th>
+              <th className="px-3 py-2 text-left">Detail</th>
+            </tr>
+          </thead>
+          <tbody>
+            {paddingTop > 0 && (
+              <tr style={{ height: paddingTop }} aria-hidden="true">
+                <td colSpan={9} />
+              </tr>
+            )}
+            {virtualItems.map((vi) => {
+              const a = attempts[vi.index];
+              return (
+                <tr
+                  key={a.attempt_id}
+                  className="border-b border-gray-800/30 hover:bg-gray-800/20"
+                >
+                  <td className="px-3 py-1.5 text-gray-500 font-mono">{a.sequence_num}</td>
+                  <td className="px-3 py-1.5 text-gray-300">{a.protocol}</td>
+                  <td className="px-3 py-1.5">
+                    {a.success ? (
+                      <span className="text-green-400">OK</span>
+                    ) : (
+                      <span className="text-red-400">FAIL</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-1.5 text-gray-500 text-right font-mono">
+                    {formatMs(a.dns?.duration_ms)}
+                  </td>
+                  <td className="px-3 py-1.5 text-gray-500 text-right font-mono">
+                    {formatMs(a.tcp?.connect_duration_ms)}
+                  </td>
+                  <td className="px-3 py-1.5 text-gray-500 text-right font-mono">
+                    {formatMs(a.tls?.handshake_duration_ms)}
+                  </td>
+                  <td className="px-3 py-1.5 text-gray-200 text-right font-mono">
+                    {formatMs(a.http?.ttfb_ms ?? a.browser?.ttfb_ms ?? a.page_load?.ttfb_ms)}
+                  </td>
+                  <td className="px-3 py-1.5 text-gray-100 text-right font-mono font-bold">
+                    {formatMs(
+                      a.http?.total_duration_ms ??
+                        a.browser?.load_ms ??
+                        a.page_load?.total_ms,
+                    )}
+                  </td>
+                  <td className="px-3 py-1.5 text-gray-600 max-w-48 truncate" title={a.error?.message}>
+                    {a.error ? (
+                      <span className="text-red-400">{a.error.message}</span>
+                    ) : a.http?.negotiated_version ? (
+                      a.http.negotiated_version
+                    ) : a.browser?.protocol ? (
+                      `${a.browser.protocol} ${a.browser.resource_count ?? 0}res`
+                    ) : a.tls?.protocol_version ? (
+                      `${a.tls.protocol_version} ${a.tls.cipher_suite?.split('_').slice(-2).join('_') ?? ''}`
+                    ) : a.dns?.resolved_ips ? (
+                      a.dns.resolved_ips.join(', ')
+                    ) : null}
+                  </td>
+                </tr>
+              );
+            })}
+            {paddingBottom > 0 && (
+              <tr style={{ height: paddingBottom }} aria-hidden="true">
+                <td colSpan={9} />
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
 
 export function JobDetailPage() {
   const { projectId, isProjectAdmin } = useProject();
@@ -903,61 +1022,7 @@ export function JobDetailPage() {
 
       {/* All Probes (compact) */}
       {attempts.length > 0 && (
-        <div className="table-container mb-6">
-          <h3 className="px-4 py-2.5 text-xs text-gray-500 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
-            all probes ({attempts.length})
-          </h3>
-          <div className="max-h-72 overflow-y-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="text-gray-500 border-b border-gray-800">
-                  <th className="px-3 py-2 text-left">#</th>
-                  <th className="px-3 py-2 text-left">Protocol</th>
-                  <th className="px-3 py-2 text-left">Status</th>
-                  <th className="px-3 py-2 text-right">DNS</th>
-                  <th className="px-3 py-2 text-right">TCP</th>
-                  <th className="px-3 py-2 text-right">TLS</th>
-                  <th className="px-3 py-2 text-right">TTFB</th>
-                  <th className="px-3 py-2 text-right">Total</th>
-                  <th className="px-3 py-2 text-left">Detail</th>
-                </tr>
-              </thead>
-              <tbody>
-                {attempts.map((a) => (
-                  <tr key={a.attempt_id} className="border-b border-gray-800/30 hover:bg-gray-800/20">
-                    <td className="px-3 py-1.5 text-gray-500 font-mono">{a.sequence_num}</td>
-                    <td className="px-3 py-1.5 text-gray-300">{a.protocol}</td>
-                    <td className="px-3 py-1.5">
-                      {a.success ? <span className="text-green-400">OK</span> : <span className="text-red-400">FAIL</span>}
-                    </td>
-                    <td className="px-3 py-1.5 text-gray-500 text-right font-mono">{formatMs(a.dns?.duration_ms)}</td>
-                    <td className="px-3 py-1.5 text-gray-500 text-right font-mono">{formatMs(a.tcp?.connect_duration_ms)}</td>
-                    <td className="px-3 py-1.5 text-gray-500 text-right font-mono">{formatMs(a.tls?.handshake_duration_ms)}</td>
-                    <td className="px-3 py-1.5 text-gray-200 text-right font-mono">
-                      {formatMs(a.http?.ttfb_ms ?? a.browser?.ttfb_ms ?? a.page_load?.ttfb_ms)}
-                    </td>
-                    <td className="px-3 py-1.5 text-gray-100 text-right font-mono font-bold">
-                      {formatMs(a.http?.total_duration_ms ?? a.browser?.load_ms ?? a.page_load?.total_ms)}
-                    </td>
-                    <td className="px-3 py-1.5 text-gray-600 max-w-48 truncate" title={a.error?.message}>
-                      {a.error ? (
-                        <span className="text-red-400">{a.error.message}</span>
-                      ) : a.http?.negotiated_version ? (
-                        a.http.negotiated_version
-                      ) : a.browser?.protocol ? (
-                        `${a.browser.protocol} ${a.browser.resource_count ?? 0}res`
-                      ) : a.tls?.protocol_version ? (
-                        `${a.tls.protocol_version} ${a.tls.cipher_suite?.split('_').slice(-2).join('_') ?? ''}`
-                      ) : a.dns?.resolved_ips ? (
-                        a.dns.resolved_ips.join(', ')
-                      ) : null}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <ProbeTable attempts={attempts} />
       )}
 
       {/* Errors */}
