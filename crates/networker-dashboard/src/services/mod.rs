@@ -10,3 +10,4 @@ pub mod tester_recovery;
 pub mod tester_scheduler;
 pub mod tester_state;
 pub mod version_refresh;
+pub mod vm_lifecycle_recorder;

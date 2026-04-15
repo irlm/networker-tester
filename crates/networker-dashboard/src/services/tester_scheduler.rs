@@ -47,7 +47,8 @@ async fn sweep(client: &Client) -> anyhow::Result<()> {
             r#"
             SELECT t.tester_id, t.project_id, t.name, t.cloud, t.region,
                    t.auto_shutdown_local_hour, t.shutdown_deferral_count,
-                   t.vm_name, t.vm_resource_id, t.cloud_connection_id
+                   t.vm_name, t.vm_resource_id, t.cloud_connection_id,
+                   t.vm_size
               FROM project_tester t
              WHERE t.auto_shutdown_enabled = TRUE
                AND t.next_shutdown_at < NOW()
@@ -80,6 +81,7 @@ async fn sweep(client: &Client) -> anyhow::Result<()> {
             vm_name: row.get::<_, Option<String>>(7),
             vm_resource_id: row.get::<_, Option<String>>(8),
             cloud_connection_id: row.get::<_, Option<Uuid>>(9),
+            vm_size: row.get::<_, String>(10),
         };
         if let Err(e) = handle_due_tester(client, &due).await {
             tracing::warn!(
@@ -104,6 +106,7 @@ struct DueTester {
     vm_name: Option<String>,
     vm_resource_id: Option<String>,
     cloud_connection_id: Option<Uuid>,
+    vm_size: String,
 }
 
 async fn handle_due_tester(client: &Client, due: &DueTester) -> anyhow::Result<()> {
@@ -162,6 +165,32 @@ async fn handle_due_tester(client: &Client, due: &DueTester) -> anyhow::Result<(
             // tester is left permanently in 'stopping'.
             match sync_stopped_with_retry(client, &due.tester_id, &next).await {
                 Ok(()) => {
+                    // Lifecycle event: scheduler-driven stop. `auto_shutdown`
+                    // keeps this distinct from a user-initiated `stopped` so
+                    // the UI can show shutdown reasons separately.
+                    crate::services::vm_lifecycle_recorder::insert_tester_event(
+                        client,
+                        crate::services::vm_lifecycle_recorder::TesterEventInput {
+                            project_id: &due.project_id,
+                            tester_id: due.tester_id,
+                            tester_name: &due.name,
+                            cloud: &due.cloud,
+                            region: &due.region,
+                            vm_size: &due.vm_size,
+                            vm_name: due.vm_name.as_deref(),
+                            vm_resource_id: due.vm_resource_id.as_deref(),
+                            cloud_connection_id: due.cloud_connection_id,
+                            event_type: "auto_shutdown",
+                            event_time: Utc::now(),
+                            triggered_by: None,
+                            metadata: Some(serde_json::json!({
+                                "local_hour": due.local_hour,
+                                "deferral_count": due.deferral_count,
+                            })),
+                        },
+                    )
+                    .await;
+
                     tracing::info!(
                         target: "tester_auto_shutdown_completed",
                         tester_id = %due.tester_id,
