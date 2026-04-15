@@ -10,6 +10,10 @@ export interface Agent {
   last_heartbeat: string | null;
   registered_at: string;
   tags: Record<string, string> | null;
+  /** FK to `project_tester`. NULL means the tester was deleted and the
+   * agent row is orphaned — dashboard UI should hide these unless they
+   * happen to be online right now. */
+  tester_id: string | null;
 }
 
 export interface Job {

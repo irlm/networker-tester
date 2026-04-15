@@ -16,13 +16,18 @@ pub struct AgentRow {
     pub last_heartbeat: Option<DateTime<Utc>>,
     pub registered_at: DateTime<Utc>,
     pub tags: Option<serde_json::Value>,
+    /// FK to `project_tester`. NULL when the agent's tester row was
+    /// deleted (V032 set NULL on delete) — lets the dashboard distinguish
+    /// currently-attached agents from orphaned rows so the UI can hide
+    /// stale entries.
+    pub tester_id: Option<Uuid>,
 }
 
 pub async fn list(client: &Client, project_id: &str) -> anyhow::Result<Vec<AgentRow>> {
     let rows = client
         .query(
             "SELECT agent_id, name, region, provider, status, version, os, arch,
-                    last_heartbeat, registered_at, tags
+                    last_heartbeat, registered_at, tags, tester_id
              FROM agent WHERE project_id = $1 ORDER BY name",
             &[&project_id],
         )
@@ -42,6 +47,7 @@ pub async fn list(client: &Client, project_id: &str) -> anyhow::Result<Vec<Agent
             last_heartbeat: r.get("last_heartbeat"),
             registered_at: r.get("registered_at"),
             tags: r.get("tags"),
+            tester_id: r.get("tester_id"),
         })
         .collect())
 }
@@ -50,7 +56,7 @@ pub async fn get_by_api_key(client: &Client, api_key: &str) -> anyhow::Result<Op
     let row = client
         .query_opt(
             "SELECT agent_id, name, region, provider, status, version, os, arch,
-                    last_heartbeat, registered_at, tags
+                    last_heartbeat, registered_at, tags, tester_id
              FROM agent WHERE api_key = $1",
             &[&api_key],
         )
@@ -68,6 +74,7 @@ pub async fn get_by_api_key(client: &Client, api_key: &str) -> anyhow::Result<Op
         last_heartbeat: r.get("last_heartbeat"),
         registered_at: r.get("registered_at"),
         tags: r.get("tags"),
+        tester_id: r.get("tester_id"),
     }))
 }
 
@@ -76,7 +83,7 @@ pub async fn get_by_id(client: &Client, agent_id: &Uuid) -> anyhow::Result<Optio
     let row = client
         .query_opt(
             "SELECT agent_id, name, region, provider, status, version, os, arch,
-                    last_heartbeat, registered_at, tags
+                    last_heartbeat, registered_at, tags, tester_id
              FROM agent WHERE agent_id = $1",
             &[agent_id],
         )
@@ -94,6 +101,7 @@ pub async fn get_by_id(client: &Client, agent_id: &Uuid) -> anyhow::Result<Optio
         last_heartbeat: r.get("last_heartbeat"),
         registered_at: r.get("registered_at"),
         tags: r.get("tags"),
+        tester_id: r.get("tester_id"),
     }))
 }
 

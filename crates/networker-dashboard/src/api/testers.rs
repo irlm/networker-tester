@@ -1929,7 +1929,16 @@ async fn run_create_tester_cloud_init(
         "Resolved OS image + bootstrap script (cloud-init path)"
     );
 
-    tester_state::set_status_message(&client, &tester_id, "creating VM (cloud-init)").await?;
+    // Progress message is read by the polling TestersPage — we update it at
+    // each phase boundary so users watching a long Windows create see WHY
+    // the status bar sits for minutes at a time instead of thinking the
+    // dashboard is hung.
+    tester_state::set_status_message(
+        &client,
+        &tester_id,
+        "cleaning stale cloud resources (orphan reaper)",
+    )
+    .await?;
 
     let vm_config = cloud_provider::VmConfig {
         name: vm_name_preview.clone(),
@@ -1974,6 +1983,17 @@ async fn run_create_tester_cloud_init(
         }
     }
 
+    // `provider.create_vm` is the heavy call: allocates the VM, waits for
+    // Azure/AWS/GCP to return the resource id + public IP, and for Windows
+    // also synchronously installs CustomScriptExtension (5-10 min). Update
+    // status BEFORE it fires so users see the phase transition immediately.
+    let create_phase_msg = if is_windows {
+        "creating VM + running Windows bootstrap via CustomScriptExtension (5-10 min)"
+    } else {
+        "creating VM + running cloud-init bootstrap (~60-120s)"
+    };
+    tester_state::set_status_message(&client, &tester_id, create_phase_msg).await?;
+
     let created = provider.create_vm(&vm_config).await?;
 
     // Step 3: persist identity fields.
@@ -2016,8 +2036,12 @@ async fn run_create_tester_cloud_init(
             .map_err(|e| anyhow::anyhow!("DB update (with IP): {e}"))?;
     }
 
-    tester_state::set_status_message(&client, &tester_id, "waiting for agent to come online")
-        .await?;
+    let wait_hint = if is_windows {
+        "waiting for agent to come online (Windows: 2-5 min after VM boot)"
+    } else {
+        "waiting for agent to come online (Linux: usually < 30s)"
+    };
+    tester_state::set_status_message(&client, &tester_id, wait_hint).await?;
 
     // Lifecycle event: VM create + boot happened successfully at this point
     // (agent-online polling below is a separate liveness phase). Emit BOTH
@@ -2051,8 +2075,14 @@ async fn run_create_tester_cloud_init(
     // give it 15 minutes. Linux usually finishes in 60-120s but cap at 6 min
     // to absorb slow apt mirrors.
     let timeout_secs: u64 = if is_windows { 900 } else { 360 };
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    let started_at = std::time::Instant::now();
+    let deadline = started_at + std::time::Duration::from_secs(timeout_secs);
     let mut observed_online = false;
+    // Refresh the status_message with elapsed time every N poll ticks so
+    // users watching the Testers page can tell the dashboard is still
+    // actively polling, not stalled.
+    let status_update_every = 6; // 6 ticks × 5s = 30s
+    let mut tick = 0u32;
     loop {
         let poll_client = state.db.get().await?;
         let row_opt = poll_client
@@ -2073,6 +2103,20 @@ async fn run_create_tester_cloud_init(
         }
         if std::time::Instant::now() >= deadline {
             break;
+        }
+        // Periodic status refresh so the UI surfaces progress. Kept cheap
+        // (one UPDATE every 30s on average); surfaces as the tester row's
+        // status_message field which the Testers page polls every 10s.
+        tick += 1;
+        if tick.is_multiple_of(status_update_every) {
+            let elapsed = started_at.elapsed().as_secs();
+            let remaining = timeout_secs.saturating_sub(elapsed);
+            let _ = tester_state::set_status_message(
+                &poll_client,
+                &tester_id,
+                &format!("waiting for agent ({elapsed}s elapsed, up to {remaining}s remaining)"),
+            )
+            .await;
         }
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
     }

@@ -28,8 +28,28 @@ async fn check_versions(
     // Get local tester version
     let tester_version = get_tester_version().await;
 
-    // Get latest release from GitHub
-    let latest_release = get_latest_release().await;
+    // Read the latest_release from AppState's shared cache, populated by
+    // services::version_refresh::refresh_latest_version_loop on a 5-minute
+    // cadence. Previously this path made a live HTTPS call to
+    // api.github.com per request (up to 5s timeout, frequent 2-3s
+    // responses), which is what made /version hang for users.
+    //
+    // The cache is initialised at startup with the dashboard's own
+    // CARGO_PKG_VERSION as a conservative fallback before the first refresh
+    // completes, so a brand-new process responds fast even during the
+    // first 5 minutes.
+    let latest_release = {
+        let guard = state.latest_version_cache.read().await;
+        let v = guard.clone();
+        // Treat the bootstrap-fallback value (equal to our own version) as
+        // "unknown" so the UI doesn't show a spurious "no update" message
+        // before the refresh loop has populated the cache.
+        if v.is_empty() || v == dashboard_version {
+            None
+        } else {
+            Some(v)
+        }
+    };
 
     // Check if update is available
     let update_available = match (&tester_version, &latest_release) {
@@ -106,6 +126,7 @@ async fn get_tester_version() -> Option<String> {
     }
 }
 
+#[allow(dead_code)]
 async fn get_latest_release() -> Option<String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
@@ -124,10 +145,15 @@ async fn get_latest_release() -> Option<String> {
 }
 
 async fn check_endpoint_version(host: &str) -> (bool, Option<String>) {
+    // Tight budget for /version — a dead endpoint should NOT drag the
+    // response past 1.5s. If an endpoint is truly slow-but-alive, users can
+    // still see it on the Infra page which uses its own longer-timeout
+    // health probe. The goal here is a fast summary status, not authoritative
+    // latency measurement.
     let client = reqwest::Client::builder()
         .danger_accept_invalid_certs(true)
-        .connect_timeout(std::time::Duration::from_secs(2))
-        .timeout(std::time::Duration::from_secs(3))
+        .connect_timeout(std::time::Duration::from_millis(800))
+        .timeout(std::time::Duration::from_millis(1500))
         .build()
         .unwrap_or_default();
 

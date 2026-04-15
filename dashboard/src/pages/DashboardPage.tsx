@@ -219,28 +219,70 @@ export function DashboardPage() {
                   <Link to={`/projects/${projectId}/tests`} className="text-xs text-cyan-400 mt-1 inline-block">Add a tester</Link>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                  {agents.map(a => (
-                    <div
-                      key={a.agent_id}
-                      className={`border border-gray-800 rounded p-3 flex items-center gap-3 ${
-                        a.status !== 'online' ? 'opacity-50' : ''
-                      }`}
-                    >
-                      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                        a.status === 'online' ? 'bg-green-400' : 'bg-gray-600'
-                      }`} />
-                      <div className="min-w-0 flex-1">
-                        <div className="text-sm text-gray-200 truncate">{a.name}</div>
-                        <div className="text-xs text-gray-600">
-                          {a.provider && `${a.provider} `}
-                          {a.region && a.region}
-                        </div>
+                // Dashboard tester card ordering:
+                //   1. online first (what users actually care about)
+                //   2. then currently-attached-but-offline (still a live row
+                //      in project_tester — could come back)
+                //   3. orphan agent rows (tester_id NULL, left over from
+                //      deletes) filtered out entirely — they add clutter
+                //      without actionable info. VM History still surfaces
+                //      the deletion event for anyone who wants the audit.
+                //   4. Capped at 8 cards so the dashboard doesn't become a
+                //      long scrolling list once a project has many testers.
+                (() => {
+                  // Agents whose `tester_id` is NULL are orphaned (V032
+                  // sets agent.tester_id NULL when the tester row is
+                  // deleted, preserving the agent for audit). Hide them
+                  // unless they happen to be online right now — a
+                  // still-heartbeating orphan is worth surfacing so the
+                  // user can delete it, but a stopped orphan is pure noise.
+                  const sorted = [...agents]
+                    .filter((a) => a.status === 'online' || a.tester_id != null)
+                    .sort((a, b) => {
+                      if (a.status === 'online' && b.status !== 'online') return -1;
+                      if (a.status !== 'online' && b.status === 'online') return 1;
+                      return a.name.localeCompare(b.name);
+                    });
+                  const MAX_CARDS = 8;
+                  const shown = sorted.slice(0, MAX_CARDS);
+                  const hidden = sorted.length - shown.length;
+                  return (
+                    <>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        {shown.map((a) => (
+                          <div
+                            key={a.agent_id}
+                            className={`border border-gray-800 rounded p-3 flex items-center gap-3 ${
+                              a.status !== 'online' ? 'opacity-50' : ''
+                            }`}
+                          >
+                            <span
+                              className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                                a.status === 'online' ? 'bg-green-400' : 'bg-gray-600'
+                              }`}
+                            />
+                            <div className="min-w-0 flex-1">
+                              <div className="text-sm text-gray-200 truncate">{a.name}</div>
+                              <div className="text-xs text-gray-600">
+                                {a.provider && `${a.provider} `}
+                                {a.region && a.region}
+                              </div>
+                            </div>
+                            <StatusBadge status={a.status} />
+                          </div>
+                        ))}
                       </div>
-                      <StatusBadge status={a.status} />
-                    </div>
-                  ))}
-                </div>
+                      {hidden > 0 && (
+                        <Link
+                          to={`/projects/${projectId}/testers`}
+                          className="block text-xs text-gray-500 hover:text-cyan-400 mt-2 text-center"
+                        >
+                          + {hidden} more — view all testers →
+                        </Link>
+                      )}
+                    </>
+                  );
+                })()
               )}
             </div>
 
