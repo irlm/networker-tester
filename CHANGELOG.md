@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.27.13] — 2026-04-15
+
+### Fixed
+- **Azure Windows testers never came online.** Three independent bugs compounded to prevent any Windows tester from bootstrapping; all three are fixed:
+  1. **`--custom-data` is not executed on Azure Windows VMs.** Linux cloud-init consumes custom-data automatically, but on Windows Azure only drops the payload at `C:\AzureData\CustomData.bin` — nothing runs it. `AzureProvider::create_vm` now installs `CustomScriptExtension` (Microsoft.Compute/1.10) after the VM is created when the image is Windows and a bootstrap script was requested. The extension runs the payload as `LocalSystem` and tees output to `C:\AzureData\bootstrap.log` for post-mortem debugging. Linux path is unchanged.
+  2. **`choco install npcap` started returning 404.** Npcap was removed from the Chocolatey community repository (licensing). The bootstrap's `$ErrorActionPreference='Stop'` meant this failure aborted the whole script before the agent could install. The npcap install is now wrapped in `try/catch` with a `Write-Warning` — packet capture degrades but the agent still comes online. Same soft-fail pattern already used for Chrome.
+  3. **Windows bootstrap downloaded the wrong archive format.** CI publishes Windows release artefacts as `.zip` (e.g. `networker-agent-x86_64-pc-windows-msvc.zip`), but the bootstrap expected `.tar.gz` + `tar -xzf`, so every download 404'd. Switched the Windows path to `.zip` + `Expand-Archive` (native on Windows, no tar shim). Linux path still uses `.tar.gz`. Test updated to assert the literal `.zip` asset names and `Expand-Archive` usage, and to reject any `.tar.gz` reference in the Windows template.
+
+---
+
 ## [0.27.12] — 2026-04-14
 
 ### Fixed
