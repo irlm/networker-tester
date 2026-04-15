@@ -4,69 +4,13 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Job configuration (subset of ResolvedConfig relevant for remote execution)
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Test job configuration dispatched to an agent.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct JobConfig {
-    pub target: String,
-    pub modes: Vec<String>,
-    #[serde(default)]
-    pub project_id: Option<String>,
-    #[serde(default)]
-    pub tls_profile_url: Option<String>,
-    #[serde(default)]
-    pub tls_profile_ip: Option<String>,
-    #[serde(default)]
-    pub tls_profile_sni: Option<String>,
-    #[serde(default)]
-    pub tls_profile_target_kind: Option<String>,
-    #[serde(default = "default_runs")]
-    pub runs: u32,
-    #[serde(default = "default_concurrency")]
-    pub concurrency: usize,
-    #[serde(default = "default_timeout")]
-    pub timeout_secs: u64,
-    #[serde(default)]
-    pub payload_sizes: Vec<String>,
-    #[serde(default)]
-    pub insecure: bool,
-    #[serde(default)]
-    pub dns_enabled: bool,
-    #[serde(default)]
-    pub ipv4_only: bool,
-    #[serde(default)]
-    pub ipv6_only: bool,
-    #[serde(default)]
-    pub connection_reuse: bool,
-    #[serde(default)]
-    pub retries: u32,
-    #[serde(default)]
-    pub page_preset: Option<String>,
-    #[serde(default)]
-    pub page_assets: Option<u32>,
-    #[serde(default)]
-    pub page_asset_size: Option<String>,
-    #[serde(default)]
-    pub udp_port: Option<u16>,
-    #[serde(default)]
-    pub udp_throughput_port: Option<u16>,
-    /// Packet capture mode.
-    #[serde(default)]
-    pub capture_mode: Option<networker_tester::cli::PacketCaptureMode>,
-}
-
-fn default_runs() -> u32 {
-    3
-}
-fn default_concurrency() -> usize {
-    1
-}
-fn default_timeout() -> u64 {
-    30
-}
+// NOTE (v0.28.0 refactor): the legacy `JobConfig` struct and the
+// `ControlMessage::JobAssign` variant that carried it have been removed.
+// The unified replacement lives in `crate::test_config` as `TestConfig` +
+// `TestRun`. The WebSocket protocol v2 (AssignRun / CancelRun / RunStarted /
+// RunProgress / RunFinished) is rewritten by Agent B and is not defined here
+// yet — Agent B will re-introduce the new variants referencing `TestConfig`
+// and `TestRun` from `crate::test_config`.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Agent → Control Plane messages
@@ -121,11 +65,6 @@ pub enum AgentMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ControlMessage {
-    /// Assign a test job to the agent.
-    JobAssign {
-        job_id: Uuid,
-        config: Box<JobConfig>,
-    },
     /// Request the agent to cancel a running job.
     JobCancel { job_id: Uuid },
     /// Acknowledge agent registration / reconnection.
