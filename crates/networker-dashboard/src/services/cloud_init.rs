@@ -118,7 +118,7 @@ try {
 }
 
 # Chrome for Page Load (Browser) probes. Soft-fail so a missing browser
-# does not abort the bootstrap — the agent still comes online, only
+# does not abort the bootstrap -- the agent still comes online, only
 # browser probes are degraded.
 try {
     choco install -y --no-progress googlechrome --params '/NoDesktopIcon'
@@ -362,6 +362,29 @@ mod tests {
         );
         assert!(s.contains("sc.exe create NetworkerAgent"));
         assert!(!s.contains("__TARGET_TRIPLE__"));
+    }
+
+    #[test]
+    fn windows_template_is_ascii_clean() {
+        // Azure CLI's `az vm create --custom-data @file` has a latin-1
+        // encoding path on some platforms that rejects non-ASCII content with
+        // "'latin-1' codec can't encode character '\u2014' in position N".
+        // Keep the Windows bootstrap strictly ASCII so we can't regress the
+        // bug that took bm-azure-win11 down on v0.27.13. Em-dashes, en-dashes,
+        // smart quotes, and other typographic Unicode belong in doc comments,
+        // not in the template body.
+        let s = render_windows_bootstrap(
+            "https://alethedash.com",
+            "abc123def456ghi789jkl012mno345pqr678",
+            "x86_64-pc-windows-msvc",
+        )
+        .unwrap();
+        for (i, c) in s.chars().enumerate() {
+            assert!(
+                c.is_ascii(),
+                "Windows bootstrap must be ASCII-only, found non-ASCII char {c:?} at position {i}",
+            );
+        }
     }
 
     #[test]

@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.27.15] — 2026-04-15
+
+### Fixed
+- **Hotfix: Azure Windows `az vm create` crashed on non-ASCII bootstrap content.** A single em-dash (U+2014) introduced in v0.27.13's `WINDOWS_TEMPLATE` triggered Azure CLI's latin-1 encoding path: `'latin-1' codec can't encode character '\u2014' in position 992`. Every Windows tester create failed immediately with an `InvalidTemplateDeployment` error. Replaced the em-dash with `--` and added a regression test (`windows_template_is_ascii_clean`) that asserts the rendered Windows bootstrap is strictly ASCII — no em-dashes, smart quotes, or other typographic Unicode. Doc comments outside the template body are unaffected.
+- **Tester delete didn't refresh the list.** `TesterDetailDrawer` called `onClose()` but not `onChanged()` after a successful delete, so the just-deleted row stayed visible until the user navigated away. Other drawer actions (stop/start/edit) already called `onChanged` correctly.
+- **Testers page went stale when server state changed.** The list only refreshed on mount and on drawer events, so a tester that transitioned from `provisioning → running` (or got auto-shut-down) appeared frozen until manual reload. Added a 10s polling tick so `power_state`, `allocation`, and `installer_version` stay current.
+
+---
+
 ## [0.27.14] — 2026-04-15
 
 ### Added
