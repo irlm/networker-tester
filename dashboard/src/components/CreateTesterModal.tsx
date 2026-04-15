@@ -10,6 +10,17 @@ interface CreateTesterModalProps {
   defaultVmSize?: string;
   defaultAutoShutdownEnabled?: boolean;
   defaultAutoShutdownHour?: number;
+  /**
+   * Pre-fill the Operating System selector (e.g. `ubuntu-24.04`,
+   * `windows-11`). Must be a value present in `OS_OPTIONS[cloud]` or
+   * the select will silently render the first entry.
+   */
+  defaultOs?: string;
+  /**
+   * Pre-fill the variant selector (`server` or `desktop`). Ignored if
+   * not supported by the chosen `defaultOs`.
+   */
+  defaultVariant?: string;
   onCreated: (testerId: string) => void;
   onClose: () => void;
 }
@@ -102,6 +113,8 @@ export function CreateTesterModal({
   defaultVmSize = 'Standard_D2s_v3',
   defaultAutoShutdownEnabled = true,
   defaultAutoShutdownHour = 23,
+  defaultOs,
+  defaultVariant,
   onCreated,
   onClose,
 }: CreateTesterModalProps) {
@@ -109,8 +122,10 @@ export function CreateTesterModal({
   const [region, setRegion] = useState(defaultRegion);
   const [name, setName] = useState(defaultName);
   const [vmSize, setVmSize] = useState(defaultVmSize);
-  const [requestedOs, setRequestedOs] = useState('ubuntu-24.04');
-  const [requestedVariant, setRequestedVariant] = useState('server');
+  const [requestedOs, setRequestedOs] = useState(defaultOs ?? 'ubuntu-24.04');
+  const [requestedVariant, setRequestedVariant] = useState(
+    defaultVariant ?? 'server',
+  );
   const [autoShutdownEnabled, setAutoShutdownEnabled] = useState(
     defaultAutoShutdownEnabled,
   );

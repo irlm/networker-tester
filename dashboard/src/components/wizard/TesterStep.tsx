@@ -3,6 +3,8 @@ import { testersApi, type TesterRow } from '../../api/testers';
 import { CreateTesterModal } from '../CreateTesterModal';
 import { useTesterSubscription } from '../../hooks/useTesterSubscription';
 
+export type TesterOs = 'server' | 'desktop-linux' | 'desktop-windows';
+
 export interface TesterStepProps {
   projectId: string;
   /** Cloud token from the upstream testbed step (e.g. "Azure", "AWS"). */
@@ -11,6 +13,63 @@ export interface TesterStepProps {
   region: string;
   value: string | null;
   onChange: (testerId: string | null) => void;
+  /**
+   * Optional OS/variant filter from the upstream testbed step. When
+   * provided, only testers matching the pick are shown and the
+   * "Create tester" modal is pre-filled with the corresponding OS
+   * + variant. Old callers (e.g. legacy full-stack wizard) omit this
+   * and get the unfiltered behaviour.
+   */
+  testerOs?: TesterOs;
+}
+
+/**
+ * Return whether a tester row matches the wizard's `testerOs` pick.
+ *
+ * - `server`          → `requested_variant === 'server'` (any OS)
+ * - `desktop-linux`   → Linux OS (ubuntu/debian) AND variant `desktop`
+ * - `desktop-windows` → Windows OS AND variant `desktop`
+ *
+ * When the row lacks `requested_os` / `requested_variant` (older rows),
+ * we fall back to matching on the `server` bucket so those testers don't
+ * vanish from the picker.
+ */
+function matchesTesterOs(
+  row: TesterRow,
+  testerOs: TesterOs | undefined,
+): boolean {
+  if (!testerOs) return true;
+  const os = (row.requested_os ?? '').toLowerCase();
+  const variant = (row.requested_variant ?? '').toLowerCase();
+  switch (testerOs) {
+    case 'server':
+      return variant === 'server' || (variant === '' && os === '');
+    case 'desktop-linux':
+      return (
+        variant === 'desktop' &&
+        (os.startsWith('ubuntu') || os.startsWith('debian'))
+      );
+    case 'desktop-windows':
+      return variant === 'desktop' && os.startsWith('windows');
+    default:
+      return true;
+  }
+}
+
+/** Map wizard OS pick → CreateTesterModal default OS + variant. */
+function modalDefaultsFor(
+  testerOs: TesterOs | undefined,
+): { os: string; variant: string } | null {
+  switch (testerOs) {
+    case 'desktop-windows':
+      return { os: 'windows-11', variant: 'desktop' };
+    case 'desktop-linux':
+      return { os: 'ubuntu-24.04', variant: 'desktop' };
+    case 'server':
+      return { os: 'ubuntu-24.04', variant: 'server' };
+    default:
+      return null;
+  }
 }
 
 function normCloud(s: string): string {
@@ -64,7 +123,7 @@ function statusClass(v: StatusVariant): string {
   }
 }
 
-export function TesterStep({ projectId, cloud, region, value, onChange }: TesterStepProps) {
+export function TesterStep({ projectId, cloud, region, value, onChange, testerOs }: TesterStepProps) {
   const [rows, setRows] = useState<TesterRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -94,9 +153,10 @@ export function TesterStep({ projectId, cloud, region, value, onChange }: Tester
       rows.filter(
         (r) =>
           normCloud(r.cloud) === normCloud(cloud) &&
-          normRegion(r.region) === normRegion(region),
+          normRegion(r.region) === normRegion(region) &&
+          matchesTesterOs(r, testerOs),
       ),
-    [rows, cloud, region],
+    [rows, cloud, region, testerOs],
   );
 
   // When filter changes or selection becomes invalid, clear.
@@ -300,6 +360,8 @@ export function TesterStep({ projectId, cloud, region, value, onChange }: Tester
           projectId={projectId}
           defaultCloud={normCloud(cloud)}
           defaultRegion={normRegion(region)}
+          defaultOs={modalDefaultsFor(testerOs)?.os}
+          defaultVariant={modalDefaultsFor(testerOs)?.variant}
           onCreated={(testerId) => {
             setShowCreate(false);
             setPendingTesterId(testerId);

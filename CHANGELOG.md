@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.27.12] — 2026-04-14
+
+### Fixed
+- **Wizard tester filter ignored desktop vs. server pick.** `TesterStep` now honors the testbed step's `testerOs` (`server` / `desktop-linux` / `desktop-windows`) in addition to cloud + region, so picking "Desktop Windows" no longer shows Linux testers. The "+ Create another tester" action on the same step pre-fills the Create Tester modal with the matching OS + variant (`windows-11` + `desktop`, `ubuntu-24.04` + `desktop`, or `ubuntu-24.04` + `server`). `CreateTesterModal` gained `defaultOs` / `defaultVariant` props for this. Legacy callers (e.g. the full-stack wizard) that omit `testerOs` keep the previous unfiltered behaviour.
+- **Browser probes failed because Chrome was never installed on testers.** The cloud-init bootstrap now installs Chromium on Linux (`apt-get install chromium-browser` with a fallback to `chromium`; `dnf install chromium` on RHEL-family) and Google Chrome on Windows (`choco install googlechrome`). All three installs soft-fail: if the browser package is missing the bootstrap still completes, the agent still comes online, and only Page Load (Browser) probes are degraded rather than the whole tester.
+
+---
+
 ## [0.27.11] — 2026-04-14
 
 ### Added

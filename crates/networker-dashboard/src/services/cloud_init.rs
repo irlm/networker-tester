@@ -27,8 +27,14 @@ if command -v apt-get >/dev/null 2>&1; then
         | debconf-set-selections
     apt-get update -y -qq
     apt-get install -y -qq curl tar ca-certificates tshark
+    # Chromium for Page Load (Browser) probes. Soft-fail: some distros ship
+    # the package under a different name, and a missing browser must not
+    # abort the bootstrap (agent still comes online, only browser probes
+    # are degraded).
+    apt-get install -y -qq chromium-browser || apt-get install -y -qq chromium || true
 elif command -v dnf >/dev/null 2>&1; then
     dnf install -y curl tar ca-certificates wireshark-cli
+    dnf install -y chromium || true
 else
     echo "ERROR: no supported package manager (apt/dnf) found" >&2
     exit 1
@@ -103,6 +109,15 @@ if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
 # 2. Wireshark + Npcap (loopback-capable, no WinPcap mode)
 choco install -y --no-progress wireshark --params '/NoDesktopIcon /NoQuickLaunchIcon'
 choco install -y --no-progress npcap --params '/WinPcapMode=no /LoopbackSupport=yes'
+
+# Chrome for Page Load (Browser) probes. Soft-fail so a missing browser
+# does not abort the bootstrap — the agent still comes online, only
+# browser probes are degraded.
+try {
+    choco install -y --no-progress googlechrome --params '/NoDesktopIcon'
+} catch {
+    Write-Warning "Chrome install failed: $_"
+}
 
 # Add Wireshark to the machine PATH so tshark resolves from any service.
 $wireshark = 'C:\Program Files\Wireshark'
@@ -294,6 +309,8 @@ mod tests {
         assert!(s.contains("networker-tester-x86_64-unknown-linux-musl.tar.gz"));
         assert!(s.contains("networker-agent-x86_64-unknown-linux-musl.tar.gz"));
         assert!(s.contains("apt-get install -y -qq curl tar ca-certificates tshark"));
+        // Chromium for Page Load (Browser) probes (case-insensitive match).
+        assert!(s.to_lowercase().contains("chromium"));
         assert!(s.contains("setcap cap_net_raw,cap_net_admin"));
         assert!(s.contains("systemctl enable --now networker-agent.service"));
         assert!(!s.contains("__TARGET_TRIPLE__"));
@@ -314,6 +331,8 @@ mod tests {
         assert!(s.contains("alethedash.com"));
         assert!(s.contains("choco install -y --no-progress wireshark"));
         assert!(s.contains("choco install -y --no-progress npcap"));
+        // Chrome for Page Load (Browser) probes.
+        assert!(s.contains("googlechrome"));
         assert!(s.contains("networker-tester-x86_64-pc-windows-msvc.tar.gz"));
         assert!(s.contains("sc.exe create NetworkerAgent"));
         assert!(!s.contains("__TARGET_TRIPLE__"));

@@ -29,6 +29,8 @@ export type TesterRow = {
   cloud: string;
   region: string;
   vm_size: string;
+  requested_os?: string | null;
+  requested_variant?: string | null;
   vm_name: string | null;
   public_ip: string | null;
   ssh_user: string;
