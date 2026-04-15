@@ -107,8 +107,15 @@ if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
 }
 
 # 2. Wireshark + Npcap (loopback-capable, no WinPcap mode)
+# Npcap was removed from the Chocolatey community repository (licensing), so
+# the install is soft-failed: packet capture degrades but the agent still
+# comes online. Wireshark itself is still in the community repo.
 choco install -y --no-progress wireshark --params '/NoDesktopIcon /NoQuickLaunchIcon'
-choco install -y --no-progress npcap --params '/WinPcapMode=no /LoopbackSupport=yes'
+try {
+    choco install -y --no-progress npcap --params '/WinPcapMode=no /LoopbackSupport=yes'
+} catch {
+    Write-Warning "npcap install failed (package removed from Chocolatey community repo): $_"
+}
 
 # Chrome for Page Load (Browser) probes. Soft-fail so a missing browser
 # does not abort the bootstrap — the agent still comes online, only
@@ -137,15 +144,20 @@ $BinDir = 'C:\Program Files\Networker'
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 
 # Literal asset names (also assert tests can grep for):
-#   networker-tester-__TARGET_TRIPLE__.tar.gz
-#   networker-agent-__TARGET_TRIPLE__.tar.gz
+#   networker-tester-__TARGET_TRIPLE__.zip
+#   networker-agent-__TARGET_TRIPLE__.zip
+# Windows release artefacts are zipped. Unpacked with Expand-Archive (native
+# on Windows, no tar shim needed).
 foreach ($name in 'networker-tester','networker-agent') {
-    $url = "https://github.com/irlm/networker-tester/releases/download/$TAG/$name-$TARGET.tar.gz"
-    $tmp = "$env:TEMP\$name.tar.gz"
-    Invoke-WebRequest -Uri $url -OutFile $tmp
-    tar -xzf $tmp -C $env:TEMP
-    Copy-Item -Force "$env:TEMP\$name.exe" "$BinDir\$name.exe"
-    Remove-Item -Force $tmp, "$env:TEMP\$name.exe"
+    $url = "https://github.com/irlm/networker-tester/releases/download/$TAG/$name-$TARGET.zip"
+    $zip = "$env:TEMP\$name.zip"
+    $extract = "$env:TEMP\$name-extract"
+    Invoke-WebRequest -Uri $url -OutFile $zip
+    if (Test-Path $extract) { Remove-Item -Recurse -Force $extract }
+    Expand-Archive -Path $zip -DestinationPath $extract -Force
+    Copy-Item -Force "$extract\$name.exe" "$BinDir\$name.exe"
+    Remove-Item -Force $zip
+    Remove-Item -Recurse -Force $extract
 }
 
 # 4. Set machine env vars + install service via sc.exe
@@ -330,10 +342,24 @@ mod tests {
         assert!(s.contains("AGENT_API_KEY"));
         assert!(s.contains("alethedash.com"));
         assert!(s.contains("choco install -y --no-progress wireshark"));
+        // npcap is installed best-effort (package removed from Chocolatey
+        // community repo) — bootstrap must not abort when it 404s.
         assert!(s.contains("choco install -y --no-progress npcap"));
+        assert!(
+            s.contains("npcap install failed"),
+            "npcap install must be wrapped in try/catch so the agent still comes online"
+        );
         // Chrome for Page Load (Browser) probes.
         assert!(s.contains("googlechrome"));
-        assert!(s.contains("networker-tester-x86_64-pc-windows-msvc.tar.gz"));
+        // Windows CI publishes .zip artefacts — not .tar.gz. Bootstrap must
+        // match the published asset name and use Expand-Archive to unpack.
+        assert!(s.contains("networker-tester-x86_64-pc-windows-msvc.zip"));
+        assert!(s.contains("networker-agent-x86_64-pc-windows-msvc.zip"));
+        assert!(s.contains("Expand-Archive"));
+        assert!(
+            !s.contains(".tar.gz"),
+            "Windows bootstrap must not reference .tar.gz (release publishes .zip)"
+        );
         assert!(s.contains("sc.exe create NetworkerAgent"));
         assert!(!s.contains("__TARGET_TRIPLE__"));
     }

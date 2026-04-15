@@ -499,9 +499,9 @@ impl AzureProvider {
             .context("failed to spawn `az vm create`")?;
         // Keep tempfile alive until after the az invocation completed.
         drop(custom_data_tmp);
-        Self::cleanup_sp_session(&sp_dir);
 
         if !output.status.success() {
+            Self::cleanup_sp_session(&sp_dir);
             let stderr = String::from_utf8_lossy(&output.stderr);
             let stdout = String::from_utf8_lossy(&output.stdout);
             tracing::error!(
@@ -516,19 +516,44 @@ impl AzureProvider {
         // Strip any non-JSON prefix (az CLI may print warnings before JSON)
         let stdout_str = String::from_utf8_lossy(&output.stdout);
         let json_start = stdout_str.find('{').unwrap_or(0);
-        let v: serde_json::Value = serde_json::from_str(&stdout_str[json_start..])
-            .context("az vm create produced non-JSON output")?;
+        let v: serde_json::Value =
+            serde_json::from_str(&stdout_str[json_start..]).map_err(|e| {
+                // Clean up before bailing so we don't leak the sp login dir.
+                Self::cleanup_sp_session(&sp_dir);
+                anyhow!("az vm create produced non-JSON output: {e}")
+            })?;
 
         let public_ip = v
             .get("publicIpAddress")
             .and_then(|s| s.as_str())
-            .ok_or_else(|| anyhow!("az vm create: missing publicIpAddress"))?
+            .ok_or_else(|| {
+                Self::cleanup_sp_session(&sp_dir);
+                anyhow!("az vm create: missing publicIpAddress")
+            })?
             .to_string();
         let resource_id = v
             .get("id")
             .and_then(|s| s.as_str())
-            .ok_or_else(|| anyhow!("az vm create: missing id"))?
+            .ok_or_else(|| {
+                Self::cleanup_sp_session(&sp_dir);
+                anyhow!("az vm create: missing id")
+            })?
             .to_string();
+
+        // On Windows, `--custom-data` only drops the script at
+        // `C:\AzureData\CustomData.bin`; Azure does NOT execute it. We wire a
+        // CustomScriptExtension after the VM is up so the bootstrap actually
+        // runs. Linux cloud-init handles `--custom-data` natively, so this
+        // branch is a no-op there.
+        if is_windows && config.bootstrap_script.is_some() {
+            let ext_res = self
+                .run_windows_bootstrap_extension(&sp_dir, &config.name)
+                .await;
+            Self::cleanup_sp_session(&sp_dir);
+            ext_res?;
+        } else {
+            Self::cleanup_sp_session(&sp_dir);
+        }
 
         Ok(VmInfo {
             resource_id,
@@ -536,6 +561,78 @@ impl AzureProvider {
             vm_name: config.name.clone(),
             power_state: "running".to_string(),
         })
+    }
+
+    /// Install the `CustomScriptExtension` on a freshly-created Windows VM so
+    /// the cloud-init payload written to `C:\AzureData\CustomData.bin` is
+    /// actually executed. The extension runs as `LocalSystem`; its progress
+    /// and stderr are written to `C:\AzureData\bootstrap.log` on the VM for
+    /// post-mortem debugging.
+    ///
+    /// Blocks until the extension reports a terminal state (typically 5-10
+    /// minutes for choco + Wireshark + release-binary downloads). Surfacing
+    /// the failure here lets the dashboard mark the tester `error` with a
+    /// precise cause instead of the generic "agent did not come online".
+    async fn run_windows_bootstrap_extension(
+        &self,
+        sp_dir: &Option<String>,
+        vm_name: &str,
+    ) -> anyhow::Result<()> {
+        use std::io::Write;
+        // Rename CustomData.bin → CustomData.ps1 so PowerShell recognises it
+        // as a script, then invoke it, teeing everything to bootstrap.log.
+        // Single-line because CustomScriptExtension takes one command string.
+        let command = "powershell -ExecutionPolicy Bypass -NoProfile -Command \
+             \"Copy-Item 'C:\\AzureData\\CustomData.bin' 'C:\\AzureData\\CustomData.ps1' -Force; \
+              & 'C:\\AzureData\\CustomData.ps1' *> 'C:\\AzureData\\bootstrap.log'\"";
+        let protected_settings = serde_json::json!({ "commandToExecute": command });
+
+        let mut ps_tmp = tempfile::NamedTempFile::new()
+            .context("failed to create tempfile for protected-settings")?;
+        ps_tmp
+            .write_all(serde_json::to_string(&protected_settings)?.as_bytes())
+            .context("failed to write protected-settings JSON")?;
+        ps_tmp.flush().ok();
+
+        let output = self
+            .az_cmd(sp_dir)
+            .await
+            .arg("vm")
+            .arg("extension")
+            .arg("set")
+            .arg("--subscription")
+            .arg(&self.subscription_id)
+            .arg("--resource-group")
+            .arg(&self.resource_group)
+            .arg("--vm-name")
+            .arg(vm_name)
+            .arg("--name")
+            .arg("CustomScriptExtension")
+            .arg("--publisher")
+            .arg("Microsoft.Compute")
+            .arg("--version")
+            .arg("1.10")
+            .arg("--protected-settings")
+            .arg(format!("@{}", ps_tmp.path().display()))
+            .output()
+            .await
+            .context("failed to spawn `az vm extension set`")?;
+        drop(ps_tmp);
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            tracing::error!(
+                %stderr,
+                %stdout,
+                vm = %vm_name,
+                status = ?output.status.code(),
+                "az vm extension set (CustomScriptExtension) failed"
+            );
+            anyhow::bail!("az vm extension set failed: {stderr}");
+        }
+        tracing::info!(vm = %vm_name, "CustomScriptExtension installed — Windows bootstrap started");
+        Ok(())
     }
 
     /// Start a stopped (deallocated) VM.
