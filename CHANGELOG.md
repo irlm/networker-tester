@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.27.22] — 2026-04-15
+
+### Changed
+- **Unified Cloud VMs page.** The three top-level nav entries `Infra`, `Testers`, and `VM History` collapse into a single `Cloud VMs` entry with sub-tabs for `Testers | Endpoints | History`. Same underlying concept ("a VM you own in a cloud") presented as one mental model. Landing sub-tab is Testers (most-used). Old URLs (`/deploy`, `/testers`, `/vm-history`) redirect transparently so existing deep links and bookmarks keep working. The three page components themselves are unchanged — this is a pure navigation restructure; each tab just renders the existing page inside a shared tabbed layout.
+
+---
+
 ## [0.27.21] — 2026-04-15
 
 ### Fixed
