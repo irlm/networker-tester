@@ -444,6 +444,9 @@ export const api = {
   stopDeployment: (projectId: string, deploymentId: string) =>
     request<{ status: string }>(projectUrl(projectId, `deployments/${deploymentId}/stop`), { method: 'POST' }),
 
+  startDeployment: (projectId: string, deploymentId: string) =>
+    request<{ status: string; deployment_id: string }>(projectUrl(projectId, `deployments/${deploymentId}/start`), { method: 'POST' }),
+
   deleteDeployment: (projectId: string, deploymentId: string) =>
     request<{ deleted: boolean }>(projectUrl(projectId, `deployments/${deploymentId}`), { method: 'DELETE' }),
 

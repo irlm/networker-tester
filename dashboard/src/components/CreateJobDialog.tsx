@@ -30,6 +30,9 @@ export function CreateJobDialog({ projectId, onClose, onCreated }: CreateJobDial
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [testers, setTesters] = useState<Agent[]>([]);
   const [selectedTester, setSelectedTester] = useState<string>('');
+  const [showOfflineTesters, setShowOfflineTesters] = useState(false);
+  const [showOfflineEndpoints, setShowOfflineEndpoints] = useState(false);
+  const [startingDeploymentId, setStartingDeploymentId] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const firstInputRef = useRef<HTMLInputElement>(null);
   const addToast = useToast();
@@ -168,6 +171,78 @@ export function CreateJobDialog({ projectId, onClose, onCreated }: CreateJobDial
 
   const titleId = 'create-job-dialog-title';
 
+  // Sort deployments online-first: online (true) → checking (undefined) → offline (false).
+  // Stable sort preserves server order within each bucket.
+  const sortedDeployments = [...deployments].sort((a, b) => {
+    const ha = endpointHealth[a.deployment_id];
+    const hb = endpointHealth[b.deployment_id];
+    const rank = (h: boolean | undefined) => (h === true ? 0 : h === undefined ? 1 : 2);
+    return rank(ha) - rank(hb);
+  });
+  const offlineDeploymentCount = sortedDeployments.filter(
+    (d) => endpointHealth[d.deployment_id] === false
+  ).length;
+  const visibleDeployments = showOfflineEndpoints
+    ? sortedDeployments
+    : sortedDeployments.filter((d) => endpointHealth[d.deployment_id] !== false);
+
+  // Sort testers online-first; everything else is "offline" for UI purposes.
+  const sortedTesters = [...testers].sort((a, b) => {
+    const oa = a.status === 'online' ? 0 : 1;
+    const ob = b.status === 'online' ? 0 : 1;
+    return oa - ob;
+  });
+  const offlineTesterCount = sortedTesters.filter((t) => t.status !== 'online').length;
+  const visibleTesters = showOfflineTesters
+    ? sortedTesters
+    : sortedTesters.filter((t) => t.status === 'online');
+
+  const selectedDeployment = deployments.find((d) =>
+    (d.endpoint_ips || []).some((ip) => target.includes(ip))
+  );
+  const selectedHealth = selectedDeployment
+    ? endpointHealth[selectedDeployment.deployment_id]
+    : undefined;
+
+  const handleStartEndpoint = async () => {
+    if (!selectedDeployment) return;
+    setStartingDeploymentId(selectedDeployment.deployment_id);
+    try {
+      await api.startDeployment(projectId, selectedDeployment.deployment_id);
+      addToast('success', `Starting ${selectedDeployment.name} — this can take up to 2 minutes`);
+      // Optimistic: mark as checking so the poll below can update it.
+      setEndpointHealth((prev) => ({
+        ...prev,
+        [selectedDeployment.deployment_id]: undefined,
+      }));
+      // Re-check periodically until alive or timeout.
+      const depId = selectedDeployment.deployment_id;
+      let attempts = 0;
+      const poll = async () => {
+        attempts += 1;
+        try {
+          const r = await api.checkDeployment(projectId, depId);
+          const alive = r.endpoints.some((ep) => ep.alive);
+          setEndpointHealth((prev) => ({ ...prev, [depId]: alive }));
+          if (alive) return;
+        } catch {
+          /* keep polling */
+        }
+        if (attempts < 18) {
+          window.setTimeout(poll, 10_000);
+        } else {
+          setEndpointHealth((prev) => ({ ...prev, [depId]: false }));
+        }
+      };
+      window.setTimeout(poll, 10_000);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to start endpoint';
+      addToast('error', msg);
+    } finally {
+      setStartingDeploymentId(null);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
       {/* Backdrop — semi-transparent, click to close */}
@@ -223,7 +298,7 @@ export function CreateJobDialog({ projectId, onClose, onCreated }: CreateJobDial
             className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 mb-2 focus:outline-none focus:border-cyan-500"
           >
             <option value="">Select endpoint...</option>
-            {deployments.flatMap(d => {
+            {visibleDeployments.flatMap(d => {
               const health = endpointHealth[d.deployment_id];
               const status = health === undefined ? '...' : health ? '\u2714' : '\u2716 offline';
               // Extract OS from config if available
@@ -249,22 +324,36 @@ export function CreateJobDialog({ projectId, onClose, onCreated }: CreateJobDial
               <option value={target}>Custom: {target}</option>
             )}
           </select>
-          {(() => {
-            const selectedDep = deployments.find(d => (d.endpoint_ips || []).some(ip => target.includes(ip)));
-            if (!selectedDep) return null;
-            const health = endpointHealth[selectedDep.deployment_id];
-            if (health === undefined) return (
-              <p className="text-xs text-gray-500 mt-1 mb-1">Checking endpoint health...</p>
-            );
-            if (health === false) return (
-              <p className="text-xs text-red-400 mt-1 mb-1">
-                Endpoint is offline — start the VM from Settings before running a test
-              </p>
-            );
-            return (
-              <p className="text-xs text-green-400 mt-1 mb-1">Endpoint is online</p>
-            );
-          })()}
+          {offlineDeploymentCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowOfflineEndpoints((v) => !v)}
+              className="text-xs text-gray-500 hover:text-gray-300 mb-1"
+            >
+              {showOfflineEndpoints
+                ? `\u2212 Hide offline (${offlineDeploymentCount})`
+                : `+ Show ${offlineDeploymentCount} offline endpoint${offlineDeploymentCount === 1 ? '' : 's'}`}
+            </button>
+          )}
+          {selectedDeployment && selectedHealth === undefined && (
+            <p className="text-xs text-gray-500 mt-1 mb-1">Checking endpoint health...</p>
+          )}
+          {selectedDeployment && selectedHealth === false && (
+            <div className="flex items-center gap-2 mt-1 mb-1">
+              <p className="text-xs text-red-400 flex-1">Endpoint is offline</p>
+              <button
+                type="button"
+                onClick={handleStartEndpoint}
+                disabled={startingDeploymentId === selectedDeployment.deployment_id}
+                className="px-2 py-0.5 text-xs rounded border border-cyan-500/50 text-cyan-400 hover:border-cyan-400 hover:text-cyan-300 disabled:opacity-50 transition-colors"
+              >
+                {startingDeploymentId === selectedDeployment.deployment_id ? 'Starting...' : 'Start'}
+              </button>
+            </div>
+          )}
+          {selectedDeployment && selectedHealth === true && (
+            <p className="text-xs text-green-400 mt-1 mb-1">Endpoint is online</p>
+          )}
           <input
             ref={firstInputRef}
             id="create-job-target"
@@ -287,12 +376,23 @@ export function CreateJobDialog({ projectId, onClose, onCreated }: CreateJobDial
                 className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
               >
                 <option value="">Auto (any online tester)</option>
-                {testers.map(a => (
+                {visibleTesters.map(a => (
                   <option key={a.agent_id} value={a.agent_id}>
                     {a.name} ({a.status}){a.region ? ` \u2014 ${a.region}` : ''}
                   </option>
                 ))}
               </select>
+              {offlineTesterCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowOfflineTesters((v) => !v)}
+                  className="text-xs text-gray-500 hover:text-gray-300 mt-1"
+                >
+                  {showOfflineTesters
+                    ? `\u2212 Hide offline (${offlineTesterCount})`
+                    : `+ Show ${offlineTesterCount} offline tester${offlineTesterCount === 1 ? '' : 's'}`}
+                </button>
+              )}
             </div>
           )}
 
@@ -430,7 +530,17 @@ export function CreateJobDialog({ projectId, onClose, onCreated }: CreateJobDial
             </button>
             <button
               type="submit"
-              disabled={loading || selectedModes.size === 0 || !target}
+              disabled={
+                loading ||
+                selectedModes.size === 0 ||
+                !target ||
+                (selectedDeployment !== undefined && selectedHealth === false)
+              }
+              title={
+                selectedDeployment && selectedHealth === false
+                  ? 'Endpoint is offline — start it before running a test'
+                  : undefined
+              }
               className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors disabled:opacity-50"
             >
               {loading ? 'Creating...' : 'Run Test'}

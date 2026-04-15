@@ -303,7 +303,7 @@ async fn clone_and_queue_benchmark(
 }
 
 /// Start VMs associated with a deployment using cloud CLI tools.
-async fn start_deployment_vm(
+pub(crate) async fn start_deployment_vm(
     client: &tokio_postgres::Client,
     deployment_id: &uuid::Uuid,
 ) -> anyhow::Result<()> {
