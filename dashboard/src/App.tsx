@@ -208,18 +208,21 @@ function AuthenticatedApp() {
               <Route path="history" element={<VmHistoryPage />} />
             </Route>
 
-            {/* Redirects from the pre-v0.27.22 URLs. */}
+            {/* Redirects from the pre-v0.27.22 URLs. `relative="path"` makes
+                `..` resolve against the URL, not the route hierarchy — without
+                it the catch-all at the bottom fires and bounces the user to
+                the workspace picker (regression seen in v0.27.22). */}
             <Route
               path="/projects/:projectId/deploy"
-              element={<Navigate to="../vms/endpoints" replace />}
+              element={<Navigate to="../vms/endpoints" replace relative="path" />}
             />
             <Route
               path="/projects/:projectId/testers"
-              element={<Navigate to="../vms/testers" replace />}
+              element={<Navigate to="../vms/testers" replace relative="path" />}
             />
             <Route
               path="/projects/:projectId/vm-history"
-              element={<Navigate to="../vms/history" replace />}
+              element={<Navigate to="../vms/history" replace relative="path" />}
             />
 
             {/* Detail pages keep their own URLs — they aren't tab-scoped. */}

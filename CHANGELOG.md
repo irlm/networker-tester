@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.27.24] — 2026-04-15
+
+### Fixed
+- **Old deep-link redirects now actually land on the right tab.** After v0.27.22 collapsed `Infra`, `Testers`, and `VM History` into the unified `/vms` page, the three compatibility redirects (`/projects/{pid}/deploy`, `/testers`, `/vm-history`) silently bounced users to the workspace picker (`/projects`) instead of the matching sub-tab. `<Navigate to="../vms/endpoints">` resolves `..` against the **route hierarchy**, not the URL, so the relative path escaped to root, didn't match anything, and fell through to the `*` catch-all. Adding `relative="path"` pins `..` to the URL segment so the redirects land on `/projects/{pid}/vms/endpoints` / `/vms/testers` / `/vms/history` as advertised. Caught during an end-to-end sweep of every page on `alethedash.com` after v0.27.23 deployed.
+
+---
+
 ## [0.27.23] — 2026-04-15
 
 ### Changed
