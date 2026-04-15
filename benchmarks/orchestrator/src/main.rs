@@ -7,6 +7,7 @@ mod deployer;
 mod executor;
 mod progress;
 mod provisioner;
+mod reaper;
 mod reporter;
 mod runner;
 pub mod ssh;
@@ -178,8 +179,8 @@ async fn main() -> Result<()> {
         (None, None)
     };
 
-    let mut builder = networker_log::LogBuilder::new("orchestrator")
-        .with_console(networker_log::Stream::Stderr);
+    let mut builder =
+        networker_log::LogBuilder::new("orchestrator").with_console(networker_log::Stream::Stderr);
     if let Some(ref url) = logs_db_url {
         builder = builder.with_db(url);
     }
@@ -517,49 +518,49 @@ async fn cmd_run(
             &dashboard_config.config_id,
         ));
 
-            // PID file
-            let pid_path = PathBuf::from(format!(
-                "/tmp/alethabench-{}.pid",
-                dashboard_config.config_id
-            ));
-            if let Err(e) = std::fs::write(&pid_path, std::process::id().to_string()) {
-                tracing::warn!("Failed to write PID file: {e}");
-            } else {
-                tracing::info!("PID file written: {}", pid_path.display());
-            }
+        // PID file
+        let pid_path = PathBuf::from(format!(
+            "/tmp/alethabench-{}.pid",
+            dashboard_config.config_id
+        ));
+        if let Err(e) = std::fs::write(&pid_path, std::process::id().to_string()) {
+            tracing::warn!("Failed to write PID file: {e}");
+        } else {
+            tracing::info!("PID file written: {}", pid_path.display());
+        }
 
-            // Heartbeat background task
-            let heartbeat_handle = {
-                let client = callback_client.clone();
-                let cancel_tx = cancel_tx.clone();
-                tokio::spawn(async move {
-                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
-                    interval.tick().await; // skip immediate first tick
-                    loop {
-                        interval.tick().await;
-                        if let Err(e) = client.heartbeat().await {
-                            tracing::warn!("Heartbeat failed: {e}");
-                        }
-                        match client.check_cancelled().await {
-                            Ok(true) => {
-                                tracing::warn!("Dashboard requested cancellation");
-                                let _ = cancel_tx.send(true);
-                                break;
-                            }
-                            Ok(false) => {}
-                            Err(e) => tracing::warn!("Cancellation check failed: {e}"),
-                        }
+        // Heartbeat background task
+        let heartbeat_handle = {
+            let client = callback_client.clone();
+            let cancel_tx = cancel_tx.clone();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+                interval.tick().await; // skip immediate first tick
+                loop {
+                    interval.tick().await;
+                    if let Err(e) = client.heartbeat().await {
+                        tracing::warn!("Heartbeat failed: {e}");
                     }
-                })
-            };
+                    match client.check_cancelled().await {
+                        Ok(true) => {
+                            tracing::warn!("Dashboard requested cancellation");
+                            let _ = cancel_tx.send(true);
+                            break;
+                        }
+                        Ok(false) => {}
+                        Err(e) => tracing::warn!("Cancellation check failed: {e}"),
+                    }
+                }
+            })
+        };
 
-            let result = executor::execute_dashboard_benchmark(
-                &dashboard_config,
-                &callback_client,
-                &cancel_rx,
-                &bench_dir,
-            )
-            .await;
+        let result = executor::execute_dashboard_benchmark(
+            &dashboard_config,
+            &callback_client,
+            &cancel_rx,
+            &bench_dir,
+        )
+        .await;
 
         heartbeat_handle.abort();
         let _ = std::fs::remove_file(&pid_path);

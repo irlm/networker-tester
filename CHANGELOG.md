@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.27.11] — 2026-04-14
+
+### Added
+- **Cloud orphan reaper.** New `services/cloud_orphan_reaper.rs` lists every VM / NIC / Public IP / Disk in the configured cloud account and deletes those whose resource IDs aren't referenced by any row in `project_tester` or `benchmark_config.config_json`. A defence-in-depth allow-list (`tester-*`, `ab-*`, `nwk-ep-*`) guarantees the reaper never touches resources that don't look like ours, even if the DB snapshot is stale. Azure has a full implementation; AWS and GCP are stubs that return empty (TODOs).
+- **"Clean orphans" button on the Cloud Accounts page.** Admin-only, destructive. Confirms before firing, shows a deleted/failed count in a toast. New `POST /api/projects/{pid}/cloud-accounts/{aid}/clean-orphans` endpoint (requires `Admin` role).
+- **Auto-cleanup on tester create (cloud-init path).** `run_create_tester_cloud_init` now runs the reaper (30s timeout, soft-fail) before `provider.create_vm()` so stale NICs/IPs from a prior failed create don't block the Azure public IP quota.
+- **Orchestrator reaper.** `benchmarks/orchestrator/src/reaper.rs` — standalone helper that runs at the top of `provision_vm` for Azure to clean `ab-*` orphans in `alethabench-rg`.
+
+---
+
 ## [0.27.10] — 2026-04-14
 
 ### Fixed

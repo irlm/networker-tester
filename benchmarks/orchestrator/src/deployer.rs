@@ -31,14 +31,17 @@ const INSTALLER_URL: &str =
 /// Deploy a language server to a remote VM using ONE SSH call.
 /// Downloads the install script via HTTP and runs it — no SCP, no multiple connections.
 async fn deploy_remote(vm: &VmInfo, language: &str) -> Result<()> {
-    tracing::info!("Remote deploy: {} to {} via install.sh --benchmark-server", language, vm.ip);
+    tracing::info!(
+        "Remote deploy: {} to {} via install.sh --benchmark-server",
+        language,
+        vm.ip
+    );
 
     // Use install.sh --benchmark-server for all languages.
     // One script, one deploy path — tested with bats, handles nginx mainline,
     // HTTP/3, TLS certs, health checks, and all language runtimes.
-    let install_cmd = format!(
-        "curl -fsSL {INSTALLER_URL} | bash -s -- --benchmark-server {language}"
-    );
+    let install_cmd =
+        format!("curl -fsSL {INSTALLER_URL} | bash -s -- --benchmark-server {language}");
 
     for attempt in 1..=5 {
         match ssh_exec(&vm.ip, &install_cmd).await {

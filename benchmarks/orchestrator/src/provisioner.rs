@@ -121,6 +121,13 @@ pub async fn provision_vm(
     vm_size: &str,
     name: &str,
 ) -> Result<VmInfo> {
+    // Pre-emptive orphan cleanup — keeps stale `ab-*` NICs/IPs/disks from
+    // prior failed runs from blocking the Azure public IP quota. Soft-fail
+    // so a reaper issue never blocks a provisioning run.
+    if cloud.eq_ignore_ascii_case("azure") {
+        crate::reaper::reap_orphans_best_effort(RESOURCE_GROUP).await;
+    }
+
     match cloud.to_lowercase().as_str() {
         "azure" => provision_azure(region, os, vm_size, name).await,
         "aws" => provision_aws(region, os, vm_size, name).await,
