@@ -43,6 +43,7 @@ const DeployDetailPage = lazyPage(() => import('./pages/DeployDetailPage'), 'Dep
 const SchedulesPage = lazyPage(() => import('./pages/SchedulesPage'), 'SchedulesPage');
 const TestersPage = lazyPage(() => import('./pages/TestersPage'), 'TestersPage');
 const VmHistoryPage = lazyPage(() => import('./pages/VmHistoryPage'), 'VmHistoryPage');
+const CloudVmsLayout = lazyPage(() => import('./pages/CloudVmsLayout'), 'CloudVmsLayout');
 const SettingsPage = lazyPage(() => import('./pages/SettingsPage'), 'SettingsPage');
 const UsersPage = lazyPage(() => import('./pages/UsersPage'), 'UsersPage');
 const PendingPage = lazyPage(() => import('./pages/PendingPage'), 'PendingPage');
@@ -197,11 +198,33 @@ function AuthenticatedApp() {
             <Route path="/projects/:projectId/benchmark-progress/:configId" element={<BenchmarkProgressPage />} />
             <Route path="/projects/:projectId/benchmarks/compare" element={<BenchmarkComparePage />} />
             <Route path="/projects/:projectId/benchmarks/:runId" element={<BenchmarkDetailPage />} />
-            <Route path="/projects/:projectId/deploy" element={<DeployPage />} />
+            {/* Unified Cloud VMs page (v0.27.22). Three sub-tabs for the
+                three VM resource types. Old URLs redirect so deep links +
+                bookmarks keep working. */}
+            <Route path="/projects/:projectId/vms" element={<CloudVmsLayout />}>
+              <Route index element={<Navigate to="testers" replace />} />
+              <Route path="testers" element={<TestersPage />} />
+              <Route path="endpoints" element={<DeployPage />} />
+              <Route path="history" element={<VmHistoryPage />} />
+            </Route>
+
+            {/* Redirects from the pre-v0.27.22 URLs. */}
+            <Route
+              path="/projects/:projectId/deploy"
+              element={<Navigate to="../vms/endpoints" replace />}
+            />
+            <Route
+              path="/projects/:projectId/testers"
+              element={<Navigate to="../vms/testers" replace />}
+            />
+            <Route
+              path="/projects/:projectId/vm-history"
+              element={<Navigate to="../vms/history" replace />}
+            />
+
+            {/* Detail pages keep their own URLs — they aren't tab-scoped. */}
             <Route path="/projects/:projectId/deploy/:deploymentId" element={<DeployDetailPage />} />
             <Route path="/projects/:projectId/schedules" element={<SchedulesPage />} />
-            <Route path="/projects/:projectId/testers" element={<TestersPage />} />
-            <Route path="/projects/:projectId/vm-history" element={<VmHistoryPage />} />
             <Route path="/projects/:projectId/settings" element={<SettingsPage />} />
             <Route path="/projects/:projectId/members" element={<ProjectMembersPage />} />
             <Route path="/projects/:projectId/cloud-accounts" element={<CloudAccountsPage />} />

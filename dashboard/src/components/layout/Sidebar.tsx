@@ -37,11 +37,12 @@ export function Sidebar({ connectionDot }: SidebarProps) {
 
   const coreItems: NavItem[] = pid ? [
     { path: `/projects/${pid}`, label: 'Dashboard', icon: '\u25C8', exact: true },
-    { path: `/projects/${pid}/deploy`, label: 'Infra', icon: '\u25A3' },
+    // Unified Cloud VMs nav (v0.27.22): Testers + Endpoints + History under
+    // one entry. The landing sub-tab is Testers (most-used) — the layout
+    // redirects /vms → /vms/testers.
+    { path: `/projects/${pid}/vms`, label: 'Cloud VMs', icon: '\u25A3' },
     { path: `/projects/${pid}/tests`, label: 'Tests', icon: '\u25B6' },
     { path: `/projects/${pid}/schedules`, label: 'Schedules', icon: '\u21BB' },
-    { path: `/projects/${pid}/testers`, label: 'Testers', icon: '\u25C7' },
-    { path: `/projects/${pid}/vm-history`, label: 'VM History', icon: '\u29D7' },
     { path: `/projects/${pid}/runs`, label: 'Runs', icon: '\u25F7' },
   ] : [];
 
