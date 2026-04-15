@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.27.19] — 2026-04-15
+
+### Added
+- **Auto-shutdown hook.** `tester_auto_shutdown_loop` in `services/tester_scheduler.rs` now emits an `auto_shutdown` lifecycle event when the scheduler deallocates an idle tester. Distinguishes scheduler-driven stops from user-initiated `stopped` events so the UI can surface shutdown reasons separately. Metadata carries the `local_hour` and prior `deferral_count` so timelines show why each nightly stop fired (or didn't).
+- **Lib-side `vm_lifecycle_recorder`.** New `services/vm_lifecycle_recorder.rs` gives lib-crate code (scheduler, tester_state, orphan reaper) a way to append lifecycle rows without reaching into bin-side `db::vm_lifecycle`. Uses raw SQL, takes primitive snapshots, swallows errors with a WARN log — same "best-effort audit on top of a durable row" contract as the bin-side helper.
+- **`GET /api/projects/{pid}/vm-history`.** Project-scoped REST endpoint returning `vm_lifecycle` events. Filters: `resource_type`, `resource_id`, `from`, `to`, `limit` (default 100, max 500), `offset`. When `resource_id` is set the results come oldest-first for natural timeline rendering; the project-wide feed returns newest-first. Gated on `ProjectRole::Viewer`. Returns `has_more` on the page response so the UI can show a load-more control without paying for a `COUNT(*)` per page. This is the last backend piece — v0.27.20 lands the React history page on top of this endpoint.
+
+### Not yet in this release
+- React history page (v0.27.20).
+- Error hook at `tester_state::set_error` (v0.27.20 — needs minor refactor to thread the project_id through).
+- Endpoint + benchmark VM hooks (v0.27.21).
+- Real billing reconciliation via AWS / Azure / GCP Cost APIs (v0.27.22).
+
+---
+
 ## [0.27.18] — 2026-04-15
 
 ### Added

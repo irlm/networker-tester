@@ -41,6 +41,7 @@ mod url_tests;
 mod users;
 mod version;
 mod visibility;
+mod vm_history;
 mod zones;
 
 use axum::{middleware, Router};
@@ -108,6 +109,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(benchmark_catalog::project_router(state.clone()))
         .merge(testers::project_router(state.clone()))
         .merge(tester_precheck::project_router(state.clone()))
+        .merge(vm_history::project_router(state.clone()))
         .merge(projects::detail_router(state.clone()))
         .layer(middleware::from_fn_with_state(
             state.clone(),
