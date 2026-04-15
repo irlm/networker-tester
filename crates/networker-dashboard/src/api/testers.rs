@@ -94,6 +94,58 @@ const FALLBACK_AZURE_REGIONS: &[&str] = &[
     "australiaeast",
 ];
 
+// ── Lifecycle event recorder ──────────────────────────────────────────────
+
+/// Append a `vm_lifecycle` row for a tester state transition.
+///
+/// Called after the state change has succeeded — never inside the critical
+/// path. Failures log at WARN and are swallowed so a transient DB issue
+/// with the history table doesn't surface as a user-visible failure on the
+/// tester action the user actually asked for. Historical data is best-effort
+/// (the durable `project_tester` row is authoritative; `vm_lifecycle` is an
+/// audit trail built on top).
+///
+/// Snapshots the cloud / region / vm_size / vm_name / vm_resource_id from
+/// the `ProjectTesterRow` at call time, so future renames or deletions of
+/// the source connection don't rewrite history. Design:
+/// `docs/superpowers/specs/2026-04-15-vm-usage-history-design.md`.
+pub(super) async fn record_tester_lifecycle(
+    client: &tokio_postgres::Client,
+    tester: &ProjectTesterRow,
+    event_type: crate::db::vm_lifecycle::EventType,
+    triggered_by: Option<Uuid>,
+    metadata: Option<serde_json::Value>,
+) {
+    let event = crate::db::vm_lifecycle::NewEvent {
+        project_id: &tester.project_id,
+        resource_type: crate::db::vm_lifecycle::ResourceType::Tester,
+        resource_id: tester.tester_id,
+        resource_name: Some(&tester.name),
+        cloud: &tester.cloud,
+        region: Some(&tester.region),
+        vm_size: Some(&tester.vm_size),
+        vm_name: tester.vm_name.as_deref(),
+        vm_resource_id: tester.vm_resource_id.as_deref(),
+        cloud_connection_id: tester.cloud_connection_id,
+        // cloud_account_name + provider_account_id land in v0.27.19 when we
+        // add the `provider_account_id` fingerprint column to cloud_connection.
+        cloud_account_name_at_event: None,
+        provider_account_id: None,
+        event_type,
+        event_time: chrono::Utc::now(),
+        triggered_by,
+        metadata,
+    };
+    if let Err(e) = crate::db::vm_lifecycle::insert(client, &event).await {
+        tracing::warn!(
+            tester_id = %tester.tester_id,
+            event_type = event_type.as_str(),
+            error = %e,
+            "failed to append vm_lifecycle event (history incomplete, user-facing op unaffected)"
+        );
+    }
+}
+
 // ── Pure helpers (unit-testable without DB) ───────────────────────────────
 
 /// Hardcoded hourly USD cost lookup for supported VM sizes. Unknown sizes
@@ -914,6 +966,31 @@ async fn delete_tester(
             "tester has no vm_resource_id; deleting row without Azure call"
         );
     }
+
+    // Lifecycle event: VM destroyed (or never had one). Emit BEFORE deleting
+    // the project_tester row — the vm_lifecycle row snapshots identity
+    // fields but a foreign-key-style audit reference would be cleaner for
+    // debugging if we ever need to reconcile "which tester row produced
+    // this event". Emit `stopped` first if the VM was running so uptime
+    // math closes the final window, then `deleted` to mark the row gone.
+    if tester.power_state == "running" {
+        record_tester_lifecycle(
+            &client,
+            &tester,
+            crate::db::vm_lifecycle::EventType::Stopped,
+            Some(user.user_id),
+            None,
+        )
+        .await;
+    }
+    record_tester_lifecycle(
+        &client,
+        &tester,
+        crate::db::vm_lifecycle::EventType::Deleted,
+        Some(user.user_id),
+        None,
+    )
+    .await;
 
     let deleted = crate::db::project_testers::delete(&client, &ctx.project_id, &tester_id)
         .await
@@ -1779,7 +1856,7 @@ async fn run_create_tester_ssh(
 /// as `online`. No SSH is performed from the dashboard.
 async fn run_create_tester_cloud_init(
     state: Arc<AppState>,
-    _project_id: String,
+    project_id: String,
     tester_id: Uuid,
     _input: CreateTesterInput,
 ) -> anyhow::Result<()> {
@@ -1942,6 +2019,33 @@ async fn run_create_tester_cloud_init(
     tester_state::set_status_message(&client, &tester_id, "waiting for agent to come online")
         .await?;
 
+    // Lifecycle event: VM create + boot happened successfully at this point
+    // (agent-online polling below is a separate liveness phase). Emit BOTH
+    // `created` and `started` — an active VM is both new and running, and
+    // downstream uptime math wants the `started` timestamp to mark the
+    // start of the first usage window. Refetches the row once so we can
+    // snapshot the persisted vm_name / vm_resource_id / public_ip that the
+    // UPDATE above just wrote.
+    if let Ok(Some(row)) = crate::db::project_testers::get(&client, &project_id, &tester_id).await {
+        let creator = Some(row.created_by);
+        record_tester_lifecycle(
+            &client,
+            &row,
+            crate::db::vm_lifecycle::EventType::Created,
+            creator,
+            None,
+        )
+        .await;
+        record_tester_lifecycle(
+            &client,
+            &row,
+            crate::db::vm_lifecycle::EventType::Started,
+            creator,
+            None,
+        )
+        .await;
+    }
+
     // Step 4: poll for the agent reporting online. Windows takes much longer
     // (chocolatey + npcap + wireshark before the agent itself is downloaded);
     // give it 15 minutes. Linux usually finishes in 60-120s but cap at 6 min
@@ -2057,6 +2161,16 @@ async fn run_start_tester(state: Arc<AppState>, tester: ProjectTesterRow) -> any
         .start_vm(resource_id)
         .await?;
 
+    // Lifecycle event: VM is back up; start a new uptime window.
+    record_tester_lifecycle(
+        &client,
+        &tester,
+        crate::db::vm_lifecycle::EventType::Started,
+        None,
+        None,
+    )
+    .await;
+
     // Wait for SSH to come back up.
     if let Some(ip) = tester.public_ip.as_deref() {
         let target = tester_install::TesterTarget {
@@ -2152,6 +2266,16 @@ async fn run_stop_tester(state: Arc<AppState>, tester: ProjectTesterRow) -> anyh
         .await?
         .stop_vm(resource_id)
         .await?;
+
+    // Lifecycle event: VM is deallocated; close the current uptime window.
+    record_tester_lifecycle(
+        &client,
+        &tester,
+        crate::db::vm_lifecycle::EventType::Stopped,
+        None,
+        None,
+    )
+    .await;
 
     let moved =
         tester_state::try_power_transition(&client, &tester.tester_id, "stopping", "stopped")
