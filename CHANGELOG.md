@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.27.21] — 2026-04-15
+
+### Fixed
+- **`/version` endpoint hung up to 5 seconds per request.** Was calling `api.github.com/releases/latest` live on every hit. Now reads from `state.latest_version_cache`, populated by the existing `services::version_refresh::refresh_latest_version_loop` on a 5-minute cadence. Typical response time drops from 1-5s to well under 100ms. Endpoint health probes also tightened from 2s/3s to 800ms/1500ms — a dead endpoint no longer drags the response past 1.5s.
+- **"View changelog" link pointed at the wrong GitHub org.** `TesterDetailDrawer` hard-coded `github.com/impeccable/networker-tester/releases` → 404. Fixed to `irlm/networker-tester/releases`.
+- **Dashboard tester cards included orphaned agents from deleted testers.** V032 sets `agent.tester_id = NULL` on tester delete (preserving the agent row for audit), which left stale entries cluttering the dashboard's tester list. `AgentRow` now exposes `tester_id`; the dashboard filter hides non-online agents whose `tester_id` is NULL, sorts online-first, and caps the card grid at 8 with a "+N more" link to the full Testers page.
+
+### Added
+- **Live progress messages during tester create.** The `run_create_tester_cloud_init` path now sets distinct `status_message` values at each phase boundary (`cleaning stale cloud resources`, `creating VM + running Windows bootstrap via CustomScriptExtension (5-10 min)`, `waiting for agent to come online (Windows: 2-5 min after VM boot)`). During the agent-online poll loop the status refreshes every 30s with elapsed / remaining time so the Testers page — which polls every 10s — surfaces active progress instead of a frozen "provisioning" badge.
+
+### Known issues (follow-up in v0.27.22)
+- Test creation wizard still lists all testers regardless of power state; should filter to online OR offer an inline "start first" action.
+- Per user report: "cannot start a new test" — needs reproduction; investigating next session.
+
+---
+
 ## [0.27.20] — 2026-04-15
 
 ### Added

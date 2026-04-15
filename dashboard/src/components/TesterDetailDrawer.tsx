@@ -14,7 +14,7 @@ interface TesterDetailDrawerProps {
   onChanged: () => void;
 }
 
-const GITHUB_RELEASES = 'https://github.com/impeccable/networker-tester/releases';
+const GITHUB_RELEASES = 'https://github.com/irlm/networker-tester/releases';
 
 function formatDate(value: string | null): string {
   if (!value) return '—';
