@@ -1,10 +1,18 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
+    response::{
+        sse::{Event, KeepAlive, Sse},
+        IntoResponse,
+    },
     routing::{get, post},
     Extension, Json, Router,
 };
+use futures::stream::StreamExt;
+use networker_common::messages::DashboardEvent;
+use networker_dashboard::services::event_bus::SeqEvent;
 use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -358,6 +366,96 @@ async fn stop_deployment_scoped(
     Ok(Json(serde_json::json!({"status": "cancelled"})))
 }
 
+/// Whether a `DashboardEvent` is a log/completion event for the given
+/// deployment. Used by the per-deployment SSE endpoint to filter the
+/// process-wide event firehose down to a single deployment's stream.
+fn event_targets_deployment(event: &DashboardEvent, deployment_id: Uuid) -> bool {
+    match event {
+        DashboardEvent::DeployLog {
+            deployment_id: id, ..
+        }
+        | DashboardEvent::DeployComplete {
+            deployment_id: id, ..
+        } => *id == deployment_id,
+        _ => false,
+    }
+}
+
+/// GET /api/projects/{project_id}/deployments/{deployment_id}/events
+///
+/// Server-Sent Events stream scoped to a single deployment. Delivers every
+/// `DeployLog` and `DeployComplete` event for this `deployment_id`, in order,
+/// starting with any recent history still in the `EventBus` replay ring.
+///
+/// Why a dedicated SSE endpoint when the `/ws/dashboard` WebSocket already
+/// broadcasts the same events: the WS is process-wide (every event for every
+/// project fans out to every connected browser) and is rate-coupled to
+/// dashboard-wide traffic — a busy benchmark run in one project can lag a
+/// client watching a deploy in another. This stream only carries the caller's
+/// deployment and is the right scope for a deploy-detail page that just wants
+/// incremental log lines without a full firehose subscription.
+///
+/// The stream ends naturally when the client disconnects; `KeepAlive` emits
+/// a comment every 15s so intermediaries don't idle-close the socket.
+async fn deployment_events(
+    State(state): State<Arc<AppState>>,
+    Path((_, deployment_id)): Path<(String, Uuid)>,
+) -> impl IntoResponse {
+    // Subscribe BEFORE snapshotting the replay log so any event published in
+    // the small window between the two is seen on both the replay and the
+    // live channel. The dedup rule below (skip seq <= max_replayed) keeps
+    // the client from receiving the duplicate. Same contract tested in
+    // `services::event_bus` — this is the documented subscribe-then-replay
+    // discipline.
+    let mut rx = state.events_tx.subscribe();
+    let replay: Vec<SeqEvent> = state
+        .events_tx
+        .replay_since(0)
+        .into_iter()
+        .filter(|e| event_targets_deployment(&e.event, deployment_id))
+        .collect();
+    let max_replayed = replay.iter().map(|e| e.seq).max().unwrap_or(0);
+
+    let replay_stream = futures::stream::iter(replay.into_iter().map(|seqe| {
+        let payload = serde_json::to_string(&seqe).unwrap_or_else(|_| "{}".into());
+        Ok::<_, Infallible>(Event::default().event("deploy").data(payload))
+    }));
+
+    let live_stream = async_stream::stream! {
+        loop {
+            match rx.recv().await {
+                Ok(seqe) => {
+                    if seqe.seq <= max_replayed {
+                        continue;
+                    }
+                    if !event_targets_deployment(&seqe.event, deployment_id) {
+                        continue;
+                    }
+                    let is_done = matches!(seqe.event, DashboardEvent::DeployComplete { .. });
+                    let payload = serde_json::to_string(&seqe).unwrap_or_else(|_| "{}".into());
+                    yield Ok::<_, Infallible>(Event::default().event("deploy").data(payload));
+                    if is_done {
+                        // Final event delivered; close the stream so the
+                        // client knows to stop listening and fall back to the
+                        // DB-persisted log for the final view.
+                        return;
+                    }
+                }
+                // Lagged: client missed events while the per-subscriber queue
+                // filled. The WS path has a reconnect-with-since recovery
+                // flow; for this scoped SSE stream we simply continue tailing
+                // — losing a handful of lines is acceptable given the UI
+                // falls back to the DB log once the deploy completes.
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+            }
+        }
+    };
+
+    let stream = replay_stream.chain(live_stream);
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
 pub fn project_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route(
@@ -374,6 +472,10 @@ pub fn project_router(state: Arc<AppState>) -> Router {
         )
         .route("/deployments/{deployment_id}/check", post(check_deployment))
         .route("/deployments/{deployment_id}/update", post(update_endpoint))
+        .route(
+            "/deployments/{deployment_id}/events",
+            get(deployment_events),
+        )
         .with_state(state)
 }
 

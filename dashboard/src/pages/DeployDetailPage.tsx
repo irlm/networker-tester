@@ -8,6 +8,7 @@ import { usePolling } from '../hooks/usePolling';
 import { useLiveStore } from '../stores/liveStore';
 import { useToast } from '../hooks/useToast';
 import { useProject } from '../hooks/useProject';
+import { useDeployEvents } from '../hooks/useDeployEvents';
 
 interface EndpointHealth {
   ip: string;
@@ -33,8 +34,21 @@ export function DeployDetailPage() {
   const addToast = useToast();
   const navigate = useNavigate();
 
-  // Live log lines from WebSocket — must return a stable reference to avoid infinite re-renders
-  const liveLines = useLiveStore(s => (deploymentId && s.deployLogs[deploymentId]) || EMPTY_LINES);
+  // Live log lines from WebSocket — must return a stable reference to avoid infinite re-renders.
+  // Kept as a fallback: if the per-deployment SSE stream fails to connect
+  // (network hiccup, auth issue) we still surface lines from the dashboard
+  // firehose that the useWebSocket hook maintains.
+  const wsLines = useLiveStore(s => (deploymentId && s.deployLogs[deploymentId]) || EMPTY_LINES);
+
+  // Per-deployment SSE stream. Scoped to this deployment so it's not rate-
+  // coupled to unrelated events across the dashboard; also replays any
+  // recent events from the server ring buffer on mount.
+  const { lines: sseLines, complete: sseComplete } = useDeployEvents(projectId, deploymentId);
+
+  // Prefer SSE lines when we have them — the SSE stream is per-deployment
+  // and resyncs via the replay ring on reconnect. Fall back to WS-derived
+  // lines so we don't regress existing behaviour if SSE is unavailable.
+  const liveLines = sseLines.length > 0 ? sseLines : wsLines;
 
   const loadDeployment = useCallback(async () => {
     if (!deploymentId) return;
@@ -50,6 +64,15 @@ export function DeployDetailPage() {
   }, [deploymentId, projectId]);
 
   usePolling(loadDeployment, 5000, !!deploymentId);
+
+  // Server signalled DeployComplete via SSE — refresh the deployment record
+  // immediately so the UI reflects the final status (endpoint_ips, DB log)
+  // without waiting for the next polling tick.
+  useEffect(() => {
+    if (sseComplete) {
+      loadDeployment();
+    }
+  }, [sseComplete, loadDeployment]);
 
   // Auto-scroll log container when new lines arrive or DB log loads
   useEffect(() => {

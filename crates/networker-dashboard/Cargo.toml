@@ -18,6 +18,7 @@ anyhow      = { workspace = true }
 thiserror   = "2"
 tracing     = { workspace = true }
 tracing-subscriber = { workspace = true }
+async-stream = "0.3"
 
 # Local deps
 networker-common = { path = "../networker-common" }

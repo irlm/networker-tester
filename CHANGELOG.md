@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.27.16] — 2026-04-15
+
+### Added
+- **Per-deployment SSE stream.** New `GET /api/projects/{pid}/deployments/{did}/events` returns a `text/event-stream` scoped to a single deployment. It delivers every `DeployLog` and `DeployComplete` event for this deployment, replaying recent history from the `EventBus` ring buffer on connect, then tailing live. The per-deployment scope removes the firehose-coupling that made the `DeployDetailPage` log pane noisy when unrelated events were busy elsewhere in the dashboard. Handler subscribes before snapshotting the replay log and dedupes by seq to avoid duplicates in the race window.
+- **`useDeployEvents` hook.** `DeployDetailPage` now prefers the per-deployment SSE stream over the shared WebSocket firehose. Uses `fetch` with a streaming body (not native `EventSource`) so the JWT can be sent in the `Authorization` header. Falls back to the WS-derived `liveStore` lines if SSE is unavailable, so there's no regression on degraded setups. Deployment record auto-refreshes when the SSE signals `DeployComplete` instead of waiting for the next 5s poll tick.
+
+### Changed
+- **Virtualised the "all probes" table on `JobDetailPage`.** `@tanstack/react-virtual` keeps DOM node count bounded by viewport size + overscan (target ~30-40 rows rendered at once). Long runs that approach the 2000-attempt cap in `liveStore` no longer stall the browser on scroll or on incoming events. The native `<table>` layout is preserved so column widths still align with the header.
+
+---
+
 ## [0.27.15] — 2026-04-15
 
 ### Fixed
