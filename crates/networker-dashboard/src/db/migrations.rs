@@ -1913,6 +1913,26 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
         tracing::info!("V034 migration complete");
     }
 
+    // V035: Synthetic backfill of `created` events for existing testers.
+    // Idempotent via WHERE NOT EXISTS — re-running a failed migration or
+    // applying to a fresh DB that already has events skips rows we already
+    // have. Only fires once, same pattern as every other V0xx migration.
+    let row = client
+        .query_opt("SELECT version FROM _migrations WHERE version = 35", &[])
+        .await?;
+
+    if row.is_none() {
+        tracing::info!("Applying V035: backfill vm_lifecycle.created for existing testers...");
+        client.batch_execute(V035_TESTER_CREATED_BACKFILL).await?;
+        client
+            .execute(
+                "INSERT INTO _migrations (version) VALUES (35) ON CONFLICT DO NOTHING",
+                &[],
+            )
+            .await?;
+        tracing::info!("V035 migration complete");
+    }
+
     Ok(())
 }
 
@@ -2071,4 +2091,37 @@ INSERT INTO cost_rate (cloud, vm_size, region, rate_per_hour_usd, effective_from
     ('gcp',   'e2-standard-2',     NULL, 0.0670,  '2026-04-15T00:00:00Z', 'static-v1'),
     ('gcp',   'n2-standard-2',     NULL, 0.0971,  '2026-04-15T00:00:00Z', 'static-v1')
 ON CONFLICT DO NOTHING;
+"#;
+
+/// V035: Backfill synthetic `created` events for testers that existed before
+/// the runtime hooks landed. Without this the history table would be empty
+/// of every VM created before v0.27.18 deploys, making the "total uptime"
+/// column useless for the first week. Idempotent — skips any tester that
+/// already has a `created` row.
+///
+/// Intentionally does NOT backfill `started` / `stopped` / `deleted`:
+/// historical state transitions are unrecoverable (DB has only the current
+/// snapshot), and synthesising them would pollute uptime math. Going
+/// forward, real hooks capture the full picture; pre-existing rows just get
+/// the single `created` anchor.
+const V035_TESTER_CREATED_BACKFILL: &str = r#"
+INSERT INTO vm_lifecycle (
+    project_id, resource_type, resource_id, resource_name,
+    cloud, region, vm_size, vm_name, vm_resource_id,
+    cloud_connection_id,
+    event_type, event_time, triggered_by, metadata
+)
+SELECT
+    t.project_id, 'tester', t.tester_id, t.name,
+    t.cloud, t.region, t.vm_size, t.vm_name, t.vm_resource_id,
+    t.cloud_connection_id,
+    'created', t.created_at, t.created_by,
+    jsonb_build_object('source', 'v035-backfill')
+FROM project_tester t
+WHERE NOT EXISTS (
+    SELECT 1 FROM vm_lifecycle v
+    WHERE v.resource_type = 'tester'
+      AND v.resource_id   = t.tester_id
+      AND v.event_type    = 'created'
+);
 "#;

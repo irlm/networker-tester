@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.27.18] — 2026-04-15
+
+### Added
+- **VM usage history Phase 1b — tester lifecycle hooks + backfill.** The `vm_lifecycle` table seeded in v0.27.17 now starts accumulating rows. Hooks fire on four tester transitions — `created`, `started`, `stopped`, `deleted` — at the provider-call-succeeded boundary in `api::testers::{run_create_tester_cloud_init, run_start_tester, run_stop_tester, delete_tester}`. Each hook snapshots `cloud`, `region`, `vm_size`, `vm_name`, `vm_resource_id`, and `cloud_connection_id` at event time so history survives future rename or deletion of the source connection. Recorder failures log at WARN and are swallowed — a transient history-table issue can't surface as a user-visible failure on the action the user actually asked for.
+- **Migration V035 — synthetic `created` backfill for existing testers.** Idempotent `INSERT ... WHERE NOT EXISTS`; every `project_tester` row that existed before the runtime hooks deployed gets exactly one `created` row anchored at its `created_at`, tagged `metadata.source='v035-backfill'`. Intentionally does NOT backfill `started` / `stopped` / `deleted` — historical state transitions are unrecoverable from the current DB snapshot, so synthesising them would pollute uptime math.
+
+### Not yet in this release
+- Error + auto-shutdown hooks (v0.27.19).
+- Endpoints / benchmark VM hooks (v0.27.19).
+- REST endpoints `GET /api/projects/{pid}/vm-history` (v0.27.19).
+- React history page (v0.27.19).
+- Real billing reconciliation (v0.27.20).
+
+---
+
 ## [0.27.17] — 2026-04-15
 
 ### Added
