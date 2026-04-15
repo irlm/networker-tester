@@ -70,7 +70,7 @@ async fn update_local_tester(
 
 async fn do_update_tester(
     bin_path: &str,
-    events_tx: &tokio::sync::broadcast::Sender<networker_common::messages::DashboardEvent>,
+    events_tx: &networker_dashboard::services::event_bus::EventBus,
     update_id: uuid::Uuid,
 ) -> anyhow::Result<String> {
     // Determine platform
@@ -297,7 +297,7 @@ fn restart_self() {
 
 #[allow(clippy::too_many_lines)]
 async fn do_update_dashboard(
-    events_tx: &tokio::sync::broadcast::Sender<networker_common::messages::DashboardEvent>,
+    events_tx: &networker_dashboard::services::event_bus::EventBus,
     update_id: uuid::Uuid,
 ) -> anyhow::Result<String> {
     let target = if cfg!(target_os = "macos") {

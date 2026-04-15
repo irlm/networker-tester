@@ -118,8 +118,11 @@ pub struct AppState {
     pub jwt_secret: String,
     pub dashboard_port: u16,
     pub public_url: String,
-    /// Broadcast channel for dashboard events (agent → browser fan-out).
-    pub events_tx: broadcast::Sender<networker_common::messages::DashboardEvent>,
+    /// Sequenced event bus for dashboard events (agent → browser fan-out).
+    /// Wraps a broadcast channel with a monotonic seq number + bounded replay
+    /// ring buffer so browser WS reconnects can request events since their
+    /// last-seen seq and recover transient disconnects without missing state.
+    pub events_tx: networker_dashboard::services::event_bus::EventBus,
     /// Connected agents registry.
     pub agents: ws::agent_hub::AgentHub,
     /// In-process pub/sub for tester queue updates (publishers: dispatcher/
@@ -424,7 +427,7 @@ async fn main() -> anyhow::Result<()> {
             .unwrap_or_default()
     };
 
-    let (events_tx, _) = broadcast::channel(1024);
+    let events_tx = networker_dashboard::services::event_bus::EventBus::new(1024);
     let (approval_tx, _) = broadcast::channel(100);
 
     let state = Arc::new(AppState {

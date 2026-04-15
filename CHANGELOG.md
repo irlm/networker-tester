@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.27.14] — 2026-04-15
+
+### Added
+- **Sequenced dashboard event bus with replay-on-reconnect.** New `services/event_bus.rs` wraps the `tokio::sync::broadcast` fan-out with a monotonic `u64` sequence number and a 2048-event ring buffer. Every `DashboardEvent` now ships with a `seq` field. The browser WebSocket client tracks the last seq it saw and, on reconnect, appends `?since=<seq>` — the server replays any buffered events the client missed during the drop before tailing the live channel. Deploy logs, probe results, benchmark updates, and schedule events now survive transient WebSocket drops without the UI losing state.
+  - Transparent to the 30+ `events_tx.send(event)` publisher call sites (the `.send()` method is drop-in).
+  - Lagged subscribers no longer silently lose events: the WS hub logs the lag and the client's next reconnect re-syncs via replay.
+  - Clean scope boundary on project switch: the seq watermark resets so a new project's WS doesn't request replay for the previous project's events.
+
+### Changed
+- **Probe UI batching latency 500ms → 100ms.** `FLUSH_INTERVAL_MS` in `liveStore` dropped from 500ms to 100ms. The old value was far above the 200ms perceived-instant threshold, making live probe tables feel laggy during fast runs. 100ms still coalesces same-tick bursts but renders updates before the user notices.
+
+---
+
 ## [0.27.13] — 2026-04-15
 
 ### Fixed

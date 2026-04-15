@@ -2,6 +2,7 @@ pub mod azure_regions;
 pub mod cloud_init;
 pub mod cloud_orphan_reaper;
 pub mod cloud_provider;
+pub mod event_bus;
 pub mod tester_dispatcher;
 pub mod tester_install;
 pub mod tester_queue_hub;
