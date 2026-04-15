@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.27.23] — 2026-04-15
+
+### Changed
+- **Test-create dialog UX.** The `New Test` slide-over now sorts the tester and endpoint dropdowns **online-first** so the first option you see is the one that will actually run. Offline entries are hidden behind a `+ Show N offline` toggle (they were previously mixed in and easy to pick by accident — an online tester was sometimes option 10 of 11). When the selected endpoint is known-offline the dialog shows an inline `Start` button that calls the new `POST /deployments/{id}/start` route and polls health until the VM is up, and the `Run Test` button disables itself with a tooltip until the endpoint is healthy. This turns "test stuck in `assigned` because the endpoint is down" into a fix-it-now prompt before the job is ever created.
+
+### Added
+- **`POST /api/projects/{pid}/deployments/{did}/start`** (Operator+). Exposes the existing `scheduler::start_deployment_vm` helper — previously only callable from the auto-start-VM path on scheduled runs — as a first-class REST route. Returns `202 Accepted` immediately and runs the provider-specific `az/aws/gcloud` start call in a background task that waits for the endpoint to become healthy.
+
+---
+
 ## [0.27.22] — 2026-04-15
 
 ### Changed

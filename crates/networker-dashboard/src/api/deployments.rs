@@ -366,6 +366,57 @@ async fn stop_deployment_scoped(
     Ok(Json(serde_json::json!({"status": "cancelled"})))
 }
 
+/// POST /api/projects/{project_id}/deployments/{deployment_id}/start
+///
+/// Starts the VM(s) behind a deployment that was previously stopped or
+/// auto-shut-down. Returns 202 Accepted immediately and spawns a
+/// background task that runs the provider-specific `start` CLI call and
+/// waits for the endpoint to become healthy. The caller should poll
+/// `/deployments/{deployment_id}/check` to observe the VM coming back
+/// online.
+async fn start_deployment_scoped(
+    State(state): State<Arc<AppState>>,
+    Path((_, deployment_id)): Path<(String, Uuid)>,
+    req: axum::extract::Request,
+) -> Result<(StatusCode, Json<serde_json::Value>), StatusCode> {
+    let ctx = req.extensions().get::<ProjectContext>().unwrap().clone();
+    crate::auth::require_project_role(&ctx, ProjectRole::Operator)?;
+
+    // Verify the deployment exists and belongs to this project.
+    let client = state
+        .db
+        .get()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let _deployment = crate::db::deployments::get(&client, &deployment_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    drop(client);
+
+    let state_clone = state.clone();
+    tokio::spawn(async move {
+        let client = match state_clone.db.get().await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!(error = %e, "DB pool error in start_deployment_scoped task");
+                return;
+            }
+        };
+        if let Err(e) = crate::scheduler::start_deployment_vm(&client, &deployment_id).await {
+            tracing::error!(error = %e, deployment_id = %deployment_id, "Failed to start deployment VM");
+        }
+    });
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "status": "starting",
+            "deployment_id": deployment_id,
+        })),
+    ))
+}
+
 /// Whether a `DashboardEvent` is a log/completion event for the given
 /// deployment. Used by the per-deployment SSE endpoint to filter the
 /// process-wide event firehose down to a single deployment's stream.
@@ -469,6 +520,10 @@ pub fn project_router(state: Arc<AppState>) -> Router {
         .route(
             "/deployments/{deployment_id}/stop",
             post(stop_deployment_scoped),
+        )
+        .route(
+            "/deployments/{deployment_id}/start",
+            post(start_deployment_scoped),
         )
         .route("/deployments/{deployment_id}/check", post(check_deployment))
         .route("/deployments/{deployment_id}/update", post(update_endpoint))
