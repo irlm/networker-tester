@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.27.17] — 2026-04-15
+
+### Added
+- **VM usage history schema (Phase 1a of the roadmap in `docs/superpowers/specs/2026-04-15-vm-usage-history-design.md`).** New migration V034 adds:
+  - `vm_lifecycle` — append-only log of VM create / start / stop / delete / auto-shutdown / error events. All cloud-connection-dependent columns (`cloud`, `region`, `vm_size`, `cloud_account_name_at_event`, `provider_account_id`) are snapshot strings so the history survives rename, soft-delete, or hard-delete of the source `cloud_connection` row. CHECK constraints on `event_type` and `resource_type` reject unknown strings at the DB boundary.
+  - `cost_rate` — versioned per-cloud / per-vm-size / optional-per-region USD-per-hour table. `[effective_from, effective_to)` windows let rates change going forward without rewriting historical cost estimates. Seeded with ~17 rows covering the VM sizes `cloud_provider.rs` actually creates today (AWS `t3.*` / `m5.*`, Azure `Standard_B2s` / `Standard_D*s_v3` / `Standard_D2s_v5`, GCP `e2-*` / `n2-standard-2`), sourced from each cloud's public pricing page (`source = 'static-v1'`).
+- **`db::vm_lifecycle` module** — CRUD helpers for the new tables: `insert`, `list_by_project`, `list_by_resource`, `lookup_rate`. `EventType` and `ResourceType` enums mirror the DB CHECK constraints so callers get compile-time safety on event kind.
+
+### Not yet in this release
+- Event hooks at the ~10 provider / scheduler / reaper call sites (v0.27.18).
+- Synthetic backfill migration for existing VMs (v0.27.18).
+- REST endpoints + React history page (v0.27.18).
+- Real billing reconciliation via AWS Cost Explorer / Azure Cost Management / GCP Cloud Billing (v0.27.19).
+
+---
+
 ## [0.27.16] — 2026-04-15
 
 ### Added

@@ -25,6 +25,7 @@ pub mod tls_profiles;
 pub mod url_tests;
 pub mod users;
 pub mod visibility;
+pub mod vm_lifecycle;
 pub mod workspace_warnings;
 pub mod zones;
 
