@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.27.20] — 2026-04-15
+
+### Added
+- **VM History page.** First user-visible slice of the VM usage history feature — new `VM History` nav entry under the Infra section lands you on a project-scoped table of every lifecycle event the backend has recorded. Filter by resource type (tester / endpoint / benchmark), load more with a bottom button (no COUNT pressure on the backend), refresh explicitly. Event kind shows as a colour-coded badge: cyan `created`, green `started`, gray `stopped`, amber `auto_shutdown`, red `deleted` / `error`. Cloud / region / VM size / VM name columns are snapshots — a renamed connection or deleted cloud account doesn't blank out history. Wraps the `GET /api/projects/{pid}/vm-history` endpoint shipped in v0.27.19.
+
+### Not yet in this release
+- Per-resource timeline drawer (v0.27.21).
+- Error hook at `tester_state::set_error` (v0.27.21).
+- Endpoint + benchmark VM hooks (v0.27.21).
+- Uptime + estimated cost columns (v0.27.22).
+- Real billing reconciliation (v0.27.22+).
+
+---
+
 ## [0.27.19] — 2026-04-15
 
 ### Added
