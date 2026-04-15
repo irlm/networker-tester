@@ -162,7 +162,10 @@ pub async fn cleanup_keyvault_vm(config_id: &str, testbed_id: &str) -> Result<()
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        tracing::warn!("Key Vault cleanup failed (non-fatal): {}", stderr.chars().take(200).collect::<String>());
+        tracing::warn!(
+            "Key Vault cleanup failed (non-fatal): {}",
+            stderr.chars().take(200).collect::<String>()
+        );
     }
 
     Ok(())
@@ -178,7 +181,11 @@ pub async fn revoke_all_tokens(config_id: &str) -> Result<()> {
 
     let prefix = format!("bench-{}", &config_id[..config_id.len().min(12)]);
 
-    tracing::warn!("REVOKING ALL tokens for config {} from Key Vault {}", config_id, vault_name);
+    tracing::warn!(
+        "REVOKING ALL tokens for config {} from Key Vault {}",
+        config_id,
+        vault_name
+    );
 
     // List all secrets matching the prefix
     let output = tokio::process::Command::new("az")

@@ -173,8 +173,7 @@ impl DashboardBenchmarkConfig {
             "benchmark_type must be 'fullstack' or 'application', got '{}'",
             self.benchmark_type
         );
-        const VALID_PROXIES: &[&str] =
-            &["nginx", "iis", "caddy", "traefik", "haproxy", "apache"];
+        const VALID_PROXIES: &[&str] = &["nginx", "iis", "caddy", "traefik", "haproxy", "apache"];
         if self.benchmark_type == "application" {
             for testbed in &self.testbeds {
                 if testbed.proxies.is_empty() {

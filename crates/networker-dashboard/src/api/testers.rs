@@ -1494,6 +1494,68 @@ async fn provider_for_tester(
     cloud_provider::legacy_azure_provider()
 }
 
+/// Collect every cloud `resource_id` we know about for this project, used as
+/// the safety allow-list for the orphan reaper. Best-effort — any DB error
+/// returns an empty set (the reaper's `name_is_ours` check is the safety net).
+async fn collect_known_resource_ids(
+    client: &tokio_postgres::Client,
+    project_id: &str,
+) -> std::collections::HashSet<String> {
+    let mut known: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if let Ok(rows) = client
+        .query(
+            "SELECT vm_resource_id FROM project_tester \
+             WHERE project_id = $1 AND vm_resource_id IS NOT NULL",
+            &[&project_id],
+        )
+        .await
+    {
+        for r in rows {
+            if let Ok(Some(s)) = r.try_get::<_, Option<String>>("vm_resource_id") {
+                if !s.is_empty() {
+                    known.insert(s);
+                }
+            }
+        }
+    }
+    if let Ok(rows) = client
+        .query(
+            "SELECT config_json FROM benchmark_config WHERE project_id::text = $1",
+            &[&project_id],
+        )
+        .await
+    {
+        for r in rows {
+            let v: serde_json::Value = r.get("config_json");
+            walk_resource_ids(&v, &mut known);
+        }
+    }
+    known
+}
+
+fn walk_resource_ids(v: &serde_json::Value, out: &mut std::collections::HashSet<String>) {
+    match v {
+        serde_json::Value::Object(m) => {
+            for (k, vv) in m {
+                if k.ends_with("resource_id") {
+                    if let Some(s) = vv.as_str() {
+                        if !s.is_empty() {
+                            out.insert(s.to_string());
+                        }
+                    }
+                }
+                walk_resource_ids(vv, out);
+            }
+        }
+        serde_json::Value::Array(a) => {
+            for vv in a {
+                walk_resource_ids(vv, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 // ── Background task helpers ───────────────────────────────────────────────
 
 fn spawn_create_tester_task(
@@ -1801,6 +1863,40 @@ async fn run_create_tester_cloud_init(
         tags: std::collections::HashMap::new(),
         bootstrap_script: Some(bootstrap),
     };
+
+    // Pre-emptive cloud orphan cleanup — don't hit Azure public IP quota
+    // because of leftover NICs/IPs/disks from prior failed creates. Soft-fail:
+    // any reaper error is logged but never blocks the create.
+    {
+        let known = collect_known_resource_ids(&client, &tester_row.project_id).await;
+        let reaper =
+            networker_dashboard::services::cloud_orphan_reaper::list_orphans(&provider, &known);
+        match tokio::time::timeout(std::time::Duration::from_secs(30), reaper).await {
+            Ok(Ok(orphans)) if !orphans.is_empty() => {
+                let report = networker_dashboard::services::cloud_orphan_reaper::delete_orphans(
+                    &provider, &orphans,
+                )
+                .await;
+                tracing::info!(
+                    tester_id = %tester_id,
+                    orphans_found = orphans.len(),
+                    deleted = report.deleted.len(),
+                    failed = report.failed.len(),
+                    "Pre-create orphan reaper"
+                );
+            }
+            Ok(Ok(_)) => {
+                tracing::debug!(tester_id = %tester_id, "Pre-create orphan reaper: none found");
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(tester_id = %tester_id, error = %e, "Pre-create orphan reaper failed (soft-fail)");
+            }
+            Err(_) => {
+                tracing::warn!(tester_id = %tester_id, "Pre-create orphan reaper timed out after 30s (soft-fail)");
+            }
+        }
+    }
+
     let created = provider.create_vm(&vm_config).await?;
 
     // Step 3: persist identity fields.

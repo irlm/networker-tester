@@ -100,6 +100,7 @@ export function CloudAccountsPage() {
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
   const [validating, setValidating] = useState<string | null>(null);
+  const [cleaning, setCleaning] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [justCreatedId, setJustCreatedId] = useState<string | null>(null);
 
@@ -265,6 +266,32 @@ export function CloudAccountsPage() {
       addToast('error', `Validation request failed: ${msg}`);
     } finally {
       setValidating(null);
+    }
+  };
+
+  const handleCleanOrphans = async (accountId: string, name: string) => {
+    if (!projectId) return;
+    if (!window.confirm(
+      `Clean orphaned cloud resources for "${name}"?\n\n` +
+      `This will delete every VM, NIC, Public IP, and disk in this account ` +
+      `that matches our naming conventions (tester-*, ab-*, nwk-ep-*) ` +
+      `and is NOT referenced by any tester or benchmark in the database.\n\n` +
+      `This action cannot be undone.`
+    )) return;
+    setCleaning(accountId);
+    try {
+      const result = await api.cleanCloudAccountOrphans(projectId, accountId);
+      const msg = result.failed.length > 0
+        ? `Reaper: deleted ${result.deleted.length}/${result.orphans_found} orphans, ${result.failed.length} failed`
+        : result.orphans_found === 0
+          ? 'Reaper: no orphans found'
+          : `Reaper: deleted ${result.deleted.length} orphan${result.deleted.length === 1 ? '' : 's'}`;
+      addToast(result.failed.length > 0 ? 'error' : 'success', msg);
+    } catch (err) {
+      const m = err instanceof Error ? err.message : 'Unknown error';
+      addToast('error', `Failed to clean orphans: ${m}`);
+    } finally {
+      setCleaning(null);
     }
   };
 
@@ -608,6 +635,16 @@ export function CloudAccountsPage() {
                       >
                         {validating === acct.account_id ? 'Validating...' : 'Validate'}
                       </button>
+                      {isProjectAdmin && acct.status === 'active' && (
+                        <button
+                          onClick={() => handleCleanOrphans(acct.account_id, acct.name)}
+                          disabled={cleaning === acct.account_id}
+                          className="text-xs text-amber-400 hover:text-amber-300 transition-colors disabled:opacity-50"
+                          title="Delete cloud resources not referenced by the database (admin only, destructive)"
+                        >
+                          {cleaning === acct.account_id ? 'Cleaning...' : 'Clean orphans'}
+                        </button>
+                      )}
                       <button
                         onClick={() => handleDelete(acct.account_id, acct.name)}
                         className="text-xs text-gray-600 hover:text-red-400 transition-colors"

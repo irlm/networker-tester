@@ -619,6 +619,13 @@ export const api = {
   validateCloudAccount: (projectId: string, accountId: string) =>
     request<{ status: string; validation_error?: string }>(projectUrl(projectId, `cloud-accounts/${accountId}/validate`), { method: 'POST' }),
 
+  cleanCloudAccountOrphans: (projectId: string, accountId: string) =>
+    request<{
+      orphans_found: number;
+      deleted: Array<{ resource_id: string; name: string; kind: string }>;
+      failed: Array<{ resource_id: string; name: string; kind: string; error: string }>;
+    }>(projectUrl(projectId, `cloud-accounts/${accountId}/clean-orphans`), { method: 'POST' }),
+
   extendShareLink: (projectId: string, linkId: string, days: number) =>
     request<void>(projectUrl(projectId, `share-links/${linkId}`), {
       method: 'PUT',
