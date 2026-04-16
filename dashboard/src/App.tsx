@@ -33,7 +33,7 @@ const JobDetailPage = lazyPage(() => import('./pages/JobDetailPage'), 'JobDetail
 const RunsPage = lazyPage(() => import('./pages/RunsPage'), 'RunsPage');
 const RunDetailPage = lazyPage(() => import('./pages/RunDetailPage'), 'RunDetailPage');
 const NewRunPage = lazyPage(() => import('./pages/NewRunPage'), 'NewRunPage');
-const ProbePage = lazyPage(() => import('./pages/ProbePage'), 'ProbePage');
+const DiagnosticsPage = lazyPage(() => import('./pages/DiagnosticsPage'), 'DiagnosticsPage');
 const RunComparePage = lazyPage(() => import('./pages/RunComparePage'), 'RunComparePage');
 const DeployDetailPage = lazyPage(() => import('./pages/DeployDetailPage'), 'DeployDetailPage');
 const SchedulesPage = lazyPage(() => import('./pages/SchedulesPage'), 'SchedulesPage');
@@ -184,7 +184,8 @@ function AuthenticatedApp() {
             <Route path="/projects/:projectId" element={<DashboardPage />} />
             <Route path="/projects/:projectId/runs" element={<RunsPage />} />
             <Route path="/projects/:projectId/runs/new" element={<NewRunPage />} />
-            <Route path="/projects/:projectId/runs/new/probe" element={<ProbePage />} />
+            <Route path="/projects/:projectId/runs/new/probe" element={<Navigate to="../../diagnostics" replace relative="path" />} />
+            <Route path="/projects/:projectId/diagnostics" element={<DiagnosticsPage />} />
             <Route path="/projects/:projectId/runs/compare" element={<RunComparePage />} />
             <Route path="/projects/:projectId/runs/:runId" element={<RunDetailPage />} />
 
