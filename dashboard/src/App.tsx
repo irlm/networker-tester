@@ -58,6 +58,9 @@ const BenchmarkConfigResultsPage = lazyPage(() => import('./pages/BenchmarkConfi
 const BenchmarkRegressionsPage = lazyPage(() => import('./pages/BenchmarkRegressionsPage'), 'BenchmarkRegressionsPage');
 const BenchTokensPage = lazyPage(() => import('./pages/BenchTokensPage'), 'BenchTokensPage');
 const BenchTokenHistoryPage = lazyPage(() => import('./pages/BenchTokenHistoryPage'), 'BenchTokenHistoryPage');
+const NetworkTestPage = lazyPage(() => import('./pages/NetworkTestPage'), 'NetworkTestPage');
+const FullStackPage = lazyPage(() => import('./pages/FullStackPage'), 'FullStackPage');
+const AppBenchmarkPage = lazyPage(() => import('./pages/AppBenchmarkPage'), 'AppBenchmarkPage');
 
 const statusColors: Record<ConnectionStatus, string> = {
   connected: 'bg-green-400',
@@ -184,6 +187,9 @@ function AuthenticatedApp() {
             <Route path="/projects/:projectId" element={<DashboardPage />} />
             <Route path="/projects/:projectId/runs" element={<RunsPage />} />
             <Route path="/projects/:projectId/runs/new" element={<NewRunPage />} />
+            <Route path="/projects/:projectId/tests/new" element={<NetworkTestPage />} />
+            <Route path="/projects/:projectId/benchmarks/full-stack/new" element={<FullStackPage />} />
+            <Route path="/projects/:projectId/benchmarks/application/new" element={<AppBenchmarkPage />} />
             <Route path="/projects/:projectId/runs/new/probe" element={<Navigate to="../../diagnostics" replace relative="path" />} />
             <Route path="/projects/:projectId/diagnostics" element={<DiagnosticsPage />} />
             <Route path="/projects/:projectId/runs/compare" element={<RunComparePage />} />

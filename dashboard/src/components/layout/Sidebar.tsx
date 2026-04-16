@@ -38,12 +38,18 @@ export function Sidebar({ connectionDot }: SidebarProps) {
   const coreItems: NavItem[] = pid ? [
     { path: `/projects/${pid}`, label: 'Dashboard', icon: '\u25C8', exact: true },
     { path: `/projects/${pid}/vms`, label: 'Infrastructure', icon: '\u25A3' },
-    { path: `/projects/${pid}/runs`, label: 'Runs', icon: '\u25B6' },
-    { path: `/projects/${pid}/schedules`, label: 'Schedules', icon: '\u21BB' },
     { path: `/projects/${pid}/diagnostics`, label: 'Diagnostics', icon: '\u2713' },
   ] : [];
 
+  const testingItems: NavItem[] = pid ? [
+    { path: `/projects/${pid}/tests/new`, label: 'Network Tests', icon: '\u25B7', exact: true },
+    { path: `/projects/${pid}/runs`, label: 'Runs', icon: '\u25B6' },
+    { path: `/projects/${pid}/schedules`, label: 'Schedules', icon: '\u21BB' },
+  ] : [];
+
   const benchItems: NavItem[] = pid ? [
+    { path: `/projects/${pid}/benchmarks/full-stack/new`, label: 'Full Stack', icon: '\u25A4', exact: true },
+    { path: `/projects/${pid}/benchmarks/application/new`, label: 'Application', icon: '\u25A5', exact: true },
     { path: '/leaderboard', label: 'Leaderboard', icon: '\u2261' },
     ...(isOperator ? [{ path: `/projects/${pid}/benchmark-catalog`, label: 'Runtimes', icon: '\u2395' }] : []),
     { path: `/projects/${pid}/benchmark-regressions`, label: 'Regressions', icon: '\u26A0' },
@@ -181,6 +187,9 @@ export function Sidebar({ connectionDot }: SidebarProps) {
         <nav className="flex-1 p-1.5 overflow-y-auto" aria-label="Main navigation">
           {/* Core: daily workflow */}
           {coreItems.map(renderItem)}
+
+          {/* Testing group */}
+          {renderSection('testing', testingItems)}
 
           {/* Benchmarks group */}
           {renderSection('benchmarks', benchItems)}
