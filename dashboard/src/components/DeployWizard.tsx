@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { api } from '../api/client';
-import type { CloudConnection, DeployEndpoint, ModeGroup } from '../api/types';
+import type { DeployEndpoint, ModeGroup } from '../api/types';
 import { THROUGHPUT_IDS } from '../lib/chart';
 import { ModeSelector } from './common/ModeSelector';
 import { PayloadSelector } from './common/PayloadSelector';
@@ -43,7 +43,6 @@ function emptyEndpoint(provider = 'azure'): DeployEndpoint {
 
 export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProps) {
   const [step, setStep] = useState(1);
-  const [cloudConnections, setCloudConnections] = useState<CloudConnection[]>([]);
   const [cloudAccounts, setCloudAccounts] = useState<{ account_id: string; name: string; provider: string; status: string }[]>([]);
   const [cloudLoading, setCloudLoading] = useState(true);
   const [endpoints, setEndpoints] = useState<DeployEndpoint[]>([emptyEndpoint()]);
@@ -76,13 +75,10 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
 
   useEffect(() => {
     api.getModes().then(r => setModeGroups(r.groups)).catch(() => {});
-    Promise.all([
-      api.getCloudConnections(projectId).catch(() => []),
-      api.getCloudAccounts(projectId).catch(() => []),
-    ]).then(([conns, accts]) => {
-      setCloudConnections(Array.isArray(conns) ? conns : []);
-      setCloudAccounts(Array.isArray(accts) ? accts : []);
-    }).finally(() => setCloudLoading(false));
+    api.getCloudAccounts(projectId)
+      .then(accts => setCloudAccounts(Array.isArray(accts) ? accts : []))
+      .catch(() => {})
+      .finally(() => setCloudLoading(false));
   }, [projectId]);
 
   const handleKeyDown = useCallback(
@@ -240,11 +236,6 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
     }
   };
 
-  const providerAvailable = (p: string) => {
-    if (p === 'lan') return true;
-    return cloudConnections.some(c => c.provider === p)
-      || cloudAccounts.some(a => a.provider === p);
-  };
 
   const titleId = 'deploy-wizard-title';
 
@@ -314,28 +305,17 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
                         onChange={e => changeProvider(idx, e.target.value)}
                         className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                       >
-                        {cloudConnections.filter(c => c.provider === 'azure').length > 0 ? (
-                          cloudConnections.filter(c => c.provider === 'azure').map(c => (
-                            <option key={c.connection_id} value="azure">{c.name}</option>
-                          ))
-                        ) : (
-                          <option value="azure" disabled={!providerAvailable('azure')}>Azure{!providerAvailable('azure') ? ' (unavailable)' : ''}</option>
-                        )}
-                        {cloudConnections.filter(c => c.provider === 'aws').length > 0 ? (
-                          cloudConnections.filter(c => c.provider === 'aws').map(c => (
-                            <option key={c.connection_id} value="aws">{c.name}</option>
-                          ))
-                        ) : (
-                          <option value="aws" disabled={!providerAvailable('aws')}>AWS{!providerAvailable('aws') ? ' (unavailable)' : ''}</option>
-                        )}
-                        {cloudConnections.filter(c => c.provider === 'gcp').length > 0 ? (
-                          cloudConnections.filter(c => c.provider === 'gcp').map(c => (
-                            <option key={c.connection_id} value="gcp">{c.name}</option>
-                          ))
-                        ) : (
-                          <option value="gcp" disabled={!providerAvailable('gcp')}>GCP{!providerAvailable('gcp') ? ' (unavailable)' : ''}</option>
-                        )}
+                        {/* Dynamic: only providers with configured cloud accounts */}
+                        {[...new Set(cloudAccounts.map(a => a.provider))].map(p => (
+                          <option key={p} value={p}>
+                            {p === 'azure' ? 'Azure' : p === 'aws' ? 'AWS' : p === 'gcp' ? 'GCP' : p.charAt(0).toUpperCase() + p.slice(1)}
+                            {cloudAccounts.filter(a => a.provider === p).every(a => a.status === 'error') ? ' (credentials invalid)' : ''}
+                          </option>
+                        ))}
                         <option value="lan">LAN/SSH</option>
+                        {cloudAccounts.length === 0 && (
+                          <option disabled>— add cloud accounts in Settings → Cloud —</option>
+                        )}
                       </select>
                     </div>
 
