@@ -65,8 +65,9 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
   // Determine the primary cloud provider for the account selector (first non-LAN endpoint)
   const primaryCloudProvider = endpoints.find(ep => ep.provider !== 'lan')?.provider || 'azure';
 
-  // Step mapping: 1=Cloud Status, 2=Endpoint Config, 3=Cloud Account (if cloud), 4=Review
-  const stepList: string[] = ['cloud-status', 'endpoint-config'];
+  // Step mapping: 1=Endpoint Config, 2=Cloud Account (if cloud), 3=Review
+  // Cloud status shown inline on step 1 (not a separate step).
+  const stepList: string[] = ['endpoint-config'];
   if (hasCloudEndpoint) stepList.push('cloud-account');
   stepList.push('review');
   const totalSteps = stepList.length;
@@ -283,63 +284,42 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
             </div>
           )}
 
-          {/* Step: Cloud Status */}
-          {currentStepName === 'cloud-status' && (
+          {/* Step: Target Config (cloud status shown inline) */}
+          {currentStepName === 'endpoint-config' && (
             <div>
-              <p className="text-sm text-gray-400 mb-3">Cloud provider status on this host:</p>
-              {cloudLoading ? (
-                <p className="text-gray-500 text-sm">Checking cloud CLIs...</p>
-              ) : cloudStatus ? (
-                <>
-                  <div className="grid grid-cols-2 gap-3 mb-4">
+              {/* Inline cloud provider status — same pattern as CreateTesterModal */}
+              <div className="border border-gray-800 rounded p-3 mb-4">
+                <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-2">Cloud providers</div>
+                {cloudLoading ? (
+                  <p className="text-xs text-gray-500">Checking...</p>
+                ) : cloudStatus ? (
+                  <div className="grid grid-cols-2 gap-2">
                     {(['azure', 'aws', 'gcp', 'ssh'] as const).map(p => {
                       const s = cloudStatus[p];
                       return (
-                        <div key={p} className="bg-[var(--bg-base)] border border-gray-800 rounded p-3">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className={`w-2 h-2 rounded-full ${
+                        <div key={p} className="bg-[var(--bg-base)] border border-gray-800 rounded p-2.5">
+                          <div className="flex items-center gap-2 mb-0.5">
+                            <span className={`w-1.5 h-1.5 rounded-full ${
                               s.authenticated ? 'bg-green-400' : s.available ? 'bg-yellow-400' : 'bg-gray-600'
                             }`} />
-                            <span className="text-sm text-gray-200 font-medium">
+                            <span className={`text-xs font-medium ${s.authenticated ? 'text-gray-200' : 'text-gray-500'}`}>
                               {p === 'ssh' ? 'SSH/LAN' : p.toUpperCase()}
                             </span>
                           </div>
-                          <p className="text-xs text-gray-500">
+                          <p className="text-[10px] text-gray-600 pl-3.5">
                             {!s.available ? 'CLI not installed' :
                              !s.authenticated ? 'Not authenticated' :
-                             s.account ? `Account: ${s.account}` : 'Ready'}
+                             s.account ? s.account : 'Ready'}
                           </p>
                         </div>
                       );
                     })}
                   </div>
-                  {cloudConnections.length > 0 && (
-                    <div className="mb-4">
-                      <p className="text-xs text-gray-500 tracking-wider font-medium mb-2">cloud accounts (federation)</p>
-                      <div className="space-y-1">
-                        {cloudConnections.map(c => (
-                          <div key={c.connection_id} className="flex items-center gap-2 text-xs">
-                            <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
-                            <span className={
-                              c.provider === 'azure' ? 'text-blue-400' :
-                              c.provider === 'aws' ? 'text-orange-400' : 'text-green-400'
-                            }>{c.provider.toUpperCase()}</span>
-                            <span className="text-gray-300">{c.name}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <p className="text-yellow-400 text-sm mb-4">Could not detect cloud CLIs. Ensure az, aws, or gcloud is installed and authenticated.</p>
-              )}
-            </div>
-          )}
+                ) : (
+                  <p className="text-xs text-yellow-400/70">Could not detect cloud CLIs.</p>
+                )}
+              </div>
 
-          {/* Step: Endpoint Config */}
-          {currentStepName === 'endpoint-config' && (
-            <div>
               <p className="text-sm text-gray-400 mb-3">Configure targets to deploy:</p>
               {endpoints.map((ep, idx) => (
                 <div key={idx} className="bg-[var(--bg-base)] border border-gray-800 rounded p-3 mb-3">
