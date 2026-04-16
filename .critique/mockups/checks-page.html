@@ -1,0 +1,1678 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AletheDash - Checks</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+  /* ── Reset ─────────────────────────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  /* ── Tokens ────────────────────────────────────────────────────────── */
+  :root {
+    --bg-base: #0b0f14;
+    --bg-sidebar: #080b0f;
+    --bg-card: transparent;
+    --bg-card-expanded: #0d1218;
+    --bg-input: #0e1319;
+    --bg-hover: #111820;
+
+    --border: #1a2030;
+    --border-light: #1e2a3a;
+
+    --cyan: #22d3ee;
+    --purple: #863bff;
+    --green: #10b981;
+    --red: #ef4444;
+    --amber: #f59e0b;
+    --blue: #3b82f6;
+
+    --text-primary: #e2e8f0;
+    --text-secondary: #94a3b8;
+    --text-muted: #475569;
+    --text-dim: #334155;
+
+    --font-mono: 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
+
+    --phase-dns: #a78bfa;
+    --phase-tcp: #22d3ee;
+    --phase-tls: #f59e0b;
+    --phase-ttfb: #10b981;
+    --phase-download: #3b82f6;
+  }
+
+  body {
+    font-family: var(--font-mono);
+    background: var(--bg-base);
+    color: var(--text-primary);
+    font-size: 13px;
+    line-height: 1.5;
+    display: flex;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── Sidebar ───────────────────────────────────────────────────────── */
+  .sidebar {
+    width: 192px;
+    min-width: 192px;
+    background: var(--bg-sidebar);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    position: sticky;
+    top: 0;
+    align-self: flex-start;
+  }
+
+  .sidebar-brand {
+    padding: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .sidebar-brand-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .sidebar-brand-name .dot {
+    width: 6px; height: 6px;
+    background: var(--green);
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .sidebar-project {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 4px;
+  }
+
+  .sidebar nav {
+    flex: 1;
+    padding: 6px;
+    overflow-y: auto;
+  }
+
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 12px;
+    border-radius: 4px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    text-decoration: none;
+    margin-bottom: 2px;
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s;
+  }
+
+  .nav-item:hover {
+    color: var(--text-primary);
+    background: rgba(255,255,255,0.03);
+  }
+
+  .nav-item.active {
+    color: var(--text-primary);
+    background: rgba(255,255,255,0.05);
+  }
+
+  .nav-item .icon {
+    font-size: 14px;
+    width: 18px;
+    text-align: center;
+    flex-shrink: 0;
+  }
+
+  .nav-section-label {
+    padding: 12px 12px 6px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-dim);
+    border-top: 1px solid rgba(255,255,255,0.03);
+    margin-top: 8px;
+  }
+
+  .sidebar-footer {
+    border-top: 1px solid var(--border);
+    padding: 12px 16px;
+  }
+
+  .sidebar-user {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .sidebar-avatar {
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    background: var(--purple);
+    color: white;
+    font-size: 11px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .sidebar-user-info {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .sidebar-user-name {
+    font-size: 12px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .sidebar-user-role {
+    font-size: 10px;
+    color: var(--text-dim);
+  }
+
+  /* ── Main content ──────────────────────────────────────────────────── */
+  .main {
+    flex: 1;
+    min-width: 0;
+    padding: 32px 40px;
+    max-width: 1200px;
+  }
+
+  /* ── Page header ───────────────────────────────────────────────────── */
+  .page-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 24px;
+  }
+
+  .page-title {
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--text-primary);
+    letter-spacing: -0.02em;
+  }
+
+  .page-subtitle {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 4px;
+  }
+
+  .page-context {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-top: 6px;
+  }
+
+  .btn-primary {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    background: var(--cyan);
+    color: #0b0f14;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 600;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+
+  .btn-primary:hover { opacity: 0.85; }
+
+  .btn-secondary {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s;
+  }
+
+  .btn-secondary:hover {
+    color: var(--text-primary);
+    border-color: var(--border-light);
+  }
+
+  .btn-run {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    background: var(--cyan);
+    color: #0b0f14;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 16px;
+    font-weight: 700;
+    transition: opacity 0.15s;
+    flex-shrink: 0;
+  }
+
+  .btn-run:hover { opacity: 0.85; }
+
+  /* ── Run a Check input ─────────────────────────────────────────────── */
+  .check-input-bar {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 16px 20px;
+    margin-bottom: 28px;
+  }
+
+  .check-input-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    margin-bottom: 10px;
+  }
+
+  .check-input-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .check-input-field {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .check-input-field label {
+    font-size: 12px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+
+  .check-input-field input {
+    flex: 1;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 8px 12px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--cyan);
+    outline: none;
+    transition: border-color 0.15s;
+  }
+
+  .check-input-field input:focus {
+    border-color: var(--cyan);
+  }
+
+  .check-input-field input::placeholder {
+    color: var(--text-dim);
+  }
+
+  .preset-select {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 8px 12px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    outline: none;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%23475569' stroke-width='1.5'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    padding-right: 28px;
+  }
+
+  /* ── Summary strip ─────────────────────────────────────────────────── */
+  .summary-strip {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 16px;
+    font-size: 12px;
+  }
+
+  .summary-stat {
+    color: var(--text-muted);
+  }
+
+  .summary-stat strong {
+    color: var(--text-secondary);
+    font-weight: 500;
+  }
+
+  .summary-stat.healthy strong { color: var(--green); }
+  .summary-stat.failed strong { color: var(--red); }
+  .summary-stat.stale strong { color: var(--amber); }
+
+  .summary-sep {
+    color: var(--text-dim);
+  }
+
+  /* ── Toolbar ───────────────────────────────────────────────────────── */
+  .toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+
+  .toolbar-left {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .section-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+  }
+
+  .toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .filter-toggle {
+    display: flex;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .filter-toggle button {
+    padding: 5px 12px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    background: transparent;
+    color: var(--text-muted);
+    border: none;
+    border-right: 1px solid var(--border);
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s;
+  }
+
+  .filter-toggle button:last-child { border-right: none; }
+
+  .filter-toggle button.active {
+    background: rgba(255,255,255,0.05);
+    color: var(--text-primary);
+  }
+
+  .filter-toggle button:hover:not(.active) {
+    color: var(--text-secondary);
+  }
+
+  .sort-select {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 5px 28px 5px 10px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    cursor: pointer;
+    outline: none;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%23475569' stroke-width='1.5'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+  }
+
+  .sort-select option {
+    background: var(--bg-base);
+  }
+
+  /* ── URL Card ──────────────────────────────────────────────────────── */
+  .url-card {
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    margin-bottom: 6px;
+    transition: background 0.15s;
+  }
+
+  .url-card.failed {
+    border-left: 2px solid var(--red);
+  }
+
+  .url-card.stale {
+    border-left: 2px solid var(--amber);
+  }
+
+  .url-card.expanded {
+    background: var(--bg-card-expanded);
+  }
+
+  .url-card-header {
+    display: flex;
+    align-items: center;
+    padding: 12px 16px;
+    cursor: pointer;
+    gap: 12px;
+    transition: background 0.15s;
+  }
+
+  .url-card-header:hover {
+    background: rgba(255,255,255,0.015);
+  }
+
+  .url-card-url {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--cyan);
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex-shrink: 1;
+  }
+
+  .url-card.failed .url-card-url {
+    color: var(--red);
+  }
+
+  .url-card.stale .url-card-url {
+    color: var(--amber);
+  }
+
+  .url-card-meta {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+
+  .url-card-ago {
+    font-size: 11px;
+    color: var(--text-dim);
+    white-space: nowrap;
+  }
+
+  .status-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .status-dot.ok { background: var(--green); }
+  .status-dot.fail { background: var(--red); }
+  .status-dot.stale { background: var(--amber); }
+
+  .badge {
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 3px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  .badge-count {
+    background: rgba(255,255,255,0.05);
+    color: var(--text-muted);
+  }
+
+  .badge-stale {
+    background: rgba(245, 158, 11, 0.12);
+    color: var(--amber);
+  }
+
+  .badge-failed {
+    background: rgba(239, 68, 68, 0.12);
+    color: var(--red);
+  }
+
+  .url-card-timings {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .timing-phase {
+    color: var(--text-muted);
+  }
+
+  .timing-phase .label {
+    color: var(--text-dim);
+    margin-right: 3px;
+  }
+
+  .timing-total {
+    color: var(--text-primary);
+    font-weight: 500;
+  }
+
+  .timing-total .label {
+    color: var(--text-muted);
+    margin-right: 3px;
+    font-weight: 400;
+  }
+
+  .url-card-expand-icon {
+    color: var(--text-dim);
+    font-size: 11px;
+    flex-shrink: 0;
+    transition: transform 0.2s;
+  }
+
+  .url-card.expanded .url-card-expand-icon {
+    transform: rotate(90deg);
+  }
+
+  /* Sparkline */
+  .sparkline-container {
+    flex-shrink: 0;
+    width: 80px;
+    height: 16px;
+  }
+
+  .sparkline-container svg {
+    display: block;
+  }
+
+  /* ── URL Card body (expanded) ──────────────────────────────────────── */
+  .url-card-body {
+    padding: 0 16px 16px;
+    display: none;
+  }
+
+  .url-card.expanded .url-card-body {
+    display: block;
+  }
+
+  /* Phase bar */
+  .phase-bar-container {
+    margin-bottom: 16px;
+  }
+
+  .phase-bar {
+    display: flex;
+    height: 6px;
+    border-radius: 2px;
+    overflow: hidden;
+    margin-bottom: 8px;
+  }
+
+  .phase-bar-segment {
+    height: 100%;
+    min-width: 2px;
+  }
+
+  .phase-bar-segment.dns { background: var(--phase-dns); }
+  .phase-bar-segment.tcp { background: var(--phase-tcp); }
+  .phase-bar-segment.tls { background: var(--phase-tls); }
+  .phase-bar-segment.ttfb { background: var(--phase-ttfb); }
+  .phase-bar-segment.download { background: var(--phase-download); }
+
+  .phase-bar-legend {
+    display: flex;
+    gap: 16px;
+    font-size: 11px;
+  }
+
+  .phase-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--text-muted);
+  }
+
+  .phase-legend-dot {
+    width: 6px; height: 6px;
+    border-radius: 1px;
+    flex-shrink: 0;
+  }
+
+  .phase-legend-value {
+    font-variant-numeric: tabular-nums;
+    color: var(--text-secondary);
+  }
+
+  /* History table */
+  .history-section {
+    margin-top: 12px;
+  }
+
+  .history-day-label {
+    font-size: 11px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 4px;
+    margin-top: 12px;
+  }
+
+  .history-day-label:first-child {
+    margin-top: 0;
+  }
+
+  .history-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .history-table th {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+    font-weight: 500;
+    text-align: left;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .history-table td {
+    font-size: 12px;
+    color: var(--text-muted);
+    padding: 5px 8px;
+    border-bottom: 1px solid rgba(255,255,255,0.02);
+  }
+
+  .history-table tr:last-child td {
+    border-bottom: none;
+  }
+
+  .history-table .time-col {
+    color: var(--text-secondary);
+    white-space: nowrap;
+  }
+
+  .history-table .status-ok {
+    color: var(--green);
+  }
+
+  .history-table .status-fail {
+    color: var(--red);
+  }
+
+  .history-table .total-col {
+    color: var(--text-primary);
+    font-weight: 500;
+  }
+
+  .history-table .error-row td {
+    color: var(--red);
+    opacity: 0.8;
+  }
+
+  .history-table .error-msg {
+    font-size: 11px;
+    color: var(--red);
+    opacity: 0.7;
+    padding-left: 8px;
+  }
+
+  /* Card actions */
+  .card-actions {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+  }
+
+  .card-actions .btn-secondary {
+    font-size: 11px;
+    padding: 5px 10px;
+  }
+
+  .card-actions .link-danger {
+    font-size: 11px;
+    color: var(--text-dim);
+    text-decoration: none;
+    cursor: pointer;
+    transition: color 0.15s;
+    margin-left: auto;
+  }
+
+  .card-actions .link-danger:hover {
+    color: var(--red);
+  }
+
+  /* ── Collapsed card row (compact layout) ───────────────────────────── */
+  .url-card-header-row1 {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .url-card-header-row2 {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+  }
+
+  /* ── Responsive tweaks ─────────────────────────────────────────────── */
+  @media (max-width: 1100px) {
+    .url-card-timings {
+      display: none;
+    }
+  }
+
+  @media (max-width: 768px) {
+    .sidebar { display: none; }
+    .main { padding: 20px; }
+    .sparkline-container { display: none; }
+  }
+
+  /* ── Scrollbar ─────────────────────────────────────────────────────── */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--border-light); }
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════════════════════════════════
+     SIDEBAR
+     ══════════════════════════════════════════════════════════════════════ -->
+<aside class="sidebar">
+  <div class="sidebar-brand">
+    <div class="sidebar-brand-name">
+      <span class="dot"></span>
+      AletheDash
+    </div>
+    <div class="sidebar-project">Default</div>
+  </div>
+
+  <nav>
+    <a class="nav-item" href="#"><span class="icon">&#x25C8;</span> Dashboard</a>
+    <a class="nav-item" href="#"><span class="icon">&#x25A3;</span> Infrastructure</a>
+    <a class="nav-item" href="#"><span class="icon">&#x25B6;</span> Runs</a>
+    <a class="nav-item" href="#"><span class="icon">&#x21BB;</span> Schedules</a>
+    <a class="nav-item active" href="#"><span class="icon">&#x2713;</span> Checks</a>
+
+    <div class="nav-section-label">benchmarks</div>
+    <a class="nav-item" href="#"><span class="icon">&#x2261;</span> Leaderboard</a>
+    <a class="nav-item" href="#"><span class="icon">&#x2395;</span> Runtimes</a>
+    <a class="nav-item" href="#"><span class="icon">&#x26A0;</span> Regressions</a>
+
+    <div class="nav-section-label">admin</div>
+    <a class="nav-item" href="#"><span class="icon">&#x2318;</span> System</a>
+    <a class="nav-item" href="#"><span class="icon">&#x265F;</span> Users</a>
+    <a class="nav-item" href="#"><span class="icon">&#x2699;</span> Settings</a>
+  </nav>
+
+  <div class="sidebar-footer">
+    <div class="sidebar-user">
+      <div class="sidebar-avatar">A</div>
+      <div class="sidebar-user-info">
+        <div class="sidebar-user-name">admin</div>
+        <div class="sidebar-user-role">admin</div>
+      </div>
+    </div>
+  </div>
+</aside>
+
+<!-- ══════════════════════════════════════════════════════════════════════
+     MAIN CONTENT
+     ══════════════════════════════════════════════════════════════════════ -->
+<main class="main">
+
+  <!-- Page header -->
+  <div class="page-header">
+    <div>
+      <div class="page-title">Checks</div>
+      <div class="page-subtitle">Quick connectivity tests for any URL</div>
+      <div class="page-context">project: Default &middot; admin</div>
+    </div>
+    <button class="btn-primary">+ New Check</button>
+  </div>
+
+  <!-- Run a Check input bar -->
+  <div class="check-input-bar">
+    <div class="check-input-label">Run a Check</div>
+    <div class="check-input-row">
+      <div class="check-input-field">
+        <label>URL:</label>
+        <input type="text" value="www.cloudflare.com" placeholder="Enter URL to test..." />
+      </div>
+      <label style="font-size: 12px; color: var(--text-muted);">Preset</label>
+      <select class="preset-select">
+        <option>Quick</option>
+        <option>Full</option>
+        <option>DNS only</option>
+        <option>TLS verify</option>
+      </select>
+      <button class="btn-run" title="Run check">&#x25B6;</button>
+    </div>
+  </div>
+
+  <!-- Summary strip -->
+  <div class="summary-strip">
+    <span class="summary-stat"><strong>16</strong> URLs</span>
+    <span class="summary-sep">&middot;</span>
+    <span class="summary-stat healthy"><strong>12</strong> healthy</span>
+    <span class="summary-sep">&middot;</span>
+    <span class="summary-stat failed"><strong>3</strong> failed</span>
+    <span class="summary-sep">&middot;</span>
+    <span class="summary-stat stale"><strong>1</strong> stale (&gt;24h)</span>
+  </div>
+
+  <!-- Toolbar -->
+  <div class="toolbar">
+    <div class="toolbar-left">
+      <span class="section-label">Your URLs (16)</span>
+    </div>
+    <div class="toolbar-right">
+      <div class="filter-toggle">
+        <button class="active">All</button>
+        <button>Healthy</button>
+        <button>Failed</button>
+      </div>
+      <select class="sort-select">
+        <option>Last checked</option>
+        <option>Name</option>
+        <option>Slowest</option>
+        <option>Most checks</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════
+       URL CARDS
+       ═══════════════════════════════════════════════════════════════════ -->
+
+  <!-- 1. www.cloudflare.com — EXPANDED -->
+  <div class="url-card expanded">
+    <div class="url-card-header" onclick="this.parentElement.classList.toggle('expanded')">
+      <span class="url-card-expand-icon">&#x25B8;</span>
+      <div class="url-card-header-row1">
+        <span class="url-card-url">www.cloudflare.com</span>
+        <div class="url-card-timings">
+          <span class="timing-phase"><span class="label">dns</span>18ms</span>
+          <span class="timing-phase"><span class="label">tcp</span>42ms</span>
+          <span class="timing-phase"><span class="label">tls</span>84ms</span>
+          <span class="timing-phase"><span class="label">ttfb</span>612ms</span>
+          <span class="timing-total"><span class="label">total</span>756ms</span>
+        </div>
+      </div>
+      <div class="url-card-header-row2">
+        <div class="sparkline-container">
+          <svg width="80" height="16" viewBox="0 0 80 16">
+            <polyline points="4,8 12,9 20,7 28,10 36,6 44,8 52,7 60,5 68,9 76,8" fill="none" stroke="#22d3ee" stroke-width="1.5" opacity="0.5"/>
+          </svg>
+        </div>
+        <span class="badge badge-count">24</span>
+        <span class="url-card-ago">2m ago</span>
+        <span class="status-dot ok"></span>
+      </div>
+    </div>
+    <div class="url-card-body">
+      <!-- Phase breakdown bar -->
+      <div class="phase-bar-container">
+        <div class="phase-bar">
+          <div class="phase-bar-segment dns" style="width: 2.4%"></div>
+          <div class="phase-bar-segment tcp" style="width: 5.6%"></div>
+          <div class="phase-bar-segment tls" style="width: 11.1%"></div>
+          <div class="phase-bar-segment ttfb" style="width: 80.9%"></div>
+        </div>
+        <div class="phase-bar-legend">
+          <span class="phase-legend-item"><span class="phase-legend-dot" style="background: var(--phase-dns)"></span>dns <span class="phase-legend-value">18ms</span></span>
+          <span class="phase-legend-item"><span class="phase-legend-dot" style="background: var(--phase-tcp)"></span>tcp <span class="phase-legend-value">42ms</span></span>
+          <span class="phase-legend-item"><span class="phase-legend-dot" style="background: var(--phase-tls)"></span>tls <span class="phase-legend-value">84ms</span></span>
+          <span class="phase-legend-item"><span class="phase-legend-dot" style="background: var(--phase-ttfb)"></span>ttfb <span class="phase-legend-value">612ms</span></span>
+        </div>
+      </div>
+
+      <!-- History -->
+      <div class="history-section">
+        <div class="history-day-label">Today</div>
+        <table class="history-table">
+          <thead>
+            <tr><th>Time</th><th></th><th>DNS</th><th>TCP</th><th>TLS</th><th>TTFB</th><th>Total</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="time-col">14:32</td><td class="status-ok">&#x2713;</td><td>18ms</td><td>42ms</td><td>84ms</td><td>612ms</td><td class="total-col">756ms</td></tr>
+            <tr><td class="time-col">12:15</td><td class="status-ok">&#x2713;</td><td>16ms</td><td>40ms</td><td>82ms</td><td>604ms</td><td class="total-col">742ms</td></tr>
+            <tr><td class="time-col">09:44</td><td class="status-ok">&#x2713;</td><td>21ms</td><td>44ms</td><td>88ms</td><td>648ms</td><td class="total-col">801ms</td></tr>
+            <tr><td class="time-col">07:22</td><td class="status-ok">&#x2713;</td><td>19ms</td><td>41ms</td><td>85ms</td><td>620ms</td><td class="total-col">765ms</td></tr>
+          </tbody>
+        </table>
+
+        <div class="history-day-label">Yesterday</div>
+        <table class="history-table">
+          <thead>
+            <tr><th>Time</th><th></th><th>DNS</th><th>TCP</th><th>TLS</th><th>TTFB</th><th>Total</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="time-col">23:12</td><td class="status-ok">&#x2713;</td><td>17ms</td><td>39ms</td><td>81ms</td><td>601ms</td><td class="total-col">738ms</td></tr>
+            <tr><td class="time-col">18:05</td><td class="status-ok">&#x2713;</td><td>18ms</td><td>43ms</td><td>86ms</td><td>608ms</td><td class="total-col">755ms</td></tr>
+            <tr><td class="time-col">14:48</td><td class="status-ok">&#x2713;</td><td>20ms</td><td>42ms</td><td>83ms</td><td>618ms</td><td class="total-col">763ms</td></tr>
+            <tr><td class="time-col">10:30</td><td class="status-ok">&#x2713;</td><td>15ms</td><td>38ms</td><td>80ms</td><td>599ms</td><td class="total-col">732ms</td></tr>
+            <tr><td class="time-col">06:15</td><td class="status-ok">&#x2713;</td><td>22ms</td><td>45ms</td><td>89ms</td><td>635ms</td><td class="total-col">791ms</td></tr>
+          </tbody>
+        </table>
+
+        <div class="history-day-label" style="color: var(--text-dim); font-style: italic; text-transform: none; letter-spacing: normal;">+15 older checks</div>
+      </div>
+
+      <div class="card-actions">
+        <button class="btn-secondary">&#x25B6; Run again</button>
+        <a class="link-danger" href="#">Remove from watchlist</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. api.stripe.com — EXPANDED -->
+  <div class="url-card expanded">
+    <div class="url-card-header" onclick="this.parentElement.classList.toggle('expanded')">
+      <span class="url-card-expand-icon">&#x25B8;</span>
+      <div class="url-card-header-row1">
+        <span class="url-card-url">api.stripe.com</span>
+        <div class="url-card-timings">
+          <span class="timing-phase"><span class="label">dns</span>12ms</span>
+          <span class="timing-phase"><span class="label">tcp</span>38ms</span>
+          <span class="timing-phase"><span class="label">tls</span>92ms</span>
+          <span class="timing-phase"><span class="label">ttfb</span>145ms</span>
+          <span class="timing-total"><span class="label">total</span>287ms</span>
+        </div>
+      </div>
+      <div class="url-card-header-row2">
+        <div class="sparkline-container">
+          <svg width="80" height="16" viewBox="0 0 80 16">
+            <polyline points="4,7 12,8 20,6 28,9 36,7 44,8 52,6 60,7 68,8 76,7" fill="none" stroke="#22d3ee" stroke-width="1.5" opacity="0.5"/>
+          </svg>
+        </div>
+        <span class="badge badge-count">18</span>
+        <span class="url-card-ago">5m ago</span>
+        <span class="status-dot ok"></span>
+      </div>
+    </div>
+    <div class="url-card-body">
+      <div class="phase-bar-container">
+        <div class="phase-bar">
+          <div class="phase-bar-segment dns" style="width: 4.2%"></div>
+          <div class="phase-bar-segment tcp" style="width: 13.2%"></div>
+          <div class="phase-bar-segment tls" style="width: 32.1%"></div>
+          <div class="phase-bar-segment ttfb" style="width: 50.5%"></div>
+        </div>
+        <div class="phase-bar-legend">
+          <span class="phase-legend-item"><span class="phase-legend-dot" style="background: var(--phase-dns)"></span>dns <span class="phase-legend-value">12ms</span></span>
+          <span class="phase-legend-item"><span class="phase-legend-dot" style="background: var(--phase-tcp)"></span>tcp <span class="phase-legend-value">38ms</span></span>
+          <span class="phase-legend-item"><span class="phase-legend-dot" style="background: var(--phase-tls)"></span>tls <span class="phase-legend-value">92ms</span></span>
+          <span class="phase-legend-item"><span class="phase-legend-dot" style="background: var(--phase-ttfb)"></span>ttfb <span class="phase-legend-value">145ms</span></span>
+        </div>
+      </div>
+
+      <div class="history-section">
+        <div class="history-day-label">Today</div>
+        <table class="history-table">
+          <thead>
+            <tr><th>Time</th><th></th><th>DNS</th><th>TCP</th><th>TLS</th><th>TTFB</th><th>Total</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="time-col">14:27</td><td class="status-ok">&#x2713;</td><td>12ms</td><td>38ms</td><td>92ms</td><td>145ms</td><td class="total-col">287ms</td></tr>
+            <tr><td class="time-col">11:55</td><td class="status-ok">&#x2713;</td><td>11ms</td><td>36ms</td><td>90ms</td><td>140ms</td><td class="total-col">277ms</td></tr>
+            <tr><td class="time-col">08:20</td><td class="status-ok">&#x2713;</td><td>14ms</td><td>40ms</td><td>95ms</td><td>152ms</td><td class="total-col">301ms</td></tr>
+          </tbody>
+        </table>
+
+        <div class="history-day-label">Yesterday</div>
+        <table class="history-table">
+          <thead>
+            <tr><th>Time</th><th></th><th>DNS</th><th>TCP</th><th>TLS</th><th>TTFB</th><th>Total</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="time-col">22:40</td><td class="status-ok">&#x2713;</td><td>13ms</td><td>37ms</td><td>91ms</td><td>148ms</td><td class="total-col">289ms</td></tr>
+            <tr><td class="time-col">16:12</td><td class="status-ok">&#x2713;</td><td>10ms</td><td>35ms</td><td>88ms</td><td>138ms</td><td class="total-col">271ms</td></tr>
+          </tbody>
+        </table>
+        <div class="history-day-label" style="color: var(--text-dim); font-style: italic; text-transform: none; letter-spacing: normal;">+13 older checks</div>
+      </div>
+
+      <div class="card-actions">
+        <button class="btn-secondary">&#x25B6; Run again</button>
+        <a class="link-danger" href="#">Remove from watchlist</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. github.com — EXPANDED -->
+  <div class="url-card expanded">
+    <div class="url-card-header" onclick="this.parentElement.classList.toggle('expanded')">
+      <span class="url-card-expand-icon">&#x25B8;</span>
+      <div class="url-card-header-row1">
+        <span class="url-card-url">github.com</span>
+        <div class="url-card-timings">
+          <span class="timing-phase"><span class="label">dns</span>8ms</span>
+          <span class="timing-phase"><span class="label">tcp</span>52ms</span>
+          <span class="timing-phase"><span class="label">tls</span>110ms</span>
+          <span class="timing-phase"><span class="label">ttfb</span>250ms</span>
+          <span class="timing-total"><span class="label">total</span>420ms</span>
+        </div>
+      </div>
+      <div class="url-card-header-row2">
+        <div class="sparkline-container">
+          <svg width="80" height="16" viewBox="0 0 80 16">
+            <polyline points="4,6 12,10 20,8 28,7 36,9 44,5 52,8 60,7 68,6 76,8" fill="none" stroke="#22d3ee" stroke-width="1.5" opacity="0.5"/>
+          </svg>
+        </div>
+        <span class="badge badge-count">12</span>
+        <span class="url-card-ago">8m ago</span>
+        <span class="status-dot ok"></span>
+      </div>
+    </div>
+    <div class="url-card-body">
+      <div class="phase-bar-container">
+        <div class="phase-bar">
+          <div class="phase-bar-segment dns" style="width: 1.9%"></div>
+          <div class="phase-bar-segment tcp" style="width: 12.4%"></div>
+          <div class="phase-bar-segment tls" style="width: 26.2%"></div>
+          <div class="phase-bar-segment ttfb" style="width: 59.5%"></div>
+        </div>
+        <div class="phase-bar-legend">
+          <span class="phase-legend-item"><span class="phase-legend-dot" style="background: var(--phase-dns)"></span>dns <span class="phase-legend-value">8ms</span></span>
+          <span class="phase-legend-item"><span class="phase-legend-dot" style="background: var(--phase-tcp)"></span>tcp <span class="phase-legend-value">52ms</span></span>
+          <span class="phase-legend-item"><span class="phase-legend-dot" style="background: var(--phase-tls)"></span>tls <span class="phase-legend-value">110ms</span></span>
+          <span class="phase-legend-item"><span class="phase-legend-dot" style="background: var(--phase-ttfb)"></span>ttfb <span class="phase-legend-value">250ms</span></span>
+        </div>
+      </div>
+
+      <div class="history-section">
+        <div class="history-day-label">Today</div>
+        <table class="history-table">
+          <thead>
+            <tr><th>Time</th><th></th><th>DNS</th><th>TCP</th><th>TLS</th><th>TTFB</th><th>Total</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="time-col">14:24</td><td class="status-ok">&#x2713;</td><td>8ms</td><td>52ms</td><td>110ms</td><td>250ms</td><td class="total-col">420ms</td></tr>
+            <tr><td class="time-col">11:03</td><td class="status-ok">&#x2713;</td><td>7ms</td><td>48ms</td><td>105ms</td><td>242ms</td><td class="total-col">402ms</td></tr>
+            <tr><td class="time-col">08:51</td><td class="status-ok">&#x2713;</td><td>9ms</td><td>55ms</td><td>118ms</td><td>260ms</td><td class="total-col">442ms</td></tr>
+          </tbody>
+        </table>
+
+        <div class="history-day-label">Yesterday</div>
+        <table class="history-table">
+          <thead>
+            <tr><th>Time</th><th></th><th>DNS</th><th>TCP</th><th>TLS</th><th>TTFB</th><th>Total</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="time-col">20:15</td><td class="status-ok">&#x2713;</td><td>10ms</td><td>50ms</td><td>112ms</td><td>255ms</td><td class="total-col">427ms</td></tr>
+            <tr><td class="time-col">15:33</td><td class="status-ok">&#x2713;</td><td>6ms</td><td>46ms</td><td>102ms</td><td>238ms</td><td class="total-col">392ms</td></tr>
+          </tbody>
+        </table>
+        <div class="history-day-label" style="color: var(--text-dim); font-style: italic; text-transform: none; letter-spacing: normal;">+7 older checks</div>
+      </div>
+
+      <div class="card-actions">
+        <button class="btn-secondary">&#x25B6; Run again</button>
+        <a class="link-danger" href="#">Remove from watchlist</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4. nwk-ep-ubuntu-dev... — COLLAPSED -->
+  <div class="url-card">
+    <div class="url-card-header" onclick="this.parentElement.classList.toggle('expanded')">
+      <span class="url-card-expand-icon">&#x25B8;</span>
+      <div class="url-card-header-row1">
+        <span class="url-card-url">nwk-ep-ubuntu-dev.eastus.cloudapp.azure.com</span>
+        <div class="url-card-timings">
+          <span class="timing-phase"><span class="label">dns</span>22ms</span>
+          <span class="timing-phase"><span class="label">tcp</span>35ms</span>
+          <span class="timing-phase"><span class="label">tls</span>68ms</span>
+          <span class="timing-phase"><span class="label">ttfb</span>55ms</span>
+          <span class="timing-total"><span class="label">total</span>180ms</span>
+        </div>
+      </div>
+      <div class="url-card-header-row2">
+        <div class="sparkline-container">
+          <svg width="80" height="16" viewBox="0 0 80 16">
+            <polyline points="4,7 12,6 20,8 28,7 36,6 44,7 52,8 60,6 68,7 76,7" fill="none" stroke="#22d3ee" stroke-width="1.5" opacity="0.5"/>
+          </svg>
+        </div>
+        <span class="badge badge-count">15</span>
+        <span class="url-card-ago">12m ago</span>
+        <span class="status-dot ok"></span>
+      </div>
+    </div>
+    <div class="url-card-body">
+      <div class="phase-bar-container">
+        <div class="phase-bar">
+          <div class="phase-bar-segment dns" style="width: 12.2%"></div>
+          <div class="phase-bar-segment tcp" style="width: 19.4%"></div>
+          <div class="phase-bar-segment tls" style="width: 37.8%"></div>
+          <div class="phase-bar-segment ttfb" style="width: 30.6%"></div>
+        </div>
+        <div class="phase-bar-legend">
+          <span class="phase-legend-item"><span class="phase-legend-dot" style="background: var(--phase-dns)"></span>dns <span class="phase-legend-value">22ms</span></span>
+          <span class="phase-legend-item"><span class="phase-legend-dot" style="background: var(--phase-tcp)"></span>tcp <span class="phase-legend-value">35ms</span></span>
+          <span class="phase-legend-item"><span class="phase-legend-dot" style="background: var(--phase-tls)"></span>tls <span class="phase-legend-value">68ms</span></span>
+          <span class="phase-legend-item"><span class="phase-legend-dot" style="background: var(--phase-ttfb)"></span>ttfb <span class="phase-legend-value">55ms</span></span>
+        </div>
+      </div>
+      <div class="history-section">
+        <div class="history-day-label">Today</div>
+        <table class="history-table">
+          <thead><tr><th>Time</th><th></th><th>DNS</th><th>TCP</th><th>TLS</th><th>TTFB</th><th>Total</th></tr></thead>
+          <tbody>
+            <tr><td class="time-col">14:20</td><td class="status-ok">&#x2713;</td><td>22ms</td><td>35ms</td><td>68ms</td><td>55ms</td><td class="total-col">180ms</td></tr>
+            <tr><td class="time-col">12:01</td><td class="status-ok">&#x2713;</td><td>20ms</td><td>33ms</td><td>65ms</td><td>52ms</td><td class="total-col">170ms</td></tr>
+            <tr><td class="time-col">09:15</td><td class="status-ok">&#x2713;</td><td>24ms</td><td>37ms</td><td>72ms</td><td>58ms</td><td class="total-col">191ms</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card-actions">
+        <button class="btn-secondary">&#x25B6; Run again</button>
+        <a class="link-danger" href="#">Remove from watchlist</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5. ec2-44-234-19-8... — COLLAPSED -->
+  <div class="url-card">
+    <div class="url-card-header" onclick="this.parentElement.classList.toggle('expanded')">
+      <span class="url-card-expand-icon">&#x25B8;</span>
+      <div class="url-card-header-row1">
+        <span class="url-card-url">ec2-44-234-19-8.us-west-2.compute.amazonaws.com</span>
+        <div class="url-card-timings">
+          <span class="timing-phase"><span class="label">dns</span>28ms</span>
+          <span class="timing-phase"><span class="label">tcp</span>45ms</span>
+          <span class="timing-phase"><span class="label">tls</span>72ms</span>
+          <span class="timing-phase"><span class="label">ttfb</span>65ms</span>
+          <span class="timing-total"><span class="label">total</span>210ms</span>
+        </div>
+      </div>
+      <div class="url-card-header-row2">
+        <div class="sparkline-container">
+          <svg width="80" height="16" viewBox="0 0 80 16">
+            <polyline points="20,8 28,7 36,9 44,6 52,8 60,7 68,9 76,8" fill="none" stroke="#22d3ee" stroke-width="1.5" opacity="0.5"/>
+          </svg>
+        </div>
+        <span class="badge badge-count">8</span>
+        <span class="url-card-ago">18m ago</span>
+        <span class="status-dot ok"></span>
+      </div>
+    </div>
+    <div class="url-card-body">
+      <div class="phase-bar-container">
+        <div class="phase-bar">
+          <div class="phase-bar-segment dns" style="width: 13.3%"></div>
+          <div class="phase-bar-segment tcp" style="width: 21.4%"></div>
+          <div class="phase-bar-segment tls" style="width: 34.3%"></div>
+          <div class="phase-bar-segment ttfb" style="width: 31.0%"></div>
+        </div>
+        <div class="phase-bar-legend">
+          <span class="phase-legend-item"><span class="phase-legend-dot" style="background: var(--phase-dns)"></span>dns <span class="phase-legend-value">28ms</span></span>
+          <span class="phase-legend-item"><span class="phase-legend-dot" style="background: var(--phase-tcp)"></span>tcp <span class="phase-legend-value">45ms</span></span>
+          <span class="phase-legend-item"><span class="phase-legend-dot" style="background: var(--phase-tls)"></span>tls <span class="phase-legend-value">72ms</span></span>
+          <span class="phase-legend-item"><span class="phase-legend-dot" style="background: var(--phase-ttfb)"></span>ttfb <span class="phase-legend-value">65ms</span></span>
+        </div>
+      </div>
+      <div class="history-section">
+        <div class="history-day-label">Today</div>
+        <table class="history-table">
+          <thead><tr><th>Time</th><th></th><th>DNS</th><th>TCP</th><th>TLS</th><th>TTFB</th><th>Total</th></tr></thead>
+          <tbody>
+            <tr><td class="time-col">14:14</td><td class="status-ok">&#x2713;</td><td>28ms</td><td>45ms</td><td>72ms</td><td>65ms</td><td class="total-col">210ms</td></tr>
+            <tr><td class="time-col">10:22</td><td class="status-ok">&#x2713;</td><td>26ms</td><td>42ms</td><td>70ms</td><td>60ms</td><td class="total-col">198ms</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card-actions">
+        <button class="btn-secondary">&#x25B6; Run again</button>
+        <a class="link-danger" href="#">Remove from watchlist</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- 6. www.google.com — COLLAPSED -->
+  <div class="url-card">
+    <div class="url-card-header" onclick="this.parentElement.classList.toggle('expanded')">
+      <span class="url-card-expand-icon">&#x25B8;</span>
+      <div class="url-card-header-row1">
+        <span class="url-card-url">www.google.com</span>
+        <div class="url-card-timings">
+          <span class="timing-phase"><span class="label">dns</span>5ms</span>
+          <span class="timing-phase"><span class="label">tcp</span>32ms</span>
+          <span class="timing-phase"><span class="label">tls</span>95ms</span>
+          <span class="timing-phase"><span class="label">ttfb</span>188ms</span>
+          <span class="timing-total"><span class="label">total</span>320ms</span>
+        </div>
+      </div>
+      <div class="url-card-header-row2">
+        <div class="sparkline-container">
+          <svg width="80" height="16" viewBox="0 0 80 16">
+            <polyline points="44,7 52,9 60,6 68,8 76,7" fill="none" stroke="#22d3ee" stroke-width="1.5" opacity="0.5"/>
+          </svg>
+        </div>
+        <span class="badge badge-count">6</span>
+        <span class="url-card-ago">25m ago</span>
+        <span class="status-dot ok"></span>
+      </div>
+    </div>
+    <div class="url-card-body">
+      <div class="phase-bar-container">
+        <div class="phase-bar">
+          <div class="phase-bar-segment dns" style="width: 1.6%"></div>
+          <div class="phase-bar-segment tcp" style="width: 10.0%"></div>
+          <div class="phase-bar-segment tls" style="width: 29.7%"></div>
+          <div class="phase-bar-segment ttfb" style="width: 58.7%"></div>
+        </div>
+        <div class="phase-bar-legend">
+          <span class="phase-legend-item"><span class="phase-legend-dot" style="background: var(--phase-dns)"></span>dns <span class="phase-legend-value">5ms</span></span>
+          <span class="phase-legend-item"><span class="phase-legend-dot" style="background: var(--phase-tcp)"></span>tcp <span class="phase-legend-value">32ms</span></span>
+          <span class="phase-legend-item"><span class="phase-legend-dot" style="background: var(--phase-tls)"></span>tls <span class="phase-legend-value">95ms</span></span>
+          <span class="phase-legend-item"><span class="phase-legend-dot" style="background: var(--phase-ttfb)"></span>ttfb <span class="phase-legend-value">188ms</span></span>
+        </div>
+      </div>
+      <div class="card-actions">
+        <button class="btn-secondary">&#x25B6; Run again</button>
+        <a class="link-danger" href="#">Remove from watchlist</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- 7. api.openai.com — COLLAPSED -->
+  <div class="url-card">
+    <div class="url-card-header" onclick="this.parentElement.classList.toggle('expanded')">
+      <span class="url-card-expand-icon">&#x25B8;</span>
+      <div class="url-card-header-row1">
+        <span class="url-card-url">api.openai.com</span>
+        <div class="url-card-timings">
+          <span class="timing-phase"><span class="label">dns</span>14ms</span>
+          <span class="timing-phase"><span class="label">tcp</span>56ms</span>
+          <span class="timing-phase"><span class="label">tls</span>120ms</span>
+          <span class="timing-phase"><span class="label">ttfb</span>360ms</span>
+          <span class="timing-total"><span class="label">total</span>550ms</span>
+        </div>
+      </div>
+      <div class="url-card-header-row2">
+        <div class="sparkline-container">
+          <svg width="80" height="16" viewBox="0 0 80 16">
+            <polyline points="52,10 60,6 68,8 76,7" fill="none" stroke="#22d3ee" stroke-width="1.5" opacity="0.5"/>
+          </svg>
+        </div>
+        <span class="badge badge-count">4</span>
+        <span class="url-card-ago">1h ago</span>
+        <span class="status-dot ok"></span>
+      </div>
+    </div>
+    <div class="url-card-body">
+      <div class="card-actions">
+        <button class="btn-secondary">&#x25B6; Run again</button>
+        <a class="link-danger" href="#">Remove from watchlist</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- 8. registry.npmjs.org — COLLAPSED -->
+  <div class="url-card">
+    <div class="url-card-header" onclick="this.parentElement.classList.toggle('expanded')">
+      <span class="url-card-expand-icon">&#x25B8;</span>
+      <div class="url-card-header-row1">
+        <span class="url-card-url">registry.npmjs.org</span>
+        <div class="url-card-timings">
+          <span class="timing-phase"><span class="label">dns</span>25ms</span>
+          <span class="timing-phase"><span class="label">tcp</span>65ms</span>
+          <span class="timing-phase"><span class="label">tls</span>130ms</span>
+          <span class="timing-phase"><span class="label">ttfb</span>260ms</span>
+          <span class="timing-total"><span class="label">total</span>480ms</span>
+        </div>
+      </div>
+      <div class="url-card-header-row2">
+        <div class="sparkline-container">
+          <svg width="80" height="16" viewBox="0 0 80 16">
+            <polyline points="60,7 68,9 76,8" fill="none" stroke="#22d3ee" stroke-width="1.5" opacity="0.5"/>
+          </svg>
+        </div>
+        <span class="badge badge-count">3</span>
+        <span class="url-card-ago">2h ago</span>
+        <span class="status-dot ok"></span>
+      </div>
+    </div>
+    <div class="url-card-body">
+      <div class="card-actions">
+        <button class="btn-secondary">&#x25B6; Run again</button>
+        <a class="link-danger" href="#">Remove from watchlist</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- 9. login.microsoftonline.com — COLLAPSED -->
+  <div class="url-card">
+    <div class="url-card-header" onclick="this.parentElement.classList.toggle('expanded')">
+      <span class="url-card-expand-icon">&#x25B8;</span>
+      <div class="url-card-header-row1">
+        <span class="url-card-url">login.microsoftonline.com</span>
+        <div class="url-card-timings">
+          <span class="timing-phase"><span class="label">dns</span>10ms</span>
+          <span class="timing-phase"><span class="label">tcp</span>48ms</span>
+          <span class="timing-phase"><span class="label">tls</span>102ms</span>
+          <span class="timing-phase"><span class="label">ttfb</span>220ms</span>
+          <span class="timing-total"><span class="label">total</span>380ms</span>
+        </div>
+      </div>
+      <div class="url-card-header-row2">
+        <div class="sparkline-container">
+          <svg width="80" height="16" viewBox="0 0 80 16">
+            <polyline points="36,8 44,6 52,9 60,7 68,8 76,7" fill="none" stroke="#22d3ee" stroke-width="1.5" opacity="0.5"/>
+          </svg>
+        </div>
+        <span class="badge badge-count">7</span>
+        <span class="url-card-ago">35m ago</span>
+        <span class="status-dot ok"></span>
+      </div>
+    </div>
+    <div class="url-card-body">
+      <div class="card-actions">
+        <button class="btn-secondary">&#x25B6; Run again</button>
+        <a class="link-danger" href="#">Remove from watchlist</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- 10. storage.googleapis.com — COLLAPSED -->
+  <div class="url-card">
+    <div class="url-card-header" onclick="this.parentElement.classList.toggle('expanded')">
+      <span class="url-card-expand-icon">&#x25B8;</span>
+      <div class="url-card-header-row1">
+        <span class="url-card-url">storage.googleapis.com</span>
+        <div class="url-card-timings">
+          <span class="timing-phase"><span class="label">dns</span>6ms</span>
+          <span class="timing-phase"><span class="label">tcp</span>30ms</span>
+          <span class="timing-phase"><span class="label">tls</span>78ms</span>
+          <span class="timing-phase"><span class="label">ttfb</span>146ms</span>
+          <span class="timing-total"><span class="label">total</span>260ms</span>
+        </div>
+      </div>
+      <div class="url-card-header-row2">
+        <div class="sparkline-container">
+          <svg width="80" height="16" viewBox="0 0 80 16">
+            <polyline points="44,7 52,8 60,6 68,7 76,8" fill="none" stroke="#22d3ee" stroke-width="1.5" opacity="0.5"/>
+          </svg>
+        </div>
+        <span class="badge badge-count">5</span>
+        <span class="url-card-ago">45m ago</span>
+        <span class="status-dot ok"></span>
+      </div>
+    </div>
+    <div class="url-card-body">
+      <div class="card-actions">
+        <button class="btn-secondary">&#x25B6; Run again</button>
+        <a class="link-danger" href="#">Remove from watchlist</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- 11. api.github.com — COLLAPSED -->
+  <div class="url-card">
+    <div class="url-card-header" onclick="this.parentElement.classList.toggle('expanded')">
+      <span class="url-card-expand-icon">&#x25B8;</span>
+      <div class="url-card-header-row1">
+        <span class="url-card-url">api.github.com</span>
+        <div class="url-card-timings">
+          <span class="timing-phase"><span class="label">dns</span>9ms</span>
+          <span class="timing-phase"><span class="label">tcp</span>50ms</span>
+          <span class="timing-phase"><span class="label">tls</span>108ms</span>
+          <span class="timing-phase"><span class="label">ttfb</span>183ms</span>
+          <span class="timing-total"><span class="label">total</span>350ms</span>
+        </div>
+      </div>
+      <div class="url-card-header-row2">
+        <div class="sparkline-container">
+          <svg width="80" height="16" viewBox="0 0 80 16">
+            <polyline points="68,7 76,8" fill="none" stroke="#22d3ee" stroke-width="1.5" opacity="0.5"/>
+          </svg>
+        </div>
+        <span class="badge badge-count">2</span>
+        <span class="url-card-ago">3h ago</span>
+        <span class="status-dot ok"></span>
+      </div>
+    </div>
+    <div class="url-card-body">
+      <div class="card-actions">
+        <button class="btn-secondary">&#x25B6; Run again</button>
+        <a class="link-danger" href="#">Remove from watchlist</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- 12. cdn.jsdelivr.net — COLLAPSED, stale (>24h) -->
+  <div class="url-card stale">
+    <div class="url-card-header" onclick="this.parentElement.classList.toggle('expanded')">
+      <span class="url-card-expand-icon">&#x25B8;</span>
+      <div class="url-card-header-row1">
+        <span class="url-card-url">cdn.jsdelivr.net</span>
+        <div class="url-card-timings">
+          <span class="timing-phase"><span class="label">dns</span>4ms</span>
+          <span class="timing-phase"><span class="label">tcp</span>15ms</span>
+          <span class="timing-phase"><span class="label">tls</span>32ms</span>
+          <span class="timing-phase"><span class="label">ttfb</span>39ms</span>
+          <span class="timing-total"><span class="label">total</span>90ms</span>
+        </div>
+      </div>
+      <div class="url-card-header-row2">
+        <div class="sparkline-container">
+          <svg width="80" height="16" viewBox="0 0 80 16">
+            <polyline points="76,7" fill="none" stroke="#f59e0b" stroke-width="1.5" opacity="0.5"/>
+            <circle cx="76" cy="7" r="1.5" fill="#f59e0b" opacity="0.5"/>
+          </svg>
+        </div>
+        <span class="badge badge-stale">stale</span>
+        <span class="badge badge-count">1</span>
+        <span class="url-card-ago">3d ago</span>
+        <span class="status-dot stale"></span>
+      </div>
+    </div>
+    <div class="url-card-body">
+      <div class="card-actions">
+        <button class="btn-secondary">&#x25B6; Run again</button>
+        <a class="link-danger" href="#">Remove from watchlist</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- 13. example.com — COLLAPSED -->
+  <div class="url-card">
+    <div class="url-card-header" onclick="this.parentElement.classList.toggle('expanded')">
+      <span class="url-card-expand-icon">&#x25B8;</span>
+      <div class="url-card-header-row1">
+        <span class="url-card-url">example.com</span>
+        <div class="url-card-timings">
+          <span class="timing-phase"><span class="label">dns</span>15ms</span>
+          <span class="timing-phase"><span class="label">tcp</span>40ms</span>
+          <span class="timing-phase"><span class="label">tls</span>62ms</span>
+          <span class="timing-phase"><span class="label">ttfb</span>83ms</span>
+          <span class="timing-total"><span class="label">total</span>200ms</span>
+        </div>
+      </div>
+      <div class="url-card-header-row2">
+        <div class="sparkline-container">
+          <svg width="80" height="16" viewBox="0 0 80 16">
+            <polyline points="76,7" fill="none" stroke="#22d3ee" stroke-width="1.5" opacity="0.5"/>
+            <circle cx="76" cy="7" r="1.5" fill="#22d3ee" opacity="0.5"/>
+          </svg>
+        </div>
+        <span class="badge badge-count">1</span>
+        <span class="url-card-ago">6h ago</span>
+        <span class="status-dot ok"></span>
+      </div>
+    </div>
+    <div class="url-card-body">
+      <div class="card-actions">
+        <button class="btn-secondary">&#x25B6; Run again</button>
+        <a class="link-danger" href="#">Remove from watchlist</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- 14. httpbin.org — COLLAPSED, failed (1 of 2 checks failed) -->
+  <div class="url-card failed">
+    <div class="url-card-header" onclick="this.parentElement.classList.toggle('expanded')">
+      <span class="url-card-expand-icon">&#x25B8;</span>
+      <div class="url-card-header-row1">
+        <span class="url-card-url">httpbin.org</span>
+        <div class="url-card-timings">
+          <span class="timing-phase"><span class="label">dns</span>18ms</span>
+          <span class="timing-phase"><span class="label">tcp</span>55ms</span>
+          <span class="timing-phase"><span class="label">tls</span>115ms</span>
+          <span class="timing-phase"><span class="label">ttfb</span>--</span>
+          <span class="timing-total" style="color: var(--red);"><span class="label">total</span>timeout</span>
+        </div>
+      </div>
+      <div class="url-card-header-row2">
+        <div class="sparkline-container">
+          <svg width="80" height="16" viewBox="0 0 80 16">
+            <polyline points="68,5 76,14" fill="none" stroke="#ef4444" stroke-width="1.5" opacity="0.5"/>
+          </svg>
+        </div>
+        <span class="badge badge-failed">1 fail</span>
+        <span class="badge badge-count">2</span>
+        <span class="url-card-ago">4h ago</span>
+        <span class="status-dot fail"></span>
+      </div>
+    </div>
+    <div class="url-card-body">
+      <div class="history-section">
+        <div class="history-day-label">Today</div>
+        <table class="history-table">
+          <thead><tr><th>Time</th><th></th><th>DNS</th><th>TCP</th><th>TLS</th><th>TTFB</th><th>Total</th></tr></thead>
+          <tbody>
+            <tr class="error-row"><td class="time-col">10:18</td><td class="status-fail">&#x2717;</td><td>18ms</td><td>55ms</td><td>115ms</td><td>--</td><td>timeout</td></tr>
+            <tr><td colspan="7" class="error-msg">TTFB timeout after 30000ms &mdash; connection established but server did not respond</td></tr>
+            <tr><td class="time-col">08:45</td><td class="status-ok">&#x2713;</td><td>16ms</td><td>52ms</td><td>110ms</td><td>262ms</td><td class="total-col">440ms</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card-actions">
+        <button class="btn-secondary">&#x25B6; Run again</button>
+        <a class="link-danger" href="#">Remove from watchlist</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- 15. expired.badssl.com — FAILED (TLS error) -->
+  <div class="url-card failed">
+    <div class="url-card-header" onclick="this.parentElement.classList.toggle('expanded')">
+      <span class="url-card-expand-icon">&#x25B8;</span>
+      <div class="url-card-header-row1">
+        <span class="url-card-url">expired.badssl.com</span>
+        <div class="url-card-timings">
+          <span class="timing-phase"><span class="label">dns</span>12ms</span>
+          <span class="timing-phase"><span class="label">tcp</span>38ms</span>
+          <span class="timing-phase" style="color: var(--red);"><span class="label">tls</span>err</span>
+          <span class="timing-phase"><span class="label">ttfb</span>--</span>
+          <span class="timing-total" style="color: var(--red);"><span class="label">total</span>150ms</span>
+        </div>
+      </div>
+      <div class="url-card-header-row2">
+        <div class="sparkline-container">
+          <svg width="80" height="16" viewBox="0 0 80 16">
+            <circle cx="76" cy="13" r="1.5" fill="#ef4444" opacity="0.6"/>
+          </svg>
+        </div>
+        <span class="badge badge-failed">fail</span>
+        <span class="badge badge-count">1</span>
+        <span class="url-card-ago">1d ago</span>
+        <span class="status-dot fail"></span>
+      </div>
+    </div>
+    <div class="url-card-body">
+      <div class="history-section">
+        <div class="history-day-label">Yesterday</div>
+        <table class="history-table">
+          <thead><tr><th>Time</th><th></th><th>DNS</th><th>TCP</th><th>TLS</th><th>TTFB</th><th>Total</th></tr></thead>
+          <tbody>
+            <tr class="error-row"><td class="time-col">16:42</td><td class="status-fail">&#x2717;</td><td>12ms</td><td>38ms</td><td>err</td><td>--</td><td>150ms</td></tr>
+            <tr><td colspan="7" class="error-msg">TLS handshake failed: certificate has expired (NotAfter: 2015-04-12T23:59:59Z)</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card-actions">
+        <button class="btn-secondary">&#x25B6; Run again</button>
+        <a class="link-danger" href="#">Remove from watchlist</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- 16. nonexistent.invalid — FAILED (DNS failure) -->
+  <div class="url-card failed">
+    <div class="url-card-header" onclick="this.parentElement.classList.toggle('expanded')">
+      <span class="url-card-expand-icon">&#x25B8;</span>
+      <div class="url-card-header-row1">
+        <span class="url-card-url">nonexistent.invalid</span>
+        <div class="url-card-timings">
+          <span class="timing-phase" style="color: var(--red);"><span class="label">dns</span>err</span>
+          <span class="timing-phase"><span class="label">tcp</span>--</span>
+          <span class="timing-phase"><span class="label">tls</span>--</span>
+          <span class="timing-phase"><span class="label">ttfb</span>--</span>
+          <span class="timing-total" style="color: var(--red);"><span class="label">total</span>0ms</span>
+        </div>
+      </div>
+      <div class="url-card-header-row2">
+        <div class="sparkline-container">
+          <svg width="80" height="16" viewBox="0 0 80 16">
+            <circle cx="76" cy="14" r="1.5" fill="#ef4444" opacity="0.6"/>
+          </svg>
+        </div>
+        <span class="badge badge-failed">fail</span>
+        <span class="badge badge-count">1</span>
+        <span class="url-card-ago">2d ago</span>
+        <span class="status-dot fail"></span>
+      </div>
+    </div>
+    <div class="url-card-body">
+      <div class="history-section">
+        <div class="history-day-label">Apr 13</div>
+        <table class="history-table">
+          <thead><tr><th>Time</th><th></th><th>DNS</th><th>TCP</th><th>TLS</th><th>TTFB</th><th>Total</th></tr></thead>
+          <tbody>
+            <tr class="error-row"><td class="time-col">11:30</td><td class="status-fail">&#x2717;</td><td>err</td><td>--</td><td>--</td><td>--</td><td>0ms</td></tr>
+            <tr><td colspan="7" class="error-msg">DNS resolution failed: NXDOMAIN &mdash; domain does not exist</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card-actions">
+        <button class="btn-secondary">&#x25B6; Run again</button>
+        <a class="link-danger" href="#">Remove from watchlist</a>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+</body>
+</html>

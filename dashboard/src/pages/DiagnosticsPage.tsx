@@ -499,8 +499,8 @@ export function DiagnosticsPage() {
       api.listTestConfigs(projectId),
       api.listTestRuns(projectId, { endpoint_kind: 'network', limit: 200 }),
     ]).then(([cfgs, runs]) => {
-      // Filter to only 'network' endpoint_kind configs
-      const networkConfigs = cfgs.filter(c => c.endpoint_kind === 'network');
+      // Filter to only 'network' endpoint configs — handle both flat and nested shapes
+      const networkConfigs = cfgs.filter((c: any) => c.endpoint_kind === 'network' || c.endpoint?.kind === 'network');
       setConfigs(networkConfigs);
       setAllRuns(runs);
       setLoading(false);
