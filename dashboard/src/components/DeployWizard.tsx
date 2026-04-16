@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { api } from '../api/client';
-import type { CloudStatus, CloudConnection, DeployEndpoint, ModeGroup } from '../api/types';
+import type { CloudConnection, DeployEndpoint, ModeGroup } from '../api/types';
 import { THROUGHPUT_IDS } from '../lib/chart';
 import { ModeSelector } from './common/ModeSelector';
 import { PayloadSelector } from './common/PayloadSelector';
@@ -43,9 +43,8 @@ function emptyEndpoint(provider = 'azure'): DeployEndpoint {
 
 export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProps) {
   const [step, setStep] = useState(1);
-  const [cloudStatus, setCloudStatus] = useState<CloudStatus | null>(null);
   const [cloudConnections, setCloudConnections] = useState<CloudConnection[]>([]);
-  const [cloudAccountProviders, setCloudAccountProviders] = useState<Set<string>>(new Set());
+  const [cloudAccounts, setCloudAccounts] = useState<{ account_id: string; name: string; provider: string; status: string }[]>([]);
   const [cloudLoading, setCloudLoading] = useState(true);
   const [endpoints, setEndpoints] = useState<DeployEndpoint[]>([emptyEndpoint()]);
   const [name, setName] = useState('');
@@ -76,17 +75,14 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
   const currentStepName = stepList[step - 1] || 'cloud-status';
 
   useEffect(() => {
-    api.getCloudStatus(projectId)
-      .then(setCloudStatus)
-      .catch(() => setCloudStatus(null))
-      .finally(() => setCloudLoading(false));
     api.getModes().then(r => setModeGroups(r.groups)).catch(() => {});
-    api.getCloudConnections(projectId)
-      .then(conns => setCloudConnections(conns))
-      .catch(() => {});
-    api.getCloudAccounts(projectId)
-      .then(accts => setCloudAccountProviders(new Set(accts.map((a: { provider: string }) => a.provider))))
-      .catch(() => {});
+    Promise.all([
+      api.getCloudConnections(projectId).catch(() => []),
+      api.getCloudAccounts(projectId).catch(() => []),
+    ]).then(([conns, accts]) => {
+      setCloudConnections(Array.isArray(conns) ? conns : []);
+      setCloudAccounts(Array.isArray(accts) ? accts : []);
+    }).finally(() => setCloudLoading(false));
   }, [projectId]);
 
   const handleKeyDown = useCallback(
@@ -246,11 +242,8 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
 
   const providerAvailable = (p: string) => {
     if (p === 'lan') return true;
-    // Available if ANY auth path works: CLI authenticated, cloud connection, or cloud account
-    const cliOk = cloudStatus?.[p as keyof CloudStatus]?.authenticated ?? false;
-    const hasConnection = cloudConnections.some(c => c.provider === p);
-    const hasAccount = cloudAccountProviders.has(p);
-    return cliOk || hasConnection || hasAccount;
+    return cloudConnections.some(c => c.provider === p)
+      || cloudAccounts.some(a => a.provider === p);
   };
 
   const titleId = 'deploy-wizard-title';
@@ -295,11 +288,7 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
           {/* Step: Target Config (cloud status shown inline) */}
           {currentStepName === 'endpoint-config' && (
             <div>
-              <CloudProviderStatus
-                cloudStatus={cloudStatus}
-                loading={cloudLoading}
-                availableClouds={[...cloudAccountProviders, ...cloudConnections.map(c => c.provider)]}
-              />
+              <CloudProviderStatus accounts={cloudAccounts} loading={cloudLoading} />
 
               <p className="text-sm text-gray-400 mb-3">Configure targets to deploy:</p>
               {endpoints.map((ep, idx) => (

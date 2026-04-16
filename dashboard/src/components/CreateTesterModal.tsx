@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { testersApi, type TesterRow } from '../api/testers';
 import { api } from '../api/client';
-import type { CloudStatus } from '../api/types';
 import { CloudProviderStatus } from './common/CloudProviderStatus';
 
 interface CreateTesterModalProps {
@@ -137,7 +136,7 @@ export function CreateTesterModal({
   const [autoProbeEnabled, setAutoProbeEnabled] = useState(false);
 
   const [availableClouds, setAvailableClouds] = useState<string[]>([]);
-  const [cloudStatus, setCloudStatus] = useState<CloudStatus | null>(null);
+  const [cloudAccounts, setCloudAccounts] = useState<{ account_id: string; name: string; provider: string; status: string }[]>([]);
   const [existingNames, setExistingNames] = useState<Set<string>>(new Set());
   const [regions, setRegions] = useState<string[]>([]);
   const [stage, setStage] = useState<Stage>('form');
@@ -156,7 +155,6 @@ export function CreateTesterModal({
   // Also load existing tester names for unique-name suggestion
   useEffect(() => {
     let cancelled = false;
-    api.getCloudStatus(projectId).then(setCloudStatus).catch(() => {});
     Promise.all([
       api.getCloudConnections(projectId).catch(() => []),
       api.getCloudAccounts(projectId).catch(() => []),
@@ -166,9 +164,7 @@ export function CreateTesterModal({
       const connsArr = Array.isArray(conns) ? conns : [];
       const acctsArr = Array.isArray(accts) ? accts : [];
       const testersArr = Array.isArray(testers) ? testers : [];
-      // Include all configured providers — not just 'active' ones.
-      // Error-status accounts still represent an intent to use that provider;
-      // hiding them silently makes the dropdown empty and confusing.
+      setCloudAccounts(acctsArr);
       const fromConns = connsArr
         .map((c: { provider: string }) => c.provider);
       const fromAccts = acctsArr
@@ -373,7 +369,7 @@ export function CreateTesterModal({
             </div>
           ) : (
             <form onSubmit={handleSubmit} className="space-y-4">
-              <CloudProviderStatus cloudStatus={cloudStatus} availableClouds={availableClouds} />
+              <CloudProviderStatus accounts={cloudAccounts} />
 
               {/* Cloud */}
               <div>
