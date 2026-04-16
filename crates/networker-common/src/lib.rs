@@ -1,4 +1,6 @@
 pub mod messages;
+/// WebSocket protocol version (v0.28.0 — bumped to 2 with the TestConfig refactor).
+pub const PROTOCOL_VERSION: u32 = 2;
 pub mod phase;
 pub mod protocol;
 pub mod test_config;
