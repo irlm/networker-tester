@@ -119,6 +119,7 @@ export function CreateTesterModal({
   onClose,
 }: CreateTesterModalProps) {
   const [cloud, setCloud] = useState(defaultCloud);
+  const [selectedAccountId, setSelectedAccountId] = useState<string>('');
   const [region, setRegion] = useState(defaultRegion);
   const [name, setName] = useState(defaultName);
   const [vmSize, setVmSize] = useState(defaultVmSize);
@@ -172,9 +173,16 @@ export function CreateTesterModal({
       const providers = [...new Set(acctsArr.map((a: { provider: string }) => a.provider))] as string[];
       setAvailableClouds(providers.length > 0 ? providers : ['azure']);
       setExistingNames(new Set(testersArr.map((t: { name: string }) => t.name)));
-      if (providers.length > 0 && !providers.includes(cloud)) {
+      // Auto-select first account and set provider accordingly
+      if (acctsArr.length > 0) {
+        const first = acctsArr[0];
+        setSelectedAccountId(first.account_id);
+        setCloud(first.provider);
+        setVmSize(DEFAULT_VM_SIZE[first.provider] || '');
+        setRegion('');
+      } else if (providers.length > 0 && !providers.includes(cloud)) {
         setCloud(providers[0]);
-        setVmSize(DEFAULT_VM_SIZE[providers[0]] || providers[0]);
+        setVmSize(DEFAULT_VM_SIZE[providers[0]] || '');
       }
       // Re-validate stale accounts (> 10 min)
       const tenMinAgo = Date.now() - 10 * 60 * 1000;
@@ -384,9 +392,10 @@ export function CreateTesterModal({
                 </label>
                 <select
                   id="tester-cloud"
-                  value={cloud}
+                  value={selectedAccountId}
                   onChange={(e) => {
                     const acctId = e.target.value;
+                    setSelectedAccountId(acctId);
                     const acct = cloudAccounts.find(a => a.account_id === acctId);
                     if (acct) {
                       setCloud(acct.provider);
