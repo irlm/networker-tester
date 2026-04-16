@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { testersApi, type TesterRow } from '../api/testers';
-import type { EndpointRef, EndpointKind, Workload, Methodology, TestConfigCreate, ModeGroup, Deployment, ComparisonCell, ComparisonGroupCreate } from '../api/types';
+import type { EndpointRef, EndpointKind, Workload, Methodology, TestConfigCreate, ModeGroup, Deployment, ComparisonCell, ComparisonGroupCreate, CloudAccountSummary } from '../api/types';
 import { Breadcrumb } from '../components/common/Breadcrumb';
 import { ModeSelector } from '../components/common/ModeSelector';
 import { PayloadSelector } from '../components/common/PayloadSelector';
@@ -11,8 +11,10 @@ import { useProject } from '../hooks/useProject';
 import { useToast } from '../hooks/useToast';
 import { THROUGHPUT_IDS } from '../lib/chart';
 
-type Step = 1 | 2 | 3 | 4;
+type Step = 1 | 2 | 3 | 4 | 5;
+const STEP_LABELS: Record<Step, string> = { 1: 'Runner', 2: 'Target', 3: 'Workload', 4: 'Methodology', 5: 'Launch' };
 const ENDPOINT_KINDS: EndpointKind[] = ['network', 'proxy', 'runtime'];
+type RunnerChoice = 'auto' | 'specific' | 'create';
 
 const DEFAULT_METHODOLOGY: Methodology = {
   warmup_runs: 5,
@@ -147,6 +149,68 @@ const REGIONS: Record<string, string[]> = {
   GCP: ['us-central1', 'us-east1', 'us-west1', 'europe-west1', 'europe-west4', 'asia-southeast1', 'asia-northeast1', 'australia-southeast1'],
 };
 
+// ── Runner/target creation constants (mirrored from CreateTesterModal) ──
+
+const VM_SIZE_PRESETS: Record<string, { value: string; label: string }[]> = {
+  azure: [
+    { value: 'Standard_B1s', label: 'Standard_B1s (1 vCPU, 1 GB)' },
+    { value: 'Standard_B2s', label: 'Standard_B2s (2 vCPU, 4 GB)' },
+    { value: 'Standard_D2s_v3', label: 'Standard_D2s_v3 (2 vCPU, 8 GB)' },
+    { value: 'Standard_D4s_v3', label: 'Standard_D4s_v3 (4 vCPU, 16 GB)' },
+  ],
+  aws: [
+    { value: 't3.micro', label: 't3.micro (2 vCPU, 1 GB)' },
+    { value: 't3.small', label: 't3.small (2 vCPU, 2 GB)' },
+    { value: 't3.medium', label: 't3.medium (2 vCPU, 4 GB)' },
+    { value: 't3.large', label: 't3.large (2 vCPU, 8 GB)' },
+  ],
+  gcp: [
+    { value: 'e2-micro', label: 'e2-micro (2 vCPU, 1 GB)' },
+    { value: 'e2-small', label: 'e2-small (2 vCPU, 2 GB)' },
+    { value: 'e2-medium', label: 'e2-medium (2 vCPU, 4 GB)' },
+  ],
+};
+
+const DEFAULT_VM_SIZE: Record<string, string> = {
+  azure: 'Standard_B2s', aws: 't3.small', gcp: 'e2-small',
+};
+
+const OS_OPTIONS: Record<string, { value: string; label: string; variants: string[] }[]> = {
+  azure: [
+    { value: 'ubuntu-24.04', label: 'Ubuntu 24.04 LTS', variants: ['server', 'desktop'] },
+    { value: 'ubuntu-22.04', label: 'Ubuntu 22.04 LTS', variants: ['server'] },
+    { value: 'debian-12', label: 'Debian 12', variants: ['server'] },
+    { value: 'windows-2022', label: 'Windows Server 2022', variants: ['server'] },
+    { value: 'windows-11', label: 'Windows 11', variants: ['desktop'] },
+  ],
+  aws: [
+    { value: 'ubuntu-24.04', label: 'Ubuntu 24.04 LTS', variants: ['server'] },
+    { value: 'ubuntu-22.04', label: 'Ubuntu 22.04 LTS', variants: ['server'] },
+    { value: 'debian-12', label: 'Debian 12', variants: ['server'] },
+    { value: 'windows-2022', label: 'Windows Server 2022', variants: ['server'] },
+  ],
+  gcp: [
+    { value: 'ubuntu-24.04', label: 'Ubuntu 24.04 LTS', variants: ['server'] },
+    { value: 'ubuntu-22.04', label: 'Ubuntu 22.04 LTS', variants: ['server'] },
+    { value: 'debian-12', label: 'Debian 12', variants: ['server'] },
+    { value: 'windows-2022', label: 'Windows Server 2022', variants: ['server'] },
+  ],
+};
+
+const REGIONS_BY_CLOUD: Record<string, string[]> = {
+  azure: ['eastus', 'eastus2', 'westus2', 'westus3', 'centralus', 'northeurope', 'westeurope', 'uksouth', 'francecentral', 'japaneast', 'southeastasia', 'australiaeast'],
+  aws: ['us-east-1', 'us-east-2', 'us-west-1', 'us-west-2', 'eu-west-1', 'eu-west-2', 'eu-central-1', 'ap-northeast-1', 'ap-southeast-1', 'ap-southeast-2'],
+  gcp: ['us-central1', 'us-east1', 'us-east4', 'us-west1', 'europe-west1', 'europe-west2', 'asia-east1', 'asia-northeast1', 'asia-southeast1'],
+};
+
+const DEPLOY_REGIONS: Record<string, string[]> = {
+  azure: ['eastus', 'westus2', 'westeurope', 'northeurope', 'southeastasia'],
+  aws: ['us-east-1', 'us-west-2', 'eu-west-1', 'eu-central-1', 'ap-southeast-1'],
+  gcp: ['us-central1', 'us-east1', 'europe-west1', 'europe-west4', 'asia-southeast1'],
+};
+
+const HTTP_STACKS = ['nginx', 'iis'] as const;
+
 // ── Methodology presets ─────────────────────────────────────────────────
 
 const METHODOLOGY_FROM_PRESET: Record<string, Partial<Methodology>> = {
@@ -265,7 +329,26 @@ export function NewRunPage() {
   // Step tracking
   const [step, setStep] = useState<Step>(1);
 
-  // Step 1: Endpoint
+  // ── Step 1: Runner ──────────────────────────────────────────────────
+  const [runnerChoice, setRunnerChoice] = useState<RunnerChoice>('auto');
+  const [testers, setTesters] = useState<TesterRow[]>([]);
+  const [testersLoading, setTestersLoading] = useState(false);
+  const [selectedTesterId, setSelectedTesterId] = useState<string | null>(null);
+
+  // Runner creation inline fields
+  const [newRunnerCloud, setNewRunnerCloud] = useState('azure');
+  const [newRunnerAccountId, setNewRunnerAccountId] = useState('');
+  const [newRunnerRegion, setNewRunnerRegion] = useState('');
+  const [newRunnerVmSize, setNewRunnerVmSize] = useState('');
+  const [newRunnerOs, setNewRunnerOs] = useState('ubuntu-24.04');
+  const [newRunnerVariant, setNewRunnerVariant] = useState('server');
+  const [newRunnerName, setNewRunnerName] = useState('');
+
+  // Cloud accounts (shared by runner + target creation)
+  const [cloudAccounts, setCloudAccounts] = useState<CloudAccountSummary[]>([]);
+  const [cloudAccountsLoading, setCloudAccountsLoading] = useState(false);
+
+  // ── Step 2: Target ──────────────────────────────────────────────────
   const [endpointKind, setEndpointKind] = useState<EndpointKind>('network');
   const [host, setHost] = useState('');
   const [port, setPort] = useState('');
@@ -273,69 +356,85 @@ export function NewRunPage() {
   const [runtimeId, setRuntimeId] = useState('');
   const [language, setLanguage] = useState('');
 
-  // Step 1 -- Proxy: deployed endpoints
+  // Proxy: deployed endpoints
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [deploymentsLoading, setDeploymentsLoading] = useState(false);
+  const [proxySubType, setProxySubType] = useState<'existing' | 'create'>('existing');
+  // Proxy create-new fields
+  const [newTargetAccountId, setNewTargetAccountId] = useState('');
+  const [newTargetRegion, setNewTargetRegion] = useState('');
+  const [newTargetOs, setNewTargetOs] = useState<'linux' | 'windows'>('linux');
+  const [newTargetHttpStack, setNewTargetHttpStack] = useState('nginx');
+  const [newTargetEphemeral, setNewTargetEphemeral] = useState(true);
 
-  // Step 1 -- Runtime: template + language selection
+  // Runtime: template + language selection
   const [runtimeTemplate, setRuntimeTemplate] = useState<string | null>(null);
   const [runtimeLangs, setRuntimeLangs] = useState<Set<string>>(new Set());
   const [customCloud, setCustomCloud] = useState('Azure');
   const [customRegion, setCustomRegion] = useState('eastus');
   const [customOs, setCustomOs] = useState<'linux' | 'windows'>('linux');
 
-  // Step 1 -- Tester picker (optional, for proxy + runtime)
-  const [testers, setTesters] = useState<TesterRow[]>([]);
-  const [testersLoading, setTestersLoading] = useState(false);
-  const [selectedTesterId, setSelectedTesterId] = useState<string | null>(null);
-  const [showTesterPicker, setShowTesterPicker] = useState(false);
-
-  // Step 1 -- Matrix builder (comparison group)
+  // Matrix builder (comparison group)
   const [compareLanguages, setCompareLanguages] = useState<string[]>([]);
   const [compareRunners, setCompareRunners] = useState<string[]>([]);
 
-  // Step 2: Workload
+  // ── Step 3: Workload ────────────────────────────────────────────────
   const [modeGroups, setModeGroups] = useState<ModeGroup[]>([]);
   const [selectedModes, setSelectedModes] = useState<Set<string>>(new Set(['http2']));
   const [runs, setRuns] = useState(10);
   const [concurrency, setConcurrency] = useState(1);
   const [timeoutMs, setTimeoutMs] = useState(5000);
   const [selectedPayloads, setSelectedPayloads] = useState<Set<string>>(new Set());
+  const [insecure, setInsecure] = useState(false);
+  const [connectionReuse, setConnectionReuse] = useState(true);
+  const [captureMode, setCaptureMode] = useState<'none' | 'tester' | 'endpoint' | 'both'>('none');
 
-  // Step 3: Methodology (optional)
+  // Step 4: Methodology (optional)
   const [benchmarkMode, setBenchmarkMode] = useState(false);
   const [methodology, setMethodology] = useState<Methodology>(DEFAULT_METHODOLOGY);
 
-  // Step 4: Config name + schedule
+  // Step 5: Config name + schedule
   const [configName, setConfigName] = useState('');
   const [addSchedule, setAddSchedule] = useState(false);
   const [cronExpr, setCronExpr] = useState('0 0 * * * *');
   const [submitting, setSubmitting] = useState(false);
 
-  // Load mode groups
+  // Load mode groups, agents, deployments, cloud accounts on mount
   useEffect(() => {
     api.getModes().then(r => setModeGroups(r.groups)).catch(() => {});
-  }, []);
 
-  // Load deployments when proxy tab is active
-  useEffect(() => {
-    if (endpointKind !== 'proxy') return;
-    setDeploymentsLoading(true);
-    api.getDeployments(projectId)
-      .then(deps => setDeployments(deps))
-      .catch(() => setDeployments([]))
-      .finally(() => setDeploymentsLoading(false));
-  }, [endpointKind, projectId]);
-
-  // Load testers when proxy/runtime tab is active (needed for matrix builder + tester picker)
-  useEffect(() => {
-    if (endpointKind !== 'proxy' && endpointKind !== 'runtime') return;
     setTestersLoading(true);
     testersApi.listTesters(projectId)
       .then(rows => setTesters(rows))
       .catch(() => setTesters([]))
       .finally(() => setTestersLoading(false));
-  }, [endpointKind, projectId]);
+
+    setDeploymentsLoading(true);
+    api.getDeployments(projectId, { limit: 50 })
+      .then(deps => setDeployments(deps))
+      .catch(() => setDeployments([]))
+      .finally(() => setDeploymentsLoading(false));
+
+    setCloudAccountsLoading(true);
+    api.getCloudAccounts(projectId)
+      .then(accts => {
+        const list = Array.isArray(accts) ? accts : [];
+        list.sort((a, b) => {
+          if (a.status === 'active' && b.status !== 'active') return -1;
+          if (a.status !== 'active' && b.status === 'active') return 1;
+          return a.provider.localeCompare(b.provider) || a.name.localeCompare(b.name);
+        });
+        setCloudAccounts(list);
+        // Pre-select first account for inline create forms
+        if (list.length > 0) {
+          setNewRunnerAccountId(list[0].account_id);
+          setNewRunnerCloud(list[0].provider);
+          setNewTargetAccountId(list[0].account_id);
+        }
+      })
+      .catch(() => setCloudAccounts([]))
+      .finally(() => setCloudAccountsLoading(false));
+  }, [projectId]);
 
   const handleModeToggle = useCallback((id: string) => {
     setSelectedModes(prev => {
@@ -421,6 +520,37 @@ export function NewRunPage() {
       .map(t => ({ id: t.tester_id, label: `${t.name} (${t.cloud} ${t.region})`, region: t.region }));
   }, [testers]);
 
+  /** Runner summary stats */
+  const runnerStats = useMemo(() => {
+    const online = testers.filter(t => t.power_state === 'running');
+    const busy = online.filter(t => t.allocation === 'locked');
+    const idle = online.filter(t => t.allocation === 'idle');
+    const offline = testers.filter(t => t.power_state !== 'running');
+    return { online: online.length, busy: busy.length, idle: idle.length, offline: offline.length };
+  }, [testers]);
+
+  /** Selected runner info for summary display */
+  const selectedRunner = useMemo(() => {
+    if (runnerChoice === 'auto') return null;
+    if (runnerChoice === 'create') return null;
+    return testers.find(t => t.tester_id === selectedTesterId) ?? null;
+  }, [runnerChoice, selectedTesterId, testers]);
+
+  /** Regions for new runner cloud */
+  const newRunnerRegions = useMemo(() => {
+    return REGIONS_BY_CLOUD[newRunnerCloud] || [];
+  }, [newRunnerCloud]);
+
+  /** VM size presets for new runner cloud */
+  const newRunnerVmSizes = useMemo(() => {
+    return VM_SIZE_PRESETS[newRunnerCloud] || VM_SIZE_PRESETS.azure;
+  }, [newRunnerCloud]);
+
+  /** OS options for new runner cloud */
+  const newRunnerOsOptions = useMemo(() => {
+    return OS_OPTIONS[newRunnerCloud] || [];
+  }, [newRunnerCloud]);
+
   const toggleCompareLanguage = useCallback((lang: string) => {
     setCompareLanguages(prev =>
       prev.includes(lang) ? prev.filter(l => l !== lang) : [...prev, lang],
@@ -484,15 +614,23 @@ export function NewRunPage() {
 
   const canAdvance = (s: Step): boolean => {
     switch (s) {
-      case 1:
+      case 1: // Runner
+        if (runnerChoice === 'auto') return true;
+        if (runnerChoice === 'specific') return selectedTesterId !== null;
+        // create: need account, region, name
+        return newRunnerAccountId !== '' && newRunnerRegion !== '' && newRunnerName !== '';
+      case 2: // Target
         if (endpointKind === 'network') return host.trim().length > 0;
-        if (endpointKind === 'proxy') return proxyEndpointId.trim().length > 0;
+        if (endpointKind === 'proxy') {
+          if (proxySubType === 'existing') return proxyEndpointId.trim().length > 0;
+          return newTargetAccountId !== '' && newTargetRegion !== '';
+        }
         return runtimeId.trim().length > 0 && language.trim().length > 0;
-      case 2:
+      case 3: // Workload
         return selectedModes.size > 0;
-      case 3:
+      case 4: // Methodology
         return true;
-      case 4:
+      case 5: // Launch
         return configName.trim().length > 0;
     }
   };
@@ -538,13 +676,16 @@ export function NewRunPage() {
       const sizeMap: Record<string, number> = { '64k': 65536, '1m': 1048576, '16m': 16777216 };
       const payloadSizes = [...selectedPayloads].map(s => sizeMap[s]).filter(Boolean);
 
+      const captureModeMap: Record<string, string> = { none: 'metrics-only', tester: 'headers-only', endpoint: 'headers-only', both: 'full' };
       const workload: Workload = {
         modes: [...selectedModes],
         runs,
         concurrency,
         timeout_ms: timeoutMs,
         payload_sizes: payloadSizes,
-        capture_mode: 'headers-only',
+        capture_mode: (captureModeMap[captureMode] ?? 'headers-only') as Workload['capture_mode'],
+        insecure: insecure || undefined,
+        connection_reuse: connectionReuse || undefined,
       };
 
       // ── Matrix path: create a ComparisonGroup ──────────────────────
@@ -696,10 +837,10 @@ export function NewRunPage() {
           <div className="ml-0">
             {/* Step indicator */}
             <div className="flex items-center gap-1 mb-8 text-xs">
-              {[1, 2, 3, 4].map(s => (
+              {([1, 2, 3, 4, 5] as Step[]).map(s => (
                 <button
                   key={s}
-                  onClick={() => s < step && setStep(s as Step)}
+                  onClick={() => s < step && setStep(s)}
                   disabled={s > step}
                   className={`px-3 py-1.5 rounded transition-colors ${
                     s === step
@@ -709,13 +850,281 @@ export function NewRunPage() {
                         : 'bg-gray-900 text-gray-600 cursor-not-allowed'
                   }`}
                 >
-                  {s === 1 ? 'Target' : s === 2 ? 'Workload' : s === 3 ? 'Methodology' : 'Save & Launch'}
+                  {STEP_LABELS[s]}
                 </button>
               ))}
             </div>
 
-            {/* Step 1: Target kind */}
+            {/* Step 1: Runner */}
             {step === 1 && (
+              <div className="space-y-4">
+                <div>
+                  <label className="text-xs text-gray-500 mb-2 block">Select a runner</label>
+
+                  {/* Runner summary */}
+                  {!testersLoading && testers.length > 0 && (
+                    <p className="text-[10px] font-mono text-gray-600 mb-3">
+                      {runnerStats.online} runner{runnerStats.online !== 1 ? 's' : ''} online
+                      {runnerStats.busy > 0 && <> &middot; {runnerStats.busy} busy</>}
+                      {runnerStats.offline > 0 && <> &middot; {runnerStats.offline} offline</>}
+                    </p>
+                  )}
+
+                  {/* Runner choice radios */}
+                  <div className="space-y-2" role="radiogroup" aria-label="Runner selection">
+                    {/* Auto-pick */}
+                    <label
+                      className={`block border p-3 cursor-pointer transition-colors ${
+                        runnerChoice === 'auto'
+                          ? 'border-cyan-500/50 bg-cyan-500/5'
+                          : 'border-gray-800 hover:border-gray-600'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="radio"
+                          name="runner-choice"
+                          checked={runnerChoice === 'auto'}
+                          onChange={() => { setRunnerChoice('auto'); setSelectedTesterId(null); }}
+                          className="accent-cyan-400"
+                        />
+                        <div>
+                          <span className="text-sm text-gray-200">Auto-pick</span>
+                          <p className="text-[10px] text-gray-600">First available online runner</p>
+                        </div>
+                      </div>
+                    </label>
+
+                    {/* Pick specific */}
+                    <label
+                      className={`block border p-3 cursor-pointer transition-colors ${
+                        runnerChoice === 'specific'
+                          ? 'border-cyan-500/50 bg-cyan-500/5'
+                          : 'border-gray-800 hover:border-gray-600'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="radio"
+                          name="runner-choice"
+                          checked={runnerChoice === 'specific'}
+                          onChange={() => setRunnerChoice('specific')}
+                          className="accent-cyan-400"
+                        />
+                        <span className="text-sm text-gray-200">Pick specific runner</span>
+                      </div>
+                    </label>
+
+                    {/* Specific runner list */}
+                    {runnerChoice === 'specific' && (
+                      <div className="ml-6 space-y-1.5">
+                        {testersLoading && (
+                          <p className="text-xs text-gray-500 motion-safe:animate-pulse">Loading runners...</p>
+                        )}
+                        {!testersLoading && testers.length === 0 && (
+                          <p className="text-xs text-gray-500">No runners available. Create one or use Auto-pick.</p>
+                        )}
+                        {!testersLoading && testers.length > 0 && (
+                          <div className="space-y-1" role="radiogroup" aria-label="Available runners">
+                            {testers.map(row => {
+                              const isOnline = row.power_state === 'running';
+                              const isBusy = isOnline && row.allocation === 'locked';
+                              const isIdle = isOnline && row.allocation === 'idle';
+                              const isOffline = !isOnline;
+                              const checked = selectedTesterId === row.tester_id;
+                              return (
+                                <label
+                                  key={row.tester_id}
+                                  className={`block border p-2.5 transition-colors ${
+                                    isOffline ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'
+                                  } ${
+                                    checked
+                                      ? 'border-cyan-500/50 bg-cyan-500/5'
+                                      : 'border-gray-800 hover:border-gray-600'
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-3">
+                                    <input
+                                      type="radio"
+                                      name="runner-specific"
+                                      value={row.tester_id}
+                                      checked={checked}
+                                      disabled={isOffline}
+                                      onChange={() => setSelectedTesterId(row.tester_id)}
+                                      className="accent-cyan-400"
+                                    />
+                                    <span className={`w-1.5 h-1.5 rounded-full ${isIdle ? 'bg-green-400' : isBusy ? 'bg-yellow-400' : 'bg-gray-600'}`} />
+                                    <span className="text-sm font-medium text-gray-100 flex-1">{row.name}</span>
+                                    <span className="text-[10px] font-mono text-gray-500">{row.cloud} / {row.region}</span>
+                                    <span className={`text-[10px] font-mono px-1.5 py-0.5 border rounded ${testerStatusClass(row)}`}>
+                                      {testerStatusLabel(row)}
+                                    </span>
+                                  </div>
+                                  {isBusy && checked && row.locked_by_config_id && (
+                                    <p className="text-[10px] text-yellow-400 ml-9 mt-1">
+                                      Currently running {row.locked_by_config_id.slice(0, 8)}. Your run will queue behind it.
+                                    </p>
+                                  )}
+                                </label>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Create new runner */}
+                    <label
+                      className={`block border p-3 cursor-pointer transition-colors ${
+                        runnerChoice === 'create'
+                          ? 'border-cyan-500/50 bg-cyan-500/5'
+                          : 'border-gray-800 hover:border-gray-600'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="radio"
+                          name="runner-choice"
+                          checked={runnerChoice === 'create'}
+                          onChange={() => setRunnerChoice('create')}
+                          className="accent-cyan-400"
+                        />
+                        <div>
+                          <span className="text-sm text-gray-200">Create new runner</span>
+                          <p className="text-[10px] text-gray-600">Provision a cloud VM (~3 min). Run starts automatically when ready.</p>
+                        </div>
+                      </div>
+                    </label>
+
+                    {/* Create new runner inline form */}
+                    {runnerChoice === 'create' && (
+                      <div className="ml-6 border border-gray-800 rounded p-4 space-y-3">
+                        {/* Cloud Account */}
+                        <div>
+                          <label htmlFor="new-runner-cloud" className="block text-xs text-gray-400 mb-1">Cloud Account</label>
+                          {cloudAccountsLoading ? (
+                            <p className="text-xs text-gray-500 motion-safe:animate-pulse">Loading accounts...</p>
+                          ) : (
+                            <select
+                              id="new-runner-cloud"
+                              value={newRunnerAccountId}
+                              onChange={e => {
+                                const acctId = e.target.value;
+                                setNewRunnerAccountId(acctId);
+                                const acct = cloudAccounts.find(a => a.account_id === acctId);
+                                if (acct) {
+                                  setNewRunnerCloud(acct.provider);
+                                  setNewRunnerVmSize(DEFAULT_VM_SIZE[acct.provider] || '');
+                                  setNewRunnerRegion('');
+                                }
+                              }}
+                              className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                            >
+                              {cloudAccounts.length === 0 && (
+                                <option disabled value="">No cloud accounts -- add in Settings</option>
+                              )}
+                              {cloudAccounts.map(a => (
+                                <option key={a.account_id} value={a.account_id}>
+                                  {a.provider.toUpperCase()} -- {a.name}
+                                  {a.status === 'active' ? '' : ` (${a.status})`}
+                                </option>
+                              ))}
+                            </select>
+                          )}
+                        </div>
+
+                        {/* Region + VM Size */}
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label htmlFor="new-runner-region" className="block text-xs text-gray-400 mb-1">Region</label>
+                            <select
+                              id="new-runner-region"
+                              value={newRunnerRegion}
+                              onChange={e => setNewRunnerRegion(e.target.value)}
+                              className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                            >
+                              <option value="">Select region</option>
+                              {newRunnerRegions.map(r => <option key={r} value={r}>{r}</option>)}
+                            </select>
+                          </div>
+                          <div>
+                            <label htmlFor="new-runner-vmsize" className="block text-xs text-gray-400 mb-1">VM Size</label>
+                            <select
+                              id="new-runner-vmsize"
+                              value={newRunnerVmSize}
+                              onChange={e => setNewRunnerVmSize(e.target.value)}
+                              className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                            >
+                              {newRunnerVmSizes.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
+                            </select>
+                          </div>
+                        </div>
+
+                        {/* OS + Variant */}
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label htmlFor="new-runner-os" className="block text-xs text-gray-400 mb-1">OS</label>
+                            <select
+                              id="new-runner-os"
+                              value={newRunnerOs}
+                              onChange={e => {
+                                const os = e.target.value;
+                                setNewRunnerOs(os);
+                                const osDef = newRunnerOsOptions.find(o => o.value === os);
+                                if (osDef && !osDef.variants.includes(newRunnerVariant)) {
+                                  setNewRunnerVariant(osDef.variants[0]);
+                                }
+                              }}
+                              className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                            >
+                              {newRunnerOsOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                            </select>
+                          </div>
+                          <div>
+                            <label htmlFor="new-runner-variant" className="block text-xs text-gray-400 mb-1">Variant</label>
+                            <select
+                              id="new-runner-variant"
+                              value={newRunnerVariant}
+                              onChange={e => setNewRunnerVariant(e.target.value)}
+                              className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                            >
+                              {(newRunnerOsOptions.find(o => o.value === newRunnerOs)?.variants ?? ['server']).map(v => (
+                                <option key={v} value={v}>{v === 'server' ? 'Server' : v === 'desktop' ? 'Desktop' : v}</option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+
+                        {/* Name */}
+                        <div>
+                          <label htmlFor="new-runner-name" className="block text-xs text-gray-400 mb-1">Name</label>
+                          <input
+                            id="new-runner-name"
+                            value={newRunnerName}
+                            onChange={e => setNewRunnerName(e.target.value)}
+                            placeholder={`${newRunnerCloud}-${newRunnerRegion || 'runner'}`}
+                            className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="pt-4">
+                  <button
+                    onClick={() => setStep(2)}
+                    disabled={!canAdvance(1)}
+                    className="bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed text-white px-4 py-2 rounded text-sm transition-colors"
+                  >
+                    Next: Target
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Step 2: Target */}
+            {step === 2 && (
               <div className="space-y-4">
                 <div>
                   <label className="text-xs text-gray-500 mb-2 block">Target Type</label>
@@ -736,7 +1145,7 @@ export function NewRunPage() {
                   </div>
                 </div>
 
-                {/* -- Network endpoint (unchanged) -- */}
+                {/* -- Network endpoint -- */}
                 {endpointKind === 'network' && (
                   <div className="space-y-3">
                     <div>
@@ -764,98 +1173,196 @@ export function NewRunPage() {
                   </div>
                 )}
 
-                {/* -- Proxy endpoint -- deployed endpoint picker -- */}
+                {/* -- Proxy endpoint -- */}
                 {endpointKind === 'proxy' && (
-                  <div>
-                    <label className="text-xs text-gray-500 mb-2 block">Select a deployed target</label>
-
-                    {deploymentsLoading && (
-                      <p className="text-xs text-gray-500 motion-safe:animate-pulse">Loading targets...</p>
-                    )}
-
-                    {!deploymentsLoading && deployments.length === 0 && (
-                      <div className="border border-dashed border-gray-800 rounded p-4">
-                        <p className="text-sm text-gray-300 mb-1">No targets deployed yet.</p>
-                        <p className="text-xs text-gray-500 mb-3">
-                          Deploy a target from Infrastructure to use it as a proxy target.
-                        </p>
-                        <Link
-                          to={`/projects/${projectId}/vms`}
-                          className="text-xs text-cyan-400 hover:text-cyan-300 transition-colors"
+                  <div className="space-y-3">
+                    {/* Sub-type selector */}
+                    <div className="flex gap-1 bg-gray-900 rounded p-0.5 w-fit">
+                      {(['existing', 'create'] as const).map(sub => (
+                        <button
+                          key={sub}
+                          onClick={() => setProxySubType(sub)}
+                          className={`px-3 py-1 rounded text-xs transition-colors ${
+                            proxySubType === sub
+                              ? 'bg-gray-700 text-gray-100'
+                              : 'text-gray-500 hover:text-gray-300'
+                          }`}
                         >
-                          Go to Infrastructure / Targets
-                        </Link>
-                      </div>
-                    )}
+                          {sub === 'existing' ? 'Use existing target' : 'Create new target'}
+                        </button>
+                      ))}
+                    </div>
 
-                    {!deploymentsLoading && deployments.length > 0 && (
-                      <div className="space-y-2" role="radiogroup" aria-label="Deployed targets">
-                        {deployments.map(dep => {
-                          const checked = proxyEndpointId === dep.deployment_id;
-                          const ips = dep.endpoint_ips ?? [];
-                          const firstEndpoint = dep.config?.endpoints?.[0];
-                          return (
-                            <label
-                              key={dep.deployment_id}
-                              className={`block border p-3 cursor-pointer transition-colors ${
-                                checked
-                                  ? 'border-cyan-500/50 bg-cyan-500/5'
-                                  : 'border-gray-800 hover:border-gray-600'
-                              }`}
+                    {/* Existing target picker */}
+                    {proxySubType === 'existing' && (
+                      <>
+                        {deploymentsLoading && (
+                          <p className="text-xs text-gray-500 motion-safe:animate-pulse">Loading targets...</p>
+                        )}
+
+                        {!deploymentsLoading && deployments.length === 0 && (
+                          <div className="border border-dashed border-gray-800 rounded p-4">
+                            <p className="text-sm text-gray-300 mb-1">No targets deployed yet.</p>
+                            <p className="text-xs text-gray-500 mb-2">
+                              Switch to "Create new target" to deploy one inline.
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => setProxySubType('create')}
+                              className="text-xs text-cyan-400 hover:text-cyan-300 transition-colors"
                             >
-                              <div className="flex items-center gap-3">
-                                <input
-                                  type="radio"
-                                  name="proxy-endpoint"
-                                  value={dep.deployment_id}
-                                  checked={checked}
-                                  onChange={() => selectDeployment(dep)}
-                                  className="accent-cyan-400"
-                                />
-                                <div className="flex-1 min-w-0">
-                                  <span className="text-sm font-medium text-gray-100">{dep.name}</span>
-                                  <div className="flex items-center gap-2 mt-0.5">
-                                    {firstEndpoint?.provider && (
-                                      <span className="text-[10px] font-mono text-gray-500">
-                                        {firstEndpoint.provider}
-                                      </span>
-                                    )}
-                                    {firstEndpoint?.region && (
-                                      <span className="text-[10px] font-mono text-gray-500">
-                                        {firstEndpoint.region}
-                                      </span>
-                                    )}
-                                    {ips.length > 0 && (
-                                      <span className="text-[10px] font-mono text-gray-600">
-                                        {ips[0]}
-                                      </span>
-                                    )}
+                              Create new target
+                            </button>
+                          </div>
+                        )}
+
+                        {!deploymentsLoading && deployments.length > 0 && (
+                          <div className="space-y-2" role="radiogroup" aria-label="Deployed targets">
+                            {deployments.map(dep => {
+                              const checked = proxyEndpointId === dep.deployment_id;
+                              const ips = dep.endpoint_ips ?? [];
+                              const firstEndpoint = dep.config?.endpoints?.[0];
+                              const sameRegion = selectedRunner && firstEndpoint?.region === selectedRunner.region;
+                              return (
+                                <label
+                                  key={dep.deployment_id}
+                                  className={`block border p-3 cursor-pointer transition-colors ${
+                                    checked
+                                      ? 'border-cyan-500/50 bg-cyan-500/5'
+                                      : 'border-gray-800 hover:border-gray-600'
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-3">
+                                    <input
+                                      type="radio"
+                                      name="proxy-endpoint"
+                                      value={dep.deployment_id}
+                                      checked={checked}
+                                      onChange={() => selectDeployment(dep)}
+                                      className="accent-cyan-400"
+                                    />
+                                    <div className="flex-1 min-w-0">
+                                      <span className="text-sm font-medium text-gray-100">{dep.name}</span>
+                                      <div className="flex items-center gap-2 mt-0.5">
+                                        {firstEndpoint?.provider && (
+                                          <span className="text-[10px] font-mono text-gray-500">{firstEndpoint.provider}</span>
+                                        )}
+                                        {firstEndpoint?.region && (
+                                          <span className="text-[10px] font-mono text-gray-500">{firstEndpoint.region}</span>
+                                        )}
+                                        {sameRegion && (
+                                          <span className="text-[10px] font-mono text-green-500">same region as runner</span>
+                                        )}
+                                        {ips.length > 0 && (
+                                          <span className="text-[10px] font-mono text-gray-600">{ips[0]}</span>
+                                        )}
+                                      </div>
+                                    </div>
+                                    <span className={`text-[10px] font-mono px-1.5 py-0.5 border rounded ${deploymentStatusClass(dep.status)}`}>
+                                      {dep.status}
+                                    </span>
                                   </div>
-                                </div>
-                                <span className={`text-[10px] font-mono px-1.5 py-0.5 border rounded ${deploymentStatusClass(dep.status)}`}>
-                                  {dep.status}
-                                </span>
-                              </div>
-                            </label>
-                          );
-                        })}
+                                </label>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </>
+                    )}
+
+                    {/* Create new target inline */}
+                    {proxySubType === 'create' && (
+                      <div className="border border-gray-800 rounded p-4 space-y-3">
+                        <div>
+                          <label htmlFor="new-target-cloud" className="block text-xs text-gray-400 mb-1">Cloud Account</label>
+                          <select
+                            id="new-target-cloud"
+                            value={newTargetAccountId}
+                            onChange={e => {
+                              setNewTargetAccountId(e.target.value);
+                              const acct = cloudAccounts.find(a => a.account_id === e.target.value);
+                              if (acct) {
+                                const regions = DEPLOY_REGIONS[acct.provider] ?? [];
+                                // Default to runner's region if available
+                                const runnerRegion = selectedRunner?.region;
+                                setNewTargetRegion(runnerRegion && regions.includes(runnerRegion) ? runnerRegion : regions[0] ?? '');
+                              }
+                            }}
+                            className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                          >
+                            {cloudAccounts.length === 0 && <option disabled value="">No cloud accounts</option>}
+                            {cloudAccounts.map(a => (
+                              <option key={a.account_id} value={a.account_id}>
+                                {a.provider.toUpperCase()} -- {a.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label htmlFor="new-target-region" className="block text-xs text-gray-400 mb-1">Region</label>
+                            <select
+                              id="new-target-region"
+                              value={newTargetRegion}
+                              onChange={e => setNewTargetRegion(e.target.value)}
+                              className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                            >
+                              {(DEPLOY_REGIONS[cloudAccounts.find(a => a.account_id === newTargetAccountId)?.provider ?? 'azure'] ?? []).map(r => (
+                                <option key={r} value={r}>{r}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label htmlFor="new-target-os" className="block text-xs text-gray-400 mb-1">OS</label>
+                            <select
+                              id="new-target-os"
+                              value={newTargetOs}
+                              onChange={e => {
+                                const os = e.target.value as 'linux' | 'windows';
+                                setNewTargetOs(os);
+                                setNewTargetHttpStack(os === 'windows' ? 'iis' : 'nginx');
+                              }}
+                              className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                            >
+                              <option value="linux">Linux (Ubuntu)</option>
+                              <option value="windows">Windows Server</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label htmlFor="new-target-stack" className="block text-xs text-gray-400 mb-1">HTTP Stack</label>
+                          <select
+                            id="new-target-stack"
+                            value={newTargetHttpStack}
+                            onChange={e => setNewTargetHttpStack(e.target.value)}
+                            className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                          >
+                            {HTTP_STACKS.map(s => <option key={s} value={s}>{s.toUpperCase()}</option>)}
+                          </select>
+                        </div>
+
+                        <div className="space-y-2 pt-1">
+                          <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={newTargetEphemeral}
+                              onChange={e => setNewTargetEphemeral(e.target.checked)}
+                              className="accent-cyan-500"
+                            />
+                            Destroy after run
+                          </label>
+                          <p className="text-[10px] text-gray-600 ml-5">
+                            {newTargetEphemeral ? 'Target will be torn down when the run completes.' : 'Target will persist for reuse in future runs.'}
+                          </p>
+                        </div>
                       </div>
                     )}
 
-                    {!deploymentsLoading && deployments.length > 0 && (
-                      <div className="mt-3">
-                        <Link
-                          to={`/projects/${projectId}/vms`}
-                          className="text-xs text-cyan-400 hover:text-cyan-300 transition-colors"
-                        >
-                          + Deploy new target
-                        </Link>
-                      </div>
-                    )}
-
-                    {/* ── Matrix builder: Compare from multiple runners (proxy) ─── */}
-                    {proxyEndpointId && availableRunners.length > 0 && (
-                      <div className="border border-gray-800 rounded p-4 space-y-3 mt-4">
+                    {/* Matrix builder: proxy runners */}
+                    {proxyEndpointId && proxySubType === 'existing' && availableRunners.length > 0 && (
+                      <div className="border border-gray-800 rounded p-4 space-y-3">
                         <h4 className="text-xs font-semibold text-gray-300 uppercase tracking-wider">Compare from multiple runners</h4>
                         <div className="space-y-1">
                           {availableRunners.map(runner => {
@@ -918,29 +1425,20 @@ export function NewRunPage() {
                     {runtimeTemplate === 'custom' && (
                       <div className="border border-gray-800 rounded p-4 space-y-3">
                         <h4 className="text-xs font-semibold text-gray-300">Testbed Configuration</h4>
-
                         <div className="flex items-center gap-2 flex-wrap">
-                          {/* Cloud */}
                           <div className="flex">
                             {CLOUDS.map(c => (
                               <button
                                 key={c}
-                                onClick={() => {
-                                  setCustomCloud(c);
-                                  setCustomRegion(REGIONS[c]?.[0] ?? '');
-                                }}
+                                onClick={() => { setCustomCloud(c); setCustomRegion(REGIONS[c]?.[0] ?? ''); }}
                                 className={`px-2.5 py-1 text-xs font-mono border transition-colors ${
-                                  customCloud === c
-                                    ? 'bg-cyan-500/10 border-cyan-500/40 text-cyan-300 z-10'
-                                    : 'border-gray-700 text-gray-500 hover:text-gray-300'
+                                  customCloud === c ? 'bg-cyan-500/10 border-cyan-500/40 text-cyan-300 z-10' : 'border-gray-700 text-gray-500 hover:text-gray-300'
                                 } ${c === 'Azure' ? '' : '-ml-px'}`}
                               >
                                 {c}
                               </button>
                             ))}
                           </div>
-
-                          {/* OS */}
                           <div className="flex">
                             {(['linux', 'windows'] as const).map(os => (
                               <button
@@ -948,9 +1446,7 @@ export function NewRunPage() {
                                 onClick={() => setCustomOs(os)}
                                 className={`px-2.5 py-1 text-xs font-mono border transition-colors ${
                                   customOs === os
-                                    ? os === 'linux'
-                                      ? 'bg-green-500/10 border-green-500/40 text-green-300 z-10'
-                                      : 'bg-blue-500/10 border-blue-500/40 text-blue-300 z-10'
+                                    ? os === 'linux' ? 'bg-green-500/10 border-green-500/40 text-green-300 z-10' : 'bg-blue-500/10 border-blue-500/40 text-blue-300 z-10'
                                     : 'border-gray-700 text-gray-500 hover:text-gray-300'
                                 } ${os === 'linux' ? '' : '-ml-px'}`}
                               >
@@ -958,8 +1454,6 @@ export function NewRunPage() {
                               </button>
                             ))}
                           </div>
-
-                          {/* Region */}
                           <select
                             value={customRegion}
                             onChange={e => setCustomRegion(e.target.value)}
@@ -968,8 +1462,6 @@ export function NewRunPage() {
                             {(REGIONS[customCloud] ?? []).map(r => <option key={r} value={r}>{r}</option>)}
                           </select>
                         </div>
-
-                        {/* Runtime ID (manual for custom) */}
                         <div>
                           <label htmlFor="runtimeId" className="text-xs text-gray-500 mb-1 block">Runtime ID</label>
                           <input
@@ -984,7 +1476,7 @@ export function NewRunPage() {
                       </div>
                     )}
 
-                    {/* Language picker (shown once a template is selected) */}
+                    {/* Language picker */}
                     {runtimeTemplate && (
                       <div>
                         <label className="text-xs text-gray-500 mb-2 block">
@@ -1003,9 +1495,7 @@ export function NewRunPage() {
                                       key={entry.id}
                                       onClick={() => toggleRuntimeLang(entry.id)}
                                       className={`px-2 py-1 text-xs font-mono border transition-colors ${
-                                        selected
-                                          ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-300'
-                                          : 'border-gray-800 text-gray-500 hover:text-gray-300 hover:border-gray-600'
+                                        selected ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-300' : 'border-gray-800 text-gray-500 hover:text-gray-300 hover:border-gray-600'
                                       }`}
                                     >
                                       {entry.label}
@@ -1019,12 +1509,11 @@ export function NewRunPage() {
                       </div>
                     )}
 
-                    {/* ── Matrix builder: Compare across (runtime, non-custom) ─── */}
+                    {/* Matrix builder */}
                     {runtimeTemplate && runtimeTemplate !== 'custom' && (
                       <div className="border border-gray-800 rounded p-4 space-y-4">
                         <h4 className="text-xs font-semibold text-gray-300 uppercase tracking-wider">Compare across</h4>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          {/* Languages column */}
                           <div>
                             <label className="text-[10px] font-mono text-gray-500 mb-1.5 block">Languages</label>
                             <div className="space-y-1">
@@ -1032,45 +1521,25 @@ export function NewRunPage() {
                                 const checked = compareLanguages.includes(entry.id);
                                 return (
                                   <label key={entry.id} className="flex items-center gap-2 cursor-pointer group">
-                                    <input
-                                      type="checkbox"
-                                      checked={checked}
-                                      onChange={() => toggleCompareLanguage(entry.id)}
-                                      className="w-3.5 h-3.5 rounded border-gray-600 bg-gray-900 text-cyan-500 focus:ring-cyan-500/50"
-                                    />
-                                    <span className={`text-xs font-mono ${checked ? 'text-cyan-300' : 'text-gray-500 group-hover:text-gray-300'}`}>
-                                      {entry.label}
-                                    </span>
+                                    <input type="checkbox" checked={checked} onChange={() => toggleCompareLanguage(entry.id)} className="w-3.5 h-3.5 rounded border-gray-600 bg-gray-900 text-cyan-500 focus:ring-cyan-500/50" />
+                                    <span className={`text-xs font-mono ${checked ? 'text-cyan-300' : 'text-gray-500 group-hover:text-gray-300'}`}>{entry.label}</span>
                                   </label>
                                 );
                               })}
                             </div>
                           </div>
-
-                          {/* Runners column */}
                           <div>
                             <label className="text-[10px] font-mono text-gray-500 mb-1.5 block">Runners</label>
-                            {testersLoading && (
-                              <p className="text-xs text-gray-600 motion-safe:animate-pulse">Loading runners...</p>
-                            )}
-                            {!testersLoading && availableRunners.length === 0 && (
-                              <p className="text-xs text-gray-600">No runners available. System will auto-assign.</p>
-                            )}
+                            {testersLoading && <p className="text-xs text-gray-600 motion-safe:animate-pulse">Loading runners...</p>}
+                            {!testersLoading && availableRunners.length === 0 && <p className="text-xs text-gray-600">No runners available.</p>}
                             {!testersLoading && availableRunners.length > 0 && (
                               <div className="space-y-1">
                                 {availableRunners.map(runner => {
                                   const checked = compareRunners.includes(runner.id);
                                   return (
                                     <label key={runner.id} className="flex items-center gap-2 cursor-pointer group">
-                                      <input
-                                        type="checkbox"
-                                        checked={checked}
-                                        onChange={() => toggleCompareRunner(runner.id)}
-                                        className="w-3.5 h-3.5 rounded border-gray-600 bg-gray-900 text-cyan-500 focus:ring-cyan-500/50"
-                                      />
-                                      <span className={`text-xs font-mono ${checked ? 'text-cyan-300' : 'text-gray-500 group-hover:text-gray-300'}`}>
-                                        {runner.label}
-                                      </span>
+                                      <input type="checkbox" checked={checked} onChange={() => toggleCompareRunner(runner.id)} className="w-3.5 h-3.5 rounded border-gray-600 bg-gray-900 text-cyan-500 focus:ring-cyan-500/50" />
+                                      <span className={`text-xs font-mono ${checked ? 'text-cyan-300' : 'text-gray-500 group-hover:text-gray-300'}`}>{runner.label}</span>
                                     </label>
                                   );
                                 })}
@@ -1078,8 +1547,6 @@ export function NewRunPage() {
                             )}
                           </div>
                         </div>
-
-                        {/* Matrix summary */}
                         {matrixCellCount > 1 && (
                           <div className="text-xs font-mono text-purple-400 pt-1">
                             This creates {matrixCellCount} runs ({compareLanguages.length || 1} language{(compareLanguages.length || 1) !== 1 ? 's' : ''} x {compareRunners.length || 1} runner{(compareRunners.length || 1) !== 1 ? 's' : ''})
@@ -1090,92 +1557,13 @@ export function NewRunPage() {
                   </div>
                 )}
 
-                {/* -- Tester picker (optional, for proxy/runtime) -- */}
-                {(endpointKind === 'proxy' || endpointKind === 'runtime') && (
-                  <div className="border-t border-gray-800 pt-4">
-                    <button
-                      type="button"
-                      onClick={() => setShowTesterPicker(!showTesterPicker)}
-                      className="text-xs text-gray-400 hover:text-gray-200 transition-colors"
-                    >
-                      {showTesterPicker ? '- Hide runner selection' : '+ Select runner (optional, defaults to auto-pick)'}
-                    </button>
-
-                    {showTesterPicker && (
-                      <div className="mt-3">
-                        {testersLoading && (
-                          <p className="text-xs text-gray-500 motion-safe:animate-pulse">Loading runners...</p>
-                        )}
-
-                        {!testersLoading && testers.length === 0 && (
-                          <p className="text-xs text-gray-500">No runners available. The system will auto-assign one.</p>
-                        )}
-
-                        {!testersLoading && testers.length > 0 && (
-                          <div className="space-y-1.5" role="radiogroup" aria-label="Available runners">
-                            {/* Auto-pick option */}
-                            <label
-                              className={`block border p-2.5 cursor-pointer transition-colors ${
-                                selectedTesterId === null
-                                  ? 'border-cyan-500/50 bg-cyan-500/5'
-                                  : 'border-gray-800 hover:border-gray-600'
-                              }`}
-                            >
-                              <div className="flex items-center gap-3">
-                                <input
-                                  type="radio"
-                                  name="tester"
-                                  checked={selectedTesterId === null}
-                                  onChange={() => setSelectedTesterId(null)}
-                                  className="accent-cyan-400"
-                                />
-                                <span className="text-sm text-gray-300">Auto-pick</span>
-                                <span className="text-[10px] text-gray-600">System selects the best available runner</span>
-                              </div>
-                            </label>
-
-                            {testers.map(row => {
-                              const checked = selectedTesterId === row.tester_id;
-                              return (
-                                <label
-                                  key={row.tester_id}
-                                  className={`block border p-2.5 cursor-pointer transition-colors ${
-                                    checked
-                                      ? 'border-cyan-500/50 bg-cyan-500/5'
-                                      : 'border-gray-800 hover:border-gray-600'
-                                  }`}
-                                >
-                                  <div className="flex items-center gap-3">
-                                    <input
-                                      type="radio"
-                                      name="tester"
-                                      value={row.tester_id}
-                                      checked={checked}
-                                      onChange={() => setSelectedTesterId(row.tester_id)}
-                                      className="accent-cyan-400"
-                                    />
-                                    <span className="text-sm font-medium text-gray-100 flex-1">{row.name}</span>
-                                    <span className="text-[10px] font-mono text-gray-500">
-                                      {row.cloud} / {row.region}
-                                    </span>
-                                    <span className={`text-[10px] font-mono px-1.5 py-0.5 border rounded ${testerStatusClass(row)}`}>
-                                      {testerStatusLabel(row)}
-                                    </span>
-                                  </div>
-                                </label>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                <div className="pt-4">
+                <div className="flex gap-2 pt-4">
+                  <button onClick={() => setStep(1)} className="text-gray-400 hover:text-gray-200 px-4 py-2 text-sm transition-colors">
+                    Back
+                  </button>
                   <button
-                    onClick={() => setStep(2)}
-                    disabled={!canAdvance(1)}
+                    onClick={() => setStep(3)}
+                    disabled={!canAdvance(2)}
                     className="bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed text-white px-4 py-2 rounded text-sm transition-colors"
                   >
                     Next: Workload
@@ -1184,8 +1572,8 @@ export function NewRunPage() {
               </div>
             )}
 
-            {/* Step 2: Workload */}
-            {step === 2 && (
+            {/* Step 3: Workload */}
+            {step === 3 && (
               <div className="space-y-4">
                 {modeGroups.length > 0 && (
                   <div>
@@ -1245,13 +1633,53 @@ export function NewRunPage() {
                   </div>
                 )}
 
+                {/* Advanced options */}
+                <div className="border border-gray-800 rounded p-4 space-y-3">
+                  <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Advanced</h4>
+
+                  <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={insecure}
+                      onChange={e => setInsecure(e.target.checked)}
+                      className="accent-cyan-500"
+                    />
+                    Allow insecure HTTPS (skip TLS verification)
+                  </label>
+
+                  <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={connectionReuse}
+                      onChange={e => setConnectionReuse(e.target.checked)}
+                      className="accent-cyan-500"
+                    />
+                    Reuse connections (keep-alive)
+                  </label>
+
+                  <div>
+                    <label htmlFor="capture-mode" className="block text-xs text-gray-400 mb-1">Capture mode</label>
+                    <select
+                      id="capture-mode"
+                      value={captureMode}
+                      onChange={e => setCaptureMode(e.target.value as typeof captureMode)}
+                      className="bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                    >
+                      <option value="none">None</option>
+                      <option value="tester">Tester-side</option>
+                      <option value="endpoint">Endpoint-side</option>
+                      <option value="both">Both</option>
+                    </select>
+                  </div>
+                </div>
+
                 <div className="flex gap-2 pt-4">
-                  <button onClick={() => setStep(1)} className="text-gray-400 hover:text-gray-200 px-4 py-2 text-sm transition-colors">
+                  <button onClick={() => setStep(2)} className="text-gray-400 hover:text-gray-200 px-4 py-2 text-sm transition-colors">
                     Back
                   </button>
                   <button
-                    onClick={() => setStep(3)}
-                    disabled={!canAdvance(2)}
+                    onClick={() => setStep(4)}
+                    disabled={!canAdvance(3)}
                     className="bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed text-white px-4 py-2 rounded text-sm transition-colors"
                   >
                     Next: Methodology
@@ -1260,8 +1688,8 @@ export function NewRunPage() {
               </div>
             )}
 
-            {/* Step 3: Methodology (optional) */}
-            {step === 3 && (
+            {/* Step 4: Methodology (optional) */}
+            {step === 4 && (
               <div className="space-y-4">
                 <label className="flex items-center gap-3 cursor-pointer">
                   <input
@@ -1333,34 +1761,73 @@ export function NewRunPage() {
                 )}
 
                 <div className="flex gap-2 pt-4">
-                  <button onClick={() => setStep(2)} className="text-gray-400 hover:text-gray-200 px-4 py-2 text-sm transition-colors">
+                  <button onClick={() => setStep(3)} className="text-gray-400 hover:text-gray-200 px-4 py-2 text-sm transition-colors">
                     Back
                   </button>
                   <button
-                    onClick={() => setStep(4)}
+                    onClick={() => setStep(5)}
                     className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-2 rounded text-sm transition-colors"
                   >
-                    Next: Save & Launch
+                    Next: Launch
                   </button>
                 </div>
               </div>
             )}
 
-            {/* Step 4: Save & Launch */}
-            {step === 4 && (
+            {/* Step 5: Review & Launch */}
+            {step === 5 && (
               <div className="space-y-4">
-                <div>
-                  <label htmlFor="configName" className="text-xs text-gray-500 mb-1 block">Configuration Name</label>
-                  <input
-                    id="configName"
-                    type="text"
-                    value={configName}
-                    onChange={e => setConfigName(e.target.value)}
-                    placeholder="e.g. cloudflare-http2-daily"
-                    className="bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 w-full focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
-                  />
+                {/* Summary card */}
+                <div className="border border-gray-800 rounded p-4 text-xs text-gray-400 space-y-1.5">
+                  <p>
+                    <span className="text-gray-500">Runner:</span>{' '}
+                    {runnerChoice === 'auto' && 'Auto-pick (first available)'}
+                    {runnerChoice === 'specific' && (selectedRunner ? `${selectedRunner.name} (${selectedRunner.cloud} / ${selectedRunner.region})` : 'None selected')}
+                    {runnerChoice === 'create' && `New: ${newRunnerName || 'unnamed'} (${newRunnerCloud} / ${newRunnerRegion})`}
+                  </p>
+                  <p>
+                    <span className="text-gray-500">Target:</span> {endpointKind}
+                    {endpointKind === 'network' && ` / ${host}`}
+                    {endpointKind === 'proxy' && proxySubType === 'existing' && selectedDeployment && ` / ${selectedDeployment.name}`}
+                    {endpointKind === 'proxy' && proxySubType === 'create' && ` / new (${newTargetOs}, ${newTargetHttpStack})`}
+                    {endpointKind === 'runtime' && runtimeTemplate && ` / ${runtimeTemplate}`}
+                  </p>
+                  <p><span className="text-gray-500">Modes:</span> {[...selectedModes].join(', ')}</p>
+                  <p><span className="text-gray-500">Iterations:</span> {runs} x {concurrency} concurrency</p>
+                  {insecure && <p className="text-yellow-400">Insecure mode (TLS verification disabled)</p>}
+                  {!connectionReuse && <p className="text-gray-500">Connection reuse disabled</p>}
+                  {captureMode !== 'none' && <p><span className="text-gray-500">Capture:</span> {captureMode}</p>}
+                  {endpointKind === 'runtime' && runtimeLangs.size > 0 && (
+                    <p><span className="text-gray-500">Languages:</span> {[...runtimeLangs].join(', ')}</p>
+                  )}
+                  {benchmarkMode && <p><span className="text-purple-400">Benchmark mode enabled</span> -- {methodology.measured_runs} measured runs</p>}
+                  {isMatrixRun && (
+                    <p className="text-purple-400 font-medium">
+                      Comparison group: {matrixCellCount} runs
+                      {endpointKind === 'runtime' && ` (${compareLanguages.length || 1} lang x ${compareRunners.length || 1} runner${(compareRunners.length || 1) !== 1 ? 's' : ''})`}
+                      {endpointKind === 'proxy' && ` (1 target x ${compareRunners.length} runners)`}
+                    </p>
+                  )}
                 </div>
 
+                {/* Warnings */}
+                {runnerChoice === 'specific' && selectedRunner?.allocation === 'locked' && (
+                  <div className="bg-yellow-500/10 border border-yellow-500/30 rounded p-2 text-xs text-yellow-300">
+                    Runner {selectedRunner.name} is busy. Your run will be queued.
+                  </div>
+                )}
+                {runnerChoice === 'create' && (
+                  <div className="bg-blue-500/10 border border-blue-500/30 rounded p-2 text-xs text-blue-300">
+                    Runner will be provisioned first (~3 min).
+                  </div>
+                )}
+                {endpointKind === 'proxy' && proxySubType === 'create' && (
+                  <div className="bg-blue-500/10 border border-blue-500/30 rounded p-2 text-xs text-blue-300">
+                    Target will be deployed first (~2 min).
+                  </div>
+                )}
+
+                {/* Schedule */}
                 <label className="flex items-center gap-3 cursor-pointer">
                   <input
                     type="checkbox"
@@ -1368,7 +1835,7 @@ export function NewRunPage() {
                     onChange={e => setAddSchedule(e.target.checked)}
                     className="w-4 h-4 rounded border-gray-600 bg-gray-900 text-cyan-500 focus:ring-cyan-500/50"
                   />
-                  <span className="text-sm text-gray-200">Also create a recurring schedule</span>
+                  <span className="text-sm text-gray-200">Add schedule</span>
                 </label>
 
                 {addSchedule && (
@@ -1385,39 +1852,40 @@ export function NewRunPage() {
                   </div>
                 )}
 
-                {/* Summary */}
-                <div className="border border-gray-800 rounded p-4 text-xs text-gray-400 space-y-1">
-                  <p><span className="text-gray-500">Target:</span> {endpointKind}
-                    {endpointKind === 'network' && ` / ${host}`}
-                    {endpointKind === 'proxy' && selectedDeployment && ` / ${selectedDeployment.name}`}
-                    {endpointKind === 'runtime' && runtimeTemplate && ` / ${runtimeTemplate}`}
-                  </p>
-                  <p><span className="text-gray-500">Modes:</span> {[...selectedModes].join(', ')}</p>
-                  <p><span className="text-gray-500">Iterations:</span> {runs} x {concurrency} concurrency</p>
-                  {endpointKind === 'runtime' && runtimeLangs.size > 0 && (
-                    <p><span className="text-gray-500">Languages:</span> {[...runtimeLangs].join(', ')}</p>
-                  )}
-                  {selectedTesterId && (
-                    <p><span className="text-gray-500">Runner:</span> {testers.find(t => t.tester_id === selectedTesterId)?.name ?? selectedTesterId.slice(0, 8)}</p>
-                  )}
-                  {benchmarkMode && <p><span className="text-purple-400">Benchmark mode enabled</span> -- {methodology.measured_runs} measured runs</p>}
-                  {isMatrixRun && (
-                    <p className="text-purple-400 font-medium">
-                      Comparison group: {matrixCellCount} runs
-                      {endpointKind === 'runtime' && ` (${compareLanguages.length || 1} lang x ${compareRunners.length || 1} runner${(compareRunners.length || 1) !== 1 ? 's' : ''})`}
-                      {endpointKind === 'proxy' && ` (1 target x ${compareRunners.length} runners)`}
-                    </p>
-                  )}
+                {/* Auto-teardown (only for ephemeral targets) */}
+                {endpointKind === 'proxy' && proxySubType === 'create' && newTargetEphemeral && (
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={newTargetEphemeral}
+                      onChange={e => setNewTargetEphemeral(e.target.checked)}
+                      className="w-4 h-4 rounded border-gray-600 bg-gray-900 text-cyan-500 focus:ring-cyan-500/50"
+                    />
+                    <span className="text-sm text-gray-200">Auto-teardown target after run</span>
+                  </label>
+                )}
+
+                {/* Config name */}
+                <div>
+                  <label htmlFor="configName" className="text-xs text-gray-500 mb-1 block">Configuration Name</label>
+                  <input
+                    id="configName"
+                    type="text"
+                    value={configName}
+                    onChange={e => setConfigName(e.target.value)}
+                    placeholder="e.g. cloudflare-http2-daily"
+                    className="bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 w-full focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
+                  />
                 </div>
 
                 <div className="flex gap-2 pt-4">
-                  <button onClick={() => setStep(3)} className="text-gray-400 hover:text-gray-200 px-4 py-2 text-sm transition-colors">
+                  <button onClick={() => setStep(4)} className="text-gray-400 hover:text-gray-200 px-4 py-2 text-sm transition-colors">
                     Back
                   </button>
                   {!isMatrixRun && (
                     <button
                       onClick={() => handleSubmit(false)}
-                      disabled={submitting || !canAdvance(4)}
+                      disabled={submitting || !canAdvance(5)}
                       className="border border-gray-700 hover:border-gray-600 text-gray-300 px-4 py-2 rounded text-sm transition-colors disabled:opacity-40"
                     >
                       Save Config
@@ -1425,7 +1893,7 @@ export function NewRunPage() {
                   )}
                   <button
                     onClick={() => handleSubmit(true)}
-                    disabled={submitting || !canAdvance(4)}
+                    disabled={submitting || !canAdvance(5)}
                     className="bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed text-white px-4 py-2 rounded text-sm transition-colors"
                   >
                     {submitting

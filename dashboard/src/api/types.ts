@@ -16,6 +16,8 @@ export interface Workload {
   timeout_ms: number;
   payload_sizes: number[];
   capture_mode: CaptureMode;
+  insecure?: boolean;
+  connection_reuse?: boolean;
 }
 
 export type OutlierPolicy =
