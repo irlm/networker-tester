@@ -86,6 +86,14 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
           return a.name.localeCompare(b.name);
         });
         setCloudAccounts(list);
+        // Sync first endpoint's provider with first cloud account
+        if (list.length > 0) {
+          const firstProvider = list[0].provider;
+          setSelectedCloudAccountId(list[0].account_id);
+          setEndpoints(prev => prev.map((ep, i) =>
+            i === 0 ? emptyEndpoint(firstProvider) : ep
+          ));
+        }
         // Re-validate stale accounts (last_validated > 10 min ago)
         const tenMinAgo = Date.now() - 10 * 60 * 1000;
         for (const acct of list) {
