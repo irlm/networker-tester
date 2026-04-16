@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useNavigate, Link } from 'react-router-dom';
 import { api } from '../api/client';
-import type { EndpointRef, EndpointKind, Workload, Methodology, TestConfigCreate, ModeGroup } from '../api/types';
+import { testersApi, type TesterRow } from '../api/testers';
+import type { EndpointRef, EndpointKind, Workload, Methodology, TestConfigCreate, ModeGroup, Deployment } from '../api/types';
 import { Breadcrumb } from '../components/common/Breadcrumb';
 import { ModeSelector } from '../components/common/ModeSelector';
 import { PayloadSelector } from '../components/common/PayloadSelector';
@@ -23,6 +24,151 @@ const DEFAULT_METHODOLOGY: Methodology = {
   publication_gates: { max_failure_pct: 5.0, require_all_phases: true },
 };
 
+// ── Runtime template definitions (ported from AppBenchmarkWizardPage) ────
+
+interface RuntimeTemplate {
+  id: string;
+  name: string;
+  description: string;
+  defaultLanguages: string[];
+  defaultModes: string[];
+  methodology: 'quick' | 'standard' | 'rigorous';
+}
+
+const RUNTIME_TEMPLATES: RuntimeTemplate[] = [
+  {
+    id: 'linux-api-stack',
+    name: 'Linux API Stack',
+    description: 'nginx + Caddy proxies, top 6 languages.',
+    defaultLanguages: ['nginx', 'rust', 'go', 'csharp-net8', 'java', 'nodejs'],
+    defaultModes: ['http1', 'http2', 'http3', 'download', 'upload'],
+    methodology: 'standard',
+  },
+  {
+    id: 'windows-api-stack',
+    name: 'Windows API Stack',
+    description: 'IIS + nginx proxies, .NET ecosystem.',
+    defaultLanguages: ['nginx', 'csharp-net48', 'csharp-net8', 'csharp-net8-aot', 'csharp-net9', 'csharp-net9-aot'],
+    defaultModes: ['http1', 'http2', 'http3', 'download', 'upload'],
+    methodology: 'standard',
+  },
+  {
+    id: 'validation-run',
+    name: 'Validation Run',
+    description: 'Golden run: Rust + Python, h2 + h3. Validates measurement correctness.',
+    defaultLanguages: ['rust', 'python'],
+    defaultModes: ['http2', 'http3'],
+    methodology: 'standard',
+  },
+  {
+    id: 'low-noise',
+    name: 'Low Noise',
+    description: 'Single language, extended warmup. For regression tracking.',
+    defaultLanguages: ['rust'],
+    defaultModes: ['http2'],
+    methodology: 'rigorous',
+  },
+  {
+    id: 'custom',
+    name: 'Custom',
+    description: 'Start from scratch -- pick cloud, region, OS, and languages manually.',
+    defaultLanguages: [],
+    defaultModes: ['http2'],
+    methodology: 'standard',
+  },
+];
+
+// ── Language catalog (ported from AppBenchmarkWizardPage) ────────────────
+
+interface LanguageEntry { id: string; label: string; group: string }
+
+const LANGUAGE_GROUPS: { label: string; entries: LanguageEntry[] }[] = [
+  {
+    label: 'Systems',
+    entries: [
+      { id: 'rust', label: 'Rust', group: 'Systems' },
+      { id: 'go', label: 'Go', group: 'Systems' },
+      { id: 'cpp', label: 'C++', group: 'Systems' },
+    ],
+  },
+  {
+    label: 'Managed',
+    entries: [
+      { id: 'csharp-net48', label: 'C# .NET 4.8', group: 'Managed' },
+      { id: 'csharp-net8', label: 'C# .NET 8', group: 'Managed' },
+      { id: 'csharp-net8-aot', label: 'C# .NET 8 AOT', group: 'Managed' },
+      { id: 'csharp-net9', label: 'C# .NET 9', group: 'Managed' },
+      { id: 'csharp-net9-aot', label: 'C# .NET 9 AOT', group: 'Managed' },
+      { id: 'csharp-net10', label: 'C# .NET 10', group: 'Managed' },
+      { id: 'csharp-net10-aot', label: 'C# .NET 10 AOT', group: 'Managed' },
+      { id: 'java', label: 'Java', group: 'Managed' },
+    ],
+  },
+  {
+    label: 'Scripting',
+    entries: [
+      { id: 'nodejs', label: 'Node.js', group: 'Scripting' },
+      { id: 'python', label: 'Python', group: 'Scripting' },
+      { id: 'ruby', label: 'Ruby', group: 'Scripting' },
+      { id: 'php', label: 'PHP', group: 'Scripting' },
+    ],
+  },
+  {
+    label: 'Static',
+    entries: [
+      { id: 'nginx', label: 'nginx', group: 'Static' },
+    ],
+  },
+];
+
+// ── Cloud/region constants for Custom testbed config ────────────────────
+
+const CLOUDS = ['Azure', 'AWS', 'GCP'] as const;
+
+const REGIONS: Record<string, string[]> = {
+  Azure: ['eastus', 'eastus2', 'westus2', 'westus3', 'centralus', 'northeurope', 'westeurope', 'southeastasia', 'japaneast', 'australiaeast'],
+  AWS: ['us-east-1', 'us-east-2', 'us-west-2', 'eu-west-1', 'eu-central-1', 'ap-southeast-1', 'ap-northeast-1', 'ap-southeast-2'],
+  GCP: ['us-central1', 'us-east1', 'us-west1', 'europe-west1', 'europe-west4', 'asia-southeast1', 'asia-northeast1', 'australia-southeast1'],
+};
+
+// ── Methodology presets ─────────────────────────────────────────────────
+
+const METHODOLOGY_FROM_PRESET: Record<string, Partial<Methodology>> = {
+  quick: { warmup_runs: 5, measured_runs: 10, target_error_pct: 5.0 },
+  standard: { warmup_runs: 10, measured_runs: 50, target_error_pct: 5.0 },
+  rigorous: { warmup_runs: 20, measured_runs: 200, target_error_pct: 2.0 },
+};
+
+// ── Helpers ─────────────────────────────────────────────────────────────
+
+function deploymentStatusClass(status: string): string {
+  switch (status) {
+    case 'running': return 'text-green-400 border-green-500/40 bg-green-500/5';
+    case 'stopped': case 'stopping': return 'text-gray-400 border-gray-700 bg-gray-800/40';
+    case 'error': case 'failed': return 'text-red-400 border-red-500/40 bg-red-500/5';
+    case 'creating': case 'starting': return 'text-yellow-300 border-yellow-500/40 bg-yellow-500/5';
+    default: return 'text-gray-400 border-gray-700';
+  }
+}
+
+function testerStatusClass(row: TesterRow): string {
+  if (row.power_state === 'error') return 'text-red-400 border-red-500/40 bg-red-500/5';
+  if (row.power_state === 'stopped' || row.power_state === 'stopping') return 'text-gray-400 border-gray-700 bg-gray-800/40';
+  if (row.allocation === 'locked' || row.allocation === 'upgrading') return 'text-yellow-300 border-yellow-500/40 bg-yellow-500/5';
+  if (row.power_state === 'running' && row.allocation === 'idle') return 'text-green-400 border-green-500/40 bg-green-500/5';
+  return 'text-gray-400 border-gray-700';
+}
+
+function testerStatusLabel(row: TesterRow): string {
+  if (row.power_state === 'error') return 'error';
+  if (row.allocation === 'locked') return 'busy';
+  if (row.allocation === 'upgrading') return 'upgrading';
+  if (row.power_state === 'running' && row.allocation === 'idle') return 'idle';
+  return row.power_state;
+}
+
+// ── Component ───────────────────────────────────────────────────────────
+
 export function NewRunPage() {
   const { projectId } = useProject();
   const navigate = useNavigate();
@@ -39,6 +185,23 @@ export function NewRunPage() {
   const [proxyEndpointId, setProxyEndpointId] = useState('');
   const [runtimeId, setRuntimeId] = useState('');
   const [language, setLanguage] = useState('');
+
+  // Step 1 — Proxy: deployed endpoints
+  const [deployments, setDeployments] = useState<Deployment[]>([]);
+  const [deploymentsLoading, setDeploymentsLoading] = useState(false);
+
+  // Step 1 — Runtime: template + language selection
+  const [runtimeTemplate, setRuntimeTemplate] = useState<string | null>(null);
+  const [runtimeLangs, setRuntimeLangs] = useState<Set<string>>(new Set());
+  const [customCloud, setCustomCloud] = useState('Azure');
+  const [customRegion, setCustomRegion] = useState('eastus');
+  const [customOs, setCustomOs] = useState<'linux' | 'windows'>('linux');
+
+  // Step 1 — Tester picker (optional, for proxy + runtime)
+  const [testers, setTesters] = useState<TesterRow[]>([]);
+  const [testersLoading, setTestersLoading] = useState(false);
+  const [selectedTesterId, setSelectedTesterId] = useState<string | null>(null);
+  const [showTesterPicker, setShowTesterPicker] = useState(false);
 
   // Step 2: Workload
   const [modeGroups, setModeGroups] = useState<ModeGroup[]>([]);
@@ -62,6 +225,26 @@ export function NewRunPage() {
   useEffect(() => {
     api.getModes().then(r => setModeGroups(r.groups)).catch(() => {});
   }, []);
+
+  // Load deployments when proxy tab is active
+  useEffect(() => {
+    if (endpointKind !== 'proxy') return;
+    setDeploymentsLoading(true);
+    api.getDeployments(projectId)
+      .then(deps => setDeployments(deps))
+      .catch(() => setDeployments([]))
+      .finally(() => setDeploymentsLoading(false));
+  }, [endpointKind, projectId]);
+
+  // Load testers when picker is shown
+  useEffect(() => {
+    if (!showTesterPicker) return;
+    setTestersLoading(true);
+    testersApi.listTesters(projectId)
+      .then(rows => setTesters(rows))
+      .catch(() => setTesters([]))
+      .finally(() => setTestersLoading(false));
+  }, [showTesterPicker, projectId]);
 
   const handleModeToggle = useCallback((id: string) => {
     setSelectedModes(prev => {
@@ -93,6 +276,63 @@ export function NewRunPage() {
       return next;
     });
   }, []);
+
+  // ── Runtime template application ─────────────────────────────────────
+
+  const applyRuntimeTemplate = useCallback((tmpl: RuntimeTemplate) => {
+    setRuntimeTemplate(tmpl.id);
+    setRuntimeLangs(new Set(tmpl.defaultLanguages));
+    setSelectedModes(new Set(tmpl.defaultModes));
+
+    // Auto-fill methodology
+    if (tmpl.methodology !== 'quick') {
+      setBenchmarkMode(true);
+      const preset = METHODOLOGY_FROM_PRESET[tmpl.methodology];
+      if (preset) {
+        setMethodology(m => ({ ...m, ...preset }));
+      }
+    }
+
+    // For non-custom templates, set a placeholder runtime_id.
+    // TODO: When a runtime catalog API exists, look up real runtime IDs
+    // based on the template's language set. For now, use template ID as
+    // a placeholder that the backend can resolve.
+    if (tmpl.id !== 'custom') {
+      setRuntimeId(tmpl.id);
+      setLanguage(tmpl.defaultLanguages[0] ?? '');
+    }
+  }, []);
+
+  const toggleRuntimeLang = useCallback((id: string) => {
+    setRuntimeLangs(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+    // Update the primary language field to first selected
+    setLanguage(prev => {
+      if (prev === id) {
+        // Removed the current one, pick another
+        const remaining = [...runtimeLangs].filter(l => l !== id);
+        return remaining[0] ?? '';
+      }
+      return prev || id;
+    });
+  }, [runtimeLangs]);
+
+  // ── Proxy deployment selection ────────────────────────────────────────
+
+  const selectDeployment = useCallback((dep: Deployment) => {
+    setProxyEndpointId(dep.deployment_id);
+  }, []);
+
+  // ── Derived: selected deployment info for summary ─────────────────────
+
+  const selectedDeployment = useMemo(
+    () => deployments.find(d => d.deployment_id === proxyEndpointId),
+    [deployments, proxyEndpointId],
+  );
 
   const buildEndpoint = (): EndpointRef => {
     switch (endpointKind) {
@@ -215,6 +455,7 @@ export function NewRunPage() {
             </div>
           </div>
 
+          {/* ── Network endpoint (unchanged) ── */}
           {endpointKind === 'network' && (
             <div className="space-y-3">
               <div>
@@ -242,44 +483,312 @@ export function NewRunPage() {
             </div>
           )}
 
+          {/* ── Proxy endpoint — deployed endpoint picker ── */}
           {endpointKind === 'proxy' && (
             <div>
-              <label htmlFor="proxyId" className="text-xs text-gray-500 mb-1 block">Proxy Endpoint ID</label>
-              <input
-                id="proxyId"
-                type="text"
-                value={proxyEndpointId}
-                onChange={e => setProxyEndpointId(e.target.value)}
-                placeholder="UUID of deployed endpoint"
-                className="bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 w-full focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
-              />
+              <label className="text-xs text-gray-500 mb-2 block">Select a deployed endpoint</label>
+
+              {deploymentsLoading && (
+                <p className="text-xs text-gray-500 motion-safe:animate-pulse">Loading endpoints...</p>
+              )}
+
+              {!deploymentsLoading && deployments.length === 0 && (
+                <div className="border border-dashed border-gray-800 rounded p-4">
+                  <p className="text-sm text-gray-300 mb-1">No endpoints deployed yet.</p>
+                  <p className="text-xs text-gray-500 mb-3">
+                    Deploy an endpoint from Cloud VMs to use it as a proxy target.
+                  </p>
+                  <Link
+                    to={`/projects/${projectId}/vms/endpoints`}
+                    className="text-xs text-cyan-400 hover:text-cyan-300 transition-colors"
+                  >
+                    Go to Cloud VMs / Endpoints
+                  </Link>
+                </div>
+              )}
+
+              {!deploymentsLoading && deployments.length > 0 && (
+                <div className="space-y-2" role="radiogroup" aria-label="Deployed endpoints">
+                  {deployments.map(dep => {
+                    const checked = proxyEndpointId === dep.deployment_id;
+                    const ips = dep.endpoint_ips ?? [];
+                    const firstEndpoint = dep.config?.endpoints?.[0];
+                    return (
+                      <label
+                        key={dep.deployment_id}
+                        className={`block border p-3 cursor-pointer transition-colors ${
+                          checked
+                            ? 'border-cyan-500/50 bg-cyan-500/5'
+                            : 'border-gray-800 hover:border-gray-600'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="radio"
+                            name="proxy-endpoint"
+                            value={dep.deployment_id}
+                            checked={checked}
+                            onChange={() => selectDeployment(dep)}
+                            className="accent-cyan-400"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <span className="text-sm font-medium text-gray-100">{dep.name}</span>
+                            <div className="flex items-center gap-2 mt-0.5">
+                              {firstEndpoint?.provider && (
+                                <span className="text-[10px] font-mono text-gray-500">
+                                  {firstEndpoint.provider}
+                                </span>
+                              )}
+                              {firstEndpoint?.region && (
+                                <span className="text-[10px] font-mono text-gray-500">
+                                  {firstEndpoint.region}
+                                </span>
+                              )}
+                              {ips.length > 0 && (
+                                <span className="text-[10px] font-mono text-gray-600">
+                                  {ips[0]}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <span className={`text-[10px] font-mono px-1.5 py-0.5 border rounded ${deploymentStatusClass(dep.status)}`}>
+                            {dep.status}
+                          </span>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+
+              {!deploymentsLoading && deployments.length > 0 && (
+                <div className="mt-3">
+                  <Link
+                    to={`/projects/${projectId}/vms/endpoints`}
+                    className="text-xs text-cyan-400 hover:text-cyan-300 transition-colors"
+                  >
+                    + Deploy new endpoint
+                  </Link>
+                </div>
+              )}
             </div>
           )}
 
+          {/* ── Runtime endpoint — template gallery + language picker ── */}
           {endpointKind === 'runtime' && (
-            <div className="space-y-3">
+            <div className="space-y-4">
+              {/* Template gallery */}
               <div>
-                <label htmlFor="runtimeId" className="text-xs text-gray-500 mb-1 block">Runtime ID</label>
-                <input
-                  id="runtimeId"
-                  type="text"
-                  value={runtimeId}
-                  onChange={e => setRuntimeId(e.target.value)}
-                  placeholder="UUID from Runtimes catalog"
-                  className="bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 w-full focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
-                />
+                <label className="text-xs text-gray-500 mb-2 block">Choose a template</label>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                  {RUNTIME_TEMPLATES.map(tmpl => (
+                    <button
+                      key={tmpl.id}
+                      onClick={() => applyRuntimeTemplate(tmpl)}
+                      className={`text-left border px-3 py-2.5 transition-colors ${
+                        runtimeTemplate === tmpl.id
+                          ? 'border-cyan-500/50 bg-cyan-500/5'
+                          : 'border-gray-800 hover:border-gray-600'
+                      }`}
+                    >
+                      <div className="text-sm font-medium text-gray-100">{tmpl.name}</div>
+                      <div className="text-[11px] text-gray-500 mt-0.5">{tmpl.description}</div>
+                      {tmpl.defaultLanguages.length > 0 && (
+                        <div className="text-[10px] font-mono text-gray-600 mt-1.5">
+                          {tmpl.defaultLanguages.length} lang / {tmpl.defaultModes.length} modes
+                        </div>
+                      )}
+                    </button>
+                  ))}
+                </div>
               </div>
-              <div>
-                <label htmlFor="language" className="text-xs text-gray-500 mb-1 block">Language</label>
-                <input
-                  id="language"
-                  type="text"
-                  value={language}
-                  onChange={e => setLanguage(e.target.value)}
-                  placeholder="e.g. go, rust, node"
-                  className="bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 w-48 focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
-                />
-              </div>
+
+              {/* Custom testbed configuration */}
+              {runtimeTemplate === 'custom' && (
+                <div className="border border-gray-800 rounded p-4 space-y-3">
+                  <h4 className="text-xs font-semibold text-gray-300">Testbed Configuration</h4>
+
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {/* Cloud */}
+                    <div className="flex">
+                      {CLOUDS.map(c => (
+                        <button
+                          key={c}
+                          onClick={() => {
+                            setCustomCloud(c);
+                            setCustomRegion(REGIONS[c]?.[0] ?? '');
+                          }}
+                          className={`px-2.5 py-1 text-xs font-mono border transition-colors ${
+                            customCloud === c
+                              ? 'bg-cyan-500/10 border-cyan-500/40 text-cyan-300 z-10'
+                              : 'border-gray-700 text-gray-500 hover:text-gray-300'
+                          } ${c === 'Azure' ? '' : '-ml-px'}`}
+                        >
+                          {c}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* OS */}
+                    <div className="flex">
+                      {(['linux', 'windows'] as const).map(os => (
+                        <button
+                          key={os}
+                          onClick={() => setCustomOs(os)}
+                          className={`px-2.5 py-1 text-xs font-mono border transition-colors ${
+                            customOs === os
+                              ? os === 'linux'
+                                ? 'bg-green-500/10 border-green-500/40 text-green-300 z-10'
+                                : 'bg-blue-500/10 border-blue-500/40 text-blue-300 z-10'
+                              : 'border-gray-700 text-gray-500 hover:text-gray-300'
+                          } ${os === 'linux' ? '' : '-ml-px'}`}
+                        >
+                          {os === 'linux' ? 'Linux' : 'Windows'}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Region */}
+                    <select
+                      value={customRegion}
+                      onChange={e => setCustomRegion(e.target.value)}
+                      className="bg-[var(--bg-base)] border border-gray-700 px-2 py-1 text-xs font-mono text-gray-300 focus:outline-none focus:border-cyan-500"
+                    >
+                      {(REGIONS[customCloud] ?? []).map(r => <option key={r} value={r}>{r}</option>)}
+                    </select>
+                  </div>
+
+                  {/* Runtime ID (manual for custom) */}
+                  <div>
+                    <label htmlFor="runtimeId" className="text-xs text-gray-500 mb-1 block">Runtime ID</label>
+                    <input
+                      id="runtimeId"
+                      type="text"
+                      value={runtimeId}
+                      onChange={e => setRuntimeId(e.target.value)}
+                      placeholder="UUID or template slug"
+                      className="bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 w-full focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Language picker (shown once a template is selected) */}
+              {runtimeTemplate && (
+                <div>
+                  <label className="text-xs text-gray-500 mb-2 block">
+                    Languages
+                    <span className="text-gray-600 ml-2">{runtimeLangs.size} selected</span>
+                  </label>
+                  <div className="space-y-3">
+                    {LANGUAGE_GROUPS.map(group => (
+                      <div key={group.label}>
+                        <div className="text-[10px] font-mono text-gray-600 mb-1">{group.label}</div>
+                        <div className="flex flex-wrap gap-1">
+                          {group.entries.map(entry => {
+                            const selected = runtimeLangs.has(entry.id);
+                            return (
+                              <button
+                                key={entry.id}
+                                onClick={() => toggleRuntimeLang(entry.id)}
+                                className={`px-2 py-1 text-xs font-mono border transition-colors ${
+                                  selected
+                                    ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-300'
+                                    : 'border-gray-800 text-gray-500 hover:text-gray-300 hover:border-gray-600'
+                                }`}
+                              >
+                                {entry.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Tester picker (optional, for proxy/runtime) ── */}
+          {(endpointKind === 'proxy' || endpointKind === 'runtime') && (
+            <div className="border-t border-gray-800 pt-4">
+              <button
+                type="button"
+                onClick={() => setShowTesterPicker(!showTesterPicker)}
+                className="text-xs text-gray-400 hover:text-gray-200 transition-colors"
+              >
+                {showTesterPicker ? '- Hide tester selection' : '+ Select tester (optional, defaults to auto-pick)'}
+              </button>
+
+              {showTesterPicker && (
+                <div className="mt-3">
+                  {testersLoading && (
+                    <p className="text-xs text-gray-500 motion-safe:animate-pulse">Loading testers...</p>
+                  )}
+
+                  {!testersLoading && testers.length === 0 && (
+                    <p className="text-xs text-gray-500">No testers available. The system will auto-assign one.</p>
+                  )}
+
+                  {!testersLoading && testers.length > 0 && (
+                    <div className="space-y-1.5" role="radiogroup" aria-label="Available testers">
+                      {/* Auto-pick option */}
+                      <label
+                        className={`block border p-2.5 cursor-pointer transition-colors ${
+                          selectedTesterId === null
+                            ? 'border-cyan-500/50 bg-cyan-500/5'
+                            : 'border-gray-800 hover:border-gray-600'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="radio"
+                            name="tester"
+                            checked={selectedTesterId === null}
+                            onChange={() => setSelectedTesterId(null)}
+                            className="accent-cyan-400"
+                          />
+                          <span className="text-sm text-gray-300">Auto-pick</span>
+                          <span className="text-[10px] text-gray-600">System selects the best available tester</span>
+                        </div>
+                      </label>
+
+                      {testers.map(row => {
+                        const checked = selectedTesterId === row.tester_id;
+                        return (
+                          <label
+                            key={row.tester_id}
+                            className={`block border p-2.5 cursor-pointer transition-colors ${
+                              checked
+                                ? 'border-cyan-500/50 bg-cyan-500/5'
+                                : 'border-gray-800 hover:border-gray-600'
+                            }`}
+                          >
+                            <div className="flex items-center gap-3">
+                              <input
+                                type="radio"
+                                name="tester"
+                                value={row.tester_id}
+                                checked={checked}
+                                onChange={() => setSelectedTesterId(row.tester_id)}
+                                className="accent-cyan-400"
+                              />
+                              <span className="text-sm font-medium text-gray-100 flex-1">{row.name}</span>
+                              <span className="text-[10px] font-mono text-gray-500">
+                                {row.cloud} / {row.region}
+                              </span>
+                              <span className={`text-[10px] font-mono px-1.5 py-0.5 border rounded ${testerStatusClass(row)}`}>
+                                {testerStatusLabel(row)}
+                              </span>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -498,9 +1007,19 @@ export function NewRunPage() {
 
           {/* Summary */}
           <div className="border border-gray-800 rounded p-4 text-xs text-gray-400 space-y-1">
-            <p><span className="text-gray-500">Endpoint:</span> {endpointKind}{endpointKind === 'network' ? ` / ${host}` : ''}</p>
+            <p><span className="text-gray-500">Endpoint:</span> {endpointKind}
+              {endpointKind === 'network' && ` / ${host}`}
+              {endpointKind === 'proxy' && selectedDeployment && ` / ${selectedDeployment.name}`}
+              {endpointKind === 'runtime' && runtimeTemplate && ` / ${runtimeTemplate}`}
+            </p>
             <p><span className="text-gray-500">Modes:</span> {[...selectedModes].join(', ')}</p>
             <p><span className="text-gray-500">Iterations:</span> {runs} x {concurrency} concurrency</p>
+            {endpointKind === 'runtime' && runtimeLangs.size > 0 && (
+              <p><span className="text-gray-500">Languages:</span> {[...runtimeLangs].join(', ')}</p>
+            )}
+            {selectedTesterId && (
+              <p><span className="text-gray-500">Tester:</span> {testers.find(t => t.tester_id === selectedTesterId)?.name ?? selectedTesterId.slice(0, 8)}</p>
+            )}
             {benchmarkMode && <p><span className="text-purple-400">Benchmark mode enabled</span> -- {methodology.measured_runs} measured runs</p>}
           </div>
 
