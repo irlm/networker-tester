@@ -126,20 +126,20 @@ export function DashboardPage() {
             <div className={`text-3xl font-bold tabular-nums ${onlineAgents.length > 0 ? 'text-green-400' : 'text-gray-600'}`}>
               {onlineAgents.length}
             </div>
-            <div className="text-xs text-gray-500">runners online</div>
+            <div className="text-xs text-gray-500" title="Agents that execute network tests from remote locations">runners online</div>
           </div>
           <div>
             <div className={`text-xl font-semibold tabular-nums ${activeCount > 0 ? 'text-blue-400' : 'text-gray-600'}`}>
               {activeCount}
             </div>
-            <div className="text-xs text-gray-600">active</div>
+            <div className="text-xs text-gray-600">running</div>
           </div>
           {showRuns24h && (
             <div>
               <div className="text-xl font-semibold tabular-nums text-gray-300">
                 {summary?.runs_24h ?? 0}
               </div>
-              <div className="text-xs text-gray-600">runs (24h)</div>
+              <div className="text-xs text-gray-600">runs · last 24h</div>
             </div>
           )}
           <div>
@@ -167,10 +167,10 @@ export function DashboardPage() {
           <h3 className="text-sm text-gray-300 font-medium mb-4">Get started</h3>
           <div className="space-y-2">
             {[
-              { to: `/projects/${projectId}/deploy`, step: '1', title: 'Deploy a target', desc: 'Install networker-endpoint on a remote host to create a test target' },
+              { to: `/projects/${projectId}/deploy`, step: '1', title: 'Deploy a test target', desc: 'Install networker-endpoint on a remote host to create a test target' },
               { to: `/projects/${projectId}/runs`, step: '2', title: 'Add a runner', desc: 'Connect an agent to run diagnostics from a remote location' },
               { to: `/projects/${projectId}/runs`, step: '3', title: 'Run your first test', desc: 'HTTP, DNS, TLS, UDP latency measured per-phase' },
-              { to: `/projects/${projectId}/schedules`, step: '4', title: 'Create a schedule', desc: 'Automate recurring tests with cron expressions' },
+              { to: `/projects/${projectId}/schedules`, step: '4', title: 'Schedule recurring tests', desc: 'Automate recurring tests with cron expressions' },
             ].map(item => (
               <Link
                 key={item.step}
@@ -202,9 +202,9 @@ export function DashboardPage() {
             <h3 className="text-sm text-gray-300 font-medium mb-4">Get started</h3>
             <div className="space-y-2">
               {[
-                { to: `/projects/${projectId}/deploy`, step: '1', title: 'Deploy a target', done: endpoints.length > 0 },
+                { to: `/projects/${projectId}/deploy`, step: '1', title: 'Deploy a test target', done: endpoints.length > 0 },
                 { to: `/projects/${projectId}/tests/new`, step: '2', title: 'Run your first network test', done: nonQueuedRuns.length > 0 },
-                { to: `/projects/${projectId}/schedules`, step: '3', title: 'Set up a schedule', done: false },
+                { to: `/projects/${projectId}/schedules`, step: '3', title: 'Schedule recurring tests', done: false },
               ].map(item => (
                 <Link
                   key={item.step}
@@ -289,7 +289,7 @@ function InfraSection({ agents, endpoints, projectId }: {
 
       {endpoints.length === 0 && agents.length === 0 ? (
         <div className="border border-gray-800 rounded p-6 text-center">
-          <p className="text-gray-600 text-sm">No infrastructure deployed</p>
+          <p className="text-gray-600 text-sm">No runners or targets deployed yet</p>
           <Link to={`/projects/${projectId}/deploy`} className="text-xs text-cyan-400 mt-1 inline-block">Deploy your first target</Link>
         </div>
       ) : (

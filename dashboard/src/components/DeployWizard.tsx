@@ -298,7 +298,7 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
           {/* Step: Target Config */}
           {currentStepName === 'endpoint-config' && (
             <div>
-              <p className="text-sm text-gray-400 mb-3">Configure targets to deploy:</p>
+              <p className="text-sm text-gray-400 mb-3">Configure your target:</p>
               {endpoints.map((ep, idx) => (
                 <div key={idx} className="bg-[var(--bg-base)] border border-gray-800 rounded p-3 mb-3">
                   <div className="flex items-center justify-between mb-2">
@@ -476,7 +476,7 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
               )}
 
               <p className="mt-4 pt-3 border-t border-gray-800 text-xs text-gray-600">
-                After deploy, run against this target from Runs → New Run → Proxy.
+                After deploy, run a network test against this target.
               </p>
             </div>
           )}
@@ -589,7 +589,7 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
               <div className="bg-[var(--bg-base)] border border-gray-800 rounded p-3 mb-3 text-xs text-gray-500">
                 <span className="text-gray-400">Deploy only</span>
                 {' \u00b7 '}
-                <span>Run against this target from Runs → New Run → Proxy</span>
+                <span>Run a network test against this target</span>
               </div>
             </div>
           )}

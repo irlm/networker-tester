@@ -750,7 +750,7 @@ export function DiagnosticsPage() {
 
       {/* Run a Diagnostic input bar */}
       <div className="border border-gray-800 rounded p-4 mb-7">
-        <div className="text-[11px] uppercase tracking-wider text-gray-600 mb-2.5">Run a Diagnostic</div>
+        <div className="text-[11px] tracking-wider text-gray-600 mb-2.5">Run a Diagnostic</div>
         <div className="flex items-center gap-2.5">
           <div className="flex-1 flex items-center gap-2">
             <label htmlFor="diag-url" className="text-xs text-gray-500 flex-shrink-0">URL:</label>
@@ -824,7 +824,7 @@ export function DiagnosticsPage() {
       {!loading && urlGroups.length > 0 && (
         <div className="flex items-center gap-4 mb-4 text-xs">
           <span className="text-gray-500">
-            <strong className="text-gray-400 font-medium">{summary.total}</strong> URLs
+            <strong className="text-gray-400 font-medium">{summary.total}</strong> {summary.total === 1 ? 'URL' : 'URLs'}
           </span>
           <span className="text-gray-700">&middot;</span>
           <span className="text-gray-500">
@@ -836,15 +836,15 @@ export function DiagnosticsPage() {
           </span>
           <span className="text-gray-700">&middot;</span>
           <span className="text-gray-500">
-            <strong className="text-amber-400 font-medium">{summary.stale}</strong> stale (&gt;24h)
+            <strong className="text-amber-400 font-medium">{summary.stale}</strong> stale (no check in 24h)
           </span>
         </div>
       )}
 
       {/* Toolbar */}
       <div className="flex items-center justify-between mb-3">
-        <span className="text-[11px] uppercase tracking-wider text-gray-600">
-          Your URLs ({filteredGroups.length})
+        <span className="text-[11px] tracking-wider text-gray-600">
+          Watched URLs ({filteredGroups.length})
         </span>
         <div className="flex items-center gap-3">
           {/* Filter toggle */}

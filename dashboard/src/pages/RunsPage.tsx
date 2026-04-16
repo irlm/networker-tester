@@ -159,7 +159,7 @@ export function RunsPage() {
             <thead>
               <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
                 <th className="px-3 py-2 text-left font-medium">Run</th>
-                <th className="px-3 py-2 text-left font-medium">Config</th>
+                <th className="px-3 py-2 text-left font-medium">Name</th>
                 <th className="px-3 py-2 text-left font-medium">Kind</th>
                 <th className="px-3 py-2 text-left font-medium">Status</th>
                 <th className="px-3 py-2 text-left font-medium">Result</th>
@@ -262,7 +262,7 @@ export function RunsPage() {
         >
           {STATUS_OPTIONS.map(s => (
             <option key={s} value={s}>
-              {s === 'all' ? 'All statuses' : s.charAt(0).toUpperCase() + s.slice(1)}
+              {s === 'all' ? 'Any status' : s.charAt(0).toUpperCase() + s.slice(1)}
             </option>
           ))}
         </select>
@@ -287,7 +287,7 @@ export function RunsPage() {
             onChange={toggleShowQueued}
             className="rounded border-gray-600 bg-transparent text-cyan-500 focus:ring-cyan-500 focus:ring-offset-0 w-3.5 h-3.5"
           />
-          Show queued
+          Include queued
         </label>
       </FilterBar>
 
@@ -301,10 +301,10 @@ export function RunsPage() {
       <div className="md:hidden space-y-2 mt-4">
         {pageRuns.length === 0 ? (
           <div className="border border-gray-800 rounded p-8 text-center">
-            <p className="text-gray-500 text-sm">{activeFilterCount > 0 ? 'No runs match filters' : 'No test runs yet'}</p>
+            <p className="text-gray-500 text-sm">{activeFilterCount > 0 ? 'No runs match filters' : 'No runs yet'}</p>
             {activeFilterCount === 0 && (
               <Link to={`/projects/${projectId}/tests/new`} className="text-cyan-400 text-xs mt-2 inline-block">
-                Create your first run
+                Start a network test
               </Link>
             )}
           </div>
@@ -338,8 +338,8 @@ export function RunsPage() {
           <thead>
             <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
               <th className="px-4 py-2.5 text-left font-medium">Run</th>
-              <th className="px-4 py-2.5 text-left font-medium">Config</th>
-              <th className="px-4 py-2.5 text-left font-medium hidden lg:table-cell">Kind</th>
+              <th className="px-4 py-2.5 text-left font-medium">Name</th>
+              <th className="px-4 py-2.5 text-left font-medium hidden lg:table-cell">Type</th>
               <th className="px-4 py-2.5 text-left font-medium">Status</th>
               <th className="px-4 py-2.5 text-left font-medium">Result</th>
               <th className="px-4 py-2.5 text-left font-medium hidden lg:table-cell">Modes</th>
@@ -392,10 +392,10 @@ export function RunsPage() {
 
         {runsWithDates.length === 0 && (
           <div className="py-10 text-center">
-            <p className="text-gray-500 text-sm">{activeFilterCount > 0 ? 'No runs match the current filters' : 'No test runs yet'}</p>
+            <p className="text-gray-500 text-sm">{activeFilterCount > 0 ? 'No runs match the current filters' : 'No runs yet'}</p>
             {activeFilterCount === 0 && (
               <Link to={`/projects/${projectId}/tests/new`} className="text-cyan-400 text-xs mt-1 inline-block">
-                Create your first run
+                Start a network test
               </Link>
             )}
           </div>

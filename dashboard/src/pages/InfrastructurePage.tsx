@@ -440,6 +440,7 @@ export function InfrastructurePage() {
       ) : history.length === 0 ? (
         <div className="border border-gray-800 rounded p-6 text-center">
           <p className="text-sm text-gray-400">No recent activity</p>
+          <p className="text-xs text-gray-600 mt-1">VM lifecycle events will appear here</p>
         </div>
       ) : (
         <div className="table-container">

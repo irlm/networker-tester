@@ -563,7 +563,7 @@ export function CreateTesterModal({
                     onChange={(e) => setAutoProbeEnabled(e.target.checked)}
                     className="accent-cyan-500"
                   />
-                  Auto-probe on error
+                  Auto-recover on error
                 </label>
                 <p className="text-xs text-gray-500 mt-1" title="When enabled, the dashboard probes this runner's SSH port on a short interval whenever it enters the error state and auto-clears transient faults.">
                   When enabled, the dashboard probes this runner automatically if

@@ -229,7 +229,7 @@ export function NetworkTestPage() {
       <div className="mb-6">
         <h2 className="text-lg md:text-xl font-bold text-gray-100">New Network Test</h2>
         <p className="text-xs text-gray-500 mt-1">
-          Test raw network protocol performance against a deployed endpoint.
+          Test network performance against any host or deployed target.
         </p>
       </div>
 
@@ -243,8 +243,8 @@ export function NetworkTestPage() {
             <label className="text-xs text-gray-500 mb-2 block">Target Type</label>
             <div className="flex">
               {([
-                { kind: 'network' as const, label: 'Hostname / IP' },
-                { kind: 'proxy' as const, label: 'Deployed Endpoint' },
+                { kind: 'network' as const, label: 'Host' },
+                { kind: 'proxy' as const, label: 'Deployed Target' },
               ]).map(({ kind, label }) => (
                 <button
                   key={kind}
@@ -303,7 +303,7 @@ export function NetworkTestPage() {
                         : 'text-gray-500 hover:text-gray-300'
                     }`}
                   >
-                    {sub === 'existing' ? 'Use existing target' : 'Create new target'}
+                    {sub === 'existing' ? 'Use existing target' : 'Deploy new target'}
                   </button>
                 ))}
               </div>
@@ -427,7 +427,7 @@ export function NetworkTestPage() {
                   </div>
                   <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
                     <input type="checkbox" checked={newTargetEphemeral} onChange={e => setNewTargetEphemeral(e.target.checked)} className="accent-cyan-500" />
-                    Destroy after run
+                    Remove target after test completes
                   </label>
                 </div>
               )}
@@ -437,7 +437,7 @@ export function NetworkTestPage() {
           {/* Runner selection */}
           <div className="mt-6 border border-gray-800 p-4">
             <div className="flex items-center justify-between mb-3">
-              <h4 className="text-xs font-semibold text-gray-300 uppercase tracking-wider">Runner</h4>
+              <h4 className="text-xs font-semibold text-gray-300 tracking-wider">Runner</h4>
               {!testersLoading && (
                 <span className="text-[10px] font-mono text-gray-600">
                   {runnerStats.idle} idle / {runnerStats.online} online
@@ -460,7 +460,7 @@ export function NetworkTestPage() {
               ))}
             </div>
             {runnerMode === 'auto' && (
-              <p className="text-xs text-gray-500">First available idle runner will be assigned.</p>
+              <p className="text-xs text-gray-500">A runner will be auto-assigned.</p>
             )}
             {runnerMode === 'specific' && (
               <div className="space-y-1">
