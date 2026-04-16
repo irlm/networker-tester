@@ -15,7 +15,7 @@ import { usePageTitle } from '../hooks/usePageTitle';
 import { useProject } from '../hooks/useProject';
 import { useTesterSubscription } from '../hooks/useTesterSubscription';
 import { useToast } from '../hooks/useToast';
-import { formatDuration } from '../lib/format';
+import { formatDuration, timeAgo } from '../lib/format';
 
 /* ── Tester grouping (from TestersPage) ── */
 
@@ -50,11 +50,7 @@ const EVENT_BADGE: Record<string, string> = {
 };
 
 function formatTime(iso: string): string {
-  try {
-    return new Date(iso).toLocaleString();
-  } catch {
-    return iso;
-  }
+  return timeAgo(iso);
 }
 
 function EventBadge({ kind }: { kind: string }) {
@@ -100,7 +96,7 @@ function SectionDivider({
 }) {
   return (
     <div className="flex items-center justify-between mb-3 mt-8 first:mt-0">
-      <h3 className="text-xs text-gray-500 tracking-wider font-medium uppercase">
+      <h3 className="text-xs text-gray-500 tracking-wider font-medium">
         {title}
         {count != null && count > 0 && (
           <span className="text-gray-600 ml-2">({count})</span>
@@ -232,7 +228,7 @@ export function InfrastructurePage() {
       {/* Active deploys in progress */}
       {activeDeps.length > 0 && (
         <div className="mb-4">
-          <h3 className="text-xs text-gray-500 tracking-wider font-medium mb-3 uppercase">in progress</h3>
+          <h3 className="text-xs text-gray-500 tracking-wider font-medium mb-3">in progress</h3>
           <div className="space-y-2">
             {activeDeps.map(d => (
               <Link
@@ -337,8 +333,8 @@ export function InfrastructurePage() {
                     <td className="px-4 py-3 text-gray-400 font-mono text-xs hidden lg:table-cell">
                       {formatDuration(d.started_at, d.finished_at)}
                     </td>
-                    <td className="px-4 py-3 text-gray-500 text-xs hidden lg:table-cell">
-                      {new Date(d.created_at).toLocaleString()}
+                    <td className="px-4 py-3 text-gray-500 text-xs hidden lg:table-cell" title={new Date(d.created_at).toISOString()}>
+                      {timeAgo(d.created_at)}
                     </td>
                   </tr>
                 ))}
@@ -459,7 +455,7 @@ export function InfrastructurePage() {
                   key={r.event_id}
                   className="border-b border-gray-800/30 hover:bg-gray-800/20"
                 >
-                  <td className="px-3 py-1.5 text-gray-400 font-mono whitespace-nowrap">
+                  <td className="px-3 py-1.5 text-gray-400 font-mono whitespace-nowrap" title={new Date(r.event_time).toISOString()}>
                     {formatTime(r.event_time)}
                   </td>
                   <td className="px-3 py-1.5">

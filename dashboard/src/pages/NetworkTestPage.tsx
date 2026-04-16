@@ -596,7 +596,7 @@ export function NetworkTestPage() {
             <button
               onClick={() => handleSubmit(false)}
               disabled={submitting || configName.trim().length === 0}
-              className="border border-gray-700 hover:border-gray-600 text-gray-300 px-4 py-2 text-sm transition-colors disabled:opacity-40"
+              className="border border-gray-700 hover:border-gray-600 text-gray-300 px-4 py-2 text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Save Config
             </button>

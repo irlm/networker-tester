@@ -84,7 +84,7 @@ body {
   transition: background-color 150ms;
 }
 .btn-primary:hover { background-color: oklch(0.655 0.127 221.723); /* cyan-500 */ }
-.btn-primary:disabled { opacity: 0.5; }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* Form input */
 .input {

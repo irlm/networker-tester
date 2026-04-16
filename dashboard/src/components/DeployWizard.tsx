@@ -620,7 +620,7 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
                   type="button"
                   onClick={handleSubmit}
                   disabled={loading}
-                  className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors disabled:opacity-50"
+                  className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {loading ? 'Deploying...' : 'Deploy Target'}
                 </button>

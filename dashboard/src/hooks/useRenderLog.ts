@@ -6,6 +6,9 @@ import { useApiLogStore } from '../stores/apiLogStore';
  *
  * Call `markRender(trigger, itemCount)` BEFORE setState.
  * The hook measures time to the next paint via rAF.
+ *
+ * DEV-ONLY: render timing is gated behind `store.enabled` (Perf Log pill).
+ * In production the store is disabled by default, so no measurements are recorded.
  */
 export function useRenderLog(component: string) {
   const pendingRef = useRef<{

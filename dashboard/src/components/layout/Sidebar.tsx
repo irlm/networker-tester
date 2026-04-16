@@ -117,7 +117,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
         onClick={() => setMobileOpen(false)}
         aria-current={active ? 'page' : undefined}
         title={collapsed ? item.label : undefined}
-        className={`flex items-center overflow-hidden whitespace-nowrap ${collapsed ? 'justify-center' : 'gap-3 px-3'} py-2 rounded text-sm mb-0.5 transition-all duration-200 ${
+        className={`flex items-center overflow-hidden whitespace-nowrap ${collapsed ? 'justify-center' : 'gap-3 px-3'} py-2 rounded text-sm mb-0.5 transition-all duration-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-cyan-500/50 ${
           active
             ? 'bg-gray-800/40 text-gray-100'
             : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/30'

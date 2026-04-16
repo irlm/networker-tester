@@ -8,6 +8,7 @@ import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useRenderLog } from '../hooks/useRenderLog';
 import { stableSet } from '../lib/stableUpdate';
+import { timeAgo } from '../lib/format';
 import { useProject } from '../hooks/useProject';
 
 const STATUS_OPTIONS: Array<RunStatus | 'all'> = ['all', 'queued', 'running', 'completed', 'failed', 'cancelled'];
@@ -132,8 +133,8 @@ export function RunsPage() {
       : filteredRuns;
     return source.map(r => ({
       ...r,
-      _createdTime: new Date(r.created_at).toLocaleTimeString(),
-      _createdFull: new Date(r.created_at).toLocaleString(),
+      _createdAgo: timeAgo(r.created_at),
+      _createdIso: new Date(r.created_at).toISOString(),
     }));
   }, [filteredRuns, endpointKindFilter]);
 
@@ -326,7 +327,7 @@ export function RunsPage() {
               {run.artifact_id && <span className="text-purple-400">benchmark</span>}
               <span className="text-green-400">{run.success_count} ok</span>
               {run.failure_count > 0 && <span className="text-red-400">{run.failure_count} fail</span>}
-              <span>{run._createdTime}</span>
+              <span title={run._createdIso}>{run._createdAgo}</span>
             </div>
           </Link>
         ))}
@@ -382,8 +383,8 @@ export function RunsPage() {
                 <td className="px-4 py-3 text-gray-500 text-xs hidden lg:table-cell">
                   {run.modes?.join(', ') || '-'}
                 </td>
-                <td className="px-4 py-3 text-gray-500 text-xs">
-                  {run._createdFull}
+                <td className="px-4 py-3 text-gray-500 text-xs" title={run._createdIso}>
+                  {run._createdAgo}
                 </td>
               </tr>
             ))}
