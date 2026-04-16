@@ -11,8 +11,25 @@ import { stableSet } from '../lib/stableUpdate';
 import { useProject } from '../hooks/useProject';
 
 const STATUS_OPTIONS: Array<RunStatus | 'all'> = ['all', 'queued', 'running', 'completed', 'failed', 'cancelled'];
-const ENDPOINT_KIND_OPTIONS: Array<EndpointKind | 'all'> = ['all', 'network', 'proxy', 'runtime'];
 const ARTIFACT_OPTIONS = ['all', 'yes', 'no'] as const;
+
+const PAGE_SIZE = 20;
+
+const KIND_BADGE_CLASSES: Record<string, string> = {
+  network: 'text-cyan-400 bg-cyan-500/10',
+  proxy: 'text-purple-400 bg-purple-500/10',
+  runtime: 'text-green-400 bg-green-500/10',
+};
+
+function KindBadge({ kind }: { kind: string | null | undefined }) {
+  if (!kind) return <span className="text-gray-600">-</span>;
+  const classes = KIND_BADGE_CLASSES[kind] || 'text-gray-400 bg-gray-500/10';
+  return (
+    <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${classes}`}>
+      {kind}
+    </span>
+  );
+}
 
 export function RunsPage() {
   const { projectId } = useProject();
@@ -20,11 +37,13 @@ export function RunsPage() {
   const [runs, setRuns] = useState<TestRun[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
   const runsFingerprint = useRef('');
 
   const statusFilter = searchParams.get('status') || 'all';
   const endpointKindFilter = searchParams.get('endpoint_kind') || 'all';
   const artifactFilter = searchParams.get('has_artifact') || 'all';
+  const showQueued = searchParams.get('show_queued') === '1';
 
   const markRender = useRenderLog('RunsPage');
 
@@ -39,10 +58,25 @@ export function RunsPage() {
       }
       return next;
     }, { replace: true });
+    setPage(0);
   }, [setSearchParams, markRender]);
+
+  const toggleShowQueued = useCallback(() => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      if (prev.get('show_queued') === '1') {
+        next.delete('show_queued');
+      } else {
+        next.set('show_queued', '1');
+      }
+      return next;
+    }, { replace: true });
+    setPage(0);
+  }, [setSearchParams]);
 
   const clearAllFilters = useCallback(() => {
     setSearchParams({}, { replace: true });
+    setPage(0);
   }, [setSearchParams]);
 
   usePageTitle('Runs');
@@ -54,7 +88,7 @@ export function RunsPage() {
       endpoint_kind?: string;
       has_artifact?: boolean;
       limit?: number;
-    } = { limit: 50 };
+    } = { limit: 200 };
     if (statusFilter !== 'all') params.status = statusFilter;
     if (endpointKindFilter !== 'all') params.endpoint_kind = endpointKindFilter;
     if (artifactFilter === 'yes') params.has_artifact = true;
@@ -75,15 +109,40 @@ export function RunsPage() {
 
   usePolling(loadRuns, 15000);
 
-  // Precompute formatted dates
-  const runsWithDates = useMemo(() =>
-    runs.map(r => ({
+  // Filter out queued unless opted in
+  const filteredRuns = useMemo(() => {
+    if (showQueued || statusFilter === 'queued') return runs;
+    return runs.filter(r => r.status !== 'queued');
+  }, [runs, showQueued, statusFilter]);
+
+  // Kind counts for tabs
+  const kindCounts = useMemo(() => {
+    const counts: Record<string, number> = { all: filteredRuns.length, network: 0, proxy: 0, runtime: 0 };
+    for (const r of filteredRuns) {
+      const k = r.endpoint_kind;
+      if (k && k in counts) counts[k]++;
+    }
+    return counts;
+  }, [filteredRuns]);
+
+  // Precompute formatted dates + apply kind tab filter
+  const runsWithDates = useMemo(() => {
+    const source = endpointKindFilter !== 'all'
+      ? filteredRuns.filter(r => r.endpoint_kind === endpointKindFilter)
+      : filteredRuns;
+    return source.map(r => ({
       ...r,
       _createdTime: new Date(r.created_at).toLocaleTimeString(),
       _createdFull: new Date(r.created_at).toLocaleString(),
-    })),
-    [runs],
-  );
+    }));
+  }, [filteredRuns, endpointKindFilter]);
+
+  // Pagination
+  const totalPages = Math.max(1, Math.ceil(runsWithDates.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages - 1);
+  const pageStart = safePage * PAGE_SIZE;
+  const pageEnd = Math.min(pageStart + PAGE_SIZE, runsWithDates.length);
+  const pageRuns = runsWithDates.slice(pageStart, pageEnd);
 
   const activeFilterCount = [
     statusFilter !== 'all',
@@ -137,16 +196,47 @@ export function RunsPage() {
     );
   }
 
+  const kindTabs: Array<{ key: EndpointKind | 'all'; label: string }> = [
+    { key: 'all', label: 'All' },
+    { key: 'network', label: 'Network' },
+    { key: 'proxy', label: 'Proxy' },
+    { key: 'runtime', label: 'Runtime' },
+  ];
+
   return (
     <div className="p-4 md:p-6">
       <div className="flex items-center justify-between mb-4 md:mb-6 gap-2">
         <h2 className="text-lg md:text-xl font-bold text-gray-100">Runs</h2>
         <Link
-          to={`/projects/${projectId}/runs/new`}
+          to={`/projects/${projectId}/tests/new`}
           className="bg-cyan-600 hover:bg-cyan-500 text-white px-3 md:px-4 py-1.5 rounded text-sm transition-colors flex-shrink-0"
         >
           New Run
         </Link>
+      </div>
+
+      {/* Kind tabs */}
+      <div className="flex items-center gap-1 mb-4 border-b border-gray-800/50">
+        {kindTabs.map(tab => {
+          const active = endpointKindFilter === tab.key;
+          const count = kindCounts[tab.key] ?? 0;
+          return (
+            <button
+              key={tab.key}
+              onClick={() => setFilter('endpoint_kind', tab.key)}
+              className={`px-3 py-2 text-xs font-medium border-b-2 transition-colors ${
+                active
+                  ? 'border-cyan-500 text-gray-100'
+                  : 'border-transparent text-gray-500 hover:text-gray-300'
+              }`}
+            >
+              {tab.label}
+              <span className={`ml-1.5 tabular-nums ${active ? 'text-cyan-400' : 'text-gray-600'}`}>
+                {count}
+              </span>
+            </button>
+          );
+        })}
       </div>
 
       {/* Filter Bar */}
@@ -157,9 +247,6 @@ export function RunsPage() {
           <>
             {statusFilter !== 'all' && (
               <FilterChip label="Status" value={statusFilter} onClear={() => setFilter('status', 'all')} />
-            )}
-            {endpointKindFilter !== 'all' && (
-              <FilterChip label="Kind" value={endpointKindFilter} onClear={() => setFilter('endpoint_kind', 'all')} />
             )}
             {artifactFilter !== 'all' && (
               <FilterChip label="Benchmark" value={artifactFilter === 'yes' ? 'Yes' : 'No'} onClear={() => setFilter('has_artifact', 'all')} />
@@ -181,19 +268,6 @@ export function RunsPage() {
         </select>
 
         <select
-          value={endpointKindFilter}
-          onChange={(e) => setFilter('endpoint_kind', e.target.value)}
-          aria-label="Filter by endpoint kind"
-          className="bg-[var(--bg-base)] border border-gray-700 rounded px-2 md:px-3 py-1.5 text-sm text-gray-300 focus:outline-none focus:border-cyan-500"
-        >
-          {ENDPOINT_KIND_OPTIONS.map(k => (
-            <option key={k} value={k}>
-              {k === 'all' ? 'All kinds' : k.charAt(0).toUpperCase() + k.slice(1)}
-            </option>
-          ))}
-        </select>
-
-        <select
           value={artifactFilter}
           onChange={(e) => setFilter('has_artifact', e.target.value)}
           aria-label="Filter by benchmark artifact"
@@ -205,6 +279,16 @@ export function RunsPage() {
             </option>
           ))}
         </select>
+
+        <label className="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={showQueued}
+            onChange={toggleShowQueued}
+            className="rounded border-gray-600 bg-transparent text-cyan-500 focus:ring-cyan-500 focus:ring-offset-0 w-3.5 h-3.5"
+          />
+          Show queued
+        </label>
       </FilterBar>
 
       {error && (
@@ -215,16 +299,16 @@ export function RunsPage() {
 
       {/* Mobile card layout (< md) */}
       <div className="md:hidden space-y-2 mt-4">
-        {runsWithDates.length === 0 ? (
+        {pageRuns.length === 0 ? (
           <div className="border border-gray-800 rounded p-8 text-center">
             <p className="text-gray-500 text-sm">{activeFilterCount > 0 ? 'No runs match filters' : 'No test runs yet'}</p>
             {activeFilterCount === 0 && (
-              <Link to={`/projects/${projectId}/runs/new`} className="text-cyan-400 text-xs mt-2 inline-block">
+              <Link to={`/projects/${projectId}/tests/new`} className="text-cyan-400 text-xs mt-2 inline-block">
                 Create your first run
               </Link>
             )}
           </div>
-        ) : runsWithDates.map((run) => (
+        ) : pageRuns.map((run) => (
           <Link
             key={run.id}
             to={`/projects/${projectId}/runs/${run.id}`}
@@ -238,7 +322,7 @@ export function RunsPage() {
               {run.config_name || run.test_config_id.slice(0, 8)}
             </p>
             <div className="flex items-center gap-3 text-xs text-gray-500">
-              {run.endpoint_kind && <span className="text-gray-600">{run.endpoint_kind}</span>}
+              {run.endpoint_kind && <KindBadge kind={run.endpoint_kind} />}
               {run.artifact_id && <span className="text-purple-400">benchmark</span>}
               <span className="text-green-400">{run.success_count} ok</span>
               {run.failure_count > 0 && <span className="text-red-400">{run.failure_count} fail</span>}
@@ -263,7 +347,7 @@ export function RunsPage() {
             </tr>
           </thead>
           <tbody>
-            {runsWithDates.map((run) => (
+            {pageRuns.map((run) => (
               <tr
                 key={run.id}
                 className="border-b border-gray-800/50 hover:bg-gray-800/20"
@@ -282,8 +366,8 @@ export function RunsPage() {
                 <td className="px-4 py-3 text-gray-300 text-xs truncate max-w-48">
                   {run.config_name || run.test_config_id.slice(0, 8)}
                 </td>
-                <td className="px-4 py-3 text-gray-500 text-xs hidden lg:table-cell">
-                  {run.endpoint_kind || '-'}
+                <td className="px-4 py-3 hidden lg:table-cell">
+                  <KindBadge kind={run.endpoint_kind} />
                 </td>
                 <td className="px-4 py-3">
                   <StatusBadge status={run.status} />
@@ -310,13 +394,41 @@ export function RunsPage() {
           <div className="py-10 text-center">
             <p className="text-gray-500 text-sm">{activeFilterCount > 0 ? 'No runs match the current filters' : 'No test runs yet'}</p>
             {activeFilterCount === 0 && (
-              <Link to={`/projects/${projectId}/runs/new`} className="text-cyan-400 text-xs mt-1 inline-block">
+              <Link to={`/projects/${projectId}/tests/new`} className="text-cyan-400 text-xs mt-1 inline-block">
                 Create your first run
               </Link>
             )}
           </div>
         )}
       </div>
+
+      {/* Pagination footer */}
+      {runsWithDates.length > 0 && (
+        <div className="flex items-center justify-between mt-4 text-xs text-gray-500">
+          <span>
+            Showing {pageStart + 1}-{pageEnd} of {runsWithDates.length} runs
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPage(p => Math.max(0, p - 1))}
+              disabled={safePage === 0}
+              className="px-2.5 py-1 rounded border border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            >
+              Previous
+            </button>
+            <span className="tabular-nums text-gray-400">
+              {safePage + 1} / {totalPages}
+            </span>
+            <button
+              onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
+              disabled={safePage >= totalPages - 1}
+              className="px-2.5 py-1 rounded border border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
