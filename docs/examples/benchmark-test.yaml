@@ -1,0 +1,35 @@
+# Benchmark-grade network test (TestConfig v2 with methodology).
+#
+# Usage:
+#   networker-tester --config docs/examples/benchmark-test.yaml
+#
+# The methodology block makes this a benchmark test. When submitted to the
+# dashboard, a BenchmarkArtifact (phases, samples, quality gates) will be
+# produced alongside the TestRun.
+
+name: "edge latency benchmark"
+endpoint:
+  kind: network
+  host: www.cloudflare.com
+workload:
+  modes: [dns, tcp, tls, http2]
+  runs: 30
+  concurrency: 1
+  timeout_ms: 5000
+  payload_sizes: []
+  capture_mode: headers-only
+methodology:
+  warmup_runs: 5
+  measured_runs: 30
+  cooldown_ms: 100
+  target_error_pct: 5.0
+  outlier_policy:
+    policy: iqr
+    k: 1.5
+  quality_gates:
+    max_cv_pct: 5.0
+    min_samples: 20
+    max_noise_level: 0.3
+  publication_gates:
+    max_failure_pct: 1.0
+    require_all_phases: true
