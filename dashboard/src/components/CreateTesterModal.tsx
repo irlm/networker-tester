@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { testersApi, type TesterRow } from '../api/testers';
 import { api } from '../api/client';
-import { CloudProviderStatus } from './common/CloudProviderStatus';
 
 interface CreateTesterModalProps {
   projectId: string;
@@ -136,7 +135,6 @@ export function CreateTesterModal({
   const [autoProbeEnabled, setAutoProbeEnabled] = useState(false);
 
   const [availableClouds, setAvailableClouds] = useState<string[]>([]);
-  const [cloudAccounts, setCloudAccounts] = useState<{ account_id: string; name: string; provider: string; status: string }[]>([]);
   const [existingNames, setExistingNames] = useState<Set<string>>(new Set());
   const [regions, setRegions] = useState<string[]>([]);
   const [stage, setStage] = useState<Stage>('form');
@@ -156,26 +154,33 @@ export function CreateTesterModal({
   useEffect(() => {
     let cancelled = false;
     Promise.all([
-      api.getCloudConnections(projectId).catch(() => []),
       api.getCloudAccounts(projectId).catch(() => []),
       testersApi.listTesters(projectId).catch(() => []),
-    ]).then(([conns, accts, testers]) => {
+    ]).then(([accts, testers]) => {
       if (cancelled) return;
-      const connsArr = Array.isArray(conns) ? conns : [];
       const acctsArr = Array.isArray(accts) ? accts : [];
       const testersArr = Array.isArray(testers) ? testers : [];
-      setCloudAccounts(acctsArr);
-      const fromConns = connsArr
-        .map((c: { provider: string }) => c.provider);
-      const fromAccts = acctsArr
-        .map((a: { provider: string }) => a.provider);
-      const providers = [...new Set([...fromConns, ...fromAccts])] as string[];
+      // Sort: active first, then by provider + name
+      acctsArr.sort((a: { status: string; provider: string; name: string }, b: { status: string; provider: string; name: string }) => {
+        if (a.status === 'active' && b.status !== 'active') return -1;
+        if (a.status !== 'active' && b.status === 'active') return 1;
+        const pc = a.provider.localeCompare(b.provider);
+        return pc !== 0 ? pc : a.name.localeCompare(b.name);
+      });
+      const providers = [...new Set(acctsArr.map((a: { provider: string }) => a.provider))] as string[];
       setAvailableClouds(providers.length > 0 ? providers : ['azure']);
       setExistingNames(new Set(testersArr.map((t: { name: string }) => t.name)));
-      // If current cloud not in available list, switch to first available
       if (providers.length > 0 && !providers.includes(cloud)) {
         setCloud(providers[0]);
         setVmSize(DEFAULT_VM_SIZE[providers[0]] || providers[0]);
+      }
+      // Re-validate stale accounts (> 10 min)
+      const tenMinAgo = Date.now() - 10 * 60 * 1000;
+      for (const acct of acctsArr) {
+        const lastVal = acct.last_validated ? new Date(acct.last_validated).getTime() : 0;
+        if (lastVal < tenMinAgo) {
+          api.validateCloudAccount(projectId, acct.account_id).catch(() => {});
+        }
       }
     });
     return () => { cancelled = true; };
@@ -369,7 +374,6 @@ export function CreateTesterModal({
             </div>
           ) : (
             <form onSubmit={handleSubmit} className="space-y-4">
-              <CloudProviderStatus accounts={cloudAccounts} />
 
               {/* Cloud */}
               <div>

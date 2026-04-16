@@ -6,7 +6,6 @@ import { ModeSelector } from './common/ModeSelector';
 import { PayloadSelector } from './common/PayloadSelector';
 import { CloudAccountSelector } from './CloudAccountSelector';
 import { useToast } from '../hooks/useToast';
-import { CloudProviderStatus } from './common/CloudProviderStatus';
 
 interface DeployWizardProps {
   projectId: string;
@@ -43,7 +42,7 @@ function emptyEndpoint(provider = 'azure'): DeployEndpoint {
 
 export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProps) {
   const [step, setStep] = useState(1);
-  const [cloudAccounts, setCloudAccounts] = useState<{ account_id: string; name: string; provider: string; status: string }[]>([]);
+  const [cloudAccounts, setCloudAccounts] = useState<{ account_id: string; name: string; provider: string; status: string; last_validated?: string | null }[]>([]);
   const [cloudLoading, setCloudLoading] = useState(true);
   const [endpoints, setEndpoints] = useState<DeployEndpoint[]>([emptyEndpoint()]);
   const [name, setName] = useState('');
@@ -76,7 +75,26 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
   useEffect(() => {
     api.getModes().then(r => setModeGroups(r.groups)).catch(() => {});
     api.getCloudAccounts(projectId)
-      .then(accts => setCloudAccounts(Array.isArray(accts) ? accts : []))
+      .then(accts => {
+        const list = Array.isArray(accts) ? accts : [];
+        // Sort: active first, then by provider + name
+        list.sort((a: { status: string; provider: string; name: string }, b: { status: string; provider: string; name: string }) => {
+          if (a.status === 'active' && b.status !== 'active') return -1;
+          if (a.status !== 'active' && b.status === 'active') return 1;
+          const pc = a.provider.localeCompare(b.provider);
+          if (pc !== 0) return pc;
+          return a.name.localeCompare(b.name);
+        });
+        setCloudAccounts(list);
+        // Re-validate stale accounts (last_validated > 10 min ago)
+        const tenMinAgo = Date.now() - 10 * 60 * 1000;
+        for (const acct of list) {
+          const lastVal = acct.last_validated ? new Date(acct.last_validated).getTime() : 0;
+          if (lastVal < tenMinAgo) {
+            api.validateCloudAccount(projectId, acct.account_id).catch(() => {});
+          }
+        }
+      })
       .catch(() => {})
       .finally(() => setCloudLoading(false));
   }, [projectId]);
@@ -276,11 +294,9 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
             </div>
           )}
 
-          {/* Step: Target Config (cloud status shown inline) */}
+          {/* Step: Target Config */}
           {currentStepName === 'endpoint-config' && (
             <div>
-              <CloudProviderStatus accounts={cloudAccounts} loading={cloudLoading} />
-
               <p className="text-sm text-gray-400 mb-3">Configure targets to deploy:</p>
               {endpoints.map((ep, idx) => (
                 <div key={idx} className="bg-[var(--bg-base)] border border-gray-800 rounded p-3 mb-3">
@@ -299,24 +315,40 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
 
                   <div className="grid grid-cols-2 gap-3 mb-2">
                     <div>
-                      <label className="block text-xs text-gray-400 mb-1">Provider</label>
-                      <select
-                        value={ep.provider}
-                        onChange={e => changeProvider(idx, e.target.value)}
-                        className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
-                      >
-                        {/* Dynamic: only providers with configured cloud accounts */}
-                        {[...new Set(cloudAccounts.map(a => a.provider))].map(p => (
-                          <option key={p} value={p}>
-                            {p === 'azure' ? 'Azure' : p === 'aws' ? 'AWS' : p === 'gcp' ? 'GCP' : p.charAt(0).toUpperCase() + p.slice(1)}
-                            {cloudAccounts.filter(a => a.provider === p).every(a => a.status === 'error') ? ' (credentials invalid)' : ''}
-                          </option>
-                        ))}
-                        <option value="lan">LAN/SSH</option>
-                        {cloudAccounts.length === 0 && (
-                          <option disabled>— add cloud accounts in Settings → Cloud —</option>
-                        )}
-                      </select>
+                      <label className="block text-xs text-gray-400 mb-1">Cloud Account</label>
+                      {cloudLoading ? (
+                        <p className="text-xs text-gray-500 py-2">Loading accounts...</p>
+                      ) : (
+                        <select
+                          value={ep.provider === 'lan' ? 'lan' : (selectedCloudAccountId || '')}
+                          onChange={e => {
+                            const val = e.target.value;
+                            if (val === 'lan') {
+                              changeProvider(idx, 'lan');
+                              setSelectedCloudAccountId(null);
+                            } else {
+                              const acct = cloudAccounts.find(a => a.account_id === val);
+                              if (acct) {
+                                changeProvider(idx, acct.provider);
+                                setSelectedCloudAccountId(acct.account_id);
+                              }
+                            }
+                          }}
+                          className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                        >
+                          {cloudAccounts.length === 0 && (
+                            <option disabled value="">No cloud accounts — add in Settings → Cloud</option>
+                          )}
+                          {cloudAccounts.map(a => (
+                            <option key={a.account_id} value={a.account_id}>
+                              {a.provider === 'azure' ? 'Azure' : a.provider === 'aws' ? 'AWS' : a.provider === 'gcp' ? 'GCP' : a.provider}
+                              {' — '}{a.name}
+                              {a.status === 'active' ? ' ✓' : a.status === 'error' ? ' ✗ invalid' : ` (${a.status})`}
+                            </option>
+                          ))}
+                          <option value="lan">LAN / SSH</option>
+                        </select>
+                      )}
                     </div>
 
                     {ep.provider === 'lan' ? (
