@@ -53,7 +53,6 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
   const [timeout, setTimeout_] = useState(30);
   const [insecure, setInsecure] = useState(true);
   const [payloadSizes, setPayloadSizes] = useState<Set<string>>(new Set(['64k', '1m']));
-  const [endpointOnly, setEndpointOnly] = useState(false);
   const [selectedCloudAccountId, setSelectedCloudAccountId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -66,11 +65,9 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
   // Determine the primary cloud provider for the account selector (first non-LAN endpoint)
   const primaryCloudProvider = endpoints.find(ep => ep.provider !== 'lan')?.provider || 'azure';
 
-  // Step mapping: 1=Cloud Status, 2=Endpoint Config, 3=Cloud Account (if cloud), 4=Test Config (if !endpointOnly), 5=Review
-  // Build ordered step list
+  // Step mapping: 1=Cloud Status, 2=Endpoint Config, 3=Cloud Account (if cloud), 4=Review
   const stepList: string[] = ['cloud-status', 'endpoint-config'];
   if (hasCloudEndpoint) stepList.push('cloud-account');
-  if (!endpointOnly) stepList.push('test-config');
   stepList.push('review');
   const totalSteps = stepList.length;
   const currentStepName = stepList[step - 1] || 'cloud-status';
@@ -168,10 +165,6 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
   };
 
   const handleSubmit = async () => {
-    if (!endpointOnly && selectedModes.size === 0) {
-      setError('Select at least one probe mode');
-      return;
-    }
     setLoading(true);
     setError(null);
 
@@ -229,19 +222,7 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
       }),
     };
 
-    if (endpointOnly) {
-      config.tests = { run_tests: false };
-    } else {
-      const testsObj: Record<string, unknown> = {
-        modes: Array.from(selectedModes),
-        runs,
-        insecure,
-      };
-      if (needsPayload && payloadSizes.size > 0) {
-        testsObj.payload_sizes = Array.from(payloadSizes);
-      }
-      config.tests = testsObj;
-    }
+    config.tests = { run_tests: false };
 
     try {
       const result = await api.createDeployment(projectId, deployName, config);
@@ -282,7 +263,7 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-4">
               <h3 id={titleId} className="text-lg font-bold text-gray-100">
-                Deploy & Test
+                Deploy Endpoint
               </h3>
               <div className="flex gap-1">
                 {Array.from({ length: totalSteps }, (_, i) => i + 1).map(s => (
@@ -531,20 +512,9 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
                 </button>
               )}
 
-              <div className="mt-4 pt-3 border-t border-gray-800">
-                <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={endpointOnly}
-                    onChange={e => setEndpointOnly(e.target.checked)}
-                    className="accent-cyan-500"
-                  />
-                  Deploy endpoint only (skip tests)
-                </label>
-                <p className="text-xs text-gray-600 mt-1 ml-5">
-                  You can run a test later from the Tests page
-                </p>
-              </div>
+              <p className="mt-4 pt-3 border-t border-gray-800 text-xs text-gray-600">
+                After deploy, run against this endpoint from Runs → New Run → Proxy.
+              </p>
             </div>
           )}
 
@@ -666,24 +636,11 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
                 ))}
               </div>
 
-              {endpointOnly ? (
-                <div className="bg-[var(--bg-base)] border border-gray-800 rounded p-3 mb-3 text-xs text-gray-500">
-                  <span className="text-gray-400">Endpoint only</span>
-                  {' \u00b7 '}
-                  <span>No tests will be run</span>
-                </div>
-              ) : (
-                <div className="bg-[var(--bg-base)] border border-gray-800 rounded p-3 mb-3 text-xs text-gray-500">
-                  <span className="text-gray-400">{selectedModes.size} modes</span>
-                  {' \u00b7 '}
-                  <span>{runs} runs</span>
-                  {needsPayload && <>{' \u00b7 '}<span>{payloadSizes.size} payload sizes</span></>}
-                  {' \u00b7 '}
-                  <span>{concurrency} concurrent</span>
-                  {' \u00b7 '}
-                  <span>{timeout}s timeout</span>
-                </div>
-              )}
+              <div className="bg-[var(--bg-base)] border border-gray-800 rounded p-3 mb-3 text-xs text-gray-500">
+                <span className="text-gray-400">Deploy only</span>
+                {' \u00b7 '}
+                <span>Run against this endpoint from Runs → New Run → Proxy</span>
+              </div>
             </div>
           )}
 
@@ -715,7 +672,7 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
                   disabled={loading}
                   className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors disabled:opacity-50"
                 >
-                  {loading ? 'Deploying...' : endpointOnly ? 'Deploy Endpoint' : 'Deploy & Test'}
+                  {loading ? 'Deploying...' : 'Deploy Endpoint'}
                 </button>
               ) : (
                 <button

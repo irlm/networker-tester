@@ -226,16 +226,16 @@ export function DeployPage() {
             tester VMs
             {testerVms.length > 0 && <span className="text-gray-600 ml-2">({testerVms.length})</span>}
           </h3>
-          <Link to={`/projects/${projectId}/tests`} className="text-xs text-gray-600 hover:text-gray-400 transition-colors">
-            Manage in Tests →
+          <Link to={`/projects/${projectId}/vms/testers`} className="text-xs text-gray-600 hover:text-gray-400 transition-colors">
+            Manage in Cloud VMs →
           </Link>
         </div>
 
         {testerVms.length === 0 ? (
           <div className="border border-gray-800 rounded p-8 text-center">
             <p className="text-gray-500 text-sm">No tester VMs deployed</p>
-            <Link to={`/projects/${projectId}/tests`} className="text-xs text-cyan-400 mt-2 inline-block">
-              Deploy a tester from the Tests page
+            <Link to={`/projects/${projectId}/vms/testers`} className="text-xs text-cyan-400 mt-2 inline-block">
+              Deploy a tester from Cloud VMs
             </Link>
           </div>
         ) : (
