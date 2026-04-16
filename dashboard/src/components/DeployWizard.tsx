@@ -4,7 +4,6 @@ import type { DeployEndpoint, ModeGroup } from '../api/types';
 import { THROUGHPUT_IDS } from '../lib/chart';
 import { ModeSelector } from './common/ModeSelector';
 import { PayloadSelector } from './common/PayloadSelector';
-import { CloudAccountSelector } from './CloudAccountSelector';
 import { useToast } from '../hooks/useToast';
 
 interface DeployWizardProps {
@@ -60,14 +59,8 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
   const addToast = useToast();
 
   const needsPayload = THROUGHPUT_IDS.some((m) => selectedModes.has(m));
-  const hasCloudEndpoint = endpoints.some(ep => ep.provider !== 'lan');
-  // Determine the primary cloud provider for the account selector (first non-LAN endpoint)
-  const primaryCloudProvider = endpoints.find(ep => ep.provider !== 'lan')?.provider || 'azure';
-
-  // Step mapping: 1=Endpoint Config, 2=Cloud Account (if cloud), 3=Review
-  // Cloud status shown inline on step 1 (not a separate step).
+  // Step mapping: 1=Endpoint Config, 2=Review
   const stepList: string[] = ['endpoint-config'];
-  if (hasCloudEndpoint) stepList.push('cloud-account');
   stepList.push('review');
   const totalSteps = stepList.length;
   const currentStepName = stepList[step - 1] || 'cloud-status';
@@ -485,19 +478,6 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
               <p className="mt-4 pt-3 border-t border-gray-800 text-xs text-gray-600">
                 After deploy, run against this target from Runs → New Run → Proxy.
               </p>
-            </div>
-          )}
-
-          {/* Step: Cloud Account Selection */}
-          {currentStepName === 'cloud-account' && (
-            <div>
-              <p className="text-sm text-gray-400 mb-3">Select cloud account for deployment:</p>
-              <CloudAccountSelector
-                projectId={projectId}
-                provider={primaryCloudProvider}
-                selectedAccountId={selectedCloudAccountId}
-                onSelect={setSelectedCloudAccountId}
-              />
             </div>
           )}
 
