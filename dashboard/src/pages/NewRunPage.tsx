@@ -46,7 +46,7 @@ export function NewRunPage() {
   const [runs, setRuns] = useState(10);
   const [concurrency, setConcurrency] = useState(1);
   const [timeoutMs, setTimeoutMs] = useState(5000);
-  const [payloadSizes, setPayloadSizes] = useState<number[]>([]);
+  const [selectedPayloads, setSelectedPayloads] = useState<Set<string>>(new Set());
 
   // Step 3: Methodology (optional)
   const [benchmarkMode, setBenchmarkMode] = useState(false);
@@ -83,7 +83,16 @@ export function NewRunPage() {
     });
   }, []);
 
-  const hasThroughput = [...selectedModes].some(m => THROUGHPUT_IDS.includes(m));
+  const hasThroughput = [...selectedModes].some(m => (THROUGHPUT_IDS as readonly string[]).includes(m));
+
+  const handlePayloadToggle = useCallback((value: string) => {
+    setSelectedPayloads(prev => {
+      const next = new Set(prev);
+      if (next.has(value)) next.delete(value);
+      else next.add(value);
+      return next;
+    });
+  }, []);
 
   const buildEndpoint = (): EndpointRef => {
     switch (endpointKind) {
@@ -114,6 +123,10 @@ export function NewRunPage() {
   const handleSubmit = async (launchNow: boolean) => {
     setSubmitting(true);
     try {
+      // Convert payload size labels to byte values
+      const sizeMap: Record<string, number> = { '64k': 65536, '1m': 1048576, '16m': 16777216 };
+      const payloadSizes = [...selectedPayloads].map(s => sizeMap[s]).filter(Boolean);
+
       const workload: Workload = {
         modes: [...selectedModes],
         runs,
@@ -337,8 +350,8 @@ export function NewRunPage() {
             <div>
               <label className="text-xs text-gray-500 mb-2 block">Payload Sizes</label>
               <PayloadSelector
-                selectedSizes={payloadSizes}
-                onChange={setPayloadSizes}
+                selected={selectedPayloads}
+                onToggle={handlePayloadToggle}
               />
             </div>
           )}

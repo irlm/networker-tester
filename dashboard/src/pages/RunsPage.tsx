@@ -4,7 +4,6 @@ import { api } from '../api/client';
 import type { TestRun, RunStatus, EndpointKind } from '../api/types';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { FilterBar, FilterChip } from '../components/common/FilterBar';
-import { useDebounce } from '../hooks/useDebounce';
 import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useRenderLog } from '../hooks/useRenderLog';

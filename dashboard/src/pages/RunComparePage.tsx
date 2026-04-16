@@ -1,9 +1,10 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import type { ComparisonReport, BenchmarkCaseComparison } from '../api/types';
 import { Breadcrumb } from '../components/common/Breadcrumb';
 import { usePageTitle } from '../hooks/usePageTitle';
+import { usePolling } from '../hooks/usePolling';
 import { useProject } from '../hooks/useProject';
 
 export function RunComparePage() {
@@ -17,16 +18,29 @@ export function RunComparePage() {
 
   usePageTitle('Compare Runs');
 
-  useEffect(() => {
-    if (runIds.length < 2) {
-      setError('At least two run IDs are required (pass ?ids=a,b,...)');
-      setLoading(false);
-      return;
-    }
+  const loadComparison = useCallback(() => {
+    if (runIds.length < 2) return;
     api.compareTestRuns(runIds)
-      .then(r => { setReport(r); setLoading(false); })
+      .then(r => { setReport(r); setError(null); setLoading(false); })
       .catch(e => { setError(String(e)); setLoading(false); });
   }, [runIds]);
+
+  usePolling(loadComparison, 0, runIds.length >= 2);
+
+  // Handle invalid input without useEffect setState
+  const tooFewIds = runIds.length < 2;
+
+  if (tooFewIds) {
+    return (
+      <div className="p-4 md:p-6">
+        <Breadcrumb items={[{ label: 'Runs', to: `/projects/${projectId}/runs` }, { label: 'Compare' }]} />
+        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
+          <h3 className="text-red-400 font-bold mb-2">Invalid input</h3>
+          <p className="text-red-300 text-sm">At least two run IDs are required (pass ?ids=a,b,...)</p>
+        </div>
+      </div>
+    );
+  }
 
   if (loading) {
     return (
