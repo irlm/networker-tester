@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { testersApi, type TesterRow } from '../api/testers';
 import type { EndpointRef, EndpointKind, Workload, Methodology, TestConfigCreate, ModeGroup, Deployment, ComparisonCell, ComparisonGroupCreate, CloudAccountSummary } from '../api/types';
@@ -694,13 +694,7 @@ export function NewRunPage() {
       <div className="mb-6">
         <h2 className="text-lg md:text-xl font-bold text-gray-100">New Run</h2>
         <p className="text-xs text-gray-500 mt-1">
-          Just testing a URL?{' '}
-          <Link
-            to={`/projects/${projectId}/runs/new/probe`}
-            className="text-cyan-400 hover:text-cyan-300 transition-colors"
-          >
-            Quick Probe
-          </Link>
+          Configure workload tests against your deployed targets.
         </p>
       </div>
 
@@ -747,7 +741,6 @@ export function NewRunPage() {
               {([
                 { kind: 'runtime' as const, label: 'Runtime (stack)', desc: 'Compare language stacks' },
                 { kind: 'proxy' as const, label: 'Proxy (target)', desc: 'Use a deployed endpoint' },
-                { kind: 'network' as const, label: 'Network (URL)', desc: 'Test any public URL' },
               ]).map(({ kind, label }) => (
                 <button
                   key={kind}
