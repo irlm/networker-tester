@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { api } from '../api/client';
 import { testersApi, type TesterRow } from '../api/testers';
-import type { EndpointRef, EndpointKind, Workload, Methodology, TestConfigCreate, ModeGroup, Deployment } from '../api/types';
+import type { EndpointRef, EndpointKind, Workload, Methodology, TestConfigCreate, ModeGroup, Deployment, ComparisonCell, ComparisonGroupCreate } from '../api/types';
 import { Breadcrumb } from '../components/common/Breadcrumb';
 import { ModeSelector } from '../components/common/ModeSelector';
 import { PayloadSelector } from '../components/common/PayloadSelector';
@@ -290,6 +290,10 @@ export function NewRunPage() {
   const [selectedTesterId, setSelectedTesterId] = useState<string | null>(null);
   const [showTesterPicker, setShowTesterPicker] = useState(false);
 
+  // Step 1 -- Matrix builder (comparison group)
+  const [compareLanguages, setCompareLanguages] = useState<string[]>([]);
+  const [compareRunners, setCompareRunners] = useState<string[]>([]);
+
   // Step 2: Workload
   const [modeGroups, setModeGroups] = useState<ModeGroup[]>([]);
   const [selectedModes, setSelectedModes] = useState<Set<string>>(new Set(['http2']));
@@ -323,15 +327,15 @@ export function NewRunPage() {
       .finally(() => setDeploymentsLoading(false));
   }, [endpointKind, projectId]);
 
-  // Load testers when picker is shown
+  // Load testers when proxy/runtime tab is active (needed for matrix builder + tester picker)
   useEffect(() => {
-    if (!showTesterPicker) return;
+    if (endpointKind !== 'proxy' && endpointKind !== 'runtime') return;
     setTestersLoading(true);
     testersApi.listTesters(projectId)
       .then(rows => setTesters(rows))
       .catch(() => setTesters([]))
       .finally(() => setTestersLoading(false));
-  }, [showTesterPicker, projectId]);
+  }, [endpointKind, projectId]);
 
   const handleModeToggle = useCallback((id: string) => {
     setSelectedModes(prev => {
@@ -408,6 +412,52 @@ export function NewRunPage() {
     });
   }, [runtimeLangs]);
 
+  // ── Matrix builder helpers ───────────────────────────────────────────
+
+  /** Unique runner regions from loaded testers (for matrix runner selection) */
+  const availableRunners = useMemo(() => {
+    return testers
+      .filter(t => t.power_state === 'running' || t.power_state === 'stopped')
+      .map(t => ({ id: t.tester_id, label: `${t.name} (${t.cloud} ${t.region})`, region: t.region }));
+  }, [testers]);
+
+  const toggleCompareLanguage = useCallback((lang: string) => {
+    setCompareLanguages(prev =>
+      prev.includes(lang) ? prev.filter(l => l !== lang) : [...prev, lang],
+    );
+  }, []);
+
+  const toggleCompareRunner = useCallback((runnerId: string) => {
+    setCompareRunners(prev =>
+      prev.includes(runnerId) ? prev.filter(r => r !== runnerId) : [...prev, runnerId],
+    );
+  }, []);
+
+  /** Number of cells the matrix will produce */
+  const matrixCellCount = useMemo(() => {
+    if (endpointKind === 'runtime') {
+      const langs = compareLanguages.length || 1;
+      const runners = compareRunners.length || 1;
+      return langs * runners;
+    }
+    if (endpointKind === 'proxy') {
+      return compareRunners.length || 1;
+    }
+    return 1;
+  }, [endpointKind, compareLanguages, compareRunners]);
+
+  const isMatrixRun = matrixCellCount > 1;
+
+  // Sync compareLanguages when template changes
+  useEffect(() => {
+    if (endpointKind === 'runtime' && runtimeTemplate && runtimeTemplate !== 'custom') {
+      const tmpl = RUNTIME_TEMPLATES.find(t => t.id === runtimeTemplate);
+      if (tmpl) {
+        setCompareLanguages(tmpl.defaultLanguages);
+      }
+    }
+  }, [endpointKind, runtimeTemplate]);
+
   // ── Proxy deployment selection ────────────────────────────────────────
 
   const selectDeployment = useCallback((dep: Deployment) => {
@@ -447,6 +497,40 @@ export function NewRunPage() {
     }
   };
 
+  /** Build cells for the comparison group from the cartesian product of languages x runners. */
+  const buildComparisonCells = (): ComparisonCell[] => {
+    const cells: ComparisonCell[] = [];
+    const langs = compareLanguages.length > 0 ? compareLanguages : [language];
+    const runners = compareRunners.length > 0 ? compareRunners : [undefined];
+
+    if (endpointKind === 'runtime') {
+      for (const lang of langs) {
+        for (const runnerId of runners) {
+          const runnerInfo = runnerId ? availableRunners.find(r => r.id === runnerId) : undefined;
+          const label = runnerInfo
+            ? `${lang} @ ${runnerInfo.region}`
+            : lang;
+          cells.push({
+            label,
+            endpoint: { kind: 'runtime', runtime_id: runtimeId, language: lang },
+            ...(runnerId ? { runner_id: runnerId } : {}),
+          });
+        }
+      }
+    } else if (endpointKind === 'proxy') {
+      for (const runnerId of runners) {
+        const runnerInfo = runnerId ? availableRunners.find(r => r.id === runnerId) : undefined;
+        const label = runnerInfo ? `from ${runnerInfo.region}` : 'default';
+        cells.push({
+          label,
+          endpoint: { kind: 'proxy', proxy_endpoint_id: proxyEndpointId },
+          ...(runnerId ? { runner_id: runnerId } : {}),
+        });
+      }
+    }
+    return cells;
+  };
+
   const handleSubmit = async (launchNow: boolean) => {
     setSubmitting(true);
     try {
@@ -463,6 +547,22 @@ export function NewRunPage() {
         capture_mode: 'headers-only',
       };
 
+      // ── Matrix path: create a ComparisonGroup ──────────────────────
+      if (isMatrixRun && launchNow) {
+        const cells = buildComparisonCells();
+        const body: ComparisonGroupCreate = {
+          name: configName,
+          base_workload: workload,
+          ...(benchmarkMode ? { methodology } : {}),
+          cells,
+        };
+        const group = await api.createComparisonGroup(projectId, body);
+        addToast('success', `Comparison group launched -- ${cells.length} runs`);
+        navigate(`/projects/${projectId}/runs?comparison_group=${group.id}`);
+        return;
+      }
+
+      // ── Single-run path (unchanged) ────────────────────────────────
       const config: TestConfigCreate = {
         name: configName,
         endpoint: buildEndpoint(),
@@ -752,6 +852,36 @@ export function NewRunPage() {
                         </Link>
                       </div>
                     )}
+
+                    {/* ── Matrix builder: Compare from multiple runners (proxy) ─── */}
+                    {proxyEndpointId && availableRunners.length > 0 && (
+                      <div className="border border-gray-800 rounded p-4 space-y-3 mt-4">
+                        <h4 className="text-xs font-semibold text-gray-300 uppercase tracking-wider">Compare from multiple runners</h4>
+                        <div className="space-y-1">
+                          {availableRunners.map(runner => {
+                            const checked = compareRunners.includes(runner.id);
+                            return (
+                              <label key={runner.id} className="flex items-center gap-2 cursor-pointer group">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => toggleCompareRunner(runner.id)}
+                                  className="w-3.5 h-3.5 rounded border-gray-600 bg-gray-900 text-cyan-500 focus:ring-cyan-500/50"
+                                />
+                                <span className={`text-xs font-mono ${checked ? 'text-cyan-300' : 'text-gray-500 group-hover:text-gray-300'}`}>
+                                  {runner.label}
+                                </span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                        {compareRunners.length > 1 && (
+                          <div className="text-xs font-mono text-purple-400 pt-1">
+                            This creates {compareRunners.length} runs (1 target x {compareRunners.length} runners)
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -886,6 +1016,75 @@ export function NewRunPage() {
                             </div>
                           ))}
                         </div>
+                      </div>
+                    )}
+
+                    {/* ── Matrix builder: Compare across (runtime, non-custom) ─── */}
+                    {runtimeTemplate && runtimeTemplate !== 'custom' && (
+                      <div className="border border-gray-800 rounded p-4 space-y-4">
+                        <h4 className="text-xs font-semibold text-gray-300 uppercase tracking-wider">Compare across</h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {/* Languages column */}
+                          <div>
+                            <label className="text-[10px] font-mono text-gray-500 mb-1.5 block">Languages</label>
+                            <div className="space-y-1">
+                              {LANGUAGE_GROUPS.flatMap(g => g.entries).map(entry => {
+                                const checked = compareLanguages.includes(entry.id);
+                                return (
+                                  <label key={entry.id} className="flex items-center gap-2 cursor-pointer group">
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      onChange={() => toggleCompareLanguage(entry.id)}
+                                      className="w-3.5 h-3.5 rounded border-gray-600 bg-gray-900 text-cyan-500 focus:ring-cyan-500/50"
+                                    />
+                                    <span className={`text-xs font-mono ${checked ? 'text-cyan-300' : 'text-gray-500 group-hover:text-gray-300'}`}>
+                                      {entry.label}
+                                    </span>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </div>
+
+                          {/* Runners column */}
+                          <div>
+                            <label className="text-[10px] font-mono text-gray-500 mb-1.5 block">Runners</label>
+                            {testersLoading && (
+                              <p className="text-xs text-gray-600 motion-safe:animate-pulse">Loading runners...</p>
+                            )}
+                            {!testersLoading && availableRunners.length === 0 && (
+                              <p className="text-xs text-gray-600">No runners available. System will auto-assign.</p>
+                            )}
+                            {!testersLoading && availableRunners.length > 0 && (
+                              <div className="space-y-1">
+                                {availableRunners.map(runner => {
+                                  const checked = compareRunners.includes(runner.id);
+                                  return (
+                                    <label key={runner.id} className="flex items-center gap-2 cursor-pointer group">
+                                      <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        onChange={() => toggleCompareRunner(runner.id)}
+                                        className="w-3.5 h-3.5 rounded border-gray-600 bg-gray-900 text-cyan-500 focus:ring-cyan-500/50"
+                                      />
+                                      <span className={`text-xs font-mono ${checked ? 'text-cyan-300' : 'text-gray-500 group-hover:text-gray-300'}`}>
+                                        {runner.label}
+                                      </span>
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Matrix summary */}
+                        {matrixCellCount > 1 && (
+                          <div className="text-xs font-mono text-purple-400 pt-1">
+                            This creates {matrixCellCount} runs ({compareLanguages.length || 1} language{(compareLanguages.length || 1) !== 1 ? 's' : ''} x {compareRunners.length || 1} runner{(compareRunners.length || 1) !== 1 ? 's' : ''})
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1202,25 +1401,38 @@ export function NewRunPage() {
                     <p><span className="text-gray-500">Runner:</span> {testers.find(t => t.tester_id === selectedTesterId)?.name ?? selectedTesterId.slice(0, 8)}</p>
                   )}
                   {benchmarkMode && <p><span className="text-purple-400">Benchmark mode enabled</span> -- {methodology.measured_runs} measured runs</p>}
+                  {isMatrixRun && (
+                    <p className="text-purple-400 font-medium">
+                      Comparison group: {matrixCellCount} runs
+                      {endpointKind === 'runtime' && ` (${compareLanguages.length || 1} lang x ${compareRunners.length || 1} runner${(compareRunners.length || 1) !== 1 ? 's' : ''})`}
+                      {endpointKind === 'proxy' && ` (1 target x ${compareRunners.length} runners)`}
+                    </p>
+                  )}
                 </div>
 
                 <div className="flex gap-2 pt-4">
                   <button onClick={() => setStep(3)} className="text-gray-400 hover:text-gray-200 px-4 py-2 text-sm transition-colors">
                     Back
                   </button>
-                  <button
-                    onClick={() => handleSubmit(false)}
-                    disabled={submitting || !canAdvance(4)}
-                    className="border border-gray-700 hover:border-gray-600 text-gray-300 px-4 py-2 rounded text-sm transition-colors disabled:opacity-40"
-                  >
-                    Save Config
-                  </button>
+                  {!isMatrixRun && (
+                    <button
+                      onClick={() => handleSubmit(false)}
+                      disabled={submitting || !canAdvance(4)}
+                      className="border border-gray-700 hover:border-gray-600 text-gray-300 px-4 py-2 rounded text-sm transition-colors disabled:opacity-40"
+                    >
+                      Save Config
+                    </button>
+                  )}
                   <button
                     onClick={() => handleSubmit(true)}
                     disabled={submitting || !canAdvance(4)}
                     className="bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed text-white px-4 py-2 rounded text-sm transition-colors"
                   >
-                    {submitting ? 'Launching...' : 'Launch Now'}
+                    {submitting
+                      ? 'Launching...'
+                      : isMatrixRun
+                        ? `Launch ${matrixCellCount} Runs`
+                        : 'Launch Now'}
                   </button>
                 </div>
               </div>

@@ -193,28 +193,72 @@ export function Sidebar({ connectionDot }: SidebarProps) {
           <HelpHint collapsed={collapsed} />
         </div>
         <div className="border-t border-gray-800">
-          {!collapsed && (
-            <div className="px-3 py-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-gray-600 truncate max-w-[100px]" title={email ?? ''}>
-                  {email?.split('@')[0] ?? ''}
-                </span>
-                <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => setShowPasswordDialog(true)}
-                    className="text-xs text-gray-600 hover:text-gray-400 transition-colors px-1.5 py-1 rounded hover:bg-gray-800/50"
-                    title="Change password"
-                  >
-                    key
-                  </button>
-                  <button
-                    onClick={logout}
-                    className="text-xs text-gray-500 hover:text-red-400 transition-colors px-2 py-1 rounded hover:bg-gray-800/50"
-                  >
-                    Logout
-                  </button>
+          {!collapsed ? (
+            <div className="px-3 py-2.5">
+              <div className="flex items-center gap-2.5">
+                {/* Avatar */}
+                <div
+                  className="w-7 h-7 rounded-full bg-purple-600 text-white text-xs font-bold flex items-center justify-center flex-shrink-0"
+                  aria-hidden="true"
+                >
+                  {email?.[0]?.toUpperCase() ?? '?'}
                 </div>
+                {/* Name + role */}
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs text-gray-300 truncate" title={email ?? ''}>
+                    {email?.split('@')[0] ?? ''}
+                  </div>
+                  <div className="text-[10px] text-gray-600">
+                    {isPlatformAdmin ? 'admin' : role ?? 'viewer'}
+                  </div>
+                </div>
+                {/* Actions */}
+                <button
+                  onClick={() => setShowPasswordDialog(true)}
+                  className="text-gray-600 hover:text-cyan-400 transition-colors p-1 rounded hover:bg-gray-800/50"
+                  title="Change password"
+                  aria-label="Change password"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/>
+                  </svg>
+                </button>
+                <button
+                  onClick={logout}
+                  className="text-gray-600 hover:text-red-400 transition-colors p-1 rounded hover:bg-gray-800/50"
+                  title="Log out"
+                  aria-label="Log out"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                    <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
+                  </svg>
+                </button>
               </div>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center gap-1.5 py-2">
+              <div
+                className="w-6 h-6 rounded-full bg-purple-600 text-white text-[10px] font-bold flex items-center justify-center"
+                title={`${email?.split('@')[0] ?? ''} (${isPlatformAdmin ? 'admin' : role ?? 'viewer'})`}
+              >
+                {email?.[0]?.toUpperCase() ?? '?'}
+              </div>
+              <button
+                onClick={() => setShowPasswordDialog(true)}
+                className="text-gray-600 hover:text-cyan-400 text-xs p-0.5"
+                title="Change password"
+                aria-label="Change password"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+              </button>
+              <button
+                onClick={logout}
+                className="text-gray-600 hover:text-red-400 text-xs p-0.5"
+                title="Log out"
+                aria-label="Log out"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+              </button>
             </div>
           )}
           <button

@@ -124,6 +124,33 @@ export interface ComparisonReport {
   cases: BenchmarkCaseComparison[];
 }
 
+// ── Comparison Groups (matrix builder) ────────────────────────────────────
+
+export interface ComparisonCell {
+  label: string;
+  endpoint: EndpointRef;
+  runner_id?: string;
+}
+
+export interface ComparisonGroupCreate {
+  name: string;
+  base_workload: Workload;
+  methodology?: Methodology;
+  cells: ComparisonCell[];
+}
+
+export interface ComparisonGroup {
+  id: string;
+  project_id: string;
+  name: string;
+  base_workload: Workload;
+  methodology?: Methodology;
+  cells: ComparisonCell[];
+  status: string;
+  created_by?: string;
+  created_at: string;
+}
+
 // ── Legacy type aliases (used by out-of-scope pages: DashboardPage, JobDetailPage) ──
 
 export interface Agent {
