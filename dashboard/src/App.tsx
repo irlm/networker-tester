@@ -29,15 +29,11 @@ const ForgotPasswordPage = lazyPage(() => import('./pages/ForgotPasswordPage'), 
 const ResetPasswordPage = lazyPage(() => import('./pages/ResetPasswordPage'), 'ResetPasswordPage');
 const ChangePasswordPage = lazyPage(() => import('./pages/ChangePasswordPage'), 'ChangePasswordPage');
 const DashboardPage = lazyPage(() => import('./pages/DashboardPage'), 'DashboardPage');
-const JobsPage = lazyPage(() => import('./pages/JobsPage'), 'JobsPage');
 const JobDetailPage = lazyPage(() => import('./pages/JobDetailPage'), 'JobDetailPage');
 const RunsPage = lazyPage(() => import('./pages/RunsPage'), 'RunsPage');
 const RunDetailPage = lazyPage(() => import('./pages/RunDetailPage'), 'RunDetailPage');
-const BenchmarksPage = lazyPage(() => import('./pages/BenchmarksPage'), 'BenchmarksPage');
-const BenchmarkWizardPage = lazyPage(() => import('./pages/BenchmarkWizardPage'), 'BenchmarkWizardPage');
-const BenchmarkProgressPage = lazyPage(() => import('./pages/BenchmarkProgressPage'), 'BenchmarkProgressPage');
-const BenchmarkDetailPage = lazyPage(() => import('./pages/BenchmarkDetailPage'), 'BenchmarkDetailPage');
-const BenchmarkComparePage = lazyPage(() => import('./pages/BenchmarkComparePage'), 'BenchmarkComparePage');
+const NewRunPage = lazyPage(() => import('./pages/NewRunPage'), 'NewRunPage');
+const RunComparePage = lazyPage(() => import('./pages/RunComparePage'), 'RunComparePage');
 const DeployPage = lazyPage(() => import('./pages/DeployPage'), 'DeployPage');
 const DeployDetailPage = lazyPage(() => import('./pages/DeployDetailPage'), 'DeployDetailPage');
 const SchedulesPage = lazyPage(() => import('./pages/SchedulesPage'), 'SchedulesPage');
@@ -61,7 +57,6 @@ const LeaderboardPage = lazyPage(() => import('./pages/LeaderboardPage'), 'Leade
 const BenchmarkCatalogPage = lazyPage(() => import('./pages/BenchmarkCatalogPage'), 'BenchmarkCatalogPage');
 const BenchmarkConfigResultsPage = lazyPage(() => import('./pages/BenchmarkConfigResultsPage'), 'BenchmarkConfigResultsPage');
 const BenchmarkRegressionsPage = lazyPage(() => import('./pages/BenchmarkRegressionsPage'), 'BenchmarkRegressionsPage');
-const AppBenchmarkWizardPage = lazyPage(() => import('./pages/AppBenchmarkWizardPage'), 'AppBenchmarkWizardPage');
 const BenchTokensPage = lazyPage(() => import('./pages/BenchTokensPage'), 'BenchTokensPage');
 const BenchTokenHistoryPage = lazyPage(() => import('./pages/BenchTokenHistoryPage'), 'BenchTokenHistoryPage');
 
@@ -188,16 +183,20 @@ function AuthenticatedApp() {
 
             {/* Project-scoped routes */}
             <Route path="/projects/:projectId" element={<DashboardPage />} />
-            <Route path="/projects/:projectId/tests" element={<JobsPage />} />
-            <Route path="/projects/:projectId/tests/:jobId" element={<JobDetailPage />} />
             <Route path="/projects/:projectId/runs" element={<RunsPage />} />
+            <Route path="/projects/:projectId/runs/new" element={<NewRunPage />} />
+            <Route path="/projects/:projectId/runs/compare" element={<RunComparePage />} />
             <Route path="/projects/:projectId/runs/:runId" element={<RunDetailPage />} />
-            <Route path="/projects/:projectId/benchmarks" element={<BenchmarksPage />} />
-            <Route path="/projects/:projectId/benchmark-wizard" element={<BenchmarkWizardPage />} />
-            <Route path="/projects/:projectId/app-benchmark-wizard" element={<AppBenchmarkWizardPage />} />
-            <Route path="/projects/:projectId/benchmark-progress/:configId" element={<BenchmarkProgressPage />} />
-            <Route path="/projects/:projectId/benchmarks/compare" element={<BenchmarkComparePage />} />
-            <Route path="/projects/:projectId/benchmarks/:runId" element={<BenchmarkDetailPage />} />
+
+            {/* Legacy redirects: old bookmarks → new pages */}
+            <Route path="/projects/:projectId/tests" element={<Navigate to="../runs" replace relative="path" />} />
+            <Route path="/projects/:projectId/tests/:jobId" element={<JobDetailPage />} />
+            <Route path="/projects/:projectId/benchmarks" element={<Navigate to="../runs?has_artifact=yes" replace relative="path" />} />
+            <Route path="/projects/:projectId/benchmark-wizard" element={<Navigate to="../runs/new" replace relative="path" />} />
+            <Route path="/projects/:projectId/app-benchmark-wizard" element={<Navigate to="../runs/new" replace relative="path" />} />
+            <Route path="/projects/:projectId/benchmark-progress/:configId" element={<Navigate to="../../runs" replace relative="path" />} />
+            <Route path="/projects/:projectId/benchmarks/compare" element={<Navigate to="../../runs/compare" replace relative="path" />} />
+            <Route path="/projects/:projectId/benchmarks/:runId" element={<Navigate to={`../../runs`} replace relative="path" />} />
             {/* Unified Cloud VMs page (v0.27.22). Three sub-tabs for the
                 three VM resource types. Old URLs redirect so deep links +
                 bookmarks keep working. */}
