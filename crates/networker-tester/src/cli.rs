@@ -163,6 +163,13 @@ pub struct Cli {
     #[arg(long)]
     pub benchmark_mode: bool,
 
+    /// Shorthand flag that auto-populates a default Methodology block
+    /// (warmup 5, measured 30, target CV 5%, IQR outlier policy, standard
+    /// quality gates). Equivalent to specifying a full methodology section
+    /// in a v2 config file.
+    #[arg(long)]
+    pub benchmark: bool,
+
     /// Primary benchmark phase for this invocation.
     /// Valid: environment-check, stability-check, pilot, warmup, measured, cooldown, overhead.
     #[arg(long)]
@@ -795,7 +802,9 @@ impl Cli {
             css: self.css.or(f.css),
             excel: flag!(excel),
             json_stdout: self.json_stdout || f.json_stdout.unwrap_or(false),
-            benchmark_mode: self.benchmark_mode || f.benchmark_mode.unwrap_or(false),
+            benchmark_mode: self.benchmark_mode
+                || self.benchmark
+                || f.benchmark_mode.unwrap_or(false),
             benchmark_phase: self
                 .benchmark_phase
                 .or(f.benchmark_phase)
@@ -1151,11 +1160,143 @@ impl ResolvedConfig {
     }
 }
 
-/// Load and deserialize a JSON config file.
+/// Load and deserialize a config file (JSON or YAML, detected by extension).
+///
+/// ## V2 TestConfig detection
+///
+/// If the parsed document contains an `endpoint` + `workload` structure
+/// (i.e. the v2 `TestConfig` shape), those fields are mapped into the legacy
+/// `ConfigFile` struct so the rest of the CLI pipeline (resolve → validate →
+/// run probes) works unchanged.
+///
+/// ## Legacy v1 rejection
+///
+/// If the document contains a top-level `target_host` key without `endpoint` /
+/// `workload` wrappers, we emit a hard error directing the user to the new
+/// config shape.
 pub fn load_config(path: &str) -> anyhow::Result<ConfigFile> {
     let s = std::fs::read_to_string(path)
         .with_context(|| format!("Cannot read config file: {path}"))?;
-    serde_json::from_str(&s).with_context(|| format!("Invalid JSON in config file: {path}"))
+
+    // Detect format by extension; fall back to JSON.
+    let value: serde_json::Value = if path.ends_with(".yaml") || path.ends_with(".yml") {
+        serde_yaml::from_str(&s).with_context(|| format!("Invalid YAML in config file: {path}"))?
+    } else {
+        serde_json::from_str(&s).with_context(|| format!("Invalid JSON in config file: {path}"))?
+    };
+
+    // ── Reject legacy v1 shape ────────────────────────────────────────────
+    if value.get("target_host").is_some()
+        && value.get("endpoint").is_none()
+        && value.get("workload").is_none()
+    {
+        anyhow::bail!("Legacy config format. Upgrade to TestConfig shape; see docs/config-v2.md.");
+    }
+
+    // ── Detect v2 TestConfig shape (endpoint + workload wrappers) ─────────
+    if value.get("endpoint").is_some() && value.get("workload").is_some() {
+        return config_from_test_config_value(&value, path);
+    }
+
+    // ── Standard ConfigFile (flat flags) ──────────────────────────────────
+    serde_json::from_value(value)
+        .with_context(|| format!("Cannot parse config file as ConfigFile: {path}"))
+}
+
+/// Convert a v2 `TestConfig`-shaped JSON value into a legacy `ConfigFile`
+/// so the rest of the CLI pipeline (resolve → validate → probes) works.
+fn config_from_test_config_value(
+    value: &serde_json::Value,
+    path: &str,
+) -> anyhow::Result<ConfigFile> {
+    let mut cfg = ConfigFile::default();
+
+    // Endpoint → target
+    if let Some(endpoint) = value.get("endpoint") {
+        let kind = endpoint
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .unwrap_or("network");
+        if kind == "network" {
+            let host = endpoint
+                .get("host")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("endpoint.host is required for kind=network"))?;
+            let port = endpoint.get("port").and_then(|v| v.as_u64());
+            let target = if host.starts_with("http://") || host.starts_with("https://") {
+                host.to_string()
+            } else {
+                match port {
+                    Some(p) => format!("https://{host}:{p}/health"),
+                    None => format!("https://{host}/health"),
+                }
+            };
+            cfg.target = Some(target);
+        } else {
+            anyhow::bail!(
+                "Config file {path} uses endpoint kind '{kind}' which is not supported by the CLI. \
+                 Only 'network' kind is supported for standalone CLI execution."
+            );
+        }
+    }
+
+    // Workload
+    if let Some(workload) = value.get("workload") {
+        if let Some(modes) = workload.get("modes").and_then(|v| v.as_array()) {
+            cfg.modes = Some(
+                modes
+                    .iter()
+                    .filter_map(|m| m.as_str().map(|s| s.to_string()))
+                    .collect(),
+            );
+        }
+        cfg.runs = workload
+            .get("runs")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as u32);
+        cfg.concurrency = workload
+            .get("concurrency")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize);
+        cfg.timeout = workload.get("timeout_ms").and_then(|v| v.as_u64());
+        if let Some(sizes) = workload.get("payload_sizes").and_then(|v| v.as_array()) {
+            cfg.payload_sizes = Some(
+                sizes
+                    .iter()
+                    .filter_map(|s| s.as_u64().map(|n| n.to_string()))
+                    .collect(),
+            );
+        }
+    }
+
+    // Methodology → benchmark flags
+    if value.get("methodology").is_some() {
+        cfg.benchmark_mode = Some(true);
+    }
+
+    // Pass through name/description as-is (not used by CLI, but no harm)
+    Ok(cfg)
+}
+
+/// Build a serde_json::Value representing a default `Methodology` block
+/// matching spec §5.2 defaults (warmup 5, measured 30, CV 5%, IQR outlier, standard gates).
+pub fn default_methodology_json() -> serde_json::Value {
+    serde_json::json!({
+        "warmup_runs": 5,
+        "measured_runs": 30,
+        "cooldown_ms": 100,
+        "target_error_pct": 5.0,
+        "outlier_policy": { "policy": "iqr", "k": 1.5 },
+        "quality_gates": {
+            "max_cv_pct": 5.0,
+            "min_samples": 20,
+            "max_noise_level": 0.3
+        },
+        "publication_gates": {
+            "max_failure_pct": 1.0,
+            "require_all_phases": true
+        }
+    })
 }
 
 /// Returns true if the current process is running as root / Administrator.
