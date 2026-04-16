@@ -368,6 +368,32 @@ export function CreateTesterModal({
             </div>
           ) : (
             <form onSubmit={handleSubmit} className="space-y-4">
+              {/* Cloud provider status */}
+              <div className="border border-gray-800 rounded p-3 mb-1">
+                <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-2">Cloud providers</div>
+                <div className="flex gap-3">
+                  {['azure', 'aws', 'gcp'].map(p => {
+                    const connected = availableClouds.includes(p);
+                    return (
+                      <div key={p} className="flex items-center gap-1.5 text-xs">
+                        <span className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-green-400' : 'bg-gray-600'}`} />
+                        <span className={connected ? 'text-gray-300' : 'text-gray-600'}>
+                          {p === 'azure' ? 'Azure' : p === 'aws' ? 'AWS' : 'GCP'}
+                        </span>
+                        {!connected && (
+                          <span className="text-gray-700 text-[10px]">(not connected)</span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                {availableClouds.length === 0 && (
+                  <p className="text-xs text-yellow-400/70 mt-2">
+                    No cloud accounts connected. Add one in Settings → Cloud to deploy runners.
+                  </p>
+                )}
+              </div>
+
               {/* Cloud */}
               <div>
                 <label htmlFor="tester-cloud" className="block text-xs text-gray-400 mb-1">
