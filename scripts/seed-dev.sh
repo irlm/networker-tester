@@ -30,9 +30,11 @@ echo "==> Starting Postgres..."
 docker compose -f docker-compose.dashboard.yml up -d postgres
 sleep 3
 
+CONTAINER="networker-tester-postgres-1"
+
 echo "==> Waiting for Postgres to be ready..."
 for i in $(seq 1 30); do
-  if PGPASSWORD=networker psql -h 127.0.0.1 -U networker -d networker_core -c "SELECT 1" > /dev/null 2>&1; then
+  if docker exec "$CONTAINER" pg_isready -U networker -d networker_core > /dev/null 2>&1; then
     break
   fi
   sleep 1
@@ -41,16 +43,27 @@ done
 echo "==> Running dashboard to apply migrations..."
 DASHBOARD_DB_URL="$DB_URL" \
 DASHBOARD_ADMIN_PASSWORD=admin \
+DASHBOARD_ADMIN_EMAIL=admin@localhost \
 DASHBOARD_JWT_SECRET=dev-secret \
 DASHBOARD_PORT=3099 \
-  cargo run -p networker-dashboard &
+  cargo run -p networker-dashboard --bin networker-dashboard &
 DASH_PID=$!
 
-echo "==> Waiting for dashboard (PID $DASH_PID) to finish migrations..."
-sleep 8
+echo "==> Waiting for dashboard to be ready (compiling + migrating)..."
+for i in $(seq 1 120); do
+  if curl -sf http://127.0.0.1:3099/api/version > /dev/null 2>&1; then
+    echo "    Dashboard ready after ${i}s"
+    break
+  fi
+  if ! kill -0 $DASH_PID 2>/dev/null; then
+    echo "ERROR: Dashboard exited before becoming ready"
+    exit 1
+  fi
+  sleep 1
+done
 
 echo "==> Seeding mock data..."
-PGPASSWORD=networker psql -h 127.0.0.1 -U networker -d networker_core -f scripts/seed-dev.sql
+docker exec -i "$CONTAINER" psql -U networker -d networker_core < scripts/seed-dev.sql
 
 echo "==> Stopping bootstrap dashboard..."
 kill $DASH_PID 2>/dev/null || true
