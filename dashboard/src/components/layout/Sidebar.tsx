@@ -29,51 +29,48 @@ export function Sidebar({ connectionDot }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('sidebar-collapsed') === '1');
   const [pendingCount, setPendingCount] = useState(0);
   const [showPasswordDialog, setShowPasswordDialog] = useState(false);
+  const [adminOpen, setAdminOpen] = useState(() => localStorage.getItem('sidebar-admin-open') === '1');
 
   const pid = projectId;
   const isAdmin = role === 'admin' || isPlatformAdmin;
 
-  // ── Nav item groups ─────────────────────────────────────────────────
+  // ── Nav items (flat, no section headers) ────────────────────────────
 
-  const coreItems: NavItem[] = pid ? [
+  const mainItems: NavItem[] = pid ? [
     { path: `/projects/${pid}`, label: 'Dashboard', icon: '\u25C8', exact: true },
     { path: `/projects/${pid}/vms`, label: 'Infrastructure', icon: '\u25A3' },
     { path: `/projects/${pid}/diagnostics`, label: 'Diagnostics', icon: '\u2713' },
   ] : [];
 
-  const testingItems: NavItem[] = pid ? [
+  const workItems: NavItem[] = pid ? [
     { path: `/projects/${pid}/tests/new`, label: 'Network Tests', icon: '\u25B7', exact: true },
+    { path: `/projects/${pid}/benchmarks/full-stack/new`, label: 'Full Stack', icon: '\u25A4', exact: true },
+    { path: `/projects/${pid}/benchmarks/application/new`, label: 'Application', icon: '\u25A5', exact: true },
     { path: `/projects/${pid}/runs`, label: 'Runs', icon: '\u25B6' },
     { path: `/projects/${pid}/schedules`, label: 'Schedules', icon: '\u21BB' },
   ] : [];
 
-  const benchItems: NavItem[] = pid ? [
-    { path: `/projects/${pid}/benchmarks/full-stack/new`, label: 'Full Stack', icon: '\u25A4', exact: true },
-    { path: `/projects/${pid}/benchmarks/application/new`, label: 'Application', icon: '\u25A5', exact: true },
-    { path: '/leaderboard', label: 'Leaderboard', icon: '\u2261' },
-    ...(isOperator ? [{ path: `/projects/${pid}/benchmark-catalog`, label: 'Runtimes', icon: '\u2395' }] : []),
-    { path: `/projects/${pid}/benchmark-regressions`, label: 'Regressions', icon: '\u26A0' },
-  ] : [];
-
-  // globalItems merged into benchItems
-
-  const platformItems: NavItem[] = [];
+  const adminItems: NavItem[] = [];
   if (isPlatformAdmin) {
-    platformItems.push({ path: '/admin/system', label: 'System', icon: '\u2318' });
-    platformItems.push({ path: '/bench-tokens', label: 'Tokens', icon: '\u26BF' });
-    platformItems.push({ path: '/admin/perf-log', label: 'Perf Log', icon: '\u23F1' });
+    adminItems.push({ path: '/admin/system', label: 'System', icon: '\u2318' });
+    adminItems.push({ path: '/bench-tokens', label: 'Tokens', icon: '\u26BF' });
+    adminItems.push({ path: '/admin/perf-log', label: 'Perf Log', icon: '\u23F1' });
   }
   if (isAdmin) {
-    platformItems.push({ path: '/users', label: 'Users', icon: '\u265F' });
+    adminItems.push({ path: '/users', label: 'Users', icon: '\u265F' });
   }
   if (pid) {
-    platformItems.push({
+    adminItems.push({
       path: `/projects/${pid}/settings`,
       label: 'Settings',
       icon: '\u2699',
       badge: isProjectAdmin && pid ? <NotificationBell projectId={pid} /> : undefined,
     });
   }
+
+  // Keep Leaderboard, Runtimes, Regressions accessible but hidden from
+  // sidebar — they're linked from Full Stack / Application pages instead.
+  void isOperator; // suppress unused warning
 
   // ── Pending user count (admin only) ─────────────────────────────────
 
@@ -149,18 +146,10 @@ export function Sidebar({ connectionDot }: SidebarProps) {
     );
   };
 
-  const renderSection = (label: string, items: NavItem[]) => {
-    if (items.length === 0) return null;
-    return (
-      <div className="mt-3 pt-3 border-t border-gray-800/50">
-        {!collapsed && (
-          <div className="px-3 mb-1.5 text-[10px] uppercase tracking-wider text-gray-600">
-            {label}
-          </div>
-        )}
-        {items.map(renderItem)}
-      </div>
-    );
+  const toggleAdmin = () => {
+    const next = !adminOpen;
+    setAdminOpen(next);
+    localStorage.setItem('sidebar-admin-open', next ? '1' : '0');
   };
 
   return (
@@ -185,17 +174,31 @@ export function Sidebar({ connectionDot }: SidebarProps) {
         </div>
 
         <nav className="flex-1 p-1.5 overflow-y-auto" aria-label="Main navigation">
-          {/* Core: daily workflow */}
-          {coreItems.map(renderItem)}
+          {/* Core items */}
+          {mainItems.map(renderItem)}
 
-          {/* Testing group */}
-          {renderSection('testing', testingItems)}
+          {/* Work items — separated by spacing */}
+          {workItems.length > 0 && (
+            <div className="mt-4 pt-1">
+              {workItems.map(renderItem)}
+            </div>
+          )}
 
-          {/* Benchmarks group */}
-          {renderSection('benchmarks', benchItems)}
-
-          {/* Platform: admin tools */}
-          {renderSection('admin', platformItems)}
+          {/* Admin section — collapsible */}
+          {adminItems.length > 0 && (
+            <div className="mt-4 pt-3 border-t border-gray-800/50">
+              {!collapsed && (
+                <button
+                  onClick={toggleAdmin}
+                  className="flex items-center justify-between w-full px-3 mb-1.5 text-[10px] uppercase tracking-wider text-gray-600 hover:text-gray-500 transition-colors"
+                >
+                  <span>admin</span>
+                  <span className="text-[8px]">{adminOpen ? '\u25B2' : '\u25BC'}</span>
+                </button>
+              )}
+              {(collapsed || adminOpen) && adminItems.map(renderItem)}
+            </div>
+          )}
         </nav>
 
         {/* Help hint + Collapse toggle + user */}

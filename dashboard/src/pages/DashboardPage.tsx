@@ -293,7 +293,7 @@ export function DashboardPage() {
               {recentRuns.length === 0 ? (
                 <div className="border border-gray-800 rounded p-6 text-center">
                   <p className="text-gray-600 text-sm">No runs yet</p>
-                  <Link to={`/projects/${projectId}/runs/new`} className="text-xs text-cyan-400 mt-1 inline-block">Run your first test</Link>
+                  <Link to={`/projects/${projectId}/tests/new`} className="text-xs text-cyan-400 mt-1 inline-block">Run your first test</Link>
                 </div>
               ) : (
                 <div className="table-container">
