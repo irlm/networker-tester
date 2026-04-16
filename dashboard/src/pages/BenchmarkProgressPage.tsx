@@ -811,7 +811,7 @@ export function BenchmarkProgressPage() {
                   </p>
                   {effectiveStatus === 'running' && savedResults.length === 0 && (
                     <p className="text-gray-700 text-[10px]">
-                      Logs stream between language deployments. During a benchmark run, the tester executes silently. Check the language progress table above for completed results.
+                      Logs stream between language deployments. During a benchmark run, the runner executes silently. Check the language progress table above for completed results.
                     </p>
                   )}
                 </>

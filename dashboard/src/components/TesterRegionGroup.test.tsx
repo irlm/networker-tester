@@ -50,7 +50,7 @@ describe('TesterRegionGroup', () => {
       />,
     );
     expect(screen.getByText(/azure \/ eastus/)).toBeInTheDocument();
-    expect(screen.getByText(/2 testers/)).toBeInTheDocument();
+    expect(screen.getByText(/2 runners/)).toBeInTheDocument();
     fireEvent.click(screen.getByText('eastus-1'));
     expect(onSelect).toHaveBeenCalledTimes(1);
 

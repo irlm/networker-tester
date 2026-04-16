@@ -84,7 +84,7 @@ describe('CreateTesterModal', () => {
     });
     expect(screen.getByLabelText(/Name/i)).toHaveValue('eastus-1');
     expect(screen.getByLabelText(/VM size/i)).toHaveValue('Standard_D2s_v3');
-    expect(screen.getByRole('button', { name: /Create Tester/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /Create Runner/i })).toBeEnabled();
   });
 
   it('POSTs create body and enters creating state', async () => {
@@ -118,9 +118,9 @@ describe('CreateTesterModal', () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: /Create Tester/i })).toBeEnabled(),
+      expect(screen.getByRole('button', { name: /Create Runner/i })).toBeEnabled(),
     );
-    fireEvent.click(screen.getByRole('button', { name: /Create Tester/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Create Runner/i }));
 
     await waitFor(() =>
       expect(screen.getByTestId('creating-state')).toBeInTheDocument(),

@@ -8,7 +8,7 @@ import { TesterStep } from '../components/wizard/TesterStep';
 
 // ── Constants ────────────────────────────────────────────────────────────
 
-const STEP_LABELS = ['Template', 'Testbeds', 'Tester', 'Languages', 'Methodology', 'Review'] as const;
+const STEP_LABELS = ['Template', 'Testbeds', 'Runner', 'Languages', 'Methodology', 'Review'] as const;
 
 interface TemplateOption {
   id: string;
@@ -441,7 +441,7 @@ export function AppBenchmarkWizardPage() {
   const handleLaunch = async () => {
     if (!projectId) return;
     if (!testerId) {
-      setSubmitError('A tester is required. Go back to the Tester step and select one.');
+      setSubmitError('A runner is required. Go back to the Runner step and select one.');
       return;
     }
     setSubmitting(true);
@@ -686,7 +686,7 @@ export function AppBenchmarkWizardPage() {
 
                 {/* Tester OS */}
                 <div className="mt-3">
-                  <label className="block text-xs text-gray-500 mb-1.5">Tester VM</label>
+                  <label className="block text-xs text-gray-500 mb-1.5">Runner VM</label>
                   <div className="flex gap-2">
                     {TESTER_OS_OPTIONS.map(opt => (
                       <button

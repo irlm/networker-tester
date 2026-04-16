@@ -171,9 +171,9 @@ export function TesterDetailDrawer({
               className="border border-red-500/40 bg-red-500/5 rounded p-4 space-y-3"
             >
               <div>
-                <h4 className="text-sm font-bold text-red-400">Fix tester first</h4>
+                <h4 className="text-sm font-bold text-red-400">Fix runner first</h4>
                 <p className="text-xs text-red-300/80 mt-1">
-                  This tester is in an error state. Resolve the fault before
+                  This runner is in an error state. Resolve the fault before
                   queueing more work.
                 </p>
                 {tester.status_message && (
@@ -203,7 +203,7 @@ export function TesterDetailDrawer({
                   }
                   className="px-3 py-1 text-xs rounded border border-purple-500/50 text-purple-400 hover:bg-purple-500/10 disabled:opacity-50"
                 >
-                  Reinstall tester
+                  Reinstall runner
                 </button>
                 <button
                   type="button"
@@ -219,7 +219,7 @@ export function TesterDetailDrawer({
                   onClick={() => setConfirmDelete(true)}
                   className="px-3 py-1 text-xs rounded border border-red-500/50 text-red-400 hover:bg-red-500/10 disabled:opacity-50"
                 >
-                  Delete tester
+                  Delete runner
                 </button>
               </div>
             </section>
@@ -487,7 +487,7 @@ export function TesterDetailDrawer({
                   onClick={() => run(() => testersApi.startTester(projectId, tester.tester_id))}
                   className="px-3 py-1 text-xs rounded border border-emerald-500/50 text-emerald-400 hover:bg-emerald-500/10 disabled:opacity-50"
                 >
-                  Start tester
+                  Start runner
                 </button>
               ) : (
                 <button
@@ -505,7 +505,7 @@ export function TesterDetailDrawer({
                       : undefined
                   }
                 >
-                  Stop tester
+                  Stop runner
                 </button>
               )}
               <button
@@ -514,7 +514,7 @@ export function TesterDetailDrawer({
                 onClick={() => setConfirmDelete(true)}
                 className="px-3 py-1 text-xs rounded border border-red-500/50 text-red-400 hover:bg-red-500/10 disabled:opacity-50"
               >
-                Delete tester
+                Delete runner
               </button>
             </div>
             {isRunningOrQueued && (
@@ -529,8 +529,8 @@ export function TesterDetailDrawer({
       {/* ── Confirm force-stop ─────────────────────────────────────────── */}
       {confirmForceStop && (
         <ConfirmDialog
-          title="Force tester to stopped"
-          message="This marks the tester stopped without waiting for a clean shutdown. Queued benchmarks remain locked until manually released. Continue?"
+          title="Force runner to stopped"
+          message="This marks the runner stopped without waiting for a clean shutdown. Queued benchmarks remain locked until manually released. Continue?"
           confirmLabel="Force stop"
           danger
           onConfirm={() => {
@@ -549,7 +549,7 @@ export function TesterDetailDrawer({
       {/* ── Confirm delete ─────────────────────────────────────────────── */}
       {confirmDelete && (
         <ConfirmDialog
-          title={`Delete tester "${tester.name}"?`}
+          title={`Delete runner "${tester.name}"?`}
           message="The VM will be deprovisioned. This cannot be undone."
           confirmLabel="Delete"
           danger

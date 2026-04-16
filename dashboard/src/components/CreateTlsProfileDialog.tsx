@@ -91,7 +91,7 @@ export function CreateTlsProfileDialog({ projectId, onClose, onCreated }: Create
             <div>
               <label className="block text-xs text-gray-400 mb-1">Target kind</label>
               <select value={targetKind} onChange={(e) => setTargetKind(e.target.value as 'managed-endpoint' | 'external-url' | 'external-host')} className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500">
-                <option value="managed-endpoint">Managed endpoint</option>
+                <option value="managed-endpoint">Managed target</option>
                 <option value="external-url">External URL</option>
                 <option value="external-host">External host</option>
               </select>
@@ -103,9 +103,9 @@ export function CreateTlsProfileDialog({ projectId, onClose, onCreated }: Create
           </div>
 
           <div className="mb-4">
-            <label className="block text-xs text-gray-400 mb-1">Tester</label>
+            <label className="block text-xs text-gray-400 mb-1">Runner</label>
             <select value={selectedTester} onChange={(e) => setSelectedTester(e.target.value)} className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500">
-              <option value="">Auto (any online tester)</option>
+              <option value="">Auto (any online runner)</option>
               {testers.map((a) => <option key={a.agent_id} value={a.agent_id}>{a.name} ({a.status})</option>)}
             </select>
           </div>

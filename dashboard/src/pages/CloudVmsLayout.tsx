@@ -20,7 +20,7 @@ import { usePageTitle } from '../hooks/usePageTitle';
  * easy to review.
  */
 export function CloudVmsLayout() {
-  usePageTitle('Cloud VMs');
+  usePageTitle('Infrastructure');
   const { projectId } = useProject();
   const base = `/projects/${projectId}/vms`;
 
@@ -38,10 +38,10 @@ export function CloudVmsLayout() {
           page keeps its own heading + subtitle without extra work. */}
       <div className="border-b border-gray-800 flex items-center gap-1 px-4 md:px-6 bg-[var(--bg-surface)]">
         <NavLink end to={`${base}/testers`} className={tabClass}>
-          Testers
+          Runners
         </NavLink>
         <NavLink end to={`${base}/endpoints`} className={tabClass}>
-          Endpoints
+          Targets
         </NavLink>
         <NavLink end to={`${base}/history`} className={tabClass}>
           History

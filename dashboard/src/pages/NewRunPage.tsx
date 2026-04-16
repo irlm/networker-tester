@@ -428,16 +428,16 @@ export function NewRunPage() {
                   : 'bg-gray-900 text-gray-600 cursor-not-allowed'
             }`}
           >
-            {s === 1 ? 'Endpoint' : s === 2 ? 'Workload' : s === 3 ? 'Methodology' : 'Save & Launch'}
+            {s === 1 ? 'Target' : s === 2 ? 'Workload' : s === 3 ? 'Methodology' : 'Save & Launch'}
           </button>
         ))}
       </div>
 
-      {/* Step 1: Endpoint kind */}
+      {/* Step 1: Target kind */}
       {step === 1 && (
         <div className="space-y-4">
           <div>
-            <label className="text-xs text-gray-500 mb-2 block">Endpoint Type</label>
+            <label className="text-xs text-gray-500 mb-2 block">Target Type</label>
             <div className="flex gap-1 bg-gray-900 rounded p-0.5 w-fit">
               {ENDPOINT_KINDS.map(k => (
                 <button
@@ -486,29 +486,29 @@ export function NewRunPage() {
           {/* ── Proxy endpoint — deployed endpoint picker ── */}
           {endpointKind === 'proxy' && (
             <div>
-              <label className="text-xs text-gray-500 mb-2 block">Select a deployed endpoint</label>
+              <label className="text-xs text-gray-500 mb-2 block">Select a deployed target</label>
 
               {deploymentsLoading && (
-                <p className="text-xs text-gray-500 motion-safe:animate-pulse">Loading endpoints...</p>
+                <p className="text-xs text-gray-500 motion-safe:animate-pulse">Loading targets...</p>
               )}
 
               {!deploymentsLoading && deployments.length === 0 && (
                 <div className="border border-dashed border-gray-800 rounded p-4">
-                  <p className="text-sm text-gray-300 mb-1">No endpoints deployed yet.</p>
+                  <p className="text-sm text-gray-300 mb-1">No targets deployed yet.</p>
                   <p className="text-xs text-gray-500 mb-3">
-                    Deploy an endpoint from Cloud VMs to use it as a proxy target.
+                    Deploy a target from Infrastructure to use it as a proxy target.
                   </p>
                   <Link
                     to={`/projects/${projectId}/vms/endpoints`}
                     className="text-xs text-cyan-400 hover:text-cyan-300 transition-colors"
                   >
-                    Go to Cloud VMs / Endpoints
+                    Go to Infrastructure / Targets
                   </Link>
                 </div>
               )}
 
               {!deploymentsLoading && deployments.length > 0 && (
-                <div className="space-y-2" role="radiogroup" aria-label="Deployed endpoints">
+                <div className="space-y-2" role="radiogroup" aria-label="Deployed targets">
                   {deployments.map(dep => {
                     const checked = proxyEndpointId === dep.deployment_id;
                     const ips = dep.endpoint_ips ?? [];
@@ -567,7 +567,7 @@ export function NewRunPage() {
                     to={`/projects/${projectId}/vms/endpoints`}
                     className="text-xs text-cyan-400 hover:text-cyan-300 transition-colors"
                   >
-                    + Deploy new endpoint
+                    + Deploy new target
                   </Link>
                 </div>
               )}
@@ -718,21 +718,21 @@ export function NewRunPage() {
                 onClick={() => setShowTesterPicker(!showTesterPicker)}
                 className="text-xs text-gray-400 hover:text-gray-200 transition-colors"
               >
-                {showTesterPicker ? '- Hide tester selection' : '+ Select tester (optional, defaults to auto-pick)'}
+                {showTesterPicker ? '- Hide runner selection' : '+ Select runner (optional, defaults to auto-pick)'}
               </button>
 
               {showTesterPicker && (
                 <div className="mt-3">
                   {testersLoading && (
-                    <p className="text-xs text-gray-500 motion-safe:animate-pulse">Loading testers...</p>
+                    <p className="text-xs text-gray-500 motion-safe:animate-pulse">Loading runners...</p>
                   )}
 
                   {!testersLoading && testers.length === 0 && (
-                    <p className="text-xs text-gray-500">No testers available. The system will auto-assign one.</p>
+                    <p className="text-xs text-gray-500">No runners available. The system will auto-assign one.</p>
                   )}
 
                   {!testersLoading && testers.length > 0 && (
-                    <div className="space-y-1.5" role="radiogroup" aria-label="Available testers">
+                    <div className="space-y-1.5" role="radiogroup" aria-label="Available runners">
                       {/* Auto-pick option */}
                       <label
                         className={`block border p-2.5 cursor-pointer transition-colors ${
@@ -750,7 +750,7 @@ export function NewRunPage() {
                             className="accent-cyan-400"
                           />
                           <span className="text-sm text-gray-300">Auto-pick</span>
-                          <span className="text-[10px] text-gray-600">System selects the best available tester</span>
+                          <span className="text-[10px] text-gray-600">System selects the best available runner</span>
                         </div>
                       </label>
 
@@ -1007,7 +1007,7 @@ export function NewRunPage() {
 
           {/* Summary */}
           <div className="border border-gray-800 rounded p-4 text-xs text-gray-400 space-y-1">
-            <p><span className="text-gray-500">Endpoint:</span> {endpointKind}
+            <p><span className="text-gray-500">Target:</span> {endpointKind}
               {endpointKind === 'network' && ` / ${host}`}
               {endpointKind === 'proxy' && selectedDeployment && ` / ${selectedDeployment.name}`}
               {endpointKind === 'runtime' && runtimeTemplate && ` / ${runtimeTemplate}`}
@@ -1018,7 +1018,7 @@ export function NewRunPage() {
               <p><span className="text-gray-500">Languages:</span> {[...runtimeLangs].join(', ')}</p>
             )}
             {selectedTesterId && (
-              <p><span className="text-gray-500">Tester:</span> {testers.find(t => t.tester_id === selectedTesterId)?.name ?? selectedTesterId.slice(0, 8)}</p>
+              <p><span className="text-gray-500">Runner:</span> {testers.find(t => t.tester_id === selectedTesterId)?.name ?? selectedTesterId.slice(0, 8)}</p>
             )}
             {benchmarkMode && <p><span className="text-purple-400">Benchmark mode enabled</span> -- {methodology.measured_runs} measured runs</p>}
           </div>

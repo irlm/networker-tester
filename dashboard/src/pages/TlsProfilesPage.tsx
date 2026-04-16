@@ -77,7 +77,7 @@ export function TlsProfilesPage() {
       <div className="flex items-center justify-between mb-4 md:mb-6 gap-2">
         <div>
           <h2 className="text-lg md:text-xl font-bold text-gray-100">TLS Profiles</h2>
-          <p className="text-xs text-gray-500 mt-1">Persisted endpoint TLS observations and history.</p>
+          <p className="text-xs text-gray-500 mt-1">Persisted target TLS observations and history.</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
           <input
@@ -93,7 +93,7 @@ export function TlsProfilesPage() {
             className="bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-300 focus:outline-none focus:border-cyan-500"
           >
             <option value="all">All kinds</option>
-            <option value="managed-endpoint">Managed endpoint</option>
+            <option value="managed-endpoint">Managed target</option>
             <option value="external-url">External URL</option>
             <option value="external-host">External host</option>
           </select>

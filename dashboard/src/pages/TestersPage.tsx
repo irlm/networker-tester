@@ -48,7 +48,7 @@ const FIRST_TESTER_DEFAULTS: CreateDefaults = {
 };
 
 export function TestersPage() {
-  usePageTitle('Testers');
+  usePageTitle('Runners');
   const { projectId, isProjectAdmin } = useProject();
   const addToast = useToast();
 
@@ -68,7 +68,7 @@ export function TestersPage() {
       const list = await testersApi.listTesters(projectId);
       setRows(list);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load testers');
+      setError(e instanceof Error ? e.message : 'Failed to load runners');
     } finally {
       setLoading(false);
     }
@@ -126,7 +126,7 @@ export function TestersPage() {
   return (
     <div className="p-4 md:p-6 max-w-5xl mx-auto">
       <PageHeader
-        title="Testers"
+        title="Runners"
         subtitle="Persistent Azure VMs that run benchmarks against your targets."
         action={
           isProjectAdmin ? (
@@ -147,7 +147,7 @@ export function TestersPage() {
                 }}
                 className="px-3 py-1 text-xs rounded bg-cyan-600 hover:bg-cyan-500 text-white"
               >
-                + New tester
+                + New runner
               </button>
             </div>
           ) : null
@@ -171,10 +171,10 @@ export function TestersPage() {
           data-testid="testers-empty-state"
         >
           <h3 className="text-sm font-bold text-gray-200 mb-2">
-            No testers yet
+            No runners yet
           </h3>
           <p className="text-xs text-gray-500 mb-4 max-w-md mx-auto">
-            Create a persistent tester VM in your preferred region. It will be
+            Create a persistent runner VM in your preferred region. It will be
             reused across benchmarks and stopped each night to save costs.
           </p>
           <button
@@ -182,7 +182,7 @@ export function TestersPage() {
             onClick={handleEmptyStateCreate}
             className="px-4 py-1.5 text-xs rounded bg-cyan-600 hover:bg-cyan-500 text-white"
           >
-            + Create your first tester in eastus (recommended)
+            + Create your first runner in eastus (recommended)
           </button>
         </div>
       ) : (

@@ -449,16 +449,16 @@ export function JobDetailPage() {
           {runMeta && (
             <div className="flex gap-3 mt-1">
               <span className="text-xs text-gray-600">
-                Tester: <span className="text-gray-400 font-mono">v{runMeta.client_version}</span>
+                Runner: <span className="text-gray-400 font-mono">v{runMeta.client_version}</span>
                 <span className="text-gray-700 ml-1">({runMeta.client_os})</span>
               </span>
               {runMeta.endpoint_version && (
                 <span className="text-xs text-gray-600">
-                  Endpoint: <span className="text-gray-400 font-mono">v{runMeta.endpoint_version}</span>
+                  Target: <span className="text-gray-400 font-mono">v{runMeta.endpoint_version}</span>
                 </span>
               )}
               {runMeta.endpoint_version === null && (
-                <span className="text-xs text-gray-700">Endpoint: offline</span>
+                <span className="text-xs text-gray-700">Target: offline</span>
               )}
             </div>
           )}
@@ -894,7 +894,7 @@ export function JobDetailPage() {
       {jobLogs.length > 0 && (
         <div className="table-container mb-6">
           <h3 className="px-4 py-2.5 text-xs text-gray-500 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
-            tester log
+            runner log
           </h3>
           <div ref={testerLogRef} className="h-[400px] overflow-y-auto p-3 font-mono text-xs leading-5">
             {jobLogs.map((entry, i) => (

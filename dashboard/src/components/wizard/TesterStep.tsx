@@ -196,7 +196,7 @@ export function TesterStep({ projectId, cloud, region, value, onChange, testerOs
     <div>
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-sm font-semibold text-gray-200">
-          Select a Tester
+          Select a Runner
           <span className="text-gray-500 font-normal ml-2 font-mono text-xs">
             {cloud} / {region}
           </span>
@@ -207,14 +207,14 @@ export function TesterStep({ projectId, cloud, region, value, onChange, testerOs
             onClick={() => setShowCreate(true)}
             className="px-3 py-1.5 rounded border border-gray-700 text-xs text-gray-200 hover:border-cyan-500 transition-colors"
           >
-            + Create another tester in {region}
+            + Create another runner in {region}
           </button>
         )}
       </div>
 
       {loading && (
         <p className="text-xs text-gray-500" role="status">
-          Loading testers…
+          Loading runners…
         </p>
       )}
 
@@ -231,10 +231,10 @@ export function TesterStep({ projectId, cloud, region, value, onChange, testerOs
       {!loading && !error && filtered.length === 0 && !pendingTesterId && (
         <div className="border border-dashed border-gray-800 p-4">
           <p className="text-sm text-gray-300 mb-1">
-            No testers in <span className="font-mono">{region}</span> yet.
+            No runners in <span className="font-mono">{region}</span> yet.
           </p>
           <p className="text-xs text-gray-500 mb-3">
-            Testers are long-lived VMs that execute benchmarks against the
+            Runners are long-lived VMs that execute benchmarks against the
             testbed. Create one to continue — it takes about 2-4 minutes to
             provision and then stays available for future runs.
           </p>
@@ -243,7 +243,7 @@ export function TesterStep({ projectId, cloud, region, value, onChange, testerOs
             onClick={() => setShowCreate(true)}
             className="px-4 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white text-xs rounded transition-colors"
           >
-            Create {region} tester
+            Create {region} runner
           </button>
         </div>
       )}
@@ -257,12 +257,12 @@ export function TesterStep({ projectId, cloud, region, value, onChange, testerOs
           <div className="flex items-center gap-3">
             <span className="inline-block w-3 h-3 border-2 border-cyan-400/40 border-t-cyan-400 rounded-full animate-spin" />
             <p className="text-sm text-cyan-200">
-              Provisioning new tester in{' '}
+              Provisioning new runner in{' '}
               <span className="font-mono">{region}</span>…
             </p>
           </div>
           <p className="text-[11px] text-gray-500 mt-2">
-            This page will auto-select the tester once it reaches the{' '}
+            This page will auto-select the runner once it reaches the{' '}
             <span className="font-mono">running / idle</span> state. Usually 2-4
             minutes.
           </p>
@@ -271,7 +271,7 @@ export function TesterStep({ projectId, cloud, region, value, onChange, testerOs
 
       {/* ── State A: list ── */}
       {!loading && filtered.length > 0 && (
-        <div className="space-y-2" role="radiogroup" aria-label="Available testers">
+        <div className="space-y-2" role="radiogroup" aria-label="Available runners">
           {filtered.map((row) => {
             const q = queueState[row.tester_id];
             const queueDepth = (q?.queued?.length ?? 0) + (q?.running ? 1 : 0);
@@ -317,7 +317,7 @@ export function TesterStep({ projectId, cloud, region, value, onChange, testerOs
                 {checked && busy && (
                   <div className="mt-2 ml-6 border border-yellow-500/30 bg-yellow-500/5 rounded p-2">
                     <p className="text-[11px] text-yellow-300">
-                      This tester is currently busy. Your benchmark will be
+                      This runner is currently busy. Your benchmark will be
                       queued at position{' '}
                       <span className="font-mono">{queueDepth + 1}</span>
                       {row.avg_benchmark_duration_seconds != null && (
@@ -338,14 +338,14 @@ export function TesterStep({ projectId, cloud, region, value, onChange, testerOs
 
                 {checked && variant === 'stopped' && (
                   <div className="mt-2 ml-6 text-[11px] text-gray-400">
-                    Tester is stopped — will auto-start when the benchmark
+                    Runner is stopped -- will auto-start when the benchmark
                     launches.
                   </div>
                 )}
 
                 {checked && variant === 'error' && (
                   <div className="mt-2 ml-6 border border-red-500/30 bg-red-500/5 rounded p-2 text-[11px] text-red-400">
-                    Tester is in error state. Clear the fault from the Testers
+                    Runner is in error state. Clear the fault from the Runners
                     page before launching.
                   </div>
                 )}

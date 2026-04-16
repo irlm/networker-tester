@@ -297,7 +297,7 @@ export function CreateJobDialog({ projectId, onClose, onCreated }: CreateJobDial
             onChange={(e) => setTarget(e.target.value)}
             className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 mb-2 focus:outline-none focus:border-cyan-500"
           >
-            <option value="">Select endpoint...</option>
+            <option value="">Select target...</option>
             {visibleDeployments.flatMap(d => {
               const health = endpointHealth[d.deployment_id];
               const status = health === undefined ? '...' : health ? '\u2714' : '\u2716 offline';
@@ -332,15 +332,15 @@ export function CreateJobDialog({ projectId, onClose, onCreated }: CreateJobDial
             >
               {showOfflineEndpoints
                 ? `\u2212 Hide offline (${offlineDeploymentCount})`
-                : `+ Show ${offlineDeploymentCount} offline endpoint${offlineDeploymentCount === 1 ? '' : 's'}`}
+                : `+ Show ${offlineDeploymentCount} offline target${offlineDeploymentCount === 1 ? '' : 's'}`}
             </button>
           )}
           {selectedDeployment && selectedHealth === undefined && (
-            <p className="text-xs text-gray-500 mt-1 mb-1">Checking endpoint health...</p>
+            <p className="text-xs text-gray-500 mt-1 mb-1">Checking target health...</p>
           )}
           {selectedDeployment && selectedHealth === false && (
             <div className="flex items-center gap-2 mt-1 mb-1">
-              <p className="text-xs text-red-400 flex-1">Endpoint is offline</p>
+              <p className="text-xs text-red-400 flex-1">Target is offline</p>
               <button
                 type="button"
                 onClick={handleStartEndpoint}
@@ -352,7 +352,7 @@ export function CreateJobDialog({ projectId, onClose, onCreated }: CreateJobDial
             </div>
           )}
           {selectedDeployment && selectedHealth === true && (
-            <p className="text-xs text-green-400 mt-1 mb-1">Endpoint is online</p>
+            <p className="text-xs text-green-400 mt-1 mb-1">Target is online</p>
           )}
           <input
             ref={firstInputRef}
@@ -363,11 +363,11 @@ export function CreateJobDialog({ projectId, onClose, onCreated }: CreateJobDial
             className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-xs text-gray-400 mb-4 focus:outline-none focus:border-cyan-500"
           />
 
-          {/* Tester Selection */}
+          {/* Runner Selection */}
           {testers.length > 0 && (
             <div className="mb-4">
               <label htmlFor="create-job-tester" className="block text-xs text-gray-400 mb-1">
-                Tester
+                Runner
               </label>
               <select
                 id="create-job-tester"
@@ -375,7 +375,7 @@ export function CreateJobDialog({ projectId, onClose, onCreated }: CreateJobDial
                 onChange={(e) => setSelectedTester(e.target.value)}
                 className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
               >
-                <option value="">Auto (any online tester)</option>
+                <option value="">Auto (any online runner)</option>
                 {visibleTesters.map(a => (
                   <option key={a.agent_id} value={a.agent_id}>
                     {a.name} ({a.status}){a.region ? ` \u2014 ${a.region}` : ''}
@@ -390,7 +390,7 @@ export function CreateJobDialog({ projectId, onClose, onCreated }: CreateJobDial
                 >
                   {showOfflineTesters
                     ? `\u2212 Hide offline (${offlineTesterCount})`
-                    : `+ Show ${offlineTesterCount} offline tester${offlineTesterCount === 1 ? '' : 's'}`}
+                    : `+ Show ${offlineTesterCount} offline runner${offlineTesterCount === 1 ? '' : 's'}`}
                 </button>
               )}
             </div>
@@ -498,10 +498,10 @@ export function CreateJobDialog({ projectId, onClose, onCreated }: CreateJobDial
               className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-300 focus:outline-none focus:border-cyan-500"
             >
               <option value="none">Disabled</option>
-              <option value="tester">Tester-side (capture on this machine)</option>
+              <option value="tester">Runner-side (capture on this machine)</option>
             </select>
             {captureMode !== 'none' && (
-              <p className="text-xs text-yellow-400/70 mt-1">Captures network packets during the test (requires tshark on the tester)</p>
+              <p className="text-xs text-yellow-400/70 mt-1">Captures network packets during the test (requires tshark on the runner)</p>
             )}
           </div>
 
@@ -538,7 +538,7 @@ export function CreateJobDialog({ projectId, onClose, onCreated }: CreateJobDial
               }
               title={
                 selectedDeployment && selectedHealth === false
-                  ? 'Endpoint is offline — start it before running a test'
+                  ? 'Target is offline -- start it before running a test'
                   : undefined
               }
               className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors disabled:opacity-50"

@@ -85,7 +85,7 @@ function PersistentTestersBanner({ projectId }: { projectId: string | null | und
     >
       <span className="text-purple-400 font-mono text-xs mt-0.5">NEW</span>
       <div className="flex-1">
-        Persistent testers are now available &mdash;{' '}
+        Persistent runners are now available &mdash;{' '}
         <Link
           to={`/projects/${projectId}/testers`}
           className="text-cyan-400 hover:text-cyan-300 underline underline-offset-2"
@@ -97,7 +97,7 @@ function PersistentTestersBanner({ projectId }: { projectId: string | null | und
       <button
         type="button"
         onClick={onDismiss}
-        aria-label="Dismiss persistent testers banner"
+        aria-label="Dismiss persistent runners banner"
         className="text-gray-500 hover:text-gray-300 transition-colors text-xs font-mono px-1"
       >
         {'\u2715'}

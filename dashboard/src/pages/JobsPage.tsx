@@ -178,7 +178,7 @@ export function JobsPage() {
           region: cloudRegion,
           vm_size: cloudVmSize,
         });
-        addToast('success', `Tester VM "${vmName}" deploying... (~3 minutes)`);
+        addToast('success', `Runner VM "${vmName}" deploying... (~3 minutes)`);
       } else if (addTesterMode === 'ssh') {
         if (!sshHost.trim()) { setAddingTester(false); return; }
         const result = await api.createAgent(projectId, {
@@ -188,7 +188,7 @@ export function JobsPage() {
           ssh_user: sshUser,
           ssh_port: sshPort,
         });
-        addToast('success', `Tester "${result.name}" deploying via SSH...`);
+        addToast('success', `Runner "${result.name}" deploying via SSH...`);
       } else if (addTesterMode === 'endpoint') {
         if (!selectedEndpoint) { setAddingTester(false); return; }
         const dep = deployments.find(d =>
@@ -202,7 +202,7 @@ export function JobsPage() {
           ssh_port: 22,
           region: dep?.provider_summary || undefined,
         });
-        addToast('success', `Tester "${result.name}" deploying to endpoint...`);
+        addToast('success', `Runner "${result.name}" deploying to target...`);
       }
       setShowAddTester(false);
       setTesterName('');
@@ -210,7 +210,7 @@ export function JobsPage() {
       setSelectedEndpoint('');
       loadTesters();
     } catch {
-      addToast('error', 'Failed to add tester');
+      addToast('error', 'Failed to add runner');
     } finally {
       setAddingTester(false);
     }
@@ -219,10 +219,10 @@ export function JobsPage() {
   const handleDeleteTester = async (id: string, name: string) => {
     try {
       await api.deleteAgent(projectId, id);
-      addToast('info', `Tester "${name}" removed`);
+      addToast('info', `Runner "${name}" removed`);
       loadTesters();
     } catch {
-      addToast('error', 'Failed to remove tester');
+      addToast('error', 'Failed to remove runner');
     }
   };
 
@@ -282,7 +282,7 @@ export function JobsPage() {
             }`}
           >
             <span className={`w-2 h-2 rounded-full ${onlineTesters.length > 0 ? 'bg-green-400' : 'bg-gray-500'}`} />
-            <span className="hidden sm:inline">{testers.length} tester{testers.length !== 1 ? 's' : ''}</span> ({onlineTesters.length} online)
+            <span className="hidden sm:inline">{testers.length} runner{testers.length !== 1 ? 's' : ''}</span> ({onlineTesters.length} online)
           </button>
           {isOperator && (
             <button
@@ -306,7 +306,7 @@ export function JobsPage() {
               <FilterChip label="Status" value={statusFilter} onClear={() => setFilter('status', 'all')} />
             )}
             {agentFilter && (
-              <FilterChip label="Tester" value={agentName} onClear={() => setFilter('agent', '')} />
+              <FilterChip label="Runner" value={agentName} onClear={() => setFilter('agent', '')} />
             )}
             {createdByFilter && (
               <FilterChip label="Created by" value={memberName} onClear={() => setFilter('created_by', '')} />
@@ -351,8 +351,8 @@ export function JobsPage() {
           value={agentFilter}
           onChange={(v) => setFilter('agent', v)}
           options={agentOptions}
-          placeholder="All testers"
-          ariaLabel="Filter by tester"
+          placeholder="All runners"
+          ariaLabel="Filter by runner"
           className="w-40 md:w-48"
           compact
         />
@@ -379,13 +379,13 @@ export function JobsPage() {
       {showTesters && (
         <div className="border-b border-gray-800/50 pb-5 mb-6 mt-4">
           <div className="flex items-center justify-between mb-3">
-            <p className="text-xs text-gray-500 tracking-wider font-medium">testers</p>
+            <p className="text-xs text-gray-500 tracking-wider font-medium">runners</p>
             {isOperator && (
               <button
                 onClick={() => setShowAddTester(!showAddTester)}
                 className="text-xs text-cyan-400 hover:text-cyan-300"
               >
-                {showAddTester ? 'Cancel' : '+ Add Tester'}
+                {showAddTester ? 'Cancel' : '+ Add Runner'}
               </button>
             )}
           </div>
@@ -396,7 +396,7 @@ export function JobsPage() {
               <div className="flex gap-2 mb-3">
                 {([
                   { id: 'cloud', label: 'New Cloud VM' },
-                  { id: 'endpoint', label: 'Add to existing endpoint' },
+                  { id: 'endpoint', label: 'Add to existing target' },
                   { id: 'ssh', label: 'Remote (SSH)' },
                 ] as const).map(opt => (
                   <button
@@ -417,7 +417,7 @@ export function JobsPage() {
               {addTesterMode === 'cloud' && (
                 <div className="mb-2">
                   <p className="text-xs text-gray-500 mb-2">
-                    Create a new Azure VM with the tester agent pre-installed. Takes ~3 minutes.
+                    Create a new Azure VM with the runner agent pre-installed. Takes ~3 minutes.
                   </p>
                   <div className="grid grid-cols-2 gap-2">
                     <div>
@@ -459,14 +459,14 @@ export function JobsPage() {
               {addTesterMode === 'endpoint' && (
                 <div className="mb-2">
                   <p className="text-xs text-gray-500 mb-2">
-                    Add the tester agent to a VM you already deployed. No new VM created — just installs the tester software.
+                    Add the runner agent to a VM you already deployed. No new VM created -- just installs the runner software.
                   </p>
                   <select
                     value={selectedEndpoint}
                     onChange={e => setSelectedEndpoint(e.target.value)}
                     className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                   >
-                    <option value="">Select endpoint...</option>
+                    <option value="">Select target...</option>
                     {deployments.flatMap(d =>
                       (d.endpoint_ips || []).map(ip => (
                         <option key={ip} value={ip}>
@@ -506,7 +506,7 @@ export function JobsPage() {
                 <input
                   value={testerName}
                   onChange={e => setTesterName(e.target.value)}
-                  placeholder="Tester name (optional)"
+                  placeholder="Runner name (optional)"
                   className="flex-1 bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 />
                 <button
@@ -522,7 +522,7 @@ export function JobsPage() {
 
           {/* Tester List — flat rows with dividers */}
           {testers.length === 0 ? (
-            <p className="text-gray-600 text-sm">No testers registered. Click "+ Add Tester" to deploy one on an endpoint or via SSH.</p>
+            <p className="text-gray-600 text-sm">No runners registered. Click "+ Add Runner" to deploy one on a target or via SSH.</p>
           ) : (
             <div>
               {testers.map((t, i) => (
@@ -546,8 +546,8 @@ export function JobsPage() {
                     <button
                       onClick={() => handleDeleteTester(t.agent_id, t.name)}
                       className="text-xs text-gray-600 hover:text-red-400 transition-colors"
-                      title="Remove tester"
-                      aria-label={`Remove tester ${t.name}`}
+                      title="Remove runner"
+                      aria-label={`Remove runner ${t.name}`}
                     >
                       &#x2715;
                     </button>
@@ -570,14 +570,14 @@ export function JobsPage() {
         {filteredJobs.length === 0 ? (
           testers.length === 0 ? (
             <div className="border border-gray-800 rounded p-8 text-center">
-              <p className="text-gray-500 text-sm">No testers connected</p>
-              <p className="text-gray-700 text-xs mt-1">Deploy a tester on one of your endpoints to start running diagnostics.</p>
+              <p className="text-gray-500 text-sm">No runners connected</p>
+              <p className="text-gray-700 text-xs mt-1">Deploy a runner on one of your targets to start running diagnostics.</p>
               {isOperator && (
                 <button
                   onClick={() => { setShowTesters(true); setShowAddTester(true); }}
                   className="text-xs text-cyan-400 mt-2"
                 >
-                  Add Tester
+                  Add Runner
                 </button>
               )}
             </div>
@@ -632,7 +632,7 @@ export function JobsPage() {
               <th className="px-4 py-2.5 text-left font-medium">Type</th>
               <th className="px-4 py-2.5 text-left font-medium">Summary</th>
               <th className="px-4 py-2.5 text-left font-medium hidden lg:table-cell">Runs</th>
-              <th className="px-4 py-2.5 text-left font-medium hidden lg:table-cell">Tester</th>
+              <th className="px-4 py-2.5 text-left font-medium hidden lg:table-cell">Runner</th>
               <th className="px-4 py-2.5 text-left font-medium">Status</th>
               <th className="px-4 py-2.5 text-left font-medium hidden lg:table-cell">Duration</th>
               <th className="px-4 py-2.5 text-left font-medium">Created</th>
@@ -691,14 +691,14 @@ export function JobsPage() {
         {filteredJobs.length === 0 && (
           testers.length === 0 ? (
             <div className="border border-gray-800 rounded p-8 text-center my-6">
-              <p className="text-gray-500 text-sm">No testers connected</p>
-              <p className="text-gray-700 text-xs mt-1">Deploy a tester on one of your endpoints to start running diagnostics.</p>
+              <p className="text-gray-500 text-sm">No runners connected</p>
+              <p className="text-gray-700 text-xs mt-1">Deploy a runner on one of your targets to start running diagnostics.</p>
               {isOperator && (
                 <button
                   onClick={() => { setShowTesters(true); setShowAddTester(true); }}
                   className="text-xs text-cyan-400 mt-2"
                 >
-                  Add Tester
+                  Add Runner
                 </button>
               )}
             </div>

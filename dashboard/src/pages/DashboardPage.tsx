@@ -103,7 +103,7 @@ export function DashboardPage() {
           <div className={`text-3xl font-bold tabular-nums ${onlineAgents.length > 0 ? 'text-green-400' : 'text-gray-600'}`}>
             {onlineAgents.length}
           </div>
-          <div className="text-xs text-gray-500">testers online</div>
+          <div className="text-xs text-gray-500">runners online</div>
         </div>
         <div>
           <div className={`text-xl font-semibold tabular-nums ${(summary?.jobs_running ?? 0) > 0 ? 'text-blue-400' : 'text-gray-600'}`}>
@@ -121,7 +121,7 @@ export function DashboardPage() {
           <div className="text-xl font-semibold tabular-nums text-gray-300">
             {completedDeps.length}
           </div>
-          <div className="text-xs text-gray-600">endpoints</div>
+          <div className="text-xs text-gray-600">targets</div>
         </div>
       </div>
 
@@ -141,8 +141,8 @@ export function DashboardPage() {
           <h3 className="text-sm text-gray-300 font-medium mb-4">Get started</h3>
           <div className="space-y-2">
             {[
-              { to: `/projects/${projectId}/deploy`, step: '1', title: 'Deploy an endpoint', desc: 'Install networker-endpoint on a remote host to create a test target' },
-              { to: `/projects/${projectId}/runs`, step: '2', title: 'Add a tester', desc: 'Connect an agent to run diagnostics from a remote location' },
+              { to: `/projects/${projectId}/deploy`, step: '1', title: 'Deploy a target', desc: 'Install networker-endpoint on a remote host to create a test target' },
+              { to: `/projects/${projectId}/runs`, step: '2', title: 'Add a runner', desc: 'Connect an agent to run diagnostics from a remote location' },
               { to: `/projects/${projectId}/runs`, step: '3', title: 'Run your first test', desc: 'HTTP, DNS, TLS, UDP latency measured per-phase' },
               { to: `/projects/${projectId}/schedules`, step: '4', title: 'Create a schedule', desc: 'Automate recurring tests with cron expressions' },
             ].map(item => (
@@ -169,13 +169,13 @@ export function DashboardPage() {
             {/* Endpoint Health */}
             <div>
               <div className="flex items-center justify-between mb-3">
-                <h3 className="text-xs text-gray-500 tracking-wider font-medium">endpoint health</h3>
+                <h3 className="text-xs text-gray-500 tracking-wider font-medium">target health</h3>
                 <Link to={`/projects/${projectId}/deploy`} className="text-xs text-gray-600 hover:text-gray-400 transition-colors">View all →</Link>
               </div>
               {endpoints.length === 0 ? (
                 <div className="border border-gray-800 rounded p-6 text-center">
-                  <p className="text-gray-600 text-sm">No endpoints deployed</p>
-                  <Link to={`/projects/${projectId}/deploy`} className="text-xs text-cyan-400 mt-1 inline-block">Deploy your first endpoint</Link>
+                  <p className="text-gray-600 text-sm">No targets deployed</p>
+                  <Link to={`/projects/${projectId}/deploy`} className="text-xs text-cyan-400 mt-1 inline-block">Deploy your first target</Link>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
@@ -208,13 +208,13 @@ export function DashboardPage() {
             {/* Testers */}
             <div>
               <div className="flex items-center justify-between mb-3">
-                <h3 className="text-xs text-gray-500 tracking-wider font-medium">testers</h3>
+                <h3 className="text-xs text-gray-500 tracking-wider font-medium">runners</h3>
                 <Link to={`/projects/${projectId}/runs`} className="text-xs text-gray-600 hover:text-gray-400 transition-colors">Manage →</Link>
               </div>
               {agents.length === 0 ? (
                 <div className="border border-gray-800 rounded p-6 text-center">
-                  <p className="text-gray-600 text-sm">No testers deployed</p>
-                  <Link to={`/projects/${projectId}/runs`} className="text-xs text-cyan-400 mt-1 inline-block">Add a tester</Link>
+                  <p className="text-gray-600 text-sm">No runners deployed</p>
+                  <Link to={`/projects/${projectId}/runs`} className="text-xs text-cyan-400 mt-1 inline-block">Add a runner</Link>
                 </div>
               ) : (
                 // Dashboard tester card ordering:
@@ -275,7 +275,7 @@ export function DashboardPage() {
                           to={`/projects/${projectId}/testers`}
                           className="block text-xs text-gray-500 hover:text-cyan-400 mt-2 text-center"
                         >
-                          + {hidden} more — view all testers →
+                          + {hidden} more -- view all runners →
                         </Link>
                       )}
                     </>
@@ -359,7 +359,7 @@ export function DashboardPage() {
                   New Run
                 </Link>
                 <Link to={`/projects/${projectId}/deploy`} className="block px-3 py-2 text-sm text-gray-400 hover:text-gray-200 hover:bg-gray-800/30 rounded transition-colors">
-                  Deploy Endpoint
+                  Deploy Target
                 </Link>
                 <Link to={`/projects/${projectId}/schedules`} className="block px-3 py-2 text-sm text-gray-400 hover:text-gray-200 hover:bg-gray-800/30 rounded transition-colors">
                   New Schedule

@@ -37,7 +37,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
 
   const coreItems: NavItem[] = pid ? [
     { path: `/projects/${pid}`, label: 'Dashboard', icon: '\u25C8', exact: true },
-    { path: `/projects/${pid}/vms`, label: 'Cloud VMs', icon: '\u25A3' },
+    { path: `/projects/${pid}/vms`, label: 'Infrastructure', icon: '\u25A3' },
     { path: `/projects/${pid}/runs`, label: 'Runs', icon: '\u25B6' },
     { path: `/projects/${pid}/schedules`, label: 'Schedules', icon: '\u21BB' },
   ] : [];

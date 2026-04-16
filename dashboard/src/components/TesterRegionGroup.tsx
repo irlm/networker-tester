@@ -57,7 +57,7 @@ export function TesterRegionGroup({
             {cloud} / {region}
           </span>
           <span className="text-xs text-gray-500">
-            {testers.length} tester{testers.length === 1 ? '' : 's'} ·{' '}
+            {testers.length} runner{testers.length === 1 ? '' : 's'} ·{' '}
             {runningCount} running · {inQueueCount} in queue
           </span>
         </button>
@@ -98,7 +98,7 @@ export function TesterRegionGroup({
             );
           })}
           {testers.length === 0 && (
-            <li className="px-3 py-3 text-xs text-gray-500">No testers in this region.</li>
+            <li className="px-3 py-3 text-xs text-gray-500">No runners in this region.</li>
           )}
         </ul>
       )}

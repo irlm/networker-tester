@@ -263,7 +263,7 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-4">
               <h3 id={titleId} className="text-lg font-bold text-gray-100">
-                Deploy Endpoint
+                Deploy Target
               </h3>
               <div className="flex gap-1">
                 {Array.from({ length: totalSteps }, (_, i) => i + 1).map(s => (
@@ -340,11 +340,11 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
           {/* Step: Endpoint Config */}
           {currentStepName === 'endpoint-config' && (
             <div>
-              <p className="text-sm text-gray-400 mb-3">Configure endpoints to deploy:</p>
+              <p className="text-sm text-gray-400 mb-3">Configure targets to deploy:</p>
               {endpoints.map((ep, idx) => (
                 <div key={idx} className="bg-[var(--bg-base)] border border-gray-800 rounded p-3 mb-3">
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs text-gray-500 font-medium">Endpoint {idx + 1}</span>
+                    <span className="text-xs text-gray-500 font-medium">Target {idx + 1}</span>
                     {endpoints.length > 1 && (
                       <button
                         type="button"
@@ -508,12 +508,12 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
                   onClick={addEndpoint}
                   className="text-xs text-cyan-400 hover:text-cyan-300"
                 >
-                  + Add endpoint
+                  + Add target
                 </button>
               )}
 
               <p className="mt-4 pt-3 border-t border-gray-800 text-xs text-gray-600">
-                After deploy, run against this endpoint from Runs → New Run → Proxy.
+                After deploy, run against this target from Runs → New Run → Proxy.
               </p>
             </div>
           )}
@@ -620,7 +620,7 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
               </div>
 
               <div className="bg-[var(--bg-base)] border border-gray-800 rounded p-3 mb-3">
-                <p className="text-xs text-gray-500 mb-2 font-medium">Endpoints ({endpoints.length})</p>
+                <p className="text-xs text-gray-500 mb-2 font-medium">Targets ({endpoints.length})</p>
                 {endpoints.map((ep, i) => (
                   <div key={i} className="text-sm text-gray-300 py-1">
                     {ep.provider === 'lan'
@@ -639,7 +639,7 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
               <div className="bg-[var(--bg-base)] border border-gray-800 rounded p-3 mb-3 text-xs text-gray-500">
                 <span className="text-gray-400">Deploy only</span>
                 {' \u00b7 '}
-                <span>Run against this endpoint from Runs → New Run → Proxy</span>
+                <span>Run against this target from Runs → New Run → Proxy</span>
               </div>
             </div>
           )}
@@ -672,7 +672,7 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
                   disabled={loading}
                   className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors disabled:opacity-50"
                 >
-                  {loading ? 'Deploying...' : 'Deploy Endpoint'}
+                  {loading ? 'Deploying...' : 'Deploy Target'}
                 </button>
               ) : (
                 <button

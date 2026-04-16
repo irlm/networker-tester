@@ -73,7 +73,7 @@ export function DeployPage() {
         <div>
           <h2 className="text-lg md:text-xl font-bold text-gray-100">Infrastructure</h2>
           <p className="text-sm text-gray-500 mt-1 hidden md:block">
-            Endpoints and testers deployed across cloud regions
+            Targets and runners deployed across cloud regions
           </p>
         </div>
         {isOperator && (
@@ -81,7 +81,7 @@ export function DeployPage() {
             onClick={() => setShowWizard(true)}
             className="bg-cyan-600 hover:bg-cyan-500 text-white px-3 md:px-4 py-2 rounded text-sm transition-colors flex-shrink-0"
           >
-            New Endpoint
+            New Target
           </button>
         )}
       </div>
@@ -134,7 +134,7 @@ export function DeployPage() {
       <div className="mb-8">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-xs text-gray-500 tracking-wider font-medium">
-            endpoints
+            targets
             {completedDeps.length > 0 && <span className="text-gray-600 ml-2">({completedDeps.length})</span>}
           </h3>
         </div>
@@ -149,9 +149,9 @@ export function DeployPage() {
           </div>
         ) : completedDeps.length === 0 ? (
           <div className="border border-gray-800 rounded p-8 text-center">
-            <p className="text-gray-500 text-sm">No endpoints deployed</p>
+            <p className="text-gray-500 text-sm">No targets deployed</p>
             <button onClick={() => setShowWizard(true)} className="text-xs text-cyan-400 mt-2">
-              Deploy your first endpoint
+              Deploy your first target
             </button>
           </div>
         ) : (
@@ -186,7 +186,7 @@ export function DeployPage() {
                     <th className="text-left px-4 py-2.5 font-medium">Name</th>
                     <th className="text-left px-4 py-2.5 font-medium">Provider</th>
                     <th className="text-left px-4 py-2.5 font-medium">Status</th>
-                    <th className="text-left px-4 py-2.5 font-medium">Endpoint</th>
+                    <th className="text-left px-4 py-2.5 font-medium">Target</th>
                     <th className="text-left px-4 py-2.5 font-medium hidden lg:table-cell">Duration</th>
                     <th className="text-left px-4 py-2.5 font-medium hidden lg:table-cell">Created</th>
                   </tr>
@@ -223,19 +223,19 @@ export function DeployPage() {
       <div>
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-xs text-gray-500 tracking-wider font-medium">
-            tester VMs
+            runner VMs
             {testerVms.length > 0 && <span className="text-gray-600 ml-2">({testerVms.length})</span>}
           </h3>
           <Link to={`/projects/${projectId}/vms/testers`} className="text-xs text-gray-600 hover:text-gray-400 transition-colors">
-            Manage in Cloud VMs →
+            Manage in Infrastructure →
           </Link>
         </div>
 
         {testerVms.length === 0 ? (
           <div className="border border-gray-800 rounded p-8 text-center">
-            <p className="text-gray-500 text-sm">No tester VMs deployed</p>
+            <p className="text-gray-500 text-sm">No runner VMs deployed</p>
             <Link to={`/projects/${projectId}/vms/testers`} className="text-xs text-cyan-400 mt-2 inline-block">
-              Deploy a tester from Cloud VMs
+              Deploy a runner from Infrastructure
             </Link>
           </div>
         ) : (

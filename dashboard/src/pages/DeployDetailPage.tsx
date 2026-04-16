@@ -109,7 +109,7 @@ export function DeployDetailPage() {
         setVersionInfo({ latest: result.latest_release, endpointVersion: epVer });
       }
     } catch {
-      addToast('error', 'Failed to check endpoint health');
+      addToast('error', 'Failed to check target health');
     } finally {
       setHealthLoading(false);
     }
@@ -199,7 +199,7 @@ export function DeployDetailPage() {
                     if (!deploymentId) return;
                     try {
                       await api.updateEndpoint(projectId, deploymentId);
-                      addToast('info', 'Endpoint update started');
+                      addToast('info', 'Target update started');
                       loadDeployment();
                     } catch {
                       addToast('error', 'Failed to start update');
@@ -207,7 +207,7 @@ export function DeployDetailPage() {
                   }}
                   className="bg-yellow-600/20 border border-yellow-500/30 hover:bg-yellow-600/30 text-yellow-400 px-4 py-1.5 rounded text-sm transition-colors"
                 >
-                  Update Endpoint
+                  Update Target
                 </button>
               )}
               {!confirmDelete ? (
@@ -245,7 +245,7 @@ export function DeployDetailPage() {
           Provider <span className="text-gray-200 ml-1">{deployment?.provider_summary || '\u2014'}</span>
         </span>
         <span className="text-gray-500">
-          Endpoints <span className="text-gray-200 font-mono ml-1">
+          Targets <span className="text-gray-200 font-mono ml-1">
             {hasEndpoints ? (deployment?.endpoint_ips || []).join(', ') : '\u2014'}
           </span>
         </span>
@@ -264,7 +264,7 @@ export function DeployDetailPage() {
       {/* Endpoint Health */}
       {endpointHealth.length > 0 && (
         <div className="mb-6">
-          <p className="text-xs text-gray-500 tracking-wider font-medium mb-2">endpoint health</p>
+          <p className="text-xs text-gray-500 tracking-wider font-medium mb-2">target health</p>
           <div>
             {endpointHealth.map((ep, i) => (
               <div

@@ -240,7 +240,7 @@ export function CreateTesterModal({
           return;
         }
         if (row.power_state === 'error') {
-          setError(row.status_message ?? 'Tester failed to provision');
+          setError(row.status_message ?? 'Runner failed to provision');
           setStage('error');
           return;
         }
@@ -287,11 +287,11 @@ export function CreateTesterModal({
       if (row.power_state === 'running' && row.allocation === 'idle') {
         onCreated(row.tester_id);
       } else if (row.power_state === 'error') {
-        setError(row.status_message ?? 'Tester failed to provision');
+        setError(row.status_message ?? 'Runner failed to provision');
         setStage('error');
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create tester');
+      setError(err instanceof Error ? err.message : 'Failed to create runner');
       setStage('error');
     }
   };
@@ -315,7 +315,7 @@ export function CreateTesterModal({
         <div className="p-4 md:p-6">
           <div className="flex items-center justify-between mb-6">
             <h3 id={titleId} className="text-lg font-bold text-gray-100">
-              Create Tester
+              Create Runner
             </h3>
             <button
               type="button"
@@ -354,7 +354,7 @@ export function CreateTesterModal({
               </div>
               <p className="text-xs text-gray-500">
                 This usually takes 2-4 minutes. You can close this dialog; the
-                tester will continue provisioning in the background.
+                runner will continue provisioning in the background.
               </p>
               <div className="flex justify-end">
                 <button
@@ -522,7 +522,7 @@ export function CreateTesterModal({
                   </select>
                 </div>
                 <p className="text-xs text-gray-500">
-                  Tester stops automatically each day at this local time
+                  Runner stops automatically each day at this local time
                   (region timezone). Costs drop by roughly 2/3 with an overnight
                   schedule.
                 </p>
@@ -539,8 +539,8 @@ export function CreateTesterModal({
                   />
                   Auto-probe on error
                 </label>
-                <p className="text-xs text-gray-500 mt-1" title="When enabled, the dashboard probes this tester's SSH port on a short interval whenever it enters the error state and auto-clears transient faults.">
-                  When enabled, the dashboard probes this tester automatically if
+                <p className="text-xs text-gray-500 mt-1" title="When enabled, the dashboard probes this runner's SSH port on a short interval whenever it enters the error state and auto-clears transient faults.">
+                  When enabled, the dashboard probes this runner automatically if
                   it enters an error state. Off by default — you'll be asked to
                   run a probe manually from the detail drawer.
                 </p>
@@ -559,7 +559,7 @@ export function CreateTesterModal({
                   disabled={stage === 'creating' || !name || !region}
                   className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors disabled:opacity-50"
                 >
-                  Create Tester
+                  Create Runner
                 </button>
               </div>
             </form>

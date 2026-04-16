@@ -110,9 +110,9 @@ describe('TesterStep', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText(/No testers in/)).toBeTruthy();
+      expect(screen.getByText(/No runners in/)).toBeTruthy();
     });
-    expect(screen.getByText('Create eastus tester')).toBeTruthy();
+    expect(screen.getByText('Create eastus runner')).toBeTruthy();
   });
 
   it('State A filter: excludes testers from other regions', async () => {

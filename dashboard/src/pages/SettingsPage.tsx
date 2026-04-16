@@ -106,7 +106,7 @@ export function SettingsPage() {
   const handleUpdateAll = async () => {
     const outdated = getOutdatedDeployments();
     if (outdated.length === 0) {
-      addToast('info', 'All endpoints are up to date');
+      addToast('info', 'All targets are up to date');
       return;
     }
     for (const dep of outdated) {
@@ -264,7 +264,7 @@ export function SettingsPage() {
             onClick={handleUpdateAll}
             className="bg-yellow-600/20 border border-yellow-500/30 hover:bg-yellow-600/30 text-yellow-400 px-4 py-2 rounded text-sm transition-colors"
           >
-            Update All Endpoints ({outdatedDeps.length})
+            Update All Targets ({outdatedDeps.length})
           </button>
         </div>
       )}
@@ -301,9 +301,9 @@ export function SettingsPage() {
 
       {/* Deployed Endpoints */}
       <div className="section-divider">
-        <h3 className="text-xs text-gray-500 tracking-wider font-medium mb-3">deployed endpoints</h3>
+        <h3 className="text-xs text-gray-500 tracking-wider font-medium mb-3">deployed targets</h3>
         {deployments.length === 0 ? (
-          <p className="text-gray-600 text-sm">No endpoints deployed yet. Deploy one from the Infrastructure page.</p>
+          <p className="text-gray-600 text-sm">No targets deployed yet. Deploy one from the Infrastructure page.</p>
         ) : (
           <div>
             {deployments.map((d, i) => {
