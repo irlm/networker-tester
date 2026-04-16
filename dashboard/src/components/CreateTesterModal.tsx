@@ -135,6 +135,7 @@ export function CreateTesterModal({
   const [autoProbeEnabled, setAutoProbeEnabled] = useState(false);
 
   const [availableClouds, setAvailableClouds] = useState<string[]>([]);
+  const [cloudAccounts, setCloudAccounts] = useState<{ account_id: string; name: string; provider: string; status: string }[]>([]);
   const [existingNames, setExistingNames] = useState<Set<string>>(new Set());
   const [regions, setRegions] = useState<string[]>([]);
   const [stage, setStage] = useState<Stage>('form');
@@ -167,6 +168,7 @@ export function CreateTesterModal({
         const pc = a.provider.localeCompare(b.provider);
         return pc !== 0 ? pc : a.name.localeCompare(b.name);
       });
+      setCloudAccounts(acctsArr);
       const providers = [...new Set(acctsArr.map((a: { provider: string }) => a.provider))] as string[];
       setAvailableClouds(providers.length > 0 ? providers : ['azure']);
       setExistingNames(new Set(testersArr.map((t: { name: string }) => t.name)));
@@ -375,25 +377,33 @@ export function CreateTesterModal({
           ) : (
             <form onSubmit={handleSubmit} className="space-y-4">
 
-              {/* Cloud */}
+              {/* Cloud Account */}
               <div>
                 <label htmlFor="tester-cloud" className="block text-xs text-gray-400 mb-1">
-                  Cloud
+                  Cloud Account
                 </label>
                 <select
                   id="tester-cloud"
                   value={cloud}
                   onChange={(e) => {
-                    const newCloud = e.target.value;
-                    setCloud(newCloud);
-                    setVmSize(DEFAULT_VM_SIZE[newCloud] || '');
-                    setRegion('');
+                    const acctId = e.target.value;
+                    const acct = cloudAccounts.find(a => a.account_id === acctId);
+                    if (acct) {
+                      setCloud(acct.provider);
+                      setVmSize(DEFAULT_VM_SIZE[acct.provider] || '');
+                      setRegion('');
+                    }
                   }}
                   className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 >
-                  {availableClouds.map((c) => (
-                    <option key={c} value={c}>
-                      {c === 'azure' ? 'Azure' : c === 'aws' ? 'AWS' : c === 'gcp' ? 'GCP' : c}
+                  {cloudAccounts.length === 0 && (
+                    <option disabled value="">No cloud accounts — add in Settings → Cloud</option>
+                  )}
+                  {cloudAccounts.map((a) => (
+                    <option key={a.account_id} value={a.account_id}>
+                      {a.provider === 'azure' ? 'Azure' : a.provider === 'aws' ? 'AWS' : a.provider === 'gcp' ? 'GCP' : a.provider}
+                      {' — '}{a.name}
+                      {a.status === 'active' ? ' ✓' : a.status === 'error' ? ' ✗ invalid' : ` (${a.status})`}
                     </option>
                   ))}
                 </select>
