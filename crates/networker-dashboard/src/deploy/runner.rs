@@ -32,14 +32,19 @@ pub async fn run_deployment(
     // Find install.sh relative to the workspace root
     let install_sh = find_install_sh().await?;
 
-    // Read only stdout — install.sh prints all user-facing output there.
-    // Discard stderr (az/aws/gcloud CLI noise that causes duplicates).
+    // Pipe both streams. install.sh prints user-facing output to stdout and
+    // validation/error lines (`print_err()`, `>&2`) to stderr. Previously we
+    // dropped stderr to silence az/aws/gcloud CLI noise — but that also hid
+    // every install.sh validation failure ("✗ endpoints[0]: nginx requires
+    // Linux..."), leaving operators staring at "exited with code 1" with no
+    // hint why. Capture both streams; tag each line with its origin so the
+    // UI can color-code error lines later.
     let mut child = Command::new("bash")
         .arg(&install_sh)
         .arg("--deploy")
         .arg(&deploy_file)
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true)
         .spawn()?;
@@ -58,16 +63,39 @@ pub async fn run_deployment(
     });
 
     let stdout = child.stdout.take().expect("stdout piped");
-    let mut reader = BufReader::new(stdout).lines();
+    let stderr = child.stderr.take().expect("stderr piped");
+
+    // Merge stdout + stderr into a single line stream via mpsc. Each item
+    // carries the originating stream tag so process_line can dedup if the
+    // same line escapes both pipes (cargo, az CLI, etc.) and the UI can
+    // style stderr lines distinctly.
+    let (line_tx, mut line_rx) = tokio::sync::mpsc::unbounded_channel::<(String, &'static str)>();
+    let stdout_tx = line_tx.clone();
+    let stderr_tx = line_tx;
+    let stdout_task = tokio::spawn(async move {
+        let mut reader = BufReader::new(stdout).lines();
+        while let Ok(Some(text)) = reader.next_line().await {
+            if stdout_tx.send((text, "stdout")).is_err() {
+                break;
+            }
+        }
+    });
+    let stderr_task = tokio::spawn(async move {
+        let mut reader = BufReader::new(stderr).lines();
+        while let Ok(Some(text)) = reader.next_line().await {
+            if stderr_tx.send((text, "stderr")).is_err() {
+                break;
+            }
+        }
+    });
 
     let mut output = DeployOutput::new();
-
     let bare_ip = regex::Regex::new(r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b").unwrap();
 
-    // Single stream (stdout + stderr merged via 2>&1)
-    while let Ok(Some(text)) = reader.next_line().await {
-        output.process_line(&text, &events_tx, deployment_id, "stdout");
+    while let Some((text, stream)) = line_rx.recv().await {
+        output.process_line(&text, &events_tx, deployment_id, stream);
     }
+    let _ = tokio::join!(stdout_task, stderr_task);
 
     // Wait for process to exit
     let exit_status = child.wait().await?;

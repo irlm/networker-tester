@@ -1,5 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { testersApi, type TesterRow } from '../../api/testers';
+import { api } from '../../api/client';
+import type { CloudAccountSummary } from '../../api/types';
 import { TestbedRow } from './TestbedRow';
 import type { TestbedState } from './testbed-constants';
 import { makeTestbed, updateTestbedState } from './testbed-constants';
@@ -50,6 +52,7 @@ export function TestbedMatrix({
   const [testbedKey, setTestbedKey] = useState(() => testbeds.length);
   const [testers, setTesters] = useState<TesterRow[]>([]);
   const [testersLoading, setTestersLoading] = useState(false);
+  const [cloudAccounts, setCloudAccounts] = useState<CloudAccountSummary[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -57,6 +60,9 @@ export function TestbedMatrix({
       .then(rows => { if (!cancelled) setTesters(rows); })
       .catch(() => { if (!cancelled) setTesters([]); })
       .finally(() => { if (!cancelled) setTestersLoading(false); });
+    api.getCloudAccounts(projectId)
+      .then(rows => { if (!cancelled) setCloudAccounts(rows); })
+      .catch(() => { if (!cancelled) setCloudAccounts([]); });
     return () => { cancelled = true; };
   }, [projectId]);
 
@@ -129,6 +135,8 @@ export function TestbedMatrix({
             key={testbed.key}
             testbed={testbed}
             index={idx}
+            projectId={projectId}
+            cloudAccounts={cloudAccounts}
             onUpdate={updateTestbed}
             onRemove={removeTestbed}
           />

@@ -148,10 +148,20 @@ function AuthenticatedApp() {
   // Fetch projects on mount
   useEffect(() => {
     api.getProjects().then(projects => {
-      useProjectStore.getState().setProjects(projects);
-      // Auto-select if only one project and no active
-      if (!useProjectStore.getState().activeProjectId && projects.length === 1) {
-        useProjectStore.getState().setActiveProject(projects[0]);
+      const store = useProjectStore.getState();
+      store.setProjects(projects);
+      const activeId = store.activeProjectId;
+      // Cached activeProjectId points at a project that no longer exists
+      // (DB reseed, project deleted). Fall back to the first available one
+      // so the sidebar stops linking to a ghost.
+      if (activeId && !projects.some(p => p.project_id === activeId)) {
+        if (projects.length > 0) {
+          store.setActiveProject(projects[0]);
+        } else {
+          store.clearActiveProject();
+        }
+      } else if (!activeId && projects.length === 1) {
+        store.setActiveProject(projects[0]);
       }
     }).catch(() => {});
   }, []);

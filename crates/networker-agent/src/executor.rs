@@ -45,8 +45,12 @@ fn endpoint_to_target(endpoint: &EndpointRef) -> Option<String> {
         }
         // Proxy and Runtime endpoints are dispatched via dashboard-side
         // resolution (Agent B). The standalone agent path doesn't yet know
-        // how to materialise them into a probe target.
-        EndpointRef::Proxy { .. } | EndpointRef::Runtime { .. } => None,
+        // how to materialise them into a probe target. `Pending` should never
+        // reach an agent — the orchestrator rewrites it to `Network` before
+        // dispatch; if we see one here, the orchestrator made a mistake.
+        EndpointRef::Proxy { .. } | EndpointRef::Runtime { .. } | EndpointRef::Pending { .. } => {
+            None
+        }
     }
 }
 

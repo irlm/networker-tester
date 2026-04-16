@@ -217,15 +217,16 @@ async fn launch_handler(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    // Best-effort dispatch to any online agent (full scheduler is in scheduler.rs).
-    if let Some(agent_id) = state.agents.any_online_agent().await {
-        let msg = networker_common::messages::ControlMessage::AssignRun {
-            run: Box::new(run.clone()),
-            config: Box::new(cfg),
-        };
-        let _ = state.agents.send_to_agent(&agent_id, &msg).await;
+    // Dispatch now or kick off provisioning if the endpoint is Pending.
+    if let Err(e) = crate::provisioning::dispatch_or_provision(&state, &run, &cfg).await {
+        tracing::error!(error = %e, run_id = %run.id, "dispatch_or_provision failed");
     }
 
+    // Re-fetch in case provisioning transitioned the run to `provisioning`.
+    let run = match crate::db::test_runs::get(&client, &run.id).await {
+        Ok(Some(r)) => r,
+        _ => run,
+    };
     Ok(Json(run))
 }
 

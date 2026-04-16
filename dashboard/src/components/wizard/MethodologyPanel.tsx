@@ -28,11 +28,13 @@ export function MethodologyPanel({
     const p = METHODOLOGY_PRESETS.find(m => m.id === presetId);
     if (!p) return;
     onMethodPresetChange(presetId);
+    // A preset with targetError == null means "no error target"; force to 0
+    // so switching Rigorous → Quick doesn't leave a stale 2% gate active.
     onMethodologyChange({
       ...methodology,
       warmup_runs: p.warmup,
       measured_runs: p.measured,
-      target_error_pct: p.targetError ?? methodology.target_error_pct,
+      target_error_pct: p.targetError ?? 0,
     });
   };
 

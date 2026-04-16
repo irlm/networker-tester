@@ -188,10 +188,7 @@ async fn trigger_handler(
 /// Project-scoped router (mounted under `/api/v2/projects/{project_id}`).
 pub fn project_router(state: Arc<AppState>) -> Router {
     Router::new()
-        .route(
-            "/schedules",
-            post(create_handler).get(list_handler),
-        )
+        .route("/schedules", post(create_handler).get(list_handler))
         .with_state(state)
 }
 

@@ -6,6 +6,7 @@ import type { EndpointRef, Workload, ModeGroup, Deployment, TestConfigCreate, Cl
 import { Breadcrumb } from '../components/common/Breadcrumb';
 import { WizardStepper } from '../components/wizard/WizardStepper';
 import { WorkloadPanel } from '../components/wizard/WorkloadPanel';
+import { CloudAccountCombobox } from '../components/wizard/CloudAccountCombobox';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useProject } from '../hooks/useProject';
 import { useToast } from '../hooks/useToast';
@@ -357,30 +358,20 @@ export function NetworkTestPage() {
               {proxySubType === 'create' && (
                 <div className="border border-gray-800 p-4 space-y-3">
                   <div>
-                    <label htmlFor="new-target-cloud" className="block text-xs text-gray-400 mb-1">Cloud Account</label>
+                    <label className="block text-xs text-gray-400 mb-1">Cloud Account</label>
                     {cloudAccountsLoading ? (
                       <p className="text-xs text-gray-500 motion-safe:animate-pulse">Loading accounts...</p>
                     ) : (
-                      <select
-                        id="new-target-cloud"
-                        value={newTargetAccountId}
-                        onChange={e => {
-                          setNewTargetAccountId(e.target.value);
-                          const acct = cloudAccounts.find(a => a.account_id === e.target.value);
-                          if (acct) {
-                            const regions = DEPLOY_REGIONS[acct.provider] ?? [];
-                            setNewTargetRegion(regions[0] ?? '');
-                          }
+                      <CloudAccountCombobox
+                        projectId={projectId}
+                        cloudAccounts={cloudAccounts}
+                        selectedAccountId={newTargetAccountId}
+                        onSelect={(acct) => {
+                          setNewTargetAccountId(acct.account_id);
+                          const regions = DEPLOY_REGIONS[acct.provider] ?? [];
+                          setNewTargetRegion(regions[0] ?? '');
                         }}
-                        className="w-full bg-[var(--bg-base)] border border-gray-700 px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
-                      >
-                        {cloudAccounts.length === 0 && <option disabled value="">No cloud accounts</option>}
-                        {cloudAccounts.map(a => (
-                          <option key={a.account_id} value={a.account_id}>
-                            {a.provider.toUpperCase()} -- {a.name}
-                          </option>
-                        ))}
-                      </select>
+                      />
                     )}
                   </div>
                   <div className="grid grid-cols-2 gap-3">

@@ -29,6 +29,7 @@ pub async fn create(client: &Client, new: &NewTestConfig<'_>) -> anyhow::Result<
         EndpointRef::Network { .. } => "network",
         EndpointRef::Proxy { .. } => "proxy",
         EndpointRef::Runtime { .. } => "runtime",
+        EndpointRef::Pending { .. } => "pending",
     };
     let endpoint_ref = serde_json::to_value(new.endpoint)?;
     let workload = serde_json::to_value(new.workload)?;
@@ -130,6 +131,7 @@ pub async fn update(
         EndpointRef::Network { .. } => "network",
         EndpointRef::Proxy { .. } => "proxy",
         EndpointRef::Runtime { .. } => "runtime",
+        EndpointRef::Pending { .. } => "pending",
     });
     let endpoint_ref: Option<serde_json::Value> =
         patch.endpoint.map(serde_json::to_value).transpose()?;
@@ -189,6 +191,34 @@ pub async fn update(
         .await?;
 
     row.as_ref().map(row_to_config).transpose()
+}
+
+/// Rewrite only the endpoint on an existing config. Used by the provisioning
+/// orchestrator when it resolves a `Pending` endpoint to a concrete
+/// `Network { host, port }` after the deployment lands.
+pub async fn update_endpoint(
+    client: &Client,
+    id: &Uuid,
+    endpoint: &EndpointRef,
+) -> anyhow::Result<()> {
+    let kind = match endpoint {
+        EndpointRef::Network { .. } => "network",
+        EndpointRef::Proxy { .. } => "proxy",
+        EndpointRef::Runtime { .. } => "runtime",
+        EndpointRef::Pending { .. } => "pending",
+    };
+    let value = serde_json::to_value(endpoint)?;
+    client
+        .execute(
+            "UPDATE test_config
+             SET endpoint_kind = $2,
+                 endpoint_ref = $3,
+                 updated_at = now()
+             WHERE id = $1",
+            &[id, &kind, &value],
+        )
+        .await?;
+    Ok(())
 }
 
 /// Delete a `test_config`. Returns `true` if a row was deleted.

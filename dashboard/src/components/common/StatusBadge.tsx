@@ -3,6 +3,8 @@ const statusColors: Record<string, string> = {
   offline: 'bg-gray-500/20 text-gray-400 border-gray-500/30',
   busy: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
   pending: 'bg-gray-500/20 text-gray-400 border-gray-500/30',
+  provisioning: 'bg-purple-500/20 text-purple-300 border-purple-500/30',
+  queued: 'bg-gray-500/20 text-gray-300 border-gray-500/30',
   deploying: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
   waiting: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
   assigned: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
@@ -19,7 +21,11 @@ interface StatusBadgeProps {
 
 export function StatusBadge({ status, label }: StatusBadgeProps) {
   const color = statusColors[status] || statusColors.offline;
-  const isPulsing = status === 'deploying' || status === 'running' || status === 'assigned';
+  const isPulsing =
+    status === 'deploying' ||
+    status === 'running' ||
+    status === 'assigned' ||
+    status === 'provisioning';
   return (
     <span
       className={`inline-flex items-center px-2 py-0.5 text-xs rounded border ${color}`}

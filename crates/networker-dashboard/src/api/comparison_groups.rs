@@ -213,18 +213,19 @@ async fn launch_handler(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    // Best-effort dispatch each queued run to an online agent.
+    // For each queued run: dispatch now, or kick off provisioning if its
+    // config carries an `EndpointRef::Pending`.
     for run in &runs {
         if run.status == networker_common::RunStatus::Queued {
-            if let Some(agent_id) = state.agents.any_online_agent().await {
-                if let Ok(Some(cfg)) =
-                    crate::db::test_configs::get(&client, &run.test_config_id).await
+            if let Ok(Some(cfg)) = crate::db::test_configs::get(&client, &run.test_config_id).await
+            {
+                if let Err(e) = crate::provisioning::dispatch_or_provision(&state, run, &cfg).await
                 {
-                    let msg = networker_common::messages::ControlMessage::AssignRun {
-                        run: Box::new(run.clone()),
-                        config: Box::new(cfg),
-                    };
-                    let _ = state.agents.send_to_agent(&agent_id, &msg).await;
+                    tracing::error!(
+                        error = %e,
+                        run_id = %run.id,
+                        "dispatch_or_provision failed for comparison-group run"
+                    );
                 }
             }
         }
@@ -242,10 +243,7 @@ async fn launch_handler(
 /// Project-scoped router (mounted under `/api/v2/projects/{project_id}`).
 pub fn project_router(state: Arc<AppState>) -> Router {
     Router::new()
-        .route(
-            "/comparison-groups",
-            post(create_handler).get(list_handler),
-        )
+        .route("/comparison-groups", post(create_handler).get(list_handler))
         .with_state(state)
 }
 

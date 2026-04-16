@@ -54,9 +54,46 @@ impl TestConfig {
             EndpointRef::Network { .. } => "network",
             EndpointRef::Proxy { .. } => "proxy",
             EndpointRef::Runtime { .. } => "runtime",
+            EndpointRef::Pending { .. } => "pending",
         }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Proxy port mapping — shared by frontend display, orchestrator endpoint
+// rewrites, and the install.sh step_setup_<proxy> functions. If you change a
+// port here, update install.sh and install.ps1 to match.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// HTTP port the given proxy listens on after a standard test deployment.
+pub fn proxy_http_port(stack: &str) -> u16 {
+    match stack {
+        "nginx" => 8081,
+        "caddy" => 8091,
+        "traefik" => 8092,
+        "haproxy" => 8093,
+        "apache" => 8094,
+        "iis" => 80,
+        _ => 80,
+    }
+}
+
+/// HTTPS port the given proxy listens on after a standard test deployment.
+pub fn proxy_https_port(stack: &str) -> u16 {
+    match stack {
+        "nginx" => 8444,
+        "caddy" => 8454,
+        "traefik" => 8455,
+        "haproxy" => 8456,
+        "apache" => 8457,
+        "iis" => 443,
+        _ => 443,
+    }
+}
+
+/// Every proxy stack we know how to install via install.sh / install.ps1.
+pub const SUPPORTED_PROXY_STACKS: &[&str] =
+    &["nginx", "caddy", "traefik", "haproxy", "apache", "iis"];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EndpointRef — tagged union, JSONB-backed
@@ -79,6 +116,28 @@ pub enum EndpointRef {
     Proxy { proxy_endpoint_id: Uuid },
     /// Language/framework stack (Node, Go, Rust, etc.) from the runtime catalog.
     Runtime { runtime_id: Uuid, language: String },
+    /// Target to be provisioned on demand. Carries everything the deploy
+    /// pipeline needs; the orchestrator turns this into a live deployment +
+    /// rewrites the endpoint to `Network { host, port }` once the VM is up.
+    Pending {
+        cloud_account_id: Uuid,
+        region: String,
+        /// Cloud-native size (e.g. "Standard_B2s", "t3.small", "e2-small").
+        vm_size: String,
+        /// "linux" | "windows"
+        os: String,
+        /// One of `SUPPORTED_PROXY_STACKS`. Selects which listener port the
+        /// provisioned VM is probed on.
+        proxy_stack: String,
+        /// "loopback" | "same-region" — informs the deploy pipeline about
+        /// the runner↔target topology. Reserved for future use by the
+        /// orchestrator when it picks which runner to dispatch to.
+        topology: String,
+        /// Optional language/runtime to install behind the proxy. Present
+        /// only for Application Benchmark cells; `None` for plain Full Stack.
+        #[serde(default)]
+        language: Option<String>,
+    },
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -203,6 +262,11 @@ pub struct PublicationGates {
 #[serde(rename_all = "lowercase")]
 pub enum RunStatus {
     Queued,
+    /// Waiting for a fresh deployment to come up before the run can dispatch.
+    /// Set when a `TestConfig.endpoint` is `Pending` and the orchestrator has
+    /// kicked off provisioning. Transitions to `Queued` once the deployment
+    /// completes and the endpoint has been rewritten to `Network`.
+    Provisioning,
     Running,
     Completed,
     Failed,
@@ -213,6 +277,7 @@ impl RunStatus {
     pub fn as_str(&self) -> &'static str {
         match self {
             RunStatus::Queued => "queued",
+            RunStatus::Provisioning => "provisioning",
             RunStatus::Running => "running",
             RunStatus::Completed => "completed",
             RunStatus::Failed => "failed",
@@ -224,6 +289,7 @@ impl RunStatus {
     pub fn parse_str(s: &str) -> Option<Self> {
         match s {
             "queued" => Some(RunStatus::Queued),
+            "provisioning" => Some(RunStatus::Provisioning),
             "running" => Some(RunStatus::Running),
             "completed" => Some(RunStatus::Completed),
             "failed" => Some(RunStatus::Failed),

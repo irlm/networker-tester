@@ -9,7 +9,8 @@ import { PageHeader } from '../components/common/PageHeader';
 import { TesterRegionGroup } from '../components/TesterRegionGroup';
 import { CreateTesterModal } from '../components/CreateTesterModal';
 import { TesterDetailDrawer } from '../components/TesterDetailDrawer';
-import { DeployWizard } from '../components/DeployWizard';
+import { InfraDeployWizard } from '../components/InfraDeployWizard';
+import type { DeployWizardPrefill } from '../components/DeployWizard';
 import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useProject } from '../hooks/useProject';
@@ -121,6 +122,8 @@ export function InfrastructurePage() {
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [deploymentsLoading, setDeploymentsLoading] = useState(true);
   const [showWizard, setShowWizard] = useState(false);
+  const [wizardKind, setWizardKind] = useState<'target' | 'runner'>('target');
+  const [wizardPrefill, setWizardPrefill] = useState<DeployWizardPrefill | undefined>(undefined);
 
   /* ── Runners state ── */
   const [testers, setTesters] = useState<TesterRow[]>([]);
@@ -164,6 +167,30 @@ export function InfrastructurePage() {
   }, [loadAll]);
 
   usePolling(() => void loadAll(), 10000, !!projectId);
+
+  /* ── Open the wizard pre-filled to add stacks to an existing deployment.
+        Pulls the cloud / region / OS / IP / installed proxies off the
+        deployment's first endpoint so the user only ticks the new stacks. */
+  const openAddStack = useCallback((d: Deployment) => {
+    const ep = d.config?.endpoints?.[0];
+    const ip = d.endpoint_ips?.[0] ?? '';
+    if (!ep || !ip) return;
+    const providerLower = (ep.provider || '').toLowerCase();
+    const providerLabel: 'Azure' | 'AWS' | 'GCP' =
+      providerLower === 'azure' ? 'Azure' :
+      providerLower === 'aws' ? 'AWS' :
+      providerLower === 'gcp' ? 'GCP' :
+      'Azure';
+    setWizardPrefill({
+      cloud: providerLabel,
+      cloudAccountId: '',
+      region: ep.region ?? '',
+      os: (ep.os === 'windows' ? 'windows' : 'linux'),
+      existingVmIp: ip,
+      installedProxies: ep.http_stacks ?? [],
+    });
+    setShowWizard(true);
+  }, []);
 
   /* ── Tester grouping + WS subscription ── */
   const grouped = useMemo(() => groupByRegion(testers), [testers]);
@@ -254,10 +281,10 @@ export function InfrastructurePage() {
           isOperator ? (
             <button
               type="button"
-              onClick={() => setShowWizard(true)}
+              onClick={() => { setWizardKind('target'); setWizardPrefill(undefined); setShowWizard(true); }}
               className="px-3 py-1 text-xs rounded bg-cyan-600 hover:bg-cyan-500 text-white"
             >
-              + Deploy Target
+              + Deploy
             </button>
           ) : null
         }
@@ -275,7 +302,11 @@ export function InfrastructurePage() {
         <div className="border border-gray-800 rounded p-8 text-center">
           <p className="text-gray-500 text-sm">No targets deployed</p>
           {isOperator && (
-            <button type="button" onClick={() => setShowWizard(true)} className="text-xs text-cyan-400 mt-2">
+            <button
+              type="button"
+              onClick={() => { setWizardKind('target'); setWizardPrefill(undefined); setShowWizard(true); }}
+              className="text-xs text-cyan-400 mt-2"
+            >
               Deploy your first target
             </button>
           )}
@@ -315,6 +346,7 @@ export function InfrastructurePage() {
                   <th className="text-left px-4 py-2.5 font-medium">Target</th>
                   <th className="text-left px-4 py-2.5 font-medium hidden lg:table-cell">Duration</th>
                   <th className="text-left px-4 py-2.5 font-medium hidden lg:table-cell">Created</th>
+                  {isOperator && <th className="text-right px-4 py-2.5 font-medium" />}
                 </tr>
               </thead>
               <tbody>
@@ -336,6 +368,20 @@ export function InfrastructurePage() {
                     <td className="px-4 py-3 text-gray-500 text-xs hidden lg:table-cell" title={new Date(d.created_at).toISOString()}>
                       {timeAgo(d.created_at)}
                     </td>
+                    {isOperator && (
+                      <td className="px-4 py-3 text-right">
+                        {d.status === 'running' && d.endpoint_ips?.[0] && (
+                          <button
+                            type="button"
+                            onClick={() => openAddStack(d)}
+                            className="text-[11px] px-2 py-1 rounded border border-gray-700 text-gray-400 hover:border-cyan-500/40 hover:text-cyan-300 transition-colors"
+                            title="Install additional proxy stacks on this target"
+                          >
+                            + Add stack
+                          </button>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -364,13 +410,10 @@ export function InfrastructurePage() {
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  setCreateDefaults(null);
-                  setShowCreateTester(true);
-                }}
+                onClick={() => { setWizardKind('runner'); setWizardPrefill(undefined); setShowWizard(true); }}
                 className="px-3 py-1 text-xs rounded bg-cyan-600 hover:bg-cyan-500 text-white"
               >
-                + New Runner
+                + Deploy
               </button>
             </div>
           ) : null
@@ -478,12 +521,24 @@ export function InfrastructurePage() {
       {/* ── Modals / Drawers ── */}
 
       {showWizard && (
-        <DeployWizard
+        <InfraDeployWizard
           projectId={projectId}
-          onClose={() => setShowWizard(false)}
-          onCreated={(id) => {
+          initialKind={wizardKind}
+          prefillUpgrade={wizardPrefill && {
+            cloud: wizardPrefill.cloud,
+            cloudAccountId: wizardPrefill.cloudAccountId,
+            region: wizardPrefill.region,
+            os: wizardPrefill.os,
+            existingVmIp: wizardPrefill.existingVmIp,
+            installedProxies: wizardPrefill.installedProxies,
+          }}
+          onClose={() => { setShowWizard(false); setWizardPrefill(undefined); }}
+          onCreated={(kind, id) => {
+            setWizardPrefill(undefined);
             void loadAll();
-            navigate(`/projects/${projectId}/deploy/${id}`);
+            if (kind === 'target') {
+              navigate(`/projects/${projectId}/deploy/${id}`);
+            }
           }}
         />
       )}

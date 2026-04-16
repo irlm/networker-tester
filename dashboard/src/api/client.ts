@@ -878,6 +878,7 @@ export const api = {
     status?: string;
     endpoint_kind?: string;
     has_artifact?: boolean;
+    comparison_group_id?: string;
     limit?: number;
     before?: string;
   }) => {
@@ -885,6 +886,7 @@ export const api = {
     if (params?.status) search.set('status', params.status);
     if (params?.endpoint_kind) search.set('endpoint_kind', params.endpoint_kind);
     if (params?.has_artifact !== undefined) search.set('has_artifact', String(params.has_artifact));
+    if (params?.comparison_group_id) search.set('comparison_group_id', params.comparison_group_id);
     if (params?.limit) search.set('limit', String(params.limit));
     if (params?.before) search.set('before', params.before);
     const qs = search.toString();
@@ -952,4 +954,7 @@ export const api = {
 
   getComparisonGroup: (groupId: string) =>
     request<ComparisonGroup>(`/v2/comparison-groups/${groupId}`),
+
+  launchComparisonGroup: (groupId: string) =>
+    request<ComparisonGroup>(`/v2/comparison-groups/${groupId}/launch`, { method: 'POST' }),
 };

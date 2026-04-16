@@ -133,25 +133,13 @@ async fn tick(state: &Arc<AppState>) -> anyhow::Result<()> {
             "Created test_run from schedule"
         );
 
-        // Try to dispatch to any online agent
-        if let Some(agent_id) = state.agents.any_online_agent().await {
-            let msg = networker_common::messages::ControlMessage::AssignRun {
-                run: Box::new(run.clone()),
-                config: Box::new(cfg),
-            };
-            if state.agents.send_to_agent(&agent_id, &msg).await.is_ok() {
-                tracing::info!(
-                    schedule_id = %schedule_id,
-                    run_id = %run.id,
-                    agent_id = %agent_id,
-                    "Dispatched scheduled run to agent"
-                );
-            }
-        } else {
-            tracing::warn!(
+        // Dispatch now, or kick off provisioning if the endpoint is Pending.
+        if let Err(e) = crate::provisioning::dispatch_or_provision(state, &run, &cfg).await {
+            tracing::error!(
                 schedule_id = %schedule_id,
                 run_id = %run.id,
-                "No online agent — scheduled run queued as pending"
+                error = %e,
+                "dispatch_or_provision failed for scheduled run"
             );
         }
 

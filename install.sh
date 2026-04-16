@@ -4671,6 +4671,462 @@ NGINX_CONF
     fi
 }
 
+# ─── Shared helpers for Caddy/Traefik/HAProxy/Apache setup ───────────────────
+
+# Ensure the static test site + self-signed cert exist at the canonical paths.
+# Idempotent: safe to call from every proxy installer.
+_networker_prepare_shared_assets() {
+    local site_root="/var/www/networker"
+    sudo mkdir -p "$site_root"
+    local ep_bin="/usr/local/bin/networker-endpoint"
+    if [[ ! -x "$ep_bin" ]]; then
+        ep_bin="${INSTALL_DIR}/networker-endpoint"
+    fi
+    if [[ -x "$ep_bin" ]]; then
+        sudo "$ep_bin" generate-site "$site_root" --preset mixed --stack generic >/dev/null 2>&1 || true
+    fi
+    # Always guarantee the probe-critical files exist, even if the binary missed them.
+    [[ -f "$site_root/index.html" ]] || \
+        echo '<!DOCTYPE html><html><body><p>Networker static test</p></body></html>' | \
+        sudo tee "$site_root/index.html" > /dev/null
+    [[ -f "$site_root/health" ]] || \
+        printf '{"status":"ok"}\n' | sudo tee "$site_root/health" > /dev/null
+
+    # Shared self-signed cert under /etc/networker/ — reused by every proxy.
+    sudo mkdir -p /etc/networker/ssl
+    if [[ ! -f /etc/networker/ssl/networker.crt ]]; then
+        local ep_ip="${ENDPOINT_IP:-127.0.0.1}"
+        sudo openssl req -x509 -newkey rsa:2048 \
+            -keyout /etc/networker/ssl/networker.key \
+            -out /etc/networker/ssl/networker.crt \
+            -days 365 -nodes \
+            -subj "/CN=localhost" \
+            -addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:::1,IP:${ep_ip}" \
+            2>/dev/null < /dev/null
+    fi
+}
+
+# ─── HTTP Stack comparison: Caddy setup ──────────────────────────────────────
+
+step_setup_caddy() {
+    next_step "Set up Caddy for HTTP stack comparison"
+
+    if [[ "$SYS_OS" != "Linux" ]]; then
+        print_info "Caddy setup is Linux-only — skipping."
+        return 0
+    fi
+
+    local pkg_mgr
+    pkg_mgr="$(detect_pkg_manager)"
+    if [[ -z "$pkg_mgr" ]]; then
+        print_warn "No supported package manager found — cannot install Caddy."
+        return 1
+    fi
+
+    if ! command -v caddy &>/dev/null; then
+        print_info "Installing Caddy…"
+        case "$pkg_mgr" in
+            apt-get)
+                sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+                    debian-keyring debian-archive-keyring apt-transport-https curl < /dev/null
+                curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
+                    | sudo gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+                curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
+                    | sudo tee /etc/apt/sources.list.d/caddy-stable.list > /dev/null
+                sudo apt-get update -qq && \
+                    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y caddy < /dev/null
+                ;;
+            dnf)
+                sudo dnf install -y 'dnf-command(copr)' < /dev/null
+                sudo dnf copr enable -y @caddy/caddy < /dev/null
+                sudo dnf install -y caddy < /dev/null
+                ;;
+            *)
+                print_warn "Caddy install via $pkg_mgr is not yet wired — downloading binary."
+                local url="https://github.com/caddyserver/caddy/releases/download/v2.8.4/caddy_2.8.4_linux_amd64.tar.gz"
+                local tmp; tmp="$(mktemp -d)"
+                curl -fsSL "$url" -o "$tmp/caddy.tar.gz"
+                tar -xzf "$tmp/caddy.tar.gz" -C "$tmp"
+                sudo install -m 0755 "$tmp/caddy" /usr/local/bin/caddy
+                rm -rf "$tmp"
+                ;;
+        esac
+    fi
+
+    if ! command -v caddy &>/dev/null; then
+        print_warn "Caddy install failed — skipping config."
+        return 1
+    fi
+
+    _networker_prepare_shared_assets
+
+    sudo mkdir -p /etc/caddy
+    sudo tee /etc/caddy/networker.Caddyfile > /dev/null <<'CADDY_CONF'
+# Networker HTTP stack comparison — Caddy
+# Serves the shared static test site; native HTTP/1.1, H2, H3 support.
+
+{
+    auto_https off
+    servers {
+        protocols h1 h2 h3
+    }
+}
+
+:8091 {
+    root * /var/www/networker
+    file_server
+    handle /page* { reverse_proxy 127.0.0.1:8080 }
+    handle /asset* { reverse_proxy 127.0.0.1:8080 }
+}
+
+:8454 {
+    tls /etc/networker/ssl/networker.crt /etc/networker/ssl/networker.key
+    root * /var/www/networker
+    file_server
+    handle /page* { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
+    handle /asset* { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
+    header Alt-Svc "h3=\":8454\"; ma=86400"
+}
+CADDY_CONF
+
+    # Caddy's main /etc/caddy/Caddyfile imports conf.d snippets by default on
+    # Debian/Ubuntu. Safest is a dedicated unit that loads only our config.
+    sudo tee /etc/systemd/system/networker-caddy.service > /dev/null <<'CADDY_UNIT'
+[Unit]
+Description=Networker Caddy stack (ports 8091/8454)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/caddy run --config /etc/caddy/networker.Caddyfile --adapter caddyfile
+ExecReload=/usr/bin/caddy reload --config /etc/caddy/networker.Caddyfile --adapter caddyfile
+Restart=on-failure
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
+CADDY_UNIT
+
+    # Some distros install caddy at /usr/local/bin instead of /usr/bin.
+    if ! [[ -x /usr/bin/caddy ]] && [[ -x /usr/local/bin/caddy ]]; then
+        sudo sed -i 's|/usr/bin/caddy|/usr/local/bin/caddy|g' /etc/systemd/system/networker-caddy.service
+    fi
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable networker-caddy 2>/dev/null || true
+    if sudo systemctl restart networker-caddy; then
+        print_ok "Caddy serving test page on ports 8091 (HTTP) / 8454 (HTTPS+H3)"
+    else
+        print_warn "networker-caddy service failed to start — check journalctl -u networker-caddy"
+        return 1
+    fi
+}
+
+# ─── HTTP Stack comparison: Apache (httpd) setup ─────────────────────────────
+
+step_setup_apache() {
+    next_step "Set up Apache for HTTP stack comparison"
+
+    if [[ "$SYS_OS" != "Linux" ]]; then
+        print_info "Apache setup is Linux-only — skipping."
+        return 0
+    fi
+
+    local pkg_mgr
+    pkg_mgr="$(detect_pkg_manager)"
+    if [[ -z "$pkg_mgr" ]]; then
+        print_warn "No supported package manager found — cannot install Apache."
+        return 1
+    fi
+
+    case "$pkg_mgr" in
+        apt-get)
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq apache2 < /dev/null
+            # Enable modules we need; a2enmod is idempotent.
+            sudo a2enmod ssl headers proxy proxy_http http2 rewrite >/dev/null 2>&1 || true
+            ;;
+        dnf)
+            sudo dnf install -y httpd mod_ssl mod_http2 < /dev/null
+            ;;
+        *)
+            print_warn "Apache install via $pkg_mgr is not yet wired — skipping."
+            return 1
+            ;;
+    esac
+
+    _networker_prepare_shared_assets
+
+    # Apache config layout differs across distros. We install our vhost into
+    # the appropriate conf-available dir and a Listen stanza via ports.conf.d
+    # so we don't stomp over distro defaults.
+    local apache_dir
+    if [[ -d /etc/apache2 ]]; then
+        apache_dir="/etc/apache2"
+    elif [[ -d /etc/httpd ]]; then
+        apache_dir="/etc/httpd"
+    else
+        print_warn "Can't locate Apache config dir — skipping."
+        return 1
+    fi
+
+    sudo mkdir -p "$apache_dir/conf.d"
+    sudo tee "$apache_dir/conf.d/networker.conf" > /dev/null <<'APACHE_CONF'
+# Networker HTTP stack comparison — Apache
+# Non-standard ports (8094/8457) so we don't collide with any existing site.
+
+Listen 8094
+Listen 8457
+
+<VirtualHost *:8094>
+    ServerName networker-apache
+    DocumentRoot /var/www/networker
+    <Directory /var/www/networker>
+        AllowOverride None
+        Require all granted
+    </Directory>
+    ProxyPreserveHost On
+    ProxyPass        /page  http://127.0.0.1:8080/page
+    ProxyPassReverse /page  http://127.0.0.1:8080/page
+    ProxyPass        /asset http://127.0.0.1:8080/asset
+    ProxyPassReverse /asset http://127.0.0.1:8080/asset
+</VirtualHost>
+
+<VirtualHost *:8457>
+    ServerName networker-apache-ssl
+    DocumentRoot /var/www/networker
+    <Directory /var/www/networker>
+        AllowOverride None
+        Require all granted
+    </Directory>
+    SSLEngine on
+    SSLCertificateFile    /etc/networker/ssl/networker.crt
+    SSLCertificateKeyFile /etc/networker/ssl/networker.key
+    Protocols h2 http/1.1
+    SSLProxyEngine on
+    SSLProxyCheckPeerCN off
+    SSLProxyCheckPeerName off
+    SSLProxyVerify none
+    ProxyPass        /page  https://127.0.0.1:8443/page
+    ProxyPassReverse /page  https://127.0.0.1:8443/page
+    ProxyPass        /asset https://127.0.0.1:8443/asset
+    ProxyPassReverse /asset https://127.0.0.1:8443/asset
+</VirtualHost>
+APACHE_CONF
+
+    # Resolve systemd unit name
+    local unit="apache2"
+    if [[ ! -f /lib/systemd/system/apache2.service && ! -f /etc/systemd/system/apache2.service ]]; then
+        unit="httpd"
+    fi
+
+    if sudo systemctl enable "$unit" 2>/dev/null && sudo systemctl restart "$unit"; then
+        print_ok "Apache serving test page on ports 8094 (HTTP) / 8457 (HTTPS+H2)"
+    else
+        print_warn "Apache failed to start — check journalctl -u $unit"
+        sudo rm -f "$apache_dir/conf.d/networker.conf"
+        return 1
+    fi
+}
+
+# ─── HTTP Stack comparison: HAProxy setup ────────────────────────────────────
+
+step_setup_haproxy() {
+    next_step "Set up HAProxy for HTTP stack comparison"
+
+    if [[ "$SYS_OS" != "Linux" ]]; then
+        print_info "HAProxy setup is Linux-only — skipping."
+        return 0
+    fi
+
+    local pkg_mgr
+    pkg_mgr="$(detect_pkg_manager)"
+    if [[ -z "$pkg_mgr" ]]; then
+        print_warn "No supported package manager found — cannot install HAProxy."
+        return 1
+    fi
+
+    case "$pkg_mgr" in
+        apt-get) sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq haproxy < /dev/null ;;
+        dnf)     sudo dnf install -y haproxy < /dev/null ;;
+        pacman)  sudo pacman -S --noconfirm haproxy ;;
+        zypper)  sudo zypper install -y haproxy ;;
+        *)
+            print_warn "HAProxy install via $pkg_mgr is not yet wired — skipping."
+            return 1
+            ;;
+    esac
+
+    _networker_prepare_shared_assets
+
+    # Combined PEM for HAProxy (cert + key).
+    sudo bash -c 'cat /etc/networker/ssl/networker.crt /etc/networker/ssl/networker.key > /etc/networker/ssl/networker.pem && chmod 600 /etc/networker/ssl/networker.pem'
+
+    sudo mkdir -p /etc/haproxy/conf.d
+    sudo tee /etc/haproxy/conf.d/networker.cfg > /dev/null <<'HAPROXY_CONF'
+# Networker HTTP stack comparison — HAProxy
+# Non-standard ports (8093/8456); HAProxy 2.4+ supports alpn h2.
+
+global
+    log /dev/log local0
+    maxconn 4096
+
+defaults
+    log     global
+    mode    http
+    option  httplog
+    timeout connect 5s
+    timeout client  30s
+    timeout server  30s
+
+frontend networker_http
+    bind *:8093
+    default_backend networker_static
+
+frontend networker_https
+    bind *:8456 ssl crt /etc/networker/ssl/networker.pem alpn h2,http/1.1
+    default_backend networker_static
+
+backend networker_static
+    # Serve static files via the bundled networker-endpoint (port 8080/8443)
+    # so the test page matches other stacks exactly.
+    option forwardfor
+    server endpoint 127.0.0.1:8080 check
+HAPROXY_CONF
+
+    # haproxy's default config includes /etc/haproxy/haproxy.cfg; we need the
+    # distro unit to load our snippet. Ubuntu's default unit doesn't include
+    # conf.d, so use a dedicated unit pointing at our config alone.
+    sudo tee /etc/systemd/system/networker-haproxy.service > /dev/null <<'HAPROXY_UNIT'
+[Unit]
+Description=Networker HAProxy stack (ports 8093/8456)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/sbin/haproxy -W -f /etc/haproxy/conf.d/networker.cfg
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+HAPROXY_UNIT
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable networker-haproxy 2>/dev/null || true
+    if sudo systemctl restart networker-haproxy; then
+        print_ok "HAProxy serving test page on ports 8093 (HTTP) / 8456 (HTTPS+H2)"
+    else
+        print_warn "networker-haproxy service failed to start — check journalctl -u networker-haproxy"
+        return 1
+    fi
+}
+
+# ─── HTTP Stack comparison: Traefik setup ────────────────────────────────────
+
+step_setup_traefik() {
+    next_step "Set up Traefik for HTTP stack comparison"
+
+    if [[ "$SYS_OS" != "Linux" ]]; then
+        print_info "Traefik setup is Linux-only — skipping."
+        return 0
+    fi
+
+    # No Ubuntu repo for Traefik — download the binary.
+    local traefik_bin="/usr/local/bin/traefik"
+    local traefik_ver="v3.1.6"
+    if ! [[ -x "$traefik_bin" ]]; then
+        print_info "Downloading Traefik $traefik_ver…"
+        local arch; arch="$(uname -m)"
+        case "$arch" in
+            x86_64|amd64) arch="amd64" ;;
+            aarch64|arm64) arch="arm64" ;;
+            *)
+                print_warn "Unsupported arch $arch for Traefik download — skipping."
+                return 1
+                ;;
+        esac
+        local url="https://github.com/traefik/traefik/releases/download/${traefik_ver}/traefik_${traefik_ver}_linux_${arch}.tar.gz"
+        local tmp; tmp="$(mktemp -d)"
+        if ! curl -fsSL "$url" -o "$tmp/traefik.tar.gz"; then
+            print_warn "Traefik download failed — skipping."
+            rm -rf "$tmp"
+            return 1
+        fi
+        tar -xzf "$tmp/traefik.tar.gz" -C "$tmp"
+        sudo install -m 0755 "$tmp/traefik" "$traefik_bin"
+        rm -rf "$tmp"
+    fi
+
+    _networker_prepare_shared_assets
+
+    sudo mkdir -p /etc/traefik /etc/traefik/dynamic
+    sudo tee /etc/traefik/networker.yaml > /dev/null <<'TRAEFIK_STATIC'
+# Networker HTTP stack comparison — Traefik (static config)
+log:
+  level: WARN
+accessLog: {}
+entryPoints:
+  web:
+    address: ":8092"
+  websecure:
+    address: ":8455"
+    http:
+      tls:
+        options: default
+providers:
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
+TRAEFIK_STATIC
+
+    sudo tee /etc/traefik/dynamic/networker.yaml > /dev/null <<'TRAEFIK_DYN'
+http:
+  routers:
+    networker-http:
+      entryPoints: ["web"]
+      rule: "PathPrefix(`/`)"
+      service: networker-static
+    networker-https:
+      entryPoints: ["websecure"]
+      rule: "PathPrefix(`/`)"
+      service: networker-static
+      tls: {}
+  services:
+    networker-static:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:8080"
+tls:
+  certificates:
+    - certFile: /etc/networker/ssl/networker.crt
+      keyFile: /etc/networker/ssl/networker.key
+TRAEFIK_DYN
+
+    sudo tee /etc/systemd/system/networker-traefik.service > /dev/null <<TRAEFIK_UNIT
+[Unit]
+Description=Networker Traefik stack (ports 8092/8455)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=${traefik_bin} --configFile=/etc/traefik/networker.yaml
+Restart=on-failure
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
+TRAEFIK_UNIT
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable networker-traefik 2>/dev/null || true
+    if sudo systemctl restart networker-traefik; then
+        print_ok "Traefik serving test page on ports 8092 (HTTP) / 8455 (HTTPS)"
+    else
+        print_warn "networker-traefik service failed to start — check journalctl -u networker-traefik"
+        return 1
+    fi
+}
+
 # ─── HTTP Stack comparison: IIS setup (Windows via SSH/run-command) ───────────
 
 # Generate a PowerShell script to install and configure IIS on a Windows VM.
@@ -7941,12 +8397,12 @@ _deploy_validate_config() {
                 # Validate http_stacks per endpoint (OS compatibility)
                 local stacks_count; stacks_count="$(jq ".endpoints[$i].http_stacks | length // 0" "$cfg" 2>/dev/null)"
                 if [[ "${stacks_count:-0}" -gt 0 ]]; then
-                    local valid_stacks="nginx iis caddy apache"
+                    local valid_stacks="nginx iis caddy apache haproxy traefik"
                     local s
                     for s in $(seq 0 $((stacks_count - 1))); do
                         local sname; sname="$(jq -r ".endpoints[$i].http_stacks[$s]" "$cfg")"
                         if ! echo "$valid_stacks" | grep -qw "$sname"; then
-                            print_err "endpoints[$i].http_stacks[$s]: unknown stack '$sname' (valid: nginx, iis, caddy, apache)"
+                            print_err "endpoints[$i].http_stacks[$s]: unknown stack '$sname' (valid: nginx, iis, caddy, apache, haproxy, traefik)"
                             errors=$((errors + 1))
                         fi
                         # OS compatibility: iis requires windows, nginx requires linux
@@ -7982,11 +8438,11 @@ _deploy_validate_config() {
     local test_stacks_count
     test_stacks_count="$(jq '.tests.http_stacks | length // 0' "$cfg" 2>/dev/null)"
     if [[ "${test_stacks_count:-0}" -gt 0 ]]; then
-        local valid_stacks="nginx iis caddy apache"
+        local valid_stacks="nginx iis caddy apache haproxy traefik"
         for i in $(seq 0 $((test_stacks_count - 1))); do
             local sn; sn="$(jq -r ".tests.http_stacks[$i]" "$cfg")"
             if ! echo "$valid_stacks" | grep -qw "$sn"; then
-                print_err "tests.http_stacks[$i]: unknown stack '$sn' (valid: nginx, iis, caddy, apache)"
+                print_err "tests.http_stacks[$i]: unknown stack '$sn' (valid: nginx, iis, caddy, apache, haproxy, traefik)"
                 errors=$((errors + 1))
             fi
         done
@@ -9020,6 +9476,34 @@ deploy_from_config() {
                                     print_warn "Skipping nginx setup: only supported on Linux (detected $SYS_OS)"
                                 fi
                                 ;;
+                            caddy)
+                                if [[ "$SYS_OS" == "Linux" ]]; then
+                                    step_setup_caddy
+                                else
+                                    print_warn "Skipping Caddy setup: only supported on Linux (detected $SYS_OS)"
+                                fi
+                                ;;
+                            apache)
+                                if [[ "$SYS_OS" == "Linux" ]]; then
+                                    step_setup_apache
+                                else
+                                    print_warn "Skipping Apache setup: only supported on Linux (detected $SYS_OS)"
+                                fi
+                                ;;
+                            haproxy)
+                                if [[ "$SYS_OS" == "Linux" ]]; then
+                                    step_setup_haproxy
+                                else
+                                    print_warn "Skipping HAProxy setup: only supported on Linux (detected $SYS_OS)"
+                                fi
+                                ;;
+                            traefik)
+                                if [[ "$SYS_OS" == "Linux" ]]; then
+                                    step_setup_traefik
+                                else
+                                    print_warn "Skipping Traefik setup: only supported on Linux (detected $SYS_OS)"
+                                fi
+                                ;;
                             iis)
                                 print_warn "Skipping IIS setup: IIS is only available on Windows"
                                 ;;
@@ -9057,6 +9541,9 @@ deploy_from_config() {
                                     print_warn "Skipping nginx setup on $label: only supported on Linux"
                                 fi
                                 ;;
+                            caddy|apache|haproxy|traefik)
+                                print_warn "Remote $_ls setup on LAN endpoints is not yet supported — use nginx or pre-install the proxy manually."
+                                ;;
                             iis)
                                 if [[ "$os" == "windows" ]]; then
                                     print_warn "IIS setup on LAN Windows endpoints is not yet supported"
@@ -9087,6 +9574,9 @@ deploy_from_config() {
                                     print_warn "Skipping nginx setup on Azure Windows"
                                 fi
                                 ;;
+                            caddy|apache|haproxy|traefik)
+                                print_warn "Remote $_ls setup on Azure endpoints is not yet supported (planned follow-up). Deployment continues but this stack will not be installed."
+                                ;;
                             iis)
                                 if [[ "$AZURE_ENDPOINT_OS" == "windows" ]]; then
                                     print_info "IIS is set up during Windows endpoint deploy"
@@ -9115,6 +9605,9 @@ deploy_from_config() {
                                     print_warn "Skipping nginx setup on AWS Windows"
                                 fi
                                 ;;
+                            caddy|apache|haproxy|traefik)
+                                print_warn "Remote $_ls setup on AWS endpoints is not yet supported (planned follow-up). Deployment continues but this stack will not be installed."
+                                ;;
                             iis)
                                 if [[ "${AWS_ENDPOINT_OS:-linux}" == "windows" ]]; then
                                     print_info "IIS is set up during Windows endpoint deploy"
@@ -9142,6 +9635,9 @@ deploy_from_config() {
                                 else
                                     print_warn "Skipping nginx setup on GCP Windows"
                                 fi
+                                ;;
+                            caddy|apache|haproxy|traefik)
+                                print_warn "Remote $_ls setup on GCP endpoints is not yet supported (planned follow-up). Deployment continues but this stack will not be installed."
                                 ;;
                             iis)
                                 if [[ "$GCP_ENDPOINT_OS" == "windows" ]]; then

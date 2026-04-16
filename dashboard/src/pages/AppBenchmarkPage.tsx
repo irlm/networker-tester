@@ -20,6 +20,8 @@ import {
   WINDOWS_PROXIES,
   requiresWindows,
   makeTestbed,
+  resolveVmSize,
+  resolveTopology,
   type RuntimeTemplate,
 } from '../components/wizard/testbed-constants';
 
@@ -96,7 +98,7 @@ export function AppBenchmarkPage() {
         ...m,
         warmup_runs: p.warmup,
         measured_runs: p.measured,
-        target_error_pct: p.targetError ?? m.target_error_pct,
+        target_error_pct: p.targetError ?? 0,
       }));
     }
 
@@ -110,7 +112,13 @@ export function AppBenchmarkPage() {
 
   const canNext = useMemo(() => {
     if (step === 0) return selectedTemplate !== null;
-    if (step === 1) return testbeds.length > 0 && testbeds.every(c => c.proxies.length > 0);
+    if (step === 1) {
+      return (
+        testbeds.length > 0 &&
+        testbeds.every(c => c.proxies.length > 0) &&
+        testbeds.every(c => c.cloudAccountId !== '')
+      );
+    }
     if (step === 2) return selectedLangs.size > 0;
     if (step === 3) return true;
     if (step === 4) return configName.trim().length > 0;
@@ -143,23 +151,42 @@ export function AppBenchmarkPage() {
 
   // ── Submit ──────────────────────────────────────────────────────────
 
+  // Fan out across (testbed × proxy × language). One deployment will be
+  // created per unique (cloud_account_id, region, vm_size, os) — the
+  // orchestrator dedups and stacks languages/proxies into its http_stacks
+  // array when install.sh runs.
   const buildComparisonCells = (): ComparisonCell[] => {
     const cells: ComparisonCell[] = [];
     const langs = selectedLangs.size > 0 ? [...selectedLangs] : [''];
     for (const lang of langs) {
       for (const tb of testbeds) {
-        const label = [lang, `${tb.cloud}/${tb.region}`, tb.os].filter(Boolean).join(' @ ');
-        cells.push({
-          label,
-          endpoint: { kind: 'runtime', runtime_id: selectedTemplate ?? '', language: lang },
-          ...(selectedTesterId ? { runner_id: selectedTesterId } : {}),
-        });
+        const vmSize = resolveVmSize(tb.cloud, tb.vmSize);
+        const topology = resolveTopology(tb.topology);
+        for (const proxy of tb.proxies) {
+          const label = [lang, `${tb.cloud}/${tb.region}`, tb.os, proxy]
+            .filter(Boolean)
+            .join(' @ ');
+          cells.push({
+            label,
+            endpoint: {
+              kind: 'pending',
+              cloud_account_id: tb.cloudAccountId,
+              region: tb.region,
+              vm_size: vmSize,
+              os: tb.os,
+              proxy_stack: proxy,
+              topology,
+              ...(lang ? { language: lang } : {}),
+            },
+            ...(selectedTesterId ? { runner_id: selectedTesterId } : {}),
+          });
+        }
       }
     }
     return cells;
   };
 
-  const isMatrixRun = selectedLangs.size > 1 || testbeds.length > 1;
+  const isMatrixRun = buildComparisonCells().length > 1;
 
   const handleSubmit = async (launchNow: boolean) => {
     setSubmitting(true);
@@ -182,14 +209,22 @@ export function AppBenchmarkPage() {
           cells,
         };
         const group = await api.createComparisonGroup(projectId, body);
-        addToast('success', `Comparison group launched -- ${cells.length} runs`);
+        await api.launchComparisonGroup(group.id);
+        addToast('success', `Launched ${cells.length} run${cells.length === 1 ? '' : 's'}`);
         navigate(`/projects/${projectId}/runs?comparison_group=${group.id}`);
         return;
       }
 
+      // Single-cell path: one Pending endpoint, single deployment.
+      const cells = buildComparisonCells();
+      const onlyEndpoint = cells[0]?.endpoint;
+      if (!onlyEndpoint) {
+        addToast('error', 'At least one testbed, proxy, and language are required');
+        return;
+      }
       const config: TestConfigCreate = {
         name: configName,
-        endpoint: { kind: 'runtime', runtime_id: selectedTemplate ?? '', language: [...selectedLangs][0] ?? '' },
+        endpoint: onlyEndpoint,
         workload,
         methodology,
       };
@@ -366,7 +401,7 @@ export function AppBenchmarkPage() {
           <div className="mb-4">
             <div className="text-[10px] uppercase tracking-wider text-gray-600 mb-1.5">Methodology</div>
             <div className="text-xs font-mono text-gray-400">
-              {methodology.warmup_runs} warmup / {methodology.measured_runs} measured / {methodology.target_error_pct}% target error
+              {methodology.warmup_runs} warmup / {methodology.measured_runs} measured / {methodology.target_error_pct > 0 ? `${methodology.target_error_pct}% target error` : 'no error target'}
             </div>
           </div>
 

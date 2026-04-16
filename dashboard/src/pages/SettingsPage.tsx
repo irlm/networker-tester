@@ -299,7 +299,7 @@ export function SettingsPage() {
         </div>
       )}
 
-      {/* Deployed Endpoints */}
+      {/* Deployed Targets */}
       <div className="section-divider">
         <h3 className="text-xs text-gray-500 tracking-wider font-medium mb-3">deployed targets</h3>
         {deployments.length === 0 ? (

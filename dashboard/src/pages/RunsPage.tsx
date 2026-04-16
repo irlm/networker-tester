@@ -11,7 +11,7 @@ import { stableSet } from '../lib/stableUpdate';
 import { timeAgo } from '../lib/format';
 import { useProject } from '../hooks/useProject';
 
-const STATUS_OPTIONS: Array<RunStatus | 'all'> = ['all', 'queued', 'running', 'completed', 'failed', 'cancelled'];
+const STATUS_OPTIONS: Array<RunStatus | 'all'> = ['all', 'queued', 'provisioning', 'running', 'completed', 'failed', 'cancelled'];
 const ARTIFACT_OPTIONS = ['all', 'yes', 'no'] as const;
 
 const PAGE_SIZE = 20;
@@ -45,6 +45,7 @@ export function RunsPage() {
   const endpointKindFilter = searchParams.get('endpoint_kind') || 'all';
   const artifactFilter = searchParams.get('has_artifact') || 'all';
   const showQueued = searchParams.get('show_queued') === '1';
+  const comparisonGroupId = searchParams.get('comparison_group');
 
   const markRender = useRenderLog('RunsPage');
 
@@ -88,12 +89,14 @@ export function RunsPage() {
       status?: string;
       endpoint_kind?: string;
       has_artifact?: boolean;
+      comparison_group_id?: string;
       limit?: number;
     } = { limit: 200 };
     if (statusFilter !== 'all') params.status = statusFilter;
     if (endpointKindFilter !== 'all') params.endpoint_kind = endpointKindFilter;
     if (artifactFilter === 'yes') params.has_artifact = true;
     if (artifactFilter === 'no') params.has_artifact = false;
+    if (comparisonGroupId) params.comparison_group_id = comparisonGroupId;
     api
       .listTestRuns(projectId, params)
       .then((data) => {
@@ -106,15 +109,16 @@ export function RunsPage() {
         setError(String(e));
         setLoading(false);
       });
-  }, [statusFilter, endpointKindFilter, artifactFilter, projectId, markRender]);
+  }, [statusFilter, endpointKindFilter, artifactFilter, comparisonGroupId, projectId, markRender]);
 
   usePolling(loadRuns, 15000);
 
-  // Filter out queued unless opted in
+  // Filter out queued unless opted in. Scoped to a comparison group, show
+  // everything (the user just launched the group and expects to see its runs).
   const filteredRuns = useMemo(() => {
-    if (showQueued || statusFilter === 'queued') return runs;
+    if (showQueued || statusFilter === 'queued' || comparisonGroupId) return runs;
     return runs.filter(r => r.status !== 'queued');
-  }, [runs, showQueued, statusFilter]);
+  }, [runs, showQueued, statusFilter, comparisonGroupId]);
 
   // Kind counts for tabs
   const kindCounts = useMemo(() => {
@@ -145,10 +149,20 @@ export function RunsPage() {
   const pageEnd = Math.min(pageStart + PAGE_SIZE, runsWithDates.length);
   const pageRuns = runsWithDates.slice(pageStart, pageEnd);
 
+  const clearComparisonGroup = useCallback(() => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      next.delete('comparison_group');
+      return next;
+    }, { replace: true });
+    setPage(0);
+  }, [setSearchParams]);
+
   const activeFilterCount = [
     statusFilter !== 'all',
     endpointKindFilter !== 'all',
     artifactFilter !== 'all',
+    !!comparisonGroupId,
   ].filter(Boolean).length;
 
   if (loading && runs.length === 0) {
@@ -251,6 +265,9 @@ export function RunsPage() {
             )}
             {artifactFilter !== 'all' && (
               <FilterChip label="Benchmark" value={artifactFilter === 'yes' ? 'Yes' : 'No'} onClear={() => setFilter('has_artifact', 'all')} />
+            )}
+            {comparisonGroupId && (
+              <FilterChip label="Group" value={comparisonGroupId.slice(0, 8)} onClear={clearComparisonGroup} />
             )}
           </>
         }

@@ -1,9 +1,11 @@
 import type { TestbedState } from './testbed-constants';
+import type { CloudAccountSummary } from '../../api/types';
+import { CloudAccountCombobox } from './CloudAccountCombobox';
 import {
-  CLOUDS,
   REGIONS,
   TOPOLOGIES,
-  VM_SIZES,
+  INSTANCE_TYPES,
+  defaultInstanceType,
   LINUX_PROXIES,
   WINDOWS_PROXIES,
   PROXY_LABELS,
@@ -15,35 +17,111 @@ import {
 export interface TestbedRowProps {
   testbed: TestbedState;
   index: number;
+  /** Project ID — used for the "+ add cloud account" link target. */
+  projectId: string;
+  /** All cloud accounts available to this project. */
+  cloudAccounts: CloudAccountSummary[];
   onUpdate: (key: number, patch: Partial<TestbedState>) => void;
   onRemove: (key: number) => void;
+  /** Hide the "Runner VM" picker — used by the deploy wizard where there's no tester VM to pick. */
+  hideTesterOs?: boolean;
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────
+
+function providerToCloud(provider: string): string {
+  const p = provider.toLowerCase();
+  if (p === 'azure') return 'Azure';
+  if (p === 'aws') return 'AWS';
+  if (p === 'gcp') return 'GCP';
+  return 'Azure';
 }
 
 // ── Component ──────────────────────────────────────────────────────────
 
-export function TestbedRow({ testbed, index, onUpdate, onRemove }: TestbedRowProps) {
+export function TestbedRow({
+  testbed,
+  index,
+  projectId,
+  cloudAccounts,
+  onUpdate,
+  onRemove,
+  hideTesterOs,
+}: TestbedRowProps) {
+  // When the user picks a card we set both cloudAccountId AND cloud, so the
+  // region/proxy/vm-size lookups in updateTestbedState pick up the right
+  // provider on the next update.
+  const selectAccount = (acct: CloudAccountSummary) => {
+    const cloud = providerToCloud(acct.provider);
+    const validRegion = (REGIONS[cloud] ?? []).includes(testbed.region)
+      ? testbed.region
+      : (acct.region_default && (REGIONS[cloud] ?? []).includes(acct.region_default)
+          ? acct.region_default
+          : (REGIONS[cloud] ?? [])[0] ?? '');
+    // Re-validate the SKU against the new provider; SKU lists don't overlap.
+    const validSku = (INSTANCE_TYPES[cloud] ?? []).some(t => t.id === testbed.vmSize)
+      ? testbed.vmSize
+      : defaultInstanceType(cloud);
+    onUpdate(testbed.key, {
+      cloud,
+      cloudAccountId: acct.account_id,
+      region: validRegion,
+      vmSize: validSku,
+    });
+  };
+
   return (
     <div className="border border-gray-800 p-3">
-      {/* Row 1: Cloud, OS, Region, Topology, Size, Remove */}
-      <div className="flex items-center gap-2 flex-wrap">
+      {/* ── Row 1: Cloud account combobox ──────────────────────────────── */}
+      <div className="flex items-center gap-2 mb-2">
         <span className="text-[10px] font-mono text-gray-600 w-3">{index + 1}</span>
+        <span className="text-[11px] text-gray-500">Cloud account</span>
+        <button
+          onClick={() => onRemove(testbed.key)}
+          className="text-[11px] text-gray-600 hover:text-red-400 transition-colors ml-auto"
+        >
+          remove
+        </button>
+      </div>
 
-        {/* Cloud toggle buttons */}
-        <div className="flex">
-          {CLOUDS.map(c => (
-            <button
-              key={c}
-              onClick={() => onUpdate(testbed.key, { cloud: c })}
-              className={`px-2.5 py-1 text-xs font-mono border transition-colors ${
-                testbed.cloud === c
-                  ? 'bg-cyan-500/10 border-cyan-500/40 text-cyan-300 z-10'
-                  : 'border-gray-700 text-gray-500 hover:text-gray-300'
-              } ${c === 'Azure' ? '' : '-ml-px'}`}
-            >
-              {c}
-            </button>
+      <CloudAccountCombobox
+        projectId={projectId}
+        cloudAccounts={cloudAccounts}
+        selectedAccountId={testbed.cloudAccountId}
+        onSelect={selectAccount}
+      />
+
+      {/* ── Row 2: Region / Topology / Size / OS ───────────────────────── */}
+      <div className="mt-3 flex items-center gap-2 flex-wrap">
+        {/* Region dropdown */}
+        <select
+          value={testbed.region}
+          onChange={e => onUpdate(testbed.key, { region: e.target.value })}
+          className="bg-[var(--bg-base)] border border-gray-700 px-2 py-1 text-xs font-mono text-gray-300 focus:outline-none focus:border-cyan-500"
+        >
+          {(REGIONS[testbed.cloud] ?? []).map(r => <option key={r} value={r}>{r}</option>)}
+        </select>
+
+        {/* Topology dropdown */}
+        <select
+          value={testbed.topology}
+          onChange={e => onUpdate(testbed.key, { topology: e.target.value })}
+          className="bg-[var(--bg-base)] border border-gray-700 px-2 py-1 text-xs text-gray-500 focus:outline-none focus:border-cyan-500"
+        >
+          {TOPOLOGIES.map(t => <option key={t} value={t}>{t}</option>)}
+        </select>
+
+        {/* Instance type dropdown — cloud-native SKUs with vCPU/RAM hint */}
+        <select
+          value={testbed.vmSize}
+          onChange={e => onUpdate(testbed.key, { vmSize: e.target.value })}
+          title="Instance type"
+          className="bg-[var(--bg-base)] border border-gray-700 px-2 py-1 text-xs text-gray-300 font-mono focus:outline-none focus:border-cyan-500"
+        >
+          {(INSTANCE_TYPES[testbed.cloud] ?? []).map(t => (
+            <option key={t.id} value={t.id}>{t.id} · {t.hint}</option>
           ))}
-        </div>
+        </select>
 
         {/* OS toggle buttons */}
         <div className="flex">
@@ -63,43 +141,9 @@ export function TestbedRow({ testbed, index, onUpdate, onRemove }: TestbedRowPro
             </button>
           ))}
         </div>
-
-        {/* Region dropdown */}
-        <select
-          value={testbed.region}
-          onChange={e => onUpdate(testbed.key, { region: e.target.value })}
-          className="bg-[var(--bg-base)] border border-gray-700 px-2 py-1 text-xs font-mono text-gray-300 focus:outline-none focus:border-cyan-500"
-        >
-          {(REGIONS[testbed.cloud] ?? []).map(r => <option key={r} value={r}>{r}</option>)}
-        </select>
-
-        {/* Topology dropdown */}
-        <select
-          value={testbed.topology}
-          onChange={e => onUpdate(testbed.key, { topology: e.target.value })}
-          className="bg-[var(--bg-base)] border border-gray-700 px-2 py-1 text-xs text-gray-500 focus:outline-none focus:border-cyan-500"
-        >
-          {TOPOLOGIES.map(t => <option key={t} value={t}>{t}</option>)}
-        </select>
-
-        {/* VM Size dropdown */}
-        <select
-          value={testbed.vmSize}
-          onChange={e => onUpdate(testbed.key, { vmSize: e.target.value })}
-          className="bg-[var(--bg-base)] border border-gray-700 px-2 py-1 text-xs text-gray-500 focus:outline-none focus:border-cyan-500"
-        >
-          {VM_SIZES.map(s => <option key={s} value={s}>{s}</option>)}
-        </select>
-
-        <button
-          onClick={() => onRemove(testbed.key)}
-          className="text-[11px] text-gray-600 hover:text-red-400 transition-colors ml-auto"
-        >
-          remove
-        </button>
       </div>
 
-      {/* Existing VM checkbox */}
+      {/* ── Existing VM checkbox ───────────────────────────────────────── */}
       <div className="mt-2">
         <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
           <input
@@ -121,7 +165,7 @@ export function TestbedRow({ testbed, index, onUpdate, onRemove }: TestbedRowPro
         )}
       </div>
 
-      {/* Reverse Proxies toggle buttons */}
+      {/* ── Reverse Proxies toggle buttons ─────────────────────────────── */}
       <div className="mt-3">
         <label className="block text-xs text-gray-500 mb-1.5">Reverse Proxies</label>
         <div className="flex flex-wrap gap-2">
@@ -151,26 +195,28 @@ export function TestbedRow({ testbed, index, onUpdate, onRemove }: TestbedRowPro
         )}
       </div>
 
-      {/* Tester VM type toggle buttons */}
-      <div className="mt-3">
-        <label className="block text-xs text-gray-500 mb-1.5">Runner VM</label>
-        <div className="flex gap-2">
-          {TESTER_OS_OPTIONS.map(opt => (
-            <button
-              key={opt.id}
-              type="button"
-              onClick={() => onUpdate(testbed.key, { testerOs: opt.id })}
-              className={`px-2.5 py-1 text-xs border transition-colors ${
-                testbed.testerOs === opt.id
-                  ? 'bg-cyan-900/40 border-cyan-700 text-cyan-300'
-                  : 'border-gray-700 text-gray-400 hover:border-gray-600'
-              }`}
-            >
-              {opt.label}
-            </button>
-          ))}
+      {/* ── Tester VM type toggle buttons (benchmark wizards only) ─────── */}
+      {!hideTesterOs && (
+        <div className="mt-3">
+          <label className="block text-xs text-gray-500 mb-1.5">Runner VM</label>
+          <div className="flex gap-2">
+            {TESTER_OS_OPTIONS.map(opt => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => onUpdate(testbed.key, { testerOs: opt.id })}
+                className={`px-2.5 py-1 text-xs border transition-colors ${
+                  testbed.testerOs === opt.id
+                    ? 'bg-cyan-900/40 border-cyan-700 text-cyan-300'
+                    : 'border-gray-700 text-gray-400 hover:border-gray-600'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

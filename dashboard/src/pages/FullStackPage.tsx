@@ -11,7 +11,13 @@ import { usePageTitle } from '../hooks/usePageTitle';
 import { useProject } from '../hooks/useProject';
 import { useToast } from '../hooks/useToast';
 import type { TestbedState } from '../components/wizard/testbed-constants';
-import { DEFAULT_METHODOLOGY, PROXY_LABELS, TESTER_OS_OPTIONS } from '../components/wizard/testbed-constants';
+import {
+  DEFAULT_METHODOLOGY,
+  PROXY_LABELS,
+  TESTER_OS_OPTIONS,
+  resolveVmSize,
+  resolveTopology,
+} from '../components/wizard/testbed-constants';
 
 // ── Constants ──────────────────────────────────────────────────────────
 
@@ -65,7 +71,13 @@ export function FullStackPage() {
   const totalProxies = new Set(testbeds.flatMap(tb => tb.proxies)).size;
 
   const canNext = useMemo(() => {
-    if (step === 0) return testbeds.length > 0 && testbeds.every(c => c.proxies.length > 0);
+    if (step === 0) {
+      return (
+        testbeds.length > 0 &&
+        testbeds.every(c => c.proxies.length > 0) &&
+        testbeds.every(c => c.cloudAccountId !== '')
+      );
+    }
     if (step === 1) return selectedModes.size > 0;
     if (step === 2) return true;
     if (step === 3) return configName.trim().length > 0;
@@ -88,15 +100,38 @@ export function FullStackPage() {
 
   // ── Submit ──────────────────────────────────────────────────────────
 
+  // Fan out each testbed across its selected proxies. One testbed with
+  // [nginx, caddy] becomes 2 cells — the orchestrator deduplicates by
+  // (cloud_account_id, region, vm_size, os) so they share one deployment
+  // that installs both stacks side-by-side.
   const buildComparisonCells = (): ComparisonCell[] => {
-    return testbeds.map(tb => ({
-      label: `${tb.cloud}/${tb.region} ${tb.os}`,
-      endpoint: { kind: 'proxy' as const, proxy_endpoint_id: '' },
-      ...(selectedTesterId ? { runner_id: selectedTesterId } : {}),
-    }));
+    const cells: ComparisonCell[] = [];
+    for (const tb of testbeds) {
+      const vmSize = resolveVmSize(tb.cloud, tb.vmSize);
+      const topology = resolveTopology(tb.topology);
+      for (const proxy of tb.proxies) {
+        cells.push({
+          label: `${tb.cloud}/${tb.region} ${tb.os} · ${PROXY_LABELS[proxy] ?? proxy}`,
+          endpoint: {
+            kind: 'pending',
+            cloud_account_id: tb.cloudAccountId,
+            region: tb.region,
+            vm_size: vmSize,
+            os: tb.os,
+            proxy_stack: proxy,
+            topology,
+          },
+          ...(selectedTesterId ? { runner_id: selectedTesterId } : {}),
+        });
+      }
+    }
+    return cells;
   };
 
-  const isMatrixRun = testbeds.length > 1;
+  // Any combination that produces more than one cell is a matrix (multiple
+  // testbeds, OR a single testbed with multiple proxies).
+  const totalCells = testbeds.reduce((n, tb) => n + tb.proxies.length, 0);
+  const isMatrixRun = totalCells > 1;
 
   const handleSubmit = async (launchNow: boolean) => {
     setSubmitting(true);
@@ -125,14 +160,22 @@ export function FullStackPage() {
           cells,
         };
         const group = await api.createComparisonGroup(projectId, body);
-        addToast('success', `Comparison group launched -- ${cells.length} runs`);
+        await api.launchComparisonGroup(group.id);
+        addToast('success', `Launched ${cells.length} run${cells.length === 1 ? '' : 's'}`);
         navigate(`/projects/${projectId}/runs?comparison_group=${group.id}`);
         return;
       }
 
+      // Single-cell path: save/launch one TestConfig with a Pending endpoint.
+      const cells = buildComparisonCells();
+      const onlyEndpoint = cells[0]?.endpoint;
+      if (!onlyEndpoint) {
+        addToast('error', 'At least one testbed with one proxy is required');
+        return;
+      }
       const config: TestConfigCreate = {
         name: configName,
-        endpoint: { kind: 'proxy', proxy_endpoint_id: '' },
+        endpoint: onlyEndpoint,
         workload,
         methodology,
       };
@@ -275,7 +318,7 @@ export function FullStackPage() {
           <div className="mb-4">
             <div className="text-[10px] uppercase tracking-wider text-gray-600 mb-1.5">Methodology</div>
             <div className="text-xs font-mono text-gray-400">
-              {methodology.warmup_runs} warmup / {methodology.measured_runs} measured / {methodology.target_error_pct}% target error
+              {methodology.warmup_runs} warmup / {methodology.measured_runs} measured / {methodology.target_error_pct > 0 ? `${methodology.target_error_pct}% target error` : 'no error target'}
             </div>
           </div>
 
@@ -289,7 +332,7 @@ export function FullStackPage() {
 
           {isMatrixRun && (
             <div className="text-xs font-mono text-purple-400 mb-4">
-              Comparison group: {testbeds.length} testbed{testbeds.length !== 1 ? 's' : ''}
+              Comparison group: {totalCells} cell{totalCells !== 1 ? 's' : ''} across {testbeds.length} testbed{testbeds.length !== 1 ? 's' : ''}
             </div>
           )}
 
@@ -339,7 +382,7 @@ export function FullStackPage() {
                   <span className="inline-block w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                   Launching...
                 </span>
-              ) : isMatrixRun ? `Launch ${testbeds.length} Runs` : 'Launch Now'}
+              ) : isMatrixRun ? `Launch ${totalCells} Runs` : 'Launch Now'}
             </button>
           </div>
         </div>

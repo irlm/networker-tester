@@ -9,10 +9,55 @@ export const REGIONS: Record<string, string[]> = {
 };
 
 export const TOPOLOGIES = ['Loopback', 'Same-region'] as const;
-export const VM_SIZES = ['Small', 'Medium', 'Large'] as const;
+
+// ── Cloud-native instance types (replaces abstract Small/Medium/Large) ──
+//
+// Each entry shows the SKU + a short hint so users don't need to know
+// every cloud's size matrix by heart.
+
+export interface InstanceType {
+  id: string;
+  hint: string;
+}
+
+export const INSTANCE_TYPES: Record<string, InstanceType[]> = {
+  Azure: [
+    { id: 'Standard_B1s',    hint: '1 vCPU · 1 GiB · burstable' },
+    { id: 'Standard_B2s',    hint: '2 vCPU · 4 GiB · burstable' },
+    { id: 'Standard_B2ms',   hint: '2 vCPU · 8 GiB · burstable' },
+    { id: 'Standard_D2s_v3', hint: '2 vCPU · 8 GiB' },
+    { id: 'Standard_D4s_v5', hint: '4 vCPU · 16 GiB' },
+    { id: 'Standard_D8s_v5', hint: '8 vCPU · 32 GiB' },
+  ],
+  AWS: [
+    { id: 't3.micro',  hint: '2 vCPU · 1 GiB · burstable' },
+    { id: 't3.small',  hint: '2 vCPU · 2 GiB · burstable' },
+    { id: 't3.medium', hint: '2 vCPU · 4 GiB · burstable' },
+    { id: 't3.large',  hint: '2 vCPU · 8 GiB · burstable' },
+    { id: 'm5.large',  hint: '2 vCPU · 8 GiB' },
+    { id: 'm5.xlarge', hint: '4 vCPU · 16 GiB' },
+  ],
+  GCP: [
+    { id: 'e2-micro',     hint: '2 vCPU · 1 GiB · shared' },
+    { id: 'e2-small',     hint: '2 vCPU · 2 GiB · shared' },
+    { id: 'e2-medium',    hint: '2 vCPU · 4 GiB · shared' },
+    { id: 'e2-standard-2', hint: '2 vCPU · 8 GiB' },
+    { id: 'e2-standard-4', hint: '4 vCPU · 16 GiB' },
+    { id: 'e2-standard-8', hint: '8 vCPU · 32 GiB' },
+  ],
+};
+
+/** First instance type for a cloud — used as the default when an account is picked. */
+export function defaultInstanceType(cloud: string): string {
+  return INSTANCE_TYPES[cloud]?.[1]?.id ?? INSTANCE_TYPES[cloud]?.[0]?.id ?? 'Standard_B2s';
+}
 
 export const LINUX_PROXIES = ['nginx', 'caddy', 'traefik', 'haproxy', 'apache'] as const;
-export const WINDOWS_PROXIES = ['iis', 'nginx', 'caddy', 'traefik', 'haproxy', 'apache'] as const;
+// install.sh only supports IIS on Windows. nginx is rejected by validation;
+// Caddy/Apache/HAProxy/Traefik silently skip ("Linux-only — skipping").
+// Listing only what actually installs prevents the user from picking a combo
+// that fails at provision time. See install.sh:8408-8416.
+export const WINDOWS_PROXIES = ['iis'] as const;
 
 export const PROXY_LABELS: Record<string, string> = {
   nginx: 'nginx', iis: 'IIS', caddy: 'Caddy', traefik: 'Traefik', haproxy: 'HAProxy', apache: 'Apache',
@@ -29,8 +74,11 @@ export const TESTER_OS_OPTIONS = [
 export interface TestbedState {
   key: number;
   cloud: string;
+  /** Cloud account ID the testbed will be provisioned against. Empty = not picked yet. */
+  cloudAccountId: string;
   region: string;
   topology: string;
+  /** Abstract size ('Small'/'Medium'/'Large'); translated to cloud-native at submit. */
   vmSize: string;
   os: 'linux' | 'windows';
   proxies: string[];
@@ -44,9 +92,10 @@ export function makeTestbed(key: number, cloud?: string, os?: 'linux' | 'windows
   return {
     key,
     cloud: c,
+    cloudAccountId: '',
     region: REGIONS[c]?.[0] ?? '',
     topology: 'Loopback',
-    vmSize: 'Medium',
+    vmSize: defaultInstanceType(c),
     os: os ?? 'linux',
     proxies: proxies ?? [],
     testerOs: 'server',
@@ -55,12 +104,29 @@ export function makeTestbed(key: number, cloud?: string, os?: 'linux' | 'windows
   };
 }
 
+/**
+ * Pre-v0.28 the wizard kept an abstract size (Small/Medium/Large) and resolved
+ * to a native SKU at submit. We now store the native SKU directly, so this is
+ * a passthrough — kept for call-site stability.
+ */
+export function resolveVmSize(_cloud: string, sku: string): string {
+  return sku;
+}
+
+// Topology label ('Loopback'/'Same-region') → canonical wire value.
+export function resolveTopology(label: string): string {
+  return label.toLowerCase().replace(/\s+/g, '-');
+}
+
 export function updateTestbedState(testbeds: TestbedState[], key: number, patch: Partial<TestbedState>): TestbedState[] {
   return testbeds.map(c => {
     if (c.key !== key) return c;
     const updated = { ...c, ...patch };
     if (patch.cloud && patch.cloud !== c.cloud) {
       updated.region = REGIONS[patch.cloud]?.[0] ?? '';
+      // Reset vmSize to a valid native SKU for the new provider; keeping the
+      // previous (e.g. Standard_B2s) when switching to AWS would be invalid.
+      updated.vmSize = defaultInstanceType(patch.cloud);
     }
     if (patch.os && patch.os !== c.os) {
       const validProxies = patch.os === 'windows'

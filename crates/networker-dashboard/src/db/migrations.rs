@@ -1975,6 +1975,23 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
         tracing::info!("V037 migration complete");
     }
 
+    // V038: Pending endpoints + provisioning run status.
+    let row = client
+        .query_opt("SELECT version FROM _migrations WHERE version = 38", &[])
+        .await?;
+
+    if row.is_none() {
+        tracing::info!("Applying V038: pending endpoints + provisioning status...");
+        client.batch_execute(V038_PENDING_ENDPOINTS).await?;
+        client
+            .execute(
+                "INSERT INTO _migrations (version) VALUES (38) ON CONFLICT DO NOTHING",
+                &[],
+            )
+            .await?;
+        tracing::info!("V038 migration complete");
+    }
+
     Ok(())
 }
 
@@ -2397,4 +2414,35 @@ CREATE INDEX IF NOT EXISTS ix_comparison_group_project ON comparison_group(proje
 
 ALTER TABLE test_run ADD COLUMN IF NOT EXISTS comparison_group_id UUID REFERENCES comparison_group(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS ix_test_run_comparison ON test_run(comparison_group_id) WHERE comparison_group_id IS NOT NULL;
+"#;
+
+/// V038: Pending endpoints + provisioning run status.
+///
+/// - Broadens `test_config.endpoint_kind` CHECK to allow `pending` —
+///   an endpoint whose VM is provisioned on demand by the orchestrator.
+/// - Broadens `test_run.status` CHECK to allow `provisioning` —
+///   state a run sits in while its target deployment is coming up.
+/// - Adds `test_run.provisioning_deployment_id` FK so the orchestrator knows
+///   which `deployment` row's completion unblocks this run.
+const V038_PENDING_ENDPOINTS: &str = r#"
+-- Broaden endpoint_kind CHECK (Postgres doesn't support ALTER CONSTRAINT for CHECKs).
+ALTER TABLE test_config DROP CONSTRAINT IF EXISTS test_config_endpoint_kind_check;
+ALTER TABLE test_config
+    ADD CONSTRAINT test_config_endpoint_kind_check
+    CHECK (endpoint_kind IN ('network','proxy','runtime','pending'));
+
+-- Broaden test_run.status CHECK to allow 'provisioning'.
+ALTER TABLE test_run DROP CONSTRAINT IF EXISTS test_run_status_check;
+ALTER TABLE test_run
+    ADD CONSTRAINT test_run_status_check
+    CHECK (status IN ('queued','provisioning','running','completed','failed','cancelled'));
+
+-- Link a provisioning run to the deployment that will satisfy it.
+ALTER TABLE test_run
+    ADD COLUMN IF NOT EXISTS provisioning_deployment_id UUID
+    REFERENCES deployment(deployment_id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS ix_test_run_provisioning
+    ON test_run(provisioning_deployment_id)
+    WHERE provisioning_deployment_id IS NOT NULL;
 "#;

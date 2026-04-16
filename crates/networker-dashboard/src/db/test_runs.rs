@@ -65,6 +65,7 @@ pub async fn list(
     project_id: &str,
     status_filter: Option<RunStatus>,
     has_artifact: Option<bool>,
+    comparison_group_id: Option<&Uuid>,
     limit: i64,
     offset: i64,
 ) -> anyhow::Result<Vec<TestRun>> {
@@ -91,6 +92,10 @@ pub async fn list(
             sql.push_str(" AND artifact_id IS NULL");
         }
     }
+    if comparison_group_id.is_some() {
+        sql.push_str(&format!(" AND comparison_group_id = ${idx}"));
+        idx += 1;
+    }
     sql.push_str(&format!(
         " ORDER BY created_at DESC LIMIT ${} OFFSET ${}",
         idx,
@@ -101,6 +106,9 @@ pub async fn list(
     params.push(&project_id);
     if let Some(s) = &status_str {
         params.push(s);
+    }
+    if let Some(g) = comparison_group_id {
+        params.push(g);
     }
     params.push(&limit);
     params.push(&offset);
@@ -181,6 +189,53 @@ pub async fn set_error(client: &Client, id: &Uuid, message: &str) -> anyhow::Res
         )
         .await?;
     Ok(())
+}
+
+/// Transition a freshly-created run into `provisioning` and link it to the
+/// deployment whose completion unblocks it. Called by the provisioning
+/// orchestrator at dispatch time for `EndpointRef::Pending` configs.
+pub async fn set_provisioning(
+    client: &Client,
+    run_id: &Uuid,
+    deployment_id: &Uuid,
+) -> anyhow::Result<()> {
+    client
+        .execute(
+            "UPDATE test_run
+             SET status = 'provisioning',
+                 provisioning_deployment_id = $2
+             WHERE id = $1",
+            &[run_id, deployment_id],
+        )
+        .await?;
+    Ok(())
+}
+
+/// Every run that's currently waiting on a deployment to come up. Returns
+/// `(run, deployment_id)` pairs so the orchestrator can check deployment
+/// status in one pass.
+pub async fn list_provisioning(client: &Client) -> anyhow::Result<Vec<(TestRun, Uuid)>> {
+    let rows = client
+        .query(
+            "SELECT id, test_config_id, project_id, status,
+                    started_at, finished_at,
+                    success_count, failure_count, error_message,
+                    artifact_id, tester_id, worker_id,
+                    last_heartbeat, created_at, comparison_group_id,
+                    provisioning_deployment_id
+             FROM test_run
+             WHERE status = 'provisioning'
+               AND provisioning_deployment_id IS NOT NULL",
+            &[],
+        )
+        .await?;
+    let mut out = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let run = row_to_run(row)?;
+        let dep_id: Uuid = row.get("provisioning_deployment_id");
+        out.push((run, dep_id));
+    }
+    Ok(out)
 }
 
 /// Attach an artifact id to a completed run (methodology mode only).

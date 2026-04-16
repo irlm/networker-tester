@@ -1,11 +1,25 @@
 // ── REST v2 types (spec §2) ──────────────────────────────────────────────
 
-export type EndpointKind = 'network' | 'proxy' | 'runtime';
+export type EndpointKind = 'network' | 'proxy' | 'runtime' | 'pending';
 
 export type EndpointRef =
   | { kind: 'network'; host: string; port?: number }
   | { kind: 'proxy'; proxy_endpoint_id: string }
-  | { kind: 'runtime'; runtime_id: string; language: string };
+  | { kind: 'runtime'; runtime_id: string; language: string }
+  | {
+      /** Target is provisioned on demand; orchestrator rewrites to `network` once VMs are up. */
+      kind: 'pending';
+      cloud_account_id: string;
+      region: string;
+      /** Cloud-native VM size (e.g. 'Standard_B2s', 't3.small', 'e2-small'). */
+      vm_size: string;
+      /** 'linux' | 'windows'. */
+      os: string;
+      /** One of: nginx | iis | caddy | apache | haproxy | traefik. */
+      proxy_stack: string;
+      /** 'loopback' | 'same-region'. */
+      topology: string;
+    };
 
 export type CaptureMode = 'headers-only' | 'full' | 'metrics-only';
 
@@ -82,7 +96,7 @@ export interface TestConfigCreate {
   max_duration_secs?: number;
 }
 
-export type RunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type RunStatus = 'queued' | 'provisioning' | 'running' | 'completed' | 'failed' | 'cancelled';
 
 export interface TestRun {
   id: string;

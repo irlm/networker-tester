@@ -21,6 +21,7 @@ pub struct ListRunsQuery {
     pub status: Option<String>,
     pub endpoint_kind: Option<String>,
     pub has_artifact: Option<bool>,
+    pub comparison_group_id: Option<Uuid>,
     pub limit: Option<i64>,
     pub before: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -54,6 +55,7 @@ async fn list_handler(
         &ctx.project_id,
         status_filter,
         q.has_artifact,
+        q.comparison_group_id.as_ref(),
         limit,
         0,
     )
