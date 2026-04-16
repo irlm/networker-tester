@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.0] — 2026-04-15
+
+### Changed
+- **Unified TestConfig model.** `Job` and `BenchmarkConfig` collapsed into a single `TestConfig { endpoint, workload, methodology? }` primitive. The real taxonomy is endpoint type (Network / Proxy / Runtime), not "test vs benchmark" — methodology is an optional flag on any test config.
+- **REST API v2.** All endpoints moved to `/api/v2/test-configs`, `/api/v2/test-runs`, `/api/v2/schedules`. Old v1 endpoints removed.
+- **WebSocket protocol v2.** `ControlMessage::AssignRun` replaces `JobAssign`; `AgentMessage::RunFinished` carries optional `BenchmarkArtifact`.
+- **CLI.** `--config` accepts YAML/JSON `TestConfig` files. `--benchmark` flag toggles methodology block. Old v1 config format rejected with clear error.
+- **Dashboard.** Tests + Benchmarks pages merged into unified Runs page. New Run wizard with endpoint-type segmented control (Network / Proxy with deployment picker / Runtime with template gallery). Sidebar nav simplified.
+- **Schema.** New tables: `test_config`, `test_run`, `test_schedule`, `benchmark_artifact`. Old tables dropped: `job`, `benchmark_config`, `benchmark_config_preset`, `schedule` (polymorphic).
+- **Local dev.** `scripts/seed-dev.sh` boots Postgres, runs migrations, seeds 4 test configs + 10 runs + 1 artifact + 3 testers + 2 schedules.
+
+### Breaking
+- Old v1 REST endpoints, WebSocket protocol, CLI config format, and database schema are all removed. This is a dev-mode-only release with no production users to migrate.
+
+---
+
 ## [0.27.26] — 2026-04-15
 
 ### Fixed
