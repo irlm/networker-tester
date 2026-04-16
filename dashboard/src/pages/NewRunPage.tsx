@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useNavigate, Link } from 'react-router-dom';
 import { api } from '../api/client';
 import { testersApi, type TesterRow } from '../api/testers';
 import type { EndpointRef, EndpointKind, Workload, Methodology, TestConfigCreate, ModeGroup, Deployment, ComparisonCell, ComparisonGroupCreate, CloudAccountSummary } from '../api/types';
@@ -12,8 +12,7 @@ import { useToast } from '../hooks/useToast';
 import { THROUGHPUT_IDS } from '../lib/chart';
 
 type Step = 1 | 2 | 3 | 4 | 5;
-const STEP_LABELS: Record<Step, string> = { 1: 'Runner', 2: 'Target', 3: 'Workload', 4: 'Methodology', 5: 'Launch' };
-const ENDPOINT_KINDS: EndpointKind[] = ['network', 'proxy', 'runtime'];
+const STEP_LABELS: Record<Step, string> = { 1: 'Runner', 2: 'Target', 3: 'Workload', 4: 'Methodology', 5: 'Review' };
 type RunnerChoice = 'auto' | 'specific' | 'create';
 
 const DEFAULT_METHODOLOGY: Methodology = {
@@ -24,22 +23,6 @@ const DEFAULT_METHODOLOGY: Methodology = {
   outlier_policy: { policy: 'iqr', k: 1.5 },
   quality_gates: { max_cv_pct: 5.0, min_samples: 10, max_noise_level: 0.1 },
   publication_gates: { max_failure_pct: 5.0, require_all_phases: true },
-};
-
-// ── Quick Probe presets ───────────────────────────────────────────────
-
-type ProbePreset = 'quick' | 'standard' | 'full';
-
-const PROBE_PRESETS: Record<ProbePreset, string[]> = {
-  quick: ['dns', 'tcp', 'tls', 'http2'],
-  standard: ['dns', 'tcp', 'tls', 'tlsresume', 'native', 'http1', 'http2', 'http3', 'udp'],
-  full: ['dns', 'tcp', 'tls', 'tlsresume', 'native', 'http1', 'http2', 'http3', 'udp', 'curl', 'pageload', 'pageload2', 'pageload3', 'browser1', 'browser2', 'browser3'],
-};
-
-const PROBE_PRESET_LABELS: Record<ProbePreset, { time: string; desc: string }> = {
-  quick: { time: '~3s', desc: 'dns, tcp, tls, http2' },
-  standard: { time: '~15s', desc: '+ http1, http3, tls-resume, native-tls, udp' },
-  full: { time: '~60s', desc: '+ pageload, browser' },
 };
 
 // ── Runtime template definitions (ported from AppBenchmarkWizardPage) ────
@@ -247,24 +230,6 @@ function testerStatusLabel(row: TesterRow): string {
   return row.power_state;
 }
 
-/** Extract a clean hostname from user input (URL or bare host). */
-function extractHost(input: string): string {
-  const trimmed = input.trim();
-  if (!trimmed) return '';
-  try {
-    // If it looks like a URL, parse it
-    if (trimmed.includes('://')) {
-      return new URL(trimmed).hostname;
-    }
-    // Try adding https:// to parse as URL
-    const candidate = new URL(`https://${trimmed}`);
-    return candidate.hostname;
-  } catch {
-    // Fall back to raw input
-    return trimmed;
-  }
-}
-
 // ── Component ───────────────────────────────────────────────────────────
 
 export function NewRunPage() {
@@ -272,59 +237,6 @@ export function NewRunPage() {
   const navigate = useNavigate();
   const addToast = useToast();
   usePageTitle('New Run');
-
-  // ── Quick Probe state ────────────────────────────────────────────────
-  const probeInputRef = useRef<HTMLInputElement>(null);
-  const [probeUrl, setProbeUrl] = useState('');
-  const [probePreset, setProbePreset] = useState<ProbePreset>('quick');
-  const [probeSubmitting, setProbeSubmitting] = useState(false);
-
-  // Autofocus the probe URL input on mount
-  useEffect(() => {
-    probeInputRef.current?.focus();
-  }, []);
-
-  const handleProbe = async () => {
-    const host = extractHost(probeUrl);
-    if (!host) {
-      addToast('error', 'Enter a URL or hostname to probe');
-      return;
-    }
-
-    setProbeSubmitting(true);
-    try {
-      const presetLabel = probePreset.charAt(0).toUpperCase() + probePreset.slice(1);
-      const configName = `Probe: ${host} (${presetLabel})`;
-
-      const endpoint: EndpointRef = { kind: 'network', host };
-      const workload: Workload = {
-        modes: PROBE_PRESETS[probePreset],
-        runs: 1,
-        concurrency: 1,
-        timeout_ms: 5000,
-        payload_sizes: [],
-        capture_mode: 'headers-only',
-      };
-
-      const config: TestConfigCreate = {
-        name: configName,
-        endpoint,
-        workload,
-      };
-
-      const created = await api.createTestConfig(projectId, config);
-      const run = await api.launchTestConfig(created.id);
-      addToast('success', `Probe ${run.id.slice(0, 8)} launched`);
-      navigate(`/projects/${projectId}/runs/${run.id}`);
-    } catch (e) {
-      addToast('error', `Probe failed: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      setProbeSubmitting(false);
-    }
-  };
-
-  // ── Configured Run state ─────────────────────────────────────────────
-  const [configuredExpanded, setConfiguredExpanded] = useState(false);
 
   // Step tracking
   const [step, setStep] = useState<Step>(1);
@@ -736,127 +648,45 @@ export function NewRunPage() {
   };
 
   return (
-    <div className="p-4 md:p-6 max-w-3xl">
+    <div className="p-4 md:p-6 max-w-[800px] mx-auto">
       <Breadcrumb items={[{ label: 'Runs', to: `/projects/${projectId}/runs` }, { label: 'New Run' }]} />
 
-      <h2 className="text-xl font-bold text-gray-100 mb-6">New Run</h2>
-
-      {/* ── Quick Probe section ─────────────────────────────────────────── */}
-      <section className="mb-8">
-        <div className="mb-3">
-          <h3 className="text-sm font-semibold text-cyan-400 tracking-wider uppercase">Quick Probe</h3>
-          <p className="text-xs text-gray-500 mt-1">Test any URL in ~3 seconds -- no target deployment needed.</p>
-        </div>
-
-        <div className="flex flex-col sm:flex-row items-start sm:items-end gap-3">
-          {/* URL input */}
-          <div className="flex-1 w-full sm:w-auto">
-            <label htmlFor="probe-url" className="text-xs text-gray-500 mb-1 block">URL</label>
-            <input
-              ref={probeInputRef}
-              id="probe-url"
-              type="text"
-              value={probeUrl}
-              onChange={e => setProbeUrl(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter' && probeUrl.trim()) handleProbe(); }}
-              placeholder="e.g. www.cloudflare.com"
-              className="bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm font-mono text-gray-200 w-full focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
-            />
-          </div>
-
-          {/* Preset selector */}
-          <div>
-            <label className="text-xs text-gray-500 mb-1 block">Preset</label>
-            <div className="flex bg-gray-900 rounded p-0.5">
-              {(['quick', 'standard', 'full'] as ProbePreset[]).map(p => (
-                <button
-                  key={p}
-                  onClick={() => setProbePreset(p)}
-                  className={`px-3 py-1.5 rounded text-xs font-mono transition-colors ${
-                    probePreset === p
-                      ? 'bg-cyan-600 text-white'
-                      : 'text-gray-400 hover:text-gray-200'
-                  }`}
-                >
-                  {p.charAt(0).toUpperCase() + p.slice(1)}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Run button */}
-          <button
-            onClick={handleProbe}
-            disabled={probeSubmitting || !probeUrl.trim()}
-            className="bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed text-white px-5 py-2 rounded text-sm font-medium transition-colors whitespace-nowrap"
-          >
-            {probeSubmitting ? 'Launching...' : 'Run Probe'}
-          </button>
-        </div>
-
-        {/* Preset descriptions */}
-        <div className="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-[11px] font-mono text-gray-600">
-          {(['quick', 'standard', 'full'] as ProbePreset[]).map(p => (
-            <span key={p} className={probePreset === p ? 'text-gray-400' : ''}>
-              <span className="text-gray-500">{p}</span>{' '}
-              <span className="text-gray-600">({PROBE_PRESET_LABELS[p].time})</span>{' '}
-              {PROBE_PRESET_LABELS[p].desc}
-            </span>
-          ))}
-        </div>
-      </section>
-
-      {/* ── Divider ────────────────────────────────────────────────────── */}
-      <div className="flex items-center gap-4 mb-8">
-        <div className="flex-1 border-t border-gray-800" />
-        <span className="text-xs text-gray-600 font-mono">or</span>
-        <div className="flex-1 border-t border-gray-800" />
-      </div>
-
-      {/* ── Configured Run section ──────────────────────────────────────── */}
-      <section>
-        <button
-          type="button"
-          onClick={() => setConfiguredExpanded(!configuredExpanded)}
-          className="w-full text-left mb-4 group"
+      <h2 className="text-xl font-bold text-gray-100 mb-2">New Run</h2>
+      <p className="text-xs text-gray-500 mb-6">
+        Just testing a URL?{' '}
+        <Link
+          to={`/projects/${projectId}/runs/new/probe`}
+          className="text-cyan-400 hover:text-cyan-300 transition-colors"
         >
-          <div className="flex items-center gap-2">
-            <span className={`text-xs text-gray-600 transition-transform ${configuredExpanded ? 'rotate-90' : ''}`}>
-              &#9656;
-            </span>
-            <h3 className="text-sm font-semibold text-gray-300 tracking-wider uppercase group-hover:text-gray-100 transition-colors">
-              Configured Run
-            </h3>
-          </div>
-          <p className="text-xs text-gray-600 mt-1 ml-5">
-            Full workload test against your deployed targets with optional benchmark methodology.
-          </p>
-        </button>
+          Quick Probe
+        </Link>
+      </p>
 
-        {configuredExpanded && (
-          <div className="ml-0">
-            {/* Step indicator */}
-            <div className="flex items-center gap-1 mb-8 text-xs">
-              {([1, 2, 3, 4, 5] as Step[]).map(s => (
-                <button
-                  key={s}
-                  onClick={() => s < step && setStep(s)}
-                  disabled={s > step}
-                  className={`px-3 py-1.5 rounded transition-colors ${
-                    s === step
-                      ? 'bg-cyan-600 text-white'
-                      : s < step
-                        ? 'bg-gray-800 text-cyan-400 hover:bg-gray-700 cursor-pointer'
-                        : 'bg-gray-900 text-gray-600 cursor-not-allowed'
-                  }`}
-                >
-                  {STEP_LABELS[s]}
-                </button>
-              ))}
-            </div>
+      {/* ── Step indicator ──────────────────────────────────────────────── */}
+      <nav aria-label="Wizard steps" className="mb-8">
+        <ol className="flex items-center gap-1 text-xs">
+          {([1, 2, 3, 4, 5] as Step[]).map(s => (
+            <li key={s}>
+              <button
+                onClick={() => s < step && setStep(s)}
+                disabled={s > step}
+                className={`px-3 py-1.5 rounded transition-colors ${
+                  s === step
+                    ? 'bg-cyan-600 text-white'
+                    : s < step
+                      ? 'bg-gray-800 text-cyan-400 hover:bg-gray-700 cursor-pointer'
+                      : 'bg-gray-900 text-gray-600 cursor-not-allowed'
+                }`}
+              >
+                {s}. {STEP_LABELS[s]}
+              </button>
+            </li>
+          ))}
+        </ol>
+      </nav>
 
-            {/* Step 1: Runner */}
-            {step === 1 && (
+      {/* Step 1: Runner */}
+      {step === 1 && (
               <div className="space-y-4">
                 <div>
                   <label className="text-xs text-gray-500 mb-2 block">Select a runner</label>
@@ -870,50 +700,53 @@ export function NewRunPage() {
                     </p>
                   )}
 
-                  {/* Runner choice radios */}
-                  <div className="space-y-2" role="radiogroup" aria-label="Runner selection">
-                    {/* Auto-pick */}
-                    <label
-                      className={`block border p-3 cursor-pointer transition-colors ${
+                  {/* Runner choice cards */}
+                  <div className="grid grid-cols-3 gap-3" role="radiogroup" aria-label="Runner selection">
+                    <button
+                      type="button"
+                      onClick={() => { setRunnerChoice('auto'); setSelectedTesterId(null); }}
+                      className={`border rounded p-4 text-left transition-colors ${
                         runnerChoice === 'auto'
-                          ? 'border-cyan-500/50 bg-cyan-500/5'
+                          ? 'border-cyan-500 bg-cyan-500/5'
                           : 'border-gray-800 hover:border-gray-600'
                       }`}
                     >
-                      <div className="flex items-center gap-3">
-                        <input
-                          type="radio"
-                          name="runner-choice"
-                          checked={runnerChoice === 'auto'}
-                          onChange={() => { setRunnerChoice('auto'); setSelectedTesterId(null); }}
-                          className="accent-cyan-400"
-                        />
-                        <div>
-                          <span className="text-sm text-gray-200">Auto-pick</span>
-                          <p className="text-[10px] text-gray-600">First available online runner</p>
-                        </div>
-                      </div>
-                    </label>
+                      <div className="text-sm font-medium text-gray-100 mb-1">Auto-pick</div>
+                      <div className="text-xs text-gray-500">First available online runner</div>
+                      {runnerStats.idle > 0 && (
+                        <div className="text-xs text-cyan-400 mt-2">{runnerStats.idle} runner{runnerStats.idle !== 1 ? 's' : ''} idle</div>
+                      )}
+                    </button>
 
-                    {/* Pick specific */}
-                    <label
-                      className={`block border p-3 cursor-pointer transition-colors ${
+                    <button
+                      type="button"
+                      onClick={() => setRunnerChoice('specific')}
+                      className={`border rounded p-4 text-left transition-colors ${
                         runnerChoice === 'specific'
-                          ? 'border-cyan-500/50 bg-cyan-500/5'
+                          ? 'border-cyan-500 bg-cyan-500/5'
                           : 'border-gray-800 hover:border-gray-600'
                       }`}
                     >
-                      <div className="flex items-center gap-3">
-                        <input
-                          type="radio"
-                          name="runner-choice"
-                          checked={runnerChoice === 'specific'}
-                          onChange={() => setRunnerChoice('specific')}
-                          className="accent-cyan-400"
-                        />
-                        <span className="text-sm text-gray-200">Pick specific runner</span>
-                      </div>
-                    </label>
+                      <div className="text-sm font-medium text-gray-100 mb-1">Pick specific</div>
+                      <div className="text-xs text-gray-500">Choose a runner by region</div>
+                      {runnerStats.online > 0 && (
+                        <div className="text-xs text-cyan-400 mt-2">{runnerStats.online} online</div>
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setRunnerChoice('create')}
+                      className={`border rounded p-4 text-left transition-colors ${
+                        runnerChoice === 'create'
+                          ? 'border-cyan-500 bg-cyan-500/5'
+                          : 'border-gray-800 hover:border-gray-600'
+                      }`}
+                    >
+                      <div className="text-sm font-medium text-gray-100 mb-1">Create new</div>
+                      <div className="text-xs text-gray-500">Provision a cloud VM (~3 min)</div>
+                    </button>
+                  </div>
 
                     {/* Specific runner list */}
                     {runnerChoice === 'specific' && (
@@ -972,29 +805,6 @@ export function NewRunPage() {
                         )}
                       </div>
                     )}
-
-                    {/* Create new runner */}
-                    <label
-                      className={`block border p-3 cursor-pointer transition-colors ${
-                        runnerChoice === 'create'
-                          ? 'border-cyan-500/50 bg-cyan-500/5'
-                          : 'border-gray-800 hover:border-gray-600'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <input
-                          type="radio"
-                          name="runner-choice"
-                          checked={runnerChoice === 'create'}
-                          onChange={() => setRunnerChoice('create')}
-                          className="accent-cyan-400"
-                        />
-                        <div>
-                          <span className="text-sm text-gray-200">Create new runner</span>
-                          <p className="text-[10px] text-gray-600">Provision a cloud VM (~3 min). Run starts automatically when ready.</p>
-                        </div>
-                      </div>
-                    </label>
 
                     {/* Create new runner inline form */}
                     {runnerChoice === 'create' && (
@@ -1108,7 +918,6 @@ export function NewRunPage() {
                         </div>
                       </div>
                     )}
-                  </div>
                 </div>
 
                 <div className="pt-4">
@@ -1128,20 +937,45 @@ export function NewRunPage() {
               <div className="space-y-4">
                 <div>
                   <label className="text-xs text-gray-500 mb-2 block">Target Type</label>
-                  <div className="flex gap-1 bg-gray-900 rounded p-0.5 w-fit">
-                    {ENDPOINT_KINDS.map(k => (
-                      <button
-                        key={k}
-                        onClick={() => setEndpointKind(k)}
-                        className={`px-4 py-1.5 rounded text-sm transition-colors ${
-                          endpointKind === k
-                            ? 'bg-cyan-600 text-white'
-                            : 'text-gray-400 hover:text-gray-200'
-                        }`}
-                      >
-                        {k.charAt(0).toUpperCase() + k.slice(1)}
-                      </button>
-                    ))}
+                  <div className="grid grid-cols-3 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setEndpointKind('network')}
+                      className={`border rounded p-4 text-left transition-colors ${
+                        endpointKind === 'network'
+                          ? 'border-cyan-500 bg-cyan-500/5'
+                          : 'border-gray-800 hover:border-gray-600'
+                      }`}
+                    >
+                      <div className="text-sm font-medium text-gray-100 mb-1">Network (URL)</div>
+                      <div className="text-xs text-gray-500">Test any public URL or IP</div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setEndpointKind('proxy')}
+                      className={`border rounded p-4 text-left transition-colors ${
+                        endpointKind === 'proxy'
+                          ? 'border-cyan-500 bg-cyan-500/5'
+                          : 'border-gray-800 hover:border-gray-600'
+                      }`}
+                    >
+                      <div className="text-sm font-medium text-gray-100 mb-1">Proxy (target)</div>
+                      <div className="text-xs text-gray-500">Use a deployed endpoint</div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setEndpointKind('runtime')}
+                      className={`border rounded p-4 text-left transition-colors ${
+                        endpointKind === 'runtime'
+                          ? 'border-cyan-500 bg-cyan-500/5'
+                          : 'border-gray-800 hover:border-gray-600'
+                      }`}
+                    >
+                      <div className="text-sm font-medium text-gray-100 mb-1">Runtime (stack)</div>
+                      <div className="text-xs text-gray-500">Compare language stacks</div>
+                    </button>
                   </div>
                 </div>
 
@@ -1633,45 +1467,48 @@ export function NewRunPage() {
                   </div>
                 )}
 
-                {/* Advanced options */}
-                <div className="border border-gray-800 rounded p-4 space-y-3">
-                  <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Advanced</h4>
+                {/* Advanced options (collapsible) */}
+                <details className="border border-gray-800 rounded">
+                  <summary className="px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider cursor-pointer hover:text-gray-300 transition-colors select-none">
+                    Advanced
+                  </summary>
+                  <div className="px-4 pb-4 space-y-3">
+                    <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={insecure}
+                        onChange={e => setInsecure(e.target.checked)}
+                        className="accent-cyan-500"
+                      />
+                      Allow insecure HTTPS (skip TLS verification)
+                    </label>
 
-                  <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={insecure}
-                      onChange={e => setInsecure(e.target.checked)}
-                      className="accent-cyan-500"
-                    />
-                    Allow insecure HTTPS (skip TLS verification)
-                  </label>
+                    <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={connectionReuse}
+                        onChange={e => setConnectionReuse(e.target.checked)}
+                        className="accent-cyan-500"
+                      />
+                      Reuse connections (keep-alive)
+                    </label>
 
-                  <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={connectionReuse}
-                      onChange={e => setConnectionReuse(e.target.checked)}
-                      className="accent-cyan-500"
-                    />
-                    Reuse connections (keep-alive)
-                  </label>
-
-                  <div>
-                    <label htmlFor="capture-mode" className="block text-xs text-gray-400 mb-1">Capture mode</label>
-                    <select
-                      id="capture-mode"
-                      value={captureMode}
-                      onChange={e => setCaptureMode(e.target.value as typeof captureMode)}
-                      className="bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
-                    >
-                      <option value="none">None</option>
-                      <option value="tester">Tester-side</option>
-                      <option value="endpoint">Endpoint-side</option>
-                      <option value="both">Both</option>
-                    </select>
+                    <div>
+                      <label htmlFor="capture-mode" className="block text-xs text-gray-400 mb-1">Capture mode</label>
+                      <select
+                        id="capture-mode"
+                        value={captureMode}
+                        onChange={e => setCaptureMode(e.target.value as typeof captureMode)}
+                        className="bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                      >
+                        <option value="none">None</option>
+                        <option value="tester">Tester-side</option>
+                        <option value="endpoint">Endpoint-side</option>
+                        <option value="both">Both</option>
+                      </select>
+                    </div>
                   </div>
-                </div>
+                </details>
 
                 <div className="flex gap-2 pt-4">
                   <button onClick={() => setStep(2)} className="text-gray-400 hover:text-gray-200 px-4 py-2 text-sm transition-colors">
@@ -1905,9 +1742,6 @@ export function NewRunPage() {
                 </div>
               </div>
             )}
-          </div>
-        )}
-      </section>
     </div>
   );
 }
