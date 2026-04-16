@@ -117,7 +117,7 @@ Each endpoint has the same structure as `tester`, plus:
 | `zone` | string | no | `"us-central1-a"` | GCP zone |
 | `instance_name` | string | no | `"networker-endpoint"` | Instance name |
 | `machine_type` | string | no | `"e2-small"` | GCE machine type |
-| `project` | string | no | auto-detected | GCP project ID |
+| `project_id` | string | no | auto-detected | GCP project ID (alias: `project`). Auto-detect order: this field → service-account email → `gcloud config get-value project`. |
 | `os` | string | no | `"linux"` | `"linux"` or `"windows"` |
 | `auto_shutdown` | boolean | no | `true` | Install cron to shutdown at 04:00 UTC |
 

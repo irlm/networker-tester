@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.27.26] — 2026-04-15
+
+### Fixed
+- **Parallel deploy race (ETXTBSY).** Multiple concurrent endpoint deploys collided on the shared `networker-tester` binary path: first deploy succeeds, rest get "Text file busy" and abort. Fix: extract to unique `mktemp -d`, atomic `mv -f` to install dir, ETXTBSY retry + version-check fallback so concurrent deploys either install or reuse the sibling's binary.
+- **GCP endpoint deploy "project not set".** `install.sh` step 2 required `gcloud config set project` pre-run on the dashboard host and never read the deploy config's `gcp.project_id`. Fix: `_gcp_autodetect_project()` resolves project_id with three-level fallback — explicit config `project_id`, parse from service account email, then `gcloud config get-value project`. All `gcloud compute` calls now use `--project` flag instead of mutating host config.
+
+---
+
 ## [0.27.25] — 2026-04-15
 
 ### Fixed
