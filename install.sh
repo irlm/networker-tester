@@ -324,7 +324,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.27.25"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.27.26"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -1803,6 +1803,56 @@ _gcp_resolve_project() {
     fi
 }
 
+# Extract a GCP project ID from a service account email.
+#   alethedash-vms@kepler-408121.iam.gserviceaccount.com  →  kepler-408121
+# Returns empty string if the email is not a service account email.
+# Uses parameter expansion only (no awk/sed) for Bash 3.2 portability.
+_gcp_project_from_sa_email() {
+    local email="$1"
+    case "$email" in
+        *@*.iam.gserviceaccount.com)
+            local after_at="${email#*@}"
+            printf '%s\n' "${after_at%.iam.gserviceaccount.com}"
+            ;;
+        *)
+            printf '\n'
+            ;;
+    esac
+}
+
+# Try to populate GCP_PROJECT when empty by inspecting:
+#   1. Active gcloud account if it is a service-account email.
+#   2. gcloud config get-value project (host-wide setting).
+# Safe to call even if gcloud is not installed (silently no-ops).
+_gcp_autodetect_project() {
+    [[ -n "$GCP_PROJECT" ]] && return 0
+    command -v gcloud &>/dev/null || return 0
+
+    # 1. Service-account email embeds project ID
+    local active_account
+    active_account="$(gcloud config get-value account 2>/dev/null </dev/null || echo "")"
+    if [[ -z "$active_account" || "$active_account" == "(unset)" ]]; then
+        active_account="$(gcloud auth list --filter='status:ACTIVE' \
+            --format='value(account)' 2>/dev/null </dev/null | head -1)"
+    fi
+    if [[ -n "$active_account" ]]; then
+        local sa_proj
+        sa_proj="$(_gcp_project_from_sa_email "$active_account")"
+        if [[ -n "$sa_proj" ]]; then
+            GCP_PROJECT="$sa_proj"
+            print_dim "Resolved GCP project from service account email: $GCP_PROJECT"
+            return 0
+        fi
+    fi
+
+    # 2. Host-wide gcloud config
+    local host_proj
+    host_proj="$(gcloud config get-value project 2>/dev/null </dev/null || echo "")"
+    if [[ -n "$host_proj" && "$host_proj" != "(unset)" ]]; then
+        GCP_PROJECT="$host_proj"
+    fi
+}
+
 # ── GCP interactive configuration ────────────────────────────────────────────
 ask_gcp_options() {
     local component="$1"  # "tester" or "endpoint"
@@ -1815,11 +1865,8 @@ ask_gcp_options() {
     print_section "GCP options for $title"
     echo ""
 
-    # Project (ask once, auto-detect from gcloud config)
-    if [[ -z "$GCP_PROJECT" ]]; then
-        GCP_PROJECT="$(gcloud config get-value project 2>/dev/null || echo "")"
-        [[ "$GCP_PROJECT" == "(unset)" ]] && GCP_PROJECT=""
-    fi
+    # Project (ask once; auto-detect from SA email + gcloud config)
+    _gcp_autodetect_project
     if [[ -z "$GCP_PROJECT" ]]; then
         echo "  No GCP project is set."
         printf "  Enter your GCP project ID: "
@@ -2397,11 +2444,8 @@ ensure_gcp_cli() {
         fi
     fi
 
-    # Ensure a project is set
-    if [[ -z "$GCP_PROJECT" ]]; then
-        GCP_PROJECT="$(gcloud config get-value project 2>/dev/null || echo "")"
-        [[ "$GCP_PROJECT" == "(unset)" ]] && GCP_PROJECT=""
-    fi
+    # Ensure a project is set — try service-account email + host config first
+    _gcp_autodetect_project
     if [[ -z "$GCP_PROJECT" ]]; then
         echo ""
         print_warn "No GCP project set."
@@ -2797,9 +2841,55 @@ step_download_release() {
     fi
 
     mkdir -p "$INSTALL_DIR"
-    tar xzf "${tmp_dir}/${archive}" -C "$INSTALL_DIR"
-    chmod +x "${INSTALL_DIR}/${binary}"
+    # Extract into the tmp dir first, then atomically move into INSTALL_DIR.
+    # This makes concurrent runs (e.g., dashboard issuing parallel deploys that
+    # all install to /root/.cargo/bin/networker-tester) safe: each run writes
+    # its own file inside tmp_dir, then `mv -f` either succeeds or — if a
+    # sibling process is currently executing the existing binary (ETXTBSY,
+    # "Text file busy") — we fall back to checking that the on-disk version
+    # already matches what we just extracted, and reuse it.
+    tar xzf "${tmp_dir}/${archive}" -C "$tmp_dir"
+    chmod +x "${tmp_dir}/${binary}"
+
+    # Determine the version of the freshly-extracted binary so we can compare
+    # against any binary that another concurrent installer may have just put
+    # in place. Skip for dashboard/agent which can't run without config.
+    local extracted_ver=""
+    case "$binary" in
+        networker-dashboard|networker-agent) ;;
+        *)
+            extracted_ver="$("${tmp_dir}/${binary}" --version 2>/dev/null | awk '{print $NF}')"
+            ;;
+    esac
+
+    local mv_ok=0
+    if mv -f "${tmp_dir}/${binary}" "${INSTALL_DIR}/${binary}" 2>/dev/null; then
+        mv_ok=1
+    else
+        # Likely ETXTBSY: a sibling process is executing the existing binary.
+        # Wait briefly and check whether the on-disk version is already what
+        # we wanted to install. If so, reuse it.
+        sleep 1
+        if [[ -n "$extracted_ver" ]]; then
+            local existing_ver
+            existing_ver="$("${INSTALL_DIR}/${binary}" --version 2>/dev/null | awk '{print $NF}')"
+            if [[ -n "$existing_ver" && "$existing_ver" == "$extracted_ver" ]]; then
+                print_ok "$binary already at v${existing_ver} (concurrent install detected, reusing) → ${INSTALL_DIR}/${binary}"
+                rm -rf "$tmp_dir"
+                return 0
+            fi
+        fi
+        # One more attempt after the brief pause.
+        if mv -f "${tmp_dir}/${binary}" "${INSTALL_DIR}/${binary}" 2>/dev/null; then
+            mv_ok=1
+        fi
+    fi
     rm -rf "$tmp_dir"
+
+    if [[ $mv_ok -eq 0 ]]; then
+        print_warn "Failed to install $binary into ${INSTALL_DIR} (concurrent install race)"
+        return 1
+    fi
 
     # Verify the binary runs (catches GLIBC mismatch, wrong arch, etc.)
     # Skip full validation for dashboard/agent — they require DB/config to start.
@@ -6391,15 +6481,29 @@ step_check_gcp_prereqs() {
         fi
     fi
 
+    # Try to resolve project automatically: deploy config (already populated
+    # GCP_PROJECT if present), service-account email, then host gcloud config.
     if [[ -z "$GCP_PROJECT" ]]; then
-        print_err "No GCP project set."
-        echo "  Run:  gcloud config set project YOUR_PROJECT_ID"
+        _gcp_autodetect_project
+    fi
+
+    if [[ -z "$GCP_PROJECT" ]]; then
+        print_err "No GCP project could be resolved."
+        echo "  Provide one of:"
+        echo "    - 'gcp.project_id' in the deploy config (recommended)"
+        echo "    - GOOGLE_APPLICATION_CREDENTIALS pointing to a service-account key"
+        echo "    - 'gcloud config set project YOUR_PROJECT_ID' on this host"
         exit 1
     fi
     _gcp_resolve_project
 
+    # Persist for downstream gcloud invocations on this host. Subsequent
+    # gcloud commands in this script also pass --project explicitly, but
+    # this keeps any helper SSH/SCP shorthand consistent.
+    gcloud config set project "$GCP_PROJECT" 2>/dev/null </dev/null || true
+
     local gcp_account
-    gcp_account="$(gcloud config get-value account 2>/dev/null || echo "")"
+    gcp_account="$(gcloud config get-value account 2>/dev/null </dev/null || echo "")"
     print_ok "Account: ${gcp_account}  (project: ${GCP_PROJECT})"
 
     # Ensure Compute Engine API is enabled (required for VM creation, firewall rules, etc.)
@@ -8074,7 +8178,8 @@ _deploy_parse_config() {
             GCP_TESTER_NAME="$(jq -r '.tester.gcp.instance_name // "networker-tester"' "$cfg")"
             GCP_TESTER_MACHINE_TYPE="$(jq -r '.tester.gcp.machine_type // "e2-small"' "$cfg")"
             GCP_TESTER_OS="$(jq -r '.tester.gcp.os // "linux"' "$cfg")"
-            GCP_PROJECT="$(jq -r '.tester.gcp.project // ""' "$cfg")"
+            # Accept both 'project' (legacy) and 'project_id' (canonical)
+            GCP_PROJECT="$(jq -r '.tester.gcp.project_id // .tester.gcp.project // ""' "$cfg")"
             local t_gcp_shutdown; t_gcp_shutdown="$(jq -r '.tester.gcp.auto_shutdown // true' "$cfg")"
             [[ "$t_gcp_shutdown" == "true" ]] && GCP_AUTO_SHUTDOWN="yes" || GCP_AUTO_SHUTDOWN="no"
             ;;
@@ -8182,7 +8287,8 @@ _deploy_load_endpoint() {
             GCP_ENDPOINT_NAME="$(jq -r ".endpoints[$idx].gcp.instance_name // \"networker-endpoint\"" "$cfg")"
             GCP_ENDPOINT_MACHINE_TYPE="$(jq -r ".endpoints[$idx].gcp.machine_type // \"e2-small\"" "$cfg")"
             GCP_ENDPOINT_OS="$(jq -r ".endpoints[$idx].gcp.os // \"linux\"" "$cfg")"
-            GCP_PROJECT="$(jq -r ".endpoints[$idx].gcp.project // \"$GCP_PROJECT\"" "$cfg")"
+            # Accept both 'project' (legacy) and 'project_id' (canonical)
+            GCP_PROJECT="$(jq -r ".endpoints[$idx].gcp.project_id // .endpoints[$idx].gcp.project // \"$GCP_PROJECT\"" "$cfg")"
             local ep_gcp_shutdown; ep_gcp_shutdown="$(jq -r ".endpoints[$idx].gcp.auto_shutdown // true" "$cfg")"
             [[ "$ep_gcp_shutdown" == "true" ]] && GCP_AUTO_SHUTDOWN="yes" || GCP_AUTO_SHUTDOWN="no"
             ;;

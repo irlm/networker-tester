@@ -476,6 +476,35 @@ teardown() {
     [[ "$output" == *"failed"* ]]
 }
 
+@test "step_download_release: concurrent installs to same INSTALL_DIR both succeed (no ETXTBSY)" {
+    # Regression for v0.27.26: dashboard issues parallel deploys that all run
+    # install.sh against the same shared $HOME/.cargo/bin/networker-tester.
+    # Previously, the second writer hit "Text file busy" while the first
+    # process was still executing the binary. Now writes go via tmp + mv -f
+    # with version-match fallback, so both runs must finish cleanly.
+    RELEASE_TARGET="x86_64-unknown-linux-musl"
+
+    # Run two installs in parallel against the same INSTALL_DIR.
+    # Capture exit codes via files since bats `run` is single-shot.
+    local rc1_file="$TEST_TMPDIR/rc1"
+    local rc2_file="$TEST_TMPDIR/rc2"
+    (
+        step_download_release "networker-tester" >/dev/null 2>&1
+        echo $? > "$rc1_file"
+    ) &
+    local pid1=$!
+    (
+        step_download_release "networker-tester" >/dev/null 2>&1
+        echo $? > "$rc2_file"
+    ) &
+    local pid2=$!
+    wait "$pid1" "$pid2"
+
+    [ "$(cat "$rc1_file")" -eq 0 ]
+    [ "$(cat "$rc2_file")" -eq 0 ]
+    [ -x "${INSTALL_DIR}/networker-tester" ]
+}
+
 
 # ===========================================================================
 # 7. Integrity: BASH_SOURCE guard
@@ -1443,4 +1472,121 @@ JSON
     [ "$DEPLOY_VALIDATE_ERRORS" -gt 0 ]
     # Error message should name AWS specifically
     [[ "$(_deploy_validate_config "$cfg" 2>&1)" == *"AWS Windows"* ]]
+}
+
+# ===========================================================================
+# GCP project_id resolution (regression for v0.27.26 — GCP deploys failed
+# at "Step 2: Check GCP prerequisites" because install.sh ignored the
+# config's project_id and the dashboard host had no `gcloud config project`).
+# ===========================================================================
+
+@test "_gcp_project_from_sa_email: extracts project from service account email" {
+    run _gcp_project_from_sa_email "alethedash-vms@kepler-408121.iam.gserviceaccount.com"
+    [ "$status" -eq 0 ]
+    [ "$output" = "kepler-408121" ]
+}
+
+@test "_gcp_project_from_sa_email: handles project IDs containing hyphens" {
+    run _gcp_project_from_sa_email "ci-runner@my-prod-project-42.iam.gserviceaccount.com"
+    [ "$status" -eq 0 ]
+    [ "$output" = "my-prod-project-42" ]
+}
+
+@test "_gcp_project_from_sa_email: returns empty for human user email" {
+    run _gcp_project_from_sa_email "alice@example.com"
+    [ "$status" -eq 0 ]
+    [ -z "${output// /}" ]
+}
+
+@test "_gcp_project_from_sa_email: returns empty for empty input" {
+    run _gcp_project_from_sa_email ""
+    [ "$status" -eq 0 ]
+    [ -z "${output// /}" ]
+}
+
+@test "_gcp_autodetect_project: derives project from active service account email" {
+    GCP_PROJECT=""
+    gcloud() {
+        if [[ "$1 $2" == "config get-value" && "$3" == "account" ]]; then
+            echo "alethedash-vms@kepler-408121.iam.gserviceaccount.com"
+        else
+            echo ""
+        fi
+    }
+    export -f gcloud
+    _gcp_autodetect_project
+    [ "$GCP_PROJECT" = "kepler-408121" ]
+    unset -f gcloud
+}
+
+@test "_gcp_autodetect_project: leaves GCP_PROJECT alone when already set" {
+    GCP_PROJECT="preset-project"
+    gcloud() { echo "should-not-be-called"; }
+    export -f gcloud
+    _gcp_autodetect_project
+    [ "$GCP_PROJECT" = "preset-project" ]
+    unset -f gcloud
+}
+
+@test "_gcp_autodetect_project: falls back to host gcloud config for human accounts" {
+    GCP_PROJECT=""
+    gcloud() {
+        if [[ "$1 $2" == "config get-value" && "$3" == "account" ]]; then
+            echo "alice@example.com"
+        elif [[ "$1 $2" == "config get-value" && "$3" == "project" ]]; then
+            echo "host-fallback-proj"
+        else
+            echo ""
+        fi
+    }
+    export -f gcloud
+    _gcp_autodetect_project
+    [ "$GCP_PROJECT" = "host-fallback-proj" ]
+    unset -f gcloud
+}
+
+@test "_deploy_parse_config: reads tester.gcp.project_id (canonical key)" {
+    local cfg="$TEST_TMPDIR/parse-gcp-pid.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "gcp", "gcp": { "project_id": "from-pid", "zone": "us-central1-a" } },
+  "endpoints": [{ "provider": "local" }]
+}
+JSON
+    DEPLOY_CONFIG_PATH="$cfg"
+    _deploy_parse_config "$cfg"
+    [ "$GCP_PROJECT" = "from-pid" ]
+}
+
+@test "_deploy_parse_config: reads tester.gcp.project (legacy alias)" {
+    local cfg="$TEST_TMPDIR/parse-gcp-legacy.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "gcp", "gcp": { "project": "from-legacy", "zone": "us-central1-a" } },
+  "endpoints": [{ "provider": "local" }]
+}
+JSON
+    DEPLOY_CONFIG_PATH="$cfg"
+    _deploy_parse_config "$cfg"
+    [ "$GCP_PROJECT" = "from-legacy" ]
+}
+
+@test "_deploy_load_endpoint: reads endpoints[i].gcp.project_id" {
+    local cfg="$TEST_TMPDIR/parse-ep-gcp-pid.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [
+    { "provider": "gcp", "gcp": { "project_id": "ep-pid-proj", "zone": "us-central1-a", "instance_name": "nwk-ep" } }
+  ]
+}
+JSON
+    DEPLOY_CONFIG_PATH="$cfg"
+    GCP_PROJECT=""
+    _deploy_parse_config "$cfg"
+    _deploy_load_endpoint 0
+    [ "$GCP_PROJECT" = "ep-pid-proj" ]
 }
