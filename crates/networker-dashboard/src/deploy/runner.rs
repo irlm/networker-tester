@@ -243,42 +243,54 @@ impl DeployOutput {
     }
 }
 
-/// Locate install.sh — try workspace root (two levels up from crate), then current dir.
+/// install.sh embedded at compile time — guarantees the script always matches
+/// the dashboard binary version, eliminating the stale-script-on-prod bug where
+/// the release pipeline updated the binary but left install.sh at an old version.
+const EMBEDDED_INSTALL_SH: &str = include_str!("../../../../install.sh");
+
+/// Write the embedded install.sh to a stable path and return it.
+///
+/// The script is baked into the binary via `include_str!`, so every build
+/// automatically picks up the latest install.sh from the workspace root.
+/// No more filesystem search or manual SCP required.
 async fn find_install_sh() -> anyhow::Result<std::path::PathBuf> {
-    // Try relative to CARGO_MANIFEST_DIR if set
-    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-        let p = std::path::PathBuf::from(manifest_dir).join("../../install.sh");
-        if tokio::fs::metadata(&p).await.is_ok() {
-            return Ok(p.canonicalize().unwrap_or(p));
-        }
-    }
-
-    // Try current working directory
-    let cwd = std::env::current_dir()?;
-    let p = cwd.join("install.sh");
-    if tokio::fs::metadata(&p).await.is_ok() {
-        return Ok(p);
-    }
-
-    // Try parent directories
-    let mut dir = cwd.as_path();
-    for _ in 0..5 {
-        if let Some(parent) = dir.parent() {
-            let p = parent.join("install.sh");
-            if tokio::fs::metadata(&p).await.is_ok() {
-                return Ok(p);
-            }
-            dir = parent;
-        }
-    }
-
-    // Check INSTALL_SH_PATH env var as override
+    // Allow override for development / testing
     if let Ok(path) = std::env::var("INSTALL_SH_PATH") {
-        let p = std::path::PathBuf::from(path);
+        let p = std::path::PathBuf::from(&path);
         if tokio::fs::metadata(&p).await.is_ok() {
+            tracing::info!(path = %path, "Using INSTALL_SH_PATH override");
             return Ok(p);
         }
     }
 
-    anyhow::bail!("Cannot find install.sh. Set INSTALL_SH_PATH environment variable to the path.")
+    // Write the embedded script to a well-known location.
+    // Use /opt/alethedash/ on Linux (prod), fall back to temp dir elsewhere.
+    let dest = if cfg!(target_os = "linux") {
+        let dir = std::path::PathBuf::from("/opt/alethedash");
+        if tokio::fs::create_dir_all(&dir).await.is_ok() {
+            dir.join("install.sh")
+        } else {
+            std::env::temp_dir().join("networker-install.sh")
+        }
+    } else {
+        std::env::temp_dir().join("networker-install.sh")
+    };
+
+    tokio::fs::write(&dest, EMBEDDED_INSTALL_SH).await?;
+
+    // Ensure the script is executable (no-op on Windows)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o755);
+        tokio::fs::set_permissions(&dest, perms).await?;
+    }
+
+    tracing::info!(
+        path = %dest.display(),
+        version = env!("CARGO_PKG_VERSION"),
+        "Wrote embedded install.sh (matches dashboard binary version)"
+    );
+
+    Ok(dest)
 }
