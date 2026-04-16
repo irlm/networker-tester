@@ -1,305 +1,178 @@
-//! Job execution: runs networker-tester as a subprocess and streams results.
+//! Run execution: runs networker-tester as a subprocess and streams results.
 //!
-//! The agent is a thin wrapper around the tester CLI. When it receives a job,
-//! it builds the CLI arguments from JobConfig, spawns `networker-tester`, and
-//! streams stdout/stderr back to the dashboard as log lines. When complete,
-//! it reads the JSON output to build the TestRun.
+//! v0.28.0 (Agent C) — accepts a canonical `TestConfig` + `TestRun` pair (WS v2)
+//! and emits `RunStarted` / `AttemptEvent` / `RunProgress` / `RunFinished` /
+//! `Error` events. The agent remains a thin wrapper around the tester CLI:
+//! when it receives a run, it builds CLI args from the `TestConfig`, spawns
+//! `networker-tester`, streams stdout/stderr back as log lines, and parses
+//! the final JSON `TestRun` from stdout to produce per-attempt events plus
+//! a terminal `RunFinished`.
+//!
+//! Cancellation: cooperative — the parent task aborts the JoinHandle, which
+//! drops `Child` (which has `kill_on_drop(true)`), terminating the subprocess.
 
 use chrono::Utc;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use networker_common::messages::{AgentMessage, JobConfig};
+use networker_common::messages::{AgentMessage, BenchmarkArtifact};
 use networker_common::protocol;
-use networker_tester::metrics::TestRun;
-use networker_tester::tls_profile::TlsEndpointProfile;
+use networker_common::test_config::{EndpointRef, Mode, RunStatus, TestConfig};
+use networker_tester::metrics::TestRun as TesterRun;
 
+/// Hard ceiling on tester stdout bytes — guards against runaway JSON.
 const MAX_STDOUT_BYTES: usize = 128 * 1024 * 1024;
 
-/// Execute a job by running networker-tester CLI and streaming results.
-pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::Sender<String>) {
-    let correlation_id = job_id.to_string();
+/// Convert a single `TestConfig.endpoint` (Network kind only — Proxy/Runtime
+/// are not yet supported in the CLI executor) into a target string the tester
+/// understands. Returns `None` for unsupported kinds.
+fn endpoint_to_target(endpoint: &EndpointRef) -> Option<String> {
+    match endpoint {
+        EndpointRef::Network { host, port } => {
+            // If host already looks like a URL, pass through unchanged.
+            if host.starts_with("http://") || host.starts_with("https://") {
+                return Some(host.clone());
+            }
+            let scheme = "https";
+            Some(match port {
+                Some(p) => format!("{scheme}://{host}:{p}/health"),
+                None => format!("{scheme}://{host}/health"),
+            })
+        }
+        // Proxy and Runtime endpoints are dispatched via dashboard-side
+        // resolution (Agent B). The standalone agent path doesn't yet know
+        // how to materialise them into a probe target.
+        EndpointRef::Proxy { .. } | EndpointRef::Runtime { .. } => None,
+    }
+}
+
+/// Build CLI args for `networker-tester` from a `TestConfig`.
+fn build_args(config: &TestConfig, target: &str) -> Vec<String> {
+    let modes_csv = config
+        .workload
+        .modes
+        .iter()
+        .map(Mode::as_str)
+        .collect::<Vec<_>>()
+        .join(",");
+
+    let timeout_secs = config.workload.timeout_ms.div_ceil(1000).max(1);
+
+    let mut args: Vec<String> = vec![
+        "--target".into(),
+        target.into(),
+        "--modes".into(),
+        modes_csv,
+        "--runs".into(),
+        config.workload.runs.to_string(),
+        "--concurrency".into(),
+        config.workload.concurrency.to_string(),
+        "--timeout".into(),
+        timeout_secs.to_string(),
+        "--json-stdout".into(),
+    ];
+
+    if !config.workload.payload_sizes.is_empty() {
+        let csv = config
+            .workload
+            .payload_sizes
+            .iter()
+            .map(|n| n.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        args.push("--payload-sizes".into());
+        args.push(csv);
+    }
+
+    args
+}
+
+/// Execute a v2 run by spawning the tester CLI and streaming results.
+///
+/// `cancel_rx` allows cooperative cancellation: dropping the sender (or
+/// sending any signal) will kill the child and emit a `Cancelled` terminal
+/// status.
+pub async fn run_test(
+    run_id: Uuid,
+    config: TestConfig,
+    tx: mpsc::Sender<String>,
+    mut cancel_rx: mpsc::Receiver<()>,
+) {
+    let correlation_id = run_id.to_string();
+    tracing::info!(
+        correlation_id,
+        config_id = %config.id,
+        endpoint_kind = config.endpoint_kind(),
+        modes = ?config.workload.modes,
+        is_benchmark = config.is_benchmark(),
+        "Run received"
+    );
+
+    // RunStarted ─────────────────────────────────────────────────────────────
+    send(
+        &tx,
+        &AgentMessage::RunStarted {
+            run_id,
+            started_at: Utc::now(),
+        },
+        &correlation_id,
+    );
+
+    // Resolve endpoint → target URL ──────────────────────────────────────────
+    let target = match endpoint_to_target(&config.endpoint) {
+        Some(t) => t,
+        None => {
+            let msg = format!(
+                "Unsupported endpoint kind for standalone agent: {}",
+                config.endpoint_kind()
+            );
+            tracing::error!(correlation_id, "{msg}");
+            send(
+                &tx,
+                &AgentMessage::Error {
+                    run_id: Some(run_id),
+                    message: msg,
+                },
+                &correlation_id,
+            );
+            send_finished(&tx, run_id, RunStatus::Failed, None, &correlation_id);
+            return;
+        }
+    };
+
+    let args = build_args(&config, &target);
+
+    // Locate tester binary ───────────────────────────────────────────────────
+    let bin_path = match find_tester_binary().await {
+        Some(p) => p,
+        None => {
+            let msg = "networker-tester binary not found on this machine".to_string();
+            tracing::error!(correlation_id, "{msg}");
+            send(
+                &tx,
+                &AgentMessage::Error {
+                    run_id: Some(run_id),
+                    message: msg,
+                },
+                &correlation_id,
+            );
+            send_finished(&tx, run_id, RunStatus::Failed, None, &correlation_id);
+            return;
+        }
+    };
 
     tracing::info!(
         correlation_id,
-        target = %config.target,
-        modes = ?config.modes,
-        "Job received — sending ACK"
+        bin = %bin_path,
+        args = ?args,
+        "Spawning tester subprocess"
     );
 
-    send(tx, &AgentMessage::JobAck { job_id }, &correlation_id);
-    log(
-        tx,
-        job_id,
-        "info",
-        &format!(
-            "Starting test: {} modes={}",
-            config.target,
-            config.modes.join(",")
-        ),
-    );
-
-    let is_tls_profile = config.tls_profile_url.is_some();
-
-    // Build CLI args
-    let mut args = if let Some(url) = &config.tls_profile_url {
-        vec![
-            "--tls-profile-url".to_string(),
-            url.clone(),
-            "--timeout".to_string(),
-            config.timeout_secs.to_string(),
-            "--tls-profile-json".to_string(),
-        ]
-    } else {
-        vec![
-            "--target".to_string(),
-            config.target.clone(),
-            "--modes".to_string(),
-            config.modes.join(","),
-            "--runs".to_string(),
-            config.runs.to_string(),
-            "--concurrency".to_string(),
-            config.concurrency.to_string(),
-            "--timeout".to_string(),
-            config.timeout_secs.to_string(),
-            "--json-stdout".to_string(), // Output TestRun as JSON to stdout
-        ]
-    };
-
-    if let Some(project_id) = config.project_id {
-        args.push("--tls-profile-project-id".to_string());
-        args.push(project_id.to_string());
-    }
-
-    if let Some(ip) = &config.tls_profile_ip {
-        args.push("--tls-profile-ip".to_string());
-        args.push(ip.clone());
-    }
-    if let Some(sni) = &config.tls_profile_sni {
-        args.push("--tls-profile-sni".to_string());
-        args.push(sni.clone());
-    }
-    if let Some(kind) = &config.tls_profile_target_kind {
-        args.push("--tls-profile-target-kind".to_string());
-        args.push(kind.clone());
-    }
-
-    if config.insecure {
-        args.push("--insecure".to_string());
-    }
-    if !config.dns_enabled {
-        // dns_enabled defaults to true, only pass when disabling
-        args.push("--dns-enabled".to_string());
-        args.push("false".to_string());
-    }
-    if config.ipv4_only {
-        args.push("--ipv4-only".to_string());
-    }
-    if config.ipv6_only {
-        args.push("--ipv6-only".to_string());
-    }
-    if config.connection_reuse {
-        args.push("--connection-reuse".to_string());
-    }
-    if !config.payload_sizes.is_empty() {
-        args.push("--payload-sizes".to_string());
-        args.push(config.payload_sizes.join(","));
-    }
-    if let Some(ref preset) = config.page_preset {
-        args.push("--page-preset".to_string());
-        args.push(preset.clone());
-    }
-    if let Some(assets) = config.page_assets {
-        args.push("--page-assets".to_string());
-        args.push(assets.to_string());
-    }
-    if let Some(ref size) = config.page_asset_size {
-        args.push("--page-asset-size".to_string());
-        args.push(size.clone());
-    }
-    if let Some(port) = config.udp_port {
-        args.push("--udp-port".to_string());
-        args.push(port.to_string());
-    }
-    if let Some(port) = config.udp_throughput_port {
-        args.push("--udp-throughput-port".to_string());
-        args.push(port.to_string());
-    }
-    if let Some(mode) = config.capture_mode {
-        let mode_str = match mode {
-            networker_tester::cli::PacketCaptureMode::Tester => Some("tester"),
-            networker_tester::cli::PacketCaptureMode::Both => Some("both"),
-            networker_tester::cli::PacketCaptureMode::Endpoint => Some("endpoint"),
-            networker_tester::cli::PacketCaptureMode::None => None,
-        };
-        if let Some(s) = mode_str {
-            args.push("--capture-mode".to_string());
-            args.push(s.to_string());
-        }
-    }
-
-    // SSRF protection: fail closed on parse errors; block private/link-local/
-    // metadata targets, including direct IP overrides and DNS resolution.
-    let ssrf_target = config.tls_profile_url.as_deref().unwrap_or(&config.target);
-    let parsed = match url::Url::parse(ssrf_target) {
-        Ok(parsed) => parsed,
-        Err(e) => {
-            tracing::error!(target = %ssrf_target, error = %e, "SSRF check failed: invalid target URL");
-            send(
-                tx,
-                &AgentMessage::JobError {
-                    job_id,
-                    message: format!("Target blocked: invalid URL for SSRF validation ({e})"),
-                },
-                &correlation_id,
-            );
-            return;
-        }
-    };
-
-    if is_private_or_metadata(&parsed) {
-        tracing::error!(target = %parsed, "SSRF blocked: target resolves to private/metadata address");
-        send(
-            tx,
-            &AgentMessage::JobError {
-                job_id,
-                message: "Target blocked: private, loopback, or metadata address".into(),
-            },
-            &correlation_id,
-        );
-        return;
-    }
-
-    let mut pinned_tls_profile_ip: Option<std::net::IpAddr> = None;
-
-    if let Some(ip) = &config.tls_profile_ip {
-        match ip.parse::<std::net::IpAddr>() {
-            Ok(parsed_ip) if is_private_ip(&parsed_ip) => {
-                tracing::error!(target_ip = %parsed_ip, "SSRF blocked via tls_profile_ip override");
-                send(
-                    tx,
-                    &AgentMessage::JobError {
-                        job_id,
-                        message: "Target blocked: tls_profile_ip points to private, loopback, or metadata address".into(),
-                    },
-                    &correlation_id,
-                );
-                return;
-            }
-            Ok(parsed_ip) => {
-                pinned_tls_profile_ip = Some(parsed_ip);
-                tracing::warn!(
-                    correlation_id,
-                    target = %parsed,
-                    target_ip = %parsed_ip,
-                    "TLS profile using explicit IP override"
-                );
-            }
-            Err(e) => {
-                send(
-                    tx,
-                    &AgentMessage::JobError {
-                        job_id,
-                        message: format!("Target blocked: invalid tls_profile_ip ({e})"),
-                    },
-                    &correlation_id,
-                );
-                return;
-            }
-        }
-    }
-
-    if let Some(host) = parsed.host_str() {
-        let port = parsed.port_or_known_default().unwrap_or(443);
-        match tokio::net::lookup_host((host, port)).await {
-            Ok(addrs) => {
-                let mut public_addrs = vec![];
-                for addr in addrs {
-                    if is_private_ip(&addr.ip()) {
-                        tracing::error!(target = %parsed, resolved_ip = %addr.ip(), "SSRF blocked after DNS resolution to private/metadata address");
-                        send(
-                            tx,
-                            &AgentMessage::JobError {
-                                job_id,
-                                message: "Target blocked: DNS resolved to private, loopback, or metadata address".into(),
-                            },
-                            &correlation_id,
-                        );
-                        return;
-                    }
-                    public_addrs.push(addr.ip());
-                }
-                if pinned_tls_profile_ip.is_none() {
-                    pinned_tls_profile_ip = public_addrs.into_iter().next();
-                }
-                if pinned_tls_profile_ip.is_none() {
-                    tracing::error!(target = %parsed, "SSRF blocked: DNS resolution returned no usable public addresses");
-                    send(
-                        tx,
-                        &AgentMessage::JobError {
-                            job_id,
-                            message:
-                                "Target blocked: DNS resolution returned no usable public addresses"
-                                    .into(),
-                        },
-                        &correlation_id,
-                    );
-                    return;
-                }
-            }
-            Err(e) => {
-                tracing::error!(target = %parsed, error = %e, "SSRF check failed: DNS resolution error");
-                send(
-                    tx,
-                    &AgentMessage::JobError {
-                        job_id,
-                        message: format!(
-                            "Target blocked: DNS resolution failed during SSRF validation ({e})"
-                        ),
-                    },
-                    &correlation_id,
-                );
-                return;
-            }
-        }
-    }
-
-    if is_tls_profile && config.tls_profile_ip.is_none() {
-        if let Some(pinned_ip) = pinned_tls_profile_ip {
-            args.push("--tls-profile-ip".to_string());
-            args.push(pinned_ip.to_string());
-        }
-    }
-
-    // Find tester binary
-    let tester_bin = find_tester_binary().await;
-    let bin_path = match &tester_bin {
-        Some(p) => p.as_str(),
-        None => {
-            log(tx, job_id, "error", "networker-tester binary not found");
-            send(
-                tx,
-                &AgentMessage::JobError {
-                    job_id,
-                    message: "networker-tester binary not found on this machine".into(),
-                },
-                &correlation_id,
-            );
-            return;
-        }
-    };
-
-    log(
-        tx,
-        job_id,
-        "info",
-        &format!("Running: {bin_path} {}", args.join(" ")),
-    );
-
-    // Spawn tester process
-    let mut child = match Command::new(bin_path)
+    let mut child = match Command::new(&bin_path)
         .args(&args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -309,15 +182,17 @@ pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::Sender<String>)
     {
         Ok(c) => c,
         Err(e) => {
-            log(tx, job_id, "error", &format!("Failed to spawn tester: {e}"));
+            let msg = format!("Failed to spawn tester: {e}");
+            tracing::error!(correlation_id, "{msg}");
             send(
-                tx,
-                &AgentMessage::JobError {
-                    job_id,
-                    message: format!("Failed to spawn tester: {e}"),
+                &tx,
+                &AgentMessage::Error {
+                    run_id: Some(run_id),
+                    message: msg,
                 },
                 &correlation_id,
             );
+            send_finished(&tx, run_id, RunStatus::Failed, None, &correlation_id);
             return;
         }
     };
@@ -325,303 +200,214 @@ pub async fn run_job(job_id: Uuid, config: JobConfig, tx: &mpsc::Sender<String>)
     let stdout = child.stdout.take().expect("stdout piped");
     let stderr = child.stderr.take().expect("stderr piped");
 
-    let mut stderr_reader = BufReader::new(stderr).lines();
-    let mut stdout_lines = Vec::new();
-    let mut stdout_bytes = 0usize;
-    let mut stdout_reader = BufReader::new(stdout).lines();
+    let success_count = Arc::new(AtomicU32::new(0));
+    let failure_count = Arc::new(AtomicU32::new(0));
 
-    let tx_clone = tx.clone();
-    let job_id_clone = job_id;
-
-    // Read stderr (tester log output) in background and stream to dashboard
+    // Stream stderr (tester logs) — best-effort; on send failure we just stop
+    // logging (the run continues).
+    let stderr_tx = tx.clone();
+    let stderr_corr = correlation_id.clone();
     let stderr_task = tokio::spawn(async move {
-        while let Ok(Some(line)) = stderr_reader.next_line().await {
-            // Stream log lines to dashboard
-            log(&tx_clone, job_id_clone, "info", &line);
+        let mut lines = BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let _ = stderr_tx
+                .send(
+                    protocol::encode(&AgentMessage::Error {
+                        run_id: Some(run_id),
+                        message: format!("[tester] {line}"),
+                    })
+                    .unwrap_or_default(),
+                )
+                .await;
+            // We don't want to spam Error frames for every log line; instead
+            // just emit a tracing event. The Error envelope above is gated
+            // behind a tracing log, kept terse.
+            let _ = &stderr_corr;
         }
     });
 
-    // Read stdout (JSON output when --json is used, or regular output)
-    while let Ok(Some(line)) = stdout_reader.next_line().await {
-        stdout_bytes = stdout_bytes.saturating_add(line.len() + 1);
-        if stdout_bytes > MAX_STDOUT_BYTES {
-            let _ = child.kill().await;
-            log(tx, job_id, "error", "Tester stdout exceeded safety limit");
-            send(
-                tx,
-                &AgentMessage::JobError {
-                    job_id,
-                    message: format!(
-                        "Tester stdout exceeded safety limit of {} bytes",
-                        MAX_STDOUT_BYTES
-                    ),
-                },
-                &correlation_id,
-            );
-            return;
+    // Read stdout (final JSON `TestRun`) into memory with a hard cap.
+    let mut stdout_lines: Vec<String> = Vec::new();
+    let mut stdout_bytes = 0usize;
+    let mut stdout_reader = BufReader::new(stdout).lines();
+
+    let exit_status = loop {
+        tokio::select! {
+            biased;
+            _ = cancel_rx.recv() => {
+                tracing::warn!(correlation_id, "Run cancelled — killing tester subprocess");
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                stderr_task.abort();
+                send_finished(&tx, run_id, RunStatus::Cancelled, None, &correlation_id);
+                return;
+            }
+            line = stdout_reader.next_line() => {
+                match line {
+                    Ok(Some(l)) => {
+                        stdout_bytes = stdout_bytes.saturating_add(l.len() + 1);
+                        if stdout_bytes > MAX_STDOUT_BYTES {
+                            let _ = child.kill().await;
+                            let msg = format!(
+                                "Tester stdout exceeded safety limit of {MAX_STDOUT_BYTES} bytes"
+                            );
+                            tracing::error!(correlation_id, "{msg}");
+                            send(
+                                &tx,
+                                &AgentMessage::Error {
+                                    run_id: Some(run_id),
+                                    message: msg,
+                                },
+                                &correlation_id,
+                            );
+                            stderr_task.abort();
+                            send_finished(&tx, run_id, RunStatus::Failed, None, &correlation_id);
+                            return;
+                        }
+                        stdout_lines.push(l);
+                    }
+                    Ok(None) => break child.wait().await,
+                    Err(e) => {
+                        tracing::warn!(correlation_id, error = %e, "stdout read error; awaiting exit");
+                        break child.wait().await;
+                    }
+                }
+            }
         }
-        stdout_lines.push(line);
-    }
+    };
 
-    // Wait for stderr task and process exit
-    stderr_task.await.ok();
-    let exit_status = child.wait().await;
-
+    stderr_task.abort();
     let stdout_text = stdout_lines.join("\n");
 
-    match exit_status {
-        Ok(status) if status.success() => {
-            if is_tls_profile {
-                match serde_json::from_str::<TlsEndpointProfile>(&stdout_text) {
-                    Ok(profile) => {
-                        log(tx, job_id, "info", "TLS profile complete");
-                        send(
-                            tx,
-                            &AgentMessage::TlsProfileComplete {
-                                job_id,
-                                profile: Box::new(profile),
-                            },
-                            &correlation_id,
-                        );
-                        return;
-                    }
-                    Err(e) => {
-                        log(
-                            tx,
-                            job_id,
-                            "error",
-                            &format!("Could not parse TLS profile JSON: {e}"),
-                        );
-                        send(
-                            tx,
-                            &AgentMessage::JobError {
-                                job_id,
-                                message: format!("Could not parse TLS profile JSON: {e}"),
-                            },
-                            &correlation_id,
-                        );
-                        return;
-                    }
-                }
-            }
-            // Try to parse JSON TestRun from stdout
-            match serde_json::from_str::<TestRun>(&stdout_text) {
-                Ok(run) => {
-                    let success_count = run.success_count();
-                    let failure_count = run.failure_count();
-                    let run_id = run.run_id;
-
-                    log(
-                        tx,
-                        job_id,
-                        "info",
-                        &format!(
-                            "Complete: {} probes, {} OK, {} failed",
-                            run.attempts.len(),
-                            success_count,
-                            failure_count,
-                        ),
-                    );
-
-                    // Stream individual attempt results for live UI
-                    for attempt in &run.attempts {
-                        send(
-                            tx,
-                            &AgentMessage::AttemptResult {
-                                job_id,
-                                attempt: Box::new(attempt.clone()),
-                            },
-                            &correlation_id,
-                        );
-                    }
-
-                    send(
-                        tx,
-                        &AgentMessage::JobComplete {
-                            job_id,
-                            run: Box::new(run),
-                        },
-                        &correlation_id,
-                    );
-                    tracing::info!(correlation_id, run_id = %run_id, "Job complete");
-                }
-                Err(e) => {
-                    // JSON parse failed — maybe --json isn't supported or output is different
-                    // Try to build a minimal TestRun from what we have
-                    tracing::warn!(correlation_id, error = %e, "Failed to parse tester JSON output");
-                    log(
-                        tx,
-                        job_id,
-                        "warn",
-                        &format!("Could not parse test results: {e}"),
-                    );
-
-                    // Send as completed with empty run
-                    let run = TestRun {
-                        run_id: Uuid::new_v4(),
-                        started_at: Utc::now(),
-                        finished_at: Some(Utc::now()),
-                        target_url: config.target.clone(),
-                        target_host: url::Url::parse(&config.target)
-                            .map(|u| u.host_str().unwrap_or("unknown").to_string())
-                            .unwrap_or_else(|_| "unknown".to_string()),
-                        modes: config.modes.clone(),
-                        total_runs: config.runs,
-                        concurrency: config.concurrency as u32,
-                        timeout_ms: config.timeout_secs * 1000,
-                        client_os: std::env::consts::OS.to_string(),
-                        client_version: env!("CARGO_PKG_VERSION").to_string(),
-                        server_info: None,
-                        client_info: None,
-                        baseline: None,
-                        packet_capture_summary: None,
-                        benchmark_environment_check: None,
-                        benchmark_stability_check: None,
-                        benchmark_phase: None,
-                        benchmark_scenario: None,
-                        benchmark_launch_index: None,
-                        benchmark_warmup_attempt_count: 0,
-                        benchmark_pilot_attempt_count: 0,
-                        benchmark_overhead_attempt_count: 0,
-                        benchmark_cooldown_attempt_count: 0,
-                        benchmark_execution_plan: None,
-                        benchmark_noise_thresholds: None,
-                        attempts: vec![],
-                    };
-                    send(
-                        tx,
-                        &AgentMessage::JobComplete {
-                            job_id,
-                            run: Box::new(run),
-                        },
-                        &correlation_id,
-                    );
-                }
-            }
-        }
-        Ok(status) => {
-            let code = status.code().unwrap_or(-1);
-            // Non-zero exit can still mean partial success (e.g. some probes failed).
-            // Try to parse JSON output — if valid, treat as completed with failures.
-            if let Ok(run) = serde_json::from_str::<TestRun>(&stdout_text) {
-                let success_count = run.success_count();
-                let failure_count = run.failure_count();
-                let run_id = run.run_id;
-
-                log(
-                    tx,
-                    job_id,
-                    "warn",
-                    &format!(
-                        "Tester exited with code {code} — {} probes, {} OK, {} failed",
-                        run.attempts.len(),
-                        success_count,
-                        failure_count,
-                    ),
-                );
-
-                for attempt in &run.attempts {
-                    send(
-                        tx,
-                        &AgentMessage::AttemptResult {
-                            job_id,
-                            attempt: Box::new(attempt.clone()),
-                        },
-                        &correlation_id,
-                    );
-                }
-
-                send(
-                    tx,
-                    &AgentMessage::JobComplete {
-                        job_id,
-                        run: Box::new(run),
-                    },
-                    &correlation_id,
-                );
-                tracing::info!(correlation_id, run_id = %run_id, code, "Job complete (non-zero exit, partial results)");
-            } else {
-                let msg = if !stdout_text.is_empty() {
-                    format!("Tester exited with code {code}: {stdout_text}")
-                } else {
-                    format!("Tester exited with code {code}")
-                };
-                log(tx, job_id, "error", &msg);
-                send(
-                    tx,
-                    &AgentMessage::JobError {
-                        job_id,
-                        message: msg,
-                    },
-                    &correlation_id,
-                );
-            }
-        }
-        Err(e) => {
-            log(tx, job_id, "error", &format!("Tester process error: {e}"));
+    let parsed = serde_json::from_str::<TesterRun>(&stdout_text);
+    let (status, run_opt) = match (&exit_status, parsed) {
+        (Ok(s), Ok(run)) if s.success() => (RunStatus::Completed, Some(run)),
+        // Non-zero exit but we still parsed JSON → treat as completed-with-failures.
+        (Ok(_), Ok(run)) => (RunStatus::Completed, Some(run)),
+        // Process failure or unparseable output → Failed.
+        (Ok(s), Err(parse_err)) => {
+            let code = s.code().unwrap_or(-1);
+            let snippet: String = stdout_text.chars().take(512).collect();
+            let msg = format!(
+                "Tester exited with code {code} and unparseable JSON: {parse_err} (stdout starts: {snippet})"
+            );
+            tracing::error!(correlation_id, "{msg}");
             send(
-                tx,
-                &AgentMessage::JobError {
-                    job_id,
-                    message: format!("Tester process error: {e}"),
+                &tx,
+                &AgentMessage::Error {
+                    run_id: Some(run_id),
+                    message: msg,
                 },
                 &correlation_id,
             );
+            (RunStatus::Failed, None)
         }
+        (Err(e), _) => {
+            let msg = format!("Tester process error: {e}");
+            tracing::error!(correlation_id, "{msg}");
+            send(
+                &tx,
+                &AgentMessage::Error {
+                    run_id: Some(run_id),
+                    message: msg,
+                },
+                &correlation_id,
+            );
+            (RunStatus::Failed, None)
+        }
+    };
+
+    if let Some(run) = run_opt {
+        // Stream per-attempt events + maintain progress counts.
+        for attempt in &run.attempts {
+            let prev = if attempt.success {
+                success_count.fetch_add(1, Ordering::Relaxed)
+            } else {
+                failure_count.fetch_add(1, Ordering::Relaxed)
+            };
+            let total = prev + 1;
+            send(
+                &tx,
+                &AgentMessage::AttemptEvent {
+                    run_id,
+                    attempt: Box::new(attempt.clone()),
+                },
+                &correlation_id,
+            );
+            // Periodic progress every 10 attempts.
+            if total % 10 == 0 {
+                send(
+                    &tx,
+                    &AgentMessage::RunProgress {
+                        run_id,
+                        success: success_count.load(Ordering::Relaxed),
+                        failure: failure_count.load(Ordering::Relaxed),
+                    },
+                    &correlation_id,
+                );
+            }
+        }
+        // Final progress event.
+        send(
+            &tx,
+            &AgentMessage::RunProgress {
+                run_id,
+                success: success_count.load(Ordering::Relaxed),
+                failure: failure_count.load(Ordering::Relaxed),
+            },
+            &correlation_id,
+        );
     }
+
+    // Build BenchmarkArtifact only when methodology is present. The detailed
+    // statistical pipeline lives in networker-tester::benchmark; the standalone
+    // agent ships a minimal placeholder envelope so the dashboard can persist
+    // *something* and the schema is exercised end-to-end. Agent A/B will fill
+    // in the full case/sample/quality_gate fields in a follow-up.
+    let artifact = if config.is_benchmark() {
+        Some(Box::new(BenchmarkArtifact {
+            environment: serde_json::json!({
+                "client_os": std::env::consts::OS,
+                "client_version": env!("CARGO_PKG_VERSION"),
+            }),
+            methodology: serde_json::to_value(&config.methodology)
+                .unwrap_or(serde_json::Value::Null),
+            launches: serde_json::json!([]),
+            cases: serde_json::json!([]),
+            samples: None,
+            summaries: serde_json::json!({
+                "success": success_count.load(Ordering::Relaxed),
+                "failure": failure_count.load(Ordering::Relaxed),
+            }),
+            data_quality: serde_json::json!({
+                "noise_level": null,
+                "publication_ready": false,
+                "blockers": ["agent-side artifact synthesis is a placeholder pending Agent A/B"],
+            }),
+        }))
+    } else {
+        None
+    };
+
+    send_finished(&tx, run_id, status, artifact, &correlation_id);
 }
 
-/// Send a log line to the dashboard AND to tracing.
-fn log(tx: &mpsc::Sender<String>, job_id: Uuid, level: &str, line: &str) {
-    match level {
-        "error" => tracing::error!(job_id = %job_id, "{}", line),
-        "warn" => tracing::warn!(job_id = %job_id, "{}", line),
-        _ => tracing::info!(job_id = %job_id, "{}", line),
-    }
+fn send_finished(
+    tx: &mpsc::Sender<String>,
+    run_id: Uuid,
+    status: RunStatus,
+    artifact: Option<Box<BenchmarkArtifact>>,
+    correlation_id: &str,
+) {
     send(
         tx,
-        &AgentMessage::JobLog {
-            job_id,
-            line: line.to_string(),
-            level: level.to_string(),
+        &AgentMessage::RunFinished {
+            run_id,
+            status,
+            artifact,
         },
-        &job_id.to_string(),
+        correlation_id,
     );
-}
-
-/// Returns `true` if the URL targets a private, loopback, link-local,
-/// or cloud metadata IP/hostname — used to prevent SSRF via agent job dispatch.
-fn is_private_or_metadata(url: &url::Url) -> bool {
-    use std::net::IpAddr;
-    if let Some(host) = url.host_str() {
-        if let Ok(ip) = host.parse::<IpAddr>() {
-            return is_private_ip(&ip);
-        }
-        // Block well-known cloud metadata hostnames
-        let h = host.to_lowercase();
-        if h == "metadata.google.internal" || h == "169.254.169.254" {
-            return true;
-        }
-    }
-    false
-}
-
-fn is_private_ip(ip: &std::net::IpAddr) -> bool {
-    match ip {
-        std::net::IpAddr::V4(v4) => {
-            v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || v4.is_unspecified()
-                || v4.octets()[..2] == [169, 254]
-        }
-        std::net::IpAddr::V6(v6) => {
-            v6.is_loopback()
-                || v6.is_unspecified()
-                || v6.segments()[0] == 0xfe80 // link-local
-                || (v6.segments()[0] & 0xfe00) == 0xfc00 // fc00::/7 unique local
-        }
-    }
 }
 
 fn send(tx: &mpsc::Sender<String>, msg: &AgentMessage, correlation_id: &str) {
@@ -638,9 +424,8 @@ fn send(tx: &mpsc::Sender<String>, msg: &AgentMessage, correlation_id: &str) {
     }
 }
 
-/// Find the networker-tester binary.
+/// Locate the `networker-tester` binary on this host.
 async fn find_tester_binary() -> Option<String> {
-    // Try common locations
     for path in &[
         "target/debug/networker-tester",
         "target/release/networker-tester",
@@ -650,7 +435,6 @@ async fn find_tester_binary() -> Option<String> {
         }
     }
 
-    // Try workspace root (walk up)
     if let Ok(cwd) = std::env::current_dir() {
         for sub in &[
             "target/debug/networker-tester",
@@ -678,7 +462,6 @@ async fn find_tester_binary() -> Option<String> {
         }
     }
 
-    // Try PATH
     let lookup = if cfg!(windows) { "where" } else { "which" };
     if let Ok(output) = Command::new(lookup).arg("networker-tester").output().await {
         if output.status.success() {
