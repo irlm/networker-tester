@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client';
-import type { Agent, Job, Deployment, RunSummary } from '../api/types';
+import type { Agent, Deployment, TestRun } from '../api/types';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { useLiveStore } from '../stores/liveStore';
 import { usePolling } from '../hooks/usePolling';
@@ -28,9 +28,8 @@ export function DashboardPage() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [versionInfo, setVersionInfo] = useState<VersionInfo | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
-  const [recentJobs, setRecentJobs] = useState<Job[]>([]);
+  const [recentRuns, setRecentRuns] = useState<TestRun[]>([]);
   const [deployments, setDeployments] = useState<Deployment[]>([]);
-  const [, setRecentRuns] = useState<RunSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const events = useLiveStore((s) => s.events);
@@ -46,9 +45,8 @@ export function DashboardPage() {
     Promise.all([
       api.getDashboardSummary(projectId).then(setSummary),
       api.getAgents(projectId).then(r => setAgents(r.agents)),
-      api.getJobs(projectId, { limit: 5 }).then(setRecentJobs),
+      api.listTestRuns(projectId, { limit: 5 }).then(setRecentRuns),
       api.getDeployments(projectId, { limit: 10 }).then(setDeployments),
-      api.getRuns(projectId, { limit: 5 }).then(setRecentRuns),
     ]).then(() => { setError(null); setLoading(false); })
      .catch(e => { setError(String(e)); setLoading(false); });
   }, [projectId]);
@@ -128,7 +126,7 @@ export function DashboardPage() {
       </div>
 
       {/* Empty workspace: full-width setup checklist */}
-      {endpoints.length === 0 && agents.length === 0 && recentJobs.length === 0 ? (
+      {endpoints.length === 0 && agents.length === 0 && recentRuns.length === 0 ? (
         <div className="max-w-2xl">
           {/* Update notice — above checklist */}
           {versionInfo?.update_available && (
@@ -144,8 +142,8 @@ export function DashboardPage() {
           <div className="space-y-2">
             {[
               { to: `/projects/${projectId}/deploy`, step: '1', title: 'Deploy an endpoint', desc: 'Install networker-endpoint on a remote host to create a test target' },
-              { to: `/projects/${projectId}/tests`, step: '2', title: 'Add a tester', desc: 'Connect an agent to run diagnostics from a remote location' },
-              { to: `/projects/${projectId}/tests`, step: '3', title: 'Run your first test', desc: 'HTTP, DNS, TLS, UDP latency measured per-phase' },
+              { to: `/projects/${projectId}/runs`, step: '2', title: 'Add a tester', desc: 'Connect an agent to run diagnostics from a remote location' },
+              { to: `/projects/${projectId}/runs`, step: '3', title: 'Run your first test', desc: 'HTTP, DNS, TLS, UDP latency measured per-phase' },
               { to: `/projects/${projectId}/schedules`, step: '4', title: 'Create a schedule', desc: 'Automate recurring tests with cron expressions' },
             ].map(item => (
               <Link
@@ -211,12 +209,12 @@ export function DashboardPage() {
             <div>
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-xs text-gray-500 tracking-wider font-medium">testers</h3>
-                <Link to={`/projects/${projectId}/tests`} className="text-xs text-gray-600 hover:text-gray-400 transition-colors">Manage →</Link>
+                <Link to={`/projects/${projectId}/runs`} className="text-xs text-gray-600 hover:text-gray-400 transition-colors">Manage →</Link>
               </div>
               {agents.length === 0 ? (
                 <div className="border border-gray-800 rounded p-6 text-center">
                   <p className="text-gray-600 text-sm">No testers deployed</p>
-                  <Link to={`/projects/${projectId}/tests`} className="text-xs text-cyan-400 mt-1 inline-block">Add a tester</Link>
+                  <Link to={`/projects/${projectId}/runs`} className="text-xs text-cyan-400 mt-1 inline-block">Add a tester</Link>
                 </div>
               ) : (
                 // Dashboard tester card ordering:
@@ -286,16 +284,16 @@ export function DashboardPage() {
               )}
             </div>
 
-            {/* Recent Tests */}
+            {/* Recent Runs */}
             <div>
               <div className="flex items-center justify-between mb-3">
-                <h3 className="text-xs text-gray-500 tracking-wider font-medium">recent tests</h3>
-                <Link to={`/projects/${projectId}/tests`} className="text-xs text-gray-600 hover:text-gray-400 transition-colors">View all →</Link>
+                <h3 className="text-xs text-gray-500 tracking-wider font-medium">recent runs</h3>
+                <Link to={`/projects/${projectId}/runs`} className="text-xs text-gray-600 hover:text-gray-400 transition-colors">View all →</Link>
               </div>
-              {recentJobs.length === 0 ? (
+              {recentRuns.length === 0 ? (
                 <div className="border border-gray-800 rounded p-6 text-center">
-                  <p className="text-gray-600 text-sm">No tests yet</p>
-                  <Link to={`/projects/${projectId}/tests`} className="text-xs text-cyan-400 mt-1 inline-block">Run your first test</Link>
+                  <p className="text-gray-600 text-sm">No runs yet</p>
+                  <Link to={`/projects/${projectId}/runs/new`} className="text-xs text-cyan-400 mt-1 inline-block">Run your first test</Link>
                 </div>
               ) : (
                 <div className="table-container">
@@ -303,31 +301,31 @@ export function DashboardPage() {
                     <thead>
                       <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
                         <th className="px-3 py-2 text-left font-medium">ID</th>
-                        <th className="px-3 py-2 text-left font-medium">Target</th>
-                        <th className="px-3 py-2 text-left font-medium">Modes</th>
                         <th className="px-3 py-2 text-left font-medium">Status</th>
+                        <th className="px-3 py-2 text-left font-medium">Success</th>
+                        <th className="px-3 py-2 text-left font-medium">Failed</th>
                         <th className="px-3 py-2 text-left font-medium">Duration</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {recentJobs.map(job => (
-                        <tr key={job.job_id} className="border-b border-gray-800/30 hover:bg-gray-800/20">
+                      {recentRuns.map(run => (
+                        <tr key={run.id} className="border-b border-gray-800/30 hover:bg-gray-800/20">
                           <td className="px-3 py-2">
-                            <Link to={`/projects/${projectId}/tests/${job.job_id}`} className="text-cyan-400 hover:underline font-mono text-xs">
-                              {job.job_id.slice(0, 8)}
+                            <Link to={`/projects/${projectId}/runs/${run.id}`} className="text-cyan-400 hover:underline font-mono text-xs">
+                              {run.id.slice(0, 8)}
                             </Link>
                           </td>
-                          <td className="px-3 py-2 text-gray-400 text-xs truncate max-w-40">
-                            {job.config?.target?.replace('https://', '').split(':')[0]}
+                          <td className="px-3 py-2"><StatusBadge status={run.status} /></td>
+                          <td className={`px-3 py-2 tabular-nums text-xs ${run.success_count > 0 ? 'text-green-400' : 'text-gray-600'}`}>
+                            {run.success_count}
                           </td>
-                          <td className="px-3 py-2 text-gray-500 text-xs truncate max-w-24">
-                            {job.config?.modes?.join(', ')}
+                          <td className={`px-3 py-2 tabular-nums text-xs ${run.failure_count > 0 ? 'text-red-400 font-semibold' : 'text-gray-600'}`}>
+                            {run.failure_count}
                           </td>
-                          <td className="px-3 py-2"><StatusBadge status={job.status} /></td>
                           <td className="px-3 py-2 text-gray-500 text-xs font-mono">
-                            {job.started_at && job.finished_at
-                              ? `${((new Date(job.finished_at).getTime() - new Date(job.started_at).getTime()) / 1000).toFixed(1)}s`
-                              : '-'}
+                            {run.started_at && run.finished_at
+                              ? `${((new Date(run.finished_at).getTime() - new Date(run.started_at).getTime()) / 1000).toFixed(1)}s`
+                              : run.status === 'running' ? '...' : '-'}
                           </td>
                         </tr>
                       ))}
@@ -357,8 +355,8 @@ export function DashboardPage() {
             <div>
               <h3 className="text-xs text-gray-600 mb-3">quick actions</h3>
               <div className="space-y-1">
-                <Link to={`/projects/${projectId}/tests`} className="block px-3 py-2 text-sm text-gray-400 hover:text-gray-200 hover:bg-gray-800/30 rounded transition-colors">
-                  New Test
+                <Link to={`/projects/${projectId}/runs/new`} className="block px-3 py-2 text-sm text-gray-400 hover:text-gray-200 hover:bg-gray-800/30 rounded transition-colors">
+                  New Run
                 </Link>
                 <Link to={`/projects/${projectId}/deploy`} className="block px-3 py-2 text-sm text-gray-400 hover:text-gray-200 hover:bg-gray-800/30 rounded transition-colors">
                   Deploy Endpoint
