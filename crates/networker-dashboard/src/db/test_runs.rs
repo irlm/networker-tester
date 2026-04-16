@@ -15,6 +15,7 @@ pub struct NewTestRun<'a> {
     pub project_id: &'a str,
     pub tester_id: Option<&'a Uuid>,
     pub worker_id: Option<&'a str>,
+    pub comparison_group_id: Option<&'a Uuid>,
 }
 
 /// Queue a new run (status = queued). Returns the full row.
@@ -22,18 +23,19 @@ pub async fn create(client: &Client, new: &NewTestRun<'_>) -> anyhow::Result<Tes
     let row = client
         .query_one(
             "INSERT INTO test_run
-                (test_config_id, project_id, status, tester_id, worker_id)
-             VALUES ($1,$2,'queued',$3,$4)
+                (test_config_id, project_id, status, tester_id, worker_id, comparison_group_id)
+             VALUES ($1,$2,'queued',$3,$4,$5)
              RETURNING id, test_config_id, project_id, status,
                        started_at, finished_at,
                        success_count, failure_count, error_message,
                        artifact_id, tester_id, worker_id,
-                       last_heartbeat, created_at",
+                       last_heartbeat, created_at, comparison_group_id",
             &[
                 &new.test_config_id,
                 &new.project_id,
                 &new.tester_id,
                 &new.worker_id,
+                &new.comparison_group_id,
             ],
         )
         .await?;
@@ -48,7 +50,7 @@ pub async fn get(client: &Client, id: &Uuid) -> anyhow::Result<Option<TestRun>> 
                     started_at, finished_at,
                     success_count, failure_count, error_message,
                     artifact_id, tester_id, worker_id,
-                    last_heartbeat, created_at
+                    last_heartbeat, created_at, comparison_group_id
              FROM test_run WHERE id = $1",
             &[id],
         )
@@ -73,7 +75,7 @@ pub async fn list(
                 started_at, finished_at,
                 success_count, failure_count, error_message,
                 artifact_id, tester_id, worker_id,
-                last_heartbeat, created_at
+                last_heartbeat, created_at, comparison_group_id
          FROM test_run WHERE project_id = $1",
     );
     let status_str = status_filter.map(|s| s.as_str().to_string());
@@ -137,7 +139,7 @@ pub async fn update_status(
                        started_at, finished_at,
                        success_count, failure_count, error_message,
                        artifact_id, tester_id, worker_id,
-                       last_heartbeat, created_at",
+                       last_heartbeat, created_at, comparison_group_id",
             &[id, &status_str, &started, &finished],
         )
         .await?;
@@ -224,5 +226,6 @@ fn row_to_run(r: &tokio_postgres::Row) -> anyhow::Result<TestRun> {
         worker_id: r.get("worker_id"),
         last_heartbeat: r.get("last_heartbeat"),
         created_at: r.get("created_at"),
+        comparison_group_id: r.get("comparison_group_id"),
     })
 }

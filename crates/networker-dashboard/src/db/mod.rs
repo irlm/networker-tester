@@ -8,6 +8,7 @@ pub mod benchmark_vm_catalog;
 pub mod cloud_accounts;
 pub mod cloud_connections;
 pub mod command_approvals;
+pub mod comparison_groups;
 pub mod deployments;
 pub mod invites;
 pub mod migrations;

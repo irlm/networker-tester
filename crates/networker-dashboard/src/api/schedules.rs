@@ -176,6 +176,7 @@ async fn trigger_handler(
             project_id: &cfg.project_id,
             tester_id: None,
             worker_id: None,
+            comparison_group_id: None,
         },
     )
     .await

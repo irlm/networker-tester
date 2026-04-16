@@ -208,6 +208,7 @@ async fn launch_handler(
             project_id: &cfg.project_id,
             tester_id: payload.tester_id.as_ref(),
             worker_id: None,
+            comparison_group_id: None,
         },
     )
     .await

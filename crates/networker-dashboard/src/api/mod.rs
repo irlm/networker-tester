@@ -8,6 +8,7 @@ mod cloud;
 mod cloud_accounts;
 mod cloud_connections;
 mod command_approvals;
+mod comparison_groups;
 mod dashboard;
 mod deployments;
 mod events;
@@ -81,6 +82,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(test_configs::flat_router(state.clone()))
         .merge(test_runs::flat_router(state.clone()))
         .merge(schedules::flat_router(state.clone()))
+        .merge(comparison_groups::flat_router(state.clone()))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::require_auth,
@@ -92,6 +94,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(test_configs::project_router(state.clone()))
         .merge(test_runs::project_router(state.clone()))
         .merge(schedules::project_router(state.clone()))
+        .merge(comparison_groups::project_router(state.clone()))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::require_project,

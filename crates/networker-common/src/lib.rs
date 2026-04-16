@@ -18,6 +18,6 @@ pub use networker_tester::metrics::{
 // Downstream code that still wants the legacy result-storage type should use
 // `networker_tester::metrics::TestRun` directly.
 pub use test_config::{
-    CaptureMode, EndpointRef, Methodology, Mode, OutlierPolicy, PublicationGates, QualityGates,
-    RunStatus, TestConfig, TestRun, TestSchedule, Workload,
+    CaptureMode, ComparisonCell, ComparisonGroup, EndpointRef, Methodology, Mode, OutlierPolicy,
+    PublicationGates, QualityGates, RunStatus, TestConfig, TestRun, TestSchedule, Workload,
 };

@@ -1958,6 +1958,23 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
         tracing::info!("V036 migration complete");
     }
 
+    // V037: Comparison groups for multi-target / multi-runner matrix runs.
+    let row = client
+        .query_opt("SELECT version FROM _migrations WHERE version = 37", &[])
+        .await?;
+
+    if row.is_none() {
+        tracing::info!("Applying V037: comparison groups...");
+        client.batch_execute(V037_COMPARISON_GROUPS).await?;
+        client
+            .execute(
+                "INSERT INTO _migrations (version) VALUES (37) ON CONFLICT DO NOTHING",
+                &[],
+            )
+            .await?;
+        tracing::info!("V037 migration complete");
+    }
+
     Ok(())
 }
 
@@ -2355,4 +2372,29 @@ BEGIN
     END IF;
 EXCEPTION WHEN undefined_column THEN NULL;
 END$$;
+"#;
+
+/// V037: Comparison groups for multi-target / multi-runner matrix runs.
+///
+/// A `comparison_group` bundles N cells that share a common `base_workload`
+/// (and optional `methodology`). Creating a group fans out into N
+/// `test_config` + `test_run` rows, each linked back via
+/// `test_run.comparison_group_id` so the dashboard can display side-by-side
+/// results.
+const V037_COMPARISON_GROUPS: &str = r#"
+CREATE TABLE IF NOT EXISTS comparison_group (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id      TEXT NOT NULL REFERENCES project(project_id) ON DELETE CASCADE,
+    name            TEXT NOT NULL,
+    base_workload   JSONB NOT NULL,
+    methodology     JSONB,
+    cells           JSONB NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','running','completed','failed')),
+    created_by      UUID,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_comparison_group_project ON comparison_group(project_id);
+
+ALTER TABLE test_run ADD COLUMN IF NOT EXISTS comparison_group_id UUID REFERENCES comparison_group(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS ix_test_run_comparison ON test_run(comparison_group_id) WHERE comparison_group_id IS NOT NULL;
 "#;

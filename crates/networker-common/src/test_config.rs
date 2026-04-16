@@ -272,6 +272,41 @@ pub struct TestRun {
     #[serde(default)]
     pub last_heartbeat: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+    /// Links this run to a comparison group for side-by-side multi-target analysis.
+    #[serde(default)]
+    pub comparison_group_id: Option<Uuid>,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ComparisonGroup — batched multi-target / multi-runner matrix runs
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A batch of test runs that share a common workload but vary endpoint,
+/// runner, or region. Each `ComparisonCell` expands into one `TestConfig` +
+/// `TestRun` pair so results can be compared side-by-side.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComparisonGroup {
+    pub id: Uuid,
+    pub project_id: String,
+    pub name: String,
+    pub base_workload: Workload,
+    #[serde(default)]
+    pub methodology: Option<Methodology>,
+    pub cells: Vec<ComparisonCell>,
+    pub status: String,
+    #[serde(default)]
+    pub created_by: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// One axis in a comparison matrix. Each cell becomes its own TestConfig +
+/// TestRun with the group's `base_workload` and (optionally) `methodology`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComparisonCell {
+    pub label: String,
+    pub endpoint: EndpointRef,
+    #[serde(default)]
+    pub runner_id: Option<Uuid>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
