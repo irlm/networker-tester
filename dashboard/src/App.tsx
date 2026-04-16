@@ -34,12 +34,10 @@ const RunsPage = lazyPage(() => import('./pages/RunsPage'), 'RunsPage');
 const RunDetailPage = lazyPage(() => import('./pages/RunDetailPage'), 'RunDetailPage');
 const NewRunPage = lazyPage(() => import('./pages/NewRunPage'), 'NewRunPage');
 const RunComparePage = lazyPage(() => import('./pages/RunComparePage'), 'RunComparePage');
-const DeployPage = lazyPage(() => import('./pages/DeployPage'), 'DeployPage');
 const DeployDetailPage = lazyPage(() => import('./pages/DeployDetailPage'), 'DeployDetailPage');
 const SchedulesPage = lazyPage(() => import('./pages/SchedulesPage'), 'SchedulesPage');
-const TestersPage = lazyPage(() => import('./pages/TestersPage'), 'TestersPage');
 const VmHistoryPage = lazyPage(() => import('./pages/VmHistoryPage'), 'VmHistoryPage');
-const CloudVmsLayout = lazyPage(() => import('./pages/CloudVmsLayout'), 'CloudVmsLayout');
+const InfrastructurePage = lazyPage(() => import('./pages/InfrastructurePage'), 'InfrastructurePage');
 const SettingsPage = lazyPage(() => import('./pages/SettingsPage'), 'SettingsPage');
 const UsersPage = lazyPage(() => import('./pages/UsersPage'), 'UsersPage');
 const PendingPage = lazyPage(() => import('./pages/PendingPage'), 'PendingPage');
@@ -197,27 +195,27 @@ function AuthenticatedApp() {
             <Route path="/projects/:projectId/benchmark-progress/:configId" element={<Navigate to="../../runs" replace relative="path" />} />
             <Route path="/projects/:projectId/benchmarks/compare" element={<Navigate to="../../runs/compare" replace relative="path" />} />
             <Route path="/projects/:projectId/benchmarks/:runId" element={<Navigate to={`../../runs`} replace relative="path" />} />
-            {/* Unified Cloud VMs page (v0.27.22). Three sub-tabs for the
-                three VM resource types. Old URLs redirect so deep links +
-                bookmarks keep working. */}
-            <Route path="/projects/:projectId/vms" element={<CloudVmsLayout />}>
-              <Route index element={<Navigate to="testers" replace />} />
-              <Route path="testers" element={<TestersPage />} />
-              <Route path="endpoints" element={<DeployPage />} />
-              <Route path="history" element={<VmHistoryPage />} />
-            </Route>
+            {/* Single-page Infrastructure (v0.28). Replaces the tabbed
+                Cloud VMs layout — all three sections visible on one page. */}
+            <Route path="/projects/:projectId/vms" element={<InfrastructurePage />} />
+            <Route path="/projects/:projectId/vms/history" element={<VmHistoryPage />} />
 
-            {/* Redirects from the pre-v0.27.22 URLs. `relative="path"` makes
-                `..` resolve against the URL, not the route hierarchy — without
-                it the catch-all at the bottom fires and bounces the user to
-                the workspace picker (regression seen in v0.27.22). */}
+            {/* Redirects: old tab URLs + pre-v0.27.22 URLs → /vms */}
+            <Route
+              path="/projects/:projectId/vms/testers"
+              element={<Navigate to="../vms" replace relative="path" />}
+            />
+            <Route
+              path="/projects/:projectId/vms/endpoints"
+              element={<Navigate to="../vms" replace relative="path" />}
+            />
             <Route
               path="/projects/:projectId/deploy"
-              element={<Navigate to="../vms/endpoints" replace relative="path" />}
+              element={<Navigate to="../vms" replace relative="path" />}
             />
             <Route
               path="/projects/:projectId/testers"
-              element={<Navigate to="../vms/testers" replace relative="path" />}
+              element={<Navigate to="../vms" replace relative="path" />}
             />
             <Route
               path="/projects/:projectId/vm-history"

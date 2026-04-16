@@ -499,7 +499,7 @@ export function NewRunPage() {
                     Deploy a target from Infrastructure to use it as a proxy target.
                   </p>
                   <Link
-                    to={`/projects/${projectId}/vms/endpoints`}
+                    to={`/projects/${projectId}/vms`}
                     className="text-xs text-cyan-400 hover:text-cyan-300 transition-colors"
                   >
                     Go to Infrastructure / Targets
@@ -564,7 +564,7 @@ export function NewRunPage() {
               {!deploymentsLoading && deployments.length > 0 && (
                 <div className="mt-3">
                   <Link
-                    to={`/projects/${projectId}/vms/endpoints`}
+                    to={`/projects/${projectId}/vms`}
                     className="text-xs text-cyan-400 hover:text-cyan-300 transition-colors"
                   >
                     + Deploy new target
