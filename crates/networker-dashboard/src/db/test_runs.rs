@@ -182,6 +182,7 @@ pub async fn set_error(client: &Client, id: &Uuid, message: &str) -> anyhow::Res
 }
 
 /// Attach an artifact id to a completed run (methodology mode only).
+#[allow(dead_code)]
 pub async fn attach_artifact(client: &Client, id: &Uuid, artifact_id: &Uuid) -> anyhow::Result<()> {
     client
         .execute(
@@ -192,6 +193,7 @@ pub async fn attach_artifact(client: &Client, id: &Uuid, artifact_id: &Uuid) -> 
     Ok(())
 }
 
+#[allow(dead_code)]
 pub async fn delete(client: &Client, id: &Uuid) -> anyhow::Result<bool> {
     let n = client
         .execute("DELETE FROM test_run WHERE id = $1", &[id])

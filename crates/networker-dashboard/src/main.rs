@@ -9,6 +9,7 @@ mod deploy;
 mod email;
 #[allow(dead_code)]
 mod project_id;
+#[allow(dead_code)]
 mod regression;
 mod scheduler;
 mod system_metrics;

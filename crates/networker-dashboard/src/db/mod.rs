@@ -1,6 +1,8 @@
 pub mod agent_commands;
 pub mod agents;
+#[allow(dead_code)]
 pub mod benchmark_artifacts;
+#[allow(dead_code)]
 pub mod benchmark_testbeds;
 pub mod benchmark_vm_catalog;
 pub mod cloud_accounts;
@@ -21,6 +23,7 @@ pub mod test_schedules;
 pub mod tls_profiles;
 pub mod url_tests;
 pub mod users;
+#[allow(dead_code)]
 pub mod visibility;
 pub mod vm_lifecycle;
 pub mod workspace_warnings;
