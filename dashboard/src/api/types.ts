@@ -1,3 +1,131 @@
+// ── REST v2 types (spec §2) ──────────────────────────────────────────────
+
+export type EndpointKind = 'network' | 'proxy' | 'runtime';
+
+export type EndpointRef =
+  | { kind: 'network'; host: string; port?: number }
+  | { kind: 'proxy'; proxy_endpoint_id: string }
+  | { kind: 'runtime'; runtime_id: string; language: string };
+
+export type CaptureMode = 'headers-only' | 'full' | 'metrics-only';
+
+export interface Workload {
+  modes: string[];
+  runs: number;
+  concurrency: number;
+  timeout_ms: number;
+  payload_sizes: number[];
+  capture_mode: CaptureMode;
+}
+
+export type OutlierPolicy =
+  | { policy: 'none' }
+  | { policy: 'iqr'; k: number }
+  | { policy: 'std-dev'; sigma: number }
+  | { policy: 'percentile'; lo: number; hi: number };
+
+export interface QualityGates {
+  max_cv_pct: number;
+  min_samples: number;
+  max_noise_level: number;
+}
+
+export interface PublicationGates {
+  max_failure_pct: number;
+  require_all_phases: boolean;
+}
+
+export interface Methodology {
+  warmup_runs: number;
+  measured_runs: number;
+  cooldown_ms: number;
+  target_error_pct: number;
+  outlier_policy: OutlierPolicy;
+  quality_gates: QualityGates;
+  publication_gates: PublicationGates;
+}
+
+export interface TestConfig {
+  id: string;
+  project_id: string;
+  name: string;
+  description: string | null;
+  endpoint: EndpointRef;
+  workload: Workload;
+  methodology: Methodology | null;
+  baseline_run_id: string | null;
+  max_duration_secs: number;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TestConfigListItem {
+  id: string;
+  project_id: string;
+  name: string;
+  endpoint_kind: EndpointKind;
+  modes: string[];
+  has_methodology: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TestConfigCreate {
+  name: string;
+  description?: string;
+  endpoint: EndpointRef;
+  workload: Workload;
+  methodology?: Methodology;
+  max_duration_secs?: number;
+}
+
+export type RunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+export interface TestRun {
+  id: string;
+  test_config_id: string;
+  project_id: string;
+  status: RunStatus;
+  started_at: string | null;
+  finished_at: string | null;
+  success_count: number;
+  failure_count: number;
+  error_message: string | null;
+  artifact_id: string | null;
+  tester_id: string | null;
+  worker_id: string | null;
+  last_heartbeat: string | null;
+  created_at: string;
+  /** Denormalized from test_config for list display */
+  config_name?: string;
+  endpoint_kind?: EndpointKind;
+  modes?: string[];
+}
+
+export interface TestSchedule {
+  id: string;
+  test_config_id: string;
+  project_id: string;
+  cron_expr: string;
+  timezone: string;
+  enabled: boolean;
+  last_fired_at: string | null;
+  last_run_id: string | null;
+  next_fire_at: string | null;
+  created_by: string | null;
+  created_at: string;
+  /** Denormalized for display */
+  config_name?: string;
+}
+
+export interface ComparisonReport {
+  run_ids: string[];
+  cases: BenchmarkCaseComparison[];
+}
+
+// ── Legacy type aliases (used by out-of-scope pages: DashboardPage, JobDetailPage) ──
+
 export interface Agent {
   agent_id: string;
   name: string;
@@ -10,12 +138,10 @@ export interface Agent {
   last_heartbeat: string | null;
   registered_at: string;
   tags: Record<string, string> | null;
-  /** FK to `project_tester`. NULL means the tester was deleted and the
-   * agent row is orphaned — dashboard UI should hide these unless they
-   * happen to be online right now. */
   tester_id: string | null;
 }
 
+/** @deprecated Use TestRun */
 export interface Job {
   job_id: string;
   definition_id: string | null;
@@ -31,6 +157,7 @@ export interface Job {
   error_message: string | null;
 }
 
+/** @deprecated Use Workload */
 export interface JobConfig {
   target: string;
   modes: string[];
@@ -49,6 +176,7 @@ export interface JobConfig {
   capture_mode?: 'none' | 'tester' | 'endpoint' | 'both';
 }
 
+/** @deprecated Use TestRun */
 export interface RunSummary {
   run_id: string;
   started_at: string;
@@ -61,6 +189,7 @@ export interface RunSummary {
   failure_count: number;
 }
 
+/** @deprecated Use TestRun + BenchmarkArtifact */
 export interface BenchmarkRunSummary {
   run_id: string;
   generated_at: string;
@@ -520,6 +649,7 @@ export interface PacketCaptureSummary {
   capture_may_be_ambiguous: boolean;
 }
 
+/** @deprecated Use TestSchedule */
 export interface Schedule {
   schedule_id: string;
   name: string | null;

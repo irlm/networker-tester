@@ -1,7 +1,7 @@
-import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, LogsResponse, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, BenchmarkComparePreset, BenchmarkComparePresetInput, TlsProfileSummary, TlsProfileDetail, BenchmarkConfigSummary, BenchmarkVmCatalogEntry, BenchTokenInfo, PerfLogInput, PerfLogRow, PerfLogStats, ImportResult, SendInviteResult } from './types';
+import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, LogsResponse, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, BenchmarkComparePreset, BenchmarkComparePresetInput, TlsProfileSummary, TlsProfileDetail, BenchmarkConfigSummary, BenchmarkVmCatalogEntry, BenchTokenInfo, PerfLogInput, PerfLogRow, PerfLogStats, ImportResult, SendInviteResult, TestConfig, TestConfigListItem, TestConfigCreate, TestRun, TestSchedule, ComparisonReport } from './types';
 
-export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, LogsResponse, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, BenchmarkComparePreset, BenchmarkComparePresetInput, TlsProfileSummary, TlsProfileDetail, BenchmarkConfigSummary, BenchmarkVmCatalogEntry, BenchTokenInfo, ImportResult, SendInviteResult };
-export type { LiveAttempt } from './types';
+export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, LogsResponse, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, BenchmarkComparePreset, BenchmarkComparePresetInput, TlsProfileSummary, TlsProfileDetail, BenchmarkConfigSummary, BenchmarkVmCatalogEntry, BenchTokenInfo, ImportResult, SendInviteResult, TestConfig, TestConfigListItem, TestConfigCreate, TestRun, TestSchedule, ComparisonReport };
+export type { LiveAttempt, EndpointRef, EndpointKind, Workload, Methodology, RunStatus, CaptureMode, OutlierPolicy, QualityGates, PublicationGates } from './types';
 
 import { useApiLogStore } from '../stores/apiLogStore';
 import { getRequestSource } from '../lib/requestSource';
@@ -840,4 +840,103 @@ export const api = {
 
   getPerfLogStats: () =>
     request<PerfLogStats>('/perf-log/stats'),
+
+  // ═══════════════════════════════════════════════════════════════════════
+  //  REST v2 — TestConfig / TestRun / TestSchedule (spec §3)
+  // ═══════════════════════════════════════════════════════════════════════
+
+  // ── TestConfig CRUD ──────────────────────────────────────────────────
+  createTestConfig: (projectId: string, config: TestConfigCreate) =>
+    request<TestConfig>(`/v2/projects/${projectId}/test-configs`, {
+      method: 'POST',
+      body: JSON.stringify(config),
+    }),
+
+  listTestConfigs: (projectId: string) =>
+    request<TestConfigListItem[]>(`/v2/projects/${projectId}/test-configs`),
+
+  getTestConfig: (configId: string) =>
+    request<TestConfig>(`/v2/test-configs/${configId}`),
+
+  updateTestConfig: (configId: string, patch: Partial<TestConfigCreate>) =>
+    request<TestConfig>(`/v2/test-configs/${configId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+
+  deleteTestConfig: (configId: string) =>
+    request<void>(`/v2/test-configs/${configId}`, { method: 'DELETE' }),
+
+  launchTestConfig: (configId: string, testerId?: string) =>
+    request<TestRun>(`/v2/test-configs/${configId}/launch`, {
+      method: 'POST',
+      body: JSON.stringify({ tester_id: testerId }),
+    }),
+
+  // ── TestRun ──────────────────────────────────────────────────────────
+  listTestRuns: (projectId: string, params?: {
+    status?: string;
+    endpoint_kind?: string;
+    has_artifact?: boolean;
+    limit?: number;
+    before?: string;
+  }) => {
+    const search = new URLSearchParams();
+    if (params?.status) search.set('status', params.status);
+    if (params?.endpoint_kind) search.set('endpoint_kind', params.endpoint_kind);
+    if (params?.has_artifact !== undefined) search.set('has_artifact', String(params.has_artifact));
+    if (params?.limit) search.set('limit', String(params.limit));
+    if (params?.before) search.set('before', params.before);
+    const qs = search.toString();
+    return request<TestRun[]>(`/v2/projects/${projectId}/test-runs${qs ? `?${qs}` : ''}`);
+  },
+
+  getTestRun: (runId: string) =>
+    request<TestRun>(`/v2/test-runs/${runId}`),
+
+  getTestRunArtifact: (runId: string) =>
+    request<BenchmarkArtifact>(`/v2/test-runs/${runId}/artifact`),
+
+  getTestRunAttempts: (runId: string) =>
+    request<Attempt[]>(`/v2/test-runs/${runId}/attempts`),
+
+  cancelTestRun: (runId: string) =>
+    request<void>(`/v2/test-runs/${runId}/cancel`, { method: 'POST' }),
+
+  compareTestRuns: (runIds: string[]) =>
+    request<ComparisonReport>('/v2/test-runs/compare', {
+      method: 'POST',
+      body: JSON.stringify({ run_ids: runIds }),
+    }),
+
+  // ── TestSchedule ─────────────────────────────────────────────────────
+  createTestSchedule: (projectId: string, params: {
+    test_config_id: string;
+    cron_expr: string;
+    timezone?: string;
+    enabled?: boolean;
+  }) =>
+    request<TestSchedule>(`/v2/projects/${projectId}/schedules`, {
+      method: 'POST',
+      body: JSON.stringify(params),
+    }),
+
+  listTestSchedules: (projectId: string) =>
+    request<TestSchedule[]>(`/v2/projects/${projectId}/schedules`),
+
+  updateTestSchedule: (scheduleId: string, patch: Partial<{
+    cron_expr: string;
+    timezone: string;
+    enabled: boolean;
+  }>) =>
+    request<TestSchedule>(`/v2/schedules/${scheduleId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+
+  deleteTestSchedule: (scheduleId: string) =>
+    request<void>(`/v2/schedules/${scheduleId}`, { method: 'DELETE' }),
+
+  triggerTestSchedule: (scheduleId: string) =>
+    request<TestRun>(`/v2/schedules/${scheduleId}/trigger`, { method: 'POST' }),
 };
