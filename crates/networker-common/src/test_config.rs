@@ -220,7 +220,8 @@ impl RunStatus {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    /// Parse from the lowercase wire form. Returns `None` on unknown input.
+    pub fn parse_str(s: &str) -> Option<Self> {
         match s {
             "queued" => Some(RunStatus::Queued),
             "running" => Some(RunStatus::Running),
@@ -390,7 +391,7 @@ mod tests {
             serde_json::to_string(&RunStatus::Queued).unwrap(),
             "\"queued\""
         );
-        assert_eq!(RunStatus::from_str("running"), Some(RunStatus::Running));
+        assert_eq!(RunStatus::parse_str("running"), Some(RunStatus::Running));
         assert!(RunStatus::Completed.is_terminal());
         assert!(!RunStatus::Running.is_terminal());
     }
