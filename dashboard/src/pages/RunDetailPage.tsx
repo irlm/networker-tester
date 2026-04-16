@@ -1,9 +1,10 @@
 import { useState, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
-import { api, type RunSummary } from '../api/client';
-import type { LiveAttempt } from '../api/types';
+import { api } from '../api/client';
+import type { TestRun, LiveAttempt, BenchmarkArtifact } from '../api/types';
 import { useProject } from '../hooks/useProject';
 import { Breadcrumb } from '../components/common/Breadcrumb';
+import { StatusBadge } from '../components/common/StatusBadge';
 import { ShareDialog } from '../components/ShareDialog';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { usePolling } from '../hooks/usePolling';
@@ -33,8 +34,9 @@ import {
 export function RunDetailPage() {
   const { projectId, isProjectAdmin } = useProject();
   const { runId } = useParams<{ runId: string }>();
-  const [run, setRun] = useState<RunSummary | null>(null);
+  const [run, setRun] = useState<TestRun | null>(null);
   const [attempts, setAttempts] = useState<LiveAttempt[]>([]);
+  const [artifact, setArtifact] = useState<BenchmarkArtifact | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expandedProtocols, setExpandedProtocols] = useState<Set<string>>(new Set());
@@ -47,7 +49,7 @@ export function RunDetailPage() {
     () => {
       if (!runId || !projectId) return;
       api
-        .getRunAttempts(projectId, runId)
+        .getTestRunAttempts(runId)
         .then((data) => {
           setAttempts(data as unknown as LiveAttempt[]);
           setError(null);
@@ -55,8 +57,14 @@ export function RunDetailPage() {
         })
         .catch((e) => { setError(String(e)); setLoading(false); });
       api
-        .getRun(projectId, runId!)
-        .then((data) => setRun(data as unknown as RunSummary))
+        .getTestRun(runId)
+        .then((data) => {
+          setRun(data);
+          // Fetch artifact if present and not already loaded
+          if (data.artifact_id && !artifact) {
+            api.getTestRunArtifact(runId).then(setArtifact).catch(() => {});
+          }
+        })
         .catch(() => {});
     },
     15000,
@@ -142,21 +150,37 @@ export function RunDetailPage() {
       {/* Header */}
       <div className="mb-6 flex items-start justify-between">
         <div>
-          <h2 className="text-xl font-bold text-gray-100 mb-1">Run {shortId}</h2>
+          <div className="flex items-center gap-3 mb-1">
+            <h2 className="text-xl font-bold text-gray-100">Run {shortId}</h2>
+            {run && <StatusBadge status={run.status} />}
+            {run?.artifact_id && (
+              <span className="text-[10px] text-purple-400 bg-purple-500/10 px-1.5 py-0.5 rounded">benchmark</span>
+            )}
+          </div>
           <p className="text-sm text-gray-500">
-            {run?.target_host && <>Target: <span className="text-gray-300">{run.target_host}</span> · </>}
-            {run?.modes && <>Modes: <span className="text-gray-300">{run.modes}</span> · </>}
+            {run?.config_name && <>Config: <span className="text-gray-300">{run.config_name}</span> · </>}
+            {run?.modes && <>Modes: <span className="text-gray-300">{run.modes.join(', ')}</span> · </>}
             {attempts.length} attempts
           </p>
         </div>
-        {isProjectAdmin && runId && (
-          <button
-            onClick={() => setShowShareDialog(true)}
-            className="px-3 py-1.5 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors border border-gray-700"
-          >
-            Share
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {run && (run.status === 'queued' || run.status === 'running') && (
+            <button
+              onClick={() => runId && api.cancelTestRun(runId).catch(() => {})}
+              className="px-3 py-1.5 text-xs bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded transition-colors border border-red-500/30"
+            >
+              Cancel
+            </button>
+          )}
+          {isProjectAdmin && runId && (
+            <button
+              onClick={() => setShowShareDialog(true)}
+              className="px-3 py-1.5 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors border border-gray-700"
+            >
+              Share
+            </button>
+          )}
+        </div>
       </div>
 
       {showShareDialog && runId && (
@@ -374,6 +398,127 @@ export function RunDetailPage() {
           </div>
         );
       })}
+
+      {/* ── Benchmark Artifact (methodology runs only) ── */}
+      {artifact && <ArtifactSection artifact={artifact} />}
+
+      {/* ── Live Progress (queued/running runs) ── */}
+      {run && (run.status === 'queued' || run.status === 'running') && (
+        <div className="table-container mb-6 mt-6">
+          <h3 className="px-4 py-2.5 text-xs text-gray-500 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
+            live progress
+          </h3>
+          <div className="px-4 py-4 text-sm">
+            <div className="flex items-center gap-3">
+              <span className="w-2 h-2 rounded-full bg-cyan-400 motion-safe:animate-pulse" />
+              <span className="text-gray-300">
+                {run.success_count + run.failure_count} attempts completed
+              </span>
+              <span className="text-green-400">{run.success_count} ok</span>
+              {run.failure_count > 0 && <span className="text-red-400">{run.failure_count} fail</span>}
+            </div>
+            {run.error_message && (
+              <p className="text-red-400 text-xs mt-2 font-mono">{run.error_message}</p>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Artifact Section (merged from BenchmarkDetailPage) ─────────────────────
+
+function ArtifactSection({ artifact }: { artifact: BenchmarkArtifact }) {
+  return (
+    <div className="mt-8 border-t border-purple-500/20 pt-6">
+      <h3 className="text-sm font-bold text-purple-400 mb-4 flex items-center gap-2">
+        <span className="text-purple-400/60">&#9670;</span> Benchmark Artifact
+      </h3>
+
+      {/* Data Quality Summary */}
+      {artifact.data_quality && (
+        <div className="border border-gray-800 rounded p-4 mb-4 text-xs">
+          <div className="flex flex-wrap gap-x-6 gap-y-2">
+            <span className="text-gray-500">
+              Noise: <span className={artifact.data_quality.noise_level === 'low' ? 'text-green-400' : 'text-yellow-400'}>
+                {artifact.data_quality.noise_level}
+              </span>
+            </span>
+            <span className="text-gray-500">
+              Sufficiency: <span className={artifact.data_quality.sufficiency === 'sufficient' ? 'text-green-400' : 'text-yellow-400'}>
+                {artifact.data_quality.sufficiency}
+              </span>
+            </span>
+            <span className="text-gray-500">
+              Publication: <span className={artifact.data_quality.publication_ready ? 'text-green-400' : 'text-red-400'}>
+                {artifact.data_quality.publication_ready ? 'Ready' : 'Not Ready'}
+              </span>
+            </span>
+            {artifact.data_quality.quality_tier && (
+              <span className="text-gray-500">
+                Tier: <span className="text-gray-300">{artifact.data_quality.quality_tier}</span>
+              </span>
+            )}
+          </div>
+          {artifact.data_quality.warnings.length > 0 && (
+            <div className="mt-2 space-y-1">
+              {artifact.data_quality.warnings.map((w, i) => (
+                <p key={i} className="text-yellow-400/80">&#9888; {w}</p>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Case Summaries */}
+      {artifact.summaries && artifact.summaries.length > 0 && (
+        <div className="table-container mb-4">
+          <h4 className="px-4 py-2.5 text-xs text-gray-500 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
+            case summaries
+          </h4>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-gray-800 text-gray-500">
+                  <th className="px-4 py-2 text-left">Protocol</th>
+                  <th className="px-4 py-2 text-left">Metric</th>
+                  <th className="px-4 py-2 text-right">N</th>
+                  <th className="px-4 py-2 text-right">p50</th>
+                  <th className="px-4 py-2 text-right">p95</th>
+                  <th className="px-4 py-2 text-right">p99</th>
+                  <th className="px-4 py-2 text-right">RPS</th>
+                  <th className="px-4 py-2 text-right">StdDev</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(Array.isArray(artifact.summaries) ? artifact.summaries : [artifact.summaries]).map((s, i) => (
+                  <tr key={i} className="border-b border-gray-800/30 hover:bg-gray-800/10">
+                    <td className="px-4 py-2 text-gray-200">{s.protocol}</td>
+                    <td className="px-4 py-2 text-gray-400">{s.metric_name} ({s.metric_unit})</td>
+                    <td className="px-4 py-2 text-gray-400 text-right">{s.included_sample_count}</td>
+                    <td className="px-4 py-2 text-gray-100 text-right font-mono">{s.p50.toFixed(2)}</td>
+                    <td className="px-4 py-2 text-yellow-400 text-right font-mono">{s.p95.toFixed(2)}</td>
+                    <td className="px-4 py-2 text-orange-400 text-right font-mono">{s.p99.toFixed(2)}</td>
+                    <td className="px-4 py-2 text-gray-300 text-right font-mono">{s.rps.toFixed(0)}</td>
+                    <td className="px-4 py-2 text-gray-500 text-right font-mono">{s.stddev.toFixed(2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Methodology */}
+      {artifact.methodology && (
+        <div className="border border-gray-800 rounded p-4 text-xs text-gray-400 space-y-1">
+          <p className="text-gray-500 font-medium mb-2">Methodology</p>
+          <p>Mode: {artifact.methodology.mode} | Phase model: {artifact.methodology.phase_model}</p>
+          <p>Scenario: {artifact.methodology.scenario} | Sample phase: {artifact.methodology.sample_phase}</p>
+          <p>Launches: {artifact.methodology.launch_count} | Phases: {artifact.methodology.phases_present?.join(', ')}</p>
+        </div>
+      )}
     </div>
   );
 }
