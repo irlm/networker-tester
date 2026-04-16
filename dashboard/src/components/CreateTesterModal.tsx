@@ -166,11 +166,12 @@ export function CreateTesterModal({
       const connsArr = Array.isArray(conns) ? conns : [];
       const acctsArr = Array.isArray(accts) ? accts : [];
       const testersArr = Array.isArray(testers) ? testers : [];
+      // Include all configured providers — not just 'active' ones.
+      // Error-status accounts still represent an intent to use that provider;
+      // hiding them silently makes the dropdown empty and confusing.
       const fromConns = connsArr
-        .filter((c: { status: string }) => c.status === 'active')
         .map((c: { provider: string }) => c.provider);
       const fromAccts = acctsArr
-        .filter((a: { status: string }) => a.status === 'active')
         .map((a: { provider: string }) => a.provider);
       const providers = [...new Set([...fromConns, ...fromAccts])] as string[];
       setAvailableClouds(providers.length > 0 ? providers : ['azure']);

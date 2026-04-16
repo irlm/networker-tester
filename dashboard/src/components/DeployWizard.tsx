@@ -81,7 +81,7 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
       .finally(() => setCloudLoading(false));
     api.getModes().then(r => setModeGroups(r.groups)).catch(() => {});
     api.getCloudConnections(projectId)
-      .then(conns => setCloudConnections(conns.filter(c => c.status === 'active')))
+      .then(conns => setCloudConnections(conns))
       .catch(() => {});
   }, [projectId]);
 
