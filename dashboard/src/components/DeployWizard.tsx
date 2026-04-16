@@ -6,6 +6,7 @@ import { ModeSelector } from './common/ModeSelector';
 import { PayloadSelector } from './common/PayloadSelector';
 import { CloudAccountSelector } from './CloudAccountSelector';
 import { useToast } from '../hooks/useToast';
+import { CloudProviderStatus } from './common/CloudProviderStatus';
 
 interface DeployWizardProps {
   projectId: string;
@@ -287,38 +288,7 @@ export function DeployWizard({ projectId, onClose, onCreated }: DeployWizardProp
           {/* Step: Target Config (cloud status shown inline) */}
           {currentStepName === 'endpoint-config' && (
             <div>
-              {/* Inline cloud provider status — same pattern as CreateTesterModal */}
-              <div className="border border-gray-800 rounded p-3 mb-4">
-                <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-2">Cloud providers</div>
-                {cloudLoading ? (
-                  <p className="text-xs text-gray-500">Checking...</p>
-                ) : cloudStatus ? (
-                  <div className="grid grid-cols-2 gap-2">
-                    {(['azure', 'aws', 'gcp', 'ssh'] as const).map(p => {
-                      const s = cloudStatus[p];
-                      return (
-                        <div key={p} className="bg-[var(--bg-base)] border border-gray-800 rounded p-2.5">
-                          <div className="flex items-center gap-2 mb-0.5">
-                            <span className={`w-1.5 h-1.5 rounded-full ${
-                              s.authenticated ? 'bg-green-400' : s.available ? 'bg-yellow-400' : 'bg-gray-600'
-                            }`} />
-                            <span className={`text-xs font-medium ${s.authenticated ? 'text-gray-200' : 'text-gray-500'}`}>
-                              {p === 'ssh' ? 'SSH/LAN' : p.toUpperCase()}
-                            </span>
-                          </div>
-                          <p className="text-[10px] text-gray-600 pl-3.5">
-                            {!s.available ? 'CLI not installed' :
-                             !s.authenticated ? 'Not authenticated' :
-                             s.account ? s.account : 'Ready'}
-                          </p>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <p className="text-xs text-yellow-400/70">Could not detect cloud CLIs.</p>
-                )}
-              </div>
+              <CloudProviderStatus cloudStatus={cloudStatus} loading={cloudLoading} />
 
               <p className="text-sm text-gray-400 mb-3">Configure targets to deploy:</p>
               {endpoints.map((ep, idx) => (

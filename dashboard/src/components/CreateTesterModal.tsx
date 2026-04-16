@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { testersApi, type TesterRow } from '../api/testers';
 import { api } from '../api/client';
 import type { CloudStatus } from '../api/types';
+import { CloudProviderStatus } from './common/CloudProviderStatus';
 
 interface CreateTesterModalProps {
   projectId: string;
@@ -371,39 +372,7 @@ export function CreateTesterModal({
             </div>
           ) : (
             <form onSubmit={handleSubmit} className="space-y-4">
-              {/* Cloud provider status — matches Deploy Target wizard */}
-              <div className="border border-gray-800 rounded p-3 mb-1">
-                <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-2">Cloud providers</div>
-                <div className="grid grid-cols-2 gap-2 mb-2">
-                  {(['azure', 'aws', 'gcp'] as const).map(p => {
-                    const s = cloudStatus?.[p];
-                    const connected = availableClouds.includes(p);
-                    return (
-                      <div key={p} className="bg-[var(--bg-base)] border border-gray-800 rounded p-2.5">
-                        <div className="flex items-center gap-2 mb-0.5">
-                          <span className={`w-1.5 h-1.5 rounded-full ${
-                            connected ? 'bg-green-400' : s?.available ? 'bg-yellow-400' : 'bg-gray-600'
-                          }`} />
-                          <span className={`text-xs font-medium ${connected ? 'text-gray-200' : 'text-gray-500'}`}>
-                            {p === 'azure' ? 'Azure' : p === 'aws' ? 'AWS' : 'GCP'}
-                          </span>
-                        </div>
-                        <p className="text-[10px] text-gray-600 pl-3.5">
-                          {!s ? 'checking...' :
-                           !s.available ? 'CLI not installed' :
-                           !s.authenticated ? 'Not authenticated' :
-                           s.account ? `${s.account}` : 'Ready'}
-                        </p>
-                      </div>
-                    );
-                  })}
-                </div>
-                {availableClouds.length === 0 && (
-                  <p className="text-xs text-yellow-400/70">
-                    No cloud accounts connected. Add one in Settings → Cloud to deploy runners.
-                  </p>
-                )}
-              </div>
+              <CloudProviderStatus cloudStatus={cloudStatus} availableClouds={availableClouds} />
 
               {/* Cloud */}
               <div>
