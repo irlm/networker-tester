@@ -3,10 +3,7 @@ mod agent_commands;
 mod agents;
 mod auth;
 mod bench_tokens;
-mod benchmark_callbacks;
 mod benchmark_catalog;
-mod benchmark_configs;
-mod benchmarks;
 mod cloud;
 mod cloud_accounts;
 mod cloud_connections;
@@ -16,7 +13,6 @@ mod deployments;
 mod events;
 mod inventory;
 mod invites;
-mod jobs;
 mod leaderboard;
 mod logs;
 mod member_import;
@@ -25,14 +21,12 @@ mod pending_projects;
 mod perf_log;
 mod project_members;
 mod projects;
-mod runs;
 mod schedules;
 mod share_links;
 mod sso_admin;
-// Task 14: tester REST handlers land here. Wiring into `project_scoped`
-// is deferred to Task 18; for now we declare the module so it compiles
-// and its unit tests run.
 mod system_health;
+mod test_configs;
+mod test_runs;
 mod tester_precheck;
 mod testers;
 mod tls_profiles;
@@ -56,7 +50,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(share_links::public_router(state.clone()))
         .merge(invites::public_router(state.clone()))
         .merge(leaderboard::public_router(state.clone()))
-        .merge(benchmark_callbacks::public_router(state.clone()))
         .merge(system_health::public_router(state.clone()));
 
     // Protected flat routes (require valid JWT, global/platform resources only)
@@ -83,14 +76,36 @@ pub fn router(state: Arc<AppState>) -> Router {
             crate::auth::require_auth,
         ));
 
-    // Project-scoped routes (require auth + project membership)
+    // ── v2 flat routes (auth required, no project scope) ────────────────
+    let v2_flat = Router::new()
+        .merge(test_configs::flat_router(state.clone()))
+        .merge(test_runs::flat_router(state.clone()))
+        .merge(schedules::flat_router(state.clone()))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::require_auth,
+        ));
+    let v2_flat_nested = Router::new().nest("/v2", v2_flat);
+
+    // ── v2 project-scoped routes ────────────────────────────────────────
+    let v2_project = Router::new()
+        .merge(test_configs::project_router(state.clone()))
+        .merge(test_runs::project_router(state.clone()))
+        .merge(schedules::project_router(state.clone()))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::require_project,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::require_auth,
+        ));
+    let v2_project_nested = Router::new().nest("/v2/projects/{project_id}", v2_project);
+
+    // Project-scoped v1 routes that are NOT deleted (cloud, agents, etc.)
     let project_scoped = Router::new()
         .merge(agents::project_router(state.clone()))
         .merge(agent_commands::project_router(state.clone()))
-        .merge(benchmarks::project_router(state.clone()))
-        .merge(jobs::project_router(state.clone()))
-        .merge(runs::project_router(state.clone()))
-        .merge(schedules::project_router(state.clone()))
         .merge(dashboard::project_router(state.clone()))
         .merge(deployments::project_router(state.clone()))
         .merge(cloud::project_router(state.clone()))
@@ -105,7 +120,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(command_approvals::project_router(state.clone()))
         .merge(visibility::project_router(state.clone()))
         .merge(invites::project_router(state.clone()))
-        .merge(benchmark_configs::project_router(state.clone()))
         .merge(benchmark_catalog::project_router(state.clone()))
         .merge(testers::project_router(state.clone()))
         .merge(tester_precheck::project_router(state.clone()))
@@ -122,5 +136,9 @@ pub fn router(state: Arc<AppState>) -> Router {
 
     let project_nested = Router::new().nest("/projects/{project_id}", project_scoped);
 
-    public.merge(protected_flat).merge(project_nested)
+    public
+        .merge(protected_flat)
+        .merge(v2_flat_nested)
+        .merge(v2_project_nested)
+        .merge(project_nested)
 }
