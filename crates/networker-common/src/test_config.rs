@@ -240,6 +240,13 @@ impl RunStatus {
     }
 }
 
+impl std::str::FromStr for RunStatus {
+    type Err = &'static str;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse_str(s).ok_or("unknown run status")
+    }
+}
+
 /// Every execution of a `TestConfig` produces one `TestRun`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TestRun {
