@@ -37,20 +37,14 @@ export function Sidebar({ connectionDot }: SidebarProps) {
 
   const coreItems: NavItem[] = pid ? [
     { path: `/projects/${pid}`, label: 'Dashboard', icon: '\u25C8', exact: true },
-    // Unified Cloud VMs nav (v0.27.22): Testers + Endpoints + History under
-    // one entry. The landing sub-tab is Testers (most-used) — the layout
-    // redirects /vms → /vms/testers.
     { path: `/projects/${pid}/vms`, label: 'Cloud VMs', icon: '\u25A3' },
-    { path: `/projects/${pid}/tests`, label: 'Tests', icon: '\u25B6' },
+    { path: `/projects/${pid}/runs`, label: 'Runs', icon: '\u25B6' },
     { path: `/projects/${pid}/schedules`, label: 'Schedules', icon: '\u21BB' },
-    { path: `/projects/${pid}/runs`, label: 'Runs', icon: '\u25F7' },
   ] : [];
 
   const benchItems: NavItem[] = pid ? [
-    { path: `/projects/${pid}/benchmarks`, label: 'Full Stack', icon: '\u25A6' },
-    { path: `/projects/${pid}/app-benchmark-wizard`, label: 'Application', icon: '\u25A7' },
     { path: '/leaderboard', label: 'Leaderboard', icon: '\u2261' },
-    ...(isOperator ? [{ path: `/projects/${pid}/benchmark-catalog`, label: 'VM Catalog', icon: '\u2395' }] : []),
+    ...(isOperator ? [{ path: `/projects/${pid}/benchmark-catalog`, label: 'Runtimes', icon: '\u2395' }] : []),
     { path: `/projects/${pid}/benchmark-regressions`, label: 'Regressions', icon: '\u26A0' },
   ] : [];
 
