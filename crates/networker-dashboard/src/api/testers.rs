@@ -942,6 +942,12 @@ async fn delete_tester(
     // delete fails we refuse to delete the row so the user can retry
     // (otherwise we'd leak Azure resources).
     if let Some(resource_id) = tester.vm_resource_id.as_deref() {
+        let _permit = state.deploy_semaphore.acquire().await.map_err(|_| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "deploy queue closed".into(),
+            )
+        })?;
         let delete_result = match provider_for_tester(&client, &tester, &state).await {
             Ok(p) => p.delete_vm(resource_id).await,
             Err(e) => Err(e),
@@ -1642,7 +1648,9 @@ fn spawn_create_tester_task(
     input: CreateTesterInput,
     use_ssh_bootstrap: bool,
 ) {
+    let semaphore = state.deploy_semaphore.clone();
     tokio::spawn(async move {
+        let _permit = semaphore.acquire().await.expect("semaphore closed");
         let result = if use_ssh_bootstrap {
             run_create_tester_ssh(state.clone(), project_id, tester_id, input).await
         } else {
@@ -2174,7 +2182,9 @@ async fn run_create_tester_cloud_init(
 
 fn spawn_start_tester_task(state: Arc<AppState>, tester: ProjectTesterRow) {
     let tester_id = tester.tester_id;
+    let semaphore = state.deploy_semaphore.clone();
     tokio::spawn(async move {
+        let _permit = semaphore.acquire().await.expect("semaphore closed");
         if let Err(e) = run_start_tester(state.clone(), tester).await {
             tracing::error!(%tester_id, error = ?e, "tester start background task failed");
             if let Ok(client) = state.db.get().await {
@@ -2280,7 +2290,9 @@ async fn wait_for_ssh_ready(target: &tester_install::TesterTarget) -> anyhow::Re
 
 fn spawn_stop_tester_task(state: Arc<AppState>, tester: ProjectTesterRow) {
     let tester_id = tester.tester_id;
+    let semaphore = state.deploy_semaphore.clone();
     tokio::spawn(async move {
+        let _permit = semaphore.acquire().await.expect("semaphore closed");
         if let Err(e) = run_stop_tester(state.clone(), tester).await {
             tracing::error!(%tester_id, error = ?e, "tester stop background task failed");
             if let Ok(client) = state.db.get().await {
@@ -2337,7 +2349,9 @@ async fn run_stop_tester(state: Arc<AppState>, tester: ProjectTesterRow) -> anyh
 
 fn spawn_upgrade_tester_task(state: Arc<AppState>, tester: ProjectTesterRow) {
     let tester_id = tester.tester_id;
+    let semaphore = state.deploy_semaphore.clone();
     tokio::spawn(async move {
+        let _permit = semaphore.acquire().await.expect("semaphore closed");
         if let Err(e) = run_upgrade_tester(state.clone(), tester).await {
             tracing::error!(%tester_id, error = ?e, "tester upgrade background task failed");
             if let Ok(client) = state.db.get().await {

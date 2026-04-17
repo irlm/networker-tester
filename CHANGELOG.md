@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.27.27] — 2026-04-17
+
+### Fixed
+- **SSH pipe hang on endpoint deploy.** `install.sh` SSH-piped scripts hung indefinitely because started services (nginx, networker-endpoint) inherited the pipe's stdin/stdout FDs, preventing SSH from closing. Fix: redirect FDs (`</dev/null >/dev/null 2>&1`) on all `systemctl start/restart` calls inside SSH heredoc blocks.
+- **Stale agent assignment watchdog.** Jobs assigned to offline/deleted agents stayed in "assigned" forever. Added a 60s periodic reaper in the scheduler that finds jobs assigned >120s ago, checks if the agent is still online, and fails those whose agent disconnected — with a real-time `JobUpdate` event so the UI reflects the failure immediately.
+- **Deploy concurrency cap.** The dashboard spawned unlimited concurrent `install.sh` / cloud CLI processes, which could overwhelm the server. Added a `tokio::sync::Semaphore` (default 2, configurable via `DEPLOY_CONCURRENCY`) that gates all deploy, tester create/start/stop/delete operations.
+
+### Added
+- **AWS Windows endpoint support.** Previously rejected at preflight with "use Azure or GCP". Now supports Windows Server 2022 on AWS: AMI lookup (`_aws_find_windows_ami`), UserData PowerShell bootstrap (IIS, firewall rules, networker-endpoint service), and health-check polling with 600s timeout for Windows cold boot. Mirrors the existing Azure Windows endpoint path.
+
+---
+
 ## [0.27.26] — 2026-04-15
 
 ### Fixed

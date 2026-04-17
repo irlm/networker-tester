@@ -260,6 +260,26 @@ pub async fn recent_tls_profile_job_count(
     Ok(row.get(0))
 }
 
+/// Find jobs stuck in "assigned" status for longer than `stale_secs` seconds.
+/// Returns (job_id, agent_id) pairs.
+pub async fn find_stale_assigned(
+    client: &Client,
+    stale_secs: i64,
+) -> anyhow::Result<Vec<(Uuid, Option<Uuid>)>> {
+    let rows = client
+        .query(
+            "SELECT job_id, agent_id FROM job
+             WHERE status = 'assigned'
+               AND created_at < now() - ($1::text || ' seconds')::interval",
+            &[&stale_secs.to_string()],
+        )
+        .await?;
+    Ok(rows
+        .iter()
+        .map(|r| (r.get("job_id"), r.get("agent_id")))
+        .collect())
+}
+
 pub async fn set_error(client: &Client, job_id: &Uuid, message: &str) -> anyhow::Result<()> {
     client
         .execute(
