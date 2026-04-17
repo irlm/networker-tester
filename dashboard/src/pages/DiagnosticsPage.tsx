@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
+import { testersApi, type TesterRow } from '../api/testers';
 import type { EndpointRef, TestConfig, TestConfigCreate, TestConfigListItem, TestRun, Workload } from '../api/types';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { usePageTitle } from '../hooks/usePageTitle';
@@ -473,6 +474,10 @@ export function DiagnosticsPage() {
   const [allRuns, setAllRuns] = useState<TestRun[]>([]);
   const [loading, setLoading] = useState(true);
   const [pendingRunIds, setPendingRunIds] = useState<Set<string>>(new Set());
+  const [testers, setTesters] = useState<TesterRow[]>([]);
+  // null = "auto-pick", otherwise a specific tester_id. Persisted in URL so
+  // a user can share a probe-URL that pins the runner.
+  const [selectedTesterId, setSelectedTesterId] = useState<string | null>(null);
 
   // UI state
   const [filter, setFilter] = useState<FilterMode>('all');
@@ -551,6 +556,18 @@ export function DiagnosticsPage() {
 
   const hasPending = pendingRunIds.size > 0;
   usePolling(loadData, hasPending ? 5000 : 15000);
+
+  // Load testers once so the runner-picker can show the list of runners the
+  // user can pin their probe to. Auto-pick stays the default — this lets them
+  // override it when e.g. debugging a specific region or version.
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    testersApi.listTesters(projectId).then((rows) => {
+      if (!cancelled) setTesters(rows);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [projectId]);
 
   // ── Build URL groups ──────────────────────────────────────────────
 
@@ -718,7 +735,7 @@ export function DiagnosticsPage() {
         configId = created.id;
         createdOrExisting = created;
       }
-      const run = await api.launchTestConfig(configId);
+      const run = await api.launchTestConfig(configId, selectedTesterId ?? undefined);
       addToast('success', `Diagnostic ${run.id.slice(0, 8)} launched for ${host}`);
 
       setPendingRunIds(prev => new Set(prev).add(run.id));
@@ -819,6 +836,31 @@ export function DiagnosticsPage() {
                 {p.charAt(0).toUpperCase() + p.slice(1)} ({DIAG_PRESET_LABELS[p].time})
               </option>
             ))}
+          </select>
+          <label htmlFor="diag-runner" className="text-xs text-gray-500">Runner</label>
+          <select
+            id="diag-runner"
+            value={selectedTesterId ?? ''}
+            onChange={e => setSelectedTesterId(e.target.value || null)}
+            className="bg-[var(--bg-input,#0e1319)] border border-gray-800 rounded px-3 py-2 text-xs font-mono text-gray-400 focus:outline-none appearance-none pr-7 cursor-pointer max-w-[14rem]"
+            style={{
+              backgroundImage: `url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%23475569' stroke-width='1.5'/%3E%3C/svg%3E")`,
+              backgroundRepeat: 'no-repeat',
+              backgroundPosition: 'right 10px center',
+            }}
+            title="Pick a specific runner or leave auto-pick to let the dispatcher choose"
+          >
+            <option value="">auto-pick</option>
+            {testers
+              .filter(t => t.power_state === 'running')
+              .map(t => {
+                const v = t.installer_version ?? '?';
+                return (
+                  <option key={t.tester_id} value={t.tester_id}>
+                    {t.name} ({t.cloud}/{t.region}) · v{v}
+                  </option>
+                );
+              })}
           </select>
           <button
             onClick={() => handleRun()}

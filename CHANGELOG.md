@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.6] — 2026-04-17
+
+### Fixed
+- **Dispatcher now filters agents by WS-protocol version.** Root cause of "probes launch but never run on prod": `AgentHub::any_online_agent` returned a random agent from the in-memory registry, but older tester VMs still ran `networker-agent` v0.27.26, which silently drops the `AssignRun` message (introduced in v0.28.0). ~80% of dispatches landed on incompatible agents and disappeared. New `any_online_agent_min_version("0.28.0")` intersects the online registry with the DB's `agent.version` column and only returns v0.28.0+ agents. Redispatcher + launch path both use this.
+
+### Added
+- **Runner selector on URL Probe.** Users can now pick a specific runner (or leave auto-pick) when launching a diagnostic. Forwarded to the backend via the existing `tester_id` field on `POST /v2/test-configs/:id/launch`. Running runners are listed with cloud/region and agent version so users can pin to a known-good binary.
+
+---
+
 ## [0.28.5] — 2026-04-17
 
 ### Fixed

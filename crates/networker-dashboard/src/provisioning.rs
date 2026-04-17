@@ -200,8 +200,13 @@ fn sanitize_vm_label(raw: &str) -> String {
 /// Non-Pending endpoint — send to any online agent. Same semantics as the
 /// inline code that used to live in every launch handler.
 async fn best_effort_dispatch(state: &Arc<AppState>, run: &TestRun, cfg: &TestConfig) {
-    let _ = try_dispatch_run(&state.agents, run, cfg).await;
+    let _ = try_dispatch_run(&state.agents, run, cfg, Some(state)).await;
 }
+
+/// Minimum agent version that understands the WS v2 protocol (AssignRun,
+/// CancelRun, etc.). Agents older than this silently drop AssignRun during
+/// deserialization — see commit 892fd26 for when AssignRun was introduced.
+const MIN_AGENT_VERSION_FOR_ASSIGN_RUN: &str = "0.28.0";
 
 /// Outcome of a single dispatch attempt. Used by the redispatcher to decide
 /// whether to log progress or back off.
@@ -255,12 +260,31 @@ pub async fn try_dispatch_run<D: RunDispatcher>(
     hub: &D,
     run: &TestRun,
     cfg: &TestConfig,
+    state: Option<&Arc<AppState>>,
 ) -> DispatchOutcome {
-    match hub.any_online_agent().await {
+    // Prefer an agent whose reported version is ≥ MIN_AGENT_VERSION_FOR_ASSIGN_RUN.
+    // If the DB lookup is unavailable (test harness passes `None`), fall back
+    // to the naive "any online agent" behaviour so unit tests aren't forced
+    // to stand up a Postgres pool.
+    let chosen = if let Some(state) = state {
+        match state.db.get().await {
+            Ok(client) => {
+                state
+                    .agents
+                    .any_online_agent_min_version(&client, MIN_AGENT_VERSION_FOR_ASSIGN_RUN)
+                    .await
+            }
+            Err(_) => hub.any_online_agent().await,
+        }
+    } else {
+        hub.any_online_agent().await
+    };
+    match chosen {
         None => {
             tracing::info!(
                 run_id = %run.id,
-                "No online agent — run remains queued for later dispatch"
+                min_version = %MIN_AGENT_VERSION_FOR_ASSIGN_RUN,
+                "No compatible online agent — run remains queued for later dispatch"
             );
             DispatchOutcome::NoAgent
         }
@@ -435,7 +459,7 @@ mod tests {
         let cfg = probe_config();
         let run = queued_run(&cfg);
 
-        let outcome = try_dispatch_run(&hub, &run, &cfg).await;
+        let outcome = try_dispatch_run(&hub, &run, &cfg, None).await;
 
         // Must report Sent — not NoAgent / SendFailed.
         let agent_id = match outcome {
@@ -464,7 +488,7 @@ mod tests {
         let hub = MockDispatcher::empty();
         let cfg = probe_config();
         let run = queued_run(&cfg);
-        let outcome = try_dispatch_run(&hub, &run, &cfg).await;
+        let outcome = try_dispatch_run(&hub, &run, &cfg, None).await;
         assert_eq!(outcome, DispatchOutcome::NoAgent);
         assert!(hub.sent.lock().await.is_empty());
     }
@@ -474,7 +498,7 @@ mod tests {
         let hub = MockDispatcher::with_broken_agent();
         let cfg = probe_config();
         let run = queued_run(&cfg);
-        let outcome = try_dispatch_run(&hub, &run, &cfg).await;
+        let outcome = try_dispatch_run(&hub, &run, &cfg, None).await;
         match outcome {
             DispatchOutcome::SendFailed { agent_id, error } => {
                 assert_eq!(Some(agent_id), hub.agent);

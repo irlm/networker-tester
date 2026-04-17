@@ -757,7 +757,8 @@ async fn redispatch_queued_runs(state: &Arc<AppState>) -> anyhow::Result<()> {
             continue;
         }
 
-        let outcome = crate::provisioning::try_dispatch_run(&state.agents, &run, &cfg).await;
+        let outcome =
+            crate::provisioning::try_dispatch_run(&state.agents, &run, &cfg, Some(state)).await;
         match outcome {
             crate::provisioning::DispatchOutcome::Sent { agent_id } => {
                 tracing::info!(
