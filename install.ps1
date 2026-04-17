@@ -23,10 +23,14 @@
 
 # PSScriptAnalyzer suppressions — interactive installer uses Write-Host for
 # colored output, plural nouns for clarity, params consumed via $script: scope.
+# The ConvertTo-SecureString -AsPlainText use in Invoke-EnsureSelfSignedCert
+# is intentional: generates a transient password for a local-only self-signed
+# PFX that is re-exported to PEM via openssl and then deleted — no secrets at rest.
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '')]
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '')]
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '')]
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseBOMForUnicodeEncodedFile', '')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingConvertToSecureStringWithPlainText', '')]
 param(
     [string]$Component  = "",
     [switch]$Yes,
@@ -2136,7 +2140,6 @@ function Invoke-SetupTraefik {
     $crtKey = Invoke-EnsureSelfSignedCert $stackDir "Networker Traefik Test"
     $crtPath = $crtKey[0] -replace '\\','/'
     $keyPath = $crtKey[1] -replace '\\','/'
-    $siteRoot = $script:NetworkerSiteRoot -replace '\\','/'
 
     # Traefik doesn't ship a native static-file-server middleware for a folder,
     # so we proxy static paths to the networker-endpoint static mount (same
