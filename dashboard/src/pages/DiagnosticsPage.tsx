@@ -454,7 +454,7 @@ export function DiagnosticsPage() {
   const { projectId } = useProject();
   const addToast = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
-  usePageTitle('Diagnostics');
+  usePageTitle('URL Probe');
 
   const inputRef = useRef<HTMLInputElement>(null);
   const [url, setUrl] = useState(searchParams.get('host') || '');
@@ -743,14 +743,14 @@ export function DiagnosticsPage() {
       {/* Page header */}
       <div className="flex items-start justify-between mb-6">
         <div>
-          <h1 className="text-[22px] font-semibold text-gray-200 tracking-tight">Diagnostics</h1>
-          <p className="text-xs text-gray-500 mt-1">Quick connectivity tests for any URL</p>
+          <h1 className="text-[22px] font-semibold text-gray-200 tracking-tight">URL Probe</h1>
+          <p className="text-xs text-gray-500 mt-1">Discover what features a URL supports — protocols, TLS, certificates, ALPN.</p>
         </div>
       </div>
 
-      {/* Run a Diagnostic input bar */}
+      {/* Probe input bar */}
       <div className="border border-gray-800 rounded p-4 mb-7">
-        <div className="text-[11px] tracking-wider text-gray-600 mb-2.5">Run a Diagnostic</div>
+        <div className="text-[11px] tracking-wider text-gray-600 mb-2.5">Probe a URL</div>
         <div className="flex items-center gap-2.5">
           <div className="flex-1 flex items-center gap-2">
             <label htmlFor="diag-url" className="text-xs text-gray-500 flex-shrink-0">URL:</label>
@@ -900,7 +900,7 @@ export function DiagnosticsPage() {
           <p className="text-gray-500 text-sm">
             {filter !== 'all'
               ? `No ${filter} URLs found. Try changing the filter.`
-              : 'No diagnostics yet. Enter a URL above to run your first test.'}
+              : 'No probes yet. Enter a URL above to discover what it supports.'}
           </p>
         </div>
       ) : (

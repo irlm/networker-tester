@@ -39,6 +39,7 @@ const DeployDetailPage = lazyPage(() => import('./pages/DeployDetailPage'), 'Dep
 const SchedulesPage = lazyPage(() => import('./pages/SchedulesPage'), 'SchedulesPage');
 const VmHistoryPage = lazyPage(() => import('./pages/VmHistoryPage'), 'VmHistoryPage');
 const InfrastructurePage = lazyPage(() => import('./pages/InfrastructurePage'), 'InfrastructurePage');
+const EndpointRunsPage = lazyPage(() => import('./pages/EndpointRunsPage'), 'EndpointRunsPage');
 const SettingsPage = lazyPage(() => import('./pages/SettingsPage'), 'SettingsPage');
 const UsersPage = lazyPage(() => import('./pages/UsersPage'), 'UsersPage');
 const PendingPage = lazyPage(() => import('./pages/PendingPage'), 'PendingPage');
@@ -200,8 +201,12 @@ function AuthenticatedApp() {
             <Route path="/projects/:projectId/tests/new" element={<NetworkTestPage />} />
             <Route path="/projects/:projectId/benchmarks/full-stack/new" element={<FullStackPage />} />
             <Route path="/projects/:projectId/benchmarks/application/new" element={<AppBenchmarkPage />} />
-            <Route path="/projects/:projectId/runs/new/probe" element={<Navigate to="../../diagnostics" replace relative="path" />} />
-            <Route path="/projects/:projectId/diagnostics" element={<DiagnosticsPage />} />
+            {/* PROBE — canonical /probe; legacy /diagnostics redirected */}
+            <Route path="/projects/:projectId/probe" element={<DiagnosticsPage />} />
+            <Route path="/projects/:projectId/diagnostics" element={<Navigate to="../probe" replace relative="path" />} />
+            <Route path="/projects/:projectId/runs/new/probe" element={<Navigate to="../../probe" replace relative="path" />} />
+            {/* NETWORK — per-endpoint runs-list (preset cards + colored mode chips) */}
+            <Route path="/projects/:projectId/network/:endpointId" element={<EndpointRunsPage />} />
             <Route path="/projects/:projectId/runs/compare" element={<RunComparePage />} />
             <Route path="/projects/:projectId/runs/:runId" element={<RunDetailPage />} />
 

@@ -34,18 +34,31 @@ export function Sidebar({ connectionDot }: SidebarProps) {
   const pid = projectId;
   const isAdmin = role === 'admin' || isPlatformAdmin;
 
-  // ── Nav items (flat, no section headers) ────────────────────────────
+  // ── Nav items ───────────────────────────────────────────────────────
+  //
+  // Three test-category groups plus the Dashboard/Infrastructure core and
+  // Runs/Schedules tail. Group headers (── PROBE ──, ── BENCHMARKS ──)
+  // carry the category so child labels can be terse: "URL" under PROBE
+  // reads as "URL Probe"; "Application" under BENCHMARKS reads as
+  // "Application Benchmark". Avoids suffix repetition. See sidebar-v3
+  // mockup iteration 3.
 
   const mainItems: NavItem[] = pid ? [
     { path: `/projects/${pid}`, label: 'Dashboard', icon: '\u25C8', exact: true },
     { path: `/projects/${pid}/vms`, label: 'Infrastructure', icon: '\u25A3' },
-    { path: `/projects/${pid}/diagnostics`, label: 'Diagnostics', icon: '\u2713' },
   ] : [];
 
-  const workItems: NavItem[] = pid ? [
-    { path: `/projects/${pid}/tests/new`, label: 'Network Tests', icon: '\u25B7', exact: true },
+  const probeItems: NavItem[] = pid ? [
+    { path: `/projects/${pid}/probe`, label: 'URL', icon: '\u2713' },
+  ] : [];
+
+  const benchmarkItems: NavItem[] = pid ? [
+    { path: `/projects/${pid}/tests/new`, label: 'Network', icon: '\u25B7', exact: true },
     { path: `/projects/${pid}/benchmarks/full-stack/new`, label: 'Full Stack', icon: '\u25A4', exact: true },
     { path: `/projects/${pid}/benchmarks/application/new`, label: 'Application', icon: '\u25A5', exact: true },
+  ] : [];
+
+  const tailItems: NavItem[] = pid ? [
     { path: `/projects/${pid}/runs`, label: 'Runs', icon: '\u25B6' },
     { path: `/projects/${pid}/schedules`, label: 'Schedules', icon: '\u21BB' },
   ] : [];
@@ -177,10 +190,34 @@ export function Sidebar({ connectionDot }: SidebarProps) {
           {/* Core items */}
           {mainItems.map(renderItem)}
 
-          {/* Work items — separated by spacing */}
-          {workItems.length > 0 && (
-            <div className="mt-4 pt-1">
-              {workItems.map(renderItem)}
+          {/* ── PROBE ── group (URL capability discovery) */}
+          {probeItems.length > 0 && (
+            <div className="mt-4">
+              {!collapsed && (
+                <div className="px-3 mb-1 text-[10px] uppercase tracking-wider text-gray-600">
+                  probe
+                </div>
+              )}
+              {probeItems.map(renderItem)}
+            </div>
+          )}
+
+          {/* ── BENCHMARKS ── group (Network / Stack / Application) */}
+          {benchmarkItems.length > 0 && (
+            <div className="mt-4">
+              {!collapsed && (
+                <div className="px-3 mb-1 text-[10px] uppercase tracking-wider text-gray-600">
+                  benchmarks
+                </div>
+              )}
+              {benchmarkItems.map(renderItem)}
+            </div>
+          )}
+
+          {/* Tail items — Runs / Schedules are the output/observing surfaces */}
+          {tailItems.length > 0 && (
+            <div className="mt-4 pt-3 border-t border-gray-800/50">
+              {tailItems.map(renderItem)}
             </div>
           )}
 

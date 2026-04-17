@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.1] — 2026-04-17
+
+### Added
+- **Azure Windows reverse-proxy parity.** `install.sh` now deploys Caddy, Traefik, HAProxy, and Apache httpd on Azure Windows endpoints, not just IIS. New `install.ps1 -Setup <proxy>` fast-path runs `Invoke-HttpStackSetup` and exits, called remotely via `az vm run-command invoke` by the new `_azure_win_setup_proxy` helper. Proxy port map matches the Linux convention (caddy 8091/8454, traefik 8092/8455, haproxy 8093/8456, apache 8094/8457). Dashboard `TestbedRow` picker now surfaces all 5 proxies for Azure + Windows combos; AWS/GCP + Windows still restricted to `[]` pending their Windows deploy paths.
+
+### Known gaps (pre-existing)
+- AWS Windows endpoint deploy still exits with "not yet supported" (install.sh:6836).
+- GCP Windows endpoint deploys but has no proxy setup (`# IIS setup for GCP Windows would need gcloud SSH — deferred for now`, install.sh:7771).
+
+---
+
 ## [0.28.0] — 2026-04-15
 
 ### Changed

@@ -168,7 +168,7 @@ export function DashboardPage() {
           <div className="space-y-2">
             {[
               { to: `/projects/${projectId}/deploy`, step: '1', title: 'Deploy a test target', desc: 'Install networker-endpoint on a remote host to create a test target' },
-              { to: `/projects/${projectId}/runs`, step: '2', title: 'Add a runner', desc: 'Connect an agent to run diagnostics from a remote location' },
+              { to: `/projects/${projectId}/runs`, step: '2', title: 'Add a runner', desc: 'Connect an agent to run probes and benchmarks from a remote location' },
               { to: `/projects/${projectId}/runs`, step: '3', title: 'Run your first test', desc: 'HTTP, DNS, TLS, UDP latency measured per-phase' },
               { to: `/projects/${projectId}/schedules`, step: '4', title: 'Schedule recurring tests', desc: 'Automate recurring tests with cron expressions' },
             ].map(item => (

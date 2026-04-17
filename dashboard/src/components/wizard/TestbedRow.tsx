@@ -7,7 +7,7 @@ import {
   INSTANCE_TYPES,
   defaultInstanceType,
   LINUX_PROXIES,
-  WINDOWS_PROXIES,
+  windowsProxiesFor,
   PROXY_LABELS,
   TESTER_OS_OPTIONS,
 } from './testbed-constants';
@@ -169,7 +169,10 @@ export function TestbedRow({
       <div className="mt-3">
         <label className="block text-xs text-gray-500 mb-1.5">Reverse Proxies</label>
         <div className="flex flex-wrap gap-2">
-          {(testbed.os === 'windows' ? WINDOWS_PROXIES : LINUX_PROXIES).map(p => (
+          {(testbed.os === 'windows'
+            ? windowsProxiesFor(testbed.cloud)
+            : LINUX_PROXIES
+          ).map(p => (
             <button
               key={p}
               type="button"
@@ -190,8 +193,16 @@ export function TestbedRow({
             </button>
           ))}
         </div>
+        {testbed.os === 'windows' && testbed.cloud !== 'Azure' && (
+          <p className="text-xs text-yellow-500 mt-1">
+            Windows endpoint deploy is not yet supported on {testbed.cloud}.
+            Switch to Azure for full proxy support, or pick Linux.
+          </p>
+        )}
         {testbed.proxies.length === 0 && (
-          <p className="text-xs text-yellow-500 mt-1">At least one proxy is required</p>
+          (testbed.os === 'linux' || windowsProxiesFor(testbed.cloud).length > 0) && (
+            <p className="text-xs text-yellow-500 mt-1">At least one proxy is required</p>
+          )
         )}
       </div>
 

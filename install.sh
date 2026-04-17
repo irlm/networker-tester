@@ -324,7 +324,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.0"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.1"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -5530,6 +5530,109 @@ _azure_win_setup_iis() {
     fi
 }
 
+# Port map for non-IIS Windows proxies (mirrors install.ps1 ReverseProxy header).
+#   caddy    8091 / 8454
+#   traefik  8092 / 8455
+#   haproxy  8093 / 8456
+#   apache   8094 / 8457
+_azure_win_proxy_ports() {
+    # Usage: _azure_win_proxy_ports <proxy> → echoes "HTTP_PORT HTTPS_PORT"
+    case "$1" in
+        caddy)   echo "8091 8454" ;;
+        traefik) echo "8092 8455" ;;
+        haproxy) echo "8093 8456" ;;
+        apache)  echo "8094 8457" ;;
+        *)       echo "" ;;
+    esac
+}
+
+# Set up a non-IIS reverse proxy (caddy/traefik/haproxy/apache) on an Azure
+# Windows VM. Downloads install.ps1 on the remote host and invokes it with
+# -Setup <proxy>, which runs the matching Invoke-SetupXxx function and exits.
+# $1 = resource group, $2 = VM name, $3 = public IP, $4 = proxy name
+_azure_win_setup_proxy() {
+    local rg="$1" vm="$2" ip="${3:-}" proxy="$4"
+    local ports http_port https_port
+    ports="$(_azure_win_proxy_ports "$proxy")"
+    if [[ -z "$ports" ]]; then
+        print_warn "Unknown Windows proxy '$proxy' — skipping."
+        return 1
+    fi
+    http_port="${ports%% *}"
+    https_port="${ports##* }"
+
+    # Idempotent: skip if the proxy is already responding on both ports.
+    if [[ -n "$ip" ]]; then
+        if curl -sf --max-time 5 "http://${ip}:${http_port}/health" &>/dev/null \
+           && curl -sfk --max-time 5 "https://${ip}:${https_port}/" &>/dev/null; then
+            print_ok "${proxy} already responding on ${http_port}/${https_port} — skipping"
+            return 0
+        fi
+    fi
+
+    print_info "Setting up ${proxy} on Windows VM ($vm) via install.ps1 -Setup ${proxy}…"
+    local installer_url="https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.ps1"
+    # Note: install.ps1 -Setup <proxy> runs Invoke-HttpStackSetup and exits.
+    # Heredoc produces a self-contained PowerShell script for run-command.
+    local ps_script
+    ps_script="$(cat <<PS_SETUP
+\$ErrorActionPreference = 'Stop'
+\$installPath = "\$env:TEMP\\networker-install.ps1"
+Invoke-WebRequest -Uri '${installer_url}' -OutFile \$installPath -UseBasicParsing
+& \$installPath -Setup ${proxy}
+PS_SETUP
+)"
+
+    az vm run-command invoke \
+        --resource-group "$rg" --name "$vm" \
+        --command-id RunPowerShellScript \
+        --scripts "$ps_script" >/dev/null 2>&1 || true
+
+    # Open the firewall on Azure NSG for the proxy's ports (run-command hits
+    # the VM's local firewall rules, but Azure's NSG also needs both opened).
+    local nsg
+    nsg="$(az vm show --resource-group "$rg" --name "$vm" \
+        --query 'networkProfile.networkInterfaces[0].id' -o tsv 2>/dev/null \
+        | xargs -I{} az network nic show --ids {} \
+            --query 'networkSecurityGroup.id' -o tsv 2>/dev/null \
+        | xargs -I{} basename {} 2>/dev/null)"
+    if [[ -n "$nsg" ]]; then
+        # Priority 2100-2199 reserved for proxy comparison ports.
+        local prio=$((2100 + RANDOM % 100))
+        az network nsg rule create \
+            --resource-group "$rg" --nsg-name "$nsg" \
+            --name "Networker-${proxy}-${http_port}-${https_port}" \
+            --priority "$prio" --access Allow --protocol Tcp \
+            --destination-port-ranges "${http_port}" "${https_port}" \
+            --description "Networker ${proxy} HTTP stack comparison" \
+            >/dev/null 2>&1 || true
+    fi
+
+    # Verify. Proxies don't reliably serve /health (only nginx/IIS do), so
+    # we check the root path on both ports and accept any 2xx/3xx/4xx response
+    # — 5xx or no-response is a real failure.
+    if [[ -n "$ip" ]]; then
+        sleep 3  # give the service a moment to bind
+        local ok=true
+        for url in "http://${ip}:${http_port}/" "https://${ip}:${https_port}/"; do
+            local scheme="${url%%://*}"
+            local curl_flags="--max-time 8 -s -o /dev/null -w %{http_code}"
+            [[ "$scheme" == "https" ]] && curl_flags="$curl_flags -k"
+            local code
+            code="$(curl $curl_flags "$url" 2>/dev/null || echo 000)"
+            if [[ "$code" =~ ^[234][0-9][0-9]$ ]]; then
+                print_ok "  $url → $code"
+            else
+                print_warn "  $url → $code"
+                ok=false
+            fi
+        done
+        $ok || print_warn "${proxy} verification failed — check 'az vm run-command invoke' output on $vm"
+    else
+        print_ok "${proxy} setup dispatched (no IP for verification)"
+    fi
+}
+
 # Set up nginx on a GCE Linux instance via gcloud ssh.
 # $1 = instance name, $2 = public IP (for verification)
 _gcp_setup_nginx() {
@@ -9575,7 +9678,15 @@ deploy_from_config() {
                                 fi
                                 ;;
                             caddy|apache|haproxy|traefik)
-                                print_warn "Remote $_ls setup on Azure endpoints is not yet supported (planned follow-up). Deployment continues but this stack will not be installed."
+                                if [[ "$AZURE_ENDPOINT_OS" == "windows" ]]; then
+                                    # Windows: fetch install.ps1 on the VM and run -Setup <proxy>
+                                    next_step "Set up $_ls for HTTP stack comparison (Azure Windows)"
+                                    _azure_win_setup_proxy \
+                                        "$AZURE_ENDPOINT_RG" "$AZURE_ENDPOINT_VM" \
+                                        "$AZURE_ENDPOINT_IP" "$_ls"
+                                else
+                                    print_warn "Remote $_ls setup on Azure Linux endpoints is not yet supported (planned follow-up)."
+                                fi
                                 ;;
                             iis)
                                 if [[ "$AZURE_ENDPOINT_OS" == "windows" ]]; then

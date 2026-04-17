@@ -42,6 +42,11 @@ param(
     [string]$AwsRegion  = "",
     [string]$GcpProject = "",
     [string]$GcpZone    = "",
+    # -Setup <proxy>  Install ONLY the named reverse-proxy stack (iis, caddy,
+    # traefik, haproxy, apache) and exit. Used by install.sh's remote-Windows
+    # deploy path (az vm run-command) so the same Invoke-SetupXxx functions
+    # are reused for cloud VMs instead of being duplicated as inline PowerShell.
+    [string]$Setup      = "",
     [switch]$Help
 )
 
@@ -50,7 +55,7 @@ $ErrorActionPreference = "Stop"
 $RepoHttps     = "https://github.com/irlm/networker-tester"
 $RepoGh        = "irlm/networker-tester"
 $CargoBin      = Join-Path $env:USERPROFILE ".cargo\bin"
-$InstallerVersion = "v0.28.0"  # fallback when gh is unavailable
+$InstallerVersion = "v0.28.1"  # fallback when gh is unavailable
 
 # ── Print helpers ──────────────────────────────────────────────────────────────
 function Write-Ok   ($msg) { Write-Host "  v " -NoNewline -ForegroundColor Green;   Write-Host $msg }
@@ -3506,6 +3511,20 @@ function Show-Completion {
 #  ENTRY POINT
 # ══════════════════════════════════════════════════════════════════════════════
 if ($Help) { Show-Help; exit 0 }
+
+# -Setup fast-path: invoked remotely by install.sh via az vm run-command to
+# install a single reverse-proxy stack on an already-provisioned Windows VM.
+# Bypasses component selection, downloads, and deploy flow.
+if ($Setup) {
+    $validStacks = @("iis","caddy","traefik","haproxy","apache")
+    $wanted = $Setup.ToLower()
+    if ($wanted -notin $validStacks) {
+        Write-Err "Invalid -Setup value '$Setup'. Use: $($validStacks -join ', ')."
+        exit 1
+    }
+    Invoke-HttpStackSetup $wanted
+    exit 0
+}
 
 if ($Component -and $Component -notin @("tester", "endpoint", "both", "")) {
     Write-Err "Invalid -Component value '$Component'. Use: tester, endpoint, or both."
