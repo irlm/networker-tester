@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
-import type { TestRun, RunStatus, EndpointKind, TestConfigListItem } from '../api/types';
+import type { TestRun, RunStatus, EndpointKind, TestConfig, TestConfigListItem } from '../api/types';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { FilterBar, FilterChip } from '../components/common/FilterBar';
 import { usePolling } from '../hooks/usePolling';
@@ -36,7 +36,10 @@ export function RunsPage() {
   const { projectId } = useProject();
   const [searchParams, setSearchParams] = useSearchParams();
   const [runs, setRuns] = useState<TestRun[]>([]);
-  const [configs, setConfigs] = useState<TestConfigListItem[]>([]);
+  // Backend returns full TestConfig objects from this endpoint even though the
+  // client typed it as TestConfigListItem. We read endpoint.kind off the union
+  // to stay robust against either shape.
+  const [configs, setConfigs] = useState<Array<TestConfigListItem | TestConfig>>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(0);
@@ -45,8 +48,16 @@ export function RunsPage() {
   // Build a config-id → {kind, name, modes} map so runs list can show endpoint_kind
   // even when the backend doesn't denormalize it into the TestRun row.
   const configMap = useMemo(() => {
-    const m = new Map<string, TestConfigListItem>();
-    for (const c of configs) m.set(c.id, c);
+    const m = new Map<string, { name: string; endpoint_kind?: EndpointKind; modes?: string[] }>();
+    for (const c of configs) {
+      const endpoint_kind = 'endpoint_kind' in c
+        ? c.endpoint_kind
+        : (c.endpoint as { kind?: EndpointKind } | undefined)?.kind;
+      const modes = 'modes' in c
+        ? c.modes
+        : (c as TestConfig).workload?.modes;
+      m.set(c.id, { name: c.name, endpoint_kind, modes });
+    }
     return m;
   }, [configs]);
 

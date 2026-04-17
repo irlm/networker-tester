@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.3] — 2026-04-17
+
+### Fixed
+- **Runs page Type column + kind tabs still blank after v0.28.2.** `GET /v2/projects/:id/test-configs` actually returns full `TestConfig` rows (`endpoint.kind`) even though the client typed it as `TestConfigListItem` (`endpoint_kind`). The client-side join now reads the kind off either shape so Network/Proxy/Runtime tabs and the Type column populate correctly.
+
+---
+
 ## [0.28.2] — 2026-04-17
 
 ### Fixed
