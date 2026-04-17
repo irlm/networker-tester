@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.5] — 2026-04-17
+
+### Fixed
+- **URL Probe still 500'd on re-run after v0.28.4.** DiagnosticsPage's config filter used `c.endpoint_kind === 'network'`, same shape-mismatch bug v0.28.3 fixed on RunsPage. Because the filter stripped every config, v0.28.4's "reuse existing config" code never found a match and re-POSTed → 409. Now accepts both `endpoint_kind` and nested `endpoint.kind` shapes.
+
+---
+
 ## [0.28.4] — 2026-04-17
 
 ### Fixed

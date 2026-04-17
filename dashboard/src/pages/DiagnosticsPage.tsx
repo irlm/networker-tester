@@ -505,8 +505,15 @@ export function DiagnosticsPage() {
       api.listTestConfigs(projectId),
       api.listTestRuns(projectId, { endpoint_kind: 'network', limit: 200 }),
     ]).then(([cfgs, runs]) => {
-      // Filter to only 'network' endpoint configs — handle both flat and nested shapes
-      const networkConfigs = cfgs.filter((c) => c.endpoint_kind === 'network');
+      // Filter to only 'network' endpoint configs. The backend returns full
+      // TestConfig rows (endpoint.kind) here even though the client types it
+      // as TestConfigListItem (endpoint_kind), so accept either shape.
+      const networkConfigs = cfgs.filter((c) => {
+        const kind = 'endpoint_kind' in c
+          ? (c as TestConfigListItem).endpoint_kind
+          : (c as unknown as TestConfig).endpoint?.kind;
+        return kind === 'network';
+      });
       setConfigs(networkConfigs);
       setAllRuns(runs);
       setLoading(false);
