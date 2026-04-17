@@ -202,6 +202,59 @@ pub async fn find_stale_assigned(
         .collect())
 }
 
+/// Find runs that are still `queued` (never claimed by an agent). Used by
+/// the queued-run redispatcher so transient dispatch failures at launch
+/// time (no agent online at that exact millisecond, WS send race, etc.)
+/// do not permanently orphan a run.
+///
+/// Only considers runs older than `min_age_secs` to avoid racing the
+/// immediate dispatch path that runs synchronously inside `launch_handler`
+/// — we want the retry to kick in only after that path had a chance.
+///
+/// Returns the full `TestRun` rows so the caller can re-load the matching
+/// `TestConfig` and retry `best_effort_dispatch`.
+pub async fn list_unclaimed_queued(
+    client: &Client,
+    min_age_secs: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<TestRun>> {
+    let rows = client
+        .query(
+            "SELECT id, test_config_id, project_id, status,
+                    started_at, finished_at,
+                    success_count, failure_count, error_message,
+                    artifact_id, tester_id, worker_id,
+                    last_heartbeat, created_at, comparison_group_id
+             FROM test_run
+             WHERE status = 'queued'
+               AND created_at < now() - ($1::bigint || ' seconds')::interval
+             ORDER BY created_at ASC
+             LIMIT $2",
+            &[&min_age_secs, &limit],
+        )
+        .await?;
+    rows.iter().map(row_to_run).collect()
+}
+
+/// Find runs stuck in `queued` for longer than `cutoff_secs` with no agent
+/// claim. These are runs the redispatcher couldn't place on any online agent
+/// within the allowed window — the watchdog fails them with a clear error so
+/// the UI reflects the problem and the user knows to check their runners.
+///
+/// Returns `run_id`s to be failed.
+pub async fn find_stale_queued(client: &Client, cutoff_secs: i64) -> anyhow::Result<Vec<Uuid>> {
+    let rows = client
+        .query(
+            "SELECT id
+             FROM test_run
+             WHERE status = 'queued'
+               AND created_at < now() - ($1::bigint || ' seconds')::interval",
+            &[&cutoff_secs],
+        )
+        .await?;
+    Ok(rows.into_iter().map(|r| r.get::<_, Uuid>(0)).collect())
+}
+
 /// Record a terminal error. Sets status=failed and finished_at=now.
 pub async fn set_error(client: &Client, id: &Uuid, message: &str) -> anyhow::Result<()> {
     client

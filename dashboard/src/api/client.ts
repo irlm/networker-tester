@@ -900,7 +900,9 @@ export const api = {
     request<BenchmarkArtifact>(`/v2/test-runs/${runId}/artifact`),
 
   getTestRunAttempts: (runId: string) =>
-    request<Attempt[]>(`/v2/test-runs/${runId}/attempts`),
+    request<{ attempts: Attempt[] } | Attempt[]>(`/v2/test-runs/${runId}/attempts`).then((r) =>
+      Array.isArray(r) ? r : r?.attempts ?? []
+    ),
 
   cancelTestRun: (runId: string) =>
     request<void>(`/v2/test-runs/${runId}/cancel`, { method: 'POST' }),

@@ -26,6 +26,24 @@ function stateBadgeStatus(
   return 'offline';
 }
 
+// Derive what to show in the right-hand status column. Must agree with the
+// left badge — prior bug was showing "idle" for a runner whose badge said
+// "error" or "provisioning", because the column only looked at the live queue.
+function rightStatusLabel(
+  t: TesterRow,
+  q: TesterQueueState | undefined,
+): { text: string; cls: string } {
+  if (t.power_state === 'error') return { text: 'error', cls: 'text-red-400' };
+  if (t.power_state === 'stopped' || t.power_state === 'stopping') return { text: t.power_state, cls: 'text-gray-500' };
+  if (t.power_state === 'starting' || t.power_state === 'provisioning' || t.power_state === 'upgrading') {
+    return { text: t.power_state, cls: 'text-amber-300' };
+  }
+  if (q?.running) return { text: 'running', cls: 'text-cyan-300' };
+  if (q?.queued.length) return { text: `${q.queued.length} queued`, cls: 'text-amber-300' };
+  if (t.allocation === 'locked' || t.allocation === 'upgrading') return { text: 'busy', cls: 'text-amber-300' };
+  return { text: 'idle', cls: 'text-gray-400' };
+}
+
 export function TesterRegionGroup({
   cloud,
   region,
@@ -91,9 +109,12 @@ export function TesterRegionGroup({
                     {t.vm_size} · v{t.installer_version ?? '—'}
                   </div>
                 </div>
-                <div className="w-24 text-right text-gray-400 font-mono">
-                  {q?.running ? 'running' : q?.queued.length ? `${q.queued.length} queued` : 'idle'}
-                </div>
+                {(() => {
+                  const s = rightStatusLabel(t, q);
+                  return (
+                    <div className={`w-24 text-right font-mono ${s.cls}`}>{s.text}</div>
+                  );
+                })()}
               </li>
             );
           })}

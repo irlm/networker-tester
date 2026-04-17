@@ -25,12 +25,23 @@ pub fn spawn(state: Arc<AppState>) {
         let mut last_inactivity_check: Option<std::time::Instant> = None;
         let mut last_health_check = std::time::Instant::now();
         let mut last_stale_job_check = std::time::Instant::now();
+        let mut last_queued_redispatch = std::time::Instant::now();
 
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
 
             if let Err(e) = tick(&state).await {
                 tracing::error!(error = %e, "Scheduler tick failed");
+            }
+
+            // Re-dispatch queued runs that were launched while no agent was
+            // connected (or whose WS send raced). Runs every scheduler tick
+            // (~30s) so at most one tick of latency after an agent reconnects.
+            if last_queued_redispatch.elapsed() > std::time::Duration::from_secs(30) {
+                last_queued_redispatch = std::time::Instant::now();
+                if let Err(e) = redispatch_queued_runs(&state).await {
+                    tracing::error!(error = %e, "Queued-run redispatcher failed");
+                }
             }
 
             // Expire stale workspace invites hourly
@@ -579,14 +590,28 @@ async fn run_health_checks(state: &Arc<AppState>) {
     }
 }
 
-/// Fail test_runs stuck in "running" whose tester/agent is no longer online.
+/// How long a run may sit in `queued` before the watchdog gives up and
+/// marks it `failed`. Keeps the UI truthful when no runner is ever able
+/// to claim the run (all agents offline, agents crash-looping, etc.).
+const QUEUED_CUTOFF_SECS: i64 = 300; // 5 minutes
+/// Minimum age for the redispatcher to consider a queued run. Any younger
+/// and we assume the inline dispatch in `launch_handler` is still in flight.
+const QUEUED_MIN_AGE_SECS: i64 = 15;
+/// Cap on how many queued runs a single redispatch pass will try. Bounds
+/// the work each tick under pathological backlog.
+const QUEUED_REDISPATCH_LIMIT: i64 = 50;
+
+/// Fail test_runs stuck in "running" whose tester/agent is no longer online,
+/// plus runs stuck in "queued" that no agent has claimed within the
+/// `QUEUED_CUTOFF_SECS` window.
 ///
-/// When a tester VM is deleted and recreated it gets a new id, but runs
-/// assigned to the OLD tester stay "running" forever. This watchdog marks
-/// them failed so the UI reflects reality and the scheduler can re-queue work.
-///
-/// (Was `reap_stale_assigned_jobs` operating on the dropped `job` table
-/// before the v0.28 TestConfig unification; ported to `test_run`.)
+/// The `queued` arm closes a gap first observed in v0.28.1: when a user
+/// launches a diagnostic probe (`EndpointRef::Network` with a user-entered
+/// host and no deployed target) while no agent happens to be connected at
+/// that exact millisecond, `best_effort_dispatch` logs "no online agent"
+/// and returns — leaving the run queued forever with no retry and no user-
+/// visible error. The `redispatch_queued_runs` tick handles the retry; this
+/// watchdog handles the terminal case where retry still failed.
 async fn reap_stale_assigned_jobs(state: &AppState) -> anyhow::Result<()> {
     use anyhow::Context;
 
@@ -596,6 +621,7 @@ async fn reap_stale_assigned_jobs(state: &AppState) -> anyhow::Result<()> {
         .await
         .context("DB pool error in stale-run reaper")?;
 
+    // ── Stale `running` runs (v0.27.27 behaviour) ───────────────────────
     let stale = crate::db::test_runs::find_stale_assigned(&client, 120)
         .await
         .context("Failed to query stale running test_runs")?;
@@ -632,6 +658,122 @@ async fn reap_stale_assigned_jobs(state: &AppState) -> anyhow::Result<()> {
             tester_id = ?tester_id,
             "Reaped stale running test_run — agent offline"
         );
+    }
+
+    // ── Stale `queued` runs (v0.28.1+) ──────────────────────────────────
+    let stuck = crate::db::test_runs::find_stale_queued(&client, QUEUED_CUTOFF_SECS)
+        .await
+        .context("Failed to query stale queued test_runs")?;
+
+    for run_id in stuck {
+        let error_msg = format!(
+            "No runner claimed this job within {} minutes — check that at least one agent is online for this workspace",
+            QUEUED_CUTOFF_SECS / 60
+        );
+
+        crate::db::test_runs::set_error(&client, &run_id, &error_msg)
+            .await
+            .context("Failed to fail stale queued test_run")?;
+
+        let _ = state
+            .events_tx
+            .send(networker_common::messages::DashboardEvent::JobUpdate {
+                job_id: run_id,
+                status: "failed".into(),
+                agent_id: None,
+                started_at: None,
+                finished_at: Some(chrono::Utc::now()),
+            });
+
+        tracing::warn!(
+            run_id = %run_id,
+            cutoff_secs = QUEUED_CUTOFF_SECS,
+            "Reaped stale queued test_run — no runner claimed it"
+        );
+    }
+
+    Ok(())
+}
+
+/// Retry dispatch for runs still stuck in `queued`. Covers three failure
+/// modes of the inline launch-time dispatch:
+///   1. Run created while no agent was registered in the hub.
+///   2. Run created during a transient WS send failure (channel full/closed).
+///   3. Provisioned run promoted to `queued` by the orchestrator but no
+///      agent was online at that moment.
+///
+/// Each candidate run has its full `TestConfig` re-loaded and is fed through
+/// the same `try_dispatch_run` path used at launch. Success flips the run
+/// to `running` via the standard `AgentMessage::RunStarted` flow.
+async fn redispatch_queued_runs(state: &Arc<AppState>) -> anyhow::Result<()> {
+    use anyhow::Context;
+
+    let client = state
+        .db
+        .get()
+        .await
+        .context("DB pool error in queued-run redispatcher")?;
+
+    let candidates = crate::db::test_runs::list_unclaimed_queued(
+        &client,
+        QUEUED_MIN_AGE_SECS,
+        QUEUED_REDISPATCH_LIMIT,
+    )
+    .await
+    .context("Failed to query unclaimed queued test_runs")?;
+
+    if candidates.is_empty() {
+        return Ok(());
+    }
+
+    tracing::info!(
+        count = candidates.len(),
+        "Redispatching unclaimed queued test_runs"
+    );
+
+    for run in candidates {
+        let cfg = match crate::db::test_configs::get(&client, &run.test_config_id).await? {
+            Some(c) => c,
+            None => {
+                tracing::warn!(
+                    run_id = %run.id,
+                    config_id = %run.test_config_id,
+                    "Queued run references missing test_config; failing it"
+                );
+                let _ = crate::db::test_runs::set_error(
+                    &client,
+                    &run.id,
+                    "Test config was deleted before the run could be dispatched",
+                )
+                .await;
+                continue;
+            }
+        };
+
+        // Don't disturb runs whose config is still waiting on provisioning
+        // — the provisioning orchestrator will hand them off once the
+        // deployment completes.
+        if matches!(cfg.endpoint, networker_common::EndpointRef::Pending { .. }) {
+            continue;
+        }
+
+        let outcome = crate::provisioning::try_dispatch_run(&state.agents, &run, &cfg).await;
+        match outcome {
+            crate::provisioning::DispatchOutcome::Sent { agent_id } => {
+                tracing::info!(
+                    run_id = %run.id,
+                    %agent_id,
+                    "Redispatched previously-queued run"
+                );
+            }
+            crate::provisioning::DispatchOutcome::NoAgent => {
+                // Leave queued. The stale-queued watchdog will fail it if
+                // this persists past `QUEUED_CUTOFF_SECS`.
+            }
+            crate::provisioning::DispatchOutcome::SendFailed { .. } => {
+                // Ditto — retry next tick.
+            }
+        }
     }
 
     Ok(())

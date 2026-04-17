@@ -52,6 +52,19 @@ const MODE_FAMILIES: ModeFamilyDef[] = [
 
 const FAMILY_BY_ID = new Map(MODE_FAMILIES.map(f => [f.id, f]));
 
+// Modes that measure throughput — they need explicit payload sizes, otherwise
+// the agent gets an empty list and the run completes with zero data moved.
+const THROUGHPUT_MODES = new Set(['download', 'upload', 'downloadh1', 'downloadh2', 'downloadh3']);
+
+const PAYLOAD_PRESETS: Array<{ bytes: number; label: string }> = [
+  { bytes: 1024, label: '1 KB' },
+  { bytes: 64 * 1024, label: '64 KB' },
+  { bytes: 1024 * 1024, label: '1 MB' },
+  { bytes: 10 * 1024 * 1024, label: '10 MB' },
+  { bytes: 100 * 1024 * 1024, label: '100 MB' },
+];
+const DEFAULT_PAYLOADS = [1024 * 1024]; // 1 MB — sensible single-size default.
+
 const MODE_PRESETS: Array<{ id: string; label: string; modes: string[]; desc: string }> = [
   { id: 'quick',    label: '★ Quick check',    modes: ['tcp','dns','tls','http1','http2','http3'], desc: 'net + http' },
   { id: 'http',     label: '★ HTTP versions',  modes: ['http1','http2','http3'],                    desc: 'h1/h2/h3' },
@@ -102,6 +115,7 @@ export function NetworkTestPage() {
   // Form state — intent-first: modes → target → runner
   const [selectedModes, setSelectedModes] = useState<Set<string>>(new Set());
   const [activePreset, setActivePreset] = useState<string | null>(null);
+  const [payloadSizes, setPayloadSizes] = useState<Set<number>>(new Set(DEFAULT_PAYLOADS));
   const [selectedTargetId, setSelectedTargetId] = useState<string>('');
   const [targetSearch, setTargetSearch] = useState('');
   const [targetPopoverOpen, setTargetPopoverOpen] = useState(false);
@@ -167,7 +181,12 @@ export function NetworkTestPage() {
     return recentRuns;
   }, [recentRuns, scopeTab, selectedDeployment]);
 
-  const canLaunch = selectedModes.size > 0 && selectedTargetId !== '';
+  const needsPayload = useMemo(
+    () => [...selectedModes].some(m => THROUGHPUT_MODES.has(m)),
+    [selectedModes]
+  );
+  const canLaunch = selectedModes.size > 0 && selectedTargetId !== ''
+    && (!needsPayload || payloadSizes.size > 0);
 
   // ── Mode helpers ─────────────────────────────────────────────────────
 
@@ -245,12 +264,18 @@ export function NetworkTestPage() {
     if (!canLaunch || submitting || !selectedDeployment) return;
     setSubmitting(true);
     try {
+      const needsPayload = [...selectedModes].some(m => THROUGHPUT_MODES.has(m));
+      if (needsPayload && payloadSizes.size === 0) {
+        addToast('error', 'Pick at least one payload size for throughput modes.');
+        setSubmitting(false);
+        return;
+      }
       const workload: Workload = {
         modes: [...selectedModes],
         runs: 10,
         concurrency: 1,
         timeout_ms: 5000,
-        payload_sizes: [],
+        payload_sizes: needsPayload ? [...payloadSizes].sort((a, b) => a - b) : [],
         capture_mode: 'headers-only',
       };
       const name = `${selectedDeployment.name}-${[...selectedModes].slice(0, 3).join('-')}-${Date.now().toString(36).slice(-4)}`;
@@ -268,7 +293,7 @@ export function NetworkTestPage() {
     } finally {
       setSubmitting(false);
     }
-  }, [canLaunch, submitting, selectedDeployment, selectedModes, selectedTesterId, projectId, addToast, navigate]);
+  }, [canLaunch, submitting, selectedDeployment, selectedModes, selectedTesterId, payloadSizes, projectId, addToast, navigate]);
 
   // ── Keyboard shortcuts ───────────────────────────────────────────────
 
@@ -486,6 +511,43 @@ export function NetworkTestPage() {
               <button onClick={clearModes} className="px-2.5 py-1 text-[11px] font-mono text-gray-600 hover:text-gray-300">clear all</button>
             )}
           </div>
+
+          {/* Payload sizes — only shown when any throughput mode is active, since
+              other modes ignore payload. Keeps the form compact by default. */}
+          {[...selectedModes].some(m => THROUGHPUT_MODES.has(m)) && (
+            <div className="mb-2 px-2 py-1.5 border border-violet-400/30 bg-violet-500/5 rounded-sm">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[10px] uppercase tracking-wider font-mono text-violet-300">
+                  PAYLOAD SIZES <span className="text-gray-500 normal-case tracking-normal">· download/upload run once per selected size</span>
+                </span>
+                <span className="text-[10px] font-mono text-gray-500">
+                  {payloadSizes.size === 0 ? 'pick at least one' : `${payloadSizes.size} selected`}
+                </span>
+              </div>
+              <div className="flex gap-1 flex-wrap">
+                {PAYLOAD_PRESETS.map(p => {
+                  const active = payloadSizes.has(p.bytes);
+                  return (
+                    <button
+                      key={p.bytes}
+                      onClick={() => setPayloadSizes(prev => {
+                        const next = new Set(prev);
+                        if (next.has(p.bytes)) next.delete(p.bytes); else next.add(p.bytes);
+                        return next;
+                      })}
+                      className={`px-2 py-0.5 text-[11px] font-mono border transition-colors rounded-sm ${
+                        active
+                          ? 'bg-violet-400/[.16] text-violet-200 border-violet-400/55'
+                          : 'border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-600'
+                      }`}
+                    >
+                      {p.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* Mode families */}
           {MODE_FAMILIES.map(family => {

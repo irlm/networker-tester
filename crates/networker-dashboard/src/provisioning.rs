@@ -200,23 +200,109 @@ fn sanitize_vm_label(raw: &str) -> String {
 /// Non-Pending endpoint — send to any online agent. Same semantics as the
 /// inline code that used to live in every launch handler.
 async fn best_effort_dispatch(state: &Arc<AppState>, run: &TestRun, cfg: &TestConfig) {
-    if let Some(agent_id) = state.agents.any_online_agent().await {
-        let msg = ControlMessage::AssignRun {
-            run: Box::new(run.clone()),
-            config: Box::new(cfg.clone()),
-        };
-        let _ = state.agents.send_to_agent(&agent_id, &msg).await;
-    } else {
-        tracing::info!(
-            run_id = %run.id,
-            "No online agent — run remains queued for later dispatch"
-        );
+    let _ = try_dispatch_run(&state.agents, run, cfg).await;
+}
+
+/// Outcome of a single dispatch attempt. Used by the redispatcher to decide
+/// whether to log progress or back off.
+#[derive(Debug, PartialEq, Eq)]
+pub enum DispatchOutcome {
+    /// `AssignRun` was encoded and handed to an agent's outbound channel.
+    Sent { agent_id: Uuid },
+    /// No agents are currently registered in the hub. Run stays `queued`;
+    /// the redispatcher will retry on the next tick.
+    NoAgent,
+    /// The hub found an agent but the send failed (channel full, closed, or
+    /// encoding failure). Treated as non-fatal — the redispatcher retries.
+    SendFailed { agent_id: Uuid, error: String },
+}
+
+/// Trait abstraction over `ws::agent_hub::AgentHub` so tests can exercise the
+/// dispatch logic without spinning up a real hub / `AppState`.
+///
+/// Separate from `agent_dispatch::AgentSender` because we also need to query
+/// the registry for any online agent — the existing trait only exposes
+/// `send_to_agent`.
+pub trait RunDispatcher: Send + Sync {
+    fn any_online_agent(&self) -> impl std::future::Future<Output = Option<Uuid>> + Send;
+    fn send_to_agent(
+        &self,
+        agent_id: &Uuid,
+        msg: &ControlMessage,
+    ) -> impl std::future::Future<Output = anyhow::Result<()>> + Send;
+}
+
+impl RunDispatcher for crate::ws::agent_hub::AgentHub {
+    fn any_online_agent(&self) -> impl std::future::Future<Output = Option<Uuid>> + Send {
+        crate::ws::agent_hub::AgentHub::any_online_agent(self)
+    }
+    fn send_to_agent(
+        &self,
+        agent_id: &Uuid,
+        msg: &ControlMessage,
+    ) -> impl std::future::Future<Output = anyhow::Result<()>> + Send {
+        crate::ws::agent_hub::AgentHub::send_to_agent(self, agent_id, msg)
+    }
+}
+
+/// Core dispatch step: pick any online agent, send `AssignRun`, report
+/// outcome. Shared by the inline launch path and the periodic queued-run
+/// redispatcher in `scheduler.rs`.
+///
+/// Generic over `RunDispatcher` so unit tests can record every dispatch
+/// attempt without constructing a full `AppState`.
+pub async fn try_dispatch_run<D: RunDispatcher>(
+    hub: &D,
+    run: &TestRun,
+    cfg: &TestConfig,
+) -> DispatchOutcome {
+    match hub.any_online_agent().await {
+        None => {
+            tracing::info!(
+                run_id = %run.id,
+                "No online agent — run remains queued for later dispatch"
+            );
+            DispatchOutcome::NoAgent
+        }
+        Some(agent_id) => {
+            let msg = ControlMessage::AssignRun {
+                run: Box::new(run.clone()),
+                config: Box::new(cfg.clone()),
+            };
+            match hub.send_to_agent(&agent_id, &msg).await {
+                Ok(()) => {
+                    tracing::info!(
+                        run_id = %run.id,
+                        %agent_id,
+                        endpoint_kind = cfg.endpoint_kind(),
+                        "Dispatched run to agent"
+                    );
+                    DispatchOutcome::Sent { agent_id }
+                }
+                Err(e) => {
+                    let error = e.to_string();
+                    tracing::warn!(
+                        run_id = %run.id,
+                        %agent_id,
+                        error = %error,
+                        "Dispatch to agent failed — will retry"
+                    );
+                    DispatchOutcome::SendFailed { agent_id, error }
+                }
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
+    use networker_common::{
+        CaptureMode, EndpointRef, Mode, RunStatus, TestConfig, TestRun, Workload,
+    };
+    use std::collections::HashMap;
+    use tokio::sync::Mutex;
 
     #[test]
     fn vm_label_truncates_to_15() {
@@ -234,5 +320,167 @@ mod tests {
     #[test]
     fn short_id_from_name_lowercases_and_strips() {
         assert_eq!(short_id_from_name("My Test/Run!"), "my-test");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Mock dispatcher for `try_dispatch_run` unit tests.
+    // ─────────────────────────────────────────────────────────────────────
+
+    struct MockDispatcher {
+        agent: Option<Uuid>,
+        fail_send: bool,
+        sent: Mutex<HashMap<Uuid, Vec<ControlMessage>>>,
+    }
+
+    impl MockDispatcher {
+        fn with_agent() -> Self {
+            Self {
+                agent: Some(Uuid::new_v4()),
+                fail_send: false,
+                sent: Mutex::new(HashMap::new()),
+            }
+        }
+        fn empty() -> Self {
+            Self {
+                agent: None,
+                fail_send: false,
+                sent: Mutex::new(HashMap::new()),
+            }
+        }
+        fn with_broken_agent() -> Self {
+            Self {
+                agent: Some(Uuid::new_v4()),
+                fail_send: true,
+                sent: Mutex::new(HashMap::new()),
+            }
+        }
+    }
+
+    impl RunDispatcher for MockDispatcher {
+        async fn any_online_agent(&self) -> Option<Uuid> {
+            self.agent
+        }
+        async fn send_to_agent(&self, agent_id: &Uuid, msg: &ControlMessage) -> anyhow::Result<()> {
+            if self.fail_send {
+                anyhow::bail!("mock send failure");
+            }
+            self.sent
+                .lock()
+                .await
+                .entry(*agent_id)
+                .or_default()
+                .push(msg.clone());
+            Ok(())
+        }
+    }
+
+    /// Build a probe-style `TestConfig` — the exact shape the DiagnosticsPage
+    /// launches: `EndpointRef::Network` with a user-entered host and no
+    /// deployed target.
+    fn probe_config() -> TestConfig {
+        TestConfig {
+            id: Uuid::new_v4(),
+            project_id: "projtestabc001".to_string(),
+            name: "Diag: example.com".into(),
+            description: None,
+            endpoint: EndpointRef::Network {
+                host: "example.com".into(),
+                port: None,
+            },
+            workload: Workload {
+                modes: vec![Mode::Dns, Mode::Tcp, Mode::Tls],
+                runs: 1,
+                concurrency: 1,
+                timeout_ms: 5000,
+                payload_sizes: vec![],
+                capture_mode: CaptureMode::HeadersOnly,
+            },
+            methodology: None,
+            baseline_run_id: None,
+            max_duration_secs: 900,
+            created_by: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    fn queued_run(cfg: &TestConfig) -> TestRun {
+        TestRun {
+            id: Uuid::new_v4(),
+            test_config_id: cfg.id,
+            project_id: cfg.project_id.clone(),
+            status: RunStatus::Queued,
+            started_at: None,
+            finished_at: None,
+            success_count: 0,
+            failure_count: 0,
+            error_message: None,
+            artifact_id: None,
+            tester_id: None,
+            worker_id: None,
+            last_heartbeat: None,
+            created_at: Utc::now(),
+            comparison_group_id: None,
+        }
+    }
+
+    /// Core regression for the prod bug: a probe-style TestConfig (Network
+    /// endpoint without a deployed target) MUST be fanned out to any online
+    /// agent, just like a regular network test. Previously only runs with a
+    /// target_id were being dispatched; the diagnostic probe path was left
+    /// stranded in `queued` forever.
+    #[tokio::test]
+    async fn probe_run_is_dispatched_when_an_agent_is_online() {
+        let hub = MockDispatcher::with_agent();
+        let cfg = probe_config();
+        let run = queued_run(&cfg);
+
+        let outcome = try_dispatch_run(&hub, &run, &cfg).await;
+
+        // Must report Sent — not NoAgent / SendFailed.
+        let agent_id = match outcome {
+            DispatchOutcome::Sent { agent_id } => agent_id,
+            other => panic!("expected Sent, got {other:?}"),
+        };
+        assert_eq!(Some(agent_id), hub.agent);
+
+        // Exactly one AssignRun envelope must have been sent carrying the
+        // probe run's id and the probe config's Network endpoint.
+        let sent = hub.sent.lock().await;
+        let envelopes = sent.get(&agent_id).expect("agent received envelope");
+        assert_eq!(envelopes.len(), 1);
+        match &envelopes[0] {
+            ControlMessage::AssignRun { run: r, config: c } => {
+                assert_eq!(r.id, run.id);
+                assert_eq!(c.id, cfg.id);
+                assert_eq!(c.endpoint_kind(), "network");
+            }
+            other => panic!("expected AssignRun, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn no_agent_leaves_run_queued_reported_as_noagent() {
+        let hub = MockDispatcher::empty();
+        let cfg = probe_config();
+        let run = queued_run(&cfg);
+        let outcome = try_dispatch_run(&hub, &run, &cfg).await;
+        assert_eq!(outcome, DispatchOutcome::NoAgent);
+        assert!(hub.sent.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn send_failure_is_non_fatal_and_reports_send_failed() {
+        let hub = MockDispatcher::with_broken_agent();
+        let cfg = probe_config();
+        let run = queued_run(&cfg);
+        let outcome = try_dispatch_run(&hub, &run, &cfg).await;
+        match outcome {
+            DispatchOutcome::SendFailed { agent_id, error } => {
+                assert_eq!(Some(agent_id), hub.agent);
+                assert!(error.contains("mock send failure"));
+            }
+            other => panic!("expected SendFailed, got {other:?}"),
+        }
     }
 }
