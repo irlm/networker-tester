@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.2] — 2026-04-17
+
+### Fixed
+- **Probe dispatcher no longer loses queued runs.** Diagnostic probes from `/projects/{id}/probe` (and any launch) used fire-and-forget dispatch — if no agent was online at launch or the WS send failed, the run stayed `queued` forever. New scheduler loop `redispatch_queued_runs` retries every ~30s; the stale watchdog now also fails runs stuck in `queued` >5 min with a clear `error_message` so users see the problem instead of a silent spinner. Unit test `provisioning::tests::probe_run_is_dispatched_when_an_agent_is_online` guards the regression.
+- **URL Probe no longer lies "1 healthy" before a run completes.** `DiagnosticsPage` gates `healthy` on `status === 'completed' && success_count > 0`; in-flight runs surface as `pending` with a cyan pulsing dot.
+- **Run detail page no longer white-screens on queued runs.** `GET /v2/test-runs/:id/attempts` returns `{"attempts":[]}` (envelope); client now unwraps so `.filter()` never runs against a non-array. Back-compat: bare array responses still accepted.
+- **Runs page shows queued runs by default.** Previous default hid them behind an opt-in checkbox, so the list read "No runs yet" while queued probes piled up. Opt-out via `?show_queued=0`.
+- **Runs page type classification.** `TestRun` rows from the backend don't denormalize `endpoint_kind` / `config_name`; the list now joins against the project's test-configs so Network/Proxy/Runtime tabs and the Type column work again.
+- **Runner status contradictions on Infrastructure.** Runner cards showed `error`/`provisioning` in the left badge and `idle` in the right column simultaneously. Right column now derives from the same state machine as the badge. `runnerStatus()` folds `provisioning`/`starting`/`upgrading` into `busy` so header counts match the tests/new picker's definition of "available runner".
+- **Infrastructure header count math.** Hero said `4 idle · 0 busy · 0 stopped` while total was `5 active` — the missing runner was in `error`. Error count now appears in the header breakdown.
+
+### Added
+- **Payload-size picker on `/tests/new`.** When `download`, `upload`, `downloadh1/2/3` modes are selected, the form exposes 1 KB / 64 KB / 1 MB / 10 MB / 100 MB toggles. Default 1 MB. Launch is blocked until at least one size is chosen for throughput modes.
+- **Pending filter on URL Probe.** New `pending` tab + chip counts URLs whose latest run hasn't finished yet.
+
+---
+
 ## [0.28.1] — 2026-04-17
 
 ### Added

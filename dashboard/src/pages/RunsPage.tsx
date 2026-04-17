@@ -1,7 +1,7 @@
-import { useState, useCallback, useMemo, useRef } from 'react';
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
-import type { TestRun, RunStatus, EndpointKind } from '../api/types';
+import type { TestRun, RunStatus, EndpointKind, TestConfigListItem } from '../api/types';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { FilterBar, FilterChip } from '../components/common/FilterBar';
 import { usePolling } from '../hooks/usePolling';
@@ -36,15 +36,36 @@ export function RunsPage() {
   const { projectId } = useProject();
   const [searchParams, setSearchParams] = useSearchParams();
   const [runs, setRuns] = useState<TestRun[]>([]);
+  const [configs, setConfigs] = useState<TestConfigListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   const runsFingerprint = useRef('');
 
+  // Build a config-id → {kind, name, modes} map so runs list can show endpoint_kind
+  // even when the backend doesn't denormalize it into the TestRun row.
+  const configMap = useMemo(() => {
+    const m = new Map<string, TestConfigListItem>();
+    for (const c of configs) m.set(c.id, c);
+    return m;
+  }, [configs]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    api.listTestConfigs(projectId).then((data) => {
+      if (!cancelled) setConfigs(data);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [projectId]);
+
   const statusFilter = searchParams.get('status') || 'all';
   const endpointKindFilter = searchParams.get('endpoint_kind') || 'all';
   const artifactFilter = searchParams.get('has_artifact') || 'all';
-  const showQueued = searchParams.get('show_queued') === '1';
+  // Queued runs are real runs the user cares about — show them by default so
+  // the list never lies with "No runs yet" while jobs are actually piling up.
+  // Opt-out via ?show_queued=0.
+  const showQueued = searchParams.get('show_queued') !== '0';
   const comparisonGroupId = searchParams.get('comparison_group');
 
   const markRender = useRenderLog('RunsPage');
@@ -66,10 +87,11 @@ export function RunsPage() {
   const toggleShowQueued = useCallback(() => {
     setSearchParams(prev => {
       const next = new URLSearchParams(prev);
-      if (prev.get('show_queued') === '1') {
+      // Default is now "show" — store '0' to explicitly hide.
+      if (prev.get('show_queued') === '0') {
         next.delete('show_queued');
       } else {
-        next.set('show_queued', '1');
+        next.set('show_queued', '0');
       }
       return next;
     }, { replace: true });
@@ -113,12 +135,26 @@ export function RunsPage() {
 
   usePolling(loadRuns, 15000);
 
+  // Merge denormalized fields from the config map so the backend's sparse
+  // TestRun payload (no endpoint_kind, no config_name) still drives the UI.
+  const runsEnriched = useMemo(() => {
+    return runs.map((r) => {
+      const cfg = configMap.get(r.test_config_id);
+      return {
+        ...r,
+        config_name: r.config_name || cfg?.name,
+        endpoint_kind: r.endpoint_kind || cfg?.endpoint_kind,
+        modes: r.modes || cfg?.modes,
+      };
+    });
+  }, [runs, configMap]);
+
   // Filter out queued unless opted in. Scoped to a comparison group, show
   // everything (the user just launched the group and expects to see its runs).
   const filteredRuns = useMemo(() => {
-    if (showQueued || statusFilter === 'queued' || comparisonGroupId) return runs;
-    return runs.filter(r => r.status !== 'queued');
-  }, [runs, showQueued, statusFilter, comparisonGroupId]);
+    if (showQueued || statusFilter === 'queued' || comparisonGroupId) return runsEnriched;
+    return runsEnriched.filter(r => r.status !== 'queued');
+  }, [runsEnriched, showQueued, statusFilter, comparisonGroupId]);
 
   // Kind counts for tabs
   const kindCounts = useMemo(() => {

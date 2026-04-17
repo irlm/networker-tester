@@ -11,7 +11,7 @@ import { useToast } from '../hooks/useToast';
 // ── Types ───────────────────────────────────────────────────────────────
 
 type DiagPreset = 'quick' | 'standard' | 'full';
-type FilterMode = 'all' | 'healthy' | 'failed';
+type FilterMode = 'all' | 'healthy' | 'failed' | 'pending';
 type SortMode = 'last-checked' | 'name' | 'slowest' | 'most-runs';
 
 interface UrlGroup {
@@ -19,7 +19,7 @@ interface UrlGroup {
   runs: TestRun[];
   configIds: Set<string>;
   lastRun: TestRun;
-  lastStatus: 'healthy' | 'failed' | 'stale';
+  lastStatus: 'healthy' | 'failed' | 'stale' | 'pending';
   totalDurationMs: number | null;
 }
 
@@ -245,7 +245,9 @@ function UrlCard({
       ? 'border-l-2 border-l-red-500'
       : lastStatus === 'stale'
         ? 'border-l-2 border-l-amber-500'
-        : '';
+        : lastStatus === 'pending'
+          ? 'border-l-2 border-l-cyan-500'
+          : '';
 
   // URL text color
   const urlColor =
@@ -253,7 +255,9 @@ function UrlCard({
       ? 'text-red-400'
       : lastStatus === 'stale'
         ? 'text-amber-400'
-        : 'text-cyan-400';
+        : lastStatus === 'pending'
+          ? 'text-gray-300'
+          : 'text-cyan-400';
 
   // Status dot color
   const dotColor =
@@ -261,7 +265,9 @@ function UrlCard({
       ? 'bg-red-500'
       : lastStatus === 'stale'
         ? 'bg-amber-500'
-        : 'bg-emerald-500';
+        : lastStatus === 'pending'
+          ? 'bg-cyan-500 animate-pulse'
+          : 'bg-emerald-500';
 
   // Sparkline data: last 10 runs' durations
   const sparklineValues = useMemo(() => {
@@ -582,15 +588,22 @@ export function DiagnosticsPage() {
       runs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
       const lastRun = runs[0];
 
-      // Determine status
+      // Determine status. A run is "healthy" only when it has completed and
+      // recorded at least one successful attempt — never before a dispatcher
+      // has claimed and finished it.
       const timeSinceLastRun = Date.now() - new Date(lastRun.created_at).getTime();
-      let lastStatus: 'healthy' | 'failed' | 'stale';
-      if (lastRun.status === 'failed' || lastRun.failure_count > 0) {
+      let lastStatus: UrlGroup['lastStatus'];
+      if (lastRun.status === 'failed' || lastRun.status === 'cancelled' || lastRun.failure_count > 0) {
         lastStatus = 'failed';
+      } else if (lastRun.status === 'completed' && lastRun.success_count > 0) {
+        lastStatus = 'healthy';
+      } else if (lastRun.status === 'queued' || lastRun.status === 'provisioning' || lastRun.status === 'running') {
+        lastStatus = 'pending';
       } else if (timeSinceLastRun > STALE_THRESHOLD_MS) {
         lastStatus = 'stale';
       } else {
-        lastStatus = 'healthy';
+        // completed-with-no-attempts or unknown — neither healthy nor failed.
+        lastStatus = 'pending';
       }
 
       groups.push({
@@ -613,7 +626,8 @@ export function DiagnosticsPage() {
     const healthy = urlGroups.filter(g => g.lastStatus === 'healthy').length;
     const failed = urlGroups.filter(g => g.lastStatus === 'failed').length;
     const stale = urlGroups.filter(g => g.lastStatus === 'stale').length;
-    return { total, healthy, failed, stale };
+    const pending = urlGroups.filter(g => g.lastStatus === 'pending').length;
+    return { total, healthy, failed, stale, pending };
   }, [urlGroups]);
 
   // ── Filter + Sort + Paginate ──────────────────────────────────────
@@ -624,6 +638,7 @@ export function DiagnosticsPage() {
     // Filter
     if (filter === 'healthy') result = result.filter(g => g.lastStatus === 'healthy');
     if (filter === 'failed') result = result.filter(g => g.lastStatus === 'failed');
+    if (filter === 'pending') result = result.filter(g => g.lastStatus === 'pending');
 
     // Sort
     result = [...result].sort((a, b) => {
@@ -834,6 +849,14 @@ export function DiagnosticsPage() {
           <span className="text-gray-500">
             <strong className="text-red-400 font-medium">{summary.failed}</strong> failed
           </span>
+          {summary.pending > 0 && (
+            <>
+              <span className="text-gray-700">&middot;</span>
+              <span className="text-gray-500">
+                <strong className="text-cyan-400 font-medium">{summary.pending}</strong> pending
+              </span>
+            </>
+          )}
           <span className="text-gray-700">&middot;</span>
           <span className="text-gray-500">
             <strong className="text-amber-400 font-medium">{summary.stale}</strong> stale (no check in 24h)
@@ -849,7 +872,7 @@ export function DiagnosticsPage() {
         <div className="flex items-center gap-3">
           {/* Filter toggle */}
           <div className="flex border border-gray-800 rounded overflow-hidden">
-            {(['all', 'healthy', 'failed'] as FilterMode[]).map(f => (
+            {(['all', 'healthy', 'pending', 'failed'] as FilterMode[]).map(f => (
               <button
                 key={f}
                 onClick={() => setFilter(f)}

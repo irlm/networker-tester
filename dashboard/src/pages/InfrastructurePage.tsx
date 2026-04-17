@@ -124,6 +124,12 @@ function runnerStatus(row: TesterRow): RunnerStatus {
   if (row.power_state === 'error') return 'error';
   if (row.allocation === 'locked' || row.allocation === 'upgrading') return 'busy';
   if (row.power_state === 'stopped' || row.power_state === 'stopping') return 'stopped';
+  // Provisioning/starting/upgrading VMs can't accept jobs yet — bucket them
+  // as 'busy' so the header counts match the tests/new picker and users
+  // don't launch against a runner that will never respond.
+  if (row.power_state === 'starting' || row.power_state === 'provisioning' || row.power_state === 'upgrading') {
+    return 'busy';
+  }
   return 'idle';
 }
 
@@ -301,6 +307,7 @@ export function InfrastructurePage() {
   const runnerIdleCt = runnerStatusCounts.idle;
   const runnerBusyCt = runnerStatusCounts.busy;
   const runnerStoppedCt = runnerStatusCounts.stopped;
+  const runnerErrorCt = runnerStatusCounts.error;
   const runnerActiveCt = testers.length;
   const targetsCt = completedDeps.length;
   const cloudAccountsCt = 0; // wired later by the Settings cloud-accounts fetch; 0 is a reasonable default
@@ -328,6 +335,9 @@ export function InfrastructurePage() {
             <div className="text-[10px] uppercase tracking-wider text-gray-500 mt-1.5">Runners active</div>
             <div className="text-[10px] text-green-400 font-mono mt-0.5">
               {runnerIdleCt} idle · {runnerBusyCt} busy · {runnerStoppedCt} stopped
+              {runnerErrorCt > 0 && (
+                <span className="text-red-400"> · {runnerErrorCt} error</span>
+              )}
             </div>
           </div>
           <div>
