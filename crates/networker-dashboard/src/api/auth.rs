@@ -498,33 +498,29 @@ async fn sso_callback(
     let audience = claims.get("aud").and_then(|a| a.as_str()).unwrap_or("");
 
     match provider.provider_type.as_str() {
-        "microsoft" => {
-            if !issuer.starts_with("https://login.microsoftonline.com/") || audience != client_id {
-                tracing::error!(
-                    %issuer, %audience, expected_aud = %client_id,
-                    "Microsoft ID token iss/aud mismatch"
-                );
-                return redirect_to_login_with_error(&state.public_url, "id_token_invalid");
-            }
+        "microsoft"
+            if !issuer.starts_with("https://login.microsoftonline.com/")
+                || audience != client_id =>
+        {
+            tracing::error!(
+                %issuer, %audience, expected_aud = %client_id,
+                "Microsoft ID token iss/aud mismatch"
+            );
+            return redirect_to_login_with_error(&state.public_url, "id_token_invalid");
         }
-        "google" => {
-            if issuer != "https://accounts.google.com" || audience != client_id {
-                tracing::error!(
-                    %issuer, %audience, expected_aud = %client_id,
-                    "Google ID token iss/aud mismatch"
-                );
-                return redirect_to_login_with_error(&state.public_url, "id_token_invalid");
-            }
+        "google" if issuer != "https://accounts.google.com" || audience != client_id => {
+            tracing::error!(
+                %issuer, %audience, expected_aud = %client_id,
+                "Google ID token iss/aud mismatch"
+            );
+            return redirect_to_login_with_error(&state.public_url, "id_token_invalid");
         }
-        "oidc_generic" => {
-            // For generic OIDC, validate audience matches client_id
-            if audience != client_id {
-                tracing::error!(
-                    %issuer, %audience, expected_aud = %client_id,
-                    "OIDC ID token audience mismatch"
-                );
-                return redirect_to_login_with_error(&state.public_url, "id_token_invalid");
-            }
+        "oidc_generic" if audience != client_id => {
+            tracing::error!(
+                %issuer, %audience, expected_aud = %client_id,
+                "OIDC ID token audience mismatch"
+            );
+            return redirect_to_login_with_error(&state.public_url, "id_token_invalid");
         }
         _ => {}
     }
