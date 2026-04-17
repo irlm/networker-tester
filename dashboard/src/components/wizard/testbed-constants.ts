@@ -56,22 +56,25 @@ export const LINUX_PROXIES = ['nginx', 'caddy', 'traefik', 'haproxy', 'apache'] 
 // Windows proxy support by cloud:
 //   - Azure: iis, caddy, traefik, haproxy, apache — install.sh 0.28.1+ invokes
 //     install.ps1 -Setup <proxy> over `az vm run-command` (_azure_win_setup_proxy).
-//   - AWS:   Windows endpoint deploy is not yet supported at all (install.sh
-//     exits early). Restricted to [] here to avoid silent failures.
+//   - AWS:   iis only — install.sh 0.27.27+ bootstraps IIS via UserData
+//     PowerShell on Windows Server 2022 (_aws_win_endpoint_full_userdata).
+//     Non-IIS proxies would need AWS SSM RunPowerShellScript equivalent.
 //   - GCP:   Windows endpoint deploys via startup-script, but install.sh
-//     does not yet run install.ps1 remotely on GCE Windows (see install.sh:7771
+//     does not yet run install.ps1 remotely on GCE Windows (see install.sh
 //     "IIS setup for GCP Windows would need gcloud SSH — deferred for now").
 //     Restricted to [] here pending parity.
 // nginx is rejected by install.sh validation on any Windows endpoint.
 export const WINDOWS_PROXIES_AZURE = ['iis', 'caddy', 'traefik', 'haproxy', 'apache'] as const;
-export const WINDOWS_PROXIES_AWS_GCP: readonly string[] = [];
+export const WINDOWS_PROXIES_AWS = ['iis'] as const;
+export const WINDOWS_PROXIES_GCP: readonly string[] = [];
 
 /** @deprecated use windowsProxiesFor(cloud). Kept for call-site compatibility. */
 export const WINDOWS_PROXIES = WINDOWS_PROXIES_AZURE;
 
 export function windowsProxiesFor(cloud: string): readonly string[] {
   if (cloud === 'Azure') return WINDOWS_PROXIES_AZURE;
-  return WINDOWS_PROXIES_AWS_GCP;
+  if (cloud === 'AWS') return WINDOWS_PROXIES_AWS;
+  return WINDOWS_PROXIES_GCP;
 }
 
 export const PROXY_LABELS: Record<string, string> = {

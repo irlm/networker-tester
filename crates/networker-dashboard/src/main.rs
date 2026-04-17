@@ -22,7 +22,7 @@ use axum::middleware::Next;
 use axum::Router;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{broadcast, Mutex, RwLock};
+use tokio::sync::{broadcast, Mutex, RwLock, Semaphore};
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 
@@ -170,6 +170,10 @@ pub struct AppState {
     /// Populated by `services::version_refresh::refresh_latest_version_loop`
     /// and read by the manual refresh handler in `api::testers`.
     pub latest_version_cache: Arc<RwLock<String>>,
+    /// Bounded semaphore limiting concurrent cloud CLI processes (deploys,
+    /// tester create/delete, VM start/stop). Prevents resource exhaustion
+    /// on small VMs. Configurable via `DEPLOY_CONCURRENCY` env var (default 2).
+    pub deploy_semaphore: Arc<Semaphore>,
 }
 
 /// Refresh the in-memory SSO provider cache from the database.
@@ -433,6 +437,12 @@ async fn main() -> anyhow::Result<()> {
     let events_tx = networker_dashboard::services::event_bus::EventBus::new(1024);
     let (approval_tx, _) = broadcast::channel(100);
 
+    let deploy_concurrency: usize = std::env::var("DEPLOY_CONCURRENCY")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2);
+    tracing::info!(deploy_concurrency, "deploy semaphore concurrency cap");
+
     let state = Arc::new(AppState {
         db: db_pool,
         logs_db: logs_pool,
@@ -464,6 +474,7 @@ async fn main() -> anyhow::Result<()> {
         logs_database_url: cfg.logs_database_url.clone(),
         started_at: std::time::Instant::now(),
         latest_version_cache: Arc::new(RwLock::new(env!("CARGO_PKG_VERSION").to_string())),
+        deploy_semaphore: Arc::new(Semaphore::new(deploy_concurrency)),
     });
 
     if cfg.credential_key.is_none() {

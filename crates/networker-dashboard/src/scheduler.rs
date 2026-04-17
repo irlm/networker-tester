@@ -24,6 +24,7 @@ pub fn spawn(state: Arc<AppState>) {
         let mut last_approval_cleanup = std::time::Instant::now();
         let mut last_inactivity_check: Option<std::time::Instant> = None;
         let mut last_health_check = std::time::Instant::now();
+        let mut last_stale_job_check = std::time::Instant::now();
 
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
@@ -71,6 +72,14 @@ pub fn spawn(state: Arc<AppState>) {
             if should_check_inactivity {
                 check_workspace_inactivity(&state).await;
                 last_inactivity_check = Some(std::time::Instant::now());
+            }
+
+            // Stale assigned-job watchdog (every 60s)
+            if last_stale_job_check.elapsed() > std::time::Duration::from_secs(60) {
+                last_stale_job_check = std::time::Instant::now();
+                if let Err(e) = reap_stale_assigned_jobs(&state).await {
+                    tracing::error!(error = %e, "Stale assigned-job reaper failed");
+                }
             }
 
             // Hourly system health checks
@@ -568,6 +577,64 @@ async fn run_health_checks(state: &Arc<AppState>) {
             tracing::error!(error = %e, "Failed to cleanup old health records");
         }
     }
+}
+
+/// Fail test_runs stuck in "running" whose tester/agent is no longer online.
+///
+/// When a tester VM is deleted and recreated it gets a new id, but runs
+/// assigned to the OLD tester stay "running" forever. This watchdog marks
+/// them failed so the UI reflects reality and the scheduler can re-queue work.
+///
+/// (Was `reap_stale_assigned_jobs` operating on the dropped `job` table
+/// before the v0.28 TestConfig unification; ported to `test_run`.)
+async fn reap_stale_assigned_jobs(state: &AppState) -> anyhow::Result<()> {
+    use anyhow::Context;
+
+    let client = state
+        .db
+        .get()
+        .await
+        .context("DB pool error in stale-run reaper")?;
+
+    let stale = crate::db::test_runs::find_stale_assigned(&client, 120)
+        .await
+        .context("Failed to query stale running test_runs")?;
+
+    for (run_id, tester_id) in stale {
+        // Tester id == agent id in the v0.28 model. If the agent is still
+        // connected, the run may just be slow to heartbeat — skip it.
+        if let Some(ref tid) = tester_id {
+            if state.agents.is_agent_online(tid).await {
+                continue;
+            }
+        }
+
+        let error_msg = "Agent disconnected — tester may have been deleted or restarted";
+
+        crate::db::test_runs::set_error(&client, &run_id, error_msg)
+            .await
+            .context("Failed to fail stale running test_run")?;
+
+        // JobUpdate event kept for wire-compatibility with older dashboard
+        // clients; job_id carries the run id in v0.28.
+        let _ = state
+            .events_tx
+            .send(networker_common::messages::DashboardEvent::JobUpdate {
+                job_id: run_id,
+                status: "failed".into(),
+                agent_id: tester_id,
+                started_at: None,
+                finished_at: Some(chrono::Utc::now()),
+            });
+
+        tracing::warn!(
+            run_id = %run_id,
+            tester_id = ?tester_id,
+            "Reaped stale running test_run — agent offline"
+        );
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

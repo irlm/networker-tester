@@ -3556,7 +3556,8 @@ UNIT
 
 sudo systemctl daemon-reload
 sudo systemctl enable networker-endpoint
-sudo systemctl start networker-endpoint
+# Close inherited FDs before starting service so SSH pipe can exit
+sudo systemctl start networker-endpoint </dev/null >/dev/null 2>&1
 
 # Redirect standard ports 80/443 to the unprivileged service ports 8080/8443.
 # This lets browsers reach the landing page via http://IP and https://IP.
@@ -5433,7 +5434,8 @@ EOF
 # Test config — rollback on failure
 if sudo nginx -t 2>&1; then
     sudo systemctl enable nginx 2>/dev/null || true
-    sudo systemctl restart nginx
+    # Close inherited FDs before starting service so SSH pipe can exit
+    sudo systemctl restart nginx </dev/null >/dev/null 2>&1
     echo "nginx configured on ports 8081/8444 (HTTP/3 enabled)"
 else
     echo ">> ERROR: nginx -t failed — rolling back"
@@ -5732,7 +5734,8 @@ EOF
 
 if sudo nginx -t 2>&1; then
     sudo systemctl enable nginx 2>/dev/null || true
-    sudo systemctl restart nginx
+    # Close inherited FDs before starting service so SSH pipe can exit
+    sudo systemctl restart nginx </dev/null >/dev/null 2>&1
     echo "nginx configured on ports 8081/8444 (HTTP/3 enabled)"
 else
     echo ">> ERROR: nginx -t failed — rolling back"
@@ -6686,6 +6689,241 @@ _aws_find_ubuntu_ami() {
     print_ok "AMI: $AWS_AMI_ID  (Ubuntu 22.04 LTS)"
 }
 
+# Look up the latest Windows Server 2022 Base AMI for the current region.
+# Sets the global AWS_AMI_ID (reuses the same variable — caller picks Linux or Windows).
+_aws_find_windows_ami() {
+    print_info "Looking up Windows Server 2022 AMI in ${AWS_REGION}…"
+    AWS_AMI_ID="$(aws ec2 describe-images \
+        --region "$AWS_REGION" \
+        --owners amazon \
+        --filters \
+            "Name=name,Values=Windows_Server-2022-English-Full-Base-*" \
+            "Name=state,Values=available" \
+            "Name=architecture,Values=x86_64" \
+        --query "sort_by(Images, &CreationDate)[-1].ImageId" \
+        --output text 2>/dev/null || echo "")"
+
+    if [[ -z "$AWS_AMI_ID" || "$AWS_AMI_ID" == "None" ]]; then
+        print_err "Could not find Windows Server 2022 AMI in region $AWS_REGION."
+        exit 1
+    fi
+    print_ok "AMI: $AWS_AMI_ID  (Windows Server 2022)"
+}
+
+# Generate a PowerShell UserData script for AWS Windows endpoint bootstrap.
+# The script runs once on first boot (via EC2 UserData) and:
+#   - Opens firewall ports
+#   - Installs VC++ Redistributable
+#   - Downloads + installs networker-endpoint
+#   - Starts the endpoint and creates a scheduled task for reboot persistence
+# $1 = version tag (e.g. "v0.27.27" or "latest")
+# Writes the script to stdout; caller captures to a temp file.
+_aws_win_endpoint_userdata() {
+    local ver="${1:-latest}"
+    local archive="networker-endpoint-x86_64-pc-windows-msvc.zip"
+    local url="https://github.com/${REPO_GH}/releases/download/${ver}/${archive}"
+
+    cat <<USERDATA_EOF
+<powershell>
+\$ErrorActionPreference = 'Continue'
+\$dest = 'C:\\networker'
+\$logFile = 'C:\\networker-bootstrap.log'
+
+function Log(\$msg) {
+    \$ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    "\$ts  \$msg" | Tee-Object -FilePath \$logFile -Append
+}
+
+Log "Starting networker-endpoint bootstrap…"
+
+# 1. Windows Firewall rules
+Log "Configuring firewall rules…"
+netsh advfirewall firewall add rule name='Networker-HTTP'  protocol=TCP dir=in action=allow localport='80,443,8080,8081,8082'  | Out-Null
+netsh advfirewall firewall add rule name='Networker-HTTPS' protocol=TCP dir=in action=allow localport='8443,8444,8445'  | Out-Null
+netsh advfirewall firewall add rule name='Networker-UDP'   protocol=UDP dir=in action=allow localport='8443,8444,8445,9998,9999' | Out-Null
+Log "Firewall rules added"
+
+# 2. Install VC++ Redistributable if missing (MSVC-built binaries need vcruntime140.dll)
+if (-not (Test-Path 'C:\\Windows\\System32\\vcruntime140.dll')) {
+    Log "Installing VC++ Redistributable…"
+    Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vc_redist.x64.exe' -OutFile C:\\vc_redist.x64.exe -UseBasicParsing
+    Start-Process -FilePath 'C:\\vc_redist.x64.exe' -ArgumentList '/install','/quiet','/norestart' -Wait
+    Remove-Item 'C:\\vc_redist.x64.exe' -Force -ErrorAction SilentlyContinue
+    Log "VC++ Redistributable installed"
+}
+
+# 3. Download and install networker-endpoint
+Log "Downloading networker-endpoint from ${url}…"
+New-Item -ItemType Directory -Force -Path \$dest | Out-Null
+New-Item -ItemType Directory -Force -Path C:\\networker-tmp | Out-Null
+\$zip = "C:\\networker-tmp\\${archive}"
+try {
+    Invoke-WebRequest -Uri '${url}' -OutFile \$zip -UseBasicParsing
+    Expand-Archive -Path \$zip -DestinationPath \$dest -Force
+    Remove-Item -Recurse -Force C:\\networker-tmp
+    Log "Binary extracted to \$dest"
+} catch {
+    Log "ERROR downloading binary: \$_"
+}
+
+# Add to PATH
+\$machinePath = [System.Environment]::GetEnvironmentVariable('Path','Machine')
+if (\$machinePath -notlike "*\$dest*") {
+    [System.Environment]::SetEnvironmentVariable('Path',"\$machinePath;\$dest",'Machine')
+    Log "Added \$dest to system PATH"
+}
+\$env:Path = "\$dest;" + \$env:Path
+
+# 4. Start endpoint and create scheduled task for persistence
+\$exe = "\$dest\\networker-endpoint.exe"
+if (Test-Path \$exe) {
+    Stop-Process -Name 'networker-endpoint' -Force -ErrorAction SilentlyContinue
+    Start-Process -FilePath \$exe -WindowStyle Hidden
+    schtasks /Create /TN 'NetworkerEndpoint' /TR "\$exe" /SC ONSTART /RU SYSTEM /F 2>\$null | Out-Null
+    Start-Sleep 5
+    \$listening = netstat -an 2>\$null | Select-String ':8080.*LISTEN'
+    if (\$listening) { Log "Endpoint listening on 8080" } else { Log "WARNING: Not listening on 8080 after 5s" }
+} else {
+    Log "ERROR: Binary not found at \$exe"
+}
+
+Log "Bootstrap complete"
+</powershell>
+USERDATA_EOF
+}
+
+# Generate a PowerShell UserData script for IIS setup on AWS Windows endpoint.
+# This is appended to the main UserData or run as a separate step.
+# Returns the IIS setup PowerShell (reuses _iis_setup_powershell).
+_aws_win_iis_userdata() {
+    local fqdn="${1:-}"
+    cat <<'IISUSERDATA_HEADER'
+<powershell>
+$ErrorActionPreference = 'Continue'
+$logFile = 'C:\networker-iis-bootstrap.log'
+function Log($msg) {
+    $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    "$ts  $msg" | Tee-Object -FilePath $logFile -Append
+}
+Log "Starting IIS setup…"
+IISUSERDATA_HEADER
+    # Emit the IIS setup body (same as Azure)
+    _iis_setup_powershell "$fqdn"
+    cat <<'IISUSERDATA_FOOTER'
+Log "IIS setup complete"
+</powershell>
+IISUSERDATA_FOOTER
+}
+
+# Combined UserData for AWS Windows endpoint: endpoint binary + IIS.
+# $1 = version tag, $2 = FQDN (optional, for SNI/HTTP3)
+# Writes a single <powershell>...</powershell> block to stdout.
+_aws_win_endpoint_full_userdata() {
+    local ver="${1:-latest}"
+    local fqdn="${2:-}"
+    local archive="networker-endpoint-x86_64-pc-windows-msvc.zip"
+    local url="https://github.com/${REPO_GH}/releases/download/${ver}/${archive}"
+
+    cat <<FULLUD_HEAD
+<powershell>
+\$ErrorActionPreference = 'Continue'
+\$dest = 'C:\\networker'
+\$logFile = 'C:\\networker-bootstrap.log'
+
+function Log(\$msg) {
+    \$ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    "\$ts  \$msg" | Tee-Object -FilePath \$logFile -Append
+}
+
+Log "Starting networker-endpoint Windows bootstrap…"
+
+# ── Firewall rules ──────────────────────────────────────────────────────────
+Log "Configuring firewall rules…"
+netsh advfirewall firewall add rule name='Networker-HTTP'  protocol=TCP dir=in action=allow localport='80,443,8080,8081,8082'  | Out-Null
+netsh advfirewall firewall add rule name='Networker-HTTPS' protocol=TCP dir=in action=allow localport='8443,8444,8445'  | Out-Null
+netsh advfirewall firewall add rule name='Networker-UDP'   protocol=UDP dir=in action=allow localport='8443,8444,8445,9998,9999' | Out-Null
+Log "Firewall rules added"
+
+# ── VC++ Redistributable ────────────────────────────────────────────────────
+if (-not (Test-Path 'C:\\Windows\\System32\\vcruntime140.dll')) {
+    Log "Installing VC++ Redistributable…"
+    Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vc_redist.x64.exe' -OutFile C:\\vc_redist.x64.exe -UseBasicParsing
+    Start-Process -FilePath 'C:\\vc_redist.x64.exe' -ArgumentList '/install','/quiet','/norestart' -Wait
+    Remove-Item 'C:\\vc_redist.x64.exe' -Force -ErrorAction SilentlyContinue
+    Log "VC++ Redistributable installed"
+}
+
+# ── Download + install networker-endpoint ────────────────────────────────────
+Log "Downloading networker-endpoint…"
+New-Item -ItemType Directory -Force -Path \$dest | Out-Null
+New-Item -ItemType Directory -Force -Path C:\\networker-tmp | Out-Null
+\$zip = "C:\\networker-tmp\\${archive}"
+try {
+    Invoke-WebRequest -Uri '${url}' -OutFile \$zip -UseBasicParsing
+    Expand-Archive -Path \$zip -DestinationPath \$dest -Force
+    Remove-Item -Recurse -Force C:\\networker-tmp
+    Log "Binary extracted to \$dest"
+} catch {
+    Log "ERROR downloading binary: \$_"
+}
+
+\$machinePath = [System.Environment]::GetEnvironmentVariable('Path','Machine')
+if (\$machinePath -notlike "*\$dest*") {
+    [System.Environment]::SetEnvironmentVariable('Path',"\$machinePath;\$dest",'Machine')
+}
+\$env:Path = "\$dest;" + \$env:Path
+
+# ── Start endpoint + scheduled task ─────────────────────────────────────────
+\$exe = "\$dest\\networker-endpoint.exe"
+if (Test-Path \$exe) {
+    Stop-Process -Name 'networker-endpoint' -Force -ErrorAction SilentlyContinue
+    Start-Process -FilePath \$exe -WindowStyle Hidden
+    schtasks /Create /TN 'NetworkerEndpoint' /TR "\$exe" /SC ONSTART /RU SYSTEM /F 2>\$null | Out-Null
+    Start-Sleep 5
+    \$listening = netstat -an 2>\$null | Select-String ':8080.*LISTEN'
+    if (\$listening) { Log "Endpoint listening on 8080" } else { Log "WARNING: Not listening on 8080 after 5s" }
+} else {
+    Log "ERROR: Binary not found at \$exe"
+}
+
+# ── IIS setup for HTTP stack comparison ──────────────────────────────────────
+Log "Installing IIS…"
+FULLUD_HEAD
+
+    # Emit the IIS setup PowerShell body (reuses the same function as Azure)
+    _iis_setup_powershell "$fqdn"
+
+    cat <<'FULLUD_TAIL'
+
+Log "Bootstrap complete"
+</powershell>
+FULLUD_TAIL
+}
+
+# Wait for an AWS Windows endpoint to become healthy (poll /health).
+# $1 = public IP, $2 = timeout in seconds (default 600 = 10 min)
+_aws_wait_for_windows_endpoint() {
+    local ip="$1" timeout="${2:-600}"
+    print_info "Waiting for Windows endpoint to bootstrap (this may take 5–10 minutes)…"
+    print_dim "The VM is running UserData: installing VC++ runtime, endpoint binary, and IIS."
+    local elapsed=0
+    while (( elapsed < timeout )); do
+        if curl -sf --max-time 5 "http://${ip}:8080/health" &>/dev/null; then
+            echo ""
+            print_ok "Endpoint healthy at http://${ip}:8080  (after ${elapsed}s)"
+            return 0
+        fi
+        printf "."
+        sleep 15
+        elapsed=$(( elapsed + 15 ))
+    done
+    echo ""
+    print_warn "Endpoint not responding after ${timeout}s."
+    print_info "The VM may still be bootstrapping. Check C:\\networker-bootstrap.log on the instance."
+    print_info "You can RDP to ${ip} or use EC2 Instance Connect to inspect the logs."
+    return 1
+}
+
 # Create a security group with the necessary inbound rules.
 # $1 = "tester" or "endpoint"; $2 = variable name to receive the SG ID.
 _aws_create_security_group() {
@@ -6715,10 +6953,14 @@ _aws_create_security_group() {
         --query "GroupId" \
         --output text)"
 
-    # SSH (always)
+    # SSH (always — Linux VMs)
     aws ec2 authorize-security-group-ingress \
         --region "$AWS_REGION" --group-id "$_sg_created" \
         --protocol tcp --port 22 --cidr 0.0.0.0/0 --output text >/dev/null
+    # RDP (Windows VMs — for debugging; harmless on Linux)
+    aws ec2 authorize-security-group-ingress \
+        --region "$AWS_REGION" --group-id "$_sg_created" \
+        --protocol tcp --port 3389 --cidr 0.0.0.0/0 --output text >/dev/null
 
     if [[ "$component" == "endpoint" ]]; then
         # TCP 80, 443, 8080-8082, 8443-8445 (80/443 redirect to 8080/8443 via iptables on VM)
@@ -6745,9 +6987,9 @@ _aws_create_security_group() {
         aws ec2 authorize-security-group-ingress \
             --region "$AWS_REGION" --group-id "$_sg_created" \
             --protocol udp --port 9999 --cidr 0.0.0.0/0 --output text >/dev/null
-        print_ok "Security group created: $_sg_created  (TCP 22/80/443/8080-8082/8443-8445, UDP 8443-8445/9998/9999)"
+        print_ok "Security group created: $_sg_created  (TCP 22/3389/80/443/8080-8082/8443-8445, UDP 8443-8445/9998/9999)"
     else
-        print_ok "Security group created: $_sg_created  (TCP 22)"
+        print_ok "Security group created: $_sg_created  (TCP 22/3389)"
     fi
 
     printf -v "$sg_var" "%s" "$_sg_created"
@@ -6755,10 +6997,11 @@ _aws_create_security_group() {
 
 # Launch an EC2 instance and wait until it is running.
 # $1 = label, $2 = instance type, $3 = name tag,
-# $4 = SG ID, $5 = instance_id var, $6 = ip var
+# $4 = SG ID, $5 = instance_id var, $6 = ip var, $7 = optional UserData file
 _aws_launch_instance() {
     local label="$1" instance_type="$2" name_tag="$3"
     local sg_id="$4" instance_id_var="$5" ip_var="$6"
+    local userdata_file="${7:-}"
 
     # Check if an instance with this Name tag already exists (running or stopped)
     local existing_id
@@ -6854,12 +7097,18 @@ _aws_launch_instance() {
         fi
     done
 
+    local userdata_opt=""
+    if [[ -n "$userdata_file" && -f "$userdata_file" ]]; then
+        userdata_opt="--user-data file://${userdata_file}"
+    fi
+
     local instance_id
     instance_id="$(aws ec2 run-instances \
         --region "$AWS_REGION" \
         --image-id "$AWS_AMI_ID" \
         --instance-type "$instance_type" \
         $key_opt \
+        $userdata_opt \
         --security-group-ids "$sg_id" \
         --tag-specifications \
             "ResourceType=instance,Tags=[{Key=Name,Value=${name_tag}}]" \
@@ -6932,58 +7181,106 @@ step_aws_deploy_tester() {
 }
 
 step_aws_deploy_endpoint() {
-    # AWS Windows endpoint deployment is not yet implemented — the AMI lookup,
-    # SSH user, nginx setup, and service install are all Linux-specific. Refusing
-    # here prevents silently deploying Ubuntu when the user asked for Windows
-    # (see regression fixed in v0.27.25).
-    if [[ "${AWS_ENDPOINT_OS:-linux}" == "windows" ]]; then
-        print_err "AWS Windows endpoint deployment is not yet supported (endpoint: ${AWS_ENDPOINT_NAME:-unnamed})."
-        print_info "Workaround: use Azure or GCP for Windows endpoints, or pick Linux for AWS."
-        exit 1
-    fi
-    # Only check prereqs once
+    local ep_os="${AWS_ENDPOINT_OS:-linux}"
+
+    # Only check prereqs once (shared with tester path if both are AWS)
     if [[ "$TESTER_LOCATION" != "aws" || -z "$AWS_TESTER_IP" ]]; then
         step_check_aws_prereqs
         _aws_ensure_keypair
+    fi
+
+    # AMI lookup: branch on OS
+    if [[ "$ep_os" == "windows" ]]; then
+        _aws_find_windows_ami
+    else
         _aws_find_ubuntu_ami
     fi
 
-    next_step "Create AWS EC2 instance for endpoint ($AWS_ENDPOINT_NAME, $AWS_REGION)"
+    next_step "Create AWS EC2 instance for endpoint ($AWS_ENDPOINT_NAME, $AWS_REGION, $ep_os)"
     local sg_id
     _aws_create_security_group "endpoint" sg_id
-    _aws_launch_instance "endpoint" \
-        "$AWS_ENDPOINT_INSTANCE_TYPE" "$AWS_ENDPOINT_NAME" \
-        "$sg_id" "AWS_ENDPOINT_INSTANCE_ID" "AWS_ENDPOINT_IP"
 
-    # Fast-path: if endpoint is already healthy with correct version, skip install
-    if curl -sf --max-time 5 "http://${AWS_ENDPOINT_IP}:8080/health" &>/dev/null; then
-        local running_ver
-        running_ver="$(curl -sf --max-time 5 "http://${AWS_ENDPOINT_IP}:8080/health" 2>/dev/null \
-                       | grep -o '"version":"[^"]*"' | head -1 | sed 's/"version":"//;s/"//')"
-        local want_ver="${NETWORKER_VERSION:-}"
-        want_ver="${want_ver#v}"  # strip leading v
-        if [[ -n "$running_ver" && ( -z "$want_ver" || "$running_ver" == "$want_ver" ) ]]; then
-            print_ok "Endpoint already healthy (v${running_ver}) at http://${AWS_ENDPOINT_IP}:8080 — skipping install"
-            step_generate_config "$AWS_ENDPOINT_IP"
-            return 0
+    if [[ "$ep_os" == "windows" ]]; then
+        # Generate UserData that bootstraps the full Windows endpoint (binary + IIS)
+        local userdata_tmp
+        userdata_tmp="$(mktemp /tmp/networker-aws-win-ud-XXXXX.ps1)"
+        _aws_win_endpoint_full_userdata "${NETWORKER_VERSION:-latest}" "" > "$userdata_tmp"
+
+        _aws_launch_instance "endpoint" \
+            "$AWS_ENDPOINT_INSTANCE_TYPE" "$AWS_ENDPOINT_NAME" \
+            "$sg_id" "AWS_ENDPOINT_INSTANCE_ID" "AWS_ENDPOINT_IP" \
+            "$userdata_tmp"
+        rm -f "$userdata_tmp"
+
+        # Fast-path: if endpoint is already healthy with correct version, skip wait
+        if curl -sf --max-time 5 "http://${AWS_ENDPOINT_IP}:8080/health" &>/dev/null; then
+            local running_ver
+            running_ver="$(curl -sf --max-time 5 "http://${AWS_ENDPOINT_IP}:8080/health" 2>/dev/null \
+                           | grep -o '"version":"[^"]*"' | head -1 | sed 's/"version":"//;s/"//')"
+            local want_ver="${NETWORKER_VERSION:-}"
+            want_ver="${want_ver#v}"  # strip leading v
+            if [[ -n "$running_ver" && ( -z "$want_ver" || "$running_ver" == "$want_ver" ) ]]; then
+                print_ok "Endpoint already healthy (v${running_ver}) at http://${AWS_ENDPOINT_IP}:8080 — skipping install"
+                step_generate_config "$AWS_ENDPOINT_IP"
+                return 0
+            fi
+            print_info "Endpoint running v${running_ver} but want v${want_ver} — reinstalling…"
         fi
-        print_info "Endpoint running v${running_ver} but want v${want_ver} — reinstalling…"
+
+        next_step "Wait for Windows endpoint bootstrap (AWS)"
+        _aws_wait_for_windows_endpoint "$AWS_ENDPOINT_IP" 600
+
+        # Verify IIS is also responding (HTTP stack comparison)
+        next_step "Verify IIS health (AWS Windows)"
+        local iis_ok=true
+        for url in "http://${AWS_ENDPOINT_IP}:8082/" "https://${AWS_ENDPOINT_IP}:8445/"; do
+            local scheme="${url%%://*}"
+            local curl_flags="--max-time 10 -sf"
+            [[ "$scheme" == "https" ]] && curl_flags="$curl_flags -k"
+            if curl $curl_flags "$url" -o /dev/null 2>/dev/null; then
+                print_ok "  $url → OK"
+            else
+                print_warn "  $url → not responding (IIS may still be setting up or needs a reboot)"
+                iis_ok=false
+            fi
+        done
+        $iis_ok || print_info "IIS may need a VM reboot to fully activate HTTP/3. The endpoint binary (port 8080) is already running."
+    else
+        # ── Linux path (Ubuntu) ──────────────────────────────────────────────
+        _aws_launch_instance "endpoint" \
+            "$AWS_ENDPOINT_INSTANCE_TYPE" "$AWS_ENDPOINT_NAME" \
+            "$sg_id" "AWS_ENDPOINT_INSTANCE_ID" "AWS_ENDPOINT_IP"
+
+        # Fast-path: if endpoint is already healthy with correct version, skip install
+        if curl -sf --max-time 5 "http://${AWS_ENDPOINT_IP}:8080/health" &>/dev/null; then
+            local running_ver
+            running_ver="$(curl -sf --max-time 5 "http://${AWS_ENDPOINT_IP}:8080/health" 2>/dev/null \
+                           | grep -o '"version":"[^"]*"' | head -1 | sed 's/"version":"//;s/"//')"
+            local want_ver="${NETWORKER_VERSION:-}"
+            want_ver="${want_ver#v}"  # strip leading v
+            if [[ -n "$running_ver" && ( -z "$want_ver" || "$running_ver" == "$want_ver" ) ]]; then
+                print_ok "Endpoint already healthy (v${running_ver}) at http://${AWS_ENDPOINT_IP}:8080 — skipping install"
+                step_generate_config "$AWS_ENDPOINT_IP"
+                return 0
+            fi
+            print_info "Endpoint running v${running_ver} but want v${want_ver} — reinstalling…"
+        fi
+
+        _wait_for_ssh "$AWS_ENDPOINT_IP" "ubuntu" "endpoint instance"
+        step_aws_set_auto_shutdown "$AWS_ENDPOINT_IP" "ubuntu" "endpoint instance"
+
+        next_step "Install networker-endpoint on AWS EC2"
+        _remote_install_binary "networker-endpoint" "$AWS_ENDPOINT_IP" "ubuntu"
+
+        next_step "Create networker-endpoint service (AWS)"
+        _remote_create_endpoint_service "$AWS_ENDPOINT_IP" "ubuntu"
+
+        # nginx HTTP stack comparison setup
+        _remote_setup_nginx "$AWS_ENDPOINT_IP" "ubuntu"
+
+        next_step "Verify endpoint health (AWS)"
+        _remote_verify_health "$AWS_ENDPOINT_IP" "ubuntu"
     fi
-
-    _wait_for_ssh "$AWS_ENDPOINT_IP" "ubuntu" "endpoint instance"
-    step_aws_set_auto_shutdown "$AWS_ENDPOINT_IP" "ubuntu" "endpoint instance"
-
-    next_step "Install networker-endpoint on AWS EC2"
-    _remote_install_binary "networker-endpoint" "$AWS_ENDPOINT_IP" "ubuntu"
-
-    next_step "Create networker-endpoint service (AWS)"
-    _remote_create_endpoint_service "$AWS_ENDPOINT_IP" "ubuntu"
-
-    # nginx HTTP stack comparison setup
-    _remote_setup_nginx "$AWS_ENDPOINT_IP" "ubuntu"
-
-    next_step "Verify endpoint health (AWS)"
-    _remote_verify_health "$AWS_ENDPOINT_IP" "ubuntu"
 
     step_generate_config "$AWS_ENDPOINT_IP"
 }
@@ -7422,7 +7719,8 @@ WantedBy=multi-user.target
 UNIT
         sudo systemctl daemon-reload
         sudo systemctl enable networker-endpoint
-        sudo systemctl start networker-endpoint
+        # Close inherited FDs before starting service so SSH pipe can exit
+        sudo systemctl start networker-endpoint </dev/null >/dev/null 2>&1
     "
     print_ok "networker-endpoint service started"
 
@@ -8480,12 +8778,6 @@ _deploy_validate_config() {
                 # Windows computer name limit (15 chars) — applies to Azure, AWS, GCP
                 local ep_os; ep_os="$(jq -r ".endpoints[$i].${ep_prov}.os // empty" "$cfg")"
                 if [[ "$ep_os" == "windows" ]]; then
-                    # AWS Windows endpoint deployment is not yet implemented —
-                    # reject early instead of silently deploying Ubuntu.
-                    if [[ "$ep_prov" == "aws" ]]; then
-                        print_err "endpoints[$i]: AWS Windows endpoints are not yet supported (use Azure or GCP for Windows)"
-                        errors=$((errors + 1))
-                    fi
                     local vm_name=""
                     case "$ep_prov" in
                         azure) vm_name="$(jq -r ".endpoints[$i].azure.vm_name // empty" "$cfg")" ;;

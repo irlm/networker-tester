@@ -1359,6 +1359,37 @@ JSON
     [[ "$output" == *"No supported package manager"* ]]
 }
 
+@test "SSH-piped systemctl starts close inherited FDs to prevent hang" {
+    # Regression: services started inside ssh ... bash -s heredocs inherit the
+    # SSH pipe FDs. If not redirected, SSH hangs forever waiting for the service
+    # process to exit. Every "systemctl start" or "systemctl restart" inside an
+    # SSH heredoc must redirect stdin/stdout/stderr.
+    local script="$BATS_TEST_DIRNAME/../install.sh"
+
+    # Extract all systemctl start/restart lines from NGINX_SSH, NGINX_GCP,
+    # and REMOTE heredoc blocks
+    local bad_lines
+    bad_lines="$(grep -n 'systemctl \(start\|restart\)' "$script" \
+        | grep -v '</dev/null' \
+        | grep -v '2>/dev/null || true' \
+        | grep -v '# Close inherited' \
+        | grep -v '_deploy_proxy_' \
+        | grep -v 'step_setup_endpoint_service' \
+        | grep -v 'echo.*systemctl' \
+        | grep -v 'BENCH_' \
+        || true)"
+
+    if [ -n "$bad_lines" ]; then
+        echo "Found systemctl start/restart without FD redirect:"
+        echo "$bad_lines"
+    fi
+    # The four SSH-piped service starts must all have </dev/null >/dev/null 2>&1
+    # Check the critical heredoc blocks by counting FD-redirected starts
+    local fd_safe_count
+    fd_safe_count="$(grep -c 'systemctl.*</dev/null >/dev/null 2>&1' "$script" || true)"
+    [ "$fd_safe_count" -ge 4 ]
+}
+
 @test "_iis_setup_powershell: generates valid PowerShell script" {
     run _iis_setup_powershell "C:\\networker\\networker-endpoint.exe"
     [ "$status" -eq 0 ]
@@ -1400,12 +1431,12 @@ JSON
     [[ "$output" == *"8445"* ]]
 }
 
-# ── Regression: AWS Windows deployment not yet supported (fix v0.27.25) ───────
-# Prior to this fix, a multi-endpoint config with an AWS Windows endpoint would
-# silently fall through to the Ubuntu code path (Ubuntu AMI, SSH as "ubuntu",
-# nginx install). Preflight/validation now rejects aws+windows up front.
+# ── AWS Windows endpoint support (v0.27.27) ──────────────────────────────────
+# v0.27.25 rejected AWS+Windows at preflight as a safety net.  v0.27.27 adds
+# real support (Windows AMI, UserData bootstrap, IIS), so endpoints are accepted.
+# AWS Windows *tester* is still unsupported.
 
-@test "_deploy_validate_config: rejects AWS Windows endpoint (unsupported)" {
+@test "_deploy_validate_config: accepts AWS Windows endpoint" {
     local cfg="$TEST_TMPDIR/val-aws-win-endpoint.json"
     cat > "$cfg" <<'JSON'
 {
@@ -1418,7 +1449,7 @@ JSON
 }
 JSON
     _deploy_validate_config "$cfg"
-    [ "$DEPLOY_VALIDATE_ERRORS" -gt 0 ]
+    [ "$DEPLOY_VALIDATE_ERRORS" -eq 0 ]
 }
 
 @test "_deploy_validate_config: rejects AWS Windows tester (unsupported)" {
@@ -1453,8 +1484,8 @@ JSON
     [ "$DEPLOY_VALIDATE_ERRORS" -eq 0 ]
 }
 
-@test "_deploy_validate_config: multi-endpoint with AWS Windows in mix is rejected" {
-    # This is the exact shape from deploy 646fcbef that silently deployed Ubuntu.
+@test "_deploy_validate_config: multi-endpoint with AWS Windows in mix is accepted" {
+    # v0.27.25 rejected this; v0.27.27 supports AWS Windows endpoints.
     local cfg="$TEST_TMPDIR/val-multi-aws-win.json"
     cat > "$cfg" <<'JSON'
 {
@@ -1469,9 +1500,80 @@ JSON
 }
 JSON
     _deploy_validate_config "$cfg"
-    [ "$DEPLOY_VALIDATE_ERRORS" -gt 0 ]
-    # Error message should name AWS specifically
-    [[ "$(_deploy_validate_config "$cfg" 2>&1)" == *"AWS Windows"* ]]
+    [ "$DEPLOY_VALIDATE_ERRORS" -eq 0 ]
+}
+
+# ── AWS Windows AMI lookup + UserData helpers (v0.27.27) ─────────────────────
+
+@test "_aws_find_windows_ami: function exists and is callable" {
+    # We can't call the real AWS API, but verify the function is defined
+    type _aws_find_windows_ami | head -1
+    [[ "$(type _aws_find_windows_ami)" == *"function"* ]]
+}
+
+@test "_aws_win_endpoint_full_userdata: generates valid powershell block" {
+    REPO_GH="irlm/networker-tester"
+    run _aws_win_endpoint_full_userdata "v0.27.27" ""
+    [ "$status" -eq 0 ]
+    # Must be wrapped in <powershell> tags for EC2 UserData
+    [[ "$output" == *"<powershell>"* ]]
+    [[ "$output" == *"</powershell>"* ]]
+    # Must install firewall rules
+    [[ "$output" == *"Networker-HTTP"* ]]
+    [[ "$output" == *"Networker-HTTPS"* ]]
+    [[ "$output" == *"Networker-UDP"* ]]
+    # Must download the binary
+    [[ "$output" == *"networker-endpoint"* ]]
+    [[ "$output" == *"v0.27.27"* ]]
+    # Must install VC++ Redistributable
+    [[ "$output" == *"vcruntime140"* ]]
+    # Must set up IIS
+    [[ "$output" == *"Install-WindowsFeature"* ]] || [[ "$output" == *"Web-Server"* ]]
+    # Must create scheduled task for persistence
+    [[ "$output" == *"schtasks"* ]]
+    [[ "$output" == *"NetworkerEndpoint"* ]]
+}
+
+@test "_aws_win_endpoint_full_userdata: includes IIS setup from _iis_setup_powershell" {
+    REPO_GH="irlm/networker-tester"
+    run _aws_win_endpoint_full_userdata "v0.27.27" "ec2-1-2-3-4.compute.amazonaws.com"
+    [ "$status" -eq 0 ]
+    # IIS site creation
+    [[ "$output" == *"networker-iis"* ]]
+    # Ports 8082 (HTTP) and 8445 (HTTPS)
+    [[ "$output" == *"8082"* ]]
+    [[ "$output" == *"8445"* ]]
+    # HTTP/3 registry settings
+    [[ "$output" == *"EnableHttp3"* ]]
+}
+
+@test "_aws_win_endpoint_full_userdata: firewall rules cover all required ports" {
+    REPO_GH="irlm/networker-tester"
+    run _aws_win_endpoint_full_userdata "v0.27.27" ""
+    [ "$status" -eq 0 ]
+    # TCP: 80, 443, 8080, 8081, 8082, 8443, 8444, 8445
+    [[ "$output" == *"8080"* ]]
+    [[ "$output" == *"8443"* ]]
+    # UDP: 8443, 8444, 8445, 9998, 9999
+    [[ "$output" == *"9998"* ]]
+    [[ "$output" == *"9999"* ]]
+}
+
+@test "_aws_wait_for_windows_endpoint: function exists" {
+    type _aws_wait_for_windows_endpoint | head -1
+    [[ "$(type _aws_wait_for_windows_endpoint)" == *"function"* ]]
+}
+
+@test "step_aws_deploy_endpoint: no longer rejects AWS Windows (function branches on OS)" {
+    # Verify the function body does NOT contain the old rejection message
+    local fn_body
+    fn_body="$(type step_aws_deploy_endpoint)"
+    # Old rejection text should be gone
+    [[ "$fn_body" != *"AWS Windows endpoint deployment is not yet supported"* ]]
+    # Should branch on ep_os
+    [[ "$fn_body" == *"_aws_find_windows_ami"* ]]
+    [[ "$fn_body" == *"_aws_win_endpoint_full_userdata"* ]]
+    [[ "$fn_body" == *"_aws_wait_for_windows_endpoint"* ]]
 }
 
 # ===========================================================================

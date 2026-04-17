@@ -15,9 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Azure Windows reverse-proxy parity.** `install.sh` now deploys Caddy, Traefik, HAProxy, and Apache httpd on Azure Windows endpoints, not just IIS. New `install.ps1 -Setup <proxy>` fast-path runs `Invoke-HttpStackSetup` and exits, called remotely via `az vm run-command invoke` by the new `_azure_win_setup_proxy` helper. Proxy port map matches the Linux convention (caddy 8091/8454, traefik 8092/8455, haproxy 8093/8456, apache 8094/8457). Dashboard `TestbedRow` picker now surfaces all 5 proxies for Azure + Windows combos; AWS/GCP + Windows still restricted to `[]` pending their Windows deploy paths.
+- Inherits `0.27.27`: AWS Windows endpoint support, SSH-pipe-hang fixes, stale-agent watchdog, deploy-concurrency semaphore.
 
 ### Known gaps (pre-existing)
-- AWS Windows endpoint deploy still exits with "not yet supported" (install.sh:6836).
 - GCP Windows endpoint deploys but has no proxy setup (`# IIS setup for GCP Windows would need gcloud SSH — deferred for now`, install.sh:7771).
 
 ---
@@ -35,6 +35,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 - Old v1 REST endpoints, WebSocket protocol, CLI config format, and database schema are all removed. This is a dev-mode-only release with no production users to migrate.
+
+---
+
+## [0.27.27] — 2026-04-17
+
+### Fixed
+- **SSH pipe hang on endpoint deploy.** `install.sh` SSH-piped scripts hung indefinitely because started services (nginx, networker-endpoint) inherited the pipe's stdin/stdout FDs, preventing SSH from closing. Fix: redirect FDs (`</dev/null >/dev/null 2>&1`) on all `systemctl start/restart` calls inside SSH heredoc blocks.
+- **Stale agent assignment watchdog.** Jobs assigned to offline/deleted agents stayed in "assigned" forever. Added a 60s periodic reaper in the scheduler that finds jobs assigned >120s ago, checks if the agent is still online, and fails those whose agent disconnected — with a real-time `JobUpdate` event so the UI reflects the failure immediately.
+- **Deploy concurrency cap.** The dashboard spawned unlimited concurrent `install.sh` / cloud CLI processes, which could overwhelm the server. Added a `tokio::sync::Semaphore` (default 2, configurable via `DEPLOY_CONCURRENCY`) that gates all deploy, tester create/start/stop/delete operations.
+
+### Added
+- **AWS Windows endpoint support.** Previously rejected at preflight with "use Azure or GCP". Now supports Windows Server 2022 on AWS: AMI lookup (`_aws_find_windows_ami`), UserData PowerShell bootstrap (IIS, firewall rules, networker-endpoint service), and health-check polling with 600s timeout for Windows cold boot. Mirrors the existing Azure Windows endpoint path.
 
 ---
 

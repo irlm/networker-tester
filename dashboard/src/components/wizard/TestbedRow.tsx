@@ -193,10 +193,16 @@ export function TestbedRow({
             </button>
           ))}
         </div>
-        {testbed.os === 'windows' && testbed.cloud !== 'Azure' && (
+        {testbed.os === 'windows' && testbed.cloud === 'AWS' && (
           <p className="text-xs text-yellow-500 mt-1">
-            Windows endpoint deploy is not yet supported on {testbed.cloud}.
-            Switch to Azure for full proxy support, or pick Linux.
+            AWS Windows supports IIS only (via UserData bootstrap).
+            For Caddy / Traefik / HAProxy / Apache, switch to Azure or pick Linux.
+          </p>
+        )}
+        {testbed.os === 'windows' && testbed.cloud === 'GCP' && (
+          <p className="text-xs text-yellow-500 mt-1">
+            GCP Windows proxy setup is not yet wired (IIS via gcloud SSH pending).
+            Switch to Azure for proxy support, or pick Linux.
           </p>
         )}
         {testbed.proxies.length === 0 && (

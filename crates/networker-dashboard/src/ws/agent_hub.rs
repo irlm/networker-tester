@@ -62,6 +62,10 @@ impl AgentHub {
         }
     }
 
+    pub async fn is_agent_online(&self, agent_id: &Uuid) -> bool {
+        self.agents.read().await.contains_key(agent_id)
+    }
+
     pub async fn any_online_agent(&self) -> Option<Uuid> {
         let agents = self.agents.read().await;
         agents.keys().next().copied()

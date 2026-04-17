@@ -176,6 +176,32 @@ pub async fn update_counts(
     Ok(())
 }
 
+/// Find runs stuck in `running` whose agent has been silent for more than
+/// `cutoff_secs` (no heartbeat, or stale `started_at` when heartbeat was
+/// never recorded). Used by the stale-agent watchdog in the scheduler.
+/// Returns `(run_id, tester_id)` pairs.
+pub async fn find_stale_assigned(
+    client: &Client,
+    cutoff_secs: i64,
+) -> anyhow::Result<Vec<(Uuid, Option<Uuid>)>> {
+    let rows = client
+        .query(
+            "SELECT id, tester_id
+             FROM test_run
+             WHERE status = 'running'
+               AND (
+                 (last_heartbeat IS NOT NULL AND last_heartbeat < now() - ($1::bigint || ' seconds')::interval)
+                 OR (last_heartbeat IS NULL AND started_at IS NOT NULL AND started_at < now() - ($1::bigint || ' seconds')::interval)
+               )",
+            &[&cutoff_secs],
+        )
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| (r.get::<_, Uuid>(0), r.get::<_, Option<Uuid>>(1)))
+        .collect())
+}
+
 /// Record a terminal error. Sets status=failed and finished_at=now.
 pub async fn set_error(client: &Client, id: &Uuid, message: &str) -> anyhow::Result<()> {
     client
