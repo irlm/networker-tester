@@ -1,6 +1,14 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { MemoryRouter } from 'react-router-dom';
+import type { ReactNode } from 'react';
 import { CreateTesterModal } from './CreateTesterModal';
+
+// CreateTesterModal → CloudAccountCombobox uses useNavigate() for the
+// "+ add cloud account" footer, which requires a Router context.
+function renderWithRouter(ui: ReactNode) {
+  return render(<MemoryRouter>{ui}</MemoryRouter>);
+}
 
 type FetchMock = ReturnType<typeof vi.fn>;
 
@@ -70,7 +78,7 @@ describe('CreateTesterModal', () => {
   });
 
   it('renders the form with default values', async () => {
-    render(
+    renderWithRouter(
       <CreateTesterModal
         projectId="p-1"
         defaultRegion="eastus"
@@ -107,7 +115,7 @@ describe('CreateTesterModal', () => {
     });
 
     const onCreated = vi.fn();
-    render(
+    renderWithRouter(
       <CreateTesterModal
         projectId="p-1"
         defaultRegion="eastus"
