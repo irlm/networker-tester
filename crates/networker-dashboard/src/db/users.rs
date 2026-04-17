@@ -120,26 +120,74 @@ fn hash_token(token: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
-/// Seed the admin user if no users exist.
-/// Sets must_change_password = TRUE so the user is forced to set their own password.
-/// Uses email as the primary identity (V008+).
+/// Seed the admin user if no users exist, or resync the admin's password and
+/// platform-admin flag on every boot when the account already exists.
+///
+/// Rationale: the original implementation skipped everything when any user
+/// existed, so changing `DASHBOARD_ADMIN_PASSWORD` between boots had no
+/// effect and admins who pre-existed without `is_platform_admin` stayed
+/// locked out. Resyncing on every boot makes the env var the source of
+/// truth for the bootstrap identity — which is what operators expect in
+/// both dev reseeding and ops-driven password rotation.
 pub async fn seed_admin(client: &Client, email: &str, password: &str) -> anyhow::Result<()> {
-    let count: i64 = client
-        .query_one("SELECT COUNT(*) FROM dash_user", &[])
-        .await?
-        .get(0);
+    let hash = bcrypt::hash(password, bcrypt::DEFAULT_COST).map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    if count == 0 {
-        let hash =
-            bcrypt::hash(password, bcrypt::DEFAULT_COST).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let existing = client
+        .query_opt("SELECT user_id FROM dash_user WHERE email = $1", &[&email])
+        .await?;
+
+    let user_id = if let Some(row) = existing {
+        let user_id: Uuid = row.get("user_id");
         client
             .execute(
-                "INSERT INTO dash_user (user_id, email, password_hash, role, status, must_change_password) VALUES ($1, $2, $3, $4, $5, $6)",
-                &[&Uuid::new_v4(), &email, &hash, &"admin", &"active", &true],
+                "UPDATE dash_user
+                    SET password_hash        = $2,
+                        status               = 'active',
+                        must_change_password = FALSE,
+                        is_platform_admin    = TRUE
+                  WHERE user_id = $1",
+                &[&user_id, &hash],
             )
             .await?;
-        tracing::info!(email = %email, "Seeded admin user (must_change_password: true)");
-    }
+        tracing::info!(email = %email, "Resynced bootstrap admin password + platform-admin flag");
+        user_id
+    } else {
+        let new_id = Uuid::new_v4();
+        client
+            .execute(
+                "INSERT INTO dash_user (user_id, email, password_hash, role, status, must_change_password, is_platform_admin) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                &[
+                    &new_id,
+                    &email,
+                    &hash,
+                    &"admin",
+                    &"active",
+                    &false,
+                    &true,
+                ],
+            )
+            .await?;
+        tracing::info!(email = %email, "Seeded admin user (is_platform_admin: true)");
+        new_id
+    };
+
+    // Ensure the admin owns an admin membership on every existing project.
+    // Platform admins bypass membership checks in middleware, but the UI
+    // (member lists, project role display) still reads project_member. A
+    // missing row would show the admin as a non-member of their own
+    // workspace after a DB reseed.
+    client
+        .execute(
+            "INSERT INTO project_member (project_id, user_id, role, status, joined_at) \
+             SELECT p.project_id, $1, 'admin', 'active', NOW() \
+             FROM project p \
+             WHERE p.deleted_at IS NULL \
+             ON CONFLICT (project_id, user_id) DO NOTHING",
+            &[&user_id],
+        )
+        .await?;
+
     Ok(())
 }
 

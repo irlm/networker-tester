@@ -1,9 +1,14 @@
-//! WebSocket client that connects to the dashboard control plane.
+//! WebSocket client that connects to the dashboard control plane (WS v2).
+//!
+//! v0.28.0 — speaks WS protocol v2 (`AssignRun` / `CancelRun` / `Shutdown`).
+//! Legacy v1 `JobAssign` / `JobCancel` are still handled for backward
+//! compatibility during the parallel-agent transition (the dashboard may still
+//! dispatch v1 messages until Agent B cuts over to v2).
 
 use futures::{SinkExt, StreamExt};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex, Semaphore};
+use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::Instrument;
@@ -13,34 +18,36 @@ use crate::config::AgentConfig;
 use networker_common::messages::{AgentCommandLog, AgentMessage, ControlMessage};
 use networker_common::protocol;
 
-/// Maximum number of probe jobs that can run concurrently.
-const MAX_CONCURRENT_JOBS: usize = 4;
+/// Maximum number of probe runs that can execute concurrently.
+const MAX_CONCURRENT_RUNS: usize = 4;
 /// Bounded channel capacity for outbound WebSocket messages.
-/// Must be large enough for all AttemptResult + JobLog + JobComplete messages
-/// from a full test run (e.g., 27 modes × 5 runs = 135+ attempts + logs).
 const WS_CHANNEL_CAPACITY: usize = 4096;
+
+/// Per-run handle: the JoinHandle for the spawned task plus a cancellation
+/// sender. Dropping the sender or sending `()` triggers cooperative cancel.
+struct RunHandle {
+    task: JoinHandle<()>,
+    cancel_tx: mpsc::Sender<()>,
+}
 
 /// Connect to the dashboard and process messages until disconnected.
 pub async fn run(cfg: &AgentConfig) -> anyhow::Result<()> {
     let url = format!("{}?key={}", cfg.dashboard_url, cfg.api_key);
     tracing::info!("Connecting to {}", cfg.dashboard_url);
 
-    // Large test runs (many modes × runs) produce multi-MB JSON in JobComplete.
-    // Default tungstenite limits (64KB frame, 64KB message) silently drop these.
     let mut ws_config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default();
-    ws_config.max_message_size = Some(64 * 1024 * 1024); // 64 MB receive
-    ws_config.max_frame_size = Some(64 * 1024 * 1024); // 64 MB frame
-    ws_config.max_write_buffer_size = 64 * 1024 * 1024; // 64 MB write buffer
+    ws_config.max_message_size = Some(64 * 1024 * 1024);
+    ws_config.max_frame_size = Some(64 * 1024 * 1024);
+    ws_config.max_write_buffer_size = 64 * 1024 * 1024;
     let (ws_stream, _) =
         tokio_tungstenite::connect_async_with_config(&url, Some(ws_config), false).await?;
-    tracing::info!("Connected to dashboard");
+    tracing::info!("Connected to dashboard (WS v2)");
 
     let (mut ws_sink, mut ws_stream_rx) = ws_stream.split();
     let (tx, mut rx) = mpsc::channel::<String>(WS_CHANNEL_CAPACITY);
 
-    let job_semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_JOBS));
-    let running_jobs: Arc<Mutex<HashMap<Uuid, JoinHandle<()>>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+    let run_semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_RUNS));
+    let running: Arc<Mutex<HashMap<Uuid, RunHandle>>> = Arc::new(Mutex::new(HashMap::new()));
 
     // Spawn heartbeat
     let heartbeat_tx = tx.clone();
@@ -59,17 +66,15 @@ pub async fn run(cfg: &AgentConfig) -> anyhow::Result<()> {
     while let Some(msg_result) = ws_stream_rx.next().await {
         match msg_result {
             Ok(Message::Text(text)) => {
-                if let Ok(ctrl_msg) = protocol::decode::<ControlMessage>(&text) {
-                    handle_control_message(ctrl_msg, &tx, &job_semaphore, &running_jobs).await;
+                if let Ok(ctrl) = protocol::decode::<ControlMessage>(&text) {
+                    handle_control_message(ctrl, &tx, &run_semaphore, &running).await;
                 }
             }
             Ok(Message::Close(_)) => {
                 tracing::info!("Server closed connection");
                 break;
             }
-            Ok(Message::Ping(_)) => {
-                // Pong is handled automatically by tungstenite
-            }
+            Ok(Message::Ping(_)) => {} // pong handled by tungstenite
             Err(e) => {
                 tracing::error!("WebSocket error: {e}");
                 break;
@@ -78,12 +83,14 @@ pub async fn run(cfg: &AgentConfig) -> anyhow::Result<()> {
         }
     }
 
-    // Abort all running jobs on disconnect
+    // Abort all running tasks on disconnect
     {
-        let mut jobs = running_jobs.lock().await;
-        for (job_id, handle) in jobs.drain() {
-            tracing::warn!(job_id = %job_id, "Aborting running job due to disconnect");
-            handle.abort();
+        let mut runs = running.lock().await;
+        for (run_id, handle) in runs.drain() {
+            tracing::warn!(run_id = %run_id, "Aborting run due to disconnect");
+            // Signal cooperative cancel first, then abort.
+            let _ = handle.cancel_tx.try_send(());
+            handle.task.abort();
         }
     }
 
@@ -94,8 +101,7 @@ pub async fn run(cfg: &AgentConfig) -> anyhow::Result<()> {
 
 /// Build an `mpsc::Sender<AgentCommandLog>` whose output is forwarded —
 /// encoded as `AgentMessage::CommandLog` JSON — onto the outbound WebSocket
-/// channel. A dedicated forwarder task is spawned per command so that verbs
-/// can stream logs without knowing about the wire format.
+/// channel.
 fn build_log_tx(out: mpsc::Sender<String>) -> mpsc::Sender<AgentCommandLog> {
     let (tx, mut rx) = mpsc::channel::<AgentCommandLog>(64);
     tokio::spawn(async move {
@@ -118,10 +124,79 @@ fn build_log_tx(out: mpsc::Sender<String>) -> mpsc::Sender<AgentCommandLog> {
 async fn handle_control_message(
     msg: ControlMessage,
     tx: &mpsc::Sender<String>,
-    semaphore: &Arc<Semaphore>,
-    running_jobs: &Arc<Mutex<HashMap<Uuid, JoinHandle<()>>>>,
+    semaphore: &Arc<tokio::sync::Semaphore>,
+    running: &Arc<Mutex<HashMap<Uuid, RunHandle>>>,
 ) {
     match msg {
+        // ── WS v2 ────────────────────────────────────────────────────────────
+        ControlMessage::AssignRun { run, config } => {
+            let run_id = run.id;
+            tracing::info!(
+                run_id = %run_id,
+                config_name = %config.name,
+                endpoint_kind = config.endpoint_kind(),
+                "AssignRun received (v2)"
+            );
+            let tx = tx.clone();
+            let sem = semaphore.clone();
+            let runs_map = running.clone();
+            let (cancel_tx, cancel_rx) = mpsc::channel::<()>(1);
+            let span = tracing::info_span!("run", %run_id);
+            let handle = tokio::spawn(
+                async move {
+                    let _permit = match sem.acquire().await {
+                        Ok(p) => p,
+                        Err(_) => return, // semaphore closed
+                    };
+                    crate::executor::run_test(run_id, *config, tx, cancel_rx).await;
+                    runs_map.lock().await.remove(&run_id);
+                }
+                .instrument(span),
+            );
+            running.lock().await.insert(
+                run_id,
+                RunHandle {
+                    task: handle,
+                    cancel_tx,
+                },
+            );
+        }
+        ControlMessage::CancelRun { run_id } => {
+            tracing::warn!(run_id = %run_id, "CancelRun received (v2)");
+            if let Some(handle) = running.lock().await.remove(&run_id) {
+                let _ = handle.cancel_tx.try_send(());
+                // Give the task a moment to notice the cancel signal before
+                // hard-aborting. In practice `kill_on_drop` + channel recv
+                // in the executor will terminate it quickly.
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                handle.task.abort();
+            }
+        }
+        ControlMessage::HeartbeatPing { now } => {
+            tracing::trace!(server_time = %now, "HeartbeatPing from dashboard");
+        }
+        ControlMessage::Shutdown => {
+            tracing::info!("Shutdown request from dashboard — aborting all runs");
+            let mut runs = running.lock().await;
+            for (run_id, handle) in runs.drain() {
+                tracing::warn!(run_id = %run_id, "Aborting run due to shutdown");
+                let _ = handle.cancel_tx.try_send(());
+                handle.task.abort();
+            }
+            // The main loop will exit when the connection closes.
+        }
+
+        // ── Legacy v1 (backward compat — dashboard may still send these) ──
+        ControlMessage::JobAssign { .. } => {
+            tracing::warn!(
+                "Received legacy JobAssign (v1) — ignoring. Dashboard should send AssignRun (v2)."
+            );
+        }
+        ControlMessage::JobCancel { job_id } => {
+            tracing::warn!(job_id = %job_id, "Received legacy JobCancel (v1) — ignoring.");
+        }
+
+        // ── Common ───────────────────────────────────────────────────────────
         ControlMessage::Welcome {
             agent_id,
             agent_name,
@@ -132,39 +207,12 @@ async fn handle_control_message(
                 "Registered with dashboard"
             );
         }
-        ControlMessage::JobAssign { job_id, config } => {
-            tracing::info!(job_id = %job_id, target = %config.target, "Received job");
-            let tx = tx.clone();
-            let sem = semaphore.clone();
-            let jobs = running_jobs.clone();
-            let span = tracing::info_span!("job", %job_id);
-            let handle = tokio::spawn(
-                async move {
-                    let _permit = match sem.acquire().await {
-                        Ok(p) => p,
-                        Err(_) => return, // semaphore closed
-                    };
-                    crate::executor::run_job(job_id, *config, &tx).await;
-                    jobs.lock().await.remove(&job_id);
-                }
-                .instrument(span),
-            );
-            running_jobs.lock().await.insert(job_id, handle);
-        }
-        ControlMessage::JobCancel { job_id } => {
-            tracing::warn!(job_id = %job_id, "Cancelling job");
-            if let Some(handle) = running_jobs.lock().await.remove(&job_id) {
-                handle.abort();
-            }
-        }
         ControlMessage::Command(cmd) => {
             tracing::info!(
                 command_id = %cmd.command_id,
                 verb = %cmd.verb,
                 "Received command"
             );
-            // Spawn an isolated task per command. Health is fast; concurrency
-            // caps can be added when longer-running verbs land.
             let out_tx = tx.clone();
             let log_tx = build_log_tx(out_tx.clone());
             let command_id = cmd.command_id;
@@ -189,8 +237,6 @@ async fn handle_control_message(
             });
         }
         ControlMessage::Cancel(cancel) => {
-            // TODO: once long-lived command verbs exist, track their
-            // JoinHandles (mirroring `running_jobs`) and abort on cancel.
             tracing::debug!(
                 command_id = %cancel.command_id,
                 "Received Cancel for command; no in-flight commands are cancellable yet"

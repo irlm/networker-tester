@@ -58,6 +58,7 @@ async-trait = "0.1"
 # --- shared workspace ---
 serde.workspace       = true
 serde_json.workspace  = true
+serde_yaml            = "0.9"
 clap.workspace        = true
 anyhow.workspace      = true
 tracing.workspace     = true

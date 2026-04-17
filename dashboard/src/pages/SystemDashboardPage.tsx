@@ -214,7 +214,7 @@ function UsageTab({ workspaces, onRefresh }: { workspaces: WorkspaceUsage[]; onR
           <tr className="text-left text-xs text-gray-500 border-b border-gray-800">
             <th className="pb-2 pr-3 font-medium">Name</th>
             <th className="pb-2 pr-3 font-medium">Members</th>
-            <th className="pb-2 pr-3 font-medium">Testers</th>
+            <th className="pb-2 pr-3 font-medium">Runners</th>
             <th className="pb-2 pr-3 font-medium">Jobs (30d)</th>
             <th className="pb-2 pr-3 font-medium">Runs (30d)</th>
             <th className="pb-2 pr-3 font-medium">Last Activity</th>

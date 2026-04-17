@@ -112,10 +112,10 @@ describe('TesterDetailDrawer', () => {
     );
     const panel = screen.getByTestId('fix-tester-panel');
     expect(panel).toBeInTheDocument();
-    expect(screen.getByText('Fix tester first')).toBeInTheDocument();
+    expect(screen.getByText('Fix runner first')).toBeInTheDocument();
     expect(screen.getByText('SSH unreachable')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Run probe$/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Reinstall tester/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Reinstall runner/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Force to stopped/i })).toBeInTheDocument();
     // "Mark as healthy" is intentionally absent per spec.
     expect(screen.queryByRole('button', { name: /Mark as healthy/i })).toBeNull();

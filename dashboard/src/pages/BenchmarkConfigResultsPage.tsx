@@ -68,7 +68,7 @@ function buildBoxGroups(
     if (r.summaries.length === 0) continue;
     const primary = findPrimarySummary(r.summaries);
     if (!primary) {
-      console.log(`[BenchmarkConfigResults] No primary summary for language "${r.language}" — skipped`);
+      // Dev-only: no primary summary for this language — skipped
       continue;
     }
     const color = languageColor(r.language);

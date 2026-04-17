@@ -9,6 +9,8 @@ mod deploy;
 mod email;
 #[allow(dead_code)]
 mod project_id;
+mod provisioning;
+#[allow(dead_code)]
 mod regression;
 mod scheduler;
 mod system_metrics;
@@ -60,6 +62,7 @@ async fn server_timing_middleware(
 /// The existing loops (`auto_shutdown_loop`, `sweep_loop`) are `async fn` that
 /// return `()` and are intended to run forever, so in practice supervision
 /// only fires when the connection driver task terminates (e.g. PG restart).
+#[allow(dead_code)] // kept for when we re-introduce supervised loops post-v0.28
 async fn spawn_supervised_loop<F, Fut>(name: &'static str, db_url: String, loop_fn: F)
 where
     F: Fn(Arc<tokio_postgres::Client>) -> Fut + Send + Sync + 'static,
@@ -482,55 +485,18 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
-    // ── Tester persistent-lifecycle background services ──────────────────
+    // ── Legacy tester lifecycle loops (disabled in v0.28) ────────────────
     //
-    // Each DB-bound loop runs under a per-task supervisor (`spawn_supervised_loop`)
-    // that owns its own dedicated `tokio_postgres::Client`. If the connection
-    // driver dies (network blip, PG restart), the supervisor logs and
-    // reconnects after a short backoff instead of the loop silently running
-    // against a dead handle. See RR-003.
-    tracing::info!("spawning supervised tester_scheduler::auto_shutdown_loop");
-    tokio::spawn(spawn_supervised_loop(
-        "tester_scheduler",
-        cfg.database_url.clone(),
-        networker_dashboard::services::tester_scheduler::auto_shutdown_loop,
-    ));
-
-    tracing::info!("spawning supervised tester_dispatcher::sweep_loop");
-    tokio::spawn(spawn_supervised_loop(
-        "tester_dispatcher",
-        cfg.database_url.clone(),
-        networker_dashboard::services::tester_dispatcher::sweep_loop,
-    ));
-
-    // `recover_on_startup` is a one-shot that sleeps 5min then runs a single
-    // scan and returns. Putting it under `spawn_supervised_loop` would cause
-    // it to re-run on every reconnect, which is not what we want. Instead we
-    // spawn it once with its own dedicated client; if the connection dies
-    // before the scan completes, the recovery simply doesn't happen (best
-    // effort — the next dashboard restart retries).
-    tracing::info!("spawning tester_recovery::recover_on_startup (one-shot)");
-    {
-        let db_url = cfg.database_url.clone();
-        tokio::spawn(async move {
-            match tokio_postgres::connect(&db_url, tokio_postgres::NoTls).await {
-                Ok((client, conn)) => {
-                    tokio::spawn(async move {
-                        if let Err(e) = conn.await {
-                            tracing::warn!(error = ?e, "recovery DB connection dropped");
-                        }
-                    });
-                    networker_dashboard::services::tester_recovery::recover_on_startup(Arc::new(
-                        client,
-                    ))
-                    .await;
-                }
-                Err(e) => {
-                    tracing::error!(error = ?e, "failed to connect for recover_on_startup");
-                }
-            }
-        });
-    }
+    // `tester_dispatcher`, `tester_scheduler::auto_shutdown_loop`, and
+    // `tester_recovery::recover_on_startup` all query the `benchmark_config`
+    // table that was removed when the backend unified on `test_config` +
+    // `test_run` (migration V036). Spawning them produced 30s/60s error
+    // spam against a dropped relation. Their orchestration concerns are
+    // now handled by `benchmark_worker` (Pending → provisioning → running)
+    // and the v2 scheduler.
+    //
+    // Leaving the modules compiled (but unspawned) so we don't churn the
+    // service/* files until the whole benchmark_config era is deleted.
 
     // `refresh_latest_version_loop` doesn't touch the DB — it polls GitHub
     // and updates an in-memory RwLock cache. No supervision needed.

@@ -29,50 +29,61 @@ export function Sidebar({ connectionDot }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('sidebar-collapsed') === '1');
   const [pendingCount, setPendingCount] = useState(0);
   const [showPasswordDialog, setShowPasswordDialog] = useState(false);
+  const [adminOpen, setAdminOpen] = useState(() => localStorage.getItem('sidebar-admin-open') === '1');
 
   const pid = projectId;
   const isAdmin = role === 'admin' || isPlatformAdmin;
 
-  // ── Nav item groups ─────────────────────────────────────────────────
+  // ── Nav items ───────────────────────────────────────────────────────
+  //
+  // Three test-category groups plus the Dashboard/Infrastructure core and
+  // Runs/Schedules tail. Group headers (── PROBE ──, ── BENCHMARKS ──)
+  // carry the category so child labels can be terse: "URL" under PROBE
+  // reads as "URL Probe"; "Application" under BENCHMARKS reads as
+  // "Application Benchmark". Avoids suffix repetition. See sidebar-v3
+  // mockup iteration 3.
 
-  const coreItems: NavItem[] = pid ? [
+  const mainItems: NavItem[] = pid ? [
     { path: `/projects/${pid}`, label: 'Dashboard', icon: '\u25C8', exact: true },
-    // Unified Cloud VMs nav (v0.27.22): Testers + Endpoints + History under
-    // one entry. The landing sub-tab is Testers (most-used) — the layout
-    // redirects /vms → /vms/testers.
-    { path: `/projects/${pid}/vms`, label: 'Cloud VMs', icon: '\u25A3' },
-    { path: `/projects/${pid}/tests`, label: 'Tests', icon: '\u25B6' },
+    { path: `/projects/${pid}/vms`, label: 'Infrastructure', icon: '\u25A3' },
+  ] : [];
+
+  const probeItems: NavItem[] = pid ? [
+    { path: `/projects/${pid}/probe`, label: 'URL', icon: '\u2713' },
+  ] : [];
+
+  const benchmarkItems: NavItem[] = pid ? [
+    { path: `/projects/${pid}/tests/new`, label: 'Network', icon: '\u25B7', exact: true },
+    { path: `/projects/${pid}/benchmarks/full-stack/new`, label: 'Full Stack', icon: '\u25A4', exact: true },
+    { path: `/projects/${pid}/benchmarks/application/new`, label: 'Application', icon: '\u25A5', exact: true },
+  ] : [];
+
+  const tailItems: NavItem[] = pid ? [
+    { path: `/projects/${pid}/runs`, label: 'Runs', icon: '\u25B6' },
     { path: `/projects/${pid}/schedules`, label: 'Schedules', icon: '\u21BB' },
-    { path: `/projects/${pid}/runs`, label: 'Runs', icon: '\u25F7' },
   ] : [];
 
-  const benchItems: NavItem[] = pid ? [
-    { path: `/projects/${pid}/benchmarks`, label: 'Full Stack', icon: '\u25A6' },
-    { path: `/projects/${pid}/app-benchmark-wizard`, label: 'Application', icon: '\u25A7' },
-    { path: '/leaderboard', label: 'Leaderboard', icon: '\u2261' },
-    ...(isOperator ? [{ path: `/projects/${pid}/benchmark-catalog`, label: 'VM Catalog', icon: '\u2395' }] : []),
-    { path: `/projects/${pid}/benchmark-regressions`, label: 'Regressions', icon: '\u26A0' },
-  ] : [];
-
-  // globalItems merged into benchItems
-
-  const platformItems: NavItem[] = [];
+  const adminItems: NavItem[] = [];
   if (isPlatformAdmin) {
-    platformItems.push({ path: '/admin/system', label: 'System', icon: '\u2318' });
-    platformItems.push({ path: '/bench-tokens', label: 'Tokens', icon: '\u26BF' });
-    platformItems.push({ path: '/admin/perf-log', label: 'Perf Log', icon: '\u23F1' });
+    adminItems.push({ path: '/admin/system', label: 'System', icon: '\u2318' });
+    adminItems.push({ path: '/bench-tokens', label: 'Tokens', icon: '\u26BF' });
+    adminItems.push({ path: '/admin/perf-log', label: 'Perf Log', icon: '\u23F1' });
   }
   if (isAdmin) {
-    platformItems.push({ path: '/users', label: 'Users', icon: '\u265F' });
+    adminItems.push({ path: '/users', label: 'Users', icon: '\u265F' });
   }
   if (pid) {
-    platformItems.push({
+    adminItems.push({
       path: `/projects/${pid}/settings`,
       label: 'Settings',
       icon: '\u2699',
       badge: isProjectAdmin && pid ? <NotificationBell projectId={pid} /> : undefined,
     });
   }
+
+  // Keep Leaderboard, Runtimes, Regressions accessible but hidden from
+  // sidebar — they're linked from Full Stack / Application pages instead.
+  void isOperator; // suppress unused warning
 
   // ── Pending user count (admin only) ─────────────────────────────────
 
@@ -119,7 +130,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
         onClick={() => setMobileOpen(false)}
         aria-current={active ? 'page' : undefined}
         title={collapsed ? item.label : undefined}
-        className={`flex items-center overflow-hidden whitespace-nowrap ${collapsed ? 'justify-center' : 'gap-3 px-3'} py-2 rounded text-sm mb-0.5 transition-all duration-200 ${
+        className={`flex items-center overflow-hidden whitespace-nowrap ${collapsed ? 'justify-center' : 'gap-3 px-3'} py-2 rounded text-sm mb-0.5 transition-all duration-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-cyan-500/50 ${
           active
             ? 'bg-gray-800/40 text-gray-100'
             : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/30'
@@ -148,18 +159,10 @@ export function Sidebar({ connectionDot }: SidebarProps) {
     );
   };
 
-  const renderSection = (label: string, items: NavItem[]) => {
-    if (items.length === 0) return null;
-    return (
-      <div className="mt-3 pt-3 border-t border-gray-800/50">
-        {!collapsed && (
-          <div className="px-3 mb-1.5 text-[10px] uppercase tracking-wider text-gray-600">
-            {label}
-          </div>
-        )}
-        {items.map(renderItem)}
-      </div>
-    );
+  const toggleAdmin = () => {
+    const next = !adminOpen;
+    setAdminOpen(next);
+    localStorage.setItem('sidebar-admin-open', next ? '1' : '0');
   };
 
   return (
@@ -184,14 +187,55 @@ export function Sidebar({ connectionDot }: SidebarProps) {
         </div>
 
         <nav className="flex-1 p-1.5 overflow-y-auto" aria-label="Main navigation">
-          {/* Core: daily workflow */}
-          {coreItems.map(renderItem)}
+          {/* Core items */}
+          {mainItems.map(renderItem)}
 
-          {/* Benchmarks group */}
-          {renderSection('benchmarks', benchItems)}
+          {/* ── PROBE ── group (URL capability discovery) */}
+          {probeItems.length > 0 && (
+            <div className="mt-4">
+              {!collapsed && (
+                <div className="px-3 mb-1 text-[10px] uppercase tracking-wider text-gray-600">
+                  probe
+                </div>
+              )}
+              {probeItems.map(renderItem)}
+            </div>
+          )}
 
-          {/* Platform: admin tools */}
-          {renderSection('admin', platformItems)}
+          {/* ── BENCHMARKS ── group (Network / Stack / Application) */}
+          {benchmarkItems.length > 0 && (
+            <div className="mt-4">
+              {!collapsed && (
+                <div className="px-3 mb-1 text-[10px] uppercase tracking-wider text-gray-600">
+                  benchmarks
+                </div>
+              )}
+              {benchmarkItems.map(renderItem)}
+            </div>
+          )}
+
+          {/* Tail items — Runs / Schedules are the output/observing surfaces */}
+          {tailItems.length > 0 && (
+            <div className="mt-4 pt-3 border-t border-gray-800/50">
+              {tailItems.map(renderItem)}
+            </div>
+          )}
+
+          {/* Admin section — collapsible */}
+          {adminItems.length > 0 && (
+            <div className="mt-4 pt-3 border-t border-gray-800/50">
+              {!collapsed && (
+                <button
+                  onClick={toggleAdmin}
+                  className="flex items-center justify-between w-full px-3 mb-1.5 text-[10px] uppercase tracking-wider text-gray-600 hover:text-gray-500 transition-colors"
+                >
+                  <span>admin</span>
+                  <span className="text-[8px]">{adminOpen ? '\u25B2' : '\u25BC'}</span>
+                </button>
+              )}
+              {(collapsed || adminOpen) && adminItems.map(renderItem)}
+            </div>
+          )}
         </nav>
 
         {/* Help hint + Collapse toggle + user */}
@@ -199,28 +243,72 @@ export function Sidebar({ connectionDot }: SidebarProps) {
           <HelpHint collapsed={collapsed} />
         </div>
         <div className="border-t border-gray-800">
-          {!collapsed && (
-            <div className="px-3 py-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-gray-600 truncate max-w-[100px]" title={email ?? ''}>
-                  {email?.split('@')[0] ?? ''}
-                </span>
-                <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => setShowPasswordDialog(true)}
-                    className="text-xs text-gray-600 hover:text-gray-400 transition-colors px-1.5 py-1 rounded hover:bg-gray-800/50"
-                    title="Change password"
-                  >
-                    key
-                  </button>
-                  <button
-                    onClick={logout}
-                    className="text-xs text-gray-500 hover:text-red-400 transition-colors px-2 py-1 rounded hover:bg-gray-800/50"
-                  >
-                    Logout
-                  </button>
+          {!collapsed ? (
+            <div className="px-3 py-2.5">
+              <div className="flex items-center gap-2.5">
+                {/* Avatar */}
+                <div
+                  className="w-7 h-7 rounded-full bg-purple-600 text-white text-xs font-bold flex items-center justify-center flex-shrink-0"
+                  aria-hidden="true"
+                >
+                  {email?.[0]?.toUpperCase() ?? '?'}
                 </div>
+                {/* Name + role */}
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs text-gray-300 truncate" title={email ?? ''}>
+                    {email?.split('@')[0] ?? ''}
+                  </div>
+                  <div className="text-[10px] text-gray-600">
+                    {isPlatformAdmin ? 'admin' : role ?? 'viewer'}
+                  </div>
+                </div>
+                {/* Actions */}
+                <button
+                  onClick={() => setShowPasswordDialog(true)}
+                  className="text-gray-600 hover:text-cyan-400 transition-colors p-1 rounded hover:bg-gray-800/50"
+                  title="Change password"
+                  aria-label="Change password"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/>
+                  </svg>
+                </button>
+                <button
+                  onClick={logout}
+                  className="text-gray-600 hover:text-red-400 transition-colors p-1 rounded hover:bg-gray-800/50"
+                  title="Log out"
+                  aria-label="Log out"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                    <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
+                  </svg>
+                </button>
               </div>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center gap-1.5 py-2">
+              <div
+                className="w-6 h-6 rounded-full bg-purple-600 text-white text-[10px] font-bold flex items-center justify-center"
+                title={`${email?.split('@')[0] ?? ''} (${isPlatformAdmin ? 'admin' : role ?? 'viewer'})`}
+              >
+                {email?.[0]?.toUpperCase() ?? '?'}
+              </div>
+              <button
+                onClick={() => setShowPasswordDialog(true)}
+                className="text-gray-600 hover:text-cyan-400 text-xs p-0.5"
+                title="Change password"
+                aria-label="Change password"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+              </button>
+              <button
+                onClick={logout}
+                className="text-gray-600 hover:text-red-400 text-xs p-0.5"
+                title="Log out"
+                aria-label="Log out"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+              </button>
             </div>
           )}
           <button

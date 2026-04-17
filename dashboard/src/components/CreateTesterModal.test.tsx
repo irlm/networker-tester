@@ -1,6 +1,14 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { MemoryRouter } from 'react-router-dom';
+import type { ReactNode } from 'react';
 import { CreateTesterModal } from './CreateTesterModal';
+
+// CreateTesterModal → CloudAccountCombobox uses useNavigate() for the
+// "+ add cloud account" footer, which requires a Router context.
+function renderWithRouter(ui: ReactNode) {
+  return render(<MemoryRouter>{ui}</MemoryRouter>);
+}
 
 type FetchMock = ReturnType<typeof vi.fn>;
 
@@ -70,7 +78,7 @@ describe('CreateTesterModal', () => {
   });
 
   it('renders the form with default values', async () => {
-    render(
+    renderWithRouter(
       <CreateTesterModal
         projectId="p-1"
         defaultRegion="eastus"
@@ -84,7 +92,7 @@ describe('CreateTesterModal', () => {
     });
     expect(screen.getByLabelText(/Name/i)).toHaveValue('eastus-1');
     expect(screen.getByLabelText(/VM size/i)).toHaveValue('Standard_D2s_v3');
-    expect(screen.getByRole('button', { name: /Create Tester/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /Create Runner/i })).toBeEnabled();
   });
 
   it('POSTs create body and enters creating state', async () => {
@@ -107,7 +115,7 @@ describe('CreateTesterModal', () => {
     });
 
     const onCreated = vi.fn();
-    render(
+    renderWithRouter(
       <CreateTesterModal
         projectId="p-1"
         defaultRegion="eastus"
@@ -118,9 +126,9 @@ describe('CreateTesterModal', () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: /Create Tester/i })).toBeEnabled(),
+      expect(screen.getByRole('button', { name: /Create Runner/i })).toBeEnabled(),
     );
-    fireEvent.click(screen.getByRole('button', { name: /Create Tester/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Create Runner/i }));
 
     await waitFor(() =>
       expect(screen.getByTestId('creating-state')).toBeInTheDocument(),

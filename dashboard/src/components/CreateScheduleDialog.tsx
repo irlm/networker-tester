@@ -274,7 +274,7 @@ export function CreateScheduleDialog({ projectId, onClose, onCreated }: CreateSc
               )}
 
               {scheduleType === 'test' && (<>
-              <label className="block text-xs text-gray-400 mb-1">Target Endpoint</label>
+              <label className="block text-xs text-gray-400 mb-1">Target</label>
               <select
                 value={target}
                 onChange={(e) => {
@@ -287,7 +287,7 @@ export function CreateScheduleDialog({ projectId, onClose, onCreated }: CreateSc
                 }}
                 className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 mb-2 focus:outline-none focus:border-cyan-500"
               >
-                <option value="">Select endpoint...</option>
+                <option value="">Select target...</option>
                 {deployments.flatMap(d => {
                   const health = endpointHealth[d.deployment_id];
                   const status = health === undefined ? '...' : health ? '\u2714' : '\u2716 offline';
@@ -307,13 +307,13 @@ export function CreateScheduleDialog({ projectId, onClose, onCreated }: CreateSc
 
               {testers.length > 0 && (
                 <div className="mb-4">
-                  <label className="block text-xs text-gray-400 mb-1">Tester</label>
+                  <label className="block text-xs text-gray-400 mb-1">Runner</label>
                   <select
                     value={selectedTester}
                     onChange={(e) => setSelectedTester(e.target.value)}
                     className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                   >
-                    <option value="">Auto (any online tester)</option>
+                    <option value="">Auto (any online runner)</option>
                     {testers.map(a => (
                       <option key={a.agent_id} value={a.agent_id}>
                         {a.name} ({a.status}){a.region ? ` \u2014 ${a.region}` : ''}
@@ -462,7 +462,7 @@ export function CreateScheduleDialog({ projectId, onClose, onCreated }: CreateSc
 
               {!selectedDeploymentId && (
                 <div className="mb-4 border border-gray-800 rounded p-3">
-                  <p className="text-xs text-gray-600">VM auto-start/stop requires a deployed endpoint. Select a deployment in step 1.</p>
+                  <p className="text-xs text-gray-600">VM auto-start/stop requires a deployed target. Select a deployment in step 1.</p>
                 </div>
               )}
 

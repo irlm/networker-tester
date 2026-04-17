@@ -37,7 +37,7 @@ async fn summary_scoped(
 
     let jobs_running: i64 = client
         .query_one(
-            "SELECT COUNT(*) FROM job WHERE status IN ('running', 'assigned') AND project_id = $1",
+            "SELECT COUNT(*) FROM test_run WHERE status IN ('running', 'queued') AND project_id = $1",
             &[&project_id],
         )
         .await
@@ -46,7 +46,7 @@ async fn summary_scoped(
 
     let runs_24h: i64 = client
         .query_one(
-            "SELECT COUNT(*) FROM job WHERE created_at > now() - interval '24 hours' AND project_id = $1",
+            "SELECT COUNT(*) FROM test_run WHERE created_at > now() - interval '24 hours' AND project_id = $1",
             &[&project_id],
         )
         .await
@@ -55,7 +55,7 @@ async fn summary_scoped(
 
     let jobs_pending: i64 = client
         .query_one(
-            "SELECT COUNT(*) FROM job WHERE status = 'pending' AND project_id = $1",
+            "SELECT COUNT(*) FROM test_run WHERE status = 'queued' AND project_id = $1",
             &[&project_id],
         )
         .await

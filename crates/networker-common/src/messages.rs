@@ -4,11 +4,28 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::test_config::{RunStatus, TestConfig, TestRun};
+
+// NOTE (v0.28.0 refactor — Agent C):
+// During the parallel-agent transition, both the legacy v1 message variants
+// (JobAssign / JobAck / JobComplete / JobError / JobLog / TlsProfileComplete /
+// AttemptResult / JobCancel) and the new v2 variants (AssignRun / CancelRun /
+// RunStarted / RunProgress / RunFinished / AttemptEvent / Heartbeat / Error)
+// coexist in this enum. Agent B owns the dashboard side and will remove the
+// v1 variants once its REST + WS rewrite cuts over. networker-agent (Agent C)
+// already speaks v2 exclusively; networker-dashboard (Agent B) still emits v1.
+//
+// `BenchmarkArtifact` is a placeholder JSON envelope until Agent A/B publishes
+// the canonical Rust type — the on-the-wire shape is `serde_json::Value` so we
+// don't block on a frozen schema.
+
 // ─────────────────────────────────────────────────────────────────────────────
-// Job configuration (subset of ResolvedConfig relevant for remote execution)
+// LEGACY v1 types — preserved during parallel-agent transition (Agent B will
+// remove these once the dashboard cuts over to TestConfig + WS v2). DO NOT use
+// in new code. networker-agent (Agent C) no longer reads or emits these.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Test job configuration dispatched to an agent.
+/// Legacy v1 job configuration. Replaced by `TestConfig`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobConfig {
     pub target: String,
@@ -53,7 +70,6 @@ pub struct JobConfig {
     pub udp_port: Option<u16>,
     #[serde(default)]
     pub udp_throughput_port: Option<u16>,
-    /// Packet capture mode.
     #[serde(default)]
     pub capture_mode: Option<networker_tester::cli::PacketCaptureMode>,
 }
@@ -66,6 +82,22 @@ fn default_concurrency() -> usize {
 }
 fn default_timeout() -> u64 {
     30
+}
+
+/// Placeholder for the methodology-mode artifact emitted alongside
+/// `RunFinished`. The real schema (phases / cases / samples / quality_gates)
+/// will be defined by Agent A in a follow-up; for now we ship a free-form
+/// JSON envelope so Agent B can wire the persistence path without blocking.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BenchmarkArtifact {
+    pub environment: serde_json::Value,
+    pub methodology: serde_json::Value,
+    pub launches: serde_json::Value,
+    pub cases: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub samples: Option<serde_json::Value>,
+    pub summaries: serde_json::Value,
+    pub data_quality: serde_json::Value,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -82,26 +114,27 @@ pub enum AgentMessage {
         load: Option<f64>,
         version: Option<String>,
     },
-    /// Acknowledge receipt of a job assignment.
+    // ── LEGACY v1 (still emitted by old code paths in the dashboard) ─────────
+    /// Acknowledge receipt of a job assignment. *Legacy v1.*
     JobAck { job_id: Uuid },
-    /// A single probe attempt completed (streamed as it happens).
+    /// A single probe attempt completed. *Legacy v1.*
     AttemptResult {
         job_id: Uuid,
         attempt: Box<networker_tester::metrics::RequestAttempt>,
     },
-    /// Full test run completed.
+    /// Full test run completed. *Legacy v1.*
     JobComplete {
         job_id: Uuid,
         run: Box<networker_tester::metrics::TestRun>,
     },
-    /// TLS profile job completed.
+    /// TLS profile job completed. *Legacy v1.*
     TlsProfileComplete {
         job_id: Uuid,
         profile: Box<networker_tester::tls_profile::TlsEndpointProfile>,
     },
-    /// Job failed with an error.
+    /// Job failed with an error. *Legacy v1.*
     JobError { job_id: Uuid, message: String },
-    /// Log line from tester execution (streamed to browser for live logs).
+    /// Log line from tester execution. *Legacy v1.*
     JobLog {
         job_id: Uuid,
         line: String,
@@ -111,6 +144,38 @@ pub enum AgentMessage {
     CommandLog(AgentCommandLog),
     /// Final result of a command execution.
     CommandResult(AgentCommandResult),
+
+    // ── WS v2 (TestConfig / TestRun) ─────────────────────────────────────────
+    /// Agent picked up an assigned run and started executing it.
+    RunStarted {
+        run_id: Uuid,
+        started_at: DateTime<Utc>,
+    },
+    /// Periodic progress for an in-flight run (success / failure attempt counts).
+    RunProgress {
+        run_id: Uuid,
+        success: u32,
+        failure: u32,
+    },
+    /// Run terminated. `artifact` is `Some` iff the config carried a
+    /// `Methodology` block (i.e. benchmark mode).
+    RunFinished {
+        run_id: Uuid,
+        status: RunStatus,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        artifact: Option<Box<BenchmarkArtifact>>,
+    },
+    /// A single probe attempt completed (live event stream — v2 form).
+    AttemptEvent {
+        run_id: Uuid,
+        attempt: Box<networker_tester::metrics::RequestAttempt>,
+    },
+    /// Generic v2 error envelope.
+    Error {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        run_id: Option<Uuid>,
+        message: String,
+    },
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -121,12 +186,13 @@ pub enum AgentMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ControlMessage {
-    /// Assign a test job to the agent.
+    /// Assign a v1 test job to the agent. *Legacy v1 — Agent B will remove
+    /// once the dashboard speaks AssignRun.*
     JobAssign {
         job_id: Uuid,
         config: Box<JobConfig>,
     },
-    /// Request the agent to cancel a running job.
+    /// Request the agent to cancel a running v1 job. *Legacy v1.*
     JobCancel { job_id: Uuid },
     /// Acknowledge agent registration / reconnection.
     Welcome { agent_id: Uuid, agent_name: String },
@@ -134,6 +200,21 @@ pub enum ControlMessage {
     Command(AgentCommand),
     /// Cancel an in-flight command.
     Cancel(AgentCommandCancel),
+
+    // ── WS v2 (TestConfig / TestRun) ─────────────────────────────────────────
+    /// Assign an execution of `config` to the agent. The agent should reply
+    /// with `AgentMessage::RunStarted` and stream `AttemptEvent` / `RunProgress`
+    /// until the run terminates with `RunFinished`.
+    AssignRun {
+        run: Box<TestRun>,
+        config: Box<TestConfig>,
+    },
+    /// Cooperatively cancel an in-flight run.
+    CancelRun { run_id: Uuid },
+    /// Dashboard-side liveness ping (server clock).
+    HeartbeatPing { now: DateTime<Utc> },
+    /// Server-initiated shutdown (drain agent gracefully).
+    Shutdown,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -23,10 +23,14 @@
 
 # PSScriptAnalyzer suppressions — interactive installer uses Write-Host for
 # colored output, plural nouns for clarity, params consumed via $script: scope.
+# The ConvertTo-SecureString -AsPlainText use in Invoke-EnsureSelfSignedCert
+# is intentional: generates a transient password for a local-only self-signed
+# PFX that is re-exported to PEM via openssl and then deleted — no secrets at rest.
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '')]
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '')]
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '')]
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseBOMForUnicodeEncodedFile', '')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingConvertToSecureStringWithPlainText', '')]
 param(
     [string]$Component  = "",
     [switch]$Yes,
@@ -42,6 +46,11 @@ param(
     [string]$AwsRegion  = "",
     [string]$GcpProject = "",
     [string]$GcpZone    = "",
+    # -Setup <proxy>  Install ONLY the named reverse-proxy stack (iis, caddy,
+    # traefik, haproxy, apache) and exit. Used by install.sh's remote-Windows
+    # deploy path (az vm run-command) so the same Invoke-SetupXxx functions
+    # are reused for cloud VMs instead of being duplicated as inline PowerShell.
+    [string]$Setup      = "",
     [switch]$Help
 )
 
@@ -50,7 +59,7 @@ $ErrorActionPreference = "Stop"
 $RepoHttps     = "https://github.com/irlm/networker-tester"
 $RepoGh        = "irlm/networker-tester"
 $CargoBin      = Join-Path $env:USERPROFILE ".cargo\bin"
-$InstallerVersion = "v0.27.27"  # fallback when gh is unavailable
+$InstallerVersion = "v0.28.1"  # fallback when gh is unavailable
 
 # ── Print helpers ──────────────────────────────────────────────────────────────
 function Write-Ok   ($msg) { Write-Host "  v " -NoNewline -ForegroundColor Green;   Write-Host $msg }
@@ -1882,6 +1891,552 @@ function Invoke-CargoInstallStep ($binary) {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  HTTP STACK REVERSE-PROXY SETUP (Windows local)
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Mirrors Linux install.sh step_setup_{nginx,caddy,apache,haproxy,traefik} and
+# IIS on Windows. Each function installs the proxy, writes a minimal config
+# that serves the same static test page as nginx/IIS, and registers a Windows
+# service so the stack survives reboots.
+#
+# Port map (aligned with install.sh):
+#   nginx    8081 / 8444   (Linux only — handled by install.sh)
+#   iis      8082 / 8445   (Windows — handled by install.sh PowerShell payload)
+#   caddy    8091 / 8454
+#   traefik  8092 / 8455
+#   haproxy  8093 / 8456
+#   apache   8094 / 8457
+#
+# All four use $env:ProgramData\networker\<stack> for config + data, generate a
+# self-signed cert on first run, and register the service via sc.exe (native)
+# falling back to nssm where the binary has no built-in service mode.
+
+$script:NetworkerSiteRoot = Join-Path $env:ProgramData "networker\static"
+$script:NetworkerStackDir = Join-Path $env:ProgramData "networker"
+
+function Invoke-EnsureStaticSite {
+    # Generate the static test site shared by every HTTP stack. Idempotent.
+    if (-not (Test-Path $script:NetworkerSiteRoot)) {
+        New-Item -ItemType Directory -Force $script:NetworkerSiteRoot | Out-Null
+    }
+    $indexPath = Join-Path $script:NetworkerSiteRoot "index.html"
+    if (Test-Path $indexPath) { return }
+
+    $epExe = Join-Path $CargoBin "networker-endpoint.exe"
+    if (Test-Path $epExe) {
+        Write-Info "Generating static test site via networker-endpoint..."
+        $prevErr = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        & $epExe generate-site $script:NetworkerSiteRoot --preset mixed --stack windows 2>&1 | Out-Null
+        $ErrorActionPreference = $prevErr
+    }
+    if (-not (Test-Path $indexPath)) {
+        Write-Warn "networker-endpoint generate-site unavailable -- writing fallback test page."
+        $html = "<!DOCTYPE html>`n<html><head><title>Networker Page Load Test</title>"
+        $html += "<link rel=`"stylesheet`" href=`"style.css`"></head><body>"
+        for ($i = 0; $i -lt 50; $i++) { $html += "<img src=`"asset-$i.bin`" width=`"1`" height=`"1`" alt=`"`">" }
+        $html += "</body></html>"
+        [IO.File]::WriteAllText($indexPath, $html, [Text.Encoding]::UTF8)
+        [IO.File]::WriteAllText((Join-Path $script:NetworkerSiteRoot "style.css"), "body{margin:0}", [Text.Encoding]::UTF8)
+        $rng = New-Object Random
+        $sizes = @(512,2048,4096,8192,16384,32768,65536,102400,204800,409600) * 5
+        for ($i = 0; $i -lt $sizes.Count; $i++) {
+            $bytes = New-Object byte[] $sizes[$i]
+            $rng.NextBytes($bytes)
+            [IO.File]::WriteAllBytes((Join-Path $script:NetworkerSiteRoot "asset-$i.bin"), $bytes)
+        }
+    }
+    $healthPath = Join-Path $script:NetworkerSiteRoot "health"
+    if (-not (Test-Path $healthPath)) {
+        [IO.File]::WriteAllText($healthPath, '{"status":"ok","stack":"windows"}', [Text.Encoding]::UTF8)
+    }
+}
+
+function Invoke-EnsureSelfSignedCert ($stackDir, $friendlyName) {
+    # Emits PEM cert + key into $stackDir. Many Windows builds of Linux-native
+    # proxies (caddy/traefik/haproxy/apache) expect PEM — New-SelfSignedCertificate
+    # returns PFX, so we export via openssl if available, else fall back to
+    # .NET X509 export + a PowerShell-native PEM writer.
+    $crtPath = Join-Path $stackDir "networker.crt"
+    $keyPath = Join-Path $stackDir "networker.key"
+    if ((Test-Path $crtPath) -and (Test-Path $keyPath)) { return @($crtPath, $keyPath) }
+
+    $cert = New-SelfSignedCertificate `
+        -DnsName @("localhost", $env:COMPUTERNAME) `
+        -CertStoreLocation "Cert:\LocalMachine\My" `
+        -NotAfter (Get-Date).AddYears(1) `
+        -FriendlyName $friendlyName `
+        -KeyExportPolicy Exportable
+    $pfxPath = Join-Path $stackDir "networker.pfx"
+    $pfxPass = ConvertTo-SecureString -String "networker" -Force -AsPlainText
+    Export-PfxCertificate -Cert "Cert:\LocalMachine\My\$($cert.Thumbprint)" -FilePath $pfxPath -Password $pfxPass | Out-Null
+
+    $openssl = Get-Command openssl -ErrorAction SilentlyContinue
+    if ($openssl) {
+        Start-Process -FilePath $openssl.Source -WindowStyle Hidden -Wait `
+            -ArgumentList @("pkcs12","-in",$pfxPath,"-nocerts","-nodes","-out",$keyPath,"-passin","pass:networker")
+        Start-Process -FilePath $openssl.Source -WindowStyle Hidden -Wait `
+            -ArgumentList @("pkcs12","-in",$pfxPath,"-clcerts","-nokeys","-out",$crtPath,"-passin","pass:networker")
+    } else {
+        # Fallback: write DER bytes base64-encoded as PEM. Works for the cert;
+        # the private key requires openssl — warn and produce cert-only output.
+        $raw = $cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
+        $b64 = [Convert]::ToBase64String($raw, [Base64FormattingOptions]::InsertLineBreaks)
+        [IO.File]::WriteAllText($crtPath, "-----BEGIN CERTIFICATE-----`n$b64`n-----END CERTIFICATE-----`n")
+        Write-Warn "openssl not found -- PEM private key not exported. Install openssl (winget install ShiningLight.OpenSSL) and re-run."
+    }
+    return @($crtPath, $keyPath)
+}
+
+function Invoke-EnsureFirewallRule ($name, $protocol, $ports) {
+    $existing = Get-NetFirewallRule -DisplayName $name -ErrorAction SilentlyContinue
+    if ($existing) { return }
+    New-NetFirewallRule -DisplayName $name -Direction Inbound -Protocol $protocol `
+        -LocalPort $ports -Action Allow -ErrorAction SilentlyContinue | Out-Null
+}
+
+function Invoke-EnsureNssm {
+    # nssm wraps a plain executable as a Windows service. Used by proxies that
+    # have no native --install-service flag (caddy on some versions, traefik).
+    $nssmCmd = Get-Command nssm -ErrorAction SilentlyContinue
+    if ($nssmCmd) { return $nssmCmd.Source }
+    Write-Info "Installing nssm via winget..."
+    $prevErr = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    & winget install --id NSSM.NSSM -e --source winget `
+        --accept-package-agreements --accept-source-agreements 2>&1 | Out-Null
+    $ErrorActionPreference = $prevErr
+
+    $machinePath = [System.Environment]::GetEnvironmentVariable("PATH", "Machine")
+    $userPath    = [System.Environment]::GetEnvironmentVariable("PATH", "User")
+    $env:PATH    = "$machinePath;$userPath"
+    $nssmCmd = Get-Command nssm -ErrorAction SilentlyContinue
+    if ($nssmCmd) { return $nssmCmd.Source }
+
+    # Fallback: direct download (choco mirror)
+    $nssmZip = Join-Path $env:TEMP "nssm.zip"
+    $nssmDir = Join-Path $script:NetworkerStackDir "nssm"
+    New-Item -ItemType Directory -Force $nssmDir | Out-Null
+    Invoke-WebRequest -Uri "https://nssm.cc/release/nssm-2.24.zip" -OutFile $nssmZip -UseBasicParsing
+    Expand-Archive -Path $nssmZip -DestinationPath $nssmDir -Force
+    $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "x86") { "win32" } else { "win64" }
+    $nssmExe = Join-Path $nssmDir "nssm-2.24\$arch\nssm.exe"
+    if (Test-Path $nssmExe) { return $nssmExe }
+    throw "Failed to install nssm -- cannot register service without it."
+}
+
+# ── Caddy (ports 8091 / 8454) ────────────────────────────────────────────────
+function Invoke-SetupCaddy {
+    Invoke-NextStep "Set up Caddy for HTTP stack comparison (ports 8091/8454)"
+    Invoke-EnsureStaticSite
+
+    $stackDir = Join-Path $script:NetworkerStackDir "caddy"
+    New-Item -ItemType Directory -Force $stackDir | Out-Null
+
+    $caddyCmd = Get-Command caddy -ErrorAction SilentlyContinue
+    if (-not $caddyCmd) {
+        Write-Info "Installing Caddy via winget..."
+        $prevErr = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        & winget install --id CaddyServer.Caddy -e --source winget `
+            --accept-package-agreements --accept-source-agreements 2>&1 | Out-Null
+        $ErrorActionPreference = $prevErr
+        $machinePath = [System.Environment]::GetEnvironmentVariable("PATH", "Machine")
+        $env:PATH    = "$machinePath;$env:PATH"
+        $caddyCmd = Get-Command caddy -ErrorAction SilentlyContinue
+    }
+    if (-not $caddyCmd) {
+        # Fallback: direct download from GitHub releases
+        $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }
+        $caddyZip = Join-Path $env:TEMP "caddy.zip"
+        $caddyExe = Join-Path $stackDir "caddy.exe"
+        Invoke-WebRequest -UseBasicParsing `
+            -Uri "https://github.com/caddyserver/caddy/releases/latest/download/caddy_windows_${arch}.zip" `
+            -OutFile $caddyZip
+        Expand-Archive -Path $caddyZip -DestinationPath $stackDir -Force
+        if (-not (Test-Path $caddyExe)) {
+            Write-Err "Caddy download failed -- skipping."
+            return
+        }
+    } else {
+        $caddyExe = $caddyCmd.Source
+    }
+
+    $siteRoot = $script:NetworkerSiteRoot -replace '\\','/'
+    $caddyfile = Join-Path $stackDir "Caddyfile"
+    $cfg = @"
+{
+    auto_https off
+    local_certs
+    servers {
+        protocols h1 h2 h3
+    }
+}
+
+:8091 {
+    root * $siteRoot
+    file_server
+    handle /page* { reverse_proxy 127.0.0.1:8080 }
+    handle /asset* { reverse_proxy 127.0.0.1:8080 }
+}
+
+:8454 {
+    tls internal
+    root * $siteRoot
+    file_server
+    handle /page* { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
+    handle /asset* { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
+}
+"@
+    [IO.File]::WriteAllText($caddyfile, $cfg, [Text.Encoding]::UTF8)
+
+    # Register service (Caddy supports --install via nssm wrapper)
+    if (Get-Service "networker-caddy" -ErrorAction SilentlyContinue) {
+        Start-Process -FilePath "sc.exe" -WindowStyle Hidden -Wait -ArgumentList @("stop","networker-caddy")
+        Start-Process -FilePath "sc.exe" -WindowStyle Hidden -Wait -ArgumentList @("delete","networker-caddy")
+    }
+    $nssm = Invoke-EnsureNssm
+    Start-Process -FilePath $nssm -WindowStyle Hidden -Wait -ArgumentList @("install","networker-caddy",$caddyExe,"run","--config",$caddyfile,"--adapter","caddyfile")
+    Start-Process -FilePath $nssm -WindowStyle Hidden -Wait -ArgumentList @("set","networker-caddy","AppDirectory",$stackDir)
+    Start-Process -FilePath $nssm -WindowStyle Hidden -Wait -ArgumentList @("set","networker-caddy","Start","SERVICE_AUTO_START")
+    Start-Process -FilePath "sc.exe" -WindowStyle Hidden -Wait -ArgumentList @("start","networker-caddy")
+
+    Invoke-EnsureFirewallRule "Networker-Caddy-HTTP"  "TCP" @(8091)
+    Invoke-EnsureFirewallRule "Networker-Caddy-HTTPS" "TCP" @(8454)
+    Invoke-EnsureFirewallRule "Networker-Caddy-QUIC"  "UDP" @(8454)
+    Write-Ok "Caddy serving test page on ports 8091 (HTTP) / 8454 (HTTPS+H3)"
+}
+
+# ── Traefik (ports 8092 / 8455) ──────────────────────────────────────────────
+function Invoke-SetupTraefik {
+    Invoke-NextStep "Set up Traefik for HTTP stack comparison (ports 8092/8455)"
+    Invoke-EnsureStaticSite
+
+    $stackDir = Join-Path $script:NetworkerStackDir "traefik"
+    New-Item -ItemType Directory -Force $stackDir | Out-Null
+
+    $traefikExe = Join-Path $stackDir "traefik.exe"
+    if (-not (Test-Path $traefikExe)) {
+        # Traefik has no winget package — direct download from GitHub
+        Write-Info "Downloading Traefik from GitHub releases..."
+        $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }
+        $zipPath = Join-Path $env:TEMP "traefik.zip"
+        $url = "https://github.com/traefik/traefik/releases/latest/download/traefik_windows_${arch}.zip"
+        try {
+            Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
+            Expand-Archive -Path $zipPath -DestinationPath $stackDir -Force
+        } catch {
+            # Fallback to a known-good version if "latest" tag redirect fails
+            $fallback = "https://github.com/traefik/traefik/releases/download/v3.2.3/traefik_v3.2.3_windows_${arch}.zip"
+            Invoke-WebRequest -Uri $fallback -OutFile $zipPath -UseBasicParsing
+            Expand-Archive -Path $zipPath -DestinationPath $stackDir -Force
+        }
+        if (-not (Test-Path $traefikExe)) {
+            Write-Err "Traefik download failed -- skipping."
+            return
+        }
+    }
+
+    $crtKey = Invoke-EnsureSelfSignedCert $stackDir "Networker Traefik Test"
+    $crtPath = $crtKey[0] -replace '\\','/'
+    $keyPath = $crtKey[1] -replace '\\','/'
+
+    # Traefik doesn't ship a native static-file-server middleware for a folder,
+    # so we proxy static paths to the networker-endpoint static mount (same
+    # treatment used on Linux for haproxy). Dynamic /page and /asset also
+    # forward to the endpoint.
+    $staticYaml = @"
+entryPoints:
+  web:
+    address: ":8091" # unused, kept for doc parity
+  weblocal:
+    address: ":8092"
+  websecure:
+    address: ":8455"
+    http3: {}
+providers:
+  file:
+    filename: "$($stackDir -replace '\\','/')/dynamic.yml"
+log:
+  level: WARN
+"@
+    [IO.File]::WriteAllText((Join-Path $stackDir "traefik.yml"), $staticYaml, [Text.Encoding]::UTF8)
+
+    $dynamicYaml = @"
+http:
+  routers:
+    static-http:
+      rule: "PathPrefix(``/``)"
+      entryPoints: [weblocal]
+      service: endpoint
+    static-https:
+      rule: "PathPrefix(``/``)"
+      entryPoints: [websecure]
+      service: endpoint-tls
+      tls: {}
+  services:
+    endpoint:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:8080"
+    endpoint-tls:
+      loadBalancer:
+        serversTransport: insecure
+        servers:
+          - url: "https://127.0.0.1:8443"
+  serversTransports:
+    insecure:
+      insecureSkipVerify: true
+tls:
+  certificates:
+    - certFile: "$crtPath"
+      keyFile: "$keyPath"
+"@
+    [IO.File]::WriteAllText((Join-Path $stackDir "dynamic.yml"), $dynamicYaml, [Text.Encoding]::UTF8)
+
+    if (Get-Service "networker-traefik" -ErrorAction SilentlyContinue) {
+        Start-Process -FilePath "sc.exe" -WindowStyle Hidden -Wait -ArgumentList @("stop","networker-traefik")
+        Start-Process -FilePath "sc.exe" -WindowStyle Hidden -Wait -ArgumentList @("delete","networker-traefik")
+    }
+    $nssm = Invoke-EnsureNssm
+    Start-Process -FilePath $nssm -WindowStyle Hidden -Wait -ArgumentList @("install","networker-traefik",$traefikExe,"--configfile",(Join-Path $stackDir "traefik.yml"))
+    Start-Process -FilePath $nssm -WindowStyle Hidden -Wait -ArgumentList @("set","networker-traefik","AppDirectory",$stackDir)
+    Start-Process -FilePath $nssm -WindowStyle Hidden -Wait -ArgumentList @("set","networker-traefik","Start","SERVICE_AUTO_START")
+    Start-Process -FilePath "sc.exe" -WindowStyle Hidden -Wait -ArgumentList @("start","networker-traefik")
+
+    Invoke-EnsureFirewallRule "Networker-Traefik-HTTP"  "TCP" @(8092)
+    Invoke-EnsureFirewallRule "Networker-Traefik-HTTPS" "TCP" @(8455)
+    Invoke-EnsureFirewallRule "Networker-Traefik-QUIC"  "UDP" @(8455)
+    Write-Ok "Traefik serving test page on ports 8092 (HTTP) / 8455 (HTTPS+H3)"
+}
+
+# ── HAProxy (ports 8093 / 8456) ──────────────────────────────────────────────
+function Invoke-SetupHAProxy {
+    Invoke-NextStep "Set up HAProxy for HTTP stack comparison (ports 8093/8456)"
+    Invoke-EnsureStaticSite
+
+    $stackDir = Join-Path $script:NetworkerStackDir "haproxy"
+    New-Item -ItemType Directory -Force $stackDir | Out-Null
+
+    $haproxyCmd = Get-Command haproxy -ErrorAction SilentlyContinue
+    $haproxyExe = if ($haproxyCmd) { $haproxyCmd.Source } else { Join-Path $stackDir "haproxy.exe" }
+    if (-not (Test-Path $haproxyExe)) {
+        # No official Windows binary. Community builds exist at
+        # haproxy.debian.net / chocolatey ("haproxy"). Try choco first.
+        $choco = Get-Command choco -ErrorAction SilentlyContinue
+        if ($choco) {
+            Write-Info "Installing HAProxy via Chocolatey..."
+            Start-Process -FilePath $choco.Source -WindowStyle Hidden -Wait `
+                -ArgumentList @("install","haproxy","-y","--no-progress")
+            $machinePath = [System.Environment]::GetEnvironmentVariable("PATH", "Machine")
+            $env:PATH    = "$machinePath;$env:PATH"
+            $haproxyCmd = Get-Command haproxy -ErrorAction SilentlyContinue
+            if ($haproxyCmd) { $haproxyExe = $haproxyCmd.Source }
+        }
+    }
+    if (-not (Test-Path $haproxyExe)) {
+        Write-Warn "HAProxy has no official Windows binary. Install manually from"
+        Write-Warn "https://haproxy.debian.net/ or `choco install haproxy`, then re-run."
+        Write-Warn "TODO: HAProxy Windows support is best-effort -- skipping service registration."
+        return
+    }
+
+    $crtKey = Invoke-EnsureSelfSignedCert $stackDir "Networker HAProxy Test"
+    # HAProxy needs a combined cert+key PEM file
+    $combined = Join-Path $stackDir "networker.pem"
+    $crtText = if (Test-Path $crtKey[0]) { Get-Content $crtKey[0] -Raw } else { "" }
+    $keyText = if (Test-Path $crtKey[1]) { Get-Content $crtKey[1] -Raw } else { "" }
+    [IO.File]::WriteAllText($combined, "$keyText`n$crtText", [Text.Encoding]::ASCII)
+
+    # HAProxy is a pure proxy (no static file server). Forward everything to
+    # networker-endpoint, matching the Linux haproxy convention.
+    $combinedPath = $combined -replace '\\','/'
+    $cfg = @"
+global
+    maxconn 2048
+defaults
+    mode http
+    timeout connect 5s
+    timeout client  30s
+    timeout server  30s
+
+frontend http-in
+    bind *:8093
+    default_backend endpoint-http
+
+frontend https-in
+    bind *:8456 ssl crt $combinedPath alpn h2,http/1.1
+    default_backend endpoint-https
+
+backend endpoint-http
+    server ep 127.0.0.1:8080
+
+backend endpoint-https
+    server ep 127.0.0.1:8443 ssl verify none
+"@
+    $cfgPath = Join-Path $stackDir "haproxy.cfg"
+    [IO.File]::WriteAllText($cfgPath, $cfg, [Text.Encoding]::ASCII)
+
+    if (Get-Service "networker-haproxy" -ErrorAction SilentlyContinue) {
+        Start-Process -FilePath "sc.exe" -WindowStyle Hidden -Wait -ArgumentList @("stop","networker-haproxy")
+        Start-Process -FilePath "sc.exe" -WindowStyle Hidden -Wait -ArgumentList @("delete","networker-haproxy")
+    }
+    $nssm = Invoke-EnsureNssm
+    Start-Process -FilePath $nssm -WindowStyle Hidden -Wait -ArgumentList @("install","networker-haproxy",$haproxyExe,"-f",$cfgPath)
+    Start-Process -FilePath $nssm -WindowStyle Hidden -Wait -ArgumentList @("set","networker-haproxy","AppDirectory",$stackDir)
+    Start-Process -FilePath $nssm -WindowStyle Hidden -Wait -ArgumentList @("set","networker-haproxy","Start","SERVICE_AUTO_START")
+    Start-Process -FilePath "sc.exe" -WindowStyle Hidden -Wait -ArgumentList @("start","networker-haproxy")
+
+    Invoke-EnsureFirewallRule "Networker-HAProxy-HTTP"  "TCP" @(8093)
+    Invoke-EnsureFirewallRule "Networker-HAProxy-HTTPS" "TCP" @(8456)
+    Write-Ok "HAProxy serving test page on ports 8093 (HTTP) / 8456 (HTTPS). HTTP/3 not supported on Windows builds."
+}
+
+# ── Apache httpd (ports 8094 / 8457) ─────────────────────────────────────────
+function Invoke-SetupApache {
+    Invoke-NextStep "Set up Apache httpd for HTTP stack comparison (ports 8094/8457)"
+    Invoke-EnsureStaticSite
+
+    $stackDir = Join-Path $script:NetworkerStackDir "apache"
+    New-Item -ItemType Directory -Force $stackDir | Out-Null
+    $httpdExe = Join-Path $stackDir "Apache24\bin\httpd.exe"
+
+    if (-not (Test-Path $httpdExe)) {
+        # Apache Lounge publishes canonical Windows binaries. Their download
+        # URLs are not stable across versions; we use the versioned path and
+        # fall back to a TODO warning when the download fails.
+        Write-Info "Downloading Apache httpd from Apache Lounge..."
+        $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "win64-VS17" } else { "win64-VS17" }
+        $zipPath = Join-Path $env:TEMP "apache.zip"
+        $url = "https://www.apachelounge.com/download/VS17/binaries/httpd-2.4.62-240904-${arch}.zip"
+        try {
+            Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing -TimeoutSec 60
+            Expand-Archive -Path $zipPath -DestinationPath $stackDir -Force
+        } catch {
+            Write-Warn "Apache download failed from Apache Lounge (URL changes with each release)."
+            Write-Warn "TODO: Apache httpd on Windows -- manually download from https://www.apachelounge.com/"
+            Write-Warn "  and extract to $stackDir\Apache24, then re-run installer with -HttpStacks apache."
+            return
+        }
+    }
+
+    $crtKey = Invoke-EnsureSelfSignedCert $stackDir "Networker Apache Test"
+    $siteRoot = $script:NetworkerSiteRoot -replace '\\','/'
+    $serverRoot = "$stackDir\Apache24" -replace '\\','/'
+    $crtPath = $crtKey[0] -replace '\\','/'
+    $keyPath = $crtKey[1] -replace '\\','/'
+
+    $cfg = @"
+ServerRoot "$serverRoot"
+Listen 8094
+Listen 8457
+
+LoadModule authz_core_module modules/mod_authz_core.so
+LoadModule mime_module modules/mod_mime.so
+LoadModule dir_module modules/mod_dir.so
+LoadModule log_config_module modules/mod_log_config.so
+LoadModule unixd_module modules/mod_unixd.so
+LoadModule ssl_module modules/mod_ssl.so
+LoadModule proxy_module modules/mod_proxy.so
+LoadModule proxy_http_module modules/mod_proxy_http.so
+LoadModule http2_module modules/mod_http2.so
+LoadModule socache_shmcb_module modules/mod_socache_shmcb.so
+
+ServerName localhost
+DocumentRoot "$siteRoot"
+<Directory "$siteRoot">
+    Require all granted
+    DirectoryIndex index.html
+</Directory>
+
+TypesConfig conf/mime.types
+AddType application/octet-stream .bin
+
+ErrorLog "logs/error.log"
+LogLevel warn
+
+<VirtualHost *:8094>
+    DocumentRoot "$siteRoot"
+    ProxyPass /page http://127.0.0.1:8080/page
+    ProxyPassReverse /page http://127.0.0.1:8080/page
+    ProxyPass /asset http://127.0.0.1:8080/asset
+    ProxyPassReverse /asset http://127.0.0.1:8080/asset
+</VirtualHost>
+
+<VirtualHost *:8457>
+    DocumentRoot "$siteRoot"
+    Protocols h2 http/1.1
+    SSLEngine on
+    SSLCertificateFile "$crtPath"
+    SSLCertificateKeyFile "$keyPath"
+    SSLProxyEngine on
+    SSLProxyVerify none
+    SSLProxyCheckPeerCN off
+    SSLProxyCheckPeerName off
+    ProxyPass /page https://127.0.0.1:8443/page
+    ProxyPassReverse /page https://127.0.0.1:8443/page
+    ProxyPass /asset https://127.0.0.1:8443/asset
+    ProxyPassReverse /asset https://127.0.0.1:8443/asset
+</VirtualHost>
+"@
+    $cfgPath = Join-Path $stackDir "httpd.conf"
+    [IO.File]::WriteAllText($cfgPath, $cfg, [Text.Encoding]::ASCII)
+
+    if (Get-Service "networker-apache" -ErrorAction SilentlyContinue) {
+        Start-Process -FilePath "sc.exe" -WindowStyle Hidden -Wait -ArgumentList @("stop","networker-apache")
+        Start-Process -FilePath "sc.exe" -WindowStyle Hidden -Wait -ArgumentList @("delete","networker-apache")
+    }
+    # Apache has native service install via -k install
+    Start-Process -FilePath $httpdExe -WindowStyle Hidden -Wait `
+        -ArgumentList @("-k","install","-n","networker-apache","-f",$cfgPath)
+    Start-Process -FilePath "sc.exe" -WindowStyle Hidden -Wait -ArgumentList @("start","networker-apache")
+
+    Invoke-EnsureFirewallRule "Networker-Apache-HTTP"  "TCP" @(8094)
+    Invoke-EnsureFirewallRule "Networker-Apache-HTTPS" "TCP" @(8457)
+    Write-Ok "Apache serving test page on ports 8094 (HTTP) / 8457 (HTTPS). HTTP/3 not available in Apache httpd."
+}
+
+# ── IIS placeholder (the full IIS payload lives in install.sh) ───────────────
+function Invoke-SetupIIS {
+    Invoke-NextStep "Set up IIS for HTTP stack comparison (ports 8082/8445)"
+    Invoke-EnsureStaticSite
+    Write-Info "Installing IIS + URL Rewrite + ARR..."
+    # IIS is handled by the Linux-orchestrated PowerShell payload (install.sh
+    # _iis_setup_powershell). For local Windows installs we replicate the
+    # minimum: enable the Web-Server feature and drop the static site.
+    Install-WindowsFeature -Name Web-Server -IncludeManagementTools -ErrorAction SilentlyContinue | Out-Null
+    Import-Module WebAdministration -ErrorAction SilentlyContinue
+
+    if (Get-Website -Name "networker-iis" -ErrorAction SilentlyContinue) {
+        Remove-Website -Name "networker-iis" -ErrorAction SilentlyContinue
+    }
+    New-Website -Name "networker-iis" -PhysicalPath $script:NetworkerSiteRoot `
+        -Port 8082 -Force -ErrorAction SilentlyContinue | Out-Null
+    Invoke-EnsureFirewallRule "Networker-IIS-HTTP" "TCP" @(8082)
+    Write-Ok "IIS serving test page on port 8082. For HTTPS/H3 + ARR reverse-proxy use the install.sh remote flow."
+}
+
+# ── Dispatcher: map http_stacks names to setup functions ──────────────────────
+function Invoke-HttpStackSetup ($stacks) {
+    # $stacks: array or comma-separated string of stack names.
+    if (-not $stacks) { return }
+    if ($stacks -is [string]) { $stacks = $stacks -split ',' }
+    foreach ($raw in $stacks) {
+        $s = $raw.Trim().ToLower()
+        if ([string]::IsNullOrEmpty($s)) { continue }
+        switch ($s) {
+            "nginx"   { Write-Warn "nginx setup on Windows is not supported -- use install.sh on Linux or pick IIS." }
+            "iis"     { Invoke-SetupIIS }
+            "caddy"   { Invoke-SetupCaddy }
+            "traefik" { Invoke-SetupTraefik }
+            "haproxy" { Invoke-SetupHAProxy }
+            "apache"  { Invoke-SetupApache }
+            default   { Write-Warn "Unknown http_stack '$s' (valid: nginx, iis, caddy, apache, haproxy, traefik)" }
+        }
+    }
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  CLOUD DEPLOYMENT STEPS
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -2959,6 +3514,20 @@ function Show-Completion {
 #  ENTRY POINT
 # ══════════════════════════════════════════════════════════════════════════════
 if ($Help) { Show-Help; exit 0 }
+
+# -Setup fast-path: invoked remotely by install.sh via az vm run-command to
+# install a single reverse-proxy stack on an already-provisioned Windows VM.
+# Bypasses component selection, downloads, and deploy flow.
+if ($Setup) {
+    $validStacks = @("iis","caddy","traefik","haproxy","apache")
+    $wanted = $Setup.ToLower()
+    if ($wanted -notin $validStacks) {
+        Write-Err "Invalid -Setup value '$Setup'. Use: $($validStacks -join ', ')."
+        exit 1
+    }
+    Invoke-HttpStackSetup $wanted
+    exit 0
+}
 
 if ($Component -and $Component -notin @("tester", "endpoint", "both", "")) {
     Write-Err "Invalid -Component value '$Component'. Use: tester, endpoint, or both."

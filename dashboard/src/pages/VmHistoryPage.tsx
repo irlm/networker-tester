@@ -130,8 +130,8 @@ export function VmHistoryPage() {
         <div className="flex gap-1">
           {([
             ['', 'All'],
-            ['tester', `Tester${counts.tester ? ` (${counts.tester})` : ''}`],
-            ['endpoint', `Endpoint${counts.endpoint ? ` (${counts.endpoint})` : ''}`],
+            ['tester', `Runner${counts.tester ? ` (${counts.tester})` : ''}`],
+            ['endpoint', `Target${counts.endpoint ? ` (${counts.endpoint})` : ''}`],
             ['benchmark', `Benchmark${counts.benchmark ? ` (${counts.benchmark})` : ''}`],
           ] as [TypeFilter, string][]).map(([val, label]) => (
             <button

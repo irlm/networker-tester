@@ -1,436 +1,202 @@
-//! Background worker that polls for queued benchmark configs and spawns the
-//! `alethabench` orchestrator process. Runs as a tokio task alongside the
-//! dashboard API server.
+//! Provisioning orchestrator (v0.28.1).
+//!
+//! The old `benchmark_worker` polled `benchmark_config` rows and spawned
+//! orchestrator processes locally. In v0.28.0 all test execution moved onto
+//! agent dispatch and the worker became a no-op stub.
+//!
+//! v0.28.1 reuses this task for a different job: driving `EndpointRef::Pending`
+//! configs through their provisioning lifecycle. When the REST launch handlers
+//! encounter a `Pending` endpoint they kick off a deployment, mark the run
+//! `provisioning`, and link `provisioning_deployment_id` — this loop watches
+//! those runs, rewrites the config's endpoint once the deployment succeeds,
+//! and hands the run off to the normal dispatch path.
+//!
+//! Kept under the `benchmark_worker` name so `main.rs` doesn't need rewiring.
 
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
+
+use networker_common::messages::ControlMessage;
+use networker_common::test_config::proxy_https_port;
+use networker_common::{EndpointRef, RunStatus, TestRun};
 
 use crate::AppState;
 
-/// Spawn the benchmark worker background task.
+/// Spawn the orchestrator. Ticks every 5s; one tick handles all currently
+/// provisioning runs in FIFO-ish order.
 pub fn spawn(state: Arc<AppState>) {
     tokio::spawn(async move {
-        // Wait for server startup
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-        tracing::info!("Benchmark worker background task started");
-
-        let worker_id = format!(
-            "worker-{}",
-            hostname::get()
-                .map(|h| h.to_string_lossy().to_string())
-                .unwrap_or_else(|_| "unknown".into())
-        );
-
-        let in_flight = Arc::new(AtomicU32::new(0));
-        let mut last_cleanup = std::time::Instant::now();
+        // Small startup delay to let migrations finish and the DB pool warm up.
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        tracing::info!("Provisioning orchestrator started");
 
         loop {
-            // Poll every 5 seconds
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-
-            // Concurrency guard: only one orchestrator at a time
-            if in_flight.load(Ordering::SeqCst) >= 1 {
-                continue;
-            }
-
-            if let Err(e) = poll_and_run(&state, &worker_id, &in_flight).await {
-                tracing::error!(error = %e, "Benchmark worker poll failed");
-            }
-
-            // Cleanup stalled configs every 15 minutes
-            if last_cleanup.elapsed() > std::time::Duration::from_secs(900) {
-                last_cleanup = std::time::Instant::now();
-                if let Err(e) = cleanup_stalled(&state).await {
-                    tracing::error!(error = %e, "Benchmark worker cleanup failed");
-                }
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            if let Err(e) = tick(&state).await {
+                tracing::error!(error = %e, "Provisioning orchestrator tick failed");
             }
         }
     });
 }
 
-/// Poll for a queued benchmark config, claim it, and spawn the orchestrator.
-async fn poll_and_run(
-    state: &AppState,
-    worker_id: &str,
-    in_flight: &Arc<AtomicU32>,
+async fn tick(state: &Arc<AppState>) -> anyhow::Result<()> {
+    let client = state.db.get().await?;
+    let pairs = crate::db::test_runs::list_provisioning(&client).await?;
+    if pairs.is_empty() {
+        return Ok(());
+    }
+
+    for (run, deployment_id) in pairs {
+        if let Err(e) = handle_run(state, &run, &deployment_id).await {
+            tracing::error!(
+                run_id = %run.id,
+                deployment_id = %deployment_id,
+                error = %e,
+                "Orchestrator failed to handle provisioning run"
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn handle_run(
+    state: &Arc<AppState>,
+    run: &TestRun,
+    deployment_id: &uuid::Uuid,
 ) -> anyhow::Result<()> {
     let client = state.db.get().await?;
-    let config = crate::db::benchmark_configs::claim_queued(&client, worker_id).await?;
+    let deployment = crate::db::deployments::get(&client, deployment_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("deployment {deployment_id} vanished"))?;
 
-    let config = match config {
-        Some(c) => c,
-        None => return Ok(()), // Nothing queued
-    };
-
-    tracing::info!(
-        config_id = %config.config_id,
-        name = %config.name,
-        worker_id = %worker_id,
-        "Claimed benchmark config for execution"
-    );
-
-    // Fetch testbeds from DB (they have testbed_id which the config_json might not)
-    let db_testbeds = crate::db::benchmark_testbeds::list_for_config(&client, &config.config_id)
-        .await
-        .map_err(|e| {
-            tracing::error!(config_id = %config.config_id, error = %e, "Failed to list testbeds for config");
-            anyhow::anyhow!("Failed to list testbeds: {e}")
-        })?;
-
-    // Build testbeds array with testbed_id + data from config_json.
-    // Match by testbed_id rather than positional index.
-    let inner = &config.config_json;
-    let config_testbeds = inner
-        .get("testbeds")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let config_testbed_map: std::collections::HashMap<String, serde_json::Value> = config_testbeds
-        .into_iter()
-        .filter_map(|v| {
-            let id = v.get("testbed_id")?.as_str()?.to_string();
-            Some((id, v))
-        })
-        .collect();
-    let merged_testbeds: Vec<serde_json::Value> = db_testbeds
-        .iter()
-        .map(|db_testbed| {
-            let id_str = db_testbed.testbed_id.to_string();
-            let mut testbed = config_testbed_map
-                .get(&id_str)
-                .cloned()
-                .unwrap_or(serde_json::json!({}));
-            if let Some(obj) = testbed.as_object_mut() {
-                obj.insert("testbed_id".to_string(), serde_json::json!(id_str));
-                // Merge all required fields from DB if not in config_json
-                if !obj.contains_key("cloud") {
-                    obj.insert("cloud".to_string(), serde_json::json!(db_testbed.cloud));
-                }
-                if !obj.contains_key("region") {
-                    obj.insert("region".to_string(), serde_json::json!(db_testbed.region));
-                }
-                if !obj.contains_key("topology") {
-                    obj.insert(
-                        "topology".to_string(),
-                        serde_json::json!(db_testbed.topology),
-                    );
-                }
-                if !obj.contains_key("vm_size") {
-                    if let Some(ref sz) = db_testbed.vm_size {
-                        obj.insert("vm_size".to_string(), serde_json::json!(sz));
-                    }
-                }
-                if !obj.contains_key("os") {
-                    obj.insert("os".to_string(), serde_json::json!(db_testbed.os));
-                }
-                if !obj.contains_key("languages") {
-                    obj.insert("languages".to_string(), db_testbed.languages.clone());
-                }
-                if !obj.contains_key("existing_vm_ip") {
-                    if let Some(ip) = &db_testbed.endpoint_ip {
-                        obj.insert("existing_vm_ip".to_string(), serde_json::json!(ip));
-                    }
-                }
-                if !obj.contains_key("proxies") {
-                    obj.insert("proxies".to_string(), db_testbed.proxies.clone());
-                }
-                if !obj.contains_key("tester_os") {
-                    obj.insert(
-                        "tester_os".to_string(),
-                        serde_json::json!(db_testbed.tester_os),
-                    );
-                }
-            }
-            testbed
-        })
-        .collect();
-
-    // Generate a scoped callback JWT for the orchestrator
-    let callback_token = crate::auth::create_token(
-        config.config_id, // Use config_id as the subject for scoped token
-        &format!("benchmark-{}", config.config_id),
-        "system",
-        false,
-        &state.jwt_secret,
-    )?;
-
-    // Construct callback URL
-    // Callback client adds /api/benchmarks/callback/... so base_url should NOT include /api
-    let callback_url = state.public_url.clone();
-
-    // Write config JSON in the format the orchestrator's DashboardBenchmarkConfig expects
-    let config_path = format!("/tmp/bench-{}.json", config.config_id);
-    let config_data = serde_json::json!({
-        "config_id": config.config_id.to_string(),
-        "benchmark_type": config.benchmark_type,
-        "testbeds": merged_testbeds,
-        "methodology": inner.get("methodology").cloned().unwrap_or(serde_json::json!({})),
-        "auto_teardown": inner.get("auto_teardown").and_then(|v| v.as_bool()).unwrap_or(true),
-        "callback_url": callback_url,
-        "callback_token": callback_token,
-        "created_by_email": config.created_by.map(|u| u.to_string()),
-        "project_id": config.project_id.to_string(),
-        "logs_db_url": state.logs_database_url,
-    });
-    // RR-009: Write with restricted permissions (0600) — config contains callback JWT
-    {
-        let content = serde_json::to_string_pretty(&config_data)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            std::fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .mode(0o600)
-                .open(&config_path)
-                .and_then(|mut f| {
-                    use std::io::Write;
-                    f.write_all(content.as_bytes())
-                })
-                .map_err(|e| anyhow::anyhow!("Failed to write config file: {e}"))?;
-        }
-        #[cfg(not(unix))]
-        {
-            tokio::fs::write(&config_path, &content)
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to write config file: {e}"))?;
-        }
-    }
-
-    // Pick an ssh user for the orchestrator that matches the primary testbed's
-    // cloud. The orchestrator's ssh helpers honor ORCH_SSH_USER (defaults to
-    // "azureuser"). For mixed-cloud benchmarks this picks the first testbed's
-    // cloud; per-testbed users would require a deeper orchestrator change.
-    let orch_ssh_user = merged_testbeds
-        .first()
-        .and_then(|t| t.get("cloud").and_then(|v| v.as_str()))
-        .map(|cloud| match cloud.to_lowercase().as_str() {
-            "azure" => "azureuser",
-            "aws" | "gcp" => "ubuntu",
-            _ => "azureuser",
-        })
-        .unwrap_or("azureuser");
-
-    // Spawn alethabench as a child process.
-    // Pass callback token via env var to avoid leaking in /proc/PID/cmdline.
-    let mut cmd = tokio::process::Command::new("alethabench");
-    cmd.args([
-        "run",
-        "--config",
-        &config_path,
-        "--callback-url",
-        &callback_url,
-    ])
-    .env("BENCH_CALLBACK_TOKEN", &callback_token)
-    .env("ORCH_SSH_USER", orch_ssh_user)
-    .stdout(std::process::Stdio::piped())
-    .stderr(std::process::Stdio::piped());
-    // Inherit an explicit ORCH_SSH_KEY when set so operators can override
-    // the default ~/.ssh/id_ed25519 → id_rsa lookup.
-    if let Ok(k) = std::env::var("ORCH_SSH_KEY") {
-        cmd.env("ORCH_SSH_KEY", k);
-    }
-    let child_result = cmd.spawn();
-
-    match child_result {
-        Ok(mut child) => {
-            let config_id = config.config_id;
-            let db_pool = state.db.clone();
-            let in_flight = in_flight.clone();
-            in_flight.fetch_add(1, Ordering::SeqCst);
-
-            // Monitor the child process in a spawned task
-            tokio::spawn(async move {
-                // Capture both stdout and stderr for debugging
-                let stderr_handle = child.stderr.take();
-                let stdout_handle = child.stdout.take();
-                let stderr_task = tokio::spawn(async move {
-                    if let Some(mut stderr) = stderr_handle {
-                        let mut buf = String::new();
-                        use tokio::io::AsyncReadExt;
-                        let _ = stderr.read_to_string(&mut buf).await;
-                        buf
-                    } else {
-                        String::new()
-                    }
-                });
-                let stdout_task = tokio::spawn(async move {
-                    if let Some(mut stdout) = stdout_handle {
-                        let mut buf = String::new();
-                        use tokio::io::AsyncReadExt;
-                        let _ = stdout.read_to_string(&mut buf).await;
-                        buf
-                    } else {
-                        String::new()
-                    }
-                });
-
-                match child.wait().await {
-                    Ok(status) => {
-                        let err_msg = stderr_task.await.unwrap_or_default();
-                        let out_msg = stdout_task.await.unwrap_or_default();
-                        // Always log stderr/stdout sizes in the message itself
-                        // (structured fields aren't captured by the log buffer)
-                        tracing::info!(
-                            "Benchmark orchestrator finished: exit={:?} stderr={}B stdout={}B config={}",
-                            status.code(), err_msg.len(), out_msg.len(), config_id
-                        );
-                        if !err_msg.is_empty() {
-                            // Log last 4000 chars of stderr in the message
-                            let tail: String = if err_msg.len() > 4000 {
-                                err_msg[err_msg.len() - 4000..].chars().collect()
-                            } else {
-                                err_msg.clone()
-                            };
-                            tracing::info!("Orchestrator stderr (config={}):\n{}", config_id, tail);
-                        }
-
-                        if status.success() {
-                            tracing::info!(
-                                config_id = %config_id,
-                                "Benchmark orchestrator completed successfully"
-                            );
-                            // Don't overwrite status here — the orchestrator already
-                            // reported the correct status via callback.complete() which
-                            // may be "completed_with_errors". Only update if the config
-                            // is still in "running" state (callback.complete() failed).
-                            if let Ok(db) = db_pool.get().await {
-                                let current =
-                                    crate::db::benchmark_configs::get(&db, &config_id).await;
-                                if let Ok(Some(cfg)) = current {
-                                    if cfg.status == "running" {
-                                        tracing::warn!(
-                                            config_id = %config_id,
-                                            "Config still in running state after orchestrator exit — \
-                                             callback.complete() may have failed, marking completed"
-                                        );
-                                        let _ = crate::db::benchmark_configs::update_status(
-                                            &db,
-                                            &config_id,
-                                            "completed",
-                                            None,
-                                        )
-                                        .await;
-                                    }
-                                }
-                                // Persist orchestrator stderr to config for API visibility.
-                                // Append to existing error_message so we don't lose
-                                // the orchestrator's own error report.
-                                if !err_msg.is_empty() {
-                                    let diag: String = err_msg
-                                        .chars()
-                                        .rev()
-                                        .take(2000)
-                                        .collect::<Vec<_>>()
-                                        .into_iter()
-                                        .rev()
-                                        .collect();
-                                    let _ = db.execute(
-                                        "UPDATE benchmark_config SET error_message = COALESCE(error_message || E'\\n---\\nOrchestrator stderr:\\n', 'Orchestrator stderr:\\n') || $1 WHERE config_id = $2",
-                                        &[&diag, &config_id],
-                                    ).await;
-                                }
-                            }
-                        } else {
-                            tracing::error!(
-                                config_id = %config_id,
-                                exit_code = ?status.code(),
-                                stderr = %err_msg,
-                                "Benchmark orchestrator failed"
-                            );
-                            // Mark as failed in DB
-                            if let Ok(db) = db_pool.get().await {
-                                let _ = crate::db::benchmark_configs::update_status(
-                                    &db,
-                                    &config_id,
-                                    "failed",
-                                    Some(&format!(
-                                        "Orchestrator exited with code {:?}: {}",
-                                        status.code(),
-                                        err_msg.chars().take(500).collect::<String>()
-                                    )),
-                                )
-                                .await;
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            config_id = %config_id,
-                            error = %e,
-                            "Failed to wait for benchmark orchestrator"
-                        );
-                        if let Ok(db) = db_pool.get().await {
-                            let _ = crate::db::benchmark_configs::update_status(
-                                &db,
-                                &config_id,
-                                "failed",
-                                Some(&format!("Process wait error: {e}")),
-                            )
-                            .await;
-                        }
-                    }
-                }
-
-                // Decrement in-flight counter and clean up temp file
-                in_flight.fetch_sub(1, Ordering::SeqCst);
-                let _ = tokio::fs::remove_file(&format!("/tmp/bench-{config_id}.json")).await;
-            });
-        }
-        Err(e) => {
-            tracing::error!(
-                config_id = %config.config_id,
-                error = %e,
-                "Failed to spawn alethabench process"
-            );
-
-            // Mark config as failed
-            let client = state.db.get().await?;
-            crate::db::benchmark_configs::update_status(
+    match deployment.status.as_str() {
+        "completed" => promote(state, run, &deployment).await,
+        "failed" => {
+            let msg = deployment
+                .error_message
+                .as_deref()
+                .unwrap_or("deployment failed");
+            crate::db::test_runs::set_error(
                 &client,
-                &config.config_id,
-                "failed",
-                Some(&format!("Failed to spawn orchestrator: {e}")),
+                &run.id,
+                &format!("Provisioning failed: {msg}"),
             )
             .await?;
+            tracing::warn!(
+                run_id = %run.id,
+                deployment_id = %deployment_id,
+                error = %msg,
+                "Run transitioned to failed: provisioning deployment failed"
+            );
+            Ok(())
+        }
+        // Still running / pending — leave it alone; we'll check again next tick.
+        _ => Ok(()),
+    }
+}
 
-            // Clean up temp file
-            let _ = tokio::fs::remove_file(&config_path).await;
+/// Deployment completed — rewrite the config's endpoint from `Pending` to
+/// `Network{host, port}` and transition the run into the normal dispatch path.
+async fn promote(
+    state: &Arc<AppState>,
+    run: &TestRun,
+    deployment: &crate::db::deployments::DeploymentRow,
+) -> anyhow::Result<()> {
+    let client = state.db.get().await?;
+    let cfg = crate::db::test_configs::get(&client, &run.test_config_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("test_config {} vanished", run.test_config_id))?;
+
+    let EndpointRef::Pending { proxy_stack, .. } = &cfg.endpoint else {
+        // Someone already rewrote it — just move the run along.
+        crate::db::test_runs::update_status(&client, &run.id, RunStatus::Queued).await?;
+        return Ok(());
+    };
+
+    let host = first_endpoint_host(&deployment.endpoint_ips).ok_or_else(|| {
+        anyhow::anyhow!(
+            "deployment {} completed but no endpoint IPs were captured",
+            deployment.deployment_id
+        )
+    })?;
+    let port = proxy_https_port(proxy_stack);
+
+    let new_endpoint = EndpointRef::Network {
+        host: host.clone(),
+        port: Some(port),
+    };
+
+    crate::db::test_configs::update_endpoint(&client, &cfg.id, &new_endpoint).await?;
+    crate::db::test_runs::update_status(&client, &run.id, RunStatus::Queued).await?;
+
+    tracing::info!(
+        run_id = %run.id,
+        deployment_id = %deployment.deployment_id,
+        host,
+        port,
+        proxy_stack,
+        "Provisioning complete — endpoint rewritten, run queued"
+    );
+
+    // Best-effort immediate dispatch. The scheduler also polls queued runs, so
+    // if no agent is online now the run stays queued and gets picked up later.
+    if let Some(agent_id) = state.agents.any_online_agent().await {
+        // Re-read the updated config so the agent gets the rewritten endpoint.
+        let updated_cfg = crate::db::test_configs::get(&client, &cfg.id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("config vanished post-rewrite"))?;
+        let updated_run = crate::db::test_runs::get(&client, &run.id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("run vanished post-status-update"))?;
+        let msg = ControlMessage::AssignRun {
+            run: Box::new(updated_run),
+            config: Box::new(updated_cfg),
+        };
+        if state.agents.send_to_agent(&agent_id, &msg).await.is_ok() {
+            tracing::info!(
+                run_id = %run.id,
+                agent_id = %agent_id,
+                "Dispatched provisioned run"
+            );
         }
     }
 
     Ok(())
 }
 
-/// Find stalled configs (no heartbeat for 10 minutes) and mark them as failed.
-async fn cleanup_stalled(state: &AppState) -> anyhow::Result<()> {
-    let client = state.db.get().await?;
-    let stalled = crate::db::benchmark_configs::find_stalled(&client, 10).await?;
+/// Pull the first usable host (FQDN preferred, bare IP otherwise) out of the
+/// deployment's captured endpoint list. The deploy runner stores either form.
+fn first_endpoint_host(endpoint_ips: &Option<serde_json::Value>) -> Option<String> {
+    let arr = endpoint_ips.as_ref()?.as_array()?;
+    for v in arr {
+        if let Some(s) = v.as_str() {
+            let t = s.trim();
+            if !t.is_empty() {
+                return Some(t.to_string());
+            }
+        }
+    }
+    None
+}
 
-    for config in &stalled {
-        tracing::warn!(
-            config_id = %config.config_id,
-            name = %config.name,
-            last_heartbeat = ?config.last_heartbeat,
-            "Marking stalled benchmark config as failed"
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn picks_first_host_from_jsonb_array() {
+        let v = Some(json!(["first.example.com", "second.example.com"]));
+        assert_eq!(
+            first_endpoint_host(&v).as_deref(),
+            Some("first.example.com")
         );
-
-        crate::db::benchmark_configs::update_status(
-            &client,
-            &config.config_id,
-            "failed",
-            Some("No heartbeat received for 10 minutes — orchestrator presumed dead"),
-        )
-        .await?;
     }
 
-    if !stalled.is_empty() {
-        tracing::info!(
-            count = stalled.len(),
-            "Cleaned up stalled benchmark configs"
-        );
+    #[test]
+    fn empty_or_missing_returns_none() {
+        assert_eq!(first_endpoint_host(&None), None);
+        assert_eq!(first_endpoint_host(&Some(json!([]))), None);
+        assert_eq!(first_endpoint_host(&Some(json!(["   "]))), None);
     }
-
-    Ok(())
 }

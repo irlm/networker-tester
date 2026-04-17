@@ -1,3 +1,10 @@
+//! WebSocket v2 agent hub.
+//!
+//! Accepts agent connections, speaks protocol v2 (TestConfig / TestRun model).
+//! Legacy v1 agent message variants (`JobAck`, `JobComplete`, `JobError`,
+//! `JobLog`, `AttemptResult`, `TlsProfileComplete`) are ignored — all agents
+//! must run v2. See `.critique/refactor/03-spec.md` §4.
+
 use axum::{
     extract::{ws, Query, State, WebSocketUpgrade},
     http::StatusCode,
@@ -15,61 +22,13 @@ use uuid::Uuid;
 use crate::AppState;
 use networker_common::messages::{AgentMessage, ControlMessage, DashboardEvent};
 use networker_common::protocol;
-
-const MAX_TLS_PROFILE_JSON_BYTES: usize = 8 * 1024 * 1024;
-const MAX_TLS_PROFILE_FINDINGS: usize = 2048;
-const MAX_TLS_PROFILE_STRINGS: usize = 4096;
-
-fn validate_tls_profile_size(
-    profile: &networker_tester::tls_profile::TlsEndpointProfile,
-) -> anyhow::Result<()> {
-    let json = serde_json::to_vec(profile)?;
-    if json.len() > MAX_TLS_PROFILE_JSON_BYTES {
-        anyhow::bail!(
-            "TLS profile JSON exceeds {} bytes",
-            MAX_TLS_PROFILE_JSON_BYTES
-        );
-    }
-    if profile.findings.len() > MAX_TLS_PROFILE_FINDINGS {
-        anyhow::bail!(
-            "TLS profile findings exceed {} entries",
-            MAX_TLS_PROFILE_FINDINGS
-        );
-    }
-    let stringish = profile.unsupported_checks.len()
-        + profile.limitations.len()
-        + profile.target.resolved_ips.len()
-        + profile.path_characteristics.evidence.len()
-        + profile.trust.issues.len()
-        + profile.trust.revocation.notes.len()
-        + profile.resumption.notes.len();
-    if stringish > MAX_TLS_PROFILE_STRINGS {
-        anyhow::bail!(
-            "TLS profile string list fields exceed {} entries",
-            MAX_TLS_PROFILE_STRINGS
-        );
-    }
-    Ok(())
-}
-
-async fn job_assigned_to_agent(
-    state: &AppState,
-    job_id: &Uuid,
-    agent_id: Uuid,
-) -> anyhow::Result<bool> {
-    let client = state.db.get().await?;
-    Ok(crate::db::jobs::get(&client, job_id)
-        .await?
-        .and_then(|job| job.agent_id)
-        == Some(agent_id))
-}
+use networker_common::RunStatus;
 
 /// Bounded channel capacity for agent WebSocket outbound messages.
 const AGENT_CHANNEL_CAPACITY: usize = 256;
 
 /// Registry of connected agents.
 pub struct AgentHub {
-    /// agent_id → channel sender for dispatching messages to the agent.
     agents: RwLock<HashMap<Uuid, mpsc::Sender<String>>>,
 }
 
@@ -123,8 +82,6 @@ async fn agent_ws_handler(
     State(state): State<Arc<AppState>>,
     Query(q): Query<AgentWsQuery>,
 ) -> Result<impl IntoResponse, StatusCode> {
-    // Validate API key BEFORE WebSocket upgrade to reject unauthorized connections
-    // at the HTTP layer rather than after the upgrade completes.
     let client = state
         .db
         .get()
@@ -135,10 +92,8 @@ async fn agent_ws_handler(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::UNAUTHORIZED)?;
 
-    // Large test runs (27 modes × 3 runs = 255 attempts) produce multi-MB JSON.
-    // Default axum WS limit is 64KB which silently drops the JobComplete message.
     Ok(ws
-        .max_message_size(64 * 1024 * 1024) // 64 MB
+        .max_message_size(64 * 1024 * 1024)
         .on_upgrade(move |socket| handle_agent_socket(socket, state, agent)))
 }
 
@@ -149,9 +104,9 @@ async fn handle_agent_socket(
 ) {
     let agent_id = agent.agent_id;
     let agent_name = agent.name.clone();
-    tracing::info!(agent_id = %agent_id, name = %agent_name, "Tester connected");
+    tracing::info!(agent_id = %agent_id, name = %agent_name, "Tester connected (v2)");
 
-    // Update status to online
+    // Mark online
     if let Ok(client) = state.db.get().await {
         let _ = crate::db::agents::update_status(&client, &agent_id, "online").await;
     }
@@ -161,7 +116,6 @@ async fn handle_agent_socket(
         last_heartbeat: Some(chrono::Utc::now()),
     });
 
-    // Set up channels
     let (mut ws_sink, mut ws_stream) = socket.split();
     let (tx, mut rx) = mpsc::channel::<String>(AGENT_CHANNEL_CAPACITY);
 
@@ -176,7 +130,7 @@ async fn handle_agent_socket(
         let _ = ws_sink.send(ws::Message::Text(text.into())).await;
     }
 
-    // Forward outbound messages (control → agent)
+    // Outbound pump
     let sink_task = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
             if ws_sink.send(ws::Message::Text(msg.into())).await.is_err() {
@@ -185,7 +139,7 @@ async fn handle_agent_socket(
         }
     });
 
-    // Process inbound messages (agent → control)
+    // Inbound pump
     let state2 = state.clone();
     while let Some(Ok(msg)) = ws_stream.next().await {
         if let ws::Message::Text(text) = msg {
@@ -195,34 +149,21 @@ async fn handle_agent_socket(
         }
     }
 
-    // Cleanup on disconnect
+    // Cleanup
     sink_task.abort();
     state.agents.unregister(&agent_id).await;
     if let Ok(client) = state.db.get().await {
         let _ = crate::db::agents::update_status(&client, &agent_id, "offline").await;
-        // Fail any jobs that were running/assigned on this agent (orphan cleanup)
-        match client
+        // Fail orphaned runs that were running on this agent.
+        let _ = client
             .execute(
-                "UPDATE job SET status = 'failed',
+                "UPDATE test_run SET status = 'failed',
                         error_message = 'Agent disconnected during execution',
                         finished_at = now()
-                 WHERE agent_id = $1 AND status IN ('running', 'assigned')",
+                 WHERE tester_id = $1 AND status IN ('running', 'queued')",
                 &[&agent_id],
             )
-            .await
-        {
-            Ok(count) if count > 0 => {
-                tracing::warn!(
-                    agent_id = %agent_id,
-                    orphaned_jobs = count,
-                    "Failed orphaned jobs due to agent disconnect"
-                );
-            }
-            Err(e) => {
-                tracing::error!(agent_id = %agent_id, error = %e, "Failed to clean up orphaned jobs");
-            }
-            _ => {}
-        }
+            .await;
     }
     let _ = state.events_tx.send(DashboardEvent::AgentStatus {
         agent_id,
@@ -234,286 +175,130 @@ async fn handle_agent_socket(
 
 async fn handle_agent_message(state: &Arc<AppState>, agent_id: Uuid, msg: AgentMessage) {
     match msg {
+        // ── v2 message handlers ─────────────────────────────────────────
         AgentMessage::Heartbeat { version, .. } => {
-            tracing::trace!(agent_id = %agent_id, ?version, "Heartbeat received");
+            tracing::trace!(agent_id = %agent_id, ?version, "v2 heartbeat");
             if let Ok(client) = state.db.get().await {
                 let _ = crate::db::agents::update_heartbeat(&client, &agent_id, version.as_deref())
                     .await;
             }
         }
-        AgentMessage::JobAck { job_id } => {
-            let correlation_id = job_id.to_string();
-            tracing::info!(correlation_id, agent_id = %agent_id, "Job ACK — setting status to running");
-            match job_assigned_to_agent(state, &job_id, agent_id).await {
-                Ok(true) => {}
-                Ok(false) => {
-                    tracing::error!(correlation_id, agent_id = %agent_id, "Rejecting JobAck for unassigned job");
-                    return;
-                }
-                Err(e) => {
-                    tracing::error!(correlation_id, agent_id = %agent_id, error = %e, "Failed to authorize JobAck");
-                    return;
-                }
-            }
+        AgentMessage::RunStarted { run_id, started_at } => {
+            tracing::info!(run_id = %run_id, agent_id = %agent_id, "RunStarted");
             if let Ok(client) = state.db.get().await {
-                if let Err(e) = crate::db::jobs::update_status(&client, &job_id, "running").await {
-                    tracing::error!(correlation_id, error = %e, "Failed to update job status to running");
-                }
+                let _ =
+                    crate::db::test_runs::update_status(&client, &run_id, RunStatus::Running).await;
             }
             let _ = state.events_tx.send(DashboardEvent::JobUpdate {
-                job_id,
+                job_id: run_id,
                 status: "running".into(),
                 agent_id: Some(agent_id),
-                started_at: Some(chrono::Utc::now()),
+                started_at: Some(started_at),
                 finished_at: None,
             });
         }
-        AgentMessage::AttemptResult { job_id, attempt } => {
-            let correlation_id = job_id.to_string();
-            match job_assigned_to_agent(state, &job_id, agent_id).await {
-                Ok(true) => {}
-                Ok(false) => {
-                    tracing::error!(correlation_id, agent_id = %agent_id, "Rejecting AttemptResult for unassigned job");
-                    return;
-                }
-                Err(e) => {
-                    tracing::error!(correlation_id, agent_id = %agent_id, error = %e, "Failed to authorize AttemptResult");
-                    return;
-                }
-            }
-            tracing::info!(
-                correlation_id,
-                seq = attempt.sequence_num,
-                protocol = %attempt.protocol,
-                success = attempt.success,
-                "Attempt result received — broadcasting to browsers"
-            );
-            let _ = state
-                .events_tx
-                .send(DashboardEvent::AttemptResult { job_id, attempt });
-        }
-        AgentMessage::JobComplete { job_id, run } => {
-            let correlation_id = job_id.to_string();
-            let run_id = run.run_id;
-            let success_count = run.success_count();
-            let failure_count = run.failure_count();
-
-            match job_assigned_to_agent(state, &job_id, agent_id).await {
-                Ok(true) => {}
-                Ok(false) => {
-                    tracing::error!(correlation_id, agent_id = %agent_id, "Rejecting JobComplete for unassigned job");
-                    return;
-                }
-                Err(e) => {
-                    tracing::error!(correlation_id, agent_id = %agent_id, error = %e, "Failed to authorize JobComplete");
-                    return;
-                }
-            }
-
-            tracing::info!(
-                correlation_id,
-                run_id = %run_id,
-                success = success_count,
-                failures = failure_count,
-                attempts = run.attempts.len(),
-                "Job complete — persisting results"
-            );
-
-            // Set run_id BEFORE status so the frontend never sees completed+null run_id
+        AgentMessage::RunProgress {
+            run_id,
+            success,
+            failure,
+        } => {
+            tracing::trace!(run_id = %run_id, success, failure, "RunProgress");
             if let Ok(client) = state.db.get().await {
-                if let Err(e) = crate::db::jobs::set_run_id(&client, &job_id, &run_id).await {
-                    tracing::error!(correlation_id, error = %e, "Failed to set run_id on job");
-                }
-                if let Err(e) = crate::db::jobs::update_status(&client, &job_id, "completed").await
-                {
-                    tracing::error!(correlation_id, error = %e, "Failed to update job status to completed");
+                let _ =
+                    crate::db::test_runs::update_counts(&client, &run_id, success, failure).await;
+            }
+        }
+        AgentMessage::AttemptEvent { run_id, attempt } => {
+            tracing::trace!(
+                run_id = %run_id,
+                seq = attempt.sequence_num,
+                "AttemptEvent"
+            );
+            let _ = state.events_tx.send(DashboardEvent::AttemptResult {
+                job_id: run_id,
+                attempt,
+            });
+        }
+        AgentMessage::RunFinished {
+            run_id,
+            status,
+            artifact,
+        } => {
+            tracing::info!(run_id = %run_id, ?status, has_artifact = artifact.is_some(), "RunFinished");
+            if let Ok(client) = state.db.get().await {
+                let _ = crate::db::test_runs::update_status(&client, &run_id, status).await;
+
+                // Persist the benchmark artifact if present.
+                if let Some(art) = artifact {
+                    let new_art = crate::db::benchmark_artifacts::NewBenchmarkArtifact {
+                        test_run_id: &run_id,
+                        environment: &art.environment,
+                        methodology: &art.methodology,
+                        launches: &art.launches,
+                        cases: &art.cases,
+                        samples: art.samples.as_ref(),
+                        summaries: &art.summaries,
+                        data_quality: &art.data_quality,
+                    };
+                    match crate::db::benchmark_artifacts::create(&client, &new_art).await {
+                        Ok(saved) => {
+                            tracing::info!(run_id = %run_id, artifact_id = %saved.id, "artifact persisted");
+                        }
+                        Err(e) => {
+                            tracing::error!(run_id = %run_id, error = %e, "failed to persist artifact");
+                        }
+                    }
                 }
             }
 
-            // Persist the TestRun via networker-tester's DB layer
-            let db_url = &state.database_url;
-            if !db_url.is_empty() {
-                tracing::info!(
-                    correlation_id,
-                    "Saving TestRun to database via networker-tester backend"
-                );
-                match networker_tester::output::db::connect(db_url).await {
-                    Ok(backend) => {
-                        // Run migration to ensure TestRun table exists
-                        if let Err(e) = backend.migrate().await {
-                            tracing::error!(correlation_id, error = %e, "DB migration failed");
-                        }
-                        if let Err(e) = backend.save(&run).await {
-                            tracing::error!(correlation_id, error = %e, "Failed to save TestRun to database");
-                        } else {
-                            tracing::info!(correlation_id, run_id = %run_id, "TestRun saved to database");
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!(correlation_id, error = %e, "Failed to connect to DB for run save")
-                    }
+            // Read the final run state for the complete event.
+            let (success_count, failure_count) = if let Ok(client) = state.db.get().await {
+                if let Ok(Some(r)) = crate::db::test_runs::get(&client, &run_id).await {
+                    (r.success_count as usize, r.failure_count as usize)
+                } else {
+                    (0, 0)
                 }
             } else {
-                tracing::warn!(
-                    correlation_id,
-                    "DASHBOARD_DB_URL not set — skipping TestRun persistence"
-                );
-            }
-
+                (0, 0)
+            };
             let _ = state.events_tx.send(DashboardEvent::JobComplete {
-                job_id,
+                job_id: run_id,
                 run_id,
                 success_count,
                 failure_count,
             });
-            tracing::info!(correlation_id, "JobComplete event broadcast to browsers");
         }
-        AgentMessage::TlsProfileComplete { job_id, profile } => {
-            let correlation_id = job_id.to_string();
-
-            tracing::info!(correlation_id, agent_id = %agent_id, host = %profile.target.host, port = profile.target.port, "TLS profile complete — persisting result");
-
-            let mut project_id = None;
-            let mut authorized = false;
-            let pooled_client = match state.db.get().await {
-                Ok(client) => Some(client),
-                Err(e) => {
-                    tracing::warn!(correlation_id, agent_id = %agent_id, error = %e, "DB pool unavailable in TlsProfileComplete — project linkage/status updates may be lost");
-                    None
-                }
-            };
-            if let Some(client) = pooled_client.as_ref() {
-                if let Some(job) = crate::db::jobs::get(client, &job_id).await.ok().flatten() {
-                    project_id = job.project_id;
-                    authorized = job.agent_id == Some(agent_id);
-                }
+        AgentMessage::Error { run_id, message } => {
+            tracing::error!(?run_id, error = %message, "Agent error");
+            if let (Some(rid), Ok(client)) = (run_id, state.db.get().await) {
+                let _ = crate::db::test_runs::set_error(&client, &rid, &message).await;
+                let _ = state.events_tx.send(DashboardEvent::JobUpdate {
+                    job_id: rid,
+                    status: "failed".into(),
+                    agent_id: Some(agent_id),
+                    started_at: None,
+                    finished_at: Some(chrono::Utc::now()),
+                });
             }
-
-            if !authorized {
-                tracing::error!(correlation_id, agent_id = %agent_id, "Rejecting TLS profile completion for unassigned job");
-                return;
-            }
-
-            if let Err(e) = validate_tls_profile_size(&profile) {
-                tracing::error!(correlation_id, agent_id = %agent_id, error = %e, "Rejecting oversized TLS profile payload");
-                return;
-            }
-
-            if let Some(client) = pooled_client.as_ref() {
-                if let Err(e) = crate::db::jobs::update_status(client, &job_id, "completed").await {
-                    tracing::error!(correlation_id, error = %e, "Failed to update TLS profile job status to completed");
-                }
-            }
-
-            let db_url = &state.database_url;
-            if !db_url.is_empty() {
-                match networker_tester::output::db::connect(db_url).await {
-                    Ok(backend) => {
-                        let mut migrated = state.tls_profile_db_migrated.lock().await;
-                        if !*migrated {
-                            if let Err(e) = backend.migrate().await {
-                                tracing::error!(correlation_id, error = %e, "DB migration failed");
-                            } else {
-                                *migrated = true;
-                            }
-                        }
-                        drop(migrated);
-                        match backend
-                            .save_tls_profile(&profile, project_id.as_deref())
-                            .await
-                        {
-                            Ok(tls_profile_run_id) => {
-                                if let Some(client) = pooled_client.as_ref() {
-                                    if let Err(e) = crate::db::jobs::set_tls_profile_run_id(
-                                        client,
-                                        &job_id,
-                                        &tls_profile_run_id,
-                                    )
-                                    .await
-                                    {
-                                        tracing::error!(correlation_id, error = %e, "Failed to link TLS profile run to job");
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                tracing::error!(correlation_id, error = %e, "Failed to save TLS profile to database");
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!(correlation_id, error = %e, "Failed to connect to DB for TLS profile save")
-                    }
-                }
-            }
-
-            let _ = state.events_tx.send(DashboardEvent::JobUpdate {
-                job_id,
-                status: "completed".into(),
-                agent_id: Some(agent_id),
-                started_at: None,
-                finished_at: Some(chrono::Utc::now()),
-            });
         }
-        AgentMessage::JobLog {
-            job_id,
-            line,
-            level,
-        } => {
-            // Forward tester log lines to browsers
-            let _ = state.events_tx.send(DashboardEvent::JobLog {
-                job_id,
-                line,
-                level,
-            });
-        }
-        AgentMessage::JobError { job_id, message } => {
-            let correlation_id = job_id.to_string();
-            match job_assigned_to_agent(state, &job_id, agent_id).await {
-                Ok(true) => {}
-                Ok(false) => {
-                    tracing::error!(correlation_id, agent_id = %agent_id, "Rejecting JobError for unassigned job");
-                    return;
-                }
-                Err(e) => {
-                    tracing::error!(correlation_id, agent_id = %agent_id, error = %e, "Failed to authorize JobError");
-                    return;
-                }
-            }
-            tracing::error!(correlation_id, error = %message, "Job error received from tester");
-            if let Ok(client) = state.db.get().await {
-                if let Err(e) = crate::db::jobs::set_error(&client, &job_id, &message).await {
-                    tracing::error!(correlation_id, error = %e, "Failed to set error on job");
-                }
-            }
-            let _ = state.events_tx.send(DashboardEvent::JobUpdate {
-                job_id,
-                status: "failed".into(),
-                agent_id: Some(agent_id),
-                started_at: None,
-                finished_at: Some(chrono::Utc::now()),
-            });
-        }
+
+        // ── command dispatch (unchanged) ────────────────────────────────
         AgentMessage::CommandLog(log) => {
-            let command_id = log.command_id;
             if let Err(e) = crate::agent_dispatch::handle_command_log(state, log).await {
-                tracing::error!(
-                    agent_id = %agent_id,
-                    command_id = %command_id,
-                    error = %e,
-                    "failed to ingest command log"
-                );
+                tracing::error!(agent_id = %agent_id, error = %e, "command log ingestion failed");
             }
         }
         AgentMessage::CommandResult(result) => {
-            let command_id = result.command_id;
             if let Err(e) = crate::agent_dispatch::handle_command_result(state, result).await {
-                tracing::error!(
-                    agent_id = %agent_id,
-                    command_id = %command_id,
-                    error = %e,
-                    "failed to ingest command result"
-                );
+                tracing::error!(agent_id = %agent_id, error = %e, "command result ingestion failed");
             }
+        }
+
+        // ── Legacy v1 variants — ignored ────────────────────────────────
+        // These are kept in the `AgentMessage` enum for compile compat
+        // with the Agent C transition period. Dashboard no longer handles them.
+        _ => {
+            tracing::trace!(agent_id = %agent_id, "Ignored legacy v1 agent message");
         }
     }
 }

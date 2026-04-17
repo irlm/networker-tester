@@ -1,0 +1,16 @@
+# Simple network connectivity test (TestConfig v2).
+#
+# Usage:
+#   networker-tester --config docs/examples/simple-test.yaml
+
+name: "cloudflare connectivity check"
+endpoint:
+  kind: network
+  host: www.cloudflare.com
+workload:
+  modes: [dns, tcp, tls, http2]
+  runs: 10
+  concurrency: 1
+  timeout_ms: 5000
+  payload_sizes: []
+  capture_mode: headers-only

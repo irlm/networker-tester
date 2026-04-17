@@ -74,7 +74,7 @@ export function ProjectSwitcher({ collapsed, connectionDot }: ProjectSwitcherPro
         {connectionDot}
         <span className="text-gray-600 text-xs ml-auto">{open ? '\u25B4' : '\u25BE'}</span>
       </button>
-      <p className="text-gray-600 text-xs mt-0.5">diagnostics</p>
+      <p className="text-gray-600 text-xs mt-0.5">probe · network · full stack · application</p>
 
       {open && (
         <div className="absolute top-full left-0 right-0 mt-1 bg-[var(--bg-sidebar)] border border-gray-800 rounded shadow-lg z-50 max-h-64 overflow-y-auto">

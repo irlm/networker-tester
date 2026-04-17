@@ -34,7 +34,7 @@ const CLOUD_SETUP_GUIDES: Record<string, { steps: string[]; fieldHelp: Record<st
       '4. Certificates & secrets \u2192 New client secret \u2192 copy the Value immediately (shown once!)',
       '5. Subscriptions \u2192 your subscription \u2192 Access control (IAM) \u2192 Add role assignment',
       '   \u2192 Role: "Virtual Machine Contributor" \u2192 Members: select your app \u2192 Review + assign',
-      '6. If testers need public IPs, also assign "Network Contributor" on the same subscription',
+      '6. If runners need public IPs, also assign "Network Contributor" on the same subscription',
       '7. Paste the three values below: Tenant ID, Client ID, Client Secret',
     ],
     fieldHelp: {
@@ -275,7 +275,7 @@ export function CloudAccountsPage() {
       `Clean orphaned cloud resources for "${name}"?\n\n` +
       `This will delete every VM, NIC, Public IP, and disk in this account ` +
       `that matches our naming conventions (tester-*, ab-*, nwk-ep-*) ` +
-      `and is NOT referenced by any tester or benchmark in the database.\n\n` +
+      `and is NOT referenced by any runner or benchmark in the database.\n\n` +
       `This action cannot be undone.`
     )) return;
     setCleaning(accountId);
@@ -407,7 +407,7 @@ export function CloudAccountsPage() {
                   placeholder={isEditing ? 'leave empty to keep existing' : 'networker-testers'}
                   className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 />
-                <p className="text-[10px] text-gray-600 mt-0.5">Resource group where tester VMs will be created. Must exist beforehand.</p>
+                <p className="text-[10px] text-gray-600 mt-0.5">Resource group where runner VMs will be created. Must exist beforehand.</p>
               </div>
               <div>
                 <label className="block text-xs text-gray-400 mb-1">Tenant ID</label>

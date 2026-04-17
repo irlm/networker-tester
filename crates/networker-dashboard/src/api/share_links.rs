@@ -54,13 +54,10 @@ async fn create_share_link(
         Err(_) => return (StatusCode::BAD_REQUEST, "Invalid JSON").into_response(),
     };
 
-    // Validate resource_type
-    if !["run", "job"].contains(&payload.resource_type.as_str()) {
-        return (
-            StatusCode::BAD_REQUEST,
-            "resource_type must be 'run' or 'job'",
-        )
-            .into_response();
+    // Validate resource_type. v2 only supports "run" (test_run) — the legacy
+    // "job" type was removed in v0.28 along with the polymorphic job table.
+    if payload.resource_type.as_str() != "run" {
+        return (StatusCode::BAD_REQUEST, "resource_type must be 'run'").into_response();
     }
 
     // Validate expires_in_days
@@ -305,39 +302,24 @@ async fn resolve_share_link(
         }
     };
 
-    // Fetch the resource based on type
+    // Fetch the resource based on type. v2 supports only "run" (test_run with
+    // optional benchmark_artifact). The legacy "job" type was removed.
     let resource = match link.resource_type.as_str() {
         "run" => {
             if let Some(ref rid) = link.resource_id {
-                match crate::db::runs::get_attempts(&client, rid).await {
-                    Ok(data) => data,
-                    Err(e) => {
-                        tracing::error!(error = %e, "Failed to fetch run for share link");
-                        return (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "Failed to fetch resource",
-                        )
-                            .into_response();
-                    }
-                }
-            } else {
-                return (StatusCode::NOT_FOUND, "Resource not found").into_response();
-            }
-        }
-        "job" => {
-            if let Some(ref rid) = link.resource_id {
-                match crate::db::jobs::get(&client, rid).await {
-                    Ok(Some(job)) => serde_json::to_value(job).unwrap_or_default(),
-                    Ok(None) => {
-                        return (StatusCode::NOT_FOUND, "Resource not found").into_response()
-                    }
-                    Err(e) => {
-                        tracing::error!(error = %e, "Failed to fetch job for share link");
-                        return (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "Failed to fetch resource",
-                        )
-                            .into_response();
+                let run = crate::db::test_runs::get(&client, rid)
+                    .await
+                    .map_err(|e| tracing::error!(error = %e, "load test_run for share"))
+                    .ok()
+                    .flatten();
+                let artifact = crate::db::benchmark_artifacts::get_for_run(&client, rid)
+                    .await
+                    .ok()
+                    .flatten();
+                match run {
+                    Some(r) => serde_json::json!({ "run": r, "artifact": artifact }),
+                    None => {
+                        return (StatusCode::NOT_FOUND, "Resource not found").into_response();
                     }
                 }
             } else {

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { testersApi, type TesterRow } from '../api/testers';
 import { api } from '../api/client';
+import { CloudAccountCombobox } from './wizard/CloudAccountCombobox';
+import type { CloudAccountSummary } from '../api/types';
 
 interface CreateTesterModalProps {
   projectId: string;
@@ -119,6 +121,7 @@ export function CreateTesterModal({
   onClose,
 }: CreateTesterModalProps) {
   const [cloud, setCloud] = useState(defaultCloud);
+  const [selectedAccountId, setSelectedAccountId] = useState<string>('');
   const [region, setRegion] = useState(defaultRegion);
   const [name, setName] = useState(defaultName);
   const [vmSize, setVmSize] = useState(defaultVmSize);
@@ -135,6 +138,7 @@ export function CreateTesterModal({
   const [autoProbeEnabled, setAutoProbeEnabled] = useState(false);
 
   const [availableClouds, setAvailableClouds] = useState<string[]>([]);
+  const [cloudAccounts, setCloudAccounts] = useState<CloudAccountSummary[]>([]);
   const [existingNames, setExistingNames] = useState<Set<string>>(new Set());
   const [regions, setRegions] = useState<string[]>([]);
   const [stage, setStage] = useState<Stage>('form');
@@ -154,27 +158,41 @@ export function CreateTesterModal({
   useEffect(() => {
     let cancelled = false;
     Promise.all([
-      api.getCloudConnections(projectId).catch(() => []),
       api.getCloudAccounts(projectId).catch(() => []),
       testersApi.listTesters(projectId).catch(() => []),
-    ]).then(([conns, accts, testers]) => {
+    ]).then(([accts, testers]) => {
       if (cancelled) return;
-      const connsArr = Array.isArray(conns) ? conns : [];
       const acctsArr = Array.isArray(accts) ? accts : [];
       const testersArr = Array.isArray(testers) ? testers : [];
-      const fromConns = connsArr
-        .filter((c: { status: string }) => c.status === 'active')
-        .map((c: { provider: string }) => c.provider);
-      const fromAccts = acctsArr
-        .filter((a: { status: string }) => a.status === 'active')
-        .map((a: { provider: string }) => a.provider);
-      const providers = [...new Set([...fromConns, ...fromAccts])] as string[];
+      // Sort: active first, then by provider + name
+      acctsArr.sort((a: { status: string; provider: string; name: string }, b: { status: string; provider: string; name: string }) => {
+        if (a.status === 'active' && b.status !== 'active') return -1;
+        if (a.status !== 'active' && b.status === 'active') return 1;
+        const pc = a.provider.localeCompare(b.provider);
+        return pc !== 0 ? pc : a.name.localeCompare(b.name);
+      });
+      setCloudAccounts(acctsArr);
+      const providers = [...new Set(acctsArr.map((a: { provider: string }) => a.provider))] as string[];
       setAvailableClouds(providers.length > 0 ? providers : ['azure']);
       setExistingNames(new Set(testersArr.map((t: { name: string }) => t.name)));
-      // If current cloud not in available list, switch to first available
-      if (providers.length > 0 && !providers.includes(cloud)) {
+      // Auto-select first account and set provider accordingly
+      if (acctsArr.length > 0) {
+        const first = acctsArr[0];
+        setSelectedAccountId(first.account_id);
+        setCloud(first.provider);
+        setVmSize(DEFAULT_VM_SIZE[first.provider] || '');
+        setRegion('');
+      } else if (providers.length > 0 && !providers.includes(cloud)) {
         setCloud(providers[0]);
-        setVmSize(DEFAULT_VM_SIZE[providers[0]] || providers[0]);
+        setVmSize(DEFAULT_VM_SIZE[providers[0]] || '');
+      }
+      // Re-validate stale accounts (> 10 min)
+      const tenMinAgo = Date.now() - 10 * 60 * 1000;
+      for (const acct of acctsArr) {
+        const lastVal = acct.last_validated ? new Date(acct.last_validated).getTime() : 0;
+        if (lastVal < tenMinAgo) {
+          api.validateCloudAccount(projectId, acct.account_id).catch(() => {});
+        }
       }
     });
     return () => { cancelled = true; };
@@ -240,7 +258,7 @@ export function CreateTesterModal({
           return;
         }
         if (row.power_state === 'error') {
-          setError(row.status_message ?? 'Tester failed to provision');
+          setError(row.status_message ?? 'Runner failed to provision');
           setStage('error');
           return;
         }
@@ -287,11 +305,11 @@ export function CreateTesterModal({
       if (row.power_state === 'running' && row.allocation === 'idle') {
         onCreated(row.tester_id);
       } else if (row.power_state === 'error') {
-        setError(row.status_message ?? 'Tester failed to provision');
+        setError(row.status_message ?? 'Runner failed to provision');
         setStage('error');
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create tester');
+      setError(err instanceof Error ? err.message : 'Failed to create runner');
       setStage('error');
     }
   };
@@ -315,7 +333,7 @@ export function CreateTesterModal({
         <div className="p-4 md:p-6">
           <div className="flex items-center justify-between mb-6">
             <h3 id={titleId} className="text-lg font-bold text-gray-100">
-              Create Tester
+              Create Runner
             </h3>
             <button
               type="button"
@@ -354,7 +372,7 @@ export function CreateTesterModal({
               </div>
               <p className="text-xs text-gray-500">
                 This usually takes 2-4 minutes. You can close this dialog; the
-                tester will continue provisioning in the background.
+                runner will continue provisioning in the background.
               </p>
               <div className="flex justify-end">
                 <button
@@ -368,28 +386,21 @@ export function CreateTesterModal({
             </div>
           ) : (
             <form onSubmit={handleSubmit} className="space-y-4">
-              {/* Cloud */}
+
+              {/* Cloud Account */}
               <div>
-                <label htmlFor="tester-cloud" className="block text-xs text-gray-400 mb-1">
-                  Cloud
-                </label>
-                <select
-                  id="tester-cloud"
-                  value={cloud}
-                  onChange={(e) => {
-                    const newCloud = e.target.value;
-                    setCloud(newCloud);
-                    setVmSize(DEFAULT_VM_SIZE[newCloud] || '');
+                <label className="block text-xs text-gray-400 mb-1">Cloud Account</label>
+                <CloudAccountCombobox
+                  projectId={projectId}
+                  cloudAccounts={cloudAccounts}
+                  selectedAccountId={selectedAccountId}
+                  onSelect={(acct) => {
+                    setSelectedAccountId(acct.account_id);
+                    setCloud(acct.provider);
+                    setVmSize(DEFAULT_VM_SIZE[acct.provider] || '');
                     setRegion('');
                   }}
-                  className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
-                >
-                  {availableClouds.map((c) => (
-                    <option key={c} value={c}>
-                      {c === 'azure' ? 'Azure' : c === 'aws' ? 'AWS' : c === 'gcp' ? 'GCP' : c}
-                    </option>
-                  ))}
-                </select>
+                />
               </div>
 
               {/* Region */}
@@ -522,7 +533,7 @@ export function CreateTesterModal({
                   </select>
                 </div>
                 <p className="text-xs text-gray-500">
-                  Tester stops automatically each day at this local time
+                  Runner stops automatically each day at this local time
                   (region timezone). Costs drop by roughly 2/3 with an overnight
                   schedule.
                 </p>
@@ -537,10 +548,10 @@ export function CreateTesterModal({
                     onChange={(e) => setAutoProbeEnabled(e.target.checked)}
                     className="accent-cyan-500"
                   />
-                  Auto-probe on error
+                  Auto-recover on error
                 </label>
-                <p className="text-xs text-gray-500 mt-1" title="When enabled, the dashboard probes this tester's SSH port on a short interval whenever it enters the error state and auto-clears transient faults.">
-                  When enabled, the dashboard probes this tester automatically if
+                <p className="text-xs text-gray-500 mt-1" title="When enabled, the dashboard probes this runner's SSH port on a short interval whenever it enters the error state and auto-clears transient faults.">
+                  When enabled, the dashboard probes this runner automatically if
                   it enters an error state. Off by default — you'll be asked to
                   run a probe manually from the detail drawer.
                 </p>
@@ -559,7 +570,7 @@ export function CreateTesterModal({
                   disabled={stage === 'creating' || !name || !region}
                   className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors disabled:opacity-50"
                 >
-                  Create Tester
+                  Create Runner
                 </button>
               </div>
             </form>
