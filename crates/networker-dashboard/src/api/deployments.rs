@@ -186,7 +186,9 @@ async fn update_endpoint(
     tracing::info!(deployment_id = %deployment_id, "Starting endpoint update");
 
     // Spawn the update in background using the deploy runner
+    let semaphore = state.deploy_semaphore.clone();
     tokio::spawn(async move {
+        let _permit = semaphore.acquire().await.expect("semaphore closed");
         match crate::deploy::runner::run_deployment(
             deployment_id,
             &update_config,
@@ -291,7 +293,9 @@ async fn create_deployment_scoped(
     let events_tx = state.events_tx.clone();
     let db_pool = Arc::new(state.db.clone());
     let config = create_req.config.clone();
+    let semaphore = state.deploy_semaphore.clone();
     tokio::spawn(async move {
+        let _permit = semaphore.acquire().await.expect("semaphore closed");
         match crate::deploy::runner::run_deployment(deployment_id, &config, events_tx, db_pool)
             .await
         {
