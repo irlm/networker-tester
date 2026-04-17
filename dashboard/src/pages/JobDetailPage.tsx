@@ -71,6 +71,10 @@ const EMPTY_LOGS: { line: string; level: string }[] = [];
  */
 function ProbeTable({ attempts }: { attempts: LiveAttempt[] }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  // TanStack Virtual's useVirtualizer returns mutable callback references
+  // that React Compiler skips memoizing — the warning is informational only
+  // and this component still functions correctly.
+  // eslint-disable-next-line react-hooks/incompatible-library
   const rowVirtualizer = useVirtualizer({
     count: attempts.length,
     getScrollElement: () => scrollRef.current,

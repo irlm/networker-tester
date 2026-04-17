@@ -89,8 +89,9 @@ export function CloudAccountCombobox({
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
 
-  // ── Reset active index when filter changes ─────────────────────────────
-  useEffect(() => { setActiveIdx(0); }, [query]);
+  // Reset active index happens inline in the input onChange handler below —
+  // doing it via an effect on [query] would cause a cascading re-render and
+  // trips react-hooks/set-state-in-effect.
 
   // ── Scroll active item into view ───────────────────────────────────────
   useEffect(() => {
@@ -143,7 +144,7 @@ export function CloudAccountCombobox({
           value={open ? query : ''}
           placeholder={placeholder}
           onFocus={() => setOpen(true)}
-          onChange={e => { setQuery(e.target.value); setOpen(true); }}
+          onChange={e => { setQuery(e.target.value); setActiveIdx(0); setOpen(true); }}
           onKeyDown={onKeyDown}
           className={`w-full bg-[var(--bg-base)] border ${
             open ? 'border-cyan-500/60' : selectedAccountId ? 'border-gray-700' : 'border-yellow-500/40'
