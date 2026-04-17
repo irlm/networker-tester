@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.4] — 2026-04-17
+
+### Fixed
+- **URL Probe re-run 500.** `test_config` has `UNIQUE(project_id, name)` and the probe form always sends `Diag: <host> (<preset>)`, so the second click on the same host returned `POST /v2/test-configs` → 500 with an empty body and no toast. Two-part fix: `DiagnosticsPage` now reuses an existing config with the same name instead of creating a new one; the backend maps Postgres `23505 unique_violation` to `409 Conflict` instead of `500`, so future duplicate names surface a real error rather than silent breakage.
+
+---
+
 ## [0.28.3] — 2026-04-17
 
 ### Fixed

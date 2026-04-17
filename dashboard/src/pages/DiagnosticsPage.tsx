@@ -696,17 +696,31 @@ export function DiagnosticsPage() {
       };
       const config: TestConfigCreate = { name: configName, endpoint, workload };
 
-      const created = await api.createTestConfig(projectId, config);
-      const run = await api.launchTestConfig(created.id);
+      // `test_config` has UNIQUE (project_id, name), so re-running a diagnostic
+      // against the same host+preset must reuse the existing config rather than
+      // try (and fail) to create a duplicate. This also keeps the Watched URLs
+      // list grouped by host instead of exploding every click.
+      const existing = configs.find(c => c.name === configName);
+      let configId: string;
+      let createdOrExisting: TestConfig | TestConfigListItem;
+      if (existing) {
+        configId = existing.id;
+        createdOrExisting = existing;
+      } else {
+        const created = await api.createTestConfig(projectId, config);
+        configId = created.id;
+        createdOrExisting = created;
+      }
+      const run = await api.launchTestConfig(configId);
       addToast('success', `Diagnostic ${run.id.slice(0, 8)} launched for ${host}`);
 
       setPendingRunIds(prev => new Set(prev).add(run.id));
       setAllRuns(prev => [run, ...prev]);
 
-      // Update config details with the newly created config
+      // Update config details with the newly created / reused config
       setConfigDetails(prev => {
         const next = new Map(prev);
-        next.set(created.id, created);
+        next.set(configId, createdOrExisting as TestConfig);
         return next;
       });
     } catch (e) {

@@ -99,6 +99,20 @@ async fn create_handler(
     )
     .await
     .map_err(|e| {
+        // Surface UNIQUE(project_id, name) violations as 409 so the client
+        // can say "this name already exists" instead of a nebulous 500.
+        // Postgres error code 23505 == unique_violation.
+        if let Some(db) = e.downcast_ref::<tokio_postgres::Error>() {
+            if db
+                .as_db_error()
+                .map(|d| d.code().code())
+                .map(|c| c == "23505")
+                .unwrap_or(false)
+            {
+                tracing::warn!(name = %payload.name, "duplicate test_config name");
+                return StatusCode::CONFLICT;
+            }
+        }
         tracing::error!(error = %e, "create test_config failed");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
