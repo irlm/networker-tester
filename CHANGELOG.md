@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.7] — 2026-04-17
+
+### Fixed
+- **Rollup tag for v0.28.6.** CI Lint failed on main because I forgot to `cargo fmt` before committing the version-filter code, which meant Auto-tag & deploy skipped and the v0.28.6 content never shipped. This release is the same content formatted correctly.
+
+---
+
 ## [0.28.6] — 2026-04-17
 
 ### Fixed

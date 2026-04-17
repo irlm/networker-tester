@@ -122,7 +122,11 @@ fn parse_version(s: &str) -> (u32, u32, u32) {
     let trimmed = s.trim_start_matches('v');
     let mut parts = trimmed.split('.').map(|p| {
         // Strip any pre-release suffix after `-` before parsing.
-        p.split('-').next().unwrap_or("0").parse::<u32>().unwrap_or(0)
+        p.split('-')
+            .next()
+            .unwrap_or("0")
+            .parse::<u32>()
+            .unwrap_or(0)
     });
     (
         parts.next().unwrap_or(0),
