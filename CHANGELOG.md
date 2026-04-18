@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.8] — 2026-04-17
+
+### Reverted
+- **Dispatcher version filter** introduced in v0.28.6/v0.28.7. Prod went unreachable ~10 min after the v0.28.7 deploy (Health check passed at deploy time, attempt 10). Logs not yet collected, but the new code path was the only backend change — the DB query added to every dispatch tick is the most plausible destabiliser. Reverting backend files to the v0.28.5 snapshot and shipping fresh so prod can recover without waiting for a root-cause diagnosis.
+- Frontend **runner selector on URL Probe** (added in v0.28.6) is retained — it's pure UI and unrelated to the crash.
+
+---
+
 ## [0.28.7] — 2026-04-17
 
 ### Fixed
