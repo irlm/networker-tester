@@ -70,69 +70,6 @@ impl AgentHub {
         let agents = self.agents.read().await;
         agents.keys().next().copied()
     }
-
-    /// Pick any online agent whose reported `version` is ≥ `min_version`.
-    ///
-    /// Agents that haven't reported a version yet (NULL in DB, usually because
-    /// they haven't sent their first heartbeat) are treated as incompatible —
-    /// dispatching to them risks the exact silent-drop bug we're guarding
-    /// against, and the redispatcher will try again shortly.
-    ///
-    /// `min_version` is the minimum semver x.y.z string. Comparison is a
-    /// dotted-triple tuple compare — sufficient for the narrow range we ship
-    /// and avoids adding a full semver crate dependency for one call site.
-    pub async fn any_online_agent_min_version(
-        &self,
-        client: &tokio_postgres::Client,
-        min_version: &str,
-    ) -> Option<Uuid> {
-        let online = self.agents.read().await;
-        if online.is_empty() {
-            return None;
-        }
-        let ids: Vec<Uuid> = online.keys().copied().collect();
-        drop(online);
-        let min = parse_version(min_version);
-        let rows = match client
-            .query(
-                "SELECT agent_id, version FROM agent WHERE agent_id = ANY($1)",
-                &[&ids],
-            )
-            .await
-        {
-            Ok(r) => r,
-            Err(_) => return None,
-        };
-        for row in rows {
-            let id: Uuid = row.get("agent_id");
-            let ver: Option<String> = row.get("version");
-            let Some(v) = ver else { continue };
-            if parse_version(&v) >= min {
-                return Some(id);
-            }
-        }
-        None
-    }
-}
-
-/// Parse a dotted-triple version string into a tuple. Unknown or malformed
-/// parts fall back to 0 — intentionally permissive so we never panic on a
-/// weird value the agent reported.
-fn parse_version(s: &str) -> (u32, u32, u32) {
-    let trimmed = s.trim_start_matches('v');
-    let mut parts = trimmed.split('.').map(|p| {
-        // Strip any pre-release suffix after `-` before parsing.
-        p.split('-')
-            .next()
-            .unwrap_or("0")
-            .parse::<u32>()
-            .unwrap_or(0)
-    });
-    (
-        parts.next().unwrap_or(0),
-        parts.next().unwrap_or(0),
-        parts.next().unwrap_or(0),
-    )
 }
 
 #[derive(Deserialize)]
