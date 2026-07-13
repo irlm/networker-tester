@@ -11,15 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.28.11] — 2026-07-13
+## [0.28.12] — 2026-07-13
 
 ### Fixed
-- **v0.28.10 prod deploy rollback.** `perf_log` ensure_schema ran
+- **v0.28.10/v0.28.11 prod deploy rollbacks.** `perf_log` ensure_schema ran
   `CREATE INDEX IF NOT EXISTS` at startup, which requires table ownership
   even when idempotent — on deployments where V023 created the table under
   a different role, startup failed ("must be owner of table perf_log") and
   the deploy health check rolled back. The check now skips all DDL when the
   table exists and is warn-and-continue instead of fatal.
+
+---
+
+## [0.28.11] — 2026-07-13
 
 ### Added
 - **Throughput + server-info routes through every proxy stack.** The Full
