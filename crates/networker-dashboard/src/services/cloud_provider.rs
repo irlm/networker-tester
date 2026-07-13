@@ -458,7 +458,7 @@ impl AzureProvider {
             Some(format!(
                 "Nx!{}{}aZ9",
                 uuid::Uuid::new_v4().simple(),
-                &config.name.chars().take(4).collect::<String>()
+                config.name.chars().take(4).collect::<String>()
             ))
         } else {
             None
