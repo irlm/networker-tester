@@ -18,6 +18,17 @@ Second live-Azure E2E pass, this time from a completely fresh database
 connected through the public URL automatically.
 
 ### Fixed
+- **Full Stack / Application benchmark deploys failed with "unknown provider
+  'auto'".** Auto-provisioned Pending endpoints emitted `provider: "auto"`,
+  which install.sh (no DB access) can't resolve. The dispatcher now looks up
+  the concrete provider from the cloud account and emits the per-provider
+  endpoint block (azure/aws/gcp) the deploy wizard produces. Verified: the
+  auto-provisioning deployment completed against Azure.
+- **Throughput benchmark modes crashed the whole run.** `download`/`upload`
+  hard-require `--payload-sizes`; without it the tester exits 1 with empty
+  stdout and the run fails with "unparseable JSON: EOF". The agent now
+  injects a 64 KB default when a throughput mode is selected with no payload
+  sizes, so the run completes instead of crashing.
 - **Network Test against a deployed target failed with 0 attempts.** The UI
   stores the deployment id in `EndpointRef::Proxy`, but neither the dashboard
   nor the agent ever resolved it — every dispatch died with "Unsupported
