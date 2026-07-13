@@ -368,16 +368,19 @@ async fn get_queue(
         .map_err(|e| db_error("get_queue tester lookup", e))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Tester not found".to_string()))?;
 
-    // Pull running + queued benchmark_config rows bound to this tester.
+    // Pull running + queued test_run rows bound to this tester. (The legacy
+    // benchmark_config table was removed in the v0.28 unification — see
+    // TestConfig; querying it 500'd every queue view on fresh databases.)
     let rows = client
         .query(
-            "SELECT config_id, name, status, queued_at, started_at \
-             FROM benchmark_config \
-             WHERE tester_id = $1 AND status IN ('running', 'queued') \
+            "SELECT r.test_config_id AS config_id, c.name, r.status, \
+                    r.created_at AS queued_at, r.started_at \
+             FROM test_run r \
+             JOIN test_config c ON c.id = r.test_config_id \
+             WHERE r.tester_id = $1 AND r.status IN ('running', 'queued') \
              ORDER BY \
-               CASE status WHEN 'running' THEN 0 ELSE 1 END, \
-               queued_at ASC NULLS LAST, \
-               created_at ASC",
+               CASE r.status WHEN 'running' THEN 0 ELSE 1 END, \
+               r.created_at ASC",
             &[&tester_id],
         )
         .await
@@ -793,8 +796,8 @@ async fn stop_tester(
 
     let queue_count: i64 = client
         .query_one(
-            "SELECT COUNT(*)::bigint FROM benchmark_config \
-             WHERE tester_id = $1 AND status IN ('queued','pending','running')",
+            "SELECT COUNT(*)::bigint FROM test_run \
+             WHERE tester_id = $1 AND status IN ('queued','provisioning','running')",
             &[&tester_id],
         )
         .await
@@ -884,8 +887,8 @@ async fn upgrade_tester(
 
     let queue_count: i64 = client
         .query_one(
-            "SELECT COUNT(*)::bigint FROM benchmark_config \
-             WHERE tester_id = $1 AND status IN ('queued','pending','running')",
+            "SELECT COUNT(*)::bigint FROM test_run \
+             WHERE tester_id = $1 AND status IN ('queued','provisioning','running')",
             &[&tester_id],
         )
         .await
@@ -964,8 +967,8 @@ async fn delete_tester(
 
     let queue_count: i64 = client
         .query_one(
-            "SELECT COUNT(*)::bigint FROM benchmark_config \
-             WHERE tester_id = $1 AND status IN ('queued','pending','running')",
+            "SELECT COUNT(*)::bigint FROM test_run \
+             WHERE tester_id = $1 AND status IN ('queued','provisioning','running')",
             &[&tester_id],
         )
         .await
