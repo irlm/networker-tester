@@ -1992,8 +1992,35 @@ pub async fn run(client: &Client) -> anyhow::Result<()> {
         tracing::info!("V038 migration complete");
     }
 
+    // V039: Tester → cloud account binding, so provisioning uses the account
+    // the user actually selected instead of "oldest active for provider".
+    let row = client
+        .query_opt("SELECT version FROM _migrations WHERE version = 39", &[])
+        .await?;
+
+    if row.is_none() {
+        tracing::info!("Applying V039: project_tester.cloud_account_id...");
+        client.batch_execute(V039_TESTER_CLOUD_ACCOUNT).await?;
+        client
+            .execute(
+                "INSERT INTO _migrations (version) VALUES (39) ON CONFLICT DO NOTHING",
+                &[],
+            )
+            .await?;
+        tracing::info!("V039 migration complete");
+    }
+
     Ok(())
 }
+
+/// V039: Bind a tester to the specific cloud account chosen at creation.
+/// ON DELETE SET NULL — deleting an account must not orphan-break testers;
+/// provisioning falls back to the oldest-active-account path when NULL.
+const V039_TESTER_CLOUD_ACCOUNT: &str = r#"
+ALTER TABLE project_tester
+    ADD COLUMN IF NOT EXISTS cloud_account_id UUID
+        REFERENCES cloud_account(account_id) ON DELETE SET NULL;
+"#;
 
 /// V031: Add OS/arch/kernel info to project_tester so the UI can show what
 /// distro/version the tester VM is running.

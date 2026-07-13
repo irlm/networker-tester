@@ -23,7 +23,7 @@ pub const SELECT_COLUMNS: &str = "tester_id, project_id, name, cloud, region, vm
     auto_probe_enabled, \
     last_used_at, avg_benchmark_duration_seconds, benchmark_run_count, \
     created_by, created_at, updated_at, \
-    cloud_connection_id, \
+    cloud_connection_id, cloud_account_id, \
     requested_os, requested_variant, \
     os_distro, os_version, os_variant, os_arch, os_kernel";
 
@@ -59,6 +59,9 @@ pub struct ProjectTesterRow {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub cloud_connection_id: Option<Uuid>,
+    /// Specific cloud account chosen at creation time. When set, provisioning
+    /// uses exactly this account instead of "oldest active for provider".
+    pub cloud_account_id: Option<Uuid>,
     pub requested_os: Option<String>,
     pub requested_variant: Option<String>,
     pub os_distro: Option<String>,
@@ -104,6 +107,7 @@ impl ProjectTesterRow {
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
             cloud_connection_id: row.get("cloud_connection_id"),
+            cloud_account_id: row.get("cloud_account_id"),
             requested_os: row.get("requested_os"),
             requested_variant: row.get("requested_variant"),
             os_distro: row.get("os_distro"),
@@ -130,6 +134,11 @@ pub struct CreateTesterInput {
     pub auto_probe_enabled: Option<bool>,
     #[serde(default)]
     pub cloud_connection_id: Option<Uuid>,
+    /// Specific `cloud_account` picked in the UI. Optional for backwards
+    /// compatibility — when absent, provisioning falls back to the oldest
+    /// active account for the provider.
+    #[serde(default)]
+    pub cloud_account_id: Option<Uuid>,
     /// e.g. "ubuntu-24.04", "ubuntu-22.04", "debian-12", "windows-2022", "windows-11"
     #[serde(default)]
     pub requested_os: Option<String>,
@@ -185,6 +194,7 @@ pub async fn insert(
              auto_probe_enabled, \
              created_by, \
              cloud_connection_id, \
+             cloud_account_id, \
              requested_os, \
              requested_variant \
          ) VALUES ( \
@@ -194,8 +204,9 @@ pub async fn insert(
              COALESCE($7, FALSE), \
              $8, \
              $9, \
-             COALESCE($10, 'ubuntu-24.04'), \
-             COALESCE($11, 'server') \
+             $10, \
+             COALESCE($11, 'ubuntu-24.04'), \
+             COALESCE($12, 'server') \
          ) \
          RETURNING {SELECT_COLUMNS}"
     );
@@ -213,6 +224,7 @@ pub async fn insert(
                 &input.auto_probe_enabled,
                 created_by,
                 &input.cloud_connection_id,
+                &input.cloud_account_id,
                 &input.requested_os,
                 &input.requested_variant,
             ],

@@ -187,34 +187,58 @@ fn generate_temp_password() -> String {
 ///
 /// 1. Try `DASHBOARD_CREDENTIAL_KEY_FILE` (explicit path).
 /// 2. Try the default path `/var/lib/networker/credential.key`.
-/// 3. If no file exists, generate a random 32-byte key and persist it.
+/// 3. Try the per-user fallback `~/.config/networker/credential.key` —
+///    `/var/lib` is not writable for non-root users (always true on macOS
+///    dev machines); without this fallback the key silently regenerated on
+///    every restart, making ALL stored cloud-account credentials
+///    undecryptable (`aead::Error`) while accounts still showed "active".
+/// 4. If no file exists, generate a random 32-byte key and persist it to
+///    the first writable candidate path.
 ///
 /// The key file stores 64 hex characters (the same format as the env var).
 fn load_or_generate_credential_key() -> Option<[u8; 32]> {
     use rand::Rng;
 
-    let key_path = std::env::var("DASHBOARD_CREDENTIAL_KEY_FILE")
-        .unwrap_or_else(|_| "/var/lib/networker/credential.key".into());
-    let path = std::path::Path::new(&key_path);
+    // Candidate paths in priority order. An explicit env var wins outright;
+    // otherwise consider the system path first, then the per-user fallback.
+    let candidates: Vec<std::path::PathBuf> =
+        if let Ok(explicit) = std::env::var("DASHBOARD_CREDENTIAL_KEY_FILE") {
+            vec![explicit.into()]
+        } else {
+            let mut v = vec![std::path::PathBuf::from(
+                "/var/lib/networker/credential.key",
+            )];
+            if let Ok(home) = std::env::var("HOME") {
+                v.push(
+                    std::path::Path::new(&home)
+                        .join(".config")
+                        .join("networker")
+                        .join("credential.key"),
+                );
+            }
+            v
+        };
 
-    // Try to read an existing key file
-    if let Ok(contents) = std::fs::read_to_string(path) {
-        let hex_str = contents.trim();
-        if hex_str.len() == 64 {
-            if let Ok(bytes) = hex::decode(hex_str) {
-                if let Ok(key) = <[u8; 32]>::try_from(bytes) {
-                    eprintln!(
-                        "networker-dashboard: loaded credential key from {}",
-                        path.display()
-                    );
-                    return Some(key);
+    // Try to read an existing key file from any candidate.
+    for path in &candidates {
+        if let Ok(contents) = std::fs::read_to_string(path) {
+            let hex_str = contents.trim();
+            if hex_str.len() == 64 {
+                if let Ok(bytes) = hex::decode(hex_str) {
+                    if let Ok(key) = <[u8; 32]>::try_from(bytes) {
+                        eprintln!(
+                            "networker-dashboard: loaded credential key from {}",
+                            path.display()
+                        );
+                        return Some(key);
+                    }
                 }
             }
+            eprintln!(
+                "networker-dashboard: credential key file {} exists but is invalid (expected 64 hex chars), ignoring",
+                path.display()
+            );
         }
-        eprintln!(
-            "networker-dashboard: credential key file {} exists but is invalid (expected 64 hex chars), generating new key",
-            path.display()
-        );
     }
 
     // Generate a new random key
@@ -222,42 +246,38 @@ fn load_or_generate_credential_key() -> Option<[u8; 32]> {
     rand::rng().fill_bytes(&mut key);
     let hex_str = hex::encode(key);
 
-    // Persist to file — create parent directory if needed
-    if let Some(parent) = path.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            eprintln!(
-                "networker-dashboard: cannot create directory {}: {e} — \
-                 credential key will NOT persist across restarts. \
-                 Set DASHBOARD_CREDENTIAL_KEY env var to fix.",
-                parent.display()
-            );
-            return Some(key);
-        }
-    }
-
-    match std::fs::write(path, &hex_str) {
-        Ok(()) => {
-            // Restrict permissions (owner-only read/write)
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    // Persist to the first candidate we can actually write.
+    for path in &candidates {
+        if let Some(parent) = path.parent() {
+            if std::fs::create_dir_all(parent).is_err() {
+                continue;
             }
-            eprintln!(
-                "networker-dashboard: auto-generated credential key and saved to {} (chmod 600)",
-                path.display()
-            );
         }
-        Err(e) => {
-            eprintln!(
-                "networker-dashboard: cannot write credential key to {}: {e} — \
-                 credential key will NOT persist across restarts. \
-                 Set DASHBOARD_CREDENTIAL_KEY env var to fix.",
-                path.display()
-            );
+        match std::fs::write(path, &hex_str) {
+            Ok(()) => {
+                // Restrict permissions (owner-only read/write)
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+                }
+                eprintln!(
+                    "networker-dashboard: auto-generated credential key and saved to {} (chmod 600)",
+                    path.display()
+                );
+                return Some(key);
+            }
+            Err(_) => continue,
         }
     }
 
+    eprintln!(
+        "networker-dashboard: cannot write credential key to any of {:?} — \
+         credential key will NOT persist across restarts and stored cloud \
+         credentials will become undecryptable. \
+         Set DASHBOARD_CREDENTIAL_KEY env var to fix.",
+        candidates
+    );
     Some(key)
 }
 

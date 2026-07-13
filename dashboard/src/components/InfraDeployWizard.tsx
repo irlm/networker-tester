@@ -210,6 +210,7 @@ export function InfraDeployWizard({
           region,
           vm_size: vmSize,
           requested_os: os,
+          cloud_account_id: accountId || undefined,
           ...(autoShutdownEnabled ? { auto_shutdown_local_hour: autoShutdownHour } : {}),
         };
         const result = await testersApi.createTester(projectId, body);

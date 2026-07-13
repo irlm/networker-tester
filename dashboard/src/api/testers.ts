@@ -88,6 +88,7 @@ export type CreateTesterBody = {
   vm_size?: string;
   auto_shutdown_local_hour?: number;
   auto_probe_enabled?: boolean;
+  cloud_account_id?: string;
   requested_os?: string;
   requested_variant?: string;
 };

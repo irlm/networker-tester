@@ -368,16 +368,19 @@ async fn get_queue(
         .map_err(|e| db_error("get_queue tester lookup", e))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Tester not found".to_string()))?;
 
-    // Pull running + queued benchmark_config rows bound to this tester.
+    // Pull running + queued test_run rows bound to this tester. (The legacy
+    // benchmark_config table was removed in the v0.28 unification — see
+    // TestConfig; querying it 500'd every queue view on fresh databases.)
     let rows = client
         .query(
-            "SELECT config_id, name, status, queued_at, started_at \
-             FROM benchmark_config \
-             WHERE tester_id = $1 AND status IN ('running', 'queued') \
+            "SELECT r.test_config_id AS config_id, c.name, r.status, \
+                    r.created_at AS queued_at, r.started_at \
+             FROM test_run r \
+             JOIN test_config c ON c.id = r.test_config_id \
+             WHERE r.tester_id = $1 AND r.status IN ('running', 'queued') \
              ORDER BY \
-               CASE status WHEN 'running' THEN 0 ELSE 1 END, \
-               queued_at ASC NULLS LAST, \
-               created_at ASC",
+               CASE r.status WHEN 'running' THEN 0 ELSE 1 END, \
+               r.created_at ASC",
             &[&tester_id],
         )
         .await
@@ -499,6 +502,8 @@ struct CreateTesterBody {
     #[serde(default)]
     cloud_connection_id: Option<Uuid>,
     #[serde(default)]
+    cloud_account_id: Option<Uuid>,
+    #[serde(default)]
     requested_os: Option<String>,
     #[serde(default)]
     requested_variant: Option<String>,
@@ -514,6 +519,7 @@ impl From<CreateTesterBody> for CreateTesterInput {
             auto_shutdown_local_hour: b.auto_shutdown_local_hour,
             auto_probe_enabled: b.auto_probe_enabled,
             cloud_connection_id: b.cloud_connection_id,
+            cloud_account_id: b.cloud_account_id,
             requested_os: b.requested_os,
             requested_variant: b.requested_variant,
         }
@@ -622,6 +628,43 @@ async fn create_tester(
                 )
             },
         )?;
+    }
+
+    // Validate cloud_account if provided: must exist in this project, be
+    // active, and match the requested cloud provider.
+    if let Some(account_id) = body.cloud_account_id {
+        let acct_row = client
+            .query_opt(
+                "SELECT provider, status FROM cloud_account \
+                 WHERE account_id = $1 AND project_id = $2",
+                &[&account_id, &ctx.project_id],
+            )
+            .await
+            .map_err(|e| db_error("create_tester cloud_account lookup", e))?;
+        let acct_row = acct_row.ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                format!("cloud_account {account_id} not found in this project"),
+            )
+        })?;
+        let status: String = acct_row.get("status");
+        if status != "active" {
+            return Err((
+                StatusCode::CONFLICT,
+                format!("cloud_account {account_id} status is '{status}', expected 'active'"),
+            ));
+        }
+        let provider: String = acct_row.get("provider");
+        if provider != body.cloud {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "cloud_account {account_id} is a '{provider}' account but the \
+                     tester cloud is '{}'",
+                    body.cloud
+                ),
+            ));
+        }
     }
 
     let input: CreateTesterInput = body.into();
@@ -753,8 +796,8 @@ async fn stop_tester(
 
     let queue_count: i64 = client
         .query_one(
-            "SELECT COUNT(*)::bigint FROM benchmark_config \
-             WHERE tester_id = $1 AND status IN ('queued','pending','running')",
+            "SELECT COUNT(*)::bigint FROM test_run \
+             WHERE tester_id = $1 AND status IN ('queued','provisioning','running')",
             &[&tester_id],
         )
         .await
@@ -844,8 +887,8 @@ async fn upgrade_tester(
 
     let queue_count: i64 = client
         .query_one(
-            "SELECT COUNT(*)::bigint FROM benchmark_config \
-             WHERE tester_id = $1 AND status IN ('queued','pending','running')",
+            "SELECT COUNT(*)::bigint FROM test_run \
+             WHERE tester_id = $1 AND status IN ('queued','provisioning','running')",
             &[&tester_id],
         )
         .await
@@ -924,8 +967,8 @@ async fn delete_tester(
 
     let queue_count: i64 = client
         .query_one(
-            "SELECT COUNT(*)::bigint FROM benchmark_config \
-             WHERE tester_id = $1 AND status IN ('queued','pending','running')",
+            "SELECT COUNT(*)::bigint FROM test_run \
+             WHERE tester_id = $1 AND status IN ('queued','provisioning','running')",
             &[&tester_id],
         )
         .await
@@ -1507,15 +1550,35 @@ async fn provider_for_tester(
         return cloud_provider::CloudProvider::from_connection(&provider, &config);
     }
 
-    // 2. Cloud account (encrypted credentials) for this project + provider
-    let acct_row = client
-        .query_opt(
-            "SELECT credentials_enc, credentials_nonce FROM cloud_account \
-             WHERE project_id = $1 AND provider = $2 AND status = 'active' \
-             ORDER BY created_at ASC LIMIT 1",
-            &[&tester.project_id, &tester.cloud],
-        )
-        .await?;
+    // 2. Cloud account (encrypted credentials). Prefer the account explicitly
+    //    selected at creation time; fall back to the oldest active account
+    //    for this project + provider (pre-V039 rows have no binding).
+    let acct_row = if let Some(account_id) = tester.cloud_account_id {
+        let row = client
+            .query_opt(
+                "SELECT credentials_enc, credentials_nonce FROM cloud_account \
+                 WHERE account_id = $1 AND project_id = $2 AND status = 'active'",
+                &[&account_id, &tester.project_id],
+            )
+            .await?;
+        if row.is_none() {
+            anyhow::bail!(
+                "cloud account {account_id} selected for this tester is no longer \
+                 active or was removed — edit the tester or re-create it with a \
+                 valid account"
+            );
+        }
+        row
+    } else {
+        client
+            .query_opt(
+                "SELECT credentials_enc, credentials_nonce FROM cloud_account \
+                 WHERE project_id = $1 AND provider = $2 AND status = 'active' \
+                 ORDER BY created_at ASC LIMIT 1",
+                &[&tester.project_id, &tester.cloud],
+            )
+            .await?
+    };
 
     if let Some(row) = acct_row {
         let cred_key = state.credential_key.as_ref().ok_or_else(|| {
@@ -1913,6 +1976,14 @@ async fn run_create_tester_cloud_init(
     // public URL (https://host) into the WS URL the agent's tungstenite
     // client expects (wss://host/ws/agent).
     let agent_ws = cloud_init::agent_ws_url(&state.public_url);
+    if agent_ws.contains("localhost") || agent_ws.contains("127.0.0.1") {
+        tracing::warn!(
+            %agent_ws,
+            "DASHBOARD_PUBLIC_URL resolves to localhost — the cloud VM's agent \
+             will NOT be able to reach this dashboard. Set DASHBOARD_PUBLIC_URL \
+             to a publicly reachable URL before provisioning cloud runners."
+        );
+    }
     let bootstrap = if is_windows {
         let raw = cloud_init::render_windows_bootstrap(&agent_ws, &agent_api_key, target_triple)?;
         // AWS user-data convention: wrap PowerShell scripts in
@@ -2683,6 +2754,7 @@ mod tests {
             created_at: now,
             updated_at: now,
             cloud_connection_id: None,
+            cloud_account_id: None,
             requested_os: Some("ubuntu-24.04".into()),
             requested_variant: Some("server".into()),
             os_distro: None,

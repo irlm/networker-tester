@@ -300,20 +300,30 @@ async fn update_account(
                         "Invalid stored nonce".to_string(),
                     )
                 })?;
-            let existing_plain = crate::crypto::decrypt_with_fallback(
-                &acct.credentials_enc,
-                &nonce_arr,
-                key,
-                state.credential_key_old.as_ref(),
-            )
-            .map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Failed to decrypt existing credentials: {e}"),
-                )
-            })?;
+            // If the stored blob can't be decrypted (e.g. the credential key
+            // was lost/rotated without DASHBOARD_CREDENTIAL_KEY_OLD), start
+            // from an empty map instead of failing — re-entering the full
+            // credentials via Edit is the user's only recovery path.
             let mut merged: serde_json::Map<String, serde_json::Value> =
-                serde_json::from_slice(&existing_plain).unwrap_or_default();
+                match crate::crypto::decrypt_with_fallback(
+                    &acct.credentials_enc,
+                    &nonce_arr,
+                    key,
+                    state.credential_key_old.as_ref(),
+                ) {
+                    Ok(existing_plain) => {
+                        serde_json::from_slice(&existing_plain).unwrap_or_default()
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            account_id = %account_id,
+                            error = %e,
+                            "Stored credentials undecryptable — replacing with \
+                             the newly provided values instead of merging"
+                        );
+                        serde_json::Map::new()
+                    }
+                };
 
             // Only overwrite fields that have non-empty values
             for (k, v) in new_creds {

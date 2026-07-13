@@ -401,6 +401,13 @@ impl AzureProvider {
             "Standard".into(),
             "--admin-username".into(),
             config.ssh_user.clone(),
+            // Cascade-delete attached resources with the VM. Without these,
+            // `az vm delete` leaves the OS disk, NIC, and public IP behind —
+            // orphaned resources that keep billing after the tester is gone.
+            "--os-disk-delete-option".into(),
+            "Delete".into(),
+            "--nic-delete-option".into(),
+            "Delete".into(),
         ];
 
         if is_windows {
@@ -458,7 +465,7 @@ impl AzureProvider {
             Some(format!(
                 "Nx!{}{}aZ9",
                 uuid::Uuid::new_v4().simple(),
-                &config.name.chars().take(4).collect::<String>()
+                config.name.chars().take(4).collect::<String>()
             ))
         } else {
             None
@@ -707,8 +714,8 @@ impl AzureProvider {
             .output()
             .await
             .context("failed to spawn `az vm delete`")?;
-        Self::cleanup_sp_session(&sp_dir);
         if !output.status.success() {
+            Self::cleanup_sp_session(&sp_dir);
             let stderr = String::from_utf8_lossy(&output.stderr);
             // Idempotent: VM already gone is the desired end-state.
             if stderr.contains("ResourceNotFound") || stderr.contains("could not be found") {
@@ -717,6 +724,47 @@ impl AzureProvider {
             }
             anyhow::bail!("az vm delete failed: {stderr}");
         }
+
+        // Best-effort sweep of the associated resources `az vm create` made
+        // with conventional names. The disk and NIC cascade via the
+        // *-delete-option create flags; the public IP and NSG do not and
+        // would otherwise keep billing after the tester is gone. Failures
+        // are logged, not fatal — the orphan reaper is the backstop.
+        if let Some(vm_name) = resource_id.rsplit('/').next() {
+            for (kind, suffix) in [("public-ip", "PublicIP"), ("nsg", "NSG")] {
+                let res_name = format!("{vm_name}{suffix}");
+                let out = self
+                    .az_cmd(&sp_dir)
+                    .await
+                    .arg("network")
+                    .arg(kind)
+                    .arg("delete")
+                    .arg("--subscription")
+                    .arg(&self.subscription_id)
+                    .arg("--resource-group")
+                    .arg(&self.resource_group)
+                    .arg("--name")
+                    .arg(&res_name)
+                    .output()
+                    .await;
+                match out {
+                    Ok(o) if o.status.success() => {
+                        tracing::info!(%res_name, "Deleted associated Azure resource");
+                    }
+                    Ok(o) => {
+                        tracing::debug!(
+                            %res_name,
+                            stderr = %String::from_utf8_lossy(&o.stderr),
+                            "Associated Azure resource not deleted (may not exist)"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::debug!(%res_name, error = %e, "az network delete spawn failed");
+                    }
+                }
+            }
+        }
+        Self::cleanup_sp_session(&sp_dir);
         Ok(())
     }
 
