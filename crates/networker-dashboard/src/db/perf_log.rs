@@ -42,6 +42,55 @@ pub struct PerfLogInput {
     pub meta: Option<serde_json::Value>,
 }
 
+/// DDL for the `perf_log` table in the logs database.
+///
+/// Mirrors the V023 core migration but WITHOUT the `dash_user` foreign key —
+/// the logs database has no `dash_user` table. When the logs pool falls back
+/// to the core database, `IF NOT EXISTS` makes this a no-op against the
+/// V023-created table.
+const CREATE_TABLE: &str = "
+    CREATE TABLE IF NOT EXISTS perf_log (
+        id              BIGSERIAL       PRIMARY KEY,
+        logged_at       TIMESTAMPTZ     NOT NULL DEFAULT now(),
+        user_id         UUID,
+        session_id      VARCHAR(64),
+        kind            VARCHAR(10)     NOT NULL,
+
+        -- API fields
+        method          VARCHAR(10),
+        path            VARCHAR(500),
+        status          SMALLINT,
+        total_ms        REAL,
+        server_ms       REAL,
+        network_ms      REAL,
+        source          VARCHAR(10),
+
+        -- Render fields
+        component       VARCHAR(100),
+        trigger         VARCHAR(100),
+        render_ms       REAL,
+        item_count      INT,
+
+        -- Flexible extras
+        meta            JSONB
+    );
+
+    CREATE INDEX IF NOT EXISTS ix_perf_log_logged_at ON perf_log (logged_at DESC);
+    CREATE INDEX IF NOT EXISTS ix_perf_log_user      ON perf_log (user_id, logged_at DESC);
+    CREATE INDEX IF NOT EXISTS ix_perf_log_kind      ON perf_log (kind, logged_at DESC);
+    CREATE INDEX IF NOT EXISTS ix_perf_log_path      ON perf_log (path, logged_at DESC) WHERE kind = 'api';
+";
+
+/// Ensure the `perf_log` table exists in the logs database.
+///
+/// The core-DB migration (V023) only runs against the main pool; when a split
+/// logs database is configured, every perf-log endpoint hits the logs pool —
+/// without this the ingest endpoint 500s on every batch.
+pub async fn ensure_schema(client: &Client) -> anyhow::Result<()> {
+    client.batch_execute(CREATE_TABLE).await?;
+    Ok(())
+}
+
 /// Escape SQL ILIKE wildcard characters (%, _) so they are treated as literals.
 fn escape_ilike(input: &str) -> String {
     input

@@ -333,6 +333,16 @@ async fn main() -> anyhow::Result<()> {
         db::migrations::run(&client).await?;
     }
 
+    // Ensure logs-DB-only tables exist (the migration runner above only
+    // targets the core database; perf_log lives in the logs database).
+    {
+        let client = logs_pool
+            .get()
+            .await
+            .context("logs db connection for perf_log schema")?;
+        db::perf_log::ensure_schema(&client).await?;
+    }
+
     // Check if setup is needed: no users and no DASHBOARD_ADMIN_EMAIL
     let needs_setup = {
         let client = db_pool.get().await?;
@@ -603,7 +613,7 @@ async fn main() -> anyhow::Result<()> {
     // Cleanup: kill managed tester processes on shutdown
     {
         let processes = state.tester_processes.read().await;
-        for (_, pid) in processes.iter() {
+        for pid in processes.values() {
             tracing::info!(pid, "Killing managed tester on shutdown");
             #[cfg(unix)]
             unsafe {
