@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.9] — 2026-07-13
+
+### Changed
+- **Docs only.** CLAUDE.md release flow updated: the `Sync install scripts to
+  Gist` workflow works again (verified on the v0.28.8 main push), and tagging
+  is automated by CI from Cargo.toml — both were documented as manual steps.
+
+---
+
 ## [0.28.8] — 2026-07-13
 
 Full E2E pass against a real Azure account (account registration → VM

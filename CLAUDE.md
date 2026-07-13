@@ -116,7 +116,9 @@ Update all of these in a single PR:
 - **Bash 3.2** — no `declare -A`, no `[[ -v ]]`, no nameref, no `readarray`
 - **stdin protection** — `< /dev/null` for non-interactive commands in curl|bash pipe
 - **Windows** — `Start-Process -WindowStyle Hidden` (never `-NoNewWindow`); VM names ≤15 chars
-- **After merge** — update Gist manually (sync-gist.yml is broken):
+- **After merge** — the `Sync install scripts to Gist` workflow updates the Gist
+  automatically on every main push (verified working 2026-07-13). Confirm it
+  succeeded with `gh run list --branch main`; only if it failed, update manually:
   ```bash
   jq -n --rawfile sh install.sh --rawfile ps install.ps1 \
     '{"files":{"install.sh":{"content":$sh},"install.ps1":{"content":$ps}}}' \
@@ -132,7 +134,8 @@ When writing documentation for CLI flags or environment variables (e.g., RUST_LO
 ## Git Workflow
 
 - Never commit directly to main — all changes go through a PR.
-- Branch → commit → push → `gh pr create` → merge → tag → push tag → update Gist.
+- Branch → commit → push → `gh pr create` → merge. Tagging (from Cargo.toml) and
+  the Gist sync run automatically on the main push — verify both landed.
 - Required CI checks: `Test (ubuntu-latest)`, `Test (windows-latest)`, `bats (installer unit tests)`, `shellcheck`.
 
 ## Design Context
