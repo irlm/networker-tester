@@ -11,6 +11,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.8] — 2026-07-13
+
+Full E2E pass against a real Azure account (account registration → VM
+provisioning → cloud-init install → agent connect → URL probe). Every fix
+below was verified live against Azure.
+
+### Fixed
+- **Tester creation ignored the selected cloud account.** Both CreateTesterModal
+  and the Deploy wizard collected a cloud-account selection but never sent it;
+  the backend silently used the *oldest* active account for the provider
+  (`ORDER BY created_at ASC LIMIT 1`). With older/demo accounts present, a real
+  account added later was never used and provisioning failed against the wrong
+  credentials. New V039 migration adds `project_tester.cloud_account_id`
+  (FK, `ON DELETE SET NULL`); `create_tester` validates the account (project
+  scope, active, provider match); `provider_for_tester` prefers the bound
+  account and falls back to the legacy pick for pre-V039 rows.
+- **`POST /api/perf-log` 500'd on every batch with a split logs DB.** The
+  migration runner only targets the core database, but all perf-log endpoints
+  use the logs pool — `perf_log` never existed in `networker_logs`. The schema
+  (without the `dash_user` FK) is now ensured on the logs pool at startup.
+- **Scheduler churn with zero agents online.** Due schedules materialized
+  runs unconditionally; each run sat queued, was rescanned by the redispatcher
+  every 30s, and expired to `failed` after 5 minutes — ~200 manufactured dead
+  rows/hour (7,392 accumulated in the dev DB) plus one INFO log line per run
+  per tick. This unbounded churn is the most plausible cause of the v0.28.7
+  prod instability that prompted the (unmerged) revert branch. Scheduled
+  occurrences are now skipped (schedule still advances) when no agent is
+  online, except Pending-endpoint configs which provision their own VM; the
+  per-run "No compatible online agent" line is demoted to `debug`. The
+  v0.28.6 version-filter dispatch itself was verified working E2E and is kept.
+- **Infrastructure page**: CLOUD ACCOUNTS stat was hardcoded `—`; now shows the
+  live count of active accounts. "No targets deployed / Deploy your first
+  target" no longer renders while a deployment is running right above it.
+- Two new rust 1.97 clippy lints (`useless_borrows_in_formatting`,
+  `for_kv_map`) that would fail the next CI run.
+
+### Added
+- **Loud warning when provisioning a cloud runner with a localhost dashboard
+  URL.** If `DASHBOARD_PUBLIC_URL` is unset (dev default `http://localhost:PORT`),
+  the cloud VM's agent can never phone home; the bootstrap now logs an explicit
+  warning naming the env var instead of leaving the tester stuck at "waiting
+  for agent".
+
+---
+
 ## [0.28.7] — 2026-04-17
 
 ### Fixed
