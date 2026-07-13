@@ -296,6 +296,7 @@ export function CreateTesterModal({
           ? autoShutdownHour
           : undefined,
         auto_probe_enabled: autoProbeEnabled,
+        cloud_account_id: selectedAccountId || undefined,
         requested_os: requestedOs,
         requested_variant: requestedVariant,
       });

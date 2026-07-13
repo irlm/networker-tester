@@ -499,6 +499,8 @@ struct CreateTesterBody {
     #[serde(default)]
     cloud_connection_id: Option<Uuid>,
     #[serde(default)]
+    cloud_account_id: Option<Uuid>,
+    #[serde(default)]
     requested_os: Option<String>,
     #[serde(default)]
     requested_variant: Option<String>,
@@ -514,6 +516,7 @@ impl From<CreateTesterBody> for CreateTesterInput {
             auto_shutdown_local_hour: b.auto_shutdown_local_hour,
             auto_probe_enabled: b.auto_probe_enabled,
             cloud_connection_id: b.cloud_connection_id,
+            cloud_account_id: b.cloud_account_id,
             requested_os: b.requested_os,
             requested_variant: b.requested_variant,
         }
@@ -622,6 +625,43 @@ async fn create_tester(
                 )
             },
         )?;
+    }
+
+    // Validate cloud_account if provided: must exist in this project, be
+    // active, and match the requested cloud provider.
+    if let Some(account_id) = body.cloud_account_id {
+        let acct_row = client
+            .query_opt(
+                "SELECT provider, status FROM cloud_account \
+                 WHERE account_id = $1 AND project_id = $2",
+                &[&account_id, &ctx.project_id],
+            )
+            .await
+            .map_err(|e| db_error("create_tester cloud_account lookup", e))?;
+        let acct_row = acct_row.ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                format!("cloud_account {account_id} not found in this project"),
+            )
+        })?;
+        let status: String = acct_row.get("status");
+        if status != "active" {
+            return Err((
+                StatusCode::CONFLICT,
+                format!("cloud_account {account_id} status is '{status}', expected 'active'"),
+            ));
+        }
+        let provider: String = acct_row.get("provider");
+        if provider != body.cloud {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "cloud_account {account_id} is a '{provider}' account but the \
+                     tester cloud is '{}'",
+                    body.cloud
+                ),
+            ));
+        }
     }
 
     let input: CreateTesterInput = body.into();
@@ -1507,15 +1547,35 @@ async fn provider_for_tester(
         return cloud_provider::CloudProvider::from_connection(&provider, &config);
     }
 
-    // 2. Cloud account (encrypted credentials) for this project + provider
-    let acct_row = client
-        .query_opt(
-            "SELECT credentials_enc, credentials_nonce FROM cloud_account \
-             WHERE project_id = $1 AND provider = $2 AND status = 'active' \
-             ORDER BY created_at ASC LIMIT 1",
-            &[&tester.project_id, &tester.cloud],
-        )
-        .await?;
+    // 2. Cloud account (encrypted credentials). Prefer the account explicitly
+    //    selected at creation time; fall back to the oldest active account
+    //    for this project + provider (pre-V039 rows have no binding).
+    let acct_row = if let Some(account_id) = tester.cloud_account_id {
+        let row = client
+            .query_opt(
+                "SELECT credentials_enc, credentials_nonce FROM cloud_account \
+                 WHERE account_id = $1 AND project_id = $2 AND status = 'active'",
+                &[&account_id, &tester.project_id],
+            )
+            .await?;
+        if row.is_none() {
+            anyhow::bail!(
+                "cloud account {account_id} selected for this tester is no longer \
+                 active or was removed — edit the tester or re-create it with a \
+                 valid account"
+            );
+        }
+        row
+    } else {
+        client
+            .query_opt(
+                "SELECT credentials_enc, credentials_nonce FROM cloud_account \
+                 WHERE project_id = $1 AND provider = $2 AND status = 'active' \
+                 ORDER BY created_at ASC LIMIT 1",
+                &[&tester.project_id, &tester.cloud],
+            )
+            .await?
+    };
 
     if let Some(row) = acct_row {
         let cred_key = state.credential_key.as_ref().ok_or_else(|| {
@@ -2683,6 +2743,7 @@ mod tests {
             created_at: now,
             updated_at: now,
             cloud_connection_id: None,
+            cloud_account_id: None,
             requested_os: Some("ubuntu-24.04".into()),
             requested_variant: Some("server".into()),
             os_distro: None,
