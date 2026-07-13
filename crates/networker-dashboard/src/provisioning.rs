@@ -55,8 +55,24 @@ async fn kick_provisioning(
         anyhow::bail!("kick_provisioning called with non-Pending endpoint");
     };
 
+    let client = state.db.get().await?;
+
+    // Resolve the concrete provider from the cloud account. install.sh has
+    // no database access, so `provider: "auto"` was never resolvable there —
+    // every Pending-endpoint deployment failed validation with
+    // "unknown provider 'auto'".
+    let provider: String = client
+        .query_opt(
+            "SELECT provider FROM cloud_account WHERE account_id = $1",
+            &[cloud_account_id],
+        )
+        .await?
+        .map(|r| r.get("provider"))
+        .ok_or_else(|| anyhow::anyhow!("cloud account {cloud_account_id} not found"))?;
+
     let deploy_json = build_deploy_json(
         cloud_account_id,
+        &provider,
         region,
         vm_size,
         os,
@@ -65,8 +81,6 @@ async fn kick_provisioning(
         &cfg.name,
     );
     let dep_name = format!("auto-{}-{}", cfg.name, short_id(&run.id));
-
-    let client = state.db.get().await?;
     let deployment_id = crate::db::deployments::create(
         &client,
         &dep_name,
@@ -122,8 +136,10 @@ async fn kick_provisioning(
 /// Only the local/cloud provider keyed blocks are filled; we currently lean
 /// entirely on the cloud account's metadata. Extend this when the install.sh
 /// schema grows more required fields.
+#[allow(clippy::too_many_arguments)]
 fn build_deploy_json(
     cloud_account_id: &Uuid,
+    provider: &str,
     region: &str,
     vm_size: &str,
     os: &str,
@@ -131,30 +147,41 @@ fn build_deploy_json(
     language: Option<&str>,
     cfg_name: &str,
 ) -> serde_json::Value {
-    // Derive the provider from the vm_size prefix is fragile; instead,
-    // `install.sh` supports an explicit `provider` per endpoint. We don't
-    // know the provider here without a DB lookup, so we encode a neutral
-    // shape and let the runner's validation resolve via cloud_account_id.
-    //
-    // TODO(irlm): inline the provider string by passing it through the
-    // `EndpointRef::Pending` variant. Today the provider comes from the
-    // cloud_account row; install.sh looks it up from `cloud_account_id`.
+    // Emit the same per-provider endpoint shape the deploy wizard produces —
+    // the only shape install.sh validates. (`provider: "auto"` was never
+    // supported by install.sh, which has no way to resolve a cloud_account_id.)
     let suffix = short_id_from_name(cfg_name);
     let vm_label = sanitize_vm_label(&format!("nwk-auto-{suffix}"));
 
-    let mut endpoint = json!({
-        // `provider: "auto"` tells install.sh to resolve the real
-        // provider from cloud_account_id at deploy time.
-        "provider": "auto",
-        "label": cfg_name,
-        "auto": {
+    let provider_block = match provider {
+        "aws" => json!({
+            "region": region,
+            "instance_type": vm_size,
+            "os": os,
+            "instance_name": vm_label,
+        }),
+        "gcp" => json!({
+            "region": region,
+            "zone": format!("{region}-a"),
+            "machine_type": vm_size,
+            "os": os,
+            "instance_name": vm_label,
+        }),
+        // azure + default
+        _ => json!({
             "region": region,
             "vm_size": vm_size,
             "os": os,
             "vm_name": vm_label,
-        },
+        }),
+    };
+
+    let mut endpoint = json!({
+        "provider": provider,
+        "label": cfg_name,
         "http_stacks": [proxy_stack],
     });
+    endpoint[provider] = provider_block;
     if let Some(lang) = language {
         endpoint["languages"] = json!([lang]);
     }
