@@ -86,7 +86,24 @@ const CREATE_TABLE: &str = "
 /// The core-DB migration (V023) only runs against the main pool; when a split
 /// logs database is configured, every perf-log endpoint hits the logs pool —
 /// without this the ingest endpoint 500s on every batch.
+///
+/// If the table already exists, skip ALL DDL: `CREATE INDEX IF NOT EXISTS`
+/// requires table ownership even when idempotent, and on deployments where
+/// perf_log was created by a different role (e.g. V023 ran as a superuser
+/// while the service connects as an app role) the ownership check failed
+/// startup — which took down the v0.28.10 prod deploy.
 pub async fn ensure_schema(client: &Client) -> anyhow::Result<()> {
+    let exists = client
+        .query_opt(
+            "SELECT 1 FROM information_schema.tables \
+             WHERE table_schema = 'public' AND table_name = 'perf_log'",
+            &[],
+        )
+        .await?
+        .is_some();
+    if exists {
+        return Ok(());
+    }
     client.batch_execute(CREATE_TABLE).await?;
     Ok(())
 }

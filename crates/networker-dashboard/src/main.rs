@@ -335,12 +335,19 @@ async fn main() -> anyhow::Result<()> {
 
     // Ensure logs-DB-only tables exist (the migration runner above only
     // targets the core database; perf_log lives in the logs database).
+    // Non-fatal: a failure here degrades perf-log ingest, it must not take
+    // the dashboard down (it rolled back the v0.28.10 prod deploy).
     {
-        let client = logs_pool
-            .get()
-            .await
-            .context("logs db connection for perf_log schema")?;
-        db::perf_log::ensure_schema(&client).await?;
+        match logs_pool.get().await {
+            Ok(client) => {
+                if let Err(e) = db::perf_log::ensure_schema(&client).await {
+                    tracing::warn!(error = %e, "perf_log schema check failed — perf-log ingest may 500");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "logs pool unavailable for perf_log schema check");
+            }
+        }
     }
 
     // Check if setup is needed: no users and no DASHBOARD_ADMIN_EMAIL
