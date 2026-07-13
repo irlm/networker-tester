@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.11] — 2026-07-13
+
+### Added
+- **Throughput + server-info routes through every proxy stack.** The Full
+  Stack benchmark's default `download`/`upload` modes probe `/download` and
+  `/upload` *through* the proxy under test, but nginx, Caddy, Apache, and IIS
+  templates only proxied `/page` + `/asset` — every throughput sample 404'd
+  and `/info` (server metadata) was unreachable. All four now proxy
+  `/download`, `/upload`, and `/info` to the backing endpoint on both their
+  HTTP and HTTPS listeners. nginx routes disable proxy buffering and uncap
+  the body size so throughput measures the proxy path rather than nginx disk
+  buffers (HAProxy and Traefik already forwarded all paths). Five new bats
+  tests guard the routes in every config copy.
+
+---
+
 ## [0.28.10] — 2026-07-13
 
 Second live-Azure E2E pass, this time from a completely fresh database

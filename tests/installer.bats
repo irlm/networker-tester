@@ -1692,3 +1692,55 @@ JSON
     _deploy_load_endpoint 0
     [ "$GCP_PROJECT" = "ep-pid-proj" ]
 }
+
+# ---------------------------------------------------------------------------
+# Proxy stack configs: throughput + info routes (v0.28.11)
+# ---------------------------------------------------------------------------
+# The Full Stack benchmark's download/upload modes probe /download and
+# /upload THROUGH the proxy; /info supplies server metadata. Every proxy
+# template that selectively proxies /page + /asset must also proxy these.
+# (HAProxy and Traefik forward everything, so they need no explicit routes.)
+
+@test "proxy configs: every nginx copy proxies throughput + info routes" {
+    # One throughput location block per /asset location block, in all
+    # nginx config copies (local + both remote heredocs), HTTP and HTTPS.
+    local asset_ct route_ct
+    asset_ct=$(grep -c 'location /asset' "$SCRIPT")
+    route_ct=$(grep -c 'location ~ \^/(download|upload|info)' "$SCRIPT")
+    [ "$asset_ct" -gt 0 ]
+    [ "$asset_ct" -eq "$route_ct" ]
+}
+
+@test "proxy configs: Caddy proxies throughput + info on both listeners" {
+    local dl ul info
+    dl=$(grep -c 'handle /download\*' "$SCRIPT")
+    ul=$(grep -c 'handle /upload\*' "$SCRIPT")
+    info=$(grep -c 'handle /info' "$SCRIPT")
+    [ "$dl" -eq 2 ]   # :8091 and :8454
+    [ "$ul" -eq 2 ]
+    [ "$info" -eq 2 ]
+}
+
+@test "proxy configs: Apache proxies throughput + info on both vhosts" {
+    local dl ul info
+    dl=$(grep -c 'ProxyPass        /download' "$SCRIPT")
+    ul=$(grep -c 'ProxyPass        /upload' "$SCRIPT")
+    info=$(grep -c 'ProxyPass        /info' "$SCRIPT")
+    [ "$dl" -eq 2 ]   # HTTP + HTTPS vhosts
+    [ "$ul" -eq 2 ]
+    [ "$info" -eq 2 ]
+}
+
+@test "proxy configs: IIS web.config rewrites throughput + info to endpoint" {
+    grep -q 'match url="\^(download|upload|info)(.\*)"' "$SCRIPT"
+}
+
+@test "proxy configs: nginx throughput locations disable buffering and body cap" {
+    # Throughput must measure the proxy path, not nginx disk buffers, and
+    # uploads must not 413 at nginx's 1MB default.
+    local blocks
+    blocks=$(grep -A6 'location ~ \^/(download|upload|info)' "$SCRIPT" | grep -c 'client_max_body_size 0')
+    local route_ct
+    route_ct=$(grep -c 'location ~ \^/(download|upload|info)' "$SCRIPT")
+    [ "$blocks" -eq "$route_ct" ]
+}
