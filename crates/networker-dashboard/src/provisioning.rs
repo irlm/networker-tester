@@ -281,7 +281,10 @@ pub async fn try_dispatch_run<D: RunDispatcher>(
     };
     match chosen {
         None => {
-            tracing::info!(
+            // debug, not info — the redispatcher retries every 30s tick and
+            // at INFO this line dominated the logs whenever agents were
+            // offline (one line per queued run per tick, indefinitely).
+            tracing::debug!(
                 run_id = %run.id,
                 min_version = %MIN_AGENT_VERSION_FOR_ASSIGN_RUN,
                 "No compatible online agent — run remains queued for later dispatch"

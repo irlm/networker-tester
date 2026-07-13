@@ -112,6 +112,15 @@ async fn tick(state: &Arc<AppState>) -> anyhow::Result<()> {
 
     tracing::info!(count = due.len(), "Processing due schedules (v2)");
 
+    // When no agent is connected at all, materializing scheduled runs is
+    // pure churn: each run sits queued, gets rescanned by the redispatcher
+    // every tick, and expires to `failed` after QUEUED_CUTOFF_SECS — at
+    // scale this manufactured thousands of dead rows per day. Skip those
+    // occurrences (advancing the schedule) and log one aggregate warning.
+    // Pending-endpoint configs are exempt: they provision their own VM.
+    let any_agent_online = state.agents.any_online_agent().await.is_some();
+    let mut skipped_no_agent: u32 = 0;
+
     for schedule in due {
         let schedule_id = schedule.id;
 
@@ -132,6 +141,16 @@ async fn tick(state: &Arc<AppState>) -> anyhow::Result<()> {
                 continue;
             }
         };
+
+        if !any_agent_online
+            && !matches!(cfg.endpoint, networker_common::EndpointRef::Pending { .. })
+        {
+            skipped_no_agent += 1;
+            let next = compute_next_run(&schedule.cron_expr);
+            let nil_run = uuid::Uuid::nil();
+            crate::db::test_schedules::mark_fired(&client, &schedule_id, &nil_run, next).await?;
+            continue;
+        }
 
         // Create a queued test_run
         let run = crate::db::test_runs::create(
@@ -171,6 +190,13 @@ async fn tick(state: &Arc<AppState>) -> anyhow::Result<()> {
             schedule_id = %schedule_id,
             next_fire_at = ?next,
             "Schedule run recorded"
+        );
+    }
+
+    if skipped_no_agent > 0 {
+        tracing::warn!(
+            count = skipped_no_agent,
+            "Skipped scheduled runs — no agent online; occurrences advanced without creating runs"
         );
     }
 

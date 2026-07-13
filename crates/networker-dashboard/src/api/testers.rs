@@ -1973,6 +1973,14 @@ async fn run_create_tester_cloud_init(
     // public URL (https://host) into the WS URL the agent's tungstenite
     // client expects (wss://host/ws/agent).
     let agent_ws = cloud_init::agent_ws_url(&state.public_url);
+    if agent_ws.contains("localhost") || agent_ws.contains("127.0.0.1") {
+        tracing::warn!(
+            %agent_ws,
+            "DASHBOARD_PUBLIC_URL resolves to localhost — the cloud VM's agent \
+             will NOT be able to reach this dashboard. Set DASHBOARD_PUBLIC_URL \
+             to a publicly reachable URL before provisioning cloud runners."
+        );
+    }
     let bootstrap = if is_windows {
         let raw = cloud_init::render_windows_bootstrap(&agent_ws, &agent_api_key, target_triple)?;
         // AWS user-data convention: wrap PowerShell scripts in
