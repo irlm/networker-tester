@@ -182,18 +182,23 @@ export function InfrastructurePage() {
   /* ── Errors ── */
   const [error, setError] = useState<string | null>(null);
 
+  /* ── Cloud accounts (count for the hero stat) ── */
+  const [cloudAccountsCt, setCloudAccountsCt] = useState<number | null>(null);
+
   /* ── Data loading ── */
   const loadAll = useCallback(async () => {
     if (!projectId) return;
     try {
-      const [deps, testerList, histResp] = await Promise.all([
+      const [deps, testerList, histResp, accounts] = await Promise.all([
         api.getDeployments(projectId, { limit: 50 }),
         testersApi.listTesters(projectId),
         listVmHistory(projectId, { limit: 10 }),
+        api.getCloudAccounts(projectId).catch(() => null),
       ]);
       setDeployments(deps);
       setTesters(testerList);
       setHistory(histResp.events);
+      if (accounts) setCloudAccountsCt(accounts.filter(a => a.status === 'active').length);
       setError(null);
     } catch {
       setError('Failed to load infrastructure data');
@@ -310,7 +315,6 @@ export function InfrastructurePage() {
   const runnerErrorCt = runnerStatusCounts.error;
   const runnerActiveCt = testers.length;
   const targetsCt = completedDeps.length;
-  const cloudAccountsCt = 0; // wired later by the Settings cloud-accounts fetch; 0 is a reasonable default
 
   return (
     <div className="p-4 md:p-6 max-w-6xl mx-auto">
@@ -350,7 +354,7 @@ export function InfrastructurePage() {
             )}
           </div>
           <div>
-            <div className="text-2xl font-bold font-mono leading-none text-gray-200">{cloudAccountsCt || '—'}</div>
+            <div className="text-2xl font-bold font-mono leading-none text-gray-200">{cloudAccountsCt ?? '—'}</div>
             <div className="text-[10px] uppercase tracking-wider text-gray-500 mt-1.5">Cloud accounts</div>
           </div>
         </div>
@@ -629,18 +633,26 @@ export function InfrastructurePage() {
           </div>
         </div>
       ) : completedDeps.length === 0 ? (
-        <div className="border border-gray-800 rounded p-8 text-center">
-          <p className="text-gray-500 text-sm">No targets deployed</p>
-          {isOperator && (
-            <button
-              type="button"
-              onClick={() => { setWizardKind('target'); setWizardPrefill(undefined); setShowWizard(true); }}
-              className="text-xs text-cyan-400 mt-2"
-            >
-              Deploy your first target
-            </button>
-          )}
-        </div>
+        activeDeps.length > 0 ? (
+          <div className="border border-gray-800 rounded p-4 text-center">
+            <p className="text-gray-500 text-sm">
+              No completed targets yet — {activeDeps.length} deployment{activeDeps.length === 1 ? '' : 's'} in progress above
+            </p>
+          </div>
+        ) : (
+          <div className="border border-gray-800 rounded p-8 text-center">
+            <p className="text-gray-500 text-sm">No targets deployed</p>
+            {isOperator && (
+              <button
+                type="button"
+                onClick={() => { setWizardKind('target'); setWizardPrefill(undefined); setShowWizard(true); }}
+                className="text-xs text-cyan-400 mt-2"
+              >
+                Deploy your first target
+              </button>
+            )}
+          </div>
+        )
       ) : (
         <>
           {/* Mobile */}
