@@ -80,10 +80,27 @@ fn build_args(config: &TestConfig, target: &str) -> Vec<String> {
         "--json-stdout".into(),
     ];
 
-    if !config.workload.payload_sizes.is_empty() {
-        let csv = config
-            .workload
-            .payload_sizes
+    if config.workload.insecure {
+        args.push("--insecure".into());
+    }
+
+    // Throughput modes hard-require --payload-sizes; without it the tester
+    // exits 1 with no JSON and the whole run fails to parse. If the config
+    // selected a throughput mode but carries no payload sizes (e.g. a
+    // benchmark wizard that didn't force the choice), fall back to a sane
+    // default instead of crashing.
+    let needs_payload = config
+        .workload
+        .modes
+        .iter()
+        .any(|m| matches!(m, Mode::Download | Mode::Upload));
+    let payload_sizes = if config.workload.payload_sizes.is_empty() && needs_payload {
+        vec![65536]
+    } else {
+        config.workload.payload_sizes.clone()
+    };
+    if !payload_sizes.is_empty() {
+        let csv = payload_sizes
             .iter()
             .map(|n| n.to_string())
             .collect::<Vec<_>>()

@@ -55,8 +55,24 @@ async fn kick_provisioning(
         anyhow::bail!("kick_provisioning called with non-Pending endpoint");
     };
 
+    let client = state.db.get().await?;
+
+    // Resolve the concrete provider from the cloud account. install.sh has
+    // no database access, so `provider: "auto"` was never resolvable there —
+    // every Pending-endpoint deployment failed validation with
+    // "unknown provider 'auto'".
+    let provider: String = client
+        .query_opt(
+            "SELECT provider FROM cloud_account WHERE account_id = $1",
+            &[cloud_account_id],
+        )
+        .await?
+        .map(|r| r.get("provider"))
+        .ok_or_else(|| anyhow::anyhow!("cloud account {cloud_account_id} not found"))?;
+
     let deploy_json = build_deploy_json(
         cloud_account_id,
+        &provider,
         region,
         vm_size,
         os,
@@ -65,8 +81,6 @@ async fn kick_provisioning(
         &cfg.name,
     );
     let dep_name = format!("auto-{}-{}", cfg.name, short_id(&run.id));
-
-    let client = state.db.get().await?;
     let deployment_id = crate::db::deployments::create(
         &client,
         &dep_name,
@@ -122,8 +136,10 @@ async fn kick_provisioning(
 /// Only the local/cloud provider keyed blocks are filled; we currently lean
 /// entirely on the cloud account's metadata. Extend this when the install.sh
 /// schema grows more required fields.
+#[allow(clippy::too_many_arguments)]
 fn build_deploy_json(
     cloud_account_id: &Uuid,
+    provider: &str,
     region: &str,
     vm_size: &str,
     os: &str,
@@ -131,30 +147,41 @@ fn build_deploy_json(
     language: Option<&str>,
     cfg_name: &str,
 ) -> serde_json::Value {
-    // Derive the provider from the vm_size prefix is fragile; instead,
-    // `install.sh` supports an explicit `provider` per endpoint. We don't
-    // know the provider here without a DB lookup, so we encode a neutral
-    // shape and let the runner's validation resolve via cloud_account_id.
-    //
-    // TODO(irlm): inline the provider string by passing it through the
-    // `EndpointRef::Pending` variant. Today the provider comes from the
-    // cloud_account row; install.sh looks it up from `cloud_account_id`.
+    // Emit the same per-provider endpoint shape the deploy wizard produces —
+    // the only shape install.sh validates. (`provider: "auto"` was never
+    // supported by install.sh, which has no way to resolve a cloud_account_id.)
     let suffix = short_id_from_name(cfg_name);
     let vm_label = sanitize_vm_label(&format!("nwk-auto-{suffix}"));
 
-    let mut endpoint = json!({
-        // `provider: "auto"` tells install.sh to resolve the real
-        // provider from cloud_account_id at deploy time.
-        "provider": "auto",
-        "label": cfg_name,
-        "auto": {
+    let provider_block = match provider {
+        "aws" => json!({
+            "region": region,
+            "instance_type": vm_size,
+            "os": os,
+            "instance_name": vm_label,
+        }),
+        "gcp" => json!({
+            "region": region,
+            "zone": format!("{region}-a"),
+            "machine_type": vm_size,
+            "os": os,
+            "instance_name": vm_label,
+        }),
+        // azure + default
+        _ => json!({
             "region": region,
             "vm_size": vm_size,
             "os": os,
             "vm_name": vm_label,
-        },
+        }),
+    };
+
+    let mut endpoint = json!({
+        "provider": provider,
+        "label": cfg_name,
         "http_stacks": [proxy_stack],
     });
+    endpoint[provider] = provider_block;
     if let Some(lang) = language {
         endpoint["languages"] = json!([lang]);
     }
@@ -256,12 +283,93 @@ impl RunDispatcher for crate::ws::agent_hub::AgentHub {
 ///
 /// Generic over `RunDispatcher` so unit tests can record every dispatch
 /// attempt without constructing a full `AppState`.
+/// Resolve a `Proxy { proxy_endpoint_id }` endpoint into a concrete
+/// `Network { host, port }` the standalone agent can probe.
+///
+/// The UI stores the DEPLOYMENT id in `proxy_endpoint_id`; the deployed
+/// target's host lives in `deployment.endpoint_ips[0]` and the proxy stack
+/// (which selects the HTTPS listener port) in
+/// `deployment.config.endpoints[0].http_stacks[0]`. Without this rewrite
+/// every Network Test against a deployed target failed with
+/// "Unsupported endpoint kind for standalone agent: proxy" and 0 attempts.
+async fn resolve_proxy_endpoint(
+    state: &Arc<AppState>,
+    deployment_id: &Uuid,
+) -> anyhow::Result<networker_common::EndpointRef> {
+    let client = state.db.get().await?;
+    let dep = crate::db::deployments::get(&client, deployment_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("deployment {deployment_id} not found"))?;
+
+    let host = dep
+        .endpoint_ips
+        .as_ref()
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.first())
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "deployment {deployment_id} has no endpoint IPs (status: {})",
+                dep.status
+            )
+        })?
+        .to_string();
+
+    let stack = dep
+        .config
+        .get("endpoints")
+        .and_then(|e| e.as_array())
+        .and_then(|a| a.first())
+        .and_then(|ep| ep.get("http_stacks"))
+        .and_then(|s| s.as_array())
+        .and_then(|a| a.first())
+        .and_then(|v| v.as_str())
+        .unwrap_or("nginx");
+
+    Ok(networker_common::EndpointRef::Network {
+        host,
+        port: Some(networker_common::test_config::proxy_https_port(stack)),
+    })
+}
+
 pub async fn try_dispatch_run<D: RunDispatcher>(
     hub: &D,
     run: &TestRun,
     cfg: &TestConfig,
     state: Option<&Arc<AppState>>,
 ) -> DispatchOutcome {
+    // Resolve Proxy endpoints to a concrete Network target the agent can
+    // probe. Failure to resolve leaves the config unchanged; the agent will
+    // report the (accurate) unsupported-kind error.
+    let resolved_cfg: Option<TestConfig> = match (&cfg.endpoint, state) {
+        (networker_common::EndpointRef::Proxy { proxy_endpoint_id }, Some(state)) => {
+            match resolve_proxy_endpoint(state, proxy_endpoint_id).await {
+                Ok(endpoint) => {
+                    let mut c = cfg.clone();
+                    c.endpoint = endpoint;
+                    // Deployed targets serve self-signed certificates by
+                    // construction — probe them without cert validation so
+                    // TLS/HTTP modes measure the stack instead of failing
+                    // on trust.
+                    c.workload.insecure = true;
+                    Some(c)
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        run_id = %run.id,
+                        %proxy_endpoint_id,
+                        error = %e,
+                        "Failed to resolve proxy endpoint — dispatching unresolved"
+                    );
+                    None
+                }
+            }
+        }
+        _ => None,
+    };
+    let cfg = resolved_cfg.as_ref().unwrap_or(cfg);
+
     // Prefer an agent whose reported version is ≥ MIN_AGENT_VERSION_FOR_ASSIGN_RUN.
     // If the DB lookup is unavailable (test harness passes `None`), fall back
     // to the naive "any online agent" behaviour so unit tests aren't forced
@@ -421,6 +529,7 @@ mod tests {
                 timeout_ms: 5000,
                 payload_sizes: vec![],
                 capture_mode: CaptureMode::HeadersOnly,
+                insecure: false,
             },
             methodology: None,
             baseline_run_id: None,

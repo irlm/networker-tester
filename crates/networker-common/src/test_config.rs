@@ -154,6 +154,12 @@ pub struct Workload {
     #[serde(default)]
     pub payload_sizes: Vec<u32>,
     pub capture_mode: CaptureMode,
+    /// Skip TLS certificate validation (tester `--insecure`). Deployed test
+    /// targets serve self-signed certificates by construction, so the
+    /// dispatcher sets this when it resolves a Proxy endpoint; user-entered
+    /// Network endpoints keep strict validation unless explicitly opted out.
+    #[serde(default)]
+    pub insecure: bool,
 }
 
 /// Probe mode / protocol variant. Union of current `networker_tester::Protocol`
@@ -423,6 +429,7 @@ mod tests {
                 timeout_ms: 5000,
                 payload_sizes: vec![],
                 capture_mode: CaptureMode::HeadersOnly,
+                insecure: false,
             },
             methodology: None,
             baseline_run_id: None,

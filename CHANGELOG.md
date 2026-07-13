@@ -11,6 +11,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.10] — 2026-07-13
+
+Second live-Azure E2E pass, this time from a completely fresh database
+(fresh-install path). Runner + nginx target deployed via the UI; agent
+connected through the public URL automatically.
+
+### Fixed
+- **Full Stack / Application benchmark deploys failed with "unknown provider
+  'auto'".** Auto-provisioned Pending endpoints emitted `provider: "auto"`,
+  which install.sh (no DB access) can't resolve. The dispatcher now looks up
+  the concrete provider from the cloud account and emits the per-provider
+  endpoint block (azure/aws/gcp) the deploy wizard produces. Verified: the
+  auto-provisioning deployment completed against Azure.
+- **Throughput benchmark modes crashed the whole run.** `download`/`upload`
+  hard-require `--payload-sizes`; without it the tester exits 1 with empty
+  stdout and the run fails with "unparseable JSON: EOF". The agent now
+  injects a 64 KB default when a throughput mode is selected with no payload
+  sizes, so the run completes instead of crashing.
+- **Network Test against a deployed target failed with 0 attempts.** The UI
+  stores the deployment id in `EndpointRef::Proxy`, but neither the dashboard
+  nor the agent ever resolved it — every dispatch died with "Unsupported
+  endpoint kind for standalone agent: proxy". The dispatcher now rewrites
+  Proxy → Network using `deployment.endpoint_ips` + the stack's HTTPS port
+  before sending `AssignRun`. Verified live: rerun completed with all 60
+  probes executed.
+- **Create Runner modal silently disabled.** When cloud accounts loaded, the
+  auto-select handler reset the region to '' while the Region select still
+  displayed the first option — the submit button stayed disabled with no
+  explanation. The caller-provided default (or the account's default region)
+  is now preserved.
+
+### Added
+- **`Workload.insecure`** (serde-default false): deployed test targets serve
+  self-signed certificates by construction, so the dispatcher sets it when
+  resolving a Proxy endpoint and the agent forwards `--insecure` to the
+  tester. TLS/HTTP modes now measure the deployed stack instead of failing
+  cert validation. (Requires agents ≥0.28.10 to take effect.)
+
+---
+
 ## [0.28.9] — 2026-07-13
 
 ### Changed
