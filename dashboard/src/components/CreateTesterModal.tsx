@@ -181,7 +181,11 @@ export function CreateTesterModal({
         setSelectedAccountId(first.account_id);
         setCloud(first.provider);
         setVmSize(DEFAULT_VM_SIZE[first.provider] || '');
-        setRegion('');
+        // Keep the caller-provided default region (or fall back to the
+        // account's default). Resetting to '' left the Region select
+        // VISUALLY showing the first option while the state was empty —
+        // the submit button stayed disabled with no explanation.
+        setRegion(prev => prev || first.region_default || '');
       } else if (providers.length > 0 && !providers.includes(cloud)) {
         setCloud(providers[0]);
         setVmSize(DEFAULT_VM_SIZE[providers[0]] || '');

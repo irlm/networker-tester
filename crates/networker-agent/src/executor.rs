@@ -80,6 +80,10 @@ fn build_args(config: &TestConfig, target: &str) -> Vec<String> {
         "--json-stdout".into(),
     ];
 
+    if config.workload.insecure {
+        args.push("--insecure".into());
+    }
+
     if !config.workload.payload_sizes.is_empty() {
         let csv = config
             .workload

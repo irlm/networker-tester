@@ -256,12 +256,93 @@ impl RunDispatcher for crate::ws::agent_hub::AgentHub {
 ///
 /// Generic over `RunDispatcher` so unit tests can record every dispatch
 /// attempt without constructing a full `AppState`.
+/// Resolve a `Proxy { proxy_endpoint_id }` endpoint into a concrete
+/// `Network { host, port }` the standalone agent can probe.
+///
+/// The UI stores the DEPLOYMENT id in `proxy_endpoint_id`; the deployed
+/// target's host lives in `deployment.endpoint_ips[0]` and the proxy stack
+/// (which selects the HTTPS listener port) in
+/// `deployment.config.endpoints[0].http_stacks[0]`. Without this rewrite
+/// every Network Test against a deployed target failed with
+/// "Unsupported endpoint kind for standalone agent: proxy" and 0 attempts.
+async fn resolve_proxy_endpoint(
+    state: &Arc<AppState>,
+    deployment_id: &Uuid,
+) -> anyhow::Result<networker_common::EndpointRef> {
+    let client = state.db.get().await?;
+    let dep = crate::db::deployments::get(&client, deployment_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("deployment {deployment_id} not found"))?;
+
+    let host = dep
+        .endpoint_ips
+        .as_ref()
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.first())
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "deployment {deployment_id} has no endpoint IPs (status: {})",
+                dep.status
+            )
+        })?
+        .to_string();
+
+    let stack = dep
+        .config
+        .get("endpoints")
+        .and_then(|e| e.as_array())
+        .and_then(|a| a.first())
+        .and_then(|ep| ep.get("http_stacks"))
+        .and_then(|s| s.as_array())
+        .and_then(|a| a.first())
+        .and_then(|v| v.as_str())
+        .unwrap_or("nginx");
+
+    Ok(networker_common::EndpointRef::Network {
+        host,
+        port: Some(networker_common::test_config::proxy_https_port(stack)),
+    })
+}
+
 pub async fn try_dispatch_run<D: RunDispatcher>(
     hub: &D,
     run: &TestRun,
     cfg: &TestConfig,
     state: Option<&Arc<AppState>>,
 ) -> DispatchOutcome {
+    // Resolve Proxy endpoints to a concrete Network target the agent can
+    // probe. Failure to resolve leaves the config unchanged; the agent will
+    // report the (accurate) unsupported-kind error.
+    let resolved_cfg: Option<TestConfig> = match (&cfg.endpoint, state) {
+        (networker_common::EndpointRef::Proxy { proxy_endpoint_id }, Some(state)) => {
+            match resolve_proxy_endpoint(state, proxy_endpoint_id).await {
+                Ok(endpoint) => {
+                    let mut c = cfg.clone();
+                    c.endpoint = endpoint;
+                    // Deployed targets serve self-signed certificates by
+                    // construction — probe them without cert validation so
+                    // TLS/HTTP modes measure the stack instead of failing
+                    // on trust.
+                    c.workload.insecure = true;
+                    Some(c)
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        run_id = %run.id,
+                        %proxy_endpoint_id,
+                        error = %e,
+                        "Failed to resolve proxy endpoint — dispatching unresolved"
+                    );
+                    None
+                }
+            }
+        }
+        _ => None,
+    };
+    let cfg = resolved_cfg.as_ref().unwrap_or(cfg);
+
     // Prefer an agent whose reported version is ≥ MIN_AGENT_VERSION_FOR_ASSIGN_RUN.
     // If the DB lookup is unavailable (test harness passes `None`), fall back
     // to the naive "any online agent" behaviour so unit tests aren't forced
@@ -421,6 +502,7 @@ mod tests {
                 timeout_ms: 5000,
                 payload_sizes: vec![],
                 capture_mode: CaptureMode::HeadersOnly,
+                insecure: false,
             },
             methodology: None,
             baseline_run_id: None,
