@@ -52,5 +52,7 @@ jobs:
           fi
           echo "No vulnerable packages."
 
-      # Phase 2 adds a `dotnet test` step here once the xUnit + Testcontainers
-      # suites exist (there are no test projects in the scaffold yet).
+      # Contract round-trip tests (Networker.Tests). Phase 2 adds
+      # Testcontainers/WebApplicationFactory suites to the same project.
+      - name: Test
+        run: dotnet test hybrid/Networker.sln --configuration Release --no-build --verbosity normal

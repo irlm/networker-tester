@@ -38,13 +38,43 @@ public sealed class SignalRDashboardClient : IDashboardClient, IAsyncDisposable
         await _connectGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            if (_connection.State == HubConnectionState.Disconnected)
-                await _connection.StartAsync(ct).ConfigureAwait(false);
+            switch (_connection.State)
+            {
+                case HubConnectionState.Connected:
+                    return;
+                case HubConnectionState.Disconnected:
+                    await _connection.StartAsync(ct).ConfigureAwait(false);
+                    return;
+                default:
+                    // Connecting / Reconnecting (WithAutomaticReconnect is
+                    // mid-flight). Proceeding here would make InvokeAsync throw
+                    // "connection is not active" — poll until it settles.
+                    await WaitForConnectedAsync(ct).ConfigureAwait(false);
+                    return;
+            }
         }
         finally
         {
             _connectGate.Release();
         }
+    }
+
+    private async Task WaitForConnectedAsync(CancellationToken ct)
+    {
+        // Bounded wait: the automatic reconnector is working; give it a window
+        // to reach Connected before surfacing the failure to the caller.
+        for (var i = 0; i < 30; i++)
+        {
+            if (_connection.State == HubConnectionState.Connected) return;
+            if (_connection.State == HubConnectionState.Disconnected)
+            {
+                await _connection.StartAsync(ct).ConfigureAwait(false);
+                return;
+            }
+            await Task.Delay(TimeSpan.FromMilliseconds(500), ct).ConfigureAwait(false);
+        }
+        throw new InvalidOperationException(
+            "SignalR connection did not reach Connected within the reconnect window");
     }
 
     public async Task ReportResultAsync(ProbeRunResult result, CancellationToken cancellationToken = default)

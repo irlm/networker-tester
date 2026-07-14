@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Options;
 using Networker.Contracts;
@@ -44,12 +43,15 @@ public sealed class ProbeRunner(ILogger<ProbeRunner> logger, IOptions<AgentOptio
             "Spawning {Tester} --target {Target} --modes {Modes} --json-stdout",
             _options.TesterPath, target, _options.Modes);
 
-        using var process = new Process { StartInfo = psi };
-        var stdout = new StringBuilder();
-        var stderr = new StringBuilder();
-        process.OutputDataReceived += (_, e) => { if (e.Data is not null) stdout.AppendLine(e.Data); };
-        process.ErrorDataReceived += (_, e) => { if (e.Data is not null) stderr.AppendLine(e.Data); };
+        // Hard ceiling so a hung tester can never wedge the agent: the run's own
+        // timeout plus a grace window. If it trips we kill the whole process
+        // tree rather than leak an orphaned tester.
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var hardTimeout = TimeSpan.FromSeconds(_options.TimeoutSeconds + 10);
+        timeoutCts.CancelAfter(hardTimeout);
+        var ct = timeoutCts.Token;
 
+        using var process = new Process { StartInfo = psi };
         try
         {
             process.Start();
@@ -60,17 +62,39 @@ public sealed class ProbeRunner(ILogger<ProbeRunner> logger, IOptions<AgentOptio
                 $"failed to launch tester binary '{_options.TesterPath}': {ex.Message}", ex);
         }
 
-        process.BeginOutputReadLine();
-        process.BeginErrorReadLine();
-        await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        // Drain both streams concurrently and await them AFTER exit. This
+        // avoids the pipe-buffer deadlock (a full stderr blocking stdout) and
+        // the flush race the event-based BeginOutputReadLine model has, where
+        // WaitForExitAsync can return before the final data callback fires.
+        var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
+        var stderrTask = process.StandardError.ReadToEndAsync(ct);
+
+        string json, stderr;
+        try
+        {
+            await process.WaitForExitAsync(ct).ConfigureAwait(false);
+            json = (await stdoutTask.ConfigureAwait(false)).Trim();
+            stderr = (await stderrTask.ConfigureAwait(false)).Trim();
+        }
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested
+                                                 && !cancellationToken.IsCancellationRequested)
+        {
+            KillTree(process);
+            throw new ProbeRunnerException(
+                $"tester timed out after {hardTimeout.TotalSeconds:0}s and was killed");
+        }
+        catch (OperationCanceledException)
+        {
+            KillTree(process); // caller cancelled — don't leave the child running
+            throw;
+        }
 
         if (process.ExitCode != 0)
         {
             throw new ProbeRunnerException(
-                $"tester exited with code {process.ExitCode}: {stderr.ToString().Trim()}");
+                $"tester exited with code {process.ExitCode}: {stderr}");
         }
 
-        var json = stdout.ToString().Trim();
         if (json.Length == 0)
         {
             throw new ProbeRunnerException("tester produced no stdout");
@@ -87,6 +111,20 @@ public sealed class ProbeRunner(ILogger<ProbeRunner> logger, IOptions<AgentOptio
         {
             throw new ProbeRunnerException(
                 $"could not parse tester JSON against contract: {ex.Message}", ex);
+        }
+    }
+
+    private static void KillTree(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+        }
+        catch
+        {
+            // Best-effort — the process may have exited between the check and
+            // the kill, or we may lack permission; nothing more we can do.
         }
     }
 }
