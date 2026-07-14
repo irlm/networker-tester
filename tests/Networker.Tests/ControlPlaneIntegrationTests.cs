@@ -302,6 +302,24 @@ public sealed class ControlPlaneIntegrationTests : IClassFixture<ControlPlaneFix
         Assert.Equal("s3cr3t", doc.RootElement.GetProperty("client_secret").GetString());
     }
 
+    [Fact]
+    public async Task Deployment_create_persists_a_row()
+    {
+        var client = _fixture.CreateAuthenticatedClient();
+        var body = new { name = "itest-deploy", config = new { version = 1, provider = "azure" } };
+
+        var resp = await client.PostAsJsonAsync(
+            $"/api/projects/{ControlPlaneFixture.SeededProjectId}/deployments", body);
+
+        Assert.Equal(HttpStatusCode.Created, resp.StatusCode);
+
+        await using var ctx = _fixture.NewDbContext();
+        var dep = await ctx.Deployments
+            .FirstOrDefaultAsync(d => d.ProjectId == ControlPlaneFixture.SeededProjectId
+                                      && d.Name == "itest-deploy");
+        Assert.NotNull(dep);
+    }
+
     private sealed record HealthResponse(string Status, string Version, string Db);
 
     private sealed record TesterRow(

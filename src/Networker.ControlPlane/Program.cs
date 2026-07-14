@@ -65,6 +65,11 @@ builder.Services.AddNetworkerReconciliationServices();
 // shell-out to az/aws/gcloud for VM lifecycle — SDKs are a later pass).
 builder.Services.AddCredentialCipher();
 builder.Services.AddComputeProvisioner();
+// M4 slice 2: the provisioning orchestrator (Pending→provision→Network→re-queue,
+// via the deploy-runner shelling install.sh) and the cloud lifecycle loops
+// (auto-shutdown of idle testers, orphan-resource reaper).
+builder.Services.AddProvisioningOrchestrator();
+builder.Services.AddNetworkerCloudLifecycleServices();
 
 var app = builder.Build();
 
@@ -114,6 +119,7 @@ app.MapComparisonGroupsEndpoints();
 app.MapCloudAccountsEndpoints();
 app.MapCloudConnectionsEndpoints();
 app.MapTesterWriteEndpoints();
+app.MapDeploymentWriteEndpoints();
 
 // M2 browser event bus — live dashboard updates with replay + sequence numbers
 // (the Rust EventBus + browser_hub, ported). Clients connect with
