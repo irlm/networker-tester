@@ -18,6 +18,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Networker.Data\Networker.Data.csproj" />
     <ProjectReference Include="..\Networker.Contracts\Networker.Contracts.csproj" />
+    <ProjectReference Include="..\Networker.Security\Networker.Security.csproj" />
   </ItemGroup>
 
 </Project>
