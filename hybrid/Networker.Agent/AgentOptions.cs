@@ -7,8 +7,10 @@ public sealed class AgentOptions
 
     /// <summary>
     /// Path to the `networker-tester` binary. When not overridden, the agent
-    /// assumes it is on PATH. Configure via <c>AGENT_TESTER_PATH</c> env var or
-    /// <c>Agent:TesterPath</c>.
+    /// assumes it is on PATH. Configure via <c>AGENT_TESTERPATH</c> env var
+    /// (the <c>AGENT_</c> prefix maps to config root; underscores are NOT
+    /// separators, so it is <c>AGENT_TESTERPATH</c>, not <c>AGENT_TESTER_PATH</c>)
+    /// or <c>Agent:TesterPath</c> in appsettings.
     /// </summary>
     public string TesterPath { get; set; } = "networker-tester";
 
