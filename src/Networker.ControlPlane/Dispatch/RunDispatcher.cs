@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using Networker.ControlPlane.Auth;
 using Networker.ControlPlane.Realtime;
@@ -20,11 +21,16 @@ public sealed class RunDispatcher : IRunDispatcher
 {
     // The canonical wire status strings (Rust RunStatus is rename_all="lowercase").
     private const string StatusQueued = "queued";
+    private const string StatusRunning = "running";
     private const string StatusCancelled = "cancelled";
 
     // The endpoint_kind column value for a Pending endpoint (deferred to M4).
     // Matches the Rust EndpointRef::Pending => "pending".
     private const string EndpointKindPending = "pending";
+
+    // The endpoint_kind column value for a Proxy endpoint — resolved to a
+    // concrete Network{host,port} at dispatch time (Rust resolve_proxy_endpoint).
+    private const string EndpointKindProxy = "proxy";
 
     // Minimum age (seconds) before the redispatcher considers a queued run, so we
     // don't race the inline dispatch that runs synchronously inside LaunchAsync.
@@ -56,6 +62,7 @@ public sealed class RunDispatcher : IRunDispatcher
     public async Task<Guid> LaunchAsync(
         Guid testConfigId,
         Guid? comparisonGroupId,
+        Guid? testerId,
         AuthUser caller,
         CancellationToken ct)
     {
@@ -75,6 +82,12 @@ public sealed class RunDispatcher : IRunDispatcher
             FailureCount = 0,
             CreatedAt = now,
             ComparisonGroupId = comparisonGroupId,
+            // tester_id semantically holds the EXECUTING AGENT's agent_id (the
+            // Rust agent_hub binds agent_id into `WHERE tester_id=$1`). When the
+            // caller pins a tester up-front (LaunchRequest.tester_id) we seed it
+            // here so dispatch prefers that agent; the successful assignment /
+            // RunStarted stamps the actual executor.
+            TesterId = testerId,
         };
 
         _db.TestRuns.Add(run);
@@ -116,51 +129,17 @@ public sealed class RunDispatcher : IRunDispatcher
 
         // ── M4 deferral: Pending endpoints provision their own VM. ───────────
         // The Rust dispatch_or_provision kicks a deployment and flips the run to
-        // `provisioning`. Until the M4 provisioning orchestrator lands we leave
-        // the run `queued` and annotate the log so it's visibly deferred (not
-        // silently stranded). The redispatcher explicitly skips Pending runs.
+        // `provisioning`. The provisioning orchestrator owns these runs; the
+        // redispatcher explicitly skips Pending runs.
         if (string.Equals(cfg.EndpointKind, EndpointKindPending, StringComparison.OrdinalIgnoreCase))
         {
             _logger.LogInformation(
-                "Run {RunId} has a Pending endpoint — leaving queued; provisioning is deferred to M4",
+                "Run {RunId} has a Pending endpoint — leaving queued for the provisioning orchestrator",
                 run.Id);
             return;
         }
 
-        // ── Target selection (mirrors the Rust preference order). ────────────
-        // 1. The run's tester's own agent, if online (agent WHERE tester_id = run.tester_id).
-        // 2. Otherwise any online agent.
-        var targetAgentId = await SelectTargetAgentAsync(run.TesterId, ct);
-        if (targetAgentId is null)
-        {
-            // No agent online — leave queued; the redispatcher retries next tick.
-            _logger.LogDebug(
-                "Run {RunId} has no online agent — remains queued for later dispatch",
-                run.Id);
-            return;
-        }
-
-        var agentId = targetAgentId.Value;
-        var (runJson, configJson) = SerializeForAssign(run, cfg);
-
-        var sent = await _agents.AssignRunAsync(agentId, runJson, configJson, ct);
-        if (sent)
-        {
-            _logger.LogInformation(
-                "Dispatched run {RunId} to agent {AgentId} (endpoint_kind={Kind})",
-                run.Id, agentId, cfg.EndpointKind);
-            // Publish a JobUpdate so the browser bus reflects the assignment.
-            // Status stays `queued` on the DB until the agent sends RunStarted;
-            // this event carries the assigned agent id for the live UI.
-            _bus.Publish(new JobUpdate(run.Id, StatusQueued, agentId, null, null));
-        }
-        else
-        {
-            // Send failed (agent raced offline) — leave queued, redispatcher retries.
-            _logger.LogWarning(
-                "Dispatch to agent {AgentId} failed for run {RunId} — will retry",
-                agentId, run.Id);
-        }
+        await TryAssignAsync(run, cfg, ct);
     }
 
     /// <inheritdoc />
@@ -203,12 +182,6 @@ public sealed class RunDispatcher : IRunDispatcher
             }
 
             var run = candidate.Run;
-            var targetAgentId = await SelectTargetAgentAsync(run.TesterId, ct);
-            if (targetAgentId is null)
-            {
-                continue;
-            }
-
             var cfg = await _db.TestConfigs
                 .AsNoTracking()
                 .FirstOrDefaultAsync(c => c.Id == run.TestConfigId, ct);
@@ -217,15 +190,11 @@ public sealed class RunDispatcher : IRunDispatcher
                 continue;
             }
 
-            var (runJson, configJson) = SerializeForAssign(run, cfg);
-            var sent = await _agents.AssignRunAsync(targetAgentId.Value, runJson, configJson, ct);
-            if (sent)
+            if (await TryAssignAsync(run, cfg, ct))
             {
                 dispatched++;
                 _logger.LogInformation(
-                    "Redispatched previously-queued run {RunId} to agent {AgentId}",
-                    run.Id, targetAgentId.Value);
-                _bus.Publish(new JobUpdate(run.Id, StatusQueued, targetAgentId.Value, null, null));
+                    "Redispatched previously-queued run {RunId}", run.Id);
             }
         }
 
@@ -269,36 +238,252 @@ public sealed class RunDispatcher : IRunDispatcher
         _bus.Publish(new JobUpdate(runId, StatusCancelled, targetAgentId, null, DateTimeOffset.UtcNow));
     }
 
+    // ── Core assignment ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Select a target agent, serialize the run + (proxy-resolved) config, send
+    /// <c>assign_run</c>, and — on success — stamp <c>test_run.tester_id</c> with
+    /// the executing agent's id so the watchdog/cancel paths can find the owner.
+    /// Shared by the inline dispatch and the periodic redispatcher (the C#
+    /// analogue of the Rust <c>try_dispatch_run</c>).
+    /// </summary>
+    private async Task<bool> TryAssignAsync(
+        Data.Entities.TestRun run,
+        Data.Entities.TestConfig cfg,
+        CancellationToken ct)
+    {
+        var targetAgentId = await SelectTargetAgentAsync(run.TesterId, ct);
+        if (targetAgentId is null)
+        {
+            // No compatible agent online — leave queued; the redispatcher retries.
+            _logger.LogDebug(
+                "Run {RunId} has no compatible online agent (min version {MinVersion}) — remains queued for later dispatch",
+                run.Id, AgentVersionGate.MinAssignRunVersionString);
+            return false;
+        }
+
+        var agentId = targetAgentId.Value;
+        var (runJson, configJson) = await SerializeForAssignAsync(run, cfg, ct);
+
+        var sent = await _agents.AssignRunAsync(agentId, runJson, configJson, ct);
+        if (!sent)
+        {
+            // Send failed (agent raced offline) — leave queued, redispatcher retries.
+            _logger.LogWarning(
+                "Dispatch to agent {AgentId} failed for run {RunId} — will retry",
+                agentId, run.Id);
+            return false;
+        }
+
+        // Stamp the executing agent's id into tester_id (the Rust semantic: the
+        // agent hub keys orphan-cleanup and heartbeat updates on it). Guarded so
+        // a run that already reached a terminal state is never clobbered.
+        await _db.TestRuns
+            .Where(r => r.Id == run.Id && (r.Status == StatusQueued || r.Status == StatusRunning))
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.TesterId, agentId), ct);
+
+        _logger.LogInformation(
+            "Dispatched run {RunId} to agent {AgentId} (endpoint_kind={Kind})",
+            run.Id, agentId, cfg.EndpointKind);
+
+        // Publish a JobUpdate so the browser bus reflects the assignment.
+        // Status stays `queued` on the DB until the agent sends RunStarted;
+        // this event carries the assigned agent id for the live UI.
+        _bus.Publish(new JobUpdate(run.Id, StatusQueued, agentId, null, null));
+        return true;
+    }
+
     // ── Target-agent selection ───────────────────────────────────────────────
 
     /// <summary>
-    /// Prefer the run's tester's own agent if it is online (agent WHERE
-    /// tester_id = run.tester_id), else fall back to any online agent. Returns
-    /// null when no agent is connected. Mirrors the Rust dispatch preference.
+    /// Pick the target agent for a run. <paramref name="preferredAgentId"/> is
+    /// the run's <c>tester_id</c>, which semantically holds an AGENT id (the Rust
+    /// agent hub binds agent_id into <c>WHERE tester_id=$1</c>): if that agent is
+    /// online and version-compatible it wins (agent affinity); otherwise fall
+    /// back to any online agent whose reported <c>agent.version</c> parses and is
+    /// ≥ 0.28.0 — older agents silently drop <c>assign_run</c> (the Rust
+    /// <c>any_online_agent_min_version</c> gate, MIN_AGENT_VERSION_FOR_ASSIGN_RUN).
+    /// Returns null when no compatible agent is connected.
     /// </summary>
-    private async Task<Guid?> SelectTargetAgentAsync(Guid? testerId, CancellationToken ct)
+    private async Task<Guid?> SelectTargetAgentAsync(Guid? preferredAgentId, CancellationToken ct)
     {
-        if (testerId is Guid tid)
+        var online = _agents.OnlineAgents();
+        if (online.Count == 0)
         {
-            // There may be more than one agent row for a tester across its
-            // lifetime (re-registration); take the online one if present.
-            var agentIds = await _db.Agents
-                .AsNoTracking()
-                .Where(a => a.TesterId == tid)
-                .Select(a => a.AgentId)
-                .ToListAsync(ct);
+            return null;
+        }
 
-            foreach (var agentId in agentIds)
+        var onlineIds = online.ToHashSet();
+        var rows = await _db.Agents
+            .AsNoTracking()
+            .Where(a => onlineIds.Contains(a.AgentId))
+            .Select(a => new { a.AgentId, a.Version })
+            .ToListAsync(ct);
+
+        var compatible = rows
+            .Where(a => AgentVersionGate.IsCompatible(a.Version))
+            .Select(a => a.AgentId)
+            .ToList();
+
+        if (compatible.Count == 0)
+        {
+            return null;
+        }
+
+        if (preferredAgentId is Guid pid && compatible.Contains(pid))
+        {
+            return pid;
+        }
+
+        return compatible[0];
+    }
+
+    // ── Proxy endpoint resolution (Rust resolve_proxy_endpoint) ─────────────
+
+    /// <summary>
+    /// Resolve a <c>Proxy { proxy_endpoint_id }</c> endpoint into a concrete
+    /// <c>Network { host, port }</c> the standalone agent can probe — the port of
+    /// the Rust <c>resolve_proxy_endpoint</c> (provisioning.rs). The UI stores
+    /// the DEPLOYMENT id in <c>proxy_endpoint_id</c>; the deployed target's host
+    /// lives in <c>deployment.endpoint_ips[0]</c> and the proxy stack (which
+    /// selects the HTTPS listener port) in
+    /// <c>deployment.config.endpoints[0].http_stacks[0]</c>. Without this rewrite
+    /// every Network Test against a deployed target fails with "Unsupported
+    /// endpoint kind for standalone agent: proxy" and 0 attempts (v0.28.10 prod
+    /// fix). Returns null on any resolution failure — the caller dispatches the
+    /// config unresolved so the agent reports the (accurate) unsupported-kind
+    /// error, matching Rust.
+    /// </summary>
+    private async Task<JsonElement?> ResolveProxyEndpointAsync(string endpointRefText, CancellationToken ct)
+    {
+        Guid deploymentId;
+        string? stackHint = null;
+        try
+        {
+            using var doc = JsonDocument.Parse(endpointRefText);
+            if (!doc.RootElement.TryGetProperty("proxy_endpoint_id", out var idProp) ||
+                !Guid.TryParse(idProp.GetString(), out deploymentId))
             {
-                if (_agents.IsOnline(agentId))
+                _logger.LogWarning("Proxy endpoint has no parseable proxy_endpoint_id — dispatching unresolved");
+                return null;
+            }
+
+            // Optional stack override carried on the endpoint itself; falls back
+            // to the deployment's recorded stack below.
+            if (doc.RootElement.TryGetProperty("proxy_stack", out var stackProp) &&
+                stackProp.ValueKind == JsonValueKind.String)
+            {
+                stackHint = stackProp.GetString();
+            }
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(ex, "Proxy endpoint_ref is not valid JSON — dispatching unresolved");
+            return null;
+        }
+
+        var dep = await _db.Deployments
+            .AsNoTracking()
+            .FirstOrDefaultAsync(d => d.DeploymentId == deploymentId, ct);
+        if (dep is null)
+        {
+            _logger.LogWarning(
+                "Failed to resolve proxy endpoint — deployment {DeploymentId} not found; dispatching unresolved",
+                deploymentId);
+            return null;
+        }
+
+        var host = FirstEndpointIp(dep.EndpointIps);
+        if (host is null)
+        {
+            _logger.LogWarning(
+                "Failed to resolve proxy endpoint — deployment {DeploymentId} has no endpoint IPs (status: {Status}); dispatching unresolved",
+                deploymentId, dep.Status);
+            return null;
+        }
+
+        var stack = !string.IsNullOrWhiteSpace(stackHint)
+            ? stackHint!
+            : ProxyStackFromDeploymentConfig(dep.Config) ?? "nginx";
+
+        var resolved = new
+        {
+            kind = "network",
+            host,
+            port = ProxyHttpsPort(stack),
+        };
+        return JsonSerializer.SerializeToElement(resolved);
+    }
+
+    /// <summary>First non-empty string in the <c>endpoint_ips</c> JSON array.</summary>
+    private static string? FirstEndpointIp(string? endpointIps)
+    {
+        if (string.IsNullOrWhiteSpace(endpointIps))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(endpointIps);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array)
+            {
+                return null;
+            }
+            foreach (var el in doc.RootElement.EnumerateArray())
+            {
+                if (el.ValueKind == JsonValueKind.String)
                 {
-                    return agentId;
+                    var s = el.GetString()?.Trim();
+                    if (!string.IsNullOrEmpty(s))
+                    {
+                        return s;
+                    }
                 }
             }
         }
-
-        return _agents.AnyOnlineAgent();
+        catch (JsonException)
+        {
+            return null;
+        }
+        return null;
     }
+
+    /// <summary>
+    /// The Rust path <c>deployment.config.endpoints[0].http_stacks[0]</c>.
+    /// </summary>
+    private static string? ProxyStackFromDeploymentConfig(string configText)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(configText);
+            if (doc.RootElement.TryGetProperty("endpoints", out var eps) &&
+                eps.ValueKind == JsonValueKind.Array &&
+                eps.GetArrayLength() > 0 &&
+                eps[0].TryGetProperty("http_stacks", out var stacks) &&
+                stacks.ValueKind == JsonValueKind.Array &&
+                stacks.GetArrayLength() > 0 &&
+                stacks[0].ValueKind == JsonValueKind.String)
+            {
+                var s = stacks[0].GetString();
+                return string.IsNullOrWhiteSpace(s) ? null : s;
+            }
+        }
+        catch (JsonException)
+        {
+            // fall through
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// HTTPS listener port for a proxy stack after a standard deploy — the same
+    /// table as <see cref="Provisioning.ProvisioningOrchestrator"/> (ported from
+    /// <c>networker_common::test_config::proxy_https_port</c>). Public so the
+    /// unit tests exercise the actual table the dispatcher uses.
+    /// </summary>
+    public static int ProxyHttpsPort(string stack)
+        => Provisioning.ProvisioningOrchestrator.ProxyHttpsPort(stack);
 
     // ── Wire serialization ────────────────────────────────────────────────────
 
@@ -311,11 +496,31 @@ public sealed class RunDispatcher : IRunDispatcher
     /// <c>workload</c> objects arrive intact. Returned as <see cref="JsonElement"/>
     /// so <see cref="AgentConnectionRegistry.AssignRunAsync"/> can carry them
     /// opaquely into the <c>assign_run</c> envelope.
+    ///
+    /// <para><c>Proxy</c> endpoints are resolved on a COPY for the wire payload
+    /// — endpoint rewritten to <c>Network{host,port}</c> and
+    /// <c>workload.insecure = true</c> (deployed targets serve self-signed
+    /// certificates by construction) — while the stored config row is left
+    /// untouched, matching the Rust <c>try_dispatch_run</c> clone.</para>
     /// </summary>
-    private static (JsonElement Run, JsonElement Config) SerializeForAssign(
+    private async Task<(JsonElement Run, JsonElement Config)> SerializeForAssignAsync(
         Data.Entities.TestRun run,
-        Data.Entities.TestConfig cfg)
+        Data.Entities.TestConfig cfg,
+        CancellationToken ct)
     {
+        object endpointJson = RawJson(cfg.EndpointRef);
+        object workloadJson = RawJson(cfg.Workload);
+
+        if (string.Equals(cfg.EndpointKind, EndpointKindProxy, StringComparison.OrdinalIgnoreCase))
+        {
+            var resolved = await ResolveProxyEndpointAsync(cfg.EndpointRef, ct);
+            if (resolved is JsonElement resolvedEndpoint)
+            {
+                endpointJson = resolvedEndpoint;
+                workloadJson = WithInsecure(cfg.Workload);
+            }
+        }
+
         var runDto = new
         {
             id = run.Id,
@@ -341,8 +546,8 @@ public sealed class RunDispatcher : IRunDispatcher
             project_id = cfg.ProjectId,
             name = cfg.Name,
             description = cfg.Description,
-            endpoint = RawJson(cfg.EndpointRef),
-            workload = RawJson(cfg.Workload),
+            endpoint = endpointJson,
+            workload = workloadJson,
             methodology = RawJsonOrNull(cfg.Methodology),
             baseline_run_id = cfg.BaselineRunId,
             max_duration_secs = cfg.MaxDurationSecs,
@@ -354,6 +559,28 @@ public sealed class RunDispatcher : IRunDispatcher
         var runElement = JsonSerializer.SerializeToElement(runDto);
         var configElement = JsonSerializer.SerializeToElement(configDto);
         return (runElement, configElement);
+    }
+
+    /// <summary>
+    /// Copy of the workload JSON with <c>insecure: true</c> — the Rust
+    /// <c>c.workload.insecure = true</c> applied to the wire clone only.
+    /// </summary>
+    private static object WithInsecure(string workloadText)
+    {
+        try
+        {
+            var node = JsonNode.Parse(workloadText);
+            if (node is JsonObject obj)
+            {
+                obj["insecure"] = true;
+                return JsonSerializer.SerializeToElement(obj);
+            }
+        }
+        catch (JsonException)
+        {
+            // fall through — ship the workload unmodified
+        }
+        return RawJson(workloadText);
     }
 
     // Parse a JSONB-as-text column into a JsonElement so it serializes as raw
@@ -374,6 +601,60 @@ public sealed class RunDispatcher : IRunDispatcher
 
     private static object? RawJsonOrNull(string? value)
         => value is null ? null : RawJson(value);
+}
+
+/// <summary>
+/// Minimum-agent-version gate for <c>assign_run</c> — the C# port of the Rust
+/// <c>parse_version</c> / <c>any_online_agent_min_version</c> pair
+/// (ws/agent_hub.rs) and <c>MIN_AGENT_VERSION_FOR_ASSIGN_RUN = "0.28.0"</c>
+/// (provisioning.rs). Agents older than 0.28.0 silently drop <c>assign_run</c>,
+/// so they must never be selected. Parsing is intentionally permissive (Rust:
+/// malformed parts fall back to 0, so garbage parses to 0.0.0 and is rejected
+/// by the ≥ 0.28.0 comparison — never a throw).
+/// </summary>
+public static class AgentVersionGate
+{
+    /// <summary>Rust <c>MIN_AGENT_VERSION_FOR_ASSIGN_RUN</c>.</summary>
+    public const string MinAssignRunVersionString = "0.28.0";
+
+    private static readonly (int Major, int Minor, int Patch) MinAssignRunVersion = (0, 28, 0);
+
+    /// <summary>
+    /// Whether <paramref name="version"/> (as reported by the agent) parses and
+    /// is ≥ 0.28.0. Null/blank is rejected (the Rust loop <c>continue</c>s over
+    /// NULL versions); garbage parses to 0.0.0 and is rejected by comparison.
+    /// </summary>
+    public static bool IsCompatible(string? version)
+    {
+        if (string.IsNullOrWhiteSpace(version))
+        {
+            return false;
+        }
+        var v = Parse(version);
+        return v.CompareTo(MinAssignRunVersion) >= 0;
+    }
+
+    /// <summary>
+    /// Parse a dotted-triple version string into a tuple — the exact Rust
+    /// <c>parse_version</c>: leading <c>v</c> stripped, pre-release suffix after
+    /// <c>-</c> stripped per part, malformed parts fall back to 0.
+    /// </summary>
+    public static (int Major, int Minor, int Patch) Parse(string s)
+    {
+        var trimmed = s.TrimStart('v');
+        var parts = trimmed.Split('.');
+        return (PartOrZero(parts, 0), PartOrZero(parts, 1), PartOrZero(parts, 2));
+
+        static int PartOrZero(string[] parts, int index)
+        {
+            if (index >= parts.Length)
+            {
+                return 0;
+            }
+            var head = parts[index].Split('-')[0];
+            return int.TryParse(head, out var n) && n >= 0 ? n : 0;
+        }
+    }
 }
 
 /// <summary>

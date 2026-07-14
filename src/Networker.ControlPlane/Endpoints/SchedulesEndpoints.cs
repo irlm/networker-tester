@@ -102,10 +102,13 @@ public static class SchedulesEndpoints
         app.MapPatch("/api/v2/schedules/{id:guid}", async (
             Guid id,
             UpdateScheduleRequest body,
-            NetworkerDbContext db) =>
+            HttpContext ctx,
+            NetworkerDbContext db,
+            ProjectAccessChecker access,
+            CancellationToken ct) =>
         {
-            var row = await db.TestSchedules.FirstOrDefaultAsync(s => s.Id == id);
-            if (row is null)
+            var row = await db.TestSchedules.FirstOrDefaultAsync(s => s.Id == id, ct);
+            if (row is null || !await access.HasRoleAsync(ctx, row.ProjectId, ProjectRole.Operator, ct))
             {
                 return Results.NotFound();
             }
@@ -130,32 +133,41 @@ public static class SchedulesEndpoints
 
         // DELETE /api/v2/schedules/{id} — 204 on success, 404 if absent.
         // Mirrors Rust delete_handler + db::test_schedules::delete.
-        app.MapDelete("/api/v2/schedules/{id:guid}", async (Guid id, NetworkerDbContext db) =>
+        app.MapDelete("/api/v2/schedules/{id:guid}", async (
+            Guid id,
+            HttpContext ctx,
+            NetworkerDbContext db,
+            ProjectAccessChecker access,
+            CancellationToken ct) =>
         {
-            var row = await db.TestSchedules.FirstOrDefaultAsync(s => s.Id == id);
-            if (row is null)
+            var row = await db.TestSchedules.FirstOrDefaultAsync(s => s.Id == id, ct);
+            if (row is null || !await access.HasRoleAsync(ctx, row.ProjectId, ProjectRole.Operator, ct))
             {
                 return Results.NotFound();
             }
 
             db.TestSchedules.Remove(row);
-            await db.SaveChangesAsync();
+            await db.SaveChangesAsync(ct);
 
             return Results.NoContent();
         }).RequireAuthorization();
 
         // POST /api/v2/schedules/{id}/trigger — fire the schedule's config now.
         // Creates a queued test_run from the linked config via the dispatcher,
-        // stamps last_fired_at/last_run_id, returns 202 + run id (Rust trigger_handler).
+        // stamps last_fired_at/last_run_id, and returns 200 with the FULL
+        // serialized test_run row, re-read after the dispatch attempt (the
+        // frontend inserts this response straight into the runs list; status may
+        // already be running/provisioning). Rust trigger_handler.
         app.MapPost("/api/v2/schedules/{id:guid}/trigger", async (
             Guid id,
             HttpContext ctx,
             NetworkerDbContext db,
             IRunDispatcher dispatcher,
+            ProjectAccessChecker access,
             CancellationToken ct) =>
         {
             var schedule = await db.TestSchedules.FirstOrDefaultAsync(s => s.Id == id, ct);
-            if (schedule is null)
+            if (schedule is null || !await access.HasRoleAsync(ctx, schedule.ProjectId, ProjectRole.Operator, ct))
             {
                 return Results.NotFound();
             }
@@ -166,12 +178,19 @@ public static class SchedulesEndpoints
                 return Results.Unauthorized();
             }
 
-            var runId = await dispatcher.LaunchAsync(schedule.TestConfigId, null, caller, ct);
+            var runId = await dispatcher.LaunchAsync(
+                schedule.TestConfigId, null, null, caller, ct);
             schedule.LastFiredAt = DateTime.UtcNow;
             schedule.LastRunId = runId;
             await db.SaveChangesAsync(ct);
 
-            return Results.Accepted($"/api/v2/test-runs/{runId}", new { id = runId, status = "queued" });
+            var run = await db.TestRuns
+                .AsNoTracking()
+                .FirstOrDefaultAsync(r => r.Id == runId, ct);
+
+            return run is null
+                ? Results.NotFound()
+                : Results.Ok(TestRunResponse.ToDto(run));
         }).RequireAuthorization();
 
         return app;

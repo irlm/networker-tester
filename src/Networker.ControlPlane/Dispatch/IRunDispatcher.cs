@@ -34,9 +34,14 @@ public interface IRunDispatcher
     /// </summary>
     /// <param name="comparisonGroupId">Optional comparison-group id to stamp on
     /// the run (used when launching a set of runs to compare).</param>
+    /// <param name="testerId">Optional executing-agent affinity: seeds
+    /// <c>test_run.tester_id</c> (which semantically holds an AGENT id — see the
+    /// Rust agent_hub's <c>WHERE tester_id=$1</c> binding) so dispatch prefers
+    /// that agent. Threaded from <c>LaunchRequest.tester_id</c>.</param>
     Task<Guid> LaunchAsync(
         Guid testConfigId,
         Guid? comparisonGroupId,
+        Guid? testerId,
         AuthUser caller,
         CancellationToken ct);
 
