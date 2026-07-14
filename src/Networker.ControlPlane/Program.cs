@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Networker.ControlPlane.Auth;
 using Networker.ControlPlane.Endpoints;
+using Networker.ControlPlane.Realtime;
 using Networker.Contracts;
 using Networker.Data;
 
@@ -37,6 +38,13 @@ builder.Services.AddSignalR();
 // routes below stay unauthenticated; endpoints opt in via RequireAuthorization.
 builder.Services.AddNetworkerAuth(connString);
 
+// Phase-2 M2 realtime: the browser event bus (/ws/dashboard, with replay+seq)
+// and the tester-queue hub (/ws/testers, project-scoped subscriptions). JWT for
+// these WebSocket hubs arrives as ?access_token= (browsers can't set the header)
+// — AddNetworkerAuth wires JwtBearer to read it for /ws paths.
+builder.Services.AddDashboardEventBus();
+builder.Services.AddTesterQueueHub();
+
 var app = builder.Build();
 
 // Order matters: authentication → DB-status middleware → authorization, all
@@ -70,14 +78,19 @@ app.MapAgentsEndpoints();
 app.MapDeploymentsEndpoints();
 app.MapPlatformEndpoints();
 
-// SignalR hub for live dashboard updates. Phase 2 wires run/tester events
-// through Groups($"project:{id}") — for now the hub just stands up so the
-// endpoint negotiates. The agent↔dashboard hub is the same pattern.
-app.MapHub<DashboardHub>("/ws/dashboard");
+// M2 browser event bus — live dashboard updates with replay + sequence numbers
+// (the Rust EventBus + browser_hub, ported). Clients connect with
+// ?access_token=<jwt>[&since=<seq>] and catch up via replay before tailing live.
+app.MapHub<BrowserHub>("/ws/dashboard");
+
+// M2 tester-queue hub — project-scoped per-tester running/queued updates,
+// subscribe/unsubscribe with membership checks + rate limits.
+app.MapHub<TesterQueueHub>("/ws/testers");
 
 // Agent-facing hub. Replaces the Rust `ws/agent_hub.rs` — SignalR handles the
 // connection lifecycle, reconnection, and (with a backplane) multi-replica
-// routing the Rust code maintained by hand.
+// routing the Rust code maintained by hand. (M2 slice 2 extends this to the
+// full agent protocol + publishing run events through the EventBus.)
 app.MapHub<AgentHub>("/ws/agent");
 
 // POST /auth/login + GET /auth/profile — same response shapes the Rust
