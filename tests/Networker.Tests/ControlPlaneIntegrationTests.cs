@@ -322,6 +322,18 @@ public sealed class ControlPlaneIntegrationTests : IClassFixture<ControlPlaneFix
         Assert.NotNull(dep);
     }
 
+    [Fact]
+    public async Task Admin_users_endpoint_is_forbidden_for_non_platform_admin()
+    {
+        // The seeded user is a project operator, NOT a platform admin — the M5
+        // GlobalAdmin gate must reject them from the platform user list.
+        var client = _fixture.CreateAuthenticatedClient();
+
+        var resp = await client.GetAsync("/api/users");
+
+        Assert.Equal(HttpStatusCode.Forbidden, resp.StatusCode);
+    }
+
     private sealed record HealthResponse(string Status, string Version, string Db);
 
     private sealed record TesterRow(
