@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Networker.ControlPlane.Background;
 using Networker.ControlPlane.Provisioning;
 
 namespace Microsoft.Extensions.DependencyInjection;
@@ -26,8 +27,19 @@ public static class ProvisioningOrchestratorExtensions
     /// </summary>
     public static IServiceCollection AddProvisioningOrchestrator(this IServiceCollection services)
     {
+        // The DeployRunner is always registered: request-driven deployment writes
+        // need it on every replica, including API-only ones.
         services.TryAddSingleton<DeployRunner>();
-        services.AddHostedService<ProvisioningOrchestrator>();
+
+        // The orchestrator LOOP is gated: it double-fires (duplicate install.sh
+        // deploys for the same pending run) if two replicas host it. Set
+        // DASHBOARD_BACKGROUND_SERVICES=0 on secondary replicas until the M6
+        // pg-advisory-lock leader election lands (see BackgroundServicesGate).
+        if (BackgroundServicesGate.IsEnabled("provisioning-orchestrator"))
+        {
+            services.AddHostedService<ProvisioningOrchestrator>();
+        }
+
         return services;
     }
 }

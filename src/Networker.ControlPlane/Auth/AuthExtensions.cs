@@ -27,11 +27,28 @@ public static class AuthExtensions
         services.AddScoped<AuthRepository>();
 
         var secret = Environment.GetEnvironmentVariable(JwtTokenService.SecretEnvVar) ?? string.Empty;
-        // Dev fallback so the app still boots without the env var; the Rust side
-        // hard-requires it. Any real deployment sets DASHBOARD_JWT_SECRET and the
-        // two implementations then share the exact same signing key.
         if (string.IsNullOrEmpty(secret))
         {
+            // FAIL CLOSED outside Development: a hardcoded signing key in any
+            // reachable deployment lets anyone mint admin tokens. An unset
+            // ASPNETCORE_ENVIRONMENT is treated as Production.
+            if (!DeploymentEnvironment.IsDevelopment(services))
+            {
+                throw new InvalidOperationException(
+                    $"{JwtTokenService.SecretEnvVar} is not set and the host environment is " +
+                    $"{DeploymentEnvironment.Describe(services)}. Refusing to start with the insecure " +
+                    "built-in dev JWT signing key. Set a strong secret (e.g. `openssl rand -base64 32`) " +
+                    "in the environment, or run with ASPNETCORE_ENVIRONMENT=Development for local dev.");
+            }
+
+            // Development-only fallback so the app still boots without the env
+            // var; the Rust side hard-requires it. Any real deployment sets
+            // DASHBOARD_JWT_SECRET and the two implementations then share the
+            // exact same signing key.
+            Console.Error.WriteLine(
+                $"networker-controlplane: {JwtTokenService.SecretEnvVar} not set — using the " +
+                "INSECURE built-in dev JWT secret (Development environment only). Set a real " +
+                "secret (openssl rand -base64 32) before deploying.");
             secret = "dev-insecure-jwt-secret-change-me-please-32b";
         }
 
@@ -41,6 +58,9 @@ public static class AuthExtensions
         services.AddHttpContextAccessor();
         services.AddMemoryCache();
         services.AddScoped<AuthUserAccessor>();
+        // Row-level project authorization for flat (non-{projectId}) routes;
+        // also the shared engine behind ProjectRoleHandler.
+        services.AddScoped<ProjectAccessChecker>();
 
         services.AddSingleton<IAuthorizationHandler, GlobalRoleHandler>();
         services.AddScoped<IAuthorizationHandler, ProjectRoleHandler>();

@@ -26,9 +26,17 @@ public static class CloudLifecycleExtensions
 {
     /// <summary>
     /// Register the auto-shutdown and cloud-orphan-reaper hosted services.
+    /// Skipped when <see cref="BackgroundServicesGate"/> disables this replica
+    /// (DASHBOARD_BACKGROUND_SERVICES=0 → API-only; the loops double-fire across
+    /// replicas until the M6 pg-advisory-lock leader election lands).
     /// </summary>
     public static IServiceCollection AddNetworkerCloudLifecycleServices(this IServiceCollection services)
     {
+        if (!BackgroundServicesGate.IsEnabled("cloud-lifecycle"))
+        {
+            return services;
+        }
+
         services.AddHostedService<AutoShutdownService>();
         services.AddHostedService<OrphanReaperService>();
         return services;

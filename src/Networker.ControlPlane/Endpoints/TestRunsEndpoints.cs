@@ -103,11 +103,17 @@ public static class TestRunsEndpoints
         }).RequireAuthorization(AuthPolicies.ProjectMember);
 
         // GET /api/v2/test-runs/{id} — single run detail.
-        // NOTE: flat route has no {projectId}, so the ProjectMember policy can't
-        // resolve a project scope. Requires authentication only. FOLLOW-UP: add a
-        // row-level project-membership check (load run.ProjectId, verify caller is
-        // a member) once M0's project-scope helper is reusable off-path.
-        app.MapGet("/api/v2/test-runs/{id:guid}", async (Guid id, NetworkerDbContext db) =>
+        // Flat route (no {projectId}), so the ProjectMember policy can't resolve a
+        // project scope. Instead: load the row, then row-level authz via
+        // ProjectAccessChecker against run.ProjectId. No access → 404 (identical
+        // to not-found, so the route is not an existence oracle for other
+        // projects' run ids).
+        app.MapGet("/api/v2/test-runs/{id:guid}", async (
+            Guid id,
+            HttpContext ctx,
+            ProjectAccessChecker access,
+            NetworkerDbContext db,
+            CancellationToken ct) =>
         {
             var run = await db.TestRuns
                 .AsNoTracking()
@@ -130,9 +136,15 @@ public static class TestRunsEndpoints
                     created_at = r.CreatedAt,
                     comparison_group_id = r.ComparisonGroupId,
                 })
-                .FirstOrDefaultAsync();
+                .FirstOrDefaultAsync(ct);
 
-            return run is null ? Results.NotFound() : Results.Ok(run);
+            if (run is null ||
+                !await access.HasRoleAsync(ctx, run.project_id, ProjectRole.Viewer, ct))
+            {
+                return Results.NotFound();
+            }
+
+            return Results.Ok(run);
         }).RequireAuthorization();
 
         // GET /api/v2/test-runs/{id}/artifact — the BenchmarkArtifact for a run.
@@ -140,13 +152,32 @@ public static class TestRunsEndpoints
         // (newest artifact for the run). The JSONB columns are stored as text in
         // the C# entity; we re-emit them as raw JSON (not escaped strings) so the
         // wire shape matches the Rust serde_json::Value fields.
-        app.MapGet("/api/v2/test-runs/{id:guid}/artifact", async (Guid id, NetworkerDbContext db) =>
+        // Flat route: row-level authz via the parent run's ProjectId; no access
+        // (or unknown run) → 404, same as a missing artifact.
+        app.MapGet("/api/v2/test-runs/{id:guid}/artifact", async (
+            Guid id,
+            HttpContext ctx,
+            ProjectAccessChecker access,
+            NetworkerDbContext db,
+            CancellationToken ct) =>
         {
+            var runProjectId = await db.TestRuns
+                .AsNoTracking()
+                .Where(r => r.Id == id)
+                .Select(r => r.ProjectId)
+                .FirstOrDefaultAsync(ct);
+
+            if (runProjectId is null ||
+                !await access.HasRoleAsync(ctx, runProjectId, ProjectRole.Viewer, ct))
+            {
+                return Results.NotFound();
+            }
+
             var art = await db.BenchmarkArtifacts
                 .AsNoTracking()
                 .Where(a => a.TestRunId == id)
                 .OrderByDescending(a => a.CreatedAt)
-                .FirstOrDefaultAsync();
+                .FirstOrDefaultAsync(ct);
 
             if (art is null)
             {
