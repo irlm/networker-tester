@@ -44,17 +44,28 @@ public static class TestConfigsEndpoints
 
         // GET /api/v2/test-configs/{id} — single config detail (incl.
         // baseline_run_id). Mirrors Rust get_handler + db::test_configs::get.
-        // NOTE: flat route has no {projectId}, so the ProjectMember policy can't
-        // resolve a project scope. Requires authentication only. FOLLOW-UP: add a
-        // row-level project-membership check (load config.ProjectId, verify caller
-        // is a member) once M0's project-scope helper is reusable off-path.
-        app.MapGet("/api/v2/test-configs/{id:guid}", async (Guid id, NetworkerDbContext db) =>
+        // Flat route (no {projectId}), so the ProjectMember policy can't resolve a
+        // project scope. Instead: load the row, then row-level authz via
+        // ProjectAccessChecker against cfg.ProjectId. No access → 404 (identical
+        // to not-found, so the route is not an existence oracle).
+        app.MapGet("/api/v2/test-configs/{id:guid}", async (
+            Guid id,
+            HttpContext ctx,
+            ProjectAccessChecker access,
+            NetworkerDbContext db,
+            CancellationToken ct) =>
         {
             var cfg = await db.TestConfigs
                 .AsNoTracking()
-                .FirstOrDefaultAsync(c => c.Id == id);
+                .FirstOrDefaultAsync(c => c.Id == id, ct);
 
-            return cfg is null ? Results.NotFound() : Results.Ok(ToDto(cfg));
+            if (cfg is null ||
+                !await access.HasRoleAsync(ctx, cfg.ProjectId, ProjectRole.Viewer, ct))
+            {
+                return Results.NotFound();
+            }
+
+            return Results.Ok(ToDto(cfg));
         }).RequireAuthorization();
 
         return app;

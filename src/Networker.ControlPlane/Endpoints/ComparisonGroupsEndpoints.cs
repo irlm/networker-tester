@@ -101,14 +101,20 @@ public static class ComparisonGroupsEndpoints
 
         // GET /api/v2/comparison-groups/{id} — detail (incl. run_ids via runs[]).
         // Mirrors Rust get_handler + db::comparison_groups::get / get_runs. Flat
-        // route has no {projectId}, so it can only require authentication (same
-        // limitation the TestConfigs flat GET documents).
-        app.MapGet("/api/v2/comparison-groups/{id:guid}", async (Guid id, NetworkerDbContext db) =>
+        // route (no {projectId}): row-level authz via ProjectAccessChecker against
+        // group.ProjectId (Viewer). No access → 404, identical to not-found.
+        app.MapGet("/api/v2/comparison-groups/{id:guid}", async (
+            Guid id,
+            HttpContext ctx,
+            ProjectAccessChecker access,
+            NetworkerDbContext db,
+            CancellationToken ct) =>
         {
             var group = await db.ComparisonGroups
                 .AsNoTracking()
-                .FirstOrDefaultAsync(g => g.Id == id);
-            if (group is null)
+                .FirstOrDefaultAsync(g => g.Id == id, ct);
+            if (group is null ||
+                !await access.HasRoleAsync(ctx, group.ProjectId, ProjectRole.Viewer, ct))
             {
                 return Results.NotFound();
             }
@@ -118,7 +124,7 @@ public static class ComparisonGroupsEndpoints
                 .AsNoTracking()
                 .Where(r => r.ComparisonGroupId == id)
                 .OrderBy(r => r.CreatedAt)
-                .ToListAsync();
+                .ToListAsync(ct);
 
             return Results.Ok(ToDetailDto(group, runs.Select(ToRunDto).ToArray()));
         }).RequireAuthorization();
@@ -127,12 +133,23 @@ public static class ComparisonGroupsEndpoints
         // In Rust this marks the group "running" and dispatch_or_provisions each
         // queued run. That needs the run dispatcher (built in parallel), so M3
         // ships only the endpoint shell: validate the group exists, then 202.
-        app.MapPost("/api/v2/comparison-groups/{id:guid}/launch", async (Guid id, NetworkerDbContext db) =>
+        // Flat route: row-level authz via ProjectAccessChecker against
+        // group.ProjectId — launching is a mutation, so Operator (not Viewer) is
+        // required. No access → 404, identical to not-found.
+        app.MapPost("/api/v2/comparison-groups/{id:guid}/launch", async (
+            Guid id,
+            HttpContext ctx,
+            ProjectAccessChecker access,
+            NetworkerDbContext db,
+            CancellationToken ct) =>
         {
-            var exists = await db.ComparisonGroups
+            var groupProjectId = await db.ComparisonGroups
                 .AsNoTracking()
-                .AnyAsync(g => g.Id == id);
-            if (!exists)
+                .Where(g => g.Id == id)
+                .Select(g => g.ProjectId)
+                .FirstOrDefaultAsync(ct);
+            if (groupProjectId is null ||
+                !await access.HasRoleAsync(ctx, groupProjectId, ProjectRole.Operator, ct))
             {
                 return Results.NotFound();
             }

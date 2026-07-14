@@ -15,17 +15,17 @@ public sealed class ProjectRoleRequirement(ProjectRole minRole) : IAuthorization
 }
 
 /// <summary>
-/// Resolves the <c>{projectId}</c> route value and checks membership/role in
-/// <c>project_member</c> via raw SQL (<see cref="AuthRepository"/>). Order of
-/// checks matches the Rust middleware:
-/// 1. must be authenticated; 2. route must carry a project id; 3. project must
-/// exist; 4. soft-deleted projects are forbidden unless platform admin;
-/// 5. platform admins get implicit Admin; 6. otherwise the project_member role
-/// must satisfy the requirement.
+/// Resolves the <c>{projectId}</c> route value and checks membership/role via the
+/// shared <see cref="ProjectAccessChecker"/> (must-be-authenticated → project must
+/// exist → soft-deleted projects forbidden unless platform admin → platform admins
+/// get implicit Admin → otherwise the project_member role must satisfy the
+/// requirement). Flat routes without <c>{projectId}</c> can't use this policy —
+/// they call <see cref="ProjectAccessChecker"/> directly against the loaded row's
+/// ProjectId, so both paths enforce identical rules.
 /// </summary>
 public sealed class ProjectRoleHandler(
     IHttpContextAccessor httpContextAccessor,
-    AuthRepository repo) : AuthorizationHandler<ProjectRoleRequirement>
+    ProjectAccessChecker accessChecker) : AuthorizationHandler<ProjectRoleRequirement>
 {
     public const string ProjectRoleItemKey = "ProjectRole";
 
@@ -39,12 +39,6 @@ public sealed class ProjectRoleHandler(
             return; // no context → stay unauthorized
         }
 
-        var user = httpContext.GetAuthUser();
-        if (user is null)
-        {
-            return;
-        }
-
         var projectId = httpContext.Request.RouteValues.TryGetValue("projectId", out var raw)
             ? raw?.ToString()
             : null;
@@ -53,37 +47,12 @@ public sealed class ProjectRoleHandler(
             return;
         }
 
-        var (exists, deleted) = await repo.GetProjectStateAsync(projectId, httpContext.RequestAborted);
-        if (!exists)
-        {
-            return; // not found → not authorized (endpoint may still 404 separately)
-        }
+        var effectiveRole = await accessChecker.GetRoleForProjectAsync(
+            httpContext, projectId, httpContext.RequestAborted);
 
-        // Soft-deleted workspaces are forbidden to everyone except platform admins.
-        if (deleted && !user.IsPlatformAdmin)
+        if (effectiveRole is { } role && role.HasPermission(requirement.MinRole))
         {
-            return;
-        }
-
-        ProjectRole effectiveRole;
-        if (user.IsPlatformAdmin)
-        {
-            effectiveRole = ProjectRole.Admin; // implicit admin, bypass membership
-        }
-        else
-        {
-            var memberRole = await repo.GetMemberRoleAsync(projectId, user.UserId, httpContext.RequestAborted);
-            if (memberRole is null)
-            {
-                return; // not a member
-            }
-
-            effectiveRole = memberRole.Value;
-        }
-
-        if (effectiveRole.HasPermission(requirement.MinRole))
-        {
-            httpContext.Items[ProjectRoleItemKey] = effectiveRole;
+            httpContext.Items[ProjectRoleItemKey] = role;
             context.Succeed(requirement);
         }
     }

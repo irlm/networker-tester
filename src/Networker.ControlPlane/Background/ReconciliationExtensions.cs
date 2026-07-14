@@ -18,9 +18,17 @@ public static class ReconciliationExtensions
     /// Register the stale-job watchdog and the agent-status reaper as hosted
     /// <see cref="BackgroundService"/>s. Call from <c>Program.cs</c> after the
     /// realtime (registry + event bus) and data (DbContext) services are wired.
+    /// Skipped when <see cref="BackgroundServicesGate"/> disables this replica
+    /// (DASHBOARD_BACKGROUND_SERVICES=0 → API-only; the loops double-fire across
+    /// replicas until the M6 pg-advisory-lock leader election lands).
     /// </summary>
     public static IServiceCollection AddNetworkerReconciliationServices(this IServiceCollection services)
     {
+        if (!BackgroundServicesGate.IsEnabled("watchdog/reaper"))
+        {
+            return services;
+        }
+
         services.AddHostedService<WatchdogService>();
         services.AddHostedService<ReaperService>();
         return services;
