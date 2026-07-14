@@ -1,10 +1,12 @@
 # Networker Hybrid (Rust probe core + C# app layer)
 
-This directory holds the first two phases of a **hybrid** migration for the
-network-diagnostics platform. The decision is settled:
+The C# solution (`Networker.sln` at the repo root — projects under `src/`,
+tests under `tests/Networker.Tests/`) implements the first two phases of a
+**hybrid** migration for the network-diagnostics platform. The decision is
+settled:
 
 - **Keep** the Rust probe engine (`networker-tester`) — the measurement core.
-- **Rewrite** the control-plane / agent / endpoint app layer in C# (.NET 8),
+- **Rewrite** the control-plane / agent / endpoint app layer in C# (.NET 10),
   on developer-delivery-speed grounds.
 
 The two halves never link against each other. They communicate across a stable,
@@ -144,10 +146,10 @@ cargo run -p networker-tester -- --target https://www.cloudflare.com \
 
 ```bash
 # from repo root
-dotnet build hybrid/Networker.sln
+dotnet build Networker.sln
 
 # run the agent skeleton (one-shot probe on startup)
-dotnet run --project hybrid/Networker.Agent
+dotnet run --project src/Networker.Agent
 ```
 
 The agent looks for the tester on `PATH`. Point it at a local build instead:
@@ -156,9 +158,9 @@ The agent looks for the tester on `PATH`. Point it at a local build instead:
 # macOS/Linux
 AGENT_TESTERPATH="$(pwd)/target/debug/networker-tester" \
 AGENT_TARGET="https://www.cloudflare.com" \
-  dotnet run --project hybrid/Networker.Agent
+  dotnet run --project src/Networker.Agent
 ```
 
 Configuration (env var → `Agent` option): `AGENT_TESTERPATH`, `AGENT_TARGET`,
 `AGENT_MODES`, `AGENT_TIMEOUTSECONDS`. Defaults live in
-`hybrid/Networker.Agent/appsettings.json`.
+`src/Networker.Agent/appsettings.json`.

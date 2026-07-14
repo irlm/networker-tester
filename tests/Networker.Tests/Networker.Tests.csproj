@@ -21,10 +21,10 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Networker.Contracts\Networker.Contracts.csproj" />
-    <ProjectReference Include="..\Networker.Agent\Networker.Agent.csproj" />
-    <ProjectReference Include="..\Networker.ControlPlane\Networker.ControlPlane.csproj" />
-    <ProjectReference Include="..\Networker.Data\Networker.Data.csproj" />
+    <ProjectReference Include="..\..\src\Networker.Contracts\Networker.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\Networker.Agent\Networker.Agent.csproj" />
+    <ProjectReference Include="..\..\src\Networker.ControlPlane\Networker.ControlPlane.csproj" />
+    <ProjectReference Include="..\..\src\Networker.Data\Networker.Data.csproj" />
   </ItemGroup>
 
 </Project>

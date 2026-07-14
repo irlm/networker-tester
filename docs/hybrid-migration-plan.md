@@ -1,6 +1,6 @@
 # Hybrid Migration Plan — Rust → C# / .NET 10
 
-**Status:** Phase 0 + Phase 1 scaffolded and proven; Phase 2 proof-of-concept working (see `hybrid/`).
+**Status:** Phase 0 + Phase 1 scaffolded and proven; Phase 2 proof-of-concept working (the C# solution is `Networker.sln` at the repo root — projects under `src/`, tests under `tests/Networker.Tests/`).
 **Decision:** Keep the Rust probe engine; re-architect the control plane, agent, and endpoint in C#/.NET 10.
 **Score:** Hybrid **7.9/10** vs. stay-in-Rust 6.6 vs. full-C#-rewrite 6.3 (weighted for a solo, C#-fluent owner).
 
@@ -39,7 +39,7 @@ The Rust probe core exposes a **versioned JSON contract** (`schema_version` fiel
 
 ### Differential-testing (multi-language oracle)
 
-Because the contract is language-agnostic, the probe core could be re-implemented in C++ or Zig and validated against the Rust implementation: run N iterations of each against a fixed local endpoint and assert their **measurement distributions** match (statistically equivalent p50/p95, not exact values — network noise). This proves the numbers are methodology-driven, not language artifacts, and lets the core language be chosen on developer-delivery-speed. (See `hybrid/README.md`.)
+Because the contract is language-agnostic, the probe core could be re-implemented in C++ or Zig and validated against the Rust implementation: run N iterations of each against a fixed local endpoint and assert their **measurement distributions** match (statistically equivalent p50/p95, not exact values — network noise). This proves the numbers are methodology-driven, not language artifacts, and lets the core language be chosen on developer-delivery-speed. (See `docs/dotnet-migration.md`.)
 
 **On C++ specifically:** don't rewrite the working, memory-safe Rust core into C++ to ship — modern C++ safety (RAII, smart pointers, sanitizers) is opt-in *runtime* tooling, not Rust's compile-time proof, and this is the code that parses untrusted network bytes. Use C++/Zig only as validation oracles or where a platform demands it.
 
@@ -47,7 +47,7 @@ Because the contract is language-agnostic, the probe core could be re-implemente
 
 ## Target stack (.NET 10 LTS)
 
-.NET 10 is the LTS (3-year support) — right for a long-lived rewrite: improved NativeAOT, HTTP/3, EF Core 10, ASP.NET Core 10, C# 14. *(The `hybrid/` scaffold targets `net8.0` only because that's the SDK installed on the dev box; retarget to `net10.0` — a one-line TFM change per project — once the .NET 10 SDK is installed. EF Core CLI 10.x already works.)*
+.NET 10 is the LTS (3-year support) — right for a long-lived rewrite: improved NativeAOT, HTTP/3, EF Core 10, ASP.NET Core 10, C# 14. All projects target `net10.0`.
 
 | Concern | Tech |
 |---|---|
@@ -70,7 +70,7 @@ Because the contract is language-agnostic, the probe core could be re-implemente
 **Phase 1 — C# agent shells the Rust binary** *(scaffolded + proven)*
 `Networker.Agent` (`IHostedService` + DI, SignalR client stubbed as `IDashboardClient`). Verified: C# → Rust tester → parsed `schema_version=1.0` + dns/tls/ttfb/total timings. First shippable milestone.
 
-**Phase 2 — C# control plane** *(PoC working in `hybrid/`; full build is the main effort)*
+**Phase 2 — C# control plane** *(PoC working in `src/Networker.ControlPlane`; full build is the main effort)*
 `Networker.Data` (EF Core DbContext scaffolded database-first from the live schema) + `Networker.ControlPlane` (Minimal APIs + SignalR hub). PoC serves `/api/health`, `/testers`, `/test-runs` from the **real Postgres** via LINQ, and `/ws/dashboard` negotiates with transport fallback. Full phase: port all REST endpoints + WS events behind the existing contract, add EF migrations (model-first from here), cloud SDKs, auth. Cut over by running C# on a separate port, pointing one agent + staging frontend at it, validating parity, then flipping config. Rollback = point back at the Rust dashboard.
 
 **Phase 3 — Endpoint + cleanup** *(1–2 wk)*
@@ -88,7 +88,7 @@ Port `networker-endpoint` to a Minimal API; fold `networker-common`/`networker-l
 
 ---
 
-## Verified so far (`hybrid/` on branch `feat/hybrid-phase0-scaffold`)
+## Verified so far (branch `feat/hybrid-phase0-scaffold`)
 
 ```bash
 # Rust probe core (contract producer) — builds, 676 lib + 3 contract tests pass
@@ -96,13 +96,13 @@ cargo build -p networker-tester
 cargo test  -p networker-tester --test json_contract
 
 # C# app layer (contract consumer) — builds clean
-dotnet build hybrid/Networker.sln
+dotnet build Networker.sln
 
 # Phase 1 seam — C# agent shells the Rust tester (real per-phase timings)
-AGENT_TESTERPATH="$(pwd)/target/debug/networker-tester" dotnet run --project hybrid/Networker.Agent
+AGENT_TESTERPATH="$(pwd)/target/debug/networker-tester" dotnet run --project src/Networker.Agent
 
 # Phase 2 control plane — EF Core → real Postgres, SignalR negotiate
-dotnet run --project hybrid/Networker.ControlPlane --urls http://127.0.0.1:5210
+dotnet run --project src/Networker.ControlPlane --urls http://127.0.0.1:5210
 #   GET /api/health                         → {"status":"ok","db":"ok"}
 #   GET /api/projects/{id}/testers          → live testers via LINQ
 #   GET /api/projects/{id}/test-runs        → EF join TestRun→TestConfig

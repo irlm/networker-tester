@@ -31,3 +31,14 @@ benchmarks/reference-apis/**/bin/
 benchmarks/reference-apis/**/obj/
 # Block .sln in root only (benchmarks/reference-apis/benchmarks.sln is tracked)
 /*.sln
+# ...except the C# solution, which lives at repo root by design
+!/Networker.sln
+
+# C# / .NET build output (src/ = projects, tests/ = test projects)
+src/**/bin/
+src/**/obj/
+tests/**/bin/
+tests/**/obj/
+*.user
+.vs/
+.idea/

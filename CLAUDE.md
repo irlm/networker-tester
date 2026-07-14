@@ -16,6 +16,22 @@ Rust workspace: five crates plus Bash/PowerShell installers and a React frontend
 
 The `dashboard/` directory contains a React + TypeScript + Vite frontend (Tailwind dark theme).
 
+### C# / .NET 10 migration (in progress)
+
+The control plane, agent, and endpoint are being re-architected in C# (see
+`docs/hybrid-migration-plan.md`). The Rust probe engine (`networker-tester`)
+stays — it's the measurement core .NET can't match. Layout:
+
+- `Networker.sln` (repo root) — the single C# solution.
+- `src/Networker.*` — projects: `Contracts` (the versioned JSON seam),
+  `Data` (EF Core), `ControlPlane` (ASP.NET Minimal APIs + SignalR), `Agent`.
+- `tests/Networker.Tests/` — xUnit (contract + Testcontainers integration).
+- Benchmarks keep their own solution at `benchmarks/reference-apis/benchmarks.sln`.
+
+Rust crates are removed only as each C# replacement reaches parity (staged
+cutover); `main` stays shippable. The full-Rust snapshot is preserved on the
+`legacy/rust` branch and the `rust-legacy-v0.28.13` tag.
+
 ## Build Commands
 
 ```bash
