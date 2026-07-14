@@ -259,7 +259,9 @@ public sealed class ControlPlaneIntegrationTests : IClassFixture<ControlPlaneFix
         var resp = await client.PostAsync(
             $"/api/v2/test-configs/{ControlPlaneFixture.SeededConfigId}/launch", content: null);
 
-        Assert.Equal(HttpStatusCode.Accepted, resp.StatusCode);
+        // Launch now returns 200 + the full run row (frontend inserts it into the
+        // runs list); the run is created queued (no agent connected in the test).
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
 
         // The dispatcher created a test_run; with no agent connected in the test
         // it stays queued (the redispatcher/agent would pick it up in prod).

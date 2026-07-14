@@ -108,11 +108,15 @@ public static class TestConfigWriteEndpoints
         app.MapPatch("/api/v2/test-configs/{id:guid}", async (
             Guid id,
             [FromBody] UpdateTestConfigRequest req,
+            HttpContext ctx,
             NetworkerDbContext db,
+            ProjectAccessChecker access,
             CancellationToken ct) =>
         {
             var cfg = await db.TestConfigs.FirstOrDefaultAsync(c => c.Id == id, ct);
-            if (cfg is null)
+            // Row-level project authorization (flat route): require Operator on the
+            // config's project; 404 on absent or no-access (no existence oracle).
+            if (cfg is null || !await access.HasRoleAsync(ctx, cfg.ProjectId, ProjectRole.Operator, ct))
             {
                 return Results.NotFound();
             }
@@ -172,9 +176,22 @@ public static class TestConfigWriteEndpoints
         // Mirrors Rust delete_handler.
         app.MapDelete("/api/v2/test-configs/{id:guid}", async (
             Guid id,
+            HttpContext ctx,
             NetworkerDbContext db,
+            ProjectAccessChecker access,
             CancellationToken ct) =>
         {
+            // Resolve the config's project and require Operator before deleting
+            // (flat route). 404 on absent or no-access.
+            var owner = await db.TestConfigs.AsNoTracking()
+                .Where(c => c.Id == id)
+                .Select(c => c.ProjectId)
+                .FirstOrDefaultAsync(ct);
+            if (owner is null || !await access.HasRoleAsync(ctx, owner, ProjectRole.Operator, ct))
+            {
+                return Results.NotFound();
+            }
+
             var affected = await db.TestConfigs
                 .Where(c => c.Id == id)
                 .ExecuteDeleteAsync(ct);
@@ -195,12 +212,25 @@ public static class TestConfigWriteEndpoints
             HttpContext http,
             IRunDispatcher dispatcher,
             NetworkerDbContext db,
+            ProjectAccessChecker access,
             CancellationToken ct) =>
         {
             var user = http.GetAuthUser();
             if (user is null)
             {
                 return Results.Unauthorized();
+            }
+
+            // Row-level project authorization (flat route): the caller must be an
+            // Operator on the config's project to launch a run in it (else any
+            // authenticated user could spend another tenant's cloud budget).
+            var owner = await db.TestConfigs.AsNoTracking()
+                .Where(c => c.Id == id)
+                .Select(c => c.ProjectId)
+                .FirstOrDefaultAsync(ct);
+            if (owner is null || !await access.HasRoleAsync(http, owner, ProjectRole.Operator, ct))
+            {
+                return Results.NotFound();
             }
 
             Guid runId;

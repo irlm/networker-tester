@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Networker.ControlPlane.Auth;
 using Networker.ControlPlane.Dispatch;
 using Networker.Data;
 
@@ -24,10 +25,24 @@ public static class TestRunWriteEndpoints
         // synchronously; the agent-side cancel is best-effort.
         app.MapPost("/api/v2/test-runs/{id:guid}/cancel", async (
             Guid id,
+            HttpContext ctx,
             IRunDispatcher dispatcher,
             NetworkerDbContext db,
+            ProjectAccessChecker access,
             CancellationToken ct) =>
         {
+            // Row-level project authorization: flat route has no {projectId}, so
+            // resolve the run's project and require Operator there. 404 on
+            // no-access (no existence oracle for other tenants' runs).
+            var owner = await db.TestRuns.AsNoTracking()
+                .Where(r => r.Id == id)
+                .Select(r => r.ProjectId)
+                .FirstOrDefaultAsync(ct);
+            if (owner is null || !await access.HasRoleAsync(ctx, owner, ProjectRole.Operator, ct))
+            {
+                return Results.NotFound();
+            }
+
             try
             {
                 await dispatcher.CancelAsync(id, ct);

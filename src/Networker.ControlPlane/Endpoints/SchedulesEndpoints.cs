@@ -102,10 +102,13 @@ public static class SchedulesEndpoints
         app.MapPatch("/api/v2/schedules/{id:guid}", async (
             Guid id,
             UpdateScheduleRequest body,
-            NetworkerDbContext db) =>
+            HttpContext ctx,
+            NetworkerDbContext db,
+            ProjectAccessChecker access,
+            CancellationToken ct) =>
         {
-            var row = await db.TestSchedules.FirstOrDefaultAsync(s => s.Id == id);
-            if (row is null)
+            var row = await db.TestSchedules.FirstOrDefaultAsync(s => s.Id == id, ct);
+            if (row is null || !await access.HasRoleAsync(ctx, row.ProjectId, ProjectRole.Operator, ct))
             {
                 return Results.NotFound();
             }
@@ -130,16 +133,21 @@ public static class SchedulesEndpoints
 
         // DELETE /api/v2/schedules/{id} — 204 on success, 404 if absent.
         // Mirrors Rust delete_handler + db::test_schedules::delete.
-        app.MapDelete("/api/v2/schedules/{id:guid}", async (Guid id, NetworkerDbContext db) =>
+        app.MapDelete("/api/v2/schedules/{id:guid}", async (
+            Guid id,
+            HttpContext ctx,
+            NetworkerDbContext db,
+            ProjectAccessChecker access,
+            CancellationToken ct) =>
         {
-            var row = await db.TestSchedules.FirstOrDefaultAsync(s => s.Id == id);
-            if (row is null)
+            var row = await db.TestSchedules.FirstOrDefaultAsync(s => s.Id == id, ct);
+            if (row is null || !await access.HasRoleAsync(ctx, row.ProjectId, ProjectRole.Operator, ct))
             {
                 return Results.NotFound();
             }
 
             db.TestSchedules.Remove(row);
-            await db.SaveChangesAsync();
+            await db.SaveChangesAsync(ct);
 
             return Results.NoContent();
         }).RequireAuthorization();
@@ -155,10 +163,11 @@ public static class SchedulesEndpoints
             HttpContext ctx,
             NetworkerDbContext db,
             IRunDispatcher dispatcher,
+            ProjectAccessChecker access,
             CancellationToken ct) =>
         {
             var schedule = await db.TestSchedules.FirstOrDefaultAsync(s => s.Id == id, ct);
-            if (schedule is null)
+            if (schedule is null || !await access.HasRoleAsync(ctx, schedule.ProjectId, ProjectRole.Operator, ct))
             {
                 return Results.NotFound();
             }
