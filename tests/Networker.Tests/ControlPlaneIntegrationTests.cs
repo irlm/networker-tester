@@ -37,6 +37,12 @@ public sealed class ControlPlaneFixture : WebApplicationFactory<Program>, IAsync
     public const string SeededTesterName = "itest-tester-eastus";
     public static readonly Guid SeededUserId = Guid.Parse("11111111-1111-4111-8111-111111111111");
     public const string SeededUserEmail = "itest@networker.local";
+    public static readonly Guid SeededConfigId = Guid.Parse("22222222-2222-4222-8222-222222222222");
+
+    /// A fresh DbContext against the same container — for tests to assert what
+    /// a write endpoint persisted.
+    public NetworkerDbContext NewDbContext() =>
+        new(new DbContextOptionsBuilder<NetworkerDbContext>().UseNpgsql(_db.GetConnectionString()).Options);
 
     public async Task InitializeAsync()
     {
@@ -125,6 +131,19 @@ public sealed class ControlPlaneFixture : WebApplicationFactory<Program>, IAsync
             Role = "operator",
             Status = "active",
             JoinedAt = now,
+        });
+        // A test config so the M3 launch/dispatch write path can be exercised.
+        ctx.TestConfigs.Add(new TestConfig
+        {
+            Id = SeededConfigId,
+            ProjectId = SeededProjectId,
+            Name = "itest-config",
+            EndpointKind = "network",
+            EndpointRef = "{}",
+            Workload = "{}",
+            MaxDurationSecs = 60,
+            CreatedAt = now,
+            UpdatedAt = now,
         });
         await ctx.SaveChangesAsync();
     }
@@ -229,6 +248,25 @@ public sealed class ControlPlaneIntegrationTests : IClassFixture<ControlPlaneFix
         Assert.NotNull(body);
         Assert.Equal(ControlPlaneFixture.SeededProjectId, body!.Project_Id);
         Assert.Equal("Integration Test Project", body.Name);
+    }
+
+    [Fact]
+    public async Task Launch_creates_a_queued_run_via_the_dispatcher()
+    {
+        var client = _fixture.CreateAuthenticatedClient();
+
+        var resp = await client.PostAsync(
+            $"/api/v2/test-configs/{ControlPlaneFixture.SeededConfigId}/launch", content: null);
+
+        Assert.Equal(HttpStatusCode.Accepted, resp.StatusCode);
+
+        // The dispatcher created a test_run; with no agent connected in the test
+        // it stays queued (the redispatcher/agent would pick it up in prod).
+        await using var ctx = _fixture.NewDbContext();
+        var run = await ctx.TestRuns
+            .FirstOrDefaultAsync(r => r.TestConfigId == ControlPlaneFixture.SeededConfigId);
+        Assert.NotNull(run);
+        Assert.Equal("queued", run!.Status);
     }
 
     private sealed record HealthResponse(string Status, string Version, string Db);

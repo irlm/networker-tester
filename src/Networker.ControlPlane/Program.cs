@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Networker.ControlPlane.Auth;
+using Networker.ControlPlane.Dispatch;
 using Networker.ControlPlane.Endpoints;
 using Networker.ControlPlane.Realtime;
 using Networker.Contracts;
@@ -47,6 +48,10 @@ builder.Services.AddTesterQueueHub();
 // M2 slice 2: the agent hub connection registry + outbound sender. Agents
 // authenticate by api_key (not JWT) inside the hub's OnConnectedAsync.
 builder.Services.AddAgentProtocol();
+// M3 write path: the run dispatcher — creates test_run rows on launch and
+// assigns them to an online agent via the AgentConnectionRegistry, with
+// queued-run redispatch. Drives the core benchmarking loop.
+builder.Services.AddRunDispatcher();
 
 var app = builder.Build();
 
@@ -80,6 +85,14 @@ app.MapTestConfigsEndpoints();
 app.MapAgentsEndpoints();
 app.MapDeploymentsEndpoints();
 app.MapPlatformEndpoints();
+
+// M3 write path — create/patch/delete + launch configs, cancel runs, and
+// schedules + comparison-groups CRUD (trigger/launch shells wired to the
+// dispatcher in M3 slice 2 alongside the scheduler background service).
+app.MapTestConfigWriteEndpoints();
+app.MapTestRunWriteEndpoints();
+app.MapSchedulesEndpoints();
+app.MapComparisonGroupsEndpoints();
 
 // M2 browser event bus — live dashboard updates with replay + sequence numbers
 // (the Rust EventBus + browser_hub, ported). Clients connect with
