@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
+using Networker.ControlPlane.Auth;
 using Networker.Contracts;
 using Networker.Data;
 
@@ -29,7 +30,17 @@ builder.Services.AddDbContext<NetworkerDbContext>(o => o.UseNpgsql(connString));
 // Reconnection, groups, and a Redis backplane are framework features here.
 builder.Services.AddSignalR();
 
+// Phase-2 M0: JWT auth + RBAC foundation. Interchangeable with the Rust
+// dashboard's HS256/DASHBOARD_JWT_SECRET scheme. Reads dash_user/project_member
+// via raw SQL (Npgsql), independent of the EF model. Additive only — existing
+// routes below stay unauthenticated; endpoints opt in via RequireAuthorization.
+builder.Services.AddNetworkerAuth(connString);
+
 var app = builder.Build();
+
+// Order matters: authentication → DB-status middleware → authorization, all
+// after routing so {projectId} route values reach the project-scope handler.
+app.UseNetworkerAuth();
 
 // GET /api/health — same shape the Rust dashboard serves; used by the deploy
 // health check and the frontend connection dot.
@@ -98,6 +109,11 @@ app.MapHub<DashboardHub>("/ws/dashboard");
 // connection lifecycle, reconnection, and (with a backplane) multi-replica
 // routing the Rust code maintained by hand.
 app.MapHub<AgentHub>("/ws/agent");
+
+// POST /auth/login + GET /auth/profile — same response shapes the Rust
+// dashboard serves. The policies (GlobalAdmin/Operator/Viewer, ProjectMember/
+// Operator/Admin) are registered and available for other endpoints to opt into.
+app.MapAuthEndpoints();
 
 app.Run();
 
