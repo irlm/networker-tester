@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.14] — 2026-07-14
+
+### Added
+- **Phase-0 tester contract seam** — `schema_version` field on the tester's
+  JSON `TestRun` output (serde-defaulted for backward compatibility) plus a
+  golden `tests/json_contract.rs` that pins the emitted shape. This freezes the
+  `--json` contract the C# hybrid agent deserializes against, so a future
+  serde change breaks a test instead of silently dropping fields downstream.
+
+### CI
+- New `.NET (hybrid)` workflow (path-gated to `hybrid/**`): build, vulnerable-
+  package audit, and the C# contract + control-plane integration tests.
+
+---
+
 ## [0.28.13] — 2026-07-13
 
 Revives the tester lifecycle loops that were left unspawned since the v0.28

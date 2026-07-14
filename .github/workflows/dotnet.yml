@@ -1,0 +1,63 @@
+name: .NET
+
+# Builds and audits the C# solution (Networker.sln) that is replacing the Rust
+# control plane / agent / endpoint. Path-filtered: only runs when the C# code
+# (or this workflow) changes, so it never touches the Rust/npm pipeline. The
+# C# test project lives under tests/Networker.Tests/, so that path is gated
+# specifically (the rest of tests/ is the Rust/bats suite).
+on:
+  push:
+    branches: ["main", "develop"]
+    paths:
+      - "src/**"
+      - "tests/Networker.Tests/**"
+      - "Networker.sln"
+      - ".github/workflows/dotnet.yml"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "src/**"
+      - "tests/Networker.Tests/**"
+      - "Networker.sln"
+      - ".github/workflows/dotnet.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build & audit (C#)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      # TODO: pin to a SHA to match the repo's supply-chain convention once
+      # the exact setup-dotnet@v4 commit is confirmed.
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore
+        run: dotnet restore Networker.sln
+
+      - name: Build (Release)
+        run: dotnet build Networker.sln --configuration Release --no-restore
+
+      # Fails the job if any project pulls a known-vulnerable package
+      # (transitive included) — the security gate the code review called for.
+      - name: Vulnerable package audit
+        run: |
+          set -euo pipefail
+          out=$(dotnet list Networker.sln package --vulnerable --include-transitive 2>&1)
+          echo "$out"
+          if echo "$out" | grep -q "has the following vulnerable packages"; then
+            echo "::error::Vulnerable NuGet packages detected — see log above"
+            exit 1
+          fi
+          echo "No vulnerable packages."
+
+      # Contract round-trip tests + the control-plane integration test
+      # (Testcontainers + WebApplicationFactory against a real Postgres).
+      - name: Test
+        run: dotnet test Networker.sln --configuration Release --no-build --verbosity normal

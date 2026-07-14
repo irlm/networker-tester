@@ -1367,6 +1367,7 @@ async fn run_for_target(
     });
 
     let run = TestRun {
+        schema_version: networker_tester::metrics::SCHEMA_VERSION.to_string(),
         run_id,
         started_at,
         finished_at: Some(finished_at),

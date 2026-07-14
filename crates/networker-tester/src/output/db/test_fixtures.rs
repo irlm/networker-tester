@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 pub(crate) fn make_run(run_id: Uuid, attempts: Vec<RequestAttempt>) -> TestRun {
     TestRun {
+        schema_version: crate::metrics::SCHEMA_VERSION.to_string(),
         run_id,
         started_at: Utc::now(),
         finished_at: Some(Utc::now()),

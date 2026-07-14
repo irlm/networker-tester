@@ -3847,6 +3847,7 @@ mod tests {
     fn make_run() -> TestRun {
         let run_id = Uuid::new_v4();
         TestRun {
+            schema_version: crate::metrics::SCHEMA_VERSION.to_string(),
             run_id,
             started_at: Utc::now(),
             finished_at: Some(Utc::now()),
@@ -4106,6 +4107,7 @@ mod tests {
 
         let run_id = Uuid::new_v4();
         let run = TestRun {
+            schema_version: crate::metrics::SCHEMA_VERSION.to_string(),
             run_id,
             started_at: Utc::now(),
             finished_at: Some(Utc::now()),
@@ -4169,6 +4171,7 @@ mod tests {
         let run_id = Uuid::new_v4();
         let now = Utc::now();
         let run = TestRun {
+            schema_version: crate::metrics::SCHEMA_VERSION.to_string(),
             run_id,
             started_at: now,
             finished_at: Some(now),
@@ -4246,6 +4249,7 @@ mod tests {
         let run_id = Uuid::new_v4();
         let now = Utc::now();
         let run = TestRun {
+            schema_version: crate::metrics::SCHEMA_VERSION.to_string(),
             run_id,
             started_at: now,
             finished_at: Some(now),
@@ -4326,6 +4330,7 @@ mod tests {
         let run_id = Uuid::new_v4();
         let now = Utc::now();
         let run = TestRun {
+            schema_version: crate::metrics::SCHEMA_VERSION.to_string(),
             run_id,
             started_at: now,
             finished_at: Some(now),
@@ -4718,6 +4723,7 @@ mod tests {
         let run_id = Uuid::new_v4();
         let now = Utc::now();
         let run = TestRun {
+            schema_version: crate::metrics::SCHEMA_VERSION.to_string(),
             run_id,
             started_at: now,
             finished_at: Some(now),
@@ -4789,6 +4795,7 @@ mod tests {
     fn make_run_with_url(url: &str) -> TestRun {
         let run_id = Uuid::new_v4();
         TestRun {
+            schema_version: crate::metrics::SCHEMA_VERSION.to_string(),
             run_id,
             started_at: Utc::now(),
             finished_at: Some(Utc::now()),

@@ -154,6 +154,13 @@ impl Default for BenchmarkNoiseThresholds {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TestRun {
+    /// Version of the tester JSON output contract. Bumped when the emitted
+    /// schema changes in a way consumers must be aware of. Additive fields do
+    /// not require a bump; restructuring or field-removal does. This is the
+    /// stable seam between the Rust probe core and downstream consumers
+    /// (e.g. the C# agent/control-plane in the hybrid migration).
+    #[serde(default = "default_schema_version")]
+    pub schema_version: String,
     pub run_id: Uuid,
     pub started_at: DateTime<Utc>,
     pub finished_at: Option<DateTime<Utc>>,
@@ -258,6 +265,13 @@ impl HostInfo {
 
 fn is_zero_u32(value: &u32) -> bool {
     *value == 0
+}
+
+/// Current version of the tester JSON output contract (see [`TestRun::schema_version`]).
+pub const SCHEMA_VERSION: &str = "1.0";
+
+fn default_schema_version() -> String {
+    SCHEMA_VERSION.to_string()
 }
 
 fn detect_total_memory_mb() -> Option<u64> {
@@ -1722,6 +1736,7 @@ mod tests {
             http_stack: None,
         };
         let run = TestRun {
+            schema_version: crate::metrics::SCHEMA_VERSION.to_string(),
             run_id,
             started_at: Utc::now(),
             finished_at: None,
@@ -2366,6 +2381,7 @@ mod tests {
             a
         };
         let run = TestRun {
+            schema_version: crate::metrics::SCHEMA_VERSION.to_string(),
             run_id,
             started_at: Utc::now(),
             finished_at: None,
