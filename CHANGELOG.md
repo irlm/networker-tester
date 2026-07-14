@@ -11,6 +11,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.13] — 2026-07-13
+
+Revives the tester lifecycle loops that were left unspawned since the v0.28
+unification (they still queried the dropped `benchmark_config` table).
+
+### Fixed
+- **Runners showed "online" while their VM was deallocated.** The `agent.status`
+  column is a cache written on WS connect/disconnect; it went permanently stale
+  on an unclean disconnect (VM force-deallocation, credit exhaustion) or a
+  dashboard restart. A new 60s reconciler (`agent_reaper`) flips any agent the
+  DB thinks is online but which is absent from the live WS hub and whose last
+  heartbeat is older than 90s (3 missed beats) back to `offline`. Hub
+  membership is authoritative, so a genuinely-connected agent is never flipped.
+- **Idle runners never auto-deallocated (ongoing cost leak).** The
+  `auto_shutdown_loop` (60s tick, deallocates drained runners past their
+  shutdown window via `az vm deallocate`) was disabled because its drain check
+  read `benchmark_config`. Ported to `test_run` (busy = a `queued` /
+  `provisioning` / `running` run references the tester) and spawned in
+  `main.rs`. The loop now acquires a DB client per tick instead of holding one
+  out of the pool for the process lifetime.
+
+### Notes
+- `tester_dispatcher` stays disabled — dispatch is owned by `benchmark_worker`
+  + the v2 scheduler. Cloud power-state reconciliation (probing the provider
+  for VMs stopped out-of-band) remains a follow-up; the agent reaper already
+  corrects the user-visible "online" badge.
+
+---
+
 ## [0.28.12] — 2026-07-13
 
 ### Fixed

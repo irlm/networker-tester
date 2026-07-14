@@ -1,4 +1,5 @@
 mod agent_dispatch;
+mod agent_reaper;
 mod api;
 mod auth;
 mod benchmark_worker;
@@ -502,18 +503,24 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
-    // ── Legacy tester lifecycle loops (disabled in v0.28) ────────────────
+    // ── Tester lifecycle loops ───────────────────────────────────────────
     //
-    // `tester_dispatcher`, `tester_scheduler::auto_shutdown_loop`, and
-    // `tester_recovery::recover_on_startup` all query the `benchmark_config`
-    // table that was removed when the backend unified on `test_config` +
-    // `test_run` (migration V036). Spawning them produced 30s/60s error
-    // spam against a dropped relation. Their orchestration concerns are
-    // now handled by `benchmark_worker` (Pending → provisioning → running)
-    // and the v2 scheduler.
-    //
-    // Leaving the modules compiled (but unspawned) so we don't churn the
-    // service/* files until the whole benchmark_config era is deleted.
+    // Revived on the v0.28 schema (were unspawned while they still queried the
+    // dropped `benchmark_config` table). `tester_dispatcher` stays disabled —
+    // dispatch is fully owned by `benchmark_worker` + the v2 scheduler now.
+
+    // Stale-agent status reconciler: flips agents the DB thinks are online but
+    // which are absent from the live WS hub (dead VM, dashboard restart) back
+    // to offline. Fixes runners showing "online" while their VM is deallocated.
+    tracing::info!("spawning agent_reaper status reconciler");
+    agent_reaper::spawn(state.clone());
+
+    // Auto-shutdown: deallocates idle, drained runners past their shutdown
+    // window so overnight-idle VMs stop billing. Drain check reads `test_run`.
+    tracing::info!("spawning tester auto-shutdown loop");
+    tokio::spawn(
+        networker_dashboard::services::tester_scheduler::auto_shutdown_loop(state.db.clone()),
+    );
 
     // `refresh_latest_version_loop` doesn't touch the DB — it polls GitHub
     // and updates an in-memory RwLock cache. No supervision needed.

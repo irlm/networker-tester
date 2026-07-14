@@ -1,21 +1,17 @@
 //! Auto-shutdown loop — 60s tick, deallocates drained testers via `az vm deallocate`.
 //!
-//! Drain check is read from `benchmark_config.status` only. `current_phase`
-//! is purely presentational and must never be consulted by orchestration.
+//! "Drained" = no non-terminal `test_run` references the tester. A tester is
+//! considered busy while it holds a run in `queued`, `provisioning`, or
+//! `running`; only once all its runs are terminal (and it is past its
+//! `next_shutdown_at` window, idle, and running) does it become a shutdown
+//! candidate.
 //!
 //! Audit trail: there is no `service_log` / `audit_log` table in the dashboard
 //! schema today (only `migration_audit_log`, which is specific to sovereignty
 //! migrations). For MVP we emit structured `tracing` events at info/warn level;
 //! operators can scrape these off stdout / journald. A proper audit sink is
 //! tracked separately.
-//
-// TODO: wire into a real service_log / audit_log table once the schema is
-// finalized. For now, tracing::warn! with a `tester_shutdown_stuck` target is
-// the minimum viable audit trail.
 
-#![allow(dead_code)] // wired in Task 34
-
-use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
@@ -30,13 +26,23 @@ const DEFERRAL_DELAY_MINUTES: i64 = 5;
 
 /// Background loop: every 60 seconds, sweep drained testers whose shutdown
 /// window has elapsed and deallocate them via `az vm deallocate`.
-pub async fn auto_shutdown_loop(client: Arc<Client>) {
+///
+/// A DB client is acquired per tick (and dropped before sleeping) so the loop
+/// never holds a pooled connection out of circulation.
+pub async fn auto_shutdown_loop(pool: deadpool_postgres::Pool) {
     let mut ticker = tokio::time::interval(TICK);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         ticker.tick().await;
-        if let Err(e) = sweep(&client).await {
-            tracing::warn!(error = ?e, "auto-shutdown sweep failed");
+        match pool.get().await {
+            Ok(client) => {
+                if let Err(e) = sweep(&client).await {
+                    tracing::warn!(error = ?e, "auto-shutdown sweep failed");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "auto-shutdown loop: DB pool unavailable this tick")
+            }
         }
     }
 }
@@ -55,9 +61,9 @@ async fn sweep(client: &Client) -> anyhow::Result<()> {
                AND t.power_state = 'running'
                AND t.allocation  = 'idle'
                AND NOT EXISTS (
-                   SELECT 1 FROM benchmark_config c
-                    WHERE c.tester_id = t.tester_id
-                      AND c.status IN ('queued','pending','running')
+                   SELECT 1 FROM test_run r
+                    WHERE r.tester_id = t.tester_id
+                      AND r.status IN ('queued','provisioning','running')
                )
             "#,
             &[],
@@ -117,9 +123,9 @@ async fn handle_due_tester(client: &Client, due: &DueTester) -> anyhow::Result<(
             r#"
             SELECT (t.power_state = 'running' AND t.allocation = 'idle')
                AND NOT EXISTS (
-                   SELECT 1 FROM benchmark_config c
-                    WHERE c.tester_id = t.tester_id
-                      AND c.status IN ('queued','pending','running')
+                   SELECT 1 FROM test_run r
+                    WHERE r.tester_id = t.tester_id
+                      AND r.status IN ('queued','provisioning','running')
                )
               FROM project_tester t
              WHERE t.tester_id = $1
@@ -277,14 +283,15 @@ async fn defer_shutdown(client: &Client, due: &DueTester) -> anyhow::Result<()> 
         .await?;
 
     if new_count >= DEFERRAL_CAP {
-        // Look up the benchmarks blocking shutdown so the operator log is useful.
+        // Look up the runs blocking shutdown so the operator log is useful.
         let holders = client
             .query(
                 r#"
-                SELECT c.name FROM benchmark_config c
-                 WHERE c.tester_id = $1
-                   AND c.status IN ('queued','pending','running')
-                 ORDER BY c.queued_at NULLS LAST, c.created_at
+                SELECT c.name FROM test_run r
+                  JOIN test_config c ON c.id = r.test_config_id
+                 WHERE r.tester_id = $1
+                   AND r.status IN ('queued','provisioning','running')
+                 ORDER BY r.created_at
                  LIMIT 10
                 "#,
                 &[&due.tester_id],
@@ -414,12 +421,12 @@ mod tests {
         assert_eq!(TICK, Duration::from_secs(60));
     }
 
-    /// Compile-time guard: the public entry point keeps its
-    /// `Arc<tokio_postgres::Client>` signature so that Task 34 can wire it
-    /// into `main.rs` without needing to re-discover the module.
+    /// Compile-time guard: the public entry point takes a
+    /// `deadpool_postgres::Pool` so it can acquire a client per tick (rather
+    /// than holding one connection out of the pool for the process lifetime).
     #[allow(dead_code)]
-    async fn _auto_shutdown_loop_signature_compile_check(c: Arc<Client>) {
-        auto_shutdown_loop(c).await;
+    async fn _auto_shutdown_loop_signature_compile_check(pool: deadpool_postgres::Pool) {
+        auto_shutdown_loop(pool).await;
     }
 
     /// RR-006 compile-level guard: `sync_stopped_with_retry` exists with
