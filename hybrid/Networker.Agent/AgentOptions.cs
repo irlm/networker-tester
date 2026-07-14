@@ -20,4 +20,13 @@ public sealed class AgentOptions
 
     /// <summary>Per-run timeout in seconds handed to the tester.</summary>
     public int TimeoutSeconds { get; set; } = 30;
+
+    /// <summary>
+    /// Base URL of the control plane. The agent connects its SignalR client to
+    /// <c>{DashboardUrl}/ws/agent</c>. Configure via <c>AGENT_DASHBOARDURL</c>.
+    /// </summary>
+    public string DashboardUrl { get; set; } = "http://127.0.0.1:5210";
+
+    /// <summary>Name this agent reports on the wire.</summary>
+    public string Name { get; set; } = "hybrid-agent-1";
 }

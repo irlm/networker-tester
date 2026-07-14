@@ -1,4 +1,6 @@
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
+using Networker.Contracts;
 using Networker.Data;
 
 // Phase 2 proof-of-concept control plane.
@@ -92,13 +94,54 @@ app.MapGet("/api/projects/{projectId}/test-runs", async (string projectId, int? 
 // endpoint negotiates. The agent↔dashboard hub is the same pattern.
 app.MapHub<DashboardHub>("/ws/dashboard");
 
+// Agent-facing hub. Replaces the Rust `ws/agent_hub.rs` — SignalR handles the
+// connection lifecycle, reconnection, and (with a backplane) multi-replica
+// routing the Rust code maintained by hand.
+app.MapHub<AgentHub>("/ws/agent");
+
 app.Run();
 
 /// Browser-facing live-updates hub. In full Phase 2 the control plane calls
 /// Clients.Group($"project:{id}").RunUpdated(...) instead of the Rust code's
 /// hand-maintained connection map.
-public class DashboardHub : Microsoft.AspNetCore.SignalR.Hub
+public class DashboardHub : Hub
 {
     public Task Subscribe(string projectId) =>
         Groups.AddToGroupAsync(Context.ConnectionId, $"project:{projectId}");
+}
+
+/// Agent → control plane hub. Agents invoke <c>ReportResult</c>/<c>Heartbeat</c>;
+/// the hub logs them and fans the result out to any browser watching the same
+/// project via the <see cref="DashboardHub"/> group — the Rust code hand-wired
+/// this cross-hub routing with a shared connection map. In full Phase 2,
+/// ReportResult also persists via EF Core.
+public class AgentHub(ILogger<AgentHub> logger, IHubContext<DashboardHub> dashboard) : Hub
+{
+    public async Task ReportResult(ProbeRunResult result)
+    {
+        logger.LogInformation(
+            "Agent {ConnId} reported run {RunId}: schema_version={Schema}, {Count} attempts, target={Target}",
+            Context.ConnectionId, result.RunId, result.SchemaVersion, result.Attempts.Count, result.TargetUrl);
+
+        // Fan out to browsers (best-effort demo of the cross-hub path).
+        await dashboard.Clients.All.SendAsync("RunReported", new
+        {
+            result.RunId,
+            result.TargetUrl,
+            result.SchemaVersion,
+            attempts = result.Attempts.Count,
+        });
+    }
+
+    public Task Heartbeat(string agentName)
+    {
+        logger.LogInformation("Heartbeat from agent {AgentName} ({ConnId})", agentName, Context.ConnectionId);
+        return Task.CompletedTask;
+    }
+
+    public override Task OnConnectedAsync()
+    {
+        logger.LogInformation("Agent connected: {ConnId}", Context.ConnectionId);
+        return base.OnConnectedAsync();
+    }
 }
