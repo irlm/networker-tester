@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Networker.ControlPlane.Auth;
+using Networker.ControlPlane.Endpoints;
 using Networker.Contracts;
 using Networker.Data;
 
@@ -55,50 +56,19 @@ app.MapGet("/api/health", async (NetworkerDbContext db) =>
     });
 });
 
-// GET /api/projects/{projectId}/testers — LINQ replaces hand-written SELECT +
-// manual row.get() mapping. Compile-checked against the model.
-app.MapGet("/api/projects/{projectId}/testers", async (string projectId, NetworkerDbContext db) =>
-{
-    var testers = await db.ProjectTesters
-        .AsNoTracking()
-        .Where(t => t.ProjectId == projectId)
-        .OrderByDescending(t => t.CreatedAt)
-        .Select(t => new
-        {
-            tester_id = t.TesterId,
-            name = t.Name,
-            cloud = t.Cloud,
-            region = t.Region,
-            vm_size = t.VmSize,
-            power_state = t.PowerState,
-            allocation = t.Allocation,
-        })
-        .ToListAsync();
-    return Results.Ok(testers);
-});
-
-// GET /api/projects/{projectId}/test-runs — joins TestRun→TestConfig for the
-// name, the same shape the Runs page consumes.
-app.MapGet("/api/projects/{projectId}/test-runs", async (string projectId, int? limit, NetworkerDbContext db) =>
-{
-    var runs = await db.TestRuns
-        .AsNoTracking()
-        .Where(r => r.ProjectId == projectId)
-        .OrderByDescending(r => r.CreatedAt)
-        .Take(limit ?? 20)
-        .Join(db.TestConfigs, r => r.TestConfigId, c => c.Id, (r, c) => new
-        {
-            id = r.Id,
-            name = c.Name,
-            status = r.Status,
-            success_count = r.SuccessCount,
-            failure_count = r.FailureCount,
-            tester_id = r.TesterId,
-            created_at = r.CreatedAt,
-        })
-        .ToListAsync();
-    return Results.Ok(runs);
-});
+// M1 read-only endpoint parity — the hot GET endpoints the React frontend
+// consumes, ported from the Rust dashboard as EF/LINQ against the full model
+// and gated by the M0 project-scope policies. Each module is a static
+// extension (src/Networker.ControlPlane/Endpoints/) so the surface can grow
+// per-domain without this file churning. These supersede the two PoC inline
+// endpoints that used to live here (testers + test-runs).
+app.MapProjectsEndpoints();
+app.MapTestersEndpoints();
+app.MapTestRunsEndpoints();
+app.MapTestConfigsEndpoints();
+app.MapAgentsEndpoints();
+app.MapDeploymentsEndpoints();
+app.MapPlatformEndpoints();
 
 // SignalR hub for live dashboard updates. Phase 2 wires run/tester events
 // through Groups($"project:{id}") — for now the hub just stands up so the

@@ -1,8 +1,10 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Networker.ControlPlane.Auth;
 using Networker.Data;
 using Networker.Data.Entities;
 using Testcontainers.PostgreSql;
@@ -33,6 +35,8 @@ public sealed class ControlPlaneFixture : WebApplicationFactory<Program>, IAsync
 
     public const string SeededProjectId = "proj-itest-001";
     public const string SeededTesterName = "itest-tester-eastus";
+    public static readonly Guid SeededUserId = Guid.Parse("11111111-1111-4111-8111-111111111111");
+    public const string SeededUserEmail = "itest@networker.local";
 
     public async Task InitializeAsync()
     {
@@ -100,6 +104,28 @@ public sealed class ControlPlaneFixture : WebApplicationFactory<Program>, IAsync
             BenchmarkRunCount = 0,
             CreatedAt = now,
         });
+        // A user + membership so the M1 project-scoped (ProjectMember) endpoints
+        // can be exercised end-to-end with a real minted JWT.
+        ctx.DashUsers.Add(new DashUser
+        {
+            UserId = SeededUserId,
+            Email = SeededUserEmail,
+            Role = "operator",
+            Status = "active",
+            AuthProvider = "local",
+            IsPlatformAdmin = false,
+            MustChangePassword = false,
+            SsoOnly = false,
+            CreatedAt = now,
+        });
+        ctx.ProjectMembers.Add(new ProjectMember
+        {
+            ProjectId = SeededProjectId,
+            UserId = SeededUserId,
+            Role = "operator",
+            Status = "active",
+            JoinedAt = now,
+        });
         await ctx.SaveChangesAsync();
     }
 
@@ -108,6 +134,18 @@ public sealed class ControlPlaneFixture : WebApplicationFactory<Program>, IAsync
     protected override void ConfigureWebHost(Microsoft.AspNetCore.Hosting.IWebHostBuilder builder)
     {
         builder.UseSetting("ConnectionStrings:Networker", _db.GetConnectionString());
+    }
+
+    /// A client carrying a JWT for the seeded user, minted by the app's OWN
+    /// JwtTokenService (same signing key the JwtBearer handler validates with),
+    /// so the M0 auth pipeline is exercised for real.
+    public HttpClient CreateAuthenticatedClient()
+    {
+        var client = CreateClient();
+        var tokens = Services.GetRequiredService<JwtTokenService>();
+        var jwt = tokens.CreateToken(SeededUserId, SeededUserEmail, "operator", isPlatformAdmin: false);
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", jwt);
+        return client;
     }
 
     public new async Task DisposeAsync()
@@ -138,9 +176,9 @@ public sealed class ControlPlaneIntegrationTests : IClassFixture<ControlPlaneFix
     }
 
     [Fact]
-    public async Task Testers_endpoint_returns_seeded_tester_from_ef_model()
+    public async Task Testers_endpoint_returns_seeded_tester_for_project_member()
     {
-        var client = _fixture.CreateClient();
+        var client = _fixture.CreateAuthenticatedClient();
 
         var resp = await client.GetAsync(
             $"/api/projects/{ControlPlaneFixture.SeededProjectId}/testers");
@@ -156,16 +194,41 @@ public sealed class ControlPlaneIntegrationTests : IClassFixture<ControlPlaneFix
     }
 
     [Fact]
-    public async Task Testers_endpoint_returns_empty_for_unknown_project()
+    public async Task Testers_endpoint_requires_authentication()
     {
         var client = _fixture.CreateClient();
 
-        var resp = await client.GetAsync("/api/projects/does-not-exist/testers");
+        var resp = await client.GetAsync(
+            $"/api/projects/{ControlPlaneFixture.SeededProjectId}/testers");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task Testers_endpoint_forbids_non_member_project()
+    {
+        var client = _fixture.CreateAuthenticatedClient();
+
+        // The seeded user is a member of SeededProjectId only — a project they
+        // don't belong to must be rejected by the ProjectMember policy.
+        var resp = await client.GetAsync("/api/projects/proj-not-a-member/testers");
+
+        Assert.Equal(HttpStatusCode.Forbidden, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task Project_detail_endpoint_returns_seeded_project_for_member()
+    {
+        var client = _fixture.CreateAuthenticatedClient();
+
+        var resp = await client.GetAsync(
+            $"/api/projects/{ControlPlaneFixture.SeededProjectId}");
 
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
-        var testers = await resp.Content.ReadFromJsonAsync<List<TesterRow>>();
-        Assert.NotNull(testers);
-        Assert.Empty(testers!);
+        var body = await resp.Content.ReadFromJsonAsync<ProjectDetail>();
+        Assert.NotNull(body);
+        Assert.Equal(ControlPlaneFixture.SeededProjectId, body!.Project_Id);
+        Assert.Equal("Integration Test Project", body.Name);
     }
 
     private sealed record HealthResponse(string Status, string Version, string Db);
@@ -178,4 +241,6 @@ public sealed class ControlPlaneIntegrationTests : IClassFixture<ControlPlaneFix
         string Vm_Size,
         string Power_State,
         string Allocation);
+
+    private sealed record ProjectDetail(string Project_Id, string Name, string Slug);
 }
