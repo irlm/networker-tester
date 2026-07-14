@@ -1264,6 +1264,7 @@ mod tests {
     fn dummy_run() -> TestRun {
         let run_id = Uuid::new_v4();
         TestRun {
+            schema_version: crate::metrics::SCHEMA_VERSION.to_string(),
             run_id,
             started_at: Utc::now(),
             finished_at: Some(Utc::now()),
@@ -1560,6 +1561,7 @@ mod tests {
             })
             .collect();
         let run = TestRun {
+            schema_version: crate::metrics::SCHEMA_VERSION.to_string(),
             run_id,
             started_at,
             finished_at: Some(started_at),
@@ -1733,6 +1735,7 @@ mod tests {
             })
             .collect();
         let run = TestRun {
+            schema_version: crate::metrics::SCHEMA_VERSION.to_string(),
             run_id,
             started_at,
             finished_at: Some(started_at),

@@ -960,6 +960,7 @@ mod tests {
         };
 
         TestRun {
+            schema_version: crate::metrics::SCHEMA_VERSION.to_string(),
             run_id,
             started_at: now,
             finished_at: Some(now),
@@ -1020,6 +1021,7 @@ mod tests {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let run_id = Uuid::new_v4();
         let run = TestRun {
+            schema_version: crate::metrics::SCHEMA_VERSION.to_string(),
             run_id,
             started_at: Utc::now(),
             finished_at: None,
@@ -1186,6 +1188,7 @@ mod tests {
         };
 
         let run = TestRun {
+            schema_version: crate::metrics::SCHEMA_VERSION.to_string(),
             run_id,
             started_at: now,
             finished_at: Some(now),
