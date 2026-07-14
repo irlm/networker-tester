@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Networker.ControlPlane.Auth;
 using Networker.ControlPlane.Dispatch;
+using Networker.ControlPlane.Realtime;
 using Networker.Data;
 
 namespace Networker.ControlPlane.Background;
@@ -16,10 +17,15 @@ namespace Networker.ControlPlane.Background;
 /// cron or a single failing schedule is caught per-iteration so one poison row
 /// can never wedge the whole loop (mirrors the Rust per-schedule error handling).</para>
 ///
+/// <para>The "no agent online =&gt; skip &amp; advance" churn guard IS ported (the Rust
+/// <c>skipped_no_agent</c> arm): when no agent is connected, due schedules are
+/// advanced without materializing runs (Pending-endpoint configs exempt — they
+/// provision their own VM) and one aggregate warning is logged per tick.</para>
+///
 /// <para><b>Deferred / not ported here</b> (out of scope for this M3 slice — they
-/// are the other sub-routines of the Rust scheduler loop): the "no agent online
-/// =&gt; skip &amp; advance" churn guard, workspace-inactivity checks, invite/approval
-/// expiry, the stale-assigned-job reaper, and hourly system health checks. The
+/// are the other sub-routines of the Rust scheduler loop): workspace-inactivity
+/// checks, invite/approval expiry, and hourly system health checks. The
+/// stale-assigned-job reaper lives in <see cref="WatchdogService"/>. The
 /// <c>Pending</c>-endpoint provisioning branch is owned by <see cref="IRunDispatcher"/>
 /// (deferred to M4). This service does the schedule=&gt;run fan-out only.</para>
 /// </summary>
@@ -41,11 +47,16 @@ public sealed class SchedulerService : BackgroundService
         IsPlatformAdmin: true);
 
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly AgentConnectionRegistry _registry;
     private readonly ILogger<SchedulerService> _logger;
 
-    public SchedulerService(IServiceScopeFactory scopeFactory, ILogger<SchedulerService> logger)
+    public SchedulerService(
+        IServiceScopeFactory scopeFactory,
+        AgentConnectionRegistry registry,
+        ILogger<SchedulerService> logger)
     {
         _scopeFactory = scopeFactory;
+        _registry = registry;
         _logger = logger;
     }
 
@@ -95,9 +106,28 @@ public sealed class SchedulerService : BackgroundService
             return;
         }
 
+        // ── No-agent churn guard (the Rust scheduler's skipped_no_agent arm,
+        // regressed in PR #383's absence). When no agent is connected at all,
+        // materializing scheduled runs is pure churn: each run sits queued, gets
+        // rescanned by the redispatcher every tick, and expires to `failed`
+        // after the 5-minute queued cutoff — at scale this manufactured
+        // thousands of dead rows per day. Skip those occurrences, still
+        // advancing next_fire_at so due schedules don't pile up, and log ONE
+        // aggregate warning per tick. Pending-endpoint configs are exempt (they
+        // provision their own VM), matching Rust.
+        var anyAgentOnline = _registry.AnyOnlineAgent() is not null;
+        var configIds = due.Select(s => s.TestConfigId).Distinct().ToList();
+        var endpointKinds = await db.TestConfigs
+            .AsNoTracking()
+            .Where(c => configIds.Contains(c.Id))
+            .Select(c => new { c.Id, c.EndpointKind })
+            .ToDictionaryAsync(c => c.Id, c => c.EndpointKind, ct)
+            .ConfigureAwait(false);
+
         var launched = 0;
         var advanced = 0;
         var failed = 0;
+        var skippedNoAgent = 0;
 
         foreach (var schedule in due)
         {
@@ -122,8 +152,24 @@ public sealed class SchedulerService : BackgroundService
                     continue;
                 }
 
+                var isPending = endpointKinds.TryGetValue(schedule.TestConfigId, out var kind)
+                    && string.Equals(kind, "pending", StringComparison.OrdinalIgnoreCase);
+                if (!anyAgentOnline && !isPending)
+                {
+                    // Advance the occurrence without creating a run.
+                    schedule.NextFireAt =
+                        ScheduleTiming.NextFireUtc(schedule.CronExpr, schedule.Timezone, now);
+                    skippedNoAgent++;
+                    continue;
+                }
+
                 var runId = await dispatcher
-                    .LaunchAsync(schedule.TestConfigId, comparisonGroupId: null, SystemUser, ct)
+                    .LaunchAsync(
+                        schedule.TestConfigId,
+                        comparisonGroupId: null,
+                        testerId: null,
+                        SystemUser,
+                        ct)
                     .ConfigureAwait(false);
 
                 schedule.LastFiredAt = now;
@@ -152,8 +198,15 @@ public sealed class SchedulerService : BackgroundService
 
         await db.SaveChangesAsync(ct).ConfigureAwait(false);
 
+        if (skippedNoAgent > 0)
+        {
+            _logger.LogWarning(
+                "Skipped {Count} scheduled run(s) — no agent online; occurrences advanced without creating runs",
+                skippedNoAgent);
+        }
+
         _logger.LogInformation(
-            "Scheduler tick: {Due} due, {Launched} launched, {Advanced} seeded, {Failed} failed",
-            due.Count, launched, advanced, failed);
+            "Scheduler tick: {Due} due, {Launched} launched, {Advanced} seeded, {SkippedNoAgent} skipped (no agent), {Failed} failed",
+            due.Count, launched, advanced, skippedNoAgent, failed);
     }
 }

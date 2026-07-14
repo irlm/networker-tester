@@ -183,14 +183,18 @@ public static class TestConfigWriteEndpoints
         }).RequireAuthorization();
 
         // POST /api/v2/test-configs/{id}/launch — create a queued run + dispatch.
-        // Auth only. Mirrors Rust launch_handler, but delegates the create+dispatch
-        // to the M3 IRunDispatcher. Returns 202 Accepted with the new run id (the
-        // run is queued; assignment to an agent is best-effort/async).
+        // Auth only. Mirrors Rust launch_handler, delegating the create+dispatch
+        // to the M3 IRunDispatcher. tester_id is threaded through so dispatch
+        // prefers the requested agent (LaunchRequest.tester_id — previously
+        // dropped). Returns 200 with the FULL serialized test_run row, re-read
+        // after the dispatch attempt (the frontend inserts this response straight
+        // into the runs list; status may already be running/provisioning).
         app.MapPost("/api/v2/test-configs/{id:guid}/launch", async (
             Guid id,
             [FromBody] LaunchRequest? req,
             HttpContext http,
             IRunDispatcher dispatcher,
+            NetworkerDbContext db,
             CancellationToken ct) =>
         {
             var user = http.GetAuthUser();
@@ -199,18 +203,24 @@ public static class TestConfigWriteEndpoints
                 return Results.Unauthorized();
             }
 
+            Guid runId;
             try
             {
-                var runId = await dispatcher.LaunchAsync(
-                    id, req?.ComparisonGroupId, user, ct);
-                return Results.Accepted(
-                    $"/api/v2/test-runs/{runId}",
-                    new { id = runId, status = "queued" });
+                runId = await dispatcher.LaunchAsync(
+                    id, req?.ComparisonGroupId, req?.TesterId, user, ct);
             }
             catch (RunDispatchNotFoundException)
             {
                 return Results.NotFound();
             }
+
+            var run = await db.TestRuns
+                .AsNoTracking()
+                .FirstOrDefaultAsync(r => r.Id == runId, ct);
+
+            return run is null
+                ? Results.NotFound()
+                : Results.Ok(TestRunResponse.ToDto(run));
         }).RequireAuthorization();
 
         return app;
@@ -257,8 +267,9 @@ public static class TestConfigWriteEndpoints
         public int? MaxDurationSecs { get; set; }
     }
 
-    /// <summary>Mirrors Rust <c>LaunchRequest</c> (tester_id currently unused on
-    /// the create path; comparison group carried through to the run).</summary>
+    /// <summary>Mirrors Rust <c>LaunchRequest</c>. <c>tester_id</c> seeds
+    /// <c>test_run.tester_id</c> (agent affinity — it semantically holds an
+    /// AGENT id); the comparison group is carried through to the run.</summary>
     public sealed record LaunchRequest(
         [property: JsonPropertyName("tester_id")] Guid? TesterId,
         [property: JsonPropertyName("comparison_group_id")] Guid? ComparisonGroupId);

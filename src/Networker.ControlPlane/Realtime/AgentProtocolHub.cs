@@ -42,6 +42,16 @@ public sealed class AgentProtocolHub : Hub
     /// <summary>Per-connection item key under which the resolved agent name is stashed.</summary>
     private const string AgentNameItemKey = "agent_name";
 
+    /// <summary>
+    /// The canonical run statuses (Rust <c>RunStatus</c>, rename_all="lowercase").
+    /// <see cref="OnRunFinished"/> validates the agent-reported terminal status
+    /// against this set so an arbitrary/corrupt string never reaches the DB.
+    /// </summary>
+    private static readonly HashSet<string> AllowedRunStatuses = new(StringComparer.Ordinal)
+    {
+        "queued", "provisioning", "running", "completed", "failed", "cancelled",
+    };
+
     private readonly NetworkerDbContext _db;
     private readonly EventBus _bus;
     private readonly AgentConnectionRegistry _registry;
@@ -207,7 +217,7 @@ public sealed class AgentProtocolHub : Hub
                 await OnRunProgress(rp);
                 break;
             case AttemptEventMessage ae:
-                OnAttemptEvent(ae);
+                await OnAttemptEvent(ae);
                 break;
             case RunFinishedMessage rf:
                 await OnRunFinished(rf);
@@ -254,9 +264,14 @@ public sealed class AgentProtocolHub : Hub
     }
 
     /// <summary>
-    /// RunStarted → <c>test_run.status='running'</c> + <c>started_at</c>;
-    /// publish <see cref="JobUpdate"/>(running). Rust:
-    /// <c>test_runs::update_status(Running)</c> + <c>JobUpdate</c>.
+    /// RunStarted → <c>test_run.status='running'</c> + <c>started_at</c> +
+    /// <c>tester_id=&lt;this agent&gt;</c> + <c>last_heartbeat=now</c>; publish
+    /// <see cref="JobUpdate"/>(running). Rust:
+    /// <c>test_runs::update_status(Running)</c> + <c>JobUpdate</c>. Stamping
+    /// <c>tester_id</c> with the EXECUTING agent's id is what lets the watchdog
+    /// check the right agent's registry liveness and the disconnect cleanup find
+    /// this run (<c>WHERE tester_id=$1</c>); stamping <c>last_heartbeat</c>
+    /// keeps a just-started run out of the 120s staleness window.
     /// </summary>
     private async Task OnRunStarted(Guid agentId, RunStartedMessage rs)
     {
@@ -264,15 +279,19 @@ public sealed class AgentProtocolHub : Hub
             .Where(r => r.Id == rs.RunId)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(r => r.Status, "running")
-                .SetProperty(r => r.StartedAt, rs.StartedAt.UtcDateTime));
+                .SetProperty(r => r.StartedAt, rs.StartedAt.UtcDateTime)
+                .SetProperty(r => r.TesterId, agentId)
+                .SetProperty(r => r.LastHeartbeat, DateTime.UtcNow));
 
         _bus.Publish(new JobUpdate(rs.RunId, "running", agentId, rs.StartedAt, null));
     }
 
     /// <summary>
-    /// RunProgress → update <c>test_run.success_count</c> / <c>failure_count</c>.
-    /// Rust: <c>test_runs::update_counts</c>. No browser event (counts are read
-    /// back into the terminal JobComplete), matching Rust.
+    /// RunProgress → update <c>test_run.success_count</c> / <c>failure_count</c>
+    /// and refresh <c>last_heartbeat</c>. Rust: <c>test_runs::update_counts</c>
+    /// (whose UPDATE also sets <c>last_heartbeat = now()</c> — the signal the
+    /// stale-run watchdog keys on). No browser event (counts are read back into
+    /// the terminal JobComplete), matching Rust.
     /// </summary>
     private async Task OnRunProgress(RunProgressMessage rp)
     {
@@ -280,16 +299,26 @@ public sealed class AgentProtocolHub : Hub
             .Where(r => r.Id == rp.RunId)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(r => r.SuccessCount, rp.Success)
-                .SetProperty(r => r.FailureCount, rp.Failure));
+                .SetProperty(r => r.FailureCount, rp.Failure)
+                .SetProperty(r => r.LastHeartbeat, DateTime.UtcNow));
     }
 
     /// <summary>
-    /// AttemptEvent → publish <see cref="AttemptResult"/> (live stream only; no
-    /// DB write). Rust: <c>DashboardEvent::AttemptResult</c>. The opaque
-    /// <c>attempt</c> JSON is forwarded verbatim.
+    /// AttemptEvent → refresh <c>test_run.last_heartbeat</c> (each streamed
+    /// attempt is proof of life, keeping long low-count runs out of the
+    /// watchdog's 120s staleness window) and publish <see cref="AttemptResult"/>.
+    /// Rust: <c>DashboardEvent::AttemptResult</c>. The opaque <c>attempt</c>
+    /// JSON is forwarded verbatim.
     /// </summary>
-    private void OnAttemptEvent(AttemptEventMessage ae)
-        => _bus.Publish(new AttemptResult(ae.RunId, ae.Attempt));
+    private async Task OnAttemptEvent(AttemptEventMessage ae)
+    {
+        await _db.TestRuns
+            .Where(r => r.Id == ae.RunId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.LastHeartbeat, DateTime.UtcNow));
+
+        _bus.Publish(new AttemptResult(ae.RunId, ae.Attempt));
+    }
 
     /// <summary>
     /// RunFinished → set terminal <c>test_run.status</c>, persist the benchmark
@@ -299,6 +328,17 @@ public sealed class AgentProtocolHub : Hub
     /// </summary>
     private async Task OnRunFinished(RunFinishedMessage rf)
     {
+        // Validate the agent-reported status against the canonical RunStatus set
+        // — never write an arbitrary string into test_run.status (a corrupt or
+        // hostile frame would otherwise poison every status-keyed query).
+        if (string.IsNullOrEmpty(rf.Status) || !AllowedRunStatuses.Contains(rf.Status))
+        {
+            _logger.LogWarning(
+                "Rejected run_finished for run {RunId}: invalid status '{Status}'",
+                rf.RunId, rf.Status);
+            return;
+        }
+
         await _db.TestRuns
             .Where(r => r.Id == rf.RunId)
             .ExecuteUpdateAsync(s => s

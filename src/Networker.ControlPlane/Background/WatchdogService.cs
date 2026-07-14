@@ -11,17 +11,25 @@ namespace Networker.ControlPlane.Background;
 /// cadence and fails runs the system can no longer make progress on:
 ///
 /// <list type="number">
-///   <item><b>Stale <c>running</c> runs</b> — a run assigned to an agent
-///     (<c>tester_id</c>) that is no longer in the live
+///   <item><b>Stale <c>running</c> runs</b> — only runs whose
+///     <c>last_heartbeat</c> (fallback <c>started_at</c> when heartbeat is null)
+///     is older than <see cref="RunningStaleCutoff"/> (the Rust
+///     <c>find_stale_assigned(client, 120)</c> query) AND whose executing agent
+///     (<c>tester_id</c> holds the AGENT id) is not in the live
 ///     <see cref="AgentConnectionRegistry"/>. Hub/registry membership is the
 ///     authoritative "truly online" signal (identical to the Rust
 ///     <c>state.agents.is_agent_online</c> guard): if the socket is live the run
-///     may just be slow to heartbeat, so it is left alone. Otherwise it is failed
-///     with <c>error_message = "Agent offline"</c> and <c>finished_at = now</c>.</item>
+///     may just be slow to heartbeat, so it is left alone. A run is NEVER reaped
+///     merely for having a null <c>tester_id</c> — it must first fail the 120s
+///     staleness precondition (a fresh heartbeat or a start under 120s ago keeps
+///     it alive). Reaped runs are failed with the Rust user-facing guidance
+///     <c>"Agent disconnected — tester may have been deleted or restarted"</c>.</item>
 ///   <item><b>Stale <c>queued</c> runs</b> — runs still <c>queued</c> whose
 ///     <c>created_at</c> is older than <see cref="QueuedCutoff"/> (the Rust
-///     <c>QUEUED_CUTOFF_SECS = 300</c>, 5 minutes). No runner ever claimed them;
-///     they are failed with <c>error_message = "Queued too long"</c>.</item>
+///     <c>QUEUED_CUTOFF_SECS = 300</c>, 5 minutes). No runner ever claimed them.
+///     Runs whose config <c>endpoint_kind = 'pending'</c> are excluded — they
+///     wait for the provisioning orchestrator, not an agent (runs already in
+///     status <c>provisioning</c> are outside the query by construction).</item>
 /// </list>
 ///
 /// <para>Every failed run publishes a <c>JobUpdate(status: "failed")</c> on the
@@ -46,6 +54,21 @@ public sealed class WatchdogService : BackgroundService
     /// Rust <c>QUEUED_CUTOFF_SECS = 300</c> (5 minutes).
     /// </summary>
     private static readonly TimeSpan QueuedCutoff = TimeSpan.FromSeconds(300);
+
+    /// <summary>
+    /// How stale a <c>running</c> run's heartbeat (fallback: start) must be
+    /// before it is even CONSIDERED for reaping. Mirrors the Rust
+    /// <c>find_stale_assigned(client, 120)</c> cutoff.
+    /// </summary>
+    private static readonly TimeSpan RunningStaleCutoff = TimeSpan.FromSeconds(120);
+
+    /// <summary>Rust reaper's user-facing message for a dead running run.</summary>
+    private const string RunningReapedError =
+        "Agent disconnected — tester may have been deleted or restarted";
+
+    /// <summary>Rust reaper's user-facing message for a never-claimed queued run.</summary>
+    private const string QueuedReapedError =
+        "No runner claimed this job within 5 minutes — check that at least one agent is online for this workspace";
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly AgentConnectionRegistry _registry;
@@ -100,10 +123,20 @@ public sealed class WatchdogService : BackgroundService
         var eventNow = DateTimeOffset.UtcNow;
 
         // ── Stale `running` runs ────────────────────────────────────────────
-        // LINQ: WHERE status = 'running'. Registry membership (in-memory,
-        // authoritative) is checked per-row below — never expressible in SQL.
+        // The Rust find_stale_assigned(client, 120) preconditions, verbatim:
+        //   WHERE status = 'running' AND (
+        //     (last_heartbeat IS NOT NULL AND last_heartbeat < now - 120s)
+        //     OR (last_heartbeat IS NULL AND started_at IS NOT NULL
+        //         AND started_at < now - 120s))
+        // A run with a fresh heartbeat, or one that started under 120s ago, is
+        // never even a candidate — regardless of its tester_id. Registry
+        // membership (in-memory, authoritative) is then checked per-row below —
+        // never expressible in SQL.
+        var runningStaleBefore = now - RunningStaleCutoff;
         var running = await db.TestRuns
-            .Where(r => r.Status == "running")
+            .Where(r => r.Status == "running" &&
+                ((r.LastHeartbeat != null && r.LastHeartbeat < runningStaleBefore) ||
+                 (r.LastHeartbeat == null && r.StartedAt != null && r.StartedAt < runningStaleBefore)))
             .Select(r => new { r.Id, r.TesterId })
             .ToListAsync(ct)
             .ConfigureAwait(false);
@@ -111,11 +144,12 @@ public sealed class WatchdogService : BackgroundService
         var reapedRunning = 0;
         foreach (var run in running)
         {
-            // Authoritative liveness: if the agent still holds a live connection
-            // the run may just be lagging its heartbeat — leave it. Only reap
-            // when the agent is genuinely absent from the registry. A run with no
-            // tester assigned can never have a live agent, so it is reapable.
-            if (run.TesterId is Guid testerId && _registry.IsOnline(testerId))
+            // Authoritative liveness: tester_id holds the EXECUTING AGENT's id
+            // (Rust: "Tester id == agent id in the v0.28 model"). If that agent
+            // still holds a live connection the run may just be slow to
+            // heartbeat — leave it. Only reap when the agent is genuinely absent
+            // from the registry (or was never stamped despite 120s of silence).
+            if (run.TesterId is Guid agentId && _registry.IsOnline(agentId))
             {
                 continue;
             }
@@ -125,7 +159,7 @@ public sealed class WatchdogService : BackgroundService
                 .ExecuteUpdateAsync(
                     s => s
                         .SetProperty(r => r.Status, "failed")
-                        .SetProperty(r => r.ErrorMessage, "Agent offline")
+                        .SetProperty(r => r.ErrorMessage, RunningReapedError)
                         .SetProperty(r => r.FinishedAt, now),
                     ct)
                 .ConfigureAwait(false);
@@ -150,10 +184,17 @@ public sealed class WatchdogService : BackgroundService
         }
 
         // ── Stale `queued` runs ─────────────────────────────────────────────
-        // LINQ: WHERE status = 'queued' AND created_at < now - 300s.
+        // LINQ: WHERE status = 'queued' AND created_at < now - 300s
+        //   AND config.endpoint_kind <> 'pending'.
+        // Pending-endpoint runs are waiting on the provisioning orchestrator
+        // (which flips them to `provisioning`, then back to `queued` with a
+        // concrete endpoint once the VM is live) — the "no runner claimed it"
+        // cutoff does not apply to them.
         var queuedCutoff = now - QueuedCutoff;
         var stuckQueued = await db.TestRuns
-            .Where(r => r.Status == "queued" && r.CreatedAt < queuedCutoff)
+            .Where(r => r.Status == "queued"
+                && r.CreatedAt < queuedCutoff
+                && r.TestConfig.EndpointKind != "pending")
             .Select(r => r.Id)
             .ToListAsync(ct)
             .ConfigureAwait(false);
@@ -166,7 +207,7 @@ public sealed class WatchdogService : BackgroundService
                 .ExecuteUpdateAsync(
                     s => s
                         .SetProperty(r => r.Status, "failed")
-                        .SetProperty(r => r.ErrorMessage, "Queued too long")
+                        .SetProperty(r => r.ErrorMessage, QueuedReapedError)
                         .SetProperty(r => r.FinishedAt, now),
                     ct)
                 .ConfigureAwait(false);
