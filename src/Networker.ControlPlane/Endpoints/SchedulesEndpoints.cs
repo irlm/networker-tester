@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Networker.ControlPlane.Auth;
+using Networker.ControlPlane.Dispatch;
 using Networker.Data;
 
 namespace Networker.ControlPlane.Endpoints;
@@ -144,25 +145,33 @@ public static class SchedulesEndpoints
         }).RequireAuthorization();
 
         // POST /api/v2/schedules/{id}/trigger — fire the schedule's config now.
-        // In Rust this creates a queued test_run from the linked config, stamps
-        // last_fired_at/last_run_id, and returns the run. That launch path needs the
-        // run dispatcher (built in parallel), so M3 ships only the endpoint shell:
-        // validate the schedule exists, then return 202 Accepted.
-        app.MapPost("/api/v2/schedules/{id:guid}/trigger", async (Guid id, NetworkerDbContext db) =>
+        // Creates a queued test_run from the linked config via the dispatcher,
+        // stamps last_fired_at/last_run_id, returns 202 + run id (Rust trigger_handler).
+        app.MapPost("/api/v2/schedules/{id:guid}/trigger", async (
+            Guid id,
+            HttpContext ctx,
+            NetworkerDbContext db,
+            IRunDispatcher dispatcher,
+            CancellationToken ct) =>
         {
-            var exists = await db.TestSchedules
-                .AsNoTracking()
-                .AnyAsync(s => s.Id == id);
-            if (!exists)
+            var schedule = await db.TestSchedules.FirstOrDefaultAsync(s => s.Id == id, ct);
+            if (schedule is null)
             {
                 return Results.NotFound();
             }
 
-            // TODO(M3): call IRunDispatcher.LaunchAsync for the schedule's test_config
-            // (create the queued TestRun, mark_fired the schedule with the new run id,
-            // and dispatch it to an online agent). Deferred until the run dispatcher
-            // lands; for now we accept the request without launching.
-            return Results.Accepted();
+            var caller = ctx.GetAuthUser();
+            if (caller is null)
+            {
+                return Results.Unauthorized();
+            }
+
+            var runId = await dispatcher.LaunchAsync(schedule.TestConfigId, null, caller, ct);
+            schedule.LastFiredAt = DateTime.UtcNow;
+            schedule.LastRunId = runId;
+            await db.SaveChangesAsync(ct);
+
+            return Results.Accepted($"/api/v2/test-runs/{runId}", new { id = runId, status = "queued" });
         }).RequireAuthorization();
 
         return app;

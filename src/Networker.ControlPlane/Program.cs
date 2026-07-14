@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Networker.ControlPlane.Auth;
+using Networker.ControlPlane.Background;
 using Networker.ControlPlane.Dispatch;
 using Networker.ControlPlane.Endpoints;
 using Networker.ControlPlane.Realtime;
@@ -52,6 +53,12 @@ builder.Services.AddAgentProtocol();
 // assigns them to an online agent via the AgentConnectionRegistry, with
 // queued-run redispatch. Drives the core benchmarking loop.
 builder.Services.AddRunDispatcher();
+// M3 slice 2: background services (hosted). Scheduler fires due schedules →
+// LaunchAsync; the redispatcher retries stuck-queued runs; the watchdog fails
+// runs whose agent died; the reaper marks dead agents offline (the live agent
+// registry is the authoritative liveness signal).
+builder.Services.AddNetworkerSchedulerServices();
+builder.Services.AddNetworkerReconciliationServices();
 
 var app = builder.Build();
 
