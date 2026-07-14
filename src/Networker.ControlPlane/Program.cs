@@ -6,6 +6,7 @@ using Networker.ControlPlane.Dispatch;
 using Networker.ControlPlane.Endpoints;
 using Networker.ControlPlane.Realtime;
 using Networker.ControlPlane.Security;
+using Networker.ControlPlane.Sso;
 using Networker.Contracts;
 using Networker.Data;
 
@@ -70,6 +71,10 @@ builder.Services.AddComputeProvisioner();
 // (auto-shutdown of idle testers, orphan-resource reaper).
 builder.Services.AddProvisioningOrchestrator();
 builder.Services.AddNetworkerCloudLifecycleServices();
+// M5 admin/orgs/SSO: the workspace-inactivity lifecycle loop and the SSO
+// module (OIDC flows + provider admin, provider secrets encrypted via the cipher).
+builder.Services.AddNetworkerInactivityService();
+builder.Services.AddSsoModule();
 
 var app = builder.Build();
 
@@ -120,6 +125,23 @@ app.MapCloudAccountsEndpoints();
 app.MapCloudConnectionsEndpoints();
 app.MapTesterWriteEndpoints();
 app.MapDeploymentWriteEndpoints();
+
+// M5 admin / orgs / access-control / SSO — users + admin + project write;
+// members/invites/share-links/visibility; approvals + agent-commands + catalog;
+// account/password + SSO flows + provider admin.
+app.MapUsersEndpoints();
+app.MapAdminEndpoints();
+app.MapProjectWriteEndpoints();
+app.MapMembersEndpoints();
+app.MapInvitesEndpoints();
+app.MapShareLinksEndpoints();
+app.MapVisibilityRulesEndpoints();
+app.MapApprovalsEndpoints();
+app.MapAgentCommandsEndpoints();
+app.MapBenchmarkCatalogEndpoints();
+app.MapAccountEndpoints();
+app.MapSsoEndpoints();
+app.MapSsoAdminEndpoints();
 
 // M2 browser event bus — live dashboard updates with replay + sequence numbers
 // (the Rust EventBus + browser_hub, ported). Clients connect with
