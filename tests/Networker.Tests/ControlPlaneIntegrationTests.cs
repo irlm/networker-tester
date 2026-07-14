@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Networker.ControlPlane.Auth;
 using Networker.Data;
 using Networker.Data.Entities;
+using Networker.Security;
 using Testcontainers.PostgreSql;
 
 namespace Networker.Tests;
@@ -267,6 +268,38 @@ public sealed class ControlPlaneIntegrationTests : IClassFixture<ControlPlaneFix
             .FirstOrDefaultAsync(r => r.TestConfigId == ControlPlaneFixture.SeededConfigId);
         Assert.NotNull(run);
         Assert.Equal("queued", run!.Status);
+    }
+
+    [Fact]
+    public async Task Cloud_account_create_encrypts_credentials_and_round_trips()
+    {
+        var client = _fixture.CreateAuthenticatedClient();
+        var body = new
+        {
+            name = "itest-azure",
+            provider = "azure",
+            // personal → only ProjectOperator required (shared accounts need Admin).
+            personal = true,
+            credentials = new { client_id = "cid", client_secret = "s3cr3t", tenant_id = "tid" },
+        };
+
+        var resp = await client.PostAsJsonAsync(
+            $"/api/projects/{ControlPlaneFixture.SeededProjectId}/cloud-accounts", body);
+
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+
+        // The submitted secret is never stored in the clear: the row holds
+        // ciphertext+nonce that the app's OWN cipher decrypts back to the input.
+        var cipher = _fixture.Services.GetRequiredService<CredentialCipher>();
+        await using var ctx = _fixture.NewDbContext();
+        var acct = await ctx.CloudAccounts
+            .FirstOrDefaultAsync(a => a.ProjectId == ControlPlaneFixture.SeededProjectId);
+        Assert.NotNull(acct);
+        Assert.NotEmpty(acct!.CredentialsEnc);
+
+        var plaintext = cipher.Decrypt(acct.CredentialsEnc, acct.CredentialsNonce);
+        using var doc = System.Text.Json.JsonDocument.Parse(plaintext);
+        Assert.Equal("s3cr3t", doc.RootElement.GetProperty("client_secret").GetString());
     }
 
     private sealed record HealthResponse(string Status, string Version, string Db);

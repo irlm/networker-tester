@@ -5,6 +5,7 @@ using Networker.ControlPlane.Background;
 using Networker.ControlPlane.Dispatch;
 using Networker.ControlPlane.Endpoints;
 using Networker.ControlPlane.Realtime;
+using Networker.ControlPlane.Security;
 using Networker.Contracts;
 using Networker.Data;
 
@@ -59,6 +60,11 @@ builder.Services.AddRunDispatcher();
 // registry is the authoritative liveness signal).
 builder.Services.AddNetworkerSchedulerServices();
 builder.Services.AddNetworkerReconciliationServices();
+// M4 provisioning: the credential cipher (encrypts cloud-account secrets,
+// byte-compatible with the Rust dashboard) and the compute provisioner (CLI
+// shell-out to az/aws/gcloud for VM lifecycle — SDKs are a later pass).
+builder.Services.AddCredentialCipher();
+builder.Services.AddComputeProvisioner();
 
 var app = builder.Build();
 
@@ -100,6 +106,14 @@ app.MapTestConfigWriteEndpoints();
 app.MapTestRunWriteEndpoints();
 app.MapSchedulesEndpoints();
 app.MapComparisonGroupsEndpoints();
+
+// M4 provisioning + VM lifecycle — cloud credential management (encrypted) and
+// tester start/stop/upgrade/probe/postpone/schedule/force-stop/delete (202-async,
+// cloud calls behind IComputeProvisioner). Pending→provision (deploy-runner +
+// orchestrator) is M4 slice 2.
+app.MapCloudAccountsEndpoints();
+app.MapCloudConnectionsEndpoints();
+app.MapTesterWriteEndpoints();
 
 // M2 browser event bus — live dashboard updates with replay + sequence numbers
 // (the Rust EventBus + browser_hub, ported). Clients connect with
