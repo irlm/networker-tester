@@ -1,4 +1,6 @@
+using Microsoft.EntityFrameworkCore;
 using Networker.ControlPlane.Dispatch;
+using Networker.Data;
 
 namespace Networker.ControlPlane.Endpoints;
 
@@ -15,26 +17,64 @@ public static class TestRunWriteEndpoints
     {
         // POST /api/v2/test-runs/{id}/cancel — cooperative cancel. Auth only (flat
         // route, no {projectId} for the project-scope policy — same follow-up
-        // caveat as the M1 read side). Returns 202 Accepted; the DB status is set
-        // synchronously, the agent-side cancel is best-effort.
+        // caveat as the M1 read side). Returns 200 with the FULL serialized
+        // test_run row, re-read after the cancel (the Rust cancel_handler returns
+        // the updated run; the frontend inserts this response straight into the
+        // runs list, so a partial shape breaks the table). The DB status is set
+        // synchronously; the agent-side cancel is best-effort.
         app.MapPost("/api/v2/test-runs/{id:guid}/cancel", async (
             Guid id,
             IRunDispatcher dispatcher,
+            NetworkerDbContext db,
             CancellationToken ct) =>
         {
             try
             {
                 await dispatcher.CancelAsync(id, ct);
-                return Results.Accepted(
-                    $"/api/v2/test-runs/{id}",
-                    new { id, status = "cancelled" });
             }
             catch (RunDispatchNotFoundException)
             {
                 return Results.NotFound();
             }
+
+            var run = await db.TestRuns
+                .AsNoTracking()
+                .FirstOrDefaultAsync(r => r.Id == id, ct);
+
+            return run is null
+                ? Results.NotFound()
+                : Results.Ok(TestRunResponse.ToDto(run));
         }).RequireAuthorization();
 
         return app;
     }
+}
+
+/// <summary>
+/// The canonical snake_case <c>test_run</c> wire DTO — the exact shape the M1
+/// read endpoints (<see cref="TestRunsEndpoints"/>) emit and the Rust
+/// <c>networker_common::TestRun</c> serializes. Shared by the launch / cancel /
+/// trigger write endpoints, whose 200 responses the frontend inserts directly
+/// into the runs list.
+/// </summary>
+internal static class TestRunResponse
+{
+    internal static object ToDto(Networker.Data.Entities.TestRun r) => new
+    {
+        id = r.Id,
+        test_config_id = r.TestConfigId,
+        project_id = r.ProjectId,
+        status = r.Status,
+        started_at = r.StartedAt,
+        finished_at = r.FinishedAt,
+        success_count = r.SuccessCount,
+        failure_count = r.FailureCount,
+        error_message = r.ErrorMessage,
+        artifact_id = r.ArtifactId,
+        tester_id = r.TesterId,
+        worker_id = r.WorkerId,
+        last_heartbeat = r.LastHeartbeat,
+        created_at = r.CreatedAt,
+        comparison_group_id = r.ComparisonGroupId,
+    };
 }
