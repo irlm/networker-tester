@@ -101,6 +101,10 @@ app.MapHub<AgentHub>("/ws/agent");
 
 app.Run();
 
+// Exposes the top-level-statement Program to WebApplicationFactory<Program>
+// for integration tests (the standard minimal-API testing pattern).
+public partial class Program { }
+
 /// Browser-facing live-updates hub. In full Phase 2 the control plane calls
 /// Clients.Group($"project:{id}").RunUpdated(...) instead of the Rust code's
 /// hand-maintained connection map.
