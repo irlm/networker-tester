@@ -10,14 +10,14 @@ on:
     branches: ["main", "develop"]
     paths:
       - "src/**"
-      - "tests/Networker.Tests/**"
+      - "tests/Networker.*/**"
       - "Networker.sln"
       - ".github/workflows/dotnet.yml"
   pull_request:
     branches: ["main"]
     paths:
       - "src/**"
-      - "tests/Networker.Tests/**"
+      - "tests/Networker.*/**"
       - "Networker.sln"
       - ".github/workflows/dotnet.yml"
 
