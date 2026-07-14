@@ -44,6 +44,9 @@ builder.Services.AddNetworkerAuth(connString);
 // — AddNetworkerAuth wires JwtBearer to read it for /ws paths.
 builder.Services.AddDashboardEventBus();
 builder.Services.AddTesterQueueHub();
+// M2 slice 2: the agent hub connection registry + outbound sender. Agents
+// authenticate by api_key (not JWT) inside the hub's OnConnectedAsync.
+builder.Services.AddAgentProtocol();
 
 var app = builder.Build();
 
@@ -87,11 +90,11 @@ app.MapHub<BrowserHub>("/ws/dashboard");
 // subscribe/unsubscribe with membership checks + rate limits.
 app.MapHub<TesterQueueHub>("/ws/testers");
 
-// Agent-facing hub. Replaces the Rust `ws/agent_hub.rs` — SignalR handles the
-// connection lifecycle, reconnection, and (with a backplane) multi-replica
-// routing the Rust code maintained by hand. (M2 slice 2 extends this to the
-// full agent protocol + publishing run events through the EventBus.)
-app.MapHub<AgentHub>("/ws/agent");
+// M2 agent hub — the full agent↔control-plane protocol (ws/agent_hub.rs ported):
+// api-key auth in OnConnectedAsync, EF persistence per inbound message, run
+// events published through the EventBus, orphan-run failing on disconnect, and a
+// connection registry the M3 dispatcher pushes AssignRun/CancelRun through.
+app.MapHub<AgentProtocolHub>("/ws/agent");
 
 // POST /auth/login + GET /auth/profile — same response shapes the Rust
 // dashboard serves. The policies (GlobalAdmin/Operator/Viewer, ProjectMember/
@@ -103,48 +106,3 @@ app.Run();
 // Exposes the top-level-statement Program to WebApplicationFactory<Program>
 // for integration tests (the standard minimal-API testing pattern).
 public partial class Program { }
-
-/// Browser-facing live-updates hub. In full Phase 2 the control plane calls
-/// Clients.Group($"project:{id}").RunUpdated(...) instead of the Rust code's
-/// hand-maintained connection map.
-public class DashboardHub : Hub
-{
-    public Task Subscribe(string projectId) =>
-        Groups.AddToGroupAsync(Context.ConnectionId, $"project:{projectId}");
-}
-
-/// Agent → control plane hub. Agents invoke <c>ReportResult</c>/<c>Heartbeat</c>;
-/// the hub logs them and fans the result out to any browser watching the same
-/// project via the <see cref="DashboardHub"/> group — the Rust code hand-wired
-/// this cross-hub routing with a shared connection map. In full Phase 2,
-/// ReportResult also persists via EF Core.
-public class AgentHub(ILogger<AgentHub> logger, IHubContext<DashboardHub> dashboard) : Hub
-{
-    public async Task ReportResult(ProbeRunResult result)
-    {
-        logger.LogInformation(
-            "Agent {ConnId} reported run {RunId}: schema_version={Schema}, {Count} attempts, target={Target}",
-            Context.ConnectionId, result.RunId, result.SchemaVersion, result.Attempts.Count, result.TargetUrl);
-
-        // Fan out to browsers (best-effort demo of the cross-hub path).
-        await dashboard.Clients.All.SendAsync("RunReported", new
-        {
-            result.RunId,
-            result.TargetUrl,
-            result.SchemaVersion,
-            attempts = result.Attempts.Count,
-        });
-    }
-
-    public Task Heartbeat(string agentName)
-    {
-        logger.LogInformation("Heartbeat from agent {AgentName} ({ConnId})", agentName, Context.ConnectionId);
-        return Task.CompletedTask;
-    }
-
-    public override Task OnConnectedAsync()
-    {
-        logger.LogInformation("Agent connected: {ConnId}", Context.ConnectionId);
-        return base.OnConnectedAsync();
-    }
-}
