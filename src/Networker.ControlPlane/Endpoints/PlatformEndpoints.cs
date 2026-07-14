@@ -1,0 +1,148 @@
+using Microsoft.EntityFrameworkCore;
+using Networker.Data;
+
+namespace Networker.ControlPlane.Endpoints;
+
+/// <summary>
+/// Global (non-project-scoped) read endpoints, mirroring the Rust dashboard's
+/// <c>api/zones.rs</c> and <c>api/modes.rs</c>. In the Rust router both are in
+/// the <c>protected_flat</c> group (valid JWT required, no project scope), so
+/// they use <c>.RequireAuthorization()</c> with no named policy.
+/// </summary>
+public static class PlatformEndpoints
+{
+    public static IEndpointRouteBuilder MapPlatformEndpoints(this IEndpointRouteBuilder app)
+    {
+        // GET /api/zones — sovereignty/deployment zones ordered by code.
+        // Mirrors SovereigntyZone from crates/networker-dashboard/src/db/zones.rs
+        // (that DB row omits auto_detect, so we match it here for parity).
+        app.MapGet("/api/zones", async (NetworkerDbContext db) =>
+        {
+            var zones = await db.SovereigntyZones
+                .AsNoTracking()
+                .OrderBy(z => z.Code)
+                .Select(z => new
+                {
+                    code = z.Code,
+                    parent_code = z.ParentCode,
+                    name = z.Name,
+                    display = z.Display,
+                    legal_note = z.LegalNote,
+                    compliance_level = z.ComplianceLevel,
+                    fallback_zone = z.FallbackZone,
+                    requires_approval = z.RequiresApproval,
+                    requires_mfa = z.RequiresMfa,
+                    status = z.Status,
+                    created_at = z.CreatedAt,
+                })
+                .ToListAsync();
+
+            return Results.Ok(zones);
+        })
+        .RequireAuthorization();
+
+        // GET /api/modes — supported deployment/probe modes grouped by category.
+        // Replicates the static list from Protocol::all_modes() in
+        // crates/networker-tester/src/metrics.rs and the group-detail text from
+        // api/modes.rs, producing { "groups": [ { label, detail, modes: [...] } ] }.
+        app.MapGet("/api/modes", () => Results.Ok(BuildModes()))
+            .RequireAuthorization();
+
+        return app;
+    }
+
+    private record ModeInfo(string Id, string Name, string Description, string Detail, string Group);
+
+    // Mirror of Protocol::all_modes() — single source of truth for the mode
+    // pickers. Order is preserved so grouping matches the Rust output exactly.
+    private static readonly ModeInfo[] AllModes =
+    [
+        // Network
+        new("tcp", "TCP", "Connect", "TCP 3-way handshake timing to measure raw connection latency", "Network"),
+        new("dns", "DNS", "Resolve", "DNS resolution timing for the target hostname", "Network"),
+        new("tls", "TLS", "Handshake", "TLS handshake via rustls — reports version, cipher, ALPN, cert chain", "Network"),
+        new("tlsresume", "TLS Resume", "Warm handshake", "Two fresh TLS handshakes with a real HTTP request; the second should resume", "Network"),
+        new("native", "Native TLS", "OS TLS stack", "Uses SChannel (Win), SecureTransport (macOS), or OpenSSL (Linux)", "Network"),
+        new("udp", "UDP", "Round-trip", "UDP echo probe — measures RTT, jitter, and packet loss", "Network"),
+        // HTTP
+        new("http1", "HTTP/1.1", "Single request", "Full HTTP/1.1 request: DNS + TCP + TLS + request/response", "HTTP"),
+        new("http2", "HTTP/2", "Multiplexed", "HTTP/2 over TLS with ALPN h2 negotiation", "HTTP"),
+        new("http3", "HTTP/3", "QUIC", "HTTP/3 over QUIC (UDP) — 0-RTT capable", "HTTP"),
+        new("curl", "Curl", "Via curl CLI", "Spawns curl binary, captures per-phase timing from --write-out", "HTTP"),
+        // Page Load (Native)
+        new("pageload", "H1", "6 parallel connections", "Fetches page manifest + assets using 6 parallel HTTP/1.1 connections (browser-like)", "Page Load (Native)"),
+        new("pageload2", "H2", "Multiplexed", "Same assets multiplexed over a single TLS/HTTP2 connection", "Page Load (Native)"),
+        new("pageload3", "H3", "QUIC", "Same assets multiplexed over a single QUIC connection", "Page Load (Native)"),
+        // Page Load (Browser)
+        new("browser1", "H1", "Chrome HTTP/1.1", "Chrome headless with HTTP/2 disabled — forces HTTP/1.1", "Page Load (Browser)"),
+        new("browser2", "H2", "Chrome HTTP/2", "Chrome headless with QUIC disabled — forces HTTP/2", "Page Load (Browser)"),
+        new("browser3", "H3", "Chrome QUIC", "Chrome headless with QUIC forced via origin flag + SPKI cert pinning", "Page Load (Browser)"),
+        // Throughput
+        new("download", "Download", "Server→client", "Large payload download via HTTP — measures sustained throughput", "Throughput"),
+        new("upload", "Upload", "Client→server", "Large payload upload via HTTP POST — measures sustained throughput", "Throughput"),
+        new("download1", "Download H1", "H1 download", "Throughput download forced over HTTP/1.1", "Throughput"),
+        new("download2", "Download H2", "H2 download", "Throughput download over HTTP/2 multiplexed stream", "Throughput"),
+        new("download3", "Download H3", "H3 download", "Throughput download over QUIC/HTTP3", "Throughput"),
+        new("upload1", "Upload H1", "H1 upload", "Throughput upload forced over HTTP/1.1", "Throughput"),
+        new("upload2", "Upload H2", "H2 upload", "Throughput upload over HTTP/2", "Throughput"),
+        new("upload3", "Upload H3", "H3 upload", "Throughput upload over QUIC/HTTP3", "Throughput"),
+        new("webdownload", "Web Download", "HTTP GET", "Download via /download endpoint route", "Throughput"),
+        new("webupload", "Web Upload", "HTTP POST", "Upload via /upload endpoint route", "Throughput"),
+        new("udpdownload", "UDP Download", "UDP bulk DL", "Bulk download via UDP throughput server (port 9998)", "Throughput"),
+        new("udpupload", "UDP Upload", "UDP bulk UL", "Bulk upload via UDP throughput server (port 9998)", "Throughput"),
+    ];
+
+    private static string GroupDetail(string label) => label switch
+    {
+        "Network" => "Low-level connection probes. Measures DNS resolution, TCP handshake, TLS negotiation, and UDP round-trip independently — isolates each layer of the network stack.",
+        "HTTP" => "Full HTTP request timing across protocol versions. Each probe does DNS + TCP + TLS + HTTP request/response and reports TTFB, total duration, and negotiated protocol.",
+        "Page Load (Native)" => "Loads a page with multiple assets using the Rust HTTP stack (no browser). Compares H1 (6 parallel connections), H2 (multiplexed), and H3 (QUIC). Fastest, no rendering overhead.",
+        "Page Load (Browser)" => "Same page load test but using real Chrome headless. Includes rendering, JavaScript, and browser networking. Measures what users actually experience — DOM loaded, full load, bytes transferred.",
+        "Throughput" => "Sustained transfer speed tests with configurable payload sizes. Measures download and upload bandwidth across different HTTP versions and transport protocols.",
+        _ => "",
+    };
+
+    private static object BuildModes()
+    {
+        var groups = new List<object>();
+        string currentGroup = string.Empty;
+        var currentModes = new List<object>();
+
+        void Flush()
+        {
+            if (currentGroup.Length == 0)
+            {
+                return;
+            }
+
+            groups.Add(new
+            {
+                label = currentGroup,
+                detail = GroupDetail(currentGroup),
+                modes = currentModes.ToArray(),
+            });
+        }
+
+        foreach (var mode in AllModes)
+        {
+            if (mode.Group != currentGroup)
+            {
+                Flush();
+                currentModes = new List<object>();
+                currentGroup = mode.Group;
+            }
+
+            currentModes.Add(new
+            {
+                id = mode.Id,
+                name = mode.Name,
+                desc = mode.Description,
+                detail = mode.Detail,
+            });
+        }
+
+        Flush();
+
+        return new { groups };
+    }
+}
