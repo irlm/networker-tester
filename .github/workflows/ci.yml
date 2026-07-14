@@ -30,11 +30,25 @@ jobs:
 
       - name: Check version bump and changelog
         run: |
+          git fetch origin main --quiet
+
+          # A version bump is only required when a PR changes something that
+          # actually SHIPS to users: the Rust crates, the frontend, the
+          # installers, or the lockfile/manifest. PRs that touch only the C#
+          # hybrid subtree, CI, or docs don't ride the Rust release train, so
+          # forcing a bump on them is noise. Require the bump iff a shipping
+          # artifact changed.
+          SHIPPING=$(git diff --name-only origin/main...HEAD \
+            | grep -E '^(crates/|dashboard/|install\.sh$|install\.ps1$|Cargo\.(toml|lock)$)' || true)
+          if [ -z "${SHIPPING}" ]; then
+            echo "✓ PR changes no shipping artifacts (crates/frontend/installers) — Rust version bump not required."
+            exit 0
+          fi
+
           # Get version from PR branch
           PR_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
 
           # Get version from base branch
-          git fetch origin main --quiet
           BASE_VERSION=$(git show origin/main:Cargo.toml | grep '^version' | head -1 | sed 's/.*"\(.*\)"/\1/')
 
           echo "Base version: ${BASE_VERSION}"
@@ -86,14 +100,10 @@ jobs:
           components: rustfmt, clippy
 
       - name: Cache cargo
-        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: lint-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: lint-cargo-
+          key: lint
+          cache-on-failure: "true"
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -112,20 +122,21 @@ jobs:
     runs-on: ubuntu-latest
     needs: lint  # skip if lint fails
 
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
 
       - name: Cache cargo
-        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ubuntu-test-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ubuntu-test-cargo-
+          key: ubuntu-test
+          cache-on-failure: "true"
 
       - name: Unit tests
         run: cargo test --workspace --lib
@@ -144,20 +155,32 @@ jobs:
     runs-on: windows-latest
     needs: lint  # skip if lint fails
 
+    # Windows is the CI long-pole. Two env knobs cut it hard:
+    #  - CARGO_INCREMENTAL=0: incremental compilation is dead weight in CI
+    #    (cold or cache-restored builds never reuse it) and bloats the cache.
+    #  - *_DEBUG=0: skip DWARF/PDB debuginfo generation, which is a large slice
+    #    of Windows codegen+link time. RUST_BACKTRACE still yields function
+    #    names; only line numbers are lost — an acceptable CI trade.
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
 
+      # Swatinem/rust-cache replaces the hand-rolled actions/cache: it caches a
+      # pruned target/ (deps only, workspace crates + intermediates stripped)
+      # plus the registry, keyed on lockfile+rustc+job. Far smaller and more
+      # reliable to save/restore on Windows than blob-caching the whole target
+      # dir — which is what caused the 274s↔658s swing (frequent cache misses).
       - name: Cache cargo
-        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
         with:
-          path: |
-            ~\.cargo\registry
-            ~\.cargo\git
-            target
-          key: windows-test-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: windows-test-cargo-
+          key: windows-test
+          cache-on-failure: "true"
 
       # Build without browser feature (chromiumoxide adds ~10 min on Windows,
       # and there's no Chrome in the CI runner to test with anyway).
@@ -245,14 +268,10 @@ jobs:
       - uses: taiki-e/install-action@39b03b784b1fb8d2e38e4d6dcf888b991e3c5898 # cargo-llvm-cov
 
       - name: Cache cargo
-        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ubuntu-coverage-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ubuntu-coverage-cargo-
+          key: ubuntu-coverage
+          cache-on-failure: "true"
 
       - name: Collect coverage (lib tests)
         run: |
@@ -316,6 +335,12 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
 
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+        with:
+          key: sql-integration
+          cache-on-failure: "true"
+
       - name: Run SQL tests
         env:
           NETWORKER_SQL_CONN: "Server=localhost;Database=master;User Id=sa;Password=NetworkerTest1!;TrustServerCertificate=true"
@@ -348,14 +373,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
 
       - name: Cache cargo
-        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ubuntu-pg-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ubuntu-pg-cargo-
+          key: postgres-integration
+          cache-on-failure: "true"
 
       - name: Run PostgreSQL tests
         env:
