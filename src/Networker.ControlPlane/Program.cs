@@ -5,6 +5,7 @@ using Networker.ControlPlane.Background;
 using Networker.ControlPlane.Dispatch;
 using Networker.ControlPlane.Endpoints;
 using Networker.ControlPlane.Realtime;
+using Networker.ControlPlane.Realtime.RawWs;
 using Networker.ControlPlane.Security;
 using Networker.ControlPlane.Sso;
 using Networker.Contracts;
@@ -75,6 +76,13 @@ builder.Services.AddNetworkerCloudLifecycleServices();
 // module (OIDC flows + provider admin, provider secrets encrypted via the cipher).
 builder.Services.AddNetworkerInactivityService();
 builder.Services.AddSsoModule();
+// M6 cutover: raw-WebSocket bridges (the React frontend + fielded Rust agents
+// speak raw WS JSON, not SignalR) + per-tick pg-advisory leader election and
+// tick observability for the background loops. AddRawWebSockets must come
+// after AddSignalR (it decorates the tester-queue hub lifetime manager).
+builder.Services.AddRawWebSockets();
+builder.Services.AddAgentRawSocket();
+builder.Services.AddOpsInfrastructure();
 
 var app = builder.Build();
 
@@ -143,20 +151,25 @@ app.MapAccountEndpoints();
 app.MapSsoEndpoints();
 app.MapSsoAdminEndpoints();
 
-// M2 browser event bus — live dashboard updates with replay + sequence numbers
-// (the Rust EventBus + browser_hub, ported). Clients connect with
-// ?access_token=<jwt>[&since=<seq>] and catch up via replay before tailing live.
-app.MapHub<BrowserHub>("/ws/dashboard");
+// M6 raw-WebSocket surface — the CUTOVER transport. The React frontend
+// (new WebSocket + JSON.parse) and the fielded Rust agents (tungstenite text
+// frames) connect UNMODIFIED to the same /ws/* paths the Rust dashboard served:
+//   /ws/dashboard?token=[&since=]  — event feed with replay + seq
+//   /ws/testers?token=             — subscribe_tester_queue / snapshots / updates
+//   /ws/agent?key=                 — the full agent protocol
+app.UseWebSockets();
+app.MapRawWebSockets();
+app.MapAgentRawSocket();
 
-// M2 tester-queue hub — project-scoped per-tester running/queued updates,
-// subscribe/unsubscribe with membership checks + rate limits.
-app.MapHub<TesterQueueHub>("/ws/testers");
+// The SignalR hubs stay available at /hub/* for future SignalR-native clients
+// (e.g. the C# agent skeleton). Same underlying processors/registries — the
+// two transports share seq streams, connection registry, and persistence.
+app.MapHub<BrowserHub>("/hub/dashboard");
+app.MapHub<TesterQueueHub>("/hub/testers");
+app.MapHub<AgentProtocolHub>("/hub/agent");
 
-// M2 agent hub — the full agent↔control-plane protocol (ws/agent_hub.rs ported):
-// api-key auth in OnConnectedAsync, EF persistence per inbound message, run
-// events published through the EventBus, orphan-run failing on disconnect, and a
-// connection registry the M3 dispatcher pushes AssignRun/CancelRun through.
-app.MapHub<AgentProtocolHub>("/ws/agent");
+// M6 ops surface: background-service tick health + readiness probe.
+app.MapOpsEndpoints();
 
 // POST /auth/login + GET /auth/profile — same response shapes the Rust
 // dashboard serves. The policies (GlobalAdmin/Operator/Viewer, ProjectMember/

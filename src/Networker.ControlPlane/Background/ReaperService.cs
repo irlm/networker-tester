@@ -49,29 +49,43 @@ public sealed class ReaperService : BackgroundService
     private readonly AgentConnectionRegistry _registry;
     private readonly EventBus _events;
     private readonly ILogger<ReaperService> _logger;
+    private readonly PgAdvisoryLeaderLock? _leader;
+    private readonly TickMonitor _monitor;
 
     public ReaperService(
         IServiceScopeFactory scopeFactory,
         AgentConnectionRegistry registry,
         EventBus events,
-        ILogger<ReaperService> logger)
+        ILogger<ReaperService> logger,
+        PgAdvisoryLeaderLock? leaderLock = null,
+        TickMonitor? tickMonitor = null)
     {
         _scopeFactory = scopeFactory;
         _registry = registry;
         _events = events;
         _logger = logger;
+        // M6 ops infra (AddOpsInfrastructure); optional for bare test hosts.
+        _leader = leaderLock;
+        _monitor = tickMonitor ?? new TickMonitor();
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("Agent-status reaper started (tick={Tick}s)", TickInterval.TotalSeconds);
+        _monitor.ReportStarted(OpsServiceNames.AgentReaper);
 
         using var timer = new PeriodicTimer(TickInterval);
         while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
         {
             try
             {
-                await TickAsync(stoppingToken).ConfigureAwait(false);
+                var ranAsLeader = await _leader
+                    .TryRunGuardedAsync(LeaderLockKeys.AgentReaper, TickAsync, stoppingToken)
+                    .ConfigureAwait(false);
+                if (!ranAsLeader)
+                {
+                    _logger.LogDebug("Agent-status reaper tick skipped — another replica holds the leader lock");
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -80,6 +94,7 @@ public sealed class ReaperService : BackgroundService
             catch (Exception ex)
             {
                 // Never let one bad tick kill the loop (Rust logs + continues).
+                _monitor.ReportError(OpsServiceNames.AgentReaper, ex);
                 _logger.LogError(ex, "Agent-status reaper tick failed");
             }
         }
@@ -144,5 +159,10 @@ public sealed class ReaperService : BackgroundService
         {
             _logger.LogInformation("Agent-status reaper: flipped {Count} stale agent(s) offline", reaped);
         }
+
+        _monitor.ReportTick(
+            OpsServiceNames.AgentReaper,
+            reaped,
+            $"candidates={candidates.Count} reaped={reaped}");
     }
 }

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
+using Networker.ControlPlane.Background;
 using Networker.Data;
 using Networker.Data.Entities;
 
@@ -66,15 +67,22 @@ public sealed class ProvisioningOrchestrator : BackgroundService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly DeployRunner _runner;
     private readonly ILogger<ProvisioningOrchestrator> _logger;
+    private readonly PgAdvisoryLeaderLock? _leader;
+    private readonly TickMonitor _monitor;
 
     public ProvisioningOrchestrator(
         IServiceScopeFactory scopeFactory,
         DeployRunner runner,
-        ILogger<ProvisioningOrchestrator> logger)
+        ILogger<ProvisioningOrchestrator> logger,
+        PgAdvisoryLeaderLock? leaderLock = null,
+        TickMonitor? tickMonitor = null)
     {
         _scopeFactory = scopeFactory;
         _runner = runner;
         _logger = logger;
+        // M6 ops infra (AddOpsInfrastructure); optional for bare test hosts.
+        _leader = leaderLock;
+        _monitor = tickMonitor ?? new TickMonitor();
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -89,13 +97,20 @@ public sealed class ProvisioningOrchestrator : BackgroundService
         }
 
         _logger.LogInformation("Provisioning orchestrator started (tick every {Seconds}s)", TickInterval.TotalSeconds);
+        _monitor.ReportStarted(OpsServiceNames.ProvisioningOrchestrator);
 
         using var timer = new PeriodicTimer(TickInterval);
         while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
         {
             try
             {
-                await TickAsync(stoppingToken).ConfigureAwait(false);
+                var ranAsLeader = await _leader
+                    .TryRunGuardedAsync(LeaderLockKeys.ProvisioningOrchestrator, TickAsync, stoppingToken)
+                    .ConfigureAwait(false);
+                if (!ranAsLeader)
+                {
+                    _logger.LogDebug("Provisioning orchestrator tick skipped — another replica holds the leader lock");
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -103,6 +118,7 @@ public sealed class ProvisioningOrchestrator : BackgroundService
             }
             catch (Exception ex)
             {
+                _monitor.ReportError(OpsServiceNames.ProvisioningOrchestrator, ex);
                 _logger.LogError(ex, "Provisioning orchestrator tick failed");
             }
         }
@@ -113,13 +129,19 @@ public sealed class ProvisioningOrchestrator : BackgroundService
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<NetworkerDbContext>();
 
-        await KickPendingRunsAsync(db, ct).ConfigureAwait(false);
-        await PromoteProvisioningRunsAsync(db, ct).ConfigureAwait(false);
+        var kicked = await KickPendingRunsAsync(db, ct).ConfigureAwait(false);
+        var resolved = await PromoteProvisioningRunsAsync(db, ct).ConfigureAwait(false);
+
+        _monitor.ReportTick(
+            OpsServiceNames.ProvisioningOrchestrator,
+            kicked + resolved,
+            $"kicked={kicked} resolved={resolved}");
     }
 
     // ── Kick: queued + Pending + no deployment ⇒ start provisioning ──────────
 
-    private async Task KickPendingRunsAsync(NetworkerDbContext db, CancellationToken ct)
+    /// <returns>Number of runs whose provisioning was actually kicked off.</returns>
+    private async Task<int> KickPendingRunsAsync(NetworkerDbContext db, CancellationToken ct)
     {
         // queued runs, config endpoint is Pending, not yet linked to a deployment.
         var candidates = await db.TestRuns
@@ -131,21 +153,28 @@ public sealed class ProvisioningOrchestrator : BackgroundService
             .Select(r => new { Run = r, r.TestConfig })
             .ToListAsync(ct);
 
+        var kicked = 0;
         foreach (var c in candidates)
         {
             ct.ThrowIfCancellationRequested();
             try
             {
-                await KickOneAsync(db, c.Run, c.TestConfig, ct).ConfigureAwait(false);
+                if (await KickOneAsync(db, c.Run, c.TestConfig, ct).ConfigureAwait(false))
+                {
+                    kicked++;
+                }
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to kick provisioning for run {RunId}", c.Run.Id);
             }
         }
+
+        return kicked;
     }
 
-    private async Task KickOneAsync(NetworkerDbContext db, TestRun run, TestConfig cfg, CancellationToken ct)
+    /// <returns><c>true</c> when this call kicked off the deployment.</returns>
+    private async Task<bool> KickOneAsync(NetworkerDbContext db, TestRun run, TestConfig cfg, CancellationToken ct)
     {
         var pending = ParsePending(cfg.EndpointRef);
         if (pending is null)
@@ -153,7 +182,7 @@ public sealed class ProvisioningOrchestrator : BackgroundService
             _logger.LogWarning(
                 "Run {RunId} config {ConfigId} is endpoint_kind=pending but endpoint_ref did not parse as Pending — skipping",
                 run.Id, cfg.Id);
-            return;
+            return false;
         }
 
         // Resolve the concrete provider from the cloud account. install.sh has no
@@ -169,7 +198,7 @@ public sealed class ProvisioningOrchestrator : BackgroundService
             _logger.LogWarning(
                 "Cloud account {AccountId} not found for run {RunId} — cannot provision",
                 pending.CloudAccountId, run.Id);
-            return;
+            return false;
         }
 
         var deployJson = BuildDeployJson(pending, provider, cfg.Name);
@@ -212,7 +241,7 @@ public sealed class ProvisioningOrchestrator : BackgroundService
                 .Where(d => d.DeploymentId == deploymentId)
                 .ExecuteDeleteAsync(ct)
                 .ConfigureAwait(false);
-            return;
+            return false;
         }
 
         _logger.LogInformation(
@@ -233,11 +262,14 @@ public sealed class ProvisioningOrchestrator : BackgroundService
                 _logger.LogError(ex, "Auto-provisioning deploy runner failed for deployment {DeploymentId}", deploymentId);
             }
         }, CancellationToken.None);
+
+        return true;
     }
 
     // ── Promote: provisioning runs whose deployment finished ─────────────────
 
-    private async Task PromoteProvisioningRunsAsync(NetworkerDbContext db, CancellationToken ct)
+    /// <returns>Number of runs resolved this pass (promoted or failed).</returns>
+    private async Task<int> PromoteProvisioningRunsAsync(NetworkerDbContext db, CancellationToken ct)
     {
         var pairs = await db.TestRuns
             .AsNoTracking()
@@ -245,12 +277,16 @@ public sealed class ProvisioningOrchestrator : BackgroundService
             .Select(r => new { r.Id, r.TestConfigId, DeploymentId = r.ProvisioningDeploymentId!.Value })
             .ToListAsync(ct);
 
+        var resolved = 0;
         foreach (var p in pairs)
         {
             ct.ThrowIfCancellationRequested();
             try
             {
-                await HandleProvisioningRunAsync(db, p.Id, p.TestConfigId, p.DeploymentId, ct).ConfigureAwait(false);
+                if (await HandleProvisioningRunAsync(db, p.Id, p.TestConfigId, p.DeploymentId, ct).ConfigureAwait(false))
+                {
+                    resolved++;
+                }
             }
             catch (Exception ex)
             {
@@ -259,9 +295,14 @@ public sealed class ProvisioningOrchestrator : BackgroundService
                     p.Id, p.DeploymentId);
             }
         }
+
+        return resolved;
     }
 
-    private async Task HandleProvisioningRunAsync(
+    /// <returns><c>true</c> when the run reached a resolution this pass
+    /// (re-queued after promote, or failed); <c>false</c> when it is still
+    /// waiting on its deployment.</returns>
+    private async Task<bool> HandleProvisioningRunAsync(
         NetworkerDbContext db, Guid runId, Guid testConfigId, Guid deploymentId, CancellationToken ct)
     {
         var deployment = await db.Deployments
@@ -270,14 +311,14 @@ public sealed class ProvisioningOrchestrator : BackgroundService
         if (deployment is null)
         {
             _logger.LogWarning("Deployment {DeploymentId} vanished for provisioning run {RunId}", deploymentId, runId);
-            return;
+            return false;
         }
 
         switch (deployment.Status)
         {
             case DeploymentCompleted:
                 await PromoteAsync(db, runId, testConfigId, deployment, ct).ConfigureAwait(false);
-                break;
+                return true;
 
             case DeploymentFailed:
                 var msg = deployment.ErrorMessage ?? "deployment failed";
@@ -291,11 +332,11 @@ public sealed class ProvisioningOrchestrator : BackgroundService
                 _logger.LogWarning(
                     "Run {RunId} failed: provisioning deployment {DeploymentId} failed ({Error})",
                     runId, deploymentId, msg);
-                break;
+                return true;
 
             // pending / running / cancelled — leave alone; re-check next tick.
             default:
-                break;
+                return false;
         }
     }
 

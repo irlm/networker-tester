@@ -1,4 +1,6 @@
+using System.Text.Json;
 using Microsoft.AspNetCore.SignalR;
+using Networker.ControlPlane.Realtime.RawWs;
 
 namespace Networker.ControlPlane.Realtime;
 
@@ -50,6 +52,12 @@ public sealed class EventBus
     private readonly IHubContext<BrowserHub> _hub;
     private readonly ILogger<EventBus> _logger;
 
+    // Raw-WebSocket fan-out (Phase-2 M6): the React frontend speaks raw WS, not
+    // SignalR, so every published event is ALSO serialized once and enqueued to
+    // each registered raw browser socket. Optional-with-default so existing
+    // construction sites (and DI graphs without AddRawWebSockets) keep working.
+    private readonly RawSocketRegistry? _rawSockets;
+
     // Monotonic sequence counter. `Interlocked.Increment` returns the
     // POST-increment value, so the first published event gets seq = 1 (the
     // counter starts at 0) — identical to the Rust `fetch_add(1) + 1`.
@@ -61,10 +69,14 @@ public sealed class EventBus
     private readonly Queue<SeqEvent> _buffer = new(EventLogCapacity);
     private readonly Lock _bufferLock = new();
 
-    public EventBus(IHubContext<BrowserHub> hub, ILogger<EventBus> logger)
+    public EventBus(
+        IHubContext<BrowserHub> hub,
+        ILogger<EventBus> logger,
+        RawSocketRegistry? rawSockets = null)
     {
         _hub = hub;
         _logger = logger;
+        _rawSockets = rawSockets;
     }
 
     /// <summary>
@@ -99,6 +111,25 @@ public sealed class EventBus
         // for callers; failures are logged, never propagated (a dead client
         // must not break the publisher).
         _ = BroadcastAsync(seqEvent);
+
+        // Raw-WS fan-out: serialize once (the SeqEventJsonConverter flat shape,
+        // {"seq":N,"type":"...",...} — identical to the SignalR payload) and
+        // enqueue to every raw browser socket. Non-blocking: each socket has a
+        // bounded send queue; overflow ejects that socket (slow-subscriber
+        // ejection, mirroring the Rust broadcast-lag behavior). Failures are
+        // contained the same way as the SignalR path — never the publisher's
+        // problem.
+        if (_rawSockets is { BrowserClientCount: > 0 } raw)
+        {
+            try
+            {
+                raw.BroadcastBrowserEvent(seq, JsonSerializer.Serialize(seqEvent));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed raw-WS fan-out for SeqEvent seq={Seq}", seq);
+            }
+        }
 
         return seq;
     }

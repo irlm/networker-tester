@@ -51,11 +51,20 @@ public sealed class InactivityService : BackgroundService
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<InactivityService> _logger;
+    private readonly PgAdvisoryLeaderLock? _leader;
+    private readonly TickMonitor _monitor;
 
-    public InactivityService(IServiceScopeFactory scopeFactory, ILogger<InactivityService> logger)
+    public InactivityService(
+        IServiceScopeFactory scopeFactory,
+        ILogger<InactivityService> logger,
+        PgAdvisoryLeaderLock? leaderLock = null,
+        TickMonitor? tickMonitor = null)
     {
         _scopeFactory = scopeFactory;
         _logger = logger;
+        // M6 ops infra (AddOpsInfrastructure); optional for bare test hosts.
+        _leader = leaderLock;
+        _monitor = tickMonitor ?? new TickMonitor();
     }
 
     /// <summary>What the sweep should do to a LIVE (non-suspended) workspace.</summary>
@@ -139,6 +148,7 @@ public sealed class InactivityService : BackgroundService
             "Workspace-inactivity lifecycle service started (initial pass in {InitialMinutes}m, then every {Hours}h; warn {Warn}d / suspend {Suspend}d / hard-delete {Delete}d)",
             InitialDelay.TotalMinutes, TickInterval.TotalHours,
             WarnAfterDays, SuspendAfterDays, HardDeleteAfterDays);
+        _monitor.ReportStarted(OpsServiceNames.WorkspaceInactivity);
 
         try
         {
@@ -161,7 +171,13 @@ public sealed class InactivityService : BackgroundService
     {
         try
         {
-            await RunPassAsync(ct).ConfigureAwait(false);
+            var ranAsLeader = await _leader
+                .TryRunGuardedAsync(LeaderLockKeys.WorkspaceInactivity, RunPassAsync, ct)
+                .ConfigureAwait(false);
+            if (!ranAsLeader)
+            {
+                _logger.LogDebug("Workspace-inactivity pass skipped — another replica holds the leader lock");
+            }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -170,6 +186,7 @@ public sealed class InactivityService : BackgroundService
         catch (Exception ex)
         {
             // Never let one pass kill the loop (mirrors the Rust per-tick guards).
+            _monitor.ReportError(OpsServiceNames.WorkspaceInactivity, ex);
             _logger.LogError(ex, "Workspace-inactivity pass failed");
         }
     }
@@ -315,5 +332,10 @@ public sealed class InactivityService : BackgroundService
         _logger.LogInformation(
             "Workspace-inactivity pass: {Live} live checked, {Warned} warned, {Suspended} suspended, {SuspendedTotal} suspended checked, {Deleted} hard-deleted",
             live.Count, warned, suspended, suspendedRows.Count, deleted);
+
+        _monitor.ReportTick(
+            OpsServiceNames.WorkspaceInactivity,
+            warned + suspended + deleted,
+            $"live={live.Count} warned={warned} suspended={suspended} hard_deleted={deleted}");
     }
 }

@@ -1,0 +1,162 @@
+using System.Net.WebSockets;
+
+namespace Networker.ControlPlane.Realtime.RawWs;
+
+/// <summary>
+/// GET <c>/ws/agent?key=&lt;api_key&gt;</c> — the raw (non-SignalR) WebSocket
+/// agent endpoint, byte-compatible with the Rust
+/// <c>agent_ws_handler</c>/<c>handle_agent_socket</c> pair
+/// (crates/networker-dashboard/src/ws/agent_hub.rs). Fielded Rust agents speak
+/// plain tokio-tungstenite text frames (<c>{url}?key={api_key}</c> →
+/// <c>AgentMessage</c> out / <c>ControlMessage</c> in), NOT the SignalR
+/// handshake — this endpoint lets those unmodified agents connect to the C#
+/// control plane (Phase-2 M6 cutover).
+///
+/// <para><b>Flow (Rust parity):</b></para>
+/// <list type="number">
+///   <item>Must be a WebSocket upgrade request → otherwise 400.</item>
+///   <item>Validate <c>?key=</c> against <c>agent.api_key</c> BEFORE the
+///   upgrade → missing/unknown key gets HTTP 401, exactly like the axum
+///   handler's <c>ok_or(StatusCode::UNAUTHORIZED)</c>.</item>
+///   <item>Accept; mark agent online + publish <c>AgentStatus(online)</c>;
+///   register the connection (raw sender) in
+///   <see cref="AgentConnectionRegistry"/>; send the
+///   <c>{"type":"welcome","agent_id":...,"agent_name":...}</c> frame.</item>
+///   <item>Receive loop: each text frame →
+///   <see cref="AgentMessageProcessor.HandleFrameAsync"/> in a fresh DI scope
+///   (the scoped <c>NetworkerDbContext</c> must not live for the whole
+///   connection). A ~120s idle timeout closes dead peers.</item>
+///   <item>On close/error: unregister (compare-and-remove), mark offline +
+///   publish <c>AgentStatus(offline)</c> + fail orphaned runs — the same
+///   <see cref="AgentMessageProcessor.HandleDisconnectAsync"/> the SignalR
+///   hub's <c>OnDisconnectedAsync</c> runs.</item>
+/// </list>
+/// </summary>
+public static class AgentSocketEndpoint
+{
+    /// <summary>Route the fielded Rust agents dial (see <c>ws_client.rs</c>).</summary>
+    public const string Path = "/ws/agent";
+
+    /// <summary>Query-string key carrying the agent api-key (Rust: <c>?key=</c>).</summary>
+    public const string ApiKeyQueryKey = "key";
+
+    /// <summary>
+    /// Server-side staleness guard: no inbound data frame for this long →
+    /// close. The agent heartbeats every few seconds, so 120s of silence (the
+    /// same window the stale-run watchdog uses) means the peer is gone even if
+    /// TCP has not noticed.
+    /// </summary>
+    public static readonly TimeSpan IdleTimeout = TimeSpan.FromSeconds(120);
+
+    /// <summary>Server → agent WS keepalive ping cadence.</summary>
+    public static readonly TimeSpan KeepAliveInterval = TimeSpan.FromSeconds(30);
+
+    /// <summary>Endpoint handler — mapped by <see cref="AgentSocketExtensions.MapAgentRawSocket"/>.</summary>
+    public static async Task HandleAsync(HttpContext context)
+    {
+        var logger = context.RequestServices
+            .GetRequiredService<ILoggerFactory>()
+            .CreateLogger(typeof(AgentSocketEndpoint).FullName!);
+
+        if (!context.WebSockets.IsWebSocketRequest)
+        {
+            context.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await context.Response.WriteAsync("websocket upgrade required");
+            return;
+        }
+
+        // ── Authenticate BEFORE the upgrade (Rust returns 401 from the
+        //    upgrade handler). The DI scope is per-step: the scoped DbContext
+        //    must never span the socket's lifetime.
+        var apiKey = context.Request.Query[ApiKeyQueryKey].ToString();
+        var scopeFactory = context.RequestServices.GetRequiredService<IServiceScopeFactory>();
+
+        AgentIdentity? identity;
+        using (var authScope = scopeFactory.CreateScope())
+        {
+            identity = await GetProcessor(authScope)
+                .AuthenticateAsync(apiKey, context.RequestAborted);
+        }
+
+        if (identity is null)
+        {
+            logger.LogWarning(
+                "Raw agent connection rejected: {Reason}",
+                string.IsNullOrEmpty(apiKey) ? "no api key" : "unknown api key");
+            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            return;
+        }
+
+        using var socket = await context.WebSockets.AcceptWebSocketAsync(new WebSocketAcceptContext
+        {
+            KeepAliveInterval = KeepAliveInterval,
+        });
+
+        var registry = context.RequestServices.GetRequiredService<AgentConnectionRegistry>();
+        await using var conn = new AgentSocketConnection(socket, logger, context.RequestAborted);
+
+        logger.LogInformation(
+            "Agent connected (raw WS): {AgentId} name={Name} conn={ConnId}",
+            identity.AgentId, identity.Name, conn.ConnectionId);
+
+        try
+        {
+            // Mark online + publish AgentStatus(online) — Rust order: status
+            // update, register, welcome.
+            using (var scope = scopeFactory.CreateScope())
+            {
+                await GetProcessor(scope)
+                    .HandleConnectAsync(identity.AgentId, context.RequestAborted);
+            }
+
+            // Register the raw sender so the dispatcher's outbound API
+            // (AssignRunAsync / SendCommandAsync / ...) reaches this socket.
+            registry.Register(identity.AgentId, conn.ConnectionId, conn.SendAsync);
+
+            // Welcome frame — the exact ControlMessage shape from AgentProtocol.cs.
+            await conn.SendAsync(
+                AgentMessageProcessor.WelcomeFrame(identity.AgentId, identity.Name),
+                context.RequestAborted);
+
+            // ── Inbound pump: one fresh DI scope per frame.
+            while (await conn.ReceiveTextAsync(IdleTimeout, context.RequestAborted)
+                   is { } frame)
+            {
+                using var scope = scopeFactory.CreateScope();
+                await GetProcessor(scope).HandleFrameAsync(identity.AgentId, frame);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogError(ex,
+                "Agent socket {ConnId} for {AgentId} failed", conn.ConnectionId, identity.AgentId);
+        }
+        finally
+        {
+            // Compare-and-remove FIRST so a quick reconnect that already
+            // re-registered is never clobbered; then the shared disconnect
+            // cleanup (offline + AgentStatus(offline) + fail orphaned runs).
+            registry.Unregister(identity.AgentId, conn.ConnectionId);
+            try
+            {
+                using var scope = scopeFactory.CreateScope();
+                await GetProcessor(scope).HandleDisconnectAsync(identity.AgentId);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex,
+                    "Disconnect cleanup for agent {AgentId} failed", identity.AgentId);
+            }
+            await conn.CloseAsync();
+        }
+    }
+
+    /// <summary>
+    /// Resolve the scoped <see cref="AgentMessageProcessor"/> — registered by
+    /// <see cref="AgentSocketExtensions.AddAgentRawSocket"/>, or activated
+    /// directly from the scope's services when it is not (both paths yield a
+    /// processor bound to the scope's <c>NetworkerDbContext</c>).
+    /// </summary>
+    private static AgentMessageProcessor GetProcessor(IServiceScope scope)
+        => ActivatorUtilities.GetServiceOrCreateInstance<AgentMessageProcessor>(scope.ServiceProvider);
+}
