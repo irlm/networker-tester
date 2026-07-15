@@ -19,7 +19,7 @@ interface VersionInfo {
 const EMPTY_LINES: string[] = [];
 
 export function SettingsPage() {
-  const { projectId } = useProject();
+  const { projectId, isProjectAdmin } = useProject();
   const [versionInfo, setVersionInfo] = useState<VersionInfo | null>(null);
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [loading, setLoading] = useState(true);
@@ -39,7 +39,6 @@ export function SettingsPage() {
   const [addingAccount, setAddingAccount] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
   const addToast = useToast();
-  const userRole = localStorage.getItem('role');
 
   // Live deploy logs from WebSocket
   const liveLines = useLiveStore(s =>
@@ -56,11 +55,11 @@ export function SettingsPage() {
         setDeployments(deps.filter(d => d.status === 'completed'));
       }),
     ];
-    if (userRole === 'admin') {
+    if (isProjectAdmin) {
       promises.push(api.getCloudConnections(projectId).then(setCloudConnections).catch(() => {}));
     }
     Promise.all(promises).finally(() => setLoading(false));
-  }, [projectId, userRole]);
+  }, [projectId, isProjectAdmin]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -447,7 +446,7 @@ export function SettingsPage() {
       </div>
 
       {/* Cloud Accounts (admin only) */}
-      {userRole === 'admin' && (
+      {isProjectAdmin && (
         <div className="section-divider">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-xs text-gray-500 tracking-wider font-medium">cloud accounts</h3>
@@ -736,6 +735,7 @@ export function SettingsPage() {
                         </button>
                         <button
                           onClick={async () => {
+                            if (!window.confirm(`Remove cloud connection "${conn.name}"? This cannot be undone.`)) return;
                             try {
                               await api.deleteCloudConnection(projectId, conn.connection_id);
                               addToast('success', `Removed ${conn.name}`);

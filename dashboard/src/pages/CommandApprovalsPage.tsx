@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useProject } from '../hooks/useProject';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useApprovalSSE } from '../hooks/useSSE';
+import { useToast } from '../hooks/useToast';
 import { api, type CommandApproval } from '../api/client';
 import { SettingsTabs } from '../components/common/SettingsTabs';
 
@@ -53,6 +54,7 @@ function TimeUntil({ iso }: { iso: string }) {
 export function CommandApprovalsPage() {
   usePageTitle('Settings');
   const { projectId } = useProject();
+  const addToast = useToast();
   const [tab, setTab] = useState<Tab>('pending');
   const [pending, setPending] = useState<CommandApproval[]>([]);
   const [loading, setLoading] = useState(true);
@@ -86,8 +88,8 @@ export function CommandApprovalsPage() {
     try {
       await api.decideApproval(projectId, approvalId, true);
       setPending(prev => prev.filter(a => a.approval_id !== approvalId));
-    } catch {
-      // ignore
+    } catch (e) {
+      addToast('error', `Failed to approve: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setDeciding(null);
     }
@@ -105,8 +107,8 @@ export function CommandApprovalsPage() {
       setPending(prev => prev.filter(a => a.approval_id !== approvalId));
       setDenyReasonFor(null);
       setDenyReason('');
-    } catch {
-      // ignore
+    } catch (e) {
+      addToast('error', `Failed to deny: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setDeciding(null);
     }

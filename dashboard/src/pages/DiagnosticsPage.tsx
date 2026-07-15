@@ -12,7 +12,7 @@ import { useToast } from '../hooks/useToast';
 // ── Types ───────────────────────────────────────────────────────────────
 
 type DiagPreset = 'quick' | 'standard' | 'full';
-type FilterMode = 'all' | 'healthy' | 'failed' | 'pending';
+type FilterMode = 'all' | 'healthy' | 'failed' | 'pending' | 'stale';
 type SortMode = 'last-checked' | 'name' | 'slowest' | 'most-runs';
 
 interface UrlGroup {
@@ -614,17 +614,19 @@ export function DiagnosticsPage() {
 
       // Determine status. A run is "healthy" only when it has completed and
       // recorded at least one successful attempt — never before a dispatcher
-      // has claimed and finished it.
+      // has claimed and finished it. Staleness ("no check in 24h") is
+      // evaluated before healthy so an old green check surfaces as stale,
+      // matching the summary strip's label.
       const timeSinceLastRun = Date.now() - new Date(lastRun.created_at).getTime();
       let lastStatus: UrlGroup['lastStatus'];
       if (lastRun.status === 'failed' || lastRun.status === 'cancelled' || lastRun.failure_count > 0) {
         lastStatus = 'failed';
-      } else if (lastRun.status === 'completed' && lastRun.success_count > 0) {
-        lastStatus = 'healthy';
       } else if (lastRun.status === 'queued' || lastRun.status === 'provisioning' || lastRun.status === 'running') {
         lastStatus = 'pending';
       } else if (timeSinceLastRun > STALE_THRESHOLD_MS) {
         lastStatus = 'stale';
+      } else if (lastRun.status === 'completed' && lastRun.success_count > 0) {
+        lastStatus = 'healthy';
       } else {
         // completed-with-no-attempts or unknown — neither healthy nor failed.
         lastStatus = 'pending';
@@ -663,6 +665,7 @@ export function DiagnosticsPage() {
     if (filter === 'healthy') result = result.filter(g => g.lastStatus === 'healthy');
     if (filter === 'failed') result = result.filter(g => g.lastStatus === 'failed');
     if (filter === 'pending') result = result.filter(g => g.lastStatus === 'pending');
+    if (filter === 'stale') result = result.filter(g => g.lastStatus === 'stale');
 
     // Sort
     result = [...result].sort((a, b) => {
@@ -690,7 +693,9 @@ export function DiagnosticsPage() {
   // ── Recent hosts ──────────────────────────────────────────────────
 
   const recentHosts = useMemo(() => {
-    return urlGroups
+    // Copy before sorting — urlGroups is a memoized array shared with the
+    // summary/filter pipeline; sorting it in place mutates that cache.
+    return [...urlGroups]
       .sort((a, b) => new Date(b.lastRun.created_at).getTime() - new Date(a.lastRun.created_at).getTime())
       .slice(0, 8)
       .map(g => g.host);
@@ -935,7 +940,7 @@ export function DiagnosticsPage() {
         <div className="flex items-center gap-3">
           {/* Filter toggle */}
           <div className="flex border border-gray-800 rounded overflow-hidden">
-            {(['all', 'healthy', 'pending', 'failed'] as FilterMode[]).map(f => (
+            {(['all', 'healthy', 'pending', 'failed', 'stale'] as FilterMode[]).map(f => (
               <button
                 key={f}
                 onClick={() => setFilter(f)}

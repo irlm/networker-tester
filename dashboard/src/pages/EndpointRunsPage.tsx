@@ -20,6 +20,7 @@ import { usePageTitle } from '../hooks/usePageTitle';
 import { usePolling } from '../hooks/usePolling';
 import { Breadcrumb } from '../components/common/Breadcrumb';
 import { ModeChipList } from '../components/common/ModeChip';
+import { StatusBadge } from '../components/common/StatusBadge';
 import { timeAgo } from '../lib/format';
 
 // ── Saved presets ──────────────────────────────────────────────────────
@@ -36,11 +37,13 @@ interface Preset {
   modes: string[];
 }
 
+// Preset modes must match the backend Mode enum in
+// crates/networker-common/src/test_config.rs — invalid ids 422 at launch.
 const DEFAULT_PRESETS: Preset[] = [
   { id: 'quick',  star: true, name: 'Quick check',     desc: '10 runs · ~30s',                modes: ['tcp', 'dns', 'tls', 'http2'] },
-  { id: 'h3',     star: true, name: 'HTTP/3 only',     desc: '10 runs · ~15s',                modes: ['http3', 'downloadh3'] },
-  { id: 'thru',   star: true, name: 'Throughput sweep', desc: 'payloads 64K · 1M · 16M · ~3min', modes: ['downloadh1', 'downloadh2', 'downloadh3', 'uploadh1', 'uploadh2', 'uploadh3'] },
-  { id: 'full',               name: 'Full 18-mode',     desc: '50 runs · ~8min',                modes: ['tcp','dns','tls','tlsresume','nativetls','udp','http1','http2','http3','curl','download','upload','downloadh1','downloadh2','downloadh3','pageload1','pageload2','pageload3'] },
+  { id: 'h3',     star: true, name: 'HTTP/3 only',     desc: '10 runs · ~15s',                modes: ['http3'] },
+  { id: 'thru',   star: true, name: 'Throughput sweep', desc: 'download + upload · ~3min',     modes: ['download', 'upload'] },
+  { id: 'full',               name: 'Full sweep',       desc: '50 runs · ~8min',                modes: ['tcp','dns','tls','tlsresume','native','udp','http1','http2','http3','curl','download','upload','pageload','pageload2','pageload3'] },
 ];
 
 /** Compare two mode arrays without mutating; ordering-insensitive. */
@@ -66,6 +69,7 @@ export function EndpointRunsPage() {
 
   const [deployment, setDeployment] = useState<Deployment | null>(null);
   const [runs, setRuns] = useState<TestRun[]>([]);
+  const [runsLoading, setRunsLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [presetFilter, setPresetFilter] = useState<string>('all');
 
@@ -81,8 +85,8 @@ export function EndpointRunsPage() {
     if (!projectId) return;
     api
       .listTestRuns(projectId, { endpoint_kind: 'network', limit: 50 })
-      .then((rows) => setRuns(rows ?? []))
-      .catch(() => {});
+      .then((rows) => { setRuns(rows ?? []); setRunsLoading(false); })
+      .catch(() => setRunsLoading(false));
   }, [projectId]);
   useEffect(loadRuns, [loadRuns]);
   usePolling(loadRuns, 15000);
@@ -121,10 +125,13 @@ export function EndpointRunsPage() {
   // is wired separately; today this is a sensible drop-off point.
   const launchModes = useCallback(
     (modes: string[]) => {
-      const qs = new URLSearchParams({ modes: modes.join(',') }).toString();
+      const params: Record<string, string> = { modes: modes.join(',') };
+      // Carry this endpoint along so the wizard preselects it as the target.
+      if (endpointId) params.target = endpointId;
+      const qs = new URLSearchParams(params).toString();
       navigate(`/projects/${projectId}/tests/new?${qs}`);
     },
-    [navigate, projectId],
+    [navigate, projectId, endpointId],
   );
 
   // ── Render ───────────────────────────────────────────────────────────
@@ -152,10 +159,7 @@ export function EndpointRunsPage() {
       {/* ── Hero: endpoint metadata + page-level CTAs ─────────────── */}
       <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-4 items-start mt-2 mb-4">
         <div>
-          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-xs border border-green-500/40 bg-green-500/10 text-green-300 rounded">
-            <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
-            online
-          </span>
+          {deployment && <StatusBadge status={deployment.status} />}
           <h2 className="text-xl font-bold text-gray-100 font-mono mt-2">
             {deployment?.name ?? 'endpoint'}
             {ip !== '—' && <span className="text-cyan-400 text-sm ml-2">· {ip}</span>}
@@ -262,7 +266,11 @@ export function EndpointRunsPage() {
         </select>
       </div>
 
-      {filteredRuns.length === 0 ? (
+      {runsLoading && runs.length === 0 ? (
+        <div className="border border-gray-800 p-8 text-center text-xs text-gray-500 motion-safe:animate-pulse">
+          Loading runs…
+        </div>
+      ) : filteredRuns.length === 0 ? (
         <div className="border border-dashed border-gray-800 p-8 text-center text-xs text-gray-500">
           {runs.length === 0 ? 'No network runs yet — pick a preset above to start.' : 'No runs match the current filter.'}
         </div>

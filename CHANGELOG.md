@@ -11,6 +11,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.16] — 2026-07-15
+
+### Fixed — dashboard UI (pages & flows audit)
+- **Network Test / Endpoint presets sent modes the backend rejects.** The
+  `/tests/new` mode picker and the EndpointRunsPage preset cards offered
+  `nativetls`, `downloadh1/2/3`, `uploadh1/2/3`, and `pageload1` — none of
+  which exist in the backend `Mode` enum, so launching those presets 422'd.
+  Both pages now use the canonical mode ids (`native`, `download`, `upload`,
+  `pageload`); "Full 18-mode" is now "Full sweep".
+- **Endpoint preset "Run" / "rerun" buttons dropped their modes.** They
+  navigated to the Network Test wizard with `?modes=…` that the wizard never
+  read. The wizard now prefills modes *and* preselects the originating target
+  (`?target=<deploymentId>`).
+- **Infrastructure "↗ Runs" / "+ Add stack" actions never rendered** — the
+  row condition checked `status === 'running'` inside a table that only
+  contains `status === 'completed'` deployments, leaving EndpointRunsPage
+  unreachable from the UI. Now gated on the target having an IP.
+- **TLS profile pages were unrouted.** JobDetailPage links to
+  `/projects/:id/tls-profiles/:runId` fell through to the catch-all redirect.
+  Routes for TlsProfilesPage and TlsProfileDetailPage are restored.
+- **Benchmark config results "compare" link was double-broken** — it pointed
+  at the legacy `/benchmarks/compare` redirect (which drops the query string)
+  and used `?runs=` where the compare page reads `?ids=`. Now links directly
+  to `/runs/compare?ids=…`.
+- **Full Stack matrix "Save Config" silently saved only the first cell.**
+  The button is now hidden for matrix runs, matching Application Benchmark.
+- **Role gating:** DeployDetailPage Stop/Update/Delete and the CloudAccounts
+  Delete button are now operator-gated instead of 403-ing viewers;
+  SettingsPage derives admin visibility from the project role instead of a
+  stale `localStorage` value.
+- **URL Probe "stale" status finally fires** — staleness (no check in 24h) is
+  now evaluated before "healthy", a Stale filter chip was added, and the
+  recent-hosts list no longer mutates the memoized group cache.
+- **Misc:** Endpoint hero no longer hard-codes an "online" badge (shows the
+  real deployment status); Infrastructure loading text rendered a literal
+  `…`; Dashboard onboarding steps linked to the wrong pages; run cancel
+  and command approve/deny failures are now surfaced as toasts instead of
+  being swallowed; the dishonest "Mine only" scope tab was removed from
+  `/tests/new`; SettingsPage cloud-connection removal now asks for
+  confirmation; dead unrouted `DeployPage`/`TestersPage` files deleted.
+
+---
+
 ## [0.28.15] — 2026-07-15
 
 ### Added

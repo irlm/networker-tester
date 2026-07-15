@@ -361,15 +361,19 @@ export function FullStackPage() {
             </div>
           )}
 
-          {/* Launch buttons */}
+          {/* Launch buttons — matrix runs can't be saved as a single config
+              (the save path would silently keep only the first cell), so
+              Save is hidden for them, matching AppBenchmarkPage. */}
           <div className="flex gap-2">
-            <button
-              onClick={() => handleSubmit(false)}
-              disabled={submitting || configName.trim().length === 0}
-              className="border border-gray-700 hover:border-gray-600 text-gray-300 px-4 py-2 text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              Save Config
-            </button>
+            {!isMatrixRun && (
+              <button
+                onClick={() => handleSubmit(false)}
+                disabled={submitting || configName.trim().length === 0}
+                className="border border-gray-700 hover:border-gray-600 text-gray-300 px-4 py-2 text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Save Config
+              </button>
+            )}
             <button
               onClick={() => handleSubmit(true)}
               disabled={submitting || configName.trim().length === 0}

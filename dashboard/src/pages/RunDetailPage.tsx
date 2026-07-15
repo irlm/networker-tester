@@ -8,6 +8,7 @@ import { StatusBadge } from '../components/common/StatusBadge';
 import { ShareDialog } from '../components/ShareDialog';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { usePolling } from '../hooks/usePolling';
+import { useToast } from '../hooks/useToast';
 import {
   computeProtocolStats,
   computeTimingBreakdown,
@@ -34,6 +35,7 @@ import {
 export function RunDetailPage() {
   const { projectId, isProjectAdmin } = useProject();
   const { runId } = useParams<{ runId: string }>();
+  const addToast = useToast();
   const [run, setRun] = useState<TestRun | null>(null);
   const [attempts, setAttempts] = useState<LiveAttempt[]>([]);
   const [artifact, setArtifact] = useState<BenchmarkArtifact | null>(null);
@@ -166,7 +168,12 @@ export function RunDetailPage() {
         <div className="flex items-center gap-2">
           {run && (run.status === 'queued' || run.status === 'running') && (
             <button
-              onClick={() => runId && api.cancelTestRun(runId).catch(() => {})}
+              onClick={() => {
+                if (!runId) return;
+                api.cancelTestRun(runId)
+                  .then(() => addToast('info', `Run ${shortId} cancel requested`))
+                  .catch((e) => addToast('error', `Failed to cancel: ${e instanceof Error ? e.message : String(e)}`));
+              }}
               className="px-3 py-1.5 text-xs bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded transition-colors border border-red-500/30"
             >
               Cancel

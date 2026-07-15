@@ -20,7 +20,7 @@ interface EndpointHealth {
 const EMPTY_LINES: string[] = [];
 
 export function DeployDetailPage() {
-  const { projectId } = useProject();
+  const { projectId, isOperator } = useProject();
   const { deploymentId } = useParams<{ deploymentId: string }>();
   const [deployment, setDeployment] = useState<Deployment | null>(null);
   const [loading, setLoading] = useState(true);
@@ -120,7 +120,7 @@ export function DeployDetailPage() {
     try {
       await api.deleteDeployment(projectId, deploymentId);
       addToast('success', 'Deployment deleted');
-      navigate(`/projects/${projectId}/deploy`);
+      navigate(`/projects/${projectId}/vms`);
     } catch {
       addToast('error', 'Failed to delete deployment');
     }
@@ -160,8 +160,8 @@ export function DeployDetailPage() {
     <div className="p-4 md:p-6">
       {/* Breadcrumb */}
       <div className="flex items-center gap-2 text-sm text-gray-500 mb-4">
-        <Link to={`/projects/${projectId}/deploy`} className="hover:text-gray-300">
-          Deployments
+        <Link to={`/projects/${projectId}/vms`} className="hover:text-gray-300">
+          Infrastructure
         </Link>
         <span>/</span>
         <span className="text-gray-300">{deployment?.name || deploymentId?.slice(0, 8)}</span>
@@ -174,7 +174,9 @@ export function DeployDetailPage() {
           <StatusBadge status={deployment?.status || 'pending'} />
         </div>
         <div className="flex gap-2">
-          {isActive && (
+          {/* Stop/Update/Delete mutate infrastructure — operator+ only.
+              Viewers keep the read-only health check. */}
+          {isOperator && isActive && (
             <button
               onClick={handleStop}
               className="bg-red-600/20 border border-red-500/30 hover:bg-red-600/30 text-red-400 px-4 py-1.5 rounded text-sm transition-colors"
@@ -193,7 +195,7 @@ export function DeployDetailPage() {
                   {healthLoading ? 'Checking...' : 'Check Health'}
                 </button>
               )}
-              {endpointHealth.some(ep => ep.outdated) && (
+              {isOperator && endpointHealth.some(ep => ep.outdated) && (
                 <button
                   onClick={async () => {
                     if (!deploymentId) return;
@@ -210,7 +212,7 @@ export function DeployDetailPage() {
                   Update Target
                 </button>
               )}
-              {!confirmDelete ? (
+              {!isOperator ? null : !confirmDelete ? (
                 <button
                   onClick={() => setConfirmDelete(true)}
                   className="bg-red-600/20 border border-red-500/30 hover:bg-red-600/30 text-red-400 px-4 py-1.5 rounded text-sm transition-colors"

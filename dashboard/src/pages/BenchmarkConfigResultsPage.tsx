@@ -583,7 +583,7 @@ export function BenchmarkConfigResultsPage() {
       {data.results.length >= 2 && (
         <div className="pt-4 border-t border-gray-800">
           <Link
-            to={`/projects/${projectId}/benchmarks/compare?runs=${data.results.map((r) => r.run_id).join(',')}`}
+            to={`/projects/${projectId}/runs/compare?ids=${data.results.map((r) => r.run_id).join(',')}`}
             className="text-sm text-cyan-400 hover:text-cyan-300"
           >
             Open full pipeline comparison view &rarr;
