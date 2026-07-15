@@ -150,8 +150,14 @@ jobs:
           key: ubuntu-test
           cache-on-failure: "true"
 
-      - name: Unit tests
-        run: cargo test --workspace --lib
+      # Scope to the crates that still ship as Rust — the probe core (tester)
+      # and the diagnostic server (endpoint). networker-dashboard/-agent were
+      # replaced by the C# control plane (tested in dotnet.yml) and are pending
+      # decommission, so they're off the Rust test matrix. The `lint` job still
+      # clippy-builds the WHOLE workspace, a soak-time compile check for the
+      # retiring crates (rollback confidence).
+      - name: Tester unit tests
+        run: cargo test -p networker-tester --lib
 
       - name: Endpoint unit tests
         run: cargo test -p networker-endpoint --lib
@@ -208,8 +214,9 @@ jobs:
       # Build without browser feature (chromiumoxide adds ~10 min on Windows,
       # and there's no Chrome in the CI runner to test with anyway).
       # All other features (http3, db-mssql) are included via defaults.
-      - name: Unit tests (no browser)
-        run: cargo test --workspace --lib --no-default-features --features http3,db-mssql
+      # Shipped Rust crates only (see the ubuntu job) — dashboard/agent are C#.
+      - name: Tester unit tests (no browser)
+        run: cargo test -p networker-tester --lib --no-default-features --features http3,db-mssql
 
       - name: Endpoint unit tests
         run: cargo test -p networker-endpoint --lib
@@ -300,9 +307,11 @@ jobs:
           key: ubuntu-coverage
           cache-on-failure: "true"
 
+      # Coverage for the shipped Rust crates (tester + endpoint); dashboard/agent
+      # are C# now (their coverage lives in the dotnet suite).
       - name: Collect coverage (lib tests)
         run: |
-          cargo llvm-cov --no-report --workspace --all-features --lib \
+          cargo llvm-cov --no-report -p networker-tester -p networker-endpoint --all-features --lib \
             -- --include-ignored
         env:
           NETWORKER_SQL_CONN: "Server=localhost;Database=NetworkDiagnostics;User Id=sa;Password=NetworkerTest1!;TrustServerCertificate=true"
@@ -310,7 +319,7 @@ jobs:
 
       - name: Collect coverage (integration tests)
         run: |
-          cargo llvm-cov --no-report --workspace --all-features \
+          cargo llvm-cov --no-report -p networker-tester --all-features \
             --test integration -- --test-threads=1
 
       - name: Generate lcov report

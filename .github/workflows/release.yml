@@ -2,13 +2,26 @@ name: Release
 
 # Triggered by pushing a version tag, e.g.:
 #
-#   git tag v0.12.11 <merge-commit>
-#   git push origin v0.12.11
+#   git tag v0.28.15 <merge-commit>
+#   git push origin v0.28.15
 #
 # The workflow:
-#   1. Builds native binaries for Linux x64, macOS x64, macOS ARM64, Windows x64.
-#   2. Extracts the matching CHANGELOG section for the release notes.
-#   3. Creates a GitHub release with the notes and the compiled binary archives.
+#   1. Builds the Rust binaries that STILL ship — networker-tester (the probe
+#      core, installed on Win/Mac/Linux) and networker-endpoint (the diagnostic
+#      server, still Rust on prod) — plus the alethabench orchestrator, for
+#      Linux x64, macOS x64, macOS ARM64, Windows x64.
+#   2. Publishes the C# control plane (Networker.ControlPlane, self-contained
+#      linux-x64) — this is what serves alethedash.com since the cutover.
+#   3. Creates a GitHub release with the notes and every archive.
+#   4. Deploys to the Azure VM: swaps the C# control plane, the Rust endpoint +
+#      tester, the orchestrator, and the frontend.
+#
+# NOTE (post-cutover): the Rust dashboard/agent are NO LONGER built, shipped, or
+# deployed — the C# control plane replaced them (docs/phase2-cutover-runbook.md).
+# The deploy job never touches networker-dashboard; prod owns background loops
+# via the C# control plane, and restarting the Rust dashboard would double-fire
+# them. The Rust dashboard/agent crates remain in the tree (soak/rollback) but
+# off the release train; the full-Rust snapshot is the rust-legacy-* tag.
 
 on:
   push:
@@ -29,7 +42,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  # ── Build binaries for each supported platform ─────────────────────────────
+  # ── Build the still-shipped Rust binaries for each platform ────────────────
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
@@ -86,12 +99,18 @@ jobs:
           cargo generate-lockfile
           cargo generate-lockfile --manifest-path benchmarks/orchestrator/Cargo.toml
 
-      - name: Build workspace binaries
+      # Only the crates that still ship as Rust: the probe core (tester) and the
+      # diagnostic server (endpoint). networker-dashboard / networker-agent were
+      # replaced by the C# control plane and are intentionally NOT built here —
+      # dropping the 37k-LOC dashboard + its deps is the bulk of the old Windows
+      # build time. The tester keeps --features browser (headless-Chrome
+      # pageload) since it's installed on Windows too.
+      - name: Build shipped Rust binaries
         run: >
           cargo build --release --locked
           --target ${{ matrix.target }}
           --features browser
-          -p networker-tester -p networker-endpoint -p networker-dashboard -p networker-agent
+          -p networker-tester -p networker-endpoint
 
       - name: Build orchestrator
         run: >
@@ -116,10 +135,6 @@ jobs:
               -C "${SRC}" "networker-tester"
           tar czf "dist/networker-endpoint-${TARGET}.tar.gz" \
               -C "${SRC}" "networker-endpoint"
-          tar czf "dist/networker-dashboard-${TARGET}.tar.gz" \
-              -C "${SRC}" "networker-dashboard"
-          tar czf "dist/networker-agent-${TARGET}.tar.gz" \
-              -C "${SRC}" "networker-agent"
 
           ORCH_SRC="benchmarks/orchestrator/target/${TARGET}/release"
           tar czf "dist/alethabench-${TARGET}.tar.gz" \
@@ -141,14 +156,6 @@ jobs:
           Compress-Archive `
               -Path "$src\networker-endpoint.exe" `
               -DestinationPath "dist\networker-endpoint-$target.zip" `
-              -Force
-          Compress-Archive `
-              -Path "$src\networker-dashboard.exe" `
-              -DestinationPath "dist\networker-dashboard-$target.zip" `
-              -Force
-          Compress-Archive `
-              -Path "$src\networker-agent.exe" `
-              -DestinationPath "dist\networker-agent-$target.zip" `
               -Force
 
           $orchSrc = "benchmarks\orchestrator\target\$target\release"
@@ -176,10 +183,41 @@ jobs:
           name: dist-${{ matrix.target }}
           path: dist/
 
-  # ── Create GitHub release and attach all binary archives ─────────────────
+  # ── Publish the C# control plane (self-contained linux-x64) ──────────────
+  # This is the deployable that serves alethedash.com since the cutover. Built
+  # on the ubuntu runner (no Windows toolchain needed) — the whole point of the
+  # migration is that the control plane no longer rides the slow native matrix.
+  build-csharp:
+    name: Build C# control plane
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Publish ControlPlane (linux-x64, self-contained)
+        run: |
+          dotnet publish src/Networker.ControlPlane/Networker.ControlPlane.csproj \
+            -c Release -r linux-x64 --self-contained true \
+            -o publish/controlplane
+          mkdir -p dist
+          tar czf dist/networker-controlplane-linux-x64.tar.gz -C publish/controlplane .
+
+      - name: Upload C# artifact
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: dist-csharp
+          path: dist/
+
+  # ── Create GitHub release and attach all archives ────────────────────────
   release:
     name: Create GitHub Release
-    needs: build
+    needs: [build, build-csharp]
     runs-on: ubuntu-latest
 
     steps:
@@ -195,8 +233,6 @@ jobs:
           path: dist/
 
       # Extract the release notes for this version from CHANGELOG.md.
-      # Matches the section header "## [X.Y.Z]" and captures everything
-      # until the next "## [" heading.
       - name: Extract release notes
         id: notes
         run: |
@@ -226,9 +262,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           NOTES: ${{ steps.notes.outputs.notes }}
 
-  # ── Deploy to Azure dashboard (alethedash.com) ───────────────────────────
-  # Uses Azure service principal + az vm run-command (no SSH keys).
-  # Audit trail in Azure Activity Log, RBAC-controlled, no secrets on VM.
+  # ── Deploy to the Azure VM (alethedash.com) ──────────────────────────────
+  # Post-cutover deploy: swaps the C# control plane (alethedash-cs), the Rust
+  # endpoint + tester, the orchestrator, and the frontend. Does NOT touch
+  # networker-dashboard (retired; restarting it would double-fire the background
+  # loops the C# control plane now owns). nginx already proxies /api + /ws to the
+  # C# control plane on :5030 and serves the SPA static from disk.
   deploy:
     name: Deploy to alethedash.com
     needs: release
@@ -246,7 +285,7 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Deploy binaries and frontend
+      - name: Deploy control plane, endpoint, tester, frontend
         run: |
           VERSION="${RELEASE_TAG#v}"
           echo "Deploying v${VERSION} to alethedash-vm..."
@@ -259,96 +298,90 @@ jobs:
               set -e
               RELEASE_BASE='https://github.com/irlm/networker-tester/releases/download/v${VERSION}'
 
-              # ── Download all artifacts ──────────────────────────────────
-              echo '>> Downloading v${VERSION} binaries...'
-              curl -fsSL \"\${RELEASE_BASE}/networker-dashboard-x86_64-unknown-linux-musl.tar.gz\" | tar xz -C /tmp/
+              # ── Download artifacts ──────────────────────────────────────
+              echo '>> Downloading v${VERSION} artifacts...'
+              curl -fsSL \"\${RELEASE_BASE}/networker-controlplane-linux-x64.tar.gz\" -o /tmp/controlplane.tar.gz
               curl -fsSL \"\${RELEASE_BASE}/networker-endpoint-x86_64-unknown-linux-musl.tar.gz\" | tar xz -C /tmp/
-              curl -fsSL \"\${RELEASE_BASE}/networker-agent-x86_64-unknown-linux-musl.tar.gz\" | tar xz -C /tmp/
               curl -fsSL \"\${RELEASE_BASE}/networker-tester-x86_64-unknown-linux-musl.tar.gz\" | tar xz -C /tmp/
               curl -fsSL \"\${RELEASE_BASE}/alethabench-x86_64-unknown-linux-musl.tar.gz\" | tar xz -C /tmp/
-
-              echo '>> Downloading frontend...'
               curl -fsSL \"\${RELEASE_BASE}/dashboard-frontend.tar.gz\" -o /tmp/dashboard-frontend.tar.gz
 
-              # ── Stop services via systemd ───────────────────────────────
-              echo '>> Stopping services...'
-              systemctl stop networker-agent 2>/dev/null || true
-              systemctl stop networker-dashboard 2>/dev/null || true
-              systemctl stop networker-endpoint 2>/dev/null || true
-              sleep 1
+              # ── C# control plane (the /api + /ws backend) ───────────────
+              echo '>> Deploying C# control plane...'
+              sudo systemctl stop alethedash-cs
+              sudo rm -rf /opt/alethedash-cs.prevbuild
+              sudo mv /opt/alethedash-cs /opt/alethedash-cs.prevbuild
+              sudo mkdir -p /opt/alethedash-cs
+              sudo tar xzf /tmp/controlplane.tar.gz -C /opt/alethedash-cs
+              sudo find /opt/alethedash-cs -name '._*' -delete 2>/dev/null || true
+              sudo chmod +x /opt/alethedash-cs/Networker.ControlPlane
+              rm -f /tmp/controlplane.tar.gz
 
-              # Safety: kill any orphan processes on our ports
-              for PORT in 3000 8080 8443; do
-                lsof -ti:\${PORT} 2>/dev/null | xargs -r kill -9 || true
+              # ── Rust endpoint (still Rust on prod) ──────────────────────
+              echo '>> Deploying endpoint + tester + orchestrator...'
+              sudo systemctl stop networker-endpoint 2>/dev/null || true
+              for PORT in 8080 8443; do
+                sudo lsof -ti:\${PORT} 2>/dev/null | xargs -r sudo kill -9 || true
               done
-              sleep 1
+              sudo cp /tmp/networker-endpoint /opt/alethedash/networker-endpoint
+              sudo mkdir -p /opt/alethedash/tester
+              sudo cp /tmp/networker-tester /opt/alethedash/tester/networker-tester
+              sudo cp /tmp/networker-tester /usr/local/bin/networker-tester
+              sudo cp /tmp/alethabench /usr/local/bin/alethabench
+              sudo chmod +x /opt/alethedash/networker-endpoint /opt/alethedash/tester/networker-tester \\
+                /usr/local/bin/networker-tester /usr/local/bin/alethabench
+              rm -f /tmp/networker-endpoint /tmp/networker-tester /tmp/alethabench
 
-              # ── Backup current dashboard binary ────────────────────────
-              echo '>> Backing up current dashboard binary...'
-              cp /opt/alethedash/networker-dashboard /opt/alethedash/networker-dashboard.bak 2>/dev/null || true
-
-              # ── Install binaries ────────────────────────────────────────
-              echo '>> Installing new binaries...'
-              cp /tmp/networker-dashboard /opt/alethedash/networker-dashboard
-              cp /tmp/networker-endpoint /opt/alethedash/networker-endpoint
-              mkdir -p /opt/alethedash/tester
-              cp /tmp/networker-agent /opt/alethedash/tester/networker-agent 2>/dev/null || true
-              cp /tmp/networker-tester /opt/alethedash/tester/networker-tester 2>/dev/null || true
-              cp /tmp/networker-tester /usr/local/bin/networker-tester 2>/dev/null || true
-              cp /tmp/alethabench /usr/local/bin/alethabench 2>/dev/null || true
-              chmod +x /opt/alethedash/networker-dashboard /opt/alethedash/networker-endpoint \\
-                /opt/alethedash/tester/networker-agent /opt/alethedash/tester/networker-tester \\
-                /usr/local/bin/alethabench /usr/local/bin/networker-tester
-              rm -f /tmp/networker-dashboard /tmp/networker-endpoint /tmp/networker-agent \\
-                /tmp/networker-tester /tmp/alethabench
-
-              # ── Install frontend ────────────────────────────────────────
+              # ── Frontend (served static by nginx) ───────────────────────
               echo '>> Installing frontend...'
-              mkdir -p /opt/alethedash/dashboard/dist
-              rm -rf /opt/alethedash/dashboard/dist/*
-              tar xzf /tmp/dashboard-frontend.tar.gz -C /opt/alethedash/dashboard/dist
+              sudo mkdir -p /opt/alethedash/dashboard/dist
+              sudo rm -rf /opt/alethedash/dashboard/dist/*
+              sudo tar xzf /tmp/dashboard-frontend.tar.gz -C /opt/alethedash/dashboard/dist
+              sudo find /opt/alethedash/dashboard/dist -name '._*' -delete 2>/dev/null || true
+              sudo chmod -R a+rX /opt/alethedash/dashboard/dist
               rm -f /tmp/dashboard-frontend.tar.gz
 
-              # ── Start services via systemd ──────────────────────────────
+              # ── Start services ──────────────────────────────────────────
               echo '>> Starting services...'
-              systemctl start networker-endpoint
-              systemctl start networker-dashboard
-              sleep 3
-              systemctl start networker-agent
+              sudo systemctl start networker-endpoint
+              sudo systemctl start alethedash-cs
 
               # ── Health check (max 30s) with rollback on failure ─────────
               echo '>> Health check...'
               HEALTHY=false
               for i in \$(seq 1 30); do
-                if curl -sf http://localhost:3000/api/health | grep -q '\"status\":\"ok\"'; then
+                if curl -sf http://localhost:5030/api/health/ready | grep -q '\"status\":\"ready\"'; then
                   HEALTHY=true
-                  echo \"Health check passed (attempt \${i})\"
+                  echo \"C# control plane ready (attempt \${i})\"
                   break
                 fi
                 sleep 1
               done
 
-              if [ \"\${HEALTHY}\" != \"true\" ]; then
-                echo '>> DEPLOY_FAILED: Health check failed after 30s — rolling back'
-                systemctl --no-pager status networker-dashboard || true
-                tail -10 /opt/alethedash/dashboard.log || true
-                if [ -f /opt/alethedash/networker-dashboard.bak ]; then
-                  cp /opt/alethedash/networker-dashboard.bak /opt/alethedash/networker-dashboard
-                  systemctl restart networker-dashboard
+              if [ \"\${HEALTHY}\" != 'true' ]; then
+                echo '>> DEPLOY_FAILED: C# control plane not ready after 30s — rolling back'
+                sudo journalctl -u alethedash-cs --no-pager -n 20 || true
+                if [ -d /opt/alethedash-cs.prevbuild ]; then
+                  sudo rm -rf /opt/alethedash-cs
+                  sudo mv /opt/alethedash-cs.prevbuild /opt/alethedash-cs
+                  sudo systemctl restart alethedash-cs
                   sleep 5
                   echo '>> Rollback complete'
                 fi
                 exit 1
               fi
 
-              # ── Cleanup backup on success ───────────────────────────────
-              rm -f /opt/alethedash/networker-dashboard.bak
+              # ── Public-path check through nginx ─────────────────────────
+              PUB=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 https://alethedash.com/api/health || echo '000')
+              echo \">> Public /api/health: HTTP \${PUB}\"
+              if [ \"\${PUB}\" != '200' ]; then
+                echo '>> DEPLOY_FAILED: public /api/health not 200'
+                exit 1
+              fi
 
-              # ── Service status summary ──────────────────────────────────
               echo '>> Service status:'
-              echo \"   dashboard: \$(systemctl is-active networker-dashboard)\"
-              echo \"   endpoint:  \$(systemctl is-active networker-endpoint)\"
-              echo \"   agent:     \$(systemctl is-active networker-agent)\"
+              echo \"   control-plane (cs): \$(systemctl is-active alethedash-cs)\"
+              echo \"   endpoint:           \$(systemctl is-active networker-endpoint)\"
               echo \">> Deploy v${VERSION} complete\"
             " \
             --query "value[0].message" -o tsv)
@@ -380,19 +413,18 @@ jobs:
             --scripts "
               set -e
               echo '=== Service status ==='
-              echo \"dashboard: \$(systemctl is-active networker-dashboard)\"
-              echo \"endpoint:  \$(systemctl is-active networker-endpoint)\"
-              echo \"agent:     \$(systemctl is-active networker-agent)\"
+              echo \"control-plane (cs): \$(systemctl is-active alethedash-cs)\"
+              echo \"endpoint:           \$(systemctl is-active networker-endpoint)\"
 
               echo '=== Binary versions ==='
               echo \"tester:       \$(/opt/alethedash/tester/networker-tester --version 2>/dev/null || echo 'missing')\"
               echo \"orchestrator: \$(alethabench --version 2>/dev/null || echo 'missing')\"
 
-              echo '=== Dashboard API check ==='
-              HTTP_CODE=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://localhost:3000/api/auth/login -X POST -H 'Content-Type: application/json' -d '{\"email\":\"verify\",\"password\":\"probe\"}' 2>/dev/null || echo '000')
-              echo \"Dashboard API: HTTP \${HTTP_CODE}\"
+              echo '=== Login round-trip (real user path through nginx -> C#) ==='
+              HTTP_CODE=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 https://alethedash.com/api/auth/login -X POST -H 'Content-Type: application/json' -d '{\"email\":\"verify\",\"password\":\"probe\"}' 2>/dev/null || echo '000')
+              echo \"Login endpoint: HTTP \${HTTP_CODE}\"
               if [ \"\${HTTP_CODE}\" != '401' ]; then
-                echo 'VERIFY_FAILED: Dashboard not responding'
+                echo 'VERIFY_FAILED: login endpoint not responding 401 to bad creds'
                 exit 1
               fi
 
