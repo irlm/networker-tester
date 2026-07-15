@@ -77,6 +77,7 @@ export function TestbedRow({
         <span className="text-[10px] font-mono text-gray-600 w-3">{index + 1}</span>
         <span className="text-[11px] text-gray-500">Cloud account</span>
         <button
+          type="button"
           onClick={() => onRemove(testbed.key)}
           className="text-[11px] text-gray-600 hover:text-red-400 transition-colors ml-auto"
         >
@@ -128,6 +129,7 @@ export function TestbedRow({
           {(['linux', 'windows'] as const).map(os => (
             <button
               key={os}
+              type="button"
               onClick={() => onUpdate(testbed.key, { os })}
               className={`px-2.5 py-1 text-xs font-mono border transition-colors ${
                 testbed.os === os

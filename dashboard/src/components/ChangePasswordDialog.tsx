@@ -63,7 +63,7 @@ export function ChangePasswordDialog({ onClose }: ChangePasswordDialogProps) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
       <div
-        className="bg-[var(--bg-surface)] border border-gray-800 rounded-lg w-full max-w-sm p-6 shadow-xl"
+        className="bg-[var(--bg-surface)] border border-gray-800 rounded-lg w-full max-w-sm p-6"
         onClick={e => e.stopPropagation()}
         role="dialog"
         aria-modal="true"

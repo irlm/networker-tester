@@ -13,6 +13,7 @@ export function WizardStepper({ steps, currentStep, onStepClick }: WizardStepper
         return (
           <button
             key={label}
+            type="button"
             onClick={() => { if (isPast) onStepClick(i); }}
             disabled={!isPast && !isCurrent}
             className={`px-2 py-1 transition-colors ${

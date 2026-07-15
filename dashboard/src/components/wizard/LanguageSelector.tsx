@@ -32,18 +32,21 @@ export function LanguageSelector({ selectedLangs, onLangsChange, testbeds }: Lan
         <h3 className="text-sm font-semibold text-gray-200">Select Languages</h3>
         <div className="flex items-center gap-2">
           <button
+            type="button"
             onClick={() => setShortcut(ALL_LANGUAGE_IDS)}
             className="px-2 py-1 border border-gray-700 text-[11px] text-gray-300 hover:border-cyan-500 transition-colors"
           >
             Select All
           </button>
           <button
+            type="button"
             onClick={() => setShortcut(TOP_5_IDS)}
             className="px-2 py-1 border border-gray-700 text-[11px] text-gray-300 hover:border-cyan-500 transition-colors"
           >
             Top 5
           </button>
           <button
+            type="button"
             onClick={() => setShortcut(SYSTEMS_IDS)}
             className="px-2 py-1 border border-gray-700 text-[11px] text-gray-300 hover:border-cyan-500 transition-colors"
           >

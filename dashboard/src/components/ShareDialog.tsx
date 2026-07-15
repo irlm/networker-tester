@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '../api/client';
 
 interface ShareDialogProps {
@@ -36,6 +36,15 @@ export function ShareDialog({ projectId, resourceType, resourceId, onClose, onCr
     }
   };
 
+  // Escape closes — matches the other dialogs.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [onClose]);
+
   const handleCopy = async () => {
     if (result?.url) {
       await navigator.clipboard.writeText(result.url);
@@ -47,10 +56,13 @@ export function ShareDialog({ projectId, resourceType, resourceId, onClose, onCr
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
       <div
-        className="bg-[var(--bg-surface)] border border-gray-800 rounded-lg w-full max-w-md p-6 shadow-xl"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="share-dialog-title"
+        className="bg-[var(--bg-surface)] border border-gray-800 rounded-lg w-full max-w-md p-6"
         onClick={e => e.stopPropagation()}
       >
-        <h3 className="text-gray-100 font-bold text-lg mb-4">Create Share Link</h3>
+        <h3 id="share-dialog-title" className="text-gray-100 font-bold text-lg mb-4">Create Share Link</h3>
 
         {!result ? (
           <>

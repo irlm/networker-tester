@@ -92,29 +92,32 @@ export function TesterRegionGroup({
           {testers.map((t) => {
             const q = queues[t.tester_id];
             return (
-              <li
-                key={t.tester_id}
-                className="px-3 py-2 flex items-center gap-3 text-xs hover:bg-gray-900/40 cursor-pointer"
-                onClick={() => onSelect(t)}
-              >
-                <div className="w-28">
-                  <StatusBadge
-                    status={stateBadgeStatus(t.power_state, t.allocation)}
-                    label={t.power_state}
-                  />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-gray-200 font-mono truncate">{t.name}</div>
-                  <div className="text-gray-500 truncate">
-                    {t.vm_size} · v{t.installer_version ?? '—'}
+              <li key={t.tester_id}>
+                {/* Full-row button so the drawer opens via keyboard too. */}
+                <button
+                  type="button"
+                  onClick={() => onSelect(t)}
+                  className="w-full text-left px-3 py-2 flex items-center gap-3 text-xs hover:bg-gray-900/40 focus-visible:outline-none focus-visible:bg-gray-900/40"
+                >
+                  <div className="w-28">
+                    <StatusBadge
+                      status={stateBadgeStatus(t.power_state, t.allocation)}
+                      label={t.power_state}
+                    />
                   </div>
-                </div>
-                {(() => {
-                  const s = rightStatusLabel(t, q);
-                  return (
-                    <div className={`w-24 text-right font-mono ${s.cls}`}>{s.text}</div>
-                  );
-                })()}
+                  <div className="flex-1 min-w-0">
+                    <div className="text-gray-200 font-mono truncate">{t.name}</div>
+                    <div className="text-gray-500 truncate">
+                      {t.vm_size} · v{t.installer_version ?? '—'}
+                    </div>
+                  </div>
+                  {(() => {
+                    const s = rightStatusLabel(t, q);
+                    return (
+                      <div className={`w-24 text-right font-mono ${s.cls}`}>{s.text}</div>
+                    );
+                  })()}
+                </button>
               </li>
             );
           })}

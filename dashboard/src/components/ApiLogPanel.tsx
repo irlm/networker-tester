@@ -94,7 +94,7 @@ export const ApiLogPanel = memo(function ApiLogPanel() {
     return (
       <button
         onClick={() => setOpen(true)}
-        className="fixed bottom-4 right-4 z-50 bg-gray-900 border border-gray-700 rounded-lg px-3 py-1.5 text-xs text-gray-400 hover:text-cyan-400 hover:border-cyan-500/30 transition-colors shadow-lg flex items-center gap-2"
+        className="fixed bottom-4 right-4 z-50 bg-gray-900 border border-gray-700 rounded-lg px-3 py-1.5 text-xs text-gray-400 hover:text-cyan-400 hover:border-cyan-500/30 transition-colors flex items-center gap-2"
         title="Performance Log"
       >
         <span className="font-mono">{entries.filter(e => e.source === 'user').length}</span>
@@ -130,7 +130,7 @@ export const ApiLogPanel = memo(function ApiLogPanel() {
   }
 
   return (
-    <div className="fixed bottom-0 right-0 z-50 w-full md:w-[640px] lg:w-[760px] max-h-[60vh] bg-[#0d0e14] border-t border-l border-gray-700 rounded-tl-lg shadow-2xl flex flex-col">
+    <div className="fixed bottom-0 right-0 z-50 w-full md:w-[640px] lg:w-[760px] max-h-[60vh] bg-[#0d0e14] border-t border-l border-gray-700 rounded-tl-lg flex flex-col">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-gray-800 flex-shrink-0">
         <div className="flex items-center gap-2">
@@ -181,7 +181,7 @@ export const ApiLogPanel = memo(function ApiLogPanel() {
           <button onClick={clear} className="px-2 py-0.5 text-[10px] text-gray-500 hover:text-gray-300 border border-gray-700 rounded">
             Clear
           </button>
-          <button onClick={() => setOpen(false)} className="px-2 py-0.5 text-gray-500 hover:text-gray-300 text-sm">&times;</button>
+          <button onClick={() => setOpen(false)} className="px-2 py-0.5 text-gray-500 hover:text-gray-300 text-sm" aria-label="Close performance log">&times;</button>
         </div>
       </div>
 

@@ -3,7 +3,7 @@
  * Phase colors: DNS=#3b82f6, TCP=#8b5cf6, TLS=#f59e0b, TTFB=#ef4444, Transfer=#10b981
  */
 
-import { useState, useCallback } from 'react';
+import { Fragment, useState, useCallback } from 'react';
 
 export interface PhaseData {
   mode: string;
@@ -332,12 +332,9 @@ export function PhaseBreakdown({ color, modes, comparison }: PhaseBreakdownProps
               const deltas = other ? computeDeltas(modeData, other) : null;
 
               return (
-                <>
+                <Fragment key={modeData.mode}>
                   {/* Primary row */}
-                  <tr
-                    key={`${modeData.mode}-primary`}
-                    className="border-b border-[#1e293b] hover:bg-[#0f172a]"
-                  >
+                  <tr className="border-b border-[#1e293b] hover:bg-[#0f172a]">
                     <td className="py-1 pr-2 text-gray-300">{modeData.mode}</td>
                     <td className="text-right py-1 px-1 text-gray-400">
                       {fmtMsShort(modeData.dns_ms)}
@@ -361,10 +358,7 @@ export function PhaseBreakdown({ color, modes, comparison }: PhaseBreakdownProps
 
                   {/* Comparison row */}
                   {other && (
-                    <tr
-                      key={`${modeData.mode}-other`}
-                      className="border-b border-[#1e293b] hover:bg-[#0f172a]"
-                    >
+                    <tr className="border-b border-[#1e293b] hover:bg-[#0f172a]">
                       <td className="py-1 pr-2" style={{ color: comparison!.otherColor }}>
                         {comparison!.otherLanguage}
                       </td>
@@ -391,10 +385,7 @@ export function PhaseBreakdown({ color, modes, comparison }: PhaseBreakdownProps
 
                   {/* Delta row */}
                   {deltas && (
-                    <tr
-                      key={`${modeData.mode}-delta`}
-                      className="border-b border-[#1e293b] bg-[#080d14]"
-                    >
+                    <tr className="border-b border-[#1e293b] bg-[#080d14]">
                       <td className="py-0.5 pr-2 text-gray-600 text-[10px]">Δ</td>
                       <td className="text-right py-0.5 px-1">
                         <DeltaBadge delta={deltas['dns_ms']} />
@@ -416,7 +407,7 @@ export function PhaseBreakdown({ color, modes, comparison }: PhaseBreakdownProps
                       </td>
                     </tr>
                   )}
-                </>
+                </Fragment>
               );
             })}
           </tbody>
@@ -426,7 +417,7 @@ export function PhaseBreakdown({ color, modes, comparison }: PhaseBreakdownProps
       {/* ── Hover Tooltip ── */}
       {tooltip && (
         <div
-          className="fixed z-50 pointer-events-none bg-[#0f172a] border border-[#334155] rounded px-2 py-1 text-xs font-mono text-gray-200 shadow-lg"
+          className="fixed z-50 pointer-events-none bg-[#0f172a] border border-[#334155] rounded px-2 py-1 text-xs font-mono text-gray-200"
           style={{ left: tooltip.x + 12, top: tooltip.y - 28 }}
         >
           {tooltip.label}: {fmtMs(tooltip.value)} ({tooltip.pct.toFixed(0)}% of total)

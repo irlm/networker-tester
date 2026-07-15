@@ -177,7 +177,6 @@ export default function HelpPanel() {
           <span className="text-cyan-400 text-sm font-medium">? docs</span>
           <input
             ref={inputRef}
-            tabIndex={1}
             type="text"
             value={query}
             onChange={(e) => { setQuery(e.target.value); setSelectedIndex(0); }}
@@ -230,7 +229,7 @@ export default function HelpPanel() {
               );
             })}
 
-            <div className="mt-auto pt-3 border-t border-[var(--border-default)] mt-3">
+            <div className="mt-auto pt-3 border-t border-[var(--border-default)]">
               <div className="px-2 text-[10px] text-gray-600 leading-relaxed">
                 <kbd className="text-gray-500">j</kbd>/<kbd className="text-gray-500">k</kbd> navigate
                 {' '}<kbd className="text-gray-500">l</kbd> expand

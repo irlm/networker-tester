@@ -115,6 +115,23 @@ export function InfraDeployWizard({
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [handleKeyDown]);
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    function trapFocus(e: KeyboardEvent) {
+      if (e.key !== 'Tab') return;
+      const els = dialog!.querySelectorAll<HTMLElement>(
+        'input:not([disabled]), button:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]):not([disabled])'
+      );
+      if (els.length === 0) return;
+      const first = els[0];
+      const last = els[els.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+    dialog.addEventListener('keydown', trapFocus);
+    return () => dialog.removeEventListener('keydown', trapFocus);
+  }, []);
 
   // ── Suggest a runner name when entering step 4 (runner path) ───────────
   useEffect(() => {
@@ -255,14 +272,18 @@ export function InfraDeployWizard({
 
           {/* Stepper bar — clickable to jump back */}
           <div className="flex items-center gap-0 mb-6 pb-4 border-b border-gray-800">
-            {STEPS.map((label, i) => (
+            {STEPS.map((label, i) => {
+              // Upgrade mode pins kind=target — never allow jumping back to
+              // the Kind step, where the user could switch to runner.
+              const reachable = i <= step && !(upgradeMode && i === 0);
+              return (
               <div key={label} className="flex items-center" style={{ flex: i === STEPS.length - 1 ? '0 0 auto' : '1 1 auto' }}>
                 <button
                   type="button"
-                  onClick={() => i <= step && setStep(i)}
+                  onClick={() => reachable && setStep(i)}
                   className={`flex items-center gap-2 text-xs font-mono whitespace-nowrap ${
                     i === step ? accentClass :
-                    i < step ? 'text-gray-400 hover:text-gray-200 cursor-pointer' :
+                    reachable ? 'text-gray-400 hover:text-gray-200 cursor-pointer' :
                     'text-gray-600 cursor-not-allowed'
                   }`}
                 >
@@ -277,7 +298,8 @@ export function InfraDeployWizard({
                 </button>
                 {i < STEPS.length - 1 && <div className="flex-1 h-px bg-gray-800 mx-3 min-w-[18px]" />}
               </div>
-            ))}
+              );
+            })}
           </div>
 
           {error && (
@@ -561,10 +583,10 @@ export function InfraDeployWizard({
           <div className="flex justify-between pt-4 border-t border-gray-800 mt-6">
             <button
               type="button"
-              onClick={() => step > 0 ? setStep(s => s - 1) : onClose()}
+              onClick={() => step > (upgradeMode ? 1 : 0) ? setStep(s => s - 1) : onClose()}
               className="text-xs text-gray-400 hover:text-gray-200 px-2"
             >
-              {step === 0 ? 'Cancel' : '← Back'}
+              {step === (upgradeMode ? 1 : 0) ? 'Cancel' : '← Back'}
             </button>
             {step < STEPS.length - 1 ? (
               <button

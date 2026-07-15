@@ -28,6 +28,15 @@ export function CreateTlsProfileDialog({ projectId, onClose, onCreated }: Create
     api.getAgents(projectId).then(r => setTesters(r.agents)).catch(() => {});
   }, [projectId]);
 
+  // Escape closes — matches every other slide-over dialog.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [onClose]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -64,10 +73,15 @@ export function CreateTlsProfileDialog({ projectId, onClose, onCreated }: Create
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
       <div className="absolute inset-0 bg-black/40 slide-over-backdrop" onClick={onClose} aria-hidden="true" />
-      <div className="relative w-full md:w-[520px] md:max-w-[90vw] bg-[var(--bg-base)] md:border-l border-gray-800 h-full overflow-y-auto slide-over-panel">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="create-tls-profile-title"
+        className="relative w-full md:w-[520px] md:max-w-[90vw] bg-[var(--bg-base)] md:border-l border-gray-800 h-full overflow-y-auto slide-over-panel"
+      >
         <form onSubmit={handleSubmit} className="p-4 md:p-6">
           <div className="flex items-center justify-between mb-6">
-            <h3 className="text-lg font-bold text-gray-100">Run TLS Profile</h3>
+            <h3 id="create-tls-profile-title" className="text-lg font-bold text-gray-100">Run TLS Profile</h3>
             <button type="button" onClick={onClose} className="text-gray-500 hover:text-gray-300 text-sm" aria-label="Close">&#x2715;</button>
           </div>
 

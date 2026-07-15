@@ -51,11 +51,13 @@ export function TestbedMatrix({
 }: TestbedMatrixProps) {
   const [testbedKey, setTestbedKey] = useState(() => testbeds.length);
   const [testers, setTesters] = useState<TesterRow[]>([]);
-  const [testersLoading, setTestersLoading] = useState(false);
+  // Starts true so "No runners available." doesn't flash while the list loads.
+  const [testersLoading, setTestersLoading] = useState(true);
   const [cloudAccounts, setCloudAccounts] = useState<CloudAccountSummary[]>([]);
 
   useEffect(() => {
     let cancelled = false;
+    setTestersLoading(true);
     testersApi.listTesters(projectId)
       .then(rows => { if (!cancelled) setTesters(rows); })
       .catch(() => { if (!cancelled) setTesters([]); })
@@ -92,6 +94,7 @@ export function TestbedMatrix({
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-sm font-semibold text-gray-200">Configure Testbeds</h3>
         <button
+          type="button"
           onClick={() => addTestbed()}
           className="px-3 py-1.5 border border-gray-700 text-xs text-gray-200 hover:border-cyan-500 transition-colors"
         >
@@ -111,6 +114,7 @@ export function TestbedMatrix({
             ].map(({ cloud, os }) => (
               <button
                 key={`${cloud}-${os}`}
+                type="button"
                 onClick={() => addTestbed(cloud, os)}
                 className="px-3 py-1.5 text-xs font-mono border border-gray-700 text-gray-300 hover:border-cyan-500 hover:text-cyan-300 transition-colors"
               >
@@ -159,6 +163,7 @@ export function TestbedMatrix({
             {(['auto', 'specific'] as const).map(mode => (
               <button
                 key={mode}
+                type="button"
                 onClick={() => { onRunnerModeChange(mode); if (mode === 'auto') onTesterIdChange(null); }}
                 className={`px-2.5 py-1 text-xs border transition-colors ${
                   runnerMode === mode

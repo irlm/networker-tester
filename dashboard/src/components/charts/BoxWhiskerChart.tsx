@@ -19,7 +19,6 @@ export interface BoxGroup {
 
 interface BoxWhiskerChartProps {
   groups: BoxGroup[];
-  unit?: string;
   title?: string;
 }
 
@@ -43,7 +42,7 @@ function fmt(v: number): string {
   return `${(v * 1000).toFixed(0)}µs`;
 }
 
-export function BoxWhiskerChart({ groups, unit = 'ms', title }: BoxWhiskerChartProps) {
+export function BoxWhiskerChart({ groups, title }: BoxWhiskerChartProps) {
   const rows = useMemo(() => groups.filter(g => g.p95 > 0), [groups]);
 
   if (rows.length === 0) return null;
@@ -155,7 +154,7 @@ export function BoxWhiskerChart({ groups, unit = 'ms', title }: BoxWhiskerChartP
                 fill="#6b7280"
                 fontSize={10}
               >
-                p50={fmt(row.p50)}  p95={fmt(row.p95)} {unit}
+                p50={fmt(row.p50)}  p95={fmt(row.p95)}
               </text>
             </g>
           );
