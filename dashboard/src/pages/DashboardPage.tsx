@@ -167,9 +167,9 @@ export function DashboardPage() {
           <h3 className="text-sm text-gray-300 font-medium mb-4">Get started</h3>
           <div className="space-y-2">
             {[
-              { to: `/projects/${projectId}/deploy`, step: '1', title: 'Deploy a test target', desc: 'Install networker-endpoint on a remote host to create a test target' },
-              { to: `/projects/${projectId}/runs`, step: '2', title: 'Add a runner', desc: 'Connect an agent to run probes and benchmarks from a remote location' },
-              { to: `/projects/${projectId}/runs`, step: '3', title: 'Run your first test', desc: 'HTTP, DNS, TLS, UDP latency measured per-phase' },
+              { to: `/projects/${projectId}/vms`, step: '1', title: 'Deploy a test target', desc: 'Install networker-endpoint on a remote host to create a test target' },
+              { to: `/projects/${projectId}/vms`, step: '2', title: 'Add a runner', desc: 'Connect an agent to run probes and benchmarks from a remote location' },
+              { to: `/projects/${projectId}/tests/new`, step: '3', title: 'Run your first test', desc: 'HTTP, DNS, TLS, UDP latency measured per-phase' },
               { to: `/projects/${projectId}/schedules`, step: '4', title: 'Schedule recurring tests', desc: 'Automate recurring tests with cron expressions' },
             ].map(item => (
               <Link
@@ -202,7 +202,7 @@ export function DashboardPage() {
             <h3 className="text-sm text-gray-300 font-medium mb-4">Get started</h3>
             <div className="space-y-2">
               {[
-                { to: `/projects/${projectId}/deploy`, step: '1', title: 'Deploy a test target', done: endpoints.length > 0 },
+                { to: `/projects/${projectId}/vms`, step: '1', title: 'Deploy a test target', done: endpoints.length > 0 },
                 { to: `/projects/${projectId}/tests/new`, step: '2', title: 'Run your first network test', done: nonQueuedRuns.length > 0 },
                 { to: `/projects/${projectId}/schedules`, step: '3', title: 'Schedule recurring tests', done: false },
               ].map(item => (
@@ -290,7 +290,7 @@ function InfraSection({ agents, endpoints, projectId }: {
       {endpoints.length === 0 && agents.length === 0 ? (
         <div className="border border-gray-800 rounded p-6 text-center">
           <p className="text-gray-600 text-sm">No runners or targets deployed yet</p>
-          <Link to={`/projects/${projectId}/deploy`} className="text-xs text-cyan-400 mt-1 inline-block">Deploy your first target</Link>
+          <Link to={`/projects/${projectId}/vms`} className="text-xs text-cyan-400 mt-1 inline-block">Deploy your first target</Link>
         </div>
       ) : (
         <div className="space-y-2">

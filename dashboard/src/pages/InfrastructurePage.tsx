@@ -508,7 +508,7 @@ export function InfrastructurePage() {
 
       {/* Runners list — region-grouped inside the tab */}
       {testersLoading && testers.length === 0 ? (
-        <p className="text-sm text-gray-500">Loading\u2026</p>
+        <p className="text-sm text-gray-500">Loading{'\u2026'}</p>
       ) : runnerTab === 'archived' ? (
         <div className="border border-dashed border-gray-800 rounded p-6 text-center">
           <p className="text-gray-500 text-sm">No archived runners</p>
@@ -712,7 +712,10 @@ export function InfrastructurePage() {
                     </td>
                     {isOperator && (
                       <td className="px-4 py-3 text-right whitespace-nowrap">
-                        {d.status === 'running' && d.endpoint_ips?.[0] && (
+                        {/* Rows here are completed deployments — a live target
+                            has status 'completed' (the deploy finished), so
+                            gate on having an IP, not on 'running'. */}
+                        {d.endpoint_ips?.[0] && (
                           <>
                             <Link
                               to={`/projects/${projectId}/network/${d.deployment_id}`}

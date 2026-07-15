@@ -645,12 +645,14 @@ export function CloudAccountsPage() {
                           {cleaning === acct.account_id ? 'Cleaning...' : 'Clean orphans'}
                         </button>
                       )}
-                      <button
-                        onClick={() => handleDelete(acct.account_id, acct.name)}
-                        className="text-xs text-gray-600 hover:text-red-400 transition-colors"
-                      >
-                        Delete
-                      </button>
+                      {isOperator && (
+                        <button
+                          onClick={() => handleDelete(acct.account_id, acct.name)}
+                          className="text-xs text-gray-600 hover:text-red-400 transition-colors"
+                        >
+                          Delete
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>

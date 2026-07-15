@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { testersApi, type TesterRow } from '../api/testers';
 import type { Deployment, TestRun, TestConfigCreate, Workload } from '../api/types';
@@ -19,11 +19,14 @@ interface ModeFamilyDef {
   labelClass: string;
 }
 
+// Mode ids must match the backend Mode enum in
+// crates/networker-common/src/test_config.rs (lowercase serde) — anything
+// else is rejected with a 422 when the config is created.
 const MODE_FAMILIES: ModeFamilyDef[] = [
   {
     id: 'net',
     label: 'NETWORK',
-    modes: ['tcp', 'dns', 'tls', 'tlsresume', 'nativetls', 'udp'],
+    modes: ['tcp', 'dns', 'tls', 'tlsresume', 'native', 'udp'],
     activeClass: 'bg-green-400/[.14] text-green-300 border-green-400/50',
     labelClass: 'text-green-300',
   },
@@ -37,14 +40,14 @@ const MODE_FAMILIES: ModeFamilyDef[] = [
   {
     id: 'thru',
     label: 'THROUGHPUT',
-    modes: ['download', 'upload', 'downloadh1', 'downloadh2', 'downloadh3'],
+    modes: ['download', 'upload'],
     activeClass: 'bg-violet-400/[.16] text-violet-300 border-violet-400/55',
     labelClass: 'text-violet-300',
   },
   {
     id: 'page',
     label: 'PAGE-LOAD',
-    modes: ['pageload1', 'pageload2', 'pageload3'],
+    modes: ['pageload', 'pageload2', 'pageload3'],
     activeClass: 'bg-amber-400/[.14] text-amber-300 border-amber-400/50',
     labelClass: 'text-amber-300',
   },
@@ -54,7 +57,7 @@ const FAMILY_BY_ID = new Map(MODE_FAMILIES.map(f => [f.id, f]));
 
 // Modes that measure throughput — they need explicit payload sizes, otherwise
 // the agent gets an empty list and the run completes with zero data moved.
-const THROUGHPUT_MODES = new Set(['download', 'upload', 'downloadh1', 'downloadh2', 'downloadh3']);
+const THROUGHPUT_MODES = new Set(['download', 'upload']);
 
 const PAYLOAD_PRESETS: Array<{ bytes: number; label: string }> = [
   { bytes: 1024, label: '1 KB' },
@@ -68,13 +71,18 @@ const DEFAULT_PAYLOADS = [1024 * 1024]; // 1 MB — sensible single-size default
 const MODE_PRESETS: Array<{ id: string; label: string; modes: string[]; desc: string }> = [
   { id: 'quick',    label: '★ Quick check',    modes: ['tcp','dns','tls','http1','http2','http3'], desc: 'net + http' },
   { id: 'http',     label: '★ HTTP versions',  modes: ['http1','http2','http3'],                    desc: 'h1/h2/h3' },
-  { id: 'thruput',  label: '★ Throughput',     modes: ['downloadh1','downloadh2','downloadh3'],     desc: 'h1/h2/h3 download' },
-  { id: 'full',     label: '★ Full 18-mode',   modes: MODE_FAMILIES.flatMap(f => f.modes),          desc: 'everything' },
+  { id: 'thruput',  label: '★ Throughput',     modes: ['download','upload'],                        desc: 'download + upload' },
+  { id: 'full',     label: '★ Full sweep',     modes: MODE_FAMILIES.flatMap(f => f.modes),          desc: 'everything' },
 ];
 
+const ALL_MODES = new Set(MODE_FAMILIES.flatMap(f => f.modes));
+
 function classForMode(mode: string, active: boolean): string {
-  const family = familyOf(mode);
   if (!active) return 'border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-600';
+  // Prefer the page-local family table (covers 'native', which the shared
+  // familyOf() map doesn't know), fall back to familyOf for legacy modes
+  // that only appear on historical runs.
+  const family = MODE_FAMILIES.find(f => f.modes.includes(mode))?.id ?? familyOf(mode);
   return FAMILY_BY_ID.get(family as ModeFamilyDef['id'])?.activeClass
     ?? 'bg-gray-700/30 text-gray-400 border-gray-700';
 }
@@ -103,6 +111,7 @@ function deploymentStatusDot(status: string): string {
 export function NetworkTestPage() {
   const { projectId } = useProject();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const addToast = useToast();
   usePageTitle('New Network Test');
 
@@ -123,12 +132,28 @@ export function NetworkTestPage() {
   const [selectedTesterId, setSelectedTesterId] = useState<string | null>(null);
   const [runnerExpanded, setRunnerExpanded] = useState(false);
 
-  // Scope tab for recent runs
-  const [scopeTab, setScopeTab] = useState<'all' | 'this' | 'mine'>('all');
+  // Scope tab for recent runs. "Mine only" is intentionally absent — the
+  // backend doesn't expose user_id on TestRun yet, so it can't be honest.
+  const [scopeTab, setScopeTab] = useState<'all' | 'this'>('all');
 
   const [submitting, setSubmitting] = useState(false);
   const targetInputRef = useRef<HTMLInputElement>(null);
   const formRef = useRef<HTMLDivElement>(null);
+
+  // Prefill from query params (?modes=a,b&target=<deploymentId>) — set by
+  // the EndpointRunsPage preset cards and its per-run rerun links.
+  useEffect(() => {
+    const modesParam = searchParams.get('modes');
+    if (modesParam) {
+      const modes = modesParam.split(',').map(m => m.trim()).filter(m => ALL_MODES.has(m));
+      if (modes.length > 0) {
+        setSelectedModes(new Set(modes));
+        setActivePreset(null);
+      }
+    }
+    const target = searchParams.get('target');
+    if (target) setSelectedTargetId(target);
+  }, [searchParams]);
 
   // ── Data loading ─────────────────────────────────────────────────────
 
@@ -177,7 +202,6 @@ export function NetworkTestPage() {
       // TestRun doesn't expose target id directly; filter by config_name contains target name as a best-effort
       return recentRuns.filter(r => r.config_name?.toLowerCase().includes(selectedDeployment.name.toLowerCase()));
     }
-    // 'mine' would require current-user filter; backend doesn't expose user_id on TestRun yet, so fall back to all
     return recentRuns;
   }, [recentRuns, scopeTab, selectedDeployment]);
 
@@ -403,7 +427,6 @@ export function NetworkTestPage() {
             {([
               { id: 'all' as const, label: 'All', count: recentRuns.length },
               { id: 'this' as const, label: 'This target only', count: selectedDeployment ? filteredRecent.length : 0 },
-              { id: 'mine' as const, label: 'Mine only', count: recentRuns.length },
             ]).map(t => (
               <button
                 key={t.id}

@@ -60,6 +60,8 @@ const BenchmarkRegressionsPage = lazyPage(() => import('./pages/BenchmarkRegress
 const BenchTokensPage = lazyPage(() => import('./pages/BenchTokensPage'), 'BenchTokensPage');
 const BenchTokenHistoryPage = lazyPage(() => import('./pages/BenchTokenHistoryPage'), 'BenchTokenHistoryPage');
 const NetworkTestPage = lazyPage(() => import('./pages/NetworkTestPage'), 'NetworkTestPage');
+const TlsProfilesPage = lazyPage(() => import('./pages/TlsProfilesPage'), 'TlsProfilesPage');
+const TlsProfileDetailPage = lazyPage(() => import('./pages/TlsProfileDetailPage'), 'TlsProfileDetailPage');
 const FullStackPage = lazyPage(() => import('./pages/FullStackPage'), 'FullStackPage');
 const AppBenchmarkPage = lazyPage(() => import('./pages/AppBenchmarkPage'), 'AppBenchmarkPage');
 
@@ -248,6 +250,9 @@ function AuthenticatedApp() {
 
             {/* Detail pages keep their own URLs — they aren't tab-scoped. */}
             <Route path="/projects/:projectId/deploy/:deploymentId" element={<DeployDetailPage />} />
+            {/* TLS profile history — linked from JobDetailPage TLS-profile runs. */}
+            <Route path="/projects/:projectId/tls-profiles" element={<TlsProfilesPage />} />
+            <Route path="/projects/:projectId/tls-profiles/:runId" element={<TlsProfileDetailPage />} />
             <Route path="/projects/:projectId/schedules" element={<SchedulesPage />} />
             <Route path="/projects/:projectId/settings" element={<SettingsPage />} />
             <Route path="/projects/:projectId/members" element={<ProjectMembersPage />} />
