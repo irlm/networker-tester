@@ -96,7 +96,9 @@ pub use real::{run_http3_probe, run_http3_request_probe};
 
 #[cfg(feature = "http3")]
 mod real {
-    use crate::metrics::{ErrorCategory, HttpResult, Protocol, RequestAttempt, TlsResult};
+    use crate::metrics::{
+        DnsResult, ErrorCategory, HttpResult, Protocol, RequestAttempt, TlsResult,
+    };
     use bytes::Buf;
     use chrono::Utc;
     use h3_quinn::Connection as QuinnH3Connection;
@@ -144,18 +146,81 @@ mod real {
         Ok((endpoint, host, port))
     }
 
-    /// Resolve the target address, trying direct parse first then DNS lookup.
-    async fn resolve_addr(host: &str, port: u16) -> Result<std::net::SocketAddr, String> {
-        let addr_str = format!("{host}:{port}");
-        match addr_str.parse() {
-            Ok(a) => Ok(a),
-            Err(_) => match tokio::net::lookup_host(&addr_str).await {
-                Ok(mut a) => a
-                    .next()
-                    .ok_or_else(|| format!("No addresses resolved for {host}")),
-                Err(e) => Err(format!("DNS error: {e}")),
-            },
+    /// Classify a `build_quic_endpoint` failure message into the phase that
+    /// actually failed. (Trust audit V10: everything used to collapse to
+    /// `ErrorCategory::Http`.)
+    fn classify_endpoint_build_error(msg: &str) -> ErrorCategory {
+        if msg.contains("TLS config") || msg.contains("QUIC TLS config") {
+            ErrorCategory::Tls
+        } else if msg.starts_with("No host") {
+            ErrorCategory::Config
+        } else {
+            ErrorCategory::Other
         }
+    }
+
+    /// Classify a QUIC connection failure. QUIC has no TCP phase — a failure
+    /// to establish the connection is the connect-equivalent (`Tcp`), unless
+    /// it is a handshake/crypto failure (`Tls`) or an idle/handshake timeout
+    /// (`Timeout`). (Trust audit V10.)
+    fn classify_quic_connection_error(e: &quinn::ConnectionError) -> ErrorCategory {
+        match e {
+            quinn::ConnectionError::TimedOut => ErrorCategory::Timeout,
+            quinn::ConnectionError::TransportError(te) => {
+                let msg = te.to_string().to_ascii_lowercase();
+                if msg.contains("crypto")
+                    || msg.contains("tls")
+                    || msg.contains("certificate")
+                    || msg.contains("handshake")
+                {
+                    ErrorCategory::Tls
+                } else {
+                    ErrorCategory::Tcp
+                }
+            }
+            _ => ErrorCategory::Tcp,
+        }
+    }
+
+    /// Resolve the target address, trying direct parse first then DNS lookup.
+    ///
+    /// Returns the address plus a `DnsResult` timing record when an actual
+    /// DNS lookup happened (`None` for IP literals), so HTTP/3 attempts carry
+    /// the same DNS phase timing as HTTP/1.1 and HTTP/2 — previously `dns`
+    /// was always absent and H3 goodput/overhead omitted DNS while H1/H2
+    /// included it. (Trust audit V10.)
+    async fn resolve_addr(
+        host: &str,
+        port: u16,
+    ) -> Result<(std::net::SocketAddr, Option<DnsResult>), String> {
+        // Parse the bare host as an IP literal first — formatting "{host}:{port}"
+        // misses IPv6 (needs brackets: [::1]:443) and would fall through to a
+        // spurious DNS lookup for it.
+        if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+            return Ok((std::net::SocketAddr::new(ip, port), None));
+        }
+        let addr_str = format!("{host}:{port}");
+        let started_at = Utc::now();
+        let t0 = Instant::now();
+        let addrs: Vec<std::net::SocketAddr> = match tokio::net::lookup_host(&addr_str).await {
+            Ok(a) => a.collect(),
+            Err(e) => return Err(format!("DNS error: {e}")),
+        };
+        let duration_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        let addr = *addrs
+            .first()
+            .ok_or_else(|| format!("No addresses resolved for {host}"))?;
+        let dns = DnsResult {
+            query_name: host.to_string(),
+            resolved_ips: addrs.iter().map(|a| a.ip().to_string()).collect(),
+            duration_ms,
+            started_at,
+            success: true,
+            // lookup_host goes through the OS (getaddrinfo); the concrete
+            // nameserver is not observable from here.
+            resolver: Some("system (OS getaddrinfo)".to_string()),
+        };
+        Ok((addr, Some(dns)))
     }
 
     pub async fn run_http3_probe(
@@ -207,13 +272,14 @@ mod real {
                         sequence_num,
                         protocol.clone(),
                         started_at,
+                        classify_endpoint_build_error(&msg),
                         &msg,
                     );
                 }
             };
 
-        let server_addr = match resolve_addr(&host, port).await {
-            Ok(a) => a,
+        let (server_addr, dns_result) = match resolve_addr(&host, port).await {
+            Ok(v) => v,
             Err(msg) => {
                 return h3_failed(
                     run_id,
@@ -221,6 +287,7 @@ mod real {
                     sequence_num,
                     protocol.clone(),
                     started_at,
+                    ErrorCategory::Dns,
                     &msg,
                 );
             }
@@ -232,12 +299,15 @@ mod real {
         let connecting = match endpoint.connect(server_addr, &host) {
             Ok(c) => c,
             Err(e) => {
+                // quinn::ConnectError variants are all local setup problems
+                // (invalid server name, no client config, CIDs exhausted…).
                 return h3_failed(
                     run_id,
                     attempt_id,
                     sequence_num,
                     protocol.clone(),
                     started_at,
+                    ErrorCategory::Config,
                     &format!("QUIC connect error: {e}"),
                 );
             }
@@ -256,6 +326,7 @@ mod real {
                     sequence_num,
                     protocol.clone(),
                     started_at,
+                    classify_quic_connection_error(&e),
                     &format!("QUIC connect: {e}"),
                 );
             }
@@ -266,6 +337,7 @@ mod real {
                     sequence_num,
                     protocol.clone(),
                     started_at,
+                    ErrorCategory::Timeout,
                     "QUIC handshake timeout",
                 );
             }
@@ -282,6 +354,7 @@ mod real {
                     sequence_num,
                     protocol.clone(),
                     started_at,
+                    ErrorCategory::Http,
                     &format!("h3 handshake: {e}"),
                 );
             }
@@ -320,6 +393,7 @@ mod real {
                     sequence_num,
                     protocol.clone(),
                     started_at,
+                    ErrorCategory::Http,
                     &format!("h3 send_request: {e}"),
                 );
             }
@@ -339,6 +413,7 @@ mod real {
                         sequence_num,
                         protocol.clone(),
                         started_at,
+                        ErrorCategory::Http,
                         &format!("h3 send_data: {e}"),
                     );
                 }
@@ -356,6 +431,7 @@ mod real {
                     sequence_num,
                     protocol.clone(),
                     started_at,
+                    ErrorCategory::Http,
                     &format!("h3 recv_response: {e}"),
                 );
             }
@@ -418,7 +494,9 @@ mod real {
             started_at,
             finished_at: Some(Utc::now()),
             success: status_code < 500,
-            dns: None,
+            // DNS phase timing now recorded for H3 like H1/H2 (audit V10);
+            // `tcp` stays None — QUIC has no TCP phase by design.
+            dns: dns_result,
             tcp: None,
             tls: Some(tls_result),
             http: Some(HttpResult {
@@ -450,12 +528,18 @@ mod real {
         }
     }
 
+    /// Build a failed HTTP/3 attempt. `category` reflects the phase that
+    /// failed: `Dns` for resolution, `Tls` for QUIC/TLS crypto failures,
+    /// `Tcp` for the QUIC connect-equivalent, `Timeout` for handshake/idle
+    /// timeouts, and `Http` only for actual HTTP/3-layer errors — previously
+    /// everything collapsed to `Http`. (Trust audit V10.)
     fn h3_failed(
         run_id: Uuid,
         attempt_id: Uuid,
         sequence_num: u32,
         protocol: Protocol,
         started_at: chrono::DateTime<Utc>,
+        category: ErrorCategory,
         message: &str,
     ) -> RequestAttempt {
         RequestAttempt {
@@ -472,7 +556,7 @@ mod real {
             http: None,
             udp: None,
             error: Some(crate::metrics::ErrorRecord {
-                category: ErrorCategory::Http,
+                category,
                 message: message.to_string(),
                 detail: None,
                 occurred_at: Utc::now(),
@@ -638,21 +722,30 @@ mod real {
 
         #[tokio::test]
         async fn resolve_addr_ip_literal() {
-            let addr = resolve_addr("127.0.0.1", 8443).await.unwrap();
+            let (addr, dns) = resolve_addr("127.0.0.1", 8443).await.unwrap();
             assert_eq!(addr, "127.0.0.1:8443".parse().unwrap());
+            assert!(dns.is_none(), "IP literal must not record a DNS phase");
         }
 
         #[tokio::test]
         async fn resolve_addr_ipv6_literal() {
-            let addr = resolve_addr("::1", 443).await.unwrap();
+            let (addr, dns) = resolve_addr("::1", 443).await.unwrap();
             assert_eq!(addr, "[::1]:443".parse().unwrap());
+            assert!(dns.is_none());
         }
 
         #[tokio::test]
         async fn resolve_addr_hostname_localhost() {
-            let addr = resolve_addr("localhost", 9999).await.unwrap();
+            let (addr, dns) = resolve_addr("localhost", 9999).await.unwrap();
             assert_eq!(addr.port(), 9999);
             assert!(addr.ip().is_loopback());
+            // Trust audit V10: an actual DNS lookup must emit phase timing.
+            let dns = dns.expect("hostname resolution must record a DnsResult");
+            assert_eq!(dns.query_name, "localhost");
+            assert!(dns.success);
+            assert!(dns.duration_ms >= 0.0);
+            assert!(!dns.resolved_ips.is_empty());
+            assert_eq!(dns.resolver.as_deref(), Some("system (OS getaddrinfo)"));
         }
 
         #[tokio::test]
@@ -721,8 +814,22 @@ mod real {
                 "got: {}",
                 err.message
             );
+            // Trust audit V10: a resolution failure must be classified Dns,
+            // not collapsed to Http.
+            assert_eq!(
+                err.category,
+                ErrorCategory::Dns,
+                "H3 DNS failure must classify as Dns, got {:?} ({})",
+                err.category,
+                err.message
+            );
         }
 
+        /// Regression test for trust-audit V10: an HTTPS URL pointing at a
+        /// port with no QUIC listener is a connect-phase failure. It must be
+        /// classified connect-ish (Tcp — the QUIC connect-equivalent — or
+        /// Timeout on platforms that swallow ICMP unreachable), never `Http`:
+        /// no HTTP exchange ever happened.
         #[tokio::test]
         async fn h3_probe_connection_refused() {
             init_crypto();
@@ -730,6 +837,68 @@ mod real {
             let a = run_http3_probe(Uuid::new_v4(), 3, &target, 3_000, true, None).await;
             assert!(!a.success);
             assert_eq!(a.protocol, Protocol::Http3);
+            let err = a.error.unwrap();
+            assert!(
+                matches!(err.category, ErrorCategory::Tcp | ErrorCategory::Timeout),
+                "QUIC connect failure must be Tcp/Timeout, not {:?} ({})",
+                err.category,
+                err.message
+            );
+        }
+
+        // ── error-classification unit tests (trust audit V10) ────────────────
+
+        #[test]
+        fn classify_quic_timeout_is_timeout() {
+            assert_eq!(
+                classify_quic_connection_error(&quinn::ConnectionError::TimedOut),
+                ErrorCategory::Timeout
+            );
+        }
+
+        #[test]
+        fn classify_quic_reset_is_connectish() {
+            assert_eq!(
+                classify_quic_connection_error(&quinn::ConnectionError::Reset),
+                ErrorCategory::Tcp
+            );
+        }
+
+        #[test]
+        fn classify_endpoint_build_errors_by_phase() {
+            assert_eq!(
+                classify_endpoint_build_error("TLS config error: bad CA bundle"),
+                ErrorCategory::Tls
+            );
+            assert_eq!(
+                classify_endpoint_build_error("QUIC TLS config error: no cipher"),
+                ErrorCategory::Tls
+            );
+            assert_eq!(
+                classify_endpoint_build_error("No host in URL"),
+                ErrorCategory::Config
+            );
+            assert_eq!(
+                classify_endpoint_build_error("QUIC endpoint creation failed: eperm"),
+                ErrorCategory::Other
+            );
+        }
+
+        #[tokio::test]
+        async fn h3_probe_bad_ca_bundle_is_tls_error() {
+            init_crypto();
+            let target: url::Url = "https://127.0.0.1:8443/health".parse().unwrap();
+            let a = run_http3_probe(
+                Uuid::new_v4(),
+                4,
+                &target,
+                3_000,
+                false,
+                Some("/nonexistent/ca.pem"),
+            )
+            .await;
+            assert!(!a.success);
+            assert_eq!(a.error.unwrap().category, ErrorCategory::Tls);
         }
 
         #[tokio::test]
@@ -750,6 +919,7 @@ mod real {
                 7,
                 Protocol::Http3,
                 Utc::now(),
+                ErrorCategory::Tls,
                 "test error",
             );
             assert!(!a.success);
@@ -758,7 +928,7 @@ mod real {
             assert_eq!(a.attempt_id, attempt_id);
             assert_eq!(a.sequence_num, 7);
             let err = a.error.unwrap();
-            assert_eq!(err.category, ErrorCategory::Http);
+            assert_eq!(err.category, ErrorCategory::Tls);
             assert_eq!(err.message, "test error");
             assert!(a.dns.is_none());
             assert!(a.tcp.is_none());
