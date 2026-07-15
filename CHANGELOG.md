@@ -11,6 +11,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.17] — 2026-07-15
+
+### Fixed
+- **Dashboard UI component audit** (frontend only, `dashboard/src/components/**`):
+  - `TesterDetailDrawer`: "Edit schedule" was a no-op (re-submitted the current
+    values) — replaced with a working inline auto-shutdown editor (enable
+    toggle + hour + Save). "Latest known" version now populates from the
+    existing `refresh-latest-version` endpoint instead of a hardcoded `—`, and
+    the "Update available" badge no longer fires when the installed version is
+    unknown. Escape now closes the drawer, and the confirm dialogs handle
+    their own Escape.
+  - `ProjectSwitcher`: in the collapsed sidebar the workspace button toggled
+    state but never rendered the menu — dead click. The dropdown now renders
+    in both layouts (fixed-width overlay in collapsed mode).
+  - `PhaseBreakdown`: keyless `<>` fragment as the direct child of a `.map()`
+    (React list-key violation) — now a keyed `<Fragment>`.
+  - `TestbedMatrix`: runner list showed "No runners available." while still
+    loading (loading flag was never set) — now starts in the loading state.
+  - `BoxWhiskerChart`: annotation printed the unit twice ("12.3ms ms") —
+    dropped the redundant suffix.
+  - `InfraDeployWizard`: focus is now actually trapped in the slide-over (the
+    comment claimed a trap that wasn't there), and upgrade mode ("Add stack")
+    can no longer navigate back to the Kind step and silently create a runner.
+  - `TesterRegionGroup`: runner rows were clickable `<li>`s — now real
+    buttons, keyboard-operable.
+  - Escape-to-close added to `CreateTlsProfileDialog` and `ShareDialog`;
+    `dialog` roles/labels added to `ShareDialog`, `CreateTlsProfileDialog`,
+    `PendingProjectsModal`, and the drawer confirm dialog.
+  - Zero-chrome consistency: removed drop shadows (Toast, ShareDialog,
+    ChangePasswordDialog, ApiLogPanel, ProjectSwitcher menu, PhaseBreakdown
+    tooltip); `SystemHealthPanel` migrated from the one-off `zinc-*` palette
+    to the standard `gray-*` tokens.
+  - Removed positive `tabIndex={1}` from the docs palette/help inputs;
+    conflicting `mt-auto`+`mt-3` in `HelpPanel`; missing `type="button"` on
+    wizard buttons that could sit inside forms; `aria-label` on the perf-log
+    close button.
+
+---
+
 ## [0.28.16] — 2026-07-15
 
 ### Fixed — dashboard UI (pages & flows audit)

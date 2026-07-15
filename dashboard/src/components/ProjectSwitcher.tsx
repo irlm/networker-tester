@@ -48,16 +48,59 @@ export function ProjectSwitcher({ collapsed, connectionDot }: ProjectSwitcherPro
     navigate(`/projects/${project.project_id}`);
   };
 
+  // Shared dropdown — rendered from both the collapsed and expanded layouts.
+  // In collapsed mode the sidebar rail is only w-14, so the menu gets a
+  // fixed width and overlays the content area instead of stretching to it.
+  const dropdown = open && (
+    <div
+      className={`absolute top-full mt-1 bg-[var(--bg-sidebar)] border border-gray-800 rounded z-50 max-h-64 overflow-y-auto ${
+        collapsed ? 'left-0 w-56' : 'left-0 right-0'
+      }`}
+    >
+      {projects.map(project => (
+        <button
+          key={project.project_id}
+          onClick={() => selectProject(project)}
+          className={`w-full text-left px-3 py-2 hover:bg-gray-800/50 transition-colors flex items-center justify-between ${
+            project.project_id === activeProjectId ? 'bg-gray-800/30' : ''
+          }`}
+        >
+          <div className="flex items-center gap-1 min-w-0">
+            <span className="text-sm text-gray-200 truncate">{project.name}</span>
+            <span className="text-[10px] text-gray-500 font-mono whitespace-nowrap">
+              {zoneLabel(project.project_id)}
+            </span>
+          </div>
+          <RoleBadge role={project.role} />
+        </button>
+      ))}
+      {projects.length === 0 && (
+        <div className="px-3 py-2 text-xs text-gray-600">No workspaces</div>
+      )}
+      {isPlatformAdmin && (
+        <button
+          onClick={() => { setOpen(false); navigate('/projects'); }}
+          className="w-full text-left px-3 py-2 border-t border-gray-800 text-xs text-cyan-400 hover:bg-gray-800/50 transition-colors"
+        >
+          Manage Workspaces
+        </button>
+      )}
+    </div>
+  );
+
   if (collapsed) {
     return (
-      <div className="flex justify-center">
+      <div ref={ref} className="relative flex justify-center">
         <button
           onClick={() => setOpen(!open)}
           className="text-green-400 text-lg font-bold"
           title={displayName}
+          aria-haspopup="listbox"
+          aria-expanded={open}
         >
           {activeProject?.name?.charAt(0)?.toUpperCase() || 'A'}
         </button>
+        {dropdown}
       </div>
     );
   }
@@ -76,38 +119,7 @@ export function ProjectSwitcher({ collapsed, connectionDot }: ProjectSwitcherPro
       </button>
       <p className="text-gray-600 text-xs mt-0.5">probe · network · full stack · application</p>
 
-      {open && (
-        <div className="absolute top-full left-0 right-0 mt-1 bg-[var(--bg-sidebar)] border border-gray-800 rounded shadow-lg z-50 max-h-64 overflow-y-auto">
-          {projects.map(project => (
-            <button
-              key={project.project_id}
-              onClick={() => selectProject(project)}
-              className={`w-full text-left px-3 py-2 hover:bg-gray-800/50 transition-colors flex items-center justify-between ${
-                project.project_id === activeProjectId ? 'bg-gray-800/30' : ''
-              }`}
-            >
-              <div className="flex items-center gap-1 min-w-0">
-                <span className="text-sm text-gray-200 truncate">{project.name}</span>
-                <span className="text-[10px] text-gray-500 font-mono whitespace-nowrap">
-                  {zoneLabel(project.project_id)}
-                </span>
-              </div>
-              <RoleBadge role={project.role} />
-            </button>
-          ))}
-          {projects.length === 0 && (
-            <div className="px-3 py-2 text-xs text-gray-600">No workspaces</div>
-          )}
-          {isPlatformAdmin && (
-            <button
-              onClick={() => { setOpen(false); navigate('/projects'); }}
-              className="w-full text-left px-3 py-2 border-t border-gray-800 text-xs text-cyan-400 hover:bg-gray-800/50 transition-colors"
-            >
-              Manage Workspaces
-            </button>
-          )}
-        </div>
-      )}
+      {dropdown}
     </div>
   );
 }

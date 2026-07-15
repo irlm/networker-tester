@@ -61,11 +61,16 @@ export function PendingProjectsModal({ projects: initialProjects, onComplete }: 
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="w-full max-w-md mx-4 bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg overflow-hidden">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="pending-projects-title"
+        className="w-full max-w-md mx-4 bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg overflow-hidden"
+      >
         {/* Header */}
         <div className="px-5 py-4 border-b border-[var(--border-default)] flex items-center justify-between">
           <div>
-            <h2 className="text-sm font-semibold text-gray-100 tracking-tight">
+            <h2 id="pending-projects-title" className="text-sm font-semibold text-gray-100 tracking-tight">
               Pending Project Invitations
             </h2>
             <p className="text-xs text-gray-500 mt-0.5">

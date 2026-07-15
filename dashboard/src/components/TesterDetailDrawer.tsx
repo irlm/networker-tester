@@ -16,6 +16,13 @@ interface TesterDetailDrawerProps {
 
 const GITHUB_RELEASES = 'https://github.com/irlm/networker-tester/releases';
 
+const HOURS = Array.from({ length: 24 }, (_, h) => h);
+
+/** Strip a leading `v` so `v0.28.16` and `0.28.16` compare equal. */
+function normalizeVersion(v: string): string {
+  return v.replace(/^v/, '');
+}
+
 function formatDate(value: string | null): string {
   if (!value) return '—';
   try {
@@ -61,6 +68,10 @@ export function TesterDetailDrawer({
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirmForceStop, setConfirmForceStop] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [latestVersion, setLatestVersion] = useState<string | null>(null);
+  const [editingSchedule, setEditingSchedule] = useState(false);
+  const [scheduleEnabled, setScheduleEnabled] = useState(false);
+  const [scheduleHour, setScheduleHour] = useState(23);
 
   const testerIds = useMemo(
     () => (tester ? [tester.tester_id] : []),
@@ -74,6 +85,7 @@ export function TesterDetailDrawer({
     let cancelled = false;
     setCostEstimate(null);
     setCostError(null);
+    setEditingSchedule(false);
     testersApi
       .getCostEstimate(projectId, tester.tester_id)
       .then((c) => {
@@ -83,10 +95,32 @@ export function TesterDetailDrawer({
         if (!cancelled)
           setCostError(e instanceof Error ? e.message : 'Cost unavailable');
       });
+    // Latest released version — served from the dashboard's server-side cache.
+    testersApi
+      .refreshLatestVersion(projectId)
+      .then((r) => {
+        if (!cancelled) setLatestVersion(r.latest_version ?? null);
+      })
+      .catch(() => {
+        // Non-fatal — leave "Latest known" as an em dash.
+      });
     return () => {
       cancelled = true;
     };
   }, [projectId, tester]);
+
+  // Escape closes the drawer — unless a confirm dialog is open (it handles
+  // its own Escape) or an action is in flight.
+  useEffect(() => {
+    if (!tester) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (confirmForceStop || confirmDelete) return;
+      onClose();
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [tester, confirmForceStop, confirmDelete, onClose]);
 
   const run = useCallback(
     async (fn: () => Promise<unknown>) => {
@@ -114,12 +148,11 @@ export function TesterDetailDrawer({
     (queueState?.queued?.length ?? 0) > 0;
 
   const installerVersion = tester.installer_version ?? '—';
-  // TODO: backend exposes latest_version via refresh endpoint; fetch and
-  // surface on the tester row in a follow-up (Task 13 puts it on server-side
-  // cache but the row doesn't carry it yet).
-  const latestVersion: string | null = null;
   const updateAvailable = Boolean(
-    latestVersion && installerVersion !== latestVersion,
+    latestVersion &&
+      tester.installer_version &&
+      normalizeVersion(tester.installer_version) !==
+        normalizeVersion(latestVersion),
   );
 
   return (
@@ -373,23 +406,76 @@ export function TesterDetailDrawer({
                 </>
               )}
             </dl>
+            {editingSchedule && (
+              <div className="border border-gray-800 rounded p-3 mb-3 flex flex-wrap items-center gap-3">
+                <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={scheduleEnabled}
+                    onChange={(e) => setScheduleEnabled(e.target.checked)}
+                    className="accent-cyan-500"
+                  />
+                  Auto-shutdown
+                </label>
+                <label className="flex items-center gap-2 text-xs text-gray-400">
+                  at
+                  <select
+                    value={scheduleHour}
+                    disabled={!scheduleEnabled}
+                    onChange={(e) => setScheduleHour(Number(e.target.value))}
+                    className="bg-[var(--bg-base)] border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono focus:outline-none focus:border-cyan-500 disabled:opacity-50"
+                    aria-label="Local shutdown hour"
+                  >
+                    {HOURS.map((h) => (
+                      <option key={h} value={h}>
+                        {String(h).padStart(2, '0')}:00
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="flex gap-2 ml-auto">
+                  <button
+                    type="button"
+                    disabled={isBusy}
+                    onClick={() => setEditingSchedule(false)}
+                    className="px-3 py-1 text-xs text-gray-400 hover:text-gray-200 disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isBusy}
+                    onClick={() => {
+                      setEditingSchedule(false);
+                      run(() =>
+                        testersApi.updateSchedule(projectId, tester.tester_id, {
+                          auto_shutdown_enabled: scheduleEnabled,
+                          auto_shutdown_local_hour: scheduleHour,
+                        }),
+                      );
+                    }}
+                    className="px-3 py-1 text-xs rounded bg-cyan-600 hover:bg-cyan-500 text-white disabled:opacity-50"
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+            )}
             <div className="flex flex-wrap gap-2">
-              {/* TODO: inline schedule editor modal. */}
-              <button
-                type="button"
-                disabled={isBusy}
-                className="px-3 py-1 text-xs rounded border border-gray-700 text-gray-400 hover:border-cyan-500 hover:text-cyan-400 disabled:opacity-50"
-                onClick={() =>
-                  run(() =>
-                    testersApi.updateSchedule(projectId, tester.tester_id, {
-                      auto_shutdown_enabled: tester.auto_shutdown_enabled,
-                      auto_shutdown_local_hour: tester.auto_shutdown_local_hour,
-                    }),
-                  )
-                }
-              >
-                Edit schedule
-              </button>
+              {!editingSchedule && (
+                <button
+                  type="button"
+                  disabled={isBusy}
+                  className="px-3 py-1 text-xs rounded border border-gray-700 text-gray-400 hover:border-cyan-500 hover:text-cyan-400 disabled:opacity-50"
+                  onClick={() => {
+                    setScheduleEnabled(tester.auto_shutdown_enabled);
+                    setScheduleHour(tester.auto_shutdown_local_hour);
+                    setEditingSchedule(true);
+                  }}
+                >
+                  Edit schedule
+                </button>
+              )}
               <button
                 type="button"
                 disabled={isBusy}
@@ -588,15 +674,27 @@ function ConfirmDialog({
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onCancel();
+      }
+    };
+    document.addEventListener('keydown', handler, true);
+    return () => document.removeEventListener('keydown', handler, true);
+  }, [onCancel]);
+
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center">
       <div className="absolute inset-0 bg-black/60" onClick={onCancel} aria-hidden="true" />
       <div
         role="alertdialog"
         aria-modal="true"
+        aria-labelledby="confirm-dialog-title"
         className="relative bg-[var(--bg-base)] border border-gray-800 rounded p-5 w-[360px] max-w-[90vw]"
       >
-        <h4 className="text-sm font-bold text-gray-100 mb-2">{title}</h4>
+        <h4 id="confirm-dialog-title" className="text-sm font-bold text-gray-100 mb-2">{title}</h4>
         <p className="text-xs text-gray-400 mb-4">{message}</p>
         <div className="flex justify-end gap-2">
           <button

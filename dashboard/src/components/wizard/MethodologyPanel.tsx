@@ -70,6 +70,7 @@ export function MethodologyPanel({
             {METHODOLOGY_PRESETS.map(p => (
               <button
                 key={p.id}
+                type="button"
                 onClick={() => applyPreset(p.id)}
                 className={`text-left border p-4 transition-colors ${
                   methodPreset === p.id
@@ -89,6 +90,7 @@ export function MethodologyPanel({
 
           {/* Advanced toggle */}
           <button
+            type="button"
             onClick={() => setShowAdvanced(!showAdvanced)}
             className="text-xs text-gray-400 hover:text-gray-200 transition-colors mb-4"
           >

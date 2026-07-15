@@ -64,17 +64,17 @@ export default function SystemHealthPanel() {
 
   if (loading) {
     return (
-      <div className="border border-zinc-700/50 rounded-lg p-4">
-        <h3 className="text-sm font-medium text-zinc-400 mb-3">System Health</h3>
-        <p className="text-xs text-zinc-500">Loading...</p>
+      <div className="border border-gray-700/50 rounded p-4">
+        <h3 className="text-sm font-medium text-gray-400 mb-3">System Health</h3>
+        <p className="text-xs text-gray-500">Loading...</p>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="border border-red-800/50 rounded-lg p-4">
-        <h3 className="text-sm font-medium text-zinc-400 mb-3">System Health</h3>
+      <div className="border border-red-800/50 rounded p-4">
+        <h3 className="text-sm font-medium text-gray-400 mb-3">System Health</h3>
         <p className="text-xs text-red-400">{error}</p>
       </div>
     );
@@ -87,9 +87,9 @@ export default function SystemHealthPanel() {
       : "green";
 
   return (
-    <div className="border border-zinc-700/50 rounded-lg p-4">
+    <div className="border border-gray-700/50 rounded p-4">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-sm font-medium text-zinc-400">System Health</h3>
+        <h3 className="text-sm font-medium text-gray-400">System Health</h3>
         <div className="flex items-center gap-1.5">
           <span
             className={`inline-block w-2 h-2 rounded-full ${STATUS_DOT[overallStatus]}`}
@@ -121,18 +121,18 @@ export default function SystemHealthPanel() {
           >
             <div className="flex items-center gap-1.5">
               <span
-                className={`inline-block w-1.5 h-1.5 rounded-full ${STATUS_DOT[check.status] ?? "bg-zinc-500"}`}
+                className={`inline-block w-1.5 h-1.5 rounded-full ${STATUS_DOT[check.status] ?? "bg-gray-500"}`}
               />
-              <span className="text-zinc-300">
+              <span className="text-gray-300">
                 {CHECK_LABELS[check.check_name] ?? check.check_name}
               </span>
             </div>
             <div className="flex items-center gap-2">
               {check.value && (
-                <span className="text-zinc-400 font-mono">{check.value}</span>
+                <span className="text-gray-400 font-mono">{check.value}</span>
               )}
               {check.message && (
-                <span className="text-zinc-500 truncate max-w-48" title={check.message}>
+                <span className="text-gray-500 truncate max-w-48" title={check.message}>
                   {check.message}
                 </span>
               )}
@@ -142,7 +142,7 @@ export default function SystemHealthPanel() {
       </div>
 
       {health?.checks[0] && (
-        <p className="text-[10px] text-zinc-600 mt-2">
+        <p className="text-[10px] text-gray-600 mt-2">
           Last checked:{" "}
           {new Date(health.checks[0].checked_at).toLocaleString()}
         </p>

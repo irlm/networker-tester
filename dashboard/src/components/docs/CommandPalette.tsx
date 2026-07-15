@@ -202,7 +202,6 @@ export default function CommandPalette() {
           )}
           <input
             ref={inputRef}
-            tabIndex={1}
             type="text"
             value={query}
             onChange={(e) => { setQuery(e.target.value); setSelectedIndex(0); setDetailEntry(null); }}
