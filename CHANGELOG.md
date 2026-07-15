@@ -11,6 +11,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.15] — 2026-07-15
+
+### Added
+- **Complete Rust→C# control-plane port — the dual-stack baseline.** This
+  release is a snapshot of the tree with BOTH stacks present: the Rust crates
+  still build and ship, and the C# solution (`Networker.sln`) now reaches full
+  parity with the Rust dashboard / agent / endpoint. It is the reference point
+  captured before the Rust CI workflows are stripped to speed the Windows build
+  (tracked separately). No runtime behavior change — the C# port is a faithful
+  rewrite matching the Rust wire shapes and semantics.
+  - Ported the final REST modules (leaderboard, system-health, logs, perf-log,
+    update, bench-tokens, url-tests, tls-profiles, inventory, tester-precheck)
+    and `GET /api/version` — the last unported route (the frontend's "Latest
+    version" toast + tester-upgrade badge).
+  - Added the C# Notifications (ACS email), Provisioning (regression analyzer,
+    VM-lifecycle recorder, tester state/dispatch/recovery/install, cloud-init),
+    Background (version-refresh cache) layers; a full raw-WebSocket Agent
+    rewrite; and a new `Networker.Endpoint` ASP.NET port of the diagnostic
+    server.
+  - A re-audit of all 41 Rust `api/` modules + 13 `services/` confirmed no
+    remaining gaps. **556 C# tests green.**
+
+---
+
 ## [0.28.14] — 2026-07-14
 
 ### Added
