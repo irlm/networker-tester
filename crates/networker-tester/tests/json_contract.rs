@@ -35,6 +35,7 @@ fn sample_run() -> TestRun {
             duration_ms: 3.5,
             started_at: now,
             success: true,
+            resolver: Some("system (192.168.1.1:53)".into()),
         }),
         tcp: Some(TcpResult {
             local_addr: Some("10.0.0.2:51000".into()),
@@ -196,6 +197,32 @@ fn json_output_carries_all_phase_timings() {
         .and_then(|n| n.as_f64())
         .expect("http.total_duration_ms must be present");
     assert!(total_ms >= ttfb_ms);
+}
+
+/// v0.28.19 additive extension (trust audit V1): `dns.resolver` records which
+/// resolver produced the DNS timing. The field is optional and serde-defaulted:
+/// it is omitted when unknown and pre-0.28.19 JSON (without it) must still
+/// deserialize. schema_version stays 1.0 — the change is purely additive.
+#[test]
+fn dns_resolver_field_is_additive_and_optional() {
+    let run = sample_run();
+    let mut v = serde_json::to_value(&run).expect("serialize");
+
+    // Present when populated.
+    assert_eq!(
+        v.pointer("/attempts/0/dns/resolver")
+            .and_then(|s| s.as_str()),
+        Some("system (192.168.1.1:53)"),
+        "resolver identity must serialize when known"
+    );
+
+    // Absent field (pre-0.28.19 producer) must still deserialize.
+    v.pointer_mut("/attempts/0/dns")
+        .and_then(|d| d.as_object_mut())
+        .unwrap()
+        .remove("resolver");
+    let back: TestRun = serde_json::from_value(v).expect("deserialize without dns.resolver");
+    assert_eq!(back.attempts[0].dns.as_ref().unwrap().resolver, None);
 }
 
 /// A run serialized without `schema_version` (a pre-contract producer) must

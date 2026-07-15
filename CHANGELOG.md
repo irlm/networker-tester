@@ -11,6 +11,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.19] — 2026-07-15
+
+### Fixed — probe-engine trust audit, 5 P0 measurement defects
+
+These fixes change reported numbers. Full audit (incl. the P1/P2 backlog):
+`docs/analysis/tester-trust-audit.md`.
+
+- **V1 — DNS probes now use the system resolver, not hardcoded Google DNS
+  (8.8.8.8).** DNS timings now measure the path your applications actually
+  take; the resolver identity is recorded in a new optional `dns.resolver`
+  JSON field (additive, schema_version stays 1.0). Falls back to Google only
+  when the system config is unreadable — and labels the result as a fallback.
+- **V2 — UDP jitter is now real jitter.** It was computed on *sorted* RTTs
+  (collapsing to a range statistic); it is now the RFC 3550-style mean
+  absolute difference of consecutive RTTs in arrival order. Reported
+  `jitter_ms` values will rise on variable paths — they were systematically
+  underestimated before.
+- **V3 — UDP upload loss is now derived from the server's CMD_REPORT byte
+  count instead of being fabricated as 0%.** Real network loss now shows up
+  in udpupload results; throughput uses server-acknowledged bytes as the
+  numerator. `datagrams_received` is now omitted (unknown) for uploads rather
+  than faked as `sent`; a missing CMD_REPORT is an explicit error, not 0%
+  loss.
+- **V4 — UDP upload throughput no longer includes the CMD_REPORT wait.** The
+  transfer window ends when CMD_DONE is sent; a lost/late report previously
+  collapsed reported throughput by orders of magnitude. udpupload MB/s
+  figures rise to their true value.
+- **V5 — TLS handshake times drop.** Trust-store construction (webpki roots +
+  OS keychain/native certs + CA-bundle file I/O) ran inside the handshake
+  stopwatch on every attempt across the rustls, native-TLS, and standalone
+  TLS probe paths. It is now built once per process and excluded from all
+  timing windows — LAN/loopback TLS times were previously dominated by local
+  disk/keychain reads. Also corrects `tls_overhead_ratio` (pageload) and
+  `goodput_mbps` (throughput modes).
+
+### Added
+- Two-sided timing-accuracy assertions in the integration suite (`/delay`
+  TTFB upper bounds, loopback TLS handshake bound, UDP upload loss/window
+  accuracy) plus arrival-order jitter unit tests — each P0 above now has a
+  regression test that fails on the old behavior.
+
+---
+
 ## [0.28.18] — 2026-07-15
 
 ### Fixed

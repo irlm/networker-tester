@@ -165,9 +165,8 @@ pub async fn run_tls_probe(
     debug!("TLS probe: TCP connected to {addr} in {tcp_duration_ms:.1}ms");
 
     // ── 3. TLS handshake ──────────────────────────────────────────────────────
-    let tls_started_at = Utc::now();
-    let t_tls = Instant::now();
-
+    // Config (trust store, ALPN) is built BEFORE the handshake timer starts
+    // (trust audit V5).
     let tls_config = match build_tls_config_for_probe(cfg.insecure, cfg.ca_bundle.as_deref()) {
         Ok(c) => c,
         Err(e) => {
@@ -202,6 +201,10 @@ pub async fn run_tls_probe(
             );
         }
     };
+
+    // Timer starts here: the timed region is exactly the TLS handshake.
+    let tls_started_at = Utc::now();
+    let t_tls = Instant::now();
 
     let tls_stream = match tokio::time::timeout(
         std::time::Duration::from_millis(cfg.timeout_ms),
@@ -698,6 +701,25 @@ fn build_tls_config_for_probe(
     )
 }
 
+/// Base trust store: webpki roots + OS native certs, built once per process.
+///
+/// `load_native_certs()` reads the OS keychain/cert directory (one-digit to
+/// tens of ms) and must never execute inside a handshake timing window — it
+/// previously ran per attempt inside the TLS stopwatch (trust audit V5).
+/// Callers clone the store (cheap) and append any per-run CA bundle.
+pub(crate) fn base_root_store() -> &'static rustls::RootCertStore {
+    static STORE: std::sync::OnceLock<rustls::RootCertStore> = std::sync::OnceLock::new();
+    STORE.get_or_init(|| {
+        let mut root_store = rustls::RootCertStore::empty();
+        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let native = rustls_native_certs::load_native_certs();
+        for cert in native.certs {
+            let _ = root_store.add(cert);
+        }
+        root_store
+    })
+}
+
 fn build_tls_config_for_probe_with_alpn(
     insecure: bool,
     ca_bundle: Option<&str>,
@@ -709,12 +731,7 @@ fn build_tls_config_for_probe_with_alpn(
             .with_custom_certificate_verifier(Arc::new(NoVerifier))
             .with_no_client_auth()
     } else {
-        let mut root_store = rustls::RootCertStore::empty();
-        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        let native = rustls_native_certs::load_native_certs();
-        for cert in native.certs {
-            let _ = root_store.add(cert);
-        }
+        let mut root_store = base_root_store().clone();
         if let Some(bundle_path) = ca_bundle {
             load_ca_bundle(&mut root_store, bundle_path)?;
         }

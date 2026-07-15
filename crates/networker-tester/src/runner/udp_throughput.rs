@@ -16,7 +16,11 @@
 /// 3. Client → Server: data packets
 /// 4. Client → Server: CMD_DONE
 /// 5. Server → Client: CMD_REPORT (value = bytes received)
-/// 6. Client computes throughput from first-data to CMD_REPORT (or timeout)
+/// 6. Client computes throughput over the send window (first data packet to
+///    CMD_DONE sent) using the server-acknowledged byte count from CMD_REPORT
+///    as the numerator. The CMD_REPORT round-trip is deliberately excluded
+///    from the transfer window, and loss is derived from the server's byte
+///    count — never assumed. (Trust audit V3/V4.)
 use crate::metrics::{ErrorCategory, ErrorRecord, Protocol, RequestAttempt, UdpThroughputResult};
 use chrono::Utc;
 use std::collections::HashSet;
@@ -120,7 +124,7 @@ pub async fn run_udpdownload_probe(
         remote_addr: remote_addr.to_string(),
         payload_bytes,
         datagrams_sent,
-        datagrams_received,
+        datagrams_received: Some(datagrams_received),
         bytes_acked: None,
         loss_percent: loss,
         transfer_ms,
@@ -200,20 +204,48 @@ pub async fn run_udpupload_probe(
         );
     }
 
-    // Send data packets and CMD_DONE; measure transfer window.
+    // Send data packets and CMD_DONE; the transfer window ends when CMD_DONE
+    // is sent — the CMD_REPORT wait must not inflate the denominator (V4).
     let (datagrams_sent, transfer_ms, bytes_acked) =
         send_upload(&sock, payload_bytes, cfg.timeout_ms).await;
 
-    let total_seqs = payload_bytes.div_ceil(CHUNK_SIZE) as u32;
-    let loss = loss_percent(total_seqs, datagrams_sent);
-    let throughput_mbps = mbps(payload_bytes, transfer_ms);
+    // The server's CMD_REPORT byte count is the only honest source of truth
+    // for upload loss — the client cannot observe what arrived. If the report
+    // never came back the outcome is unknown: report an error rather than
+    // fabricating a 0% loss figure (V3).
+    let acked = match bytes_acked {
+        Some(a) => a,
+        None => {
+            return udp_tp_failed(
+                run_id,
+                attempt_id,
+                sequence_num,
+                Protocol::UdpUpload,
+                started_at,
+                format!(
+                    "No CMD_REPORT from server within {}ms — bytes received by \
+                     the server are unknown, loss cannot be determined",
+                    cfg.timeout_ms
+                ),
+            );
+        }
+    };
+
+    let loss = if payload_bytes > 0 {
+        payload_bytes.saturating_sub(acked) as f64 / payload_bytes as f64 * 100.0
+    } else {
+        0.0
+    };
+    // Throughput numerator = bytes the server actually received.
+    let throughput_mbps = mbps(acked, transfer_ms);
 
     let result = UdpThroughputResult {
         remote_addr: remote_addr.to_string(),
         payload_bytes,
         datagrams_sent,
-        datagrams_received: datagrams_sent,
-        bytes_acked,
+        // Unknown for uploads: CMD_REPORT carries bytes, not datagram counts.
+        datagrams_received: None,
+        bytes_acked: Some(acked),
         loss_percent: loss,
         transfer_ms,
         throughput_mbps,
@@ -227,7 +259,7 @@ pub async fn run_udpupload_probe(
         sequence_num,
         started_at,
         finished_at: Some(Utc::now()),
-        success: datagrams_sent > 0,
+        success: payload_bytes == 0 || acked > 0,
         dns: None,
         tcp: None,
         tls: None,
@@ -393,9 +425,13 @@ async fn send_upload(
     let done = make_ctrl(CMD_DONE, payload_bytes as u32);
     let _ = sock.send(&done).await;
 
-    // Wait for CMD_REPORT from server.
-    let bytes_acked = wait_for_report(sock, timeout_ms).await;
+    // The transfer window ends here: everything after CMD_DONE is a control
+    // round-trip, not data transfer. A lost/late CMD_REPORT previously turned
+    // a 50 ms transfer into timeout_ms + 50 ms (trust audit V4).
     let transfer_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+    // Wait for CMD_REPORT from server (used only for the acked byte count).
+    let bytes_acked = wait_for_report(sock, timeout_ms).await;
 
     (sent, transfer_ms, bytes_acked)
 }
@@ -596,8 +632,135 @@ mod tests {
         assert!(attempt.success, "probe failed: {:?}", attempt.error);
         let ut = attempt.udp_throughput.unwrap();
         assert_eq!(ut.payload_bytes, 4096);
-        assert!(ut.datagrams_received > 0);
+        assert!(ut.datagrams_received.unwrap_or(0) > 0);
         assert!(ut.throughput_mbps.is_some());
+    }
+
+    /// Regression test for trust-audit V3: upload loss must come from the
+    /// server's CMD_REPORT, not be fabricated as `received = sent`. The stub
+    /// under-reports by half — the probe must report ~50% loss and use the
+    /// acked bytes as throughput numerator.
+    #[tokio::test]
+    async fn udpupload_loss_derived_from_cmd_report() {
+        let server_sock = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let port = server_sock.local_addr().unwrap().port();
+        let server = std::sync::Arc::new(server_sock);
+        tokio::spawn(lossy_upload_stub(server, 0.5, 0));
+
+        let cfg = UdpThroughputConfig {
+            target_host: "127.0.0.1".to_string(),
+            target_port: port,
+            timeout_ms: 5000,
+        };
+
+        let payload = 14_000usize; // 10 datagrams
+        let attempt = run_udpupload_probe(Uuid::new_v4(), 0, payload, &cfg).await;
+        assert!(attempt.success, "probe failed: {:?}", attempt.error);
+        let ut = attempt.udp_throughput.unwrap();
+        assert_eq!(ut.bytes_acked, Some(payload / 2));
+        assert!(
+            (ut.loss_percent - 50.0).abs() < 1e-9,
+            "loss must be derived from CMD_REPORT (expected 50%), got {}%",
+            ut.loss_percent
+        );
+        assert_eq!(
+            ut.datagrams_received, None,
+            "upload datagram count is unknowable and must not be fabricated"
+        );
+    }
+
+    /// Regression test for trust-audit V4: the transfer window ends at
+    /// CMD_DONE. A CMD_REPORT delayed by 400 ms must not inflate transfer_ms
+    /// (a loopback 14 KB send takes single-digit milliseconds).
+    #[tokio::test]
+    async fn udpupload_transfer_window_excludes_report_wait() {
+        let server_sock = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let port = server_sock.local_addr().unwrap().port();
+        let server = std::sync::Arc::new(server_sock);
+        tokio::spawn(lossy_upload_stub(server, 1.0, 400));
+
+        let cfg = UdpThroughputConfig {
+            target_host: "127.0.0.1".to_string(),
+            target_port: port,
+            timeout_ms: 5000,
+        };
+
+        let attempt = run_udpupload_probe(Uuid::new_v4(), 0, 14_000, &cfg).await;
+        assert!(attempt.success, "probe failed: {:?}", attempt.error);
+        let ut = attempt.udp_throughput.unwrap();
+        assert!(
+            ut.transfer_ms < 300.0,
+            "transfer window must exclude the 400ms-delayed CMD_REPORT wait, got {}ms",
+            ut.transfer_ms
+        );
+    }
+
+    /// Regression test for trust-audit V3: when CMD_REPORT never arrives the
+    /// client cannot know the loss — the attempt must fail with an explicit
+    /// error instead of reporting fabricated numbers.
+    #[tokio::test]
+    async fn udpupload_missing_report_is_an_error_not_zero_loss() {
+        let server_sock = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let port = server_sock.local_addr().unwrap().port();
+        let server = std::sync::Arc::new(server_sock);
+        // ack_fraction < 0 → stub never sends CMD_REPORT
+        tokio::spawn(lossy_upload_stub(server, -1.0, 0));
+
+        let cfg = UdpThroughputConfig {
+            target_host: "127.0.0.1".to_string(),
+            target_port: port,
+            timeout_ms: 500, // short: this test waits out the report timeout
+        };
+
+        let attempt = run_udpupload_probe(Uuid::new_v4(), 0, 14_000, &cfg).await;
+        assert!(!attempt.success, "missing CMD_REPORT must fail the attempt");
+        assert!(attempt.udp_throughput.is_none());
+        let err = attempt.error.expect("error must be set");
+        assert!(
+            err.message.contains("CMD_REPORT"),
+            "error should explain the missing report, got: {}",
+            err.message
+        );
+    }
+
+    /// Upload stub: ACKs, absorbs data packets, then on CMD_DONE reports
+    /// `payload * ack_fraction` bytes after `report_delay_ms` (no report at
+    /// all when `ack_fraction < 0`).
+    async fn lossy_upload_stub(
+        sock: std::sync::Arc<UdpSocket>,
+        ack_fraction: f64,
+        report_delay_ms: u64,
+    ) {
+        let mut buf = vec![0u8; 65536];
+        let mut received_bytes = 0usize;
+        for _ in 0..500 {
+            let (n, src) = match sock.recv_from(&mut buf).await {
+                Ok(r) => r,
+                Err(_) => break,
+            };
+            let pkt = &buf[..n];
+            if n == CTRL_LEN && pkt[..4] == *MAGIC {
+                match pkt[4] {
+                    CMD_UPLOAD => {
+                        received_bytes = 0;
+                        let _ = sock.send_to(&make_ctrl(CMD_ACK, 0), src).await;
+                    }
+                    CMD_DONE => {
+                        if ack_fraction < 0.0 {
+                            continue; // simulate a lost CMD_REPORT
+                        }
+                        if report_delay_ms > 0 {
+                            tokio::time::sleep(Duration::from_millis(report_delay_ms)).await;
+                        }
+                        let acked = (received_bytes as f64 * ack_fraction) as u32;
+                        let _ = sock.send_to(&make_ctrl(CMD_REPORT, acked), src).await;
+                    }
+                    _ => {}
+                }
+            } else if n > DATA_HDR_LEN {
+                received_bytes += n - DATA_HDR_LEN;
+            }
+        }
     }
 
     /// Stub server implementing the minimal download + upload protocol.

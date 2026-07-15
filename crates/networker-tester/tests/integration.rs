@@ -408,11 +408,25 @@ async fn http1_delay_endpoint_respected() {
 
     assert!(attempt.success);
     let http = attempt.http.unwrap();
-    // Server delays 100ms, so TTFB should be ≥ 100ms
+    // Two-sided timing-accuracy bound (trust audit T1): the server delays
+    // 100 ms, so TTFB must be ≥ ~100 ms AND must not be grossly inflated by
+    // self-measurement overhead. The +400 ms upper slack absorbs CI jitter
+    // while still catching systematic inflation (e.g. setup work timed as
+    // network time, as in audit finding V5).
     assert!(
         http.ttfb_ms >= 90.0, // slight tolerance for CI
         "TTFB was {:.1}ms, expected ≥100ms",
         http.ttfb_ms
+    );
+    assert!(
+        http.ttfb_ms <= 500.0,
+        "TTFB was {:.1}ms for a 100ms delay — measurement is inflated",
+        http.ttfb_ms
+    );
+    assert!(
+        http.total_duration_ms <= 600.0,
+        "total was {:.1}ms for a 100ms delay on loopback — measurement is inflated",
+        http.total_duration_ms
     );
 }
 
@@ -697,7 +711,10 @@ async fn udpdownload_probe_reports_throughput() {
         .udp_throughput
         .expect("udp_throughput result missing");
     assert_eq!(ut.payload_bytes, 65_536);
-    assert!(ut.datagrams_received > 0, "should have received datagrams");
+    assert!(
+        ut.datagrams_received.unwrap_or(0) > 0,
+        "should have received datagrams"
+    );
     assert!(
         ut.throughput_mbps.unwrap_or(0.0) > 0.0,
         "throughput should be positive"
@@ -735,9 +752,31 @@ async fn udpupload_probe_reports_throughput() {
         Some(65_536),
         "server should have acknowledged all bytes"
     );
+    // Loss accuracy (trust audit V3): a clean loopback run must report ~0%
+    // loss, and that figure must be DERIVED from the server's CMD_REPORT byte
+    // count — not assumed. With bytes_acked == payload_bytes the derived loss
+    // is exactly 0.
+    assert_eq!(
+        ut.loss_percent, 0.0,
+        "loopback upload should report 0% loss (derived from CMD_REPORT)"
+    );
+    // The client cannot know the received datagram count for uploads — it
+    // must be reported as unknown, never fabricated as `sent` (audit V3).
+    assert_eq!(
+        ut.datagrams_received, None,
+        "upload datagrams_received must be unknown, not fabricated"
+    );
     assert!(
         ut.throughput_mbps.unwrap_or(0.0) > 0.0,
         "throughput should be positive"
+    );
+    // Transfer-window accuracy (trust audit V4): 64 KiB on loopback takes
+    // milliseconds; the window must not include the CMD_REPORT round-trip
+    // wait (timeout_ms is 10s here — any report stall would blow this bound).
+    assert!(
+        ut.transfer_ms < 2_000.0,
+        "transfer window {}ms is inflated — does it include the CMD_REPORT wait?",
+        ut.transfer_ms
     );
 }
 
@@ -763,6 +802,13 @@ async fn dns_probe_resolves_localhost() {
         "should have resolved at least one IP"
     );
     assert!(dns.duration_ms >= 0.0);
+    // Trust audit V1: the resolver identity must be recorded so the report
+    // states which resolver produced the timing (system vs labeled fallback).
+    let resolver = dns.resolver.expect("resolver identity must be recorded");
+    assert!(
+        resolver.starts_with("system") || resolver.contains("fallback"),
+        "resolver must be the system resolver or a labeled fallback, got: {resolver}"
+    );
 
     // Standalone DNS probe — no TCP/TLS/HTTP phases
     assert!(
@@ -828,6 +874,79 @@ async fn tls_probe_captures_cert_chain() {
     assert!(
         attempt.http.is_none(),
         "TLS probe should not send an HTTP request"
+    );
+}
+
+/// Timing-accuracy regression test for trust-audit V5: TLS handshake time on
+/// loopback must be well under a sane bound. Runs the standalone TLS probe
+/// with `insecure: false` and a CA bundle so the FULL trust-store path
+/// (webpki roots + OS native certs + bundle file I/O) is exercised — that
+/// setup work used to run inside the handshake stopwatch and inflated
+/// reported TLS times by the cost of an OS keychain/disk read per attempt.
+#[tokio::test]
+async fn tls_handshake_time_excludes_trust_store_construction() {
+    init_crypto();
+
+    // Self-signed end-entity cert for 127.0.0.1; used both as the server cert
+    // and as the client's trust anchor (rustls accepts a self-signed leaf in
+    // the root store, but rejects CA-flagged certs presented as end-entity).
+    let key_pair = rcgen::KeyPair::generate().expect("keypair");
+    let params = rcgen::CertificateParams::new(vec!["127.0.0.1".to_string()]).expect("cert params");
+    let cert = params.self_signed(&key_pair).expect("self-signed cert");
+
+    // Write the cert PEM to a temp CA bundle for the client trust store.
+    let mut bundle = tempfile::NamedTempFile::new().expect("temp file");
+    std::io::Write::write_all(&mut bundle, cert.pem().as_bytes()).expect("write pem");
+
+    // Minimal in-test TLS server: accept connections, complete the handshake.
+    let cert_der = rustls::pki_types::CertificateDer::from(cert.der().to_vec());
+    let key_der = rustls::pki_types::PrivateKeyDer::try_from(key_pair.serialize_der())
+        .expect("private key der");
+    let server_config = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert_der], key_der)
+        .expect("server config");
+    let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(server_config));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            let acceptor = acceptor.clone();
+            tokio::spawn(async move {
+                if let Ok(mut tls) = acceptor.accept(stream).await {
+                    // Drain until the client closes so close_notify is clean.
+                    let mut buf = [0u8; 256];
+                    let _ = tokio::io::AsyncReadExt::read(&mut tls, &mut buf).await;
+                }
+            });
+        }
+    });
+
+    let cfg = RunConfig {
+        dns_enabled: false,
+        timeout_ms: 5_000,
+        insecure: false,
+        ca_bundle: Some(bundle.path().to_string_lossy().into_owned()),
+        ..Default::default()
+    };
+    let url = url::Url::parse(&format!("https://127.0.0.1:{port}/")).unwrap();
+
+    // Warm-up attempt: populates the process-wide trust-store cache so the
+    // measured attempt reflects steady-state behavior.
+    let _ = run_tls_probe(Uuid::new_v4(), 0, &url, &cfg).await;
+
+    let attempt = run_tls_probe(Uuid::new_v4(), 1, &url, &cfg).await;
+    assert!(attempt.success, "TLS probe failed: {:?}", attempt.error);
+    let tls = attempt.tls.expect("tls result missing");
+    assert!(
+        tls.handshake_duration_ms > 0.0,
+        "handshake time must be positive"
+    );
+    assert!(
+        tls.handshake_duration_ms < 100.0,
+        "loopback TLS handshake took {:.1}ms — trust-store construction is \
+         leaking into the handshake timing window (audit V5)",
+        tls.handshake_duration_ms
     );
 }
 

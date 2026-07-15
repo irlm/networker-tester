@@ -147,6 +147,7 @@ pub async fn run_curl_probe(
             duration_ms: parsed.dns_ms,
             started_at,
             success: true,
+            resolver: None, // curl resolves internally; identity not observable
         })
     } else {
         None
