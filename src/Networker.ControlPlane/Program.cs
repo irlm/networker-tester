@@ -194,6 +194,11 @@ app.MapUrlTestsEndpoints();
 app.MapTlsProfilesEndpoints();
 app.MapInventoryEndpoints();
 app.MapTesterPrecheckEndpoints();
+// GET /api/version — the frontend's "Latest version" toast + tester-upgrade
+// badge. Reads the LatestVersionCache (VersionRefreshService) and probes
+// completed-deployment endpoints; authenticated, no project scope (Rust
+// version.rs, merged into protected_flat).
+app.MapVersionEndpoints();
 
 // POST /auth/login + GET /auth/profile — same response shapes the Rust
 // dashboard serves. The policies (GlobalAdmin/Operator/Viewer, ProjectMember/
