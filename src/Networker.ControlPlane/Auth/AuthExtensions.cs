@@ -73,6 +73,12 @@ public static class AuthExtensions
                 // Keep sub/email/role claim names verbatim (no legacy remapping),
                 // so AuthUser.FromPrincipal reads the same names Rust emits.
                 options.MapInboundClaims = false;
+                // Use the legacy JwtSecurityTokenHandler pipeline. .NET's default
+                // JsonWebTokenHandler mishandles our raw-HMAC SignatureValidator
+                // (which returns a JwtSecurityToken); the legacy handler is what
+                // JwtTokenService.Validate uses too, so both paths agree — and it's
+                // required for our short-key (Rust jsonwebtoken) interop.
+                options.UseSecurityTokenValidators = true;
                 // WebSocket upgrades (SignalR /ws/* hubs) can't send an
                 // Authorization header, so the client passes the JWT as
                 // ?access_token=<jwt>. Lift it from the query for /ws paths.
