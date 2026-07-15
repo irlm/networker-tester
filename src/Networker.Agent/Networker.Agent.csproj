@@ -6,16 +6,24 @@
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <RootNamespace>Networker.Agent</RootNamespace>
+    <AssemblyName>networker-agent</AssemblyName>
     <UserSecretsId>networker-agent-hybrid</UserSecretsId>
+    <Version>0.28.13</Version>
+
+    <!-- Self-contained single-file publish so this can drop in as the
+         networker-agent binary on tester VMs. Publish with:
+         dotnet publish -c Release -r linux-x64 (or win-x64) self-contained. -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <PublishTrimmed>false</PublishTrimmed>
+    <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.9" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.0" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Networker.Contracts\Networker.Contracts.csproj" />
+    <InternalsVisibleTo Include="Networker.Agent.Tests" />
   </ItemGroup>
 
 </Project>

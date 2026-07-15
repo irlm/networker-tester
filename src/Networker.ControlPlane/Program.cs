@@ -6,6 +6,8 @@ using Networker.ControlPlane.Dispatch;
 using Networker.ControlPlane.Endpoints;
 using Networker.ControlPlane.Realtime;
 using Networker.ControlPlane.Realtime.RawWs;
+using Networker.ControlPlane.Notifications;
+using Networker.ControlPlane.Provisioning;
 using Networker.ControlPlane.Security;
 using Networker.ControlPlane.Sso;
 using Networker.Contracts;
@@ -76,6 +78,13 @@ builder.Services.AddNetworkerCloudLifecycleServices();
 // module (OIDC flows + provider admin, provider secrets encrypted via the cipher).
 builder.Services.AddNetworkerInactivityService();
 builder.Services.AddSsoModule();
+// Phase-3 completeness: email sender (ACS or no-op), VM-lifecycle audit recorder,
+// GitHub version-refresh cache. AddTesterLoops (legacy benchmark_config dispatch/
+// recovery loops) is intentionally NOT wired — the unified C# schema has no
+// benchmark_config table; the M3 dispatcher/redispatcher own run assignment.
+builder.Services.AddNetworkerEmailSender();
+builder.Services.AddVmLifecycleRecorder();
+builder.Services.AddVersionRefresh("0.28.14");
 // M6 cutover: raw-WebSocket bridges (the React frontend + fielded Rust agents
 // speak raw WS JSON, not SignalR) + per-tick pg-advisory leader election and
 // tick observability for the background loops. AddRawWebSockets must come
@@ -170,6 +179,26 @@ app.MapHub<AgentProtocolHub>("/hub/agent");
 
 // M6 ops surface: background-service tick health + readiness probe.
 app.MapOpsEndpoints();
+
+// Phase-3: the remaining REST modules, completing control-plane parity with the
+// Rust dashboard so its crate can be retired. Auth is applied per-route inside
+// each module (public leaderboard; admin update/system-health/perf-log; project-
+// scoped url-tests/tls-profiles/inventory/precheck; flat logs/bench-tokens).
+app.MapLeaderboardEndpoints();
+app.MapSystemHealthEndpoints();
+app.MapLogsEndpoints();
+app.MapPerfLogEndpoints();
+app.MapUpdateEndpoints();
+app.MapBenchTokensEndpoints();
+app.MapUrlTestsEndpoints();
+app.MapTlsProfilesEndpoints();
+app.MapInventoryEndpoints();
+app.MapTesterPrecheckEndpoints();
+// GET /api/version — the frontend's "Latest version" toast + tester-upgrade
+// badge. Reads the LatestVersionCache (VersionRefreshService) and probes
+// completed-deployment endpoints; authenticated, no project scope (Rust
+// version.rs, merged into protected_flat).
+app.MapVersionEndpoints();
 
 // POST /auth/login + GET /auth/profile — same response shapes the Rust
 // dashboard serves. The policies (GlobalAdmin/Operator/Viewer, ProjectMember/
