@@ -59,11 +59,20 @@ public sealed class AutoShutdownService : BackgroundService
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<AutoShutdownService> _logger;
+    private readonly PgAdvisoryLeaderLock? _leader;
+    private readonly TickMonitor _monitor;
 
-    public AutoShutdownService(IServiceScopeFactory scopeFactory, ILogger<AutoShutdownService> logger)
+    public AutoShutdownService(
+        IServiceScopeFactory scopeFactory,
+        ILogger<AutoShutdownService> logger,
+        PgAdvisoryLeaderLock? leaderLock = null,
+        TickMonitor? tickMonitor = null)
     {
         _scopeFactory = scopeFactory;
         _logger = logger;
+        // M6 ops infra (AddOpsInfrastructure); optional for bare test hosts.
+        _leader = leaderLock;
+        _monitor = tickMonitor ?? new TickMonitor();
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -71,13 +80,20 @@ public sealed class AutoShutdownService : BackgroundService
         _logger.LogInformation(
             "Auto-shutdown background service started (tick every {Seconds}s)",
             TickInterval.TotalSeconds);
+        _monitor.ReportStarted(OpsServiceNames.AutoShutdown);
 
         using var timer = new PeriodicTimer(TickInterval);
         while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
         {
             try
             {
-                await SweepAsync(stoppingToken).ConfigureAwait(false);
+                var ranAsLeader = await _leader
+                    .TryRunGuardedAsync(LeaderLockKeys.AutoShutdown, SweepAsync, stoppingToken)
+                    .ConfigureAwait(false);
+                if (!ranAsLeader)
+                {
+                    _logger.LogDebug("Auto-shutdown sweep skipped — another replica holds the leader lock");
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -86,6 +102,7 @@ public sealed class AutoShutdownService : BackgroundService
             catch (Exception ex)
             {
                 // Never let one bad sweep kill the loop (Rust logs + continues).
+                _monitor.ReportError(OpsServiceNames.AutoShutdown, ex);
                 _logger.LogError(ex, "Auto-shutdown sweep failed");
             }
         }
@@ -121,6 +138,7 @@ public sealed class AutoShutdownService : BackgroundService
 
         if (candidates.Count == 0)
         {
+            _monitor.ReportTick(OpsServiceNames.AutoShutdown, 0, "no drained candidates");
             return;
         }
 
@@ -157,6 +175,11 @@ public sealed class AutoShutdownService : BackgroundService
         _logger.LogInformation(
             "Auto-shutdown sweep: {Count} candidate(s), {Stopped} stopped, {Deferred} deferred, {Failed} failed",
             candidates.Count, stopped, deferred, failed);
+
+        _monitor.ReportTick(
+            OpsServiceNames.AutoShutdown,
+            candidates.Count,
+            $"stopped={stopped} deferred={deferred} failed={failed}");
     }
 
     private enum Outcome { Stopped, Deferred, Failed }
