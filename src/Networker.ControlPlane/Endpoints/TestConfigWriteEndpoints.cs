@@ -202,8 +202,8 @@ public static class TestConfigWriteEndpoints
         // POST /api/v2/test-configs/{id}/launch — create a queued run + dispatch.
         // Auth only. Mirrors Rust launch_handler, delegating the create+dispatch
         // to the M3 IRunDispatcher. tester_id is threaded through so dispatch
-        // prefers the requested agent (LaunchRequest.tester_id — previously
-        // dropped). Returns 200 with the FULL serialized test_run row, re-read
+        // prefers the agent BOUND to that project_tester (LaunchRequest.tester_id
+        // — a project_tester id, previously dropped). Returns 200 with the FULL serialized test_run row, re-read
         // after the dispatch attempt (the frontend inserts this response straight
         // into the runs list; status may already be running/provisioning).
         app.MapPost("/api/v2/test-configs/{id:guid}/launch", async (
@@ -298,8 +298,9 @@ public static class TestConfigWriteEndpoints
     }
 
     /// <summary>Mirrors Rust <c>LaunchRequest</c>. <c>tester_id</c> seeds
-    /// <c>test_run.tester_id</c> (agent affinity — it semantically holds an
-    /// AGENT id); the comparison group is carried through to the run.</summary>
+    /// <c>test_run.tester_id</c> (a project_tester FK — dispatch prefers the
+    /// agent bound to that tester); the comparison group is carried through to
+    /// the run.</summary>
     public sealed record LaunchRequest(
         [property: JsonPropertyName("tester_id")] Guid? TesterId,
         [property: JsonPropertyName("comparison_group_id")] Guid? ComparisonGroupId);

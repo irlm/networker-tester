@@ -82,11 +82,13 @@ public sealed class RunDispatcher : IRunDispatcher
             FailureCount = 0,
             CreatedAt = now,
             ComparisonGroupId = comparisonGroupId,
-            // tester_id semantically holds the EXECUTING AGENT's agent_id (the
-            // Rust agent_hub binds agent_id into `WHERE tester_id=$1`). When the
-            // caller pins a tester up-front (LaunchRequest.tester_id) we seed it
-            // here so dispatch prefers that agent; the successful assignment /
-            // RunStarted stamps the actual executor.
+            // test_run.tester_id is a FK to project_tester(tester_id) — the
+            // PROJECT-TESTER (the tester/VM a run targets/executes on), NEVER an
+            // agent_id. When the caller pins a tester up-front
+            // (LaunchRequest.tester_id) we seed it so dispatch prefers the agent
+            // BOUND to that tester (agent.tester_id == run.tester_id). The
+            // executing agent's own id is recorded separately in worker_id (a
+            // nullable, FK-free string) after a successful assignment.
             TesterId = testerId,
         };
 
@@ -242,10 +244,15 @@ public sealed class RunDispatcher : IRunDispatcher
 
     /// <summary>
     /// Select a target agent, serialize the run + (proxy-resolved) config, send
-    /// <c>assign_run</c>, and — on success — stamp <c>test_run.tester_id</c> with
-    /// the executing agent's id so the watchdog/cancel paths can find the owner.
-    /// Shared by the inline dispatch and the periodic redispatcher (the C#
-    /// analogue of the Rust <c>try_dispatch_run</c>).
+    /// <c>assign_run</c>, and — on success — stamp the executing agent's identity
+    /// FK-safely: <c>test_run.worker_id = agentId</c> (a nullable, FK-free string
+    /// — the reliable key the watchdog/cancel/disconnect paths use to find the
+    /// owner) and <c>test_run.tester_id = agent.tester_id</c> (the project_tester
+    /// the agent is bound to, which may be NULL for a standalone agent). The
+    /// agent_id is NEVER written into tester_id (it is not a valid project_tester
+    /// id and would violate <c>test_run_tester_id_fkey</c>). Shared by the inline
+    /// dispatch and the periodic redispatcher (the C# analogue of the Rust
+    /// <c>try_dispatch_run</c>).
     /// </summary>
     private async Task<bool> TryAssignAsync(
         Data.Entities.TestRun run,
@@ -275,12 +282,24 @@ public sealed class RunDispatcher : IRunDispatcher
             return false;
         }
 
-        // Stamp the executing agent's id into tester_id (the Rust semantic: the
-        // agent hub keys orphan-cleanup and heartbeat updates on it). Guarded so
-        // a run that already reached a terminal state is never clobbered.
+        // Stamp the executing agent's identity FK-safely. worker_id (nullable,
+        // no FK) ALWAYS records the agent id as text — this is the reliable key
+        // the watchdog / disconnect orphan-fail use to map a run to its agent.
+        // tester_id is a project_tester FK, so it gets the tester the agent is
+        // BOUND to (agent.tester_id) — which is NULL for a standalone agent, in
+        // which case we leave it null (NEVER the agent_id). Guarded so a run
+        // that already reached a terminal state is never clobbered.
+        var boundTesterId = await _db.Agents
+            .AsNoTracking()
+            .Where(a => a.AgentId == agentId)
+            .Select(a => a.TesterId)
+            .FirstOrDefaultAsync(ct);
+        var workerId = agentId.ToString();
         await _db.TestRuns
             .Where(r => r.Id == run.Id && (r.Status == StatusQueued || r.Status == StatusRunning))
-            .ExecuteUpdateAsync(s => s.SetProperty(r => r.TesterId, agentId), ct);
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.WorkerId, workerId)
+                .SetProperty(r => r.TesterId, boundTesterId), ct);
 
         _logger.LogInformation(
             "Dispatched run {RunId} to agent {AgentId} (endpoint_kind={Kind})",
@@ -296,16 +315,17 @@ public sealed class RunDispatcher : IRunDispatcher
     // ── Target-agent selection ───────────────────────────────────────────────
 
     /// <summary>
-    /// Pick the target agent for a run. <paramref name="preferredAgentId"/> is
-    /// the run's <c>tester_id</c>, which semantically holds an AGENT id (the Rust
-    /// agent hub binds agent_id into <c>WHERE tester_id=$1</c>): if that agent is
-    /// online and version-compatible it wins (agent affinity); otherwise fall
-    /// back to any online agent whose reported <c>agent.version</c> parses and is
-    /// ≥ 0.28.0 — older agents silently drop <c>assign_run</c> (the Rust
-    /// <c>any_online_agent_min_version</c> gate, MIN_AGENT_VERSION_FOR_ASSIGN_RUN).
-    /// Returns null when no compatible agent is connected.
+    /// Pick the target agent for a run. <paramref name="preferredTesterId"/> is
+    /// the run's <c>tester_id</c>, a PROJECT-TESTER id (FK to
+    /// <c>project_tester</c>): if an online, version-compatible agent is BOUND to
+    /// that tester (<c>agent.tester_id == run.tester_id</c>) it wins (tester
+    /// affinity); otherwise fall back to any online agent whose reported
+    /// <c>agent.version</c> parses and is ≥ 0.28.0 — older agents silently drop
+    /// <c>assign_run</c> (the Rust <c>any_online_agent_min_version</c> gate,
+    /// MIN_AGENT_VERSION_FOR_ASSIGN_RUN). Returns null when no compatible agent
+    /// is connected.
     /// </summary>
-    private async Task<Guid?> SelectTargetAgentAsync(Guid? preferredAgentId, CancellationToken ct)
+    private async Task<Guid?> SelectTargetAgentAsync(Guid? preferredTesterId, CancellationToken ct)
     {
         var online = _agents.OnlineAgents();
         if (online.Count == 0)
@@ -317,12 +337,11 @@ public sealed class RunDispatcher : IRunDispatcher
         var rows = await _db.Agents
             .AsNoTracking()
             .Where(a => onlineIds.Contains(a.AgentId))
-            .Select(a => new { a.AgentId, a.Version })
+            .Select(a => new { a.AgentId, a.Version, a.TesterId })
             .ToListAsync(ct);
 
         var compatible = rows
             .Where(a => AgentVersionGate.IsCompatible(a.Version))
-            .Select(a => a.AgentId)
             .ToList();
 
         if (compatible.Count == 0)
@@ -330,12 +349,19 @@ public sealed class RunDispatcher : IRunDispatcher
             return null;
         }
 
-        if (preferredAgentId is Guid pid && compatible.Contains(pid))
+        // Tester affinity: prefer the agent BOUND to the requested project_tester
+        // (agent.tester_id == run.tester_id). NOT agent.agent_id == run.tester_id
+        // — tester_id is a project_tester FK, never an agent id.
+        if (preferredTesterId is Guid tid)
         {
-            return pid;
+            var bound = compatible.FirstOrDefault(a => a.TesterId == tid);
+            if (bound is not null)
+            {
+                return bound.AgentId;
+            }
         }
 
-        return compatible[0];
+        return compatible[0].AgentId;
     }
 
     // ── Proxy endpoint resolution (Rust resolve_proxy_endpoint) ─────────────
