@@ -18,7 +18,7 @@ namespace Networker.ControlPlane.Sso;
 ///         never secrets) for the login page buttons.</item>
 ///   <item><c>GET /auth/sso/init?provider={id}</c> — 307 to the provider's
 ///         authorize endpoint with a CSRF state cookie.</item>
-///   <item><c>GET /auth/sso/callback?code=&amp;state=</c> — verify state, swap the
+///   <item><c>GET /api/auth/sso/callback?code=&amp;state=</c> — verify state, swap the
 ///         code for tokens, validate the id_token claims, find-or-create the
 ///         dash_user, then 307 to <c>{public_url}/sso-complete?code=</c> with a
 ///         single-use exchange code (the JWT never rides in a URL).</item>
@@ -43,7 +43,7 @@ public static class SsoFlowEndpoints
     public static IEndpointRouteBuilder MapSsoEndpoints(this IEndpointRouteBuilder app)
     {
         // GET /auth/sso/providers — public; enabled providers, no secrets.
-        app.MapGet("/auth/sso/providers", async (NetworkerDbContext db, CancellationToken ct) =>
+        app.MapGet("/api/auth/sso/providers", async (NetworkerDbContext db, CancellationToken ct) =>
         {
             var providers = await db.SsoProviders
                 .AsNoTracking()
@@ -57,7 +57,7 @@ public static class SsoFlowEndpoints
         }).AllowAnonymous();
 
         // GET /auth/sso/init?provider={uuid} — 307 to the provider authorize URL.
-        app.MapGet("/auth/sso/init", async (
+        app.MapGet("/api/auth/sso/init", async (
             [FromQuery(Name = "provider")] string provider,
             HttpContext http,
             NetworkerDbContext db,
@@ -101,8 +101,8 @@ public static class SsoFlowEndpoints
             return Results.Redirect(redirectUrl, permanent: false, preserveMethod: true); // 307, like Rust
         }).AllowAnonymous();
 
-        // GET /auth/sso/callback?code=&state=[&error=] — the provider redirect.
-        app.MapGet("/auth/sso/callback", async (
+        // GET /api/auth/sso/callback?code=&state=[&error=] — the provider redirect.
+        app.MapGet("/api/auth/sso/callback", async (
             HttpContext http,
             NetworkerDbContext db,
             OidcFlowService flow,
@@ -291,7 +291,7 @@ public static class SsoFlowEndpoints
         }).AllowAnonymous();
 
         // POST /auth/sso/exchange — swap the short-lived code for the session JWT.
-        app.MapPost("/auth/sso/exchange", async (
+        app.MapPost("/api/auth/sso/exchange", async (
             SsoExchangeRequest req,
             SsoExchangeCodeCache codes,
             NetworkerDbContext db,

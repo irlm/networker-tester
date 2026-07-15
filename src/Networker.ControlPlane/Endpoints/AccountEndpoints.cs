@@ -34,7 +34,7 @@ public static class AccountEndpoints
     {
         // POST /auth/change-password — authenticated (any role; UserStatusMiddleware
         // allows pending + must-change users onto this exact path, like Rust).
-        app.MapPost("/auth/change-password", async (
+        app.MapPost("/api/auth/change-password", async (
             ChangePasswordRequest req,
             HttpContext http,
             NetworkerDbContext db,
@@ -88,7 +88,7 @@ public static class AccountEndpoints
         }).RequireAuthorization();
 
         // POST /auth/forgot-password — public; ALWAYS 200 { sent: true }.
-        app.MapPost("/auth/forgot-password", async (
+        app.MapPost("/api/auth/forgot-password", async (
             ForgotPasswordRequest req,
             NetworkerDbContext db,
             ILoggerFactory loggerFactory,
@@ -134,7 +134,7 @@ public static class AccountEndpoints
         }).AllowAnonymous();
 
         // POST /auth/reset-password — public; token + new password.
-        app.MapPost("/auth/reset-password", async (
+        app.MapPost("/api/auth/reset-password", async (
             ResetPasswordRequest req,
             NetworkerDbContext db,
             CancellationToken ct) =>
