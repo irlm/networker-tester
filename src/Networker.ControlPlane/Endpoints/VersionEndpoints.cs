@@ -113,7 +113,7 @@ public static class VersionEndpoints
     /// Compile-time version floor — kept in sync with the value wired into
     /// <c>AddVersionRefresh(...)</c> in Program.cs (Rust <c>CARGO_PKG_VERSION</c>).
     /// </summary>
-    private const string DashboardVersion = "0.28.14";
+    private const string DashboardVersion = "0.28.15";
 
     private const string TesterBinaryEnvVar = "AGENT_TESTERPATH";
 

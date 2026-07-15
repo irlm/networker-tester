@@ -3,35 +3,41 @@
 `networker-tester` is a cross-platform network diagnostics suite for measuring TCP, HTTP/1.1,
 HTTP/2, HTTP/3, UDP, page-load, throughput, TLS, and URL-diagnostic behavior.
 
-The repository includes:
-- `networker-tester`: the Rust CLI that runs probes and writes JSON, HTML, Excel, and DB output
-- `networker-endpoint`: the Rust server used as the diagnostic target
-- `networker-common`: shared WebSocket message types and protocol helpers for dashboard-agent communication
-- `networker-dashboard`: an axum + React control plane for agents, runs, deployments, and schedules
-- `networker-agent`: a worker that connects to the dashboard and runs tester jobs
+The repository is a hybrid Rust + C# system:
+- `networker-tester` (Rust): the CLI probe engine — runs probes and writes JSON, HTML, Excel, and DB output. This is the permanent measurement core.
+- `networker-endpoint` (Rust): the server used as the diagnostic target
+- `Networker.ControlPlane` (C#, ASP.NET): the production control plane — REST API, raw-WebSocket hubs, JWT auth, scheduling, provisioning, and background loops over PostgreSQL
+- `Networker.Agent` (C#): a worker that connects to the control plane and runs tester jobs
+- `Networker.Contracts` / `Networker.Data` / `Networker.Security` (C#): the versioned JSON seam, EF Core model, and crypto shared by the C# services
+
+The legacy Rust control plane (`networker-dashboard`, `networker-agent`,
+`networker-common`) has been replaced by the C# solution and is pending
+decommission — the crates remain in the tree for the soak/rollback window
+(see `docs/phase2-cutover-runbook.md`; full-Rust snapshot at the
+`rust-legacy-*` tag and `legacy/rust` branch).
 
 ## Architecture
 
 ```mermaid
 flowchart LR
     subgraph ProbePath["Direct probe path"]
-        T["networker-tester CLI"]
-        E["networker-endpoint"]
+        T["networker-tester CLI (Rust)"]
+        E["networker-endpoint (Rust)"]
         O["Artifacts: JSON, HTML, Excel, DB"]
         T -->|"TCP, HTTP1, HTTP2, HTTP3, UDP"| E
         T --> O
     end
 
-    subgraph ControlPlane["Dashboard control plane"]
+    subgraph ControlPlane["Control plane (C#)"]
         B["Browser SPA"]
-        D["networker-dashboard"]
-        A["networker-agent"]
+        D["Networker.ControlPlane"]
+        A["Agent"]
         TP["networker-tester subprocess"]
         P["PostgreSQL"]
 
-        B -->|"HTTP and WebSocket"| D
+        B -->|"HTTP and WebSocket (/api, /ws)"| D
         D -->|"UI responses and live updates"| B
-        D -->|"Agent WebSocket"| A
+        D -->|"Agent WebSocket (/ws/agent)"| A
         A -->|"Status and results"| D
         A --> TP
         D --> P
@@ -40,7 +46,7 @@ flowchart LR
 
 There are two main ways to use the system:
 - Direct mode: run `networker-tester` yourself against `networker-endpoint` or another target and collect artifacts locally.
-- Managed mode: use the browser UI and `networker-dashboard` to dispatch runs to `networker-agent`, which executes `networker-tester` and streams results back live.
+- Managed mode: use the browser UI and the control plane to dispatch runs to agents, which execute `networker-tester` and stream results back live.
 
 More detail is in [`docs/architecture.md`](docs/architecture.md).
 
@@ -67,14 +73,19 @@ Invoke-WebRequest $GistUrl -OutFile "$env:TEMP\networker-install.ps1"
 ```bash
 git clone git@github.com:irlm/networker-tester.git
 cd networker-tester
-cargo build --release
+
+# Rust probe engine + endpoint
+cargo build --release -p networker-tester -p networker-endpoint
+
+# C# control plane + agent (requires .NET 10 SDK)
+dotnet build Networker.sln -c Release
 ```
 
 Main binaries:
 - `target/release/networker-tester`
 - `target/release/networker-endpoint`
-- `target/release/networker-dashboard`
-- `target/release/networker-agent`
+- `src/Networker.ControlPlane/bin/Release/net10.0/Networker.ControlPlane`
+- `src/Networker.Agent/bin/Release/net10.0/Networker.Agent`
 
 ## Quick Start
 
@@ -131,21 +142,28 @@ Detailed documentation lives under [`docs/`](docs/):
 
 ```text
 crates/
-  networker-tester/     CLI probe engine and output writers
+  networker-tester/     CLI probe engine and output writers (the Rust core)
   networker-endpoint/   HTTP/HTTPS/UDP diagnostic target server
-  networker-common/     Shared message types (dashboard <-> agent)
-  networker-dashboard/  REST API, WebSocket hubs, auth, scheduling
-  networker-agent/      Worker daemon that runs tester jobs
+  networker-common/     LEGACY: shared message types (Rust dashboard <-> agent)
+  networker-dashboard/  LEGACY: replaced by Networker.ControlPlane, pending decommission
+  networker-agent/      LEGACY: replaced by Networker.Agent, pending decommission
+src/
+  Networker.ControlPlane/  C# control plane: REST, WS hubs, auth, scheduling, provisioning
+  Networker.Agent/         C# worker daemon that runs tester jobs
+  Networker.Endpoint/      C# port of the diagnostic target server
+  Networker.Contracts/     Versioned JSON seam (tester --json contract)
+  Networker.Data/          EF Core model (database-first from the live schema)
+  Networker.Security/      Credential cipher + auth crypto
+tests/                  C# test projects + installer/endpoint/integration tests
 dashboard/              React + TypeScript + Vite frontend (Tailwind dark theme)
 docs/                   Detailed documentation
 examples/configs/       Checked-in sample JSON configs
 scripts/                Deployment and maintenance scripts
-tests/                  Installer, endpoint, and integration tests
 ```
 
-## Dashboard Quick Start
+## Control Plane Quick Start
 
-The dashboard requires PostgreSQL and a few environment variables:
+The C# control plane requires PostgreSQL, .NET 10, and a few environment variables:
 
 ```bash
 # 1. Start PostgreSQL
@@ -154,15 +172,17 @@ docker compose -f docker-compose.dashboard.yml up -d postgres
 # 2. Start the endpoint (test target)
 cargo run -p networker-endpoint
 
-# 3. Start the dashboard API (port 3000)
+# 3. Start the control plane (port 5030)
 DASHBOARD_JWT_SECRET=$(openssl rand -base64 32) \
-DASHBOARD_ADMIN_PASSWORD=admin \
-  cargo run -p networker-dashboard
+DASHBOARD_CREDENTIAL_KEY=$(openssl rand -hex 32) \
+ASPNETCORE_URLS=http://0.0.0.0:5030 \
+  dotnet run --project src/Networker.ControlPlane
 
-# 4. Start an agent (connects to dashboard)
-AGENT_API_KEY=dev-key cargo run -p networker-agent
+# 4. Start an agent (connects to the control plane's raw agent WebSocket)
+AGENT_API_KEY=dev-key AGENT_DASHBOARD_URL=ws://localhost:5030/ws/agent \
+  dotnet run --project src/Networker.Agent
 
-# 5. Start the frontend dev server (port 5173, proxies to dashboard)
+# 5. Start the frontend dev server (port 5173, proxies /api and /ws)
 cd dashboard && npm install && npm run dev
 ```
 
@@ -170,19 +190,28 @@ Key environment variables:
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `DASHBOARD_DB_URL` | no | `postgres://networker:networker@localhost:5432/networker_dashboard` | PostgreSQL connection string |
-| `DASHBOARD_JWT_SECRET` | yes | -- | JWT signing secret (min 32 bytes) |
-| `DASHBOARD_ADMIN_PASSWORD` | no | prompted or generated | Initial admin password |
-| `DASHBOARD_PORT` | no | `3000` | API listen port |
-| `AGENT_DASHBOARD_URL` | no | `ws://localhost:3000/ws/agent` | Dashboard WebSocket URL for agents |
-| `AGENT_API_KEY` | yes | -- | Agent authentication key |
+| `DASHBOARD_DB_URL_NPGSQL` | no | localhost dev defaults | Npgsql connection string (`Host=…;Database=…;Username=…;Password=…`) |
+| `DASHBOARD_JWT_SECRET` | yes (prod) | -- | HS256 JWT signing secret — fail-closed outside Development |
+| `DASHBOARD_CREDENTIAL_KEY` | yes (prod) | -- | 64-hex AEAD key for cloud-account secrets — fail-closed outside Development |
+| `ASPNETCORE_URLS` | no | `http://localhost:5000` | Listen address, e.g. `http://0.0.0.0:5030` |
+| `DASHBOARD_BACKGROUND_SERVICES` | no | on | Set `0` for an API-only replica (no scheduler/watchdog/reaper loops) |
+| `AGENT_DASHBOARD_URL` | no | `ws://localhost:3000/ws/agent` | Full agent WebSocket URL (also accepted: `AGENT_DASHBOARDURL`) |
+| `AGENT_API_KEY` | yes | -- | Agent authentication key, validated against `agent.api_key` (also accepted: `AGENT_APIKEY`) |
 
-See [`docs/setup-guide.md`](docs/setup-guide.md) for full production deployment.
+See [`docs/phase2-cutover-runbook.md`](docs/phase2-cutover-runbook.md) for
+production operations and [`docs/setup-guide.md`](docs/setup-guide.md) for
+deployment.
 
 ## Development
 
 ```bash
-cargo test
+# Rust (probe engine + endpoint)
+cargo test -p networker-tester -p networker-endpoint --lib
+
+# C# (control plane, agent, endpoint port, contracts)
+dotnet test Networker.sln
+
+# Frontend
 cd dashboard && npm install && npm run build
 ```
 
