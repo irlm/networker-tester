@@ -13,7 +13,7 @@
 ///
 /// Run just this layer:
 ///   cargo test --test integration -p networker-tester
-use networker_tester::metrics::Protocol;
+use networker_tester::metrics::{ErrorCategory, Protocol};
 use networker_tester::runner::curl::run_curl_probe;
 use networker_tester::runner::dns::run_dns_probe;
 use networker_tester::runner::http::{run_probe, RunConfig};
@@ -445,6 +445,210 @@ async fn http1_status_endpoint_returns_correct_code() {
 
     let http = attempt.http.expect("http result missing");
     assert_eq!(http.status_code, 404);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Error-path classification (T3) and unified HTTP success rule (V6)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Nothing listens on a freshly freed port — the probe must fail in the TCP
+/// phase with `ErrorCategory::Tcp` and no partial HttpResult.
+#[tokio::test]
+async fn connection_refused_classified_as_tcp() {
+    init_crypto();
+    let port = free_port(); // bound then dropped — nothing listening
+    let cfg = RunConfig {
+        dns_enabled: false,
+        timeout_ms: 3000,
+        ..Default::default()
+    };
+    let url = url::Url::parse(&format!("http://127.0.0.1:{port}/health")).unwrap();
+    let attempt = run_probe(Uuid::new_v4(), 0, Protocol::Http1, &url, &cfg).await;
+
+    assert!(!attempt.success, "probe to a closed port must fail");
+    let err = attempt.error.expect("error must be set");
+    assert_eq!(
+        err.category,
+        ErrorCategory::Tcp,
+        "connection refused must be classified Tcp, got {:?} ({})",
+        err.category,
+        err.message
+    );
+    assert!(
+        attempt.http.is_none(),
+        "no HttpResult may leak from a refused connection"
+    );
+}
+
+/// The endpoint delays 3 s before responding while the probe timeout is
+/// 300 ms — the failure must be classified `Timeout`, not `Http`, and no
+/// partial HttpResult may leak into statistics.
+#[tokio::test]
+async fn request_timeout_classified_as_timeout() {
+    let ep = Endpoint::start().await;
+    let cfg = RunConfig {
+        dns_enabled: false,
+        timeout_ms: 300,
+        ..Default::default()
+    };
+    let url = ep.http_url("/delay?ms=3000");
+    let attempt = run_probe(Uuid::new_v4(), 0, Protocol::Http1, &url, &cfg).await;
+
+    assert!(!attempt.success, "delayed response must exceed the timeout");
+    let err = attempt.error.expect("error must be set");
+    assert_eq!(
+        err.category,
+        ErrorCategory::Timeout,
+        "request timeout must be classified Timeout, got {:?} ({})",
+        err.category,
+        err.message
+    );
+    assert!(
+        attempt.http.is_none(),
+        "no partial HttpResult may leak into stats on timeout"
+    );
+}
+
+/// An `https://` probe pointed at the plain-HTTP port fails the TLS handshake
+/// (the server answers the ClientHello with plaintext HTTP) — must be `Tls`.
+#[tokio::test]
+async fn tls_to_plain_http_port_classified_as_tls() {
+    let ep = Endpoint::start().await;
+    let cfg = RunConfig {
+        dns_enabled: false,
+        timeout_ms: 5000,
+        insecure: true, // rule out certificate verification as the cause
+        ..Default::default()
+    };
+    let url = url::Url::parse(&format!("https://127.0.0.1:{}/health", ep.http_port)).unwrap();
+    let attempt = run_probe(Uuid::new_v4(), 0, Protocol::Http1, &url, &cfg).await;
+
+    assert!(!attempt.success, "TLS to a plaintext port must fail");
+    let err = attempt.error.expect("error must be set");
+    assert_eq!(
+        err.category,
+        ErrorCategory::Tls,
+        "handshake against a plaintext port must be classified Tls, got {:?} ({})",
+        err.category,
+        err.message
+    );
+    // TCP connect succeeded — that phase should still be recorded.
+    assert!(
+        attempt.tcp.is_some(),
+        "TCP phase result should be preserved"
+    );
+}
+
+/// The endpoint serves a self-signed certificate; without `--insecure` the
+/// verification failure must be classified `Tls`.
+#[tokio::test]
+async fn tls_cert_verification_failure_classified_as_tls() {
+    let ep = Endpoint::start().await;
+    let cfg = RunConfig {
+        dns_enabled: false,
+        timeout_ms: 5000,
+        insecure: false, // verify the self-signed cert → must fail
+        ..Default::default()
+    };
+    let url = ep.https_url("/health");
+    let attempt = run_probe(Uuid::new_v4(), 0, Protocol::Http1, &url, &cfg).await;
+
+    assert!(!attempt.success, "self-signed cert must fail verification");
+    let err = attempt.error.expect("error must be set");
+    assert_eq!(
+        err.category,
+        ErrorCategory::Tls,
+        "certificate verification failure must be classified Tls, got {:?} ({})",
+        err.category,
+        err.message
+    );
+}
+
+/// 5xx responses are failures with `ErrorCategory::Http`; the HttpResult
+/// (status, timings) must still be captured for diagnosis.
+#[tokio::test]
+async fn http_500_is_failure_with_http_category() {
+    let ep = Endpoint::start().await;
+    let cfg = RunConfig {
+        dns_enabled: false,
+        timeout_ms: 5000,
+        ..Default::default()
+    };
+    let url = ep.http_url("/status/500");
+    let attempt = run_probe(Uuid::new_v4(), 0, Protocol::Http1, &url, &cfg).await;
+
+    assert!(!attempt.success, "HTTP 500 must be a failed attempt");
+    let http = attempt.http.expect("HttpResult must still be present");
+    assert_eq!(http.status_code, 500);
+    let err = attempt.error.expect("error must be set");
+    assert_eq!(err.category, ErrorCategory::Http);
+    assert!(
+        err.message.contains("500"),
+        "error message should carry the status, got: {}",
+        err.message
+    );
+}
+
+/// Pins the unified success rule (V6): 4xx is a failure on http1 and http2
+/// alike (2xx/3xx = success, i.e. status < 400 — same rule as native/curl).
+#[tokio::test]
+async fn http_4xx_is_failure_across_modes() {
+    let ep = Endpoint::start().await;
+
+    let cfg_h1 = RunConfig {
+        dns_enabled: false,
+        timeout_ms: 5000,
+        ..Default::default()
+    };
+    let attempt = run_probe(
+        Uuid::new_v4(),
+        0,
+        Protocol::Http1,
+        &ep.http_url("/status/404"),
+        &cfg_h1,
+    )
+    .await;
+    assert!(!attempt.success, "http1: 404 must be a failure");
+    assert_eq!(attempt.http.expect("http result").status_code, 404);
+    assert_eq!(
+        attempt.error.expect("error must be set").category,
+        ErrorCategory::Http
+    );
+
+    let cfg_h2 = RunConfig {
+        dns_enabled: false,
+        timeout_ms: 5000,
+        insecure: true,
+        ..Default::default()
+    };
+    let attempt2 = run_probe(
+        Uuid::new_v4(),
+        0,
+        Protocol::Http2,
+        &ep.https_url("/status/404"),
+        &cfg_h2,
+    )
+    .await;
+    assert!(!attempt2.success, "http2: 404 must be a failure");
+    assert_eq!(attempt2.http.expect("http result").status_code, 404);
+}
+
+/// 3xx responses count as success under the unified rule (redirects are
+/// recorded, not followed).
+#[tokio::test]
+async fn http_3xx_counts_as_success() {
+    let ep = Endpoint::start().await;
+    let cfg = RunConfig {
+        dns_enabled: false,
+        timeout_ms: 5000,
+        ..Default::default()
+    };
+    let url = ep.http_url("/status/301");
+    let attempt = run_probe(Uuid::new_v4(), 0, Protocol::Http1, &url, &cfg).await;
+
+    assert!(attempt.success, "3xx is success: {:?}", attempt.error);
+    let http = attempt.http.expect("http result missing");
+    assert_eq!(http.status_code, 301);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

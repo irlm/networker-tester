@@ -190,6 +190,7 @@ pub async fn run_webdownload_probe(
         );
         attempt.http = Some(patched);
     }
+    verify_download(&mut attempt, payload_bytes);
     attempt
 }
 
@@ -430,6 +431,7 @@ async fn run_labeled_download_probe(
         );
         attempt.http = Some(patched);
     }
+    verify_download(&mut attempt, payload_bytes);
     attempt
 }
 
@@ -540,6 +542,7 @@ pub async fn run_download_probe(
         );
         attempt.http = Some(patched);
     }
+    verify_download(&mut attempt, payload_bytes);
     attempt
 }
 
@@ -592,14 +595,48 @@ pub async fn run_upload_probe(
 
 /// Compute and attach download throughput to an `HttpResult`.
 ///
-/// Transfer window: `total_duration_ms − ttfb_ms` (body-receive phase only).
+/// Transfer window: `total_duration_ms − ttfb_ms − http_handshake_ms`
+/// (body-receive phase only — the HTTP connection handshake is connection
+/// setup, not transfer, and is recorded separately in `http_handshake_ms`).
+///
+/// The numerator is `body_size_bytes` — the bytes that actually arrived —
+/// never the requested size (V7). `payload_bytes` still records the requested
+/// size for grouping; `verify_download` fails the attempt on any mismatch.
 fn patch_throughput(h: HttpResult, payload_bytes: usize) -> HttpResult {
-    let transfer_ms = h.total_duration_ms - h.ttfb_ms;
-    let throughput_mbps = mbps(payload_bytes, transfer_ms);
+    let handshake_ms = h.http_handshake_ms.unwrap_or(0.0);
+    let transfer_ms = h.total_duration_ms - h.ttfb_ms - handshake_ms;
+    let throughput_mbps = mbps(h.body_size_bytes, transfer_ms);
     HttpResult {
         payload_bytes,
         throughput_mbps,
         ..h
+    }
+}
+
+/// Check that the download body contained exactly `expected_bytes`.
+///
+/// Mirrors `verify_upload`: a truncated body (network drop mid-transfer,
+/// server-side limit) or an error page must surface as a clear failure, never
+/// as a silently wrong throughput figure computed from bytes that did not
+/// arrive (V7).
+fn verify_download(attempt: &mut RequestAttempt, expected_bytes: usize) {
+    if !attempt.success {
+        return;
+    }
+    let received = match attempt.http.as_ref() {
+        Some(h) => h.body_size_bytes,
+        None => return,
+    };
+    if received != expected_bytes {
+        attempt.success = false;
+        attempt.error = Some(ErrorRecord {
+            category: ErrorCategory::Http,
+            message: format!(
+                "Download size mismatch: requested {expected_bytes} bytes but received {received} bytes"
+            ),
+            detail: None,
+            occurred_at: Utc::now(),
+        });
     }
 }
 
@@ -700,6 +737,15 @@ mod tests {
             cpu_time_ms: None,
             csw_voluntary: None,
             csw_involuntary: None,
+            http_handshake_ms: None,
+        }
+    }
+
+    /// Like `make_http_result` but with a received body size (downloads).
+    fn make_download_result(ttfb_ms: f64, total_ms: f64, body_bytes: usize) -> HttpResult {
+        HttpResult {
+            body_size_bytes: body_bytes,
+            ..make_http_result(ttfb_ms, total_ms)
         }
     }
 
@@ -775,8 +821,8 @@ mod tests {
 
     #[test]
     fn download_uses_body_receive_time() {
-        // 1 MiB in 1000ms body window (ttfb=10ms, total=1010ms) → 1.0 MB/s
-        let h = make_http_result(10.0, 1010.0);
+        // 1 MiB received in 1000ms body window (ttfb=10ms, total=1010ms) → 1.0 MB/s
+        let h = make_download_result(10.0, 1010.0, 1024 * 1024);
         let patched = patch_throughput(h, 1024 * 1024);
         let result = patched.throughput_mbps.expect("should have throughput");
         assert!(
@@ -788,7 +834,7 @@ mod tests {
     #[test]
     fn download_excludes_ttfb_from_window() {
         // 4 MiB in 4000ms body window (ttfb=1000ms, total=5000ms) → 1.0 MB/s
-        let h = make_http_result(1000.0, 5000.0);
+        let h = make_download_result(1000.0, 5000.0, 4 * 1024 * 1024);
         let patched = patch_throughput(h, 4 * 1024 * 1024);
         let result = patched.throughput_mbps.expect("should have throughput");
         assert!(
@@ -798,16 +844,46 @@ mod tests {
     }
 
     #[test]
+    fn download_excludes_http_handshake_from_window() {
+        // V8: connection handshake time must not deflate throughput.
+        // total=1510ms, ttfb=10ms, handshake=500ms → transfer window = 1000ms
+        // → 1 MiB / 1000ms = 1.0 MB/s (not 1 MiB / 1500ms ≈ 0.67 MB/s).
+        let mut h = make_download_result(10.0, 1510.0, 1024 * 1024);
+        h.http_handshake_ms = Some(500.0);
+        let patched = patch_throughput(h, 1024 * 1024);
+        let result = patched.throughput_mbps.expect("should have throughput");
+        assert!(
+            (result - 1.0).abs() < 1e-9,
+            "expected 1.0 MB/s, got {result}"
+        );
+    }
+
+    #[test]
+    fn download_throughput_from_received_not_requested_bytes() {
+        // V7: only 512 KiB arrived of a 1 MiB request — throughput must be
+        // computed from the received bytes (0.5 MB/s), not the requested size.
+        let h = make_download_result(10.0, 1010.0, 512 * 1024);
+        let patched = patch_throughput(h, 1024 * 1024);
+        let result = patched.throughput_mbps.expect("should have throughput");
+        assert!(
+            (result - 0.5).abs() < 1e-9,
+            "expected 0.5 MB/s from received bytes, got {result}"
+        );
+        // payload_bytes still records the requested size for grouping.
+        assert_eq!(patched.payload_bytes, 1024 * 1024);
+    }
+
+    #[test]
     fn download_throughput_none_when_ttfb_equals_total() {
         // ttfb == total → body window = 0ms → no meaningful rate
-        let h = make_http_result(100.0, 100.0);
+        let h = make_download_result(100.0, 100.0, 65536);
         assert!(patch_throughput(h, 65536).throughput_mbps.is_none());
     }
 
     #[test]
     fn download_throughput_none_when_ttfb_exceeds_total() {
         // Malformed timing; must not produce a result.
-        let h = make_http_result(200.0, 100.0);
+        let h = make_download_result(200.0, 100.0, 65536);
         assert!(patch_throughput(h, 65536).throughput_mbps.is_none());
     }
 
@@ -829,8 +905,8 @@ mod tests {
     }
 
     #[test]
-    fn download_zero_payload_gives_zero_throughput() {
-        // 0-byte body is valid; rate = 0.
+    fn download_zero_body_gives_zero_throughput() {
+        // 0-byte body received; rate = 0.
         let h = make_http_result(10.0, 1010.0);
         let result = patch_throughput(h, 0)
             .throughput_mbps
@@ -1174,6 +1250,7 @@ mod tests {
                 cpu_time_ms: None,
                 csw_voluntary: None,
                 csw_involuntary: None,
+                http_handshake_ms: None,
             }),
             udp: None,
             error: None,
@@ -1216,6 +1293,7 @@ mod tests {
                 cpu_time_ms: None,
                 csw_voluntary: None,
                 csw_involuntary: None,
+                http_handshake_ms: None,
             }),
             udp: None,
             error: None,
@@ -1313,6 +1391,7 @@ mod tests {
                 cpu_time_ms: None,
                 csw_voluntary: None,
                 csw_involuntary: None,
+                http_handshake_ms: None,
             }),
             udp: None,
             error: None,
@@ -1325,6 +1404,52 @@ mod tests {
         };
         verify_upload(&mut attempt, 100);
         assert!(attempt.success);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // verify_download — download body-size verification (V7)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    fn make_download_attempt(body_bytes: usize) -> RequestAttempt {
+        let mut a = make_attempt_without_header();
+        a.protocol = Protocol::Download;
+        if let Some(h) = a.http.as_mut() {
+            h.body_size_bytes = body_bytes;
+        }
+        a
+    }
+
+    #[test]
+    fn verify_download_passes_when_bytes_match() {
+        let mut attempt = make_download_attempt(65536);
+        verify_download(&mut attempt, 65536);
+        assert!(attempt.success);
+        assert!(attempt.error.is_none());
+    }
+
+    #[test]
+    fn verify_download_fails_on_truncated_body() {
+        let mut attempt = make_download_attempt(1234);
+        verify_download(&mut attempt, 65536);
+        assert!(!attempt.success, "truncated download must fail");
+        let err = attempt.error.expect("error should be set");
+        assert_eq!(err.category, ErrorCategory::Http);
+        assert!(err.message.contains("65536"));
+        assert!(err.message.contains("1234"));
+    }
+
+    #[test]
+    fn verify_download_keeps_original_error_on_failed_attempt() {
+        let mut attempt = make_download_attempt(0);
+        attempt.success = false;
+        attempt.error = Some(ErrorRecord {
+            category: ErrorCategory::Timeout,
+            message: "timed out".into(),
+            detail: None,
+            occurred_at: Utc::now(),
+        });
+        verify_download(&mut attempt, 65536);
+        assert_eq!(attempt.error.unwrap().message, "timed out");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -1438,6 +1563,7 @@ mod tests {
                 cpu_time_ms: None,
                 csw_voluntary: None,
                 csw_involuntary: None,
+                http_handshake_ms: None,
             }),
             udp: None,
             error: None,
@@ -1483,6 +1609,7 @@ mod tests {
                 cpu_time_ms: None,
                 csw_voluntary: None,
                 csw_involuntary: None,
+                http_handshake_ms: None,
             }),
             udp: None,
             error: None,
@@ -1527,6 +1654,7 @@ mod tests {
                 cpu_time_ms: None,
                 csw_voluntary: None,
                 csw_involuntary: None,
+                http_handshake_ms: None,
             }),
             udp: None,
             error: None,

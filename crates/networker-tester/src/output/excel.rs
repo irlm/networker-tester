@@ -211,8 +211,16 @@ fn write_statistics(
         ws.write_with_format(row, 3, s.min, num2)?;
         ws.write_with_format(row, 4, s.mean, num2)?;
         ws.write_with_format(row, 5, s.p50, num2)?;
-        ws.write_with_format(row, 6, s.p95, num2)?;
-        ws.write_with_format(row, 7, s.p99, num2)?;
+        // p95/p99 suppressed below the sample-size guard (n≥20 / n≥100):
+        // write an explicit marker instead of a misleading tail estimate.
+        match s.p95 {
+            Some(v) => ws.write_with_format(row, 6, v, num2)?,
+            None => ws.write(row, 6, "insufficient samples")?,
+        };
+        match s.p99 {
+            Some(v) => ws.write_with_format(row, 7, v, num2)?,
+            None => ws.write(row, 7, "insufficient samples")?,
+        };
         ws.write_with_format(row, 8, s.max, num2)?;
         ws.write_with_format(row, 9, s.stddev, num2)?;
         ws.write_with_format(row, 10, success_pct, num2)?;
@@ -814,6 +822,7 @@ mod tests {
                 cpu_time_ms: Some(1.4),
                 csw_voluntary: Some(3),
                 csw_involuntary: Some(0),
+                http_handshake_ms: None,
             }),
             udp: None,
             error: None,
@@ -1142,6 +1151,7 @@ mod tests {
                 cpu_time_ms: Some(12.0),
                 csw_voluntary: Some(20),
                 csw_involuntary: Some(1),
+                http_handshake_ms: None,
             }),
             udp: None,
             error: None,
@@ -1180,6 +1190,7 @@ mod tests {
                 cpu_time_ms: Some(15.0),
                 csw_voluntary: Some(25),
                 csw_involuntary: Some(0),
+                http_handshake_ms: None,
             }),
             udp: None,
             error: None,

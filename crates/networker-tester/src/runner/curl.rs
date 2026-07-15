@@ -17,8 +17,11 @@ use uuid::Uuid;
 
 /// Write-out format — one `key:value` per line.
 /// Times are in seconds (curl default); we multiply by 1000 to get ms.
+/// `%{http_version}` records the version curl actually negotiated (curl
+/// auto-negotiates h2 on HTTPS); `%{num_redirects}` counts followed redirects
+/// (always 0 without `-L`, kept for completeness).
 const WRITE_OUT: &str =
-    "dns:%{time_namelookup}\nconnect:%{time_connect}\ntls:%{time_appconnect}\nttfb:%{time_starttransfer}\ntotal:%{time_total}\ncode:%{http_code}\nsize:%{size_download}\nurl_effective:%{url_effective}";
+    "dns:%{time_namelookup}\nconnect:%{time_connect}\ntls:%{time_appconnect}\nttfb:%{time_starttransfer}\ntotal:%{time_total}\ncode:%{http_code}\nsize:%{size_download}\nversion:%{http_version}\nredirects:%{num_redirects}\nurl_effective:%{url_effective}";
 
 /// Run one curl probe and return a fully populated `RequestAttempt`.
 pub async fn run_curl_probe(
@@ -239,14 +242,21 @@ pub async fn run_curl_probe(
         elapsed_ms
     };
 
+    // Redirects are not followed (no -L), so a 3xx final status is one
+    // observed redirect; num_redirects covers any followed hops (currently 0).
+    let observed_redirect = if (300..400).contains(&parsed.code) {
+        1
+    } else {
+        0
+    };
     let http_result = HttpResult {
-        negotiated_version: "HTTP/1.1".into(), // curl auto-negotiates; we don't know
+        negotiated_version: map_http_version(&parsed.version),
         status_code: parsed.code as u16,
         headers_size_bytes: 0,
         body_size_bytes: parsed.size_bytes,
         ttfb_ms,
         total_duration_ms,
-        redirect_count: 0,
+        redirect_count: parsed.num_redirects + observed_redirect,
         started_at,
         response_headers: vec![],
         payload_bytes: 0,
@@ -255,6 +265,7 @@ pub async fn run_curl_probe(
         cpu_time_ms: None,
         csw_voluntary: None,
         csw_involuntary: None,
+        http_handshake_ms: None,
     };
     let success = parsed.code > 0 && parsed.code < 400;
 
@@ -303,6 +314,10 @@ struct CurlTimes {
     total_ms: f64,
     code: u32,
     size_bytes: usize,
+    /// `%{http_version}` — e.g. "1.1", "2", "3"; empty on very old curl.
+    version: String,
+    /// `%{num_redirects}` — redirects curl followed (0 without -L).
+    num_redirects: u32,
 }
 
 fn parse_write_out(s: &str) -> CurlTimes {
@@ -318,11 +333,26 @@ fn parse_write_out(s: &str) -> CurlTimes {
                 "total" => t.total_ms = secs_to_ms(val),
                 "code" => t.code = val.parse().unwrap_or(0),
                 "size" => t.size_bytes = val.parse().unwrap_or(0),
+                "version" => t.version = val.to_string(),
+                "redirects" => t.num_redirects = val.parse().unwrap_or(0),
                 _ => {}
             }
         }
     }
     t
+}
+
+/// Map curl's `%{http_version}` value to the `negotiated_version` labels used
+/// by the other probe modes. Unknown/empty values (very old curl) are reported
+/// honestly as "unknown" rather than misattributed to HTTP/1.1.
+fn map_http_version(v: &str) -> String {
+    match v {
+        "1.0" => "HTTP/1.0".into(),
+        "1.1" => "HTTP/1.1".into(),
+        "2" => "HTTP/2".into(),
+        "3" => "HTTP/3".into(),
+        _ => "unknown".into(),
+    }
 }
 
 fn secs_to_ms(s: &str) -> f64 {
@@ -486,6 +516,31 @@ mod tests {
         let input = "url_effective:https://host:8443/path\ncode:200\n";
         let t = parse_write_out(input);
         assert_eq!(t.code, 200);
+    }
+
+    #[test]
+    fn parse_write_out_version_and_redirects() {
+        let input = "code:301\nversion:2\nredirects:0\n";
+        let t = parse_write_out(input);
+        assert_eq!(t.version, "2");
+        assert_eq!(t.num_redirects, 0);
+    }
+
+    // ── map_http_version ──────────────────────────────────────────────────────
+
+    #[test]
+    fn map_http_version_known_values() {
+        assert_eq!(map_http_version("1.0"), "HTTP/1.0");
+        assert_eq!(map_http_version("1.1"), "HTTP/1.1");
+        assert_eq!(map_http_version("2"), "HTTP/2");
+        assert_eq!(map_http_version("3"), "HTTP/3");
+    }
+
+    #[test]
+    fn map_http_version_unknown_is_not_misattributed() {
+        // Old curl (no %{http_version}) must not be reported as HTTP/1.1.
+        assert_eq!(map_http_version(""), "unknown");
+        assert_eq!(map_http_version("0"), "unknown");
     }
 
     // ── make_failed ───────────────────────────────────────────────────────────

@@ -437,6 +437,7 @@ mod real {
                 cpu_time_ms,
                 csw_voluntary,
                 csw_involuntary,
+                http_handshake_ms: None,
             }),
             udp: None,
             error: None,

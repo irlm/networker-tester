@@ -363,6 +363,7 @@ async fn run_native_probe_impl(
         };
         let ttfb_ms = t_http.elapsed().as_secs_f64() * 1000.0;
         let status_code = resp.status().as_u16();
+        let has_location = resp.headers().contains_key(hyper::header::LOCATION);
         let headers = resp
             .headers()
             .iter()
@@ -374,6 +375,7 @@ async fn run_native_probe_impl(
             Err(_) => Bytes::new(),
         };
         let total_ms = t_http.elapsed().as_secs_f64() * 1000.0;
+        let http_ok = status_code < 400;
 
         RequestAttempt {
             attempt_id,
@@ -382,7 +384,7 @@ async fn run_native_probe_impl(
             sequence_num,
             started_at,
             finished_at: Some(Utc::now()),
-            success: status_code < 400,
+            success: http_ok,
             dns: dns_result,
             tcp: Some(tcp_result),
             tls: tls_result,
@@ -393,7 +395,7 @@ async fn run_native_probe_impl(
                 body_size_bytes: body.len(),
                 ttfb_ms,
                 total_duration_ms: total_ms,
-                redirect_count: 0,
+                redirect_count: crate::runner::http::count_redirect(status_code, has_location),
                 started_at: http_started_at,
                 response_headers: headers,
                 payload_bytes: 0,
@@ -402,9 +404,19 @@ async fn run_native_probe_impl(
                 cpu_time_ms: None,
                 csw_voluntary: None,
                 csw_involuntary: None,
+                http_handshake_ms: None,
             }),
             udp: None,
-            error: None,
+            error: if http_ok {
+                None
+            } else {
+                Some(ErrorRecord {
+                    category: ErrorCategory::Http,
+                    message: format!("HTTP {status_code}"),
+                    detail: None,
+                    occurred_at: Utc::now(),
+                })
+            },
             retry_count: 0,
             server_timing: None,
             udp_throughput: None,
@@ -639,6 +651,7 @@ async fn run_native_https(
     };
     let ttfb_ms = t_http.elapsed().as_secs_f64() * 1000.0;
     let status_code = resp.status().as_u16();
+    let has_location = resp.headers().contains_key(hyper::header::LOCATION);
     let headers = resp
         .headers()
         .iter()
@@ -650,6 +663,7 @@ async fn run_native_https(
         Err(_) => bytes::Bytes::new(),
     };
     let total_ms = t_http.elapsed().as_secs_f64() * 1000.0;
+    let http_ok = status_code < 400;
 
     RequestAttempt {
         attempt_id,
@@ -658,7 +672,7 @@ async fn run_native_https(
         sequence_num,
         started_at,
         finished_at: Some(Utc::now()),
-        success: status_code < 400,
+        success: http_ok,
         dns: dns_result,
         tcp: Some(tcp_result),
         tls: Some(tls_result),
@@ -669,7 +683,7 @@ async fn run_native_https(
             body_size_bytes: body.len(),
             ttfb_ms,
             total_duration_ms: total_ms,
-            redirect_count: 0,
+            redirect_count: crate::runner::http::count_redirect(status_code, has_location),
             started_at: http_started_at,
             response_headers: headers,
             payload_bytes: 0,
@@ -678,9 +692,19 @@ async fn run_native_https(
             cpu_time_ms: None,
             csw_voluntary: None,
             csw_involuntary: None,
+            http_handshake_ms: None,
         }),
         udp: None,
-        error: None,
+        error: if http_ok {
+            None
+        } else {
+            Some(ErrorRecord {
+                category: ErrorCategory::Http,
+                message: format!("HTTP {status_code}"),
+                detail: None,
+                occurred_at: Utc::now(),
+            })
+        },
         retry_count: 0,
         server_timing: None,
         udp_throughput: None,

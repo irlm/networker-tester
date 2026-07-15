@@ -11,6 +11,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.20] — 2026-07-15
+
+P1 measurement-validity fixes in the Rust probe engine (trust-audit wave A:
+V6–V9, V13–V15, T3). Several of these **change reported numbers** — they were
+wrong before, they are right now.
+
+### Fixed
+- **V6 — unified HTTP success rule (changes reported success rates).** All
+  HTTP-family probes now use one rule: 2xx/3xx = success (status < 400).
+  Previously http1/http2 counted 4xx as success (< 500) while native/curl used
+  < 400 — the same 404 target showed "✓" in one mode and "✗" in another. 4xx/5xx
+  responses now fail with an `ErrorCategory::Http` error record (and may
+  trigger `--retries`); the HttpResult (status, timings) is still captured.
+  The HTTP/3 probe keeps its old < 500 rule for now — it is being reworked in
+  the wave-B PR (V10) and will be aligned there.
+- **V7 — download throughput computed from received bytes (changes reported
+  throughput).** Download MB/s was computed from the *requested* payload size
+  with no body verification — a truncated body produced a throughput figure
+  for bytes that never arrived. Throughput is now computed from
+  `body_size_bytes`, and a size mismatch fails the attempt with a clear
+  "Download size mismatch" error (mirrors the existing upload verification).
+- **V8 — throughput window no longer includes the HTTP connection handshake
+  (changes reported throughput, mostly upward on high-RTT paths).** The hyper
+  HTTP/1.1 setup / HTTP/2 preface+SETTINGS exchange was inside the download
+  transfer window, systematically underestimating download1/download2
+  throughput. The handshake is now measured separately, exposed as the new
+  optional `http.http_handshake_ms` field (additive, omitted when unset — JSON
+  contract 1.0 shape unchanged), and excluded from the transfer window.
+- **V9 — upload payloads are now incompressible (changes reported upload
+  throughput on compressing paths).** Upload bodies were all zeros, which
+  compress ~1000:1 through VPNs/WAN optimizers/proxies, inflating measured
+  throughput arbitrarily. Payloads are now filled once with a deterministic
+  seeded splitmix64 PRNG (reproducible across runs), streamed zero-copy.
+- **V13 — p95/p99 suppressed at small sample sizes.** Tail percentiles were
+  printed even at the default `--runs 3`, where "p99" is just the max wearing
+  a lab coat. p95 now requires n≥20 and p99 n≥100; below that the summary
+  table and HTML report print "—" and Excel writes "insufficient samples".
+  (`Stats.p95/.p99` are now `Option<f64>`; benchmark-mode statistics with
+  their own CI machinery are unchanged.)
+- **V14 — `--concurrency` no longer mixes probe types.** With concurrency > 1
+  the flattened task list let a bulk download run concurrently with an http1
+  latency probe on the same link — latency numbers were dominated by
+  self-induced queueing and process-wide CPU/CSW counters cross-attributed
+  each other. Different probe modes now always run sequentially; concurrency
+  applies only within a mode (its payload-size variants). Flag unchanged.
+- **V15 — redirects recorded; curl protocol version no longer misreported.**
+  `redirect_count` was hardcoded 0 everywhere; a 3xx with a `Location` header
+  is now recorded (redirects are counted, not followed). The curl probe
+  hardcoded `negotiated_version: "HTTP/1.1"` while curl auto-negotiates h2 on
+  HTTPS — it now captures `%{http_version}` (and `%{num_redirects}`), and
+  reports "unknown" rather than guessing on very old curl.
+- **HTTP request-phase timeouts are now classified `ErrorCategory::Timeout`**
+  instead of `Http` (surfaced while pinning T3 error paths).
+
+### Added
+- **T3 — error-path integration tests** asserting `ErrorCategory`
+  classification end-to-end: connection refused → `Tcp`; `/delay` exceeding
+  `--timeout` → `Timeout` (with no partial HttpResult leaking into stats);
+  TLS-to-plaintext-port and self-signed-verification failure → `Tls`;
+  `/status/500` → failed attempt with `Http` + captured status; 404-fails /
+  301-succeeds tests pinning the unified V6 rule on http1 and http2.
+- Unit tests: percentile sample-size guard + p50≤p95≤p99≤max property;
+  download computed-from-received-bytes, handshake-exclusion and
+  `verify_download` truncation tests; upload payload incompressibility and
+  determinism tests; curl `%{http_version}` mapping tests; JSON-contract test
+  proving `http_handshake_ms` is additive and omitted when unset.
+
+---
+
 ## [0.28.19] — 2026-07-15
 
 ### Fixed — probe-engine trust audit, 5 P0 measurement defects

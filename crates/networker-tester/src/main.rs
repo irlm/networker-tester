@@ -885,10 +885,19 @@ async fn run_for_target(
     let shared_h3: Option<std::sync::Arc<tokio::sync::Mutex<()>>> = None;
 
     let connection_reuse_warmup_attempt_count = all_attempts.len() as u32;
+    if cfg.concurrency > 1 {
+        info!(
+            concurrency = cfg.concurrency,
+            "--concurrency > 1: attempts run concurrently within each probe mode; \
+             different modes run sequentially so cross-mode contention cannot \
+             distort latency or throughput readings"
+        );
+    }
     let collect_iteration = |seq: &mut u32| {
-        let futures: Vec<_> = mode_tasks
+        let futures: Vec<(Protocol, _)> = mode_tasks
             .iter()
             .map(|(proto, payload_sz)| {
+                let proto_tag = proto.clone();
                 let proto = proto.clone();
                 let payload_sz = *payload_sz;
                 let target_clone = target.clone();
@@ -902,7 +911,7 @@ async fn run_for_target(
                 let current_seq = *seq;
                 *seq += 1;
 
-                async move {
+                let fut = async move {
                     macro_rules! do_dispatch {
                         () => {{
                             if matches!(proto, Protocol::PageLoad2) {
@@ -992,17 +1001,41 @@ async fn run_for_target(
                     }
 
                     published_logical_attempts(attempts)
-                }
+                };
+                (proto_tag, fut)
             })
             .collect();
 
         async move {
             use futures::stream::{self, StreamExt};
-            let results: Vec<Vec<RequestAttempt>> = stream::iter(futures)
-                .buffer_unordered(cfg.concurrency)
-                .collect()
-                .await;
-            results.into_iter().flatten().collect::<Vec<_>>()
+            // Cross-mode isolation (V14): different probe types must never run
+            // concurrently — a bulk download racing an http1 latency probe on
+            // the same link produces self-induced queueing, and process-wide
+            // CPU/context-switch counters cross-attribute each other's cost.
+            // Group consecutive tasks by protocol: groups run strictly
+            // sequentially; tasks within a group (payload-size variants of the
+            // same mode) honor --concurrency.
+            let mut groups: Vec<Vec<_>> = Vec::new();
+            let mut last_proto: Option<Protocol> = None;
+            for (proto, fut) in futures {
+                if last_proto.as_ref() != Some(&proto) {
+                    groups.push(Vec::new());
+                    last_proto = Some(proto);
+                }
+                groups
+                    .last_mut()
+                    .expect("group pushed above is non-empty")
+                    .push(fut);
+            }
+            let mut published: Vec<RequestAttempt> = Vec::new();
+            for group in groups {
+                let results: Vec<Vec<RequestAttempt>> = stream::iter(group)
+                    .buffer_unordered(cfg.concurrency)
+                    .collect()
+                    .await;
+                published.extend(results.into_iter().flatten());
+            }
+            published
         }
     };
 
@@ -1511,6 +1544,7 @@ mod tests {
                 cpu_time_ms: None,
                 csw_voluntary: None,
                 csw_involuntary: None,
+                http_handshake_ms: None,
             }),
             udp: None,
             error: None,

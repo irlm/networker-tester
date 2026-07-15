@@ -993,6 +993,12 @@ pub struct HttpResult {
     /// Unix only; None on Windows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub csw_involuntary: Option<u64>,
+    /// Time spent in the HTTP connection handshake (hyper HTTP/1.1 setup or
+    /// HTTP/2 preface + SETTINGS exchange) before the request was written (ms).
+    /// Excluded from throughput transfer windows so throughput measures
+    /// transfer, not connection setup. None for probes that don't measure it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_handshake_ms: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1449,15 +1455,28 @@ pub fn aggregate_udp_rtts(samples: &[Option<f64>]) -> RttStats {
 // Statistics aggregation
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Minimum sample count required before a p95 estimate is reported.
+/// Below this, the interpolated p95 is essentially the max and would
+/// mislead readers into thinking it is a tail estimate.
+pub const MIN_SAMPLES_P95: usize = 20;
+/// Minimum sample count required before a p99 estimate is reported.
+pub const MIN_SAMPLES_P99: usize = 100;
+
 /// Descriptive statistics for a series of floating-point measurements.
+///
+/// `p95`/`p99` are `None` when the sample count is below
+/// [`MIN_SAMPLES_P95`]/[`MIN_SAMPLES_P99`] — at small n (the default is
+/// `--runs 3`) an interpolated tail percentile is not a meaningful estimate.
 #[derive(Debug, Clone)]
 pub struct Stats {
     pub count: usize,
     pub min: f64,
     pub mean: f64,
     pub p50: f64,
-    pub p95: f64,
-    pub p99: f64,
+    /// 95th percentile; `None` when `count < MIN_SAMPLES_P95`.
+    pub p95: Option<f64>,
+    /// 99th percentile; `None` when `count < MIN_SAMPLES_P99`.
+    pub p99: Option<f64>,
     pub max: f64,
     pub stddev: f64,
 }
@@ -1475,8 +1494,10 @@ pub fn compute_stats(values: &[f64]) -> Option<Stats> {
     let max = sorted[count - 1];
     let mean = sorted.iter().sum::<f64>() / count as f64;
     let p50 = percentile_from_sorted(&sorted, 50.0);
-    let p95 = percentile_from_sorted(&sorted, 95.0);
-    let p99 = percentile_from_sorted(&sorted, 99.0);
+    // Sample-size guard: suppress tail percentiles that would be
+    // indistinguishable from the max at small n (V13).
+    let p95 = (count >= MIN_SAMPLES_P95).then(|| percentile_from_sorted(&sorted, 95.0));
+    let p99 = (count >= MIN_SAMPLES_P99).then(|| percentile_from_sorted(&sorted, 99.0));
     let variance = sorted.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / count as f64;
     let stddev = variance.sqrt();
     Some(Stats {
@@ -1946,14 +1967,15 @@ mod tests {
         assert!((s.max - 7.0).abs() < 1e-9);
         assert!((s.mean - 7.0).abs() < 1e-9);
         assert!((s.p50 - 7.0).abs() < 1e-9);
-        assert!((s.p95 - 7.0).abs() < 1e-9);
-        assert!((s.p99 - 7.0).abs() < 1e-9);
+        // n=1 is far below the sample-size guard — tail percentiles suppressed.
+        assert!(s.p95.is_none());
+        assert!(s.p99.is_none());
         assert!((s.stddev - 0.0).abs() < 1e-9);
     }
 
     #[test]
     fn compute_stats_known_values() {
-        // 1..=10: mean=5.5, stddev=sqrt(8.25)≈2.872, p50=5.5, p95=9.55, p99=9.91
+        // 1..=10: mean=5.5, stddev=sqrt(8.25)≈2.872, p50=5.5
         let vals: Vec<f64> = (1..=10).map(|v| v as f64).collect();
         let s = compute_stats(&vals).unwrap();
         assert_eq!(s.count, 10);
@@ -1962,10 +1984,54 @@ mod tests {
         assert!((s.mean - 5.5).abs() < 1e-9);
         // p50: rank=4.5 → 5+0.5*(6-5)=5.5
         assert!((s.p50 - 5.5).abs() < 1e-9);
-        // p95: rank=8.55 → 9+0.55*(10-9)=9.55
-        assert!((s.p95 - 9.55).abs() < 1e-9);
+        // n=10 < MIN_SAMPLES_P95 — p95/p99 suppressed.
+        assert!(s.p95.is_none());
+        assert!(s.p99.is_none());
         // stddev of 1..10: variance = (sum of (i-5.5)^2 for i in 1..10)/10 = 8.25
         assert!((s.stddev - 8.25f64.sqrt()).abs() < 1e-9);
+    }
+
+    #[test]
+    fn compute_stats_p95_reported_at_min_sample_size() {
+        // n=20 (== MIN_SAMPLES_P95): p95 present, p99 still suppressed.
+        let vals: Vec<f64> = (1..=20).map(|v| v as f64).collect();
+        let s = compute_stats(&vals).unwrap();
+        // p95: rank = 0.95 * 19 = 18.05 → 19 + 0.05*(20-19) = 19.05
+        assert!((s.p95.expect("p95 at n=20") - 19.05).abs() < 1e-9);
+        assert!(s.p99.is_none(), "p99 must stay suppressed below n=100");
+    }
+
+    #[test]
+    fn compute_stats_p99_reported_at_min_sample_size() {
+        // n=100 (== MIN_SAMPLES_P99): both tail percentiles present.
+        let vals: Vec<f64> = (1..=100).map(|v| v as f64).collect();
+        let s = compute_stats(&vals).unwrap();
+        // p95: rank = 0.95 * 99 = 94.05 → 95 + 0.05*(96-95) = 95.05
+        assert!((s.p95.expect("p95 at n=100") - 95.05).abs() < 1e-9);
+        // p99: rank = 0.99 * 99 = 98.01 → 99 + 0.01*(100-99) = 99.01
+        assert!((s.p99.expect("p99 at n=100") - 99.01).abs() < 1e-9);
+    }
+
+    #[test]
+    fn compute_stats_percentiles_suppressed_below_guard() {
+        let vals19: Vec<f64> = (1..=19).map(|v| v as f64).collect();
+        assert!(compute_stats(&vals19).unwrap().p95.is_none());
+        let vals99: Vec<f64> = (1..=99).map(|v| v as f64).collect();
+        let s = compute_stats(&vals99).unwrap();
+        assert!(s.p95.is_some());
+        assert!(s.p99.is_none());
+    }
+
+    #[test]
+    fn compute_stats_percentile_ordering_property() {
+        // p50 ≤ p95 ≤ p99 ≤ max whenever all are reported.
+        let vals: Vec<f64> = (0..150).map(|v| ((v * 37) % 151) as f64).collect();
+        let s = compute_stats(&vals).unwrap();
+        let p95 = s.p95.unwrap();
+        let p99 = s.p99.unwrap();
+        assert!(s.p50 <= p95, "p50 {} > p95 {}", s.p50, p95);
+        assert!(p95 <= p99, "p95 {p95} > p99 {p99}");
+        assert!(p99 <= s.max, "p99 {} > max {}", p99, s.max);
     }
 
     // Helper to build a minimal RequestAttempt with no sub-results.
@@ -2130,6 +2196,7 @@ mod tests {
                 cpu_time_ms: None,
                 csw_voluntary: None,
                 csw_involuntary: None,
+                http_handshake_ms: None,
             });
             assert!(
                 (primary_metric_value(&a).unwrap() - 25.0).abs() < 1e-9,
@@ -2218,6 +2285,7 @@ mod tests {
                 cpu_time_ms: None,
                 csw_voluntary: None,
                 csw_involuntary: None,
+                http_handshake_ms: None,
             });
             assert!(
                 (primary_metric_value(&a).unwrap() - 100.0).abs() < 1e-9,
@@ -2384,6 +2452,7 @@ mod tests {
             cpu_time_ms: None,
             csw_voluntary: None,
             csw_involuntary: None,
+            http_handshake_ms: None,
         });
         assert_eq!(attempt_payload_bytes(&a), Some(65536));
     }
@@ -2407,6 +2476,7 @@ mod tests {
             cpu_time_ms: None,
             csw_voluntary: None,
             csw_involuntary: None,
+            http_handshake_ms: None,
         });
         assert!(attempt_payload_bytes(&a).is_none());
     }
