@@ -2,23 +2,36 @@ using Networker.Agent;
 
 var builder = Host.CreateApplicationBuilder(args);
 
-// Bind AgentOptions from config + environment (AGENT_ prefixed env vars map to
-// the Agent section, e.g. AGENT_TARGET, AGENT_TESTERPATH, AGENT_MODES).
+// Bind AgentOptions from config + environment. AGENT_-prefixed env vars map onto
+// the option object directly (no underscores between words):
+//   AGENT_DASHBOARDURL, AGENT_APIKEY, AGENT_TESTERPATH, AGENT_NAME.
+// The [Agent] appsettings section is bound too so a config file works locally.
 builder.Configuration.AddEnvironmentVariables(prefix: "AGENT_");
 builder.Services.Configure<AgentOptions>(
     builder.Configuration.GetSection(AgentOptions.SectionName));
 builder.Services.Configure<AgentOptions>(builder.Configuration);
 
-builder.Services.AddSingleton<ProbeRunner>();
+// Resolve the bound options + apply the Rust underscore env spellings
+// (AGENT_DASHBOARD_URL / AGENT_API_KEY / AGENT_TESTER_PATH) as a fallback so an
+// existing Rust-agent environment carries over unchanged.
+builder.Services.AddSingleton(sp =>
+{
+    var opts = new AgentOptions();
+    builder.Configuration.GetSection(AgentOptions.SectionName).Bind(opts);
+    builder.Configuration.Bind(opts);
 
-// Phase 2: real SignalR client to the control plane by default. Set
-// AGENT_DASHBOARDURL=none to use the offline NoOp stub instead.
-var dashUrl = builder.Configuration["DashboardUrl"] ?? builder.Configuration["Agent:DashboardUrl"];
-if (string.Equals(dashUrl, "none", StringComparison.OrdinalIgnoreCase))
-    builder.Services.AddSingleton<IDashboardClient, NoOpDashboardClient>();
-else
-    builder.Services.AddSingleton<IDashboardClient, SignalRDashboardClient>();
+    var env = new Dictionary<string, string?>
+    {
+        ["AGENT_DASHBOARD_URL"] = Environment.GetEnvironmentVariable("AGENT_DASHBOARD_URL"),
+        ["AGENT_API_KEY"] = Environment.GetEnvironmentVariable("AGENT_API_KEY"),
+        ["AGENT_TESTER_PATH"] = Environment.GetEnvironmentVariable("AGENT_TESTER_PATH"),
+    };
+    opts.ApplyRustEnvFallbacks(env);
+    return opts;
+});
 
+builder.Services.AddSingleton<RunExecutor>();
+builder.Services.AddSingleton<CommandHandler>();
 builder.Services.AddHostedService<AgentWorker>();
 
 var host = builder.Build();
