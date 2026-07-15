@@ -2092,7 +2092,7 @@ dependencies = [
 
 [[package]]
 name = "networker-agent"
-version = "0.28.17"
+version = "0.28.18"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2112,7 +2112,7 @@ dependencies = [
 
 [[package]]
 name = "networker-common"
-version = "0.28.17"
+version = "0.28.18"
 dependencies = [
  "chrono",
  "networker-tester",
@@ -2123,7 +2123,7 @@ dependencies = [
 
 [[package]]
 name = "networker-dashboard"
-version = "0.28.17"
+version = "0.28.18"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2167,7 +2167,7 @@ dependencies = [
 
 [[package]]
 name = "networker-endpoint"
-version = "0.28.17"
+version = "0.28.18"
 dependencies = [
  "anyhow",
  "axum",
@@ -2205,7 +2205,7 @@ dependencies = [
 
 [[package]]
 name = "networker-log"
-version = "0.28.17"
+version = "0.28.18"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2221,7 +2221,7 @@ dependencies = [
 
 [[package]]
 name = "networker-tester"
-version = "0.28.17"
+version = "0.28.18"
 dependencies = [
  "anyhow",
  "async-trait",

@@ -8,6 +8,56 @@ import { getRequestSource } from '../lib/requestSource';
 
 const API_BASE = '/api';
 
+/**
+ * Typed API error. `status` is the HTTP status code (0 for network-level
+ * failures where no response was received). `body` is the raw response body,
+ * when one was read. `message` keeps the legacy `API error: ...` / raw-body
+ * format so existing callers that string-match keep working.
+ */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly body: string | null;
+
+  constructor(status: number, message: string, body: string | null = null) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.body = body;
+  }
+}
+
+/**
+ * Clear every session-scoped localStorage key. Shared by all REST clients
+ * (client.ts, testers.ts, vmHistory.ts) so a 401 wipes the *whole* session,
+ * not just the token.
+ */
+export function clearSession(): void {
+  localStorage.removeItem('token');
+  localStorage.removeItem('email');
+  localStorage.removeItem('role');
+  localStorage.removeItem('status');
+  localStorage.removeItem('mustChangePassword');
+  localStorage.removeItem('isPlatformAdmin');
+  localStorage.removeItem('activeProjectId');
+  localStorage.removeItem('activeProjectSlug');
+  localStorage.removeItem('activeProjectRole');
+}
+
+/** Session expired: wipe local state and send the user to /login (once). */
+export function handleUnauthorized(): void {
+  clearSession();
+  // Guard against a redirect loop / pointless full reload when the 401
+  // arrives while we're already on the login page.
+  if (window.location.pathname !== '/login') {
+    window.location.href = '/login';
+  }
+}
+
+// Anonymous auth endpoints where a 401 means "bad credentials", not "session
+// expired" — they must surface the error to the caller instead of wiping the
+// session and hard-reloading the login page mid-interaction.
+const AUTH_401_EXEMPT = new Set(['/auth/login', '/auth/sso/exchange']);
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const token = localStorage.getItem('token');
   const headers: Record<string, string> = {
@@ -23,10 +73,23 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   let errorMsg: string | null = null;
 
   try {
-    const res = await fetch(`${API_BASE}${path}`, {
-      ...options,
-      headers: { ...headers, ...(options?.headers as Record<string, string>) },
-    });
+    let res: Response;
+    try {
+      res = await fetch(`${API_BASE}${path}`, {
+        ...options,
+        headers: { ...headers, ...(options?.headers as Record<string, string>) },
+      });
+    } catch (fetchErr) {
+      // Preserve AbortError so callers using AbortController can distinguish
+      // cancellation from real network failures.
+      if (fetchErr instanceof DOMException && fetchErr.name === 'AbortError') {
+        throw fetchErr;
+      }
+      throw new ApiError(
+        0,
+        `Network error: ${fetchErr instanceof Error ? fetchErr.message : String(fetchErr)}`
+      );
+    }
 
     status = res.status;
 
@@ -34,18 +97,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     const serverTime = res.headers.get('x-process-time-ms');
     if (serverTime) serverMs = parseFloat(serverTime);
 
-    if (res.status === 401) {
-      localStorage.removeItem('token');
-      localStorage.removeItem('email');
-      localStorage.removeItem('role');
-      localStorage.removeItem('status');
-      localStorage.removeItem('mustChangePassword');
-      localStorage.removeItem('isPlatformAdmin');
-      localStorage.removeItem('activeProjectId');
-      localStorage.removeItem('activeProjectSlug');
-      localStorage.removeItem('activeProjectRole');
-      window.location.href = '/login';
-      throw new Error('Unauthorized');
+    if (res.status === 401 && !AUTH_401_EXEMPT.has(path)) {
+      handleUnauthorized();
+      throw new ApiError(401, 'Unauthorized');
     }
 
     if (res.status === 403) {
@@ -55,17 +109,24 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
         if (window.location.pathname !== '/pending') {
           window.location.href = '/pending';
         }
-        throw new Error('pending_approval');
+        throw new ApiError(403, 'pending_approval', body);
       }
-      throw new Error(`API error: ${res.status} ${body}`);
+      throw new ApiError(403, `API error: ${res.status} ${body}`, body);
     }
 
     if (!res.ok) {
       const body = await res.text();
-      throw new Error(body || `API error: ${res.status} ${res.statusText}`);
+      throw new ApiError(
+        res.status,
+        body || `API error: ${res.status} ${res.statusText}`,
+        body || null
+      );
     }
 
-    return res.json();
+    // 204 / empty-body responses (e.g. DELETE → NoContent) are valid for
+    // request<void> endpoints — res.json() would throw on them.
+    const text = await res.text();
+    return (text ? JSON.parse(text) : undefined) as T;
   } catch (err) {
     errorMsg = err instanceof Error ? err.message : String(err);
     throw err;
@@ -160,7 +221,10 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email }),
-    }).then(r => r.json()) as Promise<{ sent: boolean }>,
+    }).then(async r => {
+      if (!r.ok) throw new ApiError(r.status, await r.text().catch(() => `API error: ${r.status}`));
+      return r.json();
+    }) as Promise<{ sent: boolean }>,
 
   resetPassword: (token: string, newPassword: string) =>
     fetch(`${API_BASE}/auth/reset-password`, {
@@ -176,11 +240,14 @@ export const api = {
   getProviders: () =>
     request<{ providers: SsoProviderInfo[] }>('/auth/sso/providers'),
 
-  checkEmail: (email: string) =>
-    request<{ provider: string | null }>('/auth/sso/check-email', {
-      method: 'POST',
-      body: JSON.stringify({ email }),
-    }),
+  // DEAD ENDPOINT — `/auth/sso/check-email` is not served by any backend
+  // (neither the Rust dashboard nor the C# control plane ever mounted it).
+  // Every call 404'd and LoginPage fell back to the password form via its
+  // catch block. Resolve locally so the login flow skips the guaranteed-404
+  // round-trip. If per-email SSO routing ships, restore the POST here.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  checkEmail: (_email: string) =>
+    Promise.resolve<{ provider: string | null }>({ provider: null }),
 
   exchangeCode: (code: string) =>
     fetch(`${API_BASE}/auth/sso/exchange`, {
@@ -251,7 +318,10 @@ export const api = {
       headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: fd,
     }).then(async r => {
-      if (!r.ok) throw new Error(`API error: ${r.status} ${r.statusText}`);
+      if (!r.ok) {
+        const body = await r.text().catch(() => '');
+        throw new ApiError(r.status, body || `API error: ${r.status} ${r.statusText}`, body || null);
+      }
       return r.json() as Promise<ImportResult>;
     });
   },
@@ -715,18 +785,21 @@ export const api = {
   hardDeleteWorkspace: (projectId: string) =>
     request<void>(`/admin/workspaces/${projectId}`, { method: 'DELETE' }),
 
-  // SSO provider admin CRUD
+  // SSO provider admin CRUD.
+  // NOTE: the C# control plane mounts these at /api/sso-providers (the old
+  // Rust dashboard used /api/admin/sso-providers — the client previously
+  // pointed there, which 404'd after the cutover).
   getSsoProviders: () =>
-    request<SsoProvider[]>('/admin/sso-providers'),
+    request<SsoProvider[]>('/sso-providers'),
 
   createSsoProvider: (data: CreateSsoProvider) =>
-    request<SsoProvider>('/admin/sso-providers', { method: 'POST', body: JSON.stringify(data) }),
+    request<SsoProvider>('/sso-providers', { method: 'POST', body: JSON.stringify(data) }),
 
   updateSsoProvider: (id: string, data: Partial<CreateSsoProvider>) =>
-    request<SsoProvider>(`/admin/sso-providers/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    request<SsoProvider>(`/sso-providers/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
 
   deleteSsoProvider: (id: string) =>
-    request<void>(`/admin/sso-providers/${id}`, { method: 'DELETE' }),
+    request<void>(`/sso-providers/${id}`, { method: 'DELETE' }),
 
   // System config
   getSystemConfig: (key: string) =>

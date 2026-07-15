@@ -6,6 +6,8 @@
  * layer; components read fields directly.
  */
 
+import { ApiError, handleUnauthorized } from './client';
+
 const API_BASE = '/api';
 
 export type ResourceType = 'tester' | 'endpoint' | 'benchmark';
@@ -61,13 +63,12 @@ async function request<T>(path: string): Promise<T> {
   };
   const res = await fetch(`${API_BASE}${path}`, { headers });
   if (res.status === 401) {
-    localStorage.removeItem('token');
-    window.location.href = '/login';
-    throw new Error('Unauthorized');
+    handleUnauthorized();
+    throw new ApiError(401, 'Unauthorized');
   }
   if (!res.ok) {
     const body = await res.text().catch(() => '');
-    throw new Error(`API error ${res.status}: ${body || res.statusText}`);
+    throw new ApiError(res.status, `API error ${res.status}: ${body || res.statusText}`, body || null);
   }
   const text = await res.text();
   return (text ? JSON.parse(text) : (undefined as unknown)) as T;
