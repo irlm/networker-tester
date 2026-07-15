@@ -200,7 +200,7 @@ app.MapTesterPrecheckEndpoints();
 // version.rs, merged into protected_flat).
 app.MapVersionEndpoints();
 
-// POST /auth/login + GET /auth/profile — same response shapes the Rust
+// POST /api/auth/login + GET /api/auth/profile — same response shapes the Rust
 // dashboard serves. The policies (GlobalAdmin/Operator/Viewer, ProjectMember/
 // Operator/Admin) are registered and available for other endpoints to opt into.
 app.MapAuthEndpoints();

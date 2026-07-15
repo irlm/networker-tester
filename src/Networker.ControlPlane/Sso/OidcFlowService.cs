@@ -120,15 +120,15 @@ public sealed class OidcFlowService(IOidcProviderClient providerClient)
     }
 
     /// <summary>
-    /// The redirect_uri registered with the provider. NOTE: the Rust dashboard
-    /// used <c>{public_url}/api/auth/sso/callback</c> (its router nested under
-    /// /api); this control plane mounts auth routes without the /api prefix
-    /// (see AuthExtensions: /auth/login), so the callback lives at
-    /// <c>{public_url}/auth/sso/callback</c>. Provider app registrations must
-    /// list this URI.
+    /// The redirect_uri registered with the provider:
+    /// <c>{public_url}/api/auth/sso/callback</c> — byte-identical to the Rust
+    /// dashboard (auth.rs builds the same URI; its router nests all auth routes
+    /// under /api). The C# auth routes carry the same /api prefix (see
+    /// AuthExtensions: /api/auth/login), so a provider app registration works
+    /// unchanged across both control planes.
     /// </summary>
     public static string BuildCallbackRedirectUri(string publicUrl)
-        => $"{publicUrl.TrimEnd('/')}/auth/sso/callback";
+        => $"{publicUrl.TrimEnd('/')}/api/auth/sso/callback";
 
     /// <summary>
     /// Set-Cookie value for the CSRF state — HttpOnly, SameSite=Lax, Path=/,

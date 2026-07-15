@@ -118,7 +118,7 @@ public sealed class OidcFlowServiceTests
 
         Assert.StartsWith("https://accounts.google.com/o/oauth2/v2/auth?response_type=code", url);
         Assert.Contains("&client_id=goog-client", url);
-        Assert.Contains(Uri.EscapeDataString("https://dash.example.com/auth/sso/callback"), url);
+        Assert.Contains(Uri.EscapeDataString("https://dash.example.com/api/auth/sso/callback"), url);
         Assert.Contains($"&state={Uri.EscapeDataString(state)}", url);
         Assert.Contains(Uri.EscapeDataString("openid email profile"), url);
 
@@ -175,7 +175,7 @@ public sealed class OidcFlowServiceTests
         var flow = new OidcFlowService(client);
 
         var idToken = await flow.ExchangeAuthorizationCodeAsync(
-            "https://oauth2.googleapis.com/token", "auth-code", "https://d/auth/sso/callback", "cid", "secret");
+            "https://oauth2.googleapis.com/token", "auth-code", "https://d/api/auth/sso/callback", "cid", "secret");
 
         Assert.Equal("header.payload.sig", idToken);
         Assert.NotNull(client.LastForm);
@@ -183,7 +183,7 @@ public sealed class OidcFlowServiceTests
         Assert.Equal("auth-code", client.LastForm["code"]);
         Assert.Equal("cid", client.LastForm["client_id"]);
         Assert.Equal("secret", client.LastForm["client_secret"]);
-        Assert.Equal("https://d/auth/sso/callback", client.LastForm["redirect_uri"]);
+        Assert.Equal("https://d/api/auth/sso/callback", client.LastForm["redirect_uri"]);
     }
 
     [Fact]

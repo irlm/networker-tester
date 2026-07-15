@@ -123,7 +123,7 @@ public static class AuthExtensions
     public static WebApplication MapAuthEndpoints(this WebApplication app)
     {
         // POST /auth/login — email+password → bcrypt verify → mint JWT.
-        app.MapPost("/auth/login", async (
+        app.MapPost("/api/auth/login", async (
             LoginRequest req,
             AuthRepository repo,
             JwtTokenService tokens,
@@ -171,7 +171,7 @@ public static class AuthExtensions
         });
 
         // GET /auth/profile — current user (email, role, status).
-        app.MapGet("/auth/profile", async (
+        app.MapGet("/api/auth/profile", async (
             HttpContext ctx,
             AuthRepository repo,
             CancellationToken ct) =>
