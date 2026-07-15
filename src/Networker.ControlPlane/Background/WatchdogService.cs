@@ -74,22 +74,30 @@ public sealed class WatchdogService : BackgroundService
     private readonly AgentConnectionRegistry _registry;
     private readonly EventBus _events;
     private readonly ILogger<WatchdogService> _logger;
+    private readonly PgAdvisoryLeaderLock? _leader;
+    private readonly TickMonitor _monitor;
 
     public WatchdogService(
         IServiceScopeFactory scopeFactory,
         AgentConnectionRegistry registry,
         EventBus events,
-        ILogger<WatchdogService> logger)
+        ILogger<WatchdogService> logger,
+        PgAdvisoryLeaderLock? leaderLock = null,
+        TickMonitor? tickMonitor = null)
     {
         _scopeFactory = scopeFactory;
         _registry = registry;
         _events = events;
         _logger = logger;
+        // M6 ops infra (AddOpsInfrastructure); optional for bare test hosts.
+        _leader = leaderLock;
+        _monitor = tickMonitor ?? new TickMonitor();
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("Stale-job watchdog started (tick={Tick}s)", TickInterval.TotalSeconds);
+        _monitor.ReportStarted(OpsServiceNames.Watchdog);
 
         // PeriodicTimer's steady cadence is the C# analogue of the Rust
         // tokio::time::interval loop. A slow tick simply delays the next one; we
@@ -99,7 +107,13 @@ public sealed class WatchdogService : BackgroundService
         {
             try
             {
-                await TickAsync(stoppingToken).ConfigureAwait(false);
+                var ranAsLeader = await _leader
+                    .TryRunGuardedAsync(LeaderLockKeys.Watchdog, TickAsync, stoppingToken)
+                    .ConfigureAwait(false);
+                if (!ranAsLeader)
+                {
+                    _logger.LogDebug("Stale-job watchdog tick skipped — another replica holds the leader lock");
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -109,6 +123,7 @@ public sealed class WatchdogService : BackgroundService
             {
                 // A single failed tick must never kill the loop — log and retry
                 // next interval (matches the Rust `tracing::error!` + continue).
+                _monitor.ReportError(OpsServiceNames.Watchdog, ex);
                 _logger.LogError(ex, "Stale-job watchdog tick failed");
             }
         }
@@ -237,5 +252,10 @@ public sealed class WatchdogService : BackgroundService
                 "Stale-job watchdog: failed {Running} running + {Queued} queued run(s)",
                 reapedRunning, reapedQueued);
         }
+
+        _monitor.ReportTick(
+            OpsServiceNames.Watchdog,
+            reapedRunning + reapedQueued,
+            $"reaped_running={reapedRunning} reaped_queued={reapedQueued}");
     }
 }

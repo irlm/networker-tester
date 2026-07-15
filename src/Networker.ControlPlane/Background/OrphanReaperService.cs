@@ -65,11 +65,20 @@ public sealed class OrphanReaperService : BackgroundService
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<OrphanReaperService> _logger;
+    private readonly PgAdvisoryLeaderLock? _leader;
+    private readonly TickMonitor _monitor;
 
-    public OrphanReaperService(IServiceScopeFactory scopeFactory, ILogger<OrphanReaperService> logger)
+    public OrphanReaperService(
+        IServiceScopeFactory scopeFactory,
+        ILogger<OrphanReaperService> logger,
+        PgAdvisoryLeaderLock? leaderLock = null,
+        TickMonitor? tickMonitor = null)
     {
         _scopeFactory = scopeFactory;
         _logger = logger;
+        // M6 ops infra (AddOpsInfrastructure); optional for bare test hosts.
+        _leader = leaderLock;
+        _monitor = tickMonitor ?? new TickMonitor();
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -77,13 +86,20 @@ public sealed class OrphanReaperService : BackgroundService
         _logger.LogInformation(
             "Cloud orphan-reaper background service started (tick every {Minutes}min)",
             TickInterval.TotalMinutes);
+        _monitor.ReportStarted(OpsServiceNames.OrphanReaper);
 
         using var timer = new PeriodicTimer(TickInterval);
         while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
         {
             try
             {
-                await SweepAsync(stoppingToken).ConfigureAwait(false);
+                var ranAsLeader = await _leader
+                    .TryRunGuardedAsync(LeaderLockKeys.OrphanReaper, SweepAsync, stoppingToken)
+                    .ConfigureAwait(false);
+                if (!ranAsLeader)
+                {
+                    _logger.LogDebug("Cloud orphan-reaper sweep skipped — another replica holds the leader lock");
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -92,6 +108,7 @@ public sealed class OrphanReaperService : BackgroundService
             catch (Exception ex)
             {
                 // Never let one bad sweep kill the loop.
+                _monitor.ReportError(OpsServiceNames.OrphanReaper, ex);
                 _logger.LogError(ex, "Cloud orphan-reaper sweep failed");
             }
         }
@@ -127,6 +144,7 @@ public sealed class OrphanReaperService : BackgroundService
             // No configured Azure scope → nothing to list. AWS/GCP are stubs
             // (Rust returns empty Vec), so the sweep is a no-op.
             _logger.LogDebug("Orphan-reaper: no Azure cloud_connection configured; nothing to scan");
+            _monitor.ReportTick(OpsServiceNames.OrphanReaper, 0, "no azure cloud_connection configured");
             return;
         }
 
@@ -158,6 +176,11 @@ public sealed class OrphanReaperService : BackgroundService
                 "Orphan-reaper sweep: {WouldReap} orphan(s) identified, {Deleted} deleted, {Failed} failed",
                 totalWouldReap, totalDeleted, totalFailed);
         }
+
+        _monitor.ReportTick(
+            OpsServiceNames.OrphanReaper,
+            totalDeleted,
+            $"identified={totalWouldReap} deleted={totalDeleted} failed={totalFailed}");
     }
 
     /// <summary>

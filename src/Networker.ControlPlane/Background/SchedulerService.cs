@@ -49,28 +49,44 @@ public sealed class SchedulerService : BackgroundService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly AgentConnectionRegistry _registry;
     private readonly ILogger<SchedulerService> _logger;
+    private readonly PgAdvisoryLeaderLock? _leader;
+    private readonly TickMonitor _monitor;
 
     public SchedulerService(
         IServiceScopeFactory scopeFactory,
         AgentConnectionRegistry registry,
-        ILogger<SchedulerService> logger)
+        ILogger<SchedulerService> logger,
+        PgAdvisoryLeaderLock? leaderLock = null,
+        TickMonitor? tickMonitor = null)
     {
         _scopeFactory = scopeFactory;
         _registry = registry;
         _logger = logger;
+        // M6 ops infra (AddOpsInfrastructure). Optional so bare test hosts that
+        // don't wire it still construct the service; without the lock, ticks run
+        // unguarded — the pre-M6 single-replica behaviour.
+        _leader = leaderLock;
+        _monitor = tickMonitor ?? new TickMonitor();
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("Scheduler background service started (tick every {Seconds}s)",
             TickInterval.TotalSeconds);
+        _monitor.ReportStarted(OpsServiceNames.Scheduler);
 
         using var timer = new PeriodicTimer(TickInterval);
         while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
         {
             try
             {
-                await TickAsync(stoppingToken).ConfigureAwait(false);
+                var ranAsLeader = await _leader
+                    .TryRunGuardedAsync(LeaderLockKeys.Scheduler, TickAsync, stoppingToken)
+                    .ConfigureAwait(false);
+                if (!ranAsLeader)
+                {
+                    _logger.LogDebug("Scheduler tick skipped — another replica holds the leader lock");
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -79,6 +95,7 @@ public sealed class SchedulerService : BackgroundService
             catch (Exception ex)
             {
                 // Never let a tick throw out of the loop — log and keep ticking.
+                _monitor.ReportError(OpsServiceNames.Scheduler, ex);
                 _logger.LogError(ex, "Scheduler tick failed");
             }
         }
@@ -103,6 +120,7 @@ public sealed class SchedulerService : BackgroundService
 
         if (due.Count == 0)
         {
+            _monitor.ReportTick(OpsServiceNames.Scheduler, 0, "no due schedules");
             return;
         }
 
@@ -208,5 +226,10 @@ public sealed class SchedulerService : BackgroundService
         _logger.LogInformation(
             "Scheduler tick: {Due} due, {Launched} launched, {Advanced} seeded, {SkippedNoAgent} skipped (no agent), {Failed} failed",
             due.Count, launched, advanced, skippedNoAgent, failed);
+
+        _monitor.ReportTick(
+            OpsServiceNames.Scheduler,
+            due.Count,
+            $"launched={launched} seeded={advanced} skipped_no_agent={skippedNoAgent} failed={failed}");
     }
 }

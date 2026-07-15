@@ -24,13 +24,20 @@ public sealed class QueuedRunRedispatchService : BackgroundService
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<QueuedRunRedispatchService> _logger;
+    private readonly PgAdvisoryLeaderLock? _leader;
+    private readonly TickMonitor _monitor;
 
     public QueuedRunRedispatchService(
         IServiceScopeFactory scopeFactory,
-        ILogger<QueuedRunRedispatchService> logger)
+        ILogger<QueuedRunRedispatchService> logger,
+        PgAdvisoryLeaderLock? leaderLock = null,
+        TickMonitor? tickMonitor = null)
     {
         _scopeFactory = scopeFactory;
         _logger = logger;
+        // M6 ops infra (AddOpsInfrastructure); optional for bare test hosts.
+        _leader = leaderLock;
+        _monitor = tickMonitor ?? new TickMonitor();
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -38,13 +45,20 @@ public sealed class QueuedRunRedispatchService : BackgroundService
         _logger.LogInformation(
             "Queued-run redispatch service started (tick every {Seconds}s)",
             TickInterval.TotalSeconds);
+        _monitor.ReportStarted(OpsServiceNames.QueuedRedispatch);
 
         using var timer = new PeriodicTimer(TickInterval);
         while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
         {
             try
             {
-                await TickAsync(stoppingToken).ConfigureAwait(false);
+                var ranAsLeader = await _leader
+                    .TryRunGuardedAsync(LeaderLockKeys.QueuedRedispatch, TickAsync, stoppingToken)
+                    .ConfigureAwait(false);
+                if (!ranAsLeader)
+                {
+                    _logger.LogDebug("Queued-run redispatch tick skipped — another replica holds the leader lock");
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -52,6 +66,7 @@ public sealed class QueuedRunRedispatchService : BackgroundService
             }
             catch (Exception ex)
             {
+                _monitor.ReportError(OpsServiceNames.QueuedRedispatch, ex);
                 _logger.LogError(ex, "Queued-run redispatch tick failed");
             }
         }
@@ -68,5 +83,7 @@ public sealed class QueuedRunRedispatchService : BackgroundService
         {
             _logger.LogInformation("Redispatched {Count} previously-queued run(s)", count);
         }
+
+        _monitor.ReportTick(OpsServiceNames.QueuedRedispatch, count);
     }
 }
