@@ -15,12 +15,13 @@ namespace Networker.ControlPlane.Background;
 ///     <c>last_heartbeat</c> (fallback <c>started_at</c> when heartbeat is null)
 ///     is older than <see cref="RunningStaleCutoff"/> (the Rust
 ///     <c>find_stale_assigned(client, 120)</c> query) AND whose executing agent
-///     (<c>tester_id</c> holds the AGENT id) is not in the live
-///     <see cref="AgentConnectionRegistry"/>. Hub/registry membership is the
-///     authoritative "truly online" signal (identical to the Rust
+///     (parsed from <c>worker_id</c> — the FK-free string that records the
+///     agent; <c>tester_id</c> is a project_tester FK, not an agent id) is not in
+///     the live <see cref="AgentConnectionRegistry"/>. Hub/registry membership is
+///     the authoritative "truly online" signal (identical to the Rust
 ///     <c>state.agents.is_agent_online</c> guard): if the socket is live the run
 ///     may just be slow to heartbeat, so it is left alone. A run is NEVER reaped
-///     merely for having a null <c>tester_id</c> — it must first fail the 120s
+///     merely for having a null/unparseable <c>worker_id</c> — it must first fail the 120s
 ///     staleness precondition (a fresh heartbeat or a start under 120s ago keeps
 ///     it alive). Reaped runs are failed with the Rust user-facing guidance
 ///     <c>"Agent disconnected — tester may have been deleted or restarted"</c>.</item>
@@ -144,7 +145,7 @@ public sealed class WatchdogService : BackgroundService
         //     OR (last_heartbeat IS NULL AND started_at IS NOT NULL
         //         AND started_at < now - 120s))
         // A run with a fresh heartbeat, or one that started under 120s ago, is
-        // never even a candidate — regardless of its tester_id. Registry
+        // never even a candidate — regardless of its worker_id. Registry
         // membership (in-memory, authoritative) is then checked per-row below —
         // never expressible in SQL.
         var runningStaleBefore = now - RunningStaleCutoff;
@@ -152,19 +153,23 @@ public sealed class WatchdogService : BackgroundService
             .Where(r => r.Status == "running" &&
                 ((r.LastHeartbeat != null && r.LastHeartbeat < runningStaleBefore) ||
                  (r.LastHeartbeat == null && r.StartedAt != null && r.StartedAt < runningStaleBefore)))
-            .Select(r => new { r.Id, r.TesterId })
+            .Select(r => new { r.Id, r.WorkerId })
             .ToListAsync(ct)
             .ConfigureAwait(false);
 
         var reapedRunning = 0;
         foreach (var run in running)
         {
-            // Authoritative liveness: tester_id holds the EXECUTING AGENT's id
-            // (Rust: "Tester id == agent id in the v0.28 model"). If that agent
-            // still holds a live connection the run may just be slow to
-            // heartbeat — leave it. Only reap when the agent is genuinely absent
-            // from the registry (or was never stamped despite 120s of silence).
-            if (run.TesterId is Guid agentId && _registry.IsOnline(agentId))
+            // Authoritative liveness: worker_id holds the EXECUTING AGENT's id
+            // (as text). tester_id is a project_tester FK, NOT an agent id, so it
+            // can never be used to look up the agent in the registry. Parse the
+            // worker_id Guid; if that agent still holds a live connection the run
+            // may just be slow to heartbeat — leave it. Only reap when the agent
+            // is genuinely absent from the registry (or worker_id is
+            // null/unparseable despite 120s of silence — a run that was never
+            // claimed by any live agent).
+            Guid? workerAgentId = Guid.TryParse(run.WorkerId, out var parsed) ? parsed : null;
+            if (workerAgentId is Guid agentId && _registry.IsOnline(agentId))
             {
                 continue;
             }
@@ -188,14 +193,14 @@ public sealed class WatchdogService : BackgroundService
             _events.Publish(new JobUpdate(
                 JobId: run.Id,
                 Status: "failed",
-                AgentId: run.TesterId,
+                AgentId: workerAgentId,
                 StartedAt: null,
                 FinishedAt: eventNow));
 
             reapedRunning++;
             _logger.LogWarning(
-                "Reaped stale running run {RunId} — agent {TesterId} offline",
-                run.Id, run.TesterId);
+                "Reaped stale running run {RunId} — agent {WorkerId} offline",
+                run.Id, run.WorkerId);
         }
 
         // ── Stale `queued` runs ─────────────────────────────────────────────

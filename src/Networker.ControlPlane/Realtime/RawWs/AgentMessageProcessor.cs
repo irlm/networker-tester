@@ -156,9 +156,11 @@ public sealed class AgentMessageProcessor
     /// <see cref="AgentStatus"/>(offline) — the Rust cleanup at the bottom of
     /// <c>handle_agent_socket</c>:
     /// <c>UPDATE test_run SET status='failed', error_message=…, finished_at=now()
-    /// WHERE tester_id=&lt;agent_id&gt; AND status IN ('running','queued')</c>.
-    /// The caller performs the registry unregister (compare-and-remove) BEFORE
-    /// invoking this, since the registry op is connection-id-scoped.
+    /// WHERE worker_id=&lt;agent_id&gt; AND status IN ('running','queued')</c>.
+    /// Runs are matched by <c>worker_id</c> (the FK-free string recording the
+    /// executing agent), NOT <c>tester_id</c> (a project_tester FK, not an agent
+    /// id). The caller performs the registry unregister (compare-and-remove)
+    /// BEFORE invoking this, since the registry op is connection-id-scoped.
     /// </summary>
     public async Task HandleDisconnectAsync(Guid agentId, CancellationToken ct = default)
     {
@@ -170,10 +172,12 @@ public sealed class AgentMessageProcessor
             await _db.SaveChangesAsync(ct);
         }
 
-        // Fail orphaned runs (running/queued) owned by this agent. Executed
-        // as a set-based UPDATE — the direct analogue of the Rust SQL.
+        // Fail orphaned runs (running/queued) owned by this agent. Ownership is
+        // keyed on worker_id (agent_id as text) — the reliable, FK-free key —
+        // NOT tester_id (a project_tester FK). Set-based UPDATE.
+        var workerId = agentId.ToString();
         var affected = await _db.TestRuns
-            .Where(r => r.TesterId == agentId
+            .Where(r => r.WorkerId == workerId
                 && (r.Status == "running" || r.Status == "queued"))
             .ExecuteUpdateAsync(s => s
                 .SetProperty(r => r.Status, "failed")
@@ -264,22 +268,36 @@ public sealed class AgentMessageProcessor
 
     /// <summary>
     /// RunStarted → <c>test_run.status='running'</c> + <c>started_at</c> +
-    /// <c>tester_id=&lt;this agent&gt;</c> + <c>last_heartbeat=now</c>; publish
+    /// <c>worker_id=&lt;this agent&gt;</c> + <c>tester_id=&lt;agent.tester_id or
+    /// null&gt;</c> + <c>last_heartbeat=now</c>; publish
     /// <see cref="JobUpdate"/>(running). Rust:
-    /// <c>test_runs::update_status(Running)</c> + <c>JobUpdate</c>. Stamping
-    /// <c>tester_id</c> with the EXECUTING agent's id is what lets the watchdog
-    /// check the right agent's registry liveness and the disconnect cleanup find
-    /// this run (<c>WHERE tester_id=$1</c>); stamping <c>last_heartbeat</c>
-    /// keeps a just-started run out of the 120s staleness window.
+    /// <c>test_runs::update_status(Running)</c> + <c>JobUpdate</c>.
+    /// <c>worker_id</c> (a nullable, FK-free string) records the EXECUTING agent
+    /// — the reliable key the watchdog/disconnect cleanup use to map a run to its
+    /// agent. <c>tester_id</c> is a project_tester FK, so it gets the tester the
+    /// agent is BOUND to (<c>agent.tester_id</c>) — NULL for a standalone agent,
+    /// and NEVER the agent_id (which would violate <c>test_run_tester_id_fkey</c>
+    /// and 500 run_started persistence). Stamping <c>last_heartbeat</c> keeps a
+    /// just-started run out of the 120s staleness window.
     /// </summary>
     private async Task OnRunStarted(Guid agentId, RunStartedMessage rs, CancellationToken ct)
     {
+        // The project_tester the agent is bound to (may be null for a standalone
+        // agent). NEVER the agent_id — that is not a valid project_tester FK.
+        var boundTesterId = await _db.Agents
+            .AsNoTracking()
+            .Where(a => a.AgentId == agentId)
+            .Select(a => a.TesterId)
+            .FirstOrDefaultAsync(ct);
+        var workerId = agentId.ToString();
+
         await _db.TestRuns
             .Where(r => r.Id == rs.RunId)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(r => r.Status, "running")
                 .SetProperty(r => r.StartedAt, rs.StartedAt.UtcDateTime)
-                .SetProperty(r => r.TesterId, agentId)
+                .SetProperty(r => r.WorkerId, workerId)
+                .SetProperty(r => r.TesterId, boundTesterId)
                 .SetProperty(r => r.LastHeartbeat, DateTime.UtcNow), ct);
 
         _bus.Publish(new JobUpdate(rs.RunId, "running", agentId, rs.StartedAt, null));
