@@ -35,6 +35,7 @@ the SAME schema during the transition window.
 | `DASHBOARD_BACKGROUND_SERVICES` | No (default **on**) | `0`/`false` makes a replica **API-only** (no scheduler/watchdog/reaper/… loops registered). With M6 leader election this is no longer required for safety with multiple replicas, but keep it as the explicit ops switch: during cutover run the C# loops **disabled** until step 3.4 flips ownership. |
 | `ASPNETCORE_ENVIRONMENT` | Yes (`Production`) | Anything other than `Development` enforces the fail-closed secrets. |
 | `ASPNETCORE_URLS` | Yes | The "separate port" for side-by-side deploy, e.g. `http://0.0.0.0:5030` (Rust stays on `:3000`). |
+| `DASHBOARD_PUBLIC_URL` | **Yes for provisioning** | The publicly reachable base URL (e.g. `https://alethedash.com`). The tester-provisioning bootstrap derives the agent WebSocket URL from it; unset, new tester agents are pointed at `ws://localhost:3000` and never come online (the control plane logs a warning). The prod deploy asserts it into `/etc/alethedash-cs.env` idempotently. |
 
 Agent side (C# `Networker.Agent`): `AGENT_DASHBOARDURL` (base URL; the agent
 connects to `{url}/ws/agent`), `AGENT_TESTERPATH`, `AGENT_NAME` — note the
