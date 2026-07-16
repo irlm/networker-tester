@@ -17,6 +17,63 @@ env:
 
 jobs:
   # ──────────────────────────────────────────────────────────────────────────
+  # Changed-area detection: lets C#-only / frontend-only PRs skip the Rust
+  # matrix (job-level skips still satisfy branch-protection required checks,
+  # unlike workflow-level `paths:` filters which leave them missing).
+  #
+  # PUSH EVENTS ALWAYS RUN EVERYTHING — auto-tag needs lint/test-ubuntu/
+  # frontend on main, and a C#-only version bump must still release. Only
+  # pull_request events skip. Detection is conservative: Rust runs unless
+  # EVERY changed file matches a known non-Rust pattern.
+  # ──────────────────────────────────────────────────────────────────────────
+  changes:
+    name: Detect changed areas
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.detect.outputs.rust }}
+      frontend: ${{ steps.detect.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+
+      - name: Detect
+        id: detect
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "rust=true" >> "$GITHUB_OUTPUT"
+            echo "frontend=true" >> "$GITHUB_OUTPUT"
+            echo "push event — running everything"
+            exit 0
+          fi
+          git fetch origin "${{ github.base_ref }}" --quiet
+          CHANGED=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
+          echo "changed files:"; echo "$CHANGED" | sed 's/^/  /'
+
+          # Rust is SKIPPED only when EVERY changed file is provably non-Rust:
+          # C# solution (src/), C# tests, frontend, docs, markdown, or the
+          # C#-workflow file. Any other file (crates/, Cargo.*, installers,
+          # scripts, this workflow, ...) keeps the full matrix. Deliberately
+          # avoids `grep -qv` (selected-vs-matched semantics differ between
+          # GNU and BSD grep) — capture the non-safe lines and test non-empty.
+          RUST=false
+          NON_SAFE=$(echo "$CHANGED" | grep -vE '^(src/|tests/Networker\.|dashboard/|docs/|\.github/workflows/dotnet\.yml$)|\.md$' || true)
+          if [ -n "$NON_SAFE" ]; then
+            RUST=true
+            echo "rust-relevant files:"; echo "$NON_SAFE" | sed 's/^/  /'
+          fi
+
+          # Frontend runs iff dashboard/ changed (or push, handled above).
+          FRONTEND=false
+          if echo "$CHANGED" | grep -qE '^dashboard/'; then
+            FRONTEND=true
+          fi
+
+          echo "rust=$RUST" >> "$GITHUB_OUTPUT"
+          echo "frontend=$FRONTEND" >> "$GITHUB_OUTPUT"
+          echo "rust=$RUST frontend=$FRONTEND"
+
+  # ──────────────────────────────────────────────────────────────────────────
   # Version bump check: every PR must bump Cargo.toml version + CHANGELOG
   # ──────────────────────────────────────────────────────────────────────────
   version-check:
@@ -93,6 +150,11 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    needs: changes
+    # C#-only / frontend-only / docs-only PRs skip the Rust matrix entirely;
+    # every job that `needs: lint` (tests, coverage, sql/pg) cascades the skip.
+    # Push events always run (auto-tag depends on this chain).
+    if: needs.changes.outputs.rust == 'true'
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -234,7 +296,11 @@ jobs:
   frontend:
     name: Dashboard frontend
     runs-on: ubuntu-latest
-    needs: lint
+    needs: [lint, changes]
+    # Runs iff dashboard/ changed (push events set frontend=true). `!cancelled()`
+    # + explicit lint-result check keeps it runnable when lint is SKIPPED
+    # (frontend-only PR) while still failing fast when lint actually FAILS.
+    if: ${{ !cancelled() && needs.changes.outputs.frontend == 'true' && (needs.lint.result == 'success' || needs.lint.result == 'skipped') }}
     defaults:
       run:
         working-directory: dashboard
