@@ -68,6 +68,61 @@ public interface IComputeProvisioner
     /// <see cref="ProvisionResult.StdOut"/>.</summary>
     Task<ProvisionResult> ShowAsync(
         ProjectTester tester, ProviderCredentials? credentials, CancellationToken ct = default);
+
+    /// <summary>
+    /// Create a brand-new VM — the C# port of the Rust
+    /// <c>CloudProvider::create_vm</c> ("the heavy call"): Azure
+    /// <c>az vm create</c> (+ <c>vm extension set</c> CustomScriptExtension for
+    /// Windows bootstraps), AWS AMI-resolve → key-pair → security-group →
+    /// <c>run-instances</c> → public-IP poll, GCP
+    /// <c>compute instances create</c> with a startup-script. Total like the
+    /// other operations: infrastructure failures are captured in the returned
+    /// <see cref="VmCreateResult"/>, never thrown.
+    /// </summary>
+    Task<VmCreateResult> CreateVmAsync(
+        VmCreateRequest request, ProviderCredentials? credentials, CancellationToken ct = default);
+}
+
+/// <summary>
+/// Inputs for <see cref="IComputeProvisioner.CreateVmAsync"/> — the C# port of
+/// the Rust <c>cloud_provider::VmConfig</c> (tags omitted: every Rust create
+/// call site passes an empty tag map).
+/// </summary>
+/// <param name="Cloud">"azure" | "aws" | "gcp".</param>
+/// <param name="Name">VM name (Rust <c>generate_vm_name</c> output).</param>
+/// <param name="Region">Cloud region / location.</param>
+/// <param name="VmSize">VM size / instance type / machine type.</param>
+/// <param name="SshUser">Admin username (Rust <c>default_ssh_user</c>).</param>
+/// <param name="Image">Provider-specific image ref (Azure URN / AWS marker /
+/// GCP family) from <see cref="TesterCreateLogic.ResolveImage"/>.</param>
+/// <param name="BootstrapScript">Optional cloud-init / user-data script —
+/// Azure <c>--custom-data</c>, AWS <c>--user-data</c>, GCP
+/// <c>--metadata-from-file startup-script=</c>.</param>
+public sealed record VmCreateRequest(
+    string Cloud,
+    string Name,
+    string Region,
+    string VmSize,
+    string SshUser,
+    string Image,
+    string? BootstrapScript);
+
+/// <summary>
+/// Result of a VM create — the Rust <c>VmInfo</c> folded into the total-result
+/// convention (no throw for infrastructure failure).
+/// </summary>
+public sealed record VmCreateResult(
+    bool Success,
+    string? ResourceId,
+    string? PublicIp,
+    string? VmName,
+    string? Error)
+{
+    public static VmCreateResult Created(string resourceId, string publicIp, string vmName) =>
+        new(true, resourceId, publicIp, vmName, null);
+
+    public static VmCreateResult Fail(string error) =>
+        new(false, null, null, null, error);
 }
 
 /// <summary>
