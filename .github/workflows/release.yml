@@ -5,16 +5,18 @@ name: Release
 #   git tag v0.28.15 <merge-commit>
 #   git push origin v0.28.15
 #
-# The workflow:
-#   1. Builds the Rust binaries that STILL ship — networker-tester (the probe
-#      core, installed on Win/Mac/Linux) and networker-endpoint (the diagnostic
-#      server, still Rust on prod) — plus the alethabench orchestrator, for
-#      Linux x64, macOS x64, macOS ARM64, Windows x64.
-#   2. Publishes the C# control plane (Networker.ControlPlane, self-contained
-#      linux-x64) — this is what serves alethedash.com since the cutover.
-#   3. Creates a GitHub release with the notes and every archive.
-#   4. Deploys to the Azure VM: swaps the C# control plane, the Rust endpoint +
-#      tester, the orchestrator, and the frontend.
+# The workflow — DEPLOY-FIRST GRAPH (the deploy never waits for Windows/mac):
+#   1. build-linux (+ sccache) builds the deploy-critical artifacts: tester/
+#      endpoint/agent (musl), alethabench, and the frontend. build-csharp
+#      publishes the control plane. These two gate everything (~6 min).
+#   2. release publishes the GitHub release with the linux + C# assets.
+#   3. deploy ships to the Azure VM immediately (~8-9 min after the tag,
+#      instead of ~20 waiting on windows-msvc — chromiumoxide in the tester is
+#      the immovable floor of that build).
+#   4. build-native (macOS x64/ARM64, Windows x64) runs in parallel and
+#      attaches its archives to the published release when done. Brief window
+#      where releases/latest lacks win/mac assets; installers fall back to
+#      cargo install if hit mid-window.
 #
 # NOTE (post-cutover): the Rust dashboard/agent are NO LONGER built, shipped, or
 # deployed — the C# control plane replaced them (docs/phase2-cutover-runbook.md).
@@ -42,19 +44,104 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  # ── Build the still-shipped Rust binaries for each platform ────────────────
-  build:
+  # ── Deploy-critical build: linux (what prod + the bootstrap consume) ───────
+  # The deploy chain gates ONLY on this + build-csharp. Windows/mac binaries are
+  # download artifacts — they attach to the release asynchronously (see
+  # build-native) instead of holding the deploy hostage for ~11 min of
+  # windows-msvc compile (chromiumoxide in the tester is the immovable floor).
+  build-linux:
+    name: Build x86_64-unknown-linux-musl
+    runs-on: ubuntu-latest
+    env:
+      TARGET: x86_64-unknown-linux-musl
+      # sccache: per-compilation-unit cache that survives the Cargo.lock bump
+      # every release makes (the version bump busts lockfile-keyed caches).
+      CARGO_INCREMENTAL: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+
+      - name: Cache cargo registry
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: release-linux-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: release-linux-registry-
+
+      - name: Install musl tools (static linking)
+        run: sudo apt-get update -qq && sudo apt-get install -y musl-tools
+
+      - name: Sync lockfiles
+        run: |
+          cargo generate-lockfile
+          cargo generate-lockfile --manifest-path benchmarks/orchestrator/Cargo.toml
+
+      - name: Build shipped Rust binaries
+        run: >
+          cargo build --release --locked
+          --target x86_64-unknown-linux-musl
+          --features browser
+          -p networker-tester -p networker-endpoint -p networker-agent
+
+      - name: Build orchestrator
+        run: >
+          cargo build --release --locked
+          --target x86_64-unknown-linux-musl
+          --manifest-path benchmarks/orchestrator/Cargo.toml
+
+      - name: Package (tar.gz)
+        shell: bash
+        run: |
+          SRC="target/${TARGET}/release"
+          mkdir -p dist
+          tar czf "dist/networker-tester-${TARGET}.tar.gz" -C "${SRC}" "networker-tester"
+          tar czf "dist/networker-endpoint-${TARGET}.tar.gz" -C "${SRC}" "networker-endpoint"
+          tar czf "dist/networker-agent-${TARGET}.tar.gz" -C "${SRC}" "networker-agent"
+          ORCH_SRC="benchmarks/orchestrator/target/${TARGET}/release"
+          tar czf "dist/alethabench-${TARGET}.tar.gz" -C "${ORCH_SRC}" "alethabench"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+
+      - name: Build dashboard frontend
+        run: |
+          cd dashboard && npm ci --ignore-scripts && npm run build
+          tar czf "../dist/dashboard-frontend.tar.gz" -C dist .
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: dist-x86_64-unknown-linux-musl
+          path: dist/
+
+  # ── Async native builds: mac x2 + windows (do NOT gate the deploy) ─────────
+  build-native:
     name: Build ${{ matrix.target }}
+    needs: release   # attach to the already-published release when done
     runs-on: ${{ matrix.os }}
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
     strategy:
       fail-fast: false
       matrix:
         include:
-          - target:  x86_64-unknown-linux-musl
-            os:      ubuntu-latest
-            ext:     ""
-            archive: tar.gz
-
           - target:  x86_64-apple-darwin
             os:      macos-latest      # cross-compile Intel from ARM64 runner
             ext:     ""
@@ -80,6 +167,9 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+
       - name: Cache cargo registry
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
         with:
@@ -89,10 +179,6 @@ jobs:
             target
           key: release-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: release-${{ matrix.target }}-
-
-      - name: Install musl tools (Linux static linking)
-        if: contains(matrix.target, 'musl')
-        run: sudo apt-get update -qq && sudo apt-get install -y musl-tools
 
       - name: Sync lockfiles
         run: |
@@ -173,24 +259,15 @@ jobs:
               -DestinationPath "dist\alethabench-$target.zip" `
               -Force
 
-      # ── Build frontend (only once, on Linux) ─────────────────────────────
-      - name: Setup Node.js
-        if: matrix.target == 'x86_64-unknown-linux-musl'
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
-        with:
-          node-version: 22
-
-      - name: Build dashboard frontend
-        if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: |
-          cd dashboard && npm ci --ignore-scripts && npm run build
-          tar czf "../dist/dashboard-frontend.tar.gz" -C dist .
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
-        with:
-          name: dist-${{ matrix.target }}
-          path: dist/
+      # Attach this target's archives to the ALREADY-PUBLISHED release. The
+      # deploy went out minutes ago on the linux+C# assets; win/mac downloads
+      # become available here (brief window where releases/latest lacks them —
+      # installers fall back to cargo install if hit mid-window).
+      - name: Upload assets to release
+        shell: bash
+        run: gh release upload "${RELEASE_TAG}" dist/* --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
 
   # ── Publish the C# control plane (self-contained linux-x64) ──────────────
   # This is the deployable that serves alethedash.com since the cutover. Built
@@ -226,7 +303,7 @@ jobs:
   # ── Create GitHub release and attach all archives ────────────────────────
   release:
     name: Create GitHub Release
-    needs: [build, build-csharp]
+    needs: [build-linux, build-csharp]
     runs-on: ubuntu-latest
 
     steps:
