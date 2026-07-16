@@ -11,6 +11,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.24] — 2026-07-16
+
+### Fixed
+- **Orphan-reaper now resolves scope from `cloud_accounts`, so automatic orphan
+  cleanup actually runs on prod.** The C# control-plane reaper
+  (`OrphanReaperService`) keyed only on `cloud_connection` for its Azure
+  (subscription + resource-group) scope. Prod provisions testers via
+  `cloud_accounts` and has zero `cloud_connections`, so the reaper no-op'd on
+  every 10-minute tick and leaked NICs / public IPs / disks / NSGs forever
+  (found by a live create-and-reap E2E). It now resolves scope from active
+  Azure `cloud_accounts` **in addition to** `cloud_connections`: it decrypts the
+  account credentials with the `CredentialCipher` (same path as tester create),
+  reads `subscription_id`, resolves the resource-group exactly as the
+  provisioner does (the account's `resource_group` claim, else the
+  `networker-testers` default — not `DASHBOARD_AZURE_RG`), and logs in with the
+  account's service-principal creds in an isolated `AZURE_CONFIG_DIR` before any
+  list/delete. Scopes are de-duped by (subscription, resource-group) so a
+  connection and account pointing at the same scope aren't double-scanned.
+
+### Changed
+- **Orphan-reaper now collects per-VM NSGs — a deliberate divergence from the
+  Rust reaper.** `az vm create` leaves a `<vmname>NSG` network security group
+  that the Rust reaper never reaped (leaked on every create+delete). The C#
+  reaper now lists and deletes orphaned NSGs (`az network nsg list` /
+  `az network nsg delete`), placed after NIC in the delete order since an NSG
+  can only be deleted once no NIC references it.
+
+---
+
 ## [0.28.23] — 2026-07-16
 
 ### Fixed
