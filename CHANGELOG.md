@@ -11,6 +11,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.18] — 2026-07-15
+
+### Fixed
+
+- **Dashboard API client — login error handling**: a 401 from `POST /auth/login`
+  (bad credentials) or `POST /auth/sso/exchange` no longer wipes the session and
+  hard-reloads the login page mid-interaction; the error now surfaces to the
+  form. Session-expiry 401s on authenticated endpoints still clear state and
+  redirect (with a loop guard when already on `/login`).
+- **Dashboard API client — empty-body responses**: `request()` no longer throws
+  a JSON parse error on 204/empty responses (e.g. `DELETE /v2/test-configs/{id}`),
+  which previously made successful mutations look like failures.
+- **Dashboard API client — dead SSO check-email call**: `/auth/sso/check-email`
+  is served by no backend (Rust or C#); the client now resolves locally instead
+  of firing a guaranteed-404 on every login attempt.
+- **Dashboard API client — SSO provider admin CRUD**: paths updated from
+  `/api/admin/sso-providers` (old Rust route) to `/api/sso-providers` as served
+  by the C# control plane.
+- **Dashboard hooks — approval SSE stream**: `useApprovalSSE` now reconnects
+  with exponential backoff after proxy/server drops instead of silently going
+  quiet until a full page reload.
+- **Dashboard hooks — perf-log flush**: the final flush now uses
+  `fetch(..., { keepalive: true })` and fires on `visibilitychange`/`pagehide`,
+  so end-of-session timing entries are no longer lost on navigation.
+
+### Added
+
+- `ApiError` typed error (status + body) thrown by all dashboard REST clients;
+  shared `clearSession()`/`handleUnauthorized()` so testers/vm-history clients
+  wipe the whole session on 401, not just the token.
+- Unit tests for `request()` error semantics and the check-email stub.
+
+---
+
 ## [0.28.17] — 2026-07-15
 
 ### Fixed

@@ -67,7 +67,10 @@ export function usePerfLogFlush() {
         lastFlushedRender.current = Math.max(...newRenderEntries.map(e => e.id));
       }
 
-      // Send directly via fetch to avoid logging the log request itself
+      // Send directly via fetch to avoid logging the log request itself.
+      // keepalive lets the request survive page unload/navigation — without
+      // it the final flush (often the one carrying the page's whole session)
+      // is aborted by the browser and silently lost.
       try {
         await fetch('/api/perf-log', {
           method: 'POST',
@@ -76,6 +79,7 @@ export function usePerfLogFlush() {
             Authorization: `Bearer ${token}`,
           },
           body: JSON.stringify({ session_id: SESSION_ID, entries }),
+          keepalive: true,
         });
       } catch {
         // Silent fail — perf logging is best-effort
@@ -84,13 +88,21 @@ export function usePerfLogFlush() {
 
     // Flush on interval
     const id = setInterval(flush, FLUSH_INTERVAL);
-    // Also flush on page unload
-    const handleUnload = () => flush();
-    window.addEventListener('beforeunload', handleUnload);
+    // Flush when the page is hidden or being unloaded. `visibilitychange` →
+    // hidden is the reliable end-of-session signal (fires on tab switch,
+    // navigation, and mobile background); `pagehide` covers bfcache
+    // navigations where beforeunload never fires.
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') void flush();
+    };
+    const handlePageHide = () => void flush();
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('pagehide', handlePageHide);
 
     return () => {
       clearInterval(id);
-      window.removeEventListener('beforeunload', handleUnload);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('pagehide', handlePageHide);
     };
   }, []);
 }

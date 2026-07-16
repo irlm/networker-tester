@@ -9,6 +9,8 @@
  * types to avoid a transform layer — components can read fields directly.
  */
 
+import { ApiError, handleUnauthorized } from './client';
+
 const API_BASE = '/api';
 
 export type PowerState =
@@ -125,13 +127,12 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   });
 
   if (res.status === 401) {
-    localStorage.removeItem('token');
-    window.location.href = '/login';
-    throw new Error('Unauthorized');
+    handleUnauthorized();
+    throw new ApiError(401, 'Unauthorized');
   }
   if (!res.ok) {
     const body = await res.text().catch(() => '');
-    throw new Error(`API error ${res.status}: ${body || res.statusText}`);
+    throw new ApiError(res.status, `API error ${res.status}: ${body || res.statusText}`, body || null);
   }
   // 204 responses still come back as empty JSON — guard against empty body.
   const text = await res.text();
