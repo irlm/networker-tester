@@ -56,15 +56,11 @@ jobs:
                 -d '{\"email\":\"admin@alethedash.com\",\"password\":\"${ADMIN_PW}\"}' \
                 | python3 -c 'import sys,json;print(json.load(sys.stdin)[\"token\"])')
               HB=\$(curl -s --max-time 8 -H \"Authorization: Bearer \$TOKEN\" http://127.0.0.1:5030/api/health/background)
-              echo \"\$HB\" | python3 -c '
-          import sys, json
-          d = json.load(sys.stdin)
-          ok = d.get(\"all_healthy\", False)
-          print(f\"loops all_healthy={ok} services={len(d.get(\\\"services\\\",[]))}\")
-          for s in d.get(\"services\", []):
-              if not s.get(\"healthy\") or s.get(\"last_error\"):
-                  print(f\"  PROBLEM: {s[\\\"name\\\"]} healthy={s.get(\\\"healthy\\\")} err={s.get(\\\"last_error\\\")}\")
-          raise SystemExit(0 if ok else 1)' || FAIL=1
+              # Quoting-proof check (no inline python — it does not survive the
+              # YAML->bash->az->bash nesting): System.Text.Json emits compact
+              # JSON, so the healthy verdict is a fixed substring.
+              echo \"loops: \$(echo \"\$HB\" | head -c 300)\"
+              echo \"\$HB\" | grep -q '\"all_healthy\":true' || { echo 'loops NOT all_healthy'; FAIL=1; }
 
               # 2. stuck-queued runs (must be 0)
               STUCK=\$(sudo -u postgres psql alethedash_core -tAc \"SELECT count(*) FROM test_run WHERE status='queued' AND created_at < now() - interval '5 minutes';\")
