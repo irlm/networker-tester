@@ -162,6 +162,24 @@ public sealed class OrphanReaperService : BackgroundService
             .ConfigureAwait(false);
         var knownSet = new HashSet<string>(knownIds, StringComparer.OrdinalIgnoreCase);
 
+        // Known VM-NAME prefixes: a tester's NIC / disk / public-IP / NSG are
+        // named "<vm_name>VMNic" / "<vm_name>_OsDisk…" / "<vm_name>PublicIP" /
+        // "<vm_name>NSG" — DISTINCT resource ids that are NOT in knownSet (only
+        // the VM's own id is). Without this guard the reaper mis-identifies every
+        // LIVE tester's child resources as orphans and tries to delete them each
+        // tick (harmless only because Azure blocks deleting attached resources —
+        // noisy + fragile). A resource is retained if its name starts with the
+        // vm_name of any tester that still has a DB row (row exists ⇒ not deleted,
+        // incl. stopped/deallocated testers that will be restarted).
+        var knownVmNames = await db.ProjectTesters
+            .Where(t => t.VmName != null)
+            .Select(t => t.VmName!)
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+        var knownNamePrefixes = knownVmNames
+            .Where(n => n.Length > 0)
+            .ToList();
+
         // Resolve every distinct Azure (subscription, resource-group) scope from
         // BOTH active cloud_accounts and cloud_connections, de-duped. Prod uses
         // cloud_accounts (encrypted SP creds) — keying only on cloud_connections
@@ -185,7 +203,7 @@ public sealed class OrphanReaperService : BackgroundService
         foreach (var scopeInfo in scopes)
         {
             var (deleted, failed, wouldReap) =
-                await ReapAzureScopeAsync(scopeInfo, knownSet, ct).ConfigureAwait(false);
+                await ReapAzureScopeAsync(scopeInfo, knownSet, knownNamePrefixes, ct).ConfigureAwait(false);
             totalDeleted += deleted;
             totalFailed += failed;
             totalWouldReap += wouldReap;
@@ -335,7 +353,7 @@ public sealed class OrphanReaperService : BackgroundService
     /// fails, the scope is skipped and (0,0,0) is returned — no throw.
     /// </summary>
     private async Task<(int Deleted, int Failed, int WouldReap)> ReapAzureScopeAsync(
-        AzureScope scope, HashSet<string> knownIds, CancellationToken ct)
+        AzureScope scope, HashSet<string> knownIds, IReadOnlyList<string> knownNamePrefixes, CancellationToken ct)
     {
         // SP-login isolation: when the scope carries service-principal creds
         // (cloud_account path), log in to an isolated AZURE_CONFIG_DIR and thread
@@ -362,8 +380,9 @@ public sealed class OrphanReaperService : BackgroundService
             // the nic/public-ip list shape.
             raw.AddRange(await AzListAsync("nsg", ["network", "nsg", "list"], scope, env, ct).ConfigureAwait(false));
 
-            // Pure filter (Rust filter_orphans): unknown id AND owned-name prefix.
-            var orphans = FilterOrphans(raw, knownIds);
+            // Pure filter (Rust filter_orphans): unknown id AND owned-name prefix
+            // AND not a child resource of a live tester (vm_name prefix guard).
+            var orphans = FilterOrphans(raw, knownIds, knownNamePrefixes);
             if (orphans.Count == 0)
             {
                 return (0, 0, 0);
@@ -466,15 +485,41 @@ public sealed class OrphanReaperService : BackgroundService
     internal readonly record struct OrphanResource(string ResourceId, string Name, string Kind, string Provider);
 
     /// <summary>
-    /// Pure filter (Rust <c>filter_orphans</c>): keep only resources whose id is
-    /// NOT in <paramref name="knownIds"/> AND whose name matches an owned prefix.
+    /// Pure filter (Rust <c>filter_orphans</c>, plus the vm-name-prefix guard):
+    /// keep a resource only when its id is NOT in <paramref name="knownIds"/>,
+    /// its name matches an owned prefix (<see cref="NameIsOurs"/>), AND its name
+    /// does NOT start with the <c>vm_name</c> of any live tester
+    /// (<paramref name="knownVmNamePrefixes"/>). The last guard is essential: a
+    /// tester's NIC / disk / public-IP / NSG are named <c>&lt;vm_name&gt;…</c>
+    /// with distinct resource ids not in <paramref name="knownIds"/>, so without
+    /// it every live tester's child resources look like orphans.
     /// </summary>
     internal static List<OrphanResource> FilterOrphans(
-        IEnumerable<RawResource> resources, HashSet<string> knownIds) =>
+        IEnumerable<RawResource> resources,
+        HashSet<string> knownIds,
+        IReadOnlyList<string> knownVmNamePrefixes) =>
         resources
-            .Where(r => !knownIds.Contains(r.ResourceId) && NameIsOurs(r.Name))
+            .Where(r =>
+                !knownIds.Contains(r.ResourceId)
+                && NameIsOurs(r.Name)
+                && !StartsWithKnownVmName(r.Name, knownVmNamePrefixes))
             .Select(r => new OrphanResource(r.ResourceId, r.Name, r.Kind, r.Provider))
             .ToList();
+
+    /// <summary>True if <paramref name="name"/> starts with the vm_name of a live
+    /// tester — i.e. it's a child resource (NIC/disk/IP/NSG) of infra still in
+    /// use, not an orphan. Case-insensitive.</summary>
+    internal static bool StartsWithKnownVmName(string name, IReadOnlyList<string> knownVmNamePrefixes)
+    {
+        foreach (var vm in knownVmNamePrefixes)
+        {
+            if (vm.Length > 0 && name.StartsWith(vm, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
 
     /// <summary>True if <paramref name="name"/> starts with one of our owned
     /// prefixes (case-insensitive). Mirrors the Rust <c>name_is_ours</c>.</summary>

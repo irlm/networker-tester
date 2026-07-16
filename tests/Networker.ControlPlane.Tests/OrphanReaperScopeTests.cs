@@ -286,13 +286,44 @@ public sealed class OrphanReaperScopeTests
             new OrphanReaperService.RawResource("/r/3", "tester-eastus-01NSG", "nsg", "azure"),
         };
 
-        var orphans = OrphanReaperService.FilterOrphans(raw, known);
+        // No live-tester vm_name prefixes here: tester-eastus-01 (/r/1) is itself
+        // an orphan VM, so its NSG (/r/3) is reapable too.
+        var orphans = OrphanReaperService.FilterOrphans(raw, known, Array.Empty<string>());
 
         Assert.Equal(2, orphans.Count);
         Assert.Contains(orphans, o => o.ResourceId == "/r/1");
         Assert.Contains(orphans, o => o.ResourceId == "/r/3" && o.Kind == "nsg");
         Assert.DoesNotContain(orphans, o => o.ResourceId == "/r/known");
         Assert.DoesNotContain(orphans, o => o.ResourceId == "/r/2");
+    }
+
+    [Fact]
+    public void FilterOrphans_retains_child_resources_of_live_testers_by_vm_name_prefix()
+    {
+        // A LIVE tester whose VM id IS recorded, but whose NIC/disk/IP/NSG have
+        // their own distinct ids (NOT in knownIds). Without the vm_name-prefix
+        // guard the reaper would try to delete all four every tick (the real
+        // prod bug — saved only by Azure's attached-resource protection).
+        var known = new HashSet<string>(new[] { "/vm/live" }, StringComparer.OrdinalIgnoreCase);
+        var liveVmNames = new[] { "tester-eastus-4e466" };
+        var raw = new[]
+        {
+            new OrphanReaperService.RawResource("/vm/live", "tester-eastus-4e466", "vm", "azure"),
+            new OrphanReaperService.RawResource("/nic/live", "tester-eastus-4e466VMNic", "nic", "azure"),
+            new OrphanReaperService.RawResource("/disk/live", "tester-eastus-4e466_OsDisk_1_abc", "disk", "azure"),
+            new OrphanReaperService.RawResource("/ip/live", "tester-eastus-4e466PublicIP", "public_ip", "azure"),
+            new OrphanReaperService.RawResource("/nsg/live", "tester-eastus-4e466NSG", "nsg", "azure"),
+            // A genuinely-orphaned resource from a DELETED tester (no matching
+            // vm_name) → must still be reaped.
+            new OrphanReaperService.RawResource("/nsg/orphan", "tester-eastus-b46c3NSG", "nsg", "azure"),
+        };
+
+        var orphans = OrphanReaperService.FilterOrphans(raw, known, liveVmNames);
+
+        Assert.Single(orphans);
+        Assert.Contains(orphans, o => o.ResourceId == "/nsg/orphan");
+        // None of the live tester's five resources are reaped.
+        Assert.DoesNotContain(orphans, o => o.Name.StartsWith("tester-eastus-4e466", System.StringComparison.Ordinal));
     }
 
     // ── NSG: delete order + argv (divergence from Rust) ───────────────────────
