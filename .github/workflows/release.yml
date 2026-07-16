@@ -294,6 +294,25 @@ jobs:
           mkdir -p dist
           tar czf dist/networker-controlplane-linux-x64.tar.gz -C publish/controlplane .
 
+      # The C# agent: what tester VMs bootstrap since v0.28.26. Single-file
+      # self-contained (csproj sets PublishSingleFile + AssemblyName
+      # networker-agent — drop-in for the Rust binary). Built HERE on the
+      # ubuntu runner for both linux and windows — no native toolchain needed;
+      # that's the point of the migration. Archive layout matches the Rust
+      # convention (binary at archive root); .pdb excluded.
+      - name: Publish Agent (linux-x64 + win-x64, self-contained single-file)
+        run: |
+          dotnet publish src/Networker.Agent/Networker.Agent.csproj \
+            -c Release -r linux-x64 --self-contained true \
+            -o publish/agent-linux
+          tar czf dist/networker-agent-cs-linux-x64.tar.gz \
+            -C publish/agent-linux networker-agent
+
+          dotnet publish src/Networker.Agent/Networker.Agent.csproj \
+            -c Release -r win-x64 --self-contained true \
+            -o publish/agent-win
+          (cd publish/agent-win && zip -q "$GITHUB_WORKSPACE/dist/networker-agent-cs-win-x64.zip" networker-agent.exe)
+
       - name: Upload C# artifact
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:

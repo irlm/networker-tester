@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.26] — 2026-07-16
+
+### Changed
+- **Tester VMs now bootstrap the C# `Networker.Agent`.** The cloud-init /
+  PowerShell bootstraps download the self-contained single-file C# agent
+  (`networker-agent-cs-linux-x64.tar.gz` / `networker-agent-cs-win-x64.zip`,
+  published from the ubuntu runner — no native toolchain), falling back to the
+  legacy Rust asset when the resolved release predates it. The binary is still
+  named `networker-agent` and reads the same `AGENT_DASHBOARD_URL` /
+  `AGENT_API_KEY` env vars — systemd unit / Windows service unchanged
+  (`RUST_LOG` dropped). Rust agent assets keep publishing this release for the
+  transition; retirement follows live E2E verification.
+
+---
+
 ## [0.28.25] — 2026-07-16
 
 ### Fixed

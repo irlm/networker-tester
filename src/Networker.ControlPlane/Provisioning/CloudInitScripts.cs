@@ -9,7 +9,9 @@ namespace Networker.ControlPlane.Provisioning;
 /// <para>These are <b>pure</b> string builders (no DB, no IO): given a dashboard
 /// URL, an agent API key, and a target triple, they emit the exact bash
 /// (cloud-init user-data) / PowerShell (AWS user-data / Azure custom-data) script
-/// that provisions a fresh VM to run <c>networker-agent</c>. Inputs are
+/// that provisions a fresh VM to run <c>networker-agent</c> (the self-contained
+/// C# <c>Networker.Agent</c> since v0.28.26; the legacy Rust asset remains the
+/// download fallback for older releases). Inputs are
 /// whitelist-validated to prevent shell injection, matching the Rust regexes
 /// byte-for-byte. The templates below are copied verbatim from the Rust
 /// <c>LINUX_TEMPLATE</c> / <c>WINDOWS_TEMPLATE</c>; only the three placeholders
@@ -240,11 +242,29 @@ download_bin() {
     rm -f "/tmp/${BIN}.tar.gz" "/tmp/${BIN}"
 }
 
+# C# agent download: the agent is the self-contained C# Networker.Agent
+# (published from the ubuntu runner as networker-agent-cs-linux-x64.tar.gz;
+# the binary inside is still named networker-agent — drop-in). Falls back to
+# the legacy Rust asset name so a bootstrap that resolves an OLDER release
+# (predating the -cs- assets) still provisions.
+download_agent() {
+    URL="https://github.com/irlm/networker-tester/releases/download/${TAG}/networker-agent-cs-linux-x64.tar.gz"
+    curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused --max-time 180 \
+        "$URL" -o /tmp/networker-agent.tar.gz \
+        || { echo "networker-bootstrap: C# agent asset unavailable at $URL; falling back to legacy Rust agent" >&2; \
+             download_bin networker-agent; return $?; }
+    tar xzf /tmp/networker-agent.tar.gz -C /tmp \
+        || { echo "networker-bootstrap: failed to extract networker-agent.tar.gz" >&2; return 1; }
+    install -m 0755 /tmp/networker-agent /usr/local/bin/networker-agent \
+        || { echo "networker-bootstrap: failed to install /usr/local/bin/networker-agent" >&2; return 1; }
+    rm -f /tmp/networker-agent.tar.gz /tmp/networker-agent
+}
+
 # Literal asset names (also assert tests can grep for):
 #   networker-tester-__TARGET_TRIPLE__.tar.gz
-#   networker-agent-__TARGET_TRIPLE__.tar.gz
+#   networker-agent-cs-linux-x64.tar.gz (fallback: networker-agent-__TARGET_TRIPLE__.tar.gz)
 download_bin networker-tester || exit 1
-download_bin networker-agent  || exit 1
+download_agent || exit 1
 
 # 4. systemd unit (system-level, runs on boot, survives SSH disconnect).
 mkdir -p /etc/systemd/system
@@ -259,7 +279,6 @@ Type=simple
 ExecStart=/usr/local/bin/networker-agent
 Restart=on-failure
 RestartSec=5
-Environment=RUST_LOG=info
 Environment=AGENT_DASHBOARD_URL=__DASHBOARD_URL__
 Environment=AGENT_API_KEY=__API_KEY__
 
@@ -344,11 +363,10 @@ New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 
 # Literal asset names (also assert tests can grep for):
 #   networker-tester-__TARGET_TRIPLE__.zip
-#   networker-agent-__TARGET_TRIPLE__.zip
+#   networker-agent-cs-win-x64.zip (fallback: networker-agent-__TARGET_TRIPLE__.zip)
 # Windows release artefacts are zipped. Unpacked with Expand-Archive (native
 # on Windows, no tar shim needed).
-foreach ($name in 'networker-tester','networker-agent') {
-    $url = "https://github.com/irlm/networker-tester/releases/download/$TAG/$name-$TARGET.zip"
+function Install-NetworkerZip($name, $url) {
     $zip = "$env:TEMP\$name.zip"
     $extract = "$env:TEMP\$name-extract"
     Invoke-WebRequest -Uri $url -OutFile $zip
@@ -358,11 +376,20 @@ foreach ($name in 'networker-tester','networker-agent') {
     Remove-Item -Force $zip
     Remove-Item -Recurse -Force $extract
 }
+Install-NetworkerZip 'networker-tester' "https://github.com/irlm/networker-tester/releases/download/$TAG/networker-tester-$TARGET.zip"
+# The agent is the self-contained C# Networker.Agent (published from the
+# ubuntu runner; the exe inside is still networker-agent.exe -- drop-in).
+# Fall back to the legacy Rust asset if the resolved release predates it.
+try {
+    Install-NetworkerZip 'networker-agent' "https://github.com/irlm/networker-tester/releases/download/$TAG/networker-agent-cs-win-x64.zip"
+} catch {
+    Write-Host 'networker-bootstrap: C# agent asset unavailable; falling back to legacy Rust agent'
+    Install-NetworkerZip 'networker-agent' "https://github.com/irlm/networker-tester/releases/download/$TAG/networker-agent-$TARGET.zip"
+}
 
 # 4. Set machine env vars + install service via sc.exe
 [Environment]::SetEnvironmentVariable('AGENT_DASHBOARD_URL', '__DASHBOARD_URL__', 'Machine')
 [Environment]::SetEnvironmentVariable('AGENT_API_KEY', '__API_KEY__', 'Machine')
-[Environment]::SetEnvironmentVariable('RUST_LOG', 'info', 'Machine')
 
 sc.exe stop NetworkerAgent 2>$null | Out-Null
 sc.exe delete NetworkerAgent 2>$null | Out-Null
