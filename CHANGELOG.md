@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.27] — 2026-07-16
+
+### Fixed
+- **Tester provisioning broken in v0.28.26: em-dash in the Linux bootstrap.**
+  az CLI latin-1-encodes `--custom-data`, so a U+2014 in a new bash comment made
+  `az vm create` exit 1 in seconds. The ASCII-only guard existed for the Windows
+  template but not Linux — Linux guard added so this class of failure is now
+  impossible to reintroduce. Provisioner failures now surface the stderr tail in
+  the error message (`CLI exited with code 1` alone masked the one-line
+  explanation during the incident).
+
+---
+
 ## [0.28.26] — 2026-07-16
 
 ### Changed

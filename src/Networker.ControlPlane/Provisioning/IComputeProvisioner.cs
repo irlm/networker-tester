@@ -164,9 +164,21 @@ public sealed record ProvisionResult(
     public static ProvisionResult Ok(int exitCode, string stdOut, string stdErr) =>
         new(true, exitCode, stdOut, stdErr);
 
-    /// <summary>A non-zero CLI exit.</summary>
+    /// <summary>A non-zero CLI exit. The Error message carries the stderr TAIL —
+    /// callers routinely log <c>Error ?? StdErr</c>, and a bare exit code masked
+    /// the actual az error for 30+ minutes during a live incident (a latin-1
+    /// custom-data failure whose one-line explanation sat unread in stderr).</summary>
     public static ProvisionResult Failed(int exitCode, string stdOut, string stdErr) =>
-        new(false, exitCode, stdOut, stdErr, $"CLI exited with code {exitCode}");
+        new(false, exitCode, stdOut, stdErr,
+            $"CLI exited with code {exitCode}{(string.IsNullOrWhiteSpace(stdErr) ? "" : ": " + TailForError(stdErr))}");
+
+    /// <summary>Last ~400 chars of stderr, newlines flattened — enough to carry
+    /// the actual CLI error (az prints it last) without flooding status_message.</summary>
+    private static string TailForError(string stdErr)
+    {
+        var flat = stdErr.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        return flat.Length <= 400 ? flat : "…" + flat[^400..];
+    }
 
     /// <summary>Could not spawn the CLI at all (missing binary, permission, …).
     /// The common CI case — treated as a soft failure the caller logs, never a
