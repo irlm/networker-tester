@@ -7,6 +7,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- The reaper's scope-resolution/argv helpers are internal (implementation
+         detail, not API) but unit-tested — expose internals to the test project. -->
+    <InternalsVisibleTo Include="Networker.ControlPlane.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Azure.Communication.Email" Version="1.0.1" />
     <PackageReference Include="Cronos" Version="0.13.0" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.0" />
