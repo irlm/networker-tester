@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.25] — 2026-07-16
+
+### Fixed
+- **Orphan-reaper no longer targets live testers' child resources.** The reaper's
+  known-set held only each tester's VM resource id, but a tester's NIC / disk /
+  public-IP / NSG are separate resources named `<vm_name>…`. So the reaper (once
+  #418 made it actually run) mis-identified every live tester's four child
+  resources as orphans and tried to delete them each 10-min tick — harmless only
+  because Azure refuses to delete attached resources (`deleted=0 failed=12` in
+  the field). Added a vm_name-prefix guard: a resource is retained if its name
+  starts with the `vm_name` of any tester that still has a DB row (incl. stopped
+  testers). Genuinely-orphaned resources from deleted testers are still reaped.
+
+---
+
 ## [0.28.24] — 2026-07-16
 
 ### Fixed
