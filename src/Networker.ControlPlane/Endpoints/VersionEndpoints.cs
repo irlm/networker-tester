@@ -112,8 +112,11 @@ public static class VersionEndpoints
     /// <summary>
     /// Compile-time version floor — kept in sync with the value wired into
     /// <c>AddVersionRefresh(...)</c> in Program.cs (Rust <c>CARGO_PKG_VERSION</c>).
+    /// Public because the tester create flow stamps it into
+    /// <c>project_tester.installer_version</c>, matching Rust's
+    /// <c>env!("CARGO_PKG_VERSION")</c>.
     /// </summary>
-    private const string DashboardVersion = "0.28.15";
+    public const string DashboardVersion = "0.28.22";
 
     private const string TesterBinaryEnvVar = "AGENT_TESTERPATH";
 

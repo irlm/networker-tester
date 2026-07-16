@@ -11,6 +11,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.22] — 2026-07-16
+
+### Fixed — tester creation (POST /testers) ported to the C# control plane; was 404 post-cutover
+- **POST /api/projects/{projectId}/testers now exists in the C# control plane** —
+  the last missing tester route after the Rust→C# cutover. The React frontend's
+  `createTester` call was 404ing, so no new tester VMs could be created. Faithful
+  port of the Rust `create_tester` handler + `run_create_tester_cloud_init`
+  background flow: Operator gate, body validation, 20-per-project / 20-per-hour
+  rate limits (same 429 messages), cloud_connection / cloud_account gating
+  (404/409/400 with the Rust messages), INSERT with the V027 COALESCE defaults
+  (`Standard_B2s` / hour 23 / probe off / `ubuntu-24.04` / `server`),
+  `tester_created` audit, and 202 Accepted + the full tester row.
+- **`IComputeProvisioner.CreateVmAsync`** — VM creation via the same az/aws/gcloud
+  CLI invocations as the Rust `CloudProvider::create_vm`: `az vm create` with
+  cascade-delete flags + service-principal login isolation + the Windows
+  CustomScriptExtension bootstrap; AWS AMI resolve → key-pair → security-group →
+  `run-instances` → public-IP poll; GCP `compute instances create` with
+  startup-script + ssh-keys metadata. Bounded at 30 min per CLI call (the Rust
+  create runs unbounded).
+- Background flow mints the agent api-key before VM create, bakes it into the
+  cloud-init / PowerShell bootstrap, streams `status_message` phase updates
+  (minting key → creating VM → waiting for agent, with elapsed-time refresh),
+  records `created`+`started` vm_lifecycle events, polls the agent online
+  (600s Linux / 900s Windows), then flips provisioning→running and stamps
+  `installer_version`; any failure sets `power_state='error'` +
+  `status_message='create failed: …'`.
+- Divergences (documented): `?ssh_bootstrap=1` returns 501 (the SSH-driven
+  install path is not ported; the frontend never sends it); the pre-create
+  cloud orphan reaper is skipped (soft-fail in Rust — cleanup only); duplicate
+  tester names return 409 instead of a 500.
+
+---
+
 ## [0.28.21] — 2026-07-15
 
 ### Fixed — tester measurement validity (trust audit P1 wave B; changes reported numbers)

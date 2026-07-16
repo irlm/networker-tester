@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using Networker.Data.Entities;
 
 namespace Networker.ControlPlane.Provisioning;
@@ -46,6 +47,16 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
     /// calls (deallocate especially) can take a while; the tree-kill guard
     /// prevents a wedged CLI from leaking.</summary>
     private static readonly TimeSpan CommandTimeout = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Ceiling for the create-path CLI invocations. The Rust <c>create_vm</c>
+    /// runs <b>unbounded</b> (<c>Command::output().await</c> with no timeout);
+    /// a Windows create synchronously installs CustomScriptExtension and can
+    /// legitimately take 5-10+ minutes. We bound at 30 minutes instead of
+    /// forever so a wedged CLI can't leak a background task — a deliberate,
+    /// narrow divergence from the Rust source (documented in the PR).
+    /// </summary>
+    private static readonly TimeSpan CreateTimeout = TimeSpan.FromMinutes(30);
 
     public Task<ProvisionResult> StartAsync(
         ProjectTester tester, ProviderCredentials? credentials, CancellationToken ct) =>
@@ -238,6 +249,833 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
         return (name, zone);
     }
 
+    // ── VM create (Rust CloudProvider::create_vm) ────────────────────────────
+
+    public async Task<VmCreateResult> CreateVmAsync(
+        VmCreateRequest request, ProviderCredentials? credentials, CancellationToken ct = default)
+    {
+        try
+        {
+            return request.Cloud.ToLowerInvariant() switch
+            {
+                "azure" => await CreateAzureVmAsync(request, credentials, ct).ConfigureAwait(false),
+                "aws" => await CreateAwsVmAsync(request, credentials, ct).ConfigureAwait(false),
+                "gcp" => await CreateGcpVmAsync(request, credentials, ct).ConfigureAwait(false),
+                _ => VmCreateResult.Fail($"unsupported cloud provider: {request.Cloud}"),
+            };
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Total like every other provisioner method: tempfile / IO trouble
+            // becomes a failed result, never an unhandled background exception.
+            logger.LogError(ex, "CreateVmAsync for {Cloud} VM {Name} threw", request.Cloud, request.Name);
+            return VmCreateResult.Fail(ex.Message);
+        }
+    }
+
+    private static string? ExtraValue(ProviderCredentials? creds, string key) =>
+        creds?.Extra is { } extra && extra.TryGetValue(key, out var v) && v.Length > 0 ? v : null;
+
+    // ── Azure create ─────────────────────────────────────────────────────────
+
+    private async Task<VmCreateResult> CreateAzureVmAsync(
+        VmCreateRequest request, ProviderCredentials? creds, CancellationToken ct)
+    {
+        var azBin = Environment.GetEnvironmentVariable("AZ_CMD") is { Length: > 0 } o ? o : "az";
+        var sub = creds?.SubscriptionId ?? string.Empty;
+        var rg = creds?.ResourceGroup ?? string.Empty;
+
+        // ensure_sp_login: when the account carries service-principal creds,
+        // log in to an isolated AZURE_CONFIG_DIR; managed identity uses the
+        // host's ambient az session.
+        string? spConfigDir = null;
+        var identityType = ExtraValue(creds, "identity_type") ?? "managed_identity";
+        if (identityType == "service_principal"
+            && ExtraValue(creds, "client_id") is { } clientId
+            && ExtraValue(creds, "client_secret") is { } clientSecret
+            && ExtraValue(creds, "tenant_id") is { } tenantId)
+        {
+            spConfigDir = Path.Combine(Path.GetTempPath(), $"az-sp-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(spConfigDir);
+            var login = await RunAsync(
+                azBin,
+                new List<string>
+                {
+                    "login", "--service-principal", "-u", clientId, "-p", clientSecret,
+                    "--tenant", tenantId, "--output", "none",
+                },
+                new Dictionary<string, string>
+                {
+                    ["AZURE_CONFIG_DIR"] = spConfigDir,
+                    ["PYTHONWARNINGS"] = "ignore",
+                },
+                ct,
+                CreateTimeout,
+                sensitiveArgs: true).ConfigureAwait(false);
+            if (!login.Success)
+            {
+                TryDeleteDir(spConfigDir);
+                return VmCreateResult.Fail(
+                    $"az login --service-principal failed: {login.Error ?? login.StdErr}");
+            }
+        }
+
+        try
+        {
+            var env = new Dictionary<string, string> { ["PYTHONWARNINGS"] = "ignore" };
+            if (spConfigDir is not null)
+            {
+                env["AZURE_CONFIG_DIR"] = spConfigDir;
+            }
+
+            var isWindows = request.Image.Contains("windows", StringComparison.OrdinalIgnoreCase);
+
+            // Windows VMs require a password; Linux VMs use SSH keys. Same
+            // generation rule as Rust (Azure: 12-72 chars, 3 character classes).
+            var winPassword = isWindows
+                ? $"Nx!{Guid.NewGuid():N}{new string(request.Name.Take(4).ToArray())}aZ9"
+                : null;
+
+            string? customDataPath = null;
+            if (request.BootstrapScript is { } script)
+            {
+                customDataPath = Path.GetTempFileName();
+                await File.WriteAllTextAsync(customDataPath, script, ct).ConfigureAwait(false);
+            }
+
+            try
+            {
+                var args = BuildAzureCreateArgs(request, sub, rg, winPassword, customDataPath);
+                // Windows argv carries --admin-password — never log it.
+                var res = await RunAsync(azBin, args, env, ct, CreateTimeout, sensitiveArgs: isWindows)
+                    .ConfigureAwait(false);
+                if (!res.Success)
+                {
+                    return VmCreateResult.Fail($"az vm create failed: {res.Error ?? res.StdErr}");
+                }
+
+                // Strip any non-JSON prefix (az may print warnings before JSON).
+                var stdout = res.StdOut;
+                var jsonStart = stdout.IndexOf('{');
+                if (jsonStart < 0)
+                {
+                    jsonStart = 0;
+                }
+
+                string? publicIp;
+                string? resourceId;
+                try
+                {
+                    using var doc = JsonDocument.Parse(stdout[jsonStart..]);
+                    var root = doc.RootElement;
+                    publicIp = root.TryGetProperty("publicIpAddress", out var ip) && ip.ValueKind == JsonValueKind.String
+                        ? ip.GetString()
+                        : null;
+                    resourceId = root.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String
+                        ? id.GetString()
+                        : null;
+                }
+                catch (JsonException e)
+                {
+                    return VmCreateResult.Fail($"az vm create produced non-JSON output: {e.Message}");
+                }
+
+                if (publicIp is null)
+                {
+                    return VmCreateResult.Fail("az vm create: missing publicIpAddress");
+                }
+
+                if (resourceId is null)
+                {
+                    return VmCreateResult.Fail("az vm create: missing id");
+                }
+
+                // On Windows, --custom-data only DROPS the script at
+                // C:\AzureData\CustomData.bin; wire CustomScriptExtension so the
+                // bootstrap actually runs (Rust run_windows_bootstrap_extension).
+                if (isWindows && request.BootstrapScript is not null)
+                {
+                    var extRes = await RunWindowsBootstrapExtensionAsync(
+                        azBin, env, sub, rg, request.Name, ct).ConfigureAwait(false);
+                    if (!extRes.Success)
+                    {
+                        return VmCreateResult.Fail(
+                            $"az vm extension set failed: {extRes.Error ?? extRes.StdErr}");
+                    }
+                }
+
+                return VmCreateResult.Created(resourceId, publicIp, request.Name);
+            }
+            finally
+            {
+                if (customDataPath is not null)
+                {
+                    TryDeleteFile(customDataPath);
+                }
+            }
+        }
+        finally
+        {
+            if (spConfigDir is not null)
+            {
+                TryDeleteDir(spConfigDir);
+            }
+        }
+    }
+
+    private async Task<ProvisionResult> RunWindowsBootstrapExtensionAsync(
+        string azBin,
+        IReadOnlyDictionary<string, string> env,
+        string sub,
+        string rg,
+        string vmName,
+        CancellationToken ct)
+    {
+        // Rename CustomData.bin → CustomData.ps1 so PowerShell recognises it,
+        // then invoke it, teeing everything to bootstrap.log. Byte-identical
+        // to the Rust command string.
+        const string command = "powershell -ExecutionPolicy Bypass -NoProfile -Command "
+            + "\"Copy-Item 'C:\\AzureData\\CustomData.bin' 'C:\\AzureData\\CustomData.ps1' -Force; "
+            + "& 'C:\\AzureData\\CustomData.ps1' *> 'C:\\AzureData\\bootstrap.log'\"";
+        var protectedSettings = JsonSerializer.Serialize(new { commandToExecute = command });
+
+        var settingsPath = Path.GetTempFileName();
+        await File.WriteAllTextAsync(settingsPath, protectedSettings, ct).ConfigureAwait(false);
+        try
+        {
+            return await RunAsync(
+                azBin,
+                new List<string>
+                {
+                    "vm", "extension", "set",
+                    "--subscription", sub,
+                    "--resource-group", rg,
+                    "--vm-name", vmName,
+                    "--name", "CustomScriptExtension",
+                    "--publisher", "Microsoft.Compute",
+                    "--version", "1.10",
+                    "--protected-settings", $"@{settingsPath}",
+                },
+                env,
+                ct,
+                CreateTimeout).ConfigureAwait(false);
+        }
+        finally
+        {
+            TryDeleteFile(settingsPath);
+        }
+    }
+
+    /// <summary>
+    /// Pure argv builder for <c>az vm create</c> — the C# port of the Rust
+    /// <c>AzureProvider::build_vm_create_args</c> (same flags, same order; tags
+    /// omitted because every Rust create call site passes an empty tag map).
+    /// </summary>
+    public static List<string> BuildAzureCreateArgs(
+        VmCreateRequest request,
+        string subscriptionId,
+        string resourceGroup,
+        string? adminPassword,
+        string? customDataPath)
+    {
+        var isWindows = request.Image.Contains("windows", StringComparison.OrdinalIgnoreCase);
+        var args = new List<string>
+        {
+            "vm", "create",
+            "--subscription", subscriptionId,
+            "--resource-group", resourceGroup,
+            "--name", request.Name,
+            "--location", request.Region,
+            "--image", request.Image,
+            "--size", request.VmSize,
+            "--public-ip-sku", "Standard",
+            "--admin-username", request.SshUser,
+            // Cascade-delete attached resources with the VM (otherwise the OS
+            // disk, NIC and public IP keep billing after the tester is gone).
+            "--os-disk-delete-option", "Delete",
+            "--nic-delete-option", "Delete",
+        };
+
+        if (isWindows)
+        {
+            args.Add("--computer-name");
+            args.Add(AzureWindowsComputerName(request.Name));
+        }
+
+        if (isWindows)
+        {
+            if (adminPassword is not null)
+            {
+                args.Add("--admin-password");
+                args.Add(adminPassword);
+            }
+        }
+        else
+        {
+            args.Add("--generate-ssh-keys");
+        }
+
+        args.Add("--output");
+        args.Add("json");
+
+        if (customDataPath is not null)
+        {
+            args.Add("--custom-data");
+            args.Add($"@{customDataPath}");
+        }
+
+        return args;
+    }
+
+    /// <summary>
+    /// Windows-safe NetBIOS computer name — the C# port of the Rust
+    /// <c>azure_windows_computer_name</c>: ≤15 chars, alphanumerics + hyphens,
+    /// collapsed doubles, trailing hyphens stripped, "w" prefix when the result
+    /// would be empty or all-numeric.
+    /// </summary>
+    public static string AzureWindowsComputerName(string name)
+    {
+        var s = new string(name.Select(c => char.IsAsciiLetterOrDigit(c) ? c : '-').ToArray());
+        while (s.Contains("--", StringComparison.Ordinal))
+        {
+            s = s.Replace("--", "-", StringComparison.Ordinal);
+        }
+
+        if (s.Length > 15)
+        {
+            s = s[..15];
+        }
+
+        s = s.TrimEnd('-');
+        if (s.Length == 0 || s.All(char.IsAsciiDigit))
+        {
+            s = $"w{s}";
+            if (s.Length > 15)
+            {
+                s = s[..15];
+            }
+        }
+
+        return s;
+    }
+
+    // ── AWS create ───────────────────────────────────────────────────────────
+
+    private async Task<VmCreateResult> CreateAwsVmAsync(
+        VmCreateRequest request, ProviderCredentials? creds, CancellationToken ct)
+    {
+        // aws_cmd(): credentials + default region via env.
+        var env = new Dictionary<string, string>();
+        if (ExtraValue(creds, "access_key_id") is { } ak)
+        {
+            env["AWS_ACCESS_KEY_ID"] = ak;
+        }
+
+        if (ExtraValue(creds, "secret_access_key") is { } sk)
+        {
+            env["AWS_SECRET_ACCESS_KEY"] = sk;
+        }
+
+        if (ExtraValue(creds, "session_token") is { } st)
+        {
+            env["AWS_SESSION_TOKEN"] = st;
+        }
+
+        env["AWS_DEFAULT_REGION"] = creds?.Region is { Length: > 0 } r ? r : request.Region;
+
+        // 1. Resolve the AMI from the "aws:<os-variant>" marker.
+        var (owner, nameFilter) = AwsAmiFilter(request.Image);
+        var amiRes = await RunAsync(
+            "aws",
+            new List<string>
+            {
+                "ec2", "describe-images",
+                "--owners", owner,
+                "--filters", $"Name=name,Values={nameFilter}", "Name=state,Values=available",
+                "--query", "sort_by(Images, &CreationDate)[-1].ImageId",
+                "--region", request.Region,
+                "--output", "text",
+            },
+            env,
+            ct,
+            CreateTimeout).ConfigureAwait(false);
+        if (!amiRes.Success)
+        {
+            return VmCreateResult.Fail($"aws ec2 describe-images failed: {amiRes.Error ?? amiRes.StdErr}");
+        }
+
+        var amiId = amiRes.StdOut.Trim();
+        if (amiId.Length == 0 || amiId == "None")
+        {
+            return VmCreateResult.Fail($"No AMI found for '{request.Image}' in region {request.Region}");
+        }
+
+        // 2. Ensure key pair + security group (idempotent).
+        var keyName = await EnsureAwsKeyPairAsync(env, request.Region, ct).ConfigureAwait(false);
+        if (keyName.Error is not null)
+        {
+            return VmCreateResult.Fail(keyName.Error);
+        }
+
+        var sg = await EnsureAwsSecurityGroupAsync(env, request.Region, ct).ConfigureAwait(false);
+        if (sg.Error is not null)
+        {
+            return VmCreateResult.Fail(sg.Error);
+        }
+
+        // 3. run-instances (user-data via tempfile when a bootstrap is set).
+        string? userDataPath = null;
+        if (request.BootstrapScript is { } script)
+        {
+            userDataPath = Path.GetTempFileName();
+            await File.WriteAllTextAsync(userDataPath, script, ct).ConfigureAwait(false);
+        }
+
+        ProvisionResult runRes;
+        try
+        {
+            var args = BuildAwsRunInstancesArgs(request, amiId, keyName.Value!, sg.Value!, userDataPath);
+            runRes = await RunAsync("aws", args, env, ct, CreateTimeout).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (userDataPath is not null)
+            {
+                TryDeleteFile(userDataPath);
+            }
+        }
+
+        if (!runRes.Success)
+        {
+            return VmCreateResult.Fail($"aws ec2 run-instances failed: {runRes.Error ?? runRes.StdErr}");
+        }
+
+        string? instanceId;
+        try
+        {
+            using var doc = JsonDocument.Parse(runRes.StdOut);
+            instanceId = doc.RootElement.TryGetProperty("InstanceId", out var iid)
+                         && iid.ValueKind == JsonValueKind.String
+                ? iid.GetString()
+                : null;
+        }
+        catch (JsonException)
+        {
+            return VmCreateResult.Fail("aws ec2 run-instances produced non-JSON output");
+        }
+
+        if (instanceId is null)
+        {
+            return VmCreateResult.Fail("missing InstanceId");
+        }
+
+        // 4. Public IP isn't immediate — poll up to 60s (30 × 2s), soft-fail to
+        //    empty like the Rust unwrap_or_default().
+        var publicIp = string.Empty;
+        for (var i = 0; i < 30; i++)
+        {
+            var ipRes = await RunAsync(
+                "aws",
+                new List<string>
+                {
+                    "ec2", "describe-instances",
+                    "--instance-ids", instanceId,
+                    "--query", "Reservations[0].Instances[0].PublicIpAddress",
+                    "--region", request.Region,
+                    "--output", "text",
+                },
+                env,
+                ct,
+                CommandTimeout).ConfigureAwait(false);
+            if (ipRes.Success)
+            {
+                var ip = ipRes.StdOut.Trim();
+                if (ip.Length > 0 && ip != "None")
+                {
+                    publicIp = ip;
+                    break;
+                }
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(2), ct).ConfigureAwait(false);
+        }
+
+        return VmCreateResult.Created(instanceId, publicIp, request.Name);
+    }
+
+    /// <summary>Rust <c>resolve_ami</c> marker → (owner, name filter).</summary>
+    public static (string Owner, string NameFilter) AwsAmiFilter(string marker) =>
+        (marker.StartsWith("aws:", StringComparison.Ordinal) ? marker["aws:".Length..] : marker) switch
+        {
+            "ubuntu-24.04-server" => ("099720109477", "ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*"),
+            "ubuntu-22.04-server" => ("099720109477", "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"),
+            "debian-12-server" => ("136693071363", "debian-12-amd64-*"),
+            "windows-2022-server" => ("801119661308", "Windows_Server-2022-English-Full-Base-*"),
+            _ => ("099720109477", "ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*"),
+        };
+
+    /// <summary>
+    /// Pure argv builder for <c>aws ec2 run-instances</c> — the C# port of the
+    /// Rust <c>AwsProvider::build_run_instances_args</c>.
+    /// </summary>
+    public static List<string> BuildAwsRunInstancesArgs(
+        VmCreateRequest request, string amiId, string keyName, string sgId, string? userDataPath)
+    {
+        var args = new List<string>
+        {
+            "ec2", "run-instances",
+            "--image-id", amiId,
+            "--instance-type", request.VmSize,
+            "--region", request.Region,
+            "--key-name", keyName,
+            "--security-group-ids", sgId,
+            "--associate-public-ip-address",
+            "--tag-specifications", $"ResourceType=instance,Tags=[{{Key=Name,Value={request.Name}}}]",
+            "--query", "Instances[0]",
+            "--output", "json",
+        };
+        if (userDataPath is not null)
+        {
+            args.Add("--user-data");
+            args.Add($"file://{userDataPath}");
+        }
+
+        return args;
+    }
+
+    private async Task<(string? Value, string? Error)> EnsureAwsKeyPairAsync(
+        IReadOnlyDictionary<string, string> env, string region, CancellationToken ct)
+    {
+        const string keyName = "alethedash-tester";
+
+        var check = await RunAsync(
+            "aws",
+            new List<string>
+            {
+                "ec2", "describe-key-pairs", "--key-names", keyName,
+                "--region", region, "--output", "json",
+            },
+            env, ct, CommandTimeout).ConfigureAwait(false);
+        if (check.Success)
+        {
+            return (keyName, null);
+        }
+
+        // Import the local public key if present.
+        var home = Environment.GetEnvironmentVariable("HOME") ?? string.Empty;
+        var pubKeyPath = Path.Combine(home, ".ssh", "id_rsa.pub");
+        if (File.Exists(pubKeyPath))
+        {
+            var import = await RunAsync(
+                "aws",
+                new List<string>
+                {
+                    "ec2", "import-key-pair", "--key-name", keyName,
+                    "--public-key-material", $"fileb://{pubKeyPath}",
+                    "--region", region,
+                },
+                env, ct, CommandTimeout).ConfigureAwait(false);
+            if (import.Success)
+            {
+                return (keyName, null);
+            }
+
+            logger.LogWarning(
+                "AWS key import failed, will try create-key-pair: {Err}", import.Error ?? import.StdErr);
+        }
+
+        var create = await RunAsync(
+            "aws",
+            new List<string>
+            {
+                "ec2", "create-key-pair", "--key-name", keyName,
+                "--query", "KeyMaterial", "--region", region, "--output", "text",
+            },
+            env, ct, CommandTimeout).ConfigureAwait(false);
+        if (!create.Success)
+        {
+            return (null, $"create-key-pair failed: {create.Error ?? create.StdErr}");
+        }
+
+        var pemPath = Path.Combine(home, ".ssh", $"{keyName}.pem");
+        try
+        {
+            await File.WriteAllTextAsync(pemPath, create.StdOut, ct).ConfigureAwait(false);
+            if (!OperatingSystem.IsWindows())
+            {
+                File.SetUnixFileMode(pemPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            }
+        }
+        catch (Exception ex)
+        {
+            return (null, $"failed to persist {pemPath}: {ex.Message}");
+        }
+
+        return (keyName, null);
+    }
+
+    private async Task<(string? Value, string? Error)> EnsureAwsSecurityGroupAsync(
+        IReadOnlyDictionary<string, string> env, string region, CancellationToken ct)
+    {
+        const string sgName = "alethedash-tester";
+
+        var check = await RunAsync(
+            "aws",
+            new List<string>
+            {
+                "ec2", "describe-security-groups", "--group-names", sgName,
+                "--query", "SecurityGroups[0].GroupId",
+                "--region", region, "--output", "text",
+            },
+            env, ct, CommandTimeout).ConfigureAwait(false);
+        if (check.Success)
+        {
+            var existing = check.StdOut.Trim();
+            if (existing.Length > 0 && existing != "None")
+            {
+                return (existing, null);
+            }
+        }
+
+        var create = await RunAsync(
+            "aws",
+            new List<string>
+            {
+                "ec2", "create-security-group", "--group-name", sgName,
+                "--description", "AletheDash tester (SSH + diagnostic ports)",
+                "--query", "GroupId", "--region", region, "--output", "text",
+            },
+            env, ct, CommandTimeout).ConfigureAwait(false);
+        if (!create.Success)
+        {
+            return (null, $"create-security-group failed: {create.Error ?? create.StdErr}");
+        }
+
+        var sgId = create.StdOut.Trim();
+
+        // Ingress: SSH (22), diagnostic TCP (8080/8443), UDP probes
+        // (8443/9998/9999). Failures ignored like the Rust `let _ =`.
+        foreach (var (proto, port) in new[]
+                 {
+                     ("tcp", "22"), ("tcp", "8080"), ("tcp", "8443"),
+                     ("udp", "8443"), ("udp", "9998"), ("udp", "9999"),
+                 })
+        {
+            _ = await RunAsync(
+                "aws",
+                new List<string>
+                {
+                    "ec2", "authorize-security-group-ingress",
+                    "--group-id", sgId,
+                    "--protocol", proto,
+                    "--port", port,
+                    "--cidr", "0.0.0.0/0",
+                    "--region", region,
+                },
+                env, ct, CommandTimeout).ConfigureAwait(false);
+        }
+
+        return (sgId, null);
+    }
+
+    // ── GCP create ───────────────────────────────────────────────────────────
+
+    private async Task<VmCreateResult> CreateGcpVmAsync(
+        VmCreateRequest request, ProviderCredentials? creds, CancellationToken ct)
+    {
+        // GcpProvider::from_config: json_key is required and must carry project_id.
+        var jsonKey = ExtraValue(creds, "json_key");
+        if (jsonKey is null)
+        {
+            return VmCreateResult.Fail("gcp config: missing json_key");
+        }
+
+        string? projectId;
+        try
+        {
+            using var keyDoc = JsonDocument.Parse(jsonKey);
+            projectId = keyDoc.RootElement.TryGetProperty("project_id", out var pid)
+                        && pid.ValueKind == JsonValueKind.String
+                ? pid.GetString()
+                : null;
+        }
+        catch (JsonException)
+        {
+            return VmCreateResult.Fail("gcp config: json_key is not valid JSON");
+        }
+
+        if (projectId is null)
+        {
+            return VmCreateResult.Fail("gcp json_key: missing project_id");
+        }
+
+        var keyFile = Path.Combine(Path.GetTempPath(), $"gcp-key-{Guid.NewGuid():N}.json");
+        await File.WriteAllTextAsync(keyFile, jsonKey, ct).ConfigureAwait(false);
+
+        var env = new Dictionary<string, string>
+        {
+            ["GOOGLE_APPLICATION_CREDENTIALS"] = keyFile,
+            ["CLOUDSDK_CORE_PROJECT"] = projectId,
+        };
+
+        // GCP needs a zone, not just a region — first zone in the region.
+        var zone = $"{request.Region}-a";
+
+        // ssh-keys metadata from the dashboard host's local key, when present.
+        string? sshMetadataPath = null;
+        var home = Environment.GetEnvironmentVariable("HOME") ?? string.Empty;
+        var pubKeyPath = Path.Combine(home, ".ssh", "id_rsa.pub");
+        if (File.Exists(pubKeyPath))
+        {
+            var pubKey = (await File.ReadAllTextAsync(pubKeyPath, ct).ConfigureAwait(false)).Trim();
+            sshMetadataPath = Path.Combine(Path.GetTempPath(), $"gcp-ssh-keys-{Guid.NewGuid():N}.txt");
+            await File.WriteAllTextAsync(sshMetadataPath, $"{request.SshUser}:{pubKey}", ct).ConfigureAwait(false);
+        }
+        else
+        {
+            logger.LogWarning("No ~/.ssh/id_rsa.pub found — GCP SSH may not work");
+        }
+
+        string? startupScriptPath = null;
+        if (request.BootstrapScript is { } script)
+        {
+            startupScriptPath = Path.GetTempFileName();
+            await File.WriteAllTextAsync(startupScriptPath, script, ct).ConfigureAwait(false);
+        }
+
+        ProvisionResult res;
+        try
+        {
+            var args = BuildGcpCreateArgs(request, zone, sshMetadataPath, startupScriptPath);
+            res = await RunAsync("gcloud", args, env, ct, CreateTimeout).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (startupScriptPath is not null)
+            {
+                TryDeleteFile(startupScriptPath);
+            }
+
+            if (sshMetadataPath is not null)
+            {
+                TryDeleteFile(sshMetadataPath);
+            }
+
+            TryDeleteFile(keyFile);
+        }
+
+        if (!res.Success)
+        {
+            return VmCreateResult.Fail($"gcloud compute instances create failed: {res.Error ?? res.StdErr}");
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(res.StdOut);
+            // GCP returns an array; take the first element (fall back to root).
+            var inst = doc.RootElement.ValueKind == JsonValueKind.Array && doc.RootElement.GetArrayLength() > 0
+                ? doc.RootElement[0]
+                : doc.RootElement;
+
+            string? resourceId =
+                inst.TryGetProperty("selfLink", out var sl) && sl.ValueKind == JsonValueKind.String
+                    ? sl.GetString()
+                    : inst.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String
+                        ? id.GetString()
+                        : null;
+            if (resourceId is null)
+            {
+                return VmCreateResult.Fail("missing instance id/selfLink");
+            }
+
+            var publicIp = string.Empty;
+            if (inst.TryGetProperty("networkInterfaces", out var nics)
+                && nics.ValueKind == JsonValueKind.Array && nics.GetArrayLength() > 0
+                && nics[0].TryGetProperty("accessConfigs", out var acs)
+                && acs.ValueKind == JsonValueKind.Array && acs.GetArrayLength() > 0
+                && acs[0].TryGetProperty("natIP", out var nat)
+                && nat.ValueKind == JsonValueKind.String)
+            {
+                publicIp = nat.GetString() ?? string.Empty;
+            }
+
+            return VmCreateResult.Created(resourceId, publicIp, request.Name);
+        }
+        catch (JsonException)
+        {
+            return VmCreateResult.Fail("gcloud create produced non-JSON output");
+        }
+    }
+
+    /// <summary>
+    /// Pure argv builder for <c>gcloud compute instances create</c> — the C#
+    /// port of the Rust <c>GcpProvider::build_create_args</c>.
+    /// </summary>
+    public static List<string> BuildGcpCreateArgs(
+        VmCreateRequest request, string zone, string? sshMetadataPath, string? startupScriptPath)
+    {
+        var imageProject = request.Image switch
+        {
+            var s when s.StartsWith("ubuntu", StringComparison.Ordinal) => "ubuntu-os-cloud",
+            var s when s.StartsWith("debian", StringComparison.Ordinal) => "debian-cloud",
+            var s when s.StartsWith("windows", StringComparison.Ordinal) => "windows-cloud",
+            _ => "ubuntu-os-cloud",
+        };
+
+        var args = new List<string>
+        {
+            "compute", "instances", "create", request.Name,
+            "--zone", zone,
+            "--machine-type", request.VmSize,
+            "--image-family", request.Image,
+            "--image-project", imageProject,
+            "--tags", "alethedash-tester",
+            "--format", "json",
+        };
+
+        if (sshMetadataPath is not null)
+        {
+            args.Add("--metadata-from-file");
+            args.Add($"ssh-keys={sshMetadataPath}");
+        }
+
+        if (startupScriptPath is not null)
+        {
+            args.Add("--metadata-from-file");
+            args.Add($"startup-script={startupScriptPath}");
+        }
+
+        return args;
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch
+        {
+            // Best-effort tempfile cleanup.
+        }
+    }
+
+    private static void TryDeleteDir(string path)
+    {
+        try
+        {
+            Directory.Delete(path, recursive: true);
+        }
+        catch
+        {
+            // Best-effort temp-dir cleanup.
+        }
+    }
+
     private static bool LooksAlreadyGone(string stderr) =>
         stderr.Contains("ResourceNotFound", StringComparison.OrdinalIgnoreCase)
         || stderr.Contains("could not be found", StringComparison.OrdinalIgnoreCase)
@@ -252,8 +1090,11 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
         string file,
         List<string> args,
         IReadOnlyDictionary<string, string>? env,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TimeSpan? timeout = null,
+        bool sensitiveArgs = false)
     {
+        var effectiveTimeout = timeout ?? CommandTimeout;
         var psi = new ProcessStartInfo
         {
             FileName = file,
@@ -274,10 +1115,13 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
             }
         }
 
-        logger.LogInformation("Provisioner spawning {File} {Args}", file, string.Join(' ', args));
+        logger.LogInformation(
+            "Provisioner spawning {File} {Args}",
+            file,
+            sensitiveArgs ? "(args redacted: contains credentials)" : string.Join(' ', args));
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(CommandTimeout);
+        timeoutCts.CancelAfter(effectiveTimeout);
         var ct = timeoutCts.Token;
 
         using var process = new Process { StartInfo = psi };
@@ -310,7 +1154,7 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
         {
             KillTree(process);
             return ProvisionResult.SpawnError(
-                $"provisioner CLI '{file}' timed out after {CommandTimeout.TotalSeconds:0}s and was killed");
+                $"provisioner CLI '{file}' timed out after {effectiveTimeout.TotalSeconds:0}s and was killed");
         }
         catch (OperationCanceledException)
         {
