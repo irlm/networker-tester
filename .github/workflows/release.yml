@@ -403,6 +403,13 @@ jobs:
               curl -fsSL \"\${RELEASE_BASE}/dashboard-frontend.tar.gz\" -o /tmp/dashboard-frontend.tar.gz
 
               # ── C# control plane (the /api + /ws backend) ───────────────
+              # Idempotent env guard: DASHBOARD_PUBLIC_URL must be set or the
+              # provisioning bootstrap points new tester agents at
+              # ws://localhost:3000 and they never come online (found live,
+              # E2E attempt 1). The deploy asserts it into the EnvironmentFile
+              # so an env-file recreation can't silently regress it.
+              sudo grep -q '^DASHBOARD_PUBLIC_URL=' /etc/alethedash-cs.env 2>/dev/null \
+                || echo 'DASHBOARD_PUBLIC_URL=https://alethedash.com' | sudo tee -a /etc/alethedash-cs.env >/dev/null
               echo '>> Deploying C# control plane...'
               sudo systemctl stop alethedash-cs
               sudo rm -rf /opt/alethedash-cs.prevbuild
