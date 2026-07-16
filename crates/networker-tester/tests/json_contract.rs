@@ -94,6 +94,7 @@ fn sample_run() -> TestRun {
             cpu_time_ms: None,
             csw_voluntary: None,
             csw_involuntary: None,
+            http_handshake_ms: None,
         }),
         udp: None,
         error: None,
@@ -223,6 +224,33 @@ fn dns_resolver_field_is_additive_and_optional() {
         .remove("resolver");
     let back: TestRun = serde_json::from_value(v).expect("deserialize without dns.resolver");
     assert_eq!(back.attempts[0].dns.as_ref().unwrap().resolver, None);
+}
+
+/// The v0.28.20 additive field `http.http_handshake_ms` is optional and
+/// skip-serialized when `None`: pre-existing JSON (without the field) must
+/// deserialize unchanged, and a run that doesn't set it serializes to the
+/// exact same shape as before — the frozen 1.0 contract is untouched.
+#[test]
+fn http_handshake_ms_is_additive_and_optional() {
+    let run = sample_run();
+    let v: serde_json::Value = serde_json::to_value(&run).expect("serialize");
+
+    let http = v
+        .pointer("/attempts/0/http")
+        .expect("http block must be present");
+    assert!(
+        http.get("http_handshake_ms").is_none(),
+        "http_handshake_ms must be omitted when unset (shape unchanged)"
+    );
+
+    // Round-trip: absent field deserializes to None.
+    let back: TestRun = serde_json::from_value(v).expect("deserialize");
+    assert!(back.attempts[0]
+        .http
+        .as_ref()
+        .expect("http")
+        .http_handshake_ms
+        .is_none());
 }
 
 /// A run serialized without `schema_version` (a pre-contract producer) must

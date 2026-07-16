@@ -168,15 +168,21 @@ pub fn print_summary(run: &TestRun) {
                 .collect();
             if let Some(s) = compute_stats(&vals) {
                 let label = primary_metric_label(proto);
+                // p95/p99 are suppressed below the sample-size guard
+                // (n≥20 / n≥100) — printing them at small n would present the
+                // max as a tail estimate.
+                let fmt_pctl = |v: Option<f64>| {
+                    v.map_or_else(|| format!("{:>8}", "—"), |x| format!("{x:>8.2}"))
+                };
                 println!(
-                    " {grp:<16} │ {label:<16} │ {n:<3} │ {min:>8.2} │ {mean:>8.2} │ {p50:>8.2} │ {p95:>8.2} │ {p99:>8.2} │ {max:>8.2} │ {stddev:>7.2}",
+                    " {grp:<16} │ {label:<16} │ {n:<3} │ {min:>8.2} │ {mean:>8.2} │ {p50:>8.2} │ {p95} │ {p99} │ {max:>8.2} │ {stddev:>7.2}",
                     grp = group_label(proto, *payload),
                     n = s.count,
                     min = s.min,
                     mean = s.mean,
                     p50 = s.p50,
-                    p95 = s.p95,
-                    p99 = s.p99,
+                    p95 = fmt_pctl(s.p95),
+                    p99 = fmt_pctl(s.p99),
                     max = s.max,
                     stddev = s.stddev,
                 );

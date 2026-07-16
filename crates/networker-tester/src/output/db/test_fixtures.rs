@@ -150,6 +150,7 @@ pub(crate) fn full_attempt(run_id: Uuid) -> RequestAttempt {
             cpu_time_ms: Some(1.2),
             csw_voluntary: Some(4),
             csw_involuntary: Some(1),
+            http_handshake_ms: None,
         }),
         udp: Some(UdpResult {
             remote_addr: "127.0.0.1:9999".into(),

@@ -58,7 +58,9 @@ pub struct Cli {
     #[arg(long)]
     pub runs: Option<u32>,
 
-    /// Number of concurrent requests per run (best-effort)
+    /// Number of concurrent attempts within a single probe mode (best-effort).
+    /// Different probe modes always run sequentially so cross-mode contention
+    /// cannot distort latency or throughput measurements.
     #[arg(long)]
     pub concurrency: Option<usize>,
 

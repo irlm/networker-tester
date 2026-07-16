@@ -547,6 +547,11 @@ async fn run_http_or_tcp(
                 h.csw_voluntary = Some((csw_v1 - csw_v0) as u64);
                 h.csw_involuntary = Some((csw_i1 - csw_i0) as u64);
             }
+            // Unified HTTP success rule across probe modes (V6): 2xx/3xx = success.
+            // Matches the native and curl probes so per-mode success rates are
+            // directly comparable.
+            let http_ok = h.status_code < 400;
+            let status_code = h.status_code;
             RequestAttempt {
                 attempt_id,
                 run_id,
@@ -554,13 +559,22 @@ async fn run_http_or_tcp(
                 sequence_num,
                 started_at,
                 finished_at: Some(Utc::now()),
-                success: h.status_code < 500,
+                success: http_ok,
                 dns: dns_result,
                 tcp: Some(tcp_result),
                 tls: tls_result,
                 http: Some(h),
                 udp: None,
-                error: None,
+                error: if http_ok {
+                    None
+                } else {
+                    Some(ErrorRecord {
+                        category: ErrorCategory::Http,
+                        message: format!("HTTP {status_code}"),
+                        detail: None,
+                        occurred_at: Utc::now(),
+                    })
+                },
                 retry_count: 0,
                 server_timing,
                 udp_throughput: None,
@@ -571,13 +585,19 @@ async fn run_http_or_tcp(
         }
         Err(e) => {
             warn!("HTTP request failed: {e}");
+            // Request-phase timeouts must be classified as Timeout, not Http.
+            let category = if e.to_string().contains("timed out") {
+                ErrorCategory::Timeout
+            } else {
+                ErrorCategory::Http
+            };
             failed_attempt(
                 run_id,
                 attempt_id,
                 sequence_num,
                 protocol,
                 started_at,
-                ErrorCategory::Http,
+                category,
                 e.to_string(),
                 None,
                 dns_result,
@@ -605,6 +625,10 @@ async fn send_http1(
         hyper::client::conn::http1::SendRequest<BoxBody<Bytes, Infallible>>,
         _,
     ) = hyper::client::conn::http1::handshake(io).await?;
+    // Connection-setup sub-phase (V8): time from HTTP-phase start to the point
+    // the connection is ready to carry a request. Recorded separately so
+    // throughput windows can exclude it.
+    let http_handshake_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
     tokio::spawn(async move {
         if let Err(e) = conn.await {
@@ -624,7 +648,16 @@ async fn send_http1(
     .map_err(|_| anyhow::anyhow!("HTTP/1.1 request timed out"))??;
 
     let ttfb_ms = t_sent.elapsed().as_secs_f64() * 1000.0;
-    collect_response(resp, "HTTP/1.1", started_at, ttfb_ms, t0, client_send_at).await
+    collect_response(
+        resp,
+        "HTTP/1.1",
+        started_at,
+        ttfb_ms,
+        t0,
+        client_send_at,
+        http_handshake_ms,
+    )
+    .await
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -645,6 +678,8 @@ async fn send_http2(
         hyper::client::conn::http2::SendRequest<BoxBody<Bytes, Infallible>>,
         _,
     ) = hyper::client::conn::http2::handshake(TokioExecutor::new(), io).await?;
+    // Connection-setup sub-phase (V8): client preface + SETTINGS exchange.
+    let http_handshake_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
     tokio::spawn(async move {
         if let Err(e) = conn.await {
@@ -664,7 +699,16 @@ async fn send_http2(
     .map_err(|_| anyhow::anyhow!("HTTP/2 request timed out"))??;
 
     let ttfb_ms = t_sent.elapsed().as_secs_f64() * 1000.0;
-    collect_response(resp, "HTTP/2", started_at, ttfb_ms, t0, client_send_at).await
+    collect_response(
+        resp,
+        "HTTP/2",
+        started_at,
+        ttfb_ms,
+        t0,
+        client_send_at,
+        http_handshake_ms,
+    )
+    .await
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -673,21 +717,51 @@ async fn send_http2(
 
 /// Chunk size for streaming upload bodies — avoids allocating the full payload in memory.
 const UPLOAD_CHUNK: usize = 256 * 1024; // 256 KiB
-/// Static zero buffer reused across all upload chunks (zero-copy via `Bytes::from_static`).
-static ZERO_BYTES: [u8; UPLOAD_CHUNK] = [0u8; UPLOAD_CHUNK];
 
-/// Build a streaming body that yields exactly `total_bytes` zero bytes in 256 KiB chunks.
+/// Deterministic seed for the upload payload PRNG. Fixed so payloads are
+/// byte-identical across runs and hosts (reproducible measurements).
+const UPLOAD_PAYLOAD_SEED: u64 = 0x4E57_4B54_5F55_5044; // "NWKT_UPD"
+
+/// splitmix64 — tiny, fast, well-distributed PRNG step function.
+fn splitmix64(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// Shared incompressible upload payload chunk, filled once with a seeded PRNG.
 ///
-/// Uses a single static 256 KiB zero array — no heap allocation per chunk.
+/// All-zero payloads (the previous behavior) compress ~1000:1 through any
+/// compressing/deduplicating middlebox, VPN, or WAN optimizer, inflating
+/// measured upload throughput arbitrarily. iperf3 uses pseudorandom payloads
+/// for the same reason (V9).
+static UPLOAD_PAYLOAD: std::sync::OnceLock<Bytes> = std::sync::OnceLock::new();
+
+fn upload_payload_chunk() -> &'static Bytes {
+    UPLOAD_PAYLOAD.get_or_init(|| {
+        let mut buf = vec![0u8; UPLOAD_CHUNK];
+        let mut state = UPLOAD_PAYLOAD_SEED;
+        for word in buf.chunks_exact_mut(8) {
+            word.copy_from_slice(&splitmix64(&mut state).to_le_bytes());
+        }
+        Bytes::from(buf)
+    })
+}
+
+/// Build a streaming body that yields exactly `total_bytes` of incompressible
+/// pseudorandom data in 256 KiB chunks.
+///
+/// Uses a single shared 256 KiB buffer — `Bytes::slice` is zero-copy
+/// (refcounted), so no per-chunk allocation occurs.
 fn make_upload_body(total_bytes: usize) -> BoxBody<Bytes, Infallible> {
     let s = stream::unfold(total_bytes, |remaining| async move {
         if remaining == 0 {
             return None;
         }
         let n = remaining.min(UPLOAD_CHUNK);
-        // SAFETY: n <= UPLOAD_CHUNK so the slice is always in-bounds.
-        // `from_static` is zero-copy — the Bytes points directly into the static array.
-        let chunk = Bytes::from_static(&ZERO_BYTES[..n]);
+        let chunk = upload_payload_chunk().slice(..n);
         Some((Ok::<_, Infallible>(Frame::data(chunk)), remaining - n))
     });
     BoxBody::new(StreamBody::new(s))
@@ -729,6 +803,7 @@ fn build_request(
     Ok(builder.body(body)?)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn collect_response(
     resp: Response<Incoming>,
     version: &str,
@@ -736,6 +811,7 @@ async fn collect_response(
     ttfb_ms: f64,
     t0: Instant,
     client_send_at: chrono::DateTime<Utc>,
+    http_handshake_ms: f64,
 ) -> anyhow::Result<(HttpResult, Option<ServerTimingResult>)> {
     let status_code = resp.status().as_u16();
     let headers = resp.headers().clone();
@@ -749,6 +825,11 @@ async fn collect_response(
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
         .collect();
+
+    // Record redirects (V15). The conn-level hyper client never follows
+    // redirects, so a 3xx with a Location header is one observed (unfollowed)
+    // redirect response.
+    let redirect_count = count_redirect(status_code, headers.contains_key(hyper::header::LOCATION));
 
     // Parse server timing before consuming the body.
     let server_timing = parse_server_timing(&headers, client_send_at, ttfb_ms);
@@ -764,7 +845,7 @@ async fn collect_response(
         body_size_bytes,
         ttfb_ms,
         total_duration_ms,
-        redirect_count: 0,
+        redirect_count,
         started_at,
         response_headers,
         payload_bytes: 0,
@@ -773,9 +854,20 @@ async fn collect_response(
         cpu_time_ms: None,
         csw_voluntary: None,
         csw_involuntary: None,
+        http_handshake_ms: Some(http_handshake_ms),
     };
 
     Ok((http, server_timing))
+}
+
+/// One observed redirect response = a 3xx status carrying a `Location` header.
+/// Redirects are recorded, not followed.
+pub(crate) fn count_redirect(status_code: u16, has_location: bool) -> u32 {
+    if (300..400).contains(&status_code) && has_location {
+        1
+    } else {
+        0
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1363,19 +1455,50 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn upload_body_all_zeros() {
-        // Every byte in the streamed body must be zero.
+    async fn upload_body_is_incompressible_not_zero_filled() {
+        // V9: the payload must not be trivially compressible. A seeded PRNG
+        // fill should use (nearly) every byte value; all-zero payloads
+        // compress ~1000:1 through middleboxes and inflate throughput.
         use http_body_util::BodyExt;
-        let total = UPLOAD_CHUNK + 100;
-        let mut body = make_upload_body(total);
+        let mut body = make_upload_body(UPLOAD_CHUNK);
+        let mut seen = [false; 256];
         while let Some(frame) = body.frame().await {
             if let Ok(data) = frame.unwrap().into_data() {
-                assert!(
-                    data.iter().all(|&b| b == 0),
-                    "non-zero byte found in upload body"
-                );
+                for &b in data.iter() {
+                    seen[b as usize] = true;
+                }
             }
         }
+        let distinct = seen.iter().filter(|&&s| s).count();
+        assert!(
+            distinct > 200,
+            "payload should span most byte values, found only {distinct} distinct"
+        );
+    }
+
+    #[test]
+    fn upload_payload_is_deterministic() {
+        // Fixed seed → reproducible payload across runs (and across calls).
+        let a = upload_payload_chunk();
+        let mut buf = vec![0u8; UPLOAD_CHUNK];
+        let mut state = UPLOAD_PAYLOAD_SEED;
+        for word in buf.chunks_exact_mut(8) {
+            word.copy_from_slice(&splitmix64(&mut state).to_le_bytes());
+        }
+        assert_eq!(a.as_ref(), buf.as_slice());
+    }
+
+    #[test]
+    fn count_redirect_rules() {
+        // 3xx with Location = one observed redirect.
+        assert_eq!(count_redirect(301, true), 1);
+        assert_eq!(count_redirect(302, true), 1);
+        assert_eq!(count_redirect(308, true), 1);
+        // 3xx without Location is not a followable redirect.
+        assert_eq!(count_redirect(304, false), 0);
+        // Non-3xx never counts.
+        assert_eq!(count_redirect(200, true), 0);
+        assert_eq!(count_redirect(404, false), 0);
     }
 
     #[tokio::test]

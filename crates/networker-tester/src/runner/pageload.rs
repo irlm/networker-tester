@@ -675,6 +675,7 @@ async fn run_h1_keepalive_connection(
                     cpu_time_ms: None,
                     csw_voluntary: None,
                     csw_involuntary: None,
+                    http_handshake_ms: None,
                 };
                 (Some(http), st, ttfb_ms)
             }
@@ -1061,6 +1062,7 @@ pub async fn run_pageload2_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
         cpu_time_ms: None,
         csw_voluntary: None,
         csw_involuntary: None,
+        http_handshake_ms: None,
     };
 
     // ── Asset requests (all in-flight simultaneously over the H2 connection) ──
@@ -1586,6 +1588,7 @@ pub async fn run_pageload3_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
         cpu_time_ms: None,
         csw_voluntary: None,
         csw_involuntary: None,
+        http_handshake_ms: None,
     };
 
     // ── Asset requests: send + receive all concurrently (like a real browser) ──
@@ -2171,6 +2174,7 @@ async fn fetch_h2_pageload(
         cpu_time_ms: None,
         csw_voluntary: None,
         csw_involuntary: None,
+        http_handshake_ms: None,
     };
 
     // ── Asset requests ──
@@ -2713,6 +2717,7 @@ async fn fetch_h3_pageload(
         cpu_time_ms: None,
         csw_voluntary: None,
         csw_involuntary: None,
+        http_handshake_ms: None,
     };
 
     // ── Asset requests ──

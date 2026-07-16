@@ -1293,6 +1293,9 @@ fn write_protocol_sections(run: &TestRun, out: &mut String, stack_filter: Option
                 } else {
                     "err"
                 };
+                // p95/p99 suppressed below the sample-size guard (n≥20 / n≥100).
+                let fmt_pctl =
+                    |v: Option<f64>| v.map_or_else(|| "—".to_string(), |x| format!("{x:.2}"));
                 let _ = write!(
                     out,
                     r#"      <tr>
@@ -1302,8 +1305,8 @@ fn write_protocol_sections(run: &TestRun, out: &mut String, stack_filter: Option
         <td>{min:.2}</td>
         <td>{mean:.2}</td>
         <td>{p50:.2}</td>
-        <td>{p95:.2}</td>
-        <td>{p99:.2}</td>
+        <td>{p95}</td>
+        <td>{p99}</td>
         <td>{max:.2}</td>
         <td>{stddev:.2}</td>
         <td class="{ok_cls}">{pct:.0}%</td>
@@ -1313,8 +1316,8 @@ fn write_protocol_sections(run: &TestRun, out: &mut String, stack_filter: Option
                     min = s.min,
                     mean = s.mean,
                     p50 = s.p50,
-                    p95 = s.p95,
-                    p99 = s.p99,
+                    p95 = fmt_pctl(s.p95),
+                    p99 = fmt_pctl(s.p99),
                     max = s.max,
                     stddev = s.stddev,
                     pct = success_pct,
@@ -3924,6 +3927,7 @@ mod tests {
                     cpu_time_ms: None,
                     csw_voluntary: None,
                     csw_involuntary: None,
+                    http_handshake_ms: None,
                 }),
                 udp: None,
                 error: None,
@@ -4228,6 +4232,7 @@ mod tests {
                     cpu_time_ms: Some(12.0),
                     csw_voluntary: None,
                     csw_involuntary: None,
+                    http_handshake_ms: None,
                 }),
                 udp: None,
                 error: None,
@@ -4436,6 +4441,7 @@ mod tests {
                 cpu_time_ms: None,
                 csw_voluntary: None,
                 csw_involuntary: None,
+                http_handshake_ms: None,
             }),
             udp: None,
             error: None,
@@ -4867,6 +4873,7 @@ mod tests {
                     cpu_time_ms: None,
                     csw_voluntary: None,
                     csw_involuntary: None,
+                    http_handshake_ms: None,
                 })
             } else {
                 None
@@ -5806,6 +5813,7 @@ mod tests {
                     cpu_time_ms: None,
                     csw_voluntary: None,
                     csw_involuntary: None,
+                    http_handshake_ms: None,
                 }),
                 udp: None,
                 error: None,
