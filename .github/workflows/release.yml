@@ -94,7 +94,7 @@ jobs:
           cargo build --release --locked
           --target x86_64-unknown-linux-musl
           --features browser
-          -p networker-tester -p networker-endpoint -p networker-agent
+          -p networker-tester -p networker-endpoint
 
       - name: Build orchestrator
         run: >
@@ -109,7 +109,6 @@ jobs:
           mkdir -p dist
           tar czf "dist/networker-tester-${TARGET}.tar.gz" -C "${SRC}" "networker-tester"
           tar czf "dist/networker-endpoint-${TARGET}.tar.gz" -C "${SRC}" "networker-endpoint"
-          tar czf "dist/networker-agent-${TARGET}.tar.gz" -C "${SRC}" "networker-agent"
           ORCH_SRC="benchmarks/orchestrator/target/${TARGET}/release"
           tar czf "dist/alethabench-${TARGET}.tar.gz" -C "${ORCH_SRC}" "alethabench"
 
@@ -185,21 +184,19 @@ jobs:
           cargo generate-lockfile
           cargo generate-lockfile --manifest-path benchmarks/orchestrator/Cargo.toml
 
-      # The crates that still ship as Rust: the probe core (tester), the
-      # diagnostic server (endpoint), and the AGENT — the tester-provisioning
-      # cloud-init bootstrap installs networker-agent-<target> from the LATEST
-      # release on every new tester VM (found the hard way: v0.28.16–22 had no
-      # agent asset and provisioning died at `download_bin networker-agent`).
-      # The agent stays on the release train until the bootstrap switches to
-      # the C# Networker.Agent. Only networker-dashboard (37k LOC — the bulk
-      # of the old Windows build time) stays off. The tester keeps
-      # --features browser since it's installed on Windows too.
+      # The crates that still ship as Rust: the probe core (tester) and the
+      # diagnostic server (endpoint). The RUST AGENT IS RETIRED from the train
+      # (v0.28.26+ bootstraps install the C# Networker.Agent, E2E-verified in
+      # production; the bootstrap's legacy-asset fallback only fires for OLDER
+      # release tags, which still carry the Rust asset). networker-dashboard
+      # (37k LOC) stays off. The tester keeps --features browser since it's
+      # installed on Windows too.
       - name: Build shipped Rust binaries
         run: >
           cargo build --release --locked
           --target ${{ matrix.target }}
           --features browser
-          -p networker-tester -p networker-endpoint -p networker-agent
+          -p networker-tester -p networker-endpoint
 
       - name: Build orchestrator
         run: >
@@ -224,8 +221,6 @@ jobs:
               -C "${SRC}" "networker-tester"
           tar czf "dist/networker-endpoint-${TARGET}.tar.gz" \
               -C "${SRC}" "networker-endpoint"
-          tar czf "dist/networker-agent-${TARGET}.tar.gz" \
-              -C "${SRC}" "networker-agent"
 
           ORCH_SRC="benchmarks/orchestrator/target/${TARGET}/release"
           tar czf "dist/alethabench-${TARGET}.tar.gz" \
@@ -247,10 +242,6 @@ jobs:
           Compress-Archive `
               -Path "$src\networker-endpoint.exe" `
               -DestinationPath "dist\networker-endpoint-$target.zip" `
-              -Force
-          Compress-Archive `
-              -Path "$src\networker-agent.exe" `
-              -DestinationPath "dist\networker-agent-$target.zip" `
               -Force
 
           $orchSrc = "benchmarks\orchestrator\target\$target\release"
