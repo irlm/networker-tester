@@ -91,6 +91,7 @@ pub(crate) fn full_attempt(run_id: Uuid) -> RequestAttempt {
             duration_ms: 1.5,
             started_at: Utc::now(),
             success: true,
+            resolver: None,
         }),
         tcp: Some(TcpResult {
             local_addr: Some("127.0.0.1:12345".into()),

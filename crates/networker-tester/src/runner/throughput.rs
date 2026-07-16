@@ -1559,6 +1559,7 @@ mod tests {
                 duration_ms: 5.0,
                 started_at: now,
                 success: true,
+                resolver: None,
             }),
             tcp: Some(TcpResult {
                 local_addr: None,

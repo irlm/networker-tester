@@ -2830,7 +2830,10 @@ fn write_run_sections(run: &TestRun, out: &mut String) {
                         proto = a.protocol,
                         payload = format_bytes(u.payload_bytes),
                         sent = u.datagrams_sent,
-                        recv = u.datagrams_received,
+                        recv = u
+                            .datagrams_received
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "n/a".into()),
                         loss = u.loss_percent,
                         loss_cls = if u.loss_percent > 5.0 {
                             "warn"
@@ -4620,7 +4623,7 @@ mod tests {
                 remote_addr: "127.0.0.1:9998".into(),
                 payload_bytes: 65_536,
                 datagrams_sent: 50,
-                datagrams_received: 50,
+                datagrams_received: Some(50),
                 bytes_acked: None,
                 loss_percent: 0.0,
                 transfer_ms: 125.0,

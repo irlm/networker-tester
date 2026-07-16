@@ -582,7 +582,10 @@ fn write_udp_throughput(
         ws.write(row, 3, u.payload_bytes as f64)?;
         ws.write(row, 4, format_bytes(u.payload_bytes))?;
         ws.write(row, 5, u.datagrams_sent as f64)?;
-        ws.write(row, 6, u.datagrams_received as f64)?;
+        // Blank when unknown (upload: server reports bytes, not datagrams).
+        if let Some(recv) = u.datagrams_received {
+            ws.write(row, 6, recv as f64)?;
+        }
         ws.write_with_format(row, 7, u.loss_percent, num2)?;
         if let Some(mbps) = u.throughput_mbps {
             ws.write_with_format(row, 8, mbps, num2)?;
@@ -747,6 +750,7 @@ mod tests {
                 duration_ms: 0.5,
                 started_at: now,
                 success: true,
+                resolver: None,
             }),
             tcp: Some(TcpResult {
                 local_addr: Some("127.0.0.1:54321".into()),
@@ -884,7 +888,7 @@ mod tests {
                 remote_addr: "127.0.0.1:9998".into(),
                 payload_bytes: 1_048_576,
                 datagrams_sent: 800,
-                datagrams_received: 798,
+                datagrams_received: Some(798),
                 bytes_acked: Some(1_048_576),
                 loss_percent: 0.25,
                 transfer_ms: 85.0,

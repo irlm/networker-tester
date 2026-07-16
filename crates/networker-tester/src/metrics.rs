@@ -811,6 +811,12 @@ pub struct DnsResult {
     pub duration_ms: f64,
     pub started_at: DateTime<Utc>,
     pub success: bool,
+    /// Identity of the resolver used, e.g. `"system (192.168.1.1:53)"` or
+    /// `"google-fallback (8.8.8.8:53)"`. `None` when the probe cannot know
+    /// (e.g. curl's own resolution). Additive, serde-defaulted — absent in
+    /// pre-0.28.19 JSON. (Trust audit V1.)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolver: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1012,14 +1018,20 @@ pub struct UdpThroughputResult {
     pub payload_bytes: usize,
     /// Number of datagrams sent by the sender (server for download, client for upload).
     pub datagrams_sent: u32,
-    /// Number of datagrams received by the receiver.
-    pub datagrams_received: u32,
+    /// Number of datagrams received by the receiver. `None` when the client
+    /// cannot know it: for uploads the server's CMD_REPORT carries a byte
+    /// count, not a datagram count, so this value is never fabricated.
+    /// (Trust audit V3.)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub datagrams_received: Option<u32>,
     /// Bytes acknowledged by the server (from CMD_REPORT); upload mode only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bytes_acked: Option<usize>,
     /// Datagram loss percentage (based on unique seq_num gaps).
     pub loss_percent: f64,
-    /// Total transfer window in ms (from first data packet to CMD_DONE/CMD_REPORT).
+    /// Total transfer window in ms. Download: first data packet to CMD_DONE
+    /// received. Upload: send start to CMD_DONE sent — the CMD_REPORT
+    /// round-trip is excluded (trust audit V4).
     pub transfer_ms: f64,
     /// Measured throughput in MB/s; None if transfer_ms = 0.
     pub throughput_mbps: Option<f64>,
@@ -1407,19 +1419,22 @@ pub fn aggregate_udp_rtts(samples: &[Option<f64>]) -> RttStats {
         };
     }
 
-    rtts.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let min = rtts[0];
-    let avg = rtts.iter().sum::<f64>() / received;
-    let p95_idx = ((rtts.len() as f64 * 0.95).ceil() as usize).saturating_sub(1);
-    let p95 = rtts[p95_idx.min(rtts.len() - 1)];
-
-    // Jitter: mean of successive absolute differences
+    // Jitter: mean absolute difference between consecutive RTTs in ARRIVAL
+    // order (RFC 3550-style inter-packet variation). This must be computed
+    // BEFORE sorting — successive diffs of a sorted array telescope to
+    // (max − min) / (n − 1), a range statistic, not jitter. (Trust audit V2.)
     let jitter = if rtts.len() > 1 {
         let diffs: Vec<f64> = rtts.windows(2).map(|w| (w[1] - w[0]).abs()).collect();
         diffs.iter().sum::<f64>() / diffs.len() as f64
     } else {
         0.0
     };
+
+    rtts.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let min = rtts[0];
+    let avg = rtts.iter().sum::<f64>() / received;
+    let p95_idx = ((rtts.len() as f64 * 0.95).ceil() as usize).saturating_sub(1);
+    let p95 = rtts[p95_idx.min(rtts.len() - 1)];
 
     RttStats {
         min,
@@ -1576,17 +1591,19 @@ mod tests {
 
     #[test]
     fn test_rtt_stats_no_loss() {
+        // Deliberately UNSORTED (arrival order). Percentile/min/avg must not
+        // depend on arrival order; jitter must (see dedicated tests below).
         let samples: Vec<Option<f64>> = vec![
-            Some(1.0),
-            Some(2.0),
-            Some(3.0),
-            Some(4.0),
-            Some(5.0),
-            Some(6.0),
             Some(7.0),
-            Some(8.0),
-            Some(9.0),
+            Some(2.0),
             Some(10.0),
+            Some(4.0),
+            Some(1.0),
+            Some(6.0),
+            Some(3.0),
+            Some(9.0),
+            Some(5.0),
+            Some(8.0),
         ];
         let s = aggregate_udp_rtts(&samples);
         assert_eq!(s.loss_percent, 0.0);
@@ -1594,15 +1611,45 @@ mod tests {
         assert!((s.avg - 5.5).abs() < 1e-9);
         // 95th percentile of 10 values → index ceil(9.5)-1 = 9 → 10.0
         assert!((s.p95 - 10.0).abs() < 1e-9);
+        // Arrival-order |Δ|: 5,8,6,3,5,3,6,4,3 → mean = 43/9
+        assert!(
+            (s.jitter - 43.0 / 9.0).abs() < 1e-9,
+            "jitter must be computed on arrival order, got {}",
+            s.jitter
+        );
     }
 
     #[test]
     fn test_rtt_stats_with_loss() {
-        let samples: Vec<Option<f64>> = vec![Some(5.0), None, Some(10.0), None, Some(15.0)];
+        // Unsorted arrival order; None entries are lost probes and are
+        // skipped when pairing consecutive samples for jitter.
+        let samples: Vec<Option<f64>> = vec![Some(15.0), None, Some(5.0), None, Some(10.0)];
         let s = aggregate_udp_rtts(&samples);
         assert!((s.loss_percent - 40.0).abs() < 1e-9);
         assert!((s.min - 5.0).abs() < 1e-9);
         assert!((s.avg - 10.0).abs() < 1e-9);
+        // Arrival-order |Δ| over received: |5−15|=10, |10−5|=5 → mean 7.5
+        assert!((s.jitter - 7.5).abs() < 1e-9, "got jitter {}", s.jitter);
+    }
+
+    /// Regression test for trust-audit V2: alternating 1/10/1/10 ms RTTs have
+    /// a true arrival-order jitter of 9 ms. The old implementation sorted the
+    /// samples first and reported (max−min)/(n−1) = 3 ms instead.
+    #[test]
+    fn test_rtt_jitter_uses_arrival_order_not_sorted() {
+        let samples: Vec<Option<f64>> = vec![Some(1.0), Some(10.0), Some(1.0), Some(10.0)];
+        let s = aggregate_udp_rtts(&samples);
+        assert!(
+            (s.jitter - 9.0).abs() < 1e-9,
+            "expected arrival-order jitter 9.0, got {} (sorted-input bug?)",
+            s.jitter
+        );
+    }
+
+    #[test]
+    fn test_rtt_jitter_single_sample_is_zero() {
+        let s = aggregate_udp_rtts(&[Some(5.0)]);
+        assert_eq!(s.jitter, 0.0);
     }
 
     #[test]
@@ -1777,11 +1824,27 @@ mod tests {
             duration_ms: 12.5,
             started_at: Utc::now(),
             success: true,
+            resolver: Some("system (192.168.1.1:53)".into()),
         };
         let json = serde_json::to_string(&r).unwrap();
         let de: DnsResult = serde_json::from_str(&json).unwrap();
         assert_eq!(de.query_name, r.query_name);
         assert!((de.duration_ms - r.duration_ms).abs() < 1e-9);
+        assert_eq!(de.resolver.as_deref(), Some("system (192.168.1.1:53)"));
+    }
+
+    /// Pre-0.28.19 JSON has no `resolver` field — must still deserialize.
+    #[test]
+    fn test_dns_result_deserializes_without_resolver_field() {
+        let json = r#"{
+            "query_name": "example.com",
+            "resolved_ips": ["93.184.216.34"],
+            "duration_ms": 3.5,
+            "started_at": "2026-01-01T00:00:00Z",
+            "success": true
+        }"#;
+        let de: DnsResult = serde_json::from_str(json).unwrap();
+        assert_eq!(de.resolver, None);
     }
 
     #[test]
@@ -1972,6 +2035,7 @@ mod tests {
             duration_ms: 42.0,
             started_at: Utc::now(),
             success: true,
+            resolver: None,
         });
         assert!((primary_metric_value(&a).unwrap() - 42.0).abs() < 1e-9);
     }
@@ -2170,7 +2234,7 @@ mod tests {
                 remote_addr: "127.0.0.1:9998".into(),
                 payload_bytes: 1_048_576,
                 datagrams_sent: 100,
-                datagrams_received: 100,
+                datagrams_received: Some(100),
                 bytes_acked: None,
                 loss_percent: 0.0,
                 transfer_ms: 50.0,
@@ -2354,7 +2418,7 @@ mod tests {
             remote_addr: "127.0.0.1:9998".into(),
             payload_bytes: 1_048_576,
             datagrams_sent: 100,
-            datagrams_received: 100,
+            datagrams_received: Some(100),
             bytes_acked: None,
             loss_percent: 0.0,
             transfer_ms: 50.0,

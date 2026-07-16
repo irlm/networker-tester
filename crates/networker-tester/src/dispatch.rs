@@ -310,7 +310,12 @@ pub fn log_attempt(a: &RequestAttempt) {
                     proto = a.protocol,
                     payload = payload_str,
                     sent = ut.datagrams_sent,
-                    recv = ut.datagrams_received,
+                    // Upload probes cannot know the received datagram count
+                    // (server reports bytes) — shown as "n/a", never faked.
+                    recv = ut
+                        .datagrams_received
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "n/a".into()),
                     loss = ut.loss_percent,
                     xfer = ut.transfer_ms,
                     retry = retry_suffix,

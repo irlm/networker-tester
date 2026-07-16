@@ -435,10 +435,9 @@ async fn run_native_https(
     use hyper_util::rt::TokioIo;
     use tokio_native_tls::TlsConnector;
 
-    let tls_started_at = Utc::now();
-    let t_tls = Instant::now();
-
-    // Build native-tls connector
+    // Build native-tls connector BEFORE starting the handshake timer:
+    // connector construction (incl. CA-bundle file I/O) is local setup work,
+    // not network time (trust audit V5).
     let mut builder = native_tls::TlsConnector::builder();
     if cfg.insecure {
         builder.danger_accept_invalid_certs(true);
@@ -483,6 +482,10 @@ async fn run_native_https(
             );
         }
     };
+
+    // Timer starts here: the timed region is exactly the TLS handshake.
+    let tls_started_at = Utc::now();
+    let t_tls = Instant::now();
 
     let tls_stream = match tokio::time::timeout(
         std::time::Duration::from_millis(cfg.timeout_ms),
@@ -905,6 +908,7 @@ mod tests {
             duration_ms: 5.0,
             started_at: now,
             success: true,
+            resolver: None,
         };
         let tcp = TcpResult {
             local_addr: None,

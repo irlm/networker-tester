@@ -388,10 +388,10 @@ async fn run_http_or_tcp(
     }
 
     // ── 3. TLS handshake (HTTPS only) ─────────────────────────────────────────
+    // Client config (trust store, ALPN) is built BEFORE the handshake timer
+    // starts: config construction is local setup work, not network time
+    // (trust audit V5).
     let (tls_result, io_box): (Option<TlsResult>, Box<dyn IoStream>) = if scheme == "https" {
-        let tls_started_at = Utc::now();
-        let t_tls = Instant::now();
-
         let tls_config = match build_tls_config(&protocol, cfg.insecure, cfg.ca_bundle.as_deref()) {
             Ok(c) => c,
             Err(e) => {
@@ -428,6 +428,10 @@ async fn run_http_or_tcp(
                 );
             }
         };
+
+        // Timer starts here: the timed region is exactly the TLS handshake.
+        let tls_started_at = Utc::now();
+        let t_tls = Instant::now();
 
         let tls_stream = match tokio::time::timeout(
             std::time::Duration::from_millis(cfg.timeout_ms),
@@ -998,14 +1002,9 @@ pub(crate) fn build_tls_config(
             .with_custom_certificate_verifier(Arc::new(NoVerifier))
             .with_no_client_auth()
     } else {
-        let mut root_store = rustls::RootCertStore::empty();
-        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-
-        // Also add native OS roots (best-effort; API returns CertificateResult in 0.8)
-        let native = rustls_native_certs::load_native_certs();
-        for cert in native.certs {
-            let _ = root_store.add(cert);
-        }
+        // Shared base store (webpki + OS native roots), built once per process
+        // — trust-store construction must not run per attempt (trust audit V5).
+        let mut root_store = crate::runner::tls::base_root_store().clone();
 
         if let Some(bundle_path) = ca_bundle {
             crate::runner::tls::load_ca_bundle(&mut root_store, bundle_path)?;

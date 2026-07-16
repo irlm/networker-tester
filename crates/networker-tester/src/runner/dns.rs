@@ -5,8 +5,47 @@ use hickory_resolver::{
     TokioAsyncResolver,
 };
 use std::net::IpAddr;
+use std::sync::OnceLock;
 use std::time::Instant;
+use tracing::warn;
 use uuid::Uuid;
+
+/// Process-wide resolver plus a human-readable identity label.
+///
+/// Uses the OS resolver configuration (/etc/resolv.conf, macOS SystemConfiguration,
+/// Windows registry) so DNS timing measures the path the user's applications
+/// actually take. Falls back to Google Public DNS only when the system config
+/// cannot be read — and says so in the label. (Trust audit V1: the resolver was
+/// previously hardcoded to 8.8.8.8 via `ResolverConfig::default()`.)
+///
+/// Built once per process: reading the system config touches the filesystem and
+/// must never pollute a DNS timing window.
+fn shared_resolver() -> &'static (TokioAsyncResolver, String) {
+    static RESOLVER: OnceLock<(TokioAsyncResolver, String)> = OnceLock::new();
+    RESOLVER.get_or_init(|| match hickory_resolver::system_conf::read_system_conf() {
+        Ok((config, opts)) => {
+            let mut servers: Vec<String> = config
+                .name_servers()
+                .iter()
+                .map(|ns| ns.socket_addr.to_string())
+                .collect();
+            servers.dedup(); // UDP+TCP entries share a socket addr and are adjacent
+            let label = format!("system ({})", servers.join(", "));
+            (TokioAsyncResolver::tokio(config, opts), label)
+        }
+        Err(e) => {
+            warn!(
+                "Cannot read system resolver config ({e}); \
+                 falling back to Google Public DNS — DNS timings will NOT \
+                 reflect the path your applications use"
+            );
+            (
+                TokioAsyncResolver::tokio(ResolverConfig::default(), ResolverOpts::default()),
+                "google-fallback (8.8.8.8:53) — system config unavailable".to_string(),
+            )
+        }
+    })
+}
 
 /// Resolve `hostname` and return the list of IPs plus a timing record.
 /// Respects `ipv4_only` / `ipv6_only` filtering.
@@ -15,10 +54,12 @@ pub async fn resolve(
     ipv4_only: bool,
     ipv6_only: bool,
 ) -> Result<(Vec<IpAddr>, DnsResult), ErrorRecord> {
+    // Obtain the (cached) resolver before starting the timer: resolver
+    // construction reads config files and is not part of DNS resolution time.
+    let (resolver, resolver_label) = shared_resolver();
+
     let started_at = Utc::now();
     let t0 = Instant::now();
-
-    let resolver = TokioAsyncResolver::tokio(ResolverConfig::default(), ResolverOpts::default());
 
     let lookup = resolver
         .lookup_ip(hostname)
@@ -46,6 +87,7 @@ pub async fn resolve(
         duration_ms,
         started_at,
         success: !ips.is_empty(),
+        resolver: Some(resolver_label.clone()),
     };
 
     if ips.is_empty() {
@@ -129,6 +171,29 @@ mod tests {
         assert!(!ips.is_empty());
         assert!(r.success);
         assert!(r.duration_ms >= 0.0);
+    }
+
+    /// Regression test for trust-audit V1: the resolver identity must be
+    /// recorded, and on a machine with a readable system config it must be the
+    /// system resolver — not the old hardcoded Google Public DNS default.
+    #[tokio::test]
+    async fn records_resolver_identity() {
+        let (_, r) = resolve("localhost", false, false).await.unwrap();
+        let resolver = r.resolver.expect("resolver identity must be recorded");
+        assert!(!resolver.is_empty());
+        if resolver.starts_with("system") {
+            // System path: label lists actual nameserver socket addrs.
+            assert!(
+                resolver.contains(':'),
+                "expected socket addrs in {resolver}"
+            );
+        } else {
+            // Fallback path must be loudly labeled as such.
+            assert!(
+                resolver.contains("fallback"),
+                "non-system resolver must be labeled a fallback, got: {resolver}"
+            );
+        }
     }
 
     #[tokio::test]
