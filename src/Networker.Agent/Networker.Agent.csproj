@@ -8,7 +8,7 @@
     <RootNamespace>Networker.Agent</RootNamespace>
     <AssemblyName>networker-agent</AssemblyName>
     <UserSecretsId>networker-agent-hybrid</UserSecretsId>
-    <Version>0.28.13</Version>
+    <Version>0.28.26</Version>
 
     <!-- Self-contained single-file publish so this can drop in as the
          networker-agent binary on tester VMs. Publish with:

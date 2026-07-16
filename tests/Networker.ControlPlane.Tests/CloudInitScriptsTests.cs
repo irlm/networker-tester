@@ -65,6 +65,33 @@ public sealed class CloudInitScriptsTests
     }
 
     [Fact]
+    public void RenderLinux_installs_the_csharp_agent_with_rust_fallback()
+    {
+        var script = CloudInitScripts.RenderLinuxBootstrap(GoodUrl, GoodKey, GoodTriple);
+
+        // v0.28.26: the agent is the self-contained C# Networker.Agent asset...
+        Assert.Contains("networker-agent-cs-linux-x64.tar.gz", script);
+        // ...with the legacy Rust asset as the fallback for older releases.
+        Assert.Contains("falling back to legacy Rust agent", script);
+        Assert.Contains("download_bin networker-agent", script);
+        // The tester download is unchanged (Rust tester stays).
+        Assert.Contains("download_bin networker-tester", script);
+        // RUST_LOG is gone from the unit (the C# agent doesn't read it).
+        Assert.DoesNotContain("RUST_LOG", script);
+    }
+
+    [Fact]
+    public void RenderWindows_installs_the_csharp_agent_with_rust_fallback()
+    {
+        var script = CloudInitScripts.RenderWindowsBootstrap(GoodUrl, GoodKey, GoodTriple);
+
+        Assert.Contains("networker-agent-cs-win-x64.zip", script);
+        Assert.Contains($"networker-agent-{GoodTriple}.zip", script.Replace("$TARGET", GoodTriple));
+        Assert.Contains($"networker-tester-{GoodTriple}.zip", script.Replace("$TARGET", GoodTriple));
+        Assert.DoesNotContain("RUST_LOG", script);
+    }
+
+    [Fact]
     public void RenderWindows_is_ascii_only_and_substitutes()
     {
         var script = CloudInitScripts.RenderWindowsBootstrap(GoodUrl, GoodKey, GoodTriple);

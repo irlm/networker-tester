@@ -84,7 +84,7 @@ builder.Services.AddSsoModule();
 // benchmark_config table; the M3 dispatcher/redispatcher own run assignment.
 builder.Services.AddNetworkerEmailSender();
 builder.Services.AddVmLifecycleRecorder();
-builder.Services.AddVersionRefresh("0.28.25");
+builder.Services.AddVersionRefresh("0.28.26");
 // M6 cutover: raw-WebSocket bridges (the React frontend + fielded Rust agents
 // speak raw WS JSON, not SignalR) + per-tick pg-advisory leader election and
 // tick observability for the background loops. AddRawWebSockets must come
