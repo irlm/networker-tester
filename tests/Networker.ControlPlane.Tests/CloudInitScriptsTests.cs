@@ -92,6 +92,19 @@ public sealed class CloudInitScriptsTests
     }
 
     [Fact]
+    public void RenderLinux_is_ascii_only()
+    {
+        // Both cloud vendors' user-data paths choke on non-ASCII: az CLI
+        // latin-1-encodes --custom-data, so a single U+2014 em-dash makes
+        // `az vm create` exit 1 in seconds ('latin-1' codec can't encode…).
+        // This guard existed for the Windows template only — the gap let an
+        // em-dash into the Linux template and broke tester provisioning on
+        // prod (v0.28.26). Never remove this test.
+        var script = CloudInitScripts.RenderLinuxBootstrap(GoodUrl, GoodKey, GoodTriple);
+        Assert.All(script, c => Assert.True(c < 128, $"non-ASCII char U+{(int)c:X4}"));
+    }
+
+    [Fact]
     public void RenderWindows_is_ascii_only_and_substitutes()
     {
         var script = CloudInitScripts.RenderWindowsBootstrap(GoodUrl, GoodKey, GoodTriple);

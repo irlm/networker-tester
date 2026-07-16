@@ -244,7 +244,7 @@ download_bin() {
 
 # C# agent download: the agent is the self-contained C# Networker.Agent
 # (published from the ubuntu runner as networker-agent-cs-linux-x64.tar.gz;
-# the binary inside is still named networker-agent — drop-in). Falls back to
+# the binary inside is still named networker-agent -- drop-in). Falls back to
 # the legacy Rust asset name so a bootstrap that resolves an OLDER release
 # (predating the -cs- assets) still provisions.
 download_agent() {
