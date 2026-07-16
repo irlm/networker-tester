@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.23] — 2026-07-16
+
+### Fixed
+- **Tester provisioning broken since v0.28.16: `networker-agent` restored to
+  release assets.** The Rust-workflow strip (#408) removed the agent from the
+  release build, but the cloud-init bootstrap installs
+  `networker-agent-<target>` from the LATEST release on every new tester VM —
+  so provisioning died at `download_bin networker-agent` (found by the live
+  create-and-reap E2E). The agent rides the release train again until the
+  bootstrap switches to the C# `Networker.Agent`. Also requires
+  `DASHBOARD_PUBLIC_URL` in the control-plane environment (ops config,
+  fixed on prod).
+
+---
+
 ## [0.28.22] — 2026-07-16
 
 ### Fixed — tester creation (POST /testers) ported to the C# control plane; was 404 post-cutover
