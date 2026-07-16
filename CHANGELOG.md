@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.21] — 2026-07-15
+
+### Fixed — tester measurement validity (trust audit P1 wave B; changes reported numbers)
+- **HTTP/3 errors are no longer all classified `Http`** (V10). QUIC endpoint-build,
+  connection, and handshake failures now map to `Tls`/`Tcp`/`Timeout`/`Config`
+  per phase, matching the http1/http2 taxonomy, and HTTP/3 attempts now record
+  a real DNS phase (`DnsResult`, system resolver) for hostname targets — error
+  breakdowns and phase timings shift accordingly.
+- **UDP RTT statistics no longer poisoned by lost probes** (V11). Fully-lost
+  attempts contribute to loss%, not sentinel RTTs — reported UDP RTT stats drop
+  to their true values on lossy paths.
+- **UDP echo mismatches no longer cascade into false loss** (V12). Echoes are
+  matched by embedded sequence id against an outstanding-probe table, so one
+  delayed/reordered echo no longer desyncs the matcher and marks every
+  subsequent probe lost — reported loss% drops to its true value under
+  reordering.
+
+---
+
 ## [0.28.20] — 2026-07-15
 
 P1 measurement-validity fixes in the Rust probe engine (trust-audit wave A:

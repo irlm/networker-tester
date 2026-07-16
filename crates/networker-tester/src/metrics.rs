@@ -1577,7 +1577,15 @@ pub fn primary_metric_value(a: &RequestAttempt) -> Option<f64> {
             a.http.as_ref().map(|h| h.total_duration_ms)
         }
         Protocol::Tcp => a.tcp.as_ref().map(|t| t.connect_duration_ms),
-        Protocol::Udp => a.udp.as_ref().map(|u| u.rtt_avg_ms),
+        // A fully-lost UDP attempt has no RTT samples: its rtt_avg_ms is a
+        // 0.0 sentinel, not a measurement. Excluding it keeps lost attempts
+        // out of the RTT distribution — loss is reported via loss_percent.
+        // (Trust audit V11.)
+        Protocol::Udp => a
+            .udp
+            .as_ref()
+            .filter(|u| u.success_count > 0)
+            .map(|u| u.rtt_avg_ms),
         Protocol::Download
         | Protocol::Download1
         | Protocol::Download2
@@ -2248,6 +2256,34 @@ mod tests {
             probe_rtts_ms: vec![Some(1.0), Some(2.0)],
         });
         assert!((primary_metric_value(&a).unwrap() - 1.5).abs() < 1e-9);
+    }
+
+    /// Regression test for trust-audit V11: a fully-lost UDP attempt carries
+    /// sentinel 0.0 RTT fields. It must contribute NOTHING to the RTT
+    /// distribution — before the fix each dead attempt injected 0.0 ms into
+    /// min/mean/p50, so a flaky path reported *better* RTTs the more attempts
+    /// fully failed.
+    #[test]
+    fn primary_metric_value_udp_fully_lost_attempt_is_excluded() {
+        let mut a = bare_attempt(Protocol::Udp);
+        a.success = false;
+        a.udp = Some(UdpResult {
+            remote_addr: "1.2.3.4:9999".into(),
+            probe_count: 10,
+            success_count: 0,
+            rtt_min_ms: 0.0,
+            rtt_avg_ms: 0.0,
+            rtt_p95_ms: 0.0,
+            jitter_ms: 0.0,
+            loss_percent: 100.0,
+            started_at: Utc::now(),
+            probe_rtts_ms: vec![None; 10],
+        });
+        assert_eq!(
+            primary_metric_value(&a),
+            None,
+            "100%-loss UDP attempt must not contribute a 0.0 ms sentinel RTT to stats"
+        );
     }
 
     #[test]
