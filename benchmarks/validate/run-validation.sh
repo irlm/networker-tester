@@ -200,10 +200,14 @@ check_download_bytes() {
     local base="$2"
     local size="${3:-1024}"
 
-    local tmp
+    local tmp curl_err
     tmp=$(mktemp)
-    if ! curl -sk --max-time 10 ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} -o "$tmp" "$base/download/$size" 2>/dev/null; then
-        conf_fail "$name /download/$size" "request failed"
+    # -sS: keep curl quiet but surface transfer errors (e.g. "transfer closed
+    # with N bytes remaining" — exactly the failure mode this check hunts).
+    if ! curl_err=$(curl -sSk --max-time 15 ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} -o "$tmp" "$base/download/$size" 2>&1); then
+        local got_bytes
+        got_bytes=$(wc -c < "$tmp" 2>/dev/null | tr -d ' ' || echo '?')
+        conf_fail "$name /download/$size" "request failed after $got_bytes/$size bytes: ${curl_err:-unknown curl error}"
         rm -f "$tmp"; return 1
     fi
     local detail
