@@ -9,8 +9,7 @@
 
 use chrono::{DateTime, TimeZone, Utc};
 use networker_tester::metrics::{
-    ErrorCategory, ErrorRecord, HttpResult, Protocol, RequestAttempt, TcpResult, TestRun,
-    UdpResult,
+    ErrorCategory, ErrorRecord, HttpResult, Protocol, RequestAttempt, TcpResult, TestRun, UdpResult,
 };
 use networker_tester::output::html;
 use uuid::Uuid;
